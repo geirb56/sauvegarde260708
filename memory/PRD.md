@@ -26,3 +26,10 @@ CardioCoach — running/cardio training coach. Garmin (gccli) integration, AI co
 ## Backlog / Next
 - Configure Garmin credentials (GARMIN_USERNAME/PASSWORD/GARMIN_PROVIDER) for real sync if desired
 - Start worker processes if background sync/SSE features are needed
+
+## Garmin Connected (2026-07-07)
+- backend/.env: GARMIN_PROVIDER=gccli, GARMIN_USERNAME, GARMIN_PASSWORD set (account: mallegolbrieg@gmail.com)
+- gccli one-time headless login succeeded; OAuth token persisted at /app/backend/.gccli_home (auto-refreshes)
+- Added 4 worker supervisor services: garmin-sync-worker, garmin-event-worker, garmin-scheduler-worker, garmin-monitor-worker
+- Verified end-to-end: 30 activities + 30 derived workouts + 7 daily metrics synced; RunIndex 390/1000, Run Readiness 77, RHR 47, Sleep 7.7h
+- Scheduler auto-enqueues incremental syncs (~60s scan); event worker builds workouts layer + SSE feed
