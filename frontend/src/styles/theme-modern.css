@@ -1,0 +1,491 @@
+/* RunCoachAI Modern Theme - Inspired Design */
+
+:root {
+  /* Base Colors - Dark Navy */
+  --bg-primary: #0a0e1a;
+  --bg-secondary: #0f1424;
+  --bg-card: #141a2e;
+  --bg-card-hover: #1a2038;
+  
+  /* Primary Accent - Violet/Purple */
+  --accent-violet: #8b5cf6;
+  --accent-violet-light: #a78bfa;
+  --accent-violet-dark: #7c3aed;
+  
+  /* Secondary - Cyan/Teal */
+  --accent-cyan: #22d3ee;
+  --accent-cyan-light: #67e8f9;
+  
+  /* Pink/Magenta for highlights */
+  --accent-pink: #ec4899;
+  --accent-pink-light: #f472b6;
+  
+  /* Status Colors */
+  --status-success: #22c55e;
+  --status-warning: #f97316;
+  --status-danger: #ef4444;
+  
+  /* Workout Type Colors */
+  --type-fractionne: #8b5cf6;
+  --type-endurance: #3b82f6;
+  --type-seuil: #f97316;
+  --type-recuperation: #14b8a6;
+  
+  /* Text */
+  --text-primary: #ffffff;
+  --text-secondary: #94a3b8;
+  --text-tertiary: #64748b;
+  
+  /* Borders */
+  --border-color: #1e293b;
+  --border-color-light: #334155;
+  
+  /* Chart colors */
+  --chart-line: #8b5cf6;
+  --chart-gradient-start: rgba(139, 92, 246, 0.3);
+  --chart-gradient-end: rgba(139, 92, 246, 0);
+}
+
+/* ========== GLOBAL OVERRIDES ========== */
+body {
+  background-color: var(--bg-primary) !important;
+}
+
+/* ========== ANIMATIONS ========== */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(139, 92, 246, 0);
+  }
+  50% {
+    box-shadow: 0 0 20px 4px rgba(139, 92, 246, 0.2);
+  }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.animate-in {
+  animation: fadeInUp 0.4s ease-out forwards;
+}
+
+/* ========== CARDS ========== */
+.card-modern {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.card-modern:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--border-color-light);
+}
+
+/* Card with violet accent border */
+.card-accent-violet {
+  background: var(--bg-card);
+  border: 1px solid var(--accent-violet);
+  border-radius: 16px;
+  box-shadow: 0 0 20px rgba(139, 92, 246, 0.1);
+}
+
+/* ========== FORME ACTUELLE (Form Score) ========== */
+.form-score-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  position: relative;
+  overflow: hidden;
+}
+
+.form-score-value {
+  font-size: 3.5rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1;
+}
+
+.form-score-unit {
+  font-size: 1.25rem;
+  color: var(--text-secondary);
+  margin-left: 4px;
+}
+
+.form-score-change {
+  color: var(--accent-pink);
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+/* Circular gauge */
+.circular-gauge {
+  position: relative;
+  width: 64px;
+  height: 64px;
+}
+
+.circular-gauge svg {
+  transform: rotate(-90deg);
+}
+
+.circular-gauge .gauge-bg {
+  stroke: var(--border-color);
+}
+
+.circular-gauge .gauge-progress {
+  stroke: var(--accent-violet);
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 6px rgba(139, 92, 246, 0.5));
+}
+
+.circular-gauge .gauge-text {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* ========== METRIC CARDS ========== */
+.metric-card-modern {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  padding: 1rem;
+}
+
+.metric-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 8px;
+}
+
+.metric-value {
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.metric-unit {
+  font-size: 1rem;
+  color: var(--text-secondary);
+  margin-left: 2px;
+}
+
+.metric-progress-bar {
+  height: 6px;
+  background: var(--border-color);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-top: 12px;
+}
+
+.metric-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent-violet), var(--accent-cyan));
+  border-radius: 3px;
+  transition: width 0.5s ease;
+}
+
+.metric-objective {
+  color: var(--text-tertiary);
+  font-size: 0.75rem;
+  margin-top: 8px;
+}
+
+/* ========== TODAY'S WORKOUT CARD ========== */
+.today-workout-card {
+  background: var(--bg-card);
+  border: 2px solid var(--accent-violet);
+  border-radius: 16px;
+  padding: 1.25rem;
+  position: relative;
+  box-shadow: 0 0 30px rgba(139, 92, 246, 0.15);
+}
+
+.today-label {
+  color: var(--accent-violet);
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-bottom: 8px;
+}
+
+.today-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.today-meta {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.today-details {
+  display: flex;
+  gap: 1.5rem;
+  margin-top: 12px;
+  color: var(--text-tertiary);
+  font-size: 0.875rem;
+}
+
+/* ========== WORKOUT LIST ========== */
+.workout-list-item {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  transition: all 0.2s ease;
+}
+
+.workout-list-item:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--border-color-light);
+}
+
+.workout-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.workout-icon.fractionne {
+  background: rgba(139, 92, 246, 0.15);
+  color: var(--type-fractionne);
+}
+
+.workout-icon.endurance {
+  background: rgba(59, 130, 246, 0.15);
+  color: var(--type-endurance);
+}
+
+.workout-icon.seuil {
+  background: rgba(249, 115, 22, 0.15);
+  color: var(--type-seuil);
+}
+
+.workout-icon.recuperation {
+  background: rgba(20, 184, 166, 0.15);
+  color: var(--type-recuperation);
+}
+
+.workout-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.workout-type-name {
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.workout-stats {
+  display: flex;
+  gap: 8px;
+  color: var(--text-tertiary);
+  font-size: 0.8125rem;
+}
+
+.workout-stats span {
+  display: flex;
+  align-items: center;
+}
+
+.workout-stats .dot {
+  width: 3px;
+  height: 3px;
+  background: var(--text-tertiary);
+  border-radius: 50%;
+}
+
+.workout-date {
+  color: var(--text-tertiary);
+  font-size: 0.8125rem;
+  flex-shrink: 0;
+}
+
+.workout-arrow {
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+/* ========== SECTION HEADERS ========== */
+.section-header {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-bottom: 12px;
+}
+
+/* ========== BOTTOM NAV ========== */
+.bottom-nav-modern {
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-color);
+}
+
+.nav-item-modern {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px;
+  color: var(--text-tertiary);
+  transition: all 0.2s ease;
+}
+
+.nav-item-modern.active {
+  color: var(--accent-cyan);
+}
+
+.nav-item-modern .nav-icon {
+  width: 24px;
+  height: 24px;
+}
+
+.nav-item-modern .nav-label {
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* ========== HEADER ========== */
+.header-modern {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem;
+  background: var(--bg-primary);
+}
+
+.header-logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.header-logo-icon {
+  width: 32px;
+  height: 32px;
+  background: var(--accent-violet);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.header-logo-text {
+  font-size: 1.125rem;
+  font-weight: 700;
+}
+
+.header-logo-text span {
+  color: var(--accent-violet);
+}
+
+.sync-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-tertiary);
+  font-size: 0.75rem;
+}
+
+.sync-dot {
+  width: 6px;
+  height: 6px;
+  background: var(--status-success);
+  border-radius: 50%;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.header-avatar {
+  width: 32px;
+  height: 32px;
+  background: var(--accent-pink);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: white;
+}
+
+/* ========== CHARTS ========== */
+.chart-line-gradient {
+  stroke: var(--accent-violet);
+  stroke-width: 2;
+  fill: none;
+  filter: drop-shadow(0 0 4px rgba(139, 92, 246, 0.3));
+}
+
+/* ========== UTILITIES ========== */
+.text-gradient-violet {
+  background: linear-gradient(135deg, var(--accent-violet), var(--accent-pink));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.glow-violet {
+  box-shadow: 0 0 20px rgba(139, 92, 246, 0.3);
+}
+
+.glow-cyan {
+  box-shadow: 0 0 20px rgba(34, 211, 238, 0.3);
+}
+
+/* ========== SAFE AREA ========== */
+.safe-area-pb {
+  padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+}
+
+/* ========== RESPONSIVE ========== */
+@media (max-width: 640px) {
+  .form-score-value {
+    font-size: 2.5rem;
+  }
+  
+  .metric-value {
+    font-size: 1.75rem;
+  }
+}

@@ -1,0 +1,21 @@
+# Ignore env, pyc, virtualenv
+# NOTE: .env files are intentionally NOT ignored — Emergent deployment requires
+# them to be present in the repository for auto-configuration.
+__pycache__/
+*.pyc
+.idea/
+.vscode/
+instance/
+*.db
+credentials.json
+*.pem
+*.key
+.credentials
+# gccli: arch-specific binary (auto-downloaded at startup) and OAuth token store
+backend/bin/
+backend/.gccli_home/
+.env
+.env.*
+*.env
+frontend/node_modules/.cache/default-development/0.pack
+frontend/node_modules/.cache/default-development/1.pack

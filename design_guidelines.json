@@ -1,0 +1,149 @@
+{
+  "identity": {
+    "name": "CardioCoach",
+    "persona": "The Silent Elite Coach",
+    "tone": "Calm, Neutral, Precise, Stoic",
+    "keywords": ["Endurance", "Data", "Precision", "Obsidian", "Tactical"],
+    "anti_patterns": [
+      "Gamification (badges, confetti)",
+      "Social features (sharing, likes)",
+      "Hype/Motivation ('You got this!')",
+      "Emojis",
+      "Light Mode",
+      "Rounded 'friendly' UI"
+    ]
+  },
+  "typography": {
+    "primary_font": "Manrope",
+    "secondary_font": "Barlow Condensed",
+    "mono_font": "JetBrains Mono",
+    "imports": [
+      "@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400&display=swap');"
+    ],
+    "usage": {
+      "headings": "font-secondary uppercase tracking-tight font-bold",
+      "body": "font-primary tracking-normal",
+      "data": "font-mono text-xs tracking-wider uppercase",
+      "labels": "font-mono text-[10px] uppercase tracking-widest text-muted-foreground"
+    }
+  },
+  "colors": {
+    "palette_name": "Obsidian Tactical",
+    "mode": "dark",
+    "base": {
+      "background": "#050505",
+      "foreground": "#EDEDED",
+      "card": "#0A0A0A",
+      "card_foreground": "#EDEDED",
+      "popover": "#0A0A0A",
+      "popover_foreground": "#EDEDED",
+      "primary": "#3B82F6",
+      "primary_foreground": "#FFFFFF",
+      "secondary": "#262626",
+      "secondary_foreground": "#A1A1AA",
+      "muted": "#171717",
+      "muted_foreground": "#737373",
+      "accent": "#262626",
+      "accent_foreground": "#EDEDED",
+      "destructive": "#7F1D1D",
+      "destructive_foreground": "#FEF2F2",
+      "border": "#262626",
+      "input": "#262626",
+      "ring": "#3B82F6"
+    },
+    "charts": {
+      "chart_1": "#3B82F6",
+      "chart_2": "#10B981",
+      "chart_3": "#F59E0B",
+      "chart_4": "#EF4444",
+      "chart_5": "#8B5CF6"
+    },
+    "gradients": {
+      "subtle_glow": "radial-gradient(circle at center, rgba(59, 130, 246, 0.15) 0%, rgba(5, 5, 5, 0) 70%)",
+      "surface_sheen": "linear-gradient(180deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0) 100%)"
+    }
+  },
+  "layout": {
+    "grid_system": "Bento Grid Mode B (High Density)",
+    "spacing": {
+      "container_padding": "p-6 md:p-8",
+      "gap": "gap-4 md:gap-6",
+      "internal_padding": "p-4"
+    },
+    "border_radius": {
+      "default": "rounded-sm",
+      "card": "rounded-sm",
+      "button": "rounded-none"
+    },
+    "containers": {
+      "card_style": "bg-card border border-border shadow-none relative overflow-hidden",
+      "glass_panel": "bg-black/40 backdrop-blur-xl border border-white/10"
+    }
+  },
+  "components": {
+    "buttons": {
+      "primary": "bg-primary text-white hover:bg-primary/90 rounded-none uppercase font-bold tracking-wider text-xs h-10 px-6",
+      "secondary": "bg-secondary text-secondary-foreground hover:bg-secondary/80 rounded-none uppercase font-bold tracking-wider text-xs h-10 px-6",
+      "ghost": "hover:bg-accent hover:text-accent-foreground rounded-none uppercase font-bold tracking-wider text-xs"
+    },
+    "cards": {
+      "metric": "flex flex-col justify-between p-6 bg-card border border-border h-full",
+      "chart": "p-6 bg-card border border-border h-full flex flex-col"
+    },
+    "inputs": {
+      "default": "bg-muted border-transparent focus:border-primary rounded-none font-mono text-sm"
+    },
+    "navigation": {
+      "sidebar": "bg-background border-r border-border w-64 hidden md:flex flex-col",
+      "mobile_nav": "md:hidden fixed bottom-0 w-full bg-background/80 backdrop-blur-lg border-t border-border"
+    }
+  },
+  "visual_enhancers": {
+    "textures": {
+      "carbon": "url('https://images.unsplash.com/photo-1663140768507-90e83c8180f5?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MDV8MHwxfHNlYXJjaHwxfHxibGFjayUyMGNhcmJvbiUyMGZpYmVyJTIwdGV4dHVyZSUyMGNsb3NlJTIwdXB8ZW58MHx8fHwxNzY5OTQ4MDMyfDA&ixlib=rb-4.1.0&q=85')",
+      "noise": "url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0IiBoZWlnaHQ9IjQiPgo8cmVjdCB3aWR0aD0iNCIgaGVpZ2h0PSI0IiBmaWxsPSIjMDUwNTA1Ii8+CjxyZWN0IHdpZHRoPSIxIiBoZWlnaHQ9IjEiIGZpbGw9InJnYmEoMjU1LDI1NSwyNTUsMC4wNSkiLz4KPC9zdmc+')"
+    },
+    "effects": {
+      "scanline": "bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.25)_50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06))]",
+      "glow_text": "drop-shadow-[0_0_10px_rgba(59,130,246,0.5)]"
+    }
+  },
+  "assets": {
+    "images": {
+      "hero_cyclist": "https://images.unsplash.com/photo-1622907782973-d29eaa246931?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxOTF8MHwxfHNlYXJjaHwxfHxmZW1hbGUlMjBjeWNsaXN0JTIwcm9hZCUyMGJpa2UlMjBzZXJpb3VzJTIwdHJhaW5pbmclMjBkYXJrJTIwYWVzdGhldGljfGVufDB8fHx8MTc2OTk0ODAyN3ww&ixlib=rb-4.1.0&q=85",
+      "texture_carbon": "https://images.unsplash.com/photo-1663140768507-90e83c8180f5?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MDV8MHwxfHNlYXJjaHwxfHxibGFjayUyMGNhcmJvbiUyMGZpYmVyJTIwdGV4dHVyZSUyMGNsb3NlJTIwdXB8ZW58MHx8fHwxNzY5OTQ4MDMyfDA&ixlib=rb-4.1.0&q=85"
+    },
+    "icons": "lucide-react"
+  },
+  "instructions_to_main_agent": [
+    "1. INSTALL FONTS: Add the Google Fonts import to /app/frontend/src/index.css immediately.",
+    "2. CONFIGURE TAILWIND: Update /app/frontend/tailwind.config.js to use the 'Obsidian Tactical' color palette defined above. Ensure 'darkMode' is set to 'class'.",
+    "3. FORCE DARK MODE: In /app/frontend/src/index.js or App.js, ensure the 'dark' class is applied to the html or body tag by default.",
+    "4. COMPONENT STYLING: When using Shadcn components, override rounded corners to 'rounded-sm' or 'rounded-none'. Use 'border-border' (dark grey) for all borders.",
+    "5. LAYOUT: Use the 'Bento Grid' approach. Avoid simple columns. Create dense, data-rich layouts.",
+    "6. CHARTS: Use Recharts. Style them with the chart colors defined. Remove grid lines or make them very subtle (#262626).",
+    "7. NO EMOJIS: Strictly forbidden. Use Lucide icons for all visual indicators.",
+    "8. TONE: All copy must be serious and concise. No 'Welcome back, champion!'. Just 'Training Log'.",
+    "9. DATA-TESTID: Add data-testid attributes to all interactive elements (buttons, inputs, cards)."
+  ],
+  "universal_guidelines": [
+    "Dark colors look good when used independently without gradients. DO NOT use dark colors as gradients",
+    "Don't make generic centered layouts, simplistic gradients, and uniform styling.",
+    "Create depth through layered design elements with z-index hierarchy",
+    "Use glass-morphism effects with backdrop filters (12-24px blur)",
+    "You MUST NOT apply universal transition. Eg: transition: all. This results in breaking transforms. Always add transitions for specific interactive elements like button, input excluding transforms",
+    "You MUST NOT center align the app container, ie do not add .App { text-align: center; } in the css file. This disrupts the human natural reading flow of text",
+    "Always use modern button styles like pill-shaped, or sharp button with interaction animations & color relevant to the app style",
+    "NEVER: use AI assistant Emoji characters like 🤖🧠💭💡🔮🎯 etc for icons.",
+    "Every interaction needs micro-animations - hover states, transitions, parallax effects, and entrance animations. Static = dead.",
+    "Use 2-3x more spacing than feels comfortable. Cramped designs look cheap.",
+    "Subtle grain textures, noise overlays, custom cursors, selection states, and loading animations: separates good from extraordinary.",
+    "Main agent relies on these image URLs. Missing categories (especially sponsor logos) = main agent will use placeholder text which is FORBIDDEN",
+    "Prioritize using pre-existing components from src/components/ui when applicable",
+    "Create new components that match the style and conventions of existing components when needed",
+    "Examine existing components to understand the project's component patterns before creating new ones",
+    "Components MUST use named exports (export const ComponentName = ...)",
+    "Pages MUST use default exports (export default function PageName() {...})",
+    "Use sonner for toasts"
+  ]
+}

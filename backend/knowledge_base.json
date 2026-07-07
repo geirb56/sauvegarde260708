@@ -1,0 +1,287 @@
+{
+  "fatigue": {
+    "description": "Conseils pour gérer la fatigue et la lourdeur",
+    "tips": [
+      "La fatigue accumulée est souvent liée à un manque de sommeil ou d'hydratation",
+      "Un ratio charge/récup supérieur à 1.5 indique une surcharge",
+      "Les jambes lourdes en fin de séance signalent souvent un besoin de récup",
+      "La fatigue musculaire se répare pendant le sommeil profond",
+      "Un décrochage d'allure en fin de séance est normal si tu as bien poussé",
+      "La fatigue chronique peut masquer un surentraînement",
+      "Écoute ton corps : la fatigue est un signal, pas un ennemi",
+      "Un jour de repos vaut parfois mieux que deux séances moyennes",
+      "La récupération active (marche, vélo léger) aide à évacuer les toxines",
+      "Après une grosse semaine, prévoir 2-3 jours plus calmes"
+    ]
+  },
+  "allure_cadence": {
+    "description": "Conseils sur l'allure et la cadence",
+    "tips": [
+      "Une cadence de 170-180 pas/min est optimale pour la plupart des coureurs",
+      "Une cadence basse (<165) augmente le stress articulaire",
+      "L'allure spécifique doit être travaillée 1-2 fois par semaine max",
+      "En endurance fondamentale, tu dois pouvoir parler facilement",
+      "La variabilité d'allure faible indique une bonne régularité",
+      "Augmenter la cadence de 5% réduit l'impact au sol de 20%",
+      "L'allure ne doit pas être le seul indicateur : la FC compte aussi",
+      "Les séances de côtes améliorent naturellement la cadence",
+      "Un métronome peut aider à travailler la cadence",
+      "L'allure critique est celle que tu peux tenir 30-40 min à fond"
+    ]
+  },
+  "recuperation": {
+    "description": "Conseils sur la récupération",
+    "tips": [
+      "La progression se fait pendant la récupération, pas pendant l'effort",
+      "Dormir 7-9h est essentiel pour la récupération musculaire",
+      "Les étirements doux après la séance aident à récupérer",
+      "L'hydratation post-effort est cruciale (500ml dans l'heure)",
+      "Les massages ou le foam roller accélèrent la récupération",
+      "Une semaine de décharge tous les 3-4 semaines est recommandée",
+      "Les bains froids réduisent l'inflammation post-effort",
+      "La récupération active est plus efficace que le repos total",
+      "Le sommeil avant minuit est plus réparateur",
+      "Les protéines dans les 30min post-effort optimisent la récup"
+    ]
+  },
+  "plan_entrainement": {
+    "description": "Conseils sur la planification",
+    "tips": [
+      "Un bon plan alterne séances dures et séances faciles",
+      "La règle des 10% : n'augmente pas le volume de plus de 10%/semaine",
+      "Prévoir 2-3 séances qualité par semaine maximum",
+      "La sortie longue ne doit pas dépasser 30% du volume hebdo",
+      "Varier les types de séances : endurance, seuil, VMA, côtes",
+      "Planifier les semaines de récup à l'avance",
+      "Adapter le plan aux contraintes de vie (travail, famille)",
+      "Un plan flexible est meilleur qu'un plan rigide non suivi",
+      "La régularité bat l'intensité sur le long terme",
+      "Écouter son corps prime sur suivre le plan à la lettre"
+    ]
+  },
+  "motivation": {
+    "description": "Conseils sur la motivation",
+    "tips": [
+      "Fixe-toi des objectifs intermédiaires pour rester motivé",
+      "Varier les parcours évite la routine",
+      "Courir avec d'autres booste la motivation",
+      "Les petites victoires comptent autant que les grandes",
+      "La musique ou les podcasts peuvent aider sur les sorties longues",
+      "Accepter les jours sans fait partie du processus",
+      "Tenir un carnet d'entraînement aide à voir sa progression",
+      "Se rappeler pourquoi on court quand la motivation baisse",
+      "Les récompenses post-objectif maintiennent la motivation",
+      "La constance sur 6 mois bat la motivation sur 2 semaines"
+    ]
+  },
+  "meteo": {
+    "description": "Conseils selon les conditions météo",
+    "tips": [
+      "Par temps chaud, ralentis de 10-20 sec/km",
+      "Hydrate-toi plus par temps chaud (250ml toutes les 20min)",
+      "Le vent de face : baisse l'allure, augmente l'effort perçu",
+      "Par temps froid, échauffe-toi plus longtemps",
+      "La pluie légère n'est pas un problème si tu es bien équipé",
+      "Évite les heures les plus chaudes en été (12h-16h)",
+      "Les vêtements techniques respirants sont essentiels par chaleur",
+      "Par grand froid, protège les extrémités (mains, oreilles)",
+      "L'humidité élevée rend l'effort plus difficile",
+      "Adapte toujours l'intensité aux conditions"
+    ]
+  },
+  "nutrition": {
+    "description": "Conseils nutrition et hydratation",
+    "tips": [
+      "Mange 2-3h avant une séance intense",
+      "Les glucides sont le carburant principal du coureur",
+      "Hydrate-toi régulièrement, pas seulement pendant l'effort",
+      "Après l'effort : glucides + protéines dans les 30min",
+      "Évite les fibres juste avant de courir",
+      "Le café peut améliorer la performance (1-2h avant)",
+      "Les gels sont utiles au-delà de 1h30 d'effort",
+      "L'alcool la veille impacte la récupération",
+      "Les crampes peuvent indiquer un manque de sodium",
+      "Une alimentation équilibrée > les compléments"
+    ]
+  },
+  "blessures": {
+    "description": "Conseils prévention et gestion blessures",
+    "tips": [
+      "Une douleur qui persiste 3+ jours mérite un avis médical",
+      "Le repos est souvent le meilleur remède",
+      "La glace dans les 24-48h après une douleur réduit l'inflammation",
+      "Le renforcement musculaire prévient les blessures",
+      "Les chaussures usées augmentent le risque de blessure",
+      "Augmenter le volume trop vite est la cause #1 des blessures",
+      "Les douleurs au genou viennent souvent des hanches ou des pieds",
+      "Le syndrome de la bandelette se traite par le repos et les étirements",
+      "Les périostites tibiales nécessitent du repos et de la glace",
+      "Consulte un kiné spécialisé running si douleur persistante"
+    ]
+  },
+  "progression": {
+    "description": "Conseils sur la progression",
+    "tips": [
+      "La progression est rarement linéaire, accepte les plateaux",
+      "Les gains de VMA se font sur 6-12 mois, pas 6 semaines",
+      "La constance bat l'intensité pour progresser",
+      "Varier les stimuli (côtes, vitesse, endurance) fait progresser",
+      "Un plateau peut indiquer un besoin de changement",
+      "Les progrès se mesurent sur plusieurs mois",
+      "La technique compte autant que le volume",
+      "Le travail de seuil améliore l'endurance",
+      "Les séances de VMA améliorent la vitesse max",
+      "Patience et régularité sont les clés de la progression"
+    ]
+  },
+  "prepa_course": {
+    "description": "Conseils préparation course",
+    "tips": [
+      "Commence la prépa 12-16 semaines avant l'objectif",
+      "La dernière semaine, réduis le volume de 50%",
+      "Teste ton équipement et ta nutrition avant le jour J",
+      "Ne rien tester de nouveau le jour de la course",
+      "La dernière sortie longue 2-3 semaines avant",
+      "Visualise le parcours et ta stratégie de course",
+      "Prépare ton matériel la veille",
+      "Arrive tôt le jour J pour t'échauffer tranquillement",
+      "Pars prudemment, finis fort",
+      "La gestion de l'effort est clé sur les longues distances"
+    ]
+  },
+  "mental": {
+    "description": "Conseils gestion mentale",
+    "tips": [
+      "Le mental se travaille comme le physique",
+      "La visualisation positive aide avant une course",
+      "Découpe l'effort en segments pour rester concentré",
+      "Les mantras personnels aident dans les moments durs",
+      "Accepte l'inconfort, il fait partie du jeu",
+      "Focus sur ce que tu contrôles, pas le reste",
+      "La respiration profonde calme le stress pré-course",
+      "Les pensées négatives arrivent, laisse-les passer",
+      "Célèbre chaque petit succès",
+      "Le doute est normal, même chez les pros"
+    ]
+  },
+  "sommeil": {
+    "description": "Conseils sur le sommeil",
+    "tips": [
+      "Le sommeil est le meilleur outil de récupération",
+      "7-9h de sommeil optimisent la récupération",
+      "Le sommeil avant minuit est plus réparateur",
+      "Évite les écrans 1h avant de dormir",
+      "Une routine de coucher régulière aide à mieux dormir",
+      "La sieste de 20min peut compléter une mauvaise nuit",
+      "Le manque de sommeil augmente le risque de blessure",
+      "La caféine après 14h peut perturber le sommeil",
+      "Une chambre fraîche (18-19°C) favorise le sommeil",
+      "Le stress impacte la qualité du sommeil"
+    ]
+  },
+  "renforcement": {
+    "description": "Conseils renforcement musculaire",
+    "tips": [
+      "Le gainage renforce le tronc et améliore la foulée",
+      "Les squats renforcent les quadriceps et les fessiers",
+      "Les fentes travaillent l'équilibre et la force",
+      "2-3 séances de renfo par semaine suffisent",
+      "Le renfo prévient les blessures",
+      "Les exercices au poids du corps sont très efficaces",
+      "Travaille les mollets pour prévenir les blessures",
+      "Le pont fessier renforce la chaîne postérieure",
+      "Les abdos profonds stabilisent le bassin",
+      "Le renfo des hanches prévient les douleurs de genou"
+    ]
+  },
+  "equipement": {
+    "description": "Conseils équipement",
+    "tips": [
+      "Change tes chaussures tous les 600-800 km",
+      "Des chaussures adaptées à ta foulée réduisent les blessures",
+      "Les vêtements techniques évacuent mieux la transpiration",
+      "Une montre GPS aide à suivre ta progression",
+      "Les chaussettes de compression aident certains coureurs",
+      "Teste ton équipement à l'entraînement, pas en course",
+      "Les lacets auto-bloquants évitent de refaire ses lacets",
+      "Une ceinture porte-bidon est utile pour les longues sorties",
+      "Les lunettes de soleil protègent et réduisent la fatigue",
+      "Adapte ton équipement à la météo"
+    ]
+  },
+  "chaleur": {
+    "description": "Conseils gestion de la chaleur",
+    "tips": [
+      "Par forte chaleur, ralentis de 15-30 sec/km",
+      "Hydrate-toi avant, pendant et après l'effort",
+      "Mouille ta casquette et ta nuque pour te rafraîchir",
+      "Évite les heures les plus chaudes (12h-16h)",
+      "Les vêtements clairs réfléchissent la chaleur",
+      "L'acclimatation à la chaleur prend 10-14 jours",
+      "Les signes de coup de chaleur : nausée, confusion, arrête-toi",
+      "Préfère les parcours ombragés par forte chaleur",
+      "Le sel dans l'hydratation aide par temps chaud",
+      "Écoute ton corps, la chaleur est dangereuse"
+    ]
+  },
+  "post_course": {
+    "description": "Conseils récupération post-course",
+    "tips": [
+      "Après un marathon, prévoir 2-3 semaines de récup",
+      "Marche et étire-toi doucement après la course",
+      "Hydrate-toi et mange dans l'heure qui suit",
+      "Les courbatures post-course sont normales",
+      "Reprends progressivement, pas de séance intense avant 1-2 semaines",
+      "Un massage ou le foam roller aide à récupérer",
+      "Le sommeil est crucial pour la récupération post-course",
+      "Les bains froids réduisent l'inflammation",
+      "Célèbre ta performance, quelle qu'elle soit !",
+      "Analyse ta course à froid pour en tirer des leçons"
+    ]
+  },
+  "stagnation": {
+    "description": "Conseils pour sortir d'une stagnation",
+    "tips": [
+      "Un plateau peut indiquer un besoin de changement",
+      "Varie les types de séances si tu stagnes",
+      "Parfois, plus de repos est la solution",
+      "Change de parcours pour stimuler la motivation",
+      "La stagnation est normale, la patience est clé",
+      "Revois tes objectifs s'ils sont trop ambitieux",
+      "Le surentraînement peut causer une stagnation",
+      "Un coach ou un regard extérieur peut aider",
+      "Les progrès ne sont pas toujours visibles immédiatement",
+      "Focus sur le processus, pas que sur les résultats"
+    ]
+  },
+  "general": {
+    "description": "Conseils généraux running",
+    "tips": [
+      "La régularité est plus importante que l'intensité",
+      "Écoute ton corps, c'est ton meilleur coach",
+      "Chaque sortie compte, même les plus courtes",
+      "Le plaisir de courir doit rester la priorité",
+      "Fixe-toi des objectifs réalistes et progressifs",
+      "La course à pied est un sport de patience",
+      "Varie les plaisirs : route, trail, piste",
+      "Courir en groupe motive et fait progresser",
+      "Les jours sans font partie du jeu",
+      "Célèbre tes progrès, même les plus petits"
+    ]
+  },
+  "routine": {
+    "description": "Conseils pour maintenir la routine",
+    "tips": [
+      "Planifie tes séances comme des rendez-vous",
+      "Prépare tes affaires la veille",
+      "Trouve un partenaire d'entraînement",
+      "Varie les parcours pour éviter la routine",
+      "Fixe des mini-objectifs hebdomadaires",
+      "Les séances du matin sont souvent plus faciles à tenir",
+      "Accepte que certains jours soient plus durs",
+      "Récompense-toi après une bonne semaine",
+      "La routine devient habitude après 3-4 semaines",
+      "Sois flexible mais constant"
+    ]
+  }
+}

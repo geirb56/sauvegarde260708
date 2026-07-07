@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+celery[redis]
+redis
+psycopg[binary]
+SQLAlchemy
+cryptography
+requests
+python-dotenv
+# optional
+fitparse

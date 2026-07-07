@@ -1,0 +1,117 @@
+{
+  "summary": "Subscription system testing complete: trial, free, early_adopter statuses and Stripe checkout integration. All 18 backend tests passed (100%). All 15 frontend tests passed (100%). Subscription endpoints working correctly with proper status transitions and feature access control.",
+  "mode": "generate",
+  "baseline_commit": "00d056b77549e2c88bc4058a5223e76d29eb01c0",
+  "head_commit": "00d056b77549e2c88bc4058a5223e76d29eb01c0",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "regression_results": {
+    "total_specs": 2,
+    "passed": 2,
+    "failed": 0,
+    "skipped": 0
+  },
+  "specs_created": [
+    "/app/tests/e2e/subscription.spec.ts",
+    "/app/tests/e2e/paywall.spec.ts",
+    "/app/backend/tests/test_subscription.py"
+  ],
+  "specs_updated": [],
+  "quarantined_tests": [],
+  "test_report_links": [
+    "/app/backend/tests/test_subscription.py",
+    "/app/test_reports/pytest/pytest_subscription.xml",
+    "/app/tests/e2e/subscription.spec.ts",
+    "/app/tests/e2e/paywall.spec.ts"
+  ],
+  "action_items": [],
+  "updated_files": [
+    "/app/backend/tests/conftest.py",
+    "/app/tests/playwright.config.ts",
+    "/app/tests/fixtures/helpers.ts"
+  ],
+  "success_rate": {
+    "backend": "100% (18/18 tests passed)",
+    "frontend": "100% (15/15 tests passed)"
+  },
+  "seed_data_creation": "No seed data required - tests create/cleanup their own test users with UUID prefixes",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Subscription system fully tested. Key endpoints: GET /api/subscription/info (returns status, features, display), POST /api/subscription/early-adopter/checkout (creates Stripe session at 4.99€), GET /api/subscription/verify-checkout/{session_id} (activates early_adopter after payment). Frontend shows paywall for free users on /training page. Settings page displays subscription status with EARLY ADOPTER badge when activated.",
+  "features_verified": {
+    "subscription_status_endpoint": {
+      "endpoint": "GET /api/subscription/info",
+      "returns": ["status (trial/free/early_adopter)", "features object", "display info", "trial_days_remaining"],
+      "working": true
+    },
+    "early_adopter_checkout": {
+      "endpoint": "POST /api/subscription/early-adopter/checkout",
+      "returns": ["checkout_url (Stripe URL)", "session_id"],
+      "amount": "4.99 EUR",
+      "working": true
+    },
+    "verify_checkout": {
+      "endpoint": "GET /api/subscription/verify-checkout/{session_id}",
+      "action": "Activates early_adopter status after payment",
+      "working": true
+    },
+    "paywall_component": {
+      "displays_for": "free users",
+      "shows": ["Early Adopter offer", "4.99€ price", "Price guarantee", "CTA button"],
+      "redirects_to": "Stripe checkout",
+      "working": true
+    },
+    "settings_subscription_section": {
+      "shows_trial_badge": true,
+      "shows_early_adopter_badge": true,
+      "shows_features_list": true,
+      "subscribe_button_works": true
+    }
+  },
+  "test_summary": {
+    "backend_tests": {
+      "test_subscription_info_endpoint_returns_200": "PASSED",
+      "test_new_user_gets_trial_status": "PASSED",
+      "test_trial_user_has_all_features": "PASSED",
+      "test_subscription_display_info_french": "PASSED",
+      "test_subscription_display_info_english": "PASSED",
+      "test_trial_days_remaining": "PASSED",
+      "test_early_adopter_offer_endpoint": "PASSED",
+      "test_early_adopter_offer_english": "PASSED",
+      "test_early_adopter_checkout_creates_session": "PASSED",
+      "test_checkout_session_has_correct_amount": "PASSED",
+      "test_verify_checkout_activates_early_adopter": "PASSED",
+      "test_simulate_trial_end_sets_free_status": "PASSED",
+      "test_free_user_has_limited_features": "PASSED",
+      "test_activate_early_adopter_endpoint": "PASSED",
+      "test_early_adopter_has_all_features": "PASSED",
+      "test_early_adopter_display_info": "PASSED",
+      "test_cancel_subscription_sets_free_status": "PASSED",
+      "test_reset_to_trial": "PASSED"
+    },
+    "frontend_tests": {
+      "settings_page_loads_and_displays_subscription_section": "PASSED",
+      "settings_page_shows_correct_trial_status": "PASSED",
+      "settings_page_shows_subscription_features_list": "PASSED",
+      "early_adopter_subscribe_button_exists": "PASSED",
+      "subscribe_button_redirects_to_stripe_checkout": "PASSED",
+      "early_adopter_offer_displays_correct_price": "PASSED",
+      "price_guarantee_message_displayed": "PASSED",
+      "language_toggle_works": "PASSED",
+      "homepage_loads_without_paywall": "PASSED",
+      "training_page_shows_paywall_for_free_users": "PASSED",
+      "paywall_displays_early_adopter_offer": "PASSED",
+      "paywall_cta_button_triggers_stripe_checkout": "PASSED",
+      "early_adopter_users_can_access_protected_pages": "PASSED",
+      "coach_page_accessible": "PASSED",
+      "dashboard_insight_section_works": "PASSED"
+    }
+  }
+}

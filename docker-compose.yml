@@ -1,0 +1,36 @@
+version: "3.8"
+services:
+  api:
+    build: ./api
+    env_file: .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+      - postgres
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --proxy-headers
+
+  worker:
+    build: ./worker
+    env_file: .env
+    depends_on:
+      - redis
+      - postgres
+    command: celery -A tasks.sync_tasks worker --loglevel=info -Q SYNC_USER,FETCH_NEW_ACTIVITIES,PROCESS_ACTIVITY,COMPUTE_METRICS
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: cardiodb
+      POSTGRES_USER: cardio
+      POSTGRES_PASSWORD: secret
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:

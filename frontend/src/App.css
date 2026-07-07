@@ -1,0 +1,114 @@
+/* CardioCoach - Obsidian Tactical Theme */
+
+.App {
+    min-height: 100vh;
+}
+
+/* Metric card hover effect */
+.metric-card {
+    transition: border-color 0.2s ease;
+}
+
+.metric-card:hover {
+    border-color: hsl(var(--primary) / 0.3);
+}
+
+/* Data label styling */
+.data-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: hsl(var(--muted-foreground));
+}
+
+/* Heading styling */
+.section-heading {
+    font-family: 'Barlow Condensed', sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 600;
+}
+
+/* Workout type badge */
+.workout-type-badge {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    padding: 4px 8px;
+    border: 1px solid hsl(var(--border));
+    background: hsl(var(--muted));
+}
+
+/* Coach message bubble */
+.coach-message {
+    border-left: 2px solid hsl(var(--primary));
+    padding-left: 16px;
+}
+
+/* Chart container */
+.chart-container {
+    background: hsl(var(--card));
+    border: 1px solid hsl(var(--border));
+}
+
+/* Zone bars */
+.zone-bar {
+    height: 8px;
+    background: hsl(var(--muted));
+    position: relative;
+    overflow: hidden;
+}
+
+.zone-bar-fill {
+    height: 100%;
+    transition: width 0.3s ease;
+}
+
+/* Navigation active state */
+.nav-item.active {
+    color: hsl(var(--primary));
+    border-color: hsl(var(--primary));
+}
+
+/* Input focus states */
+input:focus, textarea:focus {
+    outline: none;
+    border-color: hsl(var(--primary));
+}
+
+/* Loading pulse */
+.loading-pulse {
+    animation: pulse-subtle 2s ease-in-out infinite;
+}
+
+/* Fade in animation for content */
+.animate-in {
+    animation: fade-in 0.3s ease-out forwards;
+}
+
+@keyframes fade-in {
+    from {
+        opacity: 0;
+        transform: translateY(4px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Stagger children animation */
+.stagger-children > *:nth-child(1) { animation-delay: 0ms; }
+.stagger-children > *:nth-child(2) { animation-delay: 50ms; }
+.stagger-children > *:nth-child(3) { animation-delay: 100ms; }
+.stagger-children > *:nth-child(4) { animation-delay: 150ms; }
+.stagger-children > *:nth-child(5) { animation-delay: 200ms; }
+.stagger-children > *:nth-child(6) { animation-delay: 250ms; }
+.stagger-children > *:nth-child(7) { animation-delay: 300ms; }
+
+/* Subtle glow effect */
+.glow-subtle {
+    box-shadow: 0 0 40px -15px hsl(var(--primary) / 0.3);
+}

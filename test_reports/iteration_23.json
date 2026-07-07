@@ -1,0 +1,122 @@
+{
+  "summary": "Dynamic Training Plan with VMA testing complete: All features verified - personalized paces calculated from VMA, plan returns VMA/VO2MAX/readiness_score/prep_status, sessions contain VMA-based paces in details, plan duration adapts to user level. 20 backend tests passed (100%), 12 frontend tests passed (100%).",
+  "mode": "generate",
+  "baseline_commit": "00d056b77549e2c88bc4058a5223e76d29eb01c0",
+  "head_commit": "3cd8c0aa3cb2eedfa60159783d96a3737d187190",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "regression_results": {
+    "total_specs": 3,
+    "passed": 3,
+    "failed": 0,
+    "skipped": 0
+  },
+  "specs_created": [
+    "/app/backend/tests/test_training_plan_vma.py",
+    "/app/tests/e2e/training-plan-vma.spec.ts"
+  ],
+  "specs_updated": [],
+  "quarantined_tests": [],
+  "test_report_links": [
+    "/app/backend/tests/test_training_plan_vma.py",
+    "/app/test_reports/pytest/pytest_training_vma.xml",
+    "/app/tests/e2e/training-plan-vma.spec.ts"
+  ],
+  "action_items": [],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "100% (20/20 tests passed)",
+    "frontend": "100% (12/12 tests passed)"
+  },
+  "seed_data_creation": "No seed data required - tests use existing default user data and VMA calculation from workout history",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Dynamic training plan VMA feature fully tested. Key verified features: 1) VMA calculated from 6-week workout history using best effort speed, 2) Personalized paces for zones Z1-Z5, marathon, semi based on VMA percentages, 3) readiness_score (0-100) calculated from volume and fitness, 4) prep_status (avancé/normal/progressif/débutant) based on readiness, 5) adjusted_weeks adapts preparation duration based on fitness level. All API endpoints working: GET /api/training/plan, POST /api/training/refresh, GET /api/training/full-cycle.",
+  "features_verified": {
+    "vma_calculation": {
+      "description": "VMA estimated from best effort in 6-week workout history",
+      "method": "effort-based or average-based fallback",
+      "working": true
+    },
+    "personalized_paces": {
+      "zones": ["z1 (65-70% VMA)", "z2 (75-80% VMA)", "z3 (82-87% VMA)", "z4 (88-93% VMA)", "z5 (95-100% VMA)"],
+      "race_paces": ["marathon (78-82% VMA)", "semi (82-85% VMA)"],
+      "format": "M:SS-M:SS/km",
+      "working": true
+    },
+    "readiness_score": {
+      "description": "Score 0-100 based on volume (60%) and fitness (40%)",
+      "working": true
+    },
+    "prep_status": {
+      "values": ["avancé (>=90)", "normal (>=70)", "progressif (>=50)", "débutant (<50)"],
+      "working": true
+    },
+    "adjusted_weeks": {
+      "description": "Plan duration adapts: -25% for avancé, standard for normal, +25% for progressif, +50% for débutant",
+      "working": true
+    },
+    "session_details": {
+      "description": "Sessions contain VMA-based paces in details field",
+      "example": "7 km • 6:12-5:48/km • FC 135-150 bpm • Zone 2",
+      "working": true
+    }
+  },
+  "test_summary": {
+    "backend_tests": {
+      "TestTrainingPlanVMA": {
+        "test_training_plan_returns_200": "PASSED",
+        "test_plan_contains_vma_field": "PASSED",
+        "test_plan_contains_vo2max_field": "PASSED",
+        "test_plan_contains_readiness_score": "PASSED",
+        "test_plan_contains_prep_status": "PASSED",
+        "test_plan_contains_adjusted_weeks": "PASSED",
+        "test_plan_contains_personalized_paces": "PASSED"
+      },
+      "TestSessionsWithPersonalizedPaces": {
+        "test_sessions_exist_in_plan": "PASSED",
+        "test_sessions_have_required_fields": "PASSED",
+        "test_non_rest_sessions_contain_pace_in_details": "PASSED",
+        "test_session_paces_match_vma_derived_paces": "PASSED"
+      },
+      "TestPlanAdaptation": {
+        "test_context_contains_fitness_metrics": "PASSED",
+        "test_adjusted_weeks_varies_with_prep_status": "PASSED"
+      },
+      "TestTrainingPlanRefresh": {
+        "test_refresh_plan_returns_200": "PASSED",
+        "test_refresh_with_sessions_parameter": "PASSED"
+      },
+      "TestFullCycleWithVMA": {
+        "test_full_cycle_returns_200": "PASSED",
+        "test_full_cycle_weeks_have_required_fields": "PASSED"
+      },
+      "TestPacesCalculation": {
+        "test_z1_pace_slower_than_z5": "PASSED",
+        "test_marathon_pace_slower_than_semi_pace": "PASSED",
+        "test_paces_are_realistic_for_vma": "PASSED"
+      }
+    },
+    "frontend_tests": {
+      "training_plan_page_loads_successfully": "PASSED",
+      "training_plan_displays_week_and_cycle_progress": "PASSED",
+      "current_week_sessions_are_displayed": "PASSED",
+      "sessions_display_personalized_pace_information": "PASSED",
+      "refresh_button_updates_the_plan": "PASSED",
+      "full_cycle_view_shows_multiple_weeks": "PASSED",
+      "week_cards_show_phase_information": "PASSED",
+      "coach_advice_is_displayed": "PASSED",
+      "training_goal_is_displayed_in_header": "PASSED",
+      "session_types_are_color_coded": "PASSED",
+      "api_returns_vma_and_paces_in_plan_response": "PASSED",
+      "sessions_contain_vma_derived_paces_in_details": "PASSED"
+    }
+  }
+}

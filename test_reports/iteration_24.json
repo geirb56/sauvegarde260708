@@ -1,0 +1,48 @@
+{
+  "summary": "Backend testing of the Strava-like quasi-real-time Garmin pipeline complete. Created /app/backend/tests/test_realtime_sync_pipeline.py with 14 tests covering non-blocking sync, ingestion dedupe, Redis Stream fan-out, feed cache, since filter, activity-signal, per-user cooldown, global concurrency counter, queue health and status. All 14/14 pass. Prior standalone suites (test_sync_scheduler, test_reliable_queue, test_queue_health) still pass in their native runner (they use custom async runners; not pytest-native so 'pytest' collection errors are expected and not regressions).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "event_worker.handle_event",
+        "issue": "db.workouts.update_one filter uses only {id: workout['id']} without user_id. Two users with the SAME Garmin external_id would overwrite each other's derived workout. Observed in Redis stream during test run: multiple synthetic users (mfa_p2, qa1, default) ingested external_id=23473184085 and only ONE workout doc survived. Not a blocker for user_id='default' feature scope, but a real multi-tenant correctness bug worth fixing (filter should be {id: workout['id'], user_id: user_id} OR keying id as garmin-{user_id}-{ext_id})."
+      },
+      {
+        "endpoint": "GET /api/garmin/activities (cache-first)",
+        "issue": "If Redis feed cache has FEWER items than the requested `limit` (e.g. cache warmed by an earlier limit=1 call, then a later limit=20 call), the endpoint still returns source=cache with < limit items instead of falling back to DB. Observed: cache had 1 entry, subsequent GET with limit=50 returned only 1 activity. Consider: if len(cached) < limit AND cache < FEED_MAXLEN, fall through to DB + re-warm."
+      },
+      {
+        "endpoint": "workers/event_worker.py",
+        "issue": "Log line at 20:43:01 shows 'loop error: Connection closed by server.' then silent. The loop catches Exception and continues, relying on redis.asyncio auto-reconnect. This worked (216 events processed post-restart) but there's no explicit reconnect/re-ensure_group on connection loss. If the group is dropped, worker would silently no-op."
+      }
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_realtime_sync_pipeline.py",
+    "/app/test_reports/pytest/pytest_realtime_pipeline.xml"
+  ],
+  "action_items": [
+    "Consider fixing event_worker.handle_event to key workouts by {id, user_id} to prevent cross-user overwrite when external_ids collide (observed in this environment).",
+    "Consider a fallback in GET /api/garmin/activities: if cache has < requested limit, hit DB & re-warm, so partial/undersized cache does not degrade response size."
+  ],
+  "critical_code_review_comments": [
+    "SEPARATION-OF-CONCERNS is respected: sync-worker only writes garmin_activities + emits ACTIVITY_CREATED; event-worker builds workouts + feed cache. Verified.",
+    "Idempotency: garmin_activities upsert is keyed on {user_id, external_id} — re-sync did NOT duplicate rows (count stable across two consecutive syncs).",
+    "activity-signal is truly read-only: no queue push, no gccli call, only sets cardiocoach:active_signal:{uid} in Redis with TTL. Verified.",
+    "Cooldown key cardiocoach:sync_cooldown:{uid} correctly set with TTL <= 900s after a successful sync (verified TTL=899s).",
+    "Global concurrency cap counter cardiocoach:garmin:global_active exists, bounded to 8, decremented on release. Verified.",
+    "POST /api/garmin/sync returns in < 1s (measured ~0.4s) — non-blocking as required.",
+    "Response contract of GET /api/garmin/activities remains backward compatible ({activities, count}) with the additional `source` field. Verified."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_realtime_sync_pipeline.py (new)"
+  ],
+  "success_rate": {"backend": "100% (14/14)", "frontend": "not tested (skipped by request)"},
+  "test_credentials": "user_id=default (gccli session pre-authenticated, no login required)",
+  "seed_data_creation": "None — used the existing pre-connected gccli Garmin session and default user's real activity history.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "New test file /app/backend/tests/test_realtime_sync_pipeline.py is the canonical regression suite for the Strava-like pipeline. It uses /app/bin/redis-cli with LD_LIBRARY_PATH=/app/lib to inspect Redis state independently of the app's python-redis client. The default user's garmin_activities already had 31 rows before testing; re-sync did NOT create duplicates. Feed cache and workouts populate only for NEW ingested activities (dedupe suppresses events on re-ingestion), so a fresh 'default' sync in an environment where activities already exist will not emit new ACTIVITY_CREATED events — this is by design and correctly tested. The known cross-user workout overwrite (see backend_issues.minor) surfaces only when different user_ids share an external_id, which happened here due to prior load-test data.",
+  "rca of the issue": "N/A — no functional blockers found. Two minor design observations (workouts overwrite key, undersized-cache fallback) are documented as action_items for the main agent."
+}
