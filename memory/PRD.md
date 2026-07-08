@@ -39,3 +39,9 @@ RunIndex — running/cardio training coach. Garmin (gccli) integration, AI coach
 - rsynced into /app preserving .git/.emergent/.env/.gccli_home/bin. Garmin creds + workers intact.
 - API root now "RunIndex API" (rebrand); queue renamed runindex:garmin:queue.
 - All services healthy; gccli session reused; Garmin still connected (30 activities). Dashboard renders (RunIndex 390, Readiness 77).
+
+## Branding RunIndex (2026-07-08)
+- New logo integrated: header (Layout.jsx) now uses /runindex-logo.png (background keyed out from original navy JPG -> transparent PNG via PIL)
+- Full logo added to Onboarding welcome screen + new BrandSplash loading screen (LoadingSpinner.jsx) used on Dashboard initial load (pulse animation)
+- Regenerated favicon/PWA icons (72-512px) with the green "R" mark on navy
+- Created light-background logo variant /runindex-logo-light.png (dark navy "Run" text) for light surfaces / print / emails

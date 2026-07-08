@@ -403,6 +403,16 @@ body {
   display: block;
 }
 
+@keyframes brandPulse {
+  0%, 100% { opacity: 0.55; transform: scale(0.98); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+.brand-splash-logo {
+  animation: brandPulse 1.6s ease-in-out infinite;
+  filter: drop-shadow(0 0 18px rgba(74, 222, 128, 0.25));
+}
+
 .header-logo-icon {
   width: 32px;
   height: 32px;

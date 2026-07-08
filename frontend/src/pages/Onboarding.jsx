@@ -191,7 +191,13 @@ export default function Onboarding() {
           </div>
 
           {stepKey === "welcome" && (
-            <div className="space-y-4">
+            <div className="flex flex-col items-center text-center space-y-5">
+              <img
+                src="/runindex-logo.png"
+                alt="RunIndex"
+                className="h-12 w-auto"
+                data-testid="onboarding-logo"
+              />
               <h1 className="text-3xl font-black tracking-tight">Turn your data into performance</h1>
               <Button
                 onClick={handleNext}

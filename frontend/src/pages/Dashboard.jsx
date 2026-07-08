@@ -34,6 +34,7 @@ import {
 import { useUnitSystem } from "@/context/UnitContext";
 import { formatDistance, formatPace as formatPaceUnits } from "@/utils/units";
 import { Button } from "@/components/ui/button";
+import { BrandSplash } from "@/components/LoadingSpinner";
 import { toast } from "sonner";
 
 import { API_BASE_URL } from "@/config";
@@ -491,14 +492,7 @@ export default function Dashboard() {
   };
 
   if (loading) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-3">
-        <Loader2 className="w-8 h-8 animate-spin" style={{ color: "var(--accent-violet)" }} />
-        <p className="text-sm" style={{ color: "var(--text-tertiary)" }}>
-          {t("common.loading")}
-        </p>
-      </div>
-    );
+    return <BrandSplash text={t("common.loading")} />;
   }
 
   const weekStats = insight?.week || { sessions: 0, volume_km: 0 };
