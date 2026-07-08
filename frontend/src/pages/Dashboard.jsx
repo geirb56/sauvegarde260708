@@ -454,10 +454,10 @@ export default function Dashboard() {
     setCardioLoading(true);
     setCardioError(null);
     try {
-      const res = await axios.get(`${API}/cardio-coach?user_id=default&language=${lang}`);
+      const res = await axios.get(`${API}/run-index?user_id=default&language=${lang}`);
       setCardioData(res.data);
     } catch (err) {
-      console.error("CardioCoach fetch failed:", err);
+      console.error("RunIndex fetch failed:", err);
       setCardioError("Unable to load data.");
     } finally {
       setCardioLoading(false);
@@ -588,7 +588,7 @@ export default function Dashboard() {
       {cardioLoading ? (
         <div
           className="flex flex-col items-center justify-center py-8 gap-3"
-          data-testid="cardio-coach-loading"
+          data-testid="run-index-loading"
         >
           <Loader2
             className="animate-spin"

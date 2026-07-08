@@ -48,9 +48,9 @@ INTERVAL_HEALTHY = int(os.environ.get("MONITOR_INTERVAL_HEALTHY", "120"))
 LEADER_TTL = int(os.environ.get("MONITOR_LEADER_TTL", "150"))
 STANDBY_POLL = int(os.environ.get("MONITOR_STANDBY_POLL", "20"))
 
-LEADER_KEY = "cardiocoach:alert:leader"
-STATE_KEY = "cardiocoach:alert:state"        # hash: unhealthy_streak, degraded_streak
-LAST_LEVEL_KEY = "cardiocoach:alert:last_level"
+LEADER_KEY = "runindex:alert:leader"
+STATE_KEY = "runindex:alert:state"        # hash: unhealthy_streak, degraded_streak
+LAST_LEVEL_KEY = "runindex:alert:last_level"
 
 OWNER = f"{os.uname().nodename}:{os.getpid()}"
 

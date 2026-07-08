@@ -4,7 +4,7 @@ import json
 import time
 from datetime import datetime
 
-class CardioCoachHiddenInsightTester:
+class RunIndexHiddenInsightTester:
     def __init__(self, base_url="https://charge-load.preview.emergentagent.com/api"):
         self.base_url = base_url
         self.tests_run = 0
@@ -236,10 +236,10 @@ class CardioCoachHiddenInsightTester:
         self.tests_run += 1
 
 def main():
-    print("🏃 CardioCoach Hidden Insight Testing")
+    print("🏃 RunIndex Hidden Insight Testing")
     print("=" * 50)
     
-    tester = CardioCoachHiddenInsightTester()
+    tester = RunIndexHiddenInsightTester()
     
     # Test basic functionality
     workouts = tester.test_basic_endpoints()

@@ -210,7 +210,7 @@ class GuidanceAPITester:
         return success, response
 
 def main():
-    print("🎯 CardioCoach Adaptive Guidance Testing")
+    print("🎯 RunIndex Adaptive Guidance Testing")
     print("=" * 50)
     
     tester = GuidanceAPITester()

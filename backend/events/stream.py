@@ -16,7 +16,7 @@ from redis.exceptions import ResponseError
 
 from jobs.redis_client import get_redis
 
-STREAM_KEY = "cardiocoach:events:activity_created"
+STREAM_KEY = "runindex:events:activity_created"
 FANOUT_GROUP = "workouts_fanout"
 STREAM_MAXLEN = 10000
 

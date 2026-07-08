@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Test CardioCoach Dashboard 'cardio-coach' block returns REAL Garmin-derived data.
+Test RunIndex Dashboard 'run-index' block returns REAL Garmin-derived data.
 
-Background: GET /api/cardio-coach now computes from real Garmin data (resting HR + sleep 
+Background: GET /api/run-index now computes from real Garmin data (resting HR + sleep 
 from gccli; training load/ACWR/fatigue computed from real activities) when the user's 
 Garmin is connected. The 'default' user is connected with real data already synced.
 
 Tests:
-1. GET /api/cardio-coach?user_id=default → expect HTTP 200 and REAL Garmin data
+1. GET /api/run-index?user_id=default → expect HTTP 200 and REAL Garmin data
 2. Regression tests: VMA history, race predictions, workouts
 3. Garmin connector health check
 """
@@ -37,20 +37,20 @@ def log_test(test_num: str, description: str, passed: bool, details: str = ""):
         failed_tests.append({"test": test_num, "description": description, "details": details})
 
 
-def test_1_cardio_coach_real_data():
-    """Test 1: GET /api/cardio-coach?user_id=default returns REAL Garmin data"""
+def test_1_run_index_real_data():
+    """Test 1: GET /api/run-index?user_id=default returns REAL Garmin data"""
     print("\n" + "="*80)
-    print("TEST 1: CardioCoach endpoint returns REAL Garmin data (not mock)")
+    print("TEST 1: RunIndex endpoint returns REAL Garmin data (not mock)")
     print("="*80)
     
     try:
-        url = f"{BASE_URL}/cardio-coach?user_id={USER_ID}"
+        url = f"{BASE_URL}/run-index?user_id={USER_ID}"
         response = requests.get(url, timeout=30)
         
         print(f"Status Code: {response.status_code}")
         
         if response.status_code != 200:
-            log_test("1", "CardioCoach endpoint HTTP 200", False, f"Expected 200, got {response.status_code}")
+            log_test("1", "RunIndex endpoint HTTP 200", False, f"Expected 200, got {response.status_code}")
             return False
         
         data = response.json()
@@ -58,22 +58,22 @@ def test_1_cardio_coach_real_data():
         
         # CRITICAL: Verify mock == false
         if data.get("mock") != False:
-            log_test("1a", "CardioCoach mock field", False, f"Expected mock=false, got mock={data.get('mock')}")
+            log_test("1a", "RunIndex mock field", False, f"Expected mock=false, got mock={data.get('mock')}")
             return False
         else:
-            log_test("1a", "CardioCoach mock field", True, "mock=false (not using static mock)")
+            log_test("1a", "RunIndex mock field", True, "mock=false (not using static mock)")
         
         # CRITICAL: Verify source == "garmin"
         if data.get("source") != "garmin":
-            log_test("1b", "CardioCoach source field", False, f"Expected source='garmin', got source='{data.get('source')}'")
+            log_test("1b", "RunIndex source field", False, f"Expected source='garmin', got source='{data.get('source')}'")
             return False
         else:
-            log_test("1b", "CardioCoach source field", True, "source='garmin' (using real Garmin data)")
+            log_test("1b", "RunIndex source field", True, "source='garmin' (using real Garmin data)")
         
         # Verify metrics object exists
         metrics = data.get("metrics")
         if not metrics:
-            log_test("1c", "CardioCoach metrics object", False, "metrics object missing")
+            log_test("1c", "RunIndex metrics object", False, "metrics object missing")
             return False
         
         print(f"Metrics: {metrics}")
@@ -81,42 +81,42 @@ def test_1_cardio_coach_real_data():
         # Verify rhr_today is a real number (around 44-50)
         rhr_today = metrics.get("rhr_today")
         if not isinstance(rhr_today, (int, float)) or rhr_today <= 0:
-            log_test("1d", "CardioCoach metrics.rhr_today", False, f"Expected real number > 0, got {rhr_today}")
+            log_test("1d", "RunIndex metrics.rhr_today", False, f"Expected real number > 0, got {rhr_today}")
             return False
         else:
-            log_test("1d", "CardioCoach metrics.rhr_today", True, f"rhr_today={rhr_today} (real value)")
+            log_test("1d", "RunIndex metrics.rhr_today", True, f"rhr_today={rhr_today} (real value)")
         
         # Verify sleep_hours is a real number (> 0)
         sleep_hours = metrics.get("sleep_hours")
         if not isinstance(sleep_hours, (int, float)) or sleep_hours <= 0:
-            log_test("1e", "CardioCoach metrics.sleep_hours", False, f"Expected real number > 0, got {sleep_hours}")
+            log_test("1e", "RunIndex metrics.sleep_hours", False, f"Expected real number > 0, got {sleep_hours}")
             return False
         else:
-            log_test("1e", "CardioCoach metrics.sleep_hours", True, f"sleep_hours={sleep_hours} (real value)")
+            log_test("1e", "RunIndex metrics.sleep_hours", True, f"sleep_hours={sleep_hours} (real value)")
         
         # Verify training_load (ACWR) is a number > 0
         training_load = metrics.get("training_load")
         if not isinstance(training_load, (int, float)) or training_load <= 0:
-            log_test("1f", "CardioCoach metrics.training_load", False, f"Expected number > 0, got {training_load}")
+            log_test("1f", "RunIndex metrics.training_load", False, f"Expected number > 0, got {training_load}")
             return False
         else:
-            log_test("1f", "CardioCoach metrics.training_load", True, f"training_load={training_load} (ACWR computed from real activities)")
+            log_test("1f", "RunIndex metrics.training_load", True, f"training_load={training_load} (ACWR computed from real activities)")
         
         # Verify fatigue_ratio is a number >= 0 (must NOT be negative)
         fatigue_ratio = metrics.get("fatigue_ratio")
         if not isinstance(fatigue_ratio, (int, float)) or fatigue_ratio < 0:
-            log_test("1g", "CardioCoach metrics.fatigue_ratio", False, f"Expected number >= 0, got {fatigue_ratio}")
+            log_test("1g", "RunIndex metrics.fatigue_ratio", False, f"Expected number >= 0, got {fatigue_ratio}")
             return False
         else:
-            log_test("1g", "CardioCoach metrics.fatigue_ratio", True, f"fatigue_ratio={fatigue_ratio} (>= 0, not negative)")
+            log_test("1g", "RunIndex metrics.fatigue_ratio", True, f"fatigue_ratio={fatigue_ratio} (>= 0, not negative)")
         
         # Verify hrv_available == false (this account's device has no HRV)
         hrv_available = metrics.get("hrv_available")
         if hrv_available != False:
-            log_test("1h", "CardioCoach metrics.hrv_available", False, f"Expected hrv_available=false, got {hrv_available}")
+            log_test("1h", "RunIndex metrics.hrv_available", False, f"Expected hrv_available=false, got {hrv_available}")
             return False
         else:
-            log_test("1h", "CardioCoach metrics.hrv_available", True, "hrv_available=false (expected for this device)")
+            log_test("1h", "RunIndex metrics.hrv_available", True, "hrv_available=false (expected for this device)")
         
         # Verify hrv_today, hrv_baseline, hrv_delta are null
         hrv_today = metrics.get("hrv_today")
@@ -124,41 +124,41 @@ def test_1_cardio_coach_real_data():
         hrv_delta = metrics.get("hrv_delta")
         
         if hrv_today is not None:
-            log_test("1i", "CardioCoach metrics.hrv_today", False, f"Expected null, got {hrv_today}")
+            log_test("1i", "RunIndex metrics.hrv_today", False, f"Expected null, got {hrv_today}")
             return False
         
         if hrv_baseline is not None:
-            log_test("1i", "CardioCoach metrics.hrv_baseline", False, f"Expected null, got {hrv_baseline}")
+            log_test("1i", "RunIndex metrics.hrv_baseline", False, f"Expected null, got {hrv_baseline}")
             return False
         
         if hrv_delta is not None:
-            log_test("1i", "CardioCoach metrics.hrv_delta", False, f"Expected null, got {hrv_delta}")
+            log_test("1i", "RunIndex metrics.hrv_delta", False, f"Expected null, got {hrv_delta}")
             return False
         
-        log_test("1i", "CardioCoach HRV fields", True, "hrv_today, hrv_baseline, hrv_delta all null (expected)")
+        log_test("1i", "RunIndex HRV fields", True, "hrv_today, hrv_baseline, hrv_delta all null (expected)")
         
         # Verify history is an array of up to 7 items
         history = data.get("history")
         if not isinstance(history, list):
-            log_test("1j", "CardioCoach history array", False, f"Expected array, got {type(history)}")
+            log_test("1j", "RunIndex history array", False, f"Expected array, got {type(history)}")
             return False
         
         if len(history) == 0 or len(history) > 7:
-            log_test("1j", "CardioCoach history array", False, f"Expected 1-7 items, got {len(history)}")
+            log_test("1j", "RunIndex history array", False, f"Expected 1-7 items, got {len(history)}")
             return False
         
         # Verify each history item has required fields
         first_history = history[0]
         if not all(k in first_history for k in ["day", "training_load", "fatigue_ratio"]):
-            log_test("1j", "CardioCoach history array", False, f"Missing required fields in history item: {first_history}")
+            log_test("1j", "RunIndex history array", False, f"Missing required fields in history item: {first_history}")
             return False
         
-        log_test("1j", "CardioCoach history array", True, f"history has {len(history)} items with required fields")
+        log_test("1j", "RunIndex history array", True, f"history has {len(history)} items with required fields")
         
         # Verify reasons is a non-empty array
         reasons = data.get("reasons")
         if not isinstance(reasons, list) or len(reasons) == 0:
-            log_test("1k", "CardioCoach reasons array", False, f"Expected non-empty array, got {reasons}")
+            log_test("1k", "RunIndex reasons array", False, f"Expected non-empty array, got {reasons}")
             return False
         
         # Verify reasons includes resting-HR reason and "HRV not recorded" reason
@@ -168,20 +168,20 @@ def test_1_cardio_coach_real_data():
         has_hrv_not_recorded = "hrv not recorded" in reasons_text or "hrv not available" in reasons_text
         
         if not has_rhr_reason:
-            log_test("1k", "CardioCoach reasons (RHR)", False, f"Expected resting-HR reason, got: {reasons}")
+            log_test("1k", "RunIndex reasons (RHR)", False, f"Expected resting-HR reason, got: {reasons}")
             return False
         
         if not has_hrv_not_recorded:
-            log_test("1k", "CardioCoach reasons (HRV not recorded)", False, f"Expected 'HRV not recorded' reason, got: {reasons}")
+            log_test("1k", "RunIndex reasons (HRV not recorded)", False, f"Expected 'HRV not recorded' reason, got: {reasons}")
             return False
         
-        log_test("1k", "CardioCoach reasons array", True, f"reasons includes RHR and 'HRV not recorded' ({len(reasons)} reasons total)")
+        log_test("1k", "RunIndex reasons array", True, f"reasons includes RHR and 'HRV not recorded' ({len(reasons)} reasons total)")
         
-        print("\n✅ TEST 1 PASSED: CardioCoach returns REAL Garmin data (not mock)")
+        print("\n✅ TEST 1 PASSED: RunIndex returns REAL Garmin data (not mock)")
         return True
         
     except Exception as e:
-        log_test("1", "CardioCoach endpoint", False, f"Exception: {str(e)}")
+        log_test("1", "RunIndex endpoint", False, f"Exception: {str(e)}")
         return False
 
 
@@ -348,14 +348,14 @@ def test_5_garmin_status():
 def main():
     """Run all tests in order"""
     print("\n" + "="*80)
-    print("CARDIOCOACH DASHBOARD - REAL GARMIN DATA TESTING")
+    print("RUNINDEX DASHBOARD - REAL GARMIN DATA TESTING")
     print("="*80)
     print(f"Base URL: {BASE_URL}")
     print(f"User ID: {USER_ID}")
     print("="*80)
     
     # Run tests in order
-    test_1_cardio_coach_real_data()
+    test_1_run_index_real_data()
     test_2_regression_vma_history()
     test_3_regression_race_predictions()
     test_4_regression_workouts()

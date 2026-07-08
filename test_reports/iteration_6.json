@@ -1,5 +1,5 @@
 {
-  "summary": "Completed comprehensive testing of CardioCoach Adaptive Training Guidance feature. All backend APIs and frontend functionality working correctly with full EN/FR language support.",
+  "summary": "Completed comprehensive testing of RunIndex Adaptive Training Guidance feature. All backend APIs and frontend functionality working correctly with full EN/FR language support.",
   
   "backend_issues": {
     "critical_bugs": [],

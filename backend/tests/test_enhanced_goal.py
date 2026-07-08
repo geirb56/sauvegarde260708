@@ -27,7 +27,7 @@ class TestEnhancedGoalAPI:
         """Test API is accessible"""
         response = requests.get(f"{BASE_URL}/api/")
         assert response.status_code == 200
-        assert response.json()["message"] == "CardioCoach API"
+        assert response.json()["message"] == "RunIndex API"
     
     # Test distance type options
     def test_create_goal_5k(self):

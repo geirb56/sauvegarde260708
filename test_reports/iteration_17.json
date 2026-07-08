@@ -13,7 +13,7 @@
   },
 
   "passed_tests": [
-    "API health check - CardioCoach API accessible",
+    "API health check - RunIndex API accessible",
     "POST /api/user/goal with distance_type=5k creates goal with distance_km=5.0",
     "POST /api/user/goal with distance_type=10k creates goal with distance_km=10.0",
     "POST /api/user/goal with distance_type=semi creates goal with distance_km=21.1",

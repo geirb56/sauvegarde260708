@@ -1,4 +1,4 @@
-# CardioCoach - Garmin gccli integration skeleton
+# RunIndex - Garmin gccli integration skeleton
 
 Ce dépôt contient un squelette pour l'intégration backend de Garmin via gccli.
 Le design respecte le Provider Pattern, un vault de credentials chiffré, Celery workers et une couche d'exécution gccli isolée.

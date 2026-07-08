@@ -94,7 +94,7 @@ export default function Onboarding() {
     const loadPhysio = async () => {
       setLoadingPhysio(true);
       try {
-        const res = await axios.get(`${API}/cardio-coach?user_id=${USER_ID}`);
+        const res = await axios.get(`${API}/run-index?user_id=${USER_ID}`);
         setPhysioData(res.data?.metrics || null);
       } catch (err) {
         setPhysioData(null);

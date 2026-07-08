@@ -27,7 +27,7 @@ import logging
 import time
 logger = logging.getLogger(__name__)
 
-ACTIVE_SIGNAL_PREFIX = "cardiocoach:active_signal:"
+ACTIVE_SIGNAL_PREFIX = "runindex:active_signal:"
 ACTIVE_SIGNAL_TTL = 45 * 60  # 45 min — matches scheduler ACTIVE window
 
 garmin_router = APIRouter(prefix="/garmin", tags=["garmin"])

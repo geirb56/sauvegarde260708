@@ -1,4 +1,4 @@
-"""CardioCoach — SRE load & resilience audit harness.
+"""RunIndex — SRE load & resilience audit harness.
 
 Methodology: to exercise the queue/worker/lock/dedup machinery WITHOUT hammering
 Garmin (single gccli account), we enqueue jobs for DISTINCT, UNCONNECTED user
@@ -11,7 +11,7 @@ import aiohttp
 import redis as redissync
 
 BASE = "http://localhost:8001"
-QUEUE_KEY = "cardiocoach:garmin:queue"
+QUEUE_KEY = "runindex:garmin:queue"
 R = redissync.from_url(os.environ.get("AUDIT_REDIS_URL", "redis://127.0.0.1:6379/0"), decode_responses=True)
 
 

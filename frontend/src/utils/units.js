@@ -5,7 +5,7 @@
 // - elevation: meters
 // Conversions are done only for display.
 
-export const UNIT_SYSTEM_KEY = "cardiocoach_unit_system";
+export const UNIT_SYSTEM_KEY = "runindex_unit_system";
 
 // Detect device region and return a default unit system ("metric" | "imperial")
 export const detectDeviceUnitSystem = () => {

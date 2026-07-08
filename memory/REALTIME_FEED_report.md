@@ -13,11 +13,11 @@ microservices, sans toucher au Provider ni au frontend.
 gccli sync (worker) ──> garmin_activities   [SOURCE OF TRUTH, dedupe external_id]
                           │  emit ACTIVITY_CREATED
                           ▼
-              Redis Stream cardiocoach:events:activity_created (MAXLEN 10k)
+              Redis Stream runindex:events:activity_created (MAXLEN 10k)
                           │  consumer group workouts_fanout
                           ▼
         event-worker (fan-out) ──> workouts  [couche produit/UI, dérivée]
-                                └─> feed cache Redis cardiocoach:feed:{user}
+                                └─> feed cache Redis runindex:feed:{user}
 ```
 Règle absolue respectée : **le sync worker n'écrit JAMAIS `workouts` directement**.
 `garmin_activities` reste immuable ; `workouts` est dérivé et remplaçable.

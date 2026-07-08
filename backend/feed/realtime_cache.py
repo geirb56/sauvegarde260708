@@ -14,7 +14,7 @@ import json
 
 from jobs.redis_client import get_redis
 
-FEED_PREFIX = "cardiocoach:feed:"
+FEED_PREFIX = "runindex:feed:"
 FEED_MAXLEN = 50            # keep only the latest N per user
 FEED_TTL = 7 * 24 * 3600    # evict cold users after a week
 

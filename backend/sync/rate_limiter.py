@@ -20,8 +20,8 @@ from jobs.redis_client import get_redis
 GLOBAL_MAX = int(os.environ.get("GARMIN_GLOBAL_MAX_SYNCS", "8"))   # 5-10 range
 COOLDOWN_SECONDS = int(os.environ.get("SYNC_USER_COOLDOWN", "900"))  # 15 min
 
-GLOBAL_ACTIVE_KEY = "cardiocoach:garmin:global_active"
-COOLDOWN_PREFIX = "cardiocoach:sync_cooldown:"
+GLOBAL_ACTIVE_KEY = "runindex:garmin:global_active"
+COOLDOWN_PREFIX = "runindex:sync_cooldown:"
 
 
 # --------------------------------------------------------------- per-user cooldown

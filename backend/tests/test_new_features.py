@@ -1,5 +1,5 @@
 """
-Test suite for CardioCoach new features:
+Test suite for RunIndex new features:
 1. Recovery Score on Dashboard (circular gauge 0-100)
 2. User Goal (event with date) in Settings
 3. Weekly Review with goal context and recommendations followup

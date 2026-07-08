@@ -1,5 +1,5 @@
 {
-  "summary": "Completed comprehensive testing of Garmin Connect API integration in CardioCoach. Backend endpoints, frontend UI, data conversion, and existing functionality all tested successfully.",
+  "summary": "Completed comprehensive testing of Garmin Connect API integration in RunIndex. Backend endpoints, frontend UI, data conversion, and existing functionality all tested successfully.",
   
   "backend_issues": {
     "minor_bugs": [

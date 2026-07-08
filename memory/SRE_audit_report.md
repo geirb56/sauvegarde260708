@@ -1,4 +1,4 @@
-# CardioCoach — Audit SRE Robustesse & Scalabilité (2026-07-01)
+# RunIndex — Audit SRE Robustesse & Scalabilité (2026-07-01)
 
 > ⚠️ Correction : le backend utilise **MongoDB**, pas PostgreSQL. Les mesures ci-dessous portent sur MongoDB.
 > Méthodologie charge : jobs enfilés pour des **user_ids distincts non connectés** → `service.sync()` revient vite ("not connected"), ce qui mesure l'**infra** (API/Redis/worker/Mongo/locks) sans marteler Garmin (compte gccli unique).

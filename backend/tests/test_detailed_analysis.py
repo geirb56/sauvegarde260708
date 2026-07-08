@@ -1,5 +1,5 @@
 """
-Test suite for CardioCoach Detailed Analysis API (Card-based Mobile Experience)
+Test suite for RunIndex Detailed Analysis API (Card-based Mobile Experience)
 Tests the GET /api/coach/detailed-analysis/{workout_id} endpoint
 
 Features tested:

@@ -262,7 +262,7 @@ export default function Coach() {
                 ) : (
                   <div className="max-w-[85%] md:max-w-[70%]">
                     <p className="font-mono text-[10px] uppercase tracking-widest text-primary mb-2">
-                      CardioCoach
+                      RunIndex
                     </p>
                     <div className="coach-message">
                       <p className="text-sm whitespace-pre-wrap leading-relaxed">
@@ -276,7 +276,7 @@ export default function Coach() {
             {loading && (
               <div className="animate-in">
                 <p className="font-mono text-[10px] uppercase tracking-widest text-primary mb-2">
-                  CardioCoach
+                  RunIndex
                 </p>
                 <div className="coach-message flex items-center gap-2">
                   <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />

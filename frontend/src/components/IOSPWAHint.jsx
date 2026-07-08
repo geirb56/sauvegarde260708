@@ -13,9 +13,9 @@ import { useState, useEffect } from 'react';
 import { X, Share } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
 
-const STORAGE_KEY = 'cardiocoach_ios_pwa_hint_dismissed';
+const STORAGE_KEY = 'runindex_ios_pwa_hint_dismissed';
 const MIN_VISITS_BEFORE_SHOW = 2; // Afficher après 2 visites
-const VISIT_COUNT_KEY = 'cardiocoach_visit_count';
+const VISIT_COUNT_KEY = 'runindex_visit_count';
 
 export const IOSPWAHint = () => {
   const { t } = useLanguage();

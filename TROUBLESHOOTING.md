@@ -1,4 +1,4 @@
-# CardioCoach Troubleshooting Guide
+# RunIndex Troubleshooting Guide
 
 ## Common Issues and Solutions
 
