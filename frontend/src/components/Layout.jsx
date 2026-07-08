@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Outlet, NavLink, useLocation } from "react-router-dom";
-import { Home, CalendarDays, MessageCircle, Zap, RefreshCw, Settings, TrendingUp } from "lucide-react";
+import { Home, CalendarDays, MessageCircle, RefreshCw, Settings, TrendingUp } from "lucide-react";
 import { useLanguage } from "@/context/LanguageContext";
 import { useAutoSync } from "@/hooks/useAutoSync";
 import ChatCoach from "@/components/ChatCoach";
@@ -54,20 +54,18 @@ export const Layout = () => {
       {/* Mobile Header */}
       <header className="header-modern">
         <div className="header-logo">
-          <div className="header-logo-icon">
-            <Zap className="w-5 h-5 text-white" />
-          </div>
-          <div>
-            <h1 className="header-logo-text">
-              Cardio<span>Coach</span>
-            </h1>
-            {lastSync && (
-              <div className="sync-status">
-                <span className="sync-dot" />
-                <span>{lastSync}</span>
-              </div>
-            )}
-          </div>
+          <img
+            src="/runindex-logo.png"
+            alt="RunIndex"
+            className="header-logo-img"
+            data-testid="app-logo"
+          />
+          {lastSync && (
+            <div className="sync-status">
+              <span className="sync-dot" />
+              <span>{lastSync}</span>
+            </div>
+          )}
         </div>
         
         <div className="header-actions">

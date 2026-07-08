@@ -394,7 +394,13 @@ body {
 .header-logo {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+}
+
+.header-logo-img {
+  height: 34px;
+  width: auto;
+  display: block;
 }
 
 .header-logo-icon {
