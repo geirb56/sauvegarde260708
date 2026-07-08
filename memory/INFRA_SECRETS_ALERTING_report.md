@@ -67,13 +67,13 @@ sync_worker** et de FastAPI. Découplé de gccli/sync (lecture Redis seule).
 - Boucle : `queue_health()` → `evaluate_queue_health()` → `send_alert()`.
 - **Intervalle adaptatif** : 30s (unhealthy) / 60s (degraded) / 120s (healthy).
 - **Alertes sur changement d'état uniquement** (anti-spam) : le niveau émis
-  précédemment est stocké dans Redis (`cardiocoach:alert:last_level`) ; on
+  précédemment est stocké dans Redis (`runindex:alert:last_level`) ; on
   n'émet que si le niveau change, plus un message de **récupération** (`info`)
   au retour `healthy`.
 - **Scalabilité horizontale** : élection de leader via lock Redis
-  (`cardiocoach:alert:leader`, TTL 150s > interval max). Un seul monitor évalue
+  (`runindex:alert:leader`, TTL 150s > interval max). Un seul monitor évalue
   et alerte ; les autres sont des **hot standbys** qui reprennent si le leader
-  meurt. Les streaks (`cardiocoach:alert:state`) et `last_level` sont dans Redis
+  meurt. Les streaks (`runindex:alert:state`) et `last_level` sont dans Redis
   → aucune remise à zéro ni doublon d'alerte quand on scale.
 - Ne bloque jamais l'app ni les sync workers ; toute erreur est loggée et la
   boucle survit.

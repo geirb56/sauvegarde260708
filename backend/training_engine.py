@@ -1,5 +1,5 @@
 """
-CardioCoach - Training Engine
+RunIndex - Training Engine
 
 Periodization engine and training load management.
 Calculations based on:

@@ -29,9 +29,9 @@
   "critical_code_review_comments": [
     "SEPARATION-OF-CONCERNS is respected: sync-worker only writes garmin_activities + emits ACTIVITY_CREATED; event-worker builds workouts + feed cache. Verified.",
     "Idempotency: garmin_activities upsert is keyed on {user_id, external_id} — re-sync did NOT duplicate rows (count stable across two consecutive syncs).",
-    "activity-signal is truly read-only: no queue push, no gccli call, only sets cardiocoach:active_signal:{uid} in Redis with TTL. Verified.",
-    "Cooldown key cardiocoach:sync_cooldown:{uid} correctly set with TTL <= 900s after a successful sync (verified TTL=899s).",
-    "Global concurrency cap counter cardiocoach:garmin:global_active exists, bounded to 8, decremented on release. Verified.",
+    "activity-signal is truly read-only: no queue push, no gccli call, only sets runindex:active_signal:{uid} in Redis with TTL. Verified.",
+    "Cooldown key runindex:sync_cooldown:{uid} correctly set with TTL <= 900s after a successful sync (verified TTL=899s).",
+    "Global concurrency cap counter runindex:garmin:global_active exists, bounded to 8, decremented on release. Verified.",
     "POST /api/garmin/sync returns in < 1s (measured ~0.4s) — non-blocking as required.",
     "Response contract of GET /api/garmin/activities remains backward compatible ({activities, count}) with the additional `source` field. Verified."
   ],

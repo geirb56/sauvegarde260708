@@ -1,5 +1,5 @@
 {
-  "summary": "Completed comprehensive testing of CardioCoach bilingual EN/FR support. All language switching functionality working perfectly including UI translations, localStorage persistence, and AI Coach language responses.",
+  "summary": "Completed comprehensive testing of RunIndex bilingual EN/FR support. All language switching functionality working perfectly including UI translations, localStorage persistence, and AI Coach language responses.",
   
   "backend_issues": {
     "critical_bugs": [],
@@ -17,7 +17,7 @@
     "English is selected by default on first load",
     "French language switch works correctly (FR button becomes active)",
     "English language switch works correctly (EN button becomes active)", 
-    "Language preference persists in localStorage with key 'cardiocoach_lang'",
+    "Language preference persists in localStorage with key 'runindex_lang'",
     "Dashboard translates to French ('Journal d'entrainement')",
     "Navigation labels translate correctly (Tableau de bord, Coach, Progression, Parametres)",
     "Coach page placeholder translates to French ('Posez une question sur votre entrainement...')",

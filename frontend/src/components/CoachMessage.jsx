@@ -35,7 +35,7 @@ export const AssistantMessage = ({ content, isLoading, lang, t, index }) => (
     style={{ animationDelay: `${index * 50}ms` }}
   >
     <p className="font-mono text-[10px] uppercase tracking-widest text-primary mb-2">
-      CardioCoach
+      RunIndex
     </p>
     <div className="coach-message bg-card/50 border-l-2 border-primary pl-4 py-3 rounded-sm">
       {isLoading ? (

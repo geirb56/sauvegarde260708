@@ -1,5 +1,5 @@
 """
-CardioCoach - Cascade Coaching Service with Cache and Metrics
+RunIndex - Cascade Coaching Service with Cache and Metrics
 
 Strategy:
 1. Check cache (0ms)

@@ -46,7 +46,7 @@ jamais considéré comme orphelin.
 | `backend/jobs/queue.py` | + `claim_job` (BLMOVE), `ack_job`, `requeue_job`, `recover_orphans` |
 | `backend/workers/sync_worker.py` | boucle passe de `BRPOP` à `claim_job` ; ACK sur succès ; requeue sur retry/lock ; `watchdog_loop` lancée au démarrage |
 | `backend/jobs/redis_client.py` | `socket_timeout=None` (sinon `BLMOVE` bloquant lève un TimeoutError client) |
-| `/etc/supervisor/conf.d/cardiocoach.conf` | Redis : `--appendonly yes --dir /app/data/redis` (persistance AOF pour survivre à un restart Redis) ; binaire pointé vers `/app/bin/redis-server` (persistant) |
+| `/etc/supervisor/conf.d/runindex.conf` | Redis : `--appendonly yes --dir /app/data/redis` (persistance AOF pour survivre à un restart Redis) ; binaire pointé vers `/app/bin/redis-server` (persistant) |
 
 Nouveaux fichiers de test :
 - `backend/tests/test_reliable_queue.py`

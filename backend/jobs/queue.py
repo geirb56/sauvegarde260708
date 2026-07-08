@@ -17,22 +17,22 @@ from .redis_client import get_redis
 logger = logging.getLogger(__name__)
 
 # Single FIFO queue (LPUSH to enqueue, BLMOVE to claim into processing).
-QUEUE_KEY = "cardiocoach:garmin:queue"
+QUEUE_KEY = "runindex:garmin:queue"
 # Reliable-queue in-flight list: a job lives here from claim until ACK.
-PROCESSING_KEY = "cardiocoach:garmin:processing"
+PROCESSING_KEY = "runindex:garmin:processing"
 # Hash job_id -> claimed_at (epoch); used by the watchdog to detect orphans.
-CLAIMS_KEY = "cardiocoach:garmin:claims"
+CLAIMS_KEY = "runindex:garmin:claims"
 # A job stuck in processing longer than this (s) is considered orphaned.
 ORPHAN_TIMEOUT = int(os.environ.get("SYNC_ORPHAN_TIMEOUT", "120"))
 
 # --- Monitoring-only keys (additive instrumentation; no queue behaviour) ---
-# Per-worker heartbeat: cardiocoach:worker:heartbeat:{pid}, TTL-refreshed.
-HEARTBEAT_PREFIX = "cardiocoach:worker:heartbeat:"
+# Per-worker heartbeat: runindex:worker:heartbeat:{pid}, TTL-refreshed.
+HEARTBEAT_PREFIX = "runindex:worker:heartbeat:"
 HEARTBEAT_TTL = int(os.environ.get("SYNC_HEARTBEAT_TTL", "15"))
 HEARTBEAT_INTERVAL = int(os.environ.get("SYNC_HEARTBEAT_INTERVAL", "10"))
 # Monotonic counters (INCR only).
-STATS_ORPHANS_KEY = "cardiocoach:stats:orphans_recovered"
-STATS_FAILED_KEY = "cardiocoach:stats:failed_jobs"
+STATS_ORPHANS_KEY = "runindex:stats:orphans_recovered"
+STATS_FAILED_KEY = "runindex:stats:failed_jobs"
 
 # Job types
 JOB_SYNC_USER = "SYNC_USER"          # full sync: activities + daily health metrics

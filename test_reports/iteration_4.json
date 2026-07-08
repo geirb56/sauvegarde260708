@@ -1,5 +1,5 @@
 {
-  "summary": "Completed comprehensive testing of CardioCoach enhanced deep analysis with contextual comparison features. All baseline comparison functionality working correctly including 14-day baseline calculation, trend detection, relative terms usage, and calm non-alarmist tone in both English and French.",
+  "summary": "Completed comprehensive testing of RunIndex enhanced deep analysis with contextual comparison features. All baseline comparison functionality working correctly including 14-day baseline calculation, trend detection, relative terms usage, and calm non-alarmist tone in both English and French.",
   
   "backend_issues": {
     "critical_bugs": [],

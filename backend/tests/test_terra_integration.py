@@ -1,5 +1,5 @@
 """
-Test suite for CardioCoach Terra Integration
+Test suite for RunIndex Terra Integration
 =============================================
 Tests: Terra connection endpoints, daily metrics sync, recovery scores,
        training load, workout recommendations.
@@ -15,7 +15,7 @@ import os
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "http://localhost:8001").rstrip("/")
 
 # A fake Terra token used for connect/disconnect tests.
-FAKE_TERRA_TOKEN = "terra_test_token_cardiocoach_2024"
+FAKE_TERRA_TOKEN = "terra_test_token_runindex_2024"
 
 
 class TestTerraStatusEndpoint:
@@ -151,15 +151,15 @@ class TestTerraMetricsEndpoints:
 
 
 class TestExistingFunctionalityNotBroken:
-    """Verify that existing CardioCoach endpoints still work after Terra addition."""
+    """Verify that existing RunIndex endpoints still work after Terra addition."""
 
     def test_api_root(self):
-        """GET /api/ — should still return CardioCoach API message."""
+        """GET /api/ — should still return RunIndex API message."""
         response = requests.get(f"{BASE_URL}/api/")
         assert response.status_code == 200
         data = response.json()
         assert "message" in data
-        assert "CardioCoach" in data["message"]
+        assert "RunIndex" in data["message"]
         print(f"✓ API root: {data['message']}")
 
     def test_strava_status_still_works(self):

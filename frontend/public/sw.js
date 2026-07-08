@@ -1,8 +1,8 @@
-// CardioCoach Service Worker
+// RunIndex Service Worker
 // Prompt natif du navigateur seulement – pas d'UI custom
 // Ce SW permet l'installabilité PWA et le cache offline basique
 
-const CACHE_NAME = 'cardiocoach-v1';
+const CACHE_NAME = 'runindex-v1';
 const OFFLINE_URL = '/offline.html';
 
 // Assets à mettre en cache immédiatement

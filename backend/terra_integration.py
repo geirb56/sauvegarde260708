@@ -1,5 +1,5 @@
 """
-Terra Integration Module for CardioCoach
+Terra Integration Module for RunIndex
 =========================================
 Replaces the Strava integration for wearable data aggregation.
 
@@ -197,14 +197,14 @@ async def fetch_terra_workouts(token: str) -> list:
 # ---------------------------------------------------------------------------
 
 def convert_terra_workout_to_internal(terra_workout: dict, user_id: str) -> dict:
-    """Convert a Terra workout payload to the CardioCoach internal workout format.
+    """Convert a Terra workout payload to the RunIndex internal workout format.
 
     Parameters
     ----------
     terra_workout:
         Raw workout dict from the Terra ``/workouts`` endpoint.
     user_id:
-        CardioCoach user identifier.
+        RunIndex user identifier.
 
     Returns
     -------
@@ -291,7 +291,7 @@ async def syncDailyMetrics(user_id: str, db) -> dict:
     Parameters
     ----------
     user_id:
-        CardioCoach user identifier.
+        RunIndex user identifier.
     db:
         Motor async MongoDB database handle.
 
@@ -369,7 +369,7 @@ async def computeRecoveryScore(user_id: str, db) -> dict:
     Parameters
     ----------
     user_id:
-        CardioCoach user identifier.
+        RunIndex user identifier.
     db:
         Motor async MongoDB database handle.
 
@@ -482,7 +482,7 @@ async def computeTrainingLoad(user_id: str, db) -> dict:
     Parameters
     ----------
     user_id:
-        CardioCoach user identifier.
+        RunIndex user identifier.
     db:
         Motor async MongoDB database handle.
 
@@ -556,7 +556,7 @@ async def generateWorkoutRecommendation(user_id: str, db) -> dict:
     Parameters
     ----------
     user_id:
-        CardioCoach user identifier.
+        RunIndex user identifier.
     db:
         Motor async MongoDB database handle.
 
@@ -610,7 +610,7 @@ async def syncTerraWorkouts(user_id: str, db) -> dict:
     Parameters
     ----------
     user_id:
-        CardioCoach user identifier.
+        RunIndex user identifier.
     db:
         Motor async MongoDB database handle.
 

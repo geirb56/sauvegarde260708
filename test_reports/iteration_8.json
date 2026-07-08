@@ -1,5 +1,5 @@
 {
-  "summary": "Completed comprehensive testing of Strava API integration in CardioCoach. All backend endpoints work correctly, UI shows generic 'Data Sync' section without Strava/Garmin branding, EN/FR translations work, and Garmin endpoints remain dormant in backend.",
+  "summary": "Completed comprehensive testing of Strava API integration in RunIndex. All backend endpoints work correctly, UI shows generic 'Data Sync' section without Strava/Garmin branding, EN/FR translations work, and Garmin endpoints remain dormant in backend.",
   
   "backend_issues": {
     "critical": [],

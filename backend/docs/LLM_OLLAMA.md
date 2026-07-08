@@ -1,4 +1,4 @@
-# CardioCoach - Intégration LLM Ollama
+# RunIndex - Intégration LLM Ollama
 
 ## Architecture
 Le chatbot utilise un LLM local (Ollama) exécuté **uniquement sur le serveur** backend.

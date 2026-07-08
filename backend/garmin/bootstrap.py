@@ -61,7 +61,7 @@ def ensure_gccli_installed(bin_dir: str = DEFAULT_BIN_DIR, timeout: int = 90) ->
         return None
 
     try:
-        req = urllib.request.Request(GITHUB_LATEST, headers={"User-Agent": "cardiocoach"})
+        req = urllib.request.Request(GITHUB_LATEST, headers={"User-Agent": "runindex"})
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             release = json.load(resp)
 
@@ -77,7 +77,7 @@ def ensure_gccli_installed(bin_dir: str = DEFAULT_BIN_DIR, timeout: int = 90) ->
 
         os.makedirs(bin_dir, exist_ok=True)
         with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp:
-            req2 = urllib.request.Request(asset_url, headers={"User-Agent": "cardiocoach"})
+            req2 = urllib.request.Request(asset_url, headers={"User-Agent": "runindex"})
             with urllib.request.urlopen(req2, timeout=timeout) as resp2:
                 shutil.copyfileobj(resp2, tmp)
             tar_path = tmp.name

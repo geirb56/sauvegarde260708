@@ -30,7 +30,7 @@ class TestCoachConversationalFormat:
         """Test API is accessible"""
         response = requests.get(f"{BASE_URL}/api/")
         assert response.status_code == 200
-        assert "CardioCoach" in response.json().get("message", "")
+        assert "RunIndex" in response.json().get("message", "")
     
     def test_english_response_no_stars(self):
         """Test English response has no stars (*, **, ****)"""

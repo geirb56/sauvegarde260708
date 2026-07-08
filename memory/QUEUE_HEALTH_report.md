@@ -52,9 +52,9 @@ Aucune modification de : `BLMOVE`/`claim_job`/`ack_job`/`requeue_job`,
 throttling, locks, dédup, retries, timeouts, provider gccli, service métier.
 
 ### Clés Redis de monitoring (écriture uniquement par le worker)
-- `cardiocoach:worker:heartbeat:{pid}` — TTL 15s, rafraîchie toutes les 10s.
-- `cardiocoach:stats:orphans_recovered` — INCR par le watchdog.
-- `cardiocoach:stats:failed_jobs` — INCR sur échec terminal.
+- `runindex:worker:heartbeat:{pid}` — TTL 15s, rafraîchie toutes les 10s.
+- `runindex:stats:orphans_recovered` — INCR par le watchdog.
+- `runindex:stats:failed_jobs` — INCR sur échec terminal.
 
 ---
 
