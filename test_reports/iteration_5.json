@@ -1,5 +1,5 @@
 {
-  "summary": "Completed testing of CardioCoach Hidden Insight feature - probabilistic deep analysis enhancement working with minor UI issues",
+  "summary": "Completed testing of RunIndex Hidden Insight feature - probabilistic deep analysis enhancement working with minor UI issues",
   "backend_issues": {
     "critical_bugs": [],
     "flaky_endpoints": []

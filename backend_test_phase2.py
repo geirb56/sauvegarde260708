@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-PHASE 2 Backend Test Suite for CardioCoach Garmin Connector
+PHASE 2 Backend Test Suite for RunIndex Garmin Connector
 Tests new daily metrics sync, workout mirroring, and enhanced cleanup.
 Provider: MockProvider (no real Garmin credentials needed)
 """
@@ -705,7 +705,7 @@ def test_regression_sync_before_connect():
 
 def main():
     print(f"\n{Colors.BLUE}{'='*80}{Colors.RESET}")
-    print(f"{Colors.BLUE}CardioCoach Garmin Connector - PHASE 2 Backend Test Suite{Colors.RESET}")
+    print(f"{Colors.BLUE}RunIndex Garmin Connector - PHASE 2 Backend Test Suite{Colors.RESET}")
     print(f"{Colors.BLUE}Base URL: {BASE_URL}{Colors.RESET}")
     print(f"{Colors.BLUE}Provider: MockProvider (GARMIN_PROVIDER=mock){Colors.RESET}")
     print(f"{Colors.BLUE}{'='*80}{Colors.RESET}")

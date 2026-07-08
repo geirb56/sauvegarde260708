@@ -1,5 +1,5 @@
 """
-Test RAG Endpoints for CardioCoach
+Test RAG Endpoints for RunIndex
 Tests the RAG-enriched dashboard, weekly review, and workout analysis endpoints.
 Bug fix verification: endpoints should return km_total > 0, nb_seances > 0, allure_moy not N/A
 """

@@ -1,5 +1,5 @@
 """
-CardioCoach - LLM Coach Module (GPT-4o-mini)
+RunIndex - LLM Coach Module (GPT-4o-mini)
 
 This module handles the enrichment of coach texts via GPT-4o-mini.
 Training data is sent directly to the LLM to
@@ -35,7 +35,7 @@ LLM_TIMEOUT = 15
 # SYSTEM PROMPTS
 # ============================================================
 
-SYSTEM_PROMPT_COACH = """You are CardioCoach, an expert and caring personal running coach.
+SYSTEM_PROMPT_COACH = """You are RunIndex, an expert and caring personal running coach.
 
 🎯 YOUR ROLE:
 You answer the athlete's questions about their training like a real personal coach.
@@ -519,7 +519,7 @@ async def _call_gpt(
     try:
         from emergentintegrations.llm.chat import LlmChat, UserMessage
         
-        session_id = f"cardiocoach_{context_type}_{user_id}_{int(time.time())}"
+        session_id = f"runindex_{context_type}_{user_id}_{int(time.time())}"
         
         chat = LlmChat(
             api_key=EMERGENT_LLM_KEY,

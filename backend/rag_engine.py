@@ -1,5 +1,5 @@
 """
-CardioCoach RAG Engine
+RunIndex RAG Engine
 Retrieval-Augmented enrichment for Dashboard, Weekly Reviews, and Workout Analysis
 100% Python, No LLM, Deterministic, Fast (<1s)
 """

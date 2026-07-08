@@ -1,10 +1,10 @@
-# CardioCoach — Project Setup Record
+# RunIndex — Project Setup Record
 
 ## Problem Statement
 Pull https://github.com/geirb56/sauvegarde260629 and set it up so it runs. Replace /app contents.
 
 ## App Overview
-CardioCoach — running/cardio training coach. Garmin (gccli) integration, AI coach (LLM), RunIndex/readiness engines, training plans, Stripe subscriptions, Terra integration.
+RunIndex — running/cardio training coach. Garmin (gccli) integration, AI coach (LLM), RunIndex/readiness engines, training plans, Stripe subscriptions, Terra integration.
 
 ## Tech Stack
 - Backend: FastAPI + Motor (MongoDB), emergentintegrations (Emergent LLM key), Stripe, Redis (jobs/queue/SSE/workers)
@@ -33,3 +33,9 @@ CardioCoach — running/cardio training coach. Garmin (gccli) integration, AI co
 - Added 4 worker supervisor services: garmin-sync-worker, garmin-event-worker, garmin-scheduler-worker, garmin-monitor-worker
 - Verified end-to-end: 30 activities + 30 derived workouts + 7 daily metrics synced; RunIndex 390/1000, Run Readiness 77, RHR 47, Sleep 7.7h
 - Scheduler auto-enqueues incremental syncs (~60s scan); event worker builds workouts layer + SSE feed
+
+## Pull sauvegarde260708 — newer version (2026-07-08)
+- Pulled commit 9fe9e8c (Merge PR #2). ~60 code files updated vs previous; deps unchanged; babel fix already included upstream.
+- rsynced into /app preserving .git/.emergent/.env/.gccli_home/bin. Garmin creds + workers intact.
+- API root now "RunIndex API" (rebrand); queue renamed runindex:garmin:queue.
+- All services healthy; gccli session reused; Garmin still connected (30 activities). Dashboard renders (RunIndex 390, Readiness 77).

@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import axios from "axios";
 import { API_BASE } from "@/utils/constants";
 
-// Default user identifier — matches the convention used across CardioCoach.
+// Default user identifier — matches the convention used across RunIndex.
 const USER_ID = "default";
 
 /**

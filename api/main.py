@@ -4,7 +4,7 @@ import os
 from app.credential_vault import CredentialVault
 from tasks.sync_tasks import sync_user
 
-app = FastAPI(title="CardioCoach API")
+app = FastAPI(title="RunIndex API")
 
 vault = CredentialVault(redis_url=os.getenv("REDIS_URL"), master_key_b64=os.getenv("MASTER_KEY"))
 

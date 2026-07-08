@@ -1,4 +1,4 @@
-"""Compute the Dashboard 'cardio-coach' payload from REAL Garmin data.
+"""Compute the Dashboard 'run-index' payload from REAL Garmin data.
 
 Replaces the static _CARDIO_COACH_MOCK_DATA: resting HR + sleep come from
 gccli (`garmin_daily_metrics`), and training load / ACWR / fatigue ratio /
@@ -8,7 +8,7 @@ HRV is not available on every Garmin device/account; when it is missing the
 fatigue model gracefully reweights to resting HR + sleep + load (no HRV term),
 and the HRV fields are returned as null so the UI shows "—".
 
-The returned dict matches the shape the existing /api/cardio-coach endpoint and
+The returned dict matches the shape the existing /api/run-index endpoint and
 the Dashboard frontend expect.
 """
 
@@ -54,7 +54,7 @@ def _compute_acwr(activities: List[dict], today) -> float:
 def compute_load_metrics(activities: List[dict], today) -> dict:
     """Duration-based training-load metrics — SINGLE SOURCE OF TRUTH.
 
-    Used by both the Dashboard (/cardio-coach) and the Training page
+    Used by both the Dashboard (/run-index) and the Training page
     (/training/metrics) so ACWR and TSB are identical across the app.
     Load proxy = session duration (TRIMP-like) via _activity_load().
     """
@@ -123,8 +123,8 @@ def _latest_with(metrics_docs: List[dict], key: str) -> Optional[dict]:
     return None
 
 
-async def compute_cardio_coach(db, user_id: str, language: str = "fr") -> Optional[dict]:
-    """Build the cardio-coach payload from real Garmin data, or None if no data."""
+async def compute_run_index(db, user_id: str, language: str = "fr") -> Optional[dict]:
+    """Build the run-index payload from real Garmin data, or None if no data."""
     lang = (language or "fr").lower()
     # --- Daily health metrics (most recent first) ---
     metrics_docs = await (

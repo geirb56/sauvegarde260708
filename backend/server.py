@@ -616,7 +616,7 @@ def calculate_baseline_metrics(workouts: List[dict], current_workout: dict, days
 
 @api_router.get("/")
 async def root():
-    return {"message": "CardioCoach API"}
+    return {"message": "RunIndex API"}
 
 
 @api_router.get("/workouts", response_model=List[dict])
@@ -2803,9 +2803,9 @@ _CARDIO_COACH_NO_DATA = {
 }
 
 
-@api_router.get("/cardio-coach")
-async def get_cardio_coach(user_id: str = "default", language: str = "fr"):
-    """Return the full CardioCoach running-screen payload.
+@api_router.get("/run-index")
+async def get_run_index(user_id: str = "default", language: str = "fr"):
+    """Return the full RunIndex running-screen payload.
 
     Data source: 100% real Garmin (gccli). Resting HR + sleep come from gccli;
     training load / ACWR / fatigue ratio / readiness are computed from the real
@@ -2826,12 +2826,12 @@ async def get_cardio_coach(user_id: str = "default", language: str = "fr"):
     garmin_conn = await db.garmin_connections.find_one({"user_id": user_id}, {"_id": 0})
     if garmin_conn and garmin_conn.get("connected"):
         try:
-            from garmin.insights import compute_cardio_coach
-            garmin_payload = await compute_cardio_coach(db, user_id, language)
+            from garmin.insights import compute_run_index
+            garmin_payload = await compute_run_index(db, user_id, language)
             if garmin_payload:
                 return garmin_payload
         except Exception as e:
-            logger.warning(f"[cardio-coach] Garmin computation failed, falling back: {e}")
+            logger.warning(f"[run-index] Garmin computation failed, falling back: {e}")
 
     # ----------------------------------------------------------------
     # Terra fallback — DORMANT (future use). No token = no data (no mock).
@@ -3309,7 +3309,7 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
 
     Combines:
     - Planned session from LLM-generated plan
-    - Current fatigue level from /api/cardio-coach
+    - Current fatigue level from /api/run-index
     - Historical feedback
 
     Adaptation logic:
@@ -3345,26 +3345,26 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
             "day": day_name
         }
 
-    # 2. Get current fatigue level from cardio-coach
+    # 2. Get current fatigue level from run-index
     # Use a direct call without auth to avoid circular dependency
-    # Falls back to neutral defaults if cardio-coach is unavailable
+    # Falls back to neutral defaults if run-index is unavailable
     fatigue_data_source = "garmin"
     try:
-        cardio_coach_data = await get_cardio_coach(user_id=user["id"])
-        _cc_metrics = cardio_coach_data.get("metrics", {}) or {}
+        run_index_data = await get_run_index(user_id=user["id"])
+        _cc_metrics = run_index_data.get("metrics", {}) or {}
         fatigue_ratio = _cc_metrics.get("fatigue_ratio")
         fatigue_status = _cc_metrics.get("fatigue_status")
         run_readiness = _cc_metrics.get("run_readiness")
-        recommendation = cardio_coach_data.get("recommendation")
-        recommendation_color = cardio_coach_data.get("recommendation_color")
+        recommendation = run_index_data.get("recommendation")
+        recommendation_color = run_index_data.get("recommendation_color")
         
         # Check if any critical value is None (would cause float() error downstream)
         if fatigue_ratio is None or fatigue_status is None:
-            raise ValueError("Missing fatigue metrics from cardio-coach")
+            raise ValueError("Missing fatigue metrics from run-index")
             
     except Exception as e:
-        # Neutral defaults if cardio-coach is unavailable (no mock dependency).
-        logger.warning(f"[TrainingToday] cardio-coach unavailable, using neutral defaults: {e}")
+        # Neutral defaults if run-index is unavailable (no mock dependency).
+        logger.warning(f"[TrainingToday] run-index unavailable, using neutral defaults: {e}")
         fatigue_data_source = "default"
         fatigue_ratio = 1.0
         fatigue_status = "green"
@@ -4437,7 +4437,7 @@ async def create_subscription_checkout(request: CreateCheckoutRequest, http_requ
         cancel_url=cancel_url,
         metadata={
             "user_id": user_id,
-            "product": f"cardiocoach_{request.tier}",
+            "product": f"runindex_{request.tier}",
             "tier": request.tier,
             "billing_period": request.billing_period,
             "type": "subscription"
@@ -4456,7 +4456,7 @@ async def create_subscription_checkout(request: CreateCheckoutRequest, http_requ
             "tier": request.tier,
             "billing_period": request.billing_period,
             "status": "pending",
-            "product": f"cardiocoach_{request.tier}",
+            "product": f"runindex_{request.tier}",
             "created_at": datetime.now(timezone.utc).isoformat()
         })
         
@@ -4549,7 +4549,7 @@ async def check_subscription_status(session_id: str, http_request: Request, user
                 "status": "completed",
                 "payment_status": status.payment_status,
                 "tier": tier,
-                "message": f"Abonnement {tier_name} activé ! Bienvenue dans CardioCoach."
+                "message": f"Abonnement {tier_name} activé ! Bienvenue dans RunIndex."
             }
         
         elif status.payment_status == "unpaid":
@@ -5178,7 +5178,7 @@ async def create_early_adopter_checkout(http_request: Request, user_id: str = "d
         cancel_url=cancel_url,
         metadata={
             "user_id": user_id,
-            "product": "cardiocoach_early_adopter",
+            "product": "runindex_early_adopter",
             "price_locked": str(EARLY_ADOPTER_PRICE),
             "type": "subscription",
             "plan": "early_adopter"
@@ -5196,7 +5196,7 @@ async def create_early_adopter_checkout(http_request: Request, user_id: str = "d
             "currency": "eur",
             "plan": "early_adopter",
             "status": "pending",
-            "product": "cardiocoach_early_adopter",
+            "product": "runindex_early_adopter",
             "created_at": datetime.now(timezone.utc).isoformat()
         })
         

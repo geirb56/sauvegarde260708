@@ -1,5 +1,5 @@
 """
-demo_mode.py — CardioCoach Demo Subscription Patch
+demo_mode.py — RunIndex Demo Subscription Patch
 ===================================================
 
 Active un mode démonstration qui simule un abonnement actif (early_adopter)

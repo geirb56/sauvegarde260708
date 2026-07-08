@@ -6,7 +6,7 @@ import sys
 from datetime import datetime, timezone
 from motor.motor_asyncio import AsyncIOMotorClient
 from server import (
-    get_cardio_coach,
+    get_run_index,
     submit_training_feedback,
     get_today_adaptive_session
 )
@@ -19,14 +19,14 @@ async def test_interactive_features():
 
     # Setup test database connection
     client = AsyncIOMotorClient("mongodb://localhost:27017")
-    db = client.cardiocoach_test
+    db = client.runindex_test
 
     test_user_id = "test_user"
 
-    # Test 1: Get cardio coach data
-    print("\n1. Testing cardio-coach endpoint...")
+    # Test 1: Get run index data
+    print("\n1. Testing run-index endpoint...")
     try:
-        cardio_data = await get_cardio_coach(user_id=test_user_id)
+        cardio_data = await get_run_index(user_id=test_user_id)
         print(f"   ✓ Cardio coach data retrieved")
         print(f"   - Recommendation: {cardio_data.get('recommendation')}")
         print(f"   - Fatigue ratio: {cardio_data.get('metrics', {}).get('fatigue_ratio')}")

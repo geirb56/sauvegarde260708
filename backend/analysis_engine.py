@@ -1,5 +1,5 @@
 """
-CardioCoach Analysis Engine
+RunIndex Analysis Engine
 100% Backend, Deterministic, No LLM Dependencies
 Privacy-first - No data leaves the infrastructure
 

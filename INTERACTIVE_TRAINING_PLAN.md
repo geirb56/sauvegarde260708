@@ -2,7 +2,7 @@
 
 ## Overview
 
-This implementation adds interactive and adaptive features to the CardioCoach training plan, allowing users to provide feedback on sessions and receive dynamically adjusted workouts based on their current fatigue levels.
+This implementation adds interactive and adaptive features to the RunIndex training plan, allowing users to provide feedback on sessions and receive dynamically adjusted workouts based on their current fatigue levels.
 
 ## Features Implemented
 
@@ -29,7 +29,7 @@ This implementation adds interactive and adaptive features to the CardioCoach tr
 - Returns today's training session with adaptive adjustments
 - Combines:
   - Planned session from LLM-generated training plan
-  - Current fatigue level from /api/cardio-coach
+  - Current fatigue level from /api/run-index
   - Historical feedback data
 
 **Adaptation Rules:**
@@ -49,8 +49,8 @@ This implementation adds interactive and adaptive features to the CardioCoach tr
 
 ### 3. Integration with Existing Systems
 
-**Cardio Coach Integration**
-- Reuses existing /api/cardio-coach endpoint
+**RunIndex Integration**
+- Reuses existing /api/run-index endpoint
 - Fatigue calculation based on:
   - HRV (Heart Rate Variability)
   - RHR (Resting Heart Rate)
@@ -223,7 +223,7 @@ python3 test_interactive_plan.py
 ## Edge Cases Handled
 
 1. **No Terra API Connection:**
-   - Falls back to mock cardio coach data
+   - Falls back to mock run index data
    - User can still see mock fatigue levels
    - Feedback still works
 
@@ -269,7 +269,7 @@ Potential improvements:
 - Python 3.8+
 - FastAPI
 - Motor (async MongoDB)
-- Existing CardioCoach modules
+- Existing RunIndex modules
 
 **Frontend:**
 - React 18+
@@ -300,7 +300,7 @@ Key metrics to track:
 **Issue: Adaptive session not showing**
 - Check /api/training/today response
 - Verify training plan exists
-- Check cardio-coach data availability
+- Check run-index data availability
 
 **Issue: Feedback not saving**
 - Check MongoDB connection
@@ -308,7 +308,7 @@ Key metrics to track:
 - Check browser console for errors
 
 **Issue: Incorrect adaptation**
-- Verify fatigue calculation in cardio-coach
+- Verify fatigue calculation in run-index
 - Check adaptation logic thresholds
 - Review session type mapping
 

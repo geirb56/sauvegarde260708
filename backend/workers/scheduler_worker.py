@@ -43,8 +43,8 @@ STAGGER_MS = int(os.environ.get("SCHEDULER_STAGGER_MS", "20"))
 LEADER_TTL = int(os.environ.get("SCHEDULER_LEADER_TTL", "90"))
 STANDBY_POLL = int(os.environ.get("SCHEDULER_STANDBY_POLL", "15"))
 
-LEADER_KEY = "cardiocoach:scheduler:leader"
-ACTIVE_SIGNAL_PREFIX = "cardiocoach:active_signal:"
+LEADER_KEY = "runindex:scheduler:leader"
+ACTIVE_SIGNAL_PREFIX = "runindex:active_signal:"
 OWNER = f"{socket.gethostname()}:{os.getpid()}"
 
 

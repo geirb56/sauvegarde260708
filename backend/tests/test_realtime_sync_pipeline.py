@@ -176,7 +176,7 @@ class TestEventFanOut:
 
     def test_stream_key_exists(self):
         # Stream is created lazily by emit; after sync it must exist
-        assert redis_xlen("cardiocoach:events:activity_created") >= 0
+        assert redis_xlen("runindex:events:activity_created") >= 0
 
     def test_feed_cache_warmed(self, session):
         # Feed cache is written by event-worker OR by the GET fallback warming.
@@ -184,7 +184,7 @@ class TestEventFanOut:
         session.get(f"{API}/garmin/activities",
                     params={"user_id": USER_ID, "limit": 5}, timeout=15)
         time.sleep(1)
-        cached_len = redis_llen(f"cardiocoach:feed:{USER_ID}")
+        cached_len = redis_llen(f"runindex:feed:{USER_ID}")
         assert cached_len > 0, "Redis feed cache should be populated"
 
     def test_activities_source_cache(self, session):
@@ -245,7 +245,7 @@ class TestActivitySignal:
 
     def test_signal_sets_key_and_no_sync(self, session):
         # Baseline queue length
-        q_before = redis_llen("cardiocoach:garmin:queue")
+        q_before = redis_llen("runindex:garmin:queue")
         # Ensure no pending flag from earlier tests
         _redis_cli("DEL", f"sync_pending:{USER_ID}")
 
@@ -257,12 +257,12 @@ class TestActivitySignal:
         assert data.get("tier_hint") == "active"
 
         # Redis active_signal key must be set with TTL close to 45min
-        signal_ttl = redis_ttl(f"cardiocoach:active_signal:{USER_ID}")
+        signal_ttl = redis_ttl(f"runindex:active_signal:{USER_ID}")
         assert 0 < signal_ttl <= 45 * 60, f"active_signal TTL bad: {signal_ttl}"
 
         # No new job should be enqueued AND no pending flag
         time.sleep(0.5)
-        q_after = redis_llen("cardiocoach:garmin:queue")
+        q_after = redis_llen("runindex:garmin:queue")
         assert q_after <= q_before, "activity-signal must not enqueue a sync"
         # And pending flag must not be set as a side effect
         assert not redis_exists(f"sync_pending:{USER_ID}"), \
@@ -274,13 +274,13 @@ class TestRateLimiter:
     def test_cooldown_key_set_after_sync(self, session):
         # After earlier tests ran a sync, the cooldown key must exist with a
         # TTL <= 900s.
-        ttl = redis_ttl(f"cardiocoach:sync_cooldown:{USER_ID}")
+        ttl = redis_ttl(f"runindex:sync_cooldown:{USER_ID}")
         assert ttl > 0, f"cooldown TTL missing/expired: {ttl}"
         assert ttl <= 900, f"cooldown TTL too high: {ttl}"
 
     def test_global_active_counter_exists_and_bounded(self):
         # After all syncs finished, counter should be 0 or unset (not > cap).
-        v = redis_get("cardiocoach:garmin:global_active")
+        v = redis_get("runindex:garmin:global_active")
         # counter is optional (may not exist if never used); if present must be <=8
         if v is not None and v != "":
             assert int(v) <= 8, f"global_active counter above cap 8: {v}"

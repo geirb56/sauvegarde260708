@@ -1,4 +1,4 @@
-export const LANGUAGE_STORAGE_KEY = "cardiocoach_lang";
+export const LANGUAGE_STORAGE_KEY = "runindex_lang";
 
 export const translations = {
   en: {
@@ -262,7 +262,7 @@ export const translations = {
       french: "French",
       spanish: "Spanish",
       about: "About",
-      aboutDesc: "CardioCoach is an elite endurance coaching tool for runners and cyclists. This is not a medical application.",
+      aboutDesc: "RunIndex is an elite endurance coaching tool for runners and cyclists. This is not a medical application.",
       version: "Version",
       dataSync: "Data Sync",
       dataSyncDesc: "Connect your fitness account to import workouts automatically",
@@ -363,7 +363,7 @@ export const translations = {
       goalSetWithName: "Goal {goal} set",
       sessionsPerWeekSet: "sessions/week",
       earlyAdopterActivated: "Early Adopter activated! Price guaranteed for life.",
-      premiumActivated: "Premium activated! Welcome to CardioCoach Pro.",
+      premiumActivated: "Premium activated! Welcome to RunIndex Pro.",
       sessionExpiredOrError: "Session expired or error",
       verificationError: "Verification error",
       paymentError: "Payment error",
@@ -414,7 +414,7 @@ export const translations = {
     coachExtended: { analysisPrompt: "Deep analysis of workout: {name}", historyCleared: "History cleared", trainingLoadSuggestion: "Analyze my recent training load and effort distribution.", heartRateSuggestion: "What patterns do you see in my heart rate data?", paceConsistencySuggestion: "How is my pace consistency across recent runs?", workoutAnalyzed: "Workout analyzed", analyzing: "Analyzing...", thinking: "Thinking..." },
     ragSummary: { personalizedAnalysis: "Personalized Analysis" },
     chat: { title: "Chat Coach", unlimited: "Unlimited", instantResponsesTitle: "Instant responses (<1s)", clearHistory: "Clear history", firstQuestion: "Ask your first question!", examplePrompt: "E.g. \"How do I recover?\" or \"Analyze my week\"", personalizedResponses: "Personalized instant responses", suggestion1: "Can you make me a plan for the week?", suggestion2: "How can I recover better?", suggestion3: "Analyze my recent workouts", placeholder: "Ask your question...", connectionError: "Connection error" },
-    pwa: { installTitle: "Install CardioCoach", installMessage: "Tap the share icon then \"Add to Home Screen\"", close: "Close" },
+    pwa: { installTitle: "Install RunIndex", installMessage: "Tap the share icon then \"Add to Home Screen\"", close: "Close" },
     terra: {
       tokenRequired: "Please enter a Terra token",
       connected: "Terra connected successfully",
@@ -688,7 +688,7 @@ export const translations = {
       french: "Français",
       spanish: "Espagnol",
       about: "À propos",
-      aboutDesc: "CardioCoach est un outil de coaching endurance élite pour coureurs et cyclistes. Ce n'est pas une application médicale.",
+      aboutDesc: "RunIndex est un outil de coaching endurance élite pour coureurs et cyclistes. Ce n'est pas une application médicale.",
       version: "Version",
       dataSync: "Synchronisation",
       dataSyncDesc: "Connectez votre compte fitness pour importer vos séances automatiquement",
@@ -789,7 +789,7 @@ export const translations = {
       goalSetWithName: "Objectif {goal} défini",
       sessionsPerWeekSet: "séances/semaine",
       earlyAdopterActivated: "Early Adopter activé ! Prix garanti à vie.",
-      premiumActivated: "Premium activé ! Bienvenue sur CardioCoach Pro.",
+      premiumActivated: "Premium activé ! Bienvenue sur RunIndex Pro.",
       sessionExpiredOrError: "Session expirée ou erreur",
       verificationError: "Erreur de vérification",
       paymentError: "Erreur de paiement",
@@ -840,7 +840,7 @@ export const translations = {
     coachExtended: { analysisPrompt: "Analyse approfondie de la séance : {name}", historyCleared: "Historique effacé", trainingLoadSuggestion: "Analyse ma charge d'entraînement récente et la distribution de l'effort.", heartRateSuggestion: "Quels patterns observes-tu dans mes données de fréquence cardiaque ?", paceConsistencySuggestion: "Comment est ma régularité d'allure sur les courses récentes ?", workoutAnalyzed: "Séance analysée", analyzing: "Analyse en cours...", thinking: "Réflexion..." },
     ragSummary: { personalizedAnalysis: "Analyse personnalisée" },
     chat: { title: "Chat Coach", unlimited: "Illimité", instantResponsesTitle: "Réponses instantanées (<1s)", clearHistory: "Effacer l'historique", firstQuestion: "Pose ta première question !", examplePrompt: "Ex. \"Comment récupérer ?\" ou \"Analyse ma semaine\"", personalizedResponses: "Réponses instantanées personnalisées", suggestion1: "Peux-tu me faire un plan pour la semaine ?", suggestion2: "Comment mieux récupérer ?", suggestion3: "Analyse mes séances récentes", placeholder: "Pose ta question...", connectionError: "Erreur de connexion" },
-    pwa: { installTitle: "Installer CardioCoach", installMessage: "Appuie sur … puis Sur l'écran d'accueil", close: "Fermer" },
+    pwa: { installTitle: "Installer RunIndex", installMessage: "Appuie sur … puis Sur l'écran d'accueil", close: "Fermer" },
     terra: {
       tokenRequired: "Veuillez entrer un token Terra",
       connected: "Terra connecté avec succès",
@@ -1071,7 +1071,7 @@ export const translations = {
       french: "Francés",
       spanish: "Español",
       about: "Acerca de",
-      aboutDesc: "CardioCoach es una herramienta de entrenamiento de resistencia élite para corredores y ciclistas. No es una aplicación médica.",
+      aboutDesc: "RunIndex es una herramienta de entrenamiento de resistencia élite para corredores y ciclistas. No es una aplicación médica.",
       version: "Versión",
       dataSync: "Sincronización",
       dataSyncDesc: "Conecta tu cuenta de fitness para importar sesiones automáticamente",
@@ -1150,7 +1150,7 @@ export const translations = {
       goalSetWithName: "Objetivo {goal} definido",
       sessionsPerWeekSet: "sesiones/semana",
       earlyAdopterActivated: "¡Early Adopter activado! Precio garantizado de por vida.",
-      premiumActivated: "¡Premium activado! Bienvenido a CardioCoach Pro.",
+      premiumActivated: "¡Premium activado! Bienvenido a RunIndex Pro.",
       sessionExpiredOrError: "Sesión expirada o error",
       verificationError: "Error de verificación",
       paymentError: "Error de pago",
@@ -1201,7 +1201,7 @@ export const translations = {
     coachExtended: { analysisPrompt: "Análisis profundo de la sesión: {name}", historyCleared: "Historial borrado", trainingLoadSuggestion: "Analiza mi carga de entrenamiento reciente.", heartRateSuggestion: "¿Cómo están mis zonas de frecuencia cardíaca?", paceConsistencySuggestion: "¿Mi ritmo es consistente?", workoutAnalyzed: "Sesión analizada", analyzing: "Analizando...", thinking: "Pensando..." },
     ragSummary: { personalizedAnalysis: "Análisis personalizado" },
     chat: { title: "Chat Coach", unlimited: "Ilimitado", instantResponsesTitle: "Respuestas instantáneas (<1s)", clearHistory: "Borrar historial", firstQuestion: "¡Haz tu primera pregunta!", examplePrompt: "¿Cómo mejorar mi ritmo?", personalizedResponses: "Respuestas instantáneas personalizadas", suggestion1: "¿Puedes hacerme un plan para la semana?", suggestion2: "¿Cómo recuperarme mejor?", suggestion3: "Analiza mis sesiones recientes", placeholder: "Haz tu pregunta...", connectionError: "Error de conexión" },
-    pwa: { installTitle: "Instalar CardioCoach", installMessage: "Pulsa el icono de compartir y luego \"Añadir a pantalla de inicio\"", close: "Cerrar" },
+    pwa: { installTitle: "Instalar RunIndex", installMessage: "Pulsa el icono de compartir y luego \"Añadir a pantalla de inicio\"", close: "Cerrar" },
     terra: {
       tokenRequired: "Por favor introduce un token Terra",
       connected: "Terra conectado con éxito",

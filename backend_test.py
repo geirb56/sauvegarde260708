@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Backend API Testing Script for CardioCoach
+Backend API Testing Script for RunIndex
 Tests all endpoints after mock removal to ensure no 500 errors and proper graceful degradation.
 """
 
@@ -285,31 +285,31 @@ def test_7_detailed_analysis(real_workout_id: Optional[str]):
         log_test(test_name, False, f"Exception: {str(e)}", critical=True)
 
 
-def test_8_cardio_coach():
-    """Test 8: GET /api/cardio-coach?user_id=default → mock:false, source=='garmin'"""
-    test_name = "Test 8: GET /api/cardio-coach?user_id=default"
+def test_8_run_index():
+    """Test 8: GET /api/run-index?user_id=default → mock:false, source=='garmin'"""
+    test_name = "Test 8: GET /api/run-index?user_id=default"
     
     try:
-        response = requests.get(f"{BASE_URL}/cardio-coach", params={"user_id": "default"}, timeout=10)
+        response = requests.get(f"{BASE_URL}/run-index", params={"user_id": "default"}, timeout=10)
         
         if response.status_code != 200:
             log_test(test_name, False, f"Expected 200, got {response.status_code}", critical=True)
             return
         
-        cardio_coach = response.json()
+        run_index = response.json()
         
-        if not isinstance(cardio_coach, dict):
-            log_test(test_name, False, f"Expected dict, got {type(cardio_coach)}", critical=True)
+        if not isinstance(run_index, dict):
+            log_test(test_name, False, f"Expected dict, got {type(run_index)}", critical=True)
             return
         
         # Check mock field
-        mock_value = cardio_coach.get("mock")
+        mock_value = run_index.get("mock")
         if mock_value is True:
             log_test(test_name, False, f"mock=true (should be false, using real Garmin data)", critical=True)
             return
         
         # Check source field
-        source_value = cardio_coach.get("source")
+        source_value = run_index.get("source")
         if source_value != "garmin":
             log_test(test_name, False, f"source='{source_value}' (should be 'garmin')", critical=True)
             return
@@ -376,7 +376,7 @@ def test_10_mock_runner_removed():
 def main():
     """Run all tests"""
     print("=" * 80)
-    print("CardioCoach Backend Testing - Mock Removal Verification")
+    print("RunIndex Backend Testing - Mock Removal Verification")
     print("=" * 80)
     print()
     
@@ -409,7 +409,7 @@ def main():
     test_7_detailed_analysis(real_workout_id)
     
     # Test 8: Cardio coach
-    test_8_cardio_coach()
+    test_8_run_index()
     
     # Test 9: Dashboard
     test_9_dashboard()

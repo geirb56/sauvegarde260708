@@ -110,7 +110,7 @@ async def send_alert(level: str, message: str, payload: dict) -> None:
         "message": message,
         "payload": payload,
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "source": "cardiocoach.queue_health",
+        "source": "runindex.queue_health",
     }
     await _post_webhook(url, body)
 

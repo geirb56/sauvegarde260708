@@ -19,7 +19,7 @@ test.describe('Paywall and Protected Access Tests', () => {
     await page.waitForLoadState('domcontentloaded');
     
     // Dashboard should be visible
-    const dashboard = page.getByTestId('today-workout-card').or(page.locator('text=CardioCoach'));
+    const dashboard = page.getByTestId('today-workout-card').or(page.locator('text=RunIndex'));
     await expect(dashboard.first()).toBeVisible({ timeout: 10000 });
     
     // Paywall should NOT be visible for trial/early_adopter users

@@ -1,6 +1,6 @@
 {
-  "name": "CardioCoach - Coach Running Personnel",
-  "short_name": "CardioCoach",
+  "name": "RunIndex - Coach Running Personnel",
+  "short_name": "RunIndex",
   "description": "Coach running personnel avec synchronisation Strava, analyses RAG et suivi de progression",
   "start_url": "/",
   "display": "standalone",
@@ -66,14 +66,14 @@
       "sizes": "1280x720",
       "type": "image/png",
       "form_factor": "wide",
-      "label": "Dashboard CardioCoach"
+      "label": "Dashboard RunIndex"
     },
     {
       "src": "/icons/screenshot-narrow.png",
       "sizes": "540x720",
       "type": "image/png",
       "form_factor": "narrow",
-      "label": "CardioCoach Mobile"
+      "label": "RunIndex Mobile"
     }
   ],
   "shortcuts": [

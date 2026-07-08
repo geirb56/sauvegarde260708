@@ -1,5 +1,5 @@
 """
-CardioCoach - Chat Engine 100% Python + RAG
+RunIndex - Chat Engine 100% Python + RAG
 Without any LLM (neither local, nor cloud, nor WebLLM)
 Deterministic, fast (<1s), offline, natural, ultra-human
 """

@@ -1,5 +1,5 @@
 {
-  "summary": "Completed comprehensive testing of CardioCoach Detailed Analysis card-based mobile experience. Backend API (18/18 tests passed) and Frontend UI tests passed. All card structure, content quality, and language enforcement features working correctly. Minor design issue: Recovery card uses blue instead of orange/warning styling.",
+  "summary": "Completed comprehensive testing of RunIndex Detailed Analysis card-based mobile experience. Backend API (18/18 tests passed) and Frontend UI tests passed. All card structure, content quality, and language enforcement features working correctly. Minor design issue: Recovery card uses blue instead of orange/warning styling.",
   
   "backend_issues": {
     "critical": [],
