@@ -1,5 +1,4 @@
 import { useState, useEffect } from "react";
-import { Link } from "react-router-dom";
 import axios from "axios";
 import { Card, CardContent } from "@/components/ui/card";
 import { useLanguage } from "@/context/LanguageContext";
@@ -18,14 +17,11 @@ import {
 import { 
   TrendingUp, 
   Activity,
-  ChevronRight,
   ChevronDown,
   ChevronUp,
-  Footprints,
   Calendar,
   Timer,
   Zap,
-  Target,
   ArrowUpRight,
   ArrowDownRight,
   Heart,
@@ -48,7 +44,6 @@ const formatDuration = (minutes) => {
 
 export default function Progress() {
   const [stats, setStats] = useState(null);
-  const [workouts, setWorkouts] = useState([]);
   const [predictions, setPredictions] = useState(null);
   const [fullCycle, setFullCycle] = useState(null);
   const [vmaHistory, setVmaHistory] = useState(null);
@@ -62,15 +57,13 @@ export default function Progress() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [statsRes, workoutsRes, predictionsRes, cycleRes, vmaHistoryRes] = await Promise.all([
+        const [statsRes, predictionsRes, cycleRes, vmaHistoryRes] = await Promise.all([
           axios.get(`${API}/stats`),
-          axios.get(`${API}/workouts`),
           axios.get(`${API}/training/race-predictions`, { headers: { "X-User-Id": USER_ID } }).catch(() => ({ data: null })),
           axios.get(`${API}/training/full-cycle`, { headers: { "X-User-Id": USER_ID } }).catch(() => ({ data: null })),
           axios.get(`${API}/training/vma-history`, { headers: { "X-User-Id": USER_ID } }).catch(() => ({ data: null }))
         ]);
         setStats(statsRes.data);
-        setWorkouts(workoutsRes.data);
 
         // Garmin daily health metrics (HRV / resting HR / sleep)
         try {
@@ -432,63 +425,6 @@ export default function Progress() {
         </div>
       )}
 
-      {/* All Workouts */}
-      <div>
-        <h2 className="font-heading text-lg uppercase tracking-tight font-semibold mb-4">
-          {t("progress.allWorkouts")}
-        </h2>
-        <div className="space-y-3">
-          {workouts.map((workout, index) => {
-            const typeLabel = t(`workoutTypes.${workout.type}`) || workout.type;
-            return (
-              <Link
-                key={workout.id}
-                to={`/workout/${workout.id}`}
-                data-testid={`progress-workout-${workout.id}`}
-                className="block animate-in"
-                style={{ animationDelay: `${index * 30}ms` }}
-              >
-                <Card className="metric-card bg-card border-border hover:border-primary/30 transition-colors">
-                  <CardContent className="p-4">
-                    <div className="flex items-center gap-4">
-                      <div className="flex-shrink-0 w-10 h-10 flex items-center justify-center bg-muted border border-border">
-                        <Footprints className="w-5 h-5 text-muted-foreground" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="workout-type-badge">
-                            {typeLabel}
-                          </span>
-                          <span className="font-mono text-[10px] text-muted-foreground">
-                            {new Date(workout.date).toLocaleDateString(lang === "fr" ? "fr-FR" : "en-US", {
-                              month: "short",
-                              day: "numeric"
-                            })}
-                          </span>
-                        </div>
-                        <p className="font-medium text-sm truncate">
-                          {workout.name}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-4">
-                        <div className="text-right">
-                          <p className="font-mono text-sm font-medium">
-                            {formatDistance(workout.distance_km || 0, { unitSystem })}
-                          </p>
-                          <p className="font-mono text-[10px] text-muted-foreground">
-                            {formatDuration(workout.duration_minutes)}
-                          </p>
-                        </div>
-                        <ChevronRight className="w-4 h-4 text-muted-foreground" />
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              </Link>
-            );
-          })}
-        </div>
-      </div>
     </div>
   );
 }

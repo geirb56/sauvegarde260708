@@ -308,40 +308,40 @@ async def generate_cycle_week(
     pace_z3 = parse_pace(paces.get('z3', '5:30-5:45'))
     pace_z4 = parse_pace(paces.get('z4', '5:00-5:15'))
     
-    # Session templates: (type, duration_min, pace_zone, intensity, tss_per_km)
+    # Session templates: (type_key, duration_min, pace_zone, intensity, tss_per_km)
     session_templates = {
-        "Rest": (0, None, "rest", 0),
-        "Recovery": (30, pace_z1, "easy", 4),
-        "Endurance": (50, pace_z2, "easy", 5),
-        "Tempo": (45, pace_z3, "moderate", 7),
-        "Threshold": (40, pace_z4, "hard", 8),
-        "Fartlek": (45, pace_z3, "moderate", 7),
+        "rest": (0, None, "rest", 0),
+        "recovery": (30, pace_z1, "easy", 4),
+        "endurance": (50, pace_z2, "easy", 5),
+        "tempo": (45, pace_z3, "moderate", 7),
+        "threshold": (40, pace_z4, "hard", 8),
+        "fartlek": (45, pace_z3, "moderate", 7),
     }
     
     # Build sessions based on number of sessions per week
     def build_session(day: str, session_type: str, custom_duration: int = None, custom_distance: float = None) -> dict:
         """Build a single session with calculated values."""
-        if session_type == "Rest":
+        if session_type == "rest":
             return {
                 "day": day,
-                "type": "Rest",
+                "type": "rest",
                 "duration": "0min",
-                "details": "Complete recovery",
+                "details": "Récupération complète",
                 "intensity": "rest",
                 "estimated_tss": 0,
                 "distance_km": 0
             }
         
-        if session_type == "Long run":
+        if session_type == "long_run":
             # Long run: distance is primary, duration is calculated
             distance = custom_distance or target_long_run
             pace = pace_z2  # Long runs at Z2
             duration = round(distance * pace)
             return {
                 "day": day,
-                "type": "Long run",
+                "type": "long_run",
                 "duration": f"{duration}min",
-                "details": f"{distance} km • {format_pace(pace)} • HR 135-150 bpm • Progressive",
+                "details": f"{distance} km • {format_pace(pace)} • FC 135-150 bpm • Progressive",
                 "intensity": "moderate",
                 "estimated_tss": round(distance * 6),
                 "distance_km": distance
@@ -349,7 +349,7 @@ async def generate_cycle_week(
         
         # Standard sessions: distance-primary when a custom distance is given
         # (volume-driven), otherwise fall back to duration-primary.
-        template = session_templates.get(session_type, session_templates["Endurance"])
+        template = session_templates.get(session_type, session_templates["endurance"])
         pace = template[1]
         intensity = template[2]
         tss_per_km = template[3]
@@ -362,17 +362,17 @@ async def generate_cycle_week(
             distance = round(duration / pace, 1)
         tss = round(distance * tss_per_km)
         
-        # Build details string
-        if session_type == "Threshold":
-            details = f"{distance} km incl. 20min at {format_pace(pace)} • HR 165-175 bpm"
-        elif session_type == "Tempo":
-            details = f"{distance} km incl. 25min at {format_pace(pace)} • HR 150-165 bpm"
-        elif session_type == "Fartlek":
-            details = f"{distance} km • varied pace • HR 140-170 bpm"
+        # Build details string (in French)
+        if session_type == "threshold":
+            details = f"{distance} km dont 20min à {format_pace(pace)} • FC 165-175 bpm"
+        elif session_type == "tempo":
+            details = f"{distance} km dont 25min à {format_pace(pace)} • FC 150-165 bpm"
+        elif session_type == "fartlek":
+            details = f"{distance} km • allure variée • FC 140-170 bpm"
         else:
-            hr_range = "120-135" if session_type == "Recovery" else "135-150"
-            zone = "Zone 1" if session_type == "Recovery" else "Zone 2"
-            details = f"{distance} km • {format_pace(pace)} • HR {hr_range} bpm • {zone}"
+            hr_range = "120-135" if session_type == "recovery" else "135-150"
+            zone = "Zone 1" if session_type == "recovery" else "Zone 2"
+            details = f"{distance} km • {format_pace(pace)} • FC {hr_range} bpm • {zone}"
         
         return {
             "day": day,
@@ -387,63 +387,63 @@ async def generate_cycle_week(
     # Define weekly structure based on sessions per week
     if target_sessions == 3:
         week_structure = [
-            ("Monday", "Rest"),
-            ("Tuesday", "Endurance"),
-            ("Wednesday", "Rest"),
-            ("Thursday", "Threshold"),
-            ("Friday", "Rest"),
-            ("Saturday", "Rest"),
-            ("Sunday", "Long run"),
+            ("monday", "rest"),
+            ("tuesday", "endurance"),
+            ("wednesday", "rest"),
+            ("thursday", "threshold"),
+            ("friday", "rest"),
+            ("saturday", "rest"),
+            ("sunday", "long_run"),
         ]
     elif target_sessions == 4:
         week_structure = [
-            ("Monday", "Rest"),
-            ("Tuesday", "Endurance"),
-            ("Wednesday", "Rest"),
-            ("Thursday", "Threshold"),
-            ("Friday", "Rest"),
-            ("Saturday", "Tempo"),
-            ("Sunday", "Long run"),
+            ("monday", "rest"),
+            ("tuesday", "endurance"),
+            ("wednesday", "rest"),
+            ("thursday", "threshold"),
+            ("friday", "rest"),
+            ("saturday", "tempo"),
+            ("sunday", "long_run"),
         ]
     elif target_sessions == 5:
         week_structure = [
-            ("Monday", "Rest"),
-            ("Tuesday", "Endurance"),
-            ("Wednesday", "Threshold"),
-            ("Thursday", "Recovery"),
-            ("Friday", "Rest"),
-            ("Saturday", "Tempo"),
-            ("Sunday", "Long run"),
+            ("monday", "rest"),
+            ("tuesday", "endurance"),
+            ("wednesday", "threshold"),
+            ("thursday", "recovery"),
+            ("friday", "rest"),
+            ("saturday", "tempo"),
+            ("sunday", "long_run"),
         ]
     else:  # 6 sessions
         week_structure = [
-            ("Monday", "Recovery"),
-            ("Tuesday", "Endurance"),
-            ("Wednesday", "Threshold"),
-            ("Thursday", "Recovery"),
-            ("Friday", "Rest"),
-            ("Saturday", "Tempo"),
-            ("Sunday", "Long run"),
+            ("monday", "recovery"),
+            ("tuesday", "endurance"),
+            ("wednesday", "threshold"),
+            ("thursday", "recovery"),
+            ("friday", "rest"),
+            ("saturday", "tempo"),
+            ("sunday", "long_run"),
         ]
     
     # Adjust for phase
     if phase == "deload":
         # Reduce all durations by 30%
-        week_structure = [(d, "Recovery" if t not in ["Rest", "Long run"] else t) for d, t in week_structure]
+        week_structure = [(d, "recovery" if t not in ["rest", "long_run"] else t) for d, t in week_structure]
     elif phase == "taper":
         # Keep intensity, reduce volume
-        week_structure = [(d, "Recovery" if t == "Endurance" else t) for d, t in week_structure]
+        week_structure = [(d, "recovery" if t == "endurance" else t) for d, t in week_structure]
     
     # Build all sessions — VOLUME-DRIVEN so the sum matches target_km exactly.
     # The long run takes its bounded distance; the remaining volume is split
     # across the work sessions weighted by session type.
-    has_long_run = any(t == "Long run" for _, t in week_structure)
+    has_long_run = any(t == "long_run" for _, t in week_structure)
     long_total = min(target_long_run, target_km) if has_long_run else 0
     remaining = max(0.0, target_km - long_total)
 
     # Relative volume weight per session type
-    type_weights = {"Recovery": 0.8, "Endurance": 1.3, "Tempo": 1.0, "Threshold": 0.9, "Fartlek": 1.0}
-    work_entries = [(d, t) for d, t in week_structure if t not in ("Rest", "Long run")]
+    type_weights = {"recovery": 0.8, "endurance": 1.3, "tempo": 1.0, "threshold": 0.9, "fartlek": 1.0}
+    work_entries = [(d, t) for d, t in week_structure if t not in ("rest", "long_run")]
     weight_sum = sum(type_weights.get(t, 1.0) for _, t in work_entries) or 1.0
 
     distances = {}
@@ -452,9 +452,9 @@ async def generate_cycle_week(
 
     sessions = []
     for day, session_type in week_structure:
-        if session_type == "Long run":
+        if session_type == "long_run":
             sessions.append(build_session(day, session_type, custom_distance=long_total))
-        elif session_type == "Rest":
+        elif session_type == "rest":
             sessions.append(build_session(day, session_type))
         else:
             sessions.append(build_session(day, session_type, custom_distance=distances.get((day, session_type))))
