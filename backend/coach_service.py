@@ -28,6 +28,7 @@ from llm_coach import (
 from training_engine import (
     GOAL_CONFIG,
     VOLUME_GOAL_CONFIG,
+    compute_cycle_dates,
     compute_target_km,
     compute_week_number,
     determine_phase,
@@ -502,7 +503,7 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
     fitness_score = min(100, (vo2max / req["min_vo2max"]) * 100) if req["min_vo2max"] > 0 else 50
     readiness_score = (volume_score * 0.6 + fitness_score * 0.4)  # Volume counts more
 
-    # Adjust number of weeks
+    # Adjust number of weeks based on athlete readiness
     base_weeks = req["base_weeks"]
     if readiness_score >= 90:
         # Very ready → short preparation (-25%)
@@ -521,17 +522,70 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
         adjusted_weeks = int(base_weeks * 1.5)
         prep_status = "beginner"
 
+    # Cap to time available before the race (never exceed event_date).
+    # event_date comes from user_goals (single source of truth).
+    user_goal = await db.user_goals.find_one({"user_id": user_id})
+    raw_event_date = (user_goal or {}).get("event_date") if user_goal else None
+    event_date_obj = None
+    if raw_event_date:
+        try:
+            if isinstance(raw_event_date, str):
+                event_date_obj = datetime.fromisoformat(raw_event_date.split("T")[0]).date()
+            elif hasattr(raw_event_date, "date"):
+                event_date_obj = raw_event_date.date()
+        except (ValueError, AttributeError):
+            event_date_obj = None
+
+    _today_date = today.date() if hasattr(today, "date") else today
+    if event_date_obj is not None:
+        weeks_available = max(1, (event_date_obj - _today_date).days // 7)
+        adjusted_weeks = min(adjusted_weeks, weeks_available)
+
     # Update config with adapted duration
     config = {**config, "cycle_weeks": adjusted_weeks}
 
-    # 7. Calculate week and phase
-    start_date = cycle.get("start_date")
-    if isinstance(start_date, str):
-        start_date = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
-    if isinstance(start_date, datetime) and start_date.tzinfo is None:
-        start_date = start_date.replace(tzinfo=timezone.utc)
-    
-    week = compute_week_number(start_date.date() if isinstance(start_date, datetime) else start_date)
+    # 7. Calculate week and phase using event_date as anchor (single source of truth).
+    cycle_dates = compute_cycle_dates(
+        event_date=event_date_obj,
+        total_weeks=adjusted_weeks,
+        today=_today_date,
+    )
+    cycle_status = cycle_dates["status"]
+
+    # Do not generate sessions before the cycle starts or after the race.
+    if cycle_status == "upcoming":
+        days_to_start = cycle_dates.get("days_to_start", 0)
+        logger.info(f"[Coach] Cycle upcoming for user {user_id}, starts in {days_to_start} days")
+        return {
+            "week": 0,
+            "phase": "upcoming",
+            "phase_info": {},
+            "goal": goal,
+            "goal_config": config,
+            "context": {},
+            "plan": None,
+            "sessions_per_week": sessions_per_week,
+            "vma": estimated_vma,
+            "vo2max": vo2max,
+            "vma_method": vma_method,
+            "vma_confidence": "low",
+            "paces": personalized_paces,
+            "readiness_score": round(readiness_score, 1),
+            "prep_status": prep_status,
+            "adjusted_weeks": adjusted_weeks,
+            "event_date": event_date_obj.isoformat() if event_date_obj else None,
+            "start_date": cycle_dates["start_date"].isoformat(),
+            "end_date": cycle_dates["end_date"].isoformat(),
+            "current_week": 0,
+            "total_weeks": adjusted_weeks,
+            "days_to_race": cycle_dates["days_to_race"],
+            "days_to_start": days_to_start,
+            "status": "upcoming",
+            "message": f"Votre préparation commence dans {days_to_start} jours.",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    week = cycle_dates["current_week"] if cycle_status == "active" else adjusted_weeks
     phase = determine_phase(week, adjusted_weeks)
 
     # 8. Calculate ACWR and TSB
@@ -625,6 +679,14 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
         "readiness_score": round(readiness_score, 1),
         "prep_status": prep_status,
         "adjusted_weeks": adjusted_weeks,
+        # Cycle temporal alignment (computed dynamically, not stored in DB)
+        "event_date": event_date_obj.isoformat() if event_date_obj else None,
+        "start_date": cycle_dates["start_date"].isoformat(),
+        "end_date": cycle_dates["end_date"].isoformat(),
+        "current_week": cycle_dates["current_week"],
+        "total_weeks": adjusted_weeks,
+        "days_to_race": cycle_dates["days_to_race"],
+        "status": cycle_dates["status"],
         "generated_at": datetime.now(timezone.utc).isoformat()
     }
 
