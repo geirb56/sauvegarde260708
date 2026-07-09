@@ -223,6 +223,109 @@ TSB_FRESH_THRESHOLD = 10
 # BASE CALCULATIONS
 # ============================================================
 
+def compute_cycle_dates(
+    event_date: Optional[datetime.date],
+    total_weeks: int,
+    today: Optional[datetime.date] = None,
+) -> Dict:
+    """Align the training cycle with the user's target race date.
+
+    The caller is responsible for supplying the right *total_weeks* (which may
+    already have been capped to the time available when the plan was first
+    created).  This function is a pure, stateless computation — it never
+    reduces *total_weeks* so that repeated calls during an ongoing cycle always
+    advance *current_week* forward rather than resetting to 1.
+
+    Rules
+    -----
+    - If *event_date* is provided it is the single source of truth:
+        * end_date   = event_date
+        * start_date = event_date - total_weeks × 7 days
+        * status     = "upcoming"  if today < start_date
+                     = "active"    if start_date <= today <= end_date
+                     = "completed" if today > end_date (race is past)
+    - If *event_date* is None the legacy behaviour is preserved:
+        * start_date = today, end_date = today + total_weeks × 7 days
+        * status always "active"
+
+    To cap *total_weeks* to the time available before the race (e.g. when the
+    user registers late), the caller should compute:
+        weeks_available = (event_date - today).days // 7
+        total_weeks = max(1, min(standard_weeks, weeks_available))
+    before calling this function.
+
+    Returns a dict with:
+        start_date    datetime.date
+        end_date      datetime.date
+        event_date    Optional[datetime.date]
+        total_weeks   int  (returned unchanged)
+        current_week  int  (0 = upcoming, 1–total_weeks = active/completed)
+        days_to_race  Optional[int]  (negative when race is past)
+        days_to_start Optional[int]  (> 0 only when status = "upcoming")
+        status        str  "upcoming" | "active" | "completed"
+    """
+    _today = today or datetime.date.today()
+
+    if event_date is None:
+        # Legacy behaviour: cycle starts today, fixed duration.
+        start = _today
+        end = _today + datetime.timedelta(days=total_weeks * 7)
+        return {
+            "start_date": start,
+            "end_date": end,
+            "event_date": None,
+            "total_weeks": total_weeks,
+            "current_week": 1,
+            "days_to_race": None,
+            "days_to_start": None,
+            "status": "active",
+        }
+
+    end = event_date
+    start = event_date - datetime.timedelta(days=total_weeks * 7)
+    days_to_race = (event_date - _today).days
+
+    # Race is in the past (or today is race day) → completed.
+    if event_date <= _today:
+        return {
+            "start_date": start,
+            "end_date": end,
+            "event_date": event_date,
+            "total_weeks": total_weeks,
+            "current_week": total_weeks,
+            "days_to_race": days_to_race,
+            "days_to_start": None,
+            "status": "completed",
+        }
+
+    # Cycle hasn't started yet.
+    if _today < start:
+        return {
+            "start_date": start,
+            "end_date": end,
+            "event_date": event_date,
+            "total_weeks": total_weeks,
+            "current_week": 0,
+            "days_to_race": days_to_race,
+            "days_to_start": (start - _today).days,
+            "status": "upcoming",
+        }
+
+    # Active: start_date <= today < end_date.
+    delta = (_today - start).days
+    current_week = max(1, min(delta // 7 + 1, total_weeks))
+    return {
+        "start_date": start,
+        "end_date": end,
+        "event_date": event_date,
+        "total_weeks": total_weeks,
+        "current_week": current_week,
+        "days_to_race": days_to_race,
+        "days_to_start": None,
+        "status": "active",
+    }
+
+
 def compute_week_number(start_date: datetime.date) -> int:
     """Calculates the week number since the start of the cycle."""
     today = datetime.date.today()

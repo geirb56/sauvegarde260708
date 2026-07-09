@@ -56,6 +56,7 @@ from rag_engine import (
 # Import training engine for periodization
 from training_engine import (
     GOAL_CONFIG,
+    compute_cycle_dates,
     compute_target_km,
     vma_pace,
     vma_pace_range,
@@ -4018,6 +4019,7 @@ async def get_full_training_cycle(
     """
     Returns the full training cycle overview with all weeks.
     Phase names/focus and session type keys are returned; frontend translates keys via i18n.
+    Cycle dates are anchored to user_goals.event_date (single source of truth).
     """
     # Retrieve user cycle
     cycle = await db.training_cycles.find_one({"user_id": user["id"]})
@@ -4037,17 +4039,41 @@ async def get_full_training_cycle(
     config = GOAL_CONFIG.get(goal, GOAL_CONFIG["SEMI"])
     # Use readiness-adjusted cycle length stored by the detailed plan engine so
     # phases (and therefore target_km per week) match the detailed plan exactly.
-    total_weeks = cycle.get("adjusted_weeks") or config["cycle_weeks"]
+    standard_weeks = cycle.get("adjusted_weeks") or config["cycle_weeks"]
 
     # Retrieve session preferences
     prefs = await db.training_prefs.find_one({"user_id": user["id"]})
     sessions_per_week = prefs.get("sessions_per_week", 4) if prefs else 4
 
-    # Calculate current week
-    start_date = cycle.get("start_date")
-    if isinstance(start_date, str):
-        start_date = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
-    current_week = compute_week_number(start_date.date() if isinstance(start_date, datetime) else start_date)
+    # --- Temporal alignment: anchor cycle to event_date (user_goals) ---
+    user_goal = await db.user_goals.find_one({"user_id": user["id"]})
+    raw_event_date = (user_goal or {}).get("event_date") if user_goal else None
+    event_date_obj = None
+    if raw_event_date:
+        try:
+            if isinstance(raw_event_date, str):
+                event_date_obj = datetime.fromisoformat(raw_event_date.split("T")[0]).date()
+            elif hasattr(raw_event_date, "date"):
+                event_date_obj = raw_event_date.date()
+        except (ValueError, AttributeError):
+            event_date_obj = None
+
+    today_date = datetime.now(timezone.utc).date()
+
+    # Cap standard_weeks to weeks available before the race
+    if event_date_obj is not None:
+        weeks_available = max(1, (event_date_obj - today_date).days // 7)
+        total_weeks = min(standard_weeks, weeks_available)
+    else:
+        total_weeks = standard_weeks
+
+    cycle_dates = compute_cycle_dates(
+        event_date=event_date_obj,
+        total_weeks=total_weeks,
+        today=today_date,
+    )
+    current_week = cycle_dates["current_week"]
+    cycle_status = cycle_dates["status"]
 
     # Retrieve athlete's current volume (based on last 28 days)
     today = datetime.now(timezone.utc)
@@ -4097,8 +4123,8 @@ async def get_full_training_cycle(
             "target_km": target_km,
             "sessions": sessions_per_week if phase not in ["taper", "race"] else min(3, sessions_per_week),
             "session_types": session_types[:sessions_per_week],
-            "is_current": week_num == current_week,
-            "is_completed": week_num < current_week,
+            "is_current": cycle_status == "active" and week_num == current_week,
+            "is_completed": cycle_status == "active" and week_num < current_week,
             "intensity_pct": phase_info.get("intensity_pct", 15)
         })
     
@@ -4107,7 +4133,11 @@ async def get_full_training_cycle(
         "goal_description": config["description"],
         "total_weeks": total_weeks,
         "current_week": current_week,
-        "start_date": start_date.isoformat() if start_date else None,
+        "start_date": cycle_dates["start_date"].isoformat(),
+        "end_date": cycle_dates["end_date"].isoformat(),
+        "event_date": event_date_obj.isoformat() if event_date_obj else None,
+        "days_to_race": cycle_dates["days_to_race"],
+        "status": cycle_status,
         "sessions_per_week": sessions_per_week,
         "base_weekly_km": round(base_weekly_km),
         "weeks": weeks_overview
