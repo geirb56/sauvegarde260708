@@ -46,10 +46,16 @@ const formatDuration = (minutes) => {
 };
 
 // Format date as short label for chart axis
-const formatDateLabel = (dateStr) => {
+const formatDateLabel = (dateStr, locale = "fr-FR") => {
   if (!dateStr) return "";
   const d = new Date(dateStr + "T00:00:00");
-  return d.toLocaleDateString("fr-FR", { day: "numeric", month: "short" });
+  return d.toLocaleDateString(locale, { day: "numeric", month: "short" });
+};
+
+// Map language code to locale string
+const langToLocale = (lang) => {
+  const map = { fr: "fr-FR", en: "en-US", es: "es-ES" };
+  return map[lang] || "fr-FR";
 };
 
 export default function Progress() {
@@ -207,11 +213,16 @@ export default function Progress() {
                   <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full ${trendBg}`}>
                     <span className="text-base">{trendEmoji}</span>
                     <span className={`text-sm font-bold ${trendColor}`}>
-                      {runIndexTrend > 0 ? "+" : ""}{runIndexTrend !== 0 ? `${runIndexTrend} ` : ""}
-                      {runIndexTrend === 0
-                        ? t("progressExtended.runIndexTrendStable").replace("{months}", runIndexPeriod)
-                        : t(runIndexTrend > 0 ? "progressExtended.runIndexTrendPositive" : "progressExtended.runIndexTrendNegative").replace("{months}", runIndexPeriod)
-                      }
+                      {(() => {
+                        if (runIndexTrend === 0) {
+                          return t("progressExtended.runIndexTrendStable").replace("{months}", runIndexPeriod);
+                        }
+                        const sign = runIndexTrend > 0 ? "+" : "";
+                        const trendKey = runIndexTrend > 0
+                          ? "progressExtended.runIndexTrendPositive"
+                          : "progressExtended.runIndexTrendNegative";
+                        return `${sign}${runIndexTrend} ` + t(trendKey).replace("{months}", runIndexPeriod);
+                      })()}
                     </span>
                   </div>
                 </div>
@@ -248,7 +259,7 @@ export default function Progress() {
                       axisLine={false}
                       tickLine={false}
                       tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 9, fontFamily: "JetBrains Mono" }}
-                      tickFormatter={formatDateLabel}
+                      tickFormatter={(dateStr) => formatDateLabel(dateStr, langToLocale(lang))}
                       interval="preserveStartEnd"
                     />
                     <YAxis
@@ -265,7 +276,7 @@ export default function Progress() {
                           return (
                             <div className="bg-popover border border-border p-2 rounded-lg shadow-lg">
                               <p className="font-mono text-xs text-muted-foreground">
-                                {formatDateLabel(d.date)}
+                                {formatDateLabel(d.date, langToLocale(lang))}
                               </p>
                               <p className="font-bold text-white">RunIndex: {d.run_index}</p>
                             </div>

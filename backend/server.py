@@ -3160,6 +3160,8 @@ def _generate_run_index_analysis(
     if current_run_index is None:
         if language == "fr":
             return "Pas encore assez de données pour analyser ta progression."
+        if language == "es":
+            return "Todavía no hay suficientes datos para analizar tu progresión."
         return "Not enough data yet to analyse your progression."
 
     # Find best and worst improving pillar
@@ -3175,7 +3177,18 @@ def _generate_run_index_analysis(
         "consistency": "consistency",
         "efficiency": "efficiency",
     }
-    names = pillar_names_fr if language == "fr" else pillar_names_en
+    pillar_names_es = {
+        "speed": "velocidad",
+        "endurance": "resistencia",
+        "consistency": "consistencia",
+        "efficiency": "eficiencia",
+    }
+    if language == "fr":
+        names = pillar_names_fr
+    elif language == "es":
+        names = pillar_names_es
+    else:
+        names = pillar_names_en
 
     evolutions = {
         p: data.get("evolution") or 0
@@ -3203,7 +3216,7 @@ def _generate_run_index_analysis(
                 "speed": "Un travail de seuil ou d'intervalles pourrait accélérer ta progression.",
                 "endurance": "Augmenter progressivement ton volume hebdomadaire t'aidera.",
                 "consistency": "La régularité est la clé : essaie de courir au moins 3 fois par semaine.",
-                "efficiency": "Des séances à allure modérée avec FC controlée améliorent l'efficacité.",
+                "efficiency": "Des séances à allure modérée avec FC contrôlée améliorent l'efficacité.",
             }
             parts.append(
                 f"Ta {names[worst_pillar]} est en recul. "
@@ -3219,6 +3232,43 @@ def _generate_run_index_analysis(
             parts.append(
                 f"Ta {names[worst_pillar]} progresse plus lentement. "
                 + tips.get(worst_pillar, "Continue ton entraînement régulier.")
+            )
+
+        return " ".join(parts)
+
+    elif language == "es":
+        parts = []
+        if trend > 0:
+            parts.append(f"Tu RunIndex ha mejorado {trend} puntos en {months} meses.")
+        elif trend < 0:
+            parts.append(f"Tu RunIndex ha bajado {abs(trend)} puntos en {months} meses.")
+        else:
+            parts.append(f"Tu RunIndex está estable en los últimos {months} meses.")
+
+        if best_pillar and evolutions.get(best_pillar, 0) > 0:
+            parts.append(f"Tu mayor mejora proviene de tu {names[best_pillar]}.")
+
+        if worst_pillar and evolutions.get(worst_pillar, 0) < 0:
+            tips = {
+                "speed": "El trabajo de umbral o intervalos puede acelerar tu progresión.",
+                "endurance": "Aumentar progresivamente tu volumen semanal te ayudará.",
+                "consistency": "La constancia es clave: intenta correr al menos 3 veces por semana.",
+                "efficiency": "Las salidas aeróbicas fáciles con FC controlada mejoran la eficiencia.",
+            }
+            parts.append(
+                f"Tu {names[worst_pillar]} está en retroceso. "
+                + tips.get(worst_pillar, "Continúa entrenando regularmente.")
+            )
+        elif worst_pillar and best_pillar and worst_pillar != best_pillar:
+            tips = {
+                "speed": "El trabajo de umbral puede acelerar tu progresión.",
+                "endurance": "Aumentar el volumen de tu salida larga te ayudará.",
+                "consistency": "Mantener una cadencia regular es clave para progresar.",
+                "efficiency": "Las salidas aeróbicas mejoran tu eficiencia cardíaca.",
+            }
+            parts.append(
+                f"Tu {names[worst_pillar]} progresa más lentamente. "
+                + tips.get(worst_pillar, "Continúa con tu entrenamiento regular.")
             )
 
         return " ".join(parts)
