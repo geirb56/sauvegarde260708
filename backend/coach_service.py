@@ -694,44 +694,44 @@ def _deterministic_plan(context: dict, phase: str, target_load: int, goal: str, 
     # Templates by phase - adapted to goal
     if phase == "deload":
         sessions = [
-            {"day": "Monday", "type": "Rest", "duration": "0min", "details": "Complete recovery • Stretching recommended", "intensity": "rest", "estimated_tss": 0, "distance_km": 0},
-            {"day": "Tuesday", "type": "Endurance", "duration": f"{easy_km*6}min", "details": f"{easy_km} km • {paces['z1']}/km • HR {hr['z1']} bpm • Zone 1-2", "intensity": "easy", "estimated_tss": easy_km*5, "distance_km": easy_km},
-            {"day": "Wednesday", "type": "Recovery", "duration": f"{recup_km*7}min", "details": f"{recup_km} km • {paces['z1']}/km • HR {hr['z1']} bpm • Very easy", "intensity": "easy", "estimated_tss": recup_km*5, "distance_km": recup_km},
-            {"day": "Thursday", "type": "Endurance", "duration": f"{easy_km*6}min", "details": f"{easy_km} km • {paces['z2']}/km • HR {hr['z2']} bpm", "intensity": "easy", "estimated_tss": easy_km*5, "distance_km": easy_km},
-            {"day": "Friday", "type": "Rest", "duration": "0min", "details": "Recovery • Light walking possible", "intensity": "rest", "estimated_tss": 0, "distance_km": 0},
-            {"day": "Saturday", "type": "Endurance", "duration": f"{tempo_km*6}min", "details": f"{tempo_km} km progressive • {paces['z2']}/km → {paces['z3']}/km", "intensity": "easy", "estimated_tss": tempo_km*6, "distance_km": tempo_km},
-            {"day": "Sunday", "type": "Long run", "duration": f"{long_run*6}min", "details": f"{long_run} km • {paces['z2']}/km • HR {hr['z2']} bpm • Easy run", "intensity": "moderate", "estimated_tss": long_run*6, "distance_km": long_run},
+            {"day": "monday", "type": "rest", "duration": "0min", "details": "Récupération complète • Étirements recommandés", "intensity": "rest", "estimated_tss": 0, "distance_km": 0},
+            {"day": "tuesday", "type": "endurance", "duration": f"{easy_km*6}min", "details": f"{easy_km} km • {paces['z1']}/km • FC {hr['z1']} bpm • Zone 1-2", "intensity": "easy", "estimated_tss": easy_km*5, "distance_km": easy_km},
+            {"day": "wednesday", "type": "recovery", "duration": f"{recup_km*7}min", "details": f"{recup_km} km • {paces['z1']}/km • FC {hr['z1']} bpm • Très facile", "intensity": "easy", "estimated_tss": recup_km*5, "distance_km": recup_km},
+            {"day": "thursday", "type": "endurance", "duration": f"{easy_km*6}min", "details": f"{easy_km} km • {paces['z2']}/km • FC {hr['z2']} bpm", "intensity": "easy", "estimated_tss": easy_km*5, "distance_km": easy_km},
+            {"day": "friday", "type": "rest", "duration": "0min", "details": "Récupération • Marche légère possible", "intensity": "rest", "estimated_tss": 0, "distance_km": 0},
+            {"day": "saturday", "type": "endurance", "duration": f"{tempo_km*6}min", "details": f"{tempo_km} km progressif • {paces['z2']}/km → {paces['z3']}/km", "intensity": "easy", "estimated_tss": tempo_km*6, "distance_km": tempo_km},
+            {"day": "sunday", "type": "long_run", "duration": f"{long_run*6}min", "details": f"{long_run} km • {paces['z2']}/km • FC {hr['z2']} bpm • Sortie facile", "intensity": "moderate", "estimated_tss": long_run*6, "distance_km": long_run},
         ]
     elif phase == "taper":
         sessions = [
-            {"day": "Monday", "type": "Rest", "duration": "0min", "details": "Complete recovery • Hydration ++", "intensity": "rest", "estimated_tss": 0, "distance_km": 0},
-            {"day": "Tuesday", "type": "Endurance", "duration": "30min", "details": f"{recup_km} km + 4×100m • {paces['z2']}/km • HR {hr['z2']} bpm", "intensity": "easy", "estimated_tss": 30, "distance_km": recup_km + 0.5},
-            {"day": "Wednesday", "type": "Recovery", "duration": "20min", "details": f"{recup_km-1} km • {paces['z1']}/km • HR {hr['z1']} bpm", "intensity": "easy", "estimated_tss": 15, "distance_km": max(3, recup_km-1)},
-            {"day": "Thursday", "type": "Short tempo", "duration": "25min", "details": f"{recup_km} km including 2 km race pace • {paces['semi']}/km • HR {hr['z3']} bpm", "intensity": "moderate", "estimated_tss": 35, "distance_km": recup_km},
-            {"day": "Friday", "type": "Rest", "duration": "0min", "details": "Complete rest • Gear preparation", "intensity": "rest", "estimated_tss": 0, "distance_km": 0},
-            {"day": "Saturday", "type": "Activation", "duration": "20min", "details": f"3 km + 3×200m • {paces['z2']}/km", "intensity": "easy", "estimated_tss": 25, "distance_km": 3.6},
-            {"day": "Sunday", "type": "Rest", "duration": "0min", "details": "DAY BEFORE RACE • Rest, carbs", "intensity": "rest", "estimated_tss": 0, "distance_km": 0},
+            {"day": "monday", "type": "rest", "duration": "0min", "details": "Récupération complète • Hydratation ++", "intensity": "rest", "estimated_tss": 0, "distance_km": 0},
+            {"day": "tuesday", "type": "endurance", "duration": "30min", "details": f"{recup_km} km + 4×100m • {paces['z2']}/km • FC {hr['z2']} bpm", "intensity": "easy", "estimated_tss": 30, "distance_km": recup_km + 0.5},
+            {"day": "wednesday", "type": "recovery", "duration": "20min", "details": f"{recup_km-1} km • {paces['z1']}/km • FC {hr['z1']} bpm", "intensity": "easy", "estimated_tss": 15, "distance_km": max(3, recup_km-1)},
+            {"day": "thursday", "type": "tempo", "duration": "25min", "details": f"{recup_km} km dont 2 km allure course • {paces['semi']}/km • FC {hr['z3']} bpm", "intensity": "moderate", "estimated_tss": 35, "distance_km": recup_km},
+            {"day": "friday", "type": "rest", "duration": "0min", "details": "Repos complet • Préparation matériel", "intensity": "rest", "estimated_tss": 0, "distance_km": 0},
+            {"day": "saturday", "type": "activation", "duration": "20min", "details": f"3 km + 3×200m • {paces['z2']}/km", "intensity": "easy", "estimated_tss": 25, "distance_km": 3.6},
+            {"day": "sunday", "type": "rest", "duration": "0min", "details": "VEILLE DE COURSE • Repos, glucides", "intensity": "rest", "estimated_tss": 0, "distance_km": 0},
         ]
     elif phase == "race":
         race_km = {"5K": 5, "10K": 10, "SEMI": 21.1, "MARATHON": 42.2, "ULTRA": 50}.get(goal, 21.1)
         sessions = [
-            {"day": "Monday", "type": "Rest", "duration": "0min", "details": "Complete recovery", "intensity": "rest", "estimated_tss": 0, "distance_km": 0},
-            {"day": "Tuesday", "type": "Activation", "duration": "20min", "details": f"3 km • {paces['z1']}/km • HR {hr['z1']} bpm", "intensity": "easy", "estimated_tss": 15, "distance_km": 3},
-            {"day": "Wednesday", "type": "Recovery", "duration": "15min", "details": f"2.5 km • {paces['z1']}/km • HR {hr['z1']} bpm", "intensity": "easy", "estimated_tss": 12, "distance_km": 2.5},
-            {"day": "Thursday", "type": "Activation", "duration": "15min", "details": f"2 km + 2×100m • {paces['z1']}/km", "intensity": "easy", "estimated_tss": 10, "distance_km": 2.2},
-            {"day": "Friday", "type": "Rest", "duration": "0min", "details": "Complete rest", "intensity": "rest", "estimated_tss": 0, "distance_km": 0},
-            {"day": "Saturday", "type": "Rest", "duration": "0min", "details": "DAY BEFORE • Carbs", "intensity": "rest", "estimated_tss": 0, "distance_km": 0},
-            {"day": "Sunday", "type": "RACE", "duration": "Variable", "details": f"🏆 {goal} ({race_km} km) • Target: {paces.get('semi')}/km", "intensity": "race", "estimated_tss": int(race_km * 7), "distance_km": race_km},
+            {"day": "monday", "type": "rest", "duration": "0min", "details": "Récupération complète", "intensity": "rest", "estimated_tss": 0, "distance_km": 0},
+            {"day": "tuesday", "type": "activation", "duration": "20min", "details": f"3 km • {paces['z1']}/km • FC {hr['z1']} bpm", "intensity": "easy", "estimated_tss": 15, "distance_km": 3},
+            {"day": "wednesday", "type": "recovery", "duration": "15min", "details": f"2.5 km • {paces['z1']}/km • FC {hr['z1']} bpm", "intensity": "easy", "estimated_tss": 12, "distance_km": 2.5},
+            {"day": "thursday", "type": "activation", "duration": "15min", "details": f"2 km + 2×100m • {paces['z1']}/km", "intensity": "easy", "estimated_tss": 10, "distance_km": 2.2},
+            {"day": "friday", "type": "rest", "duration": "0min", "details": "Repos complet", "intensity": "rest", "estimated_tss": 0, "distance_km": 0},
+            {"day": "saturday", "type": "rest", "duration": "0min", "details": "VEILLE • Glucides", "intensity": "rest", "estimated_tss": 0, "distance_km": 0},
+            {"day": "sunday", "type": "race", "duration": "Variable", "details": f"🏆 {goal} ({race_km} km) • Cible : {paces.get('semi')}/km", "intensity": "race", "estimated_tss": int(race_km * 7), "distance_km": race_km},
         ]
     else:  # build, intensification - Standard plan adapted to goal
         sessions = [
-            {"day": "Monday", "type": "Rest", "duration": "0min", "details": "Complete recovery • Stretching recommended", "intensity": "rest", "estimated_tss": 0, "distance_km": 0},
-            {"day": "Tuesday", "type": "Endurance", "duration": f"{easy_km*6}min", "details": f"{easy_km} km • {paces['z2']}/km • HR {hr['z2']} bpm • Strict zone 2", "intensity": "easy", "estimated_tss": easy_km*6, "distance_km": easy_km},
-            {"day": "Wednesday", "type": "Threshold", "duration": f"{seuil_km*5}min", "details": f"{seuil_km} km including 20min at {paces['z4']}/km • HR {hr['z4']} bpm • 2min recovery", "intensity": "hard", "estimated_tss": seuil_km*8, "distance_km": seuil_km},
-            {"day": "Thursday", "type": "Recovery", "duration": f"{recup_km*7}min", "details": f"{recup_km} km • {paces['z1']}/km • HR <135 bpm • Easy jog", "intensity": "easy", "estimated_tss": recup_km*5, "distance_km": recup_km},
-            {"day": "Friday", "type": "Rest", "duration": "0min", "details": "Recovery • Cross-training possible (bike, swim)", "intensity": "rest", "estimated_tss": 0, "distance_km": 0},
-            {"day": "Saturday", "type": "Tempo", "duration": f"{tempo_km*5}min", "details": f"{tempo_km} km including 25min at {paces['semi']}/km • HR {hr['z3']} bpm", "intensity": "moderate", "estimated_tss": tempo_km*7, "distance_km": tempo_km},
-            {"day": "Sunday", "type": "Long run", "duration": f"{long_run*5}min", "details": f"{long_run} km progressive • {paces['z2']}/km → {paces['z3']}/km • HR {hr['z2']}→{hr['z3']} bpm", "intensity": "moderate", "estimated_tss": long_run*6, "distance_km": long_run},
+            {"day": "monday", "type": "rest", "duration": "0min", "details": "Récupération complète • Étirements recommandés", "intensity": "rest", "estimated_tss": 0, "distance_km": 0},
+            {"day": "tuesday", "type": "endurance", "duration": f"{easy_km*6}min", "details": f"{easy_km} km • {paces['z2']}/km • FC {hr['z2']} bpm • Zone 2 stricte", "intensity": "easy", "estimated_tss": easy_km*6, "distance_km": easy_km},
+            {"day": "wednesday", "type": "threshold", "duration": f"{seuil_km*5}min", "details": f"{seuil_km} km dont 20min à {paces['z4']}/km • FC {hr['z4']} bpm • 2min récup", "intensity": "hard", "estimated_tss": seuil_km*8, "distance_km": seuil_km},
+            {"day": "thursday", "type": "recovery", "duration": f"{recup_km*7}min", "details": f"{recup_km} km • {paces['z1']}/km • FC <135 bpm • Footing facile", "intensity": "easy", "estimated_tss": recup_km*5, "distance_km": recup_km},
+            {"day": "friday", "type": "rest", "duration": "0min", "details": "Récupération • Cross-training possible (vélo, natation)", "intensity": "rest", "estimated_tss": 0, "distance_km": 0},
+            {"day": "saturday", "type": "tempo", "duration": f"{tempo_km*5}min", "details": f"{tempo_km} km dont 25min à {paces['semi']}/km • FC {hr['z3']} bpm", "intensity": "moderate", "estimated_tss": tempo_km*7, "distance_km": tempo_km},
+            {"day": "sunday", "type": "long_run", "duration": f"{long_run*5}min", "details": f"{long_run} km progressif • {paces['z2']}/km → {paces['z3']}/km • FC {hr['z2']}→{hr['z3']} bpm", "intensity": "moderate", "estimated_tss": long_run*6, "distance_km": long_run},
         ]
     
     total_tss = sum(s["estimated_tss"] for s in sessions)

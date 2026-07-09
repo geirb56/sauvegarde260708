@@ -110,6 +110,7 @@ const getSessionStyleKey = (type, intensity) => {
 
 // SessionCard component for displaying a single session
 function SessionCard({ session, isGrayed = false, fatigueColor = null }) {
+  const { t } = useLanguage();
   if (!session) return null;
 
   const styleKey = getSessionStyleKey(session.type, session.intensity);
@@ -136,7 +137,7 @@ function SessionCard({ session, isGrayed = false, fatigueColor = null }) {
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-1">
           <span className="text-sm font-bold" style={{ color: style.text }}>
-            {session.type}
+            {t(`trainingPlanSessionType.${session.type}`) || session.type}
           </span>
           <span className="text-xs" style={{ color: style.text, opacity: 0.8 }}>
             {session.duration}
@@ -602,10 +603,10 @@ export default function TrainingPlan() {
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-2">
                                   <span className="text-xs font-bold" style={{ color: style.text }}>
-                                    {session.day}
+                                    {t(`trainingPlanDays.${session.day}`) || session.day}
                                   </span>
                                   <span className="text-[10px]" style={{ color: style.text, opacity: 0.8 }}>
-                                    {session.type}
+                                    {t(`trainingPlanSessionType.${session.type}`) || session.type}
                                   </span>
                                 </div>
                                 {!isRest && session.details && (
