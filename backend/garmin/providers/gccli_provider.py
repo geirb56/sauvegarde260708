@@ -112,7 +112,10 @@ class GccliProvider(Provider):
                     continue
                 normalized = self._normalize(raw)
                 ext_id = normalized.get("external_id")
-                if ext_id is None or ext_id in seen_ids:
+                if ext_id is None:
+                    logger.debug("[gccli] skipping activity with no external_id: %s", raw)
+                    continue
+                if ext_id in seen_ids:
                     continue
                 seen_ids.add(ext_id)
                 all_activities.append(normalized)

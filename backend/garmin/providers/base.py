@@ -47,10 +47,14 @@ class Provider(ABC):
     def fetch_all_activities(self, page_size: int = 50) -> List[Dict]:
         """Fetch ALL available activities using pagination.
 
-        Default implementation delegates to sync_activities (no pagination).
         Subclasses should override to implement paginated fetching.
+        The default implementation raises NotImplementedError since full-history
+        pagination requires provider-specific support.
         """
-        return self.sync_activities(user_id="")
+        raise NotImplementedError(
+            f"Provider '{self.name}' does not implement fetch_all_activities(). "
+            "Override this method to support full history pagination."
+        )
 
     @abstractmethod
     def get_daily_metrics(self, user_id: str, days: int = 7) -> List[Dict]:
