@@ -25,7 +25,10 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   Heart,
-  Moon
+  Moon,
+  TrendingDown,
+  Minus,
+  Brain
 } from "lucide-react";
 import Paywall from "@/components/Paywall";
 
@@ -42,12 +45,21 @@ const formatDuration = (minutes) => {
   return `${mins}m`;
 };
 
+// Format date as short label for chart axis
+const formatDateLabel = (dateStr) => {
+  if (!dateStr) return "";
+  const d = new Date(dateStr + "T00:00:00");
+  return d.toLocaleDateString("fr-FR", { day: "numeric", month: "short" });
+};
+
 export default function Progress() {
   const [stats, setStats] = useState(null);
   const [predictions, setPredictions] = useState(null);
   const [fullCycle, setFullCycle] = useState(null);
   const [vmaHistory, setVmaHistory] = useState(null);
   const [garminHealth, setGarminHealth] = useState(null);
+  const [runIndexHistory, setRunIndexHistory] = useState(null);
+  const [runIndexPeriod, setRunIndexPeriod] = useState(6);
   const [loading, setLoading] = useState(true);
   const [showPredictions, setShowPredictions] = useState(true);
   const { t, lang } = useLanguage();
@@ -89,6 +101,22 @@ export default function Progress() {
     fetchData();
   }, []);
 
+  // Fetch RunIndex history when period changes
+  useEffect(() => {
+    const fetchRunIndexHistory = async () => {
+      try {
+        const res = await axios.get(
+          `${API}/run-index/history?months=${runIndexPeriod}&language=${lang}`,
+          { headers: { "X-User-Id": USER_ID } }
+        );
+        setRunIndexHistory(res.data);
+      } catch {
+        setRunIndexHistory(null);
+      }
+    };
+    fetchRunIndexHistory();
+  }, [runIndexPeriod, lang]);
+
   if (loading || subLoading) {
     return (
       <div className="p-6 md:p-8 animate-pulse">
@@ -108,6 +136,31 @@ export default function Progress() {
   const km7Days = stats?.km_7_days || 0;
   const km30Days = stats?.km_30_days || 0;
 
+  const pillarIcons = {
+    speed: "⚡",
+    endurance: "🫀",
+    consistency: "📈",
+    efficiency: "🧠",
+  };
+  const pillarLabels = {
+    speed: t("progressExtended.pillarSpeed"),
+    endurance: t("progressExtended.pillarEndurance"),
+    consistency: t("progressExtended.pillarConsistency"),
+    efficiency: t("progressExtended.pillarEfficiency"),
+  };
+
+  const runIndexTrend = runIndexHistory?.trend ?? 0;
+  const TrendIcon = runIndexTrend > 0 ? TrendingUp : runIndexTrend < 0 ? TrendingDown : Minus;
+  const trendColor = runIndexTrend > 0 ? "text-emerald-500" : runIndexTrend < 0 ? "text-red-500" : "text-muted-foreground";
+  const trendBg = runIndexTrend > 0 ? "bg-emerald-500/20" : runIndexTrend < 0 ? "bg-red-500/20" : "bg-muted/30";
+  const trendEmoji = runIndexTrend > 0 ? "⬆️" : runIndexTrend < 0 ? "⬇️" : "➡️";
+
+  const periodOptions = [
+    { months: 3, label: t("progressExtended.period3m") },
+    { months: 6, label: t("progressExtended.period6m") },
+    { months: 12, label: t("progressExtended.period12m") },
+  ];
+
   return (
     <div className="p-6 md:p-8 pb-24 md:pb-8" data-testid="progress-page">
       {/* Header */}
@@ -118,6 +171,194 @@ export default function Progress() {
         <p className="font-mono text-xs uppercase tracking-widest text-muted-foreground">
           {t("progress.subtitle")}
         </p>
+      </div>
+
+      {/* ===== RUNINDEX EVOLUTION (top of tab) ===== */}
+      <div className="mb-8">
+        <Card className="bg-card border-border overflow-hidden">
+          <CardContent className="p-4">
+            {/* Section title */}
+            <div className="flex items-center gap-2 mb-4">
+              <TrendingUp className="w-4 h-4 text-primary" />
+              <h2 className="font-mono text-xs uppercase tracking-widest text-muted-foreground">
+                {t("progressExtended.runIndexEvolution")}
+              </h2>
+            </div>
+
+            {/* Current RunIndex + Trend */}
+            <div className="flex items-center justify-between mb-5">
+              <div>
+                <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
+                  {t("progressExtended.runIndexCurrent")}
+                </p>
+                <div className="flex items-baseline gap-2">
+                  <span className="font-heading text-5xl font-bold text-white">
+                    {runIndexHistory?.current_run_index ?? "--"}
+                  </span>
+                  <span className="text-sm text-muted-foreground">/ 1000</span>
+                </div>
+              </div>
+
+              {runIndexHistory?.has_data && (
+                <div className={`flex flex-col items-end gap-1`}>
+                  <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                    {t("progressExtended.runIndexTrend")}
+                  </p>
+                  <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full ${trendBg}`}>
+                    <span className="text-base">{trendEmoji}</span>
+                    <span className={`text-sm font-bold ${trendColor}`}>
+                      {runIndexTrend > 0 ? "+" : ""}{runIndexTrend !== 0 ? `${runIndexTrend} ` : ""}
+                      {runIndexTrend === 0
+                        ? t("progressExtended.runIndexTrendStable").replace("{months}", runIndexPeriod)
+                        : t(runIndexTrend > 0 ? "progressExtended.runIndexTrendPositive" : "progressExtended.runIndexTrendNegative").replace("{months}", runIndexPeriod)
+                      }
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Period selector */}
+            <div className="flex gap-2 mb-4">
+              {periodOptions.map(({ months, label }) => (
+                <button
+                  key={months}
+                  onClick={() => setRunIndexPeriod(months)}
+                  className={`px-3 py-1 rounded-full font-mono text-[10px] uppercase tracking-wider transition-all ${
+                    runIndexPeriod === months
+                      ? "bg-primary text-black font-bold"
+                      : "bg-muted/30 text-muted-foreground hover:bg-muted/60"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {/* RunIndex Chart */}
+            {runIndexHistory?.has_data && runIndexHistory.history?.length > 0 ? (
+              <div className="h-40 mb-4">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart
+                    data={runIndexHistory.history.filter(h => h.run_index !== null)}
+                    margin={{ top: 5, right: 10, left: -20, bottom: 5 }}
+                  >
+                    <XAxis
+                      dataKey="date"
+                      axisLine={false}
+                      tickLine={false}
+                      tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 9, fontFamily: "JetBrains Mono" }}
+                      tickFormatter={formatDateLabel}
+                      interval="preserveStartEnd"
+                    />
+                    <YAxis
+                      domain={[0, 1000]}
+                      axisLine={false}
+                      tickLine={false}
+                      tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 9, fontFamily: "JetBrains Mono" }}
+                      ticks={[0, 250, 500, 750, 1000]}
+                    />
+                    <Tooltip
+                      content={({ active, payload }) => {
+                        if (active && payload && payload.length) {
+                          const d = payload[0].payload;
+                          return (
+                            <div className="bg-popover border border-border p-2 rounded-lg shadow-lg">
+                              <p className="font-mono text-xs text-muted-foreground">
+                                {formatDateLabel(d.date)}
+                              </p>
+                              <p className="font-bold text-white">RunIndex: {d.run_index}</p>
+                            </div>
+                          );
+                        }
+                        return null;
+                      }}
+                    />
+                    {runIndexHistory.current_run_index && (
+                      <ReferenceLine
+                        y={runIndexHistory.current_run_index}
+                        stroke="rgba(110, 235, 90, 0.3)"
+                        strokeDasharray="3 3"
+                      />
+                    )}
+                    <Line
+                      type="monotone"
+                      dataKey="run_index"
+                      stroke="#6EEB5A"
+                      strokeWidth={2}
+                      dot={{ fill: "#6EEB5A", strokeWidth: 0, r: 3 }}
+                      activeDot={{ fill: "#6EEB5A", strokeWidth: 2, stroke: "white", r: 5 }}
+                      connectNulls
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <div className="h-40 flex items-center justify-center mb-4">
+                <p className="font-mono text-xs text-muted-foreground text-center">
+                  {t("progressExtended.noDataYet")}
+                </p>
+              </div>
+            )}
+
+            {/* Pillar details */}
+            {runIndexHistory?.has_data && runIndexHistory.pillars && (
+              <div className="mb-4">
+                <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground mb-3">
+                  {t("progressExtended.pillarsTitle")}
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  {Object.entries(runIndexHistory.pillars).map(([pillar, data]) => {
+                    const evo = data.evolution;
+                    const evoStr = evo === null || evo === undefined ? "" :
+                      evo > 0 ? `(+${evo}%)` : evo < 0 ? `(${evo}%)` : "(=)";
+                    const evoColor = evo > 0 ? "text-emerald-500" : evo < 0 ? "text-red-400" : "text-muted-foreground";
+                    return (
+                      <div
+                        key={pillar}
+                        className="flex items-center gap-2 p-3 rounded-xl"
+                        style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}
+                      >
+                        <span className="text-xl">{pillarIcons[pillar]}</span>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                            {pillarLabels[pillar]}
+                          </p>
+                          <div className="flex items-baseline gap-1.5">
+                            <span className="font-heading text-lg font-bold text-white">
+                              {data.current ?? "--"}%
+                            </span>
+                            {evo !== null && evo !== undefined && (
+                              <span className={`font-mono text-[10px] ${evoColor}`}>{evoStr}</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* AI Analysis */}
+            {runIndexHistory?.ai_analysis && (
+              <div
+                className="p-3 rounded-xl"
+                style={{ background: "rgba(110, 235, 90, 0.06)", border: "1px solid rgba(110, 235, 90, 0.15)" }}
+              >
+                <div className="flex items-center gap-2 mb-2">
+                  <Brain className="w-3.5 h-3.5" style={{ color: "#6EEB5A" }} />
+                  <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: "rgba(110, 235, 90, 0.8)" }}>
+                    {t("progressExtended.aiAnalysisTitle")}
+                  </span>
+                </div>
+                <p className="text-sm text-muted-foreground leading-relaxed">
+                  {runIndexHistory.ai_analysis}
+                </p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
 
       {/* Weekly & Monthly Stats */}
