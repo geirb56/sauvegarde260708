@@ -19,6 +19,8 @@ import {
   XCircle,
   Check,
   X,
+  TrendingUp,
+  Target,
 } from "lucide-react";
 import {
   BarChart,
@@ -73,48 +75,48 @@ const REC_STYLES = {
   },
 };
 
-// Couleurs pour les séances (même style que TrainingPlan)
+// Couleurs pour les séances — dark theme (même style que TrainingPlan)
 const SESSION_STYLES = {
   repos: {
-    bg: "linear-gradient(135deg, #1e1b4b 0%, #312e81 100%)",
-    border: "#6366f1",
-    text: "#c7d2fe",
+    bg: "#12142a",
+    border: "#4f46e5",
+    text: "#a5b4fc",
     badge: "#4f46e5",
     badgeText: "#ffffff"
   },
   endurance: {
-    bg: "linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%)",
-    border: "#34d399",
-    text: "#065f46",
+    bg: "#0b1a12",
+    border: "#10b981",
+    text: "#6ee7b7",
     badge: "#10b981",
-    badgeText: "#ffffff"
+    badgeText: "#0b1a12"
   },
   seuil: {
-    bg: "linear-gradient(135deg, #fed7aa 0%, #fdba74 100%)",
+    bg: "#1c1207",
     border: "#f97316",
-    text: "#9a3412",
+    text: "#fed7aa",
     badge: "#f97316",
-    badgeText: "#ffffff"
+    badgeText: "#1c1207"
   },
   recuperation: {
-    bg: "linear-gradient(135deg, #fef9c3 0%, #fef08a 100%)",
-    border: "#facc15",
-    text: "#854d0e",
-    badge: "#eab308",
+    bg: "#0b1a1a",
+    border: "#22d3ee",
+    text: "#a5f3fc",
+    badge: "#0891b2",
     badgeText: "#ffffff"
   },
   sortie_longue: {
-    bg: "linear-gradient(135deg, #fce7f3 0%, #fbcfe8 100%)",
-    border: "#ec4899",
-    text: "#9d174d",
-    badge: "#ec4899",
+    bg: "#0d1321",
+    border: "#3b82f6",
+    text: "#93c5fd",
+    badge: "#2563eb",
     badgeText: "#ffffff"
   },
   fractionne: {
-    bg: "linear-gradient(135deg, #ede9fe 0%, #ddd6fe 100%)",
-    border: "#8b5cf6",
-    text: "#5b21b6",
-    badge: "#8b5cf6",
+    bg: "#1c1207",
+    border: "#f97316",
+    text: "#fed7aa",
+    badge: "#ea580c",
     badgeText: "#ffffff"
   },
 };
@@ -243,11 +245,11 @@ function TrendTooltip({ active, payload, label }) {
 
 // Workout type configuration (labels from t("workoutTypes.*"))
 const WORKOUT_TYPES = {
-  fractionne: { color: "#8b5cf6", bgClass: "workout-icon fractionne", icon: Zap },
-  endurance: { color: "#3b82f6", bgClass: "workout-icon endurance", icon: Activity },
+  fractionne: { color: "#f97316", bgClass: "workout-icon fractionne", icon: Zap },
+  endurance: { color: "#10b981", bgClass: "workout-icon endurance", icon: Activity },
   seuil: { color: "#f97316", bgClass: "workout-icon seuil", icon: Flame },
-  recuperation: { color: "#14b8a6", bgClass: "workout-icon recuperation", icon: Heart },
-  run: { color: "#3b82f6", bgClass: "workout-icon endurance", icon: Activity },
+  recuperation: { color: "#22d3ee", bgClass: "workout-icon recuperation", icon: Heart },
+  run: { color: "#10b981", bgClass: "workout-icon endurance", icon: Activity },
   cycle: { color: "#f97316", bgClass: "workout-icon seuil", icon: Bike },
 };
 
@@ -303,13 +305,13 @@ function CircularGauge({ value, max = 100, size = 64 }) {
   );
 }
 
-function RunIndexPillar({ emoji, label, value, color }) {
+function RunIndexPillar({ icon: Icon, label, value, color }) {
   const safeValue = Number.isFinite(value) ? value : 0;
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2 text-sm font-medium" style={{ color: "var(--text-secondary)" }}>
-          <span className="text-base">{emoji}</span>
+          {Icon && <Icon className="w-4 h-4 shrink-0" style={{ color }} />}
           <span>{label}</span>
         </div>
         <span className="text-sm font-bold" style={{ color }}>
@@ -351,8 +353,8 @@ function MiniLineChart({ data = [] }) {
     <svg width={width} height={height} className="mt-2">
       <defs>
         <linearGradient id="lineGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-          <stop offset="0%" stopColor="var(--accent-violet)" stopOpacity="0.3" />
-          <stop offset="100%" stopColor="var(--accent-violet)" />
+          <stop offset="0%" stopColor="var(--accent-green)" stopOpacity="0.3" />
+          <stop offset="100%" stopColor="var(--accent-green)" />
         </linearGradient>
       </defs>
       <polyline
@@ -515,14 +517,14 @@ export default function Dashboard() {
         <div
           className="rounded-3xl p-5 space-y-4 animate-in"
           style={{
-            background: "linear-gradient(135deg, #111827 0%, #1f2937 45%, #312e81 100%)",
-            border: "1px solid rgba(129, 140, 248, 0.28)",
+            background: "linear-gradient(135deg, #0d1a10 0%, #111827 60%, #0d1a10 100%)",
+            border: "1px solid rgba(110, 235, 90, 0.22)",
             boxShadow: "0 16px 40px rgba(15, 23, 42, 0.22)",
           }}
         >
           <div className="flex items-start justify-between gap-4">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.22em]" style={{ color: "#a5b4fc" }}>
+              <p className="text-xs font-semibold uppercase tracking-[0.22em]" style={{ color: "#6EEB5A" }}>
                 {t("dashboard.runIndex")}
               </p>
               <h2 className="text-lg font-black mt-1" style={{ color: "#ffffff" }}>
@@ -532,7 +534,7 @@ export default function Dashboard() {
                 {t("dashboard.runIndexDescription")}
               </p>
             </div>
-            <div className="px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider" style={{ background: "rgba(255,255,255,0.08)", color: "#e0e7ff" }}>
+            <div className="px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider" style={{ background: "rgba(110, 235, 90, 0.12)", color: "#6EEB5A" }}>
               {t("progress.confidence")}: {runIndexConfidence}%
             </div>
           </div>
@@ -543,7 +545,7 @@ export default function Dashboard() {
                 <span className="text-6xl font-black leading-none" style={{ color: "#ffffff" }}>
                   {runIndexScore}
                 </span>
-                <span className="text-xl font-semibold pb-1" style={{ color: "#c7d2fe" }}>
+                <span className="text-xl font-semibold pb-1" style={{ color: "#6EEB5A" }}>
                   / 1000
                 </span>
               </div>
@@ -553,7 +555,7 @@ export default function Dashboard() {
             </div>
 
             <div className="md:text-right">
-              <p className="text-xs uppercase tracking-[0.2em]" style={{ color: "#a5b4fc" }}>
+              <p className="text-xs uppercase tracking-[0.2em]" style={{ color: "#6EEB5A" }}>
                 {t("dashboard.runIndexVsReadinessTitle")}
               </p>
               <p className="text-sm mt-2" style={{ color: "rgba(255,255,255,0.72)" }}>
@@ -563,10 +565,10 @@ export default function Dashboard() {
           </div>
 
           <div className="grid gap-3">
-            <RunIndexPillar emoji="⚡" label={t("dashboard.runIndexPillars.speed")} value={runIndexData?.speed_score} color="#f59e0b" />
-            <RunIndexPillar emoji="🫀" label={t("dashboard.runIndexPillars.endurance")} value={runIndexData?.endurance_score} color="#ef4444" />
-            <RunIndexPillar emoji="📈" label={t("dashboard.runIndexPillars.consistency")} value={runIndexData?.consistency_score} color="#22c55e" />
-            <RunIndexPillar emoji="🧠" label={t("dashboard.runIndexPillars.efficiency")} value={runIndexData?.efficiency_score} color="#8b5cf6" />
+            <RunIndexPillar icon={Zap} label={t("dashboard.runIndexPillars.speed")} value={runIndexData?.speed_score} color="#f59e0b" />
+            <RunIndexPillar icon={Heart} label={t("dashboard.runIndexPillars.endurance")} value={runIndexData?.endurance_score} color="#ef4444" />
+            <RunIndexPillar icon={TrendingUp} label={t("dashboard.runIndexPillars.consistency")} value={runIndexData?.consistency_score} color="#6EEB5A" />
+            <RunIndexPillar icon={Target} label={t("dashboard.runIndexPillars.efficiency")} value={runIndexData?.efficiency_score} color="#3b82f6" />
           </div>
         </div>
       )}
@@ -587,7 +589,7 @@ export default function Dashboard() {
           <Loader2
             className="animate-spin"
             size={28}
-            style={{ color: "var(--accent-violet)" }}
+            style={{ color: "var(--accent-green)" }}
           />
           <p className="text-xs" style={{ color: "var(--text-tertiary)" }}>
             {t("dashboard.computingReadiness")}
@@ -624,7 +626,7 @@ export default function Dashboard() {
                   <Link
                     to="/onboarding"
                     className="mt-1 px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider"
-                    style={{ background: "var(--accent-violet, #7c3aed)", color: "#fff" }}
+                    style={{ background: "var(--accent-green)", color: "#0a0e1a" }}
                     data-testid="cardio-connect-cta"
                   >
                     {t("dashboard.connectGarmin", "Connect Garmin")}
@@ -674,7 +676,6 @@ export default function Dashboard() {
                     </div>
                     <div className="h-16 w-px" style={{ background: `${recStyle.accent}40` }} />
                     <div className="flex items-center gap-2">
-                      <span className="text-3xl">{cardioData?.recommendation_emoji}</span>
                       <span className="text-2xl font-black tracking-tight" style={{ color: recStyle.accent }}>
                         {cardioData?.recommendation || "—"}
                       </span>

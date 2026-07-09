@@ -622,9 +622,10 @@ export default function Settings() {
                             }`}
                             style={{
                               background: trainingGoal === opt.value 
-                                ? "linear-gradient(135deg, #8b5cf6 0%, #a855f7 100%)" 
+                                ? "var(--accent-green)" 
                                 : "var(--muted)",
-                              border: `1px solid ${trainingGoal === opt.value ? "#8b5cf6" : "var(--border)"}`
+                              border: `1px solid ${trainingGoal === opt.value ? "var(--accent-green)" : "var(--border)"}`,
+                              color: trainingGoal === opt.value ? "#0a0e1a" : undefined
                             }}
                             data-testid={`training-goal-btn-${opt.value}`}
                           >
