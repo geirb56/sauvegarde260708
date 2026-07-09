@@ -63,16 +63,77 @@ class GccliProvider(Provider):
     def sync_activities(self, user_id: str, since: Optional[str] = None) -> List[Dict]:
         account = self._account()
         # Incremental (since given): fetch a small batch and keep only newer ones,
-        # keeping Garmin API usage flat. Full sync: a larger recent window.
+        # keeping Garmin API usage flat. Full sync: one page at the configured size.
         if since:
             limit = int(os.environ.get("GARMIN_INCREMENTAL_LIMIT", "10"))
         else:
-            limit = int(os.environ.get("GARMIN_FULL_LIMIT", "30"))
+            limit = int(os.environ.get("GARMIN_PAGE_SIZE", "50"))
         raw = self._runner.fetch_activities(limit=limit, account=account)
         acts = [self._normalize(a) for a in raw if a]
         if since:
             acts = [a for a in acts if (a.get("start_time") or "") > since]
         return acts
+
+    def fetch_all_activities(self, page_size: int = 50) -> List[Dict]:
+        """Fetch ALL available activities using paginated gccli calls.
+
+        Loops with --start offset until gccli returns an empty page or fewer
+        activities than page_size. Deduplicates by external_id so re-running is
+        safe (idempotent). Intermediate errors are logged and stop the loop
+        (partial results are returned rather than raising).
+        """
+        account = self._account()
+        all_activities: List[Dict] = []
+        seen_ids: set = set()
+        start = 0
+
+        while True:
+            logger.info(
+                "[gccli] deep sync page start=%d page_size=%d total_so_far=%d",
+                start, page_size, len(all_activities),
+            )
+            try:
+                page = self._runner.fetch_activities(
+                    limit=page_size, start=start, account=account
+                )
+            except GccliError as exc:
+                logger.error(
+                    "[gccli] deep sync page error start=%d: %s; stopping pagination", start, exc
+                )
+                break
+
+            if not page:
+                logger.info("[gccli] deep sync empty page at start=%d; done", start)
+                break
+
+            added = 0
+            for raw in page:
+                if not raw:
+                    continue
+                normalized = self._normalize(raw)
+                ext_id = normalized.get("external_id")
+                if ext_id is None:
+                    logger.debug("[gccli] skipping activity with no external_id: %s", raw)
+                    continue
+                if ext_id in seen_ids:
+                    continue
+                seen_ids.add(ext_id)
+                all_activities.append(normalized)
+                added += 1
+
+            logger.info(
+                "[gccli] deep sync page start=%d returned=%d added=%d total=%d",
+                start, len(page), added, len(all_activities),
+            )
+
+            if len(page) < page_size:
+                # Last page (partial): no more data available.
+                break
+
+            start += page_size
+
+        logger.info("[gccli] deep sync complete total=%d", len(all_activities))
+        return all_activities
 
     def get_daily_metrics(self, user_id: str, days: int = 7) -> List[Dict]:
         account = self._account()

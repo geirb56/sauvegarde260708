@@ -213,8 +213,13 @@ class GccliRunner:
         raise GccliError(f"gccli login failed: {full_output[:300]}")
 
     # -------------------------------------------------------------- data fetch
-    def fetch_activities(self, limit: int = 20, account: Optional[str] = None) -> List[Dict]:
-        data = self._run_json(["activities", "list", "--limit", str(limit)], account=account)
+    def fetch_activities(
+        self, limit: int = 20, start: int = 0, account: Optional[str] = None
+    ) -> List[Dict]:
+        args = ["activities", "list", "--limit", str(limit)]
+        if start > 0:
+            args += ["--start", str(start)]
+        data = self._run_json(args, account=account)
         if isinstance(data, list):
             return data
         return data.get("activities", []) if isinstance(data, dict) else []
