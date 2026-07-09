@@ -11,7 +11,6 @@ import { useSubscription } from "@/context/SubscriptionContext";
 import { useUnitSystem } from "@/context/UnitContext";
 import { Globe, Info, Loader2, Check, Target, Calendar, Trash2, Clock, Route, Crown, Sparkles, Dumbbell } from "lucide-react";
 import { toast } from "sonner";
-import { TerraConnection } from "@/components/TerraConnection";
 
 import { API_BASE_URL } from "@/config";
 const API = API_BASE_URL;
@@ -679,9 +678,6 @@ export default function Settings() {
             </div>
           </CardContent>
         </Card>
-        {/* Terra Wearables Integration */}
-        <TerraConnection lang={lang} t={t} />
-
         {/* Language Setting */}
         <Card className="bg-card border-border">
           <CardContent className="p-6">
