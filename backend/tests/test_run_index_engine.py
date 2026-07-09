@@ -86,6 +86,21 @@ def _elite_profile() -> list[dict]:
     ]
 
 
+def _progressive_profile() -> list[dict]:
+    return [
+        _run(185, 5.0, 6.3),
+        _run(170, 6.0, 6.1),
+        _run(150, 7.0, 5.9),
+        _run(125, 8.0, 5.6, 160),
+        _run(95, 10.0, 5.3, 158),
+        _run(70, 12.0, 5.0, 156),
+        _run(45, 14.0, 4.8, 154),
+        _run(28, 16.0, 4.6, 152),
+        _run(14, 10.0, 4.3, 165),
+        _run(4, 21.1, 4.18, 160),
+    ]
+
+
 def test_profiles_produce_ordered_run_index_scores():
     reference_date = date(2026, 7, 7)
     beginner = calculate_run_index(_beginner_profile(), reference_date)
@@ -131,3 +146,13 @@ def test_empty_profile_returns_zero_scores_and_zero_confidence():
     assert result["endurance_score"] == 0
     assert result["consistency_score"] == 0
     assert result["efficiency_score"] == 0
+
+
+def test_reference_date_changes_run_index_for_progressive_runner():
+    workouts = _progressive_profile()
+
+    early = calculate_run_index(workouts, date(2026, 2, 1))
+    late = calculate_run_index(workouts, date(2026, 7, 7))
+
+    assert early["confidence_score"] <= late["confidence_score"]
+    assert early["run_index"] < late["run_index"]
