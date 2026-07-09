@@ -205,7 +205,7 @@ export default function SessionDetail() {
       title: t("sessions.nextSession"),
       icon: Lightbulb,
       content: analysis?.advice?.text,
-      tone: "border-violet-500/20 bg-violet-500/5",
+      tone: "border-primary/20 bg-primary/5",
     },
   ].filter((section) => section.content);
 

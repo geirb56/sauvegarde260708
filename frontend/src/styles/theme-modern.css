@@ -7,29 +7,34 @@
   --bg-card: #141a2e;
   --bg-card-hover: #1a2038;
   
-  /* Primary Accent - Violet/Purple */
+  /* Primary Accent - RunIndex Green */
+  --accent-green: #6EEB5A;
+  --accent-green-light: #8FFF74;
+  --accent-green-dark: #4FD040;
+  
+  /* Premium Accent - Violet (Premium only) */
   --accent-violet: #8b5cf6;
   --accent-violet-light: #a78bfa;
   --accent-violet-dark: #7c3aed;
   
-  /* Secondary - Cyan/Teal */
+  /* Secondary - Cyan/Teal (charts secondary) */
   --accent-cyan: #22d3ee;
   --accent-cyan-light: #67e8f9;
   
-  /* Pink/Magenta for highlights */
-  --accent-pink: #ec4899;
-  --accent-pink-light: #f472b6;
+  /* Warning */
+  --accent-orange: #f97316;
   
   /* Status Colors */
-  --status-success: #22c55e;
+  --status-success: #6EEB5A;
   --status-warning: #f97316;
   --status-danger: #ef4444;
+  --status-info: #3b82f6;
   
   /* Workout Type Colors */
-  --type-fractionne: #8b5cf6;
-  --type-endurance: #3b82f6;
+  --type-fractionne: #f97316;
+  --type-endurance: #6EEB5A;
   --type-seuil: #f97316;
-  --type-recuperation: #14b8a6;
+  --type-recuperation: #22d3ee;
   
   /* Text */
   --text-primary: #ffffff;
@@ -41,9 +46,9 @@
   --border-color-light: #334155;
   
   /* Chart colors */
-  --chart-line: #8b5cf6;
-  --chart-gradient-start: rgba(139, 92, 246, 0.3);
-  --chart-gradient-end: rgba(139, 92, 246, 0);
+  --chart-line: #6EEB5A;
+  --chart-gradient-start: rgba(110, 235, 90, 0.25);
+  --chart-gradient-end: rgba(110, 235, 90, 0);
 }
 
 /* ========== GLOBAL OVERRIDES ========== */
@@ -65,10 +70,10 @@ body {
 
 @keyframes pulse-glow {
   0%, 100% {
-    box-shadow: 0 0 0 0 rgba(139, 92, 246, 0);
+    box-shadow: 0 0 0 0 rgba(110, 235, 90, 0);
   }
   50% {
-    box-shadow: 0 0 20px 4px rgba(139, 92, 246, 0.2);
+    box-shadow: 0 0 20px 4px rgba(110, 235, 90, 0.2);
   }
 }
 
@@ -94,7 +99,15 @@ body {
   border-color: var(--border-color-light);
 }
 
-/* Card with violet accent border */
+/* Card with green accent border */
+.card-accent-green {
+  background: var(--bg-card);
+  border: 1px solid var(--accent-green);
+  border-radius: 16px;
+  box-shadow: 0 0 20px rgba(110, 235, 90, 0.08);
+}
+
+/* Card with violet accent border (Premium only) */
 .card-accent-violet {
   background: var(--bg-card);
   border: 1px solid var(--accent-violet);
@@ -146,9 +159,9 @@ body {
 }
 
 .circular-gauge .gauge-progress {
-  stroke: var(--accent-violet);
+  stroke: var(--accent-green);
   stroke-linecap: round;
-  filter: drop-shadow(0 0 6px rgba(139, 92, 246, 0.5));
+  filter: drop-shadow(0 0 6px rgba(110, 235, 90, 0.5));
 }
 
 .circular-gauge .gauge-text {
@@ -203,7 +216,7 @@ body {
 
 .metric-progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--accent-violet), var(--accent-cyan));
+  background: var(--accent-green);
   border-radius: 3px;
   transition: width 0.5s ease;
 }
@@ -217,15 +230,15 @@ body {
 /* ========== TODAY'S WORKOUT CARD ========== */
 .today-workout-card {
   background: var(--bg-card);
-  border: 2px solid var(--accent-violet);
+  border: 2px solid var(--accent-green);
   border-radius: 16px;
   padding: 1.25rem;
   position: relative;
-  box-shadow: 0 0 30px rgba(139, 92, 246, 0.15);
+  box-shadow: 0 0 24px rgba(110, 235, 90, 0.10);
 }
 
 .today-label {
-  color: var(--accent-violet);
+  color: var(--accent-green);
   font-size: 0.7rem;
   font-weight: 600;
   text-transform: uppercase;
@@ -281,12 +294,12 @@ body {
 }
 
 .workout-icon.fractionne {
-  background: rgba(139, 92, 246, 0.15);
+  background: rgba(249, 115, 22, 0.15);
   color: var(--type-fractionne);
 }
 
 .workout-icon.endurance {
-  background: rgba(59, 130, 246, 0.15);
+  background: rgba(110, 235, 90, 0.12);
   color: var(--type-endurance);
 }
 
@@ -296,7 +309,7 @@ body {
 }
 
 .workout-icon.recuperation {
-  background: rgba(20, 184, 166, 0.15);
+  background: rgba(34, 211, 238, 0.12);
   color: var(--type-recuperation);
 }
 
@@ -368,7 +381,7 @@ body {
 }
 
 .nav-item-modern.active {
-  color: var(--accent-cyan);
+  color: var(--accent-green);
 }
 
 .nav-item-modern .nav-icon {
@@ -416,7 +429,7 @@ body {
 .header-logo-icon {
   width: 32px;
   height: 32px;
-  background: var(--accent-violet);
+  background: var(--accent-green);
   border-radius: 8px;
   display: flex;
   align-items: center;
@@ -429,7 +442,7 @@ body {
 }
 
 .header-logo-text span {
-  color: var(--accent-violet);
+  color: var(--accent-green);
 }
 
 .sync-status {
@@ -456,38 +469,46 @@ body {
 .header-avatar {
   width: 32px;
   height: 32px;
-  background: var(--accent-pink);
+  background: var(--accent-green-dark);
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 0.75rem;
   font-weight: 600;
-  color: white;
+  color: #0a0e1a;
 }
 
 /* ========== CHARTS ========== */
 .chart-line-gradient {
-  stroke: var(--accent-violet);
+  stroke: var(--accent-green);
   stroke-width: 2;
   fill: none;
-  filter: drop-shadow(0 0 4px rgba(139, 92, 246, 0.3));
+  filter: drop-shadow(0 0 4px rgba(110, 235, 90, 0.3));
 }
 
 /* ========== UTILITIES ========== */
-.text-gradient-violet {
-  background: linear-gradient(135deg, var(--accent-violet), var(--accent-pink));
+.text-gradient-green {
+  background: linear-gradient(135deg, var(--accent-green), var(--accent-cyan));
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
 
-.glow-violet {
-  box-shadow: 0 0 20px rgba(139, 92, 246, 0.3);
+/* Keep violet gradient for premium contexts */
+.text-gradient-violet {
+  background: linear-gradient(135deg, var(--accent-violet), var(--accent-violet-light));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
-.glow-cyan {
-  box-shadow: 0 0 20px rgba(34, 211, 238, 0.3);
+.glow-green {
+  box-shadow: 0 0 20px rgba(110, 235, 90, 0.25);
+}
+
+.glow-violet {
+  box-shadow: 0 0 20px rgba(139, 92, 246, 0.3);
 }
 
 /* ========== SAFE AREA ========== */
