@@ -3034,6 +3034,283 @@ async def get_run_index(user_id: str = "default", language: str = "fr"):
     }
 
 
+@api_router.get("/run-index/history")
+async def get_run_index_history(
+    user: dict = Depends(auth_user),
+    months: int = Query(6, description="Period in months: 3, 6 or 12"),
+    language: str = Query("fr", description="Language for AI analysis"),
+):
+    """
+    Return the historical evolution of the RunIndex and its pillars.
+
+    Data source: run_index_scores collection.
+    Multiple scores on the same day are aggregated (mean).
+    Returns daily data points for the selected period (3, 6 or 12 months).
+    """
+    months = max(1, min(12, months))
+    user_id = user["id"]
+    today = datetime.now(timezone.utc).date()
+    period_start = today - timedelta(days=months * 30)
+    period_start_iso = period_start.isoformat()
+
+    # Fetch all run_index_scores documents within the period
+    docs = await db.run_index_scores.find(
+        {"user_id": user_id, "date": {"$gte": period_start_iso}},
+        {"_id": 0, "date": 1, "run_index": 1, "speed_score": 1,
+         "endurance_score": 1, "consistency_score": 1, "efficiency_score": 1},
+    ).sort("date", 1).to_list(500)
+
+    if not docs:
+        return {
+            "has_data": False,
+            "current_run_index": None,
+            "trend": 0,
+            "history": [],
+            "pillars": {},
+            "ai_analysis": None,
+        }
+
+    # Aggregate multiple scores per day (take mean)
+    from collections import defaultdict as _defaultdict
+    day_buckets: dict = _defaultdict(list)
+    for doc in docs:
+        day_buckets[doc["date"]].append(doc)
+
+    history = []
+    for date_str in sorted(day_buckets.keys()):
+        bucket = day_buckets[date_str]
+        def _avg(field):
+            vals = [d.get(field) for d in bucket if d.get(field) is not None]
+            return round(sum(vals) / len(vals)) if vals else None
+
+        history.append({
+            "date": date_str,
+            "run_index": _avg("run_index"),
+            "speed_score": _avg("speed_score"),
+            "endurance_score": _avg("endurance_score"),
+            "consistency_score": _avg("consistency_score"),
+            "efficiency_score": _avg("efficiency_score"),
+        })
+
+    if not history:
+        return {
+            "has_data": False,
+            "current_run_index": None,
+            "trend": 0,
+            "history": [],
+            "pillars": {},
+            "ai_analysis": None,
+        }
+
+    # Current values = last data point
+    current = history[-1]
+    current_run_index = current.get("run_index")
+
+    # First valid data point for trend calculation
+    first = next((h for h in history if h.get("run_index") is not None), None)
+    last = next((h for h in reversed(history) if h.get("run_index") is not None), None)
+
+    trend = 0
+    if first and last and first["run_index"] is not None and last["run_index"] is not None:
+        trend = last["run_index"] - first["run_index"]
+
+    # Pillar evolution (current vs start of period)
+    pillars = {}
+    for pillar, key in [
+        ("speed", "speed_score"),
+        ("endurance", "endurance_score"),
+        ("consistency", "consistency_score"),
+        ("efficiency", "efficiency_score"),
+    ]:
+        current_val = current.get(key)
+        first_val = first.get(key) if first else None
+        evolution = None
+        if current_val is not None and first_val is not None:
+            evolution = current_val - first_val
+        pillars[pillar] = {"current": current_val, "evolution": evolution}
+
+    # Generate AI analysis text
+    ai_analysis = _generate_run_index_analysis(
+        current_run_index=current_run_index,
+        trend=trend,
+        months=months,
+        pillars=pillars,
+        language=language,
+    )
+
+    return {
+        "has_data": True,
+        "current_run_index": current_run_index,
+        "trend": trend,
+        "period_months": months,
+        "history": history,
+        "pillars": pillars,
+        "ai_analysis": ai_analysis,
+    }
+
+
+def _generate_run_index_analysis(
+    current_run_index: Optional[int],
+    trend: int,
+    months: int,
+    pillars: dict,
+    language: str,
+) -> str:
+    """Generate a template-based analysis of RunIndex evolution (no LLM required)."""
+    if current_run_index is None:
+        if language == "fr":
+            return "Pas encore assez de données pour analyser ta progression."
+        if language == "es":
+            return "Todavía no hay suficientes datos para analizar tu progresión."
+        return "Not enough data yet to analyse your progression."
+
+    # Find best and worst improving pillar
+    pillar_names_fr = {
+        "speed": "vitesse",
+        "endurance": "endurance",
+        "consistency": "régularité",
+        "efficiency": "efficacité",
+    }
+    pillar_names_en = {
+        "speed": "speed",
+        "endurance": "endurance",
+        "consistency": "consistency",
+        "efficiency": "efficiency",
+    }
+    pillar_names_es = {
+        "speed": "velocidad",
+        "endurance": "resistencia",
+        "consistency": "consistencia",
+        "efficiency": "eficiencia",
+    }
+    if language == "fr":
+        names = pillar_names_fr
+    elif language == "es":
+        names = pillar_names_es
+    else:
+        names = pillar_names_en
+
+    evolutions = {
+        p: data.get("evolution") or 0
+        for p, data in pillars.items()
+        if data.get("evolution") is not None
+    }
+
+    best_pillar = max(evolutions, key=lambda p: evolutions[p]) if evolutions else None
+    worst_pillar = min(evolutions, key=lambda p: evolutions[p]) if evolutions else None
+
+    if language == "fr":
+        parts = []
+        if trend > 0:
+            parts.append(f"Ton RunIndex a progressé de {trend} points en {months} mois.")
+        elif trend < 0:
+            parts.append(f"Ton RunIndex a reculé de {abs(trend)} points en {months} mois.")
+        else:
+            parts.append(f"Ton RunIndex est stable sur les {months} derniers mois.")
+
+        if best_pillar and evolutions.get(best_pillar, 0) > 0:
+            parts.append(f"Ta plus forte amélioration vient de ta {names[best_pillar]}.")
+
+        if worst_pillar and evolutions.get(worst_pillar, 0) < 0:
+            tips = {
+                "speed": "Un travail de seuil ou d'intervalles pourrait accélérer ta progression.",
+                "endurance": "Augmenter progressivement ton volume hebdomadaire t'aidera.",
+                "consistency": "La régularité est la clé : essaie de courir au moins 3 fois par semaine.",
+                "efficiency": "Des séances à allure modérée avec FC contrôlée améliorent l'efficacité.",
+            }
+            parts.append(
+                f"Ta {names[worst_pillar]} est en recul. "
+                + tips.get(worst_pillar, "Continue à t'entraîner régulièrement.")
+            )
+        elif worst_pillar and best_pillar and worst_pillar != best_pillar:
+            tips = {
+                "speed": "Un travail de seuil pourrait accélérer ta progression.",
+                "endurance": "Augmenter ton volume de sortie longue t'aidera.",
+                "consistency": "Maintenir une cadence régulière est clé pour progresser.",
+                "efficiency": "Des sorties à allure aérobie améliorent ton efficacité cardiaque.",
+            }
+            parts.append(
+                f"Ta {names[worst_pillar]} progresse plus lentement. "
+                + tips.get(worst_pillar, "Continue ton entraînement régulier.")
+            )
+
+        return " ".join(parts)
+
+    elif language == "es":
+        parts = []
+        if trend > 0:
+            parts.append(f"Tu RunIndex ha mejorado {trend} puntos en {months} meses.")
+        elif trend < 0:
+            parts.append(f"Tu RunIndex ha bajado {abs(trend)} puntos en {months} meses.")
+        else:
+            parts.append(f"Tu RunIndex está estable en los últimos {months} meses.")
+
+        if best_pillar and evolutions.get(best_pillar, 0) > 0:
+            parts.append(f"Tu mayor mejora proviene de tu {names[best_pillar]}.")
+
+        if worst_pillar and evolutions.get(worst_pillar, 0) < 0:
+            tips = {
+                "speed": "El trabajo de umbral o intervalos puede acelerar tu progresión.",
+                "endurance": "Aumentar progresivamente tu volumen semanal te ayudará.",
+                "consistency": "La constancia es clave: intenta correr al menos 3 veces por semana.",
+                "efficiency": "Las salidas aeróbicas fáciles con FC controlada mejoran la eficiencia.",
+            }
+            parts.append(
+                f"Tu {names[worst_pillar]} está en retroceso. "
+                + tips.get(worst_pillar, "Continúa entrenando regularmente.")
+            )
+        elif worst_pillar and best_pillar and worst_pillar != best_pillar:
+            tips = {
+                "speed": "El trabajo de umbral puede acelerar tu progresión.",
+                "endurance": "Aumentar el volumen de tu salida larga te ayudará.",
+                "consistency": "Mantener una cadencia regular es clave para progresar.",
+                "efficiency": "Las salidas aeróbicas mejoran tu eficiencia cardíaca.",
+            }
+            parts.append(
+                f"Tu {names[worst_pillar]} progresa más lentamente. "
+                + tips.get(worst_pillar, "Continúa con tu entrenamiento regular.")
+            )
+
+        return " ".join(parts)
+
+    else:
+        parts = []
+        if trend > 0:
+            parts.append(f"Your RunIndex improved by {trend} points over {months} months.")
+        elif trend < 0:
+            parts.append(f"Your RunIndex dropped by {abs(trend)} points over {months} months.")
+        else:
+            parts.append(f"Your RunIndex is stable over the last {months} months.")
+
+        if best_pillar and evolutions.get(best_pillar, 0) > 0:
+            parts.append(f"Your biggest improvement comes from your {names[best_pillar]}.")
+
+        if worst_pillar and evolutions.get(worst_pillar, 0) < 0:
+            tips = {
+                "speed": "Threshold or interval work could accelerate your progress.",
+                "endurance": "Gradually increasing your weekly volume will help.",
+                "consistency": "Consistency is key: aim for at least 3 runs per week.",
+                "efficiency": "Easy aerobic runs with controlled HR improve efficiency.",
+            }
+            parts.append(
+                f"Your {names[worst_pillar]} is declining. "
+                + tips.get(worst_pillar, "Keep training regularly.")
+            )
+        elif worst_pillar and best_pillar and worst_pillar != best_pillar:
+            tips = {
+                "speed": "Threshold work could accelerate your progress.",
+                "endurance": "Increasing your long run volume will help.",
+                "consistency": "Maintaining a regular cadence is key to progress.",
+                "efficiency": "Easy aerobic runs improve your cardiac efficiency.",
+            }
+            parts.append(
+                f"Your {names[worst_pillar]} is progressing more slowly. "
+                + tips.get(worst_pillar, "Keep up your regular training.")
+            )
+
+        return " ".join(parts)
+
+
 # ========== PREMIUM SUBSCRIPTION (STRIPE) ==========
 
 
