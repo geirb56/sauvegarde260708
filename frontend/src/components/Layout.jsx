@@ -9,6 +9,19 @@ import axios from "axios";
 import { API_BASE_URL } from "@/config";
 const API = API_BASE_URL;
 
+const formatLastSyncLabel = (lang, diffMins) => {
+  if (diffMins < 60) {
+    if (lang === "fr") return `il y a ${diffMins} min`;
+    if (lang === "es") return `hace ${diffMins} min`;
+    return `${diffMins} min ago`;
+  }
+
+  const hours = Math.round(diffMins / 60);
+  if (lang === "fr") return `il y a ${hours} h`;
+  if (lang === "es") return `hace ${hours} h`;
+  return `${hours} h ago`;
+};
+
 export const Layout = () => {
   const location = useLocation();
   const { t, lang } = useLanguage();
@@ -27,18 +40,14 @@ export const Layout = () => {
           const syncDate = new Date(res.data.last_sync);
           const now = new Date();
           const diffMins = Math.round((now - syncDate) / 60000);
-          if (diffMins < 60) {
-            setLastSync(t("common.timeAgoMins").replace("{n}", diffMins));
-          } else {
-            setLastSync(t("common.timeAgoHours").replace("{n}", Math.round(diffMins / 60)));
-          }
+          setLastSync(formatLastSyncLabel(lang, diffMins));
         }
       } catch (err) {
         // Ignore
       }
     };
     checkSync();
-  }, [t]);
+  }, [lang]);
 
   const navItems = [
     { path: "/", icon: Home, labelKey: "nav.dashboard" },
