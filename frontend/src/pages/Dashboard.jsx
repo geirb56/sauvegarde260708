@@ -31,7 +31,6 @@ import {
   Legend,
 } from "recharts";
 import { useUnitSystem } from "@/context/UnitContext";
-import { formatDistance, formatPace as formatPaceUnits } from "@/utils/units";
 import { Button } from "@/components/ui/button";
 import { BrandSplash } from "@/components/LoadingSpinner";
 import { toast } from "sonner";
@@ -241,33 +240,6 @@ function TrendTooltip({ active, payload, label }) {
 }
 
 // Workout type configuration (labels from t("workoutTypes.*"))
-const WORKOUT_TYPES = {
-  fractionne: { color: "#f97316", bgClass: "workout-icon fractionne", icon: Zap },
-  endurance: { color: "#10b981", bgClass: "workout-icon endurance", icon: Activity },
-  seuil: { color: "#f97316", bgClass: "workout-icon seuil", icon: Flame },
-  recuperation: { color: "#22d3ee", bgClass: "workout-icon recuperation", icon: Heart },
-  run: { color: "#10b981", bgClass: "workout-icon endurance", icon: Activity },
-  cycle: { color: "#f97316", bgClass: "workout-icon seuil", icon: Bike },
-};
-
-const formatDuration = (minutes) => {
-  if (!minutes) return "--";
-  const hrs = Math.floor(minutes / 60);
-  const mins = minutes % 60;
-  if (hrs > 0) return `${hrs}h${mins.toString().padStart(2, '0')}`;
-  return `${mins}min`;
-};
-
-const getRelativeDate = (dateStr, t, locale) => {
-  const date = new Date(dateStr);
-  const today = new Date();
-  const yesterday = new Date(today);
-  yesterday.setDate(yesterday.getDate() - 1);
-  if (date.toDateString() === today.toDateString()) return t("dashboard.today");
-  if (date.toDateString() === yesterday.toDateString()) return t("dashboard.yesterday");
-  return date.toLocaleDateString(locale, { day: "numeric", month: "short" });
-};
-
 // Circular Gauge Component
 function CircularGauge({ value, max = 100, size = 64 }) {
   const strokeWidth = 5;
@@ -368,7 +340,6 @@ function MiniLineChart({ data = [] }) {
 
 export default function Dashboard() {
   const [insight, setInsight] = useState(null);
-  const [workouts, setWorkouts] = useState([]);
   const [todaySession, setTodaySession] = useState(null);
   const [trainingMetrics, setTrainingMetrics] = useState(null);
   const [cardioData, setCardioData] = useState(null);
@@ -394,15 +365,13 @@ export default function Dashboard() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [insightRes, workoutsRes, ragRes, todayRes, metricsRes] = await Promise.all([
+      const [insightRes, ragRes, todayRes, metricsRes] = await Promise.all([
         axios.get(`${API}/dashboard/insight?language=${lang}`),
-        axios.get(`${API}/workouts`),
         axios.get(`${API}/rag/dashboard`).catch(() => ({ data: null })),
         axios.get(`${API}/training/today`, { headers: { "X-User-Id": "default" } }).catch(() => ({ data: null })),
         axios.get(`${API}/training/metrics`, { headers: { "X-User-Id": "default" } }).catch(() => ({ data: null }))
       ]);
       setInsight(insightRes.data);
-      setWorkouts(workoutsRes.data);
       if (ragRes.data) {
         setInsight(prev => ({ ...prev, rag: ragRes.data }));
       }
