@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import calendar
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -18,21 +19,58 @@ from engine.run_index_engine import calculate_run_index
 
 logger = logging.getLogger(__name__)
 
+HISTORY_WINDOW_DAYS = 365
 WEEKLY_WINDOW_DAYS = 183
+MAX_HISTORY_DOCS = 500
+
+
+@dataclass(frozen=True)
+class HistoryPeriod:
+    key: str
+    months: int
+    granularity: str
+
+
+SUPPORTED_HISTORY_PERIODS = {
+    "3m": HistoryPeriod(key="3m", months=3, granularity="week"),
+    "6m": HistoryPeriod(key="6m", months=6, granularity="week"),
+    "12m": HistoryPeriod(key="12m", months=12, granularity="month"),
+}
 
 
 def _reference_day(reference_date: Optional[date] = None) -> date:
     return reference_date or datetime.now(timezone.utc).date()
 
 
+def _subtract_months(target_day: date, months: int) -> date:
+    year = target_day.year
+    month = target_day.month - months
+    while month <= 0:
+        month += 12
+        year -= 1
+    day = min(target_day.day, calendar.monthrange(year, month)[1])
+    return date(year, month, day)
+
+
+def normalize_history_period(period: Optional[str] = None, months: Optional[int] = None) -> HistoryPeriod:
+    normalized = (period or "").strip().lower()
+    if normalized in SUPPORTED_HISTORY_PERIODS:
+        return SUPPORTED_HISTORY_PERIODS[normalized]
+
+    if months in {3, 6, 12}:
+        return SUPPORTED_HISTORY_PERIODS[f"{months}m"]
+
+    return SUPPORTED_HISTORY_PERIODS["6m"]
+
+
 def _parse_workout_day(workout: dict) -> Optional[date]:
     raw_value = workout.get("date") or workout.get("start_time")
     if not raw_value:
         return None
-    if isinstance(raw_value, date):
-        return raw_value
     if isinstance(raw_value, datetime):
         return raw_value.date()
+    if isinstance(raw_value, date):
+        return raw_value
     try:
         return datetime.fromisoformat(str(raw_value).replace("Z", "+00:00")).date()
     except ValueError:
@@ -42,27 +80,145 @@ def _parse_workout_day(workout: dict) -> Optional[date]:
             return None
 
 
+def _first_workout_day(workouts: list[dict], reference_date: Optional[date] = None) -> Optional[date]:
+    today = _reference_day(reference_date)
+    workout_days = [
+        workout_day
+        for workout_day in (_parse_workout_day(workout) for workout in workouts)
+        if workout_day is not None and workout_day <= today
+    ]
+    if not workout_days:
+        return None
+    return min(workout_days)
+
+
+def _history_projection() -> dict:
+    return {
+        "_id": 0,
+        "date": 1,
+        "run_index": 1,
+        "speed_score": 1,
+        "endurance_score": 1,
+        "consistency_score": 1,
+        "efficiency_score": 1,
+    }
+
+
+def _history_entry(document: dict) -> dict:
+    return {
+        "date": document["date"],
+        "run_index": document.get("run_index"),
+        "speed": document.get("speed_score"),
+        "endurance": document.get("endurance_score"),
+        "consistency": document.get("consistency_score"),
+        "efficiency": document.get("efficiency_score"),
+        "speed_score": document.get("speed_score"),
+        "endurance_score": document.get("endurance_score"),
+        "consistency_score": document.get("consistency_score"),
+        "efficiency_score": document.get("efficiency_score"),
+    }
+
+
+def _history_bucket_key(date_str: str, granularity: str) -> tuple[int, int]:
+    snapshot_day = datetime.fromisoformat(date_str).date()
+    if granularity == "month":
+        return snapshot_day.year, snapshot_day.month
+    iso = snapshot_day.isocalendar()
+    return iso.year, iso.week
+
+
+def _select_period_history(documents: list[dict], granularity: str) -> list[dict]:
+    buckets: dict[tuple[int, int], dict] = {}
+    for document in documents:
+        buckets[_history_bucket_key(document["date"], granularity)] = _history_entry(document)
+    return sorted(buckets.values(), key=lambda item: item["date"])
+
+
+def _expected_period_points(period_config: HistoryPeriod, reference_date: Optional[date] = None) -> list[date]:
+    today = _reference_day(reference_date)
+    if period_config.granularity == "month":
+        return [_subtract_months(today, months_ago) for months_ago in range(period_config.months, -1, -1)]
+
+    start_day = _subtract_months(today, period_config.months)
+    points = []
+    candidate = today
+    while candidate >= start_day:
+        points.append(candidate)
+        candidate -= timedelta(days=7)
+    return list(reversed(points))
+
+
+def _build_history_response(history: list[dict], period_config: HistoryPeriod, reference_date: Optional[date] = None) -> dict:
+    if not history:
+        return {
+            "has_data": False,
+            "has_full_period_data": False,
+            "current_run_index": None,
+            "trend": 0,
+            "period": period_config.key,
+            "period_months": period_config.months,
+            "granularity": period_config.granularity,
+            "history": [],
+            "pillars": {},
+            "available_from": None,
+            "available_until": None,
+        }
+
+    current = history[-1]
+    first = next((entry for entry in history if entry.get("run_index") is not None), None)
+    last = next((entry for entry in reversed(history) if entry.get("run_index") is not None), None)
+
+    trend = 0
+    if first and last and first["run_index"] is not None and last["run_index"] is not None:
+        trend = last["run_index"] - first["run_index"]
+
+    pillars = {}
+    for pillar in ("speed", "endurance", "consistency", "efficiency"):
+        current_val = current.get(pillar)
+        first_val = first.get(pillar) if first else None
+        pillars[pillar] = {
+            "current": current_val,
+            "evolution": None if current_val is None or first_val is None else current_val - first_val,
+        }
+
+    expected_points = _expected_period_points(period_config, reference_date)
+    expected_bucket_count = len({_history_bucket_key(point.isoformat(), period_config.granularity) for point in expected_points})
+
+    return {
+        "has_data": True,
+        "has_full_period_data": len(history) >= expected_bucket_count,
+        "current_run_index": current.get("run_index"),
+        "trend": trend,
+        "period": period_config.key,
+        "period_months": period_config.months,
+        "granularity": period_config.granularity,
+        "history": history,
+        "pillars": pillars,
+        "available_from": history[0]["date"],
+        "available_until": history[-1]["date"],
+    }
+
+
 def select_snapshot_dates(workouts: list[dict], reference_date: Optional[date] = None) -> list[date]:
     today = _reference_day(reference_date)
-    weekly_cutoff = today - timedelta(days=WEEKLY_WINDOW_DAYS)
-    monthly_buckets: dict[tuple[int, int], date] = {}
-    weekly_buckets: dict[tuple[int, int], date] = {}
+    first_workout_day = _first_workout_day(workouts, today)
+    if first_workout_day is None:
+        return []
 
-    for workout in workouts:
-        workout_day = _parse_workout_day(workout)
-        if workout_day is None or workout_day > today:
-            continue
-        if workout_day < weekly_cutoff:
-            key = (workout_day.year, workout_day.month)
-            monthly_buckets[key] = max(monthly_buckets.get(key, workout_day), workout_day)
-            continue
-        iso = workout_day.isocalendar()
-        key = (iso.year, iso.week)
-        weekly_buckets[key] = max(weekly_buckets.get(key, workout_day), workout_day)
+    oldest_supported_day = today - timedelta(days=HISTORY_WINDOW_DAYS)
+    first_workout_day = max(first_workout_day, oldest_supported_day)
 
-    snapshot_dates = sorted(monthly_buckets.values()) + sorted(weekly_buckets.values())
-    if workouts and (not snapshot_dates or snapshot_dates[-1] != today):
-        snapshot_dates.append(today)
+    monthly_dates = [_subtract_months(today, months_ago) for months_ago in range(12, 6, -1)]
+    weekly_points = list(range(WEEKLY_WINDOW_DAYS // 7, -1, -1))
+    weekly_dates = [today - timedelta(days=7 * weeks_ago) for weeks_ago in weekly_points]
+
+    snapshot_dates = sorted(
+        {
+            candidate
+            for candidate in monthly_dates + weekly_dates
+            if first_workout_day <= candidate <= today
+        }
+    )
     return snapshot_dates
 
 
@@ -84,6 +240,26 @@ def build_snapshot_document(
 async def load_user_workouts(db, user_id: str) -> list[dict]:
     cursor = db.workouts.find({"user_id": user_id}, {"_id": 0}).sort("date", 1)
     return await cursor.to_list(None)
+
+
+async def get_run_index_history_payload(
+    db,
+    user_id: str,
+    period: Optional[str] = None,
+    months: Optional[int] = None,
+    reference_date: Optional[date] = None,
+) -> dict:
+    period_config = normalize_history_period(period=period, months=months)
+    today = _reference_day(reference_date)
+    period_start = _subtract_months(today, period_config.months).isoformat()
+
+    documents = await db.run_index_scores.find(
+        {"user_id": user_id, "date": {"$gte": period_start, "$lte": today.isoformat()}},
+        _history_projection(),
+    ).sort("date", 1).to_list(MAX_HISTORY_DOCS)
+
+    history = _select_period_history(documents, period_config.granularity)
+    return _build_history_response(history, period_config, reference_date=today)
 
 
 async def upsert_run_index_snapshot(
@@ -183,17 +359,16 @@ async def refresh_run_index_after_garmin_sync(db, user_id: str) -> dict:
     await backfill_garmin_workouts(db, user_id, prune=False)
     workouts = await load_user_workouts(db, user_id)
     today_snapshot = await upsert_run_index_snapshot(db, user_id, workouts)
+    history = await backfill_run_index_history(db, user_id, workouts=workouts)
 
     conn = await db.garmin_connections.find_one({"user_id": user_id}, {"_id": 0})
-    if conn and not conn.get("run_index_history_backfilled_at"):
-        history = await backfill_run_index_history(db, user_id, workouts=workouts)
+    if conn:
         await db.garmin_connections.update_one(
             {"user_id": user_id},
             {"$set": {"run_index_history_backfilled_at": datetime.now(timezone.utc).isoformat()}},
         )
-        return {"today_snapshot": today_snapshot, "history_backfill": history}
 
-    return {"today_snapshot": today_snapshot, "history_backfill": None}
+    return {"today_snapshot": today_snapshot, "history_backfill": history}
 
 
 async def backfill_connected_users_run_index_history(db) -> dict:

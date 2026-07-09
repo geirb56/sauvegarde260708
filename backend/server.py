@@ -1,5 +1,5 @@
 from services.adaptation_engine import adapt_workout_advanced
-from services.run_index_history import upsert_run_index_snapshot
+from services.run_index_history import get_run_index_history_payload, upsert_run_index_snapshot
 from fastapi import FastAPI, APIRouter, HTTPException, Query, Request, Depends, Header
 from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.middleware.gzip import GZipMiddleware
@@ -3027,116 +3027,26 @@ async def get_run_index(user_id: str = "default", language: str = "fr"):
 @api_router.get("/run-index/history")
 async def get_run_index_history(
     user: dict = Depends(auth_user),
-    months: int = Query(6, description="Period in months: 3, 6 or 12"),
+    period: str = Query("6m", description="Period key: 3m, 6m or 12m"),
+    months: Optional[int] = Query(None, description="Legacy period in months: 3, 6 or 12"),
     language: str = Query("fr", description="Language for AI analysis"),
 ):
     """
     Return the historical evolution of the RunIndex and its pillars.
 
     Data source: run_index_scores collection.
-    Multiple scores on the same day are aggregated (mean).
-    Returns daily data points for the selected period (3, 6 or 12 months).
+    Returns period-aware weekly or monthly points for the selected period.
     """
-    months = max(1, min(12, months))
     user_id = user["id"]
-    today = datetime.now(timezone.utc).date()
-    period_start = today - timedelta(days=months * 30)
-    period_start_iso = period_start.isoformat()
-
-    # Fetch all run_index_scores documents within the period
-    docs = await db.run_index_scores.find(
-        {"user_id": user_id, "date": {"$gte": period_start_iso}},
-        {"_id": 0, "date": 1, "run_index": 1, "speed_score": 1,
-         "endurance_score": 1, "consistency_score": 1, "efficiency_score": 1},
-    ).sort("date", 1).to_list(500)
-
-    if not docs:
-        return {
-            "has_data": False,
-            "current_run_index": None,
-            "trend": 0,
-            "history": [],
-            "pillars": {},
-            "ai_analysis": None,
-        }
-
-    # Aggregate multiple scores per day (take mean)
-    from collections import defaultdict as _defaultdict
-    day_buckets: dict = _defaultdict(list)
-    for doc in docs:
-        day_buckets[doc["date"]].append(doc)
-
-    history = []
-    for date_str in sorted(day_buckets.keys()):
-        bucket = day_buckets[date_str]
-        def _avg(field):
-            vals = [d.get(field) for d in bucket if d.get(field) is not None]
-            return round(sum(vals) / len(vals)) if vals else None
-
-        history.append({
-            "date": date_str,
-            "run_index": _avg("run_index"),
-            "speed_score": _avg("speed_score"),
-            "endurance_score": _avg("endurance_score"),
-            "consistency_score": _avg("consistency_score"),
-            "efficiency_score": _avg("efficiency_score"),
-        })
-
-    if not history:
-        return {
-            "has_data": False,
-            "current_run_index": None,
-            "trend": 0,
-            "history": [],
-            "pillars": {},
-            "ai_analysis": None,
-        }
-
-    # Current values = last data point
-    current = history[-1]
-    current_run_index = current.get("run_index")
-
-    # First valid data point for trend calculation
-    first = next((h for h in history if h.get("run_index") is not None), None)
-    last = next((h for h in reversed(history) if h.get("run_index") is not None), None)
-
-    trend = 0
-    if first and last and first["run_index"] is not None and last["run_index"] is not None:
-        trend = last["run_index"] - first["run_index"]
-
-    # Pillar evolution (current vs start of period)
-    pillars = {}
-    for pillar, key in [
-        ("speed", "speed_score"),
-        ("endurance", "endurance_score"),
-        ("consistency", "consistency_score"),
-        ("efficiency", "efficiency_score"),
-    ]:
-        current_val = current.get(key)
-        first_val = first.get(key) if first else None
-        evolution = None
-        if current_val is not None and first_val is not None:
-            evolution = current_val - first_val
-        pillars[pillar] = {"current": current_val, "evolution": evolution}
-
-    # Generate AI analysis text
-    ai_analysis = _generate_run_index_analysis(
-        current_run_index=current_run_index,
-        trend=trend,
-        months=months,
-        pillars=pillars,
+    payload = await get_run_index_history_payload(db, user_id, period=period, months=months)
+    payload["ai_analysis"] = _generate_run_index_analysis(
+        current_run_index=payload["current_run_index"],
+        trend=payload["trend"],
+        months=payload["period_months"],
+        pillars=payload["pillars"],
         language=language,
     )
-
-    return {
-        "has_data": True,
-        "current_run_index": current_run_index,
-        "trend": trend,
-        "period_months": months,
-        "history": history,
-        "pillars": pillars,
-        "ai_analysis": ai_analysis,
-    }
+    return payload
 
 
 def _generate_run_index_analysis(
