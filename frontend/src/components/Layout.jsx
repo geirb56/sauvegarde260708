@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Outlet, NavLink, useLocation } from "react-router-dom";
-import { Home, CalendarDays, MessageCircle, RefreshCw, Settings, TrendingUp } from "lucide-react";
+import { Activity, Home, CalendarDays, MessageCircle, RefreshCw, Settings, TrendingUp } from "lucide-react";
 import { useLanguage } from "@/context/LanguageContext";
 import { useAutoSync } from "@/hooks/useAutoSync";
 import ChatCoach from "@/components/ChatCoach";
@@ -11,9 +11,9 @@ const API = API_BASE_URL;
 
 export const Layout = () => {
   const location = useLocation();
-  const { t, lang } = useLanguage();
+  const { t } = useLanguage();
   const [chatOpen, setChatOpen] = useState(false);
-  const [lastSync, setLastSync] = useState(null);
+  const [lastSyncMinutes, setLastSyncMinutes] = useState(null);
   
   // Auto-sync Terra data on startup
   useAutoSync();
@@ -27,11 +27,7 @@ export const Layout = () => {
           const syncDate = new Date(res.data.last_sync);
           const now = new Date();
           const diffMins = Math.round((now - syncDate) / 60000);
-          if (diffMins < 60) {
-            setLastSync(t("common.timeAgoMins").replace("{n}", diffMins));
-          } else {
-            setLastSync(t("common.timeAgoHours").replace("{n}", Math.round(diffMins / 60)));
-          }
+          setLastSyncMinutes(diffMins);
         }
       } catch (err) {
         // Ignore
@@ -40,8 +36,17 @@ export const Layout = () => {
     checkSync();
   }, []);
 
+  const lastSyncLabel = useMemo(() => {
+    if (lastSyncMinutes == null) return null;
+    if (lastSyncMinutes < 60) {
+      return t("common.timeAgoMins").replace("{n}", lastSyncMinutes);
+    }
+    return t("common.timeAgoHours").replace("{n}", Math.round(lastSyncMinutes / 60));
+  }, [lastSyncMinutes, t]);
+
   const navItems = [
     { path: "/", icon: Home, labelKey: "nav.dashboard" },
+    { path: "/sessions", icon: Activity, labelKey: "nav.sessions" },
     { path: "/training", icon: CalendarDays, labelKey: "nav.training" },
     { path: "/coach", icon: MessageCircle, labelKey: "nav.coach" },
     { path: "/progress", icon: TrendingUp, labelKey: "nav.progress" },
@@ -60,10 +65,10 @@ export const Layout = () => {
             className="header-logo-img"
             data-testid="app-logo"
           />
-          {lastSync && (
+          {lastSyncLabel && (
             <div className="sync-status">
               <span className="sync-dot" />
-              <span>{lastSync}</span>
+              <span>{lastSyncLabel}</span>
             </div>
           )}
         </div>
@@ -89,7 +94,9 @@ export const Layout = () => {
       {/* Bottom Navigation */}
       <nav className="bottom-nav-modern fixed bottom-0 left-0 right-0 flex items-center justify-between px-2 py-2 safe-area-pb">
         {navItems.map((item) => {
-          const isActive = location.pathname === item.path;
+          const isActive = item.path === "/"
+            ? location.pathname === item.path
+            : location.pathname === item.path || location.pathname.startsWith(`${item.path}/`);
           return (
             <NavLink
               key={item.path}

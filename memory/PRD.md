@@ -45,3 +45,8 @@ RunIndex — running/cardio training coach. Garmin (gccli) integration, AI coach
 - Full logo added to Onboarding welcome screen + new BrandSplash loading screen (LoadingSpinner.jsx) used on Dashboard initial load (pulse animation)
 - Regenerated favicon/PWA icons (72-512px) with the green "R" mark on navy
 - Created light-background logo variant /runindex-logo-light.png (dark navy "Run" text) for light surfaces / print / emails
+
+## Pull sauvegarde260708 — Sessions tab (2026-07-09)
+- Pulled commit 9909760 (Merge PR #3 "sessions tab"). New: pages/Sessions.jsx, pages/SessionDetail.jsx; modified App.js (routes /sessions, /sessions/:id), Layout.jsx (nav item), i18n.js (sessions translations en/fr/es).
+- BUG in pulled code: `sessions` i18n block was nested under `workout` -> pages call t("sessions.*") -> raw keys shown. FIXED in lib/i18n.js by promoting workout.sessions to a top-level `sessions` alias per language (post-object normalization loop).
+- Verified: Sessions list (30 Garmin activities, filters/sort/search translated) + SessionDetail (metrics + AI analysis sections) render correctly. Branding (logo) preserved.
