@@ -46,9 +46,12 @@ const formatDuration = (minutes) => {
 };
 
 // Format date as short label for chart axis
-const formatDateLabel = (dateStr, locale = "fr-FR") => {
+const formatDateLabel = (dateStr, locale = "fr-FR", granularity = "week") => {
   if (!dateStr) return "";
   const d = new Date(dateStr + "T00:00:00");
+  if (granularity === "month") {
+    return d.toLocaleDateString(locale, { month: "short" });
+  }
   return d.toLocaleDateString(locale, { day: "numeric", month: "short" });
 };
 
@@ -65,7 +68,7 @@ export default function Progress() {
   const [vmaHistory, setVmaHistory] = useState(null);
   const [garminHealth, setGarminHealth] = useState(null);
   const [runIndexHistory, setRunIndexHistory] = useState(null);
-  const [runIndexPeriod, setRunIndexPeriod] = useState(6);
+  const [runIndexPeriod, setRunIndexPeriod] = useState("6m");
   const [loading, setLoading] = useState(true);
   const [showPredictions, setShowPredictions] = useState(true);
   const { t, lang } = useLanguage();
@@ -112,7 +115,7 @@ export default function Progress() {
     const fetchRunIndexHistory = async () => {
       try {
         const res = await axios.get(
-          `${API}/run-index/history?months=${runIndexPeriod}&language=${lang}`,
+          `${API}/run-index/history?period=${runIndexPeriod}&language=${lang}`,
           { headers: { "X-User-Id": USER_ID } }
         );
         setRunIndexHistory(res.data);
@@ -160,11 +163,12 @@ export default function Progress() {
   const trendColor = runIndexTrend > 0 ? "text-emerald-500" : runIndexTrend < 0 ? "text-red-500" : "text-muted-foreground";
   const trendBg = runIndexTrend > 0 ? "bg-emerald-500/20" : runIndexTrend < 0 ? "bg-red-500/20" : "bg-muted/30";
   const trendEmoji = runIndexTrend > 0 ? "⬆️" : runIndexTrend < 0 ? "⬇️" : "➡️";
+  const historyGranularity = runIndexHistory?.granularity || "week";
 
   const periodOptions = [
-    { months: 3, label: t("progressExtended.period3m") },
-    { months: 6, label: t("progressExtended.period6m") },
-    { months: 12, label: t("progressExtended.period12m") },
+    { value: "3m", label: t("progressExtended.period3m") },
+    { value: "6m", label: t("progressExtended.period6m") },
+    { value: "12m", label: t("progressExtended.period12m") },
   ];
 
   return (
@@ -215,13 +219,9 @@ export default function Progress() {
                     <span className={`text-sm font-bold ${trendColor}`}>
                       {(() => {
                         if (runIndexTrend === 0) {
-                          return t("progressExtended.runIndexTrendStable").replace("{months}", runIndexPeriod);
+                          return t("progressExtended.runIndexTrendStablePeriod");
                         }
-                        const sign = runIndexTrend > 0 ? "+" : "";
-                        const trendKey = runIndexTrend > 0
-                          ? "progressExtended.runIndexTrendPositive"
-                          : "progressExtended.runIndexTrendNegative";
-                        return `${sign}${runIndexTrend} ` + t(trendKey).replace("{months}", runIndexPeriod);
+                        return `${runIndexTrend > 0 ? "+" : ""}${runIndexTrend} ${t("progressExtended.runIndexTrendPeriod")}`;
                       })()}
                     </span>
                   </div>
@@ -231,12 +231,12 @@ export default function Progress() {
 
             {/* Period selector */}
             <div className="flex gap-2 mb-4">
-              {periodOptions.map(({ months, label }) => (
+              {periodOptions.map(({ value, label }) => (
                 <button
-                  key={months}
-                  onClick={() => setRunIndexPeriod(months)}
+                  key={value}
+                  onClick={() => setRunIndexPeriod(value)}
                   className={`px-3 py-1 rounded-full font-mono text-[10px] uppercase tracking-wider transition-all ${
-                    runIndexPeriod === months
+                    runIndexPeriod === value
                       ? "bg-primary text-black font-bold"
                       : "bg-muted/30 text-muted-foreground hover:bg-muted/60"
                   }`}
@@ -245,6 +245,17 @@ export default function Progress() {
                 </button>
               ))}
             </div>
+
+            {runIndexHistory?.has_data && !runIndexHistory?.has_full_period_data && (
+              <div
+                className="mb-4 px-3 py-2 rounded-xl"
+                style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}
+              >
+                <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                  {t("progressExtended.insufficientPeriodData")}
+                </p>
+              </div>
+            )}
 
             {/* RunIndex Chart */}
             {runIndexHistory?.has_data && runIndexHistory.history?.length > 0 ? (
@@ -259,7 +270,7 @@ export default function Progress() {
                       axisLine={false}
                       tickLine={false}
                       tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 9, fontFamily: "JetBrains Mono" }}
-                      tickFormatter={(dateStr) => formatDateLabel(dateStr, langToLocale(lang))}
+                      tickFormatter={(dateStr) => formatDateLabel(dateStr, langToLocale(lang), historyGranularity)}
                       interval="preserveStartEnd"
                     />
                     <YAxis
@@ -276,7 +287,7 @@ export default function Progress() {
                           return (
                             <div className="bg-popover border border-border p-2 rounded-lg shadow-lg">
                               <p className="font-mono text-xs text-muted-foreground">
-                                {formatDateLabel(d.date, langToLocale(lang))}
+                                {formatDateLabel(d.date, langToLocale(lang), historyGranularity)}
                               </p>
                               <p className="font-bold text-white">RunIndex: {d.run_index}</p>
                             </div>
@@ -321,8 +332,6 @@ export default function Progress() {
                 <div className="grid grid-cols-2 gap-2">
                   {Object.entries(runIndexHistory.pillars).map(([pillar, data]) => {
                     const evo = data.evolution;
-                    const evoStr = evo === null || evo === undefined ? "" :
-                      evo > 0 ? `(+${evo}%)` : evo < 0 ? `(${evo}%)` : "(=)";
                     const evoColor = evo > 0 ? "text-emerald-500" : evo < 0 ? "text-red-400" : "text-muted-foreground";
                     return (
                       <div
@@ -339,10 +348,12 @@ export default function Progress() {
                             <span className="font-heading text-lg font-bold text-white">
                               {data.current ?? "--"}%
                             </span>
-                            {evo !== null && evo !== undefined && (
-                              <span className={`font-mono text-[10px] ${evoColor}`}>{evoStr}</span>
-                            )}
                           </div>
+                          {evo !== null && evo !== undefined && (
+                            <p className={`font-mono text-[10px] uppercase tracking-wider ${evoColor}`}>
+                              {`${evo > 0 ? "+" : ""}${evo}% ${t("progressExtended.sinceStartOfPeriod")}`}
+                            </p>
+                          )}
                         </div>
                       </div>
                     );
