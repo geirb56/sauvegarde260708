@@ -163,7 +163,7 @@ export default function Progress() {
         <Card className="bg-card border-border">
           <CardContent className="p-4">
             <div className="flex items-center gap-2 mb-2">
-              <Calendar className="w-4 h-4 text-violet-500" />
+              <Calendar className="w-4 h-4 text-primary" />
               <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
                 {t("progressExtended.km30d")}
               </span>
@@ -218,7 +218,7 @@ export default function Progress() {
             <Card className="bg-card border-border" data-testid="garmin-sleep">
               <CardContent className="p-4">
                 <div className="flex items-center gap-2 mb-2">
-                  <Moon className="w-4 h-4 text-violet-400" />
+                  <Moon className="w-4 h-4 text-blue-400" />
                   <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
                     Sleep
                   </span>
@@ -241,9 +241,9 @@ export default function Progress() {
               {/* Header with current VO2MAX */}
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-4">
-                  <div className="w-14 h-14 rounded-xl flex flex-col items-center justify-center" style={{ background: "linear-gradient(135deg, rgba(139,92,246,0.2) 0%, rgba(168,85,247,0.15) 100%)", border: "1px solid rgba(139,92,246,0.3)" }}>
-                    <Zap className="w-5 h-5" style={{ color: "#a855f7" }} />
-                    <span className="text-[7px] font-mono uppercase mt-0.5" style={{ color: "rgba(168,85,247,0.8)" }}>VO2MAX</span>
+                  <div className="w-14 h-14 rounded-xl flex flex-col items-center justify-center" style={{ background: "rgba(110, 235, 90, 0.12)", border: "1px solid rgba(110, 235, 90, 0.25)" }}>
+                    <Zap className="w-5 h-5" style={{ color: "#6EEB5A" }} />
+                    <span className="text-[7px] font-mono uppercase mt-0.5" style={{ color: "rgba(110, 235, 90, 0.8)" }}>VO2MAX</span>
                   </div>
                   <div>
                     <div className="flex items-baseline gap-2">
@@ -321,16 +321,16 @@ export default function Progress() {
                         />
                         <ReferenceLine 
                           y={vmaHistory.current_vo2max} 
-                          stroke="rgba(139,92,246,0.3)" 
+                          stroke="rgba(110, 235, 90, 0.3)" 
                           strokeDasharray="3 3" 
                         />
                         <Line 
                           type="monotone" 
                           dataKey="vo2max" 
-                          stroke="#a855f7" 
+                          stroke="#6EEB5A" 
                           strokeWidth={2}
-                          dot={{ fill: "#a855f7", strokeWidth: 0, r: 3 }}
-                          activeDot={{ fill: "#a855f7", strokeWidth: 2, stroke: "white", r: 5 }}
+                          dot={{ fill: "#6EEB5A", strokeWidth: 0, r: 3 }}
+                          activeDot={{ fill: "#6EEB5A", strokeWidth: 2, stroke: "white", r: 5 }}
                           connectNulls={true}
                         />
                       </LineChart>
@@ -400,7 +400,7 @@ export default function Progress() {
                           <div className="flex items-center gap-2">
                             <span className="text-xl font-bold text-white">{pred.predicted_time}</span>
                             {pred.distance === fullCycle?.goal && (
-                              <span className="px-2 py-0.5 rounded-full text-[9px] font-bold" style={{ background: "#8b5cf6", color: "white" }}>
+                              <span className="px-2 py-0.5 rounded-full text-[9px] font-bold" style={{ background: "var(--accent-green)", color: "#0a0e1a" }}>
                                 OBJECTIF
                               </span>
                             )}

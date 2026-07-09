@@ -45,52 +45,52 @@ const PHASE_COLORS = {
   build: { bg: "#3b82f620", border: "#3b82f6", text: "#3b82f6", name: "Construction" },
   deload: { bg: "#22c55e20", border: "#22c55e", text: "#22c55e", name: "Récupération" },
   intensification: { bg: "#f9731620", border: "#f97316", text: "#f97316", name: "Intensification" },
-  taper: { bg: "#8b5cf620", border: "#8b5cf6", text: "#8b5cf6", name: "Affûtage" },
+  taper: { bg: "#0d1321", border: "#3b82f6", text: "#93c5fd", name: "Affûtage" },
   race: { bg: "#ef444420", border: "#ef4444", text: "#ef4444", name: "Course" },
 };
 
-// Couleurs correspondant au design de l'app pour les séances
+// Couleurs correspondant au design de l'app pour les séances — dark theme
 const SESSION_STYLES = {
   repos: {
-    bg: "linear-gradient(135deg, #1e1b4b 0%, #312e81 100%)",
-    border: "#6366f1",
-    text: "#c7d2fe",
+    bg: "#12142a",
+    border: "#4f46e5",
+    text: "#a5b4fc",
     badge: "#4f46e5",
     badgeText: "#ffffff"
   },
   endurance: {
-    bg: "linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%)",
-    border: "#34d399",
-    text: "#065f46",
+    bg: "#0b1a12",
+    border: "#10b981",
+    text: "#6ee7b7",
     badge: "#10b981",
-    badgeText: "#ffffff"
+    badgeText: "#0b1a12"
   },
   seuil: {
-    bg: "linear-gradient(135deg, #fed7aa 0%, #fdba74 100%)",
+    bg: "#1c1207",
     border: "#f97316",
-    text: "#9a3412",
+    text: "#fed7aa",
     badge: "#f97316",
-    badgeText: "#ffffff"
+    badgeText: "#1c1207"
   },
   recuperation: {
-    bg: "linear-gradient(135deg, #fef9c3 0%, #fef08a 100%)",
-    border: "#facc15",
-    text: "#854d0e",
-    badge: "#eab308",
+    bg: "#0b1a1a",
+    border: "#22d3ee",
+    text: "#a5f3fc",
+    badge: "#0891b2",
     badgeText: "#ffffff"
   },
   sortie_longue: {
-    bg: "linear-gradient(135deg, #fce7f3 0%, #fbcfe8 100%)",
-    border: "#ec4899",
-    text: "#9d174d",
-    badge: "#ec4899",
+    bg: "#0d1321",
+    border: "#3b82f6",
+    text: "#93c5fd",
+    badge: "#2563eb",
     badgeText: "#ffffff"
   },
   fractionne: {
-    bg: "linear-gradient(135deg, #ede9fe 0%, #ddd6fe 100%)",
-    border: "#8b5cf6",
-    text: "#5b21b6",
-    badge: "#8b5cf6",
+    bg: "#1c1207",
+    border: "#f97316",
+    text: "#fed7aa",
+    badge: "#ea580c",
     badgeText: "#ffffff"
   },
 };
@@ -260,7 +260,7 @@ export default function TrainingPlan() {
         <div 
           className="p-3 rounded-xl flex items-center justify-between"
           style={{ 
-            background: "linear-gradient(135deg, rgba(59,130,246,0.2) 0%, rgba(139,92,246,0.2) 100%)",
+            background: "rgba(59,130,246,0.1)",
             border: "1px solid rgba(59,130,246,0.3)"
           }}
         >
@@ -325,7 +325,7 @@ export default function TrainingPlan() {
             className="h-full rounded-full transition-all duration-500"
             style={{
               width: `${(currentWeek / totalWeeks) * 100}%`,
-              background: "linear-gradient(90deg, #8b5cf6 0%, #ec4899 100%)"
+              background: "var(--accent-green)"
             }}
           />
         </div>
@@ -347,7 +347,7 @@ export default function TrainingPlan() {
           }}
         >
           <div className="flex items-center gap-2 mb-2">
-            <Zap className="w-4 h-4" style={{ color: "var(--accent-violet)" }} />
+            <Zap className="w-4 h-4" style={{ color: "var(--accent-green)" }} />
             <span className="text-xs uppercase tracking-wider" style={{ color: "var(--text-tertiary)" }}>
               {t("dashboard.thisWeek")}
             </span>
@@ -362,7 +362,7 @@ export default function TrainingPlan() {
               className="h-full rounded-full"
               style={{ 
                 width: `${Math.min(100, ((trainingMetrics?.load_7 || 0) / (trainingMetrics?.weekly_target || 40)) * 100)}%`,
-                background: "var(--accent-violet)"
+                background: "var(--accent-green)"
               }}
             />
           </div>
@@ -488,7 +488,7 @@ export default function TrainingPlan() {
             return (
               <div
                 key={week.week}
-                className={`rounded-xl overflow-hidden transition-all ${isCurrent ? "ring-2 ring-violet-500" : ""}`}
+                className={`rounded-xl overflow-hidden transition-all ${isCurrent ? "ring-2 ring-primary/60" : ""}`}
                 style={{
                   background: isCompleted ? "var(--bg-secondary)" : phaseStyle.bg,
                   border: `1px solid ${isCompleted ? "var(--border-color)" : phaseStyle.border}`,
@@ -505,8 +505,8 @@ export default function TrainingPlan() {
                     <div 
                       className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm"
                       style={{ 
-                        background: isCurrent ? "#8b5cf6" : isCompleted ? "var(--bg-tertiary)" : phaseStyle.border + "30",
-                        color: isCurrent ? "white" : isCompleted ? "var(--text-tertiary)" : phaseStyle.text
+                        background: isCurrent ? "var(--accent-green)" : isCompleted ? "var(--bg-tertiary)" : phaseStyle.border + "30",
+                        color: isCurrent ? "#0a0e1a" : isCompleted ? "var(--text-tertiary)" : phaseStyle.text
                       }}
                     >
                       {isCompleted ? <CheckCircle2 className="w-4 h-4" /> : week.week}
@@ -517,7 +517,7 @@ export default function TrainingPlan() {
                           {t("trainingPlanExtended.weekLabel")} {week.week}
                         </span>
                         {isCurrent && (
-                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-violet-500 text-white">
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold text-white" style={{ background: "var(--accent-green)", color: "#0a0e1a" }}>
                             {t("trainingPlanExtended.currentBadge")}
                           </span>
                         )}
@@ -638,17 +638,17 @@ export default function TrainingPlan() {
         <div 
           className="card-modern p-4" 
           style={{ 
-            background: "linear-gradient(135deg, rgba(139, 92, 246, 0.1) 0%, rgba(139, 92, 246, 0.05) 100%)", 
-            border: "1px solid rgba(139, 92, 246, 0.3)", 
+            background: "rgba(110, 235, 90, 0.06)", 
+            border: "1px solid rgba(110, 235, 90, 0.2)", 
             borderRadius: "16px" 
           }}
         >
           <div className="flex gap-3">
             <div 
               className="shrink-0 w-10 h-10 rounded-full flex items-center justify-center"
-              style={{ background: "rgba(139, 92, 246, 0.2)" }}
+              style={{ background: "rgba(110, 235, 90, 0.12)" }}
             >
-              <Activity className="w-5 h-5" style={{ color: "#8b5cf6" }} />
+              <Activity className="w-5 h-5" style={{ color: "#6EEB5A" }} />
             </div>
             <div>
               <p className="text-xs font-mono uppercase mb-1" style={{ color: "var(--text-tertiary)" }}>

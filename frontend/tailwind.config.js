@@ -57,6 +57,11 @@ module.exports = {
           4: "hsl(var(--chart-4))",
           5: "hsl(var(--chart-5))",
         },
+        runindex: {
+          DEFAULT: "#6EEB5A",
+          light: "#8FFF74",
+          dark: "#4FD040",
+        },
       },
       borderRadius: {
         lg: "var(--radius)",

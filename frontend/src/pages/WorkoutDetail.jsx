@@ -74,7 +74,7 @@ const SplitsChart = ({ splits, lang, t }) => {
     if (idx === slowestIdx) return "#f97316"; // Orange for slowest
     if (pace < avgPace - 0.15) return "#3b82f6"; // Blue for fast
     if (pace > avgPace + 0.15) return "#eab308"; // Yellow for slow
-    return "#8b5cf6"; // Purple for average
+    return "#6EEB5A"; // Green for average
   };
 
   // Format pace for display
@@ -198,7 +198,7 @@ const SplitsChart = ({ splits, lang, t }) => {
             <span>{t("workoutDetailExtended.fast")}</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <div className="w-3 h-2 rounded-sm bg-violet-500" />
+            <div className="w-3 h-2 rounded-sm" style={{ background: "#6EEB5A" }} />
             <span>{t("workoutDetailExtended.normal")}</span>
           </div>
           <div className="flex items-center gap-1.5">
@@ -551,7 +551,7 @@ export default function WorkoutDetail() {
         <Card className="bg-card border-border mb-3" data-testid="splits-chart-card">
           <CardContent className="p-3">
             <div className="flex items-center gap-2 mb-3">
-              <Activity className="w-4 h-4 text-violet-400" />
+              <Activity className="w-4 h-4 text-primary" />
               <span className="font-mono text-[9px] uppercase tracking-widest text-muted-foreground">
                 {t("workoutDetailExtended.pacePerKm")}
               </span>
