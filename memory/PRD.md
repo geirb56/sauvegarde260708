@@ -50,3 +50,9 @@ RunIndex — running/cardio training coach. Garmin (gccli) integration, AI coach
 - Pulled commit 9909760 (Merge PR #3 "sessions tab"). New: pages/Sessions.jsx, pages/SessionDetail.jsx; modified App.js (routes /sessions, /sessions/:id), Layout.jsx (nav item), i18n.js (sessions translations en/fr/es).
 - BUG in pulled code: `sessions` i18n block was nested under `workout` -> pages call t("sessions.*") -> raw keys shown. FIXED in lib/i18n.js by promoting workout.sessions to a top-level `sessions` alias per language (post-object normalization loop).
 - Verified: Sessions list (30 Garmin activities, filters/sort/search translated) + SessionDetail (metrics + AI analysis sections) render correctly. Branding (logo) preserved.
+
+## Pull sauvegarde260708 — PR #9 RunIndex history backfill (2026-07-10)
+- Pulled commit 344ffc3. New: services/run_index_history.py + test_run_index_history_service.py; modified server.py, api/garmin.py, workers/sync_worker.py, test_run_index_engine.py.
+- Directly fixes the flat RunIndex graph diagnosed earlier: backfill computes calculate_run_index(workouts, reference_date=snapshot_date) for weekly (last 183d) + monthly snapshots. Triggered on Garmin sync (guarded by garmin_connections.run_index_history_backfilled_at); idempotent bulk upsert.
+- Verified: new tests 4/4 pass; ran backfill for default -> 19 points Jan21(98)->Jul09(390), 16 distinct values; /run-index/history returns 19 pts, trend +292; Progress graph now a real rising curve with pillar evolution + AI analysis.
+- My prior fixes (logo, BrandSplash, i18n sessions alias) preserved; deps unchanged; backend healthy.

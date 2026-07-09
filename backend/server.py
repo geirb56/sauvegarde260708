@@ -1,4 +1,5 @@
 from services.adaptation_engine import adapt_workout_advanced
+from services.run_index_history import upsert_run_index_snapshot
 from fastapi import FastAPI, APIRouter, HTTPException, Query, Request, Depends, Header
 from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.middleware.gzip import GZipMiddleware
@@ -1297,18 +1298,7 @@ async def get_dashboard_insight(language: str = "en", user_id: str = "default"):
     recovery_score = calculate_recovery_score(all_workouts, language)
     run_index = calculate_run_index(all_workouts)
 
-    await db.run_index_scores.update_one(
-        {"user_id": user_id, "date": datetime.now(timezone.utc).date().isoformat()},
-        {
-            "$set": {
-                "user_id": user_id,
-                "date": datetime.now(timezone.utc).date().isoformat(),
-                "computed_at": datetime.now(timezone.utc).isoformat(),
-                **run_index,
-            }
-        },
-        upsert=True,
-    )
+    await upsert_run_index_snapshot(db, user_id, all_workouts)
     
     # Generate insight using local engine (NO LLM)
     coach_insight = generate_dashboard_insight(

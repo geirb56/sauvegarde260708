@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from garmin import service as garmin_service
 from garmin import backfill as garmin_backfill
+from services.run_index_history import backfill_connected_users_run_index_history, backfill_run_index_history
 from jobs.queue import enqueue_sync
 from jobs.health import queue_health
 from jobs.redis_client import get_redis
@@ -104,20 +105,23 @@ async def garmin_activities(request: Request, user_id: str = "default",
 @garmin_router.post("/backfill")
 async def garmin_backfill_endpoint(request: Request, user_id: str = "default",
                                   scope: str = "user"):
-    """On-demand rebuild of the derived `workouts` layer + feed cache from
-    `garmin_activities` (source of truth). Never calls gccli, never modifies
-    garmin_activities. Idempotent.
+    """On-demand rebuild of derived Garmin data from `garmin_activities`.
+
+    Rebuilds `workouts` + feed cache and also recalculates historical RunIndex
+    snapshots with weekly/monthly granularity. Never calls gccli, never modifies
+    `garmin_activities`. Idempotent.
 
     - scope=user (default): backfill one user synchronously, returns counts.
-    - scope=all: backfill every user in a background task, returns immediately.
+    - scope=all: backfill every connected Garmin user in a background task.
     """
     import asyncio
     db = request.app.state.db
     if scope == "all":
-        asyncio.create_task(garmin_backfill.backfill_all(db))
+        asyncio.create_task(backfill_connected_users_run_index_history(db))
         return {"status": "started", "scope": "all"}
     result = await garmin_backfill.backfill_user(db, user_id)
-    return {"status": "ok", **result}
+    history = await backfill_run_index_history(db, user_id)
+    return {"status": "ok", **result, "run_index_history": history}
 
 
 @garmin_router.get("/feed/stream")
