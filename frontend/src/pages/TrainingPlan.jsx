@@ -19,6 +19,16 @@ import { API_BASE_URL } from "@/config";
 const API = API_BASE_URL;
 const USER_ID = "default";
 
+// Format an ISO date string or timestamp to DD/MM/YYYY
+const formatDateDMY = (dateStr) => {
+  if (!dateStr) return "";
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return dateStr;
+  const day = String(d.getDate()).padStart(2, "0");
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  return `${day}/${month}/${d.getFullYear()}`;
+};
+
 // Helper functions for ACWR/TSB colors
 const getAcwrColor = (status) => {
   switch(status) {
@@ -252,6 +262,15 @@ export default function TrainingPlan() {
   const weeks = fullCycle?.weeks || [];
   const currentWeek = fullCycle?.current_week || 1;
   const totalWeeks = fullCycle?.total_weeks || 12;
+  const cycleStatus = fullCycle?.status || null; // "active" | "upcoming" | "completed" | null (legacy)
+  const daysToRace = fullCycle?.days_to_race ?? null;
+  const startDate = fullCycle?.start_date || null;
+  const eventDate = fullCycle?.event_date || fullCycle?.end_date || null;
+
+  // For upcoming: compute weeks until plan starts
+  const weeksToStart = startDate
+    ? Math.ceil(Math.max(0, (new Date(startDate) - new Date()) / (1000 * 60 * 60 * 24 * 7)))
+    : null;
 
   return (
     <div className="p-4 pb-24 space-y-4" style={{ background: "var(--bg-primary)" }} data-testid="training-plan-page">
@@ -290,9 +309,21 @@ export default function TrainingPlan() {
             {t("trainingPlanExtended.planTitle")}
           </h1>
           <p className="text-sm font-mono" style={{ color: "var(--text-tertiary)" }}>
-            {t("trainingPlanExtended.weekLabel")} {currentWeek} / {totalWeeks}
-            {" • "}
-            <span className="capitalize">{fullCycle?.goal ? t(`settings.distances.${fullCycle.goal.toLowerCase()}`) : t("settings.distances.semi")}</span>
+            {cycleStatus === "upcoming" ? (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold" style={{ background: "#3b82f620", color: "#93c5fd", border: "1px solid #3b82f6" }}>
+                {t("trainingPlanExtended.upcomingBadge")}
+              </span>
+            ) : cycleStatus === "completed" ? (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold" style={{ background: "#6b728020", color: "#9ca3af", border: "1px solid #6b7280" }}>
+                {t("trainingPlanExtended.completedBadge")}
+              </span>
+            ) : (
+              <>
+                {t("trainingPlanExtended.weekLabel")} {currentWeek} / {totalWeeks}
+                {" • "}
+                <span className="capitalize">{fullCycle?.goal ? t(`settings.distances.${fullCycle.goal.toLowerCase()}`) : t("settings.distances.semi")}</span>
+              </>
+            )}
           </p>
         </div>
         <Button 
@@ -308,7 +339,54 @@ export default function TrainingPlan() {
         </Button>
       </div>
 
-      {/* Progress Bar */}
+      {/* Status Banner — Upcoming */}
+      {cycleStatus === "upcoming" && (
+        <div
+          className="card-modern p-4"
+          style={{ background: "rgba(59,130,246,0.08)", border: "1px solid rgba(59,130,246,0.35)", borderRadius: "16px" }}
+        >
+          <div className="flex items-center gap-3 mb-3">
+            <Calendar className="w-5 h-5" style={{ color: "#60a5fa" }} />
+            <span className="text-sm font-semibold text-white">
+              {t("trainingPlanExtended.upcomingTitle").replace("{weeks}", weeksToStart ?? "—")}
+            </span>
+          </div>
+          <div className="space-y-1 text-sm" style={{ color: "#93c5fd" }}>
+            {daysToRace !== null && (
+              <p>{t("trainingPlanExtended.upcomingDaysToRace").replace("{days}", daysToRace)}</p>
+            )}
+            {startDate && (
+              <p>
+                <span style={{ color: "var(--text-tertiary)" }}>{t("trainingPlanExtended.upcomingPlanStart")}</span>
+                {" "}{formatDateDMY(startDate)}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Status Banner — Completed */}
+      {cycleStatus === "completed" && (
+        <div
+          className="card-modern p-4"
+          style={{ background: "rgba(107,114,128,0.1)", border: "1px solid rgba(107,114,128,0.4)", borderRadius: "16px" }}
+        >
+          <div className="flex items-center gap-3 mb-2">
+            <CheckCircle2 className="w-5 h-5" style={{ color: "#9ca3af" }} />
+            <span className="text-sm font-semibold" style={{ color: "#d1d5db" }}>
+              {t("trainingPlanExtended.completedTitle")}
+            </span>
+          </div>
+          {(eventDate || daysToRace === 0) && (
+            <p className="text-sm" style={{ color: "#9ca3af" }}>
+              {t("trainingPlanExtended.completedRaceDate").replace("{date}", formatDateDMY(eventDate))}
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Progress Bar — only shown for active or legacy (no status) */}
+      {cycleStatus !== "upcoming" && cycleStatus !== "completed" && (
       <div className="card-modern p-4" style={{ background: "var(--bg-card)", border: "1px solid var(--border-color)", borderRadius: "16px" }}>
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2">
@@ -335,6 +413,7 @@ export default function TrainingPlan() {
           <span>{fullCycle?.goal || "SEMI"}</span>
         </div>
       </div>
+      )}
 
       {/* METRICS ROW - Cette semaine & Charge 28j */}
       <div className="grid grid-cols-2 gap-3">
