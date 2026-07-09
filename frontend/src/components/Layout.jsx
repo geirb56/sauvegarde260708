@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Outlet, NavLink, useLocation } from "react-router-dom";
-import { Home, CalendarDays, MessageCircle, RefreshCw, Settings, TrendingUp } from "lucide-react";
+import { Activity, Home, CalendarDays, MessageCircle, RefreshCw, Settings, TrendingUp } from "lucide-react";
 import { useLanguage } from "@/context/LanguageContext";
 import { useAutoSync } from "@/hooks/useAutoSync";
 import ChatCoach from "@/components/ChatCoach";
@@ -42,6 +42,7 @@ export const Layout = () => {
 
   const navItems = [
     { path: "/", icon: Home, labelKey: "nav.dashboard" },
+    { path: "/sessions", icon: Activity, labelKey: "nav.sessions" },
     { path: "/training", icon: CalendarDays, labelKey: "nav.training" },
     { path: "/coach", icon: MessageCircle, labelKey: "nav.coach" },
     { path: "/progress", icon: TrendingUp, labelKey: "nav.progress" },
@@ -89,7 +90,9 @@ export const Layout = () => {
       {/* Bottom Navigation */}
       <nav className="bottom-nav-modern fixed bottom-0 left-0 right-0 flex items-center justify-between px-2 py-2 safe-area-pb">
         {navItems.map((item) => {
-          const isActive = location.pathname === item.path;
+          const isActive = item.path === "/"
+            ? location.pathname === item.path
+            : location.pathname === item.path || location.pathname.startsWith(`${item.path}/`);
           return (
             <NavLink
               key={item.path}

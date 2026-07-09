@@ -7,6 +7,8 @@ import { UnitProvider } from "@/context/UnitContext";
 import Dashboard from "@/pages/Dashboard";
 import WorkoutDetail from "@/pages/WorkoutDetail";
 import DetailedAnalysis from "@/pages/DetailedAnalysis";
+import Sessions from "@/pages/Sessions";
+import SessionDetail from "@/pages/SessionDetail";
 import Progress from "@/pages/Progress";
 import Guidance from "@/pages/Guidance";
 import Digest from "@/pages/Digest";
@@ -29,6 +31,8 @@ function App() {
               <Routes>
                 <Route path="/" element={<Layout />}>
                   <Route index element={<Dashboard />} />
+                  <Route path="sessions" element={<Sessions />} />
+                  <Route path="sessions/:id" element={<SessionDetail />} />
                   <Route path="workout/:id" element={<WorkoutDetail />} />
                   <Route path="workout/:id/analysis" element={<DetailedAnalysis />} />
                   <Route path="progress" element={<Progress />} />
