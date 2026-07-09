@@ -50,8 +50,3 @@ RunIndex — running/cardio training coach. Garmin (gccli) integration, AI coach
 - Pulled commit 9909760 (Merge PR #3 "sessions tab"). New: pages/Sessions.jsx, pages/SessionDetail.jsx; modified App.js (routes /sessions, /sessions/:id), Layout.jsx (nav item), i18n.js (sessions translations en/fr/es).
 - BUG in pulled code: `sessions` i18n block was nested under `workout` -> pages call t("sessions.*") -> raw keys shown. FIXED in lib/i18n.js by promoting workout.sessions to a top-level `sessions` alias per language (post-object normalization loop).
 - Verified: Sessions list (30 Garmin activities, filters/sort/search translated) + SessionDetail (metrics + AI analysis sections) render correctly. Branding (logo) preserved.
-
-## Pull sauvegarde260708 — UI harmonization (2026-07-09 PR#4)
-- Pulled commit 8f2bcca. Modified: index.css, theme-modern.css, tailwind.config.js, Dashboard/Progress/SessionDetail/Settings/TrainingPlan/WorkoutDetail.jsx.
-- Confirmed all prior agent fixes are now in the repo (logo in Layout.jsx, header-logo-img/brand-splash-logo CSS, BrandSplash in Dashboard, i18n sessions alias) -> user's Save-to-GitHub worked.
-- Deps unchanged; no compile errors; dashboard + branding + Garmin data all verified working.
