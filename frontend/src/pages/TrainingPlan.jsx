@@ -262,14 +262,15 @@ export default function TrainingPlan() {
   const weeks = fullCycle?.weeks || [];
   const currentWeek = fullCycle?.current_week || 1;
   const totalWeeks = fullCycle?.total_weeks || 12;
-  const cycleStatus = fullCycle?.status || null; // "active" | "upcoming" | "completed" | null (legacy)
+  const cycleStatus = fullCycle?.status || null; // "active" | "upcoming" | "completed" | null (legacy: treated as active)
   const daysToRace = fullCycle?.days_to_race ?? null;
   const startDate = fullCycle?.start_date || null;
   const eventDate = fullCycle?.event_date || fullCycle?.end_date || null;
 
   // For upcoming: compute weeks until plan starts
+  const MS_PER_WEEK = 1000 * 60 * 60 * 24 * 7;
   const weeksToStart = startDate
-    ? Math.ceil(Math.max(0, (new Date(startDate) - new Date()) / (1000 * 60 * 60 * 24 * 7)))
+    ? Math.ceil(Math.max(0, (new Date(startDate) - new Date()) / MS_PER_WEEK))
     : null;
 
   return (
@@ -377,7 +378,7 @@ export default function TrainingPlan() {
               {t("trainingPlanExtended.completedTitle")}
             </span>
           </div>
-          {(eventDate || daysToRace === 0) && (
+          {eventDate && (
             <p className="text-sm" style={{ color: "#9ca3af" }}>
               {t("trainingPlanExtended.completedRaceDate").replace("{date}", formatDateDMY(eventDate))}
             </p>
