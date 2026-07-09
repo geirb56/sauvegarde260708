@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Outlet, NavLink, useLocation } from "react-router-dom";
 import { Activity, Home, CalendarDays, MessageCircle, RefreshCw, Settings, TrendingUp } from "lucide-react";
 import { useLanguage } from "@/context/LanguageContext";
@@ -9,24 +9,11 @@ import axios from "axios";
 import { API_BASE_URL } from "@/config";
 const API = API_BASE_URL;
 
-const formatLastSyncLabel = (lang, diffMins) => {
-  if (diffMins < 60) {
-    if (lang === "fr") return `il y a ${diffMins} min`;
-    if (lang === "es") return `hace ${diffMins} min`;
-    return `${diffMins} min ago`;
-  }
-
-  const hours = Math.round(diffMins / 60);
-  if (lang === "fr") return `il y a ${hours} h`;
-  if (lang === "es") return `hace ${hours} h`;
-  return `${hours} h ago`;
-};
-
 export const Layout = () => {
   const location = useLocation();
-  const { t, lang } = useLanguage();
+  const { t } = useLanguage();
   const [chatOpen, setChatOpen] = useState(false);
-  const [lastSync, setLastSync] = useState(null);
+  const [lastSyncMinutes, setLastSyncMinutes] = useState(null);
   
   // Auto-sync Terra data on startup
   useAutoSync();
@@ -40,14 +27,22 @@ export const Layout = () => {
           const syncDate = new Date(res.data.last_sync);
           const now = new Date();
           const diffMins = Math.round((now - syncDate) / 60000);
-          setLastSync(formatLastSyncLabel(lang, diffMins));
+          setLastSyncMinutes(diffMins);
         }
       } catch (err) {
         // Ignore
       }
     };
     checkSync();
-  }, [lang]);
+  }, []);
+
+  const lastSyncLabel = useMemo(() => {
+    if (lastSyncMinutes == null) return null;
+    if (lastSyncMinutes < 60) {
+      return t("common.timeAgoMins").replace("{n}", lastSyncMinutes);
+    }
+    return t("common.timeAgoHours").replace("{n}", Math.round(lastSyncMinutes / 60));
+  }, [lastSyncMinutes, t]);
 
   const navItems = [
     { path: "/", icon: Home, labelKey: "nav.dashboard" },
@@ -70,10 +65,10 @@ export const Layout = () => {
             className="header-logo-img"
             data-testid="app-logo"
           />
-          {lastSync && (
+          {lastSyncLabel && (
             <div className="sync-status">
               <span className="sync-dot" />
-              <span>{lastSync}</span>
+              <span>{lastSyncLabel}</span>
             </div>
           )}
         </div>

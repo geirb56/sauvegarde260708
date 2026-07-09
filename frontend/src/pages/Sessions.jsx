@@ -29,7 +29,7 @@ const formatDate = (date, locale) => {
 };
 
 const formatHeartRate = (value) => (value ? `${value} bpm` : "--");
-const formatTypeLabel = (value) => value
+const formatWorkoutTypeLabel = (value) => value
   ? value.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())
   : "--";
 
@@ -100,7 +100,7 @@ export default function Sessions() {
 
   const getSportLabel = (type) => {
     const translated = t(`workoutTypes.${type}`);
-    return translated === `workoutTypes.${type}` ? formatTypeLabel(type) : translated;
+    return translated === `workoutTypes.${type}` ? formatWorkoutTypeLabel(type) : translated;
   };
 
   return (
