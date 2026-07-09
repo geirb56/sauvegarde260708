@@ -38,7 +38,7 @@ export const Layout = () => {
       }
     };
     checkSync();
-  }, []);
+  }, [t]);
 
   const navItems = [
     { path: "/", icon: Home, labelKey: "nav.dashboard" },
