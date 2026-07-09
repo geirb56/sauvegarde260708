@@ -246,10 +246,10 @@ function TrendTooltip({ active, payload, label }) {
 // Workout type configuration (labels from t("workoutTypes.*"))
 const WORKOUT_TYPES = {
   fractionne: { color: "#f97316", bgClass: "workout-icon fractionne", icon: Zap },
-  endurance: { color: "#3b82f6", bgClass: "workout-icon endurance", icon: Activity },
+  endurance: { color: "#10b981", bgClass: "workout-icon endurance", icon: Activity },
   seuil: { color: "#f97316", bgClass: "workout-icon seuil", icon: Flame },
-  recuperation: { color: "#14b8a6", bgClass: "workout-icon recuperation", icon: Heart },
-  run: { color: "#3b82f6", bgClass: "workout-icon endurance", icon: Activity },
+  recuperation: { color: "#22d3ee", bgClass: "workout-icon recuperation", icon: Heart },
+  run: { color: "#10b981", bgClass: "workout-icon endurance", icon: Activity },
   cycle: { color: "#f97316", bgClass: "workout-icon seuil", icon: Bike },
 };
 
