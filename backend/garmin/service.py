@@ -7,6 +7,7 @@ business data (connection status + activities). Never stores credentials.
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -124,6 +125,77 @@ async def _finalize_connection(db, user_id: str, newest_start: Optional[str]) ->
     return total
 
 
+async def deep_sync(db, user_id: str) -> dict:
+    """Full historical import for a user's first Garmin connection.
+
+    Fetches ALL available Garmin activities using paginated gccli calls, then
+    ingests them through the standard pipeline (garmin_activities → ACTIVITY_CREATED
+    events → workouts → RunIndex history backfill).
+
+    This function is only triggered once per user (gated by the `deep_sync_done`
+    flag in garmin_connections). Subsequent syncs use the lightweight incremental
+    path. Never call this directly for regular syncs.
+    """
+    conn = await db.garmin_connections.find_one({"user_id": user_id}, {"_id": 0})
+    if not conn or not conn.get("connected"):
+        return {
+            "success": False, "synced_count": 0, "metrics_count": 0,
+            "message": "Garmin not connected",
+        }
+
+    page_size = int(os.environ.get("GARMIN_PAGE_SIZE", "50"))
+    provider = get_provider()
+
+    logger.info("[Garmin] deep sync starting user=%s page_size=%d", user_id, page_size)
+    try:
+        activities = provider.fetch_all_activities(page_size=page_size)
+    except Exception as exc:
+        logger.error("[Garmin] deep sync fetch failed user=%s: %s", user_id, exc)
+        return {
+            "success": False, "synced_count": 0, "metrics_count": 0,
+            "message": "Deep sync failed, please reconnect",
+        }
+
+    ingest = await _ingest_activities(db, user_id, activities)
+
+    # Mark deep sync done so subsequent syncs use the incremental path.
+    await db.garmin_connections.update_one(
+        {"user_id": user_id},
+        {"$set": {"deep_sync_done": True}},
+    )
+
+    # Daily health metrics (last 7 days — same as normal sync).
+    metrics_count = 0
+    try:
+        metrics = provider.get_daily_metrics(user_id, days=7)
+        for m in metrics:
+            day = m.get("date")
+            if not day:
+                continue
+            await db.garmin_daily_metrics.update_one(
+                {"user_id": user_id, "date": day},
+                {"$set": {**m, "user_id": user_id, "synced_at": datetime.now(timezone.utc).isoformat()}},
+                upsert=True,
+            )
+            metrics_count += 1
+    except Exception as exc:
+        logger.warning("[Garmin] deep sync daily metrics skipped user=%s: %s", user_id, exc)
+
+    await _finalize_connection(db, user_id, ingest["newest_start"])
+    logger.info(
+        "[Garmin] deep sync completed synced=%d new=%d metrics=%d user=%s",
+        ingest["synced"], ingest["new"], metrics_count, user_id,
+    )
+    return {
+        "success": True,
+        "synced_count": ingest["synced"],
+        "new_count": ingest["new"],
+        "metrics_count": metrics_count,
+        "message": f"Deep sync: imported {ingest['synced']} activities",
+        "deep_sync": True,
+    }
+
+
 async def sync(db, user_id: str, since: Optional[str] = None) -> dict:
     """Full Garmin sync (activities + daily metrics), used for manual triggers.
 
@@ -131,10 +203,22 @@ async def sync(db, user_id: str, since: Optional[str] = None) -> dict:
     API request flow. Writes only the ingestion layer (`garmin_activities`) and
     emits ACTIVITY_CREATED events; the `workouts` product layer + feed cache are
     built asynchronously by the fan-out event worker.
+
+    On the first sync for a user (deep_sync_done not set) and when
+    GARMIN_DEEP_SYNC_ENABLED=true, this delegates to deep_sync() to import the
+    full available history. Subsequent calls use the standard single-page fetch.
     """
     conn = await db.garmin_connections.find_one({"user_id": user_id}, {"_id": 0})
     if not conn or not conn.get("connected"):
         return {"success": False, "synced_count": 0, "metrics_count": 0, "message": "Garmin not connected"}
+
+    # First-connection deep sync: enabled by default, triggered once per user.
+    deep_sync_enabled = os.environ.get("GARMIN_DEEP_SYNC_ENABLED", "true").lower() not in (
+        "0", "false", "no",
+    )
+    if deep_sync_enabled and not conn.get("deep_sync_done"):
+        logger.info("[Garmin] first sync detected for user=%s — starting deep sync", user_id)
+        return await deep_sync(db, user_id)
 
     provider = get_provider()
 

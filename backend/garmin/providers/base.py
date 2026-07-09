@@ -5,6 +5,7 @@ transport (gccli / mock / future OAuth) to callers. Callers interact only via:
 
     provider.connect(user_id)
     provider.sync_activities(user_id)
+    provider.fetch_all_activities()
     provider.get_profile(user_id)
 """
 
@@ -42,6 +43,14 @@ class Provider(ABC):
     @abstractmethod
     def sync_activities(self, user_id: str, since: Optional[str] = None) -> List[Dict]:
         raise NotImplementedError
+
+    def fetch_all_activities(self, page_size: int = 50) -> List[Dict]:
+        """Fetch ALL available activities using pagination.
+
+        Default implementation delegates to sync_activities (no pagination).
+        Subclasses should override to implement paginated fetching.
+        """
+        return self.sync_activities(user_id="")
 
     @abstractmethod
     def get_daily_metrics(self, user_id: str, days: int = 7) -> List[Dict]:
