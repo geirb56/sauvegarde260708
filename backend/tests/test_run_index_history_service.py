@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from services.run_index_history import (  # noqa: E402
     backfill_run_index_history,
     build_snapshot_document,
+    get_run_index_history_payload,
     select_snapshot_dates,
 )
 
@@ -44,6 +45,18 @@ def _progressive_workouts() -> list[dict]:
         _run(7, 12.0, 4.1, 168),
         _run(2, 21.1, 4.0, 162),
     ]
+
+
+def _progressive_span_workouts(total_days: int, step_days: int) -> list[dict]:
+    workouts = []
+    scheduled_days = list(range(total_days, -1, -step_days))
+    for index, days_ago in enumerate(scheduled_days):
+        progress = index / max(len(scheduled_days) - 1, 1)
+        distance_km = round(6.0 + (10.0 * progress), 1)
+        pace_min_km = round(6.4 - (2.0 * progress), 2)
+        avg_hr = int(166 - (10 * progress))
+        workouts.append(_run(days_ago, distance_km, pace_min_km, avg_hr))
+    return workouts
 
 
 class FakeCursor:
@@ -111,7 +124,18 @@ class FakeCollection:
 
     @staticmethod
     def _matches(doc: dict, query: dict) -> bool:
-        return all(doc.get(key) == value for key, value in query.items())
+        for key, value in query.items():
+            doc_value = doc.get(key)
+            if isinstance(value, dict):
+                # Test helper only needs the range operators used by the history service queries.
+                if "$gte" in value and (doc_value is None or doc_value < value["$gte"]):
+                    return False
+                if "$lte" in value and (doc_value is None or doc_value > value["$lte"]):
+                    return False
+                continue
+            if doc_value != value:
+                return False
+        return True
 
 
 class FakeDB:
@@ -121,23 +145,26 @@ class FakeDB:
 
 
 def test_select_snapshot_dates_uses_monthly_then_weekly_granularity():
-    workouts = _progressive_workouts()
+    workouts = _progressive_span_workouts(total_days=365, step_days=14)
 
     snapshot_dates = select_snapshot_dates(workouts, reference_date=date(2026, 7, 9))
 
     assert snapshot_dates[-1] == date(2026, 7, 9)
     assert len({snapshot_date.isoformat() for snapshot_date in snapshot_dates}) == len(snapshot_dates)
-    assert len(snapshot_dates) >= 5
+    assert date(2025, 7, 9) in snapshot_dates
+    assert date(2025, 12, 9) in snapshot_dates
+    assert date(2026, 1, 8) in snapshot_dates
+    assert len(snapshot_dates) >= 30
 
 
 def test_backfill_run_index_history_creates_progressive_snapshots():
-    db = FakeDB(_progressive_workouts())
+    db = FakeDB(_progressive_span_workouts(total_days=365, step_days=14))
 
     result = asyncio.run(backfill_run_index_history(db, "runner-1", reference_date=date(2026, 7, 9)))
 
     history = sorted(db.run_index_scores.docs, key=lambda doc: doc["date"])
     assert result["snapshots_targeted"] == len(history)
-    assert len(history) >= 5
+    assert len(history) >= 30
     assert len({doc["date"] for doc in history}) == len(history)
     assert len({doc["run_index"] for doc in history}) > 1
     assert history[0]["run_index"] < history[-1]["run_index"]
@@ -159,3 +186,58 @@ def test_empty_history_snapshot_has_low_confidence():
 
     assert snapshot["run_index"] == 0
     assert snapshot["confidence_score"] == 0
+
+
+def test_history_payload_returns_complete_12_month_view():
+    db = FakeDB(_progressive_span_workouts(total_days=365, step_days=14))
+    asyncio.run(backfill_run_index_history(db, "runner-1", reference_date=date(2026, 7, 9)))
+
+    payload = asyncio.run(
+        get_run_index_history_payload(
+            db,
+            "runner-1",
+            period="12m",
+            reference_date=date(2026, 7, 9),
+        )
+    )
+
+    assert payload["has_data"] is True
+    assert payload["has_full_period_data"] is True
+    assert payload["granularity"] == "month"
+    assert len(payload["history"]) == 13
+    assert payload["history"][0]["date"].startswith("2025-07")
+    assert payload["history"][-1]["date"] == "2026-07-09"
+    assert payload["history"][0]["run_index"] < payload["history"][-1]["run_index"]
+    assert {"speed", "endurance", "consistency", "efficiency"} <= set(payload["history"][0].keys())
+
+
+def test_history_payload_marks_partial_12_month_view_for_recent_user():
+    db = FakeDB(_progressive_span_workouts(total_days=84, step_days=7))
+    asyncio.run(backfill_run_index_history(db, "runner-1", reference_date=date(2026, 7, 9)))
+
+    payload = asyncio.run(
+        get_run_index_history_payload(
+            db,
+            "runner-1",
+            period="12m",
+            reference_date=date(2026, 7, 9),
+        )
+    )
+
+    assert payload["has_data"] is True
+    assert payload["has_full_period_data"] is False
+    assert payload["granularity"] == "month"
+    assert 1 < len(payload["history"]) < 13
+    assert payload["available_from"] >= "2026-04-01"
+
+
+def test_historical_snapshot_changes_with_progression():
+    workouts = _progressive_span_workouts(total_days=180, step_days=14)
+
+    past_snapshot = build_snapshot_document("runner-1", workouts, date(2026, 4, 9))
+    current_snapshot = build_snapshot_document("runner-1", workouts, date(2026, 7, 9))
+
+    assert past_snapshot["date"] == "2026-04-09"
+    assert current_snapshot["date"] == "2026-07-09"
+    assert past_snapshot["run_index"] != current_snapshot["run_index"]
+    assert past_snapshot["run_index"] < current_snapshot["run_index"]
