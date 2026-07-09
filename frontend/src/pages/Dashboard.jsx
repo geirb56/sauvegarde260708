@@ -3,10 +3,7 @@ import { Link } from "react-router-dom";
 import axios from "axios";
 import { useLanguage } from "@/context/LanguageContext";
 import {
-  ChevronRight,
-  Bike,
   Zap,
-  Flame,
   RefreshCw,
   Loader2,
   Heart,
@@ -867,84 +864,6 @@ export default function Dashboard() {
             </p>
           </>
         )}
-      </div>
-
-      {/* DERNIÈRES SORTIES */}
-      <div className="animate-in" style={{ animationDelay: "300ms" }}>
-        <h2 className="section-header">
-          {t("dashboard.recentWorkouts")}
-        </h2>
-        
-        <div className="space-y-2">
-          {workouts.slice(0, 5).map((workout, index) => {
-            // Better workout type detection
-            const workoutName = workout.name?.toLowerCase() || "";
-            const notes = workout.notes?.toLowerCase() || "";
-            const avgHR = workout.avg_heart_rate || 0;
-            
-            let workoutType = "endurance"; // default
-            
-            if (workoutName.includes("interval") || notes.includes("interval") || workoutName.includes("fractionn")) {
-              workoutType = "fractionne";
-            } else if (workoutName.includes("recup") || notes.includes("recup") || workoutName.includes("easy") || workoutName.includes("recovery")) {
-              workoutType = "recuperation";
-            } else if (avgHR > 165 || workoutName.includes("tempo") || workoutName.includes("seuil") || workoutName.includes("threshold")) {
-              workoutType = "seuil";
-            } else if (workout.type === "cycle") {
-              workoutType = "cycle";
-            }
-            
-            const typeConfig = WORKOUT_TYPES[workoutType] || WORKOUT_TYPES.endurance;
-            const TypeIcon = typeConfig.icon;
-            
-            return (
-              <Link
-                key={workout.id}
-                to={`/workout/${workout.id}`}
-                className="workout-list-item animate-in"
-                style={{ animationDelay: `${250 + index * 50}ms` }}
-              >
-                <div 
-                  className="workout-icon"
-                  style={{ 
-                    background: `${typeConfig.color}20`,
-                    color: typeConfig.color
-                  }}
-                >
-                  <TypeIcon className="w-5 h-5" />
-                </div>
-                
-                <div className="workout-info">
-                  <p className="workout-type-name">{t(`workoutTypes.${workoutType}`)}</p>
-                  <div className="workout-stats">
-                    <span>
-                      {formatDistance(workout.distance_km || 0, { unitSystem })}
-                    </span>
-                    <span className="dot" />
-                    <span>
-                      {formatPaceUnits(
-                        (workout.avg_pace_min_km || 0) * 60,
-                        { unitSystem }
-                      )}
-                    </span>
-                    {workout.avg_heart_rate && (
-                      <>
-                        <span className="dot" />
-                        <span>{t("dashboard.hrLabel")} {workout.avg_heart_rate}</span>
-                      </>
-                    )}
-                  </div>
-                </div>
-                
-                <span className="workout-date">
-                  {getRelativeDate(workout.date, t, lang === "fr" ? "fr-FR" : "en-US")}
-                </span>
-                
-                <ChevronRight className="workout-arrow w-4 h-4" />
-              </Link>
-            );
-          })}
-        </div>
       </div>
 
     </div>
