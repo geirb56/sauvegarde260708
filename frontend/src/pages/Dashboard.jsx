@@ -3,10 +3,7 @@ import { Link } from "react-router-dom";
 import axios from "axios";
 import { useLanguage } from "@/context/LanguageContext";
 import {
-  ChevronRight,
-  Bike,
   Zap,
-  Flame,
   RefreshCw,
   Loader2,
   Heart,
@@ -34,7 +31,6 @@ import {
   Legend,
 } from "recharts";
 import { useUnitSystem } from "@/context/UnitContext";
-import { formatDistance, formatPace as formatPaceUnits } from "@/utils/units";
 import { Button } from "@/components/ui/button";
 import { BrandSplash } from "@/components/LoadingSpinner";
 import { toast } from "sonner";
@@ -244,33 +240,6 @@ function TrendTooltip({ active, payload, label }) {
 }
 
 // Workout type configuration (labels from t("workoutTypes.*"))
-const WORKOUT_TYPES = {
-  fractionne: { color: "#f97316", bgClass: "workout-icon fractionne", icon: Zap },
-  endurance: { color: "#10b981", bgClass: "workout-icon endurance", icon: Activity },
-  seuil: { color: "#f97316", bgClass: "workout-icon seuil", icon: Flame },
-  recuperation: { color: "#22d3ee", bgClass: "workout-icon recuperation", icon: Heart },
-  run: { color: "#10b981", bgClass: "workout-icon endurance", icon: Activity },
-  cycle: { color: "#f97316", bgClass: "workout-icon seuil", icon: Bike },
-};
-
-const formatDuration = (minutes) => {
-  if (!minutes) return "--";
-  const hrs = Math.floor(minutes / 60);
-  const mins = minutes % 60;
-  if (hrs > 0) return `${hrs}h${mins.toString().padStart(2, '0')}`;
-  return `${mins}min`;
-};
-
-const getRelativeDate = (dateStr, t, locale) => {
-  const date = new Date(dateStr);
-  const today = new Date();
-  const yesterday = new Date(today);
-  yesterday.setDate(yesterday.getDate() - 1);
-  if (date.toDateString() === today.toDateString()) return t("dashboard.today");
-  if (date.toDateString() === yesterday.toDateString()) return t("dashboard.yesterday");
-  return date.toLocaleDateString(locale, { day: "numeric", month: "short" });
-};
-
 // Circular Gauge Component
 function CircularGauge({ value, max = 100, size = 64 }) {
   const strokeWidth = 5;
@@ -371,7 +340,6 @@ function MiniLineChart({ data = [] }) {
 
 export default function Dashboard() {
   const [insight, setInsight] = useState(null);
-  const [workouts, setWorkouts] = useState([]);
   const [todaySession, setTodaySession] = useState(null);
   const [trainingMetrics, setTrainingMetrics] = useState(null);
   const [cardioData, setCardioData] = useState(null);
@@ -397,15 +365,13 @@ export default function Dashboard() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [insightRes, workoutsRes, ragRes, todayRes, metricsRes] = await Promise.all([
+      const [insightRes, ragRes, todayRes, metricsRes] = await Promise.all([
         axios.get(`${API}/dashboard/insight?language=${lang}`),
-        axios.get(`${API}/workouts`),
         axios.get(`${API}/rag/dashboard`).catch(() => ({ data: null })),
         axios.get(`${API}/training/today`, { headers: { "X-User-Id": "default" } }).catch(() => ({ data: null })),
         axios.get(`${API}/training/metrics`, { headers: { "X-User-Id": "default" } }).catch(() => ({ data: null }))
       ]);
       setInsight(insightRes.data);
-      setWorkouts(workoutsRes.data);
       if (ragRes.data) {
         setInsight(prev => ({ ...prev, rag: ragRes.data }));
       }
@@ -867,84 +833,6 @@ export default function Dashboard() {
             </p>
           </>
         )}
-      </div>
-
-      {/* DERNIÈRES SORTIES */}
-      <div className="animate-in" style={{ animationDelay: "300ms" }}>
-        <h2 className="section-header">
-          {t("dashboard.recentWorkouts")}
-        </h2>
-        
-        <div className="space-y-2">
-          {workouts.slice(0, 5).map((workout, index) => {
-            // Better workout type detection
-            const workoutName = workout.name?.toLowerCase() || "";
-            const notes = workout.notes?.toLowerCase() || "";
-            const avgHR = workout.avg_heart_rate || 0;
-            
-            let workoutType = "endurance"; // default
-            
-            if (workoutName.includes("interval") || notes.includes("interval") || workoutName.includes("fractionn")) {
-              workoutType = "fractionne";
-            } else if (workoutName.includes("recup") || notes.includes("recup") || workoutName.includes("easy") || workoutName.includes("recovery")) {
-              workoutType = "recuperation";
-            } else if (avgHR > 165 || workoutName.includes("tempo") || workoutName.includes("seuil") || workoutName.includes("threshold")) {
-              workoutType = "seuil";
-            } else if (workout.type === "cycle") {
-              workoutType = "cycle";
-            }
-            
-            const typeConfig = WORKOUT_TYPES[workoutType] || WORKOUT_TYPES.endurance;
-            const TypeIcon = typeConfig.icon;
-            
-            return (
-              <Link
-                key={workout.id}
-                to={`/workout/${workout.id}`}
-                className="workout-list-item animate-in"
-                style={{ animationDelay: `${250 + index * 50}ms` }}
-              >
-                <div 
-                  className="workout-icon"
-                  style={{ 
-                    background: `${typeConfig.color}20`,
-                    color: typeConfig.color
-                  }}
-                >
-                  <TypeIcon className="w-5 h-5" />
-                </div>
-                
-                <div className="workout-info">
-                  <p className="workout-type-name">{t(`workoutTypes.${workoutType}`)}</p>
-                  <div className="workout-stats">
-                    <span>
-                      {formatDistance(workout.distance_km || 0, { unitSystem })}
-                    </span>
-                    <span className="dot" />
-                    <span>
-                      {formatPaceUnits(
-                        (workout.avg_pace_min_km || 0) * 60,
-                        { unitSystem }
-                      )}
-                    </span>
-                    {workout.avg_heart_rate && (
-                      <>
-                        <span className="dot" />
-                        <span>{t("dashboard.hrLabel")} {workout.avg_heart_rate}</span>
-                      </>
-                    )}
-                  </div>
-                </div>
-                
-                <span className="workout-date">
-                  {getRelativeDate(workout.date, t, lang === "fr" ? "fr-FR" : "en-US")}
-                </span>
-                
-                <ChevronRight className="workout-arrow w-4 h-4" />
-              </Link>
-            );
-          })}
-        </div>
       </div>
 
     </div>
