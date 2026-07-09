@@ -50,7 +50,7 @@ const formatDateLabel = (dateStr, locale = "fr-FR", granularity = "week") => {
   if (!dateStr) return "";
   const d = new Date(dateStr + "T00:00:00");
   if (granularity === "month") {
-    return d.toLocaleDateString(locale, { month: "short" });
+    return d.toLocaleDateString(locale, { month: "short", year: "2-digit" });
   }
   return d.toLocaleDateString(locale, { day: "numeric", month: "short" });
 };

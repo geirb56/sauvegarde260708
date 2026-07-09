@@ -127,6 +127,7 @@ class FakeCollection:
         for key, value in query.items():
             doc_value = doc.get(key)
             if isinstance(value, dict):
+                # Test helper only needs the range operators used by the history service queries.
                 if "$gte" in value and (doc_value is None or doc_value < value["$gte"]):
                     return False
                 if "$lte" in value and (doc_value is None or doc_value > value["$lte"]):
