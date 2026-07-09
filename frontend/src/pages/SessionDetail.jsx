@@ -94,6 +94,7 @@ export default function SessionDetail() {
   }, [id, lang]);
 
   const locale = localeByLang[lang] || "en-US";
+  const cadenceValue = session?.avg_cadence_spm || session?.average_cadence;
 
   const primaryMetrics = useMemo(() => {
     if (!session) return [];
@@ -106,7 +107,7 @@ export default function SessionDetail() {
       { label: t("workout.avgSpeed"), value: formatSpeed(session.avg_speed_kmh || 0, { unitSystem }) },
       { label: t("workout.avgHeartRate"), value: session.avg_heart_rate ? `${session.avg_heart_rate} bpm` : "--" },
       { label: t("workout.maxHeartRate"), value: session.max_heart_rate ? `${session.max_heart_rate} bpm` : "--" },
-      { label: t("sessions.avgCadence"), value: session.avg_cadence_spm || session.average_cadence ? `${session.avg_cadence_spm || session.average_cadence} spm` : "--" },
+      { label: t("sessions.avgCadence"), value: cadenceValue ? `${cadenceValue} spm` : "--" },
       { label: t("workout.elevation"), value: formatElevation(session.elevation_gain_m || 0, { unitSystem }) },
       { label: t("workout.calories"), value: session.calories ? `${session.calories}` : "--" },
       { label: t("sessions.trainingLoad"), value: session.training_load ?? "--" },
@@ -115,7 +116,7 @@ export default function SessionDetail() {
       { label: t("sessions.source"), value: session.data_source || "--" },
       { label: t("sessions.createdAt"), value: session.created_at ? new Date(session.created_at).toLocaleString(locale) : "--" },
     ].filter((metric) => metric.value !== "--");
-  }, [locale, session, t, unitSystem]);
+  }, [cadenceValue, locale, session, t, unitSystem]);
 
   const extraMetrics = useMemo(() => {
     if (!session) return [];

@@ -29,7 +29,7 @@ const formatDate = (date, locale) => {
 };
 
 const formatHeartRate = (value) => (value ? `${value} bpm` : "--");
-const formatFallbackLabel = (value) => value
+const formatTypeLabel = (value) => value
   ? value.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())
   : "--";
 
@@ -100,7 +100,7 @@ export default function Sessions() {
 
   const getSportLabel = (type) => {
     const translated = t(`workoutTypes.${type}`);
-    return translated === `workoutTypes.${type}` ? formatFallbackLabel(type) : translated;
+    return translated === `workoutTypes.${type}` ? formatTypeLabel(type) : translated;
   };
 
   return (
