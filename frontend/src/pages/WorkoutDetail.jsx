@@ -412,6 +412,23 @@ export default function WorkoutDetail() {
     );
   }
 
+  const stillLoadingAnything = analysisLoading || detailedLoading || ragLoading;
+
+  if (!workout && stillLoadingAnything) {
+    // Workout fetch failed/transient but analyses are still resolving:
+    // keep showing "Analysis in progress..." rather than a premature "not found".
+    return (
+      <div className="p-4 pb-24 flex items-center justify-center min-h-[60vh]">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 className="w-6 h-6 animate-spin text-primary" />
+          <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+            {t("workoutDetailExtended.analyzing")}
+          </span>
+        </div>
+      </div>
+    );
+  }
+
   if (workoutError || !workout) {
     return (
       <div className="p-4 pb-24" data-testid="workout-not-found">
