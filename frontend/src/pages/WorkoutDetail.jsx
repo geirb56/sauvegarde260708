@@ -3,6 +3,7 @@ import { useParams, Link, useNavigate } from "react-router-dom";
 import axios from "axios";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useLanguage } from "@/context/LanguageContext";
 import { 
   ArrowLeft, 
@@ -309,52 +310,91 @@ const ZoneSummary = ({ zones, t }) => {
   );
 };
 
+// Skeleton placeholder for an AI analysis section
+const AnalysisSkeleton = () => (
+  <div className="space-y-2">
+    <Skeleton className="h-3 w-3/4" />
+    <Skeleton className="h-3 w-full" />
+    <Skeleton className="h-3 w-5/6" />
+  </div>
+);
+
+// Error placeholder for a single analysis section
+const AnalysisError = ({ t }) => (
+  <div className="flex items-center gap-2 text-muted-foreground">
+    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+    <span className="font-mono text-xs">{t("workoutDetailExtended.analysisUnavailable") || "Analyse indisponible"}</span>
+  </div>
+);
+
 export default function WorkoutDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { t, lang } = useLanguage();
+
+  // Workout state (loaded first)
   const [workout, setWorkout] = useState(null);
+  const [workoutLoading, setWorkoutLoading] = useState(true);
+  const [workoutError, setWorkoutError] = useState(false);
+
+  // AI analysis states (independent)
   const [analysis, setAnalysis] = useState(null);
+  const [analysisLoading, setAnalysisLoading] = useState(true);
+  const [analysisError, setAnalysisError] = useState(false);
+
   const [detailedAnalysis, setDetailedAnalysis] = useState(null);
+  const [detailedLoading, setDetailedLoading] = useState(true);
+  const [detailedError, setDetailedError] = useState(false);
+
   const [ragAnalysis, setRagAnalysis] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [ragLoading, setRagLoading] = useState(true);
+  const [ragError, setRagError] = useState(false);
+
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   useEffect(() => {
-    loadWorkout();
-  }, [id, lang]); // eslint-disable-line react-hooks/exhaustive-deps
+    // Reset all states when id or lang changes
+    setWorkout(null);
+    setWorkoutLoading(true);
+    setWorkoutError(false);
+    setAnalysis(null);
+    setAnalysisLoading(true);
+    setAnalysisError(false);
+    setDetailedAnalysis(null);
+    setDetailedLoading(true);
+    setDetailedError(false);
+    setRagAnalysis(null);
+    setRagLoading(true);
+    setRagError(false);
 
-  const loadWorkout = async () => {
-    setLoading(true);
-    try {
-      const [workoutRes, analysisRes, detailedRes, ragRes] = await Promise.all([
-        axios.get(`${API}/workouts/${id}`),
-        axios.get(`${API}/coach/workout-analysis/${id}?language=${lang}`),
-        axios.get(`${API}/coach/detailed-analysis/${id}?language=${lang}`).catch(() => ({ data: null })),
-        axios.get(`${API}/rag/workout/${id}?language=${lang}`).catch(() => ({ data: null }))
-      ]);
-      setWorkout(workoutRes.data);
-      setAnalysis(analysisRes.data);
-      setDetailedAnalysis(detailedRes.data);
-      setRagAnalysis(ragRes.data);
-    } catch (error) {
-      console.error("Failed to load workout:", error);
-      try {
-        const res = await axios.get(`${API}/workouts/${id}`);
-        setWorkout(res.data);
-      } catch (e) {
-        console.error("Workout not found");
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
+    // 1. Load workout immediately
+    axios.get(`${API}/workouts/${id}`)
+      .then(res => setWorkout(res.data))
+      .catch(() => setWorkoutError(true))
+      .finally(() => setWorkoutLoading(false));
+
+    // 2. Load AI analyses in parallel, independently
+    axios.get(`${API}/coach/workout-analysis/${id}?language=${lang}`)
+      .then(res => setAnalysis(res.data))
+      .catch(() => setAnalysisError(true))
+      .finally(() => setAnalysisLoading(false));
+
+    axios.get(`${API}/coach/detailed-analysis/${id}?language=${lang}`)
+      .then(res => setDetailedAnalysis(res.data))
+      .catch(() => setDetailedError(true))
+      .finally(() => setDetailedLoading(false));
+
+    axios.get(`${API}/rag/workout/${id}?language=${lang}`)
+      .then(res => setRagAnalysis(res.data))
+      .catch(() => setRagError(true))
+      .finally(() => setRagLoading(false));
+  }, [id, lang]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const goToAskCoach = () => {
     navigate("/coach");
   };
 
-  if (loading) {
+  if (workoutLoading) {
     return (
       <div className="p-4 pb-24 flex items-center justify-center min-h-[60vh]">
         <div className="flex flex-col items-center gap-3">
@@ -367,7 +407,7 @@ export default function WorkoutDetail() {
     );
   }
 
-  if (!workout) {
+  if (workoutError || !workout) {
     return (
       <div className="p-4 pb-24" data-testid="workout-not-found">
         <Link to="/" className="inline-flex items-center gap-2 text-muted-foreground mb-6">
@@ -423,105 +463,117 @@ export default function WorkoutDetail() {
       </h1>
 
       {/* 1) RÉSUMÉ COACH - Premier élément visible */}
-      {analysis?.coach_summary && (
-        <Card className="bg-card border-border mb-3">
-          <CardContent className="p-3">
+      <Card className="bg-card border-border mb-3">
+        <CardContent className="p-3">
+          {analysisLoading ? (
+            <AnalysisSkeleton />
+          ) : analysisError ? (
+            <AnalysisError t={t} />
+          ) : analysis?.coach_summary ? (
             <p className="font-mono text-sm leading-relaxed" data-testid="coach-summary">
               {analysis.coach_summary}
             </p>
-          </CardContent>
-        </Card>
-      )}
+          ) : null}
+        </CardContent>
+      </Card>
 
       {/* 2) SNAPSHOT - 3 Cards: Intensité, Charge, Type */}
       <div className="grid grid-cols-3 gap-2 mb-3">
         {/* Intensité */}
-        {(analysis?.intensity || detailedAnalysis?.execution) && (
-          <Card className="bg-card border-border">
-            <CardContent className="p-2">
-              <div className="flex items-center gap-1 mb-1">
-                <Zap className="w-3 h-3 text-muted-foreground" />
-                <span className="font-mono text-[8px] uppercase tracking-widest text-muted-foreground">
-                  {t("analysis.intensity")}
-                </span>
-              </div>
-              {detailedAnalysis?.execution?.intensity ? (
-                <span className={`inline-block px-2 py-0.5 rounded-sm font-mono text-xs ${getIntensityColor(detailedAnalysis.execution.intensity)}`}>
-                  {detailedAnalysis.execution.intensity}
-                </span>
-              ) : (
-                <>
-                  <p className="font-mono text-xs font-semibold leading-tight">
-                    {analysis?.intensity?.pace || "--"}
+        <Card className="bg-card border-border">
+          <CardContent className="p-2">
+            <div className="flex items-center gap-1 mb-1">
+              <Zap className="w-3 h-3 text-muted-foreground" />
+              <span className="font-mono text-[8px] uppercase tracking-widest text-muted-foreground">
+                {t("analysis.intensity")}
+              </span>
+            </div>
+            {(analysisLoading && detailedLoading) ? (
+              <Skeleton className="h-5 w-full" />
+            ) : detailedAnalysis?.execution?.intensity ? (
+              <span className={`inline-block px-2 py-0.5 rounded-sm font-mono text-xs ${getIntensityColor(detailedAnalysis.execution.intensity)}`}>
+                {detailedAnalysis.execution.intensity}
+              </span>
+            ) : analysis?.intensity ? (
+              <>
+                <p className="font-mono text-xs font-semibold leading-tight">
+                  {analysis.intensity.pace || "--"}
+                </p>
+                {analysis.intensity.avg_hr && (
+                  <p className="font-mono text-[10px] text-muted-foreground flex items-center gap-1">
+                    <Heart className="w-2.5 h-2.5" />
+                    {analysis.intensity.avg_hr}
                   </p>
-                  {analysis?.intensity?.avg_hr && (
-                    <p className="font-mono text-[10px] text-muted-foreground flex items-center gap-1">
-                      <Heart className="w-2.5 h-2.5" />
-                      {analysis.intensity.avg_hr}
-                    </p>
-                  )}
-                </>
-              )}
-            </CardContent>
-          </Card>
-        )}
+                )}
+              </>
+            ) : (analysisError && detailedError) ? (
+              <span className="font-mono text-xs text-muted-foreground">--</span>
+            ) : null}
+          </CardContent>
+        </Card>
 
         {/* Charge/Volume */}
-        {(analysis?.load || detailedAnalysis?.execution) && (
-          <Card className="bg-card border-border">
-            <CardContent className="p-2">
-              <div className="flex items-center gap-1 mb-1">
-                <Scale className="w-3 h-3 text-muted-foreground" />
-                <span className="font-mono text-[8px] uppercase tracking-widest text-muted-foreground">
-                  {t("analysis.load")}
-                </span>
-              </div>
-              <p className="font-mono text-xs font-semibold leading-tight">
-                {analysis?.load?.distance_km || detailedAnalysis?.execution?.volume || "--"} {analysis?.load?.distance_km ? "km" : ""}
-              </p>
-              {analysis?.load?.duration_min && (
-                <p className="font-mono text-[10px] text-muted-foreground">
-                  {formatDuration(analysis.load.duration_min)}
+        <Card className="bg-card border-border">
+          <CardContent className="p-2">
+            <div className="flex items-center gap-1 mb-1">
+              <Scale className="w-3 h-3 text-muted-foreground" />
+              <span className="font-mono text-[8px] uppercase tracking-widest text-muted-foreground">
+                {t("analysis.load")}
+              </span>
+            </div>
+            {(analysisLoading && detailedLoading) ? (
+              <Skeleton className="h-5 w-full" />
+            ) : (
+              <>
+                <p className="font-mono text-xs font-semibold leading-tight">
+                  {analysis?.load?.distance_km || detailedAnalysis?.execution?.volume || "--"} {analysis?.load?.distance_km ? "km" : ""}
                 </p>
-              )}
-              {analysis?.load?.direction && analysis.load.direction !== "stable" && (
-                <p className={`font-mono text-[9px] mt-1 flex items-center gap-0.5 ${
-                  analysis.load.direction === "up" ? "text-chart-1" : "text-chart-4"
-                }`}>
-                  {analysis.load.direction === "up" ? (
-                    <TrendingUp className="w-2.5 h-2.5" />
-                  ) : (
-                    <TrendingDown className="w-2.5 h-2.5" />
-                  )}
-                  {t(`analysis.load_${analysis.load.direction}`)}
-                </p>
-              )}
-            </CardContent>
-          </Card>
-        )}
+                {analysis?.load?.duration_min && (
+                  <p className="font-mono text-[10px] text-muted-foreground">
+                    {formatDuration(analysis.load.duration_min)}
+                  </p>
+                )}
+                {analysis?.load?.direction && analysis.load.direction !== "stable" && (
+                  <p className={`font-mono text-[9px] mt-1 flex items-center gap-0.5 ${
+                    analysis.load.direction === "up" ? "text-chart-1" : "text-chart-4"
+                  }`}>
+                    {analysis.load.direction === "up" ? (
+                      <TrendingUp className="w-2.5 h-2.5" />
+                    ) : (
+                      <TrendingDown className="w-2.5 h-2.5" />
+                    )}
+                    {t(`analysis.load_${analysis.load.direction}`)}
+                  </p>
+                )}
+              </>
+            )}
+          </CardContent>
+        </Card>
 
         {/* Type/Régularité */}
-        {(analysis?.session_type || detailedAnalysis?.execution) && (
-          <Card className="bg-card border-border">
-            <CardContent className="p-2">
-              <div className="flex items-center gap-1 mb-1">
-                <Activity className="w-3 h-3 text-muted-foreground" />
-                <span className="font-mono text-[8px] uppercase tracking-widest text-muted-foreground">
-                  {t("analysis.type")}
-                </span>
+        <Card className="bg-card border-border">
+          <CardContent className="p-2">
+            <div className="flex items-center gap-1 mb-1">
+              <Activity className="w-3 h-3 text-muted-foreground" />
+              <span className="font-mono text-[8px] uppercase tracking-widest text-muted-foreground">
+                {t("analysis.type")}
+              </span>
+            </div>
+            {(analysisLoading && detailedLoading) ? (
+              <Skeleton className="h-5 w-full" />
+            ) : analysis?.session_type ? (
+              <div className={`inline-block px-2 py-1 rounded-sm ${getSessionTypeStyle(analysis.session_type.label)}`}>
+                <p className="font-mono text-xs font-semibold">
+                  {t(`analysis.session_types.${analysis.session_type.label}`)}
+                </p>
               </div>
-              {analysis?.session_type ? (
-                <div className={`inline-block px-2 py-1 rounded-sm ${getSessionTypeStyle(analysis.session_type.label)}`}>
-                  <p className="font-mono text-xs font-semibold">
-                    {t(`analysis.session_types.${analysis.session_type.label}`)}
-                  </p>
-                </div>
-              ) : detailedAnalysis?.execution?.regularity ? (
-                <p className="font-mono text-xs">{detailedAnalysis.execution.regularity}</p>
-              ) : null}
-            </CardContent>
-          </Card>
-        )}
+            ) : detailedAnalysis?.execution?.regularity ? (
+              <p className="font-mono text-xs">{detailedAnalysis.execution.regularity}</p>
+            ) : (analysisError && detailedError) ? (
+              <span className="font-mono text-xs text-muted-foreground">--</span>
+            ) : null}
+          </CardContent>
+        </Card>
       </div>
 
       {/* 3) ZONES CARDIAQUES */}
@@ -565,43 +617,51 @@ export default function WorkoutDetail() {
       )}
 
       {/* 4) CE QUE ÇA SIGNIFIE - Fusionné */}
-      {(analysis?.insight || detailedAnalysis?.meaning?.text) && (
-        <Card className="bg-card border-border mb-3">
-          <CardContent className="p-3">
-            <div className="flex items-center gap-2 mb-2">
-              <Activity className="w-4 h-4 text-muted-foreground" />
-              <span className="font-mono text-[9px] uppercase tracking-widest text-muted-foreground">
-                {t("workoutDetailExtended.meaning")}
-              </span>
-            </div>
+      <Card className="bg-card border-border mb-3">
+        <CardContent className="p-3">
+          <div className="flex items-center gap-2 mb-2">
+            <Activity className="w-4 h-4 text-muted-foreground" />
+            <span className="font-mono text-[9px] uppercase tracking-widest text-muted-foreground">
+              {t("workoutDetailExtended.meaning")}
+            </span>
+          </div>
+          {(analysisLoading && detailedLoading) ? (
+            <AnalysisSkeleton />
+          ) : (analysisError && detailedError) ? (
+            <AnalysisError t={t} />
+          ) : (detailedAnalysis?.meaning?.text || analysis?.insight) ? (
             <p className="font-mono text-xs text-muted-foreground leading-relaxed" data-testid="meaning-text">
               {detailedAnalysis?.meaning?.text || analysis?.insight}
             </p>
-          </CardContent>
-        </Card>
-      )}
+          ) : null}
+        </CardContent>
+      </Card>
 
       {/* 5) RÉCUPÉRATION — removed per request */}
 
       {/* 6) CONSEIL COACH */}
-      {(analysis?.guidance || detailedAnalysis?.advice?.text) && (
-        <Card className="bg-primary/5 border-primary/20 mb-3">
-          <CardContent className="p-3">
-            <div className="flex items-center gap-2 mb-2">
-              <Lightbulb className="w-4 h-4 text-primary" />
-              <span className="font-mono text-[10px] uppercase tracking-widest text-primary">
-                {t("workoutDetailExtended.coachAdvice")}
-              </span>
-            </div>
+      <Card className="bg-primary/5 border-primary/20 mb-3">
+        <CardContent className="p-3">
+          <div className="flex items-center gap-2 mb-2">
+            <Lightbulb className="w-4 h-4 text-primary" />
+            <span className="font-mono text-[10px] uppercase tracking-widest text-primary">
+              {t("workoutDetailExtended.coachAdvice")}
+            </span>
+          </div>
+          {(analysisLoading && detailedLoading) ? (
+            <AnalysisSkeleton />
+          ) : (analysisError && detailedError) ? (
+            <AnalysisError t={t} />
+          ) : (detailedAnalysis?.advice?.text || analysis?.guidance) ? (
             <p className="font-mono text-xs text-primary leading-relaxed" data-testid="advice-text">
               {detailedAnalysis?.advice?.text || analysis?.guidance}
             </p>
-          </CardContent>
-        </Card>
-      )}
+          ) : null}
+        </CardContent>
+      </Card>
 
       {/* 7) ANALYSE RAG ENRICHIE */}
-      {ragAnalysis && (
+      {(ragLoading || ragAnalysis || ragError) && (
         <Card className="bg-card border-border mb-3" data-testid="rag-workout-card">
           <CardContent className="p-3">
             <div className="flex items-center gap-2 mb-2">
@@ -610,197 +670,215 @@ export default function WorkoutDetail() {
                 {t("workoutDetailExtended.enhancedAnalysis")}
               </p>
             </div>
-            
-            {/* RAG Summary */}
-            <p className="font-mono text-xs text-muted-foreground leading-relaxed mb-3 whitespace-pre-line" data-testid="rag-workout-summary">
-              {ragAnalysis.rag_summary?.split('\n').slice(0, 4).join('\n')}
-            </p>
-
-            {/* Split Analysis */}
-            {ragAnalysis.workout?.split_analysis && Object.keys(ragAnalysis.workout.split_analysis).length > 0 && (
-              <div className="p-2 bg-blue-500/10 rounded-sm mb-3" data-testid="split-analysis-card">
-                <div className="flex items-center gap-2 mb-2">
-                  <Activity className="w-3 h-3 text-blue-400" />
-                  <span className="font-mono text-[9px] uppercase text-blue-400">
-                    {t("workoutDetailExtended.splitAnalysis")}
-                  </span>
-                </div>
-                <div className="grid grid-cols-2 gap-2 text-xs">
-                  <div>
-                    <p className="font-mono text-[10px] text-muted-foreground">
-                      {t("workoutDetailExtended.fastestKm")}
-                    </p>
-                    <p className="font-mono text-emerald-400 font-semibold">
-                      Km {ragAnalysis.workout.split_analysis.fastest_km} 
-                      <span className="text-muted-foreground ml-1">
-                        ({Math.floor(ragAnalysis.workout.split_analysis.fastest_split_pace)}:{String(Math.round((ragAnalysis.workout.split_analysis.fastest_split_pace % 1) * 60)).padStart(2, '0')})
-                      </span>
-                    </p>
-                  </div>
-                  <div>
-                    <p className="font-mono text-[10px] text-muted-foreground">
-                      {t("workoutDetailExtended.slowestKm")}
-                    </p>
-                    <p className="font-mono text-amber-400 font-semibold">
-                      Km {ragAnalysis.workout.split_analysis.slowest_km}
-                      <span className="text-muted-foreground ml-1">
-                        ({Math.floor(ragAnalysis.workout.split_analysis.slowest_split_pace)}:{String(Math.round((ragAnalysis.workout.split_analysis.slowest_split_pace % 1) * 60)).padStart(2, '0')})
-                      </span>
-                    </p>
-                  </div>
-                  <div>
-                    <p className="font-mono text-[10px] text-muted-foreground">
-                      {t("workoutDetailExtended.paceDrop")}
-                    </p>
-                    <p className="font-mono font-semibold">
-                      {ragAnalysis.workout.split_analysis.pace_drop > 0 ? '+' : ''}{Math.round(ragAnalysis.workout.split_analysis.pace_drop * 60)}s/km
-                    </p>
-                  </div>
-                  <div>
-                    <p className="font-mono text-[10px] text-muted-foreground">
-                      {t("workoutDetailExtended.consistency")}
-                    </p>
-                    <p className={`font-mono font-semibold ${
-                      ragAnalysis.workout.split_analysis.consistency_score >= 80 ? 'text-emerald-400' :
-                      ragAnalysis.workout.split_analysis.consistency_score >= 60 ? 'text-amber-400' : 'text-red-400'
-                    }`}>
-                      {Math.round(ragAnalysis.workout.split_analysis.consistency_score)}%
-                    </p>
-                  </div>
-                </div>
-                {ragAnalysis.workout.split_analysis.negative_split && (
-                  <div className="mt-2 px-2 py-1 bg-emerald-500/20 rounded-sm">
-                    <p className="font-mono text-[10px] text-emerald-400 font-semibold">
-                      ✨ Negative Split - {t("workoutDetailExtended.negativeSplitMessage")}
-                    </p>
-                  </div>
-                )}
+            {ragLoading ? (
+              <div className="space-y-2">
+                <AnalysisSkeleton />
+                <Skeleton className="h-20 w-full mt-3" />
               </div>
-            )}
-
-            {/* HR Analysis */}
-            {ragAnalysis.workout?.hr_analysis && Object.keys(ragAnalysis.workout.hr_analysis).length > 0 && (
-              <div className="p-2 bg-red-500/10 rounded-sm mb-3" data-testid="hr-analysis-card">
-                <div className="flex items-center gap-2 mb-2">
-                  <Heart className="w-3 h-3 text-red-400" />
-                  <span className="font-mono text-[9px] uppercase text-red-400">
-                    {t("workoutDetailExtended.heartRateAnalysis")}
-                  </span>
-                </div>
-                <div className="grid grid-cols-3 gap-2 text-xs">
-                  <div>
-                    <p className="font-mono text-[10px] text-muted-foreground">{t("workoutDetailExtended.min")}</p>
-                    <p className="font-mono font-semibold">{ragAnalysis.workout.hr_analysis.min_hr} bpm</p>
-                  </div>
-                  <div>
-                    <p className="font-mono text-[10px] text-muted-foreground">{t("workoutDetailExtended.avg")}</p>
-                    <p className="font-mono font-semibold">{ragAnalysis.workout.hr_analysis.avg_hr} bpm</p>
-                  </div>
-                  <div>
-                    <p className="font-mono text-[10px] text-muted-foreground">{t("workoutDetailExtended.max")}</p>
-                    <p className="font-mono font-semibold">{ragAnalysis.workout.hr_analysis.max_hr} bpm</p>
-                  </div>
-                </div>
-                {ragAnalysis.workout.hr_analysis.hr_drift !== 0 && (
-                  <div className="mt-2">
-                    <p className="font-mono text-[10px] text-muted-foreground">
-                      {t("workoutDetailExtended.hrDrift")}
-                    </p>
-                    <p className={`font-mono text-xs font-semibold ${
-                      Math.abs(ragAnalysis.workout.hr_analysis.hr_drift) > 10 ? 'text-amber-400' : 'text-muted-foreground'
-                    }`}>
-                      {ragAnalysis.workout.hr_analysis.hr_drift > 0 ? '+' : ''}{ragAnalysis.workout.hr_analysis.hr_drift} bpm
-                      {Math.abs(ragAnalysis.workout.hr_analysis.hr_drift) > 10 && (
-                        <span className="ml-2 text-[10px]">
-                          ({t("workoutDetailExtended.watchHydration")})
-                        </span>
-                      )}
-                    </p>
-                  </div>
-                )}
-              </div>
-            )}
-            
-            {/* Comparison with similar workouts */}
-            {ragAnalysis.comparison?.similar_found > 0 && (
-              <div className="p-2 bg-muted/30 rounded-sm mb-3">
-                <div className="flex items-center gap-2 mb-1">
-                  <History className="w-3 h-3 text-muted-foreground" />
-                  <span className="font-mono text-[9px] uppercase text-muted-foreground">
-                    {t("workoutDetailExtended.comparison")}
-                  </span>
-                </div>
-                <p className="font-mono text-xs">
-                  {ragAnalysis.comparison.similar_found} {t("workoutDetailExtended.similarWorkouts")}
+            ) : ragError ? (
+              <AnalysisError t={t} />
+            ) : (
+              <>
+                {/* RAG Summary */}
+                <p className="font-mono text-xs text-muted-foreground leading-relaxed mb-3 whitespace-pre-line" data-testid="rag-workout-summary">
+                  {ragAnalysis.rag_summary?.split('\n').slice(0, 4).join('\n')}
                 </p>
-                {ragAnalysis.comparison.progression && (
-                  <p className={`font-mono text-xs mt-1 ${
-                    ragAnalysis.comparison.progression.includes('plus rapide') || ragAnalysis.comparison.progression.includes('faster')
-                      ? 'text-emerald-400' 
-                      : 'text-amber-400'
-                  }`}>
-                    {ragAnalysis.comparison.progression.includes('plus rapide') || ragAnalysis.comparison.progression.includes('faster') ? (
-                      <TrendingUp className="w-3 h-3 inline mr-1" />
-                    ) : (
-                      <TrendingDown className="w-3 h-3 inline mr-1" />
+
+                {/* Split Analysis */}
+                {ragAnalysis.workout?.split_analysis && Object.keys(ragAnalysis.workout.split_analysis).length > 0 && (
+                  <div className="p-2 bg-blue-500/10 rounded-sm mb-3" data-testid="split-analysis-card">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Activity className="w-3 h-3 text-blue-400" />
+                      <span className="font-mono text-[9px] uppercase text-blue-400">
+                        {t("workoutDetailExtended.splitAnalysis")}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div>
+                        <p className="font-mono text-[10px] text-muted-foreground">
+                          {t("workoutDetailExtended.fastestKm")}
+                        </p>
+                        <p className="font-mono text-emerald-400 font-semibold">
+                          Km {ragAnalysis.workout.split_analysis.fastest_km} 
+                          <span className="text-muted-foreground ml-1">
+                            ({Math.floor(ragAnalysis.workout.split_analysis.fastest_split_pace)}:{String(Math.round((ragAnalysis.workout.split_analysis.fastest_split_pace % 1) * 60)).padStart(2, '0')})
+                          </span>
+                        </p>
+                      </div>
+                      <div>
+                        <p className="font-mono text-[10px] text-muted-foreground">
+                          {t("workoutDetailExtended.slowestKm")}
+                        </p>
+                        <p className="font-mono text-amber-400 font-semibold">
+                          Km {ragAnalysis.workout.split_analysis.slowest_km}
+                          <span className="text-muted-foreground ml-1">
+                            ({Math.floor(ragAnalysis.workout.split_analysis.slowest_split_pace)}:{String(Math.round((ragAnalysis.workout.split_analysis.slowest_split_pace % 1) * 60)).padStart(2, '0')})
+                          </span>
+                        </p>
+                      </div>
+                      <div>
+                        <p className="font-mono text-[10px] text-muted-foreground">
+                          {t("workoutDetailExtended.paceDrop")}
+                        </p>
+                        <p className="font-mono font-semibold">
+                          {ragAnalysis.workout.split_analysis.pace_drop > 0 ? '+' : ''}{Math.round(ragAnalysis.workout.split_analysis.pace_drop * 60)}s/km
+                        </p>
+                      </div>
+                      <div>
+                        <p className="font-mono text-[10px] text-muted-foreground">
+                          {t("workoutDetailExtended.consistency")}
+                        </p>
+                        <p className={`font-mono font-semibold ${
+                          ragAnalysis.workout.split_analysis.consistency_score >= 80 ? 'text-emerald-400' :
+                          ragAnalysis.workout.split_analysis.consistency_score >= 60 ? 'text-amber-400' : 'text-red-400'
+                        }`}>
+                          {Math.round(ragAnalysis.workout.split_analysis.consistency_score)}%
+                        </p>
+                      </div>
+                    </div>
+                    {ragAnalysis.workout.split_analysis.negative_split && (
+                      <div className="mt-2 px-2 py-1 bg-emerald-500/20 rounded-sm">
+                        <p className="font-mono text-[10px] text-emerald-400 font-semibold">
+                          ✨ Negative Split - {t("workoutDetailExtended.negativeSplitMessage")}
+                        </p>
+                      </div>
                     )}
-                    {ragAnalysis.comparison.progression}
-                  </p>
+                  </div>
                 )}
-                {ragAnalysis.comparison.date_precedente && (
-                  <p className="font-mono text-[10px] text-muted-foreground mt-1 flex items-center gap-1">
-                    <Clock className="w-3 h-3" />
-                    {t("workoutDetailExtended.vs")} {ragAnalysis.comparison.date_precedente}
-                  </p>
+
+                {/* HR Analysis */}
+                {ragAnalysis.workout?.hr_analysis && Object.keys(ragAnalysis.workout.hr_analysis).length > 0 && (
+                  <div className="p-2 bg-red-500/10 rounded-sm mb-3" data-testid="hr-analysis-card">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Heart className="w-3 h-3 text-red-400" />
+                      <span className="font-mono text-[9px] uppercase text-red-400">
+                        {t("workoutDetailExtended.heartRateAnalysis")}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 text-xs">
+                      <div>
+                        <p className="font-mono text-[10px] text-muted-foreground">{t("workoutDetailExtended.min")}</p>
+                        <p className="font-mono font-semibold">{ragAnalysis.workout.hr_analysis.min_hr} bpm</p>
+                      </div>
+                      <div>
+                        <p className="font-mono text-[10px] text-muted-foreground">{t("workoutDetailExtended.avg")}</p>
+                        <p className="font-mono font-semibold">{ragAnalysis.workout.hr_analysis.avg_hr} bpm</p>
+                      </div>
+                      <div>
+                        <p className="font-mono text-[10px] text-muted-foreground">{t("workoutDetailExtended.max")}</p>
+                        <p className="font-mono font-semibold">{ragAnalysis.workout.hr_analysis.max_hr} bpm</p>
+                      </div>
+                    </div>
+                    {ragAnalysis.workout.hr_analysis.hr_drift !== 0 && (
+                      <div className="mt-2">
+                        <p className="font-mono text-[10px] text-muted-foreground">
+                          {t("workoutDetailExtended.hrDrift")}
+                        </p>
+                        <p className={`font-mono text-xs font-semibold ${
+                          Math.abs(ragAnalysis.workout.hr_analysis.hr_drift) > 10 ? 'text-amber-400' : 'text-muted-foreground'
+                        }`}>
+                          {ragAnalysis.workout.hr_analysis.hr_drift > 0 ? '+' : ''}{ragAnalysis.workout.hr_analysis.hr_drift} bpm
+                          {Math.abs(ragAnalysis.workout.hr_analysis.hr_drift) > 10 && (
+                            <span className="ml-2 text-[10px]">
+                              ({t("workoutDetailExtended.watchHydration")})
+                            </span>
+                          )}
+                        </p>
+                      </div>
+                    )}
+                  </div>
                 )}
-              </div>
-            )}
-            
-            {/* Points forts & améliorer */}
-            {(ragAnalysis.points_forts?.length > 0 || ragAnalysis.points_ameliorer?.length > 0) && (
-              <div className="flex flex-wrap gap-2">
-                {ragAnalysis.points_forts?.slice(0, 2).map((point, i) => (
-                  <span key={`fort-${i}`} className="inline-flex items-center gap-1 px-2 py-1 bg-emerald-500/10 text-emerald-400 rounded-sm">
-                    <Target className="w-3 h-3" />
-                    <span className="font-mono text-[10px]">{point}</span>
-                  </span>
-                ))}
-                {ragAnalysis.points_ameliorer?.slice(0, 1).map((point, i) => (
-                  <span key={`ameliorer-${i}`} className="inline-flex items-center gap-1 px-2 py-1 bg-amber-500/10 text-amber-400 rounded-sm">
-                    <AlertTriangle className="w-3 h-3" />
-                    <span className="font-mono text-[10px]">{point}</span>
-                  </span>
-                ))}
-              </div>
+                
+                {/* Comparison with similar workouts */}
+                {ragAnalysis.comparison?.similar_found > 0 && (
+                  <div className="p-2 bg-muted/30 rounded-sm mb-3">
+                    <div className="flex items-center gap-2 mb-1">
+                      <History className="w-3 h-3 text-muted-foreground" />
+                      <span className="font-mono text-[9px] uppercase text-muted-foreground">
+                        {t("workoutDetailExtended.comparison")}
+                      </span>
+                    </div>
+                    <p className="font-mono text-xs">
+                      {ragAnalysis.comparison.similar_found} {t("workoutDetailExtended.similarWorkouts")}
+                    </p>
+                    {ragAnalysis.comparison.progression && (
+                      <p className={`font-mono text-xs mt-1 ${
+                        ragAnalysis.comparison.progression.includes('plus rapide') || ragAnalysis.comparison.progression.includes('faster')
+                          ? 'text-emerald-400' 
+                          : 'text-amber-400'
+                      }`}>
+                        {ragAnalysis.comparison.progression.includes('plus rapide') || ragAnalysis.comparison.progression.includes('faster') ? (
+                          <TrendingUp className="w-3 h-3 inline mr-1" />
+                        ) : (
+                          <TrendingDown className="w-3 h-3 inline mr-1" />
+                        )}
+                        {ragAnalysis.comparison.progression}
+                      </p>
+                    )}
+                    {ragAnalysis.comparison.date_precedente && (
+                      <p className="font-mono text-[10px] text-muted-foreground mt-1 flex items-center gap-1">
+                        <Clock className="w-3 h-3" />
+                        {t("workoutDetailExtended.vs")} {ragAnalysis.comparison.date_precedente}
+                      </p>
+                    )}
+                  </div>
+                )}
+                
+                {/* Points forts & améliorer */}
+                {(ragAnalysis.points_forts?.length > 0 || ragAnalysis.points_ameliorer?.length > 0) && (
+                  <div className="flex flex-wrap gap-2">
+                    {ragAnalysis.points_forts?.slice(0, 2).map((point, i) => (
+                      <span key={`fort-${i}`} className="inline-flex items-center gap-1 px-2 py-1 bg-emerald-500/10 text-emerald-400 rounded-sm">
+                        <Target className="w-3 h-3" />
+                        <span className="font-mono text-[10px]">{point}</span>
+                      </span>
+                    ))}
+                    {ragAnalysis.points_ameliorer?.slice(0, 1).map((point, i) => (
+                      <span key={`ameliorer-${i}`} className="inline-flex items-center gap-1 px-2 py-1 bg-amber-500/10 text-amber-400 rounded-sm">
+                        <AlertTriangle className="w-3 h-3" />
+                        <span className="font-mono text-[10px]">{point}</span>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </>
             )}
           </CardContent>
         </Card>
       )}
 
       {/* 8) POUR ALLER PLUS LOIN - Accordion (from detailed analysis) */}
-      {detailedAnalysis?.advanced?.comparisons && (
+      {(detailedLoading || detailedAnalysis?.advanced?.comparisons) && (
         <Card className="bg-card border-border mb-3">
           <CardContent className="p-0">
-            <button
-              onClick={() => setShowAdvanced(!showAdvanced)}
-              className="w-full p-3 flex items-center justify-between text-left"
-              data-testid="advanced-toggle"
-            >
-              <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-                {t("workoutDetailExtended.goFurther")}
-              </span>
-              {showAdvanced ? (
-                <ChevronUp className="w-4 h-4 text-muted-foreground" />
-              ) : (
-                <ChevronDown className="w-4 h-4 text-muted-foreground" />
-              )}
-            </button>
-            {showAdvanced && (
-              <div className="px-3 pb-3 border-t border-border pt-3">
-                <p className="font-mono text-[11px] text-muted-foreground leading-relaxed whitespace-pre-line" data-testid="advanced-text">
-                  {detailedAnalysis.advanced.comparisons}
-                </p>
+            {detailedLoading ? (
+              <div className="p-3">
+                <Skeleton className="h-4 w-1/3" />
               </div>
+            ) : (
+              <>
+                <button
+                  onClick={() => setShowAdvanced(!showAdvanced)}
+                  className="w-full p-3 flex items-center justify-between text-left"
+                  data-testid="advanced-toggle"
+                >
+                  <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+                    {t("workoutDetailExtended.goFurther")}
+                  </span>
+                  {showAdvanced ? (
+                    <ChevronUp className="w-4 h-4 text-muted-foreground" />
+                  ) : (
+                    <ChevronDown className="w-4 h-4 text-muted-foreground" />
+                  )}
+                </button>
+                {showAdvanced && (
+                  <div className="px-3 pb-3 border-t border-border pt-3">
+                    <p className="font-mono text-[11px] text-muted-foreground leading-relaxed whitespace-pre-line" data-testid="advanced-text">
+                      {detailedAnalysis.advanced.comparisons}
+                    </p>
+                  </div>
+                )}
+              </>
             )}
           </CardContent>
         </Card>
