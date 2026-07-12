@@ -194,13 +194,6 @@ export default function SessionDetail() {
       tone: "border-border bg-card/40",
     },
     {
-      key: "recovery",
-      title: t("sessions.recovery"),
-      icon: HeartPulse,
-      content: analysis?.recovery?.text,
-      tone: "border-orange-500/20 bg-orange-500/5",
-    },
-    {
       key: "nextSession",
       title: t("sessions.nextSession"),
       icon: Lightbulb,
