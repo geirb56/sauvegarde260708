@@ -367,27 +367,32 @@ export default function WorkoutDetail() {
     setRagLoading(true);
     setRagError(false);
 
+    const controller = new AbortController();
+    const { signal } = controller;
+
     // 1. Load workout immediately
-    axios.get(`${API}/workouts/${id}`)
+    axios.get(`${API}/workouts/${id}`, { signal })
       .then(res => setWorkout(res.data))
-      .catch(() => setWorkoutError(true))
+      .catch(err => { if (!axios.isCancel(err)) setWorkoutError(true); })
       .finally(() => setWorkoutLoading(false));
 
     // 2. Load AI analyses in parallel, independently
-    axios.get(`${API}/coach/workout-analysis/${id}?language=${lang}`)
+    axios.get(`${API}/coach/workout-analysis/${id}?language=${lang}`, { signal })
       .then(res => setAnalysis(res.data))
-      .catch(() => setAnalysisError(true))
+      .catch(err => { if (!axios.isCancel(err)) setAnalysisError(true); })
       .finally(() => setAnalysisLoading(false));
 
-    axios.get(`${API}/coach/detailed-analysis/${id}?language=${lang}`)
+    axios.get(`${API}/coach/detailed-analysis/${id}?language=${lang}`, { signal })
       .then(res => setDetailedAnalysis(res.data))
-      .catch(() => setDetailedError(true))
+      .catch(err => { if (!axios.isCancel(err)) setDetailedError(true); })
       .finally(() => setDetailedLoading(false));
 
-    axios.get(`${API}/rag/workout/${id}?language=${lang}`)
+    axios.get(`${API}/rag/workout/${id}?language=${lang}`, { signal })
       .then(res => setRagAnalysis(res.data))
-      .catch(() => setRagError(true))
+      .catch(err => { if (!axios.isCancel(err)) setRagError(true); })
       .finally(() => setRagLoading(false));
+
+    return () => controller.abort();
   }, [id, lang]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const goToAskCoach = () => {
@@ -488,7 +493,7 @@ export default function WorkoutDetail() {
                 {t("analysis.intensity")}
               </span>
             </div>
-            {(analysisLoading && detailedLoading) ? (
+            {(analysisLoading || detailedLoading) ? (
               <Skeleton className="h-5 w-full" />
             ) : detailedAnalysis?.execution?.intensity ? (
               <span className={`inline-block px-2 py-0.5 rounded-sm font-mono text-xs ${getIntensityColor(detailedAnalysis.execution.intensity)}`}>
@@ -521,7 +526,7 @@ export default function WorkoutDetail() {
                 {t("analysis.load")}
               </span>
             </div>
-            {(analysisLoading && detailedLoading) ? (
+            {(analysisLoading || detailedLoading) ? (
               <Skeleton className="h-5 w-full" />
             ) : (
               <>
@@ -559,7 +564,7 @@ export default function WorkoutDetail() {
                 {t("analysis.type")}
               </span>
             </div>
-            {(analysisLoading && detailedLoading) ? (
+            {(analysisLoading || detailedLoading) ? (
               <Skeleton className="h-5 w-full" />
             ) : analysis?.session_type ? (
               <div className={`inline-block px-2 py-1 rounded-sm ${getSessionTypeStyle(analysis.session_type.label)}`}>
@@ -625,7 +630,7 @@ export default function WorkoutDetail() {
               {t("workoutDetailExtended.meaning")}
             </span>
           </div>
-          {(analysisLoading && detailedLoading) ? (
+          {(analysisLoading || detailedLoading) ? (
             <AnalysisSkeleton />
           ) : (analysisError && detailedError) ? (
             <AnalysisError t={t} />
@@ -648,7 +653,7 @@ export default function WorkoutDetail() {
               {t("workoutDetailExtended.coachAdvice")}
             </span>
           </div>
-          {(analysisLoading && detailedLoading) ? (
+          {(analysisLoading || detailedLoading) ? (
             <AnalysisSkeleton />
           ) : (analysisError && detailedError) ? (
             <AnalysisError t={t} />
