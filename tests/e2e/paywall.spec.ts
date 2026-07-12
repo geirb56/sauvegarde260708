@@ -95,7 +95,7 @@ test.describe('Paywall and Protected Access Tests', () => {
     }
   });
 
-  test('Paywall CTA button triggers Stripe checkout', async ({ page }) => {
+  test('Paywall CTA button triggers Paddle checkout', async ({ page }) => {
     // First simulate trial end to get free status
     await page.request.post(`${BASE_URL}/api/subscription/simulate-trial-end?user_id=default`);
     
@@ -110,16 +110,16 @@ test.describe('Paywall and Protected Access Tests', () => {
       const ctaButton = page.getByTestId('paywall-cta');
       
       // Set up navigation listener before clicking
-      const navigationPromise = page.waitForURL(/stripe|checkout/, { timeout: 15000 }).catch(() => null);
+      const navigationPromise = page.waitForURL(/paddle|checkout/, { timeout: 15000 }).catch(() => null);
       
       await ctaButton.click();
       
-      // Wait for either navigation to Stripe OR button to show loading state
+      // Wait for either navigation to Paddle OR button to show loading state
       const loadingText = paywall.locator('text=Activation').or(paywall.locator('text=Activating'));
       const isLoading = await loadingText.isVisible({ timeout: 5000 }).catch(() => false);
       const navigated = await navigationPromise;
       
-      // Either we navigated to Stripe OR the button showed loading state
+      // Either we navigated to Paddle OR the button showed loading state
       expect(isLoading || navigated !== null).toBe(true);
       
       // Restore user to trial
