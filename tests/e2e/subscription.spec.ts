@@ -70,7 +70,7 @@ test.describe('Subscription System Tests', () => {
     }
   });
 
-  test('Subscribe button redirects to Stripe checkout', async ({ page }) => {
+  test('Subscribe button redirects to Paddle checkout', async ({ page }) => {
     await page.goto('/settings');
     await page.waitForLoadState('domcontentloaded');
     
@@ -81,16 +81,16 @@ test.describe('Subscription System Tests', () => {
     
     if (buttonExists) {
       // Set up navigation listener before clicking
-      const navigationPromise = page.waitForURL(/stripe|checkout/, { timeout: 15000 }).catch(() => null);
+      const navigationPromise = page.waitForURL(/paddle|checkout/, { timeout: 15000 }).catch(() => null);
       
       await subscribeButton.click();
       
-      // Wait for either navigation to Stripe OR button to show loading state
+      // Wait for either navigation to Paddle OR button to show loading state
       const loadingText = page.locator('text=Redirection').or(page.locator('text=Redirecting'));
       const isLoading = await loadingText.isVisible({ timeout: 5000 }).catch(() => false);
       const navigated = await navigationPromise;
       
-      // Either we navigated to Stripe OR the button showed loading state
+      // Either we navigated to Paddle OR the button showed loading state
       expect(isLoading || navigated !== null).toBe(true);
     } else {
       test.skip();

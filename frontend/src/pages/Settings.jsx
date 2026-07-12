@@ -73,15 +73,15 @@ export default function Settings() {
     loadPremiumStatus();
     loadTrainingPlan();
     
-    // Handle Stripe callback
-    const sessionId = searchParams.get("session_id");
+    // Handle Paddle callback
+    const transactionId = searchParams.get("transaction_id") || searchParams.get("session_id");
     const premiumParam = searchParams.get("premium");
     const subscriptionParam = searchParams.get("subscription");
     
-    if (sessionId && premiumParam === "success") {
-      handlePaymentSuccess(sessionId, "premium");
-    } else if (sessionId && subscriptionParam === "early_adopter_success") {
-      handlePaymentSuccess(sessionId, "early_adopter");
+    if (transactionId && premiumParam === "success") {
+      handlePaymentSuccess(transactionId, "premium");
+    } else if (transactionId && subscriptionParam === "early_adopter_success") {
+      handlePaymentSuccess(transactionId, "early_adopter");
     } else if (premiumParam === "cancelled" || subscriptionParam === "cancelled") {
       toast.info(t("settingsExtended.paymentCancelled"));
       setSearchParams({});
@@ -855,13 +855,13 @@ export default function Settings() {
                       onClick={async () => {
                         setProcessingPayment(true);
                         try {
-                          // Créer une session Stripe Checkout
+                          // Créer une session Paddle Checkout
                           const res = await axios.post(
                             `${API}/subscription/early-adopter/checkout?user_id=${USER_ID}&origin_url=${encodeURIComponent(window.location.origin)}`
                           );
                           
                           if (res.data?.checkout_url) {
-                            // Rediriger vers Stripe Checkout
+                            // Rediriger vers Paddle Checkout
                             window.location.href = res.data.checkout_url;
                           } else {
                             toast.error(t("settingsExtended.paymentError"));
@@ -872,7 +872,7 @@ export default function Settings() {
                           toast.error(t("settingsExtended.paymentError"));
                           setProcessingPayment(false);
                         }
-                        // Note: pas de finally car on redirige vers Stripe
+                        // Note: pas de finally car on redirige vers Paddle
                       }}
                       disabled={processingPayment}
                       data-testid="subscribe-early-adopter"

@@ -77,13 +77,13 @@ export default function Paywall({
   const handleActivate = async () => {
     setActivating(true);
     try {
-      // Créer une session Stripe Checkout pour Early Adopter
+      // Créer une session Paddle Checkout pour Early Adopter
       const res = await axios.post(
         `${API}/subscription/early-adopter/checkout?user_id=${encodeURIComponent(userId)}&origin_url=${encodeURIComponent(window.location.origin)}`
       );
       
       if (res.data?.checkout_url) {
-        // Rediriger vers Stripe Checkout
+        // Rediriger vers Paddle Checkout
         window.location.href = res.data.checkout_url;
       } else {
         console.error("No checkout URL received");
@@ -92,7 +92,7 @@ export default function Paywall({
       console.error("Error creating checkout session:", err);
       setActivating(false);
     }
-    // Note: pas de setActivating(false) car on redirige vers Stripe
+    // Note: pas de setActivating(false) car on redirige vers Paddle
   };
 
   if (loading) {
