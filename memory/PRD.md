@@ -56,3 +56,9 @@ RunIndex — running/cardio training coach. Garmin (gccli) integration, AI coach
 - 21/21 tests pass. Triggered one-time deep_sync for existing user default: imported ALL 141 activities (111 new), back to 2024-11-23 (was 30, oldest 2026-01-21). workouts=141.
 - Re-ran RunIndex backfill: now 50 snapshots, oldest 2025-07-09 (365-day window); /run-index/history 12m returns 13 monthly pts, has_full_period_data=True. Progress graph richly populated across 6/12m.
 - Note: history graph capped at 365 days by design (HISTORY_WINDOW_DAYS); activities stored back to Nov 2024 but curve shows max 12 months.
+
+## Feature: race countdown in Training tab active state (2026-07-12)
+- Found upcoming/completed cycle states already wired (banners + weeksToStart + daysToRace + plan start date). Only missing piece: countdown for ACTIVE cycles.
+- Added i18n key trainingPlanExtended.raceCountdown (en "D-{days} to race" / fr "J-{days} avant la course" / es "F-{days} para la carrera").
+- TrainingPlan.jsx: added amber J-X/D-X badge (data-testid="active-race-countdown") next to "Week X/Y • goal" when status active and days_to_race>=0.
+- Verified live: active cycle (event +70d) shows "D-70 to race"; no compile errors. Default user goal restored to none.

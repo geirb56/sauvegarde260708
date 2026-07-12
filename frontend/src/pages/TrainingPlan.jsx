@@ -323,6 +323,15 @@ export default function TrainingPlan() {
                 {t("trainingPlanExtended.weekLabel")} {currentWeek} / {totalWeeks}
                 {" • "}
                 <span className="capitalize">{fullCycle?.goal ? t(`settings.distances.${fullCycle.goal.toLowerCase()}`) : t("settings.distances.semi")}</span>
+                {daysToRace !== null && daysToRace >= 0 && (
+                  <span
+                    className="ml-2 px-2 py-0.5 rounded-full text-[10px] font-bold align-middle"
+                    style={{ background: "#f59e0b20", color: "#fbbf24", border: "1px solid #f59e0b" }}
+                    data-testid="active-race-countdown"
+                  >
+                    {t("trainingPlanExtended.raceCountdown").replace("{days}", daysToRace)}
+                  </span>
+                )}
               </>
             )}
           </p>
