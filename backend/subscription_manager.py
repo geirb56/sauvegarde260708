@@ -19,7 +19,7 @@ from demo_mode import DEMO_MODE
 logger = logging.getLogger(__name__)
 
 # Free trial duration in days
-TRIAL_DURATION_DAYS = 7
+TRIAL_DURATION_DAYS = 30
 
 # Early Adopter price
 EARLY_ADOPTER_PRICE = 4.99

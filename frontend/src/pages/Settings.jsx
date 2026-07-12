@@ -794,7 +794,7 @@ export default function Settings() {
                     <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
                       <div 
                         className="h-full bg-gradient-to-r from-blue-500 to-violet-500 transition-all"
-                        style={{ width: `${(trialDaysRemaining / 7) * 100}%` }}
+                        style={{ width: `${Math.min(100, (trialDaysRemaining / 30) * 100)}%` }}
                       />
                     </div>
                   </div>
