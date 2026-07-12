@@ -372,25 +372,21 @@ export default function WorkoutDetail() {
 
     // 1. Load workout immediately
     axios.get(`${API}/workouts/${id}`, { signal })
-      .then(res => setWorkout(res.data))
-      .catch(err => { if (!axios.isCancel(err)) setWorkoutError(true); })
-      .finally(() => setWorkoutLoading(false));
+      .then(res => { setWorkout(res.data); setWorkoutLoading(false); })
+      .catch(err => { if (!axios.isCancel(err)) { setWorkoutError(true); setWorkoutLoading(false); } });
 
     // 2. Load AI analyses in parallel, independently
     axios.get(`${API}/coach/workout-analysis/${id}?language=${lang}`, { signal })
-      .then(res => setAnalysis(res.data))
-      .catch(err => { if (!axios.isCancel(err)) setAnalysisError(true); })
-      .finally(() => setAnalysisLoading(false));
+      .then(res => { setAnalysis(res.data); setAnalysisLoading(false); })
+      .catch(err => { if (!axios.isCancel(err)) { setAnalysisError(true); setAnalysisLoading(false); } });
 
     axios.get(`${API}/coach/detailed-analysis/${id}?language=${lang}`, { signal })
-      .then(res => setDetailedAnalysis(res.data))
-      .catch(err => { if (!axios.isCancel(err)) setDetailedError(true); })
-      .finally(() => setDetailedLoading(false));
+      .then(res => { setDetailedAnalysis(res.data); setDetailedLoading(false); })
+      .catch(err => { if (!axios.isCancel(err)) { setDetailedError(true); setDetailedLoading(false); } });
 
     axios.get(`${API}/rag/workout/${id}?language=${lang}`, { signal })
-      .then(res => setRagAnalysis(res.data))
-      .catch(err => { if (!axios.isCancel(err)) setRagError(true); })
-      .finally(() => setRagLoading(false));
+      .then(res => { setRagAnalysis(res.data); setRagLoading(false); })
+      .catch(err => { if (!axios.isCancel(err)) { setRagError(true); setRagLoading(false); } });
 
     return () => controller.abort();
   }, [id, lang]); // eslint-disable-line react-hooks/exhaustive-deps
