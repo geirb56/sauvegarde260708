@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { useAuth } from "@/context/AuthContext";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import axios from "axios";
 import { Card, CardContent } from "@/components/ui/card";
@@ -11,7 +12,6 @@ import { useLanguage } from "@/context/LanguageContext";
 
 import { API_BASE_URL } from "@/config";
 const API = API_BASE_URL;
-const USER_ID = "default"; // In production, this would be the authenticated user ID
 
 export default function Coach() {
   const [messages, setMessages] = useState([]);
@@ -29,7 +29,7 @@ export default function Coach() {
   useEffect(() => {
     const loadHistory = async () => {
       try {
-        const res = await axios.get(`${API}/coach/history?user_id=${USER_ID}&limit=50`);
+        const res = await axios.get(`${API}/coach/history&limit=50`);
         setMessages(res.data.map(msg => ({
           role: msg.role,
           content: msg.content,
@@ -86,7 +86,7 @@ export default function Coach() {
         workout_id: workoutId,
         language: lang,
         deep_analysis: true,
-        user_id: USER_ID
+        user_id: user?.id
       });
 
       setMessages(prev => [...prev, { 
@@ -120,7 +120,7 @@ export default function Coach() {
       const response = await axios.post(`${API}/coach/analyze`, {
         message: userMessage,
         language: lang,
-        user_id: USER_ID
+        user_id: user?.id
       });
 
       setMessages(prev => [...prev, { 
@@ -141,7 +141,7 @@ export default function Coach() {
 
   const handleClearHistory = async () => {
     try {
-      await axios.delete(`${API}/coach/history?user_id=${USER_ID}`);
+      await axios.delete(`${API}/coach/history`);
       setMessages([]);
       toast.success(t("coachExtended.historyCleared"));
     } catch (error) {
