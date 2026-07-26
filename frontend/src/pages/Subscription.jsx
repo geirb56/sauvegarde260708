@@ -145,7 +145,7 @@ const FAQ_ITEMS = [
 // Tiers whose subscription counts as "premium" in the UI.
 // Legacy tiers (confort, pro) are kept for backward compatibility with
 // existing subscribers who may still be on those plans in the backend.
-const PREMIUM_TIERS = new Set(["starter", "confort", "pro", "early_adopter", "premium"]);
+const PREMIUM_TIERS = new Set(["premium", "starter", "confort", "pro", "early_adopter"]);
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -205,7 +205,7 @@ export default function Subscription() {
     setSearchParams({});
   };
 
-  // The "starter" tier maps to the 4.99 €/month Premium offer in the backend
+  // The "premium" tier maps to the 4.99 €/month Premium offer in the backend
   const handleSubscribe = async () => {
     setSubscribing(true);
     try {
@@ -213,7 +213,7 @@ export default function Subscription() {
         API + "/subscription/checkout",
         {
           origin_url: window.location.origin,
-          tier: "starter",
+          tier: "premium",
           billing_period: "monthly",
         },
         { params: { user_id: USER_ID } }

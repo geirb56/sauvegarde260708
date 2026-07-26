@@ -123,8 +123,8 @@ SUBSCRIPTION_TIERS = {
         "messages_limit": 10,
         "description": "Discovery"
     },
-    "starter": {
-        "name": "Starter",
+    "premium": {
+        "name": "Premium",
         "price_monthly": 4.99,
         "price_annual": 49.99,
         "messages_limit": 25,
@@ -3235,7 +3235,7 @@ class SubscriptionStatusResponse(BaseModel):
 
 class CreateCheckoutRequest(BaseModel):
     origin_url: str
-    tier: str = "starter"  # starter, confort, pro
+    tier: str = "premium"  # premium, confort, pro
     billing_period: str = "monthly"  # monthly, annual
 
 
@@ -4547,8 +4547,10 @@ async def get_subscription_status(user_id: str = "default"):
                     )
                 else:
                     # Active subscription
-                    tier = subscription.get("tier", "starter")
-                    tier_config = SUBSCRIPTION_TIERS.get(tier, SUBSCRIPTION_TIERS["starter"])
+                    tier = subscription.get("tier", "premium")
+                    if tier == "starter":
+                        tier = "premium"
+                    tier_config = SUBSCRIPTION_TIERS.get(tier, SUBSCRIPTION_TIERS["premium"])
                     is_premium = True
                     billing_period = subscription.get("billing_period", "monthly")
                     subscription_id = subscription.get("subscription_id")
@@ -4642,10 +4644,11 @@ async def create_subscription_checkout(request: CreateCheckoutRequest, http_requ
         raise HTTPException(status_code=500, detail="Stripe not configured")
     
     # Validate tier
-    if request.tier not in ["starter", "confort", "pro"]:
+    requested_tier = "premium" if request.tier == "starter" else request.tier
+    if requested_tier not in ["premium", "confort", "pro"]:
         raise HTTPException(status_code=400, detail="Invalid subscription tier")
     
-    tier_config = SUBSCRIPTION_TIERS[request.tier]
+    tier_config = SUBSCRIPTION_TIERS[requested_tier]
     
     # Get price based on billing period
     if request.billing_period == "annual":
@@ -4669,8 +4672,8 @@ async def create_subscription_checkout(request: CreateCheckoutRequest, http_requ
         cancel_url=cancel_url,
         metadata={
             "user_id": user_id,
-            "product": f"runindex_{request.tier}",
-            "tier": request.tier,
+            "product": f"runindex_{requested_tier}",
+            "tier": requested_tier,
             "billing_period": request.billing_period,
             "type": "subscription"
         }
@@ -4685,14 +4688,14 @@ async def create_subscription_checkout(request: CreateCheckoutRequest, http_requ
             "user_id": user_id,
             "amount": amount,
             "currency": "eur",
-            "tier": request.tier,
+            "tier": requested_tier,
             "billing_period": request.billing_period,
             "status": "pending",
-            "product": f"runindex_{request.tier}",
+            "product": f"runindex_{requested_tier}",
             "created_at": datetime.now(timezone.utc).isoformat()
         })
         
-        logger.info(f"Checkout session created for user {user_id}: {request.tier} ({request.billing_period})")
+        logger.info(f"Checkout session created for user {user_id}: {requested_tier} ({request.billing_period})")
         
         return CreateCheckoutResponse(
             checkout_url=session.url,
@@ -4708,10 +4711,10 @@ async def create_subscription_checkout(request: CreateCheckoutRequest, http_requ
 @api_router.post("/premium/checkout", response_model=CreateCheckoutResponse)
 async def create_premium_checkout_compat(request: CreateCheckoutRequest, http_request: Request, user_id: str = "default"):
     """Create Stripe checkout session (backward compat)"""
-    # Convert old request to new format - default to starter monthly
+    # Convert old request to new format - default to premium monthly
     new_request = CreateCheckoutRequest(
         origin_url=request.origin_url,
-        tier=getattr(request, 'tier', 'starter'),
+        tier=getattr(request, 'tier', 'premium'),
         billing_period=getattr(request, 'billing_period', 'monthly')
     )
     return await create_subscription_checkout(new_request, http_request, user_id)
@@ -4740,7 +4743,9 @@ async def check_subscription_status(session_id: str, http_request: Request, user
             # Get tier and billing from transaction
             transaction = await db.payment_transactions.find_one({"session_id": session_id})
             actual_user_id = transaction.get("user_id", user_id) if transaction else user_id
-            tier = transaction.get("tier", "starter") if transaction else "starter"
+            tier = transaction.get("tier", "premium") if transaction else "premium"
+            if tier == "starter":
+                tier = "premium"
             billing_period = transaction.get("billing_period", "monthly") if transaction else "monthly"
             
             # Update transaction
@@ -4774,7 +4779,7 @@ async def check_subscription_status(session_id: str, http_request: Request, user
                 upsert=True
             )
             
-            tier_name = SUBSCRIPTION_TIERS.get(tier, {}).get("name", "Starter")
+            tier_name = SUBSCRIPTION_TIERS.get(tier, {}).get("name", "Premium")
             logger.info(f"Subscription activated for user {actual_user_id}: {tier} ({billing_period})")
             
             return {
@@ -4973,8 +4978,10 @@ async def send_chat_message(request: ChatRequest):
             try:
                 exp_date = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
                 if exp_date >= datetime.now(timezone.utc):
-                    tier = subscription.get("tier", "starter")
-                    tier_config = SUBSCRIPTION_TIERS.get(tier, SUBSCRIPTION_TIERS["starter"])
+                    tier = subscription.get("tier", "premium")
+                    if tier == "starter":
+                        tier = "premium"
+                    tier_config = SUBSCRIPTION_TIERS.get(tier, SUBSCRIPTION_TIERS["premium"])
             except (ValueError, TypeError):
                 pass
 
