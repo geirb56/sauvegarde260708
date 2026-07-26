@@ -1,0 +1,42 @@
+{
+  "summary": "Iteration_25 CRITICAL middleware fix VERIFIED. get_user_id_from_request now honors X-User-Id header. All previously 403 gated endpoints (/api/workouts, /api/training/plan, /api/training/full-cycle, /api/training/race-predictions) return 200 with header. /training tab now renders the full 18-week half-marathon plan with cycle progress (paywall gone). /subscription trial banner + /progress RunIndex chart continue to work. Backend pytest 8/8 pass (5 trial + 3 new middleware-header tests). HOWEVER: /sessions still shows 'No session matches your filters' — traced to a NEW frontend bug: Sessions.jsx calls axios.get(`${API}/workouts`) without an X-User-Id header or user_id query param, so the middleware falls back to IP and returns 403 (visible in console). This is unrelated to the middleware fix (which is correct) and blocks end-to-end verification of the Sessions list + WorkoutDetail flow.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Sessions list (/sessions) and consequently Workout Detail navigation",
+        "issue": "frontend/src/pages/Sessions.jsx line 51 calls `axios.get(`${API}/workouts`)` without headers { 'X-User-Id': USER_ID } and without ?user_id=default. Middleware then falls back to IP → 403 subscription_required → workouts=[] → empty-state text 'No session matches your filters.'. Fix: mirror TrainingPlan.jsx by passing { headers: { 'X-User-Id': USER_ID } } (import USER_ID from lib/user or similar). Console evidence: 'Failed to load workouts: AxiosError: Request failed with status code 403'. Backend direct curl with header returns 200 with the workouts list, so this is purely a client call bug.",
+        "affected_selectors": ["[data-testid='sessions-page']", "a[href*='/workout/']"]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_subscription_trial.py",
+    "/app/backend/tests/test_middleware_header.py",
+    "/app/test_reports/pytest/pytest_iter26.xml"
+  ],
+  "action_items": [
+    "Fix frontend/src/pages/Sessions.jsx: change `axios.get(`${API}/workouts`)` to include the X-User-Id header (or `?user_id=${USER_ID}`), matching TrainingPlan.jsx / Progress.jsx / WorkoutDetail.jsx. Without this, the trial user still sees empty Sessions list even though the middleware fix is correct.",
+    "Optional consistency cleanup: audit all axios calls in frontend/src for missing X-User-Id header — a global axios interceptor that injects X-User-Id from the user context would prevent recurrences."
+  ],
+  "critical_code_review_comments": [
+    "Sessions.jsx does not send X-User-Id header while sibling pages (TrainingPlan, Progress, WorkoutDetail) do. Introduce a shared axios instance with a request interceptor injecting X-User-Id to guarantee consistency.",
+    "Middleware IP fallback still collapses many anonymous users onto the same synthetic id in a shared preview URL. Consider returning 401 (or defaulting to 'default') instead of silently attributing to an IP with unpredictable stored status.",
+    "server.py is still 5616 lines; splitting subscription/auth helpers into a module is overdue."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_middleware_header.py (new — regression coverage for the iter_26 fix)"
+  ],
+  "success_rate": {"backend": "100% (8/8 pytest passing: 5 trial + 3 middleware-header)", "frontend": "80% (Training + Subscription + Progress OK; Sessions blocked by client-side missing header)"},
+  "test_credentials": "None. user_id=default; qa_trial_check_001 seeded previously.",
+  "seed_data_creation": "None new. Called POST /api/subscription/reset-to-trial?user_id=default via pytest (idempotent — leaves default on a fresh trial, matching user's intent).",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Middleware header fix is verified end-to-end for /training. Only remaining blocker for the original 'ça ne fonctionne pas' report is Sessions.jsx missing X-User-Id header on its /workouts call — once main agent adds it, the Sessions list will populate and clicking a session opens /workout/:id (backend already returns 200 for those). No other regressions detected.",
+  "rca of the issue": "Two-layer bug. Layer 1 (fixed in iter_26): backend middleware ignored X-User-Id header — verified fixed at server.py:252. Layer 2 (still open): Sessions.jsx fetches /api/workouts anonymously (no header, no query param), so even though the middleware CAN read X-User-Id, the frontend never sends it on this specific call. Repro: open /sessions, DevTools Network → GET /api/workouts has no X-User-Id header and returns 403. Curl with `-H 'X-User-Id: default'` on the same URL returns 200 and the workouts array. Mitigation: add `{ headers: { 'X-User-Id': USER_ID } }` to the axios call in Sessions.jsx line 51, mirroring TrainingPlan.jsx."
+}

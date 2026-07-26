@@ -247,7 +247,12 @@ def get_user_id_from_request(request: Request) -> str:
     user_id = request.query_params.get("user_id")
     if user_id:
         return user_id
-    
+
+    # Then the X-User-Id header (what the frontend sends), mirroring auth_user()
+    header_user_id = request.headers.get("X-User-Id")
+    if header_user_id:
+        return header_user_id
+
     # Fallback to IP
     forwarded = request.headers.get("X-Forwarded-For")
     if forwarded:
