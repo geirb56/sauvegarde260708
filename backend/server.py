@@ -4550,6 +4550,25 @@ async def get_subscription_status(user_id: str = "default"):
             except (ValueError, TypeError):
                 pass
 
+    elif subscription and subscription.get("status") in ("trial", "early_adopter", "premium"):
+        # Full-access statuses managed by subscription_manager (not Stripe tiers).
+        status_val = subscription.get("status")
+        trial_valid = True
+        if status_val == "trial":
+            trial_end = subscription.get("trial_end")
+            expires_at = trial_end
+            if trial_end:
+                try:
+                    if datetime.fromisoformat(trial_end.replace("Z", "+00:00")) < datetime.now(timezone.utc):
+                        trial_valid = False
+                except (ValueError, TypeError):
+                    pass
+        if trial_valid:
+            tier = status_val
+            _names = {"trial": "Free Trial", "early_adopter": "Early Adopter", "premium": "Premium"}
+            tier_config = {"name": _names[status_val], "messages_limit": 999, "unlimited": True}
+            is_premium = True
+
     # Get message count for current month
     now = datetime.now(timezone.utc)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)

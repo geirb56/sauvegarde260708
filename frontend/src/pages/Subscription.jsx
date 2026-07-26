@@ -121,6 +121,17 @@ export default function Subscription() {
         )}
       </div>
 
+      {currentTier === "trial" && (
+        <div
+          className="mx-auto mb-6 max-w-2xl rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-center"
+          data-testid="trial-active-banner"
+        >
+          <p className="font-mono text-xs uppercase tracking-widest text-emerald-400">
+            {t("subscription.trialActive") || "Free trial active — full access"}
+          </p>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {tiers.map((tier) => {
           const price = isAnnual ? tier.priceA : tier.priceM;

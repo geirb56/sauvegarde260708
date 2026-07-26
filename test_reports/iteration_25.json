@@ -1,0 +1,53 @@
+{
+  "summary": "Backend trial endpoints (/api/subscription/status, /api/subscription/info, /api/subscription/reset-to-trial) all correctly recognize trial for user_id=default and new users (5/5 pytest passing). Frontend /subscription page correctly displays the trial banner (data-testid='trial-active-banner' = 'Free trial active — full access') and no plan card is marked 'Current plan'. However, /training and /sessions tabs are STILL blocked with a paywall UI on trial due to a subscription middleware bug (see RCA).",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "subscription_middleware (server.py:329-375) via get_user_id_from_request (server.py:244)",
+        "issue": "Middleware only reads user_id from ?user_id= query param, falling back to client IP. It does NOT read the 'X-User-Id' header that the frontend actually sends (TrainingPlan.jsx, Progress.jsx, WorkoutDetail all use headers: { 'X-User-Id': USER_ID }). Result: requests are attributed to an IP-based synthetic user which lands on status='free' -> 403 subscription_required on /api/workouts, /api/training/plan, /api/training/full-cycle, /api/training/race-predictions. The trial that the Subscriptions page shows is therefore not honored on Training/Sessions pages.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Training tab access while on 30-day trial",
+        "issue": "/training returns Paywall-like UI ('Activate your running coach') because underlying /api/training/plan and /api/training/full-cycle return HTTP 403 subscription_required. Root cause is the backend middleware bug above, not the frontend isFree check (SubscriptionContext correctly reports trial).",
+        "affected_selectors": ["text=Activate your running coach", "text=Activate my coach"]
+      },
+      {
+        "flow": "Sessions tab / Workout detail",
+        "issue": "/api/workouts returns 403 for the same reason (X-User-Id header ignored by middleware). No session links render on /sessions; workout detail cannot be exercised end-to-end.",
+        "affected_selectors": ["a[href*='/workout/']"]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_subscription_trial.py",
+    "/app/test_reports/pytest/pytest_trial.xml"
+  ],
+  "action_items": [
+    "Fix get_user_id_from_request in /app/backend/server.py (line 244) to ALSO read the X-User-Id header before falling back to X-Forwarded-For / client IP, e.g.: `user_id = request.query_params.get('user_id') or request.headers.get('X-User-Id')`. Without this, the subscription middleware wrongly classifies frontend requests as anonymous IP-based users and returns 403 even when the real user (default) has an active trial.",
+    "After the fix, re-verify: GET /api/workouts with header X-User-Id: default returns 200, /training page renders the 18-week plan, /sessions page lists workouts, clicking a session opens /workout/:id without showing 'Workout not found'.",
+    "Confirmed working already: /subscription page (trial banner + Free not marked as current), /progress page (RunIndex 352/1000 chart renders), backend subscription/status + subscription/info + reset-to-trial for both existing (default) and brand-new (qa_trial_check_001) user IDs."
+  ],
+  "critical_code_review_comments": [
+    "server.py:244 get_user_id_from_request lacks parity with auth_user (server.py:262-275) which correctly checks X-User-Id header. The two helpers must agree, otherwise the middleware gate diverges from the endpoint's own user resolution.",
+    "The subscription middleware falls back to client IP as user_id. For a public preview URL behind a proxy, this collapses many callers onto the same synthetic user; whatever status is stored there (often 'free' after a prior trial expired) blocks everyone. Consider requiring an explicit user identifier or defaulting to 'default' rather than IP.",
+    "server.py is 5611 lines; splitting subscription middleware, auth helpers and route groups into modules would help maintainability."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_subscription_trial.py (new)"
+  ],
+  "success_rate": {"backend": "100% (5/5 trial endpoint tests passing)", "frontend": "60% (Subscription + Progress OK; Training + Sessions blocked by middleware bug)"},
+  "test_credentials": "None (no auth). user_id=default for existing data, qa_trial_check_001 used for new-user trial autocreation test.",
+  "seed_data_creation": "Created a subscription row for user_id=qa_trial_check_001 via GET /api/subscription/info (auto-trial). Safe throwaway id.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Backend trial recognition on /subscription/status and /subscription/info is fixed and covered by /app/backend/tests/test_subscription_trial.py. The remaining trial regression is in server.py subscription_middleware: it does not read the X-User-Id header the React app sends, so /api/workouts, /api/training/plan, /api/training/full-cycle, /api/training/race-predictions return 403 for trial users and Training/Sessions tabs show a paywall. Once the header is honored in get_user_id_from_request, re-run backend_test.py + Playwright to verify Training and Sessions render.",
+  "rca of the issue": "RCA: The frontend TrainingPlan.jsx, Progress.jsx and WorkoutDetail send user identity exclusively via `headers: { 'X-User-Id': USER_ID }` (USER_ID='default'). The backend subscription_middleware(server.py:329) calls get_user_id_from_request(server.py:244) which only inspects `request.query_params.get('user_id')` and then falls back to `X-Forwarded-For` / `request.client.host`. The X-User-Id header is silently ignored, so the middleware looks up a subscription for an IP-based synthetic user_id whose stored status is 'free' (either never provisioned or a prior expired trial). Middleware then returns 403 subscription_required, and the Training page renders its 'Activate your running coach' fallback. Repro: `curl -H 'X-User-Id: default' https://<base>/api/workouts` -> 403 with `{status:'free'}`; `curl 'https://<base>/api/workouts?user_id=default'` -> 200 with the workouts list. Mitigation: In get_user_id_from_request, add `or request.headers.get('X-User-Id')` before the IP fallback; this mirrors auth_user() and immediately unblocks Training/Sessions on trial without touching any business logic."
+}
