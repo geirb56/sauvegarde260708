@@ -143,7 +143,7 @@ const FAQ_ITEMS = [
 ];
 
 // Tiers whose subscription counts as "premium" in the UI.
-// Legacy tiers (confort, pro) are kept for backward compatibility with
+// Legacy tiers (starter, confort, pro) are kept for backward compatibility with
 // existing subscribers who may still be on those plans in the backend.
 const PREMIUM_TIERS = new Set(["premium", "starter", "confort", "pro", "early_adopter"]);
 
