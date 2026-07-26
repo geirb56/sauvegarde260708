@@ -70,3 +70,8 @@ Reported: "activate free trial ... cela ne fonctionne pas". Two-layer root cause
 3. Frontend Sessions.jsx fetched /workouts without X-User-Id header -> empty list. FIX: pass headers {X-User-Id: USER_ID}.
 Added trial banner on /subscription (data-testid=trial-active-banner) + i18n subscription.trialActive.
 Verified: testing_agent iteration_26 (Training paywall gone, backend 8/8 pytest); self-test screenshot Sessions list populated with Garmin activities. default user on active 30-day trial.
+
+## Bug fix: session AI analysis not displaying (2026-07-12)
+Reported: "l'analyse IA de séance ne s'affiche pas". Root cause: WorkoutDetail.jsx 4 axios calls (/workouts/:id, /coach/workout-analysis, /coach/detailed-analysis, /rag/workout) sent NO X-User-Id header -> protected analysis endpoints returned 403 for the IP/free user -> analysis empty.
+FIX: global axios request interceptor in src/index.js injecting X-User-Id=USER_ID('default') on all /api requests (also prevents recurrence app-wide, per testing_agent recommendation).
+Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders end-to-end, no regressions on sessions/training/progress/subscription. retest_needed=false.
