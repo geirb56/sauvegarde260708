@@ -1,6 +1,6 @@
 """
 Test suite for Subscription and Chat features
-- Multi-tier subscription (Free, Starter, Confort, Pro)
+- Multi-tier subscription (Free, Premium, Confort, Pro)
 - Chat coach with Python fallback engine
 - Stripe checkout integration
 """
@@ -25,7 +25,7 @@ class TestSubscriptionTiers:
         # Verify tier IDs
         tier_ids = [t["id"] for t in tiers]
         assert "free" in tier_ids
-        assert "starter" in tier_ids
+        assert "premium" in tier_ids
         assert "confort" in tier_ids
         assert "pro" in tier_ids
     
@@ -40,15 +40,15 @@ class TestSubscriptionTiers:
         assert free_tier["messages_limit"] == 10
         assert free_tier["unlimited"] == False
     
-    def test_starter_tier_details(self):
-        """Starter tier has correct pricing and limits"""
+    def test_premium_tier_details(self):
+        """Premium tier has correct pricing and limits"""
         response = requests.get(f"{BASE_URL}/api/subscription/tiers")
         tiers = response.json()
         
-        starter_tier = next(t for t in tiers if t["id"] == "starter")
-        assert starter_tier["price_monthly"] == 4.99
-        assert starter_tier["price_annual"] == 49.99
-        assert starter_tier["messages_limit"] == 25
+        premium_tier = next(t for t in tiers if t["id"] == "premium")
+        assert premium_tier["price_monthly"] == 4.99
+        assert premium_tier["price_annual"] == 49.99
+        assert premium_tier["messages_limit"] == 25
     
     def test_confort_tier_details(self):
         """Confort tier has correct pricing and limits"""
@@ -92,12 +92,16 @@ class TestSubscriptionStatus:
         response = requests.get(f"{BASE_URL}/api/subscription/status?user_id=default")
         data = response.json()
         
-        # Verify tier is one of the valid tiers
-        assert data["tier"] in ["free", "starter", "confort", "pro"]
+        # Verify tier is one of the valid tiers (trial/early_adopter are full-access states)
+        assert data["tier"] in ["free", "starter", "premium", "confort", "pro", "trial", "early_adopter"]
         
-        # Verify messages_remaining is calculated correctly
-        expected_remaining = data["messages_limit"] - data["messages_used"]
-        assert data["messages_remaining"] == expected_remaining
+        # Verify messages_remaining is calculated correctly.
+        # Unlimited plans (trial / early_adopter / premium / pro) don't decrement.
+        if data.get("is_unlimited"):
+            assert data["messages_remaining"] >= 0
+        else:
+            expected_remaining = data["messages_limit"] - data["messages_used"]
+            assert data["messages_remaining"] == expected_remaining
     
     def test_subscription_status_for_new_user(self):
         """New user defaults to free tier"""
@@ -112,13 +116,13 @@ class TestSubscriptionStatus:
 class TestStripeCheckout:
     """Test Stripe checkout integration"""
     
-    def test_create_checkout_session_starter(self):
-        """POST /api/subscription/checkout creates Stripe session for starter tier"""
+    def test_create_checkout_session_premium(self):
+        """POST /api/subscription/checkout creates Stripe session for premium tier"""
         response = requests.post(
             f"{BASE_URL}/api/subscription/checkout?user_id=default",
             json={
                 "origin_url": "https://charge-load.preview.emergentagent.com",
-                "tier": "starter",
+                "tier": "premium",
                 "billing_period": "monthly"
             }
         )
