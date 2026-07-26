@@ -147,6 +147,14 @@ SUBSCRIPTION_TIERS = {
     }
 }
 
+def normalize_subscription_tier(tier: Optional[str]) -> str:
+    """Normalize legacy tier IDs to current ones."""
+    if tier == "starter":
+        return "premium"
+    if tier in SUBSCRIPTION_TIERS:
+        return tier
+    return "premium"
+
 
 
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
@@ -4547,9 +4555,7 @@ async def get_subscription_status(user_id: str = "default"):
                     )
                 else:
                     # Active subscription
-                    tier = subscription.get("tier", "premium")
-                    if tier == "starter":
-                        tier = "premium"
+                    tier = normalize_subscription_tier(subscription.get("tier", "premium"))
                     tier_config = SUBSCRIPTION_TIERS.get(tier, SUBSCRIPTION_TIERS["premium"])
                     is_premium = True
                     billing_period = subscription.get("billing_period", "monthly")
@@ -4644,7 +4650,7 @@ async def create_subscription_checkout(request: CreateCheckoutRequest, http_requ
         raise HTTPException(status_code=500, detail="Stripe not configured")
     
     # Validate tier
-    requested_tier = "premium" if request.tier == "starter" else request.tier
+    requested_tier = normalize_subscription_tier(request.tier)
     if requested_tier not in ["premium", "confort", "pro"]:
         raise HTTPException(status_code=400, detail="Invalid subscription tier")
     
@@ -4695,7 +4701,7 @@ async def create_subscription_checkout(request: CreateCheckoutRequest, http_requ
             "created_at": datetime.now(timezone.utc).isoformat()
         })
         
-        logger.info(f"Checkout session created for user {user_id}: {requested_tier} ({request.billing_period})")
+        logger.info(f"Checkout session created: {requested_tier} ({request.billing_period})")
         
         return CreateCheckoutResponse(
             checkout_url=session.url,
@@ -4743,9 +4749,7 @@ async def check_subscription_status(session_id: str, http_request: Request, user
             # Get tier and billing from transaction
             transaction = await db.payment_transactions.find_one({"session_id": session_id})
             actual_user_id = transaction.get("user_id", user_id) if transaction else user_id
-            tier = transaction.get("tier", "premium") if transaction else "premium"
-            if tier == "starter":
-                tier = "premium"
+            tier = normalize_subscription_tier(transaction.get("tier", "premium") if transaction else "premium")
             billing_period = transaction.get("billing_period", "monthly") if transaction else "monthly"
             
             # Update transaction
@@ -4978,9 +4982,7 @@ async def send_chat_message(request: ChatRequest):
             try:
                 exp_date = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
                 if exp_date >= datetime.now(timezone.utc):
-                    tier = subscription.get("tier", "premium")
-                    if tier == "starter":
-                        tier = "premium"
+                    tier = normalize_subscription_tier(subscription.get("tier", "premium"))
                     tier_config = SUBSCRIPTION_TIERS.get(tier, SUBSCRIPTION_TIERS["premium"])
             except (ValueError, TypeError):
                 pass
