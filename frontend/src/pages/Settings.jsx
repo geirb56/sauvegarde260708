@@ -36,6 +36,7 @@ const TRAINING_GOAL_OPTIONS = [
 const SESSIONS_OPTIONS = [3, 4, 5, 6];
 
 export default function Settings() {
+  const { user } = useAuth();
   const { t, lang, setLang } = useLanguage();
   const { 
     subscription, 
@@ -90,9 +91,7 @@ export default function Settings() {
 
   const loadTrainingPlan = async () => {
     try {
-      const res = await axios.get(`${API}/training/full-cycle`, { 
-        headers: { "X-User-Id": undefined } 
-      });
+      const res = await axios.get(`${API}/training/full-cycle`);
       if (res.data) {
         setTrainingGoal(res.data.goal || "SEMI");
         setSessionsPerWeek(res.data.sessions_per_week || 4);
@@ -110,9 +109,7 @@ export default function Settings() {
   const handleSetTrainingGoal = async (goal) => {
     setUpdatingTrainingPlan(true);
     try {
-      await axios.post(`${API}/training/set-goal?goal=${goal}`, {}, {
-        headers: { "X-User-Id": undefined }
-      });
+      await axios.post(`${API}/training/set-goal?goal=${goal}`, {});
       setTrainingGoal(goal);
       toast.success(t("settingsExtended.goalSetWithName").replace("{goal}", goal));
     } catch (err) {
@@ -125,9 +122,7 @@ export default function Settings() {
   const handleSetSessionsPerWeek = async (sessions) => {
     setUpdatingTrainingPlan(true);
     try {
-      await axios.post(`${API}/training/refresh?sessions=${sessions}`, {}, {
-        headers: { "X-User-Id": undefined }
-      });
+      await axios.post(`${API}/training/refresh?sessions=${sessions}`, {});
       setSessionsPerWeek(sessions);
       toast.success(`${sessions} ${t("settingsExtended.sessionsPerWeekSet")}`);
     } catch (err) {

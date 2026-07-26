@@ -30,7 +30,7 @@ export const Layout = () => {
       try {
         const token = getToken();
         const res = await axios.get(`${API}/terra/status`, {
-          headers: token ? { Authorization: `****** } : {},
+          headers: token ? { Authorization: `Bearer ${token}`} : {},
         });
         if (res.data.last_sync) {
           const syncDate = new Date(res.data.last_sync);

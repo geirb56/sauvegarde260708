@@ -62,6 +62,7 @@ const langToLocale = (lang) => {
 };
 
 export default function Progress() {
+  const { user } = useAuth();
   const [stats, setStats] = useState(null);
   const [predictions, setPredictions] = useState(null);
   const [fullCycle, setFullCycle] = useState(null);
@@ -80,9 +81,9 @@ export default function Progress() {
       try {
         const [statsRes, predictionsRes, cycleRes, vmaHistoryRes] = await Promise.all([
           axios.get(`${API}/stats`),
-          axios.get(`${API}/training/race-predictions`, { headers: { "X-User-Id": undefined } }).catch(() => ({ data: null })),
-          axios.get(`${API}/training/full-cycle`, { headers: { "X-User-Id": undefined } }).catch(() => ({ data: null })),
-          axios.get(`${API}/training/vma-history`, { headers: { "X-User-Id": undefined } }).catch(() => ({ data: null }))
+          axios.get(`${API}/training/race-predictions`).catch(() => ({ data: null })),
+          axios.get(`${API}/training/full-cycle`).catch(() => ({ data: null })),
+          axios.get(`${API}/training/vma-history`).catch(() => ({ data: null }))
         ]);
         setStats(statsRes.data);
 
@@ -115,8 +116,7 @@ export default function Progress() {
     const fetchRunIndexHistory = async () => {
       try {
         const res = await axios.get(
-          `${API}/run-index/history?period=${runIndexPeriod}&language=${lang}`,
-          { headers: { "X-User-Id": undefined } }
+          `${API}/run-index/history?period=${runIndexPeriod}&language=${lang}`
         );
         setRunIndexHistory(res.data);
       } catch {

@@ -24,7 +24,7 @@ export function SubscriptionProvider({ children }) {
     const token = getToken();
     try {
       const res = await axios.get(`${API}/subscription/info?language=${lang}`, {
-        headers: token ? { Authorization: `****** } : {},
+        headers: token ? { Authorization: `Bearer ${token}`} : {},
       });
       setSubscription(res.data);
       setError(null);

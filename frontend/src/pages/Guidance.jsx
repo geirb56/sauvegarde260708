@@ -49,6 +49,7 @@ const getSessionIcon = (type) => {
 };
 
 export default function Guidance() {
+  const { user } = useAuth();
   const [guidance, setGuidance] = useState(null);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);

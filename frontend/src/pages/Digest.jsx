@@ -87,6 +87,7 @@ function SignalCard({ signal, t }) {
 }
 
 export default function Digest() {
+  const { user } = useAuth();
   const { t, lang } = useLanguage();
   const { unitSystem } = useUnitSystem();
   const navigate = useNavigate();

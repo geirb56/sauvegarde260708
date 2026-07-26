@@ -42,7 +42,7 @@ function AuthGate({ children }) {
     const token = getToken();
     axios
       .get(`${API_BASE_URL}/user/profile`, {
-        headers: { Authorization: `****** },
+        headers: { Authorization: `Bearer ${token}`},
       })
       .then((res) => setOnboardingDone(res.data?.onboarding_completed === true))
       .catch(() => setOnboardingDone(false))

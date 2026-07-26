@@ -150,6 +150,7 @@ const PREMIUM_TIERS = new Set(["premium", "starter", "confort", "pro", "early_ad
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function Subscription() {
+  const { user } = useAuth();
   const { t } = useLanguage();
   const [searchParams, setSearchParams] = useSearchParams();
   const [currentTier, setCurrentTier] = useState("free");

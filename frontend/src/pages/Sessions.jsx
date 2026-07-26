@@ -40,6 +40,7 @@ const LoadingRows = () => (
 );
 
 export default function Sessions() {
+  const { user } = useAuth();
   const { t, lang } = useLanguage();
   const { unitSystem } = useUnitSystem();
   const [workouts, setWorkouts] = useState([]);
@@ -49,7 +50,7 @@ export default function Sessions() {
     const loadWorkouts = async () => {
       setLoading(true);
       try {
-        const res = await axios.get(`${API}/workouts`, { headers: { "X-User-Id": undefined } });
+        const res = await axios.get(`${API}/workouts`);
         setWorkouts(Array.isArray(res.data) ? res.data : []);
       } catch (error) {
         console.error("Failed to load workouts:", error);

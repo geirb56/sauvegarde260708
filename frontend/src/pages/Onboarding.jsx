@@ -164,7 +164,7 @@ export default function Onboarding() {
     setSaving(true);
     try {
       const token = getToken();
-      const authHeaders = token ? { Authorization: `****** } : {};
+      const authHeaders = token ? { Authorization: `Bearer ${token}`} : {};
       // Save onboarding data and create trial subscription
       await axios.post(`${API}/user/onboarding`, {
         fitness_level: fitnessLevel,

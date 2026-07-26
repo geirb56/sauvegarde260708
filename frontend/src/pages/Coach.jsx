@@ -14,6 +14,7 @@ import { API_BASE_URL } from "@/config";
 const API = API_BASE_URL;
 
 export default function Coach() {
+  const { user } = useAuth();
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);

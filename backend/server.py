@@ -5040,6 +5040,45 @@ async def cancel_user_subscription(user: dict = Depends(auth_user)):
     }
 
 
+@api_router.get("/subscription/early-adopter-offer")
+async def get_early_adopter_offer(language: str = "en"):
+    """Public route: returns the Early Adopter offer details for the Paywall component."""
+    if language == "fr":
+        return {
+            "plan": "early_adopter",
+            "name": "RunIndex Early Adopter",
+            "price": 4.99,
+            "currency": "EUR",
+            "billing_period": "month",
+            "description": "Accès complet à RunIndex. Prix garanti à vie.",
+            "features": [
+                "Coach IA illimité",
+                "Analyses avancées",
+                "Plans d'entraînement personnalisés",
+                "Synchronisation Garmin",
+                "Accès prioritaire aux nouvelles fonctionnalités",
+                "Prix bloqué à 4,99 €/mois à vie"
+            ],
+            "cta": "Activer RunIndex"
+        }
+    return {
+        "plan": "early_adopter",
+        "name": "RunIndex Early Adopter",
+        "price": 4.99,
+        "currency": "EUR",
+        "billing_period": "month",
+        "description": "Full access to RunIndex. Price locked for life.",
+        "features": [
+            "Unlimited AI Coach",
+            "Advanced analytics",
+            "Personalized training plans",
+            "Garmin sync",
+            "Priority access to new features",
+            "Price locked at €4.99/month for life"
+        ],
+        "cta": "Activate RunIndex"
+    }
+
 
 # ========== USER PROFILE & ONBOARDING ==========
 
