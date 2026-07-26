@@ -142,7 +142,9 @@ const FAQ_ITEMS = [
   },
 ];
 
-// Tiers whose subscription counts as "premium" in the UI
+// Tiers whose subscription counts as "premium" in the UI.
+// Legacy tiers (confort, pro) are kept for backward compatibility with
+// existing subscribers who may still be on those plans in the backend.
 const PREMIUM_TIERS = new Set(["starter", "confort", "pro", "early_adopter", "premium"]);
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -225,7 +227,10 @@ export default function Subscription() {
   };
 
   const scrollTo = (id) => {
-    document.getElementById(id)?.scrollIntoView({ behavior: "smooth" });
+    const el = document.getElementById(id);
+    if (!el) return;
+    const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    el.scrollIntoView({ behavior: prefersReducedMotion ? "auto" : "smooth" });
   };
 
   const isCurrentlyPremium = PREMIUM_TIERS.has(currentTier);
@@ -647,6 +652,7 @@ export default function Subscription() {
                   className="w-full flex items-center justify-between px-5 py-4 text-left text-sm font-medium hover:bg-muted/50 transition-colors"
                   onClick={() => setOpenFaq(openFaq === idx ? null : idx)}
                   aria-expanded={openFaq === idx}
+                  aria-controls={`faq-answer-${idx}`}
                 >
                   <span>{q}</span>
                   {openFaq === idx ? (
@@ -656,7 +662,10 @@ export default function Subscription() {
                   )}
                 </button>
                 {openFaq === idx && (
-                  <div className="px-5 pb-4 text-xs text-muted-foreground leading-relaxed border-t border-border pt-3">
+                  <div
+                    id={`faq-answer-${idx}`}
+                    className="px-5 pb-4 text-xs text-muted-foreground leading-relaxed border-t border-border pt-3"
+                  >
                     {a}
                   </div>
                 )}
