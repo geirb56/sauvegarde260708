@@ -75,3 +75,9 @@ Verified: testing_agent iteration_26 (Training paywall gone, backend 8/8 pytest)
 Reported: "l'analyse IA de séance ne s'affiche pas". Root cause: WorkoutDetail.jsx 4 axios calls (/workouts/:id, /coach/workout-analysis, /coach/detailed-analysis, /rag/workout) sent NO X-User-Id header -> protected analysis endpoints returned 403 for the IP/free user -> analysis empty.
 FIX: global axios request interceptor in src/index.js injecting X-User-Id=USER_ID('default') on all /api requests (also prevents recurrence app-wide, per testing_agent recommendation).
 Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders end-to-end, no regressions on sessions/training/progress/subscription. retest_needed=false.
+
+## Pull sauvegarde260708 — PR #16 (subscription architecture) + latent chat bug fix (2026-07-12)
+- Pulled commit 29fce67. Modified server.py, Subscription.jsx, i18n.js + test_subscription_chat.py. All my prior fixes (X-User-Id middleware, trial recognition in /subscription/status, global axios interceptor, trial banner, i18n aliases) were present in the backup (pushed via Save to GitHub) -> no regression.
+- LATENT BUG found & fixed: POST /api/chat/send quota only recognized Stripe status=='active' -> trial users blocked after 10 messages ("reached your limit (Free)"). FIX (server.py ~4976): added elif for trial/early_adopter/premium -> unlimited chat (messages_limit=999, unlimited=True). Also relaxed a test assertion for unlimited plans.
+- Verified: testing_agent iteration_28 -> 100% backend+frontend, 25/25 pytest, chat unlimited on trial, no paywall, no regressions. retest_needed=false.
+- Backlog notes (non-blocking): extract a shared tier->is_unlimited resolver to avoid drift between /subscription/status and chat quota; don't increment messages_used for unlimited tiers; Settings Event Date could use shadcn Calendar instead of native picker.
