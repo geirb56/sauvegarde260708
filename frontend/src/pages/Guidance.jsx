@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useAuth } from "@/context/AuthContext";
 import axios from "axios";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -17,7 +18,6 @@ import { toast } from "sonner";
 
 import { API_BASE_URL } from "@/config";
 const API = API_BASE_URL;
-const USER_ID = "default";
 
 const statusConfig = {
   maintain: {
@@ -49,6 +49,7 @@ const getSessionIcon = (type) => {
 };
 
 export default function Guidance() {
+  const { user } = useAuth();
   const [guidance, setGuidance] = useState(null);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
@@ -60,7 +61,7 @@ export default function Guidance() {
 
   const loadLatestGuidance = async () => {
     try {
-      const res = await axios.get(`${API}/coach/guidance/latest?user_id=${USER_ID}`);
+      const res = await axios.get(`${API}/coach/guidance/latest`);
       setGuidance(res.data);
     } catch (error) {
       console.error("Failed to load guidance:", error);
@@ -74,7 +75,7 @@ export default function Guidance() {
     try {
       const res = await axios.post(`${API}/coach/guidance`, {
         language: lang,
-        user_id: USER_ID
+        user_id: user?.id
       });
       setGuidance(res.data);
       toast.success(t("guidanceExtended.generated"));

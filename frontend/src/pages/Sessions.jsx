@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
+import { useAuth } from "@/context/AuthContext";
 import { Link } from "react-router-dom";
 import axios from "axios";
 import { Activity, Bike, ChevronRight, Flame, Heart, Zap } from "lucide-react";
 
 import { API_BASE_URL } from "@/config";
-import { USER_ID } from "@/utils/constants";
 import { useLanguage } from "@/context/LanguageContext";
 import { useUnitSystem } from "@/context/UnitContext";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -40,6 +40,7 @@ const LoadingRows = () => (
 );
 
 export default function Sessions() {
+  const { user } = useAuth();
   const { t, lang } = useLanguage();
   const { unitSystem } = useUnitSystem();
   const [workouts, setWorkouts] = useState([]);
@@ -49,7 +50,7 @@ export default function Sessions() {
     const loadWorkouts = async () => {
       setLoading(true);
       try {
-        const res = await axios.get(`${API}/workouts`, { headers: { "X-User-Id": USER_ID } });
+        const res = await axios.get(`${API}/workouts`);
         setWorkouts(Array.isArray(res.data) ? res.data : []);
       } catch (error) {
         console.error("Failed to load workouts:", error);
