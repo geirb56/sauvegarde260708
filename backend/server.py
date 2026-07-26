@@ -83,7 +83,8 @@ from subscription_manager import (
     get_subscription_display,
     SubscriptionStatus,
     FEATURES,
-    EARLY_ADOPTER_PRICE
+    EARLY_ADOPTER_PRICE,
+    TRIAL_DURATION_DAYS
 )
 
 from demo_mode import get_demo_subscription, is_subscription_active, patch_subscription_status_response
@@ -5260,10 +5261,10 @@ async def simulate_trial_end(user_id: str = "default"):
 @api_router.post("/subscription/reset-to-trial")
 async def reset_to_trial(user_id: str = "default"):
     """
-    [DEV ONLY] Reset user to 7-day free trial.
+    [DEV ONLY] Reset user to free trial.
     """
     now = datetime.now(timezone.utc)
-    trial_end = now + timedelta(days=7)
+    trial_end = now + timedelta(days=TRIAL_DURATION_DAYS)
 
     await db.subscriptions.update_one(
         {"user_id": user_id},
