@@ -62,3 +62,11 @@ RunIndex — running/cardio training coach. Garmin (gccli) integration, AI coach
 - Added i18n key trainingPlanExtended.raceCountdown (en "D-{days} to race" / fr "J-{days} avant la course" / es "F-{days} para la carrera").
 - TrainingPlan.jsx: added amber J-X/D-X badge (data-testid="active-race-countdown") next to "Week X/Y • goal" when status active and days_to_race>=0.
 - Verified live: active cycle (event +70d) shows "D-70 to race"; no compile errors. Default user goal restored to none.
+
+## Bug fix: free trial not working (2026-07-12)
+Reported: "activate free trial ... cela ne fonctionne pas". Two-layer root cause (found via testing_agent):
+1. Backend /api/subscription/status only recognized Stripe status=='active' -> trial users showed tier='free' on Subscriptions page. FIX: added elif branch recognizing trial/early_adopter/premium (is_premium, unlimited, tier_name). Also reset-to-trial now uses TRIAL_DURATION_DAYS (30).
+2. Backend subscription_middleware get_user_id_from_request (server.py:244) ignored the X-User-Id header the frontend sends -> attributed requests to IP user (free) -> 403 on /workouts, /training/* -> Training/Sessions paywalled. FIX: read X-User-Id header before IP fallback.
+3. Frontend Sessions.jsx fetched /workouts without X-User-Id header -> empty list. FIX: pass headers {X-User-Id: USER_ID}.
+Added trial banner on /subscription (data-testid=trial-active-banner) + i18n subscription.trialActive.
+Verified: testing_agent iteration_26 (Training paywall gone, backend 8/8 pytest); self-test screenshot Sessions list populated with Garmin activities. default user on active 30-day trial.
