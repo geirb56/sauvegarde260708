@@ -8,6 +8,7 @@ import axios from "axios";
 import { API_BASE } from "@/utils/constants";
 
 // Default user identifier — matches the convention used across RunIndex.
+const USER_ID = "default";
 
 /**
  * TerraConnection — UI card for managing the Terra wearable integration.
@@ -34,7 +35,7 @@ export const TerraConnection = ({ lang, t, onStatusChange }) => {
 
   const loadStatus = async () => {
     try {
-      const res = await axios.get(`${API_BASE}/terra/status`);
+      const res = await axios.get(`${API_BASE}/terra/status?user_id=${USER_ID}`);
       setStatus(res.data);
       if (onStatusChange) onStatusChange(res.data);
     } catch (error) {
@@ -52,7 +53,7 @@ export const TerraConnection = ({ lang, t, onStatusChange }) => {
     }
     setConnecting(true);
     try {
-      await axios.post(`${API_BASE}/terra/connect`, { token: token.trim() });
+      await axios.post(`${API_BASE}/terra/connect?user_id=${USER_ID}`, { token: token.trim() });
       toast.success(t("terra.connected"));
       setToken("");
       loadStatus();
@@ -67,7 +68,7 @@ export const TerraConnection = ({ lang, t, onStatusChange }) => {
   const handleSync = async () => {
     setSyncing(true);
     try {
-      const res = await axios.post(`${API_BASE}/terra/sync`);
+      const res = await axios.post(`${API_BASE}/terra/sync?user_id=${USER_ID}`);
       if (res.data.success) {
         toast.success(
           t("terra.syncImported").replace(
@@ -87,7 +88,7 @@ export const TerraConnection = ({ lang, t, onStatusChange }) => {
 
   const handleDisconnect = async () => {
     try {
-      await axios.delete(`${API_BASE}/terra/disconnect`);
+      await axios.delete(`${API_BASE}/terra/disconnect?user_id=${USER_ID}`);
       setStatus({ connected: false });
       toast.success(t("terra.disconnected"));
     } catch (error) {

@@ -1,36 +1,28 @@
 import { createContext, useContext, useState, useEffect, useCallback } from "react";
 import axios from "axios";
 import { useLanguage } from "@/context/LanguageContext";
-import { useAuth } from "@/context/AuthContext";
 import { Loader2 } from "lucide-react";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+const USER_ID = "default";
 
 const SubscriptionContext = createContext(null);
 
 export function SubscriptionProvider({ children }) {
   const { lang } = useLanguage();
-  const { isAuthenticated, getToken } = useAuth();
   const [subscription, setSubscription] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
   const fetchSubscription = useCallback(async () => {
-    if (!isAuthenticated) {
-      setSubscription(null);
-      setLoading(false);
-      return;
-    }
-    const token = getToken();
     try {
-      const res = await axios.get(`${API}/subscription/info?language=${lang}`, {
-        headers: token ? { Authorization: `Bearer ${token}`} : {},
-      });
+      const res = await axios.get(`${API}/subscription/info?user_id=${USER_ID}&language=${lang}`);
       setSubscription(res.data);
       setError(null);
     } catch (err) {
       console.error("Error fetching subscription:", err);
       setError(err);
+      // Default to trial on error (display labels translated in consuming components via t())
       setSubscription({
         status: "trial",
         features: {
@@ -51,7 +43,7 @@ export function SubscriptionProvider({ children }) {
     } finally {
       setLoading(false);
     }
-  }, [lang, isAuthenticated, getToken]);
+  }, [lang]);
 
   useEffect(() => {
     fetchSubscription();
@@ -66,6 +58,7 @@ export function SubscriptionProvider({ children }) {
   const isActive = subscription?.status !== "free";
   const isTrial = subscription?.status === "trial";
   const isEarlyAdopter = subscription?.status === "early_adopter";
+  const isPremium = subscription?.status === "premium";
   const isFree = subscription?.status === "free";
 
   const hasFeature = (feature) => {
@@ -79,15 +72,20 @@ export function SubscriptionProvider({ children }) {
     loading,
     error,
     refreshSubscription,
+    // Status helpers
     isActive,
     isTrial,
     isEarlyAdopter,
+    isPremium,
     isFree,
+    // Feature helpers
     hasFeature,
     canAccessPlan: hasFeature("training_plan"),
     canAccessCoach: hasFeature("llm_access"),
     canSync: hasFeature("sync_enabled"),
+    // Trial info
     trialDaysRemaining,
+    // Display info
     statusLabel: subscription?.display?.label,
     statusBadge: subscription?.display?.badge,
     statusBadgeColor: subscription?.display?.badge_color
@@ -118,6 +116,7 @@ export function withSubscription(Component, requiredFeature = "full_access") {
     }
     
     if (isFree || !hasFeature(requiredFeature)) {
+      // Import dynamique du Paywall
       const Paywall = require("@/components/Paywall").default;
       return <Paywall />;
     }

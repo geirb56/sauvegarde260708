@@ -1,9 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
-import { Outlet, NavLink, useLocation, useNavigate } from "react-router-dom";
+import { Outlet, NavLink, useLocation } from "react-router-dom";
 import { Activity, Home, CalendarDays, MessageCircle, RefreshCw, Settings, TrendingUp } from "lucide-react";
 import { useLanguage } from "@/context/LanguageContext";
-import { useAuth } from "@/context/AuthContext";
-import { useSubscription } from "@/context/SubscriptionContext";
 import { useAutoSync } from "@/hooks/useAutoSync";
 import ChatCoach from "@/components/ChatCoach";
 import axios from "axios";
@@ -13,10 +11,7 @@ const API = API_BASE_URL;
 
 export const Layout = () => {
   const location = useLocation();
-  const navigate = useNavigate();
   const { t } = useLanguage();
-  const { user, getToken } = useAuth();
-  const { isTrial, isEarlyAdopter, isFree, trialDaysRemaining } = useSubscription();
   const [chatOpen, setChatOpen] = useState(false);
   const [lastSyncMinutes, setLastSyncMinutes] = useState(null);
   
@@ -25,13 +20,9 @@ export const Layout = () => {
 
   // Get last sync time
   useEffect(() => {
-    if (!user) return;
     const checkSync = async () => {
       try {
-        const token = getToken();
-        const res = await axios.get(`${API}/terra/status`, {
-          headers: token ? { Authorization: `Bearer ${token}`} : {},
-        });
+        const res = await axios.get(`${API}/terra/status?user_id=default`);
         if (res.data.last_sync) {
           const syncDate = new Date(res.data.last_sync);
           const now = new Date();
@@ -43,7 +34,7 @@ export const Layout = () => {
       }
     };
     checkSync();
-  }, [user, getToken]);
+  }, []);
 
   const lastSyncLabel = useMemo(() => {
     if (lastSyncMinutes == null) return null;
@@ -52,33 +43,6 @@ export const Layout = () => {
     }
     return t("common.timeAgoHours").replace("{n}", Math.round(lastSyncMinutes / 60));
   }, [lastSyncMinutes, t]);
-
-  // Trial banner message
-  const trialBanner = useMemo(() => {
-    if (isEarlyAdopter) return null;
-    if (isTrial) {
-      if (trialDaysRemaining != null && trialDaysRemaining <= 3) {
-        return {
-          text: `Votre essai expire dans ${trialDaysRemaining} jour${trialDaysRemaining !== 1 ? "s" : ""}`,
-          urgent: true,
-        };
-      }
-      if (trialDaysRemaining != null) {
-        return {
-          text: `Essai gratuit — J-${trialDaysRemaining} restant${trialDaysRemaining !== 1 ? "s" : ""}`,
-          urgent: false,
-        };
-      }
-    }
-    if (isFree) {
-      return {
-        text: "Votre essai est terminé. Activez RunIndex pour continuer.",
-        urgent: true,
-        cta: true,
-      };
-    }
-    return null;
-  }, [isTrial, isFree, isEarlyAdopter, trialDaysRemaining]);
 
   const navItems = [
     { path: "/", icon: Home, labelKey: "nav.dashboard" },
@@ -92,27 +56,6 @@ export const Layout = () => {
   return (
     <div className="min-h-screen flex flex-col" style={{ background: "var(--bg-primary)" }}>
       
-      {/* Trial / expiry banner */}
-      {trialBanner && (
-        <div
-          className={`text-center text-xs py-2 px-4 ${
-            trialBanner.urgent
-              ? "bg-destructive/90 text-destructive-foreground"
-              : "bg-primary/10 text-primary"
-          }`}
-        >
-          {trialBanner.text}
-          {trialBanner.cta && (
-            <button
-              onClick={() => navigate("/subscription")}
-              className="ml-3 underline font-semibold"
-            >
-              Activer
-            </button>
-          )}
-        </div>
-      )}
-
       {/* Mobile Header */}
       <header className="header-modern">
         <div className="header-logo">
@@ -138,7 +81,7 @@ export const Layout = () => {
             <RefreshCw className="w-5 h-5" />
           </button>
           <div className="header-avatar">
-            {user?.email?.[0]?.toUpperCase() ?? "U"}
+            AR
           </div>
         </div>
       </header>
@@ -179,7 +122,7 @@ export const Layout = () => {
       <ChatCoach 
         isOpen={chatOpen} 
         onClose={() => setChatOpen(false)} 
-        userId={user?.id}
+        userId="default"
       />
     </div>
   );

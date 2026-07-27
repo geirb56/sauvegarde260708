@@ -23,11 +23,14 @@ TRIAL_DURATION_DAYS = 30
 
 # Early Adopter price
 EARLY_ADOPTER_PRICE = 4.99
-# Subscription statuses (allowed: trial, free, early_adopter)
+EARLY_ADOPTER_PRICE_ID = "price_early_adopter_499"  # Stripe Price ID
+
+# Subscription statuses
 class SubscriptionStatus:
     TRIAL = "trial"
     FREE = "free"
     EARLY_ADOPTER = "early_adopter"
+    PREMIUM = "premium"
 
 # Features by status
 FEATURES = {
@@ -58,8 +61,16 @@ FEATURES = {
         "llm_access": True,
         "full_access": True
     },
+    SubscriptionStatus.PREMIUM: {
+        "training_plan": True,
+        "plan_adaptation": True,
+        "session_analysis": True,
+        "sync_enabled": True,
+        "api_access": True,
+        "llm_access": True,
+        "full_access": True
+    }
 }
-
 
 # Protected routes (require an active subscription)
 PROTECTED_ROUTES = [
@@ -109,10 +120,11 @@ async def create_trial_subscription(db: AsyncIOMotorDatabase, user_id: str) -> D
     subscription = {
         "user_id": user_id,
         "status": SubscriptionStatus.TRIAL,
-        "plan": SubscriptionStatus.TRIAL,
         "created_at": now.isoformat(),
         "trial_start": now.isoformat(),
         "trial_end": trial_end.isoformat(),
+        "stripe_customer_id": None,
+        "stripe_subscription_id": None,
         "price_locked": None,
         "updated_at": now.isoformat()
     }
@@ -160,10 +172,10 @@ async def check_trial_expiration(db: AsyncIOMotorDatabase, subscription: Dict) -
 async def activate_early_adopter(
     db: AsyncIOMotorDatabase,
     user_id: str,
-    paddle_customer_id: str,
-    paddle_subscription_id: str
+    stripe_customer_id: str,
+    stripe_subscription_id: str
 ) -> Dict:
-    """Activates the Early Adopter subscription for a user via Paddle."""
+    """Activates the Early Adopter subscription for a user."""
     now = datetime.now(timezone.utc)
     
     result = await db.subscriptions.update_one(
@@ -171,9 +183,8 @@ async def activate_early_adopter(
         {
             "$set": {
                 "status": SubscriptionStatus.EARLY_ADOPTER,
-                "plan": SubscriptionStatus.EARLY_ADOPTER,
-                "paddle_customer_id": paddle_customer_id,
-                "paddle_subscription_id": paddle_subscription_id,
+                "stripe_customer_id": stripe_customer_id,
+                "stripe_subscription_id": stripe_subscription_id,
                 "price_locked": EARLY_ADOPTER_PRICE,
                 "activated_at": now.isoformat(),
                 "updated_at": now.isoformat()
@@ -303,7 +314,20 @@ def get_subscription_display(subscription: Dict, lang: str = "en") -> Dict:
                 "badge_color": "amber"
             }
         },
-
+        SubscriptionStatus.PREMIUM: {
+            "fr": {
+                "label": "Premium",
+                "description": "Accès complet à toutes les fonctionnalités",
+                "badge": "PREMIUM",
+                "badge_color": "violet"
+            },
+            "en": {
+                "label": "Premium",
+                "description": "Full access to all features",
+                "badge": "PREMIUM",
+                "badge_color": "violet"
+            }
+        }
     }
     
     display = displays.get(status, displays[SubscriptionStatus.FREE]).get(lang, displays[status]["fr"])

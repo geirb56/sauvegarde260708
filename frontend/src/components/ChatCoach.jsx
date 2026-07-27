@@ -14,7 +14,6 @@ import {
   Zap
 } from "lucide-react";
 import { useLanguage } from "@/context/LanguageContext";
-import { useAuth } from "@/context/AuthContext";
 
 import { API_BASE_URL } from "@/config";
 const API = API_BASE_URL;
@@ -24,10 +23,8 @@ const API = API_BASE_URL;
  * Pas de LLM (ni local, ni cloud)
  * Réponses rapides (<1s), déterministes, ultra-naturelles
  */
-const ChatCoach = ({ isOpen, onClose }) => {
+const ChatCoach = ({ isOpen, onClose, userId = "default" }) => {
   const { t } = useLanguage();
-  const { user } = useAuth();
-  const userId = user?.id;
   const navigate = useNavigate();
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
@@ -48,7 +45,7 @@ const ChatCoach = ({ isOpen, onClose }) => {
 
   const checkSubscription = async () => {
     try {
-      const res = await axios.get(`${API}/subscription/info`);
+      const res = await axios.get(`${API}/subscription/status?user_id=${userId}`);
       setSubscriptionStatus(res.data);
     } catch (err) {
       console.error("Error checking subscription:", err);
@@ -60,7 +57,7 @@ const ChatCoach = ({ isOpen, onClose }) => {
 
   const loadHistory = async () => {
     try {
-      const res = await axios.get(`${API}/chat/history?limit=30`);
+      const res = await axios.get(`${API}/chat/history?user_id=${userId}&limit=30`);
       setMessages(res.data || []);
     } catch (err) {
       console.error("Error loading history:", err);
@@ -150,7 +147,7 @@ const ChatCoach = ({ isOpen, onClose }) => {
 
   const clearHistory = async () => {
     try {
-      await axios.delete(`${API}/chat/history`);
+      await axios.delete(`${API}/chat/history?user_id=${userId}`);
       setMessages([]);
       setCurrentSuggestions([]);
     } catch (err) {

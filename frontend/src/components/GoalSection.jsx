@@ -53,7 +53,7 @@ export const GoalSection = ({ goal, lang, t, onUpdate }) => {
 
     setSaving(true);
     try {
-      const res = await axios.post(`${API_BASE}/user/goal`, {
+      const res = await axios.post(`${API_BASE}/user/goal?user_id=default`, {
         event_name: eventName.trim(),
         event_date: eventDate,
         distance_type: distanceType,
@@ -71,7 +71,7 @@ export const GoalSection = ({ goal, lang, t, onUpdate }) => {
 
   const handleDelete = async () => {
     try {
-      await axios.delete(`${API_BASE}/user/goal`);
+      await axios.delete(`${API_BASE}/user/goal?user_id=default`);
       onUpdate(null);
       toast.success(t("settings.goalDeleted"));
     } catch (error) {

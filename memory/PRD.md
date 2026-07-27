@@ -81,3 +81,10 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
 - LATENT BUG found & fixed: POST /api/chat/send quota only recognized Stripe status=='active' -> trial users blocked after 10 messages ("reached your limit (Free)"). FIX (server.py ~4976): added elif for trial/early_adopter/premium -> unlimited chat (messages_limit=999, unlimited=True). Also relaxed a test assertion for unlimited plans.
 - Verified: testing_agent iteration_28 -> 100% backend+frontend, 25/25 pytest, chat unlimited on trial, no paywall, no regressions. retest_needed=false.
 - Backlog notes (non-blocking): extract a shared tier->is_unlimited resolver to avoid drift between /subscription/status and chat quota; don't increment messages_used for unlimited tiers; Settings Event Date could use shadcn Calendar instead of native picker.
+
+## 2026-07-27 — Retour à la PR #16 (revert PR #17 Supabase)
+- La PR #17 (auth Supabase obligatoire) a été retirée : insertion automatique corrompue de `user_id = user["id"]` (44 occurrences, dont une dans un corps de classe) faisait planter le backend au démarrage (NameError), + config Supabase manquante + risque de perte des données "default".
+- Décision utilisateur : revenir à la PR #16.
+- Action : re-sync du commit `29fce67` (PR #16) depuis GitHub dans /app, en préservant .env, .git, .emergent, session Garmin (.gccli_home), binaire gccli (bin/), node_modules et /app/memory. Fichiers Supabase supprimés (backend/auth, frontend supabase.js/AuthContext/Login/Signup). package.json sans @supabase.
+- Vérifié : backend démarre proprement, session Garmin retrouvée, 141 workouts, run-index history 12m (12 points, current 352), abonnement trial 29 j, Dashboard s'affiche correctement (screenshot).
+- auth_user (PR16) = auth flexible avec fallback "default" (non-bloquant).

@@ -1,5 +1,4 @@
 import { useState, useEffect } from "react";
-import { useAuth } from "@/context/AuthContext";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import axios from "axios";
 import { Card, CardContent } from "@/components/ui/card";
@@ -15,6 +14,7 @@ import { toast } from "sonner";
 
 import { API_BASE_URL } from "@/config";
 const API = API_BASE_URL;
+const USER_ID = "default";
 
 const DISTANCE_OPTIONS = ["5k", "10k", "semi", "marathon", "ultra"];
 const DISTANCE_KM = {
@@ -36,7 +36,6 @@ const TRAINING_GOAL_OPTIONS = [
 const SESSIONS_OPTIONS = [3, 4, 5, 6];
 
 export default function Settings() {
-  const { user } = useAuth();
   const { t, lang, setLang } = useLanguage();
   const { 
     subscription, 
@@ -74,24 +73,34 @@ export default function Settings() {
     loadPremiumStatus();
     loadTrainingPlan();
     
-    // Handle Paddle callback
-    const paddleParam = searchParams.get("paddle");
-    if (paddleParam === "success") {
-      toast.success("🎉 Abonnement Early Adopter activé !");
-      setSearchParams({});
-    } else if (paddleParam === "cancelled") {
+    // Handle Stripe callback
+    const sessionId = searchParams.get("session_id");
+    const premiumParam = searchParams.get("premium");
+    const subscriptionParam = searchParams.get("subscription");
+    
+    if (sessionId && premiumParam === "success") {
+      handlePaymentSuccess(sessionId, "premium");
+    } else if (sessionId && subscriptionParam === "early_adopter_success") {
+      handlePaymentSuccess(sessionId, "early_adopter");
+    } else if (premiumParam === "cancelled" || subscriptionParam === "cancelled") {
       toast.info(t("settingsExtended.paymentCancelled"));
       setSearchParams({});
     }
   }, [searchParams]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadPremiumStatus = async () => {
-    // Subscription status is managed by SubscriptionContext
+    try {
+      await axios.get(`${API}/premium/status?user_id=${USER_ID}`);
+    } catch (error) {
+      console.error("Failed to load premium status:", error);
+    }
   };
 
   const loadTrainingPlan = async () => {
     try {
-      const res = await axios.get(`${API}/training/full-cycle`);
+      const res = await axios.get(`${API}/training/full-cycle`, { 
+        headers: { "X-User-Id": USER_ID } 
+      });
       if (res.data) {
         setTrainingGoal(res.data.goal || "SEMI");
         setSessionsPerWeek(res.data.sessions_per_week || 4);
@@ -109,7 +118,9 @@ export default function Settings() {
   const handleSetTrainingGoal = async (goal) => {
     setUpdatingTrainingPlan(true);
     try {
-      await axios.post(`${API}/training/set-goal?goal=${goal}`, {});
+      await axios.post(`${API}/training/set-goal?goal=${goal}`, {}, {
+        headers: { "X-User-Id": USER_ID }
+      });
       setTrainingGoal(goal);
       toast.success(t("settingsExtended.goalSetWithName").replace("{goal}", goal));
     } catch (err) {
@@ -122,7 +133,9 @@ export default function Settings() {
   const handleSetSessionsPerWeek = async (sessions) => {
     setUpdatingTrainingPlan(true);
     try {
-      await axios.post(`${API}/training/refresh?sessions=${sessions}`, {});
+      await axios.post(`${API}/training/refresh?sessions=${sessions}`, {}, {
+        headers: { "X-User-Id": USER_ID }
+      });
       setSessionsPerWeek(sessions);
       toast.success(`${sessions} ${t("settingsExtended.sessionsPerWeekSet")}`);
     } catch (err) {
@@ -132,12 +145,61 @@ export default function Settings() {
     }
   };
 
+  const handlePaymentSuccess = async (sessionId, planType = "premium") => {
+    setProcessingPayment(true);
+    try {
+      // Déterminer l'endpoint selon le type de plan
+      const endpoint = planType === "early_adopter" 
+        ? `${API}/subscription/verify-checkout/${sessionId}?user_id=${USER_ID}`
+        : `${API}/premium/checkout/status/${sessionId}?user_id=${USER_ID}`;
+      
+      // Poll for payment completion
+      let attempts = 0;
+      const maxAttempts = 10;
+      
+      while (attempts < maxAttempts) {
+        const res = await axios.get(endpoint);
+        
+        if (res.data.success || res.data.status === "completed" || res.data.status === "early_adopter" || res.data.payment_status === "paid") {
+          const successMsg = planType === "early_adopter"
+            ? `🎉 ${t("settingsExtended.earlyAdopterActivated")}`
+            : `🎉 ${t("settingsExtended.premiumActivated")}`;
+          
+          toast.success(successMsg);
+          
+          // Rafraîchir le statut de l'abonnement
+          if (planType === "early_adopter") {
+            refreshSubscription();
+          } else {
+            loadPremiumStatus();
+          }
+          
+          setSearchParams({});
+          break;
+        } else if (res.data.status === "expired" || res.data.error) {
+          toast.error(t("settingsExtended.sessionExpiredOrError"));
+          setSearchParams({});
+          break;
+        }
+        
+        await new Promise(r => setTimeout(r, 2000));
+        attempts++;
+      }
+    } catch (error) {
+      console.error("Payment verification error:", error);
+      toast.error(t("settingsExtended.verificationError"));
+    } finally {
+      setProcessingPayment(false);
+      setSearchParams({});
+    }
+  };
+
   const handleSubscribe = async () => {
     try {
-      const res = await axios.post(`${API}/subscription/paddle/checkout`, {
+      const res = await axios.post(`${API}/premium/checkout`, {
         origin_url: window.location.origin
       }, {
-        params: {}
+        params: { user_id: USER_ID }
       });
       
       window.location.href = res.data.checkout_url;
@@ -149,7 +211,7 @@ export default function Settings() {
 
   const loadGoal = async () => {
     try {
-      const res = await axios.get(`${API}/user/goal`);
+      const res = await axios.get(`${API}/user/goal?user_id=${USER_ID}`);
       if (res.data) {
         setGoal(res.data);
         setEventName(res.data.event_name);
@@ -185,7 +247,7 @@ export default function Settings() {
     
     setSavingGoal(true);
     try {
-      const res = await axios.post(`${API}/user/goal`, {
+      const res = await axios.post(`${API}/user/goal?user_id=${USER_ID}`, {
         event_name: eventName.trim(),
         event_date: eventDate,
         distance_type: distanceType,
@@ -203,7 +265,7 @@ export default function Settings() {
 
   const handleDeleteGoal = async () => {
     try {
-      await axios.delete(`${API}/user/goal`);
+      await axios.delete(`${API}/user/goal?user_id=${USER_ID}`);
       setGoal(null);
       setEventName("");
       setEventDate("");
@@ -795,7 +857,7 @@ export default function Settings() {
                         try {
                           // Créer une session Stripe Checkout
                           const res = await axios.post(
-                            `${API}/subscription/early-adopter/checkout&origin_url=${encodeURIComponent(window.location.origin)}`
+                            `${API}/subscription/early-adopter/checkout?user_id=${USER_ID}&origin_url=${encodeURIComponent(window.location.origin)}`
                           );
                           
                           if (res.data?.checkout_url) {

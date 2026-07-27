@@ -10,7 +10,7 @@ export const useGoal = () => {
   const loadGoal = async () => {
     try {
       setLoading(true);
-      const res = await axios.get(`${API_BASE}/user/goal`);
+      const res = await axios.get(`${API_BASE}/user/goal?user_id=default`);
       setGoal(res.data);
     } catch (err) {
       setError(err.message);
@@ -34,7 +34,7 @@ export const useSubscriptionStatus = () => {
   const loadStatus = async () => {
     try {
       setLoading(true);
-      const res = await axios.get(`${API_BASE}/subscription/info`);
+      const res = await axios.get(`${API_BASE}/subscription/status?user_id=default`);
       setStatus(res.data);
     } catch (err) {
       setError(err.message);
@@ -58,7 +58,7 @@ export const usePremiumStatus = () => {
   const loadStatus = async () => {
     try {
       setLoading(true);
-      const res = await axios.get(`${API_BASE}/subscription/info`);
+      const res = await axios.get(`${API_BASE}/premium/status?user_id=default`);
       setStatus(res.data);
     } catch (err) {
       setError(err.message);

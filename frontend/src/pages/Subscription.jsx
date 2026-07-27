@@ -1,5 +1,4 @@
 import { useState, useEffect } from "react";
-import { useAuth } from "@/context/AuthContext";
 import { useSearchParams } from "react-router-dom";
 import axios from "axios";
 import { Card, CardContent } from "@/components/ui/card";
@@ -28,6 +27,7 @@ import { toast } from "sonner";
 
 import { API_BASE_URL } from "@/config";
 const API = API_BASE_URL;
+const USER_ID = "default";
 
 // ─── Static data ──────────────────────────────────────────────────────────────
 
@@ -150,7 +150,6 @@ const PREMIUM_TIERS = new Set(["premium", "starter", "confort", "pro", "early_ad
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function Subscription() {
-  const { user } = useAuth();
   const { t } = useLanguage();
   const [searchParams, setSearchParams] = useSearchParams();
   const [currentTier, setCurrentTier] = useState("free");
@@ -182,8 +181,8 @@ export default function Subscription() {
 
   const loadStatus = async () => {
     try {
-      const res = await axios.get(API + "/subscription/info");
-      setCurrentTier(res.data.status || "free");
+      const res = await axios.get(API + "/subscription/status?user_id=" + USER_ID);
+      setCurrentTier(res.data.tier || "free");
     } catch (e) {
       console.error(e);
     } finally {
@@ -191,18 +190,34 @@ export default function Subscription() {
     }
   };
 
-  const handleSuccess = async () => {
-    // Paddle redirects back to /subscription?paddle=success
-    toast.success("Abonnement Early Adopter activé !");
-    loadStatus();
+  const handleSuccess = async (sessionId) => {
+    try {
+      const res = await axios.get(
+        API + "/subscription/checkout/status/" + sessionId + "?user_id=" + USER_ID
+      );
+      if (res.data.status === "completed") {
+        toast.success(res.data.message || t("subscription.subscriptionActivated"));
+        loadStatus();
+      }
+    } catch (e) {
+      console.error(e);
+    }
     setSearchParams({});
   };
 
-  // Paddle checkout for Early Adopter 4.99€/month
+  // The "premium" tier maps to the 4.99 €/month Premium offer in the backend
   const handleSubscribe = async () => {
     setSubscribing(true);
     try {
-      const res = await axios.post(API + "/subscription/paddle/checkout");
+      const res = await axios.post(
+        API + "/subscription/checkout",
+        {
+          origin_url: window.location.origin,
+          tier: "premium",
+          billing_period: "monthly",
+        },
+        { params: { user_id: USER_ID } }
+      );
       window.location.href = res.data.checkout_url;
     } catch (e) {
       console.error(e);
