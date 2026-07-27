@@ -4569,6 +4569,7 @@ async def get_subscription_tiers():
 @api_router.get("/subscription/status")
 async def get_subscription_status(user: dict = Depends(auth_user)):
     """Check user's subscription status"""
+    user_id = user["id"]
     
     # Check subscription in DB
     subscription = await db.subscriptions.find_one(
@@ -4602,7 +4603,7 @@ async def get_subscription_status(user: dict = Depends(auth_user)):
                     # Active subscription
                     tier = normalize_subscription_tier(subscription.get("tier", "premium"))
                     if tier not in SUBSCRIPTION_TIERS:
-                        tier = "premium"
+                        tier = "early_adopter"
                     tier_config = SUBSCRIPTION_TIERS.get(tier, SUBSCRIPTION_TIERS["early_adopter"])
                     is_premium = True
                     billing_period = subscription.get("billing_period", "monthly")
@@ -4675,7 +4676,7 @@ async def get_subscription_status(user: dict = Depends(auth_user)):
 @api_router.get("/premium/status")
 async def get_premium_status(user: dict = Depends(auth_user)):
     """Check if user has active premium subscription (backward compat)"""
-    status = await get_subscription_status(user_id)
+    status = await get_subscription_status(user)
     return {
         "is_premium": status.is_premium or status.tier != "free",
         "subscription_id": status.subscription_id,
@@ -4692,7 +4693,6 @@ async def get_premium_status(user: dict = Depends(auth_user)):
 # ========== CHAT COACH (PREMIUM ONLY) ==========
 
 def build_chat_context(workouts: list, user_goal: dict = None) -> dict:
-    user_id = user["id"]
     """
     Construit le contexte utilisateur pour le chat coach (LLM ou templates).
     # LLM serveur uniquement – pas d'exécution client-side
