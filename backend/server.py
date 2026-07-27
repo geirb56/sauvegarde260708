@@ -5036,8 +5036,12 @@ async def send_chat_message(request: ChatRequest):
                         tier_config = SUBSCRIPTION_TIERS.get(tier, SUBSCRIPTION_TIERS["premium"])
                 except (ValueError, TypeError):
                     pass
+        elif status_val == "trial":
+            # Trial users have unlimited AI chat access during the trial period to demonstrate the product value.
+            tier = "pro"
+            tier_config = SUBSCRIPTION_TIERS["pro"]
         else:
-            # trial / early_adopter / premium: grant full access (use "premium" tier config)
+            # early_adopter / premium: grant full access (use "premium" tier config)
             tier = normalize_subscription_tier(subscription.get("tier", "premium"))
             if tier not in SUBSCRIPTION_TIERS:
                 tier = "premium"
