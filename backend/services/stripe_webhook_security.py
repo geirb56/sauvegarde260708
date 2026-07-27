@@ -59,7 +59,7 @@ def verify_and_parse_stripe_event(
         raise HTTPException(status_code=400, detail="Invalid Stripe webhook signature")
 
     now = int(time.time())
-    if abs(now - timestamp) > tolerance_seconds:
+    if (now - timestamp) > tolerance_seconds or timestamp > now:
         raise HTTPException(status_code=400, detail="Stripe webhook timestamp outside tolerance")
 
     try:
