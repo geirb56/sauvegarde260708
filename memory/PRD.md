@@ -88,3 +88,10 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
 - Action : re-sync du commit `29fce67` (PR #16) depuis GitHub dans /app, en préservant .env, .git, .emergent, session Garmin (.gccli_home), binaire gccli (bin/), node_modules et /app/memory. Fichiers Supabase supprimés (backend/auth, frontend supabase.js/AuthContext/Login/Signup). package.json sans @supabase.
 - Vérifié : backend démarre proprement, session Garmin retrouvée, 141 workouts, run-index history 12m (12 points, current 352), abonnement trial 29 j, Dashboard s'affiche correctement (screenshot).
 - auth_user (PR16) = auth flexible avec fallback "default" (non-bloquant).
+
+## 2026-07-27 — Pull branche PR16Bis
+- Synchronisé la branche PR16Bis (head 4d96cc3, PR #19) : retire le gate Supabase cassé, ajoute durcissement (demo_mode fail-fast en prod, vérif signature webhook Stripe via services/stripe_webhook_security.py, CORS strict en prod). yarn.lock régénéré.
+- Vérifié : backend démarre, session Garmin OK, 141 workouts, run-index history OK, sub trial 29j, Dashboard rend correctement, aucun gate de login.
+- ⚠️ 2 bugs détectés dans la branche (non corrigés, en attente décision user):
+  1. /api/chat/send (server.py:5014) ne reconnaît que status=="active" → ignore trial/early_adopter/premium → limite Free imposée aux users en essai (régression vs PR16).
+  2. /api/training/today (server.py:3549) crash 500 quand aucun plan (generate_dynamic_training_plan renvoie None, `plan.get` sur None).

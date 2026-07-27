@@ -87,7 +87,15 @@ from subscription_manager import (
     TRIAL_DURATION_DAYS
 )
 
-from demo_mode import get_demo_subscription, is_subscription_active, patch_subscription_status_response
+from demo_mode import (
+    get_demo_subscription,
+    is_subscription_active,
+    patch_subscription_status_response,
+    validate_demo_mode_safety,
+    validate_environment_configuration,
+    log_demo_mode_status,
+)
+from services.stripe_webhook_security import verify_and_parse_stripe_event
 
 # Import physiological engine dashboard router
 from api.dashboard import dashboard_router
@@ -113,6 +121,8 @@ db = client[os.environ['DB_NAME']]
 
 # Stripe configuration
 STRIPE_API_KEY = os.environ.get('STRIPE_API_KEY', '')
+STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+ENVIRONMENT = os.environ.get("ENVIRONMENT", "development").strip().lower()
 
 # Subscription tiers configuration
 SUBSCRIPTION_TIERS = {
@@ -156,6 +166,26 @@ def normalize_subscription_tier(tier: Optional[str]) -> str:
 
 
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
+
+
+def _compute_cors_origins() -> List[str]:
+    """
+    CORS policy:
+    - production: strictly FRONTEND_URL only
+    - development: localhost defaults (+ optional CORS_ORIGINS and FRONTEND_URL)
+    """
+    if ENVIRONMENT == "production":
+        return [FRONTEND_URL.rstrip("/")]
+
+    origins = {
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        FRONTEND_URL.rstrip("/"),
+    }
+    extra = os.environ.get("CORS_ORIGINS", "")
+    if extra:
+        origins.update(origin.strip().rstrip("/") for origin in extra.split(",") if origin.strip())
+    return sorted(origins)
 
 # Create the main app
 app = FastAPI()
@@ -4823,9 +4853,12 @@ async def stripe_webhook(request: Request):
     
     if not STRIPE_API_KEY:
         raise HTTPException(status_code=500, detail="Stripe not configured")
+    if not STRIPE_WEBHOOK_SECRET:
+        raise HTTPException(status_code=500, detail="Stripe webhook secret not configured")
     
     body = await request.body()
     signature = request.headers.get("Stripe-Signature")
+    verified_event = verify_and_parse_stripe_event(body, signature, STRIPE_WEBHOOK_SECRET)
     
     webhook_url = f"{str(request.base_url)}api/webhook/stripe"
     stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
@@ -4833,7 +4866,8 @@ async def stripe_webhook(request: Request):
     try:
         webhook_response = await stripe_checkout.handle_webhook(body, signature)
         
-        logger.info(f"Stripe webhook: {webhook_response.event_type} - {webhook_response.session_id}")
+        event_type = webhook_response.event_type or verified_event.get("type", "unknown")
+        logger.info(f"Stripe webhook: {event_type} - {webhook_response.session_id}")
         
         if webhook_response.payment_status == "paid":
             # Activate premium (same logic as checkout status)
@@ -5463,9 +5497,12 @@ async def stripe_early_adopter_webhook(request: Request):
     Webhook Stripe pour les paiements Early Adopter.
     Active l'abonnement une fois le paiement confirmé.
     """
+    if not STRIPE_WEBHOOK_SECRET:
+        raise HTTPException(status_code=500, detail="Stripe webhook secret not configured")
     try:
         payload = await request.body()
-        event = json.loads(payload)
+        signature = request.headers.get("Stripe-Signature")
+        event = verify_and_parse_stripe_event(payload, signature, STRIPE_WEBHOOK_SECRET)
         
         event_type = event.get("type", "")
         logger.info(f"Early Adopter webhook received: {event_type}")
@@ -5572,7 +5609,7 @@ app.include_router(dashboard_router, prefix="/api")
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_origins=_compute_cors_origins(),
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -5581,6 +5618,9 @@ app.add_middleware(
 @app.on_event("startup")
 async def create_db_indexes():
     """Create MongoDB indexes for common query patterns"""
+    validate_environment_configuration()
+    validate_demo_mode_safety()
+    log_demo_mode_status()
     # Expose db via app.state so sub-routers can access it via request.app.state.db
     app.state.db = db
     # Ensure the gccli Garmin connector is installed + logged in (best-effort,
