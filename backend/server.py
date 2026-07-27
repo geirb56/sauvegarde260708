@@ -5039,7 +5039,7 @@ async def send_chat_message(request: ChatRequest):
         elif status_val == "trial":
             # Trial users have unlimited AI chat access during the trial period to demonstrate the product value.
             tier = "pro"
-            tier_config = SUBSCRIPTION_TIERS["pro"]
+            tier_config = SUBSCRIPTION_TIERS.get("pro", SUBSCRIPTION_TIERS["free"])
         else:
             # early_adopter / premium: grant full access (use "premium" tier config)
             tier = normalize_subscription_tier(subscription.get("tier", "premium"))
