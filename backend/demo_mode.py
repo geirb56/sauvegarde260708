@@ -30,12 +30,32 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 DEMO_MODE: bool = os.getenv("DEMO_MODE", "false").strip().lower() in ("true", "1", "yes")
+ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development").strip().lower()
 
-if DEMO_MODE:
-    logger.warning(
-        "⚠️  DEMO_MODE is ENABLED — All subscription checks will return ACTIVE. "
-        "Do NOT use this in production."
-    )
+
+def validate_demo_mode_safety() -> None:
+    """Fail-fast when DEMO_MODE is enabled in production."""
+    if DEMO_MODE and ENVIRONMENT == "production":
+        raise RuntimeError(
+            "Unsafe configuration: DEMO_MODE=true is forbidden when ENVIRONMENT=production."
+        )
+
+
+def validate_environment_configuration() -> None:
+    """Ensure ENVIRONMENT is one of the supported runtime values."""
+    if ENVIRONMENT not in {"development", "production"}:
+        raise RuntimeError(
+            f"ENVIRONMENT must be 'development' or 'production', got '{ENVIRONMENT}'. "
+            "Set this via the ENVIRONMENT environment variable."
+        )
+
+
+def log_demo_mode_status() -> None:
+    """Emit explicit startup warning when demo mode is active in development."""
+    if DEMO_MODE and ENVIRONMENT != "production":
+        logger.warning(
+            "⚠️  DEMO_MODE is ENABLED in development — subscription checks are bypassed."
+        )
 
 
 # ---------------------------------------------------------------------------
