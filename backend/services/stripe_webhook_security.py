@@ -43,7 +43,12 @@ def verify_and_parse_stripe_event(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid Stripe signature timestamp") from exc
 
-    signed_payload = f"{timestamp}.{payload.decode('utf-8')}".encode("utf-8")
+    try:
+        payload_text = payload.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Invalid webhook payload encoding") from exc
+
+    signed_payload = f"{timestamp}.{payload_text}".encode("utf-8")
     expected_signature = hmac.new(
         webhook_secret.encode("utf-8"),
         signed_payload,
@@ -58,6 +63,6 @@ def verify_and_parse_stripe_event(
         raise HTTPException(status_code=400, detail="Stripe webhook timestamp outside tolerance")
 
     try:
-        return json.loads(payload)
+        return json.loads(payload_text)
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=400, detail="Invalid webhook JSON payload") from exc

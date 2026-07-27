@@ -39,7 +39,7 @@
 
 ## Tests passés
 
-- `cd backend && python -m pytest tests/test_demo_mode_security.py tests/test_stripe_webhook_security.py` ✅ (6 passed)
+- `cd backend && python -m pytest tests/test_demo_mode_security.py tests/test_stripe_webhook_security.py` ✅ (6 passed: 2 + 4)
 - `cd backend && python -m pytest tests/test_secrets.py` ✅ (4 passed)
 
 ## Risques restants

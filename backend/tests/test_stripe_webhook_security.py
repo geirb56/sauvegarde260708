@@ -15,7 +15,7 @@ def _build_signature_header(payload: bytes, secret: str, timestamp: int) -> str:
     return f"t={timestamp},v1={signature}"
 
 
-def test_main_webhook_valid_signature_is_accepted():
+def test_verify_stripe_webhook_with_valid_signature():
     payload = json.dumps({"type": "checkout.session.completed", "data": {"object": {"id": "cs_test"}}}).encode("utf-8")
     secret = "whsec_test_secret"
     header = _build_signature_header(payload, secret, int(time.time()))
@@ -24,14 +24,14 @@ def test_main_webhook_valid_signature_is_accepted():
     assert event["type"] == "checkout.session.completed"
 
 
-def test_main_webhook_invalid_signature_is_rejected():
+def test_verify_stripe_webhook_with_invalid_signature():
     payload = b'{"type":"checkout.session.completed"}'
     with pytest.raises(HTTPException) as exc:
         verify_and_parse_stripe_event(payload, "t=1,v1=deadbeef", "whsec_test_secret")
     assert exc.value.status_code == 400
 
 
-def test_early_adopter_webhook_valid_signature_is_accepted():
+def test_verify_stripe_webhook_with_different_secret_valid_signature():
     payload = json.dumps({"type": "checkout.session.completed", "data": {"object": {"metadata": {"user_id": "u1"}}}}).encode("utf-8")
     secret = "whsec_test_secret_early"
     header = _build_signature_header(payload, secret, int(time.time()))
@@ -40,9 +40,8 @@ def test_early_adopter_webhook_valid_signature_is_accepted():
     assert event["data"]["object"]["metadata"]["user_id"] == "u1"
 
 
-def test_early_adopter_webhook_invalid_signature_is_rejected():
+def test_verify_stripe_webhook_with_different_secret_invalid_signature():
     payload = b'{"type":"checkout.session.completed"}'
     with pytest.raises(HTTPException) as exc:
         verify_and_parse_stripe_event(payload, "t=1,v1=bad", "whsec_test_secret_early")
     assert exc.value.status_code == 400
-

@@ -5617,7 +5617,9 @@ app.add_middleware(
 async def create_db_indexes():
     """Create MongoDB indexes for common query patterns"""
     if ENVIRONMENT not in {"development", "production"}:
-        raise RuntimeError("ENVIRONMENT must be 'development' or 'production'.")
+        raise RuntimeError(
+            f"ENVIRONMENT must be 'development' or 'production', got '{ENVIRONMENT}'."
+        )
     validate_demo_mode_safety()
     log_demo_mode_status()
     # Expose db via app.state so sub-routers can access it via request.app.state.db
