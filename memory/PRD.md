@@ -95,3 +95,7 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
 - ⚠️ 2 bugs détectés dans la branche (non corrigés, en attente décision user):
   1. /api/chat/send (server.py:5014) ne reconnaît que status=="active" → ignore trial/early_adopter/premium → limite Free imposée aux users en essai (régression vs PR16).
   2. /api/training/today (server.py:3549) crash 500 quand aucun plan (generate_dynamic_training_plan renvoie None, `plan.get` sur None).
+
+## 2026-07-27 — Pull PR16Bis (PR #22, head 25835ec)
+- Chat IA : trial → tier "pro" (illimité). VÉRIFIÉ OK (réponse coach retournée).
+- ⚠️ training/today (server.py:3556) TOUJOURS cassé (500) : garde-fou incomplet, `plan["plan"]` peut être None. Fix restant: `sessions = (plan.get("plan") or {}).get("sessions", [])`. Non corrigé upstream.
