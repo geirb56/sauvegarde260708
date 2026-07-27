@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useAuth } from "@/context/AuthContext";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import { Card, CardContent } from "@/components/ui/card";
@@ -8,7 +9,6 @@ import { toast } from "sonner";
 
 import { API_BASE_URL } from "@/config";
 const API = API_BASE_URL;
-const USER_ID = "default";
 
 const STEPS = [
   { key: "welcome", title: "Welcome" },
@@ -53,6 +53,7 @@ function OptionGrid({ options, value, onSelect, testIdPrefix }) {
 
 export default function Onboarding() {
   const navigate = useNavigate();
+  const { getToken } = useAuth();
   const [stepIndex, setStepIndex] = useState(0);
   const [fitnessLevel, setFitnessLevel] = useState("");
   const [goal, setGoal] = useState("");
@@ -69,10 +70,10 @@ export default function Onboarding() {
   const connectGarmin = async () => {
     setGarminStatus("connecting");
     try {
-      const res = await axios.post(`${API}/garmin/connect?user_id=${USER_ID}`, {});
+      const res = await axios.post(`${API}/garmin/connect`, {});
       if (res.data?.status === "connected") {
         try {
-          const sync = await axios.post(`${API}/garmin/sync?user_id=${USER_ID}`, {});
+          const sync = await axios.post(`${API}/garmin/sync`, {});
           setGarminCount(sync.data?.synced_count || 0);
         } catch (syncErr) {
           // connected but sync failed — still mark connected
@@ -94,7 +95,7 @@ export default function Onboarding() {
     const loadPhysio = async () => {
       setLoadingPhysio(true);
       try {
-        const res = await axios.get(`${API}/run-index?user_id=${USER_ID}`);
+        const res = await axios.get(`${API}/run-index`);
         setPhysioData(res.data?.metrics || null);
       } catch (err) {
         setPhysioData(null);
@@ -162,14 +163,21 @@ export default function Onboarding() {
 
     setSaving(true);
     try {
-      await axios.post(`${API}/training/set-goal?goal=${targetMap[target]}`, {}, {
-        headers: { "X-User-Id": USER_ID },
-      });
-      await axios.post(`${API}/training/refresh?sessions=${sessionsMap[frequency]}`, {}, {
-        headers: { "X-User-Id": USER_ID },
-      });
+      const token = getToken();
+      const authHeaders = token ? { Authorization: `Bearer ${token}`} : {};
+      // Save onboarding data and create trial subscription
+      await axios.post(`${API}/user/onboarding`, {
+        fitness_level: fitnessLevel,
+        goal,
+        frequency,
+        device,
+        target,
+      }, { headers: authHeaders });
+      // Also set the training goal/plan
+      await axios.post(`${API}/training/set-goal?goal=${targetMap[target]}`, {}, { headers: authHeaders });
+      await axios.post(`${API}/training/refresh?sessions=${sessionsMap[frequency]}`, {}, { headers: authHeaders });
       toast.success("Personalized plan updated");
-      navigate("/training");
+      navigate("/");
     } catch (err) {
       toast.error("Unable to save onboarding choices");
     } finally {

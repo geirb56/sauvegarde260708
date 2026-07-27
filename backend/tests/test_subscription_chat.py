@@ -92,16 +92,12 @@ class TestSubscriptionStatus:
         response = requests.get(f"{BASE_URL}/api/subscription/status?user_id=default")
         data = response.json()
         
-        # Verify tier is one of the valid tiers (trial/early_adopter are full-access states)
-        assert data["tier"] in ["free", "starter", "premium", "confort", "pro", "trial", "early_adopter"]
+        # Verify tier is one of the valid tiers
+        assert data["tier"] in ["free", "premium", "confort", "pro"]
         
-        # Verify messages_remaining is calculated correctly.
-        # Unlimited plans (trial / early_adopter / premium / pro) don't decrement.
-        if data.get("is_unlimited"):
-            assert data["messages_remaining"] >= 0
-        else:
-            expected_remaining = data["messages_limit"] - data["messages_used"]
-            assert data["messages_remaining"] == expected_remaining
+        # Verify messages_remaining is calculated correctly
+        expected_remaining = data["messages_limit"] - data["messages_used"]
+        assert data["messages_remaining"] == expected_remaining
     
     def test_subscription_status_for_new_user(self):
         """New user defaults to free tier"""

@@ -67,11 +67,8 @@ from training_engine import (
     get_phase_description,
 )
 
-# Import Stripe integration
-from emergentintegrations.payments.stripe.checkout import (
-    StripeCheckout, 
-    CheckoutSessionRequest
-)
+# Import Supabase JWT validation
+from auth.supabase_jwt import extract_user_id as extract_jwt_user_id
 
 # Import subscription manager
 from subscription_manager import (
@@ -111,47 +108,43 @@ mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
-# Stripe configuration
-STRIPE_API_KEY = os.environ.get('STRIPE_API_KEY', '')
+# Paddle configuration
+PADDLE_API_KEY = os.environ.get('PADDLE_API_KEY', '')
+PADDLE_WEBHOOK_SECRET = os.environ.get('PADDLE_WEBHOOK_SECRET', '')
+PADDLE_PRICE_ID = os.environ.get('PADDLE_PRICE_ID', '')  # Price ID for Early Adopter 4.99€/month
 
-# Subscription tiers configuration
+# Supabase configuration
+SUPABASE_JWT_SECRET = os.environ.get('SUPABASE_JWT_SECRET', '')
+
+# Subscription tiers configuration (Early Adopter model)
 SUBSCRIPTION_TIERS = {
     "free": {
         "name": "Free",
         "price_monthly": 0,
-        "price_annual": 0,
         "messages_limit": 10,
-        "description": "Discovery"
+        "description": "Limited access"
     },
-    "premium": {
-        "name": "Premium",
-        "price_monthly": 4.99,
-        "price_annual": 49.99,
-        "messages_limit": 25,
-        "description": "Getting started"
-    },
-    "confort": {
-        "name": "Confort",
-        "price_monthly": 5.99,
-        "price_annual": 59.99,
-        "messages_limit": 50,
-        "description": "Regular usage"
-    },
-    "pro": {
-        "name": "Pro",
-        "price_monthly": 9.99,
-        "price_annual": 99.99,
-        "messages_limit": 150,  # Soft limit (fair-use)
+    "trial": {
+        "name": "Trial",
+        "price_monthly": 0,
+        "messages_limit": 999,
         "unlimited": True,
-        "description": "Unlimited"
+        "description": "30-day free trial"
+    },
+    "early_adopter": {
+        "name": "Early Adopter",
+        "price_monthly": 4.99,
+        "messages_limit": 999,
+        "unlimited": True,
+        "description": "Full access at 4.99€/month"
     }
 }
 
 def normalize_subscription_tier(tier: Optional[str]) -> str:
     """Normalize legacy tier IDs to current ones."""
-    if tier == "starter":
-        return "premium"
-    return tier or "premium"
+    if tier in ("starter", "comfort", "pro", "confort", "active", "premium"):
+        return "early_adopter"
+    return tier or "free"
 
 
 
@@ -273,40 +266,40 @@ security = HTTPBearer(auto_error=False)
 async def auth_user(
     request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(security),
-    x_user_id: Optional[str] = Header(None, alias="X-User-Id")
 ) -> dict:
     """
-    Flexible authentication dependency.
+    Supabase JWT authentication dependency.
 
-    Priority order:
-    1. Bearer token (JWT to be implemented)
-    2. Header X-User-Id
-    3. Query param user_id
-    4. Fallback "default"
+    Extracts user identity ONLY from a valid Supabase JWT ******
+    The backend NEVER trusts X-User-Id headers or ?user_id= query params for identity.
+
+    Raises HTTP 401 if no valid token is provided.
     """
-    user_id = None
-
-    # 1. Bearer token (placeholder for JWT)
     if credentials and credentials.credentials:
-        token = credentials.credentials
-        # TODO: Validate JWT and extract user_id
-        # For now, use the token as user_id if not JWT
-        if token.startswith("user_"):
-            user_id = token
+        user_id = extract_jwt_user_id(credentials.credentials)
+        if user_id:
+            return {"id": user_id, "authenticated": True, "token": credentials.credentials}
 
-    # 2. Header X-User-Id
-    if not user_id and x_user_id:
-        user_id = x_user_id
+    raise HTTPException(
+        status_code=401,
+        detail="Authentication required. Please provide a valid ******",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
-    # 3. Query param
-    if not user_id:
-        user_id = request.query_params.get("user_id")
 
-    # 4. Fallback
-    if not user_id:
-        user_id = "default"
-
-    return {"id": user_id, "authenticated": bool(credentials)}
+async def get_optional_user(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+) -> Optional[dict]:
+    """
+    Optional authentication — returns None if no valid token is present.
+    Use for endpoints that work both authenticated and unauthenticated.
+    """
+    if credentials and credentials.credentials:
+        user_id = extract_jwt_user_id(credentials.credentials)
+        if user_id:
+            return {"id": user_id, "authenticated": True, "token": credentials.credentials}
+    return None
 
 
 @app.middleware("http")
@@ -320,7 +313,14 @@ async def rate_limit_middleware(request: Request, call_next):
     if not request.url.path.startswith("/api"):
         return await call_next(request)
     
-    user_id = get_user_id_from_request(request)
+    # Try JWT first, fall back to IP for rate limiting
+    user_id = None
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        user_id = extract_jwt_user_id(auth_header[7:])
+    if not user_id:
+        forwarded = request.headers.get("X-Forwarded-For")
+        user_id = forwarded.split(",")[0].strip() if forwarded else (request.client.host if request.client else "unknown")
     
     if rate_limiter.is_limited(user_id):
         logger.warning(f"[RateLimit] User {user_id} exceeded rate limit")
@@ -354,8 +354,20 @@ async def subscription_middleware(request: Request, call_next):
     if not is_route_protected(path):
         return await call_next(request)
     
-    # Get user ID
-    user_id = get_user_id_from_request(request)
+    # Extract user ID from JWT token (Authorization header)
+    user_id = None
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+        user_id = extract_jwt_user_id(token)
+    
+    if not user_id:
+        # No valid JWT - block protected routes
+        return JSONResponse(
+            status_code=401,
+            content={"error": "authentication_required", "message": "Authentication required"},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     
     try:
         # Get subscription status
@@ -381,7 +393,15 @@ async def subscription_middleware(request: Request, call_next):
         
     except Exception as e:
         logger.error(f"[Subscription] Error checking subscription: {e}")
-        # In case of error, allow access (fail open)
+        # Fail closed: block access on error to prevent security bypass
+        logger.error(f"[Subscription] Blocking protected route {path} due to subscription check error")
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": "subscription_check_failed",
+                "message": "Unable to verify subscription status. Access denied.",
+            }
+        )
     
     return await call_next(request)
 
@@ -634,7 +654,7 @@ async def root():
 
 
 @api_router.get("/workouts", response_model=List[dict])
-async def get_workouts(user_id: str = "default"):
+async def get_workouts(user: dict = Depends(auth_user)):
     """Get all workouts for a user, sorted by date descending"""
     # Search for workouts with user_id OR without user_id (imported workouts)
     workouts = await db.workouts.find(
@@ -645,7 +665,9 @@ async def get_workouts(user_id: str = "default"):
 
 
 @api_router.get("/workouts/{workout_id}")
-async def get_workout(workout_id: str, user_id: str = "default"):
+async def get_workout(workout_id: str, user: dict = Depends(auth_user)):
+    user_id = user["id"]
+    user_id = user["id"]
     """Get a specific workout by ID"""
     # Search with or without user_id
     workout = await db.workouts.find_one(
@@ -658,7 +680,7 @@ async def get_workout(workout_id: str, user_id: str = "default"):
 
 
 @api_router.post("/workouts", response_model=Workout)
-async def create_workout(workout: WorkoutCreate, user_id: str = "default"):
+async def create_workout(workout: WorkoutCreate, user: dict = Depends(auth_user)):
     """Create a new workout"""
     workout_obj = Workout(**workout.model_dump())
     doc = workout_obj.model_dump()
@@ -670,6 +692,7 @@ async def create_workout(workout: WorkoutCreate, user_id: str = "default"):
 # ========== VMA / VO2MAX ESTIMATION ==========
 
 class VMAEstimationResponse(BaseModel):
+    user_id = user["id"]
     has_sufficient_data: bool
     confidence: str  # "high", "medium", "low", "insufficient"
     confidence_score: int  # 1-5 (5 = very confident)
@@ -861,7 +884,7 @@ def calculate_training_zones(vma_kmh: float, language: str = "en") -> dict:
 
 
 @api_router.get("/user/vma-estimate")
-async def get_vma_estimate(user_id: str = "default", language: str = "en"):
+async def get_vma_estimate(user: dict = Depends(auth_user), language: str = "en"):
     """Estimate VMA and VO2max from user data"""
     
     # Check if user has a goal (race performance to use)
@@ -874,6 +897,7 @@ async def get_vma_estimate(user_id: str = "default", language: str = "en"):
     ).sort("date", -1).to_list(100)
     
     if not all_workouts:
+        user_id = user["id"]
         return VMAEstimationResponse(
             has_sufficient_data=False,
             confidence="insufficient",
@@ -1149,14 +1173,16 @@ class UserGoalCreate(BaseModel):
 
 
 @api_router.get("/user/goal")
-async def get_user_goal(user_id: str = "default"):
+async def get_user_goal(user: dict = Depends(auth_user)):
     """Get user's current goal"""
     goal = await db.user_goals.find_one({"user_id": user_id}, {"_id": 0})
     return goal
 
 
 @api_router.post("/user/goal")
-async def set_user_goal(goal: UserGoalCreate, user_id: str = "default"):
+async def set_user_goal(goal: UserGoalCreate, user: dict = Depends(auth_user)):
+    user_id = user["id"]
+    user_id = user["id"]
     """Set user's goal (event with date, distance, target time)"""
     # Delete existing goal
     await db.user_goals.delete_many({"user_id": user_id})
@@ -1190,13 +1216,14 @@ async def set_user_goal(goal: UserGoalCreate, user_id: str = "default"):
 
 
 @api_router.delete("/user/goal")
-async def delete_user_goal(user_id: str = "default"):
+async def delete_user_goal(user: dict = Depends(auth_user)):
     """Delete user's goal"""
     result = await db.user_goals.delete_many({"user_id": user_id})
     return {"deleted": result.deleted_count > 0}
 
 
 def calculate_week_stats(workouts: list) -> dict:
+    user_id = user["id"]
     """Calculate current week statistics"""
     today = datetime.now(timezone.utc).date()
     # Rolling 7-day window (matches /training/metrics "THIS WEEK" and the ACWR
@@ -1281,7 +1308,7 @@ DASHBOARD_CACHE_TTL = 300  # 5 minutes in seconds
 
 
 @api_router.get("/dashboard/insight")
-async def get_dashboard_insight(language: str = "en", user_id: str = "default"):
+async def get_dashboard_insight(language: str = "en", user: dict = Depends(auth_user)):
     """Get dashboard coach insight with week and month summaries and recovery score - NO LLM"""
     
     # Check cache first
@@ -1289,6 +1316,7 @@ async def get_dashboard_insight(language: str = "en", user_id: str = "default"):
     now = datetime.now(timezone.utc).timestamp()
     
     if cache_key in _dashboard_cache:
+        user_id = user["id"]
         cached_data, cached_time = _dashboard_cache[cache_key]
         if now - cached_time < DASHBOARD_CACHE_TTL:
             logger.info(f"Dashboard insight cache hit for {cache_key}")
@@ -1435,7 +1463,7 @@ async def get_stats():
 
 
 @api_router.post("/coach/analyze", response_model=CoachResponse)
-async def analyze_with_coach(request: CoachRequest):
+async def analyze_with_coach(request: CoachRequest, user: dict = Depends(auth_user)):
     """Conversational Chat Coach with GPT-4o-mini
 
     The coach has access to:
@@ -1447,7 +1475,7 @@ async def analyze_with_coach(request: CoachRequest):
     """
     from llm_coach import enrich_chat_response
     
-    user_id = request.user_id or "default"
+    user_id = user["id"]
     language = request.language or "en"
     user_message = request.message or ""
 
@@ -1738,7 +1766,7 @@ async def analyze_with_coach(request: CoachRequest):
 
 
 @api_router.get("/coach/history")
-async def get_conversation_history(user_id: str = "default", limit: int = 50):
+async def get_conversation_history(user: dict = Depends(auth_user), limit: int = 50):
     """Get conversation history for a user"""
     messages = await db.conversations.find(
         {"user_id": user_id},
@@ -1748,7 +1776,9 @@ async def get_conversation_history(user_id: str = "default", limit: int = 50):
 
 
 @api_router.delete("/coach/history")
-async def clear_conversation_history(user_id: str = "default"):
+async def clear_conversation_history(user: dict = Depends(auth_user)):
+    user_id = user["id"]
+    user_id = user["id"]
     """Clear conversation history for a user"""
     result = await db.conversations.delete_many({"user_id": user_id})
     return {"deleted_count": result.deleted_count}
@@ -1762,11 +1792,11 @@ async def get_messages(limit: int = 20):
 
 
 @api_router.post("/coach/guidance", response_model=GuidanceResponse)
-async def get_adaptive_guidance(request: GuidanceRequest):
+async def get_adaptive_guidance(request: GuidanceRequest, user: dict = Depends(auth_user)):
     """Generate adaptive training guidance based on recent workouts - 100% LOCAL ENGINE"""
     
     language = request.language or "en"
-    user_id = request.user_id or "default"
+    user_id = user["id"]
     
     # Get recent workouts (last 14 days)
     all_workouts = await db.workouts.find({}, {"_id": 0}).sort("date", -1).to_list(100)
@@ -1864,7 +1894,7 @@ async def get_adaptive_guidance(request: GuidanceRequest):
 
 
 @api_router.get("/coach/guidance/latest")
-async def get_latest_guidance(user_id: str = "default"):
+async def get_latest_guidance(user: dict = Depends(auth_user)):
     """Get the most recent guidance for a user"""
     guidance = await db.guidance.find_one(
         {"user_id": user_id},
@@ -1872,6 +1902,7 @@ async def get_latest_guidance(user_id: str = "default"):
         sort=[("generated_at", -1)]
     )
     if not guidance:
+        user_id = user["id"]
         return None
     return guidance
 
@@ -2001,7 +2032,7 @@ def generate_review_signals(workouts: List[dict], baseline_workouts: List[dict])
 
 
 @api_router.get("/coach/digest")
-async def get_weekly_review(user_id: str = "default", language: str = "en"):
+async def get_weekly_review(user: dict = Depends(auth_user), language: str = "en"):
     """Generate weekly training review (Bilan de la semaine) - 100% LOCAL ENGINE, NO LLM"""
     
     # Get all workouts
@@ -2017,6 +2048,7 @@ async def get_weekly_review(user_id: str = "default", language: str = "en"):
     baseline_week = []
     
     for w in all_workouts:
+        user_id = user["id"]
         try:
             w_date = datetime.fromisoformat(w["date"].replace("Z", "+00:00").split("T")[0]).date()
             if week_start <= w_date <= today:
@@ -2085,7 +2117,7 @@ async def get_weekly_review(user_id: str = "default", language: str = "en"):
 
 
 @api_router.get("/coach/digest/latest")
-async def get_latest_digest(user_id: str = "default"):
+async def get_latest_digest(user: dict = Depends(auth_user)):
     """Get the most recent digest for a user"""
     digest = await db.digests.find_one(
         {"user_id": user_id},
@@ -2096,7 +2128,9 @@ async def get_latest_digest(user_id: str = "default"):
 
 
 @api_router.get("/coach/digest/history")
-async def get_digest_history(user_id: str = "default", limit: int = 10, skip: int = 0):
+async def get_digest_history(limit: int = 10, skip: int = 0, user: dict = Depends(auth_user)):
+    user_id = user["id"]
+    user_id = user["id"]
     """Get history of weekly digests for a user"""
     digests = await db.digests.find(
         {"user_id": user_id},
@@ -2115,7 +2149,7 @@ async def get_digest_history(user_id: str = "default", limit: int = 10, skip: in
 # ========== RAG-ENRICHED ENDPOINTS ==========
 
 @api_router.get("/rag/dashboard")
-async def get_rag_dashboard(user_id: str = "default"):
+async def get_rag_dashboard(user: dict = Depends(auth_user)):
     """Get RAG-enriched dashboard summary"""
     # Fetch workouts - use same logic as /api/workouts (no user_id filter since data has None)
     # This matches the main workouts endpoint behavior
@@ -2147,7 +2181,9 @@ async def get_rag_dashboard(user_id: str = "default"):
 
 
 @api_router.get("/rag/weekly-review")
-async def get_rag_weekly_review(user_id: str = "default", language: str = "fr"):
+async def get_rag_weekly_review(language: str = "fr", user: dict = Depends(auth_user)):
+    user_id = user["id"]
+    user_id = user["id"]
     """Get RAG-enriched weekly review with GPT-4o-mini enhancement"""
     # Fetch workouts
     workouts = await db.workouts.find(
@@ -2187,7 +2223,7 @@ async def get_rag_weekly_review(user_id: str = "default", language: str = "fr"):
 
 
 @api_router.get("/rag/workout/{workout_id}")
-async def get_rag_workout_analysis(workout_id: str, user_id: str = "default", language: str = "fr"):
+async def get_rag_workout_analysis(workout_id: str, user: dict = Depends(auth_user), language: str = "fr"):
     """Get RAG-enriched workout analysis with GPT-4o-mini enhancement"""
     # Fetch the workout
     workout = await db.workouts.find_one(
@@ -2196,6 +2232,7 @@ async def get_rag_workout_analysis(workout_id: str, user_id: str = "default", la
     )
     
     if not workout:
+        user_id = user["id"]
         raise HTTPException(status_code=404, detail="Workout not found")
     
     # Fetch all workouts for comparison
@@ -2348,7 +2385,7 @@ def calculate_mobile_signals(workout: dict, baseline: dict) -> dict:
 
 
 @api_router.get("/coach/workout-analysis/{workout_id}")
-async def get_mobile_workout_analysis(workout_id: str, language: str = "en", user_id: str = "default"):
+async def get_mobile_workout_analysis(workout_id: str, language: str = "en", user: dict = Depends(auth_user)):
     """Get mobile-first workout analysis with coach summary and signals - 100% LOCAL ENGINE"""
     
     # Get all workouts
@@ -2357,6 +2394,7 @@ async def get_mobile_workout_analysis(workout_id: str, language: str = "en", use
     # Find the workout
     workout = await db.workouts.find_one({"id": workout_id}, {"_id": 0})
     if not workout:
+        user_id = user["id"]
         workout = next((w for w in all_workouts if w["id"] == workout_id), None)
     
     if not workout:
@@ -2433,7 +2471,7 @@ class DetailedAnalysisResponse(BaseModel):
 
 
 @api_router.get("/coach/detailed-analysis/{workout_id}")
-async def get_detailed_analysis(workout_id: str, language: str = "en", user_id: str = "default"):
+async def get_detailed_analysis(workout_id: str, language: str = "en", user: dict = Depends(auth_user)):
     """Get card-based detailed analysis for mobile view - 100% LOCAL ENGINE"""
     
     # Get all workouts
@@ -2442,6 +2480,7 @@ async def get_detailed_analysis(workout_id: str, language: str = "en", user_id: 
     # Find the workout
     workout = await db.workouts.find_one({"id": workout_id}, {"_id": 0})
     if not workout:
+        user_id = user["id"]
         workout = next((w for w in all_workouts if w["id"] == workout_id), None)
     
     if not workout:
@@ -2576,11 +2615,12 @@ class TerraConnectRequest(BaseModel):
 
 
 @api_router.get("/terra/status")
-async def get_terra_status(user_id: str = "default"):
+async def get_terra_status(user: dict = Depends(auth_user)):
     """Get Terra connection status for a user."""
     token_doc = await db.terra_tokens.find_one({"user_id": user_id}, {"_id": 0})
 
     if not token_doc:
+        user_id = user["id"]
         return TerraConnectionStatus(connected=False)
 
     sync_info = await db.sync_history.find_one(
@@ -2603,7 +2643,7 @@ async def get_terra_status(user_id: str = "default"):
 
 
 @api_router.post("/terra/connect")
-async def terra_connect(req: TerraConnectRequest, user_id: str = "default"):
+async def terra_connect(req: TerraConnectRequest, user: dict = Depends(auth_user)):
     """Save a Terra access token for a user (token-based auth flow).
 
     In production, replace this with a full Terra OAuth widget flow.
@@ -2611,6 +2651,7 @@ async def terra_connect(req: TerraConnectRequest, user_id: str = "default"):
     posts it here to persist the connection.
     """
     if not req.token:
+        user_id = user["id"]
         raise HTTPException(status_code=400, detail="Terra token is required")
 
     # Optionally verify the token by fetching the Terra user profile.
@@ -2633,7 +2674,7 @@ async def terra_connect(req: TerraConnectRequest, user_id: str = "default"):
 
 
 @api_router.post("/terra/sync", response_model=TerraSyncResult)
-async def sync_terra(user_id: str = "default"):
+async def sync_terra(user: dict = Depends(auth_user)):
     """Sync all Terra data for a user: workouts + daily metrics.
 
     Calls syncTerraWorkouts and syncDailyMetrics then regenerates the
@@ -2641,6 +2682,7 @@ async def sync_terra(user_id: str = "default"):
     """
     token_doc = await db.terra_tokens.find_one({"user_id": user_id}, {"_id": 0})
     if not token_doc:
+        user_id = user["id"]
         return TerraSyncResult(success=False, synced_count=0, message="Not connected to Terra")
 
     try:
@@ -2667,13 +2709,14 @@ async def sync_terra(user_id: str = "default"):
 
 
 @api_router.post("/terra/sync-daily")
-async def sync_terra_daily(user_id: str = "default"):
+async def sync_terra_daily(user: dict = Depends(auth_user)):
     """Sync daily health metrics from Terra (HRV, RHR, sleep).
 
     Useful for a lightweight, metrics-only refresh without re-importing workouts.
     """
     token_doc = await db.terra_tokens.find_one({"user_id": user_id}, {"_id": 0})
     if not token_doc:
+        user_id = user["id"]
         raise HTTPException(status_code=400, detail="Not connected to Terra")
 
     try:
@@ -2698,7 +2741,7 @@ async def sync_terra_daily(user_id: str = "default"):
 
 
 @api_router.delete("/terra/disconnect")
-async def disconnect_terra(user_id: str = "default"):
+async def disconnect_terra(user: dict = Depends(auth_user)):
     """Disconnect Terra for a user (remove stored token)."""
     await db.terra_tokens.delete_one({"user_id": user_id})
     logger.info("Terra disconnected for user: %s", user_id)
@@ -2706,7 +2749,9 @@ async def disconnect_terra(user_id: str = "default"):
 
 
 @api_router.get("/terra/recovery")
-async def get_terra_recovery(user_id: str = "default"):
+async def get_terra_recovery(user: dict = Depends(auth_user)):
+    user_id = user["id"]
+    user_id = user["id"]
     """Return the latest persisted recovery score for a user.
 
     If no score exists for today, triggers a fresh computation.
@@ -2733,7 +2778,7 @@ async def get_terra_recovery(user_id: str = "default"):
 
 
 @api_router.get("/terra/recommendation")
-async def get_terra_recommendation(user_id: str = "default"):
+async def get_terra_recommendation(user: dict = Depends(auth_user)):
     """Return today's workout recommendation derived from Terra data.
 
     Triggers computation if no recommendation exists for today.
@@ -2744,6 +2789,7 @@ async def get_terra_recommendation(user_id: str = "default"):
     )
 
     if not doc:
+        user_id = user["id"]
         token_doc = await db.terra_tokens.find_one({"user_id": user_id})
         if token_doc:
             doc = await generateWorkoutRecommendation(user_id, db)
@@ -2762,12 +2808,13 @@ async def get_terra_recommendation(user_id: str = "default"):
 
 
 @api_router.get("/terra/daily-metrics")
-async def get_terra_daily_metrics(user_id: str = "default"):
+async def get_terra_daily_metrics(user: dict = Depends(auth_user)):
     """Return the latest daily metrics (HRV, RHR, sleep) for a user."""
     today = datetime.now(timezone.utc).date().isoformat()
     doc = await db.daily_metrics.find_one({"user_id": user_id, "date": today}, {"_id": 0})
 
     if not doc:
+        user_id = user["id"]
         # Attempt sync if connected.
         token_doc = await db.terra_tokens.find_one({"user_id": user_id})
         if token_doc:
@@ -2807,7 +2854,7 @@ _CARDIO_COACH_NO_DATA = {
 
 
 @api_router.get("/run-index")
-async def get_run_index(user_id: str = "default", language: str = "fr"):
+async def get_run_index(user: dict = Depends(auth_user), language: str = "fr"):
     """Return the full RunIndex running-screen payload.
 
     Data source: 100% real Garmin (gccli). Resting HR + sleep come from gccli;
@@ -2828,6 +2875,7 @@ async def get_run_index(user_id: str = "default", language: str = "fr"):
     # ----------------------------------------------------------------
     garmin_conn = await db.garmin_connections.find_one({"user_id": user_id}, {"_id": 0})
     if garmin_conn and garmin_conn.get("connected"):
+        user_id = user["id"]
         try:
             from garmin.insights import compute_run_index
             garmin_payload = await compute_run_index(db, user_id, language)
@@ -3239,20 +3287,8 @@ class SubscriptionStatusResponse(BaseModel):
     is_unlimited: bool = False
 
 
-class CreateCheckoutRequest(BaseModel):
-    origin_url: str
-    tier: str = "premium"  # premium, confort, pro
-    billing_period: str = "monthly"  # monthly, annual
-
-
-class CreateCheckoutResponse(BaseModel):
-    checkout_url: str
-    session_id: str
-
-
 class ChatRequest(BaseModel):
     message: str
-    user_id: str = "default"
     use_local_llm: bool = False  # True if using WebLLM on client
     language: Optional[str] = "en"  # Response language: "en" or "fr"
 
@@ -3278,7 +3314,6 @@ class SubscriptionTierInfo(BaseModel):
     id: str
     name: str
     price_monthly: float
-    price_annual: float
     messages_limit: int
     unlimited: bool = False
     description: str
@@ -3375,7 +3410,7 @@ async def refresh_training_plan(sessions: int = None, user: dict = Depends(auth_
 
 
 @api_router.delete("/training/goal")
-async def delete_training_goal(user_id: str = "default"):
+async def delete_training_goal(user: dict = Depends(auth_user)):
     """Delete the training goal"""
 
     result = await db.training_goals.delete_one({"user_id": user_id})
@@ -3390,6 +3425,7 @@ async def delete_training_goal(user_id: str = "default"):
 
 @api_router.get("/training-plan")
 async def get_training_plan(user: dict = Depends(auth_user)):
+    user_id = user["id"]
     """
     Retrieve the dynamic training plan for the user.
     Automatically generates sessions via LLM based on the cycle.
@@ -3429,13 +3465,14 @@ async def set_training_plan_goal(goal: str, user: dict = Depends(auth_user)):
 
 # Garder l'ancien endpoint pour compatibilité
 @api_router.get("/training/dynamic-plan")
-async def get_dynamic_training_plan_legacy(user_id: str = "default"):
+async def get_dynamic_training_plan_legacy(user: dict = Depends(auth_user)):
     """Legacy endpoint - utiliser /training-plan à la place"""
     return await generate_dynamic_training_plan(db, user_id)
 
 
 @api_router.get("/training/goals")
 async def get_available_goals():
+    user_id = user["id"]
     """Liste les types d'objectifs disponibles"""
     return {
         "goals": [
@@ -4334,7 +4371,7 @@ async def get_full_training_cycle(
 
 
 @api_router.get("/training/week-plan")
-async def get_week_plan(user_id: str = "default"):
+async def get_week_plan(user: dict = Depends(auth_user)):
     """
     Génère un plan d'entraînement détaillé pour la semaine via LLM.
     Utilise le contexte d'entraînement et l'objectif défini.
@@ -4343,6 +4380,7 @@ async def get_week_plan(user_id: str = "default"):
     goal = await db.training_goals.find_one({"user_id": user_id}, {"_id": 0})
     
     if not goal:
+        user_id = user["id"]
         raise HTTPException(status_code=400, detail="No goal defined. Use /api/training/set-goal first.")
 
     # Retrieve recent data for context
@@ -4512,7 +4550,6 @@ async def get_subscription_tiers():
             id=tier_id,
             name=config["name"],
             price_monthly=config["price_monthly"],
-            price_annual=config["price_annual"],
             messages_limit=config["messages_limit"],
             unlimited=config.get("unlimited", False),
             description=config["description"]
@@ -4521,7 +4558,7 @@ async def get_subscription_tiers():
 
 
 @api_router.get("/subscription/status")
-async def get_subscription_status(user_id: str = "default"):
+async def get_subscription_status(user: dict = Depends(auth_user)):
     """Check user's subscription status"""
     
     # Check subscription in DB
@@ -4539,6 +4576,7 @@ async def get_subscription_status(user_id: str = "default"):
     subscription_id = None
     
     if subscription and subscription.get("status") == "active":
+        user_id = user["id"]
         expires_at = subscription.get("expires_at")
         
         # Check if subscription is still valid
@@ -4556,7 +4594,7 @@ async def get_subscription_status(user_id: str = "default"):
                     tier = normalize_subscription_tier(subscription.get("tier", "premium"))
                     if tier not in SUBSCRIPTION_TIERS:
                         tier = "premium"
-                    tier_config = SUBSCRIPTION_TIERS.get(tier, SUBSCRIPTION_TIERS["premium"])
+                    tier_config = SUBSCRIPTION_TIERS.get(tier, SUBSCRIPTION_TIERS["early_adopter"])
                     is_premium = True
                     billing_period = subscription.get("billing_period", "monthly")
                     subscription_id = subscription.get("subscription_id")
@@ -4626,7 +4664,7 @@ async def get_subscription_status(user_id: str = "default"):
 
 # Keep old endpoint for backward compatibility
 @api_router.get("/premium/status")
-async def get_premium_status(user_id: str = "default"):
+async def get_premium_status(user: dict = Depends(auth_user)):
     """Check if user has active premium subscription (backward compat)"""
     status = await get_subscription_status(user_id)
     return {
@@ -4642,233 +4680,10 @@ async def get_premium_status(user_id: str = "default"):
     }
 
 
-@api_router.post("/subscription/checkout", response_model=CreateCheckoutResponse)
-async def create_subscription_checkout(request: CreateCheckoutRequest, http_request: Request, user_id: str = "default"):
-    """Create Stripe checkout session for subscription"""
-    
-    if not STRIPE_API_KEY:
-        raise HTTPException(status_code=500, detail="Stripe not configured")
-    
-    # Validate tier
-    requested_tier = normalize_subscription_tier(request.tier)
-    if requested_tier not in ["premium", "confort", "pro"]:
-        raise HTTPException(status_code=400, detail="Invalid subscription tier")
-    
-    tier_config = SUBSCRIPTION_TIERS[requested_tier]
-    
-    # Get price based on billing period
-    if request.billing_period == "annual":
-        amount = tier_config["price_annual"]
-    else:
-        amount = tier_config["price_monthly"]
-    
-    # Build URLs
-    success_url = f"{request.origin_url}/settings?session_id={{CHECKOUT_SESSION_ID}}&subscription=success"
-    cancel_url = f"{request.origin_url}/settings?subscription=cancelled"
-    
-    # Initialize Stripe
-    webhook_url = f"{str(http_request.base_url)}api/webhook/stripe"
-    stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
-    
-    # Create checkout session
-    checkout_request = CheckoutSessionRequest(
-        amount=amount,
-        currency="eur",
-        success_url=success_url,
-        cancel_url=cancel_url,
-        metadata={
-            "user_id": user_id,
-            "product": f"runindex_{requested_tier}",
-            "tier": requested_tier,
-            "billing_period": request.billing_period,
-            "type": "subscription"
-        }
-    )
-    
-    try:
-        session = await stripe_checkout.create_checkout_session(checkout_request)
-        
-        # Record transaction as pending
-        await db.payment_transactions.insert_one({
-            "session_id": session.session_id,
-            "user_id": user_id,
-            "amount": amount,
-            "currency": "eur",
-            "tier": requested_tier,
-            "billing_period": request.billing_period,
-            "status": "pending",
-            "product": f"runindex_{requested_tier}",
-            "created_at": datetime.now(timezone.utc).isoformat()
-        })
-        
-        logger.info("Checkout session created")
-        
-        return CreateCheckoutResponse(
-            checkout_url=session.url,
-            session_id=session.session_id
-        )
-    
-    except Exception as e:
-        logger.error(f"Stripe checkout error: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to create checkout: {str(e)}")
-
-
-# Keep old endpoint for backward compatibility
-@api_router.post("/premium/checkout", response_model=CreateCheckoutResponse)
-async def create_premium_checkout_compat(request: CreateCheckoutRequest, http_request: Request, user_id: str = "default"):
-    """Create Stripe checkout session (backward compat)"""
-    # Convert old request to new format - default to premium monthly
-    new_request = CreateCheckoutRequest(
-        origin_url=request.origin_url,
-        tier=getattr(request, 'tier', 'premium'),
-        billing_period=getattr(request, 'billing_period', 'monthly')
-    )
-    return await create_subscription_checkout(new_request, http_request, user_id)
-
-
-@api_router.get("/subscription/checkout/status/{session_id}")
-async def check_subscription_status(session_id: str, http_request: Request, user_id: str = "default"):
-    """Check status of a checkout session and activate subscription if paid"""
-    
-    if not STRIPE_API_KEY:
-        raise HTTPException(status_code=500, detail="Stripe not configured")
-    
-    # Check if already processed
-    existing = await db.payment_transactions.find_one({"session_id": session_id})
-    if existing and existing.get("status") == "completed":
-        return {"status": "completed", "message": "Already processed"}
-    
-    # Initialize Stripe
-    webhook_url = f"{str(http_request.base_url)}api/webhook/stripe"
-    stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
-    
-    try:
-        status = await stripe_checkout.get_checkout_status(session_id)
-        
-        if status.payment_status == "paid":
-            # Get tier and billing from transaction
-            transaction = await db.payment_transactions.find_one({"session_id": session_id})
-            actual_user_id = transaction.get("user_id", user_id) if transaction else user_id
-            tier = normalize_subscription_tier(transaction.get("tier", "premium") if transaction else "premium")
-            if tier not in SUBSCRIPTION_TIERS:
-                tier = "premium"
-            billing_period = transaction.get("billing_period", "monthly") if transaction else "monthly"
-            
-            # Update transaction
-            await db.payment_transactions.update_one(
-                {"session_id": session_id},
-                {"$set": {
-                    "status": "completed",
-                    "payment_status": status.payment_status,
-                    "completed_at": datetime.now(timezone.utc).isoformat()
-                }}
-            )
-            
-            # Calculate expiration (30 days for monthly, 365 for annual)
-            days = 365 if billing_period == "annual" else 30
-            expires_at = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
-            
-            # Create/update subscription
-            await db.subscriptions.update_one(
-                {"user_id": actual_user_id},
-                {"$set": {
-                    "user_id": actual_user_id,
-                    "subscription_id": session_id,
-                    "tier": tier,
-                    "billing_period": billing_period,
-                    "status": "active",
-                    "amount": transaction.get("amount") if transaction else 0,
-                    "currency": "eur",
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                    "expires_at": expires_at
-                }},
-                upsert=True
-            )
-            
-            tier_name = SUBSCRIPTION_TIERS.get(tier, {}).get("name", "Premium")
-            logger.info(f"Subscription activated for user {actual_user_id}: {tier} ({billing_period})")
-            
-            return {
-                "status": "completed",
-                "payment_status": status.payment_status,
-                "tier": tier,
-                "message": f"Abonnement {tier_name} activé ! Bienvenue dans RunIndex."
-            }
-        
-        elif status.payment_status == "unpaid":
-            return {"status": "pending", "payment_status": status.payment_status}
-        
-        else:
-            await db.payment_transactions.update_one(
-                {"session_id": session_id},
-                {"$set": {"status": status.payment_status}}
-            )
-            return {"status": status.status, "payment_status": status.payment_status}
-    
-    except Exception as e:
-        logger.error(f"Checkout status error: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to check status: {str(e)}")
-
-
-# Backward compat endpoint
-@api_router.get("/premium/checkout/status/{session_id}")
-async def check_checkout_status_compat(session_id: str, http_request: Request, user_id: str = "default"):
-    """Check checkout status (backward compat)"""
-    return await check_subscription_status(session_id, http_request, user_id)
-
-
-@api_router.post("/webhook/stripe")
-async def stripe_webhook(request: Request):
-    """Handle Stripe webhooks"""
-    
-    if not STRIPE_API_KEY:
-        raise HTTPException(status_code=500, detail="Stripe not configured")
-    
-    body = await request.body()
-    signature = request.headers.get("Stripe-Signature")
-    
-    webhook_url = f"{str(request.base_url)}api/webhook/stripe"
-    stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
-    
-    try:
-        webhook_response = await stripe_checkout.handle_webhook(body, signature)
-        
-        logger.info(f"Stripe webhook: {webhook_response.event_type} - {webhook_response.session_id}")
-        
-        if webhook_response.payment_status == "paid":
-            # Activate premium (same logic as checkout status)
-            user_id = webhook_response.metadata.get("user_id", "default")
-            
-            await db.payment_transactions.update_one(
-                {"session_id": webhook_response.session_id},
-                {"$set": {
-                    "status": "completed",
-                    "payment_status": "paid",
-                    "webhook_event": webhook_response.event_type,
-                    "completed_at": datetime.now(timezone.utc).isoformat()
-                }}
-            )
-            
-            expires_at = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
-            await db.subscriptions.update_one(
-                {"user_id": user_id},
-                {"$set": {
-                    "status": "active",
-                    "expires_at": expires_at
-                }},
-                upsert=True
-            )
-        
-        return {"received": True}
-    
-    except Exception as e:
-        logger.error(f"Webhook error: {e}")
-        raise HTTPException(status_code=400, detail=f"Webhook processing failed: {str(e)}")
-
-
 # ========== CHAT COACH (PREMIUM ONLY) ==========
 
 def build_chat_context(workouts: list, user_goal: dict = None) -> dict:
+    user_id = user["id"]
     """
     Construit le contexte utilisateur pour le chat coach (LLM ou templates).
     # LLM serveur uniquement – pas d'exécution client-side
@@ -4962,51 +4777,24 @@ def build_chat_context(workouts: list, user_goal: dict = None) -> dict:
     return context
 
 @api_router.post("/chat/send", response_model=ChatResponse)
-async def send_chat_message(request: ChatRequest):
-    """Send a message to the chat coach (with tier-based limits)"""
+async def send_chat_message(request: ChatRequest, user: dict = Depends(auth_user)):
+    """Send a message to the chat coach"""
     
-    user_id = request.user_id
+    user_id = user["id"]
     
-    # Get subscription status
-    subscription = await db.subscriptions.find_one(
-        {"user_id": user_id},
-        {"_id": 0}
-    )
+    # Get subscription status via subscription_manager
+    subscription = await get_demo_subscription(db, user_id)
+    status = subscription.get("status", SubscriptionStatus.FREE)
     
-    # Determine tier and limits
-    tier = "free"
-    tier_config = SUBSCRIPTION_TIERS["free"]
-    
-    if subscription and subscription.get("status") == "active":
-        # Check expiration
-        expires_at = subscription.get("expires_at")
-        if expires_at:
-            try:
-                exp_date = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-                if exp_date >= datetime.now(timezone.utc):
-                    tier = normalize_subscription_tier(subscription.get("tier", "premium"))
-                    if tier not in SUBSCRIPTION_TIERS:
-                        tier = "premium"
-                    tier_config = SUBSCRIPTION_TIERS.get(tier, SUBSCRIPTION_TIERS["premium"])
-            except (ValueError, TypeError):
-                pass
+    # Determine tier and limits based on subscription status
+    # trial and early_adopter get unlimited premium access
+    if status in (SubscriptionStatus.TRIAL, SubscriptionStatus.EARLY_ADOPTER):
+        tier = status
+        tier_config = SUBSCRIPTION_TIERS.get(status, SUBSCRIPTION_TIERS["early_adopter"])
+    else:
+        tier = "free"
+        tier_config = SUBSCRIPTION_TIERS["free"]
 
-    elif subscription and subscription.get("status") in ("trial", "early_adopter", "premium"):
-        # Full-access statuses managed by subscription_manager grant unlimited chat.
-        status_val = subscription.get("status")
-        trial_valid = True
-        if status_val == "trial":
-            trial_end = subscription.get("trial_end")
-            if trial_end:
-                try:
-                    if datetime.fromisoformat(trial_end.replace("Z", "+00:00")) < datetime.now(timezone.utc):
-                        trial_valid = False
-                except (ValueError, TypeError):
-                    pass
-        if trial_valid:
-            tier = status_val
-            _names = {"trial": "Free Trial", "early_adopter": "Early Adopter", "premium": "Premium"}
-            tier_config = {"name": _names[status_val], "messages_limit": 999, "unlimited": True}
     messages_limit = tier_config.get("messages_limit", 10)
     is_unlimited = tier_config.get("unlimited", False)
 
@@ -5149,7 +4937,7 @@ async def store_chat_response(user_id: str, message_id: str, response: str):
 
 
 @api_router.get("/chat/history")
-async def get_chat_history(user_id: str = "default", limit: int = 50):
+async def get_chat_history(user: dict = Depends(auth_user), limit: int = 50):
     """Get chat history for a user"""
     
     messages = await db.chat_messages.find(
@@ -5164,7 +4952,9 @@ async def get_chat_history(user_id: str = "default", limit: int = 50):
 
 
 @api_router.delete("/chat/history")
-async def clear_chat_history(user_id: str = "default"):
+async def clear_chat_history(user: dict = Depends(auth_user)):
+    user_id = user["id"]
+    user_id = user["id"]
     """Clear chat history for a user"""
     
     result = await db.chat_messages.delete_many({"user_id": user_id})
@@ -5207,35 +4997,21 @@ async def reset_service_metrics():
 
 # ========== SUBSCRIPTION SYSTEM (Early Adopter) ==========
 
-class SubscriptionInfo(BaseModel):
-    """Informations d'abonnement utilisateur"""
-    user_id: str
-    status: str  # trial, free, early_adopter, premium
-    display: Dict
-    features: Dict
-    trial_days_remaining: Optional[int] = None
-    price_locked: Optional[float] = None
-    stripe_customer_id: Optional[str] = None
-
-
-class ActivateSubscriptionRequest(BaseModel):
-    """Requête pour activer un abonnement"""
-    user_id: str = "default"
-    stripe_customer_id: Optional[str] = None
-    stripe_subscription_id: Optional[str] = None
-
-
 @api_router.get("/subscription/info")
-async def get_subscription_info(user_id: str = "default", language: str = "en"):
+async def get_subscription_info(
+    language: str = "en",
+    user: dict = Depends(auth_user),
+):
     """
-    Retrieves complete subscription information for a user.
+    Retrieves complete subscription information for the authenticated user.
     
     Returns:
-    - status: trial, free, early_adopter, premium
+    - status: trial, free, early_adopter
     - display: Localized UI texts
     - features: Accessible features
     - trial_days_remaining: Remaining days if in trial
     """
+    user_id = user["id"]
     subscription = await get_demo_subscription(db, user_id)
     status = subscription.get("status", SubscriptionStatus.FREE)
     
@@ -5246,43 +5022,17 @@ async def get_subscription_info(user_id: str = "default", language: str = "en"):
         "features": FEATURES.get(status, FEATURES[SubscriptionStatus.FREE]),
         "trial_days_remaining": get_trial_days_remaining(subscription),
         "price_locked": subscription.get("price_locked"),
-        "stripe_customer_id": subscription.get("stripe_customer_id"),
+        "paddle_customer_id": subscription.get("paddle_customer_id"),
         "created_at": subscription.get("created_at"),
         "activated_at": subscription.get("activated_at")
     }
 
 
-@api_router.post("/subscription/activate-early-adopter")
-async def activate_early_adopter_subscription(request: ActivateSubscriptionRequest):
-    """
-    Active l'abonnement Early Adopter pour un utilisateur.
-    Prix garanti à vie: 4.99€/mois
-    
-    Appelé après un paiement Stripe réussi.
-    """
-    subscription = await activate_early_adopter(
-        db,
-        request.user_id,
-        request.stripe_customer_id or f"cus_simulated_{request.user_id}",
-        request.stripe_subscription_id or f"sub_simulated_{request.user_id}"
-    )
-    
-    return {
-        "success": True,
-        "status": subscription.get("status"),
-        "message": "Abonnement Early Adopter activé ! Prix garanti à vie: 4.99€/mois",
-        "subscription": subscription
-    }
-
-
 @api_router.post("/subscription/cancel")
-async def cancel_user_subscription(user_id: str = "default"):
-    """
-    Annule l'abonnement d'un utilisateur.
-    Le statut passe à 'free'.
-    """
+async def cancel_user_subscription(user: dict = Depends(auth_user)):
+    """Cancel the authenticated user's subscription (switches to free)."""
+    user_id = user["id"]
     subscription = await cancel_subscription(db, user_id)
-    
     return {
         "success": True,
         "status": subscription.get("status"),
@@ -5290,289 +5040,248 @@ async def cancel_user_subscription(user_id: str = "default"):
     }
 
 
-@api_router.post("/subscription/simulate-trial-end")
-async def simulate_trial_end(user_id: str = "default"):
-    """
-    [DEV ONLY] Simulate end of free trial to test paywall.
-    """
-    await db.subscriptions.update_one(
-        {"user_id": user_id},
-        {
-            "$set": {
-                "trial_end": datetime.now(timezone.utc).isoformat(),
-                "status": SubscriptionStatus.FREE
-            }
-        }
-    )
-
-    return {
-        "success": True,
-        "message": "Trial ended, user set to FREE"
-    }
-
-
-@api_router.post("/subscription/reset-to-trial")
-async def reset_to_trial(user_id: str = "default"):
-    """
-    [DEV ONLY] Reset user to free trial.
-    """
-    now = datetime.now(timezone.utc)
-    trial_end = now + timedelta(days=TRIAL_DURATION_DAYS)
-
-    await db.subscriptions.update_one(
-        {"user_id": user_id},
-        {
-            "$set": {
-                "status": SubscriptionStatus.TRIAL,
-                "trial_start": now.isoformat(),
-                "trial_end": trial_end.isoformat(),
-                "updated_at": now.isoformat()
-            }
-        },
-        upsert=True
-    )
-
-    return {
-        "success": True,
-        "message": f"Free trial reactivated until {trial_end.isoformat()}"
-    }
-
-
 @api_router.get("/subscription/early-adopter-offer")
 async def get_early_adopter_offer(language: str = "en"):
-    """
-    Returns details of the Early Adopter offer.
-    """
+    """Public route: returns the Early Adopter offer details for the Paywall component."""
     if language == "fr":
         return {
-            "title": "Active ton coach running",
-            "subtitle": "Ton plan d'entraînement personnalisé est prêt",
-            "description": "Active ton abonnement pour y accéder.",
-            "offer_name": "Early Adopter",
-            "price": EARLY_ADOPTER_PRICE,
-            "price_display": f"{EARLY_ADOPTER_PRICE:.2f} € / mois",
-            "price_guarantee": "Prix garanti à vie",
+            "plan": "early_adopter",
+            "name": "RunIndex Early Adopter",
+            "price": 4.99,
+            "currency": "EUR",
+            "billing_period": "month",
+            "description": "Accès complet à RunIndex. Prix garanti à vie.",
             "features": [
-                "Plan d'entraînement personnalisé",
-                "Adaptation automatique du plan",
-                "Analyse intelligente des séances",
-                "Coach IA conversationnel",
-                "Synchronisation montres/apps",
-                "Prédictions de course"
+                "Coach IA illimité",
+                "Analyses avancées",
+                "Plans d'entraînement personnalisés",
+                "Synchronisation Garmin",
+                "Accès prioritaire aux nouvelles fonctionnalités",
+                "Prix bloqué à 4,99 €/mois à vie"
             ],
-            "cta_button": "Activer mon coach",
-            "trial_cta": "Profite de ton essai gratuit"
+            "cta": "Activer RunIndex"
         }
-    elif language == "es":
-        return {
-            "title": "Activa tu coach de running",
-            "subtitle": "Tu plan personalizado está listo",
-            "description": "Activa tu suscripción para acceder.",
-            "offer_name": "Early Adopter",
-            "price": EARLY_ADOPTER_PRICE,
-            "price_display": f"{EARLY_ADOPTER_PRICE:.2f} € / mes",
-            "price_guarantee": "Precio garantizado de por vida",
-            "features": [
-                "Plan de entrenamiento personalizado",
-                "Adaptación automática del plan",
-                "Análisis inteligente de sesiones",
-                "Coach IA conversacional",
-                "Sincronización relojes/apps",
-                "Predicciones de carrera"
-            ],
-            "cta_button": "Activar mi coach",
-            "trial_cta": "Disfruta tu prueba gratuita"
-        }
-    else:
-        return {
-            "title": "Activate your running coach",
-            "subtitle": "Your personalized training plan is ready",
-            "description": "Activate your subscription to access it.",
-            "offer_name": "Early Adopter",
-            "price": EARLY_ADOPTER_PRICE,
-            "price_display": f"€{EARLY_ADOPTER_PRICE:.2f} / month",
-            "price_guarantee": "Price guaranteed for life",
-            "features": [
-                "Personalized training plan",
-                "Automatic plan adaptation",
-                "Smart session analysis",
-                "AI conversational coach",
-                "Watch/app synchronization",
-                "Race predictions"
-            ],
-            "cta_button": "Activate my coach",
-            "trial_cta": "Enjoy your free trial"
-        }
+    return {
+        "plan": "early_adopter",
+        "name": "RunIndex Early Adopter",
+        "price": 4.99,
+        "currency": "EUR",
+        "billing_period": "month",
+        "description": "Full access to RunIndex. Price locked for life.",
+        "features": [
+            "Unlimited AI Coach",
+            "Advanced analytics",
+            "Personalized training plans",
+            "Garmin sync",
+            "Priority access to new features",
+            "Price locked at €4.99/month for life"
+        ],
+        "cta": "Activate RunIndex"
+    }
 
 
-@api_router.post("/subscription/early-adopter/checkout")
-async def create_early_adopter_checkout(http_request: Request, user_id: str = "default", origin_url: str = None):
+# ========== USER PROFILE & ONBOARDING ==========
+
+@api_router.get("/user/profile")
+async def get_user_profile(user: dict = Depends(auth_user)):
+    """Get the authenticated user's profile and onboarding status."""
+    user_id = user["id"]
+    profile = await db.user_profiles.find_one({"user_id": user_id}, {"_id": 0})
+    if not profile:
+        return {
+            "user_id": user_id,
+            "onboarding_completed": False,
+        }
+    return profile
+
+
+class OnboardingData(BaseModel):
+    fitness_level: Optional[str] = None
+    goal: Optional[str] = None
+    frequency: Optional[str] = None
+    device: Optional[str] = None
+    target: Optional[str] = None
+
+
+@api_router.post("/user/onboarding")
+async def save_onboarding(data: OnboardingData, user: dict = Depends(auth_user)):
     """
-    Create a Stripe Checkout session for the Early Adopter offer.
+    Save onboarding data and mark it as completed.
+    Creates the 30-day free trial subscription on first onboarding completion.
+    """
+    user_id = user["id"]
+    now = datetime.now(timezone.utc)
+
+    # Save profile
+    await db.user_profiles.update_one(
+        {"user_id": user_id},
+        {
+            "$set": {
+                "user_id": user_id,
+                "onboarding_completed": True,
+                "onboarding_completed_at": now.isoformat(),
+                "fitness_level": data.fitness_level,
+                "goal": data.goal,
+                "frequency": data.frequency,
+                "device": data.device,
+                "target": data.target,
+                "updated_at": now.isoformat(),
+            }
+        },
+        upsert=True,
+    )
+
+    # Create trial subscription if none exists
+    existing = await db.subscriptions.find_one({"user_id": user_id})
+    if not existing:
+        from subscription_manager import create_trial_subscription
+        await create_trial_subscription(db, user_id)
+        logger.info(f"[Onboarding] Trial subscription created for {user_id}")
+
+    return {"success": True, "onboarding_completed": True}
+
+
+@api_router.post("/subscription/paddle/checkout")
+async def create_paddle_checkout(http_request: Request, user: dict = Depends(auth_user)):
+    """
+    Create a Paddle Billing checkout session for the Early Adopter subscription.
     Price: 4.99€/month, guaranteed for life.
     """
-    if not STRIPE_API_KEY:
-        raise HTTPException(status_code=500, detail="Stripe not configured")
-
-    # Determine origin URL
-    if not origin_url:
-        origin_url = str(http_request.base_url).rstrip('/')
-        # In preview, use frontend URL
-        if "preview.emergentagent.com" in origin_url:
-            origin_url = origin_url.replace("/api", "").rstrip('/')
-
-    # Redirect URLs
-    success_url = f"{origin_url}/settings?session_id={{CHECKOUT_SESSION_ID}}&subscription=early_adopter_success"
-    cancel_url = f"{origin_url}/settings?subscription=cancelled"
-
-    # Webhook URL
-    webhook_url = f"{str(http_request.base_url).rstrip('/')}/api/webhook/stripe/early-adopter"
-
-    # Initialize Stripe
-    stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
-
-    # Create checkout session
-    checkout_request = CheckoutSessionRequest(
-        amount=float(EARLY_ADOPTER_PRICE),  # In euros (float format required by Stripe Emergent)
-        currency="eur",
-        success_url=success_url,
-        cancel_url=cancel_url,
-        metadata={
-            "user_id": user_id,
-            "product": "runindex_early_adopter",
-            "price_locked": str(EARLY_ADOPTER_PRICE),
-            "type": "subscription",
-            "plan": "early_adopter"
-        }
-    )
+    user_id = user["id"]
     
-    try:
-        session = await stripe_checkout.create_checkout_session(checkout_request)
-        
-        # Enregistrer la transaction en attente
-        await db.payment_transactions.insert_one({
-            "session_id": session.session_id,
-            "user_id": user_id,
-            "amount": EARLY_ADOPTER_PRICE,
-            "currency": "eur",
-            "plan": "early_adopter",
-            "status": "pending",
-            "product": "runindex_early_adopter",
-            "created_at": datetime.now(timezone.utc).isoformat()
-        })
-        
-        logger.info(f"Early Adopter checkout session created for user {user_id}: {session.session_id}")
-        
-        return {
-            "checkout_url": session.url,
-            "session_id": session.session_id
-        }
+    if not PADDLE_API_KEY:
+        raise HTTPException(status_code=500, detail="Paddle not configured")
+    if not PADDLE_PRICE_ID:
+        raise HTTPException(status_code=500, detail="Paddle price ID not configured")
+
+    # Determine return URL
+    origin_url = os.environ.get('FRONTEND_URL', str(http_request.base_url).rstrip('/'))
+    success_url = f"{origin_url}/subscription?paddle=success"
+    cancel_url = f"{origin_url}/subscription?paddle=cancelled"
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            "https://api.paddle.com/transactions",
+            headers={
+                "Authorization": f"******",
+                "Content-Type": "application/json",
+            },
+            json={
+                "items": [{"price_id": PADDLE_PRICE_ID, "quantity": 1}],
+                "custom_data": {"user_id": user_id},
+                "checkout": {
+                    "url": success_url,
+                },
+            },
+            timeout=15.0,
+        )
     
-    except Exception as e:
-        logger.error(f"Early Adopter Stripe checkout error: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to create checkout: {str(e)}")
+    if resp.status_code not in (200, 201):
+        logger.error(f"Paddle checkout error: {resp.status_code} {resp.text}")
+        raise HTTPException(status_code=502, detail="Failed to create Paddle checkout session")
+
+    data = resp.json().get("data", {})
+    checkout_url = data.get("checkout", {}).get("url")
+    transaction_id = data.get("id")
+    
+    if not checkout_url:
+        raise HTTPException(status_code=502, detail="Paddle returned no checkout URL")
+
+    await db.payment_transactions.insert_one({
+        "transaction_id": transaction_id,
+        "user_id": user_id,
+        "amount": EARLY_ADOPTER_PRICE,
+        "currency": "eur",
+        "plan": "early_adopter",
+        "status": "pending",
+        "provider": "paddle",
+        "created_at": datetime.now(timezone.utc).isoformat()
+    })
+
+    logger.info(f"Paddle checkout created for user {user_id}: {transaction_id}")
+    return {"checkout_url": checkout_url, "transaction_id": transaction_id}
 
 
-@api_router.post("/webhook/stripe/early-adopter")
-async def stripe_early_adopter_webhook(request: Request):
+@api_router.post("/webhook/paddle")
+async def paddle_webhook(request: Request):
     """
-    Webhook Stripe pour les paiements Early Adopter.
-    Active l'abonnement une fois le paiement confirmé.
+    Handle Paddle Billing webhooks.
+    Verifies the signature and activates/updates subscriptions.
     """
+    import hmac
+    import hashlib
+
+    body = await request.body()
+    
+    # Verify Paddle webhook signature
+    paddle_signature = request.headers.get("Paddle-Signature", "")
+    if PADDLE_WEBHOOK_SECRET and paddle_signature:
+        # Parse ts=...;h1=... format
+        sig_parts = dict(part.split("=", 1) for part in paddle_signature.split(";") if "=" in part)
+        ts = sig_parts.get("ts", "")
+        h1 = sig_parts.get("h1", "")
+        
+        signed_payload = f"{ts}:{body.decode()}"
+        expected = hmac.new(
+            PADDLE_WEBHOOK_SECRET.encode(),
+            signed_payload.encode(),
+            hashlib.sha256
+        ).hexdigest()
+        
+        if not hmac.compare_digest(expected, h1):
+            logger.warning("[Paddle] Invalid webhook signature")
+            raise HTTPException(status_code=400, detail="Invalid webhook signature")
+    elif PADDLE_WEBHOOK_SECRET and not paddle_signature:
+        logger.warning("[Paddle] Missing Paddle-Signature header")
+        raise HTTPException(status_code=400, detail="Missing webhook signature")
+
     try:
-        payload = await request.body()
-        event = json.loads(payload)
+        event = json.loads(body)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    event_type = event.get("event_type", "")
+    event_data = event.get("data", {})
+    
+    logger.info(f"[Paddle] Webhook received: {event_type}")
+
+    if event_type in ("subscription.created", "subscription.updated"):
+        # Extract user_id from custom_data
+        custom_data = event_data.get("custom_data") or {}
+        user_id = custom_data.get("user_id")
         
-        event_type = event.get("type", "")
-        logger.info(f"Early Adopter webhook received: {event_type}")
+        if not user_id:
+            logger.warning("[Paddle] Webhook missing user_id in custom_data")
+            return {"received": True}
         
-        if event_type == "checkout.session.completed":
-            session = event.get("data", {}).get("object", {})
-            metadata = session.get("metadata", {})
-            
-            user_id = metadata.get("user_id", "default")
-            session_id = session.get("id")
-            customer_id = session.get("customer")
-            subscription_id = session.get("subscription")
-            
-            # Activer l'abonnement Early Adopter
+        paddle_customer_id = event_data.get("customer_id", "")
+        paddle_subscription_id = event_data.get("id", "")
+        status = event_data.get("status", "")
+        
+        if status == "active":
             await activate_early_adopter(
                 db,
                 user_id,
-                customer_id or f"cus_{session_id}",
-                subscription_id or f"sub_{session_id}"
+                paddle_customer_id,
+                paddle_subscription_id
             )
-            
-            # Mettre à jour la transaction
-            await db.payment_transactions.update_one(
-                {"session_id": session_id},
-                {
-                    "$set": {
-                        "status": "completed",
-                        "stripe_customer_id": customer_id,
-                        "stripe_subscription_id": subscription_id,
-                        "completed_at": datetime.now(timezone.utc).isoformat()
-                    }
-                }
-            )
-            
-            logger.info(f"Early Adopter activated for user {user_id}")
-        
-        return {"received": True}
-    
-    except Exception as e:
-        logger.error(f"Early Adopter webhook error: {e}")
-        return {"received": True, "error": str(e)}
+            logger.info(f"[Paddle] Activated Early Adopter for user {user_id}")
+
+    elif event_type == "subscription.cancelled":
+        custom_data = event_data.get("custom_data") or {}
+        user_id = custom_data.get("user_id")
+        if user_id:
+            await cancel_subscription(db, user_id)
+            logger.info(f"[Paddle] Cancelled subscription for user {user_id}")
+
+    elif event_type == "transaction.payment_failed":
+        custom_data = event_data.get("custom_data") or {}
+        user_id = custom_data.get("user_id", "unknown")
+        logger.warning(f"[Paddle] Payment failed for user {user_id}")
+
+    return {"received": True}
 
 
-@api_router.get("/subscription/verify-checkout/{session_id}")
-async def verify_checkout_session(session_id: str, user_id: str = "default"):
-    """
-    Vérifie le statut d'une session checkout et active l'abonnement si payé.
-    Appelé par le frontend après retour de Stripe.
-    """
-    try:
-        # Vérifier la transaction
-        transaction = await db.payment_transactions.find_one({"session_id": session_id})
-        
-        if not transaction:
-            return {"success": False, "error": "Session not found"}
-        
-        if transaction.get("status") == "completed":
-            # Déjà traité
-            subscription = await get_user_subscription(db, user_id)
-            return {
-                "success": True,
-                "status": subscription.get("status"),
-                "already_processed": True
-            }
-        
-        # Pour les tests, activer directement si la session existe
-        # En production, cela serait vérifié via l'API Stripe
-        if transaction.get("plan") == "early_adopter":
-            await activate_early_adopter(
-                db,
-                user_id,
-                f"cus_{session_id}",
-                f"sub_{session_id}"
-            )
-            
-            await db.payment_transactions.update_one(
-                {"session_id": session_id},
-                {"$set": {"status": "completed", "completed_at": datetime.now(timezone.utc).isoformat()}}
-            )
-            
-            return {
-                "success": True,
-                "status": "early_adopter",
-                "message": "Abonnement Early Adopter activé !"
-            }
-        
-        return {"success": False, "error": "Unknown plan"}
-    
-    except Exception as e:
-        logger.error(f"Verify checkout error: {e}")
-        return {"success": False, "error": str(e)}
 
 
 # Register Garmin connector endpoints under /api (/api/garmin/*)
