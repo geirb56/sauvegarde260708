@@ -45,3 +45,4 @@ def test_verify_stripe_webhook_with_malformed_signature():
     with pytest.raises(HTTPException) as exc:
         verify_and_parse_stripe_event(payload, "t=1,v1=bad", "whsec_test_secret")
     assert exc.value.status_code == 400
+    assert exc.value.detail == "Invalid Stripe webhook signature"

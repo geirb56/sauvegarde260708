@@ -41,6 +41,15 @@ def validate_demo_mode_safety() -> None:
         )
 
 
+def validate_environment_configuration() -> None:
+    """Ensure ENVIRONMENT is one of the supported runtime values."""
+    if ENVIRONMENT not in {"development", "production"}:
+        raise RuntimeError(
+            f"ENVIRONMENT must be 'development' or 'production', got '{ENVIRONMENT}'. "
+            "Set this via the ENVIRONMENT environment variable."
+        )
+
+
 def log_demo_mode_status() -> None:
     """Emit explicit startup warning when demo mode is active in development."""
     if DEMO_MODE and ENVIRONMENT != "production":

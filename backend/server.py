@@ -92,6 +92,7 @@ from demo_mode import (
     is_subscription_active,
     patch_subscription_status_response,
     validate_demo_mode_safety,
+    validate_environment_configuration,
     log_demo_mode_status,
 )
 from services.stripe_webhook_security import verify_and_parse_stripe_event
@@ -4857,7 +4858,7 @@ async def stripe_webhook(request: Request):
     
     body = await request.body()
     signature = request.headers.get("Stripe-Signature")
-    verify_and_parse_stripe_event(body, signature, STRIPE_WEBHOOK_SECRET)
+    verified_event = verify_and_parse_stripe_event(body, signature, STRIPE_WEBHOOK_SECRET)
     
     webhook_url = f"{str(request.base_url)}api/webhook/stripe"
     stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
@@ -4865,7 +4866,8 @@ async def stripe_webhook(request: Request):
     try:
         webhook_response = await stripe_checkout.handle_webhook(body, signature)
         
-        logger.info(f"Stripe webhook: {webhook_response.event_type} - {webhook_response.session_id}")
+        event_type = webhook_response.event_type or verified_event.get("type", "unknown")
+        logger.info(f"Stripe webhook: {event_type} - {webhook_response.session_id}")
         
         if webhook_response.payment_status == "paid":
             # Activate premium (same logic as checkout status)
@@ -5616,11 +5618,7 @@ app.add_middleware(
 @app.on_event("startup")
 async def create_db_indexes():
     """Create MongoDB indexes for common query patterns"""
-    if ENVIRONMENT not in {"development", "production"}:
-        raise RuntimeError(
-            f"ENVIRONMENT must be 'development' or 'production', got '{ENVIRONMENT}'. "
-            "Set this via the ENVIRONMENT environment variable."
-        )
+    validate_environment_configuration()
     validate_demo_mode_safety()
     log_demo_mode_status()
     # Expose db via app.state so sub-routers can access it via request.app.state.db
