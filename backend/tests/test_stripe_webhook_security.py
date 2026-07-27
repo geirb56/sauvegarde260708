@@ -33,7 +33,7 @@ def test_verify_stripe_webhook_with_invalid_signature():
 
 def test_verify_stripe_webhook_with_valid_signature_and_metadata():
     payload = json.dumps({"type": "checkout.session.completed", "data": {"object": {"metadata": {"user_id": "u1"}}}}).encode("utf-8")
-    secret = "whsec_test_secret_early"
+    secret = "whsec_test_secret"
     header = _build_signature_header(payload, secret, int(time.time()))
 
     event = verify_and_parse_stripe_event(payload, header, secret)
@@ -43,5 +43,5 @@ def test_verify_stripe_webhook_with_valid_signature_and_metadata():
 def test_verify_stripe_webhook_with_malformed_signature():
     payload = b'{"type":"checkout.session.completed"}'
     with pytest.raises(HTTPException) as exc:
-        verify_and_parse_stripe_event(payload, "t=1,v1=bad", "whsec_test_secret_early")
+        verify_and_parse_stripe_event(payload, "t=1,v1=bad", "whsec_test_secret")
     assert exc.value.status_code == 400
