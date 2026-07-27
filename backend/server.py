@@ -3546,6 +3546,13 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
 
     # 1. Get the planned session for this week
     plan = await generate_dynamic_training_plan(db, user["id"])
+    # Guard: if no active goal/plan exists, return a graceful 200 instead of crashing
+    if plan is None:
+        return {
+            "has_plan": False,
+            "message": "Aucun plan d'entraînement actif",
+            "suggestion": "Créez un objectif pour générer votre plan personnalisé.",
+        }
     sessions = plan.get("plan", {}).get("sessions", [])
     # VMA is the single source of truth for all target paces.
     vma = plan.get("vma") or (plan.get("context", {}) or {}).get("vma")
@@ -5011,19 +5018,30 @@ async def send_chat_message(request: ChatRequest):
     tier = "free"
     tier_config = SUBSCRIPTION_TIERS["free"]
     
-    if subscription and subscription.get("status") == "active":
-        # Check expiration
-        expires_at = subscription.get("expires_at")
-        if expires_at:
-            try:
-                exp_date = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-                if exp_date >= datetime.now(timezone.utc):
-                    tier = normalize_subscription_tier(subscription.get("tier", "premium"))
-                    if tier not in SUBSCRIPTION_TIERS:
-                        tier = "premium"
-                    tier_config = SUBSCRIPTION_TIERS.get(tier, SUBSCRIPTION_TIERS["premium"])
-            except (ValueError, TypeError):
-                pass
+    # Premium-equivalent statuses: active (Stripe), trial (free trial), early_adopter and premium
+    # (legacy/manual grants). All get full chat access; only truly free users keep the 10-msg cap.
+    PREMIUM_STATUSES = {"active", "trial", "early_adopter", "premium"}
+    if subscription and subscription.get("status") in PREMIUM_STATUSES:
+        status_val = subscription.get("status")
+        # For "active" subscriptions verify the expiry date from Stripe
+        if status_val == "active":
+            expires_at = subscription.get("expires_at")
+            if expires_at:
+                try:
+                    exp_date = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+                    if exp_date >= datetime.now(timezone.utc):
+                        tier = normalize_subscription_tier(subscription.get("tier", "premium"))
+                        if tier not in SUBSCRIPTION_TIERS:
+                            tier = "premium"
+                        tier_config = SUBSCRIPTION_TIERS.get(tier, SUBSCRIPTION_TIERS["premium"])
+                except (ValueError, TypeError):
+                    pass
+        else:
+            # trial / early_adopter / premium: grant full access (use "premium" tier config)
+            tier = normalize_subscription_tier(subscription.get("tier", "premium"))
+            if tier not in SUBSCRIPTION_TIERS:
+                tier = "premium"
+            tier_config = SUBSCRIPTION_TIERS.get(tier, SUBSCRIPTION_TIERS["premium"])
 
     messages_limit = tier_config.get("messages_limit", 10)
     is_unlimited = tier_config.get("unlimited", False)
