@@ -3553,6 +3553,15 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
 
     # 1. Get the planned session for this week
     plan = await generate_dynamic_training_plan(db, user["id"])
+    if not plan:
+        return {
+            "has_plan": False,
+            "status": "no_plan",
+            "message": "Aucun plan d'entraînement actif",
+            "suggestion": "Créez un objectif d'entraînement pour générer votre plan.",
+            "date": today_iso,
+            "day": day_name,
+        }
     sessions = plan.get("plan", {}).get("sessions", [])
     # VMA is the single source of truth for all target paces.
     vma = plan.get("vma") or (plan.get("context", {}) or {}).get("vma")
@@ -4560,6 +4569,7 @@ async def get_subscription_tiers():
 @api_router.get("/subscription/status")
 async def get_subscription_status(user: dict = Depends(auth_user)):
     """Check user's subscription status"""
+    user_id = user["id"]
     
     # Check subscription in DB
     subscription = await db.subscriptions.find_one(
@@ -4593,7 +4603,7 @@ async def get_subscription_status(user: dict = Depends(auth_user)):
                     # Active subscription
                     tier = normalize_subscription_tier(subscription.get("tier", "premium"))
                     if tier not in SUBSCRIPTION_TIERS:
-                        tier = "premium"
+                        tier = "early_adopter"
                     tier_config = SUBSCRIPTION_TIERS.get(tier, SUBSCRIPTION_TIERS["early_adopter"])
                     is_premium = True
                     billing_period = subscription.get("billing_period", "monthly")
@@ -4666,7 +4676,7 @@ async def get_subscription_status(user: dict = Depends(auth_user)):
 @api_router.get("/premium/status")
 async def get_premium_status(user: dict = Depends(auth_user)):
     """Check if user has active premium subscription (backward compat)"""
-    status = await get_subscription_status(user_id)
+    status = await get_subscription_status(user)
     return {
         "is_premium": status.is_premium or status.tier != "free",
         "subscription_id": status.subscription_id,
@@ -4683,7 +4693,6 @@ async def get_premium_status(user: dict = Depends(auth_user)):
 # ========== CHAT COACH (PREMIUM ONLY) ==========
 
 def build_chat_context(workouts: list, user_goal: dict = None) -> dict:
-    user_id = user["id"]
     """
     Construit le contexte utilisateur pour le chat coach (LLM ou templates).
     # LLM serveur uniquement – pas d'exécution client-side
@@ -4786,9 +4795,15 @@ async def send_chat_message(request: ChatRequest, user: dict = Depends(auth_user
     subscription = await get_demo_subscription(db, user_id)
     status = subscription.get("status", SubscriptionStatus.FREE)
     
-    # Determine tier and limits based on subscription status
-    # trial and early_adopter get unlimited premium access
-    if status in (SubscriptionStatus.TRIAL, SubscriptionStatus.EARLY_ADOPTER):
+    # Premium chat access is granted to all paying/trial statuses; only truly
+    # free users must remain on the 10-messages/month free limit.
+    premium_chat_statuses = {
+        "active",
+        "trial",
+        "early_adopter",
+        "premium",
+    }
+    if status in premium_chat_statuses:
         tier = status
         tier_config = SUBSCRIPTION_TIERS.get(status, SUBSCRIPTION_TIERS["early_adopter"])
     else:
