@@ -3553,7 +3553,7 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
             "message": "Aucun plan d'entraînement actif",
             "suggestion": "Créez un objectif pour générer votre plan personnalisé.",
         }
-    sessions = plan.get("plan", {}).get("sessions", [])
+    sessions = (plan.get("plan") or {}).get("sessions", [])
     # VMA is the single source of truth for all target paces.
     vma = plan.get("vma") or (plan.get("context", {}) or {}).get("vma")
 

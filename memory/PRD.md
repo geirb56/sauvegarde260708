@@ -99,3 +99,10 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
 ## 2026-07-27 — Pull PR16Bis (PR #22, head 25835ec)
 - Chat IA : trial → tier "pro" (illimité). VÉRIFIÉ OK (réponse coach retournée).
 - ⚠️ training/today (server.py:3556) TOUJOURS cassé (500) : garde-fou incomplet, `plan["plan"]` peut être None. Fix restant: `sessions = (plan.get("plan") or {}).get("sessions", [])`. Non corrigé upstream.
+
+## 2026-07-27 — Correctif local training/today (patch ciblé)
+- server.py:3556 : `plan.get("plan", {})` -> `(plan.get("plan") or {})`. Corrige le crash 500 quand `plan["plan"]` est None (cycle upcoming/sans plan actif).
+- VÉRIFIÉ via curl (URL externe) :
+  - CASE 1 (aucun plan actif / upcoming) -> HTTP 200, réponse gracieuse, aucun traceback.
+  - CASE 2 (plan actif, 7 séances) -> HTTP 200, status "success" avec planned_session + adaptive_session. (testé via objectif temporaire puis état restauré à l'identique).
+- À COMMITTER côté GitHub via "Save to Github" (message: "Fix training today null plan guard") sinon écrasé au prochain pull.
