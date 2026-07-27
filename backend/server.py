@@ -3553,6 +3553,15 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
 
     # 1. Get the planned session for this week
     plan = await generate_dynamic_training_plan(db, user["id"])
+    if not plan:
+        return {
+            "has_plan": False,
+            "status": "no_plan",
+            "message": "Aucun plan d'entraînement actif",
+            "suggestion": "Créez un objectif d'entraînement pour générer votre plan.",
+            "date": today_iso,
+            "day": day_name,
+        }
     sessions = plan.get("plan", {}).get("sessions", [])
     # VMA is the single source of truth for all target paces.
     vma = plan.get("vma") or (plan.get("context", {}) or {}).get("vma")
@@ -4786,9 +4795,15 @@ async def send_chat_message(request: ChatRequest, user: dict = Depends(auth_user
     subscription = await get_demo_subscription(db, user_id)
     status = subscription.get("status", SubscriptionStatus.FREE)
     
-    # Determine tier and limits based on subscription status
-    # trial and early_adopter get unlimited premium access
-    if status in (SubscriptionStatus.TRIAL, SubscriptionStatus.EARLY_ADOPTER):
+    # Premium chat access is granted to all paying/trial statuses; only truly
+    # free users must remain on the 10-messages/month free limit.
+    premium_chat_statuses = {
+        "active",
+        "trial",
+        "early_adopter",
+        "premium",
+    }
+    if status in premium_chat_statuses:
         tier = status
         tier_config = SUBSCRIPTION_TIERS.get(status, SUBSCRIPTION_TIERS["early_adopter"])
     else:
