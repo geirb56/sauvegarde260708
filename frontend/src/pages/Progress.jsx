@@ -90,7 +90,7 @@ export default function Progress() {
 
         // Garmin daily health metrics (HRV / resting HR / sleep)
         try {
-          const garminRes = await axios.get(`${API}/garmin/daily-metrics?user_id=${userId}&days=7`);
+          const garminRes = await axios.get(`${API}/garmin/daily-metrics?days=7`);
           if (garminRes.data?.count > 0) setGarminHealth(garminRes.data);
         } catch {
           /* Garmin not connected — section stays hidden */

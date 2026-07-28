@@ -62,7 +62,7 @@ export default function Guidance() {
 
   const loadLatestGuidance = async () => {
     try {
-      const res = await axios.get(`${API}/coach/guidance/latest?user_id=${userId}`);
+      const res = await axios.get(`${API}/coach/guidance/latest`);
       setGuidance(res.data);
     } catch (error) {
       console.error("Failed to load guidance:", error);
@@ -75,8 +75,7 @@ export default function Guidance() {
     setGenerating(true);
     try {
       const res = await axios.post(`${API}/coach/guidance`, {
-        language: lang,
-        user_id: userId
+        language: lang
       });
       setGuidance(res.data);
       toast.success(t("guidanceExtended.generated"));

@@ -355,30 +355,18 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
 
     # Retrieve workouts
     workouts_7 = await db.workouts.find({
-        "$or": [
-            {"user_id": user_id},
-            {"user_id": None},
-            {"user_id": {"$exists": False}}
-        ],
+        "user_id": user_id,
         "date": {"$gte": seven_days_ago.isoformat()}
     }).to_list(100)
     
     workouts_28 = await db.workouts.find({
-        "$or": [
-            {"user_id": user_id},
-            {"user_id": None},
-            {"user_id": {"$exists": False}}
-        ],
+        "user_id": user_id,
         "date": {"$gte": twenty_eight_days_ago.isoformat()}
     }).to_list(300)
 
     # 6-week data for VMA calculation
     workouts_6w = await db.workouts.find({
-        "$or": [
-            {"user_id": user_id},
-            {"user_id": None},
-            {"user_id": {"$exists": False}}
-        ],
+        "user_id": user_id,
         "date": {"$gte": six_weeks_ago.isoformat()}
     }).to_list(500)
 

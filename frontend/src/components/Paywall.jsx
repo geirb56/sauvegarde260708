@@ -79,7 +79,7 @@ export default function Paywall({
     try {
       // Créer une session Stripe Checkout pour Early Adopter
       const res = await axios.post(
-        `${API}/subscription/early-adopter/checkout?user_id=${encodeURIComponent(userId)}&origin_url=${encodeURIComponent(window.location.origin)}`
+        `${API}/subscription/early-adopter/checkout?origin_url=${encodeURIComponent(window.location.origin)}`
       );
       
       if (res.data?.checkout_url) {
