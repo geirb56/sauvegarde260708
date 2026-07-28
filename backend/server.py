@@ -282,18 +282,32 @@ RATE_LIMIT_EXEMPT = {"/api/cache/stats"}
 
 
 def get_user_id_from_request(request: Request) -> str:
-    """Extract user_id from request"""
-    # Try query param first
-    user_id = request.query_params.get("user_id")
-    if user_id:
-        return user_id
+    """Extract user_id from request.
 
-    # Then the X-User-Id header (what the frontend sends), mirroring auth_user()
+    Resolution order (Step 2: JWT-first):
+    1. JWT ****** — Authorization: ****** (sub claim)
+    2. X-User-Id header  — legacy / internal header
+    3. IP address        — last-resort fallback
+    """
+    # 1. Try JWT ****** first
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[len("Bearer "):]
+        try:
+            from auth.jwt_utils import decode_access_token
+            payload = decode_access_token(token)
+            user_id = payload.get("sub")
+            if user_id:
+                return user_id
+        except Exception:
+            pass  # Fall through to next resolution method
+
+    # 2. X-User-Id header (legacy / internal)
     header_user_id = request.headers.get("X-User-Id")
     if header_user_id:
         return header_user_id
 
-    # Fallback to IP
+    # 3. Fallback to IP
     forwarded = request.headers.get("X-Forwarded-For")
     if forwarded:
         return forwarded.split(",")[0].strip()
