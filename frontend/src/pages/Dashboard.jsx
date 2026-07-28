@@ -427,7 +427,7 @@ export default function Dashboard() {
     setCardioLoading(true);
     setCardioError(null);
     try {
-      const res = await axios.get(`${API}/run-index?user_id=${userId}&language=${lang}`);
+      const res = await axios.get(`${API}/run-index?language=${lang}`);
       setCardioData(res.data);
     } catch (err) {
       console.error("RunIndex fetch failed:", err);

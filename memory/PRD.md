@@ -118,3 +118,11 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
   - 141 activités restent sous "default"; nouvel user voit une app vide.
   - Frontend n'envoie plus X-User-Id -> le propriétaire ne voit plus ses données via l'UI sans migration.
 - Compte test: testrunner@runindex.app / Test1234! (voir test_credentials.md).
+
+## 2026-07-28 — Pull PR22 mis à jour (PR #25 "ÉTAPE 2/3", head 72a77bb)
+- auth_user exige désormais un JWT (fallbacks X-User-Id/query supprimés -> 401/403). Trial 30j auto-créé à l'inscription (auth/router.py). /subscription/info et handlers migrés vers JWT.
+- VÉRIFIÉ: register->trial(29j, UUID), /subscription/info JWT OK, no-auth=403, X-User-Id=default=401.
+- ⚠️ BUG RESTANT (dernier blocage): le middleware d'abonnement (server.py:397) utilise get_user_id_from_request (server.py:284) qui lit query param -> header X-User-Id -> IP, PAS le JWT. Donc /workouts, /training/*, /coach/* (routes protégées) sont bloquées 403 pour un user JWT-only (middleware résout l'IP au lieu de l'UUID).
+  - Preuve: /workouts JWT seul=403 ; /workouts?user_id=<UUID> JWT=200 [].
+  - FIX upstream: dans get_user_id_from_request, décoder le Bearer JWT en premier (comme auth_user) et retourner payload['sub'] avant les fallbacks query/header/IP.
+- Comptes test créés: isotest_*@runindex.app / Test1234! (jetables).

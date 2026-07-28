@@ -23,7 +23,7 @@ export function SubscriptionProvider({ children }) {
       return;
     }
     try {
-      const res = await axios.get(`${API}/subscription/info?user_id=${userId}&language=${lang}`);
+      const res = await axios.get(`${API}/subscription/info?language=${lang}`);
       setSubscription(res.data);
       setError(null);
     } catch (err) {

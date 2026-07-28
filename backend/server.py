@@ -307,59 +307,45 @@ security = HTTPBearer(auto_error=False)
 async def auth_user(
     request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(security),
-    x_user_id: Optional[str] = Header(None, alias="X-User-Id")
 ) -> dict:
     """Authentication dependency.
 
-    Validates a JWT ****** produced by /api/auth/login or /api/auth/register.
-    Falls back to X-User-Id header (legacy) and query param user_id for backward
-    compatibility with existing endpoints during the migration period (Step 2 will
-    remove these fallbacks endpoint by endpoint).
+    Validates a JWT token produced by /api/auth/login or /api/auth/register.
+    Raises 401 if no valid JWT is present (Step 2: legacy fallbacks removed).
 
-    Priority order:
-    1. JWT ****** — validated; sub claim becomes user_id
-    2. X-User-Id header (legacy — deprecated, will be removed in Step 2)
-    3. Query param user_id (legacy — deprecated, will be removed in Step 2)
-    4. Sentinel "unauthenticated" (never "default")
+    Returns dict with at least {"id": "<user_id>", "authenticated": True}.
     """
     import jwt as _jwt
     from auth.jwt_utils import decode_access_token
 
-    user_id = None
-    authenticated = False
+    _raise_401 = HTTPException(
+        status_code=401,
+        detail="Authentication required",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
-    # 1. JWT ****** — real authentication
-    if credentials and credentials.credentials:
-        try:
-            payload = decode_access_token(credentials.credentials)
-            user_id = payload.get("sub")
-            authenticated = bool(user_id)
-        except _jwt.ExpiredSignatureError:
-            raise HTTPException(
-                status_code=401,
-                detail="Token has expired",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        except _jwt.InvalidTokenError:
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid authentication token",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
+    if not credentials or not credentials.credentials:
+        raise _raise_401
 
-    # 2. Legacy X-User-Id header (deprecated — kept for Step 2 migration)
-    if not user_id and x_user_id:
-        user_id = x_user_id
+    try:
+        payload = decode_access_token(credentials.credentials)
+        user_id = payload.get("sub")
+        if not user_id:
+            raise _raise_401
+    except _jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=401,
+            detail="Token has expired",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except _jwt.InvalidTokenError:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid authentication token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
-    # 3. Legacy query param (deprecated — kept for Step 2 migration)
-    if not user_id:
-        user_id = request.query_params.get("user_id")
-
-    # 4. No identity — sentinel that is clearly not "default"
-    if not user_id:
-        user_id = "unauthenticated"
-
-    return {"id": user_id, "authenticated": authenticated}
+    return {"id": user_id, "authenticated": True}
 
 
 @app.middleware("http")
@@ -687,22 +673,22 @@ async def root():
 
 
 @api_router.get("/workouts", response_model=List[dict])
-async def get_workouts(user_id: str = "default"):
+async def get_workouts(user: dict = Depends(auth_user)):
     """Get all workouts for a user, sorted by date descending"""
-    # Search for workouts with user_id OR without user_id (imported workouts)
+    user_id = user["id"]
     workouts = await db.workouts.find(
-        {"$or": [{"user_id": user_id}, {"user_id": None}, {"user_id": {"$exists": False}}]}, 
+        {"user_id": user_id}, 
         {"_id": 0}
     ).sort("date", -1).to_list(200)
     return workouts
 
 
 @api_router.get("/workouts/{workout_id}")
-async def get_workout(workout_id: str, user_id: str = "default"):
+async def get_workout(workout_id: str, user: dict = Depends(auth_user)):
     """Get a specific workout by ID"""
-    # Search with or without user_id
+    user_id = user["id"]
     workout = await db.workouts.find_one(
-        {"id": workout_id, "$or": [{"user_id": user_id}, {"user_id": None}, {"user_id": {"$exists": False}}]}, 
+        {"id": workout_id, "user_id": user_id}, 
         {"_id": 0}
     )
     if not workout:
@@ -711,8 +697,9 @@ async def get_workout(workout_id: str, user_id: str = "default"):
 
 
 @api_router.post("/workouts", response_model=Workout)
-async def create_workout(workout: WorkoutCreate, user_id: str = "default"):
+async def create_workout(workout: WorkoutCreate, user: dict = Depends(auth_user)):
     """Create a new workout"""
+    user_id = user["id"]
     workout_obj = Workout(**workout.model_dump())
     doc = workout_obj.model_dump()
     doc["user_id"] = user_id
@@ -914,9 +901,10 @@ def calculate_training_zones(vma_kmh: float, language: str = "en") -> dict:
 
 
 @api_router.get("/user/vma-estimate")
-async def get_vma_estimate(user_id: str = "default", language: str = "en"):
+async def get_vma_estimate(user: dict = Depends(auth_user), language: str = "en"):
     """Estimate VMA and VO2max from user data"""
     
+    user_id = user["id"]
     # Check if user has a goal (race performance to use)
     user_goal = await db.user_goals.find_one({"user_id": user_id}, {"_id": 0})
     
@@ -1202,15 +1190,17 @@ class UserGoalCreate(BaseModel):
 
 
 @api_router.get("/user/goal")
-async def get_user_goal(user_id: str = "default"):
+async def get_user_goal(user: dict = Depends(auth_user)):
     """Get user's current goal"""
+    user_id = user["id"]
     goal = await db.user_goals.find_one({"user_id": user_id}, {"_id": 0})
     return goal
 
 
 @api_router.post("/user/goal")
-async def set_user_goal(goal: UserGoalCreate, user_id: str = "default"):
+async def set_user_goal(goal: UserGoalCreate, user: dict = Depends(auth_user)):
     """Set user's goal (event with date, distance, target time)"""
+    user_id = user["id"]
     # Delete existing goal
     await db.user_goals.delete_many({"user_id": user_id})
     
@@ -1243,8 +1233,9 @@ async def set_user_goal(goal: UserGoalCreate, user_id: str = "default"):
 
 
 @api_router.delete("/user/goal")
-async def delete_user_goal(user_id: str = "default"):
+async def delete_user_goal(user: dict = Depends(auth_user)):
     """Delete user's goal"""
+    user_id = user["id"]
     result = await db.user_goals.delete_many({"user_id": user_id})
     return {"deleted": result.deleted_count > 0}
 
@@ -1334,9 +1325,10 @@ DASHBOARD_CACHE_TTL = 300  # 5 minutes in seconds
 
 
 @api_router.get("/dashboard/insight")
-async def get_dashboard_insight(language: str = "en", user_id: str = "default"):
+async def get_dashboard_insight(language: str = "en", user: dict = Depends(auth_user)):
     """Get dashboard coach insight with week and month summaries and recovery score - NO LLM"""
     
+    user_id = user["id"]
     # Check cache first
     cache_key = f"{user_id}_{language}"
     now = datetime.now(timezone.utc).timestamp()
@@ -1347,13 +1339,9 @@ async def get_dashboard_insight(language: str = "en", user_id: str = "default"):
             logger.info(f"Dashboard insight cache hit for {cache_key}")
             return cached_data
     
-    # Get workouts (user-scoped to avoid mixing other users' data)
+    # Get workouts (user-scoped)
     all_workouts = await db.workouts.find({
-        "$or": [
-            {"user_id": user_id},
-            {"user_id": None},
-            {"user_id": {"$exists": False}}
-        ]
+        "user_id": user_id
     }, {"_id": 0}).sort("date", -1).to_list(200)
     # Calculate stats
     week_stats = calculate_week_stats(all_workouts)
@@ -1389,13 +1377,14 @@ async def get_dashboard_insight(language: str = "en", user_id: str = "default"):
 
 
 @api_router.get("/stats")
-async def get_stats():
+async def get_stats(user: dict = Depends(auth_user)):
     """Get training statistics with proper 7-day and 30-day calculations"""
     from datetime import datetime, timedelta
     from collections import defaultdict
+    user_id = user["id"]
     
     # Get all workouts
-    workouts = await db.workouts.find({}, {"_id": 0}).to_list(500)
+    workouts = await db.workouts.find({"user_id": user_id}, {"_id": 0}).to_list(500)
     
     # Build activities list
     all_activities = []
@@ -1488,7 +1477,7 @@ async def get_stats():
 
 
 @api_router.post("/coach/analyze", response_model=CoachResponse)
-async def analyze_with_coach(request: CoachRequest):
+async def analyze_with_coach(request: CoachRequest, user: dict = Depends(auth_user)):
     """Conversational Chat Coach with GPT-4o-mini
 
     The coach has access to:
@@ -1500,7 +1489,7 @@ async def analyze_with_coach(request: CoachRequest):
     """
     from llm_coach import enrich_chat_response
     
-    user_id = request.user_id or "default"
+    user_id = user["id"]
     language = request.language or "en"
     user_message = request.message or ""
 
@@ -1517,12 +1506,12 @@ async def analyze_with_coach(request: CoachRequest):
     
     # Training activities
     recent_activities = await db.workouts.find({
-        "$or": [{"user_id": user_id}, {"user_id": None}, {"user_id": {"$exists": False}}],
+        "user_id": user_id,
         "date": {"$gte": seven_days_ago.isoformat()}
     }).sort("date", -1).to_list(20)
     
     all_activities = await db.workouts.find({
-        "$or": [{"user_id": user_id}, {"user_id": None}, {"user_id": {"$exists": False}}],
+        "user_id": user_id,
         "date": {"$gte": twenty_eight_days_ago.isoformat()}
     }).sort("date", -1).to_list(100)
     
@@ -1606,7 +1595,7 @@ async def analyze_with_coach(request: CoachRequest):
         # Utiliser la même logique que /api/training/race-predictions
         sixty_days_ago = today - timedelta(days=60)
         pred_activities = await db.workouts.find({
-            "$or": [{"user_id": user_id}, {"user_id": None}, {"user_id": {"$exists": False}}],
+            "user_id": user_id,
             "date": {"$gte": sixty_days_ago.isoformat()}
         }).to_list(500)
         
@@ -1791,8 +1780,9 @@ async def analyze_with_coach(request: CoachRequest):
 
 
 @api_router.get("/coach/history")
-async def get_conversation_history(user_id: str = "default", limit: int = 50):
+async def get_conversation_history(user: dict = Depends(auth_user), limit: int = 50):
     """Get conversation history for a user"""
+    user_id = user["id"]
     messages = await db.conversations.find(
         {"user_id": user_id},
         {"_id": 0}
@@ -1801,8 +1791,9 @@ async def get_conversation_history(user_id: str = "default", limit: int = 50):
 
 
 @api_router.delete("/coach/history")
-async def clear_conversation_history(user_id: str = "default"):
+async def clear_conversation_history(user: dict = Depends(auth_user)):
     """Clear conversation history for a user"""
+    user_id = user["id"]
     result = await db.conversations.delete_many({"user_id": user_id})
     return {"deleted_count": result.deleted_count}
 
@@ -1815,14 +1806,14 @@ async def get_messages(limit: int = 20):
 
 
 @api_router.post("/coach/guidance", response_model=GuidanceResponse)
-async def get_adaptive_guidance(request: GuidanceRequest):
+async def get_adaptive_guidance(request: GuidanceRequest, user: dict = Depends(auth_user)):
     """Generate adaptive training guidance based on recent workouts - 100% LOCAL ENGINE"""
     
     language = request.language or "en"
-    user_id = request.user_id or "default"
+    user_id = user["id"]
     
     # Get recent workouts (last 14 days)
-    all_workouts = await db.workouts.find({}, {"_id": 0}).sort("date", -1).to_list(100)
+    all_workouts = await db.workouts.find({"user_id": user_id}, {"_id": 0}).sort("date", -1).to_list(100)
     
     # Calculate training summary
     today = datetime.now(timezone.utc).date()
@@ -1917,8 +1908,9 @@ async def get_adaptive_guidance(request: GuidanceRequest):
 
 
 @api_router.get("/coach/guidance/latest")
-async def get_latest_guidance(user_id: str = "default"):
+async def get_latest_guidance(user: dict = Depends(auth_user)):
     """Get the most recent guidance for a user"""
+    user_id = user["id"]
     guidance = await db.guidance.find_one(
         {"user_id": user_id},
         {"_id": 0},
@@ -2054,11 +2046,11 @@ def generate_review_signals(workouts: List[dict], baseline_workouts: List[dict])
 
 
 @api_router.get("/coach/digest")
-async def get_weekly_review(user_id: str = "default", language: str = "en"):
+async def get_weekly_review(user: dict = Depends(auth_user), language: str = "en"):
     """Generate weekly training review (Bilan de la semaine) - 100% LOCAL ENGINE, NO LLM"""
     
-    # Get all workouts
-    all_workouts = await db.workouts.find({}, {"_id": 0}).sort("date", -1).to_list(200)
+    user_id = user["id"]
+    all_workouts = await db.workouts.find({"user_id": user_id}, {"_id": 0}).sort("date", -1).to_list(200)
     
     # Calculate date ranges
     today = datetime.now(timezone.utc).date()
@@ -2138,8 +2130,9 @@ async def get_weekly_review(user_id: str = "default", language: str = "en"):
 
 
 @api_router.get("/coach/digest/latest")
-async def get_latest_digest(user_id: str = "default"):
+async def get_latest_digest(user: dict = Depends(auth_user)):
     """Get the most recent digest for a user"""
+    user_id = user["id"]
     digest = await db.digests.find_one(
         {"user_id": user_id},
         {"_id": 0},
@@ -2149,8 +2142,9 @@ async def get_latest_digest(user_id: str = "default"):
 
 
 @api_router.get("/coach/digest/history")
-async def get_digest_history(user_id: str = "default", limit: int = 10, skip: int = 0):
+async def get_digest_history(user: dict = Depends(auth_user), limit: int = 10, skip: int = 0):
     """Get history of weekly digests for a user"""
+    user_id = user["id"]
     digests = await db.digests.find(
         {"user_id": user_id},
         {"_id": 0}
@@ -2168,23 +2162,20 @@ async def get_digest_history(user_id: str = "default", limit: int = 10, skip: in
 # ========== RAG-ENRICHED ENDPOINTS ==========
 
 @api_router.get("/rag/dashboard")
-async def get_rag_dashboard(user_id: str = "default"):
+async def get_rag_dashboard(user: dict = Depends(auth_user)):
     """Get RAG-enriched dashboard summary"""
-    # Fetch workouts - use same logic as /api/workouts (no user_id filter since data has None)
-    # This matches the main workouts endpoint behavior
+    user_id = user["id"]
     workouts = await db.workouts.find(
-        {},  # No filter - workouts in DB have user_id=None
+        {"user_id": user_id},
         {"_id": 0}
     ).sort("date", -1).limit(100).to_list(length=100)
     
-    # Fetch previous bilans
     bilans = await db.digests.find(
-        {},  # No filter for consistency
+        {"user_id": user_id},
         {"_id": 0}
     ).sort("generated_at", -1).limit(8).to_list(length=8)
     
-    # Fetch user goal
-    user_goal = await db.user_goals.find_one({}, {"_id": 0})
+    user_goal = await db.user_goals.find_one({"user_id": user_id}, {"_id": 0})
     
     # Generate RAG-enriched summary
     result = generate_dashboard_rag(workouts, bilans, user_goal)
@@ -2200,22 +2191,20 @@ async def get_rag_dashboard(user_id: str = "default"):
 
 
 @api_router.get("/rag/weekly-review")
-async def get_rag_weekly_review(user_id: str = "default", language: str = "fr"):
+async def get_rag_weekly_review(user: dict = Depends(auth_user), language: str = "fr"):
     """Get RAG-enriched weekly review with GPT-4o-mini enhancement"""
-    # Fetch workouts
+    user_id = user["id"]
     workouts = await db.workouts.find(
-        {},
+        {"user_id": user_id},
         {"_id": 0}
     ).sort("date", -1).limit(50).to_list(length=50)
     
-    # Fetch previous bilans
     bilans = await db.digests.find(
-        {},
+        {"user_id": user_id},
         {"_id": 0}
     ).sort("generated_at", -1).limit(8).to_list(length=8)
     
-    # Fetch user goal
-    user_goal = await db.user_goals.find_one({}, {"_id": 0})
+    user_goal = await db.user_goals.find_one({"user_id": user_id}, {"_id": 0})
     
     # Generate RAG-enriched review (calculs 100% Python local)
     result = generate_weekly_review_rag(workouts, bilans, user_goal)
@@ -2240,8 +2229,9 @@ async def get_rag_weekly_review(user_id: str = "default", language: str = "fr"):
 
 
 @api_router.get("/rag/workout/{workout_id}")
-async def get_rag_workout_analysis(workout_id: str, user_id: str = "default", language: str = "fr"):
+async def get_rag_workout_analysis(workout_id: str, user: dict = Depends(auth_user), language: str = "fr"):
     """Get RAG-enriched workout analysis with GPT-4o-mini enhancement"""
+    user_id = user["id"]
     # Fetch the workout
     workout = await db.workouts.find_one(
         {"id": workout_id},
@@ -2251,14 +2241,12 @@ async def get_rag_workout_analysis(workout_id: str, user_id: str = "default", la
     if not workout:
         raise HTTPException(status_code=404, detail="Workout not found")
     
-    # Fetch all workouts for comparison
     all_workouts = await db.workouts.find(
-        {},
+        {"user_id": user_id},
         {"_id": 0}
     ).sort("date", -1).limit(100).to_list(length=100)
     
-    # Fetch user goal
-    user_goal = await db.user_goals.find_one({}, {"_id": 0})
+    user_goal = await db.user_goals.find_one({"user_id": user_id}, {"_id": 0})
     
     # Generate RAG-enriched analysis (calculs 100% Python local)
     result = generate_workout_analysis_rag(workout, all_workouts, user_goal)
@@ -2401,11 +2389,11 @@ def calculate_mobile_signals(workout: dict, baseline: dict) -> dict:
 
 
 @api_router.get("/coach/workout-analysis/{workout_id}")
-async def get_mobile_workout_analysis(workout_id: str, language: str = "en", user_id: str = "default"):
+async def get_mobile_workout_analysis(workout_id: str, language: str = "en", user: dict = Depends(auth_user)):
     """Get mobile-first workout analysis with coach summary and signals - 100% LOCAL ENGINE"""
     
-    # Get all workouts
-    all_workouts = await db.workouts.find({}, {"_id": 0}).sort("date", -1).to_list(100)
+    user_id = user["id"]
+    all_workouts = await db.workouts.find({"user_id": user_id}, {"_id": 0}).sort("date", -1).to_list(100)
     
     # Find the workout
     workout = await db.workouts.find_one({"id": workout_id}, {"_id": 0})
@@ -2486,11 +2474,11 @@ class DetailedAnalysisResponse(BaseModel):
 
 
 @api_router.get("/coach/detailed-analysis/{workout_id}")
-async def get_detailed_analysis(workout_id: str, language: str = "en", user_id: str = "default"):
+async def get_detailed_analysis(workout_id: str, language: str = "en", user: dict = Depends(auth_user)):
     """Get card-based detailed analysis for mobile view - 100% LOCAL ENGINE"""
     
-    # Get all workouts
-    all_workouts = await db.workouts.find({}, {"_id": 0}).sort("date", -1).to_list(100)
+    user_id = user["id"]
+    all_workouts = await db.workouts.find({"user_id": user_id}, {"_id": 0}).sort("date", -1).to_list(100)
     
     # Find the workout
     workout = await db.workouts.find_one({"id": workout_id}, {"_id": 0})
@@ -2629,8 +2617,9 @@ class TerraConnectRequest(BaseModel):
 
 
 @api_router.get("/terra/status")
-async def get_terra_status(user_id: str = "default"):
+async def get_terra_status(user: dict = Depends(auth_user)):
     """Get Terra connection status for a user."""
+    user_id = user["id"]
     token_doc = await db.terra_tokens.find_one({"user_id": user_id}, {"_id": 0})
 
     if not token_doc:
@@ -2656,13 +2645,14 @@ async def get_terra_status(user_id: str = "default"):
 
 
 @api_router.post("/terra/connect")
-async def terra_connect(req: TerraConnectRequest, user_id: str = "default"):
+async def terra_connect(req: TerraConnectRequest, user: dict = Depends(auth_user)):
     """Save a Terra access token for a user (token-based auth flow).
 
     In production, replace this with a full Terra OAuth widget flow.
     The client obtains a Terra user token via the Terra Connect Widget and
     posts it here to persist the connection.
     """
+    user_id = user["id"]
     if not req.token:
         raise HTTPException(status_code=400, detail="Terra token is required")
 
@@ -2686,12 +2676,13 @@ async def terra_connect(req: TerraConnectRequest, user_id: str = "default"):
 
 
 @api_router.post("/terra/sync", response_model=TerraSyncResult)
-async def sync_terra(user_id: str = "default"):
+async def sync_terra(user: dict = Depends(auth_user)):
     """Sync all Terra data for a user: workouts + daily metrics.
 
     Calls syncTerraWorkouts and syncDailyMetrics then regenerates the
     recovery score, training load, and workout recommendation.
     """
+    user_id = user["id"]
     token_doc = await db.terra_tokens.find_one({"user_id": user_id}, {"_id": 0})
     if not token_doc:
         return TerraSyncResult(success=False, synced_count=0, message="Not connected to Terra")
@@ -2720,11 +2711,12 @@ async def sync_terra(user_id: str = "default"):
 
 
 @api_router.post("/terra/sync-daily")
-async def sync_terra_daily(user_id: str = "default"):
+async def sync_terra_daily(user: dict = Depends(auth_user)):
     """Sync daily health metrics from Terra (HRV, RHR, sleep).
 
     Useful for a lightweight, metrics-only refresh without re-importing workouts.
     """
+    user_id = user["id"]
     token_doc = await db.terra_tokens.find_one({"user_id": user_id}, {"_id": 0})
     if not token_doc:
         raise HTTPException(status_code=400, detail="Not connected to Terra")
@@ -2751,19 +2743,21 @@ async def sync_terra_daily(user_id: str = "default"):
 
 
 @api_router.delete("/terra/disconnect")
-async def disconnect_terra(user_id: str = "default"):
+async def disconnect_terra(user: dict = Depends(auth_user)):
     """Disconnect Terra for a user (remove stored token)."""
+    user_id = user["id"]
     await db.terra_tokens.delete_one({"user_id": user_id})
     logger.info("Terra disconnected for user: %s", user_id)
     return {"success": True, "message": "Terra disconnected"}
 
 
 @api_router.get("/terra/recovery")
-async def get_terra_recovery(user_id: str = "default"):
+async def get_terra_recovery(user: dict = Depends(auth_user)):
     """Return the latest persisted recovery score for a user.
 
     If no score exists for today, triggers a fresh computation.
     """
+    user_id = user["id"]
     today = datetime.now(timezone.utc).date().isoformat()
     doc = await db.recovery_scores.find_one({"user_id": user_id, "date": today}, {"_id": 0})
 
@@ -2786,11 +2780,12 @@ async def get_terra_recovery(user_id: str = "default"):
 
 
 @api_router.get("/terra/recommendation")
-async def get_terra_recommendation(user_id: str = "default"):
+async def get_terra_recommendation(user: dict = Depends(auth_user)):
     """Return today's workout recommendation derived from Terra data.
 
     Triggers computation if no recommendation exists for today.
     """
+    user_id = user["id"]
     today = datetime.now(timezone.utc).date().isoformat()
     doc = await db.workout_recommendations.find_one(
         {"user_id": user_id, "date": today}, {"_id": 0}
@@ -2815,8 +2810,9 @@ async def get_terra_recommendation(user_id: str = "default"):
 
 
 @api_router.get("/terra/daily-metrics")
-async def get_terra_daily_metrics(user_id: str = "default"):
+async def get_terra_daily_metrics(user: dict = Depends(auth_user)):
     """Return the latest daily metrics (HRV, RHR, sleep) for a user."""
+    user_id = user["id"]
     today = datetime.now(timezone.utc).date().isoformat()
     doc = await db.daily_metrics.find_one({"user_id": user_id, "date": today}, {"_id": 0})
 
@@ -2860,7 +2856,7 @@ _CARDIO_COACH_NO_DATA = {
 
 
 @api_router.get("/run-index")
-async def get_run_index(user_id: str = "default", language: str = "fr"):
+async def get_run_index(user: dict = Depends(auth_user), language: str = "fr"):
     """Return the full RunIndex running-screen payload.
 
     Data source: 100% real Garmin (gccli). Resting HR + sleep come from gccli;
@@ -2871,6 +2867,7 @@ async def get_run_index(user_id: str = "default", language: str = "fr"):
     Terra token exists (current state), the endpoint returns a NO_DATA payload
     (never mock data).
     """
+    user_id = user["id"]
     today = datetime.now(timezone.utc).date()
     today_iso = today.isoformat()
 
@@ -3428,7 +3425,7 @@ async def refresh_training_plan(sessions: int = None, user: dict = Depends(auth_
 
 
 @api_router.delete("/training/goal")
-async def delete_training_goal(user_id: str = "default"):
+async def delete_training_goal(user: dict = Depends(auth_user)):
     """Delete the training goal"""
 
     result = await db.training_goals.delete_one({"user_id": user_id})
@@ -3482,8 +3479,9 @@ async def set_training_plan_goal(goal: str, user: dict = Depends(auth_user)):
 
 # Garder l'ancien endpoint pour compatibilité
 @api_router.get("/training/dynamic-plan")
-async def get_dynamic_training_plan_legacy(user_id: str = "default"):
+async def get_dynamic_training_plan_legacy(user: dict = Depends(auth_user)):
     """Legacy endpoint - utiliser /training-plan à la place"""
+    user_id = user["id"]
     return await generate_dynamic_training_plan(db, user_id)
 
 
@@ -3670,14 +3668,8 @@ async def get_training_metrics(user: dict = Depends(auth_user)):
     seven_days_ago = today - timedelta(days=7)
     twenty_eight_days_ago = today - timedelta(days=28)
 
-    # Retrieve activities (user-scoped to avoid mixing other users' data)
-    user_filter = {
-        "$or": [
-            {"user_id": user["id"]},
-            {"user_id": None},
-            {"user_id": {"$exists": False}}
-        ]
-    }
+    # Retrieve activities (user-scoped)
+    user_filter = {"user_id": user["id"]}
     activities_7 = await db.workouts.find({
         **user_filter,
         "date": {"$gte": seven_days_ago.isoformat()}
@@ -4329,11 +4321,7 @@ async def get_full_training_cycle(
     twenty_eight_days_ago = today - timedelta(days=28)
     
     workouts_28 = await db.workouts.find({
-        "$or": [
-            {"user_id": user["id"]},
-            {"user_id": None},
-            {"user_id": {"$exists": False}}
-        ],
+        "user_id": user["id"],
         "date": {"$gte": twenty_eight_days_ago.isoformat()}
     }).to_list(300)
     
@@ -4394,11 +4382,12 @@ async def get_full_training_cycle(
 
 
 @api_router.get("/training/week-plan")
-async def get_week_plan(user_id: str = "default"):
+async def get_week_plan(user: dict = Depends(auth_user)):
     """
     Génère un plan d'entraînement détaillé pour la semaine via LLM.
     Utilise le contexte d'entraînement et l'objectif défini.
     """
+    user_id = user["id"]
     # Récupérer l'objectif
     goal = await db.training_goals.find_one({"user_id": user_id}, {"_id": 0})
     
@@ -4581,9 +4570,10 @@ async def get_subscription_tiers():
 
 
 @api_router.get("/subscription/status")
-async def get_subscription_status(user_id: str = "default"):
+async def get_subscription_status(user: dict = Depends(auth_user)):
     """Check user's subscription status"""
     
+    user_id = user["id"]
     # Check subscription in DB
     subscription = await db.subscriptions.find_one(
         {"user_id": user_id},
@@ -4686,9 +4676,10 @@ async def get_subscription_status(user_id: str = "default"):
 
 # Keep old endpoint for backward compatibility
 @api_router.get("/premium/status")
-async def get_premium_status(user_id: str = "default"):
+async def get_premium_status(user: dict = Depends(auth_user)):
     """Check if user has active premium subscription (backward compat)"""
-    status = await get_subscription_status(user_id)
+    user_id = user["id"]
+    status = await get_subscription_status(user)
     return {
         "is_premium": status.is_premium or status.tier != "free",
         "subscription_id": status.subscription_id,
@@ -4703,9 +4694,10 @@ async def get_premium_status(user_id: str = "default"):
 
 
 @api_router.post("/subscription/checkout", response_model=CreateCheckoutResponse)
-async def create_subscription_checkout(request: CreateCheckoutRequest, http_request: Request, user_id: str = "default"):
+async def create_subscription_checkout(request: CreateCheckoutRequest, http_request: Request, user: dict = Depends(auth_user)):
     """Create Stripe checkout session for subscription"""
     
+    user_id = user["id"]
     if not STRIPE_API_KEY:
         raise HTTPException(status_code=500, detail="Stripe not configured")
     
@@ -4775,21 +4767,23 @@ async def create_subscription_checkout(request: CreateCheckoutRequest, http_requ
 
 # Keep old endpoint for backward compatibility
 @api_router.post("/premium/checkout", response_model=CreateCheckoutResponse)
-async def create_premium_checkout_compat(request: CreateCheckoutRequest, http_request: Request, user_id: str = "default"):
+async def create_premium_checkout_compat(request: CreateCheckoutRequest, http_request: Request, user: dict = Depends(auth_user)):
     """Create Stripe checkout session (backward compat)"""
+    user_id = user["id"]
     # Convert old request to new format - default to premium monthly
     new_request = CreateCheckoutRequest(
         origin_url=request.origin_url,
         tier=getattr(request, 'tier', 'premium'),
         billing_period=getattr(request, 'billing_period', 'monthly')
     )
-    return await create_subscription_checkout(new_request, http_request, user_id)
+    return await create_subscription_checkout(new_request, http_request, user)
 
 
 @api_router.get("/subscription/checkout/status/{session_id}")
-async def check_subscription_status(session_id: str, http_request: Request, user_id: str = "default"):
+async def check_subscription_status(session_id: str, http_request: Request, user: dict = Depends(auth_user)):
     """Check status of a checkout session and activate subscription if paid"""
     
+    user_id = user["id"]
     if not STRIPE_API_KEY:
         raise HTTPException(status_code=500, detail="Stripe not configured")
     
@@ -4872,9 +4866,10 @@ async def check_subscription_status(session_id: str, http_request: Request, user
 
 # Backward compat endpoint
 @api_router.get("/premium/checkout/status/{session_id}")
-async def check_checkout_status_compat(session_id: str, http_request: Request, user_id: str = "default"):
+async def check_checkout_status_compat(session_id: str, http_request: Request, user: dict = Depends(auth_user)):
     """Check checkout status (backward compat)"""
-    return await check_subscription_status(session_id, http_request, user_id)
+    user_id = user["id"]
+    return await check_subscription_status(session_id, http_request, user)
 
 
 @api_router.post("/webhook/stripe")
@@ -5026,10 +5021,9 @@ def build_chat_context(workouts: list, user_goal: dict = None) -> dict:
     return context
 
 @api_router.post("/chat/send", response_model=ChatResponse)
-async def send_chat_message(request: ChatRequest):
+async def send_chat_message(request: ChatRequest, user: dict = Depends(auth_user)):
     """Send a message to the chat coach (with tier-based limits)"""
-    
-    user_id = request.user_id
+    user_id = user["id"]
     
     # Get subscription status
     subscription = await db.subscriptions.find_one(
@@ -5212,9 +5206,10 @@ async def store_chat_response(user_id: str, message_id: str, response: str):
 
 
 @api_router.get("/chat/history")
-async def get_chat_history(user_id: str = "default", limit: int = 50):
+async def get_chat_history(user: dict = Depends(auth_user), limit: int = 50):
     """Get chat history for a user"""
     
+    user_id = user["id"]
     messages = await db.chat_messages.find(
         {"user_id": user_id},
         {"_id": 0}
@@ -5227,9 +5222,10 @@ async def get_chat_history(user_id: str = "default", limit: int = 50):
 
 
 @api_router.delete("/chat/history")
-async def clear_chat_history(user_id: str = "default"):
+async def clear_chat_history(user: dict = Depends(auth_user)):
     """Clear chat history for a user"""
     
+    user_id = user["id"]
     result = await db.chat_messages.delete_many({"user_id": user_id})
     
     logger.info(f"Chat history cleared for user {user_id}: {result.deleted_count} messages")
@@ -5289,7 +5285,7 @@ class ActivateSubscriptionRequest(BaseModel):
 
 
 @api_router.get("/subscription/info")
-async def get_subscription_info(user_id: str = "default", language: str = "en"):
+async def get_subscription_info(user: dict = Depends(auth_user), language: str = "en"):
     """
     Retrieves complete subscription information for a user.
     
@@ -5299,6 +5295,7 @@ async def get_subscription_info(user_id: str = "default", language: str = "en"):
     - features: Accessible features
     - trial_days_remaining: Remaining days if in trial
     """
+    user_id = user["id"]
     subscription = await get_demo_subscription(db, user_id)
     status = subscription.get("status", SubscriptionStatus.FREE)
     
@@ -5339,11 +5336,12 @@ async def activate_early_adopter_subscription(request: ActivateSubscriptionReque
 
 
 @api_router.post("/subscription/cancel")
-async def cancel_user_subscription(user_id: str = "default"):
+async def cancel_user_subscription(user: dict = Depends(auth_user)):
     """
     Annule l'abonnement d'un utilisateur.
     Le statut passe à 'free'.
     """
+    user_id = user["id"]
     subscription = await cancel_subscription(db, user_id)
     
     return {
@@ -5354,10 +5352,11 @@ async def cancel_user_subscription(user_id: str = "default"):
 
 
 @api_router.post("/subscription/simulate-trial-end")
-async def simulate_trial_end(user_id: str = "default"):
+async def simulate_trial_end(user: dict = Depends(auth_user)):
     """
     [DEV ONLY] Simulate end of free trial to test paywall.
     """
+    user_id = user["id"]
     await db.subscriptions.update_one(
         {"user_id": user_id},
         {
@@ -5375,10 +5374,11 @@ async def simulate_trial_end(user_id: str = "default"):
 
 
 @api_router.post("/subscription/reset-to-trial")
-async def reset_to_trial(user_id: str = "default"):
+async def reset_to_trial(user: dict = Depends(auth_user)):
     """
     [DEV ONLY] Reset user to free trial.
     """
+    user_id = user["id"]
     now = datetime.now(timezone.utc)
     trial_end = now + timedelta(days=TRIAL_DURATION_DAYS)
 
@@ -5469,11 +5469,12 @@ async def get_early_adopter_offer(language: str = "en"):
 
 
 @api_router.post("/subscription/early-adopter/checkout")
-async def create_early_adopter_checkout(http_request: Request, user_id: str = "default", origin_url: str = None):
+async def create_early_adopter_checkout(http_request: Request, user: dict = Depends(auth_user), origin_url: str = None):
     """
     Create a Stripe Checkout session for the Early Adopter offer.
     Price: 4.99€/month, guaranteed for life.
     """
+    user_id = user["id"]
     if not STRIPE_API_KEY:
         raise HTTPException(status_code=500, detail="Stripe not configured")
 
@@ -5592,11 +5593,12 @@ async def stripe_early_adopter_webhook(request: Request):
 
 
 @api_router.get("/subscription/verify-checkout/{session_id}")
-async def verify_checkout_session(session_id: str, user_id: str = "default"):
+async def verify_checkout_session(session_id: str, user: dict = Depends(auth_user)):
     """
     Vérifie le statut d'une session checkout et active l'abonnement si payé.
     Appelé par le frontend après retour de Stripe.
     """
+    user_id = user["id"]
     try:
         # Vérifier la transaction
         transaction = await db.payment_transactions.find_one({"session_id": session_id})

@@ -92,7 +92,7 @@ export default function Settings() {
 
   const loadPremiumStatus = async () => {
     try {
-      await axios.get(`${API}/premium/status?user_id=${userId}`);
+      await axios.get(`${API}/premium/status`);
     } catch (error) {
       console.error("Failed to load premium status:", error);
     }
@@ -152,8 +152,8 @@ export default function Settings() {
     try {
       // Déterminer l'endpoint selon le type de plan
       const endpoint = planType === "early_adopter" 
-        ? `${API}/subscription/verify-checkout/${sessionId}?user_id=${userId}`
-        : `${API}/premium/checkout/status/${sessionId}?user_id=${userId}`;
+        ? `${API}/subscription/verify-checkout/${sessionId}`
+        : `${API}/premium/checkout/status/${sessionId}`;
       
       // Poll for payment completion
       let attempts = 0;
@@ -200,8 +200,6 @@ export default function Settings() {
     try {
       const res = await axios.post(`${API}/premium/checkout`, {
         origin_url: window.location.origin
-      }, {
-        params: { user_id: userId }
       });
       
       window.location.href = res.data.checkout_url;
@@ -213,7 +211,7 @@ export default function Settings() {
 
   const loadGoal = async () => {
     try {
-      const res = await axios.get(`${API}/user/goal?user_id=${userId}`);
+      const res = await axios.get(`${API}/user/goal`);
       if (res.data) {
         setGoal(res.data);
         setEventName(res.data.event_name);
@@ -249,7 +247,7 @@ export default function Settings() {
     
     setSavingGoal(true);
     try {
-      const res = await axios.post(`${API}/user/goal?user_id=${userId}`, {
+      const res = await axios.post(`${API}/user/goal`, {
         event_name: eventName.trim(),
         event_date: eventDate,
         distance_type: distanceType,
@@ -267,7 +265,7 @@ export default function Settings() {
 
   const handleDeleteGoal = async () => {
     try {
-      await axios.delete(`${API}/user/goal?user_id=${userId}`);
+      await axios.delete(`${API}/user/goal`);
       setGoal(null);
       setEventName("");
       setEventDate("");
@@ -859,7 +857,7 @@ export default function Settings() {
                         try {
                           // Créer une session Stripe Checkout
                           const res = await axios.post(
-                            `${API}/subscription/early-adopter/checkout?user_id=${userId}&origin_url=${encodeURIComponent(window.location.origin)}`
+                            `${API}/subscription/early-adopter/checkout?origin_url=${encodeURIComponent(window.location.origin)}`
                           );
                           
                           if (res.data?.checkout_url) {

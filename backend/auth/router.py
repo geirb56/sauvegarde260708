@@ -144,6 +144,21 @@ async def register(body: UserCreate, request: Request):
     await db.users.insert_one(user_doc)
     logger.info("New user registered: %s", user_doc["id"])
 
+    # Auto-create a 30-day free trial subscription for the new user
+    trial_end = now + timedelta(days=30)
+    await db.subscriptions.insert_one({
+        "user_id": user_doc["id"],
+        "status": "trial",
+        "created_at": now.isoformat(),
+        "trial_start": now.isoformat(),
+        "trial_end": trial_end.isoformat(),
+        "stripe_customer_id": None,
+        "stripe_subscription_id": None,
+        "price_locked": None,
+        "updated_at": now.isoformat(),
+    })
+    logger.info("Trial subscription created for user: %s (expires %s)", user_doc["id"], trial_end)
+
     access_token = create_access_token(user_doc["id"], user_doc["email"])
     return TokenResponse(
         access_token=access_token,

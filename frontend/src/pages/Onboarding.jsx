@@ -71,10 +71,10 @@ export default function Onboarding() {
   const connectGarmin = async () => {
     setGarminStatus("connecting");
     try {
-      const res = await axios.post(`${API}/garmin/connect?user_id=${userId}`, {});
+      const res = await axios.post(`${API}/garmin/connect`, {});
       if (res.data?.status === "connected") {
         try {
-          const sync = await axios.post(`${API}/garmin/sync?user_id=${userId}`, {});
+          const sync = await axios.post(`${API}/garmin/sync`, {});
           setGarminCount(sync.data?.synced_count || 0);
         } catch (syncErr) {
           // connected but sync failed — still mark connected
@@ -96,7 +96,7 @@ export default function Onboarding() {
     const loadPhysio = async () => {
       setLoadingPhysio(true);
       try {
-        const res = await axios.get(`${API}/run-index?user_id=${userId}`);
+        const res = await axios.get(`${API}/run-index`);
         setPhysioData(res.data?.metrics || null);
       } catch (err) {
         setPhysioData(null);
