@@ -183,7 +183,7 @@ export default function Subscription() {
 
   const loadStatus = async () => {
     try {
-      const res = await axios.get(API + "/subscription/status?user_id=" + userId);
+      const res = await axios.get(API + "/subscription/status);
       setCurrentTier(res.data.tier || "free");
     } catch (e) {
       console.error(e);
@@ -195,7 +195,7 @@ export default function Subscription() {
   const handleSuccess = async (sessionId) => {
     try {
       const res = await axios.get(
-        API + "/subscription/checkout/status/" + sessionId + "?user_id=" + userId
+        API + "/subscription/checkout/status/" + sessionId + "
       );
       if (res.data.status === "completed") {
         toast.success(res.data.message || t("subscription.subscriptionActivated"));
@@ -217,8 +217,7 @@ export default function Subscription() {
           origin_url: window.location.origin,
           tier: "premium",
           billing_period: "monthly",
-        },
-        { params: { user_id: userId } }
+        }
       );
       window.location.href = res.data.checkout_url;
     } catch (e) {

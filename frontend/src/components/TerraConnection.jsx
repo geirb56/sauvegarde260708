@@ -35,7 +35,7 @@ export const TerraConnection = ({ lang, t, onStatusChange }) => {
 
   const loadStatus = async () => {
     try {
-      const res = await axios.get(`${API_BASE}/terra/status?user_id=${userId}`);
+      const res = await axios.get(`${API_BASE}/terra/status`);
       setStatus(res.data);
       if (onStatusChange) onStatusChange(res.data);
     } catch (error) {
@@ -53,7 +53,7 @@ export const TerraConnection = ({ lang, t, onStatusChange }) => {
     }
     setConnecting(true);
     try {
-      await axios.post(`${API_BASE}/terra/connect?user_id=${userId}`, { token: token.trim() });
+      await axios.post(`${API_BASE}/terra/connect`, { token: token.trim() });
       toast.success(t("terra.connected"));
       setToken("");
       loadStatus();
@@ -68,7 +68,7 @@ export const TerraConnection = ({ lang, t, onStatusChange }) => {
   const handleSync = async () => {
     setSyncing(true);
     try {
-      const res = await axios.post(`${API_BASE}/terra/sync?user_id=${userId}`);
+      const res = await axios.post(`${API_BASE}/terra/sync`);
       if (res.data.success) {
         toast.success(
           t("terra.syncImported").replace(
@@ -88,7 +88,7 @@ export const TerraConnection = ({ lang, t, onStatusChange }) => {
 
   const handleDisconnect = async () => {
     try {
-      await axios.delete(`${API_BASE}/terra/disconnect?user_id=${userId}`);
+      await axios.delete(`${API_BASE}/terra/disconnect`);
       setStatus({ connected: false });
       toast.success(t("terra.disconnected"));
     } catch (error) {

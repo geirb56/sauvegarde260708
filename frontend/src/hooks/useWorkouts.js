@@ -93,7 +93,7 @@ export const useCoachHistory = () => {
   const loadHistory = async () => {
     try {
       setLoading(true);
-      const res = await axios.get(`${API_BASE}/coach/history?user_id=${userId}&limit=50`);
+      const res = await axios.get(`${API_BASE}/coach/history?limit=50`);
       setMessages(res.data.map(msg => ({
         role: msg.role,
         content: msg.content,

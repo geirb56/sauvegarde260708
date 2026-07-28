@@ -31,7 +31,7 @@ export default function Coach() {
   useEffect(() => {
     const loadHistory = async () => {
       try {
-        const res = await axios.get(`${API}/coach/history?user_id=${userId}&limit=50`);
+        const res = await axios.get(`${API}/coach/history?limit=50`);
         setMessages(res.data.map(msg => ({
           role: msg.role,
           content: msg.content,
@@ -87,8 +87,7 @@ export default function Coach() {
         message: analysisMessage,
         workout_id: workoutId,
         language: lang,
-        deep_analysis: true,
-        user_id: userId
+        deep_analysis: true
       });
 
       setMessages(prev => [...prev, { 
@@ -121,8 +120,7 @@ export default function Coach() {
     try {
       const response = await axios.post(`${API}/coach/analyze`, {
         message: userMessage,
-        language: lang,
-        user_id: userId
+        language: lang
       });
 
       setMessages(prev => [...prev, { 
@@ -143,7 +141,7 @@ export default function Coach() {
 
   const handleClearHistory = async () => {
     try {
-      await axios.delete(`${API}/coach/history?user_id=${userId}`);
+      await axios.delete(`${API}/coach/history`);
       setMessages([]);
       toast.success(t("coachExtended.historyCleared"));
     } catch (error) {

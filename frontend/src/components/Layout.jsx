@@ -26,7 +26,7 @@ export const Layout = () => {
     const checkSync = async () => {
       if (!userId) return;
       try {
-        const res = await axios.get(`${API}/terra/status?user_id=${userId}`);
+        const res = await axios.get(`${API}/terra/status`);
         if (res.data.last_sync) {
           const syncDate = new Date(res.data.last_sync);
           const now = new Date();

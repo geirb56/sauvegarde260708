@@ -45,7 +45,7 @@ const ChatCoach = ({ isOpen, onClose, userId = "default" }) => {
 
   const checkSubscription = async () => {
     try {
-      const res = await axios.get(`${API}/subscription/status?user_id=${userId}`);
+      const res = await axios.get(`${API}/subscription/status`);
       setSubscriptionStatus(res.data);
     } catch (err) {
       console.error("Error checking subscription:", err);
@@ -57,7 +57,7 @@ const ChatCoach = ({ isOpen, onClose, userId = "default" }) => {
 
   const loadHistory = async () => {
     try {
-      const res = await axios.get(`${API}/chat/history?user_id=${userId}&limit=30`);
+      const res = await axios.get(`${API}/chat/history?limit=30`);
       setMessages(res.data || []);
     } catch (err) {
       console.error("Error loading history:", err);
@@ -89,7 +89,6 @@ const ChatCoach = ({ isOpen, onClose, userId = "default" }) => {
       // Send to Python backend (100% local, no LLM)
       const res = await axios.post(`${API}/chat/send`, {
         message: userMessage,
-        user_id: userId,
         use_local_llm: false,
         language: lang
       });
@@ -147,7 +146,7 @@ const ChatCoach = ({ isOpen, onClose, userId = "default" }) => {
 
   const clearHistory = async () => {
     try {
-      await axios.delete(`${API}/chat/history?user_id=${userId}`);
+      await axios.delete(`${API}/chat/history`);
       setMessages([]);
       setCurrentSuggestions([]);
     } catch (err) {
