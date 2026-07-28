@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import axios from "axios";
 import { API_BASE } from "@/utils/constants";
+import { useAuth } from "@/context/AuthContext";
 
 export const useWorkouts = () => {
   const [workouts, setWorkouts] = useState([]);
@@ -83,6 +84,8 @@ export const useDashboardData = (lang) => {
 };
 
 export const useCoachHistory = () => {
+  const { user } = useAuth();
+  const userId = user?.id;
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -90,7 +93,7 @@ export const useCoachHistory = () => {
   const loadHistory = async () => {
     try {
       setLoading(true);
-      const res = await axios.get(`${API_BASE}/coach/history?user_id=default&limit=50`);
+      const res = await axios.get(`${API_BASE}/coach/history?user_id=${userId}&limit=50`);
       setMessages(res.data.map(msg => ({
         role: msg.role,
         content: msg.content,

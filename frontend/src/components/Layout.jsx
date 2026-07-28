@@ -1,8 +1,9 @@
 import { useState, useEffect, useMemo } from "react";
 import { Outlet, NavLink, useLocation } from "react-router-dom";
-import { Activity, Home, CalendarDays, MessageCircle, RefreshCw, Settings, TrendingUp } from "lucide-react";
+import { Activity, Home, CalendarDays, MessageCircle, RefreshCw, Settings, TrendingUp, LogOut } from "lucide-react";
 import { useLanguage } from "@/context/LanguageContext";
 import { useAutoSync } from "@/hooks/useAutoSync";
+import { useAuth } from "@/context/AuthContext";
 import ChatCoach from "@/components/ChatCoach";
 import axios from "axios";
 
@@ -12,6 +13,8 @@ const API = API_BASE_URL;
 export const Layout = () => {
   const location = useLocation();
   const { t } = useLanguage();
+  const { user, logout } = useAuth();
+  const userId = user?.id;
   const [chatOpen, setChatOpen] = useState(false);
   const [lastSyncMinutes, setLastSyncMinutes] = useState(null);
   
@@ -21,8 +24,9 @@ export const Layout = () => {
   // Get last sync time
   useEffect(() => {
     const checkSync = async () => {
+      if (!userId) return;
       try {
-        const res = await axios.get(`${API}/terra/status?user_id=default`);
+        const res = await axios.get(`${API}/terra/status?user_id=${userId}`);
         if (res.data.last_sync) {
           const syncDate = new Date(res.data.last_sync);
           const now = new Date();
@@ -34,7 +38,7 @@ export const Layout = () => {
       }
     };
     checkSync();
-  }, []);
+  }, [userId]);
 
   const lastSyncLabel = useMemo(() => {
     if (lastSyncMinutes == null) return null;
@@ -80,8 +84,16 @@ export const Layout = () => {
           >
             <RefreshCw className="w-5 h-5" />
           </button>
+          <button
+            onClick={logout}
+            className="p-2 rounded-lg transition-colors hover:bg-white/5"
+            style={{ color: "var(--text-tertiary)" }}
+            title="Sign out"
+          >
+            <LogOut className="w-5 h-5" />
+          </button>
           <div className="header-avatar">
-            AR
+            {user?.email ? user.email[0].toUpperCase() : "?"}
           </div>
         </div>
       </header>
@@ -122,7 +134,7 @@ export const Layout = () => {
       <ChatCoach 
         isOpen={chatOpen} 
         onClose={() => setChatOpen(false)} 
-        userId="default"
+        userId={userId}
       />
     </div>
   );

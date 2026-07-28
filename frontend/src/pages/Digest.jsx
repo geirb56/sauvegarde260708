@@ -25,8 +25,8 @@ import { useUnitSystem } from "@/context/UnitContext";
 import { formatDistance } from "@/utils/units";
 
 import { API_BASE_URL } from "@/config";
+import { useAuth } from "@/context/AuthContext";
 const API = API_BASE_URL;
-const USER_ID = "default";
 
 // CARTE 2 - Signal Card Component
 function SignalCard({ signal, t }) {
@@ -87,6 +87,8 @@ function SignalCard({ signal, t }) {
 }
 
 export default function Digest() {
+  const { user } = useAuth();
+  const userId = user?.id;
   const { t, lang } = useLanguage();
   const { unitSystem } = useUnitSystem();
   const navigate = useNavigate();
@@ -118,7 +120,7 @@ export default function Digest() {
     
     try {
       const [res, ragRes] = await Promise.all([
-        axios.get(`${API}/coach/digest?user_id=${USER_ID}&language=${lang}`),
+        axios.get(`${API}/coach/digest?user_id=${userId}&language=${lang}`),
         axios.get(`${API}/rag/weekly-review`).catch(() => ({ data: null }))
       ]);
       setReview(res.data);
@@ -135,7 +137,7 @@ export default function Digest() {
     setHistoryLoading(true);
     try {
       const skip = loadMore ? history.length : 0;
-      const res = await axios.get(`${API}/coach/digest/history?user_id=${USER_ID}&limit=10&skip=${skip}`);
+      const res = await axios.get(`${API}/coach/digest/history?user_id=${userId}&limit=10&skip=${skip}`);
       if (loadMore) {
         setHistory(prev => [...prev, ...res.data.digests]);
       } else {

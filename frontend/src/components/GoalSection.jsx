@@ -8,12 +8,15 @@ import { toast } from "sonner";
 import axios from "axios";
 import { API_BASE } from "@/utils/constants";
 import { useUnitSystem } from "@/context/UnitContext";
+import { useAuth } from "@/context/AuthContext";
 import { formatDistance } from "@/utils/units";
 
 const DISTANCE_OPTIONS = ["5k", "10k", "semi", "marathon", "ultra"];
 const DISTANCE_KM = { "5k": 5, "10k": 10, "semi": 21.1, "marathon": 42.195, "ultra": 50 };
 
 export const GoalSection = ({ goal, lang, t, onUpdate }) => {
+  const { user } = useAuth();
+  const userId = user?.id;
   const { unitSystem } = useUnitSystem();
   const [isEditing, setIsEditing] = useState(!goal);
   const [eventName, setEventName] = useState(goal?.event_name || "");
@@ -53,7 +56,7 @@ export const GoalSection = ({ goal, lang, t, onUpdate }) => {
 
     setSaving(true);
     try {
-      const res = await axios.post(`${API_BASE}/user/goal?user_id=default`, {
+      const res = await axios.post(`${API_BASE}/user/goal?user_id=${userId}`, {
         event_name: eventName.trim(),
         event_date: eventDate,
         distance_type: distanceType,
@@ -71,7 +74,7 @@ export const GoalSection = ({ goal, lang, t, onUpdate }) => {
 
   const handleDelete = async () => {
     try {
-      await axios.delete(`${API_BASE}/user/goal?user_id=default`);
+      await axios.delete(`${API_BASE}/user/goal?user_id=${userId}`);
       onUpdate(null);
       toast.success(t("settings.goalDeleted"));
     } catch (error) {

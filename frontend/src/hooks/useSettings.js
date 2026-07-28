@@ -1,8 +1,11 @@
 import { useState, useEffect } from "react";
 import axios from "axios";
 import { API_BASE } from "@/utils/constants";
+import { useAuth } from "@/context/AuthContext";
 
 export const useGoal = () => {
+  const { user } = useAuth();
+  const userId = user?.id;
   const [goal, setGoal] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -10,7 +13,7 @@ export const useGoal = () => {
   const loadGoal = async () => {
     try {
       setLoading(true);
-      const res = await axios.get(`${API_BASE}/user/goal?user_id=default`);
+      const res = await axios.get(`${API_BASE}/user/goal?user_id=${userId}`);
       setGoal(res.data);
     } catch (err) {
       setError(err.message);
@@ -27,6 +30,8 @@ export const useGoal = () => {
 };
 
 export const useSubscriptionStatus = () => {
+  const { user } = useAuth();
+  const userId = user?.id;
   const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -34,7 +39,7 @@ export const useSubscriptionStatus = () => {
   const loadStatus = async () => {
     try {
       setLoading(true);
-      const res = await axios.get(`${API_BASE}/subscription/status?user_id=default`);
+      const res = await axios.get(`${API_BASE}/subscription/status?user_id=${userId}`);
       setStatus(res.data);
     } catch (err) {
       setError(err.message);
@@ -51,6 +56,8 @@ export const useSubscriptionStatus = () => {
 };
 
 export const usePremiumStatus = () => {
+  const { user } = useAuth();
+  const userId = user?.id;
   const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -58,7 +65,7 @@ export const usePremiumStatus = () => {
   const loadStatus = async () => {
     try {
       setLoading(true);
-      const res = await axios.get(`${API_BASE}/premium/status?user_id=default`);
+      const res = await axios.get(`${API_BASE}/premium/status?user_id=${userId}`);
       setStatus(res.data);
     } catch (err) {
       setError(err.message);

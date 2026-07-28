@@ -6,9 +6,7 @@ import { Activity, Loader2, Check, X, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import axios from "axios";
 import { API_BASE } from "@/utils/constants";
-
-// Default user identifier — matches the convention used across RunIndex.
-const USER_ID = "default";
+import { useAuth } from "@/context/AuthContext";
 
 /**
  * TerraConnection — UI card for managing the Terra wearable integration.
@@ -23,6 +21,8 @@ const USER_ID = "default";
  *   onStatusChange — optional callback called with the latest status object
  */
 export const TerraConnection = ({ lang, t, onStatusChange }) => {
+  const { user } = useAuth();
+  const userId = user?.id;
   const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -35,7 +35,7 @@ export const TerraConnection = ({ lang, t, onStatusChange }) => {
 
   const loadStatus = async () => {
     try {
-      const res = await axios.get(`${API_BASE}/terra/status?user_id=${USER_ID}`);
+      const res = await axios.get(`${API_BASE}/terra/status?user_id=${userId}`);
       setStatus(res.data);
       if (onStatusChange) onStatusChange(res.data);
     } catch (error) {
@@ -53,7 +53,7 @@ export const TerraConnection = ({ lang, t, onStatusChange }) => {
     }
     setConnecting(true);
     try {
-      await axios.post(`${API_BASE}/terra/connect?user_id=${USER_ID}`, { token: token.trim() });
+      await axios.post(`${API_BASE}/terra/connect?user_id=${userId}`, { token: token.trim() });
       toast.success(t("terra.connected"));
       setToken("");
       loadStatus();
@@ -68,7 +68,7 @@ export const TerraConnection = ({ lang, t, onStatusChange }) => {
   const handleSync = async () => {
     setSyncing(true);
     try {
-      const res = await axios.post(`${API_BASE}/terra/sync?user_id=${USER_ID}`);
+      const res = await axios.post(`${API_BASE}/terra/sync?user_id=${userId}`);
       if (res.data.success) {
         toast.success(
           t("terra.syncImported").replace(
@@ -88,7 +88,7 @@ export const TerraConnection = ({ lang, t, onStatusChange }) => {
 
   const handleDisconnect = async () => {
     try {
-      await axios.delete(`${API_BASE}/terra/disconnect?user_id=${USER_ID}`);
+      await axios.delete(`${API_BASE}/terra/disconnect?user_id=${userId}`);
       setStatus({ connected: false });
       toast.success(t("terra.disconnected"));
     } catch (error) {

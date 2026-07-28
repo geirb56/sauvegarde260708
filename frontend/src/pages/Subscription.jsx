@@ -26,8 +26,8 @@ import {
 import { toast } from "sonner";
 
 import { API_BASE_URL } from "@/config";
+import { useAuth } from "@/context/AuthContext";
 const API = API_BASE_URL;
-const USER_ID = "default";
 
 // ─── Static data ──────────────────────────────────────────────────────────────
 
@@ -150,6 +150,8 @@ const PREMIUM_TIERS = new Set(["premium", "starter", "confort", "pro", "early_ad
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function Subscription() {
+  const { user } = useAuth();
+  const userId = user?.id;
   const { t } = useLanguage();
   const [searchParams, setSearchParams] = useSearchParams();
   const [currentTier, setCurrentTier] = useState("free");
@@ -181,7 +183,7 @@ export default function Subscription() {
 
   const loadStatus = async () => {
     try {
-      const res = await axios.get(API + "/subscription/status?user_id=" + USER_ID);
+      const res = await axios.get(API + "/subscription/status?user_id=" + userId);
       setCurrentTier(res.data.tier || "free");
     } catch (e) {
       console.error(e);
@@ -193,7 +195,7 @@ export default function Subscription() {
   const handleSuccess = async (sessionId) => {
     try {
       const res = await axios.get(
-        API + "/subscription/checkout/status/" + sessionId + "?user_id=" + USER_ID
+        API + "/subscription/checkout/status/" + sessionId + "?user_id=" + userId
       );
       if (res.data.status === "completed") {
         toast.success(res.data.message || t("subscription.subscriptionActivated"));
@@ -216,7 +218,7 @@ export default function Subscription() {
           tier: "premium",
           billing_period: "monthly",
         },
-        { params: { user_id: USER_ID } }
+        { params: { user_id: userId } }
       );
       window.location.href = res.data.checkout_url;
     } catch (e) {
