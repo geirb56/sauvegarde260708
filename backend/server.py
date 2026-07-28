@@ -4,6 +4,10 @@ from fastapi import FastAPI, APIRouter, HTTPException, Query, Request, Depends, 
 from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+
+# Auth module — JWT-based multi-user identity
+from auth.router import auth_router
+from auth.dependencies import get_current_user
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -305,38 +309,57 @@ async def auth_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     x_user_id: Optional[str] = Header(None, alias="X-User-Id")
 ) -> dict:
-    """
-    Flexible authentication dependency.
+    """Authentication dependency.
+
+    Validates a JWT ****** produced by /api/auth/login or /api/auth/register.
+    Falls back to X-User-Id header (legacy) and query param user_id for backward
+    compatibility with existing endpoints during the migration period (Step 2 will
+    remove these fallbacks endpoint by endpoint).
 
     Priority order:
-    1. Bearer token (JWT to be implemented)
-    2. Header X-User-Id
-    3. Query param user_id
-    4. Fallback "default"
+    1. JWT ****** — validated; sub claim becomes user_id
+    2. X-User-Id header (legacy — deprecated, will be removed in Step 2)
+    3. Query param user_id (legacy — deprecated, will be removed in Step 2)
+    4. Sentinel "unauthenticated" (never "default")
     """
+    import jwt as _jwt
+    from auth.jwt_utils import decode_access_token
+
     user_id = None
+    authenticated = False
 
-    # 1. Bearer token (placeholder for JWT)
+    # 1. JWT ****** — real authentication
     if credentials and credentials.credentials:
-        token = credentials.credentials
-        # TODO: Validate JWT and extract user_id
-        # For now, use the token as user_id if not JWT
-        if token.startswith("user_"):
-            user_id = token
+        try:
+            payload = decode_access_token(credentials.credentials)
+            user_id = payload.get("sub")
+            authenticated = bool(user_id)
+        except _jwt.ExpiredSignatureError:
+            raise HTTPException(
+                status_code=401,
+                detail="Token has expired",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        except _jwt.InvalidTokenError:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid authentication token",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
 
-    # 2. Header X-User-Id
+    # 2. Legacy X-User-Id header (deprecated — kept for Step 2 migration)
     if not user_id and x_user_id:
         user_id = x_user_id
 
-    # 3. Query param
+    # 3. Legacy query param (deprecated — kept for Step 2 migration)
     if not user_id:
         user_id = request.query_params.get("user_id")
 
-    # 4. Fallback
+    # 4. No identity — sentinel that is clearly not "default"
     if not user_id:
-        user_id = "default"
+        user_id = "unauthenticated"
 
-    return {"id": user_id, "authenticated": bool(credentials)}
+    return {"id": user_id, "authenticated": authenticated}
 
 
 @app.middleware("http")
@@ -5622,6 +5645,9 @@ async def verify_checkout_session(session_id: str, user_id: str = "default"):
 from api.garmin import garmin_router
 api_router.include_router(garmin_router)
 
+# Register authentication endpoints under /api/auth/*
+api_router.include_router(auth_router)
+
 # Include the router
 app.include_router(api_router)
 
@@ -5680,6 +5706,10 @@ async def create_db_indexes():
         await db.garmin_activities.create_index([("user_id", 1), ("external_id", 1)], unique=True, sparse=True)
         await db.garmin_activities.create_index([("user_id", 1), ("start_time", -1)])
         await db.garmin_daily_metrics.create_index([("user_id", 1), ("date", -1)], unique=True, sparse=True)
+        # Users collection (auth system)
+        await db.users.create_index("email", unique=True)
+        await db.users.create_index("id", unique=True)
+        await db.users.create_index("reset_password_token_hash", sparse=True)
         logger.info("MongoDB indexes created")
     except Exception as e:
         logger.warning(f"Could not create some MongoDB indexes: {e}")

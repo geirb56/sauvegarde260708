@@ -7,8 +7,8 @@ import { Loader2, Check, ShieldAlert, Activity } from "lucide-react";
 import { toast } from "sonner";
 
 import { API_BASE_URL } from "@/config";
+import { useAuth } from "@/context/AuthContext";
 const API = API_BASE_URL;
-const USER_ID = "default";
 
 const STEPS = [
   { key: "welcome", title: "Welcome" },
@@ -52,6 +52,8 @@ function OptionGrid({ options, value, onSelect, testIdPrefix }) {
 }
 
 export default function Onboarding() {
+  const { user } = useAuth();
+  const userId = user?.id;
   const navigate = useNavigate();
   const [stepIndex, setStepIndex] = useState(0);
   const [fitnessLevel, setFitnessLevel] = useState("");
@@ -69,10 +71,10 @@ export default function Onboarding() {
   const connectGarmin = async () => {
     setGarminStatus("connecting");
     try {
-      const res = await axios.post(`${API}/garmin/connect?user_id=${USER_ID}`, {});
+      const res = await axios.post(`${API}/garmin/connect?user_id=${userId}`, {});
       if (res.data?.status === "connected") {
         try {
-          const sync = await axios.post(`${API}/garmin/sync?user_id=${USER_ID}`, {});
+          const sync = await axios.post(`${API}/garmin/sync?user_id=${userId}`, {});
           setGarminCount(sync.data?.synced_count || 0);
         } catch (syncErr) {
           // connected but sync failed — still mark connected
@@ -94,7 +96,7 @@ export default function Onboarding() {
     const loadPhysio = async () => {
       setLoadingPhysio(true);
       try {
-        const res = await axios.get(`${API}/run-index?user_id=${USER_ID}`);
+        const res = await axios.get(`${API}/run-index?user_id=${userId}`);
         setPhysioData(res.data?.metrics || null);
       } catch (err) {
         setPhysioData(null);
@@ -163,10 +165,10 @@ export default function Onboarding() {
     setSaving(true);
     try {
       await axios.post(`${API}/training/set-goal?goal=${targetMap[target]}`, {}, {
-        headers: { "X-User-Id": USER_ID },
+        headers: { "X-User-Id": userId },
       });
       await axios.post(`${API}/training/refresh?sessions=${sessionsMap[frequency]}`, {}, {
-        headers: { "X-User-Id": USER_ID },
+        headers: { "X-User-Id": userId },
       });
       toast.success("Personalized plan updated");
       navigate("/training");

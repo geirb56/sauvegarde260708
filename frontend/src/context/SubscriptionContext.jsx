@@ -1,22 +1,29 @@
 import { createContext, useContext, useState, useEffect, useCallback } from "react";
 import axios from "axios";
 import { useLanguage } from "@/context/LanguageContext";
+import { useAuth } from "@/context/AuthContext";
 import { Loader2 } from "lucide-react";
+import { API_BASE_URL } from "@/config";
 
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
-const USER_ID = "default";
+const API = API_BASE_URL;
 
 const SubscriptionContext = createContext(null);
 
 export function SubscriptionProvider({ children }) {
   const { lang } = useLanguage();
+  const { user } = useAuth();
+  const userId = user?.id;
   const [subscription, setSubscription] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
   const fetchSubscription = useCallback(async () => {
+    if (!userId) {
+      setLoading(false);
+      return;
+    }
     try {
-      const res = await axios.get(`${API}/subscription/info?user_id=${USER_ID}&language=${lang}`);
+      const res = await axios.get(`${API}/subscription/info?user_id=${userId}&language=${lang}`);
       setSubscription(res.data);
       setError(null);
     } catch (err) {
@@ -43,7 +50,7 @@ export function SubscriptionProvider({ children }) {
     } finally {
       setLoading(false);
     }
-  }, [lang]);
+  }, [lang, userId]);
 
   useEffect(() => {
     fetchSubscription();

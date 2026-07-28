@@ -36,6 +36,7 @@ import { BrandSplash } from "@/components/LoadingSpinner";
 import { toast } from "sonner";
 
 import { API_BASE_URL } from "@/config";
+import { useAuth } from "@/context/AuthContext";
 const API = API_BASE_URL;
 
 // ─── Run Recommendation thresholds ──────────────────────────────────────────
@@ -340,6 +341,8 @@ function MiniLineChart({ data = [] }) {
 }
 
 export default function Dashboard() {
+  const { user } = useAuth();
+  const userId = user?.id;
   const [insight, setInsight] = useState(null);
   const [todaySession, setTodaySession] = useState(null);
   const [trainingMetrics, setTrainingMetrics] = useState(null);
@@ -424,7 +427,7 @@ export default function Dashboard() {
     setCardioLoading(true);
     setCardioError(null);
     try {
-      const res = await axios.get(`${API}/run-index?user_id=default&language=${lang}`);
+      const res = await axios.get(`${API}/run-index?user_id=${userId}&language=${lang}`);
       setCardioData(res.data);
     } catch (err) {
       console.error("RunIndex fetch failed:", err);

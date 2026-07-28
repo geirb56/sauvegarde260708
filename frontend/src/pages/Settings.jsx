@@ -13,8 +13,8 @@ import { Globe, Info, Loader2, Check, Target, Calendar, Trash2, Clock, Route, Cr
 import { toast } from "sonner";
 
 import { API_BASE_URL } from "@/config";
+import { useAuth } from "@/context/AuthContext";
 const API = API_BASE_URL;
-const USER_ID = "default";
 
 const DISTANCE_OPTIONS = ["5k", "10k", "semi", "marathon", "ultra"];
 const DISTANCE_KM = {
@@ -36,6 +36,8 @@ const TRAINING_GOAL_OPTIONS = [
 const SESSIONS_OPTIONS = [3, 4, 5, 6];
 
 export default function Settings() {
+  const { user } = useAuth();
+  const userId = user?.id;
   const { t, lang, setLang } = useLanguage();
   const { 
     subscription, 
@@ -90,7 +92,7 @@ export default function Settings() {
 
   const loadPremiumStatus = async () => {
     try {
-      await axios.get(`${API}/premium/status?user_id=${USER_ID}`);
+      await axios.get(`${API}/premium/status?user_id=${userId}`);
     } catch (error) {
       console.error("Failed to load premium status:", error);
     }
@@ -99,7 +101,7 @@ export default function Settings() {
   const loadTrainingPlan = async () => {
     try {
       const res = await axios.get(`${API}/training/full-cycle`, { 
-        headers: { "X-User-Id": USER_ID } 
+        headers: { "X-User-Id": userId } 
       });
       if (res.data) {
         setTrainingGoal(res.data.goal || "SEMI");
@@ -119,7 +121,7 @@ export default function Settings() {
     setUpdatingTrainingPlan(true);
     try {
       await axios.post(`${API}/training/set-goal?goal=${goal}`, {}, {
-        headers: { "X-User-Id": USER_ID }
+        headers: { "X-User-Id": userId }
       });
       setTrainingGoal(goal);
       toast.success(t("settingsExtended.goalSetWithName").replace("{goal}", goal));
@@ -134,7 +136,7 @@ export default function Settings() {
     setUpdatingTrainingPlan(true);
     try {
       await axios.post(`${API}/training/refresh?sessions=${sessions}`, {}, {
-        headers: { "X-User-Id": USER_ID }
+        headers: { "X-User-Id": userId }
       });
       setSessionsPerWeek(sessions);
       toast.success(`${sessions} ${t("settingsExtended.sessionsPerWeekSet")}`);
@@ -150,8 +152,8 @@ export default function Settings() {
     try {
       // Déterminer l'endpoint selon le type de plan
       const endpoint = planType === "early_adopter" 
-        ? `${API}/subscription/verify-checkout/${sessionId}?user_id=${USER_ID}`
-        : `${API}/premium/checkout/status/${sessionId}?user_id=${USER_ID}`;
+        ? `${API}/subscription/verify-checkout/${sessionId}?user_id=${userId}`
+        : `${API}/premium/checkout/status/${sessionId}?user_id=${userId}`;
       
       // Poll for payment completion
       let attempts = 0;
@@ -199,7 +201,7 @@ export default function Settings() {
       const res = await axios.post(`${API}/premium/checkout`, {
         origin_url: window.location.origin
       }, {
-        params: { user_id: USER_ID }
+        params: { user_id: userId }
       });
       
       window.location.href = res.data.checkout_url;
@@ -211,7 +213,7 @@ export default function Settings() {
 
   const loadGoal = async () => {
     try {
-      const res = await axios.get(`${API}/user/goal?user_id=${USER_ID}`);
+      const res = await axios.get(`${API}/user/goal?user_id=${userId}`);
       if (res.data) {
         setGoal(res.data);
         setEventName(res.data.event_name);
@@ -247,7 +249,7 @@ export default function Settings() {
     
     setSavingGoal(true);
     try {
-      const res = await axios.post(`${API}/user/goal?user_id=${USER_ID}`, {
+      const res = await axios.post(`${API}/user/goal?user_id=${userId}`, {
         event_name: eventName.trim(),
         event_date: eventDate,
         distance_type: distanceType,
@@ -265,7 +267,7 @@ export default function Settings() {
 
   const handleDeleteGoal = async () => {
     try {
-      await axios.delete(`${API}/user/goal?user_id=${USER_ID}`);
+      await axios.delete(`${API}/user/goal?user_id=${userId}`);
       setGoal(null);
       setEventName("");
       setEventDate("");
@@ -857,7 +859,7 @@ export default function Settings() {
                         try {
                           // Créer une session Stripe Checkout
                           const res = await axios.post(
-                            `${API}/subscription/early-adopter/checkout?user_id=${USER_ID}&origin_url=${encodeURIComponent(window.location.origin)}`
+                            `${API}/subscription/early-adopter/checkout?user_id=${userId}&origin_url=${encodeURIComponent(window.location.origin)}`
                           );
                           
                           if (res.data?.checkout_url) {
