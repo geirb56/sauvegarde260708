@@ -106,3 +106,15 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
   - CASE 1 (aucun plan actif / upcoming) -> HTTP 200, réponse gracieuse, aucun traceback.
   - CASE 2 (plan actif, 7 séances) -> HTTP 200, status "success" avec planned_session + adaptive_session. (testé via objectif temporaire puis état restauré à l'identique).
 - À COMMITTER côté GitHub via "Save to Github" (message: "Fix training today null plan guard") sinon écrasé au prochain pull.
+
+## 2026-07-28 — Pull PR22 (auth JWT multi-utilisateurs, head 8155aa1)
+- Ajoute module backend auth/ (JWT custom: register/login/me/forgot/reset), frontend Login/Register/ForgotPassword/ResetPassword + AuthContext, App.js gated (login obligatoire). Interceptor axios envoie Bearer JWT (plus de X-User-Id).
+- backend auth_user: valide JWT (sub=UUID), garde fallback X-User-Id/query param (legacy Step2), sinon "unauthenticated".
+- JWT_SECRET_KEY généré et ajouté à backend/.env. yarn.lock régénéré. Fix training/today présent upstream aussi.
+- VÉRIFIÉ: register/login/me OK, login screen rendu.
+- ⚠️ MIGRATION INCOMPLÈTE (Step 2 pending par design):
+  - /subscription/info et d'autres endpoints gardent user_id="default" en dur -> ignorent le JWT.
+  - /workouts utilise l'UUID JWT -> nouvel user bloqué "free" (pas de trial auto-créé).
+  - 141 activités restent sous "default"; nouvel user voit une app vide.
+  - Frontend n'envoie plus X-User-Id -> le propriétaire ne voit plus ses données via l'UI sans migration.
+- Compte test: testrunner@runindex.app / Test1234! (voir test_credentials.md).
