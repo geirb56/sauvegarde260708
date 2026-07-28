@@ -183,7 +183,7 @@ export default function Subscription() {
 
   const loadStatus = async () => {
     try {
-      const res = await axios.get(API + "/subscription/status);
+      const res = await axios.get(API + "/subscription/status");
       setCurrentTier(res.data.tier || "free");
     } catch (e) {
       console.error(e);
@@ -195,7 +195,7 @@ export default function Subscription() {
   const handleSuccess = async (sessionId) => {
     try {
       const res = await axios.get(
-        API + "/subscription/checkout/status/" + sessionId + "
+        API + "/subscription/checkout/status/" + sessionId
       );
       if (res.data.status === "completed") {
         toast.success(res.data.message || t("subscription.subscriptionActivated"));

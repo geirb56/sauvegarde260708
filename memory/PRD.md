@@ -129,4 +129,4 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
 
 ## 2026-07-28 — Pull PR22 (PR #26, head 987dc26)
 - PR #26 corrige le middleware: get_user_id_from_request décode le JWT en premier (fix recommandé appliqué upstream). Backend multi-user JWT VÉRIFIÉ 100%: workouts JWT=200[], training/today=200, subscription/info=trial+UUID, no-auth=403, chat trial illimité=reply.
-- ⚠️ BLOQUANT FRONTEND: Subscription.jsx:186 chaîne non terminée `axios.get(API + "/subscription/status);` (guillemet fermant manquant) -> build frontend cassé, app blanche. Présent DANS la branche. Fix: ajouter le guillemet fermant `"/subscription/status"`.
+- CORRIGÉ EN LOCAL: Subscription.jsx chaînes non terminées lignes 186 ET 198 (guillemets manquants) -> build frontend réparé. Scan de tous les .jsx/.js: aucun autre fichier affecté. VÉRIFIÉ: register via UI -> dashboard (compte isolé vide, "Connect Garmin", séance du jour), routes protégées OK. À COMMITTER sur GitHub (Save to Github).
