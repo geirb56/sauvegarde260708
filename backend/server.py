@@ -99,6 +99,12 @@ from demo_mode import (
     validate_environment_configuration,
     log_demo_mode_status,
 )
+from access_control import (
+    get_user_access,
+    get_route_access,
+    Tier,
+    RouteAccess,
+)
 from services.stripe_webhook_security import verify_and_parse_stripe_event
 
 # Import physiological engine dashboard router
@@ -394,48 +400,59 @@ async def rate_limit_middleware(request: Request, call_next):
 async def subscription_middleware(request: Request, call_next):
     """Subscription verification middleware.
 
-    Blocks access to protected routes for 'free' users.
-    Users with 'trial', 'early_adopter' and 'premium' have full access.
+    Uses access_control.get_route_access() for route classification and
+    access_control.get_user_access() for per-user tier resolution.
+
+    - PUBLIC routes: pass through (no auth required).
+    - FREE routes: pass through (any authenticated user).
+    - PREMIUM routes: require TRIAL or PREMIUM tier; fail-closed on errors.
     """
     path = request.url.path
-    
+
     # Skip non-API requests
     if not path.startswith("/api"):
         return await call_next(request)
-    
-    # Skip public routes (subscription, auth, health, etc.)
-    if not is_route_protected(path):
+
+    # Classify the route
+    route_access = get_route_access(path)
+
+    # Public and free-tier routes need no subscription check
+    if route_access != RouteAccess.PREMIUM:
         return await call_next(request)
-    
-    # Get user ID
+
+    # Premium route — verify user's subscription tier
     user_id = get_user_id_from_request(request)
-    
+
     try:
-        # Get subscription status
-        subscription = await get_demo_subscription(db, user_id)
-        status = subscription.get("status", SubscriptionStatus.FREE)
-        
-        # Check if user has access
-        if status == SubscriptionStatus.FREE:
-            logger.info(f"[Subscription] Blocked {path} for FREE user {user_id}")
+        user_access = await get_user_access(db, user_id)
+
+        if not user_access.has_premium_access:
+            logger.info(f"[Subscription] Blocked {path} for FREE user '{user_id}'")
             return JSONResponse(
                 status_code=403,
                 content={
                     "error": "subscription_required",
                     "message": "Subscription required to access this feature",
                     "message_en": "Subscription required to access this feature",
-                    "status": status,
-                    "upgrade_url": "/subscription"
-                }
+                    "status": user_access.tier.value,
+                    "upgrade_url": "/subscription",
+                },
             )
-        
-        # Store subscription in request state for later use
-        request.state.subscription = subscription
-        
+
+        # Store resolved access in request state for downstream handlers
+        request.state.user_access = user_access
+
     except Exception as e:
-        logger.error(f"[Subscription] Error checking subscription: {e}")
-        # In case of error, allow access (fail open)
-    
+        logger.error(f"[Subscription] Error checking subscription for '{user_id}': {e}")
+        # Fail-closed: if we cannot verify access, deny premium routes
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": "subscription_check_failed",
+                "message": "Could not verify subscription status. Please try again.",
+            },
+        )
+
     return await call_next(request)
 
 
@@ -4586,106 +4603,50 @@ async def get_subscription_tiers():
 @api_router.get("/subscription/status")
 async def get_subscription_status(user: dict = Depends(auth_user)):
     """Check user's subscription status"""
-    
+
     user_id = user["id"]
-    # Check subscription in DB
-    subscription = await db.subscriptions.find_one(
-        {"user_id": user_id},
-        {"_id": 0}
-    )
-    
-    # Default to free tier
-    tier = "free"
-    tier_config = SUBSCRIPTION_TIERS["free"]
-    is_premium = False
-    billing_period = None
-    expires_at = None
-    subscription_id = None
-    
-    if subscription and subscription.get("status") == "active":
-        expires_at = subscription.get("expires_at")
-        
-        # Check if subscription is still valid
-        if expires_at:
-            try:
-                exp_date = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-                if exp_date < datetime.now(timezone.utc):
-                    # Subscription expired - revert to free
-                    await db.subscriptions.update_one(
-                        {"user_id": user_id},
-                        {"$set": {"status": "expired"}}
-                    )
-                else:
-                    # Active subscription
-                    tier = normalize_subscription_tier(subscription.get("tier", "premium"))
-                    if tier not in SUBSCRIPTION_TIERS:
-                        tier = "premium"
-                    tier_config = SUBSCRIPTION_TIERS.get(tier, SUBSCRIPTION_TIERS["premium"])
-                    is_premium = True
-                    billing_period = subscription.get("billing_period", "monthly")
-                    subscription_id = subscription.get("subscription_id")
-            except (ValueError, TypeError):
-                pass
 
-    elif subscription and subscription.get("status") in ("trial", "early_adopter", "premium"):
-        # Full-access statuses managed by subscription_manager (not Stripe tiers).
-        status_val = subscription.get("status")
-        trial_valid = True
-        if status_val == "trial":
-            trial_end = subscription.get("trial_end")
-            expires_at = trial_end
-            if trial_end:
-                try:
-                    if datetime.fromisoformat(trial_end.replace("Z", "+00:00")) < datetime.now(timezone.utc):
-                        trial_valid = False
-                except (ValueError, TypeError):
-                    pass
-        if trial_valid:
-            tier = status_val
-            _names = {"trial": "Free Trial", "early_adopter": "Early Adopter", "premium": "Premium"}
-            tier_config = {"name": _names[status_val], "messages_limit": 999, "unlimited": True}
-            is_premium = True
+    # Resolve tier and access via access_control (handles DEMO_MODE, expiry, fail-closed)
+    user_access = await get_user_access(db, user_id)
 
-    # Get message count for current month
+    # Tier display name
+    _tier_names = {
+        Tier.FREE:    "Gratuit",
+        Tier.TRIAL:   "Essai gratuit",
+        Tier.PREMIUM: "Premium",
+    }
+    tier_name = _tier_names.get(user_access.tier, "Gratuit")
+
+    # Expiry date string
+    expires_at: Optional[str] = None
+    if user_access.premium_expires_at:
+        expires_at = user_access.premium_expires_at.isoformat()
+    elif user_access.trial_end and user_access.is_trial:
+        expires_at = user_access.trial_end.isoformat()
+
+    # Message count for current month
     now = datetime.now(timezone.utc)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-
     message_count = await db.chat_messages.count_documents({
         "user_id": user_id,
         "role": "user",
-        "timestamp": {"$gte": month_start.isoformat()}
+        "timestamp": {"$gte": month_start.isoformat()},
     })
 
-    messages_limit = tier_config.get("messages_limit", 10)
-    is_unlimited = tier_config.get("unlimited", False)
-    
-    result = SubscriptionStatusResponse(
-        tier=tier,
-        tier_name=tier_config["name"],
-        is_premium=is_premium,
-        subscription_id=subscription_id,
-        billing_period=billing_period,
+    messages_limit = user_access.chat_monthly_quota if user_access.chat_monthly_quota is not None else 999
+    is_unlimited = user_access.is_unlimited_chat
+
+    return SubscriptionStatusResponse(
+        tier=user_access.tier.value,
+        tier_name=tier_name,
+        is_premium=user_access.has_premium_access,
+        subscription_id=user_access.paddle_subscription_id,
         expires_at=expires_at,
         messages_used=message_count,
         messages_limit=messages_limit,
         messages_remaining=max(0, messages_limit - message_count) if not is_unlimited else 999,
-        is_unlimited=is_unlimited
+        is_unlimited=is_unlimited,
     )
-    patched = patch_subscription_status_response(result.model_dump(), user_id)
-    if patched.get("_demo_mode"):
-        return SubscriptionStatusResponse(
-            tier=patched["tier"],
-            tier_name=patched["tier_name"],
-            is_premium=patched["is_premium"],
-            subscription_id=result.subscription_id,
-            billing_period=result.billing_period,
-            expires_at=result.expires_at,
-            messages_used=result.messages_used,
-            messages_limit=patched["messages_limit"],
-            messages_remaining=patched["messages_remaining"],
-            is_unlimited=patched["is_unlimited"]
-        )
-    return result
 
 
 # Keep old endpoint for backward compatibility
@@ -4704,6 +4665,37 @@ async def get_premium_status(user: dict = Depends(auth_user)):
         "tier_name": status.tier_name,
         "messages_limit": status.messages_limit,
         "is_unlimited": status.is_unlimited
+    }
+
+
+@api_router.get("/user/features")
+async def get_user_features(user: dict = Depends(auth_user)):
+    """
+    Returns the current user's subscription tier and per-feature access flags.
+
+    The frontend uses this response to decide which features to blur/lock and
+    whether to show the Paddle upgrade CTA.  Access enforcement always happens
+    server-side; this endpoint is display-only.
+
+    Response shape:
+        {
+            "plan": "free" | "trial" | "premium",
+            "trial_active": bool,
+            "has_premium_access": bool,
+            "trial_days_remaining": int | null,
+            "feature_access": { "<feature>": bool, ... }
+        }
+    """
+    user_id = user["id"]
+    user_access = await get_user_access(db, user_id)
+    api_dict = user_access.to_api_dict()
+
+    return {
+        "plan": api_dict["subscription_status"],
+        "trial_active": api_dict["is_trial"],
+        "has_premium_access": api_dict["has_premium_access"],
+        "trial_days_remaining": api_dict["trial_days_remaining"],
+        "feature_access": api_dict["feature_access"],
     }
 
 
@@ -5302,27 +5294,33 @@ class ActivateSubscriptionRequest(BaseModel):
 async def get_subscription_info(user: dict = Depends(auth_user), language: str = "en"):
     """
     Retrieves complete subscription information for a user.
-    
+
     Returns:
-    - status: trial, free, early_adopter, premium
+    - status: trial, free, premium
     - display: Localized UI texts
     - features: Accessible features
     - trial_days_remaining: Remaining days if in trial
     """
     user_id = user["id"]
-    subscription = await get_demo_subscription(db, user_id)
-    status = subscription.get("status", SubscriptionStatus.FREE)
-    
+
+    # Use access_control as single source of truth for tier resolution
+    user_access = await get_user_access(db, user_id)
+
+    # Also fetch raw subscription doc for legacy display fields (price_locked, etc.)
+    subscription = await db.subscriptions.find_one({"user_id": user_id}, {"_id": 0}) or {}
+
+    status = user_access.tier.value
+
     return {
         "user_id": user_id,
         "status": status,
         "display": get_subscription_display(subscription, language),
         "features": FEATURES.get(status, FEATURES[SubscriptionStatus.FREE]),
-        "trial_days_remaining": get_trial_days_remaining(subscription),
+        "trial_days_remaining": user_access.trial_days_remaining,
         "price_locked": subscription.get("price_locked"),
         "stripe_customer_id": subscription.get("stripe_customer_id"),
         "created_at": subscription.get("created_at"),
-        "activated_at": subscription.get("activated_at")
+        "activated_at": subscription.get("activated_at"),
     }
 
 
