@@ -110,7 +110,7 @@ export default function Progress() {
       }
     };
     fetchData();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch RunIndex history when period changes
   useEffect(() => {
@@ -126,7 +126,7 @@ export default function Progress() {
       }
     };
     fetchRunIndexHistory();
-  }, [runIndexPeriod, lang]);
+  }, [runIndexPeriod, lang]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (loading || subLoading) {
     return (

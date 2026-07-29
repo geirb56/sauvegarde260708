@@ -136,3 +136,11 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
 - La branche a intégré mon correctif Subscription.jsx (lignes 186/198 OK). Frontend inchangé vs état précédent.
 - VÉRIFIÉ: register->trial, workouts JWT=200[], subscription/status=trial/premium(msg 999), /api/user/features renvoie plan+feature_access, no-auth=401, login screen rendu.
 - AST syntax check OK sur access_control.py, server.py, subscription_manager.py.
+
+## 2026-07-29 — Pull PR22 (PR #34, head a6034ba) — Migration Stripe→Paddle
+- Backend: paddle_webhook_security.py + endpoints /subscription/paddle/checkout, /subscription/paddle/config, /webhook/paddle. Env vars (os.environ.get, défauts vides): PADDLE_API_KEY, PADDLE_WEBHOOK_SECRET, PADDLE_ENVIRONMENT(sandbox), PADDLE_PRICE_ID, PADDLE_CLIENT_TOKEN. Backend démarre sans clés; checkout->503 "Paddle not configured", config->configured:false, webhook->rejeté.
+- Frontend: @paddle/paddle-js installé; Paywall/Subscription/Settings/SubscriptionContext MAJ. Backend AST OK.
+- VÉRIFIÉ: register->trial, workouts/user/features JWT OK, subscription page rend, dashboard rend.
+- BLOCAGE CORRIGÉ (local): Paywall.jsx:180 `PREMIUM_OFFER.features.map()` provoquait récursion infinie dans frontend/plugins/visual-edits/babel-metadata-plugin.js -> build cassé. Fix: propager garde skipArrayContext dans analyzeMemberExpression (appel getArrayIterationContext + appel analyzeIdentifier). Cache node_modules/.cache purgé, frontend recompile OK.
+  - ⚠️ Plugin versionné dans la branche -> fix écrasé au prochain pull. Options: committer le fix plugin OU modifier Paywall.jsx (destructurer features avant .map).
+- Paddle NON FONCTIONNEL tant que les clés sandbox ne sont pas fournies par l'utilisateur.
