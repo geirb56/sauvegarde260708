@@ -72,36 +72,26 @@ export default function Settings() {
 
   useEffect(() => {
     loadGoal();
-    loadPremiumStatus();
     loadTrainingPlan();
-    
-    // Handle Stripe callback
+
+    // Clean up any stale Stripe-era query params that may linger in the URL
     const sessionId = searchParams.get("session_id");
     const premiumParam = searchParams.get("premium");
     const subscriptionParam = searchParams.get("subscription");
-    
-    if (sessionId && premiumParam === "success") {
-      handlePaymentSuccess(sessionId, "premium");
-    } else if (sessionId && subscriptionParam === "early_adopter_success") {
-      handlePaymentSuccess(sessionId, "early_adopter");
-    } else if (premiumParam === "cancelled" || subscriptionParam === "cancelled") {
-      toast.info(t("settingsExtended.paymentCancelled"));
+
+    if (sessionId || premiumParam || subscriptionParam) {
+      // If a payment was cancelled show a toast; otherwise silently clean up
+      if (premiumParam === "cancelled" || subscriptionParam === "cancelled") {
+        toast.info(t("settingsExtended.paymentCancelled"));
+      }
       setSearchParams({});
     }
   }, [searchParams]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const loadPremiumStatus = async () => {
-    try {
-      await axios.get(`${API}/premium/status`);
-    } catch (error) {
-      console.error("Failed to load premium status:", error);
-    }
-  };
-
   const loadTrainingPlan = async () => {
     try {
-      const res = await axios.get(`${API}/training/full-cycle`, { 
-        headers: { "X-User-Id": userId } 
+      const res = await axios.get(`${API}/training/full-cycle`, {
+        headers: { "X-User-Id": userId }
       });
       if (res.data) {
         setTrainingGoal(res.data.goal || "SEMI");
@@ -109,11 +99,60 @@ export default function Settings() {
       }
     } catch (error) {
       console.error("Failed to load training plan:", error);
-      // Defaults
       setTrainingGoal("SEMI");
       setSessionsPerWeek(4);
     } finally {
       setLoadingTrainingPlan(false);
+    }
+  };
+
+  // ── Paddle checkout ──────────────────────────────────────────────────────
+  // The frontend NEVER decides that the user is Premium.
+  // Premium is activated server-side after Paddle sends a verified webhook.
+  // After the overlay closes with success, we refresh the subscription state.
+  const handleSubscribe = async () => {
+    setProcessingPayment(true);
+    try {
+      // 1. Create a Paddle transaction (identity from JWT, server-side)
+      const res = await axios.post(`${API}/subscription/paddle/checkout`, {});
+      const { transaction_id, paddle_environment, paddle_client_token } = res.data;
+
+      if (!transaction_id || !paddle_client_token) {
+        throw new Error("Invalid checkout configuration");
+      }
+
+      // 2. Initialize Paddle.js
+      const { initializePaddle } = await import("@paddle/paddle-js");
+      const paddle = await initializePaddle({
+        environment: paddle_environment === "production" ? "production" : "sandbox",
+        token: paddle_client_token,
+      });
+      if (!paddle) throw new Error("Failed to initialize Paddle.js");
+
+      // 3. Open Paddle checkout overlay
+      paddle.Checkout.open({
+        transactionId: transaction_id,
+        settings: { displayMode: "overlay", theme: "dark" },
+        events: {
+          onPaymentSuccess: () => {
+            toast.success(`🎉 ${t("settingsExtended.premiumActivated") || "Premium activé !"}`);
+            refreshSubscription();
+            setProcessingPayment(false);
+          },
+          onCheckoutError: (err) => {
+            console.error("[Settings] Paddle checkout error:", err);
+            toast.error(t("settingsExtended.paymentError") || "Checkout failed");
+            setProcessingPayment(false);
+          },
+          onCheckoutClose: () => {
+            setProcessingPayment(false);
+          },
+        },
+      });
+    } catch (error) {
+      console.error("[Settings] Checkout error:", error);
+      toast.error(t("settingsExtended.paymentError") || "Could not start checkout");
+      setProcessingPayment(false);
     }
   };
 
@@ -144,68 +183,6 @@ export default function Settings() {
       toast.error(t("common.error"));
     } finally {
       setUpdatingTrainingPlan(false);
-    }
-  };
-
-  const handlePaymentSuccess = async (sessionId, planType = "premium") => {
-    setProcessingPayment(true);
-    try {
-      // Déterminer l'endpoint selon le type de plan
-      const endpoint = planType === "early_adopter" 
-        ? `${API}/subscription/verify-checkout/${sessionId}`
-        : `${API}/premium/checkout/status/${sessionId}`;
-      
-      // Poll for payment completion
-      let attempts = 0;
-      const maxAttempts = 10;
-      
-      while (attempts < maxAttempts) {
-        const res = await axios.get(endpoint);
-        
-        if (res.data.success || res.data.status === "completed" || res.data.status === "early_adopter" || res.data.payment_status === "paid") {
-          const successMsg = planType === "early_adopter"
-            ? `🎉 ${t("settingsExtended.earlyAdopterActivated")}`
-            : `🎉 ${t("settingsExtended.premiumActivated")}`;
-          
-          toast.success(successMsg);
-          
-          // Rafraîchir le statut de l'abonnement
-          if (planType === "early_adopter") {
-            refreshSubscription();
-          } else {
-            loadPremiumStatus();
-          }
-          
-          setSearchParams({});
-          break;
-        } else if (res.data.status === "expired" || res.data.error) {
-          toast.error(t("settingsExtended.sessionExpiredOrError"));
-          setSearchParams({});
-          break;
-        }
-        
-        await new Promise(r => setTimeout(r, 2000));
-        attempts++;
-      }
-    } catch (error) {
-      console.error("Payment verification error:", error);
-      toast.error(t("settingsExtended.verificationError"));
-    } finally {
-      setProcessingPayment(false);
-      setSearchParams({});
-    }
-  };
-
-  const handleSubscribe = async () => {
-    try {
-      const res = await axios.post(`${API}/premium/checkout`, {
-        origin_url: window.location.origin
-      });
-      
-      window.location.href = res.data.checkout_url;
-    } catch (error) {
-      console.error("Checkout error:", error);
-      toast.error(t("settingsExtended.paymentError"));
     }
   };
 
@@ -852,28 +829,7 @@ export default function Settings() {
                     </ul>
                     
                     <Button
-                      onClick={async () => {
-                        setProcessingPayment(true);
-                        try {
-                          // Créer une session Stripe Checkout
-                          const res = await axios.post(
-                            `${API}/subscription/early-adopter/checkout?origin_url=${encodeURIComponent(window.location.origin)}`
-                          );
-                          
-                          if (res.data?.checkout_url) {
-                            // Rediriger vers Stripe Checkout
-                            window.location.href = res.data.checkout_url;
-                          } else {
-                            toast.error(t("settingsExtended.paymentError"));
-                            setProcessingPayment(false);
-                          }
-                        } catch (err) {
-                          console.error("Checkout error:", err);
-                          toast.error(t("settingsExtended.paymentError"));
-                          setProcessingPayment(false);
-                        }
-                        // Note: pas de finally car on redirige vers Stripe
-                      }}
+                      onClick={handleSubscribe}
                       disabled={processingPayment}
                       data-testid="subscribe-early-adopter"
                       className="w-full bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white rounded-lg uppercase font-bold tracking-wider text-sm h-12 flex items-center justify-center gap-2"

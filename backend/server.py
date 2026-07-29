@@ -104,8 +104,11 @@ from access_control import (
     get_route_access,
     Tier,
     RouteAccess,
+    CHAT_QUOTA_FREE,
+    CHAT_ANTIABUSE_CAP,
 )
 from services.stripe_webhook_security import verify_and_parse_stripe_event
+from services.paddle_webhook_security import verify_and_parse_paddle_event, PaddleWebhookError
 
 # Import physiological engine dashboard router
 from api.dashboard import dashboard_router
@@ -129,10 +132,29 @@ mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
-# Stripe configuration
+# Stripe configuration (legacy — read-only, kept for historical data)
 STRIPE_API_KEY = os.environ.get('STRIPE_API_KEY', '')
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "development").strip().lower()
+
+# ── Paddle configuration (new payment provider) ───────────────────────────────
+# PADDLE_API_KEY:        Paddle seller/API key (server-side only)
+# PADDLE_WEBHOOK_SECRET: Webhook notification secret from Paddle dashboard
+# PADDLE_ENVIRONMENT:    "sandbox" | "production"
+# PADDLE_PRICE_ID:       Price ID for Premium 4.99 EUR/month
+# PADDLE_CLIENT_TOKEN:   Paddle.js client-side token (safe to expose to browser)
+PADDLE_API_KEY        = os.environ.get("PADDLE_API_KEY", "")
+PADDLE_WEBHOOK_SECRET = os.environ.get("PADDLE_WEBHOOK_SECRET", "")
+PADDLE_ENVIRONMENT    = os.environ.get("PADDLE_ENVIRONMENT", "sandbox").strip().lower()
+PADDLE_PRICE_ID       = os.environ.get("PADDLE_PRICE_ID", "")
+PADDLE_CLIENT_TOKEN   = os.environ.get("PADDLE_CLIENT_TOKEN", "")
+
+# Paddle API base URLs
+_PADDLE_API_BASES = {
+    "sandbox":    "https://sandbox-api.paddle.com",
+    "production": "https://api.paddle.com",
+}
+PADDLE_API_BASE = _PADDLE_API_BASES.get(PADDLE_ENVIRONMENT, _PADDLE_API_BASES["sandbox"])
 
 # Subscription tiers configuration
 SUBSCRIPTION_TIERS = {
@@ -5030,70 +5052,38 @@ def build_chat_context(workouts: list, user_goal: dict = None) -> dict:
 async def send_chat_message(request: ChatRequest, user: dict = Depends(auth_user)):
     """Send a message to the chat coach (with tier-based limits)"""
     user_id = user["id"]
-    
-    # Get subscription status
-    subscription = await db.subscriptions.find_one(
-        {"user_id": user_id},
-        {"_id": 0}
-    )
-    
-    # Determine tier and limits
-    tier = "free"
-    tier_config = SUBSCRIPTION_TIERS["free"]
-    
-    # Premium-equivalent statuses: active (Stripe), trial (free trial), early_adopter and premium
-    # (legacy/manual grants). All get full chat access; only truly free users keep the 10-msg cap.
-    PREMIUM_STATUSES = {"active", "trial", "early_adopter", "premium"}
-    if subscription and subscription.get("status") in PREMIUM_STATUSES:
-        status_val = subscription.get("status")
-        # For "active" subscriptions verify the expiry date from Stripe
-        if status_val == "active":
-            expires_at = subscription.get("expires_at")
-            if expires_at:
-                try:
-                    exp_date = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-                    if exp_date >= datetime.now(timezone.utc):
-                        tier = normalize_subscription_tier(subscription.get("tier", "premium"))
-                        if tier not in SUBSCRIPTION_TIERS:
-                            tier = "premium"
-                        tier_config = SUBSCRIPTION_TIERS.get(tier, SUBSCRIPTION_TIERS["premium"])
-                except (ValueError, TypeError):
-                    pass
-        elif status_val == "trial":
-            # Trial users have unlimited AI chat access during the trial period to demonstrate the product value.
-            tier = "pro"
-            tier_config = SUBSCRIPTION_TIERS.get("pro", SUBSCRIPTION_TIERS["free"])
-        else:
-            # early_adopter / premium: grant full access (use "premium" tier config)
-            tier = normalize_subscription_tier(subscription.get("tier", "premium"))
-            if tier not in SUBSCRIPTION_TIERS:
-                tier = "premium"
-            tier_config = SUBSCRIPTION_TIERS.get(tier, SUBSCRIPTION_TIERS["premium"])
 
-    messages_limit = tier_config.get("messages_limit", 10)
-    is_unlimited = tier_config.get("unlimited", False)
+    # ── Access control via the single source of truth ────────────────────────
+    # access_control.get_user_access() handles all legacy statuses, expiration
+    # checks, DEMO_MODE, DB errors (fail-closed), and the canonical tier model.
+    user_access = await get_user_access(db, user_id)
+
+    is_unlimited = user_access.is_unlimited_chat
+    messages_limit = user_access.chat_monthly_quota or CHAT_QUOTA_FREE  # int for FREE tier
 
     # Get message count for current month
     now = datetime.now(timezone.utc)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    
+
     message_count = await db.chat_messages.count_documents({
         "user_id": user_id,
         "role": "user",
         "timestamp": {"$gte": month_start.isoformat()}
     })
-    
-    # Check limit (soft limit for unlimited tier)
+
+    # Check limit; apply anti-abuse hard cap for unlimited tiers
     if message_count >= messages_limit:
-        if is_unlimited and message_count < 200:  # Hard cap for fair-use
-            pass  # Allow but warn
+        if is_unlimited and message_count < CHAT_ANTIABUSE_CAP:
+            pass  # Unlimited tier — allow but anti-abuse cap still active
         else:
-            tier_name = tier_config.get("name", "Free")
             raise HTTPException(
                 status_code=429,
-                detail=f"You've reached your limit of {messages_limit} messages this month ({tier_name}). Upgrade to the next tier to continue!"
+                detail=(
+                    f"You've reached your monthly limit of {messages_limit} messages. "
+                    "Upgrade to Premium to continue."
+                ),
             )
-    
+
     # Get user's recent workouts for context
     workouts = await db.workouts.find({}, {"_id": 0}).sort("date", -1).to_list(50)
     
@@ -5325,25 +5315,33 @@ async def get_subscription_info(user: dict = Depends(auth_user), language: str =
 
 
 @api_router.post("/subscription/activate-early-adopter")
-async def activate_early_adopter_subscription(request: ActivateSubscriptionRequest):
+async def activate_early_adopter_subscription(
+    request: ActivateSubscriptionRequest,
+    user: dict = Depends(auth_user),
+):
     """
-    Active l'abonnement Early Adopter pour un utilisateur.
-    Prix garanti à vie: 4.99€/mois
-    
-    Appelé après un paiement Stripe réussi.
+    Active l'abonnement Early Adopter (legacy) pour l'utilisateur authentifié.
+
+    SECURITY: user_id is always taken from the JWT token, never from the request
+    body. The `user_id` field in `ActivateSubscriptionRequest` is ignored.
+
+    This endpoint is kept for admin/testing purposes only. New subscriptions
+    should flow through the Paddle webhook.
     """
+    # Always use JWT identity — never trust the body's user_id
+    user_id = user["id"]
     subscription = await activate_early_adopter(
         db,
-        request.user_id,
-        request.stripe_customer_id or f"cus_simulated_{request.user_id}",
-        request.stripe_subscription_id or f"sub_simulated_{request.user_id}"
+        user_id,
+        request.stripe_customer_id or f"cus_legacy_{user_id}",
+        request.stripe_subscription_id or f"sub_legacy_{user_id}",
     )
-    
+
     return {
         "success": True,
         "status": subscription.get("status"),
         "message": "Abonnement Early Adopter activé ! Prix garanti à vie: 4.99€/mois",
-        "subscription": subscription
+        "subscription": subscription,
     }
 
 
@@ -5607,55 +5605,382 @@ async def stripe_early_adopter_webhook(request: Request):
 @api_router.get("/subscription/verify-checkout/{session_id}")
 async def verify_checkout_session(session_id: str, user: dict = Depends(auth_user)):
     """
-    Vérifie le statut d'une session checkout et active l'abonnement si payé.
-    Appelé par le frontend après retour de Stripe.
+    DEPRECATED AND DISABLED — This endpoint previously activated Premium based solely
+    on a frontend-supplied session_id, bypassing real payment verification.
+
+    Premium is now activated exclusively by the Paddle webhook handler
+    (POST /api/webhook/paddle), which verifies the Paddle-Signature before
+    making any subscription change.
+
+    Clients that still call this URL during a transition period will receive
+    a read-only status from the database; they MUST NOT rely on this endpoint
+    to grant or confirm Premium access.
     """
+    raise HTTPException(
+        status_code=410,
+        detail={
+            "error": "endpoint_disabled",
+            "message": (
+                "This endpoint has been disabled for security reasons. "
+                "Premium activation is handled exclusively via the Paddle webhook. "
+                "Refresh your subscription status from GET /api/subscription/info."
+            ),
+        },
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PADDLE — new payment provider
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class PaddleCheckoutRequest(BaseModel):
+    """Request body to create a Paddle transaction / checkout."""
+    price_id: Optional[str] = None  # Override price; uses PADDLE_PRICE_ID if omitted
+
+
+class PaddleCheckoutResponse(BaseModel):
+    """Response from the Paddle checkout creation endpoint."""
+    transaction_id: str
+    paddle_environment: str
+    paddle_client_token: str
+    price_id: str
+
+
+@api_router.post("/subscription/paddle/checkout", response_model=PaddleCheckoutResponse)
+async def create_paddle_checkout(
+    request: PaddleCheckoutRequest,
+    http_request: Request,
+    user: dict = Depends(auth_user),
+):
+    """
+    Create a Paddle transaction for the authenticated user.
+
+    Returns a transaction_id that the frontend passes to
+    ``Paddle.Checkout.open({ transactionId })`` to display the checkout overlay.
+
+    The price defaults to PADDLE_PRICE_ID (Premium 4.99 EUR/month).
+
+    Security:
+    - user_id is ALWAYS taken from the JWT token, never from the request body.
+    - Premium is only activated server-side after the Paddle webhook is verified.
+    - The frontend MUST NOT interpret the transaction creation as a grant of access.
+    """
+    if not PADDLE_API_KEY:
+        raise HTTPException(status_code=503, detail="Paddle not configured on this server")
+    if not PADDLE_PRICE_ID and not request.price_id:
+        raise HTTPException(status_code=503, detail="Paddle price ID not configured")
+
     user_id = user["id"]
+    price_id = request.price_id or PADDLE_PRICE_ID
+
+    # Resolve existing Paddle customer_id if available, so Paddle pre-fills the
+    # checkout form for returning subscribers.
+    subscription = await db.subscriptions.find_one({"user_id": user_id}, {"_id": 0})
+    paddle_customer_id: Optional[str] = None
+    if subscription:
+        paddle_customer_id = subscription.get("paddle_customer_id")
+
+    # Build the transaction payload
+    transaction_payload: Dict = {
+        "items": [{"price_id": price_id, "quantity": 1}],
+        "custom_data": {"user_id": user_id},
+    }
+    if paddle_customer_id:
+        transaction_payload["customer_id"] = paddle_customer_id
+
+    headers = {
+        "Authorization": f"Bearer {PADDLE_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
     try:
-        # Vérifier la transaction
-        transaction = await db.payment_transactions.find_one({"session_id": session_id})
-        
-        if not transaction:
-            return {"success": False, "error": "Session not found"}
-        
-        if transaction.get("status") == "completed":
-            # Déjà traité
-            subscription = await get_user_subscription(db, user_id)
-            return {
-                "success": True,
-                "status": subscription.get("status"),
-                "already_processed": True
-            }
-        
-        # Pour les tests, activer directement si la session existe
-        # En production, cela serait vérifié via l'API Stripe
-        if transaction.get("plan") == "early_adopter":
-            await activate_early_adopter(
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{PADDLE_API_BASE}/transactions",
+                json=transaction_payload,
+                headers=headers,
+                timeout=15.0,
+            )
+        if resp.status_code not in (200, 201):
+            logger.error(
+                f"[Paddle] Transaction creation failed for user '{user_id}': "
+                f"HTTP {resp.status_code} — {resp.text[:500]}"
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="Failed to create Paddle transaction. Please try again.",
+            )
+        data = resp.json()
+        transaction_id: str = data["data"]["id"]
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"[Paddle] Unexpected error creating transaction for '{user_id}': {exc}")
+        raise HTTPException(status_code=500, detail="Internal error during checkout setup")
+
+    # Record the pending transaction for idempotence / audit trail
+    await db.payment_transactions.insert_one({
+        "transaction_id": transaction_id,
+        "user_id": user_id,
+        "price_id": price_id,
+        "provider": "paddle",
+        "status": "pending",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+    logger.info(f"[Paddle] Created transaction '{transaction_id}' for user '{user_id}'")
+
+    return PaddleCheckoutResponse(
+        transaction_id=transaction_id,
+        paddle_environment=PADDLE_ENVIRONMENT,
+        paddle_client_token=PADDLE_CLIENT_TOKEN,
+        price_id=price_id,
+    )
+
+
+@api_router.get("/subscription/paddle/config")
+async def get_paddle_config():
+    """
+    Returns Paddle.js client-side configuration (safe for the browser).
+
+    The frontend calls this once at startup to initialize Paddle.js with the
+    correct environment and client token.
+    """
+    return {
+        "paddle_environment": PADDLE_ENVIRONMENT,
+        "paddle_client_token": PADDLE_CLIENT_TOKEN,
+        "price_id": PADDLE_PRICE_ID,
+        "configured": bool(PADDLE_CLIENT_TOKEN and PADDLE_PRICE_ID),
+    }
+
+
+@api_router.post("/webhook/paddle")
+async def paddle_webhook(request: Request):
+    """
+    Handle Paddle Billing webhook notifications.
+
+    Security:
+    - Raw body is read before any parsing so the HMAC-SHA256 digest covers
+      exactly what Paddle signed.
+    - Signature is verified with `verify_and_parse_paddle_event()` before any
+      DB mutation.
+    - All subscription mutations go through subscription_manager helpers,
+      which are then surfaced via access_control.get_user_access() — the
+      single source of truth.
+    - Idempotence: events are deduplicated on their `event_id`.
+
+    Supported Paddle Billing event types:
+        subscription.activated   → activate_premium()
+        subscription.updated     → renew_premium() (renewal / plan update)
+        subscription.cancelled   → cancel_subscription()
+        subscription.past_due    → log warning (access expires naturally)
+        transaction.completed    → fallback for one-time or initial payment
+        transaction.payment_failed → log warning (access will lapse at expiry)
+    """
+    body = await request.body()
+    paddle_sig = request.headers.get("Paddle-Signature", "")
+
+    if not PADDLE_WEBHOOK_SECRET:
+        logger.error("[Paddle] PADDLE_WEBHOOK_SECRET is not set — rejecting webhook")
+        raise HTTPException(status_code=500, detail="Paddle webhook secret not configured")
+
+    try:
+        event = verify_and_parse_paddle_event(body, paddle_sig, PADDLE_WEBHOOK_SECRET)
+    except PaddleWebhookError as exc:
+        logger.warning(f"[Paddle] Webhook verification failed: {exc}")
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    event_id   = event.get("event_id") or event.get("id", "")
+    event_type = event.get("event_type", "")
+    data       = event.get("data", {})
+
+    logger.info(f"[Paddle] Webhook received: event_type={event_type!r} event_id={event_id!r}")
+
+    # ── Idempotence guard ────────────────────────────────────────────────────
+    if event_id:
+        existing = await db.paddle_events.find_one({"event_id": event_id})
+        if existing:
+            logger.info(f"[Paddle] Duplicate event_id={event_id!r} — skipping")
+            return {"received": True, "status": "duplicate"}
+        # Record before processing to prevent double-activation in case of
+        # retry arriving before DB write completes (best-effort idempotence).
+        await db.paddle_events.insert_one({
+            "event_id": event_id,
+            "event_type": event_type,
+            "processed_at": datetime.now(timezone.utc).isoformat(),
+        })
+
+    # ── Helper: extract user_id from custom_data ─────────────────────────────
+    def _user_id_from_event(evt_data: dict) -> Optional[str]:
+        """Extract user_id embedded by the backend when creating the transaction."""
+        custom = (
+            evt_data.get("custom_data")
+            or (evt_data.get("items") or [{}])[0].get("custom_data")
+            or {}
+        )
+        if isinstance(custom, dict):
+            return custom.get("user_id")
+        return None
+
+    # ── Helper: parse ISO datetime safely ────────────────────────────────────
+    def _parse_paddle_dt(value: Optional[str]) -> Optional[datetime]:
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            return None
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # subscription.activated
+    # Fired when a subscription's status becomes "active" (typically after the
+    # first payment is processed).
+    # ─────────────────────────────────────────────────────────────────────────
+    if event_type == "subscription.activated":
+        user_id              = _user_id_from_event(data)
+        paddle_sub_id        = data.get("id")
+        paddle_customer_id   = data.get("customer_id")
+        next_billed_at       = _parse_paddle_dt(data.get("next_billed_at"))
+
+        if not user_id:
+            logger.warning("[Paddle] subscription.activated — missing user_id in custom_data")
+            return {"received": True, "status": "no_user_id"}
+
+        from subscription_manager import activate_premium
+        await activate_premium(
+            db,
+            user_id,
+            paddle_subscription_id=paddle_sub_id,
+            paddle_customer_id=paddle_customer_id,
+            premium_expires_at=next_billed_at,
+        )
+        logger.info(
+            f"[Paddle] PREMIUM activated for user '{user_id}' "
+            f"(sub={paddle_sub_id}, next_billed={next_billed_at})"
+        )
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # subscription.updated
+    # Covers renewals, plan changes, and reactivations after past_due recovery.
+    # ─────────────────────────────────────────────────────────────────────────
+    elif event_type == "subscription.updated":
+        user_id            = _user_id_from_event(data)
+        paddle_sub_id      = data.get("id")
+        new_status         = (data.get("status") or "").lower()
+        next_billed_at     = _parse_paddle_dt(data.get("next_billed_at"))
+        paddle_customer_id = data.get("customer_id")
+
+        if not user_id:
+            logger.warning("[Paddle] subscription.updated — missing user_id in custom_data")
+            return {"received": True, "status": "no_user_id"}
+
+        if new_status in ("active", "trialing"):
+            from subscription_manager import renew_premium
+            if next_billed_at:
+                await renew_premium(db, user_id, paddle_sub_id, next_billed_at)
+            else:
+                # Renewal without a known next billing date — keep premium, reset expiry
+                from subscription_manager import activate_premium
+                await activate_premium(
+                    db, user_id,
+                    paddle_subscription_id=paddle_sub_id,
+                    paddle_customer_id=paddle_customer_id,
+                )
+            logger.info(
+                f"[Paddle] PREMIUM renewed for user '{user_id}' until {next_billed_at}"
+            )
+        elif new_status == "cancelled":
+            from subscription_manager import cancel_subscription
+            await cancel_subscription(db, user_id)
+            logger.info(f"[Paddle] Subscription cancelled for user '{user_id}'")
+        else:
+            logger.info(
+                f"[Paddle] subscription.updated status={new_status!r} for user '{user_id}' — no action"
+            )
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # subscription.cancelled
+    # The user or Paddle has cancelled the subscription.
+    # ─────────────────────────────────────────────────────────────────────────
+    elif event_type == "subscription.cancelled":
+        user_id = _user_id_from_event(data)
+        if not user_id:
+            logger.warning("[Paddle] subscription.cancelled — missing user_id in custom_data")
+            return {"received": True, "status": "no_user_id"}
+
+        from subscription_manager import cancel_subscription
+        await cancel_subscription(db, user_id)
+        logger.info(f"[Paddle] Subscription cancelled for user '{user_id}'")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # subscription.past_due
+    # Payment failed; Paddle will retry. We do NOT immediately revoke access —
+    # access naturally lapses when premium_expires_at passes.
+    # ─────────────────────────────────────────────────────────────────────────
+    elif event_type == "subscription.past_due":
+        user_id = _user_id_from_event(data)
+        logger.warning(
+            f"[Paddle] subscription.past_due for user '{user_id}' "
+            f"— access will lapse at premium_expires_at"
+        )
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # transaction.completed
+    # Fired for every completed payment (including the initial one for a
+    # subscription). Used as a fallback if subscription.activated is delayed.
+    # ─────────────────────────────────────────────────────────────────────────
+    elif event_type == "transaction.completed":
+        user_id            = _user_id_from_event(data)
+        paddle_sub_id      = data.get("subscription_id")
+        paddle_customer_id = data.get("customer_id")
+        transaction_id     = data.get("id")
+
+        if user_id and paddle_sub_id:
+            # Only activate if there is an associated subscription
+            from subscription_manager import activate_premium
+            await activate_premium(
                 db,
                 user_id,
-                f"cus_{session_id}",
-                f"sub_{session_id}"
+                paddle_subscription_id=paddle_sub_id,
+                paddle_customer_id=paddle_customer_id,
             )
-            
+            logger.info(
+                f"[Paddle] transaction.completed → PREMIUM for user '{user_id}' "
+                f"(txn={transaction_id})"
+            )
+
+        # Update transaction status in our DB
+        if transaction_id:
             await db.payment_transactions.update_one(
-                {"session_id": session_id},
-                {"$set": {"status": "completed", "completed_at": datetime.now(timezone.utc).isoformat()}}
+                {"transaction_id": transaction_id},
+                {
+                    "$set": {
+                        "status": "completed",
+                        "completed_at": datetime.now(timezone.utc).isoformat(),
+                        "paddle_customer_id": paddle_customer_id,
+                    }
+                },
             )
-            
-            return {
-                "success": True,
-                "status": "early_adopter",
-                "message": "Abonnement Early Adopter activé !"
-            }
-        
-        return {"success": False, "error": "Unknown plan"}
-    
-    except Exception as e:
-        logger.error(f"Verify checkout error: {e}")
-        return {"success": False, "error": str(e)}
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # transaction.payment_failed
+    # ─────────────────────────────────────────────────────────────────────────
+    elif event_type == "transaction.payment_failed":
+        user_id        = _user_id_from_event(data)
+        transaction_id = data.get("id")
+        logger.warning(
+            f"[Paddle] transaction.payment_failed for user '{user_id}' txn={transaction_id}"
+        )
+        if transaction_id:
+            await db.payment_transactions.update_one(
+                {"transaction_id": transaction_id},
+                {"$set": {"status": "payment_failed", "updated_at": datetime.now(timezone.utc).isoformat()}},
+            )
 
-# Register Garmin connector endpoints under /api (/api/garmin/*)
+    else:
+        logger.info(f"[Paddle] Unhandled event type: {event_type!r}")
+
+    return {"received": True}
 from api.garmin import garmin_router
 api_router.include_router(garmin_router)
 

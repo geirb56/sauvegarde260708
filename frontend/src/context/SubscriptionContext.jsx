@@ -29,22 +29,23 @@ export function SubscriptionProvider({ children }) {
     } catch (err) {
       console.error("Error fetching subscription:", err);
       setError(err);
-      // Default to trial on error (display labels translated in consuming components via t())
+      // Fail-closed on error: no premium access granted until backend confirms status.
+      // Never default to trial/premium — the frontend MUST NOT decide access.
       setSubscription({
-        status: "trial",
+        status: "free",
         features: {
-          training_plan: true,
-          plan_adaptation: true,
-          session_analysis: true,
-          sync_enabled: true,
-          api_access: true,
-          llm_access: true,
-          full_access: true
+          training_plan: false,
+          plan_adaptation: false,
+          session_analysis: false,
+          sync_enabled: false,
+          api_access: false,
+          llm_access: false,
+          full_access: false
         },
         display: {
-          label: lang === "fr" ? "Essai gratuit" : lang === "es" ? "Prueba gratuita" : "Free trial",
-          badge: lang === "fr" ? "ESSAI" : lang === "es" ? "PRUEBA" : "TRIAL",
-          badge_color: "blue"
+          label: lang === "fr" ? "Accès limité" : lang === "es" ? "Acceso limitado" : "Limited access",
+          badge: lang === "fr" ? "LIMITÉ" : lang === "es" ? "LIMITADO" : "LIMITED",
+          badge_color: "gray"
         }
       });
     } finally {
