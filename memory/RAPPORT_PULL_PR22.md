@@ -1,88 +1,98 @@
-# Rapport complet — Pull branche PR22 (état après PR #26)
-_Date : 2026-07-28 — analyse en lecture seule. Modifications hors-code : ajout de `JWT_SECRET_KEY` dans `backend/.env` (nécessaire au démarrage) + correctif frontend d'1 fichier (voir §4)._
+# Rapport complet — Pull branche PR22 (état après PR #32)
+_Date : 2026-07-29 — analyse en lecture seule. Aucune modification de code applicatif lors de ce pull (le correctif frontend précédent a été intégré upstream). `JWT_SECRET_KEY` reste présent dans `backend/.env`._
 
 ---
 
 ## 1. Ce qui a été récupéré
 - **Dépôt / branche** : `geirb56/sauvegarde260708`, branche **PR22**.
-- **Commit HEAD** : `987dc26` — *Merge PR #26 : fix middleware JWT*.
+- **Commit HEAD** : `74ed67c` — *Merge PR #32 : correction système d'abonnement (access_control)*.
 - **Historique récent de la branche** :
-  - PR #23 — audit de sécurité (`AUDIT_SECURITE.md`).
-  - PR #24 (`8155aa1`) — module d'auth JWT (backend + frontend, login gate).
-  - PR #25 (`72a77bb`) — « ÉTAPE 2/3 » : isolation multi-users, JWT sur endpoints, trial auto.
-  - **PR #26 (`987dc26`)** — correctif du middleware d'abonnement (identité via JWT).
-- **Ampleur PR #26** : `backend/server.py` uniquement, **+21 / -7 lignes**.
+  - PR #24 — module d'auth JWT (login gate).
+  - PR #25 — isolation multi-users + trial auto.
+  - PR #26 — correctif middleware (identité via JWT).
+  - PR #27 — audit Garmin multi-user (`AUDIT_GARMIN_STEP3.md`).
+  - PR #29 — audit fonctionnalités RunIndex.
+  - **PR #32 (`74ed67c`)** — intégration de `access_control.py` (source unique de vérité des accès).
+- **Changements vs version locale précédente** :
+  - **Nouveau** : `backend/access_control.py`.
+  - **Modifiés** : `backend/server.py`, `backend/subscription_manager.py`.
+  - Docs ajoutées (audits) ; `texte.txt` supprimé.
+  - **Frontend : aucun changement** (mon correctif `Subscription.jsx` a été committé upstream).
 
 ---
 
-## 2. État de l'architecture multi-utilisateurs
-- **Auth backend** (`backend/auth/`) : bcrypt, JWT HS256 (exp 60 min), endpoints `/api/auth/register|login|me|logout|forgot-password|reset-password`.
-- **`auth_user`** : exige un JWT valide (`sub` = UUID). Fallbacks legacy `X-User-Id`/`?user_id=` **supprimés** → 401 sans JWT.
-- **Trial auto** : abonnement `trial` 30 jours créé à l'inscription pour chaque nouvel UUID.
-- **Middleware d'abonnement** (correctif PR #26) : `get_user_id_from_request` décode désormais le **JWT en premier** (ordre : JWT `sub` → header `X-User-Id` → IP), cohérent avec `auth_user`. C'était le dernier blocage des routes protégées.
-- **Frontend** : `AuthContext` (token `localStorage`), `App.js` gated (login obligatoire), interceptor axios envoie `Authorization: Bearer <JWT>`, pages Login/Register/ForgotPassword/ResetPassword.
-- **Config** : `JWT_SECRET_KEY` généré (aléatoire fort) et présent dans `backend/.env`.
+## 2. Détail des changements backend
+### 2.1 `access_control.py` (nouveau)
+- **Source unique de vérité** pour toutes les décisions d'abonnement/feature.
+- Tiers commerciaux : **FREE** (trial expiré / pas d'abo) · **TRIAL** (30 j, accès Premium complet) · **PREMIUM** (abo payant Paddle, ou Stripe legacy).
+- API : `get_user_access(db, user_id) → UserAccess` ; `UserAccess.tier`, `.can(feature)`, `.is_unlimited_chat`, `.chat_monthly_quota`.
+- **Garanties de sécurité** :
+  - Erreur DB → **fail closed** (retourne FREE, aucun accès premium accordé).
+  - `DEMO_MODE` + `ENVIRONMENT=production` → **RuntimeError à l'import** (garde-fou).
+  - Toutes les décisions passent par `UserAccess.can()` (plus de conditions éparpillées).
+  - Identité **toujours issue du JWT**, jamais de valeurs fournies par le frontend.
+
+### 2.2 `server.py`
+- Import et intégration d'`access_control` dans le **middleware d'abonnement** et l'endpoint **`/subscription/status`** (classification des routes + résolution du tier par utilisateur).
+- **Nouvel endpoint `GET /api/user/features`** : renvoie le plan de l'utilisateur + les drapeaux d'accès par fonctionnalité (le frontend s'en sert pour verrouiller/afficher les features).
+
+### 2.3 `subscription_manager.py`
+- Ajustements alignés sur `access_control` (résolution/normalisation des tiers).
 
 ---
 
-## 3. Tests réalisés (via URL externe + UI)
+## 3. Configuration / synchro
+- Synchro rsync dans `/app` en **préservant** : `.env`, `.git`, `.emergent`, session Garmin `.gccli_home`, binaire `gccli`, `node_modules`, `/app/memory`.
+- `JWT_SECRET_KEY` toujours présent dans `backend/.env`.
+- `yarn.lock` régénéré (absent de la branche) — aucune nouvelle dépendance.
+- Contrôle syntaxique **AST OK** sur `access_control.py`, `server.py`, `subscription_manager.py`.
+- Aucun problème de build frontend (frontend inchangé, `Subscription.jsx` déjà corrigé upstream).
+
+---
+
+## 4. Tests réalisés (API + UI, via URL externe)
 | Test | Résultat |
 |---|---|
-| Démarrage backend | ✅ OK (session Garmin retrouvée, index `users` créés) |
-| `POST /api/auth/register` | ✅ 200 — token + UUID, trial 30j auto-créé |
-| `POST /api/auth/login` / `GET /api/auth/me` | ✅ 200 |
-| `GET /api/subscription/info` (JWT) | ✅ `trial`, `user_id = <UUID>`, 29 jours |
-| `GET /api/workouts` (JWT valide) | ✅ **200 `[]`** (routes protégées débloquées) |
-| `GET /api/training/today` (JWT) | ✅ 200 (réponse gracieuse) |
-| `POST /api/chat/send` (JWT, trial) | ✅ réponse coach (chat illimité en trial) |
-| Appel non authentifié `/api/workouts` | ✅ **403** |
-| `X-User-Id: default` | ✅ **401** (faille legacy fermée) |
-| Parcours UI : inscription → dashboard | ✅ redirection vers `/`, dashboard rendu |
-| Nouveau compte = données isolées | ✅ RunIndex 0/1000, « Connect your Garmin », séance du jour |
+| Démarrage backend | ✅ OK (session Garmin retrouvée, index Mongo créés) |
+| `POST /api/auth/register` | ✅ 200 — token + UUID, trial 30 j auto |
+| `GET /api/workouts` (JWT) | ✅ **200 `[]`** |
+| `GET /api/subscription/status` (JWT) | ✅ `tier: trial`, `is_premium: true`, `messages_limit: 999`, expiry 2026-08-28 |
+| `GET /api/user/features` (JWT, **nouveau**) | ✅ `plan: trial`, `trial_active: true`, `has_premium_access: true`, 29 j, `feature_access{ sync, race_predictions, llm, chat, rag, ... }` |
+| Appel non authentifié `/api/workouts` | ✅ **401** |
+| Écran `/login` (frontend) | ✅ rendu correct (build OK) |
 
-Comptes de test créés (jetables) : `isofix_*`, `uifull_*@runindex.app` / `Test1234!`.
+Compte de test créé (jetable) : `pr32_*@runindex.app` / `Test1234!`.
 
 ---
 
-## 4. Problème rencontré et corrigé pendant ce pull
-- **Build frontend cassé** : `frontend/src/pages/Subscription.jsx` contenait **2 chaînes non terminées** (guillemets fermants manquants) :
-  - ligne 186 : `axios.get(API + "/subscription/status)` → doit être `"/subscription/status"`.
-  - ligne 198 : `API + "/subscription/checkout/status/" + sessionId + "` → guillemet ouvrant orphelin à retirer.
-  - Symptôme : « Compiled with problems / Unterminated string constant » → **application blanche** dans le navigateur.
-  - **Ces erreurs sont présentes DANS la branche.**
-- **Action** : corrigées en local. Scan automatique de tous les `.jsx/.js` du frontend → **aucun autre fichier affecté**.
-- **Après correctif** : le frontend recompile, l'inscription mène au dashboard (voir §3).
-- ⚠️ **À committer côté GitHub** (Save to Github) sinon ce correctif sera **écrasé au prochain pull**.
+## 5. Ce qui fonctionne
+- **Authentification JWT multi-utilisateurs** : ✅ complète (register/login/me/reset), isolation, trial auto.
+- **Gestion des accès centralisée** : ✅ `access_control.py` opérationnel (fail-closed, JWT-only).
+- **Nouvel endpoint `/api/user/features`** : ✅ expose le plan + les drapeaux par feature pour piloter l'UI.
+- **Routes protégées** : ✅ accessibles pour un compte connecté (trial).
+- **Frontend** : ✅ compile et rend (login/register/dashboard).
 
 ---
 
-## 5. Ce qui fonctionne maintenant
-- **Authentification JWT multi-utilisateurs** : ✅ complète (register/login/me/reset), isolation d'identité, trial auto, sécurité legacy fermée.
-- **Routes protégées** : ✅ accessibles pour un compte connecté (le blocage middleware est résolu).
-- **Parcours utilisateur complet** : ✅ inscription → dashboard isolé fonctionnel.
-- **Frontend** : ✅ compile (après correctif §4).
-
----
-
-## 6. Points non traités par PR22 (rappel roadmap)
-1. **Migration des données `default`** : les **141 activités Garmin**, l'historique RunIndex, le plan et l'abonnement restent sous `user_id="default"`. Un nouveau compte JWT démarre **vide**. Décision à prendre : réassigner `default → votre compte`, ou repartir de zéro.
-2. **Garmin mono-compte (blocage n°1 inchangé)** : la synchro reste liée au **compte Garmin unique** du `.env` (`GARMIN_USERNAME`), ingérée sous `default`. Les nouveaux comptes n'auront **pas** de données Garmin → nécessite Garmin OAuth par utilisateur ou un agrégateur (Terra). Le bouton « Connect Garmin » du dashboard doit être branché sur ce mécanisme.
-3. **Durcissement auth avant prod** : pas de **refresh token** (déconnexion à 60 min), **rate-limit** sur `/auth/login` (anti brute-force) à confirmer, **politique de mot de passe**, **email de reset** réel à brancher.
-4. **Résidus mineurs** : quelques valeurs par défaut `user_id="default"` subsistent dans des modèles de requête (`ChatRequest`, `ActivateSubscriptionRequest`) — sans impact fonctionnel observé, mais à nettoyer.
+## 6. Points non traités (rappel roadmap)
+1. **Migration des données `default`** : les **141 activités Garmin**, l'historique RunIndex, le plan restent sous `user_id="default"`. Un nouveau compte JWT démarre **vide**. Décision à prendre : réassigner `default → votre compte`, ou repartir de zéro.
+2. **Garmin mono-compte (blocage n°1 inchangé)** : la synchro reste liée au **compte Garmin unique** du `.env` (`GARMIN_USERNAME`), ingérée sous `default`. Les nouveaux comptes n'auront **pas** de données Garmin → nécessite Garmin OAuth par utilisateur ou un agrégateur (Terra). Le bouton « Connect Garmin » du dashboard doit être branché. La branche contient l'audit `AUDIT_GARMIN_STEP3.md`.
+3. **Durcissement auth avant prod** : pas de **refresh token** (déconnexion à 60 min), **rate-limit** sur `/auth/login`, **politique de mot de passe**, **email de reset** réel à brancher.
+4. **Paddle** : `access_control` mentionne Paddle comme provider PREMIUM cible, mais l'intégration paiement Paddle n'est pas confirmée branchée (Stripe legacy encore présent).
 
 ---
 
 ## 7. État global
-- **Auth JWT multi-utilisateurs** : ✅ opérationnelle et vérifiée de bout en bout.
-- **App utilisable pour un compte connecté** : ✅ oui (après correctif frontend §4).
+- **Auth JWT + contrôle d'accès multi-utilisateurs** : ✅ opérationnels et vérifiés de bout en bout.
+- **App utilisable pour un compte connecté** : ✅ oui.
 - **Données historiques** : intactes sous `default`, **non migrées**, invisibles pour les nouveaux comptes.
 - **Garmin multi-utilisateurs** : ❌ non résolu (blocage n°1).
 
 ---
 
 ## 8. Prochaines étapes recommandées (ordre)
-1. **Committer le correctif `Subscription.jsx`** sur GitHub (Save to Github).
-2. **Décider de la migration** des données `default` (réassignation vers votre compte, ou départ à zéro).
-3. **Garmin par utilisateur** (OAuth officiel ou Terra) + brancher le bouton « Connect Garmin ».
-4. **Durcir l'auth** (refresh token, rate-limit login, politique mot de passe, email reset réel).
+1. **Décider de la migration** des données `default` (réassignation vers votre compte, ou départ à zéro).
+2. **Garmin par utilisateur** (implémenter l'étape 3 de l'audit : OAuth officiel ou Terra) + brancher « Connect Garmin ».
+3. **Durcir l'auth** (refresh token, rate-limit login, politique mot de passe, email reset réel).
+4. **Confirmer/brancher Paddle** (remplacer/compléter Stripe legacy).
 5. **Déploiement P0** (secrets hors `.env`, MongoDB Atlas + Redis managés, `deployment_agent`).
