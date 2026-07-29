@@ -130,3 +130,9 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
 ## 2026-07-28 — Pull PR22 (PR #26, head 987dc26)
 - PR #26 corrige le middleware: get_user_id_from_request décode le JWT en premier (fix recommandé appliqué upstream). Backend multi-user JWT VÉRIFIÉ 100%: workouts JWT=200[], training/today=200, subscription/info=trial+UUID, no-auth=403, chat trial illimité=reply.
 - CORRIGÉ EN LOCAL: Subscription.jsx chaînes non terminées lignes 186 ET 198 (guillemets manquants) -> build frontend réparé. Scan de tous les .jsx/.js: aucun autre fichier affecté. VÉRIFIÉ: register via UI -> dashboard (compte isolé vide, "Connect Garmin", séance du jour), routes protégées OK. À COMMITTER sur GitHub (Save to Github).
+
+## 2026-07-29 — Pull PR22 (PR #32, head 74ed67c)
+- Nouveau backend/access_control.py: source unique de vérité pour les décisions d'accès (tiers FREE/TRIAL/PREMIUM, fail-closed sur erreur DB, identité toujours via JWT, guard DEMO_MODE+production à l'import). Intégré dans server.py (middleware, /subscription/status) + nouvel endpoint /api/user/features. subscription_manager.py modifié.
+- La branche a intégré mon correctif Subscription.jsx (lignes 186/198 OK). Frontend inchangé vs état précédent.
+- VÉRIFIÉ: register->trial, workouts JWT=200[], subscription/status=trial/premium(msg 999), /api/user/features renvoie plan+feature_access, no-auth=401, login screen rendu.
+- AST syntax check OK sur access_control.py, server.py, subscription_manager.py.
