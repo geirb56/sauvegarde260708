@@ -34,8 +34,16 @@ from auth.models import (
     UserResponse,
 )
 from auth.password import hash_password, verify_password
+from auth.audit import audit_event
 
 logger = logging.getLogger(__name__)
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    return forwarded.split(",")[0].strip() if forwarded else (
+        request.client.host if request.client else "unknown"
+    )
 
 # ── Router ─────────────────────────────────────────────────────────────────────
 
@@ -143,6 +151,7 @@ async def register(body: UserCreate, request: Request):
 
     await db.users.insert_one(user_doc)
     logger.info("New user registered: %s", user_doc["id"])
+    audit_event("register", user_id=user_doc["id"], email=body.email, ip=_client_ip(request))
 
     # Auto-create a 30-day free trial subscription for the new user
     trial_end = now + timedelta(days=30)
@@ -183,6 +192,7 @@ async def login(body: UserLogin, request: Request):
     password_ok = verify_password(body.password, stored_hash)
 
     if not user or not password_ok:
+        audit_event("login_failure", email=body.email, ip=_client_ip(request))
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password.",
@@ -204,6 +214,7 @@ async def login(body: UserLogin, request: Request):
 
     access_token = create_access_token(user["id"], user["email"])
     logger.info("User logged in: %s", user["id"])
+    audit_event("login_success", user_id=user["id"], ip=_client_ip(request))
 
     return TokenResponse(
         access_token=access_token,
@@ -225,6 +236,7 @@ async def logout(user: dict = Depends(get_current_user)):
     token upon receiving this response.
     """
     logger.info("User logged out: %s", user["id"])
+    audit_event("logout", user_id=user["id"])
     return _LogoutResponse(message="Logged out successfully.")
 
 
@@ -278,6 +290,7 @@ async def forgot_password(body: ForgotPasswordRequest, request: Request):
         # The token is safe to transmit via email link since it is single-use
         # and expires in 30 minutes.
         _send_reset_email(user["email"], raw_token)
+        audit_event("password_reset_requested", user_id=user["id"], ip=_client_ip(request))
 
     return {"message": "If this email is registered you will receive a reset link."}
 
@@ -320,6 +333,7 @@ async def reset_password(body: ResetPasswordRequest, request: Request):
     )
 
     logger.info("Password reset for user: %s", user["id"])
+    audit_event("password_reset_done", user_id=user["id"], ip=_client_ip(request))
     return {"message": "Password has been reset successfully."}
 
 
