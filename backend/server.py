@@ -8,6 +8,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 # Auth module — JWT-based multi-user identity
 from auth.router import auth_router
 from auth.dependencies import get_current_user
+from auth.audit import audit_event
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -377,6 +378,8 @@ async def rate_limit_middleware(request: Request, call_next):
     
     if rate_limiter.is_limited(user_id):
         logger.warning(f"[RateLimit] User {user_id} exceeded rate limit")
+        audit_event("rate_limit_exceeded", user_id=user_id, path=request.url.path,
+                    ip=_get_client_ip(request))
         return JSONResponse(
             status_code=429,
             content={
@@ -418,6 +421,8 @@ async def subscription_middleware(request: Request, call_next):
         # Check if user has access
         if status == SubscriptionStatus.FREE:
             logger.info(f"[Subscription] Blocked {path} for FREE user {user_id}")
+            audit_event("subscription_blocked", user_id=user_id, path=path,
+                        ip=_get_client_ip(request))
             return JSONResponse(
                 status_code=403,
                 content={
@@ -437,6 +442,54 @@ async def subscription_middleware(request: Request, call_next):
         # In case of error, allow access (fail open)
     
     return await call_next(request)
+
+
+@app.middleware("http")
+async def audit_middleware(request: Request, call_next):
+    """Audit middleware — records every API request to the audit log file.
+
+    Runs outermost (registered last) so it captures the final HTTP status code
+    returned to the client, including responses short-circuited by other
+    middlewares (rate-limit, subscription checks, etc.).
+
+    Non-API paths (static assets, health-check at ``/``) are skipped so the
+    file does not fill up with noise.
+    """
+    path = request.url.path
+    if not path.startswith("/api"):
+        return await call_next(request)
+
+    t0 = time.perf_counter()
+    user_id = get_user_id_from_request(request)
+    ip = _get_client_ip(request)
+
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+    except Exception:
+        status_code = 500
+        raise
+    finally:
+        duration_ms = round((time.perf_counter() - t0) * 1000, 1)
+        audit_event(
+            "api_request",
+            method=request.method,
+            path=path,
+            status=status_code,
+            duration_ms=duration_ms,
+            user_id=user_id,
+            ip=ip,
+        )
+
+    return response
+
+
+def _get_client_ip(request: Request) -> str:
+    """Extract the originating client IP from a request."""
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    return forwarded.split(",")[0].strip() if forwarded else (
+        request.client.host if request.client else "unknown"
+    )
 
 
 # ========== MODELS ==========
@@ -2686,6 +2739,7 @@ async def terra_connect(req: TerraConnectRequest, user: dict = Depends(auth_user
     )
 
     logger.info("Terra connected for user: %s (terra_user_id=%s)", user_id, terra_user_id)
+    audit_event("terra_connected", user_id=user_id, terra_user_id=terra_user_id)
     return {"success": True, "message": "Terra connected successfully", "terra_user_id": terra_user_id}
 
 
@@ -2762,6 +2816,7 @@ async def disconnect_terra(user: dict = Depends(auth_user)):
     user_id = user["id"]
     await db.terra_tokens.delete_one({"user_id": user_id})
     logger.info("Terra disconnected for user: %s", user_id)
+    audit_event("terra_disconnected", user_id=user_id)
     return {"success": True, "message": "Terra disconnected"}
 
 
@@ -4855,6 +4910,8 @@ async def check_subscription_status(session_id: str, http_request: Request, user
             
             tier_name = SUBSCRIPTION_TIERS.get(tier, {}).get("name", "Premium")
             logger.info(f"Subscription activated for user {actual_user_id}: {tier} ({billing_period})")
+            audit_event("subscription_activated", user_id=actual_user_id, tier=tier,
+                        billing_period=billing_period, session_id=session_id)
             
             return {
                 "status": "completed",
@@ -5540,6 +5597,7 @@ async def create_early_adopter_checkout(http_request: Request, user: dict = Depe
         })
         
         logger.info(f"Early Adopter checkout session created for user {user_id}: {session.session_id}")
+        audit_event("early_adopter_checkout_created", user_id=user_id, session_id=session.session_id)
         
         return {
             "checkout_url": session.url,
@@ -5598,6 +5656,7 @@ async def stripe_early_adopter_webhook(request: Request):
             )
             
             logger.info(f"Early Adopter activated for user {user_id}")
+            audit_event("early_adopter_activated", user_id=user_id, session_id=session_id)
         
         return {"received": True}
     
