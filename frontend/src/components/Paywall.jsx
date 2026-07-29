@@ -1,18 +1,19 @@
-import { useState, useEffect } from "react";
+import { useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { useLanguage } from "@/context/LanguageContext";
-import { 
-  Lock, 
-  Sparkles, 
-  CheckCircle2, 
-  Zap, 
-  Target, 
+import { useSubscription } from "@/context/SubscriptionContext";
+import {
+  Lock,
+  Sparkles,
+  CheckCircle2,
+  Zap,
+  Target,
   Activity,
   MessageSquare,
   Watch,
   TrendingUp,
-  Crown
+  Crown,
 } from "lucide-react";
 import axios from "axios";
 
@@ -25,94 +26,116 @@ const FEATURE_ICONS = {
   2: Activity,
   3: MessageSquare,
   4: Watch,
-  5: TrendingUp
+  5: TrendingUp,
 };
 
-export default function Paywall({ 
-  onClose, 
-  userId = "default", 
-  language: languageProp,
-  returnPath = "/training"
-}) {
+// Single Premium offer: 4.99 EUR/month via Paddle.
+// The old Stripe / Early Adopter / multi-tier flow is removed.
+const PREMIUM_OFFER = {
+  offer_name: "Premium",
+  price_display: "4,99 € / mois",
+  features: [
+    "Plan d'entraînement personnalisé",
+    "Adaptation automatique du plan",
+    "Analyses IA avancées",
+    "Coach IA conversationnel illimité",
+    "Synchronisation Garmin",
+    "Prédictions de course",
+  ],
+  cta_button: "Activer Premium",
+};
+
+export default function Paywall({ onClose, returnPath = "/training" }) {
   const navigate = useNavigate();
   const { t, lang } = useLanguage();
-  const language = languageProp ?? lang;
-  const [offer, setOffer] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [activating, setActivating] = useState(false);
+  const { refreshSubscription } = useSubscription();
 
-  useEffect(() => {
-    fetchOffer();
-  }, [language]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [loading, setLoading] = useState(false);
+  const [checkoutError, setCheckoutError] = useState(null);
 
-  const fetchOffer = async () => {
+  // ── Paddle.js checkout ────────────────────────────────────────────────────
+  // Security model:
+  //   1. Backend creates the Paddle transaction (server-side, with verified identity).
+  //   2. Frontend opens the Paddle overlay with the transaction_id.
+  //   3. After payment Paddle sends a webhook to the backend.
+  //   4. The backend verifies the webhook signature and activates Premium.
+  //   5. The frontend refreshes its subscription state from the backend.
+  //
+  // The frontend NEVER decides that the user is Premium — it only displays what
+  // the backend confirms via GET /api/subscription/info.
+  const handleActivate = useCallback(async () => {
+    setLoading(true);
+    setCheckoutError(null);
+
     try {
-      const res = await axios.get(`${API}/subscription/early-adopter-offer?language=${language}`);
-      setOffer(res.data);
-    } catch (err) {
-      console.error("Error fetching offer:", err);
-      setOffer({
-        title: t("paywall.title"),
-        subtitle: t("paywall.subtitle"),
-        description: t("paywall.description"),
-        offer_name: "Early Adopter",
-        price: 4.99,
-        price_display: t("paywall.priceDisplay"),
-        price_guarantee: t("paywall.priceGuarantee"),
-        features: [
-          t("paywall.feature1"),
-          t("paywall.feature2"),
-          t("paywall.feature3"),
-          t("paywall.feature4"),
-          t("paywall.feature5"),
-          t("paywall.feature6")
-        ],
-        cta_button: t("paywall.ctaButton")
+      // Step 1: Create a Paddle transaction via the backend
+      const res = await axios.post(`${API}/subscription/paddle/checkout`, {});
+      const { transaction_id, paddle_environment, paddle_client_token } = res.data;
+
+      if (!transaction_id || !paddle_client_token) {
+        throw new Error("Invalid checkout configuration received from server");
+      }
+
+      // Step 2: Initialize Paddle.js (dynamic import to keep initial bundle lean)
+      const { initializePaddle } = await import("@paddle/paddle-js");
+      const paddle = await initializePaddle({
+        environment: paddle_environment === "production" ? "production" : "sandbox",
+        token: paddle_client_token,
       });
-    } finally {
+
+      if (!paddle) {
+        throw new Error("Failed to initialize Paddle.js");
+      }
+
+      // Step 3: Open the Paddle checkout overlay
+      paddle.Checkout.open({
+        transactionId: transaction_id,
+        settings: {
+          displayMode: "overlay",
+          theme: "dark",
+          locale: lang === "fr" ? "fr" : lang === "es" ? "es" : "en",
+        },
+        events: {
+          onPaymentSuccess: () => {
+            // Refresh from backend — backend confirms Premium after webhook
+            refreshSubscription();
+            setLoading(false);
+            if (onClose) onClose();
+            else navigate(returnPath);
+          },
+          onCheckoutError: (err) => {
+            console.error("[Paywall] Paddle checkout error:", err);
+            setCheckoutError(t("paywall.checkoutError") || "Checkout failed. Please try again.");
+            setLoading(false);
+          },
+          onCheckoutClose: () => {
+            setLoading(false);
+          },
+        },
+      });
+    } catch (err) {
+      console.error("[Paywall] Checkout setup error:", err);
+      setCheckoutError(
+        err?.response?.data?.detail ||
+          t("paywall.checkoutError") ||
+          "Could not start checkout. Please try again."
+      );
       setLoading(false);
     }
-  };
-
-  const handleActivate = async () => {
-    setActivating(true);
-    try {
-      // Créer une session Stripe Checkout pour Early Adopter
-      const res = await axios.post(
-        `${API}/subscription/early-adopter/checkout?origin_url=${encodeURIComponent(window.location.origin)}`
-      );
-      
-      if (res.data?.checkout_url) {
-        // Rediriger vers Stripe Checkout
-        window.location.href = res.data.checkout_url;
-      } else {
-        console.error("No checkout URL received");
-      }
-    } catch (err) {
-      console.error("Error creating checkout session:", err);
-      setActivating(false);
-    }
-    // Note: pas de setActivating(false) car on redirige vers Stripe
-  };
-
-  if (loading) {
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(0,0,0,0.9)" }}>
-        <div className="animate-pulse text-white">{t("common.loading")}</div>
-      </div>
-    );
-  }
+  }, [lang, navigate, onClose, refreshSubscription, returnPath, t]);
 
   return (
-    <div 
+    <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ background: "linear-gradient(180deg, rgba(0,0,0,0.95) 0%, rgba(15,10,30,0.98) 100%)" }}
+      style={{
+        background: "linear-gradient(180deg, rgba(0,0,0,0.95) 0%, rgba(15,10,30,0.98) 100%)",
+      }}
       data-testid="paywall"
     >
       <div className="max-w-md w-full space-y-6">
-        {/* Lock Icon */}
+        {/* Lock icon */}
         <div className="flex justify-center">
-          <div 
+          <div
             className="w-20 h-20 rounded-full flex items-center justify-center"
             style={{ background: "linear-gradient(135deg, #8b5cf6 0%, #ec4899 100%)" }}
           >
@@ -123,51 +146,42 @@ export default function Paywall({
         {/* Title */}
         <div className="text-center space-y-2">
           <h1 className="text-2xl font-bold text-white">
-            {offer?.title}
+            {t("paywall.title") || "Activez votre coach running"}
           </h1>
           <p className="text-base text-slate-300">
-            {offer?.subtitle}
-          </p>
-          <p className="text-sm text-slate-400">
-            {offer?.description}
+            {t("paywall.subtitle") || "Votre plan d'entraînement personnalisé est prêt"}
           </p>
         </div>
 
-        {/* Offer Card */}
-        <div 
+        {/* Offer card */}
+        <div
           className="rounded-2xl p-6 space-y-4"
-          style={{ 
-            background: "linear-gradient(135deg, rgba(139,92,246,0.15) 0%, rgba(236,72,153,0.1) 100%)",
-            border: "1px solid rgba(139,92,246,0.3)"
+          style={{
+            background:
+              "linear-gradient(135deg, rgba(139,92,246,0.15) 0%, rgba(236,72,153,0.1) 100%)",
+            border: "1px solid rgba(139,92,246,0.3)",
           }}
         >
-          {/* Offer Header */}
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Crown className="w-5 h-5 text-amber-400" />
-              <span className="font-bold text-white">{offer?.offer_name}</span>
-            </div>
-            <div 
-              className="px-2 py-1 rounded-full text-[10px] font-bold"
-              style={{ background: "rgba(251,191,36,0.2)", color: "#fbbf24" }}
-            >
-              {offer?.price_guarantee}
-            </div>
+          <div className="flex items-center gap-2">
+            <Crown className="w-5 h-5 text-amber-400" />
+            <span className="font-bold text-white">{PREMIUM_OFFER.offer_name}</span>
           </div>
 
           {/* Price */}
           <div className="text-center py-2">
-            <span className="text-4xl font-bold text-white">{offer?.price_display?.split('/')[0]}</span>
-            <span className="text-lg text-slate-400">/ {t("paywall.perMonth")}</span>
+            <span className="text-4xl font-bold text-white">4,99 €</span>
+            <span className="text-lg text-slate-400">
+              &nbsp;/ {t("paywall.perMonth") || "mois"}
+            </span>
           </div>
 
           {/* Features */}
           <div className="space-y-2">
-            {offer?.features?.map((feature, idx) => {
+            {PREMIUM_OFFER.features.map((feature, idx) => {
               const Icon = FEATURE_ICONS[idx] || CheckCircle2;
               return (
                 <div key={idx} className="flex items-center gap-3">
-                  <div 
+                  <div
                     className="w-6 h-6 rounded-full flex items-center justify-center shrink-0"
                     style={{ background: "rgba(34,197,94,0.2)" }}
                   >
@@ -180,37 +194,51 @@ export default function Paywall({
           </div>
         </div>
 
-        {/* CTA Button */}
+        {/* Error */}
+        {checkoutError && (
+          <div
+            className="rounded-lg p-3 text-sm text-center"
+            style={{
+              background: "rgba(239,68,68,0.15)",
+              border: "1px solid rgba(239,68,68,0.3)",
+              color: "#fca5a5",
+            }}
+          >
+            {checkoutError}
+          </div>
+        )}
+
+        {/* CTA */}
         <Button
           onClick={handleActivate}
-          disabled={activating}
+          disabled={loading}
           className="w-full h-14 text-lg font-bold rounded-xl"
-          style={{ 
+          style={{
             background: "linear-gradient(135deg, #8b5cf6 0%, #ec4899 100%)",
-            border: "none"
+            border: "none",
           }}
           data-testid="paywall-cta"
         >
-          {activating ? (
+          {loading ? (
             <span className="flex items-center gap-2">
               <span className="animate-spin">⏳</span>
-              {t("paywall.activating")}
+              {t("paywall.activating") || "Chargement…"}
             </span>
           ) : (
             <span className="flex items-center gap-2">
               <Sparkles className="w-5 h-5" />
-              {offer?.cta_button}
+              {PREMIUM_OFFER.cta_button}
             </span>
           )}
         </Button>
 
-        {/* Close / Skip */}
+        {/* Skip */}
         {onClose && (
           <button
             onClick={onClose}
             className="w-full text-center text-sm text-slate-500 hover:text-slate-300 transition-colors"
           >
-            {t("paywall.maybeLater")}
+            {t("paywall.maybeLater") || "Plus tard"}
           </button>
         )}
       </div>

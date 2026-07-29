@@ -27,6 +27,7 @@ import { toast } from "sonner";
 
 import { API_BASE_URL } from "@/config";
 import { useAuth } from "@/context/AuthContext";
+import { useSubscription } from "@/context/SubscriptionContext";
 const API = API_BASE_URL;
 
 // ─── Static data ──────────────────────────────────────────────────────────────
@@ -153,6 +154,7 @@ export default function Subscription() {
   const { user } = useAuth();
   const userId = user?.id;
   const { t } = useLanguage();
+  const { refreshSubscription } = useSubscription();
   const [searchParams, setSearchParams] = useSearchParams();
   const [currentTier, setCurrentTier] = useState("free");
   const [loading, setLoading] = useState(true);
@@ -166,13 +168,10 @@ export default function Subscription() {
 
     loadStatus();
 
+    // Clean up any stale Stripe-era query params
     const sessionId = searchParams.get("session_id");
     const subParam = searchParams.get("subscription");
-
-    if (sessionId && subParam === "success") {
-      handleSuccess(sessionId);
-    } else if (subParam === "cancelled") {
-      toast.info(t("subscription.paymentCancelled"));
+    if (sessionId || subParam) {
       setSearchParams({});
     }
 
@@ -183,8 +182,8 @@ export default function Subscription() {
 
   const loadStatus = async () => {
     try {
-      const res = await axios.get(API + "/subscription/status");
-      setCurrentTier(res.data.tier || "free");
+      const res = await axios.get(API + "/subscription/info");
+      setCurrentTier(res.data.status || "free");
     } catch (e) {
       console.error(e);
     } finally {
@@ -192,37 +191,56 @@ export default function Subscription() {
     }
   };
 
-  const handleSuccess = async (sessionId) => {
-    try {
-      const res = await axios.get(
-        API + "/subscription/checkout/status/" + sessionId
-      );
-      if (res.data.status === "completed") {
-        toast.success(res.data.message || t("subscription.subscriptionActivated"));
-        loadStatus();
-      }
-    } catch (e) {
-      console.error(e);
-    }
-    setSearchParams({});
-  };
-
-  // The "premium" tier maps to the 4.99 €/month Premium offer in the backend
+  // ── Paddle checkout ────────────────────────────────────────────────────
+  // Security: the backend creates the transaction, the frontend only opens
+  // the overlay. Premium is activated server-side after the Paddle webhook.
   const handleSubscribe = async () => {
     setSubscribing(true);
     try {
-      const res = await axios.post(
-        API + "/subscription/checkout",
-        {
-          origin_url: window.location.origin,
-          tier: "premium",
-          billing_period: "monthly",
-        }
-      );
-      window.location.href = res.data.checkout_url;
+      // 1. Create Paddle transaction on the backend (identity from JWT)
+      const res = await axios.post(API + "/subscription/paddle/checkout", {});
+      const { transaction_id, paddle_environment, paddle_client_token } = res.data;
+
+      if (!transaction_id || !paddle_client_token) {
+        throw new Error("Invalid checkout configuration");
+      }
+
+      // 2. Initialize Paddle.js
+      const { initializePaddle } = await import("@paddle/paddle-js");
+      const paddle = await initializePaddle({
+        environment: paddle_environment === "production" ? "production" : "sandbox",
+        token: paddle_client_token,
+      });
+
+      if (!paddle) throw new Error("Failed to initialize Paddle.js");
+
+      // 3. Open checkout overlay
+      paddle.Checkout.open({
+        transactionId: transaction_id,
+        settings: {
+          displayMode: "overlay",
+          theme: "dark",
+        },
+        events: {
+          onPaymentSuccess: () => {
+            toast.success(t("subscription.subscriptionActivated") || "Premium activé !");
+            refreshSubscription();
+            loadStatus();
+            setSubscribing(false);
+          },
+          onCheckoutError: (err) => {
+            console.error("[Subscription] Paddle checkout error:", err);
+            toast.error(t("common.error") || "Checkout failed");
+            setSubscribing(false);
+          },
+          onCheckoutClose: () => {
+            setSubscribing(false);
+          },
+        },
+      });
     } catch (e) {
-      console.error(e);
-      toast.error(t("common.error"));
+      console.error("[Subscription] Checkout error:", e);
+      toast.error(t("common.error") || "Could not start checkout");
       setSubscribing(false);
     }
   };
@@ -697,7 +715,7 @@ export default function Subscription() {
         <div className="flex flex-wrap items-center justify-center gap-6 mt-6 text-xs text-muted-foreground">
           <span className="flex items-center gap-1">
             <Shield className="w-3 h-3" />
-            Paiement sécurisé Stripe
+            Paiement sécurisé Paddle
           </span>
           <span className="flex items-center gap-1">
             <Check className="w-3 h-3" />
