@@ -58,10 +58,21 @@ class GccliRunner:
         max_retries: int = 3,
     ):
         self.gccli_path = gccli_path
+        # Always resolve to an absolute, normalised path so ".." and other
+        # relative components in a caller-supplied value are eliminated.
         raw_home = home or os.environ.get("GCCLI_HOME", "/app/backend/.gccli_home")
-        # Normalize to an absolute path so any relative components (e.g. "..") are
-        # resolved before the directory is created or used as HOME.
-        self.home = os.path.normpath(os.path.abspath(raw_home))
+        resolved = os.path.normpath(os.path.abspath(raw_home))
+        # Enforce that the resolved path stays within the configured GCCLI_HOME
+        # tree.  This turns any remaining path-traversal attempt into a hard
+        # error rather than silently allowing access to an unexpected directory.
+        gccli_base = os.path.normpath(
+            os.path.abspath(os.environ.get("GCCLI_HOME", "/app/backend/.gccli_home"))
+        )
+        if resolved != gccli_base and not resolved.startswith(gccli_base + os.sep):
+            raise ValueError(
+                f"GCCLI home path {resolved!r} is outside the allowed base directory {gccli_base!r}"
+            )
+        self.home = resolved
         self.keyring_backend = keyring_backend
         # Clamp per-command timeout to a safe 15-60s window.
         self.timeout = max(15, min(60, timeout_seconds))
