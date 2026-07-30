@@ -32,65 +32,6 @@ ACTIVE_SIGNAL_PREFIX = "runindex:active_signal:"
 ACTIVE_SIGNAL_TTL = 45 * 60  # 45 min — matches scheduler ACTIVE window
 
 garmin_router = APIRouter(prefix="/garmin", tags=["garmin"])
-"""Garmin API router (HTTP layer).
-
-Prefix /api is added when included by server.py (api_router has prefix /api).
-Final routes: /api/garmin/*
-
-NON-NEGOTIABLE: no Garmin password is ever accepted from the client.
-The connect endpoint takes only a user_id (auth abstracted backend-side).
-"""
-
-from __future__ import annotations
-
-from typing import Optional
-
-from fastapi import APIRouter, Request, Depends
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel
-
-from garmin import service as garmin_service
-from garmin import backfill as garmin_backfill
-from services.run_index_history import backfill_connected_users_run_index_history, backfill_run_index_history
-from jobs.queue import enqueue_sync
-from jobs.health import queue_health
-from jobs.redis_client import get_redis
-from feed import realtime_cache
-from feed.sse import event_stream
-from auth.supabase_jwt import extract_user_id as extract_jwt_user_id
-
-import logging
-import time
-logger = logging.getLogger(__name__)
-
-ACTIVE_SIGNAL_PREFIX = "runindex:active_signal:"
-ACTIVE_SIGNAL_TTL = 45 * 60  # 45 min — matches scheduler ACTIVE window
-
-garmin_router = APIRouter(prefix="/garmin", tags=["garmin"])
-
-_bearer = HTTPBearer(auto_error=False)
-
-
-def _resolve_user_id(
-    request: Request,
-    credentials: Optional[HTTPAuthorizationCredentials],
-    fallback_query: str = "default",
-) -> str:
-    """Resolve the RunIndex user_id, preferring a validated JWT when present.
-
-    Priority:
-    1. Valid Supabase JWT in the Authorization header (most secure, frontend-sent).
-    2. Fallback to the ?user_id= query param (legacy, kept for backward compat).
-
-    The frontend NEVER controls the Garmin identity — only the RunIndex user_id
-    is derived here, and Garmin identity is obtained from backend env vars.
-    """
-    if credentials and credentials.credentials:
-        jwt_uid = extract_jwt_user_id(credentials.credentials)
-        if jwt_uid:
-            return jwt_uid
-    return fallback_query
 
 
 async def _safe_enqueue(user_id: str):
@@ -108,37 +49,19 @@ class GarminConnectRequest(BaseModel):
 
 
 @garmin_router.post("/connect")
-async def connect_garmin(
-    request: Request,
-    body: Optional[GarminConnectRequest] = None,
-    user_id: str = "default",
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
-):
+async def connect_garmin(request: Request, body: Optional[GarminConnectRequest] = None, user_id: str = "default"):
     """Establish the Garmin session (fast auth check) and queue the initial sync.
 
     Auth is a lightweight token/status check (non-blocking); the heavy activity
     + metrics fetch is offloaded to the worker so the request returns instantly.
-
-    After a successful connection the backend checks Trial eligibility:
-    - Garmin identity is obtained from the backend env (GARMIN_USERNAME), never
-      from the client.
-    - If the Garmin identity has not yet been used for a Trial, one is granted to
-      the authenticated RunIndex user.
-    - The frontend receives `trial_granted` in the response so it can refresh the
-      subscription state without a separate API call.
     """
     db = request.app.state.db
-    resolved_user_id = _resolve_user_id(request, credentials, fallback_query=user_id)
     simulate_mfa = bool(body.simulate_mfa) if body else False
-    result = await garmin_service.connect(db, resolved_user_id, simulate_mfa=simulate_mfa)
+    result = await garmin_service.connect(db, user_id, simulate_mfa=simulate_mfa)
     if result.get("status") == "connected":
         # Kick off the first data sync in the background (never blocks the API).
         # Redis outage must not fail the connect itself.
-        await _safe_enqueue(resolved_user_id)
-        # Check and potentially award Trial (backend-only decision).
-        trial_result = await garmin_service.check_and_award_trial(db, resolved_user_id)
-        result["trial_granted"] = trial_result.get("trial_granted", False)
-        result["trial_reason"] = trial_result.get("reason", "")
+        await _safe_enqueue(user_id)
     return result
 
 
