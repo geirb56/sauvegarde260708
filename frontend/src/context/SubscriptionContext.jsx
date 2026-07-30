@@ -66,6 +66,7 @@ export function SubscriptionProvider({ children }) {
   const isActive = subscription?.status !== "free";
   const isTrial = subscription?.status === "trial";
   const isEarlyAdopter = subscription?.status === "early_adopter";
+  const isPremium = subscription?.status === "premium" || subscription?.status === "early_adopter";
   const isFree = subscription?.status === "free";
 
   const hasFeature = (feature) => {
@@ -82,6 +83,7 @@ export function SubscriptionProvider({ children }) {
     isActive,
     isTrial,
     isEarlyAdopter,
+    isPremium,
     isFree,
     hasFeature,
     canAccessPlan: hasFeature("training_plan"),
