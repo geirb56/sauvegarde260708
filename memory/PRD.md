@@ -144,3 +144,11 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
 - BLOCAGE CORRIGÉ (local): Paywall.jsx:180 `PREMIUM_OFFER.features.map()` provoquait récursion infinie dans frontend/plugins/visual-edits/babel-metadata-plugin.js -> build cassé. Fix: propager garde skipArrayContext dans analyzeMemberExpression (appel getArrayIterationContext + appel analyzeIdentifier). Cache node_modules/.cache purgé, frontend recompile OK.
   - ⚠️ Plugin versionné dans la branche -> fix écrasé au prochain pull. Options: committer le fix plugin OU modifier Paywall.jsx (destructurer features avant .map).
 - Paddle NON FONCTIONNEL tant que les clés sandbox ne sont pas fournies par l'utilisateur.
+
+## 2026-07-30 — Paddle Sandbox E2E + Fix Paywall (périmètre Paddle uniquement)
+- Paywall FIX PÉRENNE: Paywall.jsx refactorisé (destructuration `const {offer_name, features, cta_button} = PREMIUM_OFFER;` -> `features.map`), plugin visual-edits/babel-metadata-plugin.js RESTAURÉ à l'original (patch temporaire retiré). Build "Compiled successfully!" sans patch. Page rend.
+- Backend Paddle audité: checkout (user_id via JWT, jamais frontend), config (aucun secret exposé, configured=bool(client_token&&price_id)), webhook (raw body -> vérif signature HMAC-SHA256 ts:body -> idempotence paddle_events sur event_id -> activate_premium via subscription_manager -> access_control). Frontend: client_token public only, env forcé sandbox sauf backend=production, onPaymentSuccess -> refreshSubscription() (aucun octroi local). SubscriptionContext FAIL-CLOSED (status:free + features false sur erreur).
+- Tests: 48 PASS (tests/test_paddle_subscription.py) couvrant signature/tamper/malformed/idempotence/isolation/activation/renew/cancel/expiration/free-quota/fail-closed/legacy tiers.
+- Live: trial=premium access+999msg, free=10msg+premium bloqué, unsigned webhook rejeté (500 car PADDLE_WEBHOOK_SECRET absent).
+- ⚠️ BLOQUÉ: aucune clé PADDLE_ dans l'env -> config live=false, checkout overlay/paiement sandbox réel/webhook live depuis Paddle NON testables. Nécessite: PADDLE_CLIENT_TOKEN, PADDLE_API_KEY, PADDLE_WEBHOOK_SECRET, PADDLE_PRICE_ID (sandbox).
+- NON déclaré "Sandbox Ready" ni "Production Ready".

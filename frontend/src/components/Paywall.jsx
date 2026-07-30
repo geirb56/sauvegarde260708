@@ -53,6 +53,10 @@ export default function Paywall({ onClose, returnPath = "/training" }) {
   const [loading, setLoading] = useState(false);
   const [checkoutError, setCheckoutError] = useState(null);
 
+  // Destructure into plain identifiers so JSX uses `features.map(...)` instead of
+  // `PREMIUM_OFFER.features.map(...)` (member-expression array). Same data, same UI.
+  const { offer_name, features, cta_button } = PREMIUM_OFFER;
+
   // ── Paddle.js checkout ────────────────────────────────────────────────────
   // Security model:
   //   1. Backend creates the Paddle transaction (server-side, with verified identity).
@@ -164,7 +168,7 @@ export default function Paywall({ onClose, returnPath = "/training" }) {
         >
           <div className="flex items-center gap-2">
             <Crown className="w-5 h-5 text-amber-400" />
-            <span className="font-bold text-white">{PREMIUM_OFFER.offer_name}</span>
+            <span className="font-bold text-white">{offer_name}</span>
           </div>
 
           {/* Price */}
@@ -177,7 +181,7 @@ export default function Paywall({ onClose, returnPath = "/training" }) {
 
           {/* Features */}
           <div className="space-y-2">
-            {PREMIUM_OFFER.features.map((feature, idx) => {
+            {features.map((feature, idx) => {
               const Icon = FEATURE_ICONS[idx] || CheckCircle2;
               return (
                 <div key={idx} className="flex items-center gap-3">
@@ -227,7 +231,7 @@ export default function Paywall({ onClose, returnPath = "/training" }) {
           ) : (
             <span className="flex items-center gap-2">
               <Sparkles className="w-5 h-5" />
-              {PREMIUM_OFFER.cta_button}
+              {cta_button}
             </span>
           )}
         </Button>

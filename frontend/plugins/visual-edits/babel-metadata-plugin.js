@@ -609,7 +609,7 @@ const babelMetadataPlugin = ({ types: t }) => {
   /**
    * Analyzes a member expression like item.name or obj.prop.value
    */
-  function analyzeMemberExpression(exprPath, state, opts = {}) {
+  function analyzeMemberExpression(exprPath, state) {
     const node = exprPath.node;
 
     // Build the property path (e.g., "name" or "address.city")
@@ -627,11 +627,7 @@ const babelMetadataPlugin = ({ types: t }) => {
       const rootName = rootObj.name;
 
       // Check if we're inside an array iteration (like .map())
-      // skipArrayContext avoids infinite recursion when called from
-      // getArrayIterationContext for a member-expression array (e.g. OBJ.list.map()).
-      const arrayContext = opts.skipArrayContext
-        ? null
-        : getArrayIterationContext(exprPath, state);
+      const arrayContext = getArrayIterationContext(exprPath, state);
 
       if (arrayContext && arrayContext.itemParam === rootName) {
         // This is item.property where item comes from array.map(item => ...)
@@ -649,9 +645,7 @@ const babelMetadataPlugin = ({ types: t }) => {
       }
 
       // Analyze the root identifier
-      const rootInfo = analyzeIdentifier(rootName, exprPath, state, {
-        skipArrayContext: opts.skipArrayContext,
-      });
+      const rootInfo = analyzeIdentifier(rootName, exprPath, state);
       if (rootInfo) {
         return {
           ...rootInfo,
@@ -982,8 +976,7 @@ const babelMetadataPlugin = ({ types: t }) => {
       // Handle cases like data.items.map(...)
       const memberInfo = analyzeMemberExpression(
         callExprParent.get("callee.object"),
-        state,
-        { skipArrayContext: true }
+        state
       );
       if (memberInfo) {
         arrayVar = memberInfo.varName;
