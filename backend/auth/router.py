@@ -144,20 +144,24 @@ async def register(body: UserCreate, request: Request):
     await db.users.insert_one(user_doc)
     logger.info("New user registered: %s", user_doc["id"])
 
-    # Auto-create a 30-day free trial subscription for the new user
-    trial_end = now + timedelta(days=30)
+    # New users start as FREE — trial access is granted only after a Garmin
+    # identity is verified via activate_garmin_trial() (server-side, never from
+    # the frontend).  See subscription_manager.activate_garmin_trial() and the
+    # BLOCKER note in subscription_manager.py.
     await db.subscriptions.insert_one({
         "user_id": user_doc["id"],
-        "status": "trial",
+        "status": "free",
         "created_at": now.isoformat(),
-        "trial_start": now.isoformat(),
-        "trial_end": trial_end.isoformat(),
+        "trial_start": None,
+        "trial_end": None,
+        "trial_used": False,
+        "garmin_identity": None,
         "stripe_customer_id": None,
         "stripe_subscription_id": None,
         "price_locked": None,
         "updated_at": now.isoformat(),
     })
-    logger.info("Trial subscription created for user: %s (expires %s)", user_doc["id"], trial_end)
+    logger.info("FREE subscription created for user: %s", user_doc["id"])
 
     access_token = create_access_token(user_doc["id"], user_doc["email"])
     return TokenResponse(

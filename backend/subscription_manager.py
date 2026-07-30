@@ -4,14 +4,23 @@ Subscription Management System
 
 RunIndex uses three commercial tiers:
 
-    FREE    — trial expired or no active subscription.
+    FREE    — trial expired, trial not yet activated, or no active subscription.
               Limited to free features only.
 
-    TRIAL   — 30-day free trial automatically granted to new accounts.
+    TRIAL   — 30-day free trial linked to a Garmin identity.
               Full Premium access during trial period.
+              One trial per Garmin account (enforced server-side).
 
-    PREMIUM — Active paid subscription via Paddle (or Stripe, legacy).
+    PREMIUM — Active paid subscription via Stripe.
               Full Premium access while subscription is valid.
+
+Trial eligibility rule (product rule):
+    1 Garmin account = 1 Trial maximum.
+    The trial is granted server-side when a Garmin account is connected for
+    the first time.  The frontend can never create or reset a trial.
+
+    NEW USERS START AS FREE.  The trial is only activated via
+    activate_garmin_trial() after a Garmin connection is established.
 
 NOTE: Legacy statuses (early_adopter, active, starter, confort, pro) are
       transparently mapped to PREMIUM by access_control.py.  They should not
@@ -19,6 +28,21 @@ NOTE: Legacy statuses (early_adopter, active, starter, confort, pro) are
 
 All access decisions MUST go through access_control.get_user_access().
 This module handles only the CRUD operations on subscription documents.
+
+BLOCKER (Garmin identity):
+    activate_garmin_trial() requires a stable, per-user Garmin identity
+    (a unique Garmin account identifier, NOT the RunIndex user_id, NOT email,
+    NOT a frontend-provided value).
+
+    The current Garmin integration uses a SINGLE shared backend Garmin account
+    (GARMIN_USERNAME env var) for all RunIndex users.  There is no per-user
+    Garmin identity stored in the system.  Therefore the "1 Garmin = 1 Trial"
+    guarantee cannot yet be enforced at the identity level.
+
+    Until the Garmin integration is migrated to per-user OAuth / per-user
+    Garmin accounts, activate_garmin_trial() will raise NotImplementedError
+    when a garmin_identity is not provided, and callers must document this
+    limitation in the PR.
 """
 
 from datetime import datetime, timezone, timedelta
@@ -27,6 +51,15 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 import logging
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Garmin trial blocker sentinel
+# ---------------------------------------------------------------------------
+
+#: Set to True once the Garmin multi-user OAuth integration ships a stable
+#: per-user Garmin identity.  Until then, activate_garmin_trial() will raise
+#: NotImplementedError to make the missing dependency explicit.
+_GARMIN_IDENTITY_AVAILABLE: bool = False
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -130,7 +163,8 @@ async def get_user_subscription(db: AsyncIOMotorDatabase, user_id: str) -> Dict:
     subscription = await db.subscriptions.find_one({"user_id": user_id})
 
     if not subscription:
-        subscription = await create_trial_subscription(db, user_id)
+        # New users start as FREE — trial requires Garmin identity (see BLOCKER above)
+        subscription = await create_free_subscription(db, user_id)
 
     # Lazily persist trial expiration to DB
     subscription = await check_trial_expiration(db, subscription)
@@ -140,14 +174,57 @@ async def get_user_subscription(db: AsyncIOMotorDatabase, user_id: str) -> Dict:
     return subscription
 
 
+async def create_free_subscription(db: AsyncIOMotorDatabase, user_id: str) -> Dict:
+    """
+    Create a FREE subscription for a brand-new user.
+
+    New accounts start as FREE.  Premium trial access is granted only after a
+    Garmin identity is verified via activate_garmin_trial().
+
+    This function is idempotent: if a subscription already exists it is returned
+    as-is.  Use upsert=False to protect against concurrent creation.
+    """
+    now = datetime.now(timezone.utc)
+
+    subscription = {
+        "user_id": user_id,
+        "status": SubscriptionStatus.FREE,
+        "created_at": now.isoformat(),
+        # Trial fields — populated only when activate_garmin_trial() is called
+        "trial_start": None,
+        "trial_end": None,
+        "trial_used": False,
+        "garmin_identity": None,
+        # Paddle fields (null until user subscribes)
+        "paddle_subscription_id": None,
+        "paddle_customer_id": None,
+        "premium_expires_at": None,
+        # Legacy Stripe fields — kept for migration compatibility
+        "stripe_customer_id": None,
+        "stripe_subscription_id": None,
+        "updated_at": now.isoformat(),
+    }
+
+    await db.subscriptions.insert_one(subscription)
+    logger.info("Created FREE subscription for user '%s'", user_id)
+
+    subscription.pop("_id", None)
+    return subscription
+
+
 async def create_trial_subscription(db: AsyncIOMotorDatabase, user_id: str) -> Dict:
     """
-    Create a 30-day trial subscription for a brand-new user.
+    Create a 30-day trial subscription for a user.
+
+    This function should only be called after a Garmin identity has been
+    verified as eligible (no prior trial used).  See activate_garmin_trial()
+    for the gated version that enforces the "1 Garmin = 1 Trial" rule.
 
     Trial dates are always calculated and stored server-side in UTC.
-    It is impossible to reinitialize a trial from the frontend — this
-    function is only called once per user (when no subscription document
-    exists in MongoDB).
+    The frontend can never call this function.
+
+    NOTE: Direct call sites that previously used this to auto-create a trial
+    on signup must be updated to call create_free_subscription() instead.
     """
     now = datetime.now(timezone.utc)
     trial_end = now + timedelta(days=TRIAL_DURATION_DAYS)
@@ -158,6 +235,8 @@ async def create_trial_subscription(db: AsyncIOMotorDatabase, user_id: str) -> D
         "created_at": now.isoformat(),
         "trial_start": now.isoformat(),
         "trial_end": trial_end.isoformat(),
+        "trial_used": True,
+        "garmin_identity": None,   # Populated by activate_garmin_trial()
         # Paddle fields (null until user subscribes)
         "paddle_subscription_id": None,
         "paddle_customer_id": None,
@@ -173,6 +252,140 @@ async def create_trial_subscription(db: AsyncIOMotorDatabase, user_id: str) -> D
 
     subscription.pop("_id", None)
     return subscription
+
+
+async def activate_garmin_trial(
+    db: AsyncIOMotorDatabase,
+    user_id: str,
+    garmin_identity: str,
+) -> Dict:
+    """
+    Attempt to activate a 30-day Premium trial for a RunIndex user linked to
+    a specific Garmin identity.
+
+    Enforces the product rule: 1 Garmin account = 1 Trial maximum.
+
+    Algorithm (atomic, race-condition safe):
+    1. Validate that garmin_identity is a non-empty server-provided value.
+    2. Check the garmin_trial_registry collection for a prior trial using this
+       Garmin identity (ANY RunIndex user).
+    3. If already used → return the current subscription unchanged (FREE).
+    4. If not used → atomically insert a registry entry with $setOnInsert
+       (unique index prevents duplicates under concurrent requests).
+    5. Upsert the user's subscription to TRIAL status.
+
+    Args:
+        db:               AsyncIOMotorDatabase
+        user_id:          RunIndex user UUID (from JWT, never frontend-provided)
+        garmin_identity:  Stable, server-derived Garmin account identifier.
+                          MUST come from the Garmin backend, never from the
+                          request body or frontend storage.
+
+    Returns:
+        The updated subscription document (status may be "trial" or "free").
+
+    Raises:
+        NotImplementedError: If _GARMIN_IDENTITY_AVAILABLE is False, meaning the
+                             Garmin per-user identity architecture is not yet in
+                             place (see BLOCKER note at the top of this module).
+        ValueError:          If garmin_identity is empty or None (fail safe).
+
+    BLOCKER NOTE:
+        This function raises NotImplementedError until the Garmin multi-user
+        OAuth integration ships a stable per-user Garmin identity.  The current
+        integration uses a single shared backend Garmin account; there is no
+        per-user Garmin identifier to use as garmin_identity.
+
+        When unblocked, the caller (garmin connect endpoint) should:
+          1. Obtain the per-user Garmin identity from the Garmin OAuth response.
+          2. Call this function with that identity.
+          3. The function will enforce "1 Garmin = 1 Trial" atomically.
+    """
+    if not _GARMIN_IDENTITY_AVAILABLE:
+        raise NotImplementedError(
+            "BLOCKER: activate_garmin_trial() requires a per-user Garmin identity. "
+            "The current Garmin integration uses a single shared backend account "
+            "(GARMIN_USERNAME env var) and provides no per-user Garmin identifier. "
+            "This function will be enabled once the Garmin multi-user OAuth "
+            "architecture is implemented. "
+            "See AUDIT_GARMIN_STEP3.md and the feature/garmin-trial-eligibility PR."
+        )
+
+    if not garmin_identity or not str(garmin_identity).strip():
+        raise ValueError(
+            "garmin_identity must be a non-empty server-provided value. "
+            "Frontend-provided or empty values are not accepted."
+        )
+
+    garmin_identity = str(garmin_identity).strip()
+    now = datetime.now(timezone.utc)
+
+    # ── Step 1: Check if this Garmin identity already used a trial ────────────
+    # The garmin_trial_registry has a unique index on garmin_identity.
+    # We use find_one_and_update with upsert=True and $setOnInsert to atomically
+    # claim a trial slot, preventing race conditions.
+    try:
+        registry_result = await db.garmin_trial_registry.find_one_and_update(
+            {"garmin_identity": garmin_identity},
+            {
+                "$setOnInsert": {
+                    "garmin_identity": garmin_identity,
+                    "first_trial_user_id": user_id,
+                    "trial_activated_at": now.isoformat(),
+                }
+            },
+            upsert=True,
+            return_document=True,  # return the document after the operation
+        )
+    except Exception as exc:
+        # Duplicate key error (race condition: another request won the upsert)
+        # The index raises DuplicateKeyError — treat as "trial already used".
+        logger.warning(
+            "[GarminTrial] Race condition or DB error for garmin_identity '%s': %s — "
+            "treating as trial already used (fail safe).",
+            garmin_identity, exc,
+        )
+        return await db.subscriptions.find_one({"user_id": user_id}, {"_id": 0}) or {}
+
+    # If the document's first_trial_user_id differs from our user_id, the trial
+    # was already registered by a different RunIndex user for this Garmin identity.
+    if registry_result.get("first_trial_user_id") != user_id:
+        logger.info(
+            "[GarminTrial] Garmin identity '%s' already used a trial (by user '%s') — "
+            "user '%s' stays FREE.",
+            garmin_identity,
+            registry_result.get("first_trial_user_id"),
+            user_id,
+        )
+        # Return current subscription unchanged
+        sub = await db.subscriptions.find_one({"user_id": user_id}, {"_id": 0})
+        return sub or {}
+
+    # ── Step 2: Activate the trial for this user ──────────────────────────────
+    trial_end = now + timedelta(days=TRIAL_DURATION_DAYS)
+
+    await db.subscriptions.update_one(
+        {"user_id": user_id},
+        {
+            "$set": {
+                "status": SubscriptionStatus.TRIAL,
+                "trial_start": now.isoformat(),
+                "trial_end": trial_end.isoformat(),
+                "trial_used": True,
+                "garmin_identity": garmin_identity,
+                "updated_at": now.isoformat(),
+            }
+        },
+        upsert=True,
+    )
+    logger.info(
+        "[GarminTrial] Trial activated for user '%s' (garmin_identity='%s') — "
+        "expires %s",
+        user_id, garmin_identity, trial_end.isoformat(),
+    )
+
+    subscription = await db.subscriptions.find_one({"user_id": user_id}, {"_id": 0})
+    return subscription or {}
 
 
 async def check_trial_expiration(db: AsyncIOMotorDatabase, subscription: Dict) -> Dict:

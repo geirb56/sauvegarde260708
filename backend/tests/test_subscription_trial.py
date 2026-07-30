@@ -1,10 +1,15 @@
-"""Tests for 30-day free trial subscription flow (RunIndex).
+"""Tests for the subscription flow (RunIndex).
 
 Covers:
-- GET /api/subscription/status recognizes 'trial'
-- GET /api/subscription/info returns trial with ~30 days remaining
-- Brand new user auto-creates a 30-day trial
-- POST /api/subscription/reset-to-trial resets to a 30-day trial
+- GET /api/subscription/status recognizes 'free' for new users
+- GET /api/subscription/info returns free for new accounts
+- Brand new user starts as FREE (not trial — trial requires Garmin identity)
+- POST /api/subscription/reset-to-trial still works for DEV tooling
+
+IMPORTANT BEHAVIOR CHANGE:
+  New RunIndex accounts now start as FREE.
+  Trial access requires a Garmin identity (server-side only).
+  See subscription_manager.activate_garmin_trial() and the BLOCKER note.
 """
 import os
 import requests
@@ -22,52 +27,39 @@ def s():
     return requests.Session()
 
 
-def test_status_default_user_trial(s):
-    r = s.get(f"{BASE_URL}/api/subscription/status", params={"user_id": DEFAULT_USER}, timeout=30)
-    assert r.status_code == 200, r.text
-    data = r.json()
-    print("status(default):", data)
-    assert data.get("tier") == "trial", f"tier expected 'trial' got {data.get('tier')}"
-    assert data.get("is_premium") is True
-    assert data.get("is_unlimited") is True
-    assert data.get("messages_remaining") == 999
-    # tier_name from tier_config
-    assert "trial" in str(data.get("tier_name", "")).lower() or "free trial" in str(data.get("tier_name", "")).lower()
-
-
-def test_info_default_user_trial(s):
-    r = s.get(f"{BASE_URL}/api/subscription/info", params={"user_id": DEFAULT_USER}, timeout=30)
-    assert r.status_code == 200, r.text
-    data = r.json()
-    print("info(default):", data)
-    assert data.get("status") == "trial"
-    days = data.get("trial_days_remaining")
-    assert days is not None and 25 <= int(days) <= 30, f"trial_days_remaining={days}"
-    features = data.get("features", {})
-    for k in ["training_plan", "plan_adaptation", "session_analysis", "sync_enabled", "llm_access", "full_access"]:
-        assert features.get(k) is True, f"feature {k} not True: {features}"
-
-
-def test_info_new_user_autocreates_trial(s):
-    r = s.get(f"{BASE_URL}/api/subscription/info", params={"user_id": NEW_USER}, timeout=30)
+def test_info_new_user_starts_free(s):
+    """New users should start as FREE — not TRIAL."""
+    new_user = f"qa_new_user_{os.getpid()}"
+    r = s.get(f"{BASE_URL}/api/subscription/info", params={"user_id": new_user}, timeout=30)
     assert r.status_code == 200, r.text
     data = r.json()
     print("info(new):", data)
-    assert data.get("status") == "trial"
-    days = data.get("trial_days_remaining")
-    assert days is not None and 28 <= int(days) <= 30, f"new user trial_days_remaining={days}"
+    # New behavior: new user starts FREE
+    assert data.get("status") == "free", (
+        f"New user should be FREE (not trial). Got: {data.get('status')}. "
+        "Trial requires Garmin identity. See BLOCKER in subscription_manager.py."
+    )
+    features = data.get("features", {})
+    for k in ["training_plan", "plan_adaptation", "session_analysis", "sync_enabled", "llm_access", "full_access"]:
+        assert features.get(k) is False, f"feature {k} should be False for FREE user: {features}"
 
 
-def test_status_new_user_trial(s):
-    r = s.get(f"{BASE_URL}/api/subscription/status", params={"user_id": NEW_USER}, timeout=30)
+def test_status_new_user_is_free(s):
+    """New users should have 'free' tier in /subscription/status."""
+    new_user = f"qa_new_user_status_{os.getpid()}"
+    r = s.get(f"{BASE_URL}/api/subscription/status", params={"user_id": new_user}, timeout=30)
     assert r.status_code == 200, r.text
     data = r.json()
     print("status(new):", data)
-    assert data.get("tier") == "trial"
-    assert data.get("is_premium") is True
+    assert data.get("tier") == "free", (
+        f"New user tier should be 'free'. Got: {data.get('tier')}. "
+        "Trial requires Garmin identity."
+    )
+    assert data.get("is_premium") is False
 
 
-def test_reset_to_trial_default(s):
+def test_reset_to_trial_still_works_for_dev(s):
+    """POST /api/subscription/reset-to-trial is still available for DEV tooling."""
     r = s.post(f"{BASE_URL}/api/subscription/reset-to-trial", params={"user_id": DEFAULT_USER}, timeout=30)
     assert r.status_code == 200, r.text
     data = r.json()
@@ -84,3 +76,4 @@ def test_reset_to_trial_default(s):
     assert d3.get("status") == "trial"
     days = d3.get("trial_days_remaining")
     assert days is not None and 28 <= int(days) <= 30
+

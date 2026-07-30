@@ -37,28 +37,31 @@ class TestSubscriptionEndpoints:
         assert "features" in data
         assert "display" in data
     
-    def test_new_user_gets_trial_status(self):
-        """New users should get trial status"""
+    def test_new_user_gets_free_status(self):
+        """New users should get FREE status — trial requires Garmin identity."""
         res = requests.get(f"{BASE_URL}/api/subscription/info", params={"user_id": self.test_user_id, "language": "fr"})
         assert res.status_code == 200
         data = res.json()
-        assert data["status"] == "trial"
-        assert data["features"]["full_access"] == True
-        assert data["features"]["training_plan"] == True
-        assert data["features"]["llm_access"] == True
+        assert data["status"] == "free", (
+            f"New user should be FREE (not trial). Got: {data['status']}. "
+            "Trial requires Garmin identity (see BLOCKER in subscription_manager.py)."
+        )
+        assert data["features"]["full_access"] == False
+        assert data["features"]["training_plan"] == False
+        assert data["features"]["llm_access"] == False
     
-    def test_trial_user_has_all_features(self):
-        """Trial users should have access to all features"""
+    def test_new_user_has_limited_features(self):
+        """New users (FREE) should have limited features — trial requires Garmin."""
         res = requests.get(f"{BASE_URL}/api/subscription/info", params={"user_id": self.test_user_id})
         data = res.json()
         features = data["features"]
-        assert features["training_plan"] == True
-        assert features["plan_adaptation"] == True
-        assert features["session_analysis"] == True
-        assert features["sync_enabled"] == True
-        assert features["api_access"] == True
-        assert features["llm_access"] == True
-        assert features["full_access"] == True
+        assert features["training_plan"] == False
+        assert features["plan_adaptation"] == False
+        assert features["session_analysis"] == False
+        assert features["sync_enabled"] == False
+        assert features["api_access"] == False
+        assert features["llm_access"] == False
+        assert features["full_access"] == False
     
     def test_subscription_display_info_french(self):
         """Display info should be in French when language=fr"""
@@ -67,8 +70,8 @@ class TestSubscriptionEndpoints:
         display = data["display"]
         assert "label" in display
         assert "badge" in display
-        # Trial badge in French
-        assert display["badge"] in ["ESSAI", "TRIAL"]
+        # FREE badge in French
+        assert display["badge"] in ["LIMITÉ", "LIMITED", "ESSAI", "TRIAL"]
     
     def test_subscription_display_info_english(self):
         """Display info should be in English when language=en"""
@@ -76,16 +79,15 @@ class TestSubscriptionEndpoints:
         data = res.json()
         display = data["display"]
         assert "label" in display
-        assert display["badge"] == "TRIAL"
+        assert display["badge"] in ["TRIAL", "LIMITED"]
     
-    def test_trial_days_remaining(self):
-        """Trial users should have trial_days_remaining field"""
+    def test_trial_days_remaining_null_for_free_user(self):
+        """FREE users should not have trial_days_remaining"""
         res = requests.get(f"{BASE_URL}/api/subscription/info", params={"user_id": self.test_user_id})
         data = res.json()
-        assert "trial_days_remaining" in data
-        # Should be between 0 and 7 for new trial
-        if data["trial_days_remaining"] is not None:
-            assert 0 <= data["trial_days_remaining"] <= 7
+        # For FREE users, trial_days_remaining should be None or absent
+        trial_days = data.get("trial_days_remaining")
+        assert trial_days is None, f"FREE user should not have trial_days_remaining, got {trial_days}"
     
     # ========== Early Adopter Offer Tests ==========
     

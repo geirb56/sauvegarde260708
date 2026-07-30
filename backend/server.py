@@ -6045,6 +6045,14 @@ async def create_db_indexes():
         await db.garmin_activities.create_index([("user_id", 1), ("external_id", 1)], unique=True, sparse=True)
         await db.garmin_activities.create_index([("user_id", 1), ("start_time", -1)])
         await db.garmin_daily_metrics.create_index([("user_id", 1), ("date", -1)], unique=True, sparse=True)
+        # Garmin Trial Registry — enforces "1 Garmin = 1 Trial" atomically.
+        # The unique index on garmin_identity prevents concurrent race conditions:
+        # only the first insert (via find_one_and_update $setOnInsert) succeeds.
+        # BLOCKER: this collection will remain empty until the Garmin multi-user
+        # identity architecture provides a stable per-user garmin_identity.
+        await db.garmin_trial_registry.create_index(
+            "garmin_identity", unique=True, sparse=False
+        )
         # Users collection (auth system)
         await db.users.create_index("email", unique=True)
         await db.users.create_index("id", unique=True)
