@@ -36,7 +36,13 @@ def get_provider_for_user(user_id: str, garmin_account: Optional[str] = None) ->
     Each user gets their own HOME directory under the base GCCLI_HOME so their
     OAuth token is completely isolated from every other user's session.
     """
-    user_home = os.path.join(_base_home(), user_id)
+    # Sanitize user_id to prevent path traversal: keep only alphanumerics and
+    # hyphens (UUID format).  If the value somehow contains path separators or
+    # dots after JWT validation, we raise rather than silently using a bad path.
+    safe_uid = "".join(c for c in user_id if c.isalnum() or c == "-")
+    if not safe_uid or safe_uid != user_id:
+        raise ValueError(f"Invalid user_id for GCCLI home path: {user_id!r}")
+    user_home = os.path.join(_base_home(), safe_uid)
     runner = _make_runner(user_home)
     return GccliProvider(runner=runner, account=garmin_account)
 

@@ -206,7 +206,9 @@ class GccliRunner:
         full_output = "".join(output_parts)
         low = full_output.lower()
         if exit_code == 0 or "logged in as" in low:
-            logger.info("[gccli] login successful for %s", email)
+            # Log only the domain part — never the full email address.
+            domain = email.split("@")[-1] if "@" in email else "unknown"
+            logger.info("[gccli] login successful (domain=%s)", domain)
             return
         if "mfa" in low or "two-factor" in low or "verification code" in low:
             raise GccliMfaRequired("Garmin login requires an MFA code")

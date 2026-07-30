@@ -11,7 +11,17 @@ import logging
 import os
 from typing import Dict, List, Optional
 
+import re
 from config.secrets import get_secret
+
+_EMAIL_RE = re.compile(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$")
+
+
+def _validate_garmin_email(value: str) -> str:
+    """Raise ValueError if `value` is not a plausible Garmin email address."""
+    if not _EMAIL_RE.match(value):
+        raise ValueError("garmin_username must be a valid email address")
+    return value
 
 from ..runner import GccliRunner, GccliUnavailable, GccliMfaRequired, GccliError
 from .base import (
@@ -48,6 +58,12 @@ class GccliProvider(Provider):
         account = garmin_username or self._account()
         if not account:
             return ConnectResult(status=STATUS_ERROR, detail="Garmin account not configured.")
+
+        # Validate email format before it reaches the CLI.
+        try:
+            account = _validate_garmin_email(account)
+        except ValueError:
+            return ConnectResult(status=STATUS_ERROR, detail="garmin_username must be a valid email address.")
 
         # Already authenticated (token persisted) -> connected immediately.
         if self._runner.is_authenticated(account):
