@@ -305,7 +305,7 @@ class TestDeepSync:
         from garmin import service as svc
 
         with (
-            patch.object(svc, "get_provider", return_value=mock_provider),
+            patch.object(svc, "get_provider_for_user", return_value=mock_provider),
             patch.object(svc, "emit_activity_created", new=AsyncMock()),
         ):
             result = _run(svc.deep_sync(db, "user-1"))
@@ -325,7 +325,7 @@ class TestDeepSync:
         from garmin import service as svc
 
         with (
-            patch.object(svc, "get_provider", return_value=mock_provider),
+            patch.object(svc, "get_provider_for_user", return_value=mock_provider),
             patch.object(svc, "emit_activity_created", new=AsyncMock()),
         ):
             _run(svc.deep_sync(db, "user-1"))
@@ -345,7 +345,7 @@ class TestDeepSync:
 
         from garmin import service as svc
 
-        with patch.object(svc, "get_provider", return_value=mock_provider):
+        with patch.object(svc, "get_provider_for_user", return_value=mock_provider):
             result = _run(svc.deep_sync(db, "user-1"))
 
         assert result["success"] is False
@@ -380,7 +380,7 @@ class TestSyncDispatch:
 
         with (
             patch.dict("os.environ", {"GARMIN_DEEP_SYNC_ENABLED": "true"}),
-            patch.object(svc, "get_provider", return_value=mock_provider),
+            patch.object(svc, "get_provider_for_user", return_value=mock_provider),
             patch.object(svc, "deep_sync", new=AsyncMock()) as mock_deep,
             patch.object(svc, "emit_activity_created", new=AsyncMock()),
         ):
@@ -400,7 +400,7 @@ class TestSyncDispatch:
 
         with (
             patch.dict("os.environ", {"GARMIN_DEEP_SYNC_ENABLED": "false"}),
-            patch.object(svc, "get_provider", return_value=mock_provider),
+            patch.object(svc, "get_provider_for_user", return_value=mock_provider),
             patch.object(svc, "deep_sync", new=AsyncMock()) as mock_deep,
             patch.object(svc, "emit_activity_created", new=AsyncMock()),
         ):
@@ -419,7 +419,7 @@ class TestSyncDispatch:
         from garmin import service as svc
 
         with (
-            patch.object(svc, "get_provider", return_value=mock_provider),
+            patch.object(svc, "get_provider_for_user", return_value=mock_provider),
             patch.object(svc, "deep_sync", new=AsyncMock()) as mock_deep,
             patch.object(svc, "emit_activity_created", new=AsyncMock()),
         ):
@@ -460,7 +460,7 @@ class TestRunIndexBackfillAfterDeepSync:
         from garmin import service as svc
 
         with (
-            patch.object(svc, "get_provider", return_value=mock_provider),
+            patch.object(svc, "get_provider_for_user", return_value=mock_provider),
             patch.object(svc, "emit_activity_created", new=AsyncMock()),
         ):
             result = _run(svc.deep_sync(db, "user-1"))

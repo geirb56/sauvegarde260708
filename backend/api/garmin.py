@@ -3,18 +3,19 @@
 Prefix /api is added when included by server.py (api_router has prefix /api).
 Final routes: /api/garmin/*
 
-NON-NEGOTIABLE: no Garmin password is ever accepted from the client.
-The connect endpoint takes only a user_id (auth abstracted backend-side).
+All routes require a valid JWT. The authenticated user's identity (from the
+JWT) is always used as user_id — never a client-supplied query parameter.
 """
 
 from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from auth.dependencies import get_current_user
 from garmin import service as garmin_service
 from garmin import backfill as garmin_backfill
 from services.run_index_history import backfill_connected_users_run_index_history, backfill_run_index_history
@@ -44,20 +45,41 @@ async def _safe_enqueue(user_id: str):
 
 
 class GarminConnectRequest(BaseModel):
+    # Garmin Connect credentials for this user's own account.
+    # Used once for the headless gccli login; never stored by the backend.
+    garmin_username: str = Field(..., description="Garmin Connect email address")
+    garmin_password: str = Field(..., description="Garmin Connect password")
     # Optional, testing-only hook to exercise the MFA (Mode 2) code path.
     simulate_mfa: bool = False
 
+    class Config:
+        # Prevent the password from leaking into repr/logs.
+        json_encoders = {}
+
+    def __repr__(self) -> str:
+        return f"GarminConnectRequest(garmin_username={self.garmin_username!r}, simulate_mfa={self.simulate_mfa})"
+
 
 @garmin_router.post("/connect")
-async def connect_garmin(request: Request, body: Optional[GarminConnectRequest] = None, user_id: str = "default"):
+async def connect_garmin(
+    request: Request,
+    body: GarminConnectRequest,
+    user: dict = Depends(get_current_user),
+):
     """Establish the Garmin session (fast auth check) and queue the initial sync.
 
     Auth is a lightweight token/status check (non-blocking); the heavy activity
     + metrics fetch is offloaded to the worker so the request returns instantly.
     """
+    user_id = user["id"]
     db = request.app.state.db
-    simulate_mfa = bool(body.simulate_mfa) if body else False
-    result = await garmin_service.connect(db, user_id, simulate_mfa=simulate_mfa)
+    result = await garmin_service.connect(
+        db,
+        user_id,
+        garmin_username=body.garmin_username,
+        garmin_password=body.garmin_password,
+        simulate_mfa=body.simulate_mfa,
+    )
     if result.get("status") == "connected":
         # Kick off the first data sync in the background (never blocks the API).
         # Redis outage must not fail the connect itself.
@@ -66,8 +88,9 @@ async def connect_garmin(request: Request, body: Optional[GarminConnectRequest] 
 
 
 @garmin_router.post("/sync")
-async def sync_garmin(request: Request, user_id: str = "default"):
+async def sync_garmin(request: Request, user: dict = Depends(get_current_user)):
     """Non-blocking: enqueue a Garmin sync job and return immediately."""
+    user_id = user["id"]
     res, err = await _safe_enqueue(user_id)
     if err is not None:
         return JSONResponse(
@@ -78,13 +101,18 @@ async def sync_garmin(request: Request, user_id: str = "default"):
 
 
 @garmin_router.get("/activities")
-async def garmin_activities(request: Request, user_id: str = "default",
-                            limit: int = 20, since: Optional[str] = None):
+async def garmin_activities(
+    request: Request,
+    user: dict = Depends(get_current_user),
+    limit: int = 20,
+    since: Optional[str] = None,
+):
     """Ultra-fast feed: Redis cache first, MongoDB fallback (+cache warm).
 
     Backward compatible: response is still {activities, count}. `since` (ISO
     start_time) enables incremental UI updates ("give me what's newer than X").
     """
+    user_id = user["id"]
     cached = await realtime_cache.get_feed(user_id, since=since, limit=limit)
     # Serve from cache when it satisfies the request: incremental (since) reads
     # are always cache-authoritative; full reads need at least `limit` items so a
@@ -103,8 +131,11 @@ async def garmin_activities(request: Request, user_id: str = "default",
 
 
 @garmin_router.post("/backfill")
-async def garmin_backfill_endpoint(request: Request, user_id: str = "default",
-                                  scope: str = "user"):
+async def garmin_backfill_endpoint(
+    request: Request,
+    user: dict = Depends(get_current_user),
+    scope: str = "user",
+):
     """On-demand rebuild of derived Garmin data from `garmin_activities`.
 
     Rebuilds `workouts` + feed cache and also recalculates historical RunIndex
@@ -115,6 +146,7 @@ async def garmin_backfill_endpoint(request: Request, user_id: str = "default",
     - scope=all: backfill every connected Garmin user in a background task.
     """
     import asyncio
+    user_id = user["id"]
     db = request.app.state.db
     if scope == "all":
         asyncio.create_task(backfill_connected_users_run_index_history(db))
@@ -125,8 +157,11 @@ async def garmin_backfill_endpoint(request: Request, user_id: str = "default",
 
 
 @garmin_router.get("/feed/stream")
-async def garmin_feed_stream(request: Request, user_id: str = "default",
-                             last_id: Optional[str] = None):
+async def garmin_feed_stream(
+    request: Request,
+    user: dict = Depends(get_current_user),
+    last_id: Optional[str] = None,
+):
     """Server-Sent Events stream of ACTIVITY_CREATED for a user (READ-ONLY).
 
     Pure delivery layer over the Redis Stream: no sync, no gccli, no DB writes.
@@ -134,6 +169,7 @@ async def garmin_feed_stream(request: Request, user_id: str = "default",
     param); defaults to only-new events. Non-destructive XREAD -> horizontally
     scalable. Emits `event: activity_created` frames + `: ping` heartbeats.
     """
+    user_id = user["id"]
     start_id = last_id or request.headers.get("Last-Event-ID") or "$"
     return StreamingResponse(
         event_stream(user_id, request, start_id),
@@ -147,13 +183,14 @@ async def garmin_feed_stream(request: Request, user_id: str = "default",
 
 
 @garmin_router.post("/activity-signal")
-async def garmin_activity_signal(user_id: str = "default"):
+async def garmin_activity_signal(user: dict = Depends(get_current_user)):
     """Mark a user as ACTIVE from app interaction (used ONLY by the scheduler).
 
     Does NOT trigger a sync, call gccli, or touch activities/workouts. It simply
     stores a fresh app-interaction timestamp in Redis (TTL-based), which the
     scheduler worker reads to bump the user into the ACTIVE sync tier.
     """
+    user_id = user["id"]
     try:
         r = get_redis()
         await r.set(f"{ACTIVE_SIGNAL_PREFIX}{user_id}", str(time.time()), ex=ACTIVE_SIGNAL_TTL)
@@ -164,7 +201,8 @@ async def garmin_activity_signal(user_id: str = "default"):
 
 
 @garmin_router.get("/status")
-async def garmin_status(request: Request, user_id: str = "default"):
+async def garmin_status(request: Request, user: dict = Depends(get_current_user)):
+    user_id = user["id"]
     db = request.app.state.db
     return await garmin_service.get_status(db, user_id)
 
@@ -192,12 +230,18 @@ async def garmin_queue_health():
 
 
 @garmin_router.post("/disconnect")
-async def disconnect_garmin(request: Request, user_id: str = "default"):
+async def disconnect_garmin(request: Request, user: dict = Depends(get_current_user)):
+    user_id = user["id"]
     db = request.app.state.db
     return await garmin_service.disconnect(db, user_id)
 
 
 @garmin_router.get("/daily-metrics")
-async def garmin_daily_metrics(request: Request, user_id: str = "default", days: int = 7):
+async def garmin_daily_metrics(
+    request: Request,
+    user: dict = Depends(get_current_user),
+    days: int = 7,
+):
+    user_id = user["id"]
     db = request.app.state.db
     return await garmin_service.get_daily_metrics(db, user_id, days=days)
