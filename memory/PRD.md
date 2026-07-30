@@ -152,3 +152,13 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
 - Live: trial=premium access+999msg, free=10msg+premium bloqué, unsigned webhook rejeté (500 car PADDLE_WEBHOOK_SECRET absent).
 - ⚠️ BLOQUÉ: aucune clé PADDLE_ dans l'env -> config live=false, checkout overlay/paiement sandbox réel/webhook live depuis Paddle NON testables. Nécessite: PADDLE_CLIENT_TOKEN, PADDLE_API_KEY, PADDLE_WEBHOOK_SECRET, PADDLE_PRICE_ID (sandbox).
 - NON déclaré "Sandbox Ready" ni "Production Ready".
+
+## 2026-07-30 — Pull PR22 (PR #38 trial freemium + Garmin trial, head 44dc1c4) — BACKEND DOWN
+- Paywall.jsx re-refactorisé en local (fix pérenne non committé upstream) -> frontend compile OK.
+- ⚠️ BACKEND 502 (crash import): backend/api/garmin.py CORROMPU par PR#38:
+  1. En-tête DUPLIQUÉ (2x docstring + 2x `from __future__ import annotations`); le 2e (ligne 44) est illégal -> SyntaxError.
+  2. Ligne 61: `from auth.supabase_jwt import extract_user_id` -> module inexistant (auth/ = JWT jwt_utils.py). ModuleNotFoundError.
+  - server.py:6014 `from api.garmin import garmin_router` non protégé -> toute l'API tombe.
+- Fix upstream requis (dans api/garmin.py): (a) supprimer le bloc d'en-tête dupliqué (garder 1 seul, `from __future__` en tout début), (b) remplacer l'import supabase par: `from auth.jwt_utils import decode_access_token` et dans _resolve_user_id utiliser `decode_access_token(creds.credentials).get("sub")`.
+- Toujours aucune clé PADDLE_ dans l'env.
+- STOP + report (code Garmin protégé + décision requise). Fix local non appliqué sans accord.

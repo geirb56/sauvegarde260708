@@ -168,7 +168,7 @@ export default function Paywall({ onClose, returnPath = "/training" }) {
         >
           <div className="flex items-center gap-2">
             <Crown className="w-5 h-5 text-amber-400" />
-            <span className="font-bold text-white">{offer_name}</span>
+            <span className="font-bold text-white">{PREMIUM_OFFER.offer_name}</span>
           </div>
 
           {/* Price */}

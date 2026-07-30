@@ -88,7 +88,9 @@ from subscription_manager import (
     SubscriptionStatus,
     FEATURES,
     EARLY_ADOPTER_PRICE,
-    TRIAL_DURATION_DAYS
+    TRIAL_DURATION_DAYS,
+    claim_garmin_trial,
+    get_garmin_trial_record,
 )
 
 from demo_mode import (
@@ -5411,6 +5413,34 @@ async def reset_to_trial(user: dict = Depends(auth_user)):
     }
 
 
+@api_router.post("/subscription/garmin-trial")
+async def claim_garmin_trial_endpoint(user: dict = Depends(auth_user)):
+    """
+    Explicitly check and claim a Garmin-based Trial for the authenticated user.
+
+    This endpoint is the authoritative server-side gate for Trial attribution:
+    1. The RunIndex user is identified exclusively from the Supabase JWT.
+    2. The Garmin identity is obtained ONLY from the backend environment
+       (GARMIN_USERNAME) — never from the client request.
+    3. Eligibility is checked atomically against garmin_trial_registry.
+    4. If eligible, a 30-day Trial is granted; otherwise the user stays FREE.
+
+    The frontend MUST NOT use the response to self-grant a trial — it should
+    only call refreshSubscription() to re-fetch the current server-side state.
+
+    Returns:
+      {
+        "trial_granted": bool,
+        "reason": str,          # present when trial_granted=False
+        "subscription": { ... } # current subscription state
+      }
+    """
+    from garmin.service import check_and_award_trial
+    user_id = user["id"]
+    result = await check_and_award_trial(db, user_id)
+    return result
+
+
 @api_router.get("/subscription/early-adopter-offer")
 async def get_early_adopter_offer(language: str = "en"):
     """
@@ -6032,6 +6062,9 @@ async def create_db_indexes():
         await db.oauth_states.create_index("expires_at", expireAfterSeconds=0)
         # Subscriptions / tokens
         await db.subscriptions.create_index("user_id", sparse=True)
+        # Garmin Trial Registry — 1 Garmin identity = 1 Trial (unique index ensures atomicity)
+        await db.garmin_trial_registry.create_index("garmin_identity", unique=True, sparse=False)
+        await db.garmin_trial_registry.create_index("first_runindex_user_id", sparse=True)
         # Terra integration collections
         await db.terra_tokens.create_index("user_id", sparse=True)
         await db.daily_metrics.create_index([("user_id", 1), ("date", -1)])
