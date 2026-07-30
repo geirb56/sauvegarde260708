@@ -23,7 +23,7 @@ def _stub_module(name: str) -> ModuleType:
     return mod
 
 
-for _mod in ("redis", "redis.asyncio", "redis.exceptions", "motor", "motor.motor_asyncio"):
+for _mod in ("redis", "redis.asyncio", "redis.exceptions"):
     if _mod not in sys.modules:
         _stub_module(_mod)
 
