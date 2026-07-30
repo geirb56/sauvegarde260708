@@ -28,15 +28,6 @@ early_adopter (legacy) → premium access
 Auth / isolation
 ----------------
 User A ≠ User B — no cross-user data leakage
-
-BLOCKER NOTE:
-    Tests 2–10 that exercise activate_garmin_trial() require
-    _GARMIN_IDENTITY_AVAILABLE = True.  Currently this flag is False because
-    the Garmin multi-user identity architecture is not yet in place.
-    These tests are therefore marked with pytest.mark.skip, documenting both
-    the expected behavior and the blocker.
-
-    Tests 1, 11, 12 (free-on-signup, frontend manipulation) are fully runnable.
 """
 
 from __future__ import annotations
@@ -64,9 +55,7 @@ os.environ.setdefault("DB_NAME", "test_db")
 from subscription_manager import (
     SubscriptionStatus,
     TRIAL_DURATION_DAYS,
-    _GARMIN_IDENTITY_AVAILABLE,
     create_free_subscription,
-    create_trial_subscription,
     activate_garmin_trial,
     check_trial_expiration,
     get_trial_days_remaining,
@@ -317,18 +306,9 @@ async def test_get_user_access_new_user_is_free(db):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Tests 2–10 — Garmin identity-dependent (BLOCKED)
+# Tests 2–10 — Garmin identity-dependent
 # ─────────────────────────────────────────────────────────────────────────────
 
-GARMIN_BLOCKER_REASON = (
-    "BLOCKER: activate_garmin_trial() requires a per-user Garmin identity. "
-    "The current Garmin integration uses a single shared backend account "
-    "(GARMIN_USERNAME env var). No per-user Garmin identifier is available. "
-    "These tests will be enabled once the Garmin multi-user OAuth architecture ships."
-)
-
-
-@pytest.mark.skipif(not _GARMIN_IDENTITY_AVAILABLE, reason=GARMIN_BLOCKER_REASON)
 async def test_new_garmin_identity_grants_trial(db):
     """Test 2: A Garmin identity never used before → TRIAL for 30 days."""
     user_id = _uid()
@@ -346,8 +326,13 @@ async def test_new_garmin_identity_grants_trial(db):
     delta = trial_end - now
     assert TRIAL_DURATION_DAYS - 1 <= delta.days <= TRIAL_DURATION_DAYS
 
+    registry = await db.garmin_trial_registry.find_one({"garmin_identity": garmin_id})
+    assert registry is not None
+    assert registry["trial_used"] is True
+    assert registry.get("trial_started_at")
+    assert registry.get("trial_expires_at")
 
-@pytest.mark.skipif(not _GARMIN_IDENTITY_AVAILABLE, reason=GARMIN_BLOCKER_REASON)
+
 async def test_same_garmin_new_runindex_account_stays_free(db):
     """Test 3: Same Garmin identity + new RunIndex account → FREE (trial already used)."""
     user_a = _uid()
@@ -366,7 +351,21 @@ async def test_same_garmin_new_runindex_account_stays_free(db):
     assert result_b["status"] == SubscriptionStatus.FREE
 
 
-@pytest.mark.skipif(not _GARMIN_IDENTITY_AVAILABLE, reason=GARMIN_BLOCKER_REASON)
+async def test_garmin_identity_normalization_is_case_insensitive(db):
+    """Email normalization maps equivalent variants to a single trial identity."""
+    user_a = _uid()
+    user_b = _uid()
+    await create_free_subscription(db, user_a)
+    await create_free_subscription(db, user_b)
+
+    r1 = await activate_garmin_trial(db, user_a, " USER@Example.COM ")
+    assert r1["status"] == SubscriptionStatus.TRIAL
+    assert r1["garmin_identity"] == "user@example.com"
+
+    r2 = await activate_garmin_trial(db, user_b, "user@example.com")
+    assert r2["status"] == SubscriptionStatus.FREE
+
+
 async def test_garmin_reconnect_no_new_trial(db):
     """Test 4: Disconnecting and reconnecting Garmin does not reset trial status."""
     user_id = _uid()
@@ -383,9 +382,9 @@ async def test_garmin_reconnect_no_new_trial(db):
     # Should still be TRIAL (same user, same garmin — already activated)
     # The registry entry already exists with first_trial_user_id == user_id
     assert r2["status"] == SubscriptionStatus.TRIAL
+    assert await db.garmin_trial_registry.count_documents({"garmin_identity": garmin_id}) == 1
 
 
-@pytest.mark.skipif(not _GARMIN_IDENTITY_AVAILABLE, reason=GARMIN_BLOCKER_REASON)
 async def test_trial_expired_is_free(db):
     """Test 5: Trial expired → FREE (resolved in-memory by _resolve_access)."""
     past = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
@@ -396,7 +395,6 @@ async def test_trial_expired_is_free(db):
     assert access.tier == Tier.FREE
 
 
-@pytest.mark.skipif(not _GARMIN_IDENTITY_AVAILABLE, reason=GARMIN_BLOCKER_REASON)
 async def test_trial_expired_reconnect_stays_free(db):
     """Test 6: Expired trial + Garmin reconnect → still FREE (Garmin used)."""
     user_id = _uid()
@@ -424,7 +422,6 @@ async def test_trial_expired_reconnect_stays_free(db):
     assert r2["status"] == SubscriptionStatus.FREE
 
 
-@pytest.mark.skipif(not _GARMIN_IDENTITY_AVAILABLE, reason=GARMIN_BLOCKER_REASON)
 async def test_new_account_already_used_garmin_stays_free(db):
     """Test 7: New RunIndex account with a Garmin that already used trial → FREE."""
     user_a = _uid()
@@ -441,7 +438,6 @@ async def test_new_account_already_used_garmin_stays_free(db):
     assert r_b["status"] == SubscriptionStatus.FREE
 
 
-@pytest.mark.skipif(not _GARMIN_IDENTITY_AVAILABLE, reason=GARMIN_BLOCKER_REASON)
 async def test_different_garmin_identity_can_get_trial(db):
     """Test 8: Garmin X used, Garmin Y never used → Y can obtain trial."""
     user_id = _uid()
@@ -461,7 +457,6 @@ async def test_different_garmin_identity_can_get_trial(db):
     assert r_y["status"] == SubscriptionStatus.TRIAL
 
 
-@pytest.mark.skipif(not _GARMIN_IDENTITY_AVAILABLE, reason=GARMIN_BLOCKER_REASON)
 async def test_concurrent_requests_single_trial(db):
     """Test 9: Two concurrent requests with same Garmin → only one trial created."""
     user_a = _uid()
@@ -493,7 +488,6 @@ async def test_concurrent_requests_single_trial(db):
     )
 
 
-@pytest.mark.skipif(not _GARMIN_IDENTITY_AVAILABLE, reason=GARMIN_BLOCKER_REASON)
 async def test_user_cannot_use_other_user_garmin_identity(db):
     """Test 10: User A cannot use User B's Garmin identity to claim a trial."""
     user_a = _uid()
@@ -687,27 +681,26 @@ async def test_user_a_data_not_visible_to_user_b(db):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# activate_garmin_trial BLOCKER validation
+# activate_garmin_trial identity-availability guard validation
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def test_activate_garmin_trial_raises_when_identity_unavailable():
-    """activate_garmin_trial raises NotImplementedError when identity is unavailable.
+async def test_activate_garmin_trial_raises_when_identity_unavailable(db):
+    """activate_garmin_trial raises NotImplementedError when guard is disabled."""
+    import subscription_manager as sm
 
-    This confirms the BLOCKER is active and the function cannot be called without
-    a real per-user Garmin identity.
-    """
-    if _GARMIN_IDENTITY_AVAILABLE:
-        pytest.skip("Garmin identity is available — BLOCKER has been resolved")
+    original = sm._GARMIN_IDENTITY_AVAILABLE
+    sm._GARMIN_IDENTITY_AVAILABLE = False
+    try:
+        user_id = _uid()
+        garmin_id = _garmin_id()
+        await create_free_subscription(db, user_id)
 
-    db = _FakeDB()
-    user_id = _uid()
-    garmin_id = _garmin_id()
-    await create_free_subscription(db, user_id)
+        with pytest.raises(NotImplementedError) as exc_info:
+            await activate_garmin_trial(db, user_id, garmin_id)
 
-    with pytest.raises(NotImplementedError) as exc_info:
-        await activate_garmin_trial(db, user_id, garmin_id)
-
-    assert "BLOCKER" in str(exc_info.value)
+        assert "BLOCKER" in str(exc_info.value)
+    finally:
+        sm._GARMIN_IDENTITY_AVAILABLE = original
 
 
 async def test_activate_garmin_trial_rejects_empty_identity(db):

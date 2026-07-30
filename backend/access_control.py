@@ -480,6 +480,10 @@ ROUTE_ACCESS_MAP: Dict[str, RouteAccess] = {
     "/api/chat/history":        RouteAccess.FREE,
     "/api/chat/store-response": RouteAccess.FREE,
     "/api/chat/send":           RouteAccess.FREE,     # quota enforced inside the handler
+    # Garmin onboarding funnel endpoints must stay reachable for FREE users.
+    "/api/garmin/connect":      RouteAccess.FREE,
+    "/api/garmin/status":       RouteAccess.FREE,
+    "/api/garmin/disconnect":   RouteAccess.FREE,
 
     # ── Premium (TRIAL or PREMIUM required) ──────────────────────────────
     "/api/training/plan":             RouteAccess.PREMIUM,

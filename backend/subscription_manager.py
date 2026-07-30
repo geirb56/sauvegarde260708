@@ -47,6 +47,7 @@ BLOCKER (Garmin identity):
 
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict
+from uuid import uuid4
 from motor.motor_asyncio import AsyncIOMotorDatabase
 import logging
 
@@ -56,10 +57,8 @@ logger = logging.getLogger(__name__)
 # Garmin trial blocker sentinel
 # ---------------------------------------------------------------------------
 
-#: Set to True once the Garmin multi-user OAuth integration ships a stable
-#: per-user Garmin identity.  Until then, activate_garmin_trial() will raise
-#: NotImplementedError to make the missing dependency explicit.
-_GARMIN_IDENTITY_AVAILABLE: bool = False
+# Garmin identity is now derived server-side from gcccli auth status email.
+_GARMIN_IDENTITY_AVAILABLE: bool = True
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -317,8 +316,10 @@ async def activate_garmin_trial(
             "Frontend-provided or empty values are not accepted."
         )
 
-    garmin_identity = str(garmin_identity).strip()
+    garmin_identity = str(garmin_identity).strip().lower()
     now = datetime.now(timezone.utc)
+    trial_end = now + timedelta(days=TRIAL_DURATION_DAYS)
+    claim_token = uuid4().hex
 
     # ── Step 1: Check if this Garmin identity already used a trial ────────────
     # The garmin_trial_registry has a unique index on garmin_identity.
@@ -332,6 +333,10 @@ async def activate_garmin_trial(
                     "garmin_identity": garmin_identity,
                     "first_trial_user_id": user_id,
                     "trial_activated_at": now.isoformat(),
+                    "trial_started_at": now.isoformat(),
+                    "trial_expires_at": trial_end.isoformat(),
+                    "trial_used": True,
+                    "trial_claim_token": claim_token,
                 }
             },
             upsert=True,
@@ -345,25 +350,26 @@ async def activate_garmin_trial(
             "treating as trial already used (fail safe).",
             garmin_identity, exc,
         )
-        return await db.subscriptions.find_one({"user_id": user_id}, {"_id": 0}) or {}
+        sub = await db.subscriptions.find_one({"user_id": user_id}, {"_id": 0})
+        if not sub:
+            return await create_free_subscription(db, user_id)
+        return await check_trial_expiration(db, sub)
 
-    # If the document's first_trial_user_id differs from our user_id, the trial
-    # was already registered by a different RunIndex user for this Garmin identity.
-    if registry_result.get("first_trial_user_id") != user_id:
+    # If we did not create the registry record in this call, this Garmin identity
+    # already consumed its one-time trial (same or different RunIndex account).
+    if registry_result.get("trial_claim_token") != claim_token:
         logger.info(
-            "[GarminTrial] Garmin identity '%s' already used a trial (by user '%s') — "
-            "user '%s' stays FREE.",
+            "[GarminTrial] Garmin identity '%s' already used a trial — user '%s' keeps current status.",
             garmin_identity,
-            registry_result.get("first_trial_user_id"),
             user_id,
         )
-        # Return current subscription unchanged
+        # Return current subscription unchanged (except lazy expiration transition).
         sub = await db.subscriptions.find_one({"user_id": user_id}, {"_id": 0})
-        return sub or {}
+        if not sub:
+            return await create_free_subscription(db, user_id)
+        return await check_trial_expiration(db, sub)
 
     # ── Step 2: Activate the trial for this user ──────────────────────────────
-    trial_end = now + timedelta(days=TRIAL_DURATION_DAYS)
-
     await db.subscriptions.update_one(
         {"user_id": user_id},
         {
@@ -697,4 +703,3 @@ def get_subscription_display(subscription: Dict, lang: str = "en") -> Dict:
                 display["days_label"] = f"{days_remaining} day{'s' if days_remaining != 1 else ''} remaining"
 
     return display
-

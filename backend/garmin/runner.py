@@ -210,7 +210,7 @@ class GccliRunner:
             return
         if "mfa" in low or "two-factor" in low or "verification code" in low:
             raise GccliMfaRequired("Garmin login requires an MFA code")
-        raise GccliError(f"gccli login failed: {full_output[:300]}")
+        raise GccliError("Garmin authentication failed")
 
     # -------------------------------------------------------------- data fetch
     def fetch_activities(
