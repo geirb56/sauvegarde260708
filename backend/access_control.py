@@ -362,16 +362,16 @@ async def get_user_access(db, user_id: str) -> UserAccess:
         )
         return UserAccess(user_id=user_id, tier=Tier.FREE)
 
-    # --- New user — auto-create trial ---
+    # --- New user — auto-create FREE subscription ---
     if subscription is None:
         try:
             # Lazy import to avoid circular dependency
-            from subscription_manager import create_trial_subscription
-            subscription = await create_trial_subscription(db, user_id)
-            logger.info(f"[AccessControl] Auto-created trial for new user '{user_id}'")
+            from subscription_manager import create_free_subscription
+            subscription = await create_free_subscription(db, user_id)
+            logger.info(f"[AccessControl] Auto-created FREE subscription for new user '{user_id}'")
         except Exception as exc:
             logger.error(
-                f"[AccessControl] Failed to create trial for '{user_id}': {exc}. "
+                f"[AccessControl] Failed to create subscription for '{user_id}': {exc}. "
                 "Failing closed — returning FREE."
             )
             return UserAccess(user_id=user_id, tier=Tier.FREE)
