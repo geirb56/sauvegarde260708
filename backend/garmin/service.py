@@ -1,7 +1,7 @@
 """Garmin orchestration service.
 
 Coordinates the provider with MongoDB persistence. Stores ONLY normalized
-business data (connection status + activities). Never stores credentials.
+business data (connection status + activities). Never stores Garmin passwords.
 """
 
 from __future__ import annotations
@@ -11,26 +11,44 @@ import os
 from datetime import datetime, timezone
 from typing import Optional
 
-from .factory import get_provider, active_provider_name
+from .factory import get_provider_for_user, active_provider_name
 from .providers.base import STATUS_CONNECTED, STATUS_MFA_REQUIRED
 from events.stream import emit_activity_created
 
 logger = logging.getLogger(__name__)
 
 
-async def connect(db, user_id: str, simulate_mfa: bool = False) -> dict:
-    provider = get_provider()
-    result = provider.connect(user_id, simulate_mfa=simulate_mfa)
+async def _get_garmin_account(db, user_id: str) -> Optional[str]:
+    """Look up the stored Garmin username for a RunIndex user."""
+    conn = await db.garmin_connections.find_one({"user_id": user_id}, {"_id": 0, "garmin_username": 1})
+    return conn.get("garmin_username") if conn else None
+
+
+async def connect(db, user_id: str, garmin_username: Optional[str] = None,
+                  garmin_password: Optional[str] = None,
+                  simulate_mfa: bool = False) -> dict:
+    provider = get_provider_for_user(user_id, garmin_account=garmin_username)
+    result = provider.connect(
+        user_id,
+        garmin_username=garmin_username,
+        garmin_password=garmin_password,
+        simulate_mfa=simulate_mfa,
+    )
 
     if result.status == STATUS_CONNECTED:
+        update_doc: dict = {
+            "user_id": user_id,
+            "connected": True,
+            "provider": active_provider_name(),
+            "connected_at": datetime.now(timezone.utc).isoformat(),
+        }
+        # Persist the Garmin username so subsequent syncs can build the
+        # per-user provider without re-asking for credentials.
+        if garmin_username:
+            update_doc["garmin_username"] = garmin_username
         await db.garmin_connections.update_one(
             {"user_id": user_id},
-            {"$set": {
-                "user_id": user_id,
-                "connected": True,
-                "provider": active_provider_name(),
-                "connected_at": datetime.now(timezone.utc).isoformat(),
-            }},
+            {"$set": update_doc},
             upsert=True,
         )
         logger.info("[Garmin] connected user=%s provider=%s", user_id, active_provider_name())
@@ -144,7 +162,8 @@ async def deep_sync(db, user_id: str) -> dict:
         }
 
     page_size = int(os.environ.get("GARMIN_PAGE_SIZE", "50"))
-    provider = get_provider()
+    garmin_account = conn.get("garmin_username")
+    provider = get_provider_for_user(user_id, garmin_account=garmin_account)
 
     logger.info("[Garmin] deep sync starting user=%s page_size=%d", user_id, page_size)
     try:
@@ -220,7 +239,8 @@ async def sync(db, user_id: str, since: Optional[str] = None) -> dict:
         logger.info("[Garmin] first sync detected for user=%s — starting deep sync", user_id)
         return await deep_sync(db, user_id)
 
-    provider = get_provider()
+    garmin_account = conn.get("garmin_username")
+    provider = get_provider_for_user(user_id, garmin_account=garmin_account)
 
     # --- Activities ---
     try:
@@ -276,7 +296,8 @@ async def incremental_sync(db, user_id: str) -> dict:
     )
     since = last.get("start_time") if last else None
 
-    provider = get_provider()
+    garmin_account = conn.get("garmin_username")
+    provider = get_provider_for_user(user_id, garmin_account=garmin_account)
     try:
         activities = provider.sync_activities(user_id, since=since)
     except Exception as exc:
