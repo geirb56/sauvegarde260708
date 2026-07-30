@@ -142,8 +142,8 @@ def ensure_logged_in() -> None:
     try:
         runner.login(account, password)
         logger.info("[gccli] startup login successful")
-    except Exception as exc:  # noqa: BLE001 — login failure is non-fatal
-        logger.warning("[gccli] startup login failed: %s", exc)
+    except Exception:  # noqa: BLE001 — login failure is non-fatal
+        logger.warning("[gccli] startup login failed")
 
 
 def bootstrap() -> None:

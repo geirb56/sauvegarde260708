@@ -14,8 +14,18 @@ from typing import Optional
 from .factory import get_provider_for_user, active_provider_name
 from .providers.base import STATUS_CONNECTED, STATUS_MFA_REQUIRED
 from events.stream import emit_activity_created
+from subscription_manager import activate_garmin_trial
 
 logger = logging.getLogger(__name__)
+
+
+def _derive_garmin_identity_from_profile(profile: dict) -> Optional[str]:
+    """Derive canonical Garmin identity from server-side gccli auth status."""
+    email = (profile or {}).get("email")
+    if not email:
+        return None
+    normalized = str(email).strip().lower()
+    return normalized or None
 
 
 async def _get_garmin_account(db, user_id: str) -> Optional[str]:
@@ -51,6 +61,24 @@ async def connect(db, user_id: str, garmin_username: Optional[str] = None,
             {"$set": update_doc},
             upsert=True,
         )
+
+        # Trial identity must come from server-side gccli auth status, never from
+        # frontend-provided username/email.
+        try:
+            profile = provider.get_profile(user_id)
+            garmin_identity = _derive_garmin_identity_from_profile(profile)
+            if garmin_identity:
+                await activate_garmin_trial(db, user_id, garmin_identity)
+            else:
+                logger.warning(
+                    "[GarminTrial] Missing authenticated Garmin email for user=%s; trial not activated",
+                    user_id,
+                )
+        except Exception:
+            logger.warning(
+                "[GarminTrial] Trial activation failed for user=%s",
+                user_id,
+            )
         logger.info("[Garmin] connected user=%s provider=%s", user_id, active_provider_name())
 
     return {"status": result.status, "message": result.detail, "provider": active_provider_name()}
