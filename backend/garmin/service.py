@@ -18,6 +18,24 @@ from events.stream import emit_activity_created
 logger = logging.getLogger(__name__)
 
 
+def get_garmin_identity() -> Optional[str]:
+    """Return the backend-controlled Garmin account identifier.
+
+    In the current mono-account architecture this is the GARMIN_USERNAME env var —
+    the single Garmin account shared by the whole backend. The value is read
+    ONLY from the server environment; the frontend can never supply or override it.
+
+    When the architecture evolves to multi-user Garmin (each RunIndex user has
+    their own Garmin account), this function should return the per-user Garmin
+    profile ID obtained from the provider after authentication (e.g. the
+    numeric Garmin Connect user ID returned by `get_profile()`).
+
+    Returns None if the identity cannot be determined (e.g. env var not set).
+    """
+    identity = os.environ.get("GARMIN_USERNAME", "").strip()
+    return identity if identity else None
+
+
 async def connect(db, user_id: str, simulate_mfa: bool = False) -> dict:
     provider = get_provider()
     result = provider.connect(user_id, simulate_mfa=simulate_mfa)
@@ -36,6 +54,35 @@ async def connect(db, user_id: str, simulate_mfa: bool = False) -> dict:
         logger.info("[Garmin] connected user=%s provider=%s", user_id, active_provider_name())
 
     return {"status": result.status, "message": result.detail, "provider": active_provider_name()}
+
+
+async def check_and_award_trial(db, user_id: str) -> dict:
+    """Check Trial eligibility for a connected user and award it if eligible.
+
+    This must be called ONLY after a successful Garmin connection so that the
+    Garmin identity is backend-verified (sourced from GARMIN_USERNAME env var).
+    The frontend never influences this decision.
+
+    Returns a dict with:
+      - trial_granted: bool
+      - reason: str (if not granted)
+      - subscription: current subscription dict
+    """
+    from subscription_manager import claim_garmin_trial
+
+    garmin_identity = get_garmin_identity()
+    if not garmin_identity:
+        logger.warning(
+            "[GarminTrial] Cannot award trial: GARMIN_USERNAME not set (user=%s)", user_id
+        )
+        return {"trial_granted": False, "reason": "garmin_identity_unavailable", "subscription": None}
+
+    result = await claim_garmin_trial(db, user_id, garmin_identity)
+    return {
+        "trial_granted": result.get("granted", False),
+        "reason": result.get("reason", ""),
+        "subscription": result.get("subscription"),
+    }
 
 
 _ACTIVITY_TYPE_TO_WORKOUT = {
