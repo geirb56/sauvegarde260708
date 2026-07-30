@@ -6,8 +6,7 @@ import { Activity, Loader2, Check, X, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import axios from "axios";
 import { API_BASE } from "@/utils/constants";
-
-// Default user identifier — matches the convention used across RunIndex.
+import { useAuth } from "@/context/AuthContext";
 
 /**
  * TerraConnection — UI card for managing the Terra wearable integration.
@@ -22,6 +21,8 @@ import { API_BASE } from "@/utils/constants";
  *   onStatusChange — optional callback called with the latest status object
  */
 export const TerraConnection = ({ lang, t, onStatusChange }) => {
+  const { user } = useAuth();
+  const userId = user?.id;
   const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);

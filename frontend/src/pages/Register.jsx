@@ -1,20 +1,19 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
-import { useLanguage } from "@/context/LanguageContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Loader2, Eye, EyeOff } from "lucide-react";
 import { toast } from "sonner";
 
-export default function Login() {
-  const { login } = useAuth();
-  const { t } = useLanguage();
+export default function Register() {
+  const { register } = useAuth();
   const navigate = useNavigate();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -22,13 +21,23 @@ export default function Login() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
-    setLoading(true);
 
-    const result = await login(email.trim().toLowerCase(), password);
+    if (password !== confirmPassword) {
+      setError("Passwords do not match.");
+      return;
+    }
+
+    if (password.length < 8) {
+      setError("Password must be at least 8 characters.");
+      return;
+    }
+
+    setLoading(true);
+    const result = await register(email.trim().toLowerCase(), password);
     setLoading(false);
 
     if (result.ok) {
-      toast.success("Welcome back!");
+      toast.success("Account created! Welcome to RunIndex.");
       navigate("/", { replace: true });
     } else {
       setError(result.error);
@@ -40,7 +49,7 @@ export default function Login() {
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
           <CardTitle className="text-2xl font-bold">RunIndex</CardTitle>
-          <p className="text-muted-foreground text-sm mt-1">Sign in to your account</p>
+          <p className="text-muted-foreground text-sm mt-1">Create your account</p>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -68,11 +77,12 @@ export default function Login() {
                 <Input
                   id="password"
                   type={showPassword ? "text" : "password"}
-                  autoComplete="current-password"
+                  autoComplete="new-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
                   required
+                  minLength={8}
                   disabled={loading}
                   className="pr-10"
                 />
@@ -85,6 +95,25 @@ export default function Login() {
                   {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                At least 8 characters, including a digit or symbol.
+              </p>
+            </div>
+
+            <div>
+              <label htmlFor="confirmPassword" className="text-sm font-medium block mb-1">
+                Confirm password
+              </label>
+              <Input
+                id="confirmPassword"
+                type={showPassword ? "text" : "password"}
+                autoComplete="new-password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="••••••••"
+                required
+                disabled={loading}
+              />
             </div>
 
             {error && (
@@ -95,29 +124,19 @@ export default function Login() {
               {loading ? (
                 <>
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Signing in…
+                  Creating account…
                 </>
               ) : (
-                "Sign in"
+                "Create account"
               )}
             </Button>
 
-            <div className="text-center text-sm text-muted-foreground space-y-2">
-              <div>
-                <Link
-                  to="/forgot-password"
-                  className="text-primary hover:underline"
-                >
-                  Forgot your password?
-                </Link>
-              </div>
-              <div>
-                Don&apos;t have an account?{" "}
-                <Link to="/register" className="text-primary hover:underline">
-                  Sign up
-                </Link>
-              </div>
-            </div>
+            <p className="text-center text-sm text-muted-foreground">
+              Already have an account?{" "}
+              <Link to="/login" className="text-primary hover:underline">
+                Sign in
+              </Link>
+            </p>
           </form>
         </CardContent>
       </Card>

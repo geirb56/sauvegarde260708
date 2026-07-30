@@ -75,3 +75,58 @@ Verified: testing_agent iteration_26 (Training paywall gone, backend 8/8 pytest)
 Reported: "l'analyse IA de séance ne s'affiche pas". Root cause: WorkoutDetail.jsx 4 axios calls (/workouts/:id, /coach/workout-analysis, /coach/detailed-analysis, /rag/workout) sent NO X-User-Id header -> protected analysis endpoints returned 403 for the IP/free user -> analysis empty.
 FIX: global axios request interceptor in src/index.js injecting X-User-Id=USER_ID('default') on all /api requests (also prevents recurrence app-wide, per testing_agent recommendation).
 Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders end-to-end, no regressions on sessions/training/progress/subscription. retest_needed=false.
+
+## Pull sauvegarde260708 — PR #16 (subscription architecture) + latent chat bug fix (2026-07-12)
+- Pulled commit 29fce67. Modified server.py, Subscription.jsx, i18n.js + test_subscription_chat.py. All my prior fixes (X-User-Id middleware, trial recognition in /subscription/status, global axios interceptor, trial banner, i18n aliases) were present in the backup (pushed via Save to GitHub) -> no regression.
+- LATENT BUG found & fixed: POST /api/chat/send quota only recognized Stripe status=='active' -> trial users blocked after 10 messages ("reached your limit (Free)"). FIX (server.py ~4976): added elif for trial/early_adopter/premium -> unlimited chat (messages_limit=999, unlimited=True). Also relaxed a test assertion for unlimited plans.
+- Verified: testing_agent iteration_28 -> 100% backend+frontend, 25/25 pytest, chat unlimited on trial, no paywall, no regressions. retest_needed=false.
+- Backlog notes (non-blocking): extract a shared tier->is_unlimited resolver to avoid drift between /subscription/status and chat quota; don't increment messages_used for unlimited tiers; Settings Event Date could use shadcn Calendar instead of native picker.
+
+## 2026-07-27 — Retour à la PR #16 (revert PR #17 Supabase)
+- La PR #17 (auth Supabase obligatoire) a été retirée : insertion automatique corrompue de `user_id = user["id"]` (44 occurrences, dont une dans un corps de classe) faisait planter le backend au démarrage (NameError), + config Supabase manquante + risque de perte des données "default".
+- Décision utilisateur : revenir à la PR #16.
+- Action : re-sync du commit `29fce67` (PR #16) depuis GitHub dans /app, en préservant .env, .git, .emergent, session Garmin (.gccli_home), binaire gccli (bin/), node_modules et /app/memory. Fichiers Supabase supprimés (backend/auth, frontend supabase.js/AuthContext/Login/Signup). package.json sans @supabase.
+- Vérifié : backend démarre proprement, session Garmin retrouvée, 141 workouts, run-index history 12m (12 points, current 352), abonnement trial 29 j, Dashboard s'affiche correctement (screenshot).
+- auth_user (PR16) = auth flexible avec fallback "default" (non-bloquant).
+
+## 2026-07-27 — Pull branche PR16Bis
+- Synchronisé la branche PR16Bis (head 4d96cc3, PR #19) : retire le gate Supabase cassé, ajoute durcissement (demo_mode fail-fast en prod, vérif signature webhook Stripe via services/stripe_webhook_security.py, CORS strict en prod). yarn.lock régénéré.
+- Vérifié : backend démarre, session Garmin OK, 141 workouts, run-index history OK, sub trial 29j, Dashboard rend correctement, aucun gate de login.
+- ⚠️ 2 bugs détectés dans la branche (non corrigés, en attente décision user):
+  1. /api/chat/send (server.py:5014) ne reconnaît que status=="active" → ignore trial/early_adopter/premium → limite Free imposée aux users en essai (régression vs PR16).
+  2. /api/training/today (server.py:3549) crash 500 quand aucun plan (generate_dynamic_training_plan renvoie None, `plan.get` sur None).
+
+## 2026-07-27 — Pull PR16Bis (PR #22, head 25835ec)
+- Chat IA : trial → tier "pro" (illimité). VÉRIFIÉ OK (réponse coach retournée).
+- ⚠️ training/today (server.py:3556) TOUJOURS cassé (500) : garde-fou incomplet, `plan["plan"]` peut être None. Fix restant: `sessions = (plan.get("plan") or {}).get("sessions", [])`. Non corrigé upstream.
+
+## 2026-07-27 — Correctif local training/today (patch ciblé)
+- server.py:3556 : `plan.get("plan", {})` -> `(plan.get("plan") or {})`. Corrige le crash 500 quand `plan["plan"]` est None (cycle upcoming/sans plan actif).
+- VÉRIFIÉ via curl (URL externe) :
+  - CASE 1 (aucun plan actif / upcoming) -> HTTP 200, réponse gracieuse, aucun traceback.
+  - CASE 2 (plan actif, 7 séances) -> HTTP 200, status "success" avec planned_session + adaptive_session. (testé via objectif temporaire puis état restauré à l'identique).
+- À COMMITTER côté GitHub via "Save to Github" (message: "Fix training today null plan guard") sinon écrasé au prochain pull.
+
+## 2026-07-28 — Pull PR22 (auth JWT multi-utilisateurs, head 8155aa1)
+- Ajoute module backend auth/ (JWT custom: register/login/me/forgot/reset), frontend Login/Register/ForgotPassword/ResetPassword + AuthContext, App.js gated (login obligatoire). Interceptor axios envoie Bearer JWT (plus de X-User-Id).
+- backend auth_user: valide JWT (sub=UUID), garde fallback X-User-Id/query param (legacy Step2), sinon "unauthenticated".
+- JWT_SECRET_KEY généré et ajouté à backend/.env. yarn.lock régénéré. Fix training/today présent upstream aussi.
+- VÉRIFIÉ: register/login/me OK, login screen rendu.
+- ⚠️ MIGRATION INCOMPLÈTE (Step 2 pending par design):
+  - /subscription/info et d'autres endpoints gardent user_id="default" en dur -> ignorent le JWT.
+  - /workouts utilise l'UUID JWT -> nouvel user bloqué "free" (pas de trial auto-créé).
+  - 141 activités restent sous "default"; nouvel user voit une app vide.
+  - Frontend n'envoie plus X-User-Id -> le propriétaire ne voit plus ses données via l'UI sans migration.
+- Compte test: testrunner@runindex.app / Test1234! (voir test_credentials.md).
+
+## 2026-07-28 — Pull PR22 mis à jour (PR #25 "ÉTAPE 2/3", head 72a77bb)
+- auth_user exige désormais un JWT (fallbacks X-User-Id/query supprimés -> 401/403). Trial 30j auto-créé à l'inscription (auth/router.py). /subscription/info et handlers migrés vers JWT.
+- VÉRIFIÉ: register->trial(29j, UUID), /subscription/info JWT OK, no-auth=403, X-User-Id=default=401.
+- ⚠️ BUG RESTANT (dernier blocage): le middleware d'abonnement (server.py:397) utilise get_user_id_from_request (server.py:284) qui lit query param -> header X-User-Id -> IP, PAS le JWT. Donc /workouts, /training/*, /coach/* (routes protégées) sont bloquées 403 pour un user JWT-only (middleware résout l'IP au lieu de l'UUID).
+  - Preuve: /workouts JWT seul=403 ; /workouts?user_id=<UUID> JWT=200 [].
+  - FIX upstream: dans get_user_id_from_request, décoder le Bearer JWT en premier (comme auth_user) et retourner payload['sub'] avant les fallbacks query/header/IP.
+- Comptes test créés: isotest_*@runindex.app / Test1234! (jetables).
+
+## 2026-07-28 — Pull PR22 (PR #26, head 987dc26)
+- PR #26 corrige le middleware: get_user_id_from_request décode le JWT en premier (fix recommandé appliqué upstream). Backend multi-user JWT VÉRIFIÉ 100%: workouts JWT=200[], training/today=200, subscription/info=trial+UUID, no-auth=403, chat trial illimité=reply.
+- CORRIGÉ EN LOCAL: Subscription.jsx chaînes non terminées lignes 186 ET 198 (guillemets manquants) -> build frontend réparé. Scan de tous les .jsx/.js: aucun autre fichier affecté. VÉRIFIÉ: register via UI -> dashboard (compte isolé vide, "Connect Garmin", séance du jour), routes protégées OK. À COMMITTER sur GitHub (Save to Github).

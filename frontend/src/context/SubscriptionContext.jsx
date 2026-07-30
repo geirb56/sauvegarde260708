@@ -3,55 +3,56 @@ import axios from "axios";
 import { useLanguage } from "@/context/LanguageContext";
 import { useAuth } from "@/context/AuthContext";
 import { Loader2 } from "lucide-react";
+import { API_BASE_URL } from "@/config";
 
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+const API = API_BASE_URL;
 
 const SubscriptionContext = createContext(null);
 
 export function SubscriptionProvider({ children }) {
   const { lang } = useLanguage();
-  const { isAuthenticated, getToken } = useAuth();
+  const { user } = useAuth();
+  const userId = user?.id;
   const [subscription, setSubscription] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
   const fetchSubscription = useCallback(async () => {
-    if (!isAuthenticated) {
+    if (!userId) {
       setSubscription(null);
       setLoading(false);
       return;
     }
-    const token = getToken();
     try {
-      const res = await axios.get(`${API}/subscription/info?language=${lang}`, {
-        headers: token ? { Authorization: `Bearer ${token}`} : {},
-      });
+      const res = await axios.get(`${API}/subscription/info?language=${lang}`);
       setSubscription(res.data);
       setError(null);
     } catch (err) {
       console.error("Error fetching subscription:", err);
       setError(err);
+      // Fail-closed on error: no premium access granted until backend confirms status.
+      // Never default to trial/premium — the frontend MUST NOT decide access.
       setSubscription({
-        status: "trial",
+        status: "free",
         features: {
-          training_plan: true,
-          plan_adaptation: true,
-          session_analysis: true,
-          sync_enabled: true,
-          api_access: true,
-          llm_access: true,
-          full_access: true
+          training_plan: false,
+          plan_adaptation: false,
+          session_analysis: false,
+          sync_enabled: false,
+          api_access: false,
+          llm_access: false,
+          full_access: false
         },
         display: {
-          label: lang === "fr" ? "Essai gratuit" : lang === "es" ? "Prueba gratuita" : "Free trial",
-          badge: lang === "fr" ? "ESSAI" : lang === "es" ? "PRUEBA" : "TRIAL",
-          badge_color: "blue"
+          label: lang === "fr" ? "Accès limité" : lang === "es" ? "Acceso limitado" : "Limited access",
+          badge: lang === "fr" ? "LIMITÉ" : lang === "es" ? "LIMITADO" : "LIMITED",
+          badge_color: "gray"
         }
       });
     } finally {
       setLoading(false);
     }
-  }, [lang, isAuthenticated, getToken]);
+  }, [lang, userId]);
 
   useEffect(() => {
     fetchSubscription();
@@ -80,16 +81,20 @@ export function SubscriptionProvider({ children }) {
     loading,
     error,
     refreshSubscription,
+    // Status helpers
     isActive,
     isTrial,
     isEarlyAdopter,
     isPremium,
     isFree,
+    // Feature helpers
     hasFeature,
     canAccessPlan: hasFeature("training_plan"),
     canAccessCoach: hasFeature("llm_access"),
     canSync: hasFeature("sync_enabled"),
+    // Trial info
     trialDaysRemaining,
+    // Display info
     statusLabel: subscription?.display?.label,
     statusBadge: subscription?.display?.badge,
     statusBadgeColor: subscription?.display?.badge_color
@@ -120,6 +125,7 @@ export function withSubscription(Component, requiredFeature = "full_access") {
     }
     
     if (isFree || !hasFeature(requiredFeature)) {
+      // Import dynamique du Paywall
       const Paywall = require("@/components/Paywall").default;
       return <Paywall />;
     }

@@ -14,7 +14,6 @@ import {
   Zap
 } from "lucide-react";
 import { useLanguage } from "@/context/LanguageContext";
-import { useAuth } from "@/context/AuthContext";
 
 import { API_BASE_URL } from "@/config";
 const API = API_BASE_URL;
@@ -24,10 +23,8 @@ const API = API_BASE_URL;
  * Pas de LLM (ni local, ni cloud)
  * Réponses rapides (<1s), déterministes, ultra-naturelles
  */
-const ChatCoach = ({ isOpen, onClose }) => {
+const ChatCoach = ({ isOpen, onClose, userId = "default" }) => {
   const { t } = useLanguage();
-  const { user } = useAuth();
-  const userId = user?.id;
   const navigate = useNavigate();
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
@@ -48,7 +45,7 @@ const ChatCoach = ({ isOpen, onClose }) => {
 
   const checkSubscription = async () => {
     try {
-      const res = await axios.get(`${API}/subscription/info`);
+      const res = await axios.get(`${API}/subscription/status`);
       setSubscriptionStatus(res.data);
     } catch (err) {
       console.error("Error checking subscription:", err);
@@ -92,7 +89,6 @@ const ChatCoach = ({ isOpen, onClose }) => {
       // Send to Python backend (100% local, no LLM)
       const res = await axios.post(`${API}/chat/send`, {
         message: userMessage,
-        user_id: userId,
         use_local_llm: false,
         language: lang
       });

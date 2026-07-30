@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { useAuth } from "@/context/AuthContext";
 import { Link } from "react-router-dom";
 import axios from "axios";
 import { useLanguage } from "@/context/LanguageContext";
@@ -37,6 +36,7 @@ import { BrandSplash } from "@/components/LoadingSpinner";
 import { toast } from "sonner";
 
 import { API_BASE_URL } from "@/config";
+import { useAuth } from "@/context/AuthContext";
 const API = API_BASE_URL;
 
 // ─── Run Recommendation thresholds ──────────────────────────────────────────
@@ -342,6 +342,7 @@ function MiniLineChart({ data = [] }) {
 
 export default function Dashboard() {
   const { user } = useAuth();
+  const userId = user?.id;
   const [insight, setInsight] = useState(null);
   const [todaySession, setTodaySession] = useState(null);
   const [trainingMetrics, setTrainingMetrics] = useState(null);
@@ -371,8 +372,8 @@ export default function Dashboard() {
       const [insightRes, ragRes, todayRes, metricsRes] = await Promise.all([
         axios.get(`${API}/dashboard/insight?language=${lang}`),
         axios.get(`${API}/rag/dashboard`).catch(() => ({ data: null })),
-        axios.get(`${API}/training/today`).catch(() => ({ data: null })),
-        axios.get(`${API}/training/metrics`).catch(() => ({ data: null }))
+        axios.get(`${API}/training/today`, { headers: { "X-User-Id": "default" } }).catch(() => ({ data: null })),
+        axios.get(`${API}/training/metrics`, { headers: { "X-User-Id": "default" } }).catch(() => ({ data: null }))
       ]);
       setInsight(insightRes.data);
       if (ragRes.data) {
@@ -401,7 +402,8 @@ export default function Dashboard() {
         `${API}/training/feedback`,
         null,
         {
-          params: { date: today, workout_id: day, status }
+          params: { date: today, workout_id: day, status },
+          headers: { "X-User-Id": "default" }
         }
       );
 
@@ -409,7 +411,7 @@ export default function Dashboard() {
       toast.success(t("trainingPlanExtended.feedbackSaved") || "Feedback enregistré");
       
       // Refresh today's session
-      const todayRes = await axios.get(`${API}/training/today`);
+      const todayRes = await axios.get(`${API}/training/today`, { headers: { "X-User-Id": "default" } });
       if (todayRes.data?.status === "success") {
         setTodaySession(todayRes.data);
       }

@@ -1,5 +1,4 @@
 import { useState, useEffect } from "react";
-import { useAuth } from "@/context/AuthContext";
 import axios from "axios";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -17,6 +16,7 @@ import {
 import { toast } from "sonner";
 
 import { API_BASE_URL } from "@/config";
+import { useAuth } from "@/context/AuthContext";
 const API = API_BASE_URL;
 
 const statusConfig = {
@@ -50,6 +50,7 @@ const getSessionIcon = (type) => {
 
 export default function Guidance() {
   const { user } = useAuth();
+  const userId = user?.id;
   const [guidance, setGuidance] = useState(null);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
@@ -74,8 +75,7 @@ export default function Guidance() {
     setGenerating(true);
     try {
       const res = await axios.post(`${API}/coach/guidance`, {
-        language: lang,
-        user_id: user?.id
+        language: lang
       });
       setGuidance(res.data);
       toast.success(t("guidanceExtended.generated"));

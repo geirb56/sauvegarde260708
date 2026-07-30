@@ -494,11 +494,10 @@ async def computeTrainingLoad(user_id: str, db) -> dict:
     cutoff = datetime.now(timezone.utc) - timedelta(days=28)
     cutoff_iso = cutoff.isoformat()
 
-    # Fetch last 28 days of workouts for the user (include workouts with no user_id for
-    # backward-compatible imported workouts matching the existing workouts_query pattern).
+    # Fetch last 28 days of workouts for the user.
     workouts = await db.workouts.find(
         {
-            "$or": [{"user_id": user_id}, {"user_id": None}, {"user_id": {"$exists": False}}],
+            "user_id": user_id,
             "date": {"$gte": cutoff_iso},
         },
         {"date": 1, "duration_minutes": 1, "distance_km": 1, "_id": 0},

@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import { useAuth } from "@/context/AuthContext";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import { Card, CardContent } from "@/components/ui/card";
@@ -8,6 +7,7 @@ import { Loader2, Check, ShieldAlert, Activity } from "lucide-react";
 import { toast } from "sonner";
 
 import { API_BASE_URL } from "@/config";
+import { useAuth } from "@/context/AuthContext";
 const API = API_BASE_URL;
 
 const STEPS = [
@@ -52,8 +52,9 @@ function OptionGrid({ options, value, onSelect, testIdPrefix }) {
 }
 
 export default function Onboarding() {
+  const { user } = useAuth();
+  const userId = user?.id;
   const navigate = useNavigate();
-  const { getToken } = useAuth();
   const [stepIndex, setStepIndex] = useState(0);
   const [fitnessLevel, setFitnessLevel] = useState("");
   const [goal, setGoal] = useState("");
@@ -163,21 +164,14 @@ export default function Onboarding() {
 
     setSaving(true);
     try {
-      const token = getToken();
-      const authHeaders = token ? { Authorization: `Bearer ${token}`} : {};
-      // Save onboarding data and create trial subscription
-      await axios.post(`${API}/user/onboarding`, {
-        fitness_level: fitnessLevel,
-        goal,
-        frequency,
-        device,
-        target,
-      }, { headers: authHeaders });
-      // Also set the training goal/plan
-      await axios.post(`${API}/training/set-goal?goal=${targetMap[target]}`, {}, { headers: authHeaders });
-      await axios.post(`${API}/training/refresh?sessions=${sessionsMap[frequency]}`, {}, { headers: authHeaders });
+      await axios.post(`${API}/training/set-goal?goal=${targetMap[target]}`, {}, {
+        headers: { "X-User-Id": userId },
+      });
+      await axios.post(`${API}/training/refresh?sessions=${sessionsMap[frequency]}`, {}, {
+        headers: { "X-User-Id": userId },
+      });
       toast.success("Personalized plan updated");
-      navigate("/");
+      navigate("/training");
     } catch (err) {
       toast.error("Unable to save onboarding choices");
     } finally {

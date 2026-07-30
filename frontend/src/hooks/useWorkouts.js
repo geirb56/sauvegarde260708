@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import axios from "axios";
 import { API_BASE } from "@/utils/constants";
+import { useAuth } from "@/context/AuthContext";
 
 export const useWorkouts = () => {
   const [workouts, setWorkouts] = useState([]);
@@ -83,6 +84,8 @@ export const useDashboardData = (lang) => {
 };
 
 export const useCoachHistory = () => {
+  const { user } = useAuth();
+  const userId = user?.id;
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);

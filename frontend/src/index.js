@@ -5,19 +5,17 @@ import "@/index.css";
 import "@/styles/theme-modern.css";
 import App from "@/App";
 import { API_BASE_URL } from "@/config";
-import { supabase } from "@/lib/supabase";
 
-// Global axios interceptor: attach the Supabase JWT token as Authorization header.
-// The backend validates this token server-side to identify the user.
-// X-User-Id headers and ?user_id= query params are no longer used.
-axios.interceptors.request.use(async (config) => {
+// Global axios interceptor: attach JWT ****** to every API request so
+// the backend can authenticate the current user on all endpoints.
+axios.interceptors.request.use((config) => {
   const url = config.url || "";
   if (url.startsWith(API_BASE_URL) || url.includes("/api/")) {
     config.headers = config.headers || {};
     if (!config.headers["Authorization"]) {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session?.access_token) {
-        config.headers["Authorization"] = `Bearer ${session?.access_token}`;
+      const token = localStorage.getItem("access_token");
+      if (token) {
+        config.headers["Authorization"] = "Bearer " + token;
       }
     }
   }

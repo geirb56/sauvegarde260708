@@ -1,5 +1,4 @@
 import { useState, useEffect } from "react";
-import { useAuth } from "@/context/AuthContext";
 import axios from "axios";
 import { Card, CardContent } from "@/components/ui/card";
 import { useLanguage } from "@/context/LanguageContext";
@@ -34,6 +33,7 @@ import {
 import Paywall from "@/components/Paywall";
 
 import { API_BASE_URL } from "@/config";
+import { useAuth } from "@/context/AuthContext";
 const API = API_BASE_URL;
 
 const formatDuration = (minutes) => {
@@ -63,6 +63,7 @@ const langToLocale = (lang) => {
 
 export default function Progress() {
   const { user } = useAuth();
+  const userId = user?.id;
   const [stats, setStats] = useState(null);
   const [predictions, setPredictions] = useState(null);
   const [fullCycle, setFullCycle] = useState(null);
@@ -81,15 +82,15 @@ export default function Progress() {
       try {
         const [statsRes, predictionsRes, cycleRes, vmaHistoryRes] = await Promise.all([
           axios.get(`${API}/stats`),
-          axios.get(`${API}/training/race-predictions`).catch(() => ({ data: null })),
-          axios.get(`${API}/training/full-cycle`).catch(() => ({ data: null })),
-          axios.get(`${API}/training/vma-history`).catch(() => ({ data: null }))
+          axios.get(`${API}/training/race-predictions`, { headers: { "X-User-Id": userId } }).catch(() => ({ data: null })),
+          axios.get(`${API}/training/full-cycle`, { headers: { "X-User-Id": userId } }).catch(() => ({ data: null })),
+          axios.get(`${API}/training/vma-history`, { headers: { "X-User-Id": userId } }).catch(() => ({ data: null }))
         ]);
         setStats(statsRes.data);
 
         // Garmin daily health metrics (HRV / resting HR / sleep)
         try {
-          const garminRes = await axios.get(`${API}/garmin/daily-metrics&days=7`);
+          const garminRes = await axios.get(`${API}/garmin/daily-metrics?days=7`);
           if (garminRes.data?.count > 0) setGarminHealth(garminRes.data);
         } catch {
           /* Garmin not connected — section stays hidden */
@@ -109,14 +110,15 @@ export default function Progress() {
       }
     };
     fetchData();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch RunIndex history when period changes
   useEffect(() => {
     const fetchRunIndexHistory = async () => {
       try {
         const res = await axios.get(
-          `${API}/run-index/history?period=${runIndexPeriod}&language=${lang}`
+          `${API}/run-index/history?period=${runIndexPeriod}&language=${lang}`,
+          { headers: { "X-User-Id": userId } }
         );
         setRunIndexHistory(res.data);
       } catch {
@@ -124,7 +126,7 @@ export default function Progress() {
       }
     };
     fetchRunIndexHistory();
-  }, [runIndexPeriod, lang]);
+  }, [runIndexPeriod, lang]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (loading || subLoading) {
     return (

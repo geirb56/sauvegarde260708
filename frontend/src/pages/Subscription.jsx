@@ -1,5 +1,4 @@
 import { useState, useEffect } from "react";
-import { useAuth } from "@/context/AuthContext";
 import { useSearchParams } from "react-router-dom";
 import axios from "axios";
 import { Card, CardContent } from "@/components/ui/card";
@@ -27,6 +26,8 @@ import {
 import { toast } from "sonner";
 
 import { API_BASE_URL } from "@/config";
+import { useAuth } from "@/context/AuthContext";
+import { useSubscription } from "@/context/SubscriptionContext";
 const API = API_BASE_URL;
 
 // ─── Static data ──────────────────────────────────────────────────────────────
@@ -134,7 +135,7 @@ const FAQ_ITEMS = [
   },
   {
     q: "Comment fonctionne l'essai gratuit ?",
-    a: "Vous bénéficiez de 30 jours d'accès Premium complet. À l'issue de l'essai, vous passez automatiquement sur le plan Gratuit sauf si vous choisissez de continuer en Premium.",
+    a: "L'essai Premium de 30 jours est débloqué uniquement après une connexion Garmin vérifiée côté serveur. Une même identité Garmin ne peut obtenir cet essai qu'une seule fois.",
   },
   {
     q: "Le coach IA remplace-t-il un entraîneur ?",
@@ -151,7 +152,9 @@ const PREMIUM_TIERS = new Set(["premium", "starter", "confort", "pro", "early_ad
 
 export default function Subscription() {
   const { user } = useAuth();
+  const userId = user?.id;
   const { t } = useLanguage();
+  const { refreshSubscription } = useSubscription();
   const [searchParams, setSearchParams] = useSearchParams();
   const [currentTier, setCurrentTier] = useState("free");
   const [loading, setLoading] = useState(true);
@@ -165,13 +168,10 @@ export default function Subscription() {
 
     loadStatus();
 
+    // Clean up any stale Stripe-era query params
     const sessionId = searchParams.get("session_id");
     const subParam = searchParams.get("subscription");
-
-    if (sessionId && subParam === "success") {
-      handleSuccess(sessionId);
-    } else if (subParam === "cancelled") {
-      toast.info(t("subscription.paymentCancelled"));
+    if (sessionId || subParam) {
       setSearchParams({});
     }
 
@@ -191,22 +191,56 @@ export default function Subscription() {
     }
   };
 
-  const handleSuccess = async () => {
-    // Paddle redirects back to /subscription?paddle=success
-    toast.success("Abonnement Early Adopter activé !");
-    loadStatus();
-    setSearchParams({});
-  };
-
-  // Paddle checkout for Early Adopter 4.99€/month
+  // ── Paddle checkout ────────────────────────────────────────────────────
+  // Security: the backend creates the transaction, the frontend only opens
+  // the overlay. Premium is activated server-side after the Paddle webhook.
   const handleSubscribe = async () => {
     setSubscribing(true);
     try {
-      const res = await axios.post(API + "/subscription/paddle/checkout");
-      window.location.href = res.data.checkout_url;
+      // 1. Create Paddle transaction on the backend (identity from JWT)
+      const res = await axios.post(API + "/subscription/paddle/checkout", {});
+      const { transaction_id, paddle_environment, paddle_client_token } = res.data;
+
+      if (!transaction_id || !paddle_client_token) {
+        throw new Error("Invalid checkout configuration");
+      }
+
+      // 2. Initialize Paddle.js
+      const { initializePaddle } = await import("@paddle/paddle-js");
+      const paddle = await initializePaddle({
+        environment: paddle_environment === "production" ? "production" : "sandbox",
+        token: paddle_client_token,
+      });
+
+      if (!paddle) throw new Error("Failed to initialize Paddle.js");
+
+      // 3. Open checkout overlay
+      paddle.Checkout.open({
+        transactionId: transaction_id,
+        settings: {
+          displayMode: "overlay",
+          theme: "dark",
+        },
+        events: {
+          onPaymentSuccess: () => {
+            toast.success(t("subscription.subscriptionActivated") || "Premium activé !");
+            refreshSubscription();
+            loadStatus();
+            setSubscribing(false);
+          },
+          onCheckoutError: (err) => {
+            console.error("[Subscription] Paddle checkout error:", err);
+            toast.error(t("common.error") || "Checkout failed");
+            setSubscribing(false);
+          },
+          onCheckoutClose: () => {
+            setSubscribing(false);
+          },
+        },
+      });
     } catch (e) {
-      console.error(e);
-      toast.error(t("common.error"));
+      console.error("[Subscription] Checkout error:", e);
+      toast.error(t("common.error") || "Could not start checkout");
       setSubscribing(false);
     }
   };
@@ -681,11 +715,11 @@ export default function Subscription() {
         <div className="flex flex-wrap items-center justify-center gap-6 mt-6 text-xs text-muted-foreground">
           <span className="flex items-center gap-1">
             <Shield className="w-3 h-3" />
-            Paiement sécurisé Stripe
+            Paiement sécurisé Paddle
           </span>
           <span className="flex items-center gap-1">
             <Check className="w-3 h-3" />
-            30 jours gratuits
+            Essai Garmin requis
           </span>
         </div>
       </section>

@@ -1,5 +1,4 @@
 import { useState, useEffect } from "react";
-import { useAuth } from "@/context/AuthContext";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import axios from "axios";
 import { Card, CardContent } from "@/components/ui/card";
@@ -14,6 +13,7 @@ import { Globe, Info, Loader2, Check, Target, Calendar, Trash2, Clock, Route, Cr
 import { toast } from "sonner";
 
 import { API_BASE_URL } from "@/config";
+import { useAuth } from "@/context/AuthContext";
 const API = API_BASE_URL;
 
 const DISTANCE_OPTIONS = ["5k", "10k", "semi", "marathon", "ultra"];
@@ -37,6 +37,7 @@ const SESSIONS_OPTIONS = [3, 4, 5, 6];
 
 export default function Settings() {
   const { user } = useAuth();
+  const userId = user?.id;
   const { t, lang, setLang } = useLanguage();
   const { 
     subscription, 
@@ -71,34 +72,33 @@ export default function Settings() {
 
   useEffect(() => {
     loadGoal();
-    loadPremiumStatus();
     loadTrainingPlan();
-    
-    // Handle Paddle callback
-    const paddleParam = searchParams.get("paddle");
-    if (paddleParam === "success") {
-      toast.success("🎉 Abonnement Early Adopter activé !");
-      setSearchParams({});
-    } else if (paddleParam === "cancelled") {
-      toast.info(t("settingsExtended.paymentCancelled"));
+
+    // Clean up any stale Stripe-era query params that may linger in the URL
+    const sessionId = searchParams.get("session_id");
+    const premiumParam = searchParams.get("premium");
+    const subscriptionParam = searchParams.get("subscription");
+
+    if (sessionId || premiumParam || subscriptionParam) {
+      // If a payment was cancelled show a toast; otherwise silently clean up
+      if (premiumParam === "cancelled" || subscriptionParam === "cancelled") {
+        toast.info(t("settingsExtended.paymentCancelled"));
+      }
       setSearchParams({});
     }
   }, [searchParams]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const loadPremiumStatus = async () => {
-    // Subscription status is managed by SubscriptionContext
-  };
-
   const loadTrainingPlan = async () => {
     try {
-      const res = await axios.get(`${API}/training/full-cycle`);
+      const res = await axios.get(`${API}/training/full-cycle`, {
+        headers: { "X-User-Id": userId }
+      });
       if (res.data) {
         setTrainingGoal(res.data.goal || "SEMI");
         setSessionsPerWeek(res.data.sessions_per_week || 4);
       }
     } catch (error) {
       console.error("Failed to load training plan:", error);
-      // Defaults
       setTrainingGoal("SEMI");
       setSessionsPerWeek(4);
     } finally {
@@ -106,10 +106,62 @@ export default function Settings() {
     }
   };
 
+  // ── Paddle checkout ──────────────────────────────────────────────────────
+  // The frontend NEVER decides that the user is Premium.
+  // Premium is activated server-side after Paddle sends a verified webhook.
+  // After the overlay closes with success, we refresh the subscription state.
+  const handleSubscribe = async () => {
+    setProcessingPayment(true);
+    try {
+      // 1. Create a Paddle transaction (identity from JWT, server-side)
+      const res = await axios.post(`${API}/subscription/paddle/checkout`, {});
+      const { transaction_id, paddle_environment, paddle_client_token } = res.data;
+
+      if (!transaction_id || !paddle_client_token) {
+        throw new Error("Invalid checkout configuration");
+      }
+
+      // 2. Initialize Paddle.js
+      const { initializePaddle } = await import("@paddle/paddle-js");
+      const paddle = await initializePaddle({
+        environment: paddle_environment === "production" ? "production" : "sandbox",
+        token: paddle_client_token,
+      });
+      if (!paddle) throw new Error("Failed to initialize Paddle.js");
+
+      // 3. Open Paddle checkout overlay
+      paddle.Checkout.open({
+        transactionId: transaction_id,
+        settings: { displayMode: "overlay", theme: "dark" },
+        events: {
+          onPaymentSuccess: () => {
+            toast.success(`🎉 ${t("settingsExtended.premiumActivated") || "Premium activé !"}`);
+            refreshSubscription();
+            setProcessingPayment(false);
+          },
+          onCheckoutError: (err) => {
+            console.error("[Settings] Paddle checkout error:", err);
+            toast.error(t("settingsExtended.paymentError") || "Checkout failed");
+            setProcessingPayment(false);
+          },
+          onCheckoutClose: () => {
+            setProcessingPayment(false);
+          },
+        },
+      });
+    } catch (error) {
+      console.error("[Settings] Checkout error:", error);
+      toast.error(t("settingsExtended.paymentError") || "Could not start checkout");
+      setProcessingPayment(false);
+    }
+  };
+
   const handleSetTrainingGoal = async (goal) => {
     setUpdatingTrainingPlan(true);
     try {
-      await axios.post(`${API}/training/set-goal?goal=${goal}`, {});
+      await axios.post(`${API}/training/set-goal?goal=${goal}`, {}, {
+        headers: { "X-User-Id": userId }
+      });
       setTrainingGoal(goal);
       toast.success(t("settingsExtended.goalSetWithName").replace("{goal}", goal));
     } catch (err) {
@@ -122,28 +174,15 @@ export default function Settings() {
   const handleSetSessionsPerWeek = async (sessions) => {
     setUpdatingTrainingPlan(true);
     try {
-      await axios.post(`${API}/training/refresh?sessions=${sessions}`, {});
+      await axios.post(`${API}/training/refresh?sessions=${sessions}`, {}, {
+        headers: { "X-User-Id": userId }
+      });
       setSessionsPerWeek(sessions);
       toast.success(`${sessions} ${t("settingsExtended.sessionsPerWeekSet")}`);
     } catch (err) {
       toast.error(t("common.error"));
     } finally {
       setUpdatingTrainingPlan(false);
-    }
-  };
-
-  const handleSubscribe = async () => {
-    try {
-      const res = await axios.post(`${API}/subscription/paddle/checkout`, {
-        origin_url: window.location.origin
-      }, {
-        params: {}
-      });
-      
-      window.location.href = res.data.checkout_url;
-    } catch (error) {
-      console.error("Checkout error:", error);
-      toast.error(t("settingsExtended.paymentError"));
     }
   };
 
@@ -790,28 +829,7 @@ export default function Settings() {
                     </ul>
                     
                     <Button
-                      onClick={async () => {
-                        setProcessingPayment(true);
-                        try {
-                          // Créer une session Stripe Checkout
-                          const res = await axios.post(
-                            `${API}/subscription/early-adopter/checkout&origin_url=${encodeURIComponent(window.location.origin)}`
-                          );
-                          
-                          if (res.data?.checkout_url) {
-                            // Rediriger vers Stripe Checkout
-                            window.location.href = res.data.checkout_url;
-                          } else {
-                            toast.error(t("settingsExtended.paymentError"));
-                            setProcessingPayment(false);
-                          }
-                        } catch (err) {
-                          console.error("Checkout error:", err);
-                          toast.error(t("settingsExtended.paymentError"));
-                          setProcessingPayment(false);
-                        }
-                        // Note: pas de finally car on redirige vers Stripe
-                      }}
+                      onClick={handleSubscribe}
                       disabled={processingPayment}
                       data-testid="subscribe-early-adopter"
                       className="w-full bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white rounded-lg uppercase font-bold tracking-wider text-sm h-12 flex items-center justify-center gap-2"

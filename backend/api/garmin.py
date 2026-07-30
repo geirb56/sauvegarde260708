@@ -11,45 +11,12 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel
-
-from garmin import service as garmin_service
-from garmin import backfill as garmin_backfill
-from services.run_index_history import backfill_connected_users_run_index_history, backfill_run_index_history
-from jobs.queue import enqueue_sync
-from jobs.health import queue_health
-from jobs.redis_client import get_redis
-from feed import realtime_cache
-from feed.sse import event_stream
-
-import logging
-import time
-logger = logging.getLogger(__name__)
-
-ACTIVE_SIGNAL_PREFIX = "runindex:active_signal:"
-ACTIVE_SIGNAL_TTL = 45 * 60  # 45 min — matches scheduler ACTIVE window
-
-garmin_router = APIRouter(prefix="/garmin", tags=["garmin"])
-"""Garmin API router (HTTP layer).
-
-Prefix /api is added when included by server.py (api_router has prefix /api).
-Final routes: /api/garmin/*
-
-NON-NEGOTIABLE: no Garmin password is ever accepted from the client.
-The connect endpoint takes only a user_id (auth abstracted backend-side).
-"""
-
-from __future__ import annotations
-
-from typing import Optional
-
 from fastapi import APIRouter, Request, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
+from auth.supabase_jwt import extract_user_id as extract_jwt_user_id
 from garmin import service as garmin_service
 from garmin import backfill as garmin_backfill
 from services.run_index_history import backfill_connected_users_run_index_history, backfill_run_index_history
@@ -58,7 +25,6 @@ from jobs.health import queue_health
 from jobs.redis_client import get_redis
 from feed import realtime_cache
 from feed.sse import event_stream
-from auth.supabase_jwt import extract_user_id as extract_jwt_user_id
 
 import logging
 import time

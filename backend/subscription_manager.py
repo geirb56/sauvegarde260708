@@ -2,17 +2,23 @@
 Subscription Management System
 ==============================
 
-User statuses:
-- free: Limited access (no API, no LLM, no sync)
-- trial: 30-day free trial, granted only after Garmin identity verified (full access)
-- early_adopter: €4.99/month for life (full access)
-- premium: Paid subscription via Stripe (full access, alias for early_adopter perms)
+RunIndex uses three commercial tiers:
 
-Trial rules:
-- 1 Garmin account = 1 Trial, enforced via garmin_trial_registry collection
-- New users default to FREE; Trial is only granted after backend-verified Garmin identity
-- The decision is always made server-side; the frontend never self-assigns a trial
+    FREE    — default for new users and for expired/unpaid accounts.
+              Limited to free features only.
 
+    TRIAL   — 30-day free trial granted only after a backend-verified Garmin
+              identity claim. One Garmin identity can unlock at most one trial.
+
+    PREMIUM — Active paid subscription via Paddle (or Stripe, legacy).
+              Full Premium access while subscription is valid.
+
+NOTE: Legacy statuses (early_adopter, active, starter, confort, pro) are
+      transparently mapped to PREMIUM by access_control.py. They should not
+      appear in new subscription documents.
+
+All access decisions MUST go through access_control.get_user_access().
+This module handles only the CRUD operations on subscription documents.
 """
 
 from datetime import datetime, timezone, timedelta
@@ -20,67 +26,82 @@ from typing import Optional, Dict
 from motor.motor_asyncio import AsyncIOMotorDatabase
 import logging
 import hashlib
+
 from pymongo.errors import DuplicateKeyError
-from demo_mode import DEMO_MODE
 
 logger = logging.getLogger(__name__)
 
-# Free trial duration in days
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+# Free trial duration
 TRIAL_DURATION_DAYS = 30
 
-# Early Adopter price
+# Legacy — kept for backward-compat references in existing endpoints
 EARLY_ADOPTER_PRICE = 4.99
+EARLY_ADOPTER_PRICE_ID = "price_early_adopter_499"
 
-# Subscription statuses
+
+# ---------------------------------------------------------------------------
+# Canonical subscription statuses
+# ---------------------------------------------------------------------------
+
 class SubscriptionStatus:
-    TRIAL = "trial"
-    FREE = "free"
-    EARLY_ADOPTER = "early_adopter"
+    # Current canonical statuses
+    TRIAL   = "trial"
+    FREE    = "free"
     PREMIUM = "premium"
 
-# Features by status
-# PREMIUM has identical permissions to EARLY_ADOPTER and TRIAL (full access)
+    # Legacy statuses — kept for migration compatibility only.
+    # These are no longer created for new subscriptions.
+    EARLY_ADOPTER = "early_adopter"   # → maps to PREMIUM
+    ACTIVE        = "active"          # Stripe "active" → maps to PREMIUM
+    STARTER       = "starter"         # → maps to PREMIUM
+    CONFORT       = "confort"         # → maps to PREMIUM
+    PRO           = "pro"             # → maps to PREMIUM
+    EXPIRED       = "expired"         # → maps to FREE
+    CANCELLED     = "cancelled"       # → maps to FREE
+
+
+# ---------------------------------------------------------------------------
+# Feature tables
+#
+# These are used by the /api/subscription/info endpoint for display purposes.
+# For actual access enforcement use access_control.UserAccess.can().
+# ---------------------------------------------------------------------------
+
+def _premium_features(enabled: bool) -> dict:
+    return {
+        "training_plan":     enabled,
+        "plan_adaptation":   enabled,
+        "session_analysis":  enabled,
+        "sync_enabled":      enabled,
+        "api_access":        enabled,
+        "llm_access":        enabled,
+        "full_access":       enabled,
+        "rag_access":        enabled,
+        "coach_detailed":    enabled,
+        "race_predictions":  enabled,
+    }
+
+
 FEATURES = {
-    SubscriptionStatus.TRIAL: {
-        "training_plan": True,
-        "plan_adaptation": True,
-        "session_analysis": True,
-        "sync_enabled": True,
-        "api_access": True,
-        "llm_access": True,
-        "full_access": True
-    },
-    SubscriptionStatus.FREE: {
-        "training_plan": False,
-        "plan_adaptation": False,
-        "session_analysis": False,
-        "sync_enabled": False,
-        "api_access": False,
-        "llm_access": False,
-        "full_access": False
-    },
-    SubscriptionStatus.EARLY_ADOPTER: {
-        "training_plan": True,
-        "plan_adaptation": True,
-        "session_analysis": True,
-        "sync_enabled": True,
-        "api_access": True,
-        "llm_access": True,
-        "full_access": True
-    },
-    SubscriptionStatus.PREMIUM: {
-        "training_plan": True,
-        "plan_adaptation": True,
-        "session_analysis": True,
-        "sync_enabled": True,
-        "api_access": True,
-        "llm_access": True,
-        "full_access": True
-    },
+    SubscriptionStatus.TRIAL:   _premium_features(True),
+    SubscriptionStatus.PREMIUM: _premium_features(True),
+    SubscriptionStatus.FREE:    _premium_features(False),
+    # Legacy entries — map to the same feature set as their equivalent tier
+    SubscriptionStatus.EARLY_ADOPTER: _premium_features(True),
+    SubscriptionStatus.ACTIVE:        _premium_features(True),
 }
 
+# ---------------------------------------------------------------------------
+# Route tables — DEPRECATED
+# Use access_control.get_route_access() instead of these lists.
+# Kept here only for backward compatibility with any code that still
+# imports them directly.
+# ---------------------------------------------------------------------------
 
-# Protected routes (require an active subscription)
 PROTECTED_ROUTES = [
     "/api/training/plan",
     "/api/training/refresh",
@@ -90,51 +111,60 @@ PROTECTED_ROUTES = [
     "/api/coach/workout-analysis",
     "/api/coach/detailed-analysis",
     "/api/rag/",
-    "/api/workouts",  # Workout list
 ]
 
-# Always accessible routes (even in free)
 PUBLIC_ROUTES = [
     "/api/health",
     "/api/subscription/",
     "/api/premium/",
     "/api/user/",
-    "/api/dashboard/insight",  # Basic insight
+    "/api/dashboard/insight",
 ]
 
 
 async def get_user_subscription(db: AsyncIOMotorDatabase, user_id: str) -> Dict:
     """
-    Retrieves a user's subscription status.
-    New users get FREE status by default.
-    Trial is only granted after Garmin identity verification via claim_garmin_trial().
+    Retrieve a user's raw subscription document.
+
+    New users default to FREE. A Trial is granted only through
+    claim_garmin_trial() after backend-side Garmin identity verification.
+
+    NOTE: For access-control decisions use access_control.get_user_access()
+    instead of this function. This function is kept for display/CRUD use.
     """
     subscription = await db.subscriptions.find_one({"user_id": user_id})
 
     if not subscription:
-        # New user → FREE by default (no auto-trial)
         subscription = await _create_free_subscription(db, user_id)
 
-    # Check if trial has expired
+    # Lazily persist trial expiration to DB
     subscription = await check_trial_expiration(db, subscription)
+    # Lazily persist premium expiration to DB
+    subscription = await check_premium_expiration(db, subscription)
 
     return subscription
 
 
 async def _create_free_subscription(db: AsyncIOMotorDatabase, user_id: str) -> Dict:
-    """Creates a FREE subscription for a new user (no trial, no card required)."""
+    """Create the default FREE subscription for a brand-new user."""
     now = datetime.now(timezone.utc)
 
     subscription = {
         "user_id": user_id,
         "status": SubscriptionStatus.FREE,
-        "plan": SubscriptionStatus.FREE,
         "created_at": now.isoformat(),
         "updated_at": now.isoformat(),
+        # Paid-subscription fields remain unset until checkout/webhook activation.
+        "paddle_subscription_id": None,
+        "paddle_customer_id": None,
+        "premium_expires_at": None,
+        # Legacy Stripe fields — kept for migration compatibility
+        "stripe_customer_id": None,
+        "stripe_subscription_id": None,
     }
 
     await db.subscriptions.insert_one(subscription)
-    logger.info(f"Created FREE subscription for new user {user_id}")
+    logger.info("Created FREE subscription for new user '%s'", user_id)
 
     subscription.pop("_id", None)
     return subscription
@@ -142,11 +172,10 @@ async def _create_free_subscription(db: AsyncIOMotorDatabase, user_id: str) -> D
 
 async def create_trial_subscription(db: AsyncIOMotorDatabase, user_id: str) -> Dict:
     """
-    Creates or updates a trial subscription for a user.
-    
-    IMPORTANT: This function should only be called from claim_garmin_trial()
-    after the Garmin identity has been verified server-side.
-    Do NOT call this directly to grant trials without Garmin verification.
+    Create or upgrade a user's subscription to a 30-day trial.
+
+    IMPORTANT: This function must only be called after Garmin identity
+    verification succeeds server-side.
     """
     now = datetime.now(timezone.utc)
     trial_end = now + timedelta(days=TRIAL_DURATION_DAYS)
@@ -154,12 +183,17 @@ async def create_trial_subscription(db: AsyncIOMotorDatabase, user_id: str) -> D
     subscription = {
         "user_id": user_id,
         "status": SubscriptionStatus.TRIAL,
-        "plan": SubscriptionStatus.TRIAL,
         "created_at": now.isoformat(),
         "trial_start": now.isoformat(),
         "trial_end": trial_end.isoformat(),
-        "price_locked": None,
-        "updated_at": now.isoformat()
+        # Paddle fields (null until user subscribes)
+        "paddle_subscription_id": None,
+        "paddle_customer_id": None,
+        "premium_expires_at": None,
+        # Legacy Stripe fields — kept for migration compatibility
+        "stripe_customer_id": None,
+        "stripe_subscription_id": None,
+        "updated_at": now.isoformat(),
     }
 
     await db.subscriptions.update_one(
@@ -167,54 +201,79 @@ async def create_trial_subscription(db: AsyncIOMotorDatabase, user_id: str) -> D
         {"$set": subscription},
         upsert=True,
     )
-    logger.info(f"Created trial subscription for user {user_id}, expires {trial_end}")
+    logger.info("Created 30-day Garmin trial for user '%s', expires %s", user_id, trial_end.isoformat())
 
     subscription.pop("_id", None)
     return subscription
 
 
 async def check_trial_expiration(db: AsyncIOMotorDatabase, subscription: Dict) -> Dict:
-    """Checks if the free trial has expired and updates the status."""
+    """
+    Lazily check whether a trial has expired and update MongoDB if so.
+
+    TRIAL → FREE transition is persisted atomically.
+    """
     if subscription.get("status") != SubscriptionStatus.TRIAL:
         return subscription
-    
+
     trial_end_str = subscription.get("trial_end")
     if not trial_end_str:
         return subscription
-    
+
     try:
         trial_end = datetime.fromisoformat(trial_end_str.replace("Z", "+00:00"))
         now = datetime.now(timezone.utc)
-        
+
         if now > trial_end:
-            # Trial expired -> switch to free
             await db.subscriptions.update_one(
                 {"user_id": subscription["user_id"]},
-                {
-                    "$set": {
-                        "status": SubscriptionStatus.FREE,
-                        "updated_at": now.isoformat()
-                    }
-                }
+                {"$set": {"status": SubscriptionStatus.FREE, "updated_at": now.isoformat()}},
             )
             subscription["status"] = SubscriptionStatus.FREE
-            logger.info(f"Trial expired for user {subscription['user_id']}, now FREE")
-    except Exception as e:
-        logger.error(f"Error checking trial expiration: {e}")
-    
+            logger.info(f"Trial expired for user '{subscription['user_id']}' — set to FREE")
+    except Exception as exc:
+        logger.error(f"Error checking trial expiration: {exc}")
+
     return subscription
 
 
-# ============================================================
-# GARMIN TRIAL REGISTRY — 1 Garmin account = 1 Trial
-# ============================================================
+async def check_premium_expiration(db: AsyncIOMotorDatabase, subscription: Dict) -> Dict:
+    """
+    Lazily check whether a Premium subscription has expired and update MongoDB.
+
+    PREMIUM → FREE transition is persisted atomically.
+    Applies to canonical PREMIUM status and to the legacy "active" status.
+    """
+    status = subscription.get("status")
+    if status not in (SubscriptionStatus.PREMIUM, SubscriptionStatus.ACTIVE):
+        return subscription
+
+    expires_field = "premium_expires_at" if status == SubscriptionStatus.PREMIUM else "expires_at"
+    expires_str = subscription.get(expires_field)
+    if not expires_str:
+        return subscription
+
+    try:
+        expires_at = datetime.fromisoformat(expires_str.replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+
+        if now > expires_at:
+            await db.subscriptions.update_one(
+                {"user_id": subscription["user_id"]},
+                {"$set": {"status": SubscriptionStatus.FREE, "updated_at": now.isoformat()}},
+            )
+            subscription["status"] = SubscriptionStatus.FREE
+            logger.info(
+                f"Premium expired for user '{subscription['user_id']}' — set to FREE"
+            )
+    except Exception as exc:
+        logger.error(f"Error checking premium expiration: {exc}")
+
+    return subscription
+
 
 def _hash_garmin_identity(raw_identity: str) -> str:
-    """Return a stable SHA-256 hex digest of the Garmin identity string.
-
-    Avoids storing the raw Garmin username/email in the registry while keeping
-    the constraint deterministic and collision-resistant.
-    """
+    """Hash the backend-verified Garmin identity before persisting it."""
     return hashlib.sha256(raw_identity.strip().lower().encode()).hexdigest()
 
 
@@ -224,38 +283,34 @@ async def claim_garmin_trial(
     garmin_identity_raw: str,
 ) -> Dict:
     """
-    Atomically claim a Trial for the given RunIndex user using a verified Garmin identity.
+    Atomically claim a Trial for a user using a backend-verified Garmin identity.
 
-    Rules enforced here (server-side only):
-    - 1 Garmin identity → 1 Trial, ever (enforced by unique index on garmin_identity).
-    - The garmin_identity_raw MUST come from the backend integration, never from the
-      frontend. Callers are responsible for obtaining it from the provider/env.
-    - Returns {"granted": True, "subscription": {...}} on success.
-    - Returns {"granted": False, "reason": "...", "subscription": {...}} when the Trial
-      was already used by this or another RunIndex account.
-    - Race-condition safe: the unique MongoDB index + insert-on-absence guarantees
-      at most one insert succeeds even with concurrent requests.
+    Enforced server-side rules:
+    - New users start on FREE, never on TRIAL.
+    - One Garmin identity can claim at most one Trial across all RunIndex accounts.
+    - The Garmin identity must come from the backend integration, never the client.
     """
     garmin_identity = _hash_garmin_identity(garmin_identity_raw)
     now = datetime.now(timezone.utc)
     trial_end = now + timedelta(days=TRIAL_DURATION_DAYS)
 
-    # Check whether this RunIndex user already has a non-free subscription
     existing_sub = await db.subscriptions.find_one({"user_id": user_id}, {"_id": 0})
     if existing_sub and existing_sub.get("status") in (
         SubscriptionStatus.TRIAL,
-        SubscriptionStatus.EARLY_ADOPTER,
         SubscriptionStatus.PREMIUM,
+        SubscriptionStatus.ACTIVE,
+        SubscriptionStatus.EARLY_ADOPTER,
+        SubscriptionStatus.STARTER,
+        SubscriptionStatus.CONFORT,
+        SubscriptionStatus.PRO,
     ):
         logger.info(
             "[GarminTrial] user=%s already has status=%s — no new trial",
-            user_id, existing_sub.get("status"),
+            user_id,
+            existing_sub.get("status"),
         )
         return {"granted": False, "reason": "already_active", "subscription": existing_sub}
 
-    # Attempt to atomically register this Garmin identity as trial_used.
-    # The unique index on garmin_trial_registry.garmin_identity ensures only one
-    # concurrent insert can succeed (DuplicateKeyError for subsequent attempts).
     registry_doc = {
         "garmin_identity": garmin_identity,
         "trial_used": True,
@@ -269,206 +324,279 @@ async def claim_garmin_trial(
     try:
         await db.garmin_trial_registry.insert_one(registry_doc)
     except DuplicateKeyError:
-        # Another RunIndex user already claimed the trial with this Garmin identity.
         logger.info(
-            "[GarminTrial] garmin_identity=%s already used trial — user=%s gets FREE",
-            garmin_identity[:12], user_id,
+            "[GarminTrial] garmin_identity=%s already used trial — user=%s stays FREE",
+            garmin_identity[:12],
+            user_id,
         )
         current_sub = await get_user_subscription(db, user_id)
-        return {"granted": False, "reason": "garmin_trial_already_used", "subscription": current_sub}
+        return {
+            "granted": False,
+            "reason": "garmin_trial_already_used",
+            "subscription": current_sub,
+        }
 
-    # Garmin identity is fresh → grant the trial.
     subscription = await create_trial_subscription(db, user_id)
     logger.info(
         "[GarminTrial] Trial granted user=%s garmin_identity=%s expires=%s",
-        user_id, garmin_identity[:12], trial_end.isoformat(),
+        user_id,
+        garmin_identity[:12],
+        trial_end.isoformat(),
     )
     return {"granted": True, "subscription": subscription}
 
 
 async def get_garmin_trial_record(db: AsyncIOMotorDatabase, garmin_identity_raw: str) -> Optional[Dict]:
-    """Return the garmin_trial_registry record for a given raw Garmin identity, or None."""
+    """Return the registry record for a raw Garmin identity, if any."""
     garmin_identity = _hash_garmin_identity(garmin_identity_raw)
-    doc = await db.garmin_trial_registry.find_one(
-        {"garmin_identity": garmin_identity}, {"_id": 0}
-    )
-    return doc
+    return await db.garmin_trial_registry.find_one({"garmin_identity": garmin_identity}, {"_id": 0})
 
 
-async def activate_early_adopter(
+async def activate_premium(
     db: AsyncIOMotorDatabase,
     user_id: str,
+    paddle_subscription_id: str,
     paddle_customer_id: str,
-    paddle_subscription_id: str
+    premium_expires_at: Optional[datetime] = None,
 ) -> Dict:
-    """Activates the Early Adopter subscription for a user via Paddle."""
+    """
+    Activate Premium for a user after a successful Paddle payment.
+
+    Called from the Paddle webhook handler.  Never called directly from the
+    frontend.
+    """
     now = datetime.now(timezone.utc)
-    
-    result = await db.subscriptions.update_one(
+
+    update_fields = {
+        "status": SubscriptionStatus.PREMIUM,
+        "paddle_subscription_id": paddle_subscription_id,
+        "paddle_customer_id": paddle_customer_id,
+        "activated_at": now.isoformat(),
+        "updated_at": now.isoformat(),
+        "cancelled_at": None,
+    }
+    if premium_expires_at:
+        update_fields["premium_expires_at"] = premium_expires_at.isoformat()
+
+    await db.subscriptions.update_one(
+        {"user_id": user_id},
+        {"$set": update_fields},
+        upsert=True,
+    )
+    logger.info(
+        f"Activated PREMIUM for user '{user_id}' "
+        f"(paddle_sub={paddle_subscription_id}, expires={premium_expires_at})"
+    )
+
+    subscription = await db.subscriptions.find_one({"user_id": user_id})
+    subscription.pop("_id", None)
+    return subscription
+
+
+async def renew_premium(
+    db: AsyncIOMotorDatabase,
+    user_id: str,
+    paddle_subscription_id: str,
+    new_expires_at: datetime,
+) -> Dict:
+    """
+    Extend Premium expiry after a successful Paddle renewal payment.
+    """
+    now = datetime.now(timezone.utc)
+    await db.subscriptions.update_one(
         {"user_id": user_id},
         {
             "$set": {
-                "status": SubscriptionStatus.EARLY_ADOPTER,
-                "plan": SubscriptionStatus.EARLY_ADOPTER,
-                "paddle_customer_id": paddle_customer_id,
+                "status": SubscriptionStatus.PREMIUM,
                 "paddle_subscription_id": paddle_subscription_id,
-                "price_locked": EARLY_ADOPTER_PRICE,
-                "activated_at": now.isoformat(),
-                "updated_at": now.isoformat()
+                "premium_expires_at": new_expires_at.isoformat(),
+                "updated_at": now.isoformat(),
+                "cancelled_at": None,
             }
         },
-        upsert=True
+        upsert=True,
     )
-    
-    logger.info(f"Activated Early Adopter for user {user_id}")
-    
+    logger.info(
+        f"Renewed PREMIUM for user '{user_id}' until {new_expires_at.isoformat()}"
+    )
     subscription = await db.subscriptions.find_one({"user_id": user_id})
     subscription.pop("_id", None)
     return subscription
 
 
 async def cancel_subscription(db: AsyncIOMotorDatabase, user_id: str) -> Dict:
-    """Cancels the subscription and switches the user to free."""
+    """
+    Mark a subscription as cancelled.
+
+    Per business rule: the user keeps Premium access until premium_expires_at.
+    Only when that date passes does access revert to FREE (handled lazily by
+    check_premium_expiration).  If no expiry is set, access reverts immediately.
+    """
     now = datetime.now(timezone.utc)
-    
+
+    # Determine whether access should stay Premium until end of paid period
+    subscription = await db.subscriptions.find_one({"user_id": user_id})
+    premium_expires_at = None
+    if subscription:
+        raw_exp = subscription.get("premium_expires_at") or subscription.get("expires_at")
+        if raw_exp:
+            try:
+                premium_expires_at = datetime.fromisoformat(raw_exp.replace("Z", "+00:00"))
+            except (ValueError, TypeError):
+                pass
+
+    if premium_expires_at and premium_expires_at > now:
+        # Access remains PREMIUM until end of paid period
+        new_status = SubscriptionStatus.PREMIUM
+        logger.info(
+            f"Subscription cancelled for '{user_id}' — Premium access until "
+            f"{premium_expires_at.isoformat()}"
+        )
+    else:
+        # No remaining paid period — revert to FREE immediately
+        new_status = SubscriptionStatus.FREE
+        logger.info(f"Subscription cancelled for '{user_id}' — set to FREE immediately")
+
     await db.subscriptions.update_one(
         {"user_id": user_id},
         {
             "$set": {
-                "status": SubscriptionStatus.FREE,
+                "status": new_status,
                 "cancelled_at": now.isoformat(),
-                "updated_at": now.isoformat()
+                "updated_at": now.isoformat(),
             }
-        }
+        },
     )
-    
-    logger.info(f"Cancelled subscription for user {user_id}")
-    
+
     subscription = await db.subscriptions.find_one({"user_id": user_id})
     subscription.pop("_id", None)
     return subscription
 
 
+# ---------------------------------------------------------------------------
+# Legacy wrapper — kept for backward compatibility with existing call sites
+# ---------------------------------------------------------------------------
+
+async def activate_early_adopter(
+    db: AsyncIOMotorDatabase,
+    user_id: str,
+    stripe_customer_id: str = "",
+    stripe_subscription_id: str = "",
+    paddle_customer_id: str = "",
+    paddle_subscription_id: str = "",
+) -> Dict:
+    """
+    Legacy activation wrapper (Early Adopter → PREMIUM).
+
+    New code should call activate_premium() instead.
+    Kept to avoid breaking existing admin/testing endpoints.
+    """
+    now = datetime.now(timezone.utc)
+    await db.subscriptions.update_one(
+        {"user_id": user_id},
+        {
+            "$set": {
+                "status": SubscriptionStatus.EARLY_ADOPTER,
+                "stripe_customer_id": stripe_customer_id or paddle_customer_id or f"cus_legacy_{user_id}",
+                "stripe_subscription_id": stripe_subscription_id or paddle_subscription_id or f"sub_legacy_{user_id}",
+                "paddle_customer_id": paddle_customer_id or None,
+                "paddle_subscription_id": paddle_subscription_id or None,
+                # Legacy display price — not used for access decisions
+                "price_locked": EARLY_ADOPTER_PRICE,
+                "activated_at": now.isoformat(),
+                "updated_at": now.isoformat(),
+                # No expiry for grandfathered early adopters
+                "premium_expires_at": None,
+            }
+        },
+        upsert=True,
+    )
+    logger.info(f"(Legacy) Activated Early Adopter → PREMIUM for user '{user_id}'")
+    subscription = await db.subscriptions.find_one({"user_id": user_id})
+    subscription.pop("_id", None)
+    return subscription
+
+
+# ---------------------------------------------------------------------------
+# Display helpers
+# ---------------------------------------------------------------------------
+
 def get_trial_days_remaining(subscription: Dict) -> Optional[int]:
-    """Calculates the number of days remaining in the trial."""
+    """Return days remaining in trial, or None if not in trial."""
     if subscription.get("status") != SubscriptionStatus.TRIAL:
         return None
-    
     trial_end_str = subscription.get("trial_end")
     if not trial_end_str:
         return None
-    
     try:
         trial_end = datetime.fromisoformat(trial_end_str.replace("Z", "+00:00"))
-        now = datetime.now(timezone.utc)
-        remaining = (trial_end - now).days
+        remaining = (trial_end - datetime.now(timezone.utc)).days
         return max(0, remaining)
-    except:
+    except Exception:
         return None
 
 
 def has_feature_access(subscription: Dict, feature: str) -> bool:
-    """Checks if the user has access to a feature."""
-    # --- DEMO MODE PATCH ---
-    if DEMO_MODE:
-        return True
-    # --- fin patch ---
+    """
+    Check whether a subscription document grants access to a feature.
 
+    IMPORTANT: For route/middleware enforcement use access_control.UserAccess.can()
+    which has proper fail-closed behaviour and DEMO_MODE guards.
+    This function is kept for backward-compat display use only.
+    """
     status = subscription.get("status", SubscriptionStatus.FREE)
-    features = FEATURES.get(status, FEATURES[SubscriptionStatus.FREE])
-    return features.get(feature, False)
+    # Normalise legacy statuses to their canonical feature set
+    from access_control import normalize_legacy_status, Tier
+    tier = normalize_legacy_status(status)
+    if tier in (Tier.TRIAL, Tier.PREMIUM):
+        feature_set = _premium_features(True)
+    else:
+        feature_set = _premium_features(False)
+    return feature_set.get(feature, False)
 
 
 def is_route_protected(path: str) -> bool:
-    """Checks if a route requires an active subscription."""
-    # Check if it's a public route
-    for public in PUBLIC_ROUTES:
-        if path.startswith(public):
-            return False
-    
-    # Check if it's a protected route
-    for protected in PROTECTED_ROUTES:
-        if path.startswith(protected):
-            return True
-    
-    return False
+    """
+    DEPRECATED — use access_control.get_route_access() instead.
+    Kept for any remaining direct imports.
+    """
+    from access_control import get_route_access, RouteAccess
+    return get_route_access(path) == RouteAccess.PREMIUM
 
 
 def get_subscription_display(subscription: Dict, lang: str = "en") -> Dict:
-    """Returns subscription display information."""
+    """Return UI display information for the subscription status."""
     status = subscription.get("status", SubscriptionStatus.FREE)
-    
-    displays = {
-        SubscriptionStatus.TRIAL: {
-            "fr": {
-                "label": "Essai gratuit actif",
-                "description": "Profite de toutes les fonctionnalités",
-                "badge": "ESSAI",
-                "badge_color": "blue"
-            },
-            "en": {
-                "label": "Free trial active",
-                "description": "Enjoy all features",
-                "badge": "TRIAL",
-                "badge_color": "blue"
-            }
-        },
-        SubscriptionStatus.FREE: {
-            "fr": {
-                "label": "Accès limité",
-                "description": "Abonnement requis pour accéder au coach",
-                "badge": "LIMITÉ",
-                "badge_color": "gray"
-            },
-            "en": {
-                "label": "Limited access",
-                "description": "Subscription required to access coach",
-                "badge": "LIMITED",
-                "badge_color": "gray"
-            }
-        },
-        SubscriptionStatus.EARLY_ADOPTER: {
-            "fr": {
-                "label": "Early Adopter",
-                "description": "4,99 € / mois (prix garanti à vie)",
-                "badge": "EARLY ADOPTER",
-                "badge_color": "amber"
-            },
-            "en": {
-                "label": "Early Adopter",
-                "description": "€4.99 / month (price guaranteed for life)",
-                "badge": "EARLY ADOPTER",
-                "badge_color": "amber"
-            }
-        },
-        SubscriptionStatus.PREMIUM: {
-            "fr": {
-                "label": "Premium",
-                "description": "Accès complet à toutes les fonctionnalités",
-                "badge": "PREMIUM",
-                "badge_color": "amber"
-            },
-            "en": {
-                "label": "Premium",
-                "description": "Full access to all features",
-                "badge": "PREMIUM",
-                "badge_color": "amber"
-            }
-        },
 
-    }
+    # Normalise legacy statuses for display
+    from access_control import normalize_legacy_status, Tier
+    tier = normalize_legacy_status(status)
 
-    display = displays.get(status, displays[SubscriptionStatus.FREE]).get(lang, displays.get(status, displays[SubscriptionStatus.FREE]).get("fr", {}))
+    if tier == Tier.TRIAL:
+        displays = {
+            "fr": {"label": "Essai gratuit actif", "description": "Profite de toutes les fonctionnalités", "badge": "ESSAI", "badge_color": "blue"},
+            "en": {"label": "Free trial active", "description": "Enjoy all features", "badge": "TRIAL", "badge_color": "blue"},
+        }
+    elif tier == Tier.PREMIUM:
+        displays = {
+            "fr": {"label": "Premium", "description": "Accès complet à toutes les fonctionnalités", "badge": "PREMIUM", "badge_color": "violet"},
+            "en": {"label": "Premium", "description": "Full access to all features", "badge": "PREMIUM", "badge_color": "violet"},
+        }
+    else:
+        displays = {
+            "fr": {"label": "Accès limité", "description": "Abonnement requis pour accéder au coach", "badge": "LIMITÉ", "badge_color": "gray"},
+            "en": {"label": "Limited access", "description": "Subscription required to access coach", "badge": "LIMITED", "badge_color": "gray"},
+        }
 
-    # Add remaining days for trial
-    if status == SubscriptionStatus.TRIAL:
+    display = displays.get(lang, displays["en"]).copy()
+
+    if tier == Tier.TRIAL:
         days_remaining = get_trial_days_remaining(subscription)
         if days_remaining is not None:
+            display["days_remaining"] = days_remaining
             if lang == "fr":
-                display["days_remaining"] = days_remaining
-                display["days_label"] = f"{days_remaining} jour{'s' if days_remaining > 1 else ''} restant{'s' if days_remaining > 1 else ''}"
+                display["days_label"] = f"{days_remaining} jour{'s' if days_remaining != 1 else ''} restant{'s' if days_remaining != 1 else ''}"
             else:
-                display["days_remaining"] = days_remaining
-                display["days_label"] = f"{days_remaining} day{'s' if days_remaining > 1 else ''} remaining"
+                display["days_label"] = f"{days_remaining} day{'s' if days_remaining != 1 else ''} remaining"
 
     return display

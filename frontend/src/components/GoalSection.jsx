@@ -8,12 +8,15 @@ import { toast } from "sonner";
 import axios from "axios";
 import { API_BASE } from "@/utils/constants";
 import { useUnitSystem } from "@/context/UnitContext";
+import { useAuth } from "@/context/AuthContext";
 import { formatDistance } from "@/utils/units";
 
 const DISTANCE_OPTIONS = ["5k", "10k", "semi", "marathon", "ultra"];
 const DISTANCE_KM = { "5k": 5, "10k": 10, "semi": 21.1, "marathon": 42.195, "ultra": 50 };
 
 export const GoalSection = ({ goal, lang, t, onUpdate }) => {
+  const { user } = useAuth();
+  const userId = user?.id;
   const { unitSystem } = useUnitSystem();
   const [isEditing, setIsEditing] = useState(!goal);
   const [eventName, setEventName] = useState(goal?.event_name || "");
