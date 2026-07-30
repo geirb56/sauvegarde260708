@@ -22,6 +22,7 @@ import httpx
 import time
 from collections import defaultdict
 from pathlib import Path
+from urllib.parse import urlparse
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 from typing import List, Optional, Dict
 import uuid
@@ -4868,7 +4869,12 @@ async def check_subscription_status(session_id: str, http_request: Request, user
             )
             
             tier_name = SUBSCRIPTION_TIERS.get(tier, {}).get("name", "Premium")
-            logger.info(f"Subscription activated for user {actual_user_id}: {tier} ({billing_period})")
+            logger.info(
+                "Subscription activated for user=%s tier=%s billing_period=%s",
+                actual_user_id[:8],
+                tier,
+                billing_period,
+            )
             
             return {
                 "status": "completed",
@@ -5513,10 +5519,12 @@ async def create_early_adopter_checkout(http_request: Request, user: dict = Depe
 
     # Determine origin URL
     if not origin_url:
-        origin_url = str(http_request.base_url).rstrip('/')
-        # In preview, use frontend URL
-        if "preview.emergentagent.com" in origin_url:
-            origin_url = origin_url.replace("/api", "").rstrip('/')
+        base_origin = str(http_request.base_url).rstrip("/")
+        parsed_origin = urlparse(base_origin)
+        if parsed_origin.hostname and parsed_origin.hostname.endswith("preview.emergentagent.com"):
+            origin_url = FRONTEND_URL.rstrip("/")
+        else:
+            origin_url = base_origin
 
     # Redirect URLs
     success_url = f"{origin_url}/settings?session_id={{CHECKOUT_SESSION_ID}}&subscription=early_adopter_success"
@@ -5622,7 +5630,7 @@ async def stripe_early_adopter_webhook(request: Request):
     
     except Exception as e:
         logger.error(f"Early Adopter webhook error: {e}")
-        return {"received": True, "error": str(e)}
+        return {"received": True}
 
 
 @api_router.get("/subscription/verify-checkout/{session_id}")
