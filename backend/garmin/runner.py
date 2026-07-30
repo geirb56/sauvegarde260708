@@ -9,7 +9,7 @@ Auth model:
 - We perform a ONE-TIME headless login (email/password, optional MFA) via a
   pseudo-TTY; afterwards gccli auto-refreshes the token, so data commands do
   not need the password again.
-- The Garmin password is sourced ONLY from backend env (never from the UI).
+- Each RunIndex user has their own isolated HOME so tokens never cross users.
 
 If gccli is missing or login needs interactive MFA we can't satisfy, methods
 raise GccliUnavailable / GccliMfaRequired so callers can react gracefully.
@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import pty
+import re
 import select
 import shutil
 import subprocess
@@ -29,6 +30,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+# Strict email pattern used to validate Garmin account addresses before they
+# are passed to the gccli subprocess.  This is intentionally conservative.
+_EMAIL_RE = re.compile(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$")
 
 
 class GccliError(Exception):
@@ -53,7 +58,10 @@ class GccliRunner:
         max_retries: int = 3,
     ):
         self.gccli_path = gccli_path
-        self.home = home or os.environ.get("GCCLI_HOME", "/app/backend/.gccli_home")
+        raw_home = home or os.environ.get("GCCLI_HOME", "/app/backend/.gccli_home")
+        # Normalize to an absolute path so any relative components (e.g. "..") are
+        # resolved before the directory is created or used as HOME.
+        self.home = os.path.normpath(os.path.abspath(raw_home))
         self.keyring_backend = keyring_backend
         # Clamp per-command timeout to a safe 15-60s window.
         self.timeout = max(15, min(60, timeout_seconds))
@@ -157,6 +165,11 @@ class GccliRunner:
     def login(self, email: str, password: str, mfa_code: Optional[str] = None) -> None:
         """One-time headless login via a pseudo-TTY (gccli reads password from TTY)."""
         self._ensure_available()
+        # Validate email format here (defense-in-depth) before it is passed to
+        # execvpe.  The execvpe call uses an argv list (no shell interpretation),
+        # but we still reject obviously invalid values early.
+        if not _EMAIL_RE.match(email):
+            raise GccliError("Invalid Garmin account email format")
         cmd = [self.gccli_path, "auth", "login", email, "--headless"]
         if mfa_code:
             cmd += ["--mfa-code", mfa_code]
@@ -206,9 +219,7 @@ class GccliRunner:
         full_output = "".join(output_parts)
         low = full_output.lower()
         if exit_code == 0 or "logged in as" in low:
-            # Log only the domain part — never the full email address.
-            domain = email.split("@")[-1] if "@" in email else "unknown"
-            logger.info("[gccli] login successful (domain=%s)", domain)
+            logger.info("[gccli] login successful")
             return
         if "mfa" in low or "two-factor" in low or "verification code" in low:
             raise GccliMfaRequired("Garmin login requires an MFA code")
