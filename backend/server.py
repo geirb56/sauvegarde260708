@@ -6000,6 +6000,12 @@ app.add_middleware(
 )
 
 
+async def _ensure_subscriptions_unique_index(db_handle) -> None:
+    """Thin wrapper — delegates to the testable service module."""
+    from services.subscription_index import ensure_subscriptions_unique_index
+    await ensure_subscriptions_unique_index(db_handle)
+
+
 @app.on_event("startup")
 async def create_db_indexes():
     """Create MongoDB indexes for common query patterns"""
@@ -6028,8 +6034,10 @@ async def create_db_indexes():
         # OAuth state store: auto-expire after TTL (expires_at stored as datetime)
         await db.oauth_states.create_index("state", unique=True)
         await db.oauth_states.create_index("expires_at", expireAfterSeconds=0)
-        # Subscriptions / tokens
-        await db.subscriptions.create_index("user_id", unique=True, sparse=True)
+        # Subscriptions: enforce 1 document per user.
+        # Idempotent: if a non-unique index on user_id already exists (legacy),
+        # drop it first so we can (re)create it as UNIQUE without error.
+        await _ensure_subscriptions_unique_index(db)
         # Terra integration collections
         await db.terra_tokens.create_index("user_id", sparse=True)
         await db.daily_metrics.create_index([("user_id", 1), ("date", -1)])
