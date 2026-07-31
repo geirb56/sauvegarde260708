@@ -25,6 +25,7 @@ from pydantic import BaseModel
 
 from auth.dependencies import get_current_user
 from auth.jwt_utils import create_access_token, create_short_lived_token, decode_short_lived_token
+from auth.mongo_errors import DuplicateKeyError
 from auth.models import (
     ForgotPasswordRequest,
     ResetPasswordRequest,
@@ -34,6 +35,7 @@ from auth.models import (
     UserResponse,
 )
 from auth.password import hash_password, verify_password
+from subscription_manager import create_free_subscription
 
 logger = logging.getLogger(__name__)
 
@@ -130,9 +132,11 @@ async def register(body: UserCreate, request: Request):
     import uuid as _uuid
 
     now = datetime.now(timezone.utc)
+    user_id = str(_uuid.uuid4())
+    user_email = body.email
     user_doc = {
-        "id": str(_uuid.uuid4()),
-        "email": body.email,
+        "id": user_id,
+        "email": user_email,
         "password_hash": hash_password(body.password),
         "auth_providers": ["password"],
         "is_email_verified": False,
@@ -142,29 +146,23 @@ async def register(body: UserCreate, request: Request):
         "last_login_at": now,
     }
 
-    await db.users.insert_one(user_doc)
+    try:
+        await db.users.insert_one(user_doc)
+    except DuplicateKeyError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An account with this email already exists.",
+        )
     logger.info("New user registered: %s", user_doc["id"])
 
     # New users start as FREE — trial access is granted only after a Garmin
     # identity is verified via activate_garmin_trial() (server-side, never from
     # the frontend).  See subscription_manager.activate_garmin_trial() and the
     # BLOCKER note in subscription_manager.py.
-    await db.subscriptions.insert_one({
-        "user_id": user_doc["id"],
-        "status": "free",
-        "created_at": now.isoformat(),
-        "trial_start": None,
-        "trial_end": None,
-        "trial_used": False,
-        "garmin_identity": None,
-        "stripe_customer_id": None,
-        "stripe_subscription_id": None,
-        "price_locked": None,
-        "updated_at": now.isoformat(),
-    })
-    logger.info("FREE subscription created for user: %s", user_doc["id"])
+    await create_free_subscription(db, user_id)
+    logger.info("FREE subscription created for user: %s", user_id)
 
-    access_token = create_access_token(user_doc["id"], user_doc["email"])
+    access_token = create_access_token(user_id, user_email)
     return TokenResponse(
         access_token=access_token,
         user=_user_to_response(user_doc),

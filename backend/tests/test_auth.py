@@ -34,8 +34,6 @@ import os
 import secrets as _secrets
 import sys
 from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional
-
 import pytest
 import pytest_asyncio
 import httpx
@@ -55,6 +53,7 @@ import jwt
 
 from auth.password import hash_password, verify_password
 from auth.jwt_utils import create_access_token, decode_access_token
+from auth.mongo_errors import DuplicateKeyError
 
 pytestmark = pytest.mark.asyncio
 
@@ -62,8 +61,10 @@ pytestmark = pytest.mark.asyncio
 # ─── In-memory MongoDB fake ────────────────────────────────────────────────────
 
 class _FakeCollection:
-    def __init__(self):
+    def __init__(self, *, unique_fields=None):
         self._docs: list = []
+        self._unique_fields = tuple(unique_fields or ())
+        self._lock = asyncio.Lock()
 
     def _match(self, doc, query):
         for key, value in query.items():
@@ -103,7 +104,14 @@ class _FakeCollection:
         return None
 
     async def insert_one(self, doc):
-        self._docs.append(doc.copy())
+        async with self._lock:
+            candidate = doc.copy()
+            for existing in self._docs:
+                for field in self._unique_fields:
+                    value = candidate.get(field)
+                    if value is not None and existing.get(field) == value:
+                        raise DuplicateKeyError(f"Duplicate key for {field}")
+            self._docs.append(candidate)
 
     async def update_one(self, query, update):
         for doc in self._docs:
@@ -118,10 +126,14 @@ class _FakeCollection:
     async def create_index(self, *args, **kwargs):
         pass
 
+    async def count_documents(self, query):
+        return sum(1 for doc in self._docs if self._match(doc, query))
+
 
 class _FakeDB:
     def __init__(self):
-        self.users = _FakeCollection()
+        self.users = _FakeCollection(unique_fields=("email", "id"))
+        self.subscriptions = _FakeCollection(unique_fields=("user_id",))
 
     def __getattr__(self, name):
         return _FakeCollection()
@@ -234,6 +246,24 @@ async def test_register_success(client):
     assert data["user"]["email"] == "user@example.com"
 
 
+async def test_register_creates_paddle_compatible_free_subscription(client, fake_db):
+    res = await _register(client, email="subfields@example.com")
+    assert res.status_code == 201
+    user_id = res.json()["user"]["id"]
+
+    subscription = await fake_db.subscriptions.find_one({"user_id": user_id})
+    assert subscription is not None
+    assert subscription["status"] == "free"
+    assert subscription["trial_used"] is False
+    assert subscription["garmin_identity"] is None
+    assert "paddle_subscription_id" in subscription
+    assert subscription["paddle_subscription_id"] is None
+    assert "paddle_customer_id" in subscription
+    assert subscription["paddle_customer_id"] is None
+    assert "premium_expires_at" in subscription
+    assert subscription["premium_expires_at"] is None
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Test 2 — Register duplicate email
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -244,6 +274,18 @@ async def test_register_duplicate_email(client):
     assert res2.status_code == 409
 
 
+async def test_concurrent_register_duplicate_email_returns_single_account(client, fake_db):
+    responses = await asyncio.gather(*[
+        _register(client, email="race-register@example.com")
+        for _ in range(2)
+    ])
+    statuses = sorted(response.status_code for response in responses)
+    assert statuses == [201, 409]
+    assert await fake_db.users.count_documents({"email": "race-register@example.com"}) == 1
+    user = await fake_db.users.find_one({"email": "race-register@example.com"})
+    assert await fake_db.subscriptions.count_documents({"user_id": user["id"]}) == 1
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Test 3 — Register invalid password
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -251,6 +293,31 @@ async def test_register_duplicate_email(client):
 async def test_register_invalid_password(client):
     res = await client.post("/auth/register", json={"email": "x@x.com", "password": "abc"})
     assert res.status_code == 422
+
+
+async def test_register_ignores_frontend_privilege_fields(client, fake_db):
+    res = await client.post(
+        "/auth/register",
+        json={
+            "email": "privilege@example.com",
+            "password": "Password1!",
+            "user_id": "frontend-chosen-id",
+            "subscription_status": "premium",
+            "trial": True,
+            "premium": True,
+        },
+    )
+    assert res.status_code == 201
+    created_user = await fake_db.users.find_one({"email": "privilege@example.com"})
+    assert created_user is not None
+    assert created_user["id"] != "frontend-chosen-id"
+    assert "subscription_status" not in created_user
+    assert "trial" not in created_user
+    assert "premium" not in created_user
+
+    subscription = await fake_db.subscriptions.find_one({"user_id": created_user["id"]})
+    assert subscription["status"] == "free"
+    assert subscription["trial_used"] is False
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

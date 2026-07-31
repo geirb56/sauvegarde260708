@@ -16,7 +16,6 @@ import { useUnitSystem } from "@/context/UnitContext";
 import { formatDistance } from "@/utils/units";
 
 import { API_BASE_URL } from "@/config";
-import { useAuth } from "@/context/AuthContext";
 const API = API_BASE_URL;
 
 // Format an ISO date string or timestamp to DD/MM/YYYY
@@ -170,8 +169,6 @@ function SessionCard({ session, isGrayed = false, fatigueColor = null }) {
 }
 
 export default function TrainingPlan() {
-  const { user } = useAuth();
-  const userId = user?.id;
   const { t, lang } = useLanguage();
   const { unitSystem } = useUnitSystem();
   const { isFree, loading: subLoading, trialDaysRemaining, isTrial } = useSubscription();
@@ -188,9 +185,9 @@ export default function TrainingPlan() {
   const fetchData = async () => {
     try {
       const [planRes, cycleRes, metricsRes] = await Promise.all([
-        axios.get(`${API}/training/plan`, { headers: { "X-User-Id": userId } }),
-        axios.get(`${API}/training/full-cycle`, { params: { lang }, headers: { "X-User-Id": userId } }),
-        axios.get(`${API}/training/metrics`, { headers: { "X-User-Id": userId } }).catch(() => ({ data: null }))
+        axios.get(`${API}/training/plan`),
+        axios.get(`${API}/training/full-cycle`, { params: { lang } }),
+        axios.get(`${API}/training/metrics`).catch(() => ({ data: null }))
       ]);
       setPlan(planRes.data);
       setFullCycle(cycleRes.data);
@@ -226,12 +223,10 @@ export default function TrainingPlan() {
     setRefreshing(true);
     try {
       const params = newSessionCount ? `?sessions=${newSessionCount}` : "";
-      const res = await axios.post(`${API}/training/refresh${params}`, {}, {
-        headers: { "X-User-Id": userId }
-      });
+      const res = await axios.post(`${API}/training/refresh${params}`, {});
       setPlan(res.data);
       // Refresh full cycle too
-      const cycleRes = await axios.get(`${API}/training/full-cycle`, { params: { lang }, headers: { "X-User-Id": userId } });
+      const cycleRes = await axios.get(`${API}/training/full-cycle`, { params: { lang } });
       setFullCycle(cycleRes.data);
       toast.success(t("trainingPlanExtended.planUpdated"));
     } catch (err) {

@@ -1,7 +1,6 @@
 import { API_BASE_URL } from '@/config';
 
 export const API_BASE = API_BASE_URL;
-export const USER_ID = "default";
 
 export const ANIMATION_DELAYS = {
   xs: "0ms",

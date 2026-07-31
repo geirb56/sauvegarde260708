@@ -21,11 +21,7 @@ Configurer uniquement via variables d’environnement au runtime.
 Backend:
 
 - `GOOGLE_CLIENT_ID=`
-- `GOOGLE_CLIENT_SECRET=`
 - `APPLE_CLIENT_ID=`
-- `APPLE_TEAM_ID=`
-- `APPLE_KEY_ID=`
-- `APPLE_PRIVATE_KEY=`
 - `JWT_SECRET_KEY=`
 
 Frontend:
@@ -37,5 +33,7 @@ Frontend:
 
 Notes:
 
+- This OAuth implementation validates Google and Apple ID tokens server-side and only requires the client IDs above at runtime.
+- Do not commit `GOOGLE_CLIENT_SECRET`, Apple private keys, or any real OAuth secret to Git.
 - Ne pas committer de client secret, private key, token OAuth ou credentials réels.
 - Les endpoints `/api/auth/google` et `/api/auth/apple` vérifient l’identité côté backend puis émettent le JWT RunIndex.

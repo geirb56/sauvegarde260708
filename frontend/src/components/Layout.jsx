@@ -88,7 +88,7 @@ export const Layout = () => {
             onClick={logout}
             className="p-2 rounded-lg transition-colors hover:bg-white/5"
             style={{ color: "var(--text-tertiary)" }}
-            title="Sign out"
+            title={t("auth.logout")}
           >
             <LogOut className="w-5 h-5" />
           </button>

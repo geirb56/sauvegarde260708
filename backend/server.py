@@ -313,10 +313,9 @@ RATE_LIMIT_EXEMPT = {"/api/cache/stats"}
 def get_user_id_from_request(request: Request) -> str:
     """Extract user_id from request.
 
-    Resolution order (Step 2: JWT-first):
+    Resolution order (Step 2: JWT-only for client identity):
     1. JWT ****** — Authorization: ****** (sub claim)
-    2. X-User-Id header  — legacy / internal header
-    3. IP address        — last-resort fallback
+    2. IP address        — last-resort fallback
     """
     # 1. Try JWT ****** first
     auth_header = request.headers.get("Authorization", "")
@@ -331,12 +330,7 @@ def get_user_id_from_request(request: Request) -> str:
         except Exception:
             pass  # Fall through to next resolution method
 
-    # 2. X-User-Id header (legacy / internal)
-    header_user_id = request.headers.get("X-User-Id")
-    if header_user_id:
-        return header_user_id
-
-    # 3. Fallback to IP
+    # 2. Fallback to IP
     forwarded = request.headers.get("X-Forwarded-For")
     if forwarded:
         return forwarded.split(",")[0].strip()
@@ -6035,7 +6029,7 @@ async def create_db_indexes():
         await db.oauth_states.create_index("state", unique=True)
         await db.oauth_states.create_index("expires_at", expireAfterSeconds=0)
         # Subscriptions / tokens
-        await db.subscriptions.create_index("user_id", sparse=True)
+        await db.subscriptions.create_index("user_id", unique=True, sparse=True)
         # Terra integration collections
         await db.terra_tokens.create_index("user_id", sparse=True)
         await db.daily_metrics.create_index([("user_id", 1), ("date", -1)])

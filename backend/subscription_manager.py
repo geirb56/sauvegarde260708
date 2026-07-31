@@ -41,10 +41,16 @@ Garmin identity model:
 """
 
 from datetime import datetime, timezone, timedelta
-from typing import Optional, Dict
+from typing import Any, Dict, Optional, TYPE_CHECKING
 from uuid import uuid4
-from motor.motor_asyncio import AsyncIOMotorDatabase
 import logging
+
+from auth.mongo_errors import DuplicateKeyError
+
+if TYPE_CHECKING:
+    from motor.motor_asyncio import AsyncIOMotorDatabase
+else:  # pragma: no cover - runtime typing fallback for constrained environments
+    AsyncIOMotorDatabase = Any
 
 logger = logging.getLogger(__name__)
 
@@ -199,8 +205,15 @@ async def create_free_subscription(db: AsyncIOMotorDatabase, user_id: str) -> Di
         "updated_at": now.isoformat(),
     }
 
-    await db.subscriptions.insert_one(subscription)
-    logger.info("Created FREE subscription for user '%s'", user_id)
+    try:
+        await db.subscriptions.insert_one(subscription)
+        logger.info("Created FREE subscription")
+    except DuplicateKeyError:
+        existing_subscription = await db.subscriptions.find_one({"user_id": user_id}, {"_id": 0})
+        if not existing_subscription or existing_subscription.get("user_id") != user_id:
+            raise
+        logger.info("FREE subscription already exists")
+        return existing_subscription
 
     subscription.pop("_id", None)
     return subscription

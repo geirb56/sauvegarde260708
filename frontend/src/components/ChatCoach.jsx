@@ -23,8 +23,8 @@ const API = API_BASE_URL;
  * Pas de LLM (ni local, ni cloud)
  * Réponses rapides (<1s), déterministes, ultra-naturelles
  */
-const ChatCoach = ({ isOpen, onClose, userId = "default" }) => {
-  const { t } = useLanguage();
+const ChatCoach = ({ isOpen, onClose }) => {
+  const { t, lang } = useLanguage();
   const navigate = useNavigate();
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
@@ -41,7 +41,7 @@ const ChatCoach = ({ isOpen, onClose, userId = "default" }) => {
       checkSubscription();
       loadHistory();
     }
-  }, [isOpen, userId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const checkSubscription = async () => {
     try {

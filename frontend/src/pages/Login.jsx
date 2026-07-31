@@ -10,10 +10,6 @@ import { toast } from "sonner";
 import OAuthButtons from "@/components/OAuthButtons";
 import { mapAuthErrorDetail } from "@/lib/authErrors";
 
-const HAS_OAUTH_CONFIG = Boolean(
-  process.env.REACT_APP_GOOGLE_CLIENT_ID || process.env.REACT_APP_APPLE_CLIENT_ID
-);
-
 export default function Login() {
   const { login } = useAuth();
   const { t } = useLanguage();
@@ -60,13 +56,11 @@ export default function Login() {
               onError={(msg) => setError(msg)}
             />
 
-            {HAS_OAUTH_CONFIG && (
-              <div className="relative flex items-center">
-                <div className="flex-1 border-t border-border" />
-                <span className="mx-3 text-xs text-muted-foreground">{t("auth.orDivider")}</span>
-                <div className="flex-1 border-t border-border" />
-              </div>
-            )}
+            <div className="relative flex items-center">
+              <div className="flex-1 border-t border-border" />
+              <span className="mx-3 text-xs text-muted-foreground">{t("auth.orDivider")}</span>
+              <div className="flex-1 border-t border-border" />
+            </div>
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
