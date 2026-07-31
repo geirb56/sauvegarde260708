@@ -21,11 +21,15 @@ Safety constraints:
   - The unique index is created only after all duplicates are resolved.
 
 Usage:
-    # Dry run (inspect only, no writes):
+    # Dry run (inspect only, no writes) — default:
     python -m migrations.deduplicate_subscriptions
+    python -m migrations.deduplicate_subscriptions --dry-run
 
     # Apply for real:
+    python -m migrations.deduplicate_subscriptions --apply
     DRY_RUN=false python -m migrations.deduplicate_subscriptions
+
+    CLI flag takes precedence over the DRY_RUN environment variable.
 
 Environment variables expected (same as server.py):
     MONGODB_URL  — MongoDB connection string (default: mongodb://localhost:27017)
@@ -34,6 +38,7 @@ Environment variables expected (same as server.py):
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import logging
 import os
@@ -158,6 +163,86 @@ async def _ensure_unique_index(collection, dry_run: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Plan builder (pure, no I/O — easy to unit-test)
+# ---------------------------------------------------------------------------
+
+def _build_dedup_plan(
+    groups: List[dict],
+) -> Tuple[List[Tuple[dict, List[dict]]], List[dict]]:
+    """
+    Build a deduplication plan from the aggregation result groups.
+
+    Each group is a dict with keys ``_id`` (user_id), ``count``, and ``docs``
+    (list of subscription documents for that user).
+
+    Returns:
+        (plan, needs_review)
+        - plan        : list of (winner, losers) tuples for unambiguous cases.
+        - needs_review: list of {"user_id": …, "docs": […]} for ambiguous cases
+                        that require manual inspection.
+    """
+    plan: List[Tuple[dict, List[dict]]] = []
+    needs_review: List[dict] = []
+
+    for group in groups:
+        uid = group["_id"]
+        docs = group["docs"]
+        winner, losers, ambiguous = _pick_winner(docs)
+
+        if ambiguous:
+            needs_review.append({"user_id": uid, "docs": docs})
+        else:
+            plan.append((winner, losers))
+
+    return plan, needs_review
+
+
+def _log_dry_run_plan(plan: List[Tuple[dict, List[dict]]], needs_review: List[dict]) -> None:
+    """Emit a structured DRY RUN PLAN to the logger (no writes)."""
+    total_to_delete = sum(len(losers) for _, losers in plan)
+
+    logger.info("")
+    logger.info("┌─────────────────────────────────────────────────────┐")
+    logger.info("│              DRY RUN — DEDUPLICATION PLAN           │")
+    logger.info("│  No data will be modified until --apply is used.    │")
+    logger.info("└─────────────────────────────────────────────────────┘")
+    logger.info("  Duplicate user_id groups : %d", len(plan) + len(needs_review))
+    logger.info("  Resolvable automatically : %d", len(plan))
+    logger.info("  Require manual review    : %d", len(needs_review))
+    logger.info("  Documents to delete      : %d", total_to_delete)
+    logger.info("")
+
+    for winner, losers in plan:
+        uid = winner.get("user_id", "?")
+        winner_id = str(winner.get("_id", "?"))
+        logger.info(
+            "  user_id=%-36s  total docs=%d",
+            uid,
+            1 + len(losers),
+        )
+        logger.info(
+            "    ✅ KEEP   _id=%-24s  status=%-12s  updated=%s",
+            winner_id,
+            winner.get("status", "?"),
+            str(winner.get("updated_at", winner.get("created_at", "n/a")))[:19],
+        )
+        for loser in losers:
+            loser_id = str(loser.get("_id", "?"))
+            logger.info(
+                "    🗑  DELETE _id=%-24s  status=%-12s  updated=%s",
+                loser_id,
+                loser.get("status", "?"),
+                str(loser.get("updated_at", loser.get("created_at", "n/a")))[:19],
+            )
+        logger.info("")
+
+    if needs_review:
+        logger.warning("  ⚠️  The following user_id(s) cannot be resolved automatically:")
+        for item in needs_review:
+            logger.warning("    user_id=%s  (%d docs, identical score — manual review needed)", item["user_id"], len(item["docs"]))
+
+
+# ---------------------------------------------------------------------------
 # Main migration logic
 # ---------------------------------------------------------------------------
 
@@ -184,7 +269,7 @@ async def run(dry_run: bool = True) -> int:
     logger.info("=== deduplicate_subscriptions migration ===")
     logger.info("DRY_RUN=%s  db=%s", dry_run, db_name)
     if dry_run:
-        logger.info("  (Pass DRY_RUN=false to apply changes)")
+        logger.info("  (Use --apply or DRY_RUN=false to apply changes)")
 
     # ── Step 1: Find all user_ids with more than one subscription document ───
     pipeline = [
@@ -201,36 +286,13 @@ async def run(dry_run: bool = True) -> int:
 
     logger.info("⚠️   Found %d user_id(s) with duplicate subscriptions.", len(duplicates))
 
-    needs_review: List[dict] = []
-    plan: List[Tuple[dict, List[dict]]] = []  # (winner, losers_to_delete)
+    # ── Step 2: Build deduplication plan ─────────────────────────────────────
+    plan, needs_review = _build_dedup_plan(duplicates)
 
-    for group in duplicates:
-        uid = group["_id"]
-        docs = group["docs"]
-        winner, losers, ambiguous = _pick_winner(docs)
+    # ── Step 3: Emit DRY RUN report ──────────────────────────────────────────
+    _log_dry_run_plan(plan, needs_review)
 
-        if ambiguous:
-            needs_review.append({"user_id": uid, "docs": docs})
-            continue
-
-        plan.append((winner, losers))
-        logger.info(
-            "  user_id=%s  keep=%s(status=%s updated=%s)  delete=%d doc(s)",
-            uid,
-            str(winner.get("_id"))[:8] + "…",
-            winner.get("status"),
-            winner.get("updated_at", winner.get("created_at", "n/a"))[:10],
-            len(losers),
-        )
-        for loser in losers:
-            logger.info(
-                "    → DELETE _id=%s status=%s updated=%s",
-                loser["_id"],
-                loser.get("status"),
-                loser.get("updated_at", loser.get("created_at", "n/a"))[:10],
-            )
-
-    # ── Step 2: Halt if any ambiguous duplicates exist ───────────────────────
+    # ── Step 4: Halt if any ambiguous duplicates exist ───────────────────────
     if needs_review:
         logger.error("")
         logger.error("❌  STOPPING — %d user_id(s) cannot be resolved automatically:", len(needs_review))
@@ -239,9 +301,9 @@ async def run(dry_run: bool = True) -> int:
             for doc in item["docs"]:
                 logger.error(
                     "    _id=%s  status=%-15s  updated=%s  trial_used=%s  paddle_sub=%s",
-                    doc["_id"],
+                    doc.get("_id"),
                     doc.get("status"),
-                    doc.get("updated_at", doc.get("created_at", "n/a"))[:19],
+                    str(doc.get("updated_at", doc.get("created_at", "n/a")))[:19],
                     doc.get("trial_used"),
                     doc.get("paddle_subscription_id"),
                 )
@@ -251,7 +313,7 @@ async def run(dry_run: bool = True) -> int:
         client.close()
         return 1
 
-    # ── Step 3: Apply deletions ───────────────────────────────────────────────
+    # ── Step 5: Apply deletions (skipped in DRY RUN) ─────────────────────────
     total_deleted = 0
     for winner, losers in plan:
         ids_to_delete = [doc["_id"] for doc in losers]
@@ -265,15 +327,13 @@ async def run(dry_run: bool = True) -> int:
             )
         else:
             total_deleted += len(ids_to_delete)
-            logger.info(
-                "  [DRY RUN] Would delete %d doc(s) for user_id=%s",
-                len(ids_to_delete),
-                winner.get("user_id"),
-            )
 
-    logger.info("Deleted %d document(s) total.", total_deleted)
+    if dry_run:
+        logger.info("[DRY RUN] %d document(s) would be deleted — no writes performed.", total_deleted)
+    else:
+        logger.info("Deleted %d document(s) total.", total_deleted)
 
-    # ── Step 4: Enforce UNIQUE index ─────────────────────────────────────────
+    # ── Step 6: Enforce UNIQUE index ─────────────────────────────────────────
     await _ensure_unique_index(col, dry_run)
 
     logger.info("=== Migration complete. ===")
@@ -281,7 +341,38 @@ async def run(dry_run: bool = True) -> int:
     return 0
 
 
+def _parse_args(argv: Optional[List[str]] = None) -> bool:
+    """Parse CLI arguments and return the effective dry_run flag."""
+    parser = argparse.ArgumentParser(
+        description=(
+            "Safely deduplicate subscriptions.user_id to prepare a UNIQUE index.\n"
+            "Defaults to --dry-run (inspect only, no writes)."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        action="store_true",
+        default=None,
+        help="Inspect only — list duplicates and the document that would be kept; no writes (default).",
+    )
+    mode.add_argument(
+        "--apply",
+        dest="dry_run",
+        action="store_false",
+        help="Apply changes: delete losing documents and create the UNIQUE index.",
+    )
+    args = parser.parse_args(argv)
+
+    # CLI flag takes precedence; fall back to DRY_RUN env var (default true).
+    if args.dry_run is None:
+        return os.getenv("DRY_RUN", "true").strip().lower() not in ("false", "0", "no")
+    return args.dry_run
+
+
 if __name__ == "__main__":
-    dry_run = os.getenv("DRY_RUN", "true").strip().lower() not in ("false", "0", "no")
-    exit_code = asyncio.run(run(dry_run=dry_run))
+    _dry_run = _parse_args()
+    exit_code = asyncio.run(run(dry_run=_dry_run))
     sys.exit(exit_code)
