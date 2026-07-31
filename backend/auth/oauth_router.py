@@ -195,11 +195,10 @@ async def _self_heal_identity_user(
     )
     if conflicting_user and conflicting_user.get("id") != identity["user_id"]:
         logger.error(
-            "OAuth self-heal refused: identity provider=%s sub=%s references missing user %s but email %s belongs to user %s",
+            "OAuth self-heal refused: identity provider=%s sub=%s references missing user %s but the recovered email is already owned by user %s",
             provider,
             provider_subject,
             identity["user_id"],
-            recovered_email,
             conflicting_user["id"],
         )
         raise _oauth_conflict()
