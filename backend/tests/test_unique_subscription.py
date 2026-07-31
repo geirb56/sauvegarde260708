@@ -512,6 +512,33 @@ class TestIndexIdempotence:
             db.subscriptions.create_index.assert_not_called()
         _run(go())
 
+    def test_duplicates_prevent_index_no_data_deleted(self):
+        """
+        Scenario 4: if MongoDB refuses to create the unique index because duplicate
+        user_id values exist (OperationFailure), ensure_subscriptions_unique_index
+        must re-raise the error WITHOUT deleting or modifying any document.
+        """
+        async def go():
+            import pymongo.errors
+            from services.subscription_index import ensure_subscriptions_unique_index
+            col = self._make_col([{"name": "_id_", "key": {"_id": 1}}])
+            # Simulate MongoDB refusing the unique index due to duplicate keys.
+            col.create_index = AsyncMock(
+                side_effect=pymongo.errors.OperationFailure(
+                    "E11000 duplicate key error: cannot build unique index over duplicate values"
+                )
+            )
+            col.delete_one = AsyncMock()
+            col.delete_many = AsyncMock()
+            db = MagicMock()
+            db.subscriptions = col
+            with pytest.raises(pymongo.errors.OperationFailure):
+                await ensure_subscriptions_unique_index(db)
+            # No data must have been deleted.
+            col.delete_one.assert_not_called()
+            col.delete_many.assert_not_called()
+        _run(go())
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 7. Two subscriptions for same user must be rejected
@@ -543,4 +570,112 @@ class TestUniqueConstraintEnforced:
             await activate_premium(db, "u_dup_prem", "s1", "c1", exp)
             await activate_premium(db, "u_dup_prem", "s1", "c1", exp)
             assert await db.subscriptions.count_documents({"user_id": "u_dup_prem"}) == 1
+        _run(go())
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 8. Migration write-control: DRY_RUN vs. real run
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestMigrationWriteControl:
+    """
+    Scenarios 5 & 6:
+      - DRY_RUN=True  → delete_many must NEVER be called even when duplicates exist.
+      - DRY_RUN=False → delete_many IS called, but only for the losing document(s);
+                        the winner is never deleted.
+    """
+
+    def _dup_groups(self):
+        """One user_id with two docs: premium (winner) and free (loser)."""
+        now = datetime.now(timezone.utc).isoformat()
+        old = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        return [
+            {
+                "_id": "u_mig_dup",
+                "count": 2,
+                "docs": [
+                    {
+                        "_id": "id_prem",
+                        "user_id": "u_mig_dup",
+                        "status": "premium",
+                        "updated_at": now,
+                        "paddle_subscription_id": "paddle_sub_abc",
+                    },
+                    {
+                        "_id": "id_free",
+                        "user_id": "u_mig_dup",
+                        "status": "free",
+                        "updated_at": old,
+                        "paddle_subscription_id": None,
+                    },
+                ],
+            }
+        ]
+
+    def _make_col_and_client(self, dup_groups):
+        """
+        Build a fully-async mock Motor collection and matching client stub
+        that the migration's run() function can use without a real MongoDB.
+        """
+        col = MagicMock()
+        col.delete_many = AsyncMock(return_value=MagicMock(deleted_count=1))
+        col.create_index = AsyncMock()
+        col.drop_index = AsyncMock()
+
+        async def _list_indexes():
+            yield {"name": "_id_", "key": {"_id": 1}}
+        col.list_indexes = _list_indexes
+
+        # aggregate(pipeline).to_list(length=None) must be awaitable.
+        agg_cursor = MagicMock()
+        agg_cursor.to_list = AsyncMock(return_value=dup_groups)
+        col.aggregate = MagicMock(return_value=agg_cursor)
+
+        db = MagicMock()
+        db.subscriptions = col
+
+        client = MagicMock()
+        client.__getitem__ = MagicMock(return_value=db)
+        client.close = MagicMock()
+        return col, client
+
+    def _patch_motor_client(self, client):
+        """Point the already-stubbed motor module at our fake client."""
+        import sys
+        sys.modules["motor.motor_asyncio"].AsyncIOMotorClient = MagicMock(
+            return_value=client
+        )
+
+    def test_dry_run_never_calls_delete_many(self):
+        """
+        Scenario 5: DRY_RUN=True — even when duplicates are present,
+        delete_many must never be called on the collection.
+        """
+        async def go():
+            from migrations.deduplicate_subscriptions import run
+            col, client = self._make_col_and_client(self._dup_groups())
+            self._patch_motor_client(client)
+            result = await run(dry_run=True)
+            assert result == 0
+            col.delete_many.assert_not_called()
+        _run(go())
+
+    def test_real_run_deletes_only_losers(self):
+        """
+        Scenario 6: DRY_RUN=False — delete_many is called exactly once,
+        for the loser (free) document only; the winner (premium) is never deleted.
+        Paddle data is preserved because the winner carries paddle_subscription_id.
+        """
+        async def go():
+            from migrations.deduplicate_subscriptions import run
+            col, client = self._make_col_and_client(self._dup_groups())
+            self._patch_motor_client(client)
+            result = await run(dry_run=False)
+            assert result == 0
+            col.delete_many.assert_called_once()
+            ids_deleted = col.delete_many.call_args[0][0]["_id"]["$in"]
+            # Loser (free / no Paddle ID) must be deleted.
+            assert "id_free" in ids_deleted
+            # Winner (premium + Paddle subscription) must NOT be deleted.
+            assert "id_prem" not in ids_deleted
         _run(go())
