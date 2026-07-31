@@ -6035,7 +6035,7 @@ async def create_db_indexes():
         await db.oauth_states.create_index("state", unique=True)
         await db.oauth_states.create_index("expires_at", expireAfterSeconds=0)
         # Subscriptions / tokens
-        await db.subscriptions.create_index("user_id", sparse=True)
+        await db.subscriptions.create_index("user_id", unique=True, sparse=True)
         # Terra integration collections
         await db.terra_tokens.create_index("user_id", sparse=True)
         await db.daily_metrics.create_index([("user_id", 1), ("date", -1)])

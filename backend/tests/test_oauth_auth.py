@@ -38,6 +38,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import pytest_asyncio
 import httpx
+from pymongo.errors import DuplicateKeyError
 
 # Allow importing from the backend root
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -57,8 +58,11 @@ pytestmark = pytest.mark.asyncio
 # ─── In-memory MongoDB fake ────────────────────────────────────────────────────
 
 class _FakeCollection:
-    def __init__(self):
+    def __init__(self, *, unique_fields=None, unique_compounds=None):
         self._docs: list = []
+        self._unique_fields = tuple(unique_fields or ())
+        self._unique_compounds = tuple(tuple(fields) for fields in (unique_compounds or ()))
+        self._lock = asyncio.Lock()
 
     def _match(self, doc, query):
         for key, value in query.items():
@@ -93,24 +97,83 @@ class _FakeCollection:
             result.pop(k, None)
         return result
 
+    def _raise_if_duplicate(self, candidate, *, ignore_doc=None):
+        for existing in self._docs:
+            if ignore_doc is not None and existing is ignore_doc:
+                continue
+            for field in self._unique_fields:
+                value = candidate.get(field)
+                if value is not None and existing.get(field) == value:
+                    raise DuplicateKeyError(f"Duplicate key for {field}")
+            for fields in self._unique_compounds:
+                values = tuple(candidate.get(field) for field in fields)
+                if any(value is None for value in values):
+                    continue
+                if all(existing.get(field) == candidate.get(field) for field in fields):
+                    raise DuplicateKeyError(f"Duplicate key for {fields}")
+
     async def find_one(self, query, projection=None):
+        await asyncio.sleep(0)
         for doc in self._docs:
             if self._match(doc, query):
                 return self._project(doc, projection)
         return None
 
     async def insert_one(self, doc):
-        self._docs.append(doc.copy())
+        await asyncio.sleep(0)
+        async with self._lock:
+            candidate = doc.copy()
+            self._raise_if_duplicate(candidate)
+            self._docs.append(candidate)
 
-    async def update_one(self, query, update):
-        for doc in self._docs:
-            if self._match(doc, query):
-                if "$set" in update:
-                    doc.update(update["$set"])
-                if "$unset" in update:
-                    for k in update["$unset"]:
-                        doc.pop(k, None)
-                break
+    def _apply_update(self, doc, update):
+        if "$set" in update:
+            doc.update(update["$set"])
+        if "$unset" in update:
+            for k in update["$unset"]:
+                doc.pop(k, None)
+        if "$addToSet" in update:
+            for key, value in update["$addToSet"].items():
+                current = list(doc.get(key, []))
+                if value not in current:
+                    current.append(value)
+                doc[key] = current
+
+    async def update_one(self, query, update, upsert=False):
+        await asyncio.sleep(0)
+        async with self._lock:
+            for doc in self._docs:
+                if self._match(doc, query):
+                    candidate = doc.copy()
+                    self._apply_update(candidate, update)
+                    self._raise_if_duplicate(candidate, ignore_doc=doc)
+                    doc.clear()
+                    doc.update(candidate)
+                    return
+            if upsert:
+                candidate = dict(query)
+                if "$setOnInsert" in update:
+                    candidate.update(update["$setOnInsert"])
+                self._apply_update(candidate, update)
+                self._raise_if_duplicate(candidate)
+                self._docs.append(candidate)
+
+    async def delete_one(self, query):
+        await asyncio.sleep(0)
+        async with self._lock:
+            for index, doc in enumerate(self._docs):
+                if self._match(doc, query):
+                    self._docs.pop(index)
+                    return
+
+    async def delete_many(self, query):
+        await asyncio.sleep(0)
+        async with self._lock:
+            self._docs = [doc for doc in self._docs if not self._match(doc, query)]
+
+    async def count_documents(self, query):
+        await asyncio.sleep(0)
+        return sum(1 for doc in self._docs if self._match(doc, query))
 
     async def create_index(self, *args, **kwargs):
         pass
@@ -118,9 +181,9 @@ class _FakeCollection:
 
 class _FakeDB:
     def __init__(self):
-        self.users = _FakeCollection()
-        self.subscriptions = _FakeCollection()
-        self.auth_identities = _FakeCollection()
+        self.users = _FakeCollection(unique_fields=("email", "id"))
+        self.subscriptions = _FakeCollection(unique_fields=("user_id",))
+        self.auth_identities = _FakeCollection(unique_compounds=(("provider", "provider_subject"),))
 
     def __getattr__(self, name):
         return _FakeCollection()
@@ -623,3 +686,207 @@ class TestOAuthAccountLinking:
 
         assert resp.status_code == 200
         assert resp.json()["user"]["email"] == "apple.apple-sub-no-token-email@oauth.runindex.internal"
+
+
+class TestOAuthHardening:
+    async def test_concurrent_google_requests_create_single_user_identity_and_subscription(
+        self, client, fake_db
+    ):
+        claims = _make_google_claims("google-sub-concurrent-1", "race@gmail.com", True)
+        with patch("auth.oauth_router.verify_google_id_token", new=AsyncMock(return_value=claims)):
+            responses = await asyncio.gather(*[
+                client.post("/auth/google", json={"id_token": f"tok-{index}"})
+                for index in range(10)
+            ])
+
+        assert all(response.status_code == 200 for response in responses)
+        user_ids = {response.json()["user"]["id"] for response in responses}
+        assert len(user_ids) == 1
+
+        assert await fake_db.users.count_documents({}) == 1
+        assert await fake_db.auth_identities.count_documents(
+            {"provider": "google", "provider_subject": "google-sub-concurrent-1"}
+        ) == 1
+        assert await fake_db.subscriptions.count_documents(
+            {"user_id": next(iter(user_ids))}
+        ) == 1
+
+    async def test_existing_apple_identity_without_email_does_not_erase_stored_email(
+        self, client, fake_db
+    ):
+        now = datetime.now(timezone.utc)
+        user_id = str(uuid.uuid4())
+        fake_db.users._docs.append({
+            "id": user_id,
+            "email": "stored@icloud.com",
+            "password_hash": None,
+            "is_email_verified": True,
+            "is_active": True,
+            "auth_providers": ["apple"],
+            "created_at": now,
+            "updated_at": now,
+            "last_login_at": now,
+        })
+        fake_db.subscriptions._docs.append({
+            "user_id": user_id,
+            "status": "free",
+            "created_at": now.isoformat(),
+            "trial_start": None,
+            "trial_end": None,
+            "trial_used": False,
+            "garmin_identity": None,
+            "updated_at": now.isoformat(),
+        })
+        fake_db.auth_identities._docs.append({
+            "user_id": user_id,
+            "provider": "apple",
+            "provider_subject": "apple-sub-repeat-email",
+            "email": "stored@icloud.com",
+            "email_verified": True,
+            "created_at": now,
+            "updated_at": now,
+        })
+
+        claims = _make_apple_claims("apple-sub-repeat-email", email=None, email_verified=False)
+        with patch("auth.oauth_router.verify_apple_id_token", new=AsyncMock(return_value=claims)):
+            resp = await client.post("/auth/apple", json={"id_token": "tok"})
+
+        assert resp.status_code == 200
+        identity = await fake_db.auth_identities.find_one(
+            {"provider": "apple", "provider_subject": "apple-sub-repeat-email"}
+        )
+        assert identity["email"] == "stored@icloud.com"
+
+    async def test_self_heals_missing_user_when_identity_is_safe(self, client, fake_db):
+        now = datetime.now(timezone.utc)
+        missing_user_id = str(uuid.uuid4())
+        fake_db.auth_identities._docs.append({
+            "user_id": missing_user_id,
+            "provider": "google",
+            "provider_subject": "google-sub-self-heal",
+            "email": "heal@example.com",
+            "email_verified": True,
+            "created_at": now,
+            "updated_at": now,
+        })
+
+        claims = _make_google_claims("google-sub-self-heal", "heal@example.com", True)
+        with patch("auth.oauth_router.verify_google_id_token", new=AsyncMock(return_value=claims)):
+            resp = await client.post("/auth/google", json={"id_token": "tok"})
+
+        assert resp.status_code == 200
+        assert resp.json()["user"]["id"] == missing_user_id
+        user = await fake_db.users.find_one({"id": missing_user_id})
+        subscription = await fake_db.subscriptions.find_one({"user_id": missing_user_id})
+        assert user is not None
+        assert subscription is not None
+        assert subscription["status"] == "free"
+        assert subscription["trial_used"] is False
+
+    async def test_self_healing_refuses_email_collision_with_other_user(self, client, fake_db):
+        now = datetime.now(timezone.utc)
+        other_user_id = str(uuid.uuid4())
+        fake_db.users._docs.append({
+            "id": other_user_id,
+            "email": "occupied@example.com",
+            "password_hash": "hashed",
+            "is_email_verified": False,
+            "is_active": True,
+            "auth_providers": ["password"],
+            "created_at": now,
+            "updated_at": now,
+            "last_login_at": now,
+        })
+        fake_db.subscriptions._docs.append({
+            "user_id": other_user_id,
+            "status": "free",
+            "created_at": now.isoformat(),
+            "trial_start": None,
+            "trial_end": None,
+            "trial_used": False,
+            "garmin_identity": None,
+            "updated_at": now.isoformat(),
+        })
+        fake_db.auth_identities._docs.append({
+            "user_id": str(uuid.uuid4()),
+            "provider": "google",
+            "provider_subject": "google-sub-collision",
+            "email": "occupied@example.com",
+            "email_verified": True,
+            "created_at": now,
+            "updated_at": now,
+        })
+
+        claims = _make_google_claims("google-sub-collision", "occupied@example.com", True)
+        with patch("auth.oauth_router.verify_google_id_token", new=AsyncMock(return_value=claims)):
+            resp = await client.post("/auth/google", json={"id_token": "tok"})
+
+        assert resp.status_code == 409
+        assert await fake_db.users.count_documents({}) == 1
+        existing_user = await fake_db.users.find_one({"id": other_user_id})
+        assert existing_user["auth_providers"] == ["password"]
+
+    async def test_account_linking_conflict_does_not_partially_modify_existing_user(
+        self, client, fake_db
+    ):
+        now = datetime.now(timezone.utc)
+        email_user_id = str(uuid.uuid4())
+        canonical_user_id = str(uuid.uuid4())
+        fake_db.users._docs.extend([
+            {
+                "id": email_user_id,
+                "email": "link-conflict@example.com",
+                "password_hash": "hashed",
+                "is_email_verified": False,
+                "is_active": True,
+                "auth_providers": ["password"],
+                "created_at": now,
+                "updated_at": now,
+                "last_login_at": now,
+            },
+            {
+                "id": canonical_user_id,
+                "email": "canonical@example.com",
+                "password_hash": None,
+                "is_email_verified": True,
+                "is_active": True,
+                "auth_providers": ["google"],
+                "created_at": now,
+                "updated_at": now,
+                "last_login_at": now,
+            },
+        ])
+        fake_db.auth_identities._docs.append({
+            "user_id": canonical_user_id,
+            "provider": "google",
+            "provider_subject": "google-sub-link-conflict",
+            "email": "canonical@example.com",
+            "email_verified": True,
+            "created_at": now,
+            "updated_at": now,
+        })
+
+        original_find_one = fake_db.auth_identities.find_one
+        state = {"hidden": True}
+
+        async def race_find_one(query, projection=None):
+            if (
+                state["hidden"]
+                and query == {"provider": "google", "provider_subject": "google-sub-link-conflict"}
+            ):
+                state["hidden"] = False
+                return None
+            return await original_find_one(query, projection)
+
+        fake_db.auth_identities.find_one = race_find_one
+
+        claims = _make_google_claims("google-sub-link-conflict", "link-conflict@example.com", True)
+        with patch("auth.oauth_router.verify_google_id_token", new=AsyncMock(return_value=claims)):
+            resp = await client.post("/auth/google", json={"id_token": "tok"})
+
+        assert resp.status_code == 409
+        email_user = await fake_db.users.find_one({"id": email_user_id})
+        assert email_user["auth_providers"] == ["password"]
+        assert await fake_db.auth_identities.count_documents(
+            {"provider": "google", "provider_subject": "google-sub-link-conflict"}
+        ) == 1

@@ -43,8 +43,9 @@ Garmin identity model:
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict
 from uuid import uuid4
-from motor.motor_asyncio import AsyncIOMotorDatabase
 import logging
+from motor.motor_asyncio import AsyncIOMotorDatabase
+from pymongo.errors import DuplicateKeyError
 
 logger = logging.getLogger(__name__)
 
@@ -199,8 +200,15 @@ async def create_free_subscription(db: AsyncIOMotorDatabase, user_id: str) -> Di
         "updated_at": now.isoformat(),
     }
 
-    await db.subscriptions.insert_one(subscription)
-    logger.info("Created FREE subscription for user '%s'", user_id)
+    try:
+        await db.subscriptions.insert_one(subscription)
+        logger.info("Created FREE subscription for user '%s'", user_id)
+    except DuplicateKeyError:
+        existing_subscription = await db.subscriptions.find_one({"user_id": user_id}, {"_id": 0})
+        if not existing_subscription or existing_subscription.get("user_id") != user_id:
+            raise
+        logger.info("FREE subscription already exists for user '%s'", user_id)
+        return existing_subscription
 
     subscription.pop("_id", None)
     return subscription
