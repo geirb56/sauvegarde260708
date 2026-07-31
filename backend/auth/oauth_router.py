@@ -18,9 +18,9 @@ Security notes:
     - No frontend-supplied user_id, email, or name is trusted.
     - Identities are keyed on the stable ``provider_subject`` (``sub``),
       not on email alone, to prevent email-based account takeover.
-    - Automatic account merging by email is intentionally NOT implemented.
-      A future explicit account-linking flow can be added without breaking
-      this foundation.
+    - Account linking is done server-side only:
+      if a verified provider email already belongs to an existing RunIndex user,
+      the OAuth identity is linked to that same account (no duplicate user).
     - The provider ID token is verified and then discarded; only the RunIndex
       JWT is returned to the frontend.
 """
@@ -33,6 +33,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request, status
+from pymongo.errors import DuplicateKeyError
 
 from auth.jwt_utils import create_access_token
 from auth.models import TokenResponse, UserResponse
@@ -82,14 +83,13 @@ async def _find_or_create_oauth_user(
     """
     now = datetime.now(timezone.utc)
 
-    # 1. Check if we already know this identity
+    # 1) Existing provider identity → same RunIndex user.
     identity = await db.auth_identities.find_one(
         {"provider": provider, "provider_subject": provider_subject},
         {"_id": 0},
     )
 
     if identity:
-        # Existing identity → return the associated user
         user = await db.users.find_one(
             {"id": identity["user_id"]},
             {"_id": 0, "password_hash": 0,
@@ -110,30 +110,68 @@ async def _find_or_create_oauth_user(
                 detail="Account is disabled. Please contact support.",
             )
 
-        # Update last_login_at and refresh provider email if it changed
         update_set: dict = {"last_login_at": now, "updated_at": now}
         await db.users.update_one({"id": user["id"]}, {"$set": update_set})
         await db.auth_identities.update_one(
             {"provider": provider, "provider_subject": provider_subject},
-            {"$set": {"updated_at": now}},
+            {"$set": {"updated_at": now, "email": provider_email}},
         )
         user["last_login_at"] = now
         logger.info("OAuth login: user=%s provider=%s", user["id"], provider)
         return user
 
-    # 2. Unknown identity → create a new RunIndex user
+    provider_email_normalized = provider_email.strip().lower() if provider_email else None
 
-    # Use the provider email as the display email if available and verified.
-    # If not available (e.g., Apple repeat login without email), generate a
-    # placeholder that will not collide with real addresses.
-    if provider_email and email_verified:
-        display_email = provider_email.strip().lower()
-    elif provider_email:
-        # Email present but not verified — still store it, mark unverified
-        display_email = provider_email.strip().lower()
-        email_verified = False
+    # 2) Unknown identity + verified email: reuse existing RunIndex user by email.
+    if provider_email_normalized and email_verified:
+        existing_user = await db.users.find_one(
+            {"email": provider_email_normalized},
+            {"_id": 0, "password_hash": 0, "reset_password_token_hash": 0, "reset_password_expires_at": 0},
+        )
+        if existing_user:
+            if not existing_user.get("is_active", True):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Account is disabled. Please contact support.",
+                )
+
+            await db.users.update_one(
+                {"id": existing_user["id"]},
+                {
+                    "$set": {
+                        "last_login_at": now,
+                        "updated_at": now,
+                        "is_email_verified": True,
+                    },
+                    "$addToSet": {"auth_providers": provider},
+                },
+            )
+
+            try:
+                await db.auth_identities.insert_one({
+                    "user_id": existing_user["id"],
+                    "provider": provider,
+                    "provider_subject": provider_subject,
+                    "email": provider_email_normalized,
+                    "created_at": now,
+                    "updated_at": now,
+                })
+            except DuplicateKeyError:
+                pass
+
+            existing_user["last_login_at"] = now
+            existing_user["is_email_verified"] = True
+            logger.info(
+                "OAuth identity linked to existing user: user=%s provider=%s",
+                existing_user["id"],
+                provider,
+            )
+            return existing_user
+
+    # 3) Unknown identity: create a new RunIndex user.
+    if provider_email_normalized:
+        display_email = provider_email_normalized
     else:
-        # Apple: no email on repeat login — use a stable placeholder
         display_email = f"{provider}.{provider_subject}@oauth.runindex.internal"
         email_verified = False
 
@@ -144,16 +182,49 @@ async def _find_or_create_oauth_user(
         "password_hash": None,          # no password for OAuth-only accounts
         "is_email_verified": email_verified,
         "is_active": True,
+        "auth_providers": [provider],
         "created_at": now,
         "updated_at": now,
         "last_login_at": now,
     }
 
-    await db.users.insert_one(user_doc)
+    try:
+        await db.users.insert_one(user_doc)
+    except DuplicateKeyError:
+        # Race safety: if a verified email account appeared concurrently,
+        # bind to it instead of creating a duplicate RunIndex account.
+        if provider_email_normalized and email_verified:
+            existing_user = await db.users.find_one(
+                {"email": provider_email_normalized},
+                {"_id": 0, "password_hash": 0, "reset_password_token_hash": 0, "reset_password_expires_at": 0},
+            )
+            if existing_user:
+                await db.users.update_one(
+                    {"id": existing_user["id"]},
+                    {
+                        "$set": {"last_login_at": now, "updated_at": now, "is_email_verified": True},
+                        "$addToSet": {"auth_providers": provider},
+                    },
+                )
+                try:
+                    await db.auth_identities.insert_one({
+                        "user_id": existing_user["id"],
+                        "provider": provider,
+                        "provider_subject": provider_subject,
+                        "email": provider_email_normalized,
+                        "created_at": now,
+                        "updated_at": now,
+                    })
+                except DuplicateKeyError:
+                    pass
+                existing_user["last_login_at"] = now
+                existing_user["is_email_verified"] = True
+                return existing_user
+        raise
+
     logger.info("New OAuth user created: user=%s provider=%s", new_user_id, provider)
 
-    # 3. Create FREE subscription — same logic as email/password registration.
-    #    Trial is only activated later via GCCLI + Garmin identity verification.
+    # 4) Create FREE subscription — same logic as email/password registration.
     await db.subscriptions.insert_one({
         "user_id": new_user_id,
         "status": "free",
@@ -169,15 +240,33 @@ async def _find_or_create_oauth_user(
     })
     logger.info("FREE subscription created for OAuth user: %s", new_user_id)
 
-    # 4. Record the OAuth identity mapping
-    await db.auth_identities.insert_one({
-        "user_id": new_user_id,
-        "provider": provider,
-        "provider_subject": provider_subject,
-        "email": provider_email,        # store original; may be None
-        "created_at": now,
-        "updated_at": now,
-    })
+    # 5) Record provider identity.
+    try:
+        await db.auth_identities.insert_one({
+            "user_id": new_user_id,
+            "provider": provider,
+            "provider_subject": provider_subject,
+            "email": provider_email_normalized,
+            "created_at": now,
+            "updated_at": now,
+        })
+    except DuplicateKeyError:
+        # Another request linked the identity first: return the canonical user.
+        identity = await db.auth_identities.find_one(
+            {"provider": provider, "provider_subject": provider_subject},
+            {"_id": 0, "user_id": 1},
+        )
+        if identity and identity.get("user_id"):
+            existing_user = await db.users.find_one(
+                {"id": identity["user_id"]},
+                {"_id": 0, "password_hash": 0, "reset_password_token_hash": 0, "reset_password_expires_at": 0},
+            )
+            if existing_user:
+                return existing_user
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Authentication error. Please try again.",
+        )
 
     return user_doc
 
@@ -246,23 +335,12 @@ async def auth_apple(body: AppleAuthRequest, request: Request):
             detail=str(exc),
         )
 
-    # Prefer the email from the Apple ID token (most authoritative),
-    # fall back to the frontend-supplied email only if absent in the token.
-    # Note: we do NOT blindly trust the frontend email — it is only used as
-    # a display fallback and is stored as unverified in that case.
-    token_email = claims.get("email")
-    if not token_email and body.email:
-        # Apple repeat-login: email absent from token; frontend may have cached it
-        token_email = body.email.strip().lower() if body.email else None
-        # Mark as unverified since it came from the frontend, not the token
-        claims["email_verified"] = False
-
     db = request.app.state.db
     user = await _find_or_create_oauth_user(
         db=db,
         provider="apple",
         provider_subject=claims["sub"],
-        provider_email=token_email,
+        provider_email=claims.get("email"),
         email_verified=claims.get("email_verified", False),
     )
 

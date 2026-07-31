@@ -134,6 +134,7 @@ async def register(body: UserCreate, request: Request):
         "id": str(_uuid.uuid4()),
         "email": body.email,
         "password_hash": hash_password(body.password),
+        "auth_providers": ["password"],
         "is_email_verified": False,
         "is_active": True,
         "created_at": now,

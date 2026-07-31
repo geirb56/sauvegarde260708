@@ -91,11 +91,11 @@ export function AuthProvider({ children }) {
       setUser(userData);
       return { ok: true };
     } catch (err) {
-      const message =
+      const detail =
         err.response?.data?.detail ||
         err.response?.data?.message ||
-        "Login failed. Please try again.";
-      return { ok: false, error: message };
+        "";
+      return { ok: false, errorDetail: detail };
     }
   }, []);
 
@@ -107,11 +107,11 @@ export function AuthProvider({ children }) {
       setUser(userData);
       return { ok: true };
     } catch (err) {
-      const message =
+      const detail =
         err.response?.data?.detail ||
         err.response?.data?.message ||
-        "Registration failed. Please try again.";
-      return { ok: false, error: message };
+        "";
+      return { ok: false, errorDetail: detail };
     }
   }, []);
 
