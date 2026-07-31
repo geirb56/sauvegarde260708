@@ -6061,6 +6061,11 @@ async def create_db_indexes():
         await db.users.create_index("email", unique=True)
         await db.users.create_index("id", unique=True)
         await db.users.create_index("reset_password_token_hash", sparse=True)
+        await db.auth_identities.create_index(
+            [("provider", 1), ("provider_subject", 1)],
+            unique=True,
+        )
+        await db.auth_identities.create_index("user_id")
         logger.info("MongoDB indexes created")
     except Exception as e:
         logger.warning(f"Could not create some MongoDB indexes: {e}")

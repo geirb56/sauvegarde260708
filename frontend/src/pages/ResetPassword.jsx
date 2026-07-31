@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Loader2, Eye, EyeOff, CheckCircle } from "lucide-react";
 import { toast } from "sonner";
 import { API_BASE_URL } from "@/config";
+import { getAuthErrorMessage } from "@/lib/authErrors";
 
 export default function ResetPassword() {
   const { t } = useLanguage();
@@ -42,7 +43,7 @@ export default function ResetPassword() {
       toast.success(t("auth.passwordUpdated"));
       setTimeout(() => navigate("/login", { replace: true }), 2000);
     } catch (err) {
-      setError(err.response?.data?.detail || t("auth.invalidResetLink"));
+      setError(getAuthErrorMessage(t, err, "auth.invalidResetLink"));
     } finally {
       setLoading(false);
     }
@@ -144,4 +145,3 @@ export default function ResetPassword() {
     </div>
   );
 }
-

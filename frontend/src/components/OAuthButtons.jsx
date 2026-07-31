@@ -25,6 +25,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useLanguage } from "@/context/LanguageContext";
 import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
+import { getAuthErrorMessage } from "@/lib/authErrors";
 
 // ── Configuration (public IDs, not secrets) ───────────────────────────────────
 
@@ -84,11 +85,7 @@ function useGoogleSignIn({ onSuccess, onError, t }) {
         });
         onSuccess(res.data);
       } catch (err) {
-        const msg =
-          err.response?.data?.detail ||
-          err.response?.data?.message ||
-          t("auth.googleFailed");
-        onError(msg);
+        onError(getAuthErrorMessage(t, err, "auth.googleFailed"));
       } finally {
         setLoading(false);
       }
@@ -199,11 +196,7 @@ function useAppleSignIn({ onSuccess, onError, t }) {
       if (err?.error === "popup_closed_by_user" || err?.error === "user_cancelled_authorize") {
         onError(t("auth.appleCancelled"));
       } else if (err?.response) {
-        const msg =
-          err.response?.data?.detail ||
-          err.response?.data?.message ||
-          t("auth.appleFailed");
-        onError(msg);
+        onError(getAuthErrorMessage(t, err, "auth.appleFailed"));
       } else if (err?.error) {
         // Apple JS SDK error codes
         onError(t("auth.appleFailed"));

@@ -20,6 +20,9 @@ Covers:
    17.  Trial  — Google user retains same Garmin trial rules (FREE on new account)
    18.  Subscription — new Google user starts as FREE
    19.  Subscription — new Apple user starts as FREE
+   20.  Linkage — verified OAuth email reuses existing email/password account
+   21.  Linkage — unverified OAuth email does not auto-link existing account
+   22.  Apple — frontend-supplied fallback email is ignored for account linking
 """
 
 from __future__ import annotations
@@ -546,3 +549,77 @@ class TestSubscriptionRules:
         assert gsub is not None
         assert esub is not None
         assert gsub["user_id"] != esub["user_id"]
+
+
+class TestOAuthAccountLinking:
+    async def test_google_verified_email_reuses_existing_email_password_user(
+        self, client, fake_db
+    ):
+        register = await client.post(
+            "/auth/register",
+            json={"email": "link-google@example.com", "password": "Password1!"},
+        )
+        assert register.status_code == 201
+        existing_user_id = register.json()["user"]["id"]
+
+        claims = _make_google_claims("google-sub-link-1", "link-google@example.com", True)
+        with patch("auth.oauth_router.verify_google_id_token", new=AsyncMock(return_value=claims)):
+            resp = await client.post("/auth/google", json={"id_token": "tok"})
+
+        assert resp.status_code == 200
+        assert resp.json()["user"]["id"] == existing_user_id
+        identities = [
+            d for d in fake_db.auth_identities._docs
+            if d["provider"] == "google" and d["provider_subject"] == "google-sub-link-1"
+        ]
+        assert len(identities) == 1
+        assert identities[0]["user_id"] == existing_user_id
+
+    async def test_apple_verified_email_reuses_existing_email_password_user(
+        self, client, fake_db
+    ):
+        register = await client.post(
+            "/auth/register",
+            json={"email": "link-apple@example.com", "password": "Password1!"},
+        )
+        assert register.status_code == 201
+        existing_user_id = register.json()["user"]["id"]
+
+        claims = _make_apple_claims("apple-sub-link-1", "link-apple@example.com", True)
+        with patch("auth.oauth_router.verify_apple_id_token", new=AsyncMock(return_value=claims)):
+            resp = await client.post("/auth/apple", json={"id_token": "tok"})
+
+        assert resp.status_code == 200
+        assert resp.json()["user"]["id"] == existing_user_id
+        identities = [
+            d for d in fake_db.auth_identities._docs
+            if d["provider"] == "apple" and d["provider_subject"] == "apple-sub-link-1"
+        ]
+        assert len(identities) == 1
+        assert identities[0]["user_id"] == existing_user_id
+
+    async def test_unverified_google_email_does_not_auto_link(self, client):
+        register = await client.post(
+            "/auth/register",
+            json={"email": "no-link@example.com", "password": "Password1!"},
+        )
+        assert register.status_code == 201
+        existing_user_id = register.json()["user"]["id"]
+
+        claims = _make_google_claims("google-sub-no-link-1", "no-link@example.com", False)
+        with patch("auth.oauth_router.verify_google_id_token", new=AsyncMock(return_value=claims)):
+            resp = await client.post("/auth/google", json={"id_token": "tok"})
+
+        assert resp.status_code == 200
+        assert resp.json()["user"]["id"] != existing_user_id
+
+    async def test_apple_frontend_email_is_ignored_when_token_has_no_email(self, client):
+        claims = _make_apple_claims("apple-sub-no-token-email", email=None, email_verified=False)
+        with patch("auth.oauth_router.verify_apple_id_token", new=AsyncMock(return_value=claims)):
+            resp = await client.post(
+                "/auth/apple",
+                json={"id_token": "tok", "email": "spoofed@example.com"},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["user"]["email"] == "apple.apple-sub-no-token-email@oauth.runindex.internal"

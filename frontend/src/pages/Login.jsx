@@ -8,6 +8,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Loader2, Eye, EyeOff } from "lucide-react";
 import { toast } from "sonner";
 import OAuthButtons from "@/components/OAuthButtons";
+import { mapAuthErrorDetail } from "@/lib/authErrors";
+
+const HAS_OAUTH_CONFIG = Boolean(
+  process.env.REACT_APP_GOOGLE_CLIENT_ID || process.env.REACT_APP_APPLE_CLIENT_ID
+);
 
 export default function Login() {
   const { login } = useAuth();
@@ -32,7 +37,7 @@ export default function Login() {
       toast.success(t("auth.welcomeBack"));
       navigate("/", { replace: true });
     } else {
-      setError(result.error);
+      setError(mapAuthErrorDetail(t, result.errorDetail, "auth.invalidEmailOrPassword"));
     }
   };
 
@@ -55,11 +60,13 @@ export default function Login() {
               onError={(msg) => setError(msg)}
             />
 
-            <div className="relative flex items-center">
-              <div className="flex-1 border-t border-border" />
-              <span className="mx-3 text-xs text-muted-foreground">{t("auth.orDivider")}</span>
-              <div className="flex-1 border-t border-border" />
-            </div>
+            {HAS_OAUTH_CONFIG && (
+              <div className="relative flex items-center">
+                <div className="flex-1 border-t border-border" />
+                <span className="mx-3 text-xs text-muted-foreground">{t("auth.orDivider")}</span>
+                <div className="flex-1 border-t border-border" />
+              </div>
+            )}
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>

@@ -27,6 +27,17 @@ from jwt.algorithms import RSAAlgorithm
 
 logger = logging.getLogger(__name__)
 
+
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes"}
+    if isinstance(value, (int, float)):
+        return value != 0
+    return False
+
+
 # ── Google ─────────────────────────────────────────────────────────────────────
 
 _GOOGLE_CERTS_URL = "https://www.googleapis.com/oauth2/v3/certs"
@@ -70,6 +81,8 @@ async def verify_google_id_token(id_token: str) -> Dict[str, Any]:
 
     kid = header.get("kid")
     alg = header.get("alg", "RS256")
+    if alg != "RS256":
+        raise ValueError("Google ID token uses an unsupported signing algorithm.")
 
     # Find the matching public key
     matching_key = None
@@ -86,7 +99,7 @@ async def verify_google_id_token(id_token: str) -> Dict[str, Any]:
         claims = pyjwt.decode(
             id_token,
             key=matching_key,
-            algorithms=[alg],
+            algorithms=["RS256"],
             audience=client_id,
             options={"require": ["sub", "email", "exp", "iat", "iss"]},
         )
@@ -109,7 +122,7 @@ async def verify_google_id_token(id_token: str) -> Dict[str, Any]:
     return {
         "sub": claims["sub"],
         "email": claims["email"],
-        "email_verified": bool(claims.get("email_verified", False)),
+        "email_verified": _as_bool(claims.get("email_verified", False)),
         "name": claims.get("name"),
         "picture": claims.get("picture"),
     }
@@ -159,6 +172,8 @@ async def verify_apple_id_token(id_token: str) -> Dict[str, Any]:
 
     kid = header.get("kid")
     alg = header.get("alg", "RS256")
+    if alg != "RS256":
+        raise ValueError("Apple ID token uses an unsupported signing algorithm.")
 
     # Find the matching public key
     matching_key = None
@@ -175,7 +190,7 @@ async def verify_apple_id_token(id_token: str) -> Dict[str, Any]:
         claims = pyjwt.decode(
             id_token,
             key=matching_key,
-            algorithms=[alg],
+            algorithms=["RS256"],
             audience=client_id,
             options={"require": ["sub", "exp", "iat", "iss"]},
         )
@@ -196,5 +211,5 @@ async def verify_apple_id_token(id_token: str) -> Dict[str, Any]:
     return {
         "sub": claims["sub"],
         "email": claims.get("email"),  # may be None or a private relay address
-        "email_verified": bool(claims.get("email_verified", False)),
+        "email_verified": _as_bool(claims.get("email_verified", False)),
     }
