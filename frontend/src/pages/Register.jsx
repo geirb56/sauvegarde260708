@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
+import { useLanguage } from "@/context/LanguageContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,6 +11,7 @@ import OAuthButtons from "@/components/OAuthButtons";
 
 export default function Register() {
   const { register } = useAuth();
+  const { t } = useLanguage();
   const navigate = useNavigate();
 
   const [email, setEmail] = useState("");
@@ -24,12 +26,12 @@ export default function Register() {
     setError("");
 
     if (password !== confirmPassword) {
-      setError("Passwords do not match.");
+      setError(t("auth.passwordsDoNotMatch"));
       return;
     }
 
     if (password.length < 8) {
-      setError("Password must be at least 8 characters.");
+      setError(t("auth.passwordTooShort"));
       return;
     }
 
@@ -38,7 +40,7 @@ export default function Register() {
     setLoading(false);
 
     if (result.ok) {
-      toast.success("Account created! Welcome to RunIndex.");
+      toast.success(t("auth.accountCreated"));
       navigate("/", { replace: true });
     } else {
       setError(result.error);
@@ -46,7 +48,7 @@ export default function Register() {
   };
 
   const handleOAuthSuccess = () => {
-    toast.success("Account created! Welcome to RunIndex.");
+    toast.success(t("auth.accountCreated"));
     navigate("/", { replace: true });
   };
 
@@ -54,8 +56,8 @@ export default function Register() {
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
-          <CardTitle className="text-2xl font-bold">RunIndex</CardTitle>
-          <p className="text-muted-foreground text-sm mt-1">Create your account</p>
+          <CardTitle className="text-2xl font-bold">{t("auth.title")}</CardTitle>
+          <p className="text-muted-foreground text-sm mt-1">{t("auth.createAccount")}</p>
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
@@ -66,14 +68,14 @@ export default function Register() {
 
             <div className="relative flex items-center">
               <div className="flex-1 border-t border-border" />
-              <span className="mx-3 text-xs text-muted-foreground">or</span>
+              <span className="mx-3 text-xs text-muted-foreground">{t("auth.orDivider")}</span>
               <div className="flex-1 border-t border-border" />
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
                 <label htmlFor="email" className="text-sm font-medium block mb-1">
-                  Email
+                  {t("auth.emailLabel")}
                 </label>
                 <Input
                   id="email"
@@ -81,7 +83,7 @@ export default function Register() {
                   autoComplete="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@example.com"
+                  placeholder={t("auth.emailPlaceholder")}
                   required
                   disabled={loading}
                 />
@@ -89,7 +91,7 @@ export default function Register() {
 
               <div>
                 <label htmlFor="password" className="text-sm font-medium block mb-1">
-                  Password
+                  {t("auth.passwordLabel")}
                 </label>
                 <div className="relative">
                   <Input
@@ -98,7 +100,7 @@ export default function Register() {
                     autoComplete="new-password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    placeholder="••••••••"
+                    placeholder={t("auth.passwordPlaceholder")}
                     required
                     minLength={8}
                     disabled={loading}
@@ -108,19 +110,20 @@ export default function Register() {
                     type="button"
                     onClick={() => setShowPassword((v) => !v)}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    aria-label={showPassword ? t("auth.hidePassword") : t("auth.showPassword")}
                     tabIndex={-1}
                   >
                     {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">
-                  At least 8 characters, including a digit or symbol.
+                  {t("auth.passwordHint")}
                 </p>
               </div>
 
               <div>
                 <label htmlFor="confirmPassword" className="text-sm font-medium block mb-1">
-                  Confirm password
+                  {t("auth.confirmPasswordLabel")}
                 </label>
                 <Input
                   id="confirmPassword"
@@ -128,7 +131,7 @@ export default function Register() {
                   autoComplete="new-password"
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
-                  placeholder="••••••••"
+                  placeholder={t("auth.passwordPlaceholder")}
                   required
                   disabled={loading}
                 />
@@ -142,17 +145,17 @@ export default function Register() {
                 {loading ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Creating account…
+                    {t("auth.creatingAccount")}
                   </>
                 ) : (
-                  "Create account"
+                  t("auth.createAccountButton")
                 )}
               </Button>
 
               <p className="text-center text-sm text-muted-foreground">
-                Already have an account?{" "}
+                {t("auth.alreadyHaveAccount")}{" "}
                 <Link to="/login" className="text-primary hover:underline">
-                  Sign in
+                  {t("auth.signInButton")}
                 </Link>
               </p>
             </form>
@@ -162,3 +165,4 @@ export default function Register() {
     </div>
   );
 }
+

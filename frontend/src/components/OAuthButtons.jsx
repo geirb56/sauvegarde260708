@@ -22,6 +22,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import axios from "axios";
 import { API_BASE_URL } from "@/config";
 import { useAuth } from "@/context/AuthContext";
+import { useLanguage } from "@/context/LanguageContext";
 import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
 
@@ -35,7 +36,7 @@ const APPLE_REDIRECT_URI =
 
 // ── Google Sign-In ────────────────────────────────────────────────────────────
 
-function useGoogleSignIn({ onSuccess, onError }) {
+function useGoogleSignIn({ onSuccess, onError, t }) {
   const [ready, setReady] = useState(false);
   const [loading, setLoading] = useState(false);
 
@@ -60,7 +61,7 @@ function useGoogleSignIn({ onSuccess, onError }) {
           if (response.credential) {
             handleGoogleCredential(response.credential);
           } else {
-            onError("Google sign-in was cancelled or failed.");
+            onError(t("auth.googleCancelled"));
           }
         },
         cancel_on_tap_outside: true,
@@ -68,7 +69,7 @@ function useGoogleSignIn({ onSuccess, onError }) {
       setReady(true);
     };
     script.onerror = () => {
-      onError("Failed to load Google sign-in. Please try again.");
+      onError(t("auth.googleLoadFailed"));
     };
     document.head.appendChild(script);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -86,22 +87,22 @@ function useGoogleSignIn({ onSuccess, onError }) {
         const msg =
           err.response?.data?.detail ||
           err.response?.data?.message ||
-          "Google sign-in failed. Please try again.";
+          t("auth.googleFailed");
         onError(msg);
       } finally {
         setLoading(false);
       }
     },
-    [onSuccess, onError]
+    [onSuccess, onError, t]
   );
 
   const signIn = useCallback(() => {
     if (!GOOGLE_CLIENT_ID) {
-      onError("Google sign-in is not configured.");
+      onError(t("auth.googleNotConfigured"));
       return;
     }
     if (!window.google?.accounts) {
-      onError("Google sign-in is not available. Please refresh the page.");
+      onError(t("auth.googleUnavailable"));
       return;
     }
     window.google.accounts.id.prompt((notification) => {
@@ -127,14 +128,14 @@ function useGoogleSignIn({ onSuccess, onError }) {
         document.body.removeChild(btn);
       }
     });
-  }, [onError]);
+  }, [onError, t]);
 
   return { signIn, ready: ready && !!GOOGLE_CLIENT_ID, loading };
 }
 
 // ── Apple Sign-In ─────────────────────────────────────────────────────────────
 
-function useAppleSignIn({ onSuccess, onError }) {
+function useAppleSignIn({ onSuccess, onError, t }) {
   const [ready, setReady] = useState(false);
   const [loading, setLoading] = useState(false);
 
@@ -162,7 +163,7 @@ function useAppleSignIn({ onSuccess, onError }) {
       setReady(true);
     };
     script.onerror = () => {
-      onError("Failed to load Apple sign-in. Please try again.");
+      onError(t("auth.appleLoadFailed"));
     };
     document.head.appendChild(script);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -170,11 +171,11 @@ function useAppleSignIn({ onSuccess, onError }) {
 
   const signIn = useCallback(async () => {
     if (!APPLE_CLIENT_ID) {
-      onError("Apple sign-in is not configured.");
+      onError(t("auth.appleNotConfigured"));
       return;
     }
     if (!window.AppleID?.auth) {
-      onError("Apple sign-in is not available. Please refresh the page.");
+      onError(t("auth.appleUnavailable"));
       return;
     }
 
@@ -185,7 +186,7 @@ function useAppleSignIn({ onSuccess, onError }) {
       const email = result?.user?.email || null;
 
       if (!idToken) {
-        onError("Apple sign-in did not return an identity token.");
+        onError(t("auth.appleNoToken"));
         return;
       }
 
@@ -196,23 +197,23 @@ function useAppleSignIn({ onSuccess, onError }) {
       onSuccess(res.data);
     } catch (err) {
       if (err?.error === "popup_closed_by_user" || err?.error === "user_cancelled_authorize") {
-        onError("Apple sign-in was cancelled.");
+        onError(t("auth.appleCancelled"));
       } else if (err?.response) {
         const msg =
           err.response?.data?.detail ||
           err.response?.data?.message ||
-          "Apple sign-in failed. Please try again.";
+          t("auth.appleFailed");
         onError(msg);
       } else if (err?.error) {
         // Apple JS SDK error codes
-        onError("Apple sign-in failed. Please try again.");
+        onError(t("auth.appleFailed"));
       } else {
-        onError("Apple sign-in failed. Please try again.");
+        onError(t("auth.appleFailed"));
       }
     } finally {
       setLoading(false);
     }
-  }, [onError, onSuccess]);
+  }, [onError, onSuccess, t]);
 
   return { signIn, ready: ready && !!APPLE_CLIENT_ID, loading };
 }
@@ -224,6 +225,7 @@ function useAppleSignIn({ onSuccess, onError }) {
  */
 export default function OAuthButtons({ onError, onSuccess }) {
   const { loginWithToken } = useAuth();
+  const { t } = useLanguage();
 
   const handleSuccess = useCallback(
     (data) => {
@@ -234,8 +236,8 @@ export default function OAuthButtons({ onError, onSuccess }) {
     [loginWithToken, onSuccess]
   );
 
-  const google = useGoogleSignIn({ onSuccess: handleSuccess, onError });
-  const apple = useAppleSignIn({ onSuccess: handleSuccess, onError });
+  const google = useGoogleSignIn({ onSuccess: handleSuccess, onError, t });
+  const apple = useAppleSignIn({ onSuccess: handleSuccess, onError, t });
 
   const hasGoogle = !!GOOGLE_CLIENT_ID;
   const hasApple = !!APPLE_CLIENT_ID;
@@ -251,14 +253,14 @@ export default function OAuthButtons({ onError, onSuccess }) {
           className="w-full flex items-center justify-center gap-2"
           onClick={google.signIn}
           disabled={!google.ready || google.loading}
-          aria-label="Continue with Google"
+          aria-label={t("auth.continueWithGoogle")}
         >
           {google.loading ? (
             <Loader2 className="w-4 h-4 animate-spin" />
           ) : (
             <GoogleIcon />
           )}
-          Continue with Google
+          {t("auth.continueWithGoogle")}
         </Button>
       )}
 
@@ -269,14 +271,14 @@ export default function OAuthButtons({ onError, onSuccess }) {
           className="w-full flex items-center justify-center gap-2"
           onClick={apple.signIn}
           disabled={!apple.ready || apple.loading}
-          aria-label="Continue with Apple"
+          aria-label={t("auth.continueWithApple")}
         >
           {apple.loading ? (
             <Loader2 className="w-4 h-4 animate-spin" />
           ) : (
             <AppleIcon />
           )}
-          Continue with Apple
+          {t("auth.continueWithApple")}
         </Button>
       )}
     </div>
