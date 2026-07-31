@@ -23,6 +23,26 @@ Security notes:
       the OAuth identity is linked to that same account (no duplicate user).
     - The provider ID token is verified and then discarded; only the RunIndex
       JWT is returned to the frontend.
+
+Race-condition strategy (identity-first, idempotent):
+    The unique index on ``auth_identities(provider, provider_subject)`` is used
+    as the serialization point for concurrent OAuth requests for the same identity.
+
+    New-user creation flow:
+    1. FAST PATH — Existing identity → return associated user.
+       If the user document is missing (partial-failure recovery), fall through
+       to create it with the identity's existing user_id (self-healing).
+    2. EMAIL LINK PATH — Verified email matches an existing RunIndex user
+       → insert identity linked to that user; no new user created.
+    3. CLAIM PATH — Generate new_user_id, insert auth_identity FIRST.
+       • DuplicateKeyError → another concurrent request already claimed this
+         identity; look up and return the canonical user.  No orphan user or
+         subscription is ever created by the losing request.
+       • Success → create user document, then FREE subscription (both guarded
+         by DuplicateKeyError to be idempotent against further partial failures).
+
+    Result: at most one user document and one FREE subscription are created per
+    (provider, provider_subject) pair, regardless of concurrent requests.
 """
 
 from __future__ import annotations
@@ -39,6 +59,7 @@ from auth.jwt_utils import create_access_token
 from auth.models import TokenResponse, UserResponse
 from auth.oauth_models import AppleAuthRequest, GoogleAuthRequest
 from auth.oauth_utils import verify_apple_id_token, verify_google_id_token
+from subscription_manager import create_free_subscription
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +77,12 @@ def _user_to_response(user: dict) -> UserResponse:
         created_at=user["created_at"],
         last_login_at=user.get("last_login_at"),
     )
+
+
+def _strip_sensitive(user: dict) -> dict:
+    """Return a copy of *user* with sensitive fields removed."""
+    exclude = {"password_hash", "reset_password_token_hash", "reset_password_expires_at"}
+    return {k: v for k, v in user.items() if k not in exclude}
 
 
 async def _find_or_create_oauth_user(
@@ -82,51 +109,86 @@ async def _find_or_create_oauth_user(
         The RunIndex user document (without sensitive fields).
     """
     now = datetime.now(timezone.utc)
+    _projection = {"_id": 0, "password_hash": 0,
+                   "reset_password_token_hash": 0, "reset_password_expires_at": 0}
 
-    # 1) Existing provider identity → same RunIndex user.
+    # ── FAST PATH: Existing provider identity → same RunIndex user ─────────────
     identity = await db.auth_identities.find_one(
         {"provider": provider, "provider_subject": provider_subject},
         {"_id": 0},
     )
 
     if identity:
-        user = await db.users.find_one(
-            {"id": identity["user_id"]},
-            {"_id": 0, "password_hash": 0,
-             "reset_password_token_hash": 0, "reset_password_expires_at": 0},
-        )
-        if not user:
-            logger.error(
-                "auth_identities references missing user %s (provider=%s sub=%s)",
-                identity["user_id"], provider, provider_subject,
+        user = await db.users.find_one({"id": identity["user_id"]}, _projection)
+        if user:
+            if not user.get("is_active", True):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Account is disabled. Please contact support.",
+                )
+            await db.users.update_one(
+                {"id": user["id"]},
+                {"$set": {"last_login_at": now, "updated_at": now}},
             )
+            await db.auth_identities.update_one(
+                {"provider": provider, "provider_subject": provider_subject},
+                {"$set": {"updated_at": now, "email": provider_email}},
+            )
+            user["last_login_at"] = now
+            logger.info("OAuth login: user=%s provider=%s", user["id"], provider)
+            return user
+
+        # Self-healing: identity exists but its user is missing (partial failure).
+        # We re-use the existing user_id so the identity stays consistent, and
+        # fall through to create the missing user document and subscription below.
+        logger.warning(
+            "auth_identities references missing user %s (provider=%s sub=%s) — self-healing",
+            identity["user_id"], provider, provider_subject,
+        )
+        new_user_id = identity["user_id"]
+        provider_email_normalized = provider_email.strip().lower() if provider_email else None
+        display_email = (
+            provider_email_normalized
+            if provider_email_normalized
+            else f"{provider}.{provider_subject}@oauth.runindex.internal"
+        )
+        if not provider_email_normalized:
+            email_verified = False
+        user_doc = {
+            "id": new_user_id,
+            "email": display_email,
+            "password_hash": None,
+            "is_email_verified": email_verified,
+            "is_active": True,
+            "auth_providers": [provider],
+            "created_at": now,
+            "updated_at": now,
+            "last_login_at": now,
+        }
+        try:
+            await db.users.insert_one(user_doc)
+        except DuplicateKeyError:
+            # Another healer won; just fetch the user.
+            user = await db.users.find_one({"id": new_user_id}, _projection)
+            if user:
+                return user
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Authentication error. Please try again.",
             )
-        if not user.get("is_active", True):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Account is disabled. Please contact support.",
-            )
-
-        update_set: dict = {"last_login_at": now, "updated_at": now}
-        await db.users.update_one({"id": user["id"]}, {"$set": update_set})
-        await db.auth_identities.update_one(
-            {"provider": provider, "provider_subject": provider_subject},
-            {"$set": {"updated_at": now, "email": provider_email}},
-        )
-        user["last_login_at"] = now
-        logger.info("OAuth login: user=%s provider=%s", user["id"], provider)
-        return user
+        try:
+            await create_free_subscription(db, new_user_id)
+        except DuplicateKeyError:
+            pass  # Subscription already exists — idempotent.
+        logger.info("Self-healed OAuth user: user=%s provider=%s", new_user_id, provider)
+        return _strip_sensitive(user_doc)
 
     provider_email_normalized = provider_email.strip().lower() if provider_email else None
 
-    # 2) Unknown identity + verified email: reuse existing RunIndex user by email.
+    # ── EMAIL LINK PATH: Verified email → reuse existing RunIndex user ─────────
     if provider_email_normalized and email_verified:
         existing_user = await db.users.find_one(
-            {"email": provider_email_normalized},
-            {"_id": 0, "password_hash": 0, "reset_password_token_hash": 0, "reset_password_expires_at": 0},
+            {"email": provider_email_normalized}, _projection,
         )
         if existing_user:
             if not existing_user.get("is_active", True):
@@ -134,7 +196,6 @@ async def _find_or_create_oauth_user(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Account is disabled. Please contact support.",
                 )
-
             await db.users.update_one(
                 {"id": existing_user["id"]},
                 {
@@ -146,7 +207,6 @@ async def _find_or_create_oauth_user(
                     "$addToSet": {"auth_providers": provider},
                 },
             )
-
             try:
                 await db.auth_identities.insert_one({
                     "user_id": existing_user["id"],
@@ -157,18 +217,17 @@ async def _find_or_create_oauth_user(
                     "updated_at": now,
                 })
             except DuplicateKeyError:
+                # Concurrent request already linked the identity — harmless.
                 pass
-
             existing_user["last_login_at"] = now
             existing_user["is_email_verified"] = True
             logger.info(
                 "OAuth identity linked to existing user: user=%s provider=%s",
-                existing_user["id"],
-                provider,
+                existing_user["id"], provider,
             )
             return existing_user
 
-    # 3) Unknown identity: create a new RunIndex user.
+    # ── CLAIM PATH: New RunIndex user — identity-first to prevent orphans ──────
     if provider_email_normalized:
         display_email = provider_email_normalized
     else:
@@ -176,6 +235,44 @@ async def _find_or_create_oauth_user(
         email_verified = False
 
     new_user_id = str(uuid.uuid4())
+
+    # Step 1 — Claim the identity slot FIRST.  The unique index serializes
+    # concurrent requests: only one insert_one can succeed.
+    try:
+        await db.auth_identities.insert_one({
+            "user_id": new_user_id,
+            "provider": provider,
+            "provider_subject": provider_subject,
+            "email": provider_email_normalized,
+            "created_at": now,
+            "updated_at": now,
+        })
+    except DuplicateKeyError:
+        # Another concurrent request claimed this identity first.
+        # Look up the canonical user — no orphan user or subscription is created
+        # by this (losing) request.
+        identity = await db.auth_identities.find_one(
+            {"provider": provider, "provider_subject": provider_subject},
+            {"_id": 0, "user_id": 1},
+        )
+        if identity and identity.get("user_id"):
+            user = await db.users.find_one({"id": identity["user_id"]}, _projection)
+            if user:
+                logger.info(
+                    "OAuth concurrent-claim: canonical user=%s provider=%s",
+                    user["id"], provider,
+                )
+                return user
+        logger.error(
+            "OAuth concurrent-claim: could not resolve canonical user (provider=%s sub=%s)",
+            provider, provider_subject,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Authentication error. Please try again.",
+        )
+
+    # Step 2 — Create user document (we own new_user_id because we won step 1).
     user_doc = {
         "id": new_user_id,
         "email": display_email,
@@ -187,88 +284,28 @@ async def _find_or_create_oauth_user(
         "updated_at": now,
         "last_login_at": now,
     }
-
     try:
         await db.users.insert_one(user_doc)
     except DuplicateKeyError:
-        # Race safety: if a verified email account appeared concurrently,
-        # bind to it instead of creating a duplicate RunIndex account.
-        if provider_email_normalized and email_verified:
-            existing_user = await db.users.find_one(
-                {"email": provider_email_normalized},
-                {"_id": 0, "password_hash": 0, "reset_password_token_hash": 0, "reset_password_expires_at": 0},
-            )
-            if existing_user:
-                await db.users.update_one(
-                    {"id": existing_user["id"]},
-                    {
-                        "$set": {"last_login_at": now, "updated_at": now, "is_email_verified": True},
-                        "$addToSet": {"auth_providers": provider},
-                    },
-                )
-                try:
-                    await db.auth_identities.insert_one({
-                        "user_id": existing_user["id"],
-                        "provider": provider,
-                        "provider_subject": provider_subject,
-                        "email": provider_email_normalized,
-                        "created_at": now,
-                        "updated_at": now,
-                    })
-                except DuplicateKeyError:
-                    pass
-                existing_user["last_login_at"] = now
-                existing_user["is_email_verified"] = True
-                return existing_user
-        raise
-
-    logger.info("New OAuth user created: user=%s provider=%s", new_user_id, provider)
-
-    # 4) Create FREE subscription — same logic as email/password registration.
-    await db.subscriptions.insert_one({
-        "user_id": new_user_id,
-        "status": "free",
-        "created_at": now.isoformat(),
-        "trial_start": None,
-        "trial_end": None,
-        "trial_used": False,
-        "garmin_identity": None,
-        "stripe_customer_id": None,
-        "stripe_subscription_id": None,
-        "price_locked": None,
-        "updated_at": now.isoformat(),
-    })
-    logger.info("FREE subscription created for OAuth user: %s", new_user_id)
-
-    # 5) Record provider identity.
-    try:
-        await db.auth_identities.insert_one({
-            "user_id": new_user_id,
-            "provider": provider,
-            "provider_subject": provider_subject,
-            "email": provider_email_normalized,
-            "created_at": now,
-            "updated_at": now,
-        })
-    except DuplicateKeyError:
-        # Another request linked the identity first: return the canonical user.
-        identity = await db.auth_identities.find_one(
-            {"provider": provider, "provider_subject": provider_subject},
-            {"_id": 0, "user_id": 1},
-        )
-        if identity and identity.get("user_id"):
-            existing_user = await db.users.find_one(
-                {"id": identity["user_id"]},
-                {"_id": 0, "password_hash": 0, "reset_password_token_hash": 0, "reset_password_expires_at": 0},
-            )
-            if existing_user:
-                return existing_user
+        # Should not happen (UUID is unique), but guard defensively.
+        logger.error("UUID collision for new OAuth user %s — this is extremely unlikely", new_user_id)
+        user = await db.users.find_one({"id": new_user_id}, _projection)
+        if user:
+            return user
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Authentication error. Please try again.",
         )
+    logger.info("New OAuth user created: user=%s provider=%s", new_user_id, provider)
 
-    return user_doc
+    # Step 3 — Create FREE subscription via subscription_manager (canonical model).
+    try:
+        await create_free_subscription(db, new_user_id)
+    except DuplicateKeyError:
+        pass  # Idempotent guard; subscription already exists.
+    logger.info("FREE subscription created for OAuth user: %s", new_user_id)
+
+    return _strip_sensitive(user_doc)
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
