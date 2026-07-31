@@ -7,6 +7,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 # Auth module — JWT-based multi-user identity
 from auth.router import auth_router
+from auth.oauth_router import oauth_router
 from auth.dependencies import get_current_user
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -5986,6 +5987,9 @@ api_router.include_router(garmin_router)
 
 # Register authentication endpoints under /api/auth/*
 api_router.include_router(auth_router)
+
+# Register OAuth authentication endpoints under /api/auth/google and /api/auth/apple
+api_router.include_router(oauth_router)
 
 # Include the router
 app.include_router(api_router)

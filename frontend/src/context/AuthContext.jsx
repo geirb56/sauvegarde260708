@@ -6,6 +6,7 @@
  *   loading      boolean — true during initial session check
  *   login(email, password) → { ok, error? }
  *   register(email, password) → { ok, error? }
+ *   loginWithToken(access_token, user) → { ok }
  *   logout()
  *   refreshUser() — re-fetch /auth/me and update user state
  */
@@ -114,6 +115,23 @@ export function AuthProvider({ children }) {
     }
   }, []);
 
+  /**
+   * Called after a successful OAuth flow.
+   *
+   * The backend has already verified the provider token and issued a RunIndex
+   * JWT.  The frontend only stores this JWT — it never derives identity from
+   * the OAuth provider directly.
+   *
+   * @param {string} access_token  RunIndex JWT returned by the backend.
+   * @param {object} userData      User object returned by the backend.
+   * @returns {{ ok: true }}
+   */
+  const loginWithToken = useCallback((access_token, userData) => {
+    saveToken(access_token);
+    setUser(userData);
+    return { ok: true };
+  }, []);
+
   const logout = useCallback(async () => {
     const token = loadToken();
     if (token) {
@@ -133,7 +151,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout, refreshUser }}>
+    <AuthContext.Provider value={{ user, loading, login, register, loginWithToken, logout, refreshUser }}>
       {children}
     </AuthContext.Provider>
   );
