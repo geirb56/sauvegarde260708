@@ -23,6 +23,7 @@ import Login from "@/pages/Login";
 import Register from "@/pages/Register";
 import ForgotPassword from "@/pages/ForgotPassword";
 import ResetPassword from "@/pages/ResetPassword";
+import Admin from "@/pages/Admin";
 import Layout from "@/components/Layout";
 import IOSPWAHint from "@/components/IOSPWAHint";
 
@@ -36,6 +37,20 @@ function ProtectedRoute({ children }) {
     );
   }
   if (!user) return <Navigate to="/login" replace />;
+  return children;
+}
+
+function AdminRoute({ children }) {
+  const { user, loading } = useAuth();
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+  if (!user) return <Navigate to="/login" replace />;
+  if (!user.is_admin) return <Navigate to="/" replace />;
   return children;
 }
 
@@ -74,6 +89,14 @@ function App() {
                     <Route path="onboarding" element={<Onboarding />} />
                     <Route path="settings" element={<Settings />} />
                     <Route path="subscription" element={<Subscription />} />
+                    <Route
+                      path="admin"
+                      element={(
+                        <AdminRoute>
+                          <Admin />
+                        </AdminRoute>
+                      )}
+                    />
                   </Route>
                 </Routes>
               </BrowserRouter>

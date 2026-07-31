@@ -9,6 +9,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from auth.router import auth_router
 from auth.oauth_router import oauth_router
 from auth.dependencies import get_current_user
+from admin.router import admin_router
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -5984,6 +5985,9 @@ api_router.include_router(auth_router)
 
 # Register OAuth authentication endpoints under /api/auth/google and /api/auth/apple
 api_router.include_router(oauth_router)
+
+# Register admin endpoints under /api/admin/*
+api_router.include_router(admin_router)
 
 # Include the router
 app.include_router(api_router)

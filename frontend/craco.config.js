@@ -68,6 +68,13 @@ const webpackConfig = {
       return webpackConfig;
     },
   },
+  jest: {
+    configure: {
+      moduleNameMapper: {
+        "^@/(.*)$": "<rootDir>/src/$1",
+      },
+    },
+  },
 };
 
 // Only add babel metadata plugin during dev server
