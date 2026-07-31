@@ -8,27 +8,8 @@ import { toast } from "sonner";
 
 import { API_BASE_URL } from "@/config";
 import { useAuth } from "@/context/AuthContext";
+import { useLanguage } from "@/context/LanguageContext";
 const API = API_BASE_URL;
-
-const STEPS = [
-  { key: "welcome", title: "Welcome" },
-  { key: "fitness", title: "Fitness level" },
-  { key: "goal", title: "Goal" },
-  { key: "frequency", title: "Training frequency" },
-  { key: "device", title: "Device connection" },
-  { key: "target", title: "Training plan target" },
-];
-
-const FITNESS_OPTIONS = ["Beginner", "Intermediate", "Advanced"];
-const GOAL_OPTIONS = [
-  "Improve performance",
-  "Get fitter / healthier",
-  "Lose weight",
-  "Reduce stress",
-];
-const FREQUENCY_OPTIONS = ["1–2 times/week", "3–4 times/week", "5+ times/week"];
-const DEVICE_OPTIONS = ["Apple Health", "Garmin", "Whoop", "Fitbit"];
-const TARGET_OPTIONS = ["5km", "10km", "semi", "marathon", "ultra trail"];
 
 function OptionGrid({ options, value, onSelect, testIdPrefix }) {
   return (
@@ -53,6 +34,7 @@ function OptionGrid({ options, value, onSelect, testIdPrefix }) {
 
 export default function Onboarding() {
   const { user } = useAuth();
+  const { t } = useLanguage();
   const userId = user?.id;
   const navigate = useNavigate();
   const [stepIndex, setStepIndex] = useState(0);
@@ -68,6 +50,39 @@ export default function Onboarding() {
   const [garminStatus, setGarminStatus] = useState("idle"); // idle | connecting | connected | mfa_required | error
   const [garminCount, setGarminCount] = useState(0);
 
+  const STEPS = useMemo(() => [
+    { key: "welcome", title: t("onboarding.welcome") },
+    { key: "fitness", title: t("onboarding.fitnessLevel") },
+    { key: "goal", title: t("onboarding.goal") },
+    { key: "frequency", title: t("onboarding.frequency") },
+    { key: "device", title: t("onboarding.device") },
+    { key: "target", title: t("onboarding.target") },
+  ], [t]);
+
+  const FITNESS_OPTIONS = [
+    t("onboarding.fitnessOptions.beginner"),
+    t("onboarding.fitnessOptions.intermediate"),
+    t("onboarding.fitnessOptions.advanced"),
+  ];
+  const GOAL_OPTIONS = [
+    t("onboarding.goalOptions.performance"),
+    t("onboarding.goalOptions.fitness"),
+    t("onboarding.goalOptions.weight"),
+    t("onboarding.goalOptions.stress"),
+  ];
+  const FREQUENCY_OPTIONS = [
+    t("onboarding.frequencyOptions.low"),
+    t("onboarding.frequencyOptions.medium"),
+    t("onboarding.frequencyOptions.high"),
+  ];
+  const DEVICE_OPTIONS = [
+    t("onboarding.deviceOptions.appleHealth"),
+    t("onboarding.deviceOptions.garmin"),
+    t("onboarding.deviceOptions.whoop"),
+    t("onboarding.deviceOptions.fitbit"),
+  ];
+  const TARGET_OPTIONS = ["5km", "10km", "semi", "marathon", "ultra trail"];
+
   const connectGarmin = async () => {
     setGarminStatus("connecting");
     try {
@@ -81,7 +96,7 @@ export default function Onboarding() {
           setGarminCount(0);
         }
         setGarminStatus("connected");
-        toast.success("Garmin connected");
+        toast.success(t("onboarding.garminConnectedToast"));
       } else if (res.data?.status === "mfa_required") {
         setGarminStatus("mfa_required");
       } else {
@@ -116,7 +131,7 @@ export default function Onboarding() {
     if (key === "device") return Boolean(device);
     if (key === "target") return Boolean(target);
     return false;
-  }, [stepIndex, fitnessLevel, goal, frequency, device, target]);
+  }, [stepIndex, fitnessLevel, goal, frequency, device, target, STEPS]);
 
   const recommendation = useMemo(() => {
     if (!target || !fitnessLevel || !goal || !frequency) return null;
@@ -157,9 +172,9 @@ export default function Onboarding() {
       "ultra trail": "ULTRA",
     };
     const sessionsMap = {
-      "1–2 times/week": 2,
-      "3–4 times/week": 4,
-      "5+ times/week": 6,
+      [t("onboarding.frequencyOptions.low")]: 2,
+      [t("onboarding.frequencyOptions.medium")]: 4,
+      [t("onboarding.frequencyOptions.high")]: 6,
     };
 
     setSaving(true);
@@ -167,13 +182,13 @@ export default function Onboarding() {
       await axios.post(`${API}/training/set-goal?goal=${targetMap[target]}`, {}, {
         headers: { "X-User-Id": userId },
       });
-      await axios.post(`${API}/training/refresh?sessions=${sessionsMap[frequency]}`, {}, {
+      await axios.post(`${API}/training/refresh?sessions=${sessionsMap[frequency] || 4}`, {}, {
         headers: { "X-User-Id": userId },
       });
-      toast.success("Personalized plan updated");
+      toast.success(t("onboarding.planUpdated"));
       navigate("/training");
     } catch (err) {
-      toast.error("Unable to save onboarding choices");
+      toast.error(t("onboarding.planError"));
     } finally {
       setSaving(false);
     }
@@ -187,7 +202,7 @@ export default function Onboarding() {
         <CardContent className="p-6 space-y-5">
           <div className="flex items-center justify-between">
             <p className="font-mono text-xs uppercase tracking-widest text-muted-foreground">
-              Step {stepIndex + 1} / {STEPS.length}
+              {t("onboarding.stepLabel").replace("{current}", stepIndex + 1).replace("{total}", STEPS.length)}
             </p>
             <p className="font-mono text-xs text-muted-foreground">{STEPS[stepIndex].title}</p>
           </div>
@@ -200,50 +215,50 @@ export default function Onboarding() {
                 className="h-12 w-auto"
                 data-testid="onboarding-logo"
               />
-              <h1 className="text-3xl font-black tracking-tight">Turn your data into performance</h1>
+              <h1 className="text-3xl font-black tracking-tight">{t("onboarding.tagline")}</h1>
               <Button
                 onClick={handleNext}
                 className="w-full bg-primary text-white font-bold uppercase tracking-wider"
                 data-testid="onboarding-start"
               >
-                Start my optimization
+                {t("onboarding.startButton")}
               </Button>
             </div>
           )}
 
           {stepKey === "fitness" && (
             <div className="space-y-3">
-              <h2 className="text-lg font-semibold">Select your fitness level</h2>
+              <h2 className="text-lg font-semibold">{t("onboarding.selectFitness")}</h2>
               <OptionGrid options={FITNESS_OPTIONS} value={fitnessLevel} onSelect={setFitnessLevel} testIdPrefix="fitness-option" />
             </div>
           )}
 
           {stepKey === "goal" && (
             <div className="space-y-3">
-              <h2 className="text-lg font-semibold">What's your primary goal?</h2>
+              <h2 className="text-lg font-semibold">{t("onboarding.selectGoal")}</h2>
               <OptionGrid options={GOAL_OPTIONS} value={goal} onSelect={setGoal} testIdPrefix="goal-option" />
             </div>
           )}
 
           {stepKey === "frequency" && (
             <div className="space-y-3">
-              <h2 className="text-lg font-semibold">How often do you want to train?</h2>
+              <h2 className="text-lg font-semibold">{t("onboarding.selectFrequency")}</h2>
               <OptionGrid options={FREQUENCY_OPTIONS} value={frequency} onSelect={setFrequency} testIdPrefix="frequency-option" />
             </div>
           )}
 
           {stepKey === "device" && (
             <div className="space-y-3">
-              <h2 className="text-lg font-semibold">Connect your device</h2>
+              <h2 className="text-lg font-semibold">{t("onboarding.connectDevice")}</h2>
               <OptionGrid options={DEVICE_OPTIONS} value={device} onSelect={setDevice} testIdPrefix="device-option" />
 
-              {device === "Garmin" && (
+              {device === t("onboarding.deviceOptions.garmin") && (
                 <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-3" data-testid="garmin-connect-panel">
                   {garminStatus === "connected" ? (
                     <div className="flex items-center gap-2 text-chart-2" data-testid="garmin-connected">
                       <Check className="w-4 h-4 flex-shrink-0" />
                       <span className="font-mono text-xs uppercase tracking-wider">
-                        Garmin connected · {garminCount} activities synced
+                        {t("onboarding.garminConnected").replace("{count}", garminCount)}
                       </span>
                     </div>
                   ) : garminStatus === "mfa_required" ? (
@@ -251,7 +266,7 @@ export default function Onboarding() {
                       <div className="flex items-start gap-2 text-amber-400">
                         <ShieldAlert className="w-4 h-4 flex-shrink-0 mt-0.5" />
                         <span className="font-mono text-xs">
-                          Additional verification was requested by Garmin. Please retry the connection.
+                          {t("onboarding.garminMfa")}
                         </span>
                       </div>
                       <Button
@@ -259,20 +274,20 @@ export default function Onboarding() {
                         className="w-full bg-primary text-white font-bold uppercase tracking-wider text-xs h-9"
                         data-testid="garmin-retry"
                       >
-                        Retry connection
+                        {t("onboarding.garminRetry")}
                       </Button>
                     </div>
                   ) : garminStatus === "error" ? (
                     <div className="space-y-3" data-testid="garmin-error">
                       <p className="font-mono text-xs text-destructive">
-                        Garmin connection failed. Please try again.
+                        {t("onboarding.garminFailed")}
                       </p>
                       <Button
                         onClick={connectGarmin}
                         className="w-full bg-primary text-white font-bold uppercase tracking-wider text-xs h-9"
                         data-testid="garmin-retry"
                       >
-                        Try again
+                        {t("onboarding.garminTryAgain")}
                       </Button>
                     </div>
                   ) : (
@@ -287,7 +302,7 @@ export default function Onboarding() {
                       ) : (
                         <Activity className="w-4 h-4" />
                       )}
-                      Connect Garmin
+                      {garminStatus === "connecting" ? t("onboarding.garminConnecting") : t("onboarding.garminConnect")}
                     </Button>
                   )}
                 </div>
@@ -298,16 +313,16 @@ export default function Onboarding() {
           {stepKey === "target" && (
             <div className="space-y-4">
               <div className="space-y-3">
-                <h2 className="text-lg font-semibold">Select your training plan target</h2>
+                <h2 className="text-lg font-semibold">{t("onboarding.selectTarget")}</h2>
                 <OptionGrid options={TARGET_OPTIONS} value={target} onSelect={setTarget} testIdPrefix="target-option" />
               </div>
 
               <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-2" data-testid="onboarding-recommendation">
-                <p className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">Personalized recommendation</p>
+                <p className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">{t("onboarding.personalizedRec")}</p>
                 {loadingPhysio ? (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    Loading physiological data...
+                    {t("onboarding.loadingPhysio")}
                   </div>
                 ) : recommendation ? (
                   <>
@@ -316,7 +331,7 @@ export default function Onboarding() {
                     <p className="text-xs text-muted-foreground">{recommendation.detail}</p>
                   </>
                 ) : (
-                  <p className="text-sm text-muted-foreground">Complete selections to generate your recommendation.</p>
+                  <p className="text-sm text-muted-foreground">{t("onboarding.completeSelections")}</p>
                 )}
               </div>
             </div>
@@ -325,15 +340,15 @@ export default function Onboarding() {
           {stepKey !== "welcome" && (
             <div className="flex items-center gap-2 pt-2">
               <Button variant="outline" onClick={handleBack} disabled={stepIndex === 0}>
-                Back
+                {t("onboarding.back")}
               </Button>
               {stepKey !== "target" ? (
                 <Button onClick={handleNext} disabled={!canContinue} className="ml-auto">
-                  Continue
+                  {t("onboarding.continue")}
                 </Button>
               ) : (
                 <Button onClick={handleApplyPlan} disabled={!canContinue || saving} className="ml-auto" data-testid="apply-onboarding-plan">
-                  {saving ? "Saving..." : "Apply my plan"}
+                  {saving ? t("onboarding.saving") : t("onboarding.applyPlan")}
                 </Button>
               )}
             </div>

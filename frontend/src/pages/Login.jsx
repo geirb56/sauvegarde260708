@@ -29,7 +29,7 @@ export default function Login() {
     setLoading(false);
 
     if (result.ok) {
-      toast.success("Welcome back!");
+      toast.success(t("auth.welcomeBack"));
       navigate("/", { replace: true });
     } else {
       setError(result.error);
@@ -37,7 +37,7 @@ export default function Login() {
   };
 
   const handleOAuthSuccess = () => {
-    toast.success("Welcome back!");
+    toast.success(t("auth.welcomeBack"));
     navigate("/", { replace: true });
   };
 
@@ -45,8 +45,8 @@ export default function Login() {
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
-          <CardTitle className="text-2xl font-bold">RunIndex</CardTitle>
-          <p className="text-muted-foreground text-sm mt-1">Sign in to your account</p>
+          <CardTitle className="text-2xl font-bold">{t("auth.title")}</CardTitle>
+          <p className="text-muted-foreground text-sm mt-1">{t("auth.signIn")}</p>
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
@@ -57,14 +57,14 @@ export default function Login() {
 
             <div className="relative flex items-center">
               <div className="flex-1 border-t border-border" />
-              <span className="mx-3 text-xs text-muted-foreground">or</span>
+              <span className="mx-3 text-xs text-muted-foreground">{t("auth.orDivider")}</span>
               <div className="flex-1 border-t border-border" />
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
                 <label htmlFor="email" className="text-sm font-medium block mb-1">
-                  Email
+                  {t("auth.emailLabel")}
                 </label>
                 <Input
                   id="email"
@@ -72,7 +72,7 @@ export default function Login() {
                   autoComplete="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@example.com"
+                  placeholder={t("auth.emailPlaceholder")}
                   required
                   disabled={loading}
                 />
@@ -80,7 +80,7 @@ export default function Login() {
 
               <div>
                 <label htmlFor="password" className="text-sm font-medium block mb-1">
-                  Password
+                  {t("auth.passwordLabel")}
                 </label>
                 <div className="relative">
                   <Input
@@ -89,7 +89,7 @@ export default function Login() {
                     autoComplete="current-password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    placeholder="••••••••"
+                    placeholder={t("auth.passwordPlaceholder")}
                     required
                     disabled={loading}
                     className="pr-10"
@@ -98,6 +98,7 @@ export default function Login() {
                     type="button"
                     onClick={() => setShowPassword((v) => !v)}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    aria-label={showPassword ? t("auth.hidePassword") : t("auth.showPassword")}
                     tabIndex={-1}
                   >
                     {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
@@ -113,10 +114,10 @@ export default function Login() {
                 {loading ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Signing in…
+                    {t("auth.signingIn")}
                   </>
                 ) : (
-                  "Sign in"
+                  t("auth.signInButton")
                 )}
               </Button>
 
@@ -126,13 +127,13 @@ export default function Login() {
                     to="/forgot-password"
                     className="text-primary hover:underline"
                   >
-                    Forgot your password?
+                    {t("auth.forgotPassword")}
                   </Link>
                 </div>
                 <div>
-                  Don&apos;t have an account?{" "}
+                  {t("auth.noAccount")}{" "}
                   <Link to="/register" className="text-primary hover:underline">
-                    Sign up
+                    {t("auth.signUp")}
                   </Link>
                 </div>
               </div>
