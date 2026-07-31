@@ -35,6 +35,7 @@ from auth.models import (
     UserResponse,
 )
 from auth.password import hash_password, verify_password
+from auth.roles import is_admin_user, resolve_user_role
 from subscription_manager import create_free_subscription
 
 logger = logging.getLogger(__name__)
@@ -98,6 +99,8 @@ def _user_to_response(user: dict) -> UserResponse:
     return UserResponse(
         id=user["id"],
         email=user["email"],
+        role=resolve_user_role(user),
+        is_admin=is_admin_user(user),
         is_email_verified=user.get("is_email_verified", False),
         is_active=user.get("is_active", True),
         created_at=user["created_at"],
@@ -137,6 +140,7 @@ async def register(body: UserCreate, request: Request):
     user_doc = {
         "id": user_id,
         "email": user_email,
+        "role": "admin" if is_admin_user({"email": user_email}) else "user",
         "password_hash": hash_password(body.password),
         "auth_providers": ["password"],
         "is_email_verified": False,
@@ -237,11 +241,13 @@ async def me(request: Request, user: dict = Depends(get_current_user)):
     db = request.app.state.db
     doc = await db.users.find_one(
         {"id": user["id"]},
-        {"_id": 0, "id": 1, "email": 1, "is_email_verified": 1,
+        {"_id": 0, "id": 1, "email": 1, "role": 1, "is_email_verified": 1,
          "is_active": 1, "created_at": 1, "last_login_at": 1},
     )
     if not doc:
         raise HTTPException(status_code=404, detail="User not found")
+    doc["role"] = resolve_user_role(doc)
+    doc["is_admin"] = is_admin_user(doc)
     return UserResponse(**doc)
 
 

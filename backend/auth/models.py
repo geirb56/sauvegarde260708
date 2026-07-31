@@ -42,6 +42,8 @@ class UserLogin(BaseModel):
 class UserResponse(BaseModel):
     id: str
     email: str
+    role: str = "user"
+    is_admin: bool = False
     is_email_verified: bool
     is_active: bool
     created_at: datetime

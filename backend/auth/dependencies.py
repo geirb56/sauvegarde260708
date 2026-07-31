@@ -28,6 +28,7 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from auth.jwt_utils import decode_access_token
+from auth.roles import is_admin_user, resolve_user_role
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +99,8 @@ async def get_current_user(
     return {
         "id": user["id"],
         "email": user["email"],
+        "role": resolve_user_role(user),
+        "is_admin": is_admin_user(user),
         "is_email_verified": user.get("is_email_verified", False),
         "is_active": user.get("is_active", True),
         "authenticated": True,
@@ -118,3 +121,12 @@ async def get_current_user_optional(
         return await get_current_user(request, credentials)
     except HTTPException:
         return None
+
+
+async def require_admin(user: dict = Depends(get_current_user)) -> dict:
+    if not user.get("is_admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required",
+        )
+    return user

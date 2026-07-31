@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { Outlet, NavLink, useLocation } from "react-router-dom";
-import { Activity, Home, CalendarDays, MessageCircle, RefreshCw, Settings, TrendingUp, LogOut } from "lucide-react";
+import { Activity, Home, CalendarDays, MessageCircle, RefreshCw, Settings, TrendingUp, LogOut, Shield } from "lucide-react";
 import { useLanguage } from "@/context/LanguageContext";
 import { useAutoSync } from "@/hooks/useAutoSync";
 import { useAuth } from "@/context/AuthContext";
@@ -56,6 +56,9 @@ export const Layout = () => {
     { path: "/progress", icon: TrendingUp, labelKey: "nav.progress" },
     { path: "/settings", icon: Settings, labelKey: "nav.settings" },
   ];
+  if (user?.is_admin) {
+    navItems.push({ path: "/admin", icon: Shield, label: "Admin" });
+  }
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: "var(--bg-primary)" }}>
@@ -124,7 +127,7 @@ export const Layout = () => {
                   />
                 )}
               </div>
-              <span className="nav-label text-[9px]">{t(item.labelKey)}</span>
+              <span className="nav-label text-[9px]">{item.label ?? t(item.labelKey)}</span>
             </NavLink>
           );
         })}
