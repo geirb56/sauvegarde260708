@@ -28,8 +28,9 @@ Security notes:
 from __future__ import annotations
 
 import logging
+import secrets
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request, status
@@ -44,6 +45,8 @@ from subscription_manager import create_free_subscription
 logger = logging.getLogger(__name__)
 
 oauth_router = APIRouter(prefix="/auth", tags=["auth"])
+_OAUTH_PROVIDERS = {"google", "apple"}
+_OAUTH_CHALLENGE_TTL_SECONDS = 600
 
 _SAFE_USER_PROJECTION = {
     "_id": 0,
@@ -84,8 +87,51 @@ def _oauth_placeholder_email(provider: str, provider_subject: str) -> str:
     return f"{provider}.{provider_subject}@oauth.runindex.internal"
 
 
+def _is_placeholder_email(email: Optional[str]) -> bool:
+    return bool(email and email.endswith("@oauth.runindex.internal"))
+
+
 async def _load_user_by_id(db, user_id: str) -> Optional[dict]:
     return await db.users.find_one({"id": user_id}, _SAFE_USER_PROJECTION)
+
+
+async def _issue_oauth_challenge(db, provider: str) -> dict:
+    now = datetime.now(timezone.utc)
+    challenge = {
+        "provider": provider,
+        "state": secrets.token_urlsafe(32),
+        "nonce": secrets.token_urlsafe(32),
+        "created_at": now,
+        "expires_at": now + timedelta(seconds=_OAUTH_CHALLENGE_TTL_SECONDS),
+    }
+    await db.oauth_states.insert_one(challenge)
+    return {
+        "state": challenge["state"],
+        "nonce": challenge["nonce"],
+        "expires_at": challenge["expires_at"],
+    }
+
+
+async def _consume_oauth_challenge(db, provider: str, state: str) -> dict:
+    now = datetime.now(timezone.utc)
+    delete = getattr(db.oauth_states, "find_one_and_delete", None)
+    query = {
+        "provider": provider,
+        "state": state,
+        "expires_at": {"$gt": now},
+    }
+    if delete:
+        challenge = await delete(query, {"_id": 0})
+    else:
+        challenge = await db.oauth_states.find_one(query, {"_id": 0})
+        if challenge:
+            await db.oauth_states.delete_one({"provider": provider, "state": state})
+    if not challenge:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid OAuth state.",
+        )
+    return challenge
 
 
 async def _ensure_subscription_exists(db, user_id: str) -> None:
@@ -111,7 +157,7 @@ async def _touch_user_login(
     *,
     email_verified: bool,
 ) -> None:
-    update_set = {
+    update_set: dict[str, object] = {
         "last_login_at": now,
         "updated_at": now,
     }
@@ -144,6 +190,51 @@ async def _record_identity_metadata(
         {"provider": provider, "provider_subject": provider_subject},
         {"$set": update_set},
     )
+
+
+async def _promote_verified_oauth_email(
+    db,
+    *,
+    user: dict,
+    provider_email: Optional[str],
+    email_verified: bool,
+    now: datetime,
+) -> dict:
+    normalized_email = _normalize_provider_email(provider_email)
+    if not (email_verified and normalized_email and _is_placeholder_email(user.get("email"))):
+        return user
+    if _normalize_provider_email(user.get("email")) == normalized_email:
+        user["is_email_verified"] = True
+        return user
+
+    try:
+        await db.users.update_one(
+            {"id": user["id"]},
+            {
+                "$set": {
+                    "email": normalized_email,
+                    "is_email_verified": True,
+                    "updated_at": now,
+                },
+            },
+        )
+    except DuplicateKeyError:
+        conflicting_user = await db.users.find_one(
+            {"email": normalized_email},
+            {"_id": 0, "id": 1},
+        )
+        if conflicting_user and conflicting_user.get("id") != user["id"]:
+            logger.error(
+                "OAuth email promotion collision for user=%s provider_email already owned by user=%s",
+                user["id"],
+                conflicting_user["id"],
+            )
+            raise _oauth_conflict()
+        raise
+
+    user["email"] = normalized_email
+    user["is_email_verified"] = True
+    return user
 
 
 async def _claim_identity_user_id(
@@ -188,65 +279,16 @@ async def _self_heal_identity_user(
     provider_email: Optional[str],
     email_verified: bool,
 ) -> dict:
-    recovered_email = identity.get("email") or provider_email or _oauth_placeholder_email(provider, provider_subject)
-    conflicting_user = await db.users.find_one(
-        {"email": recovered_email},
-        {"_id": 0, "id": 1},
-    )
-    if conflicting_user and conflicting_user.get("id") != identity["user_id"]:
-        logger.error(
-            "OAuth self-heal refused: identity provider=%s sub=%s references missing user %s but the recovered email is already owned by user %s",
-            provider,
-            provider_subject,
-            identity["user_id"],
-            conflicting_user["id"],
-        )
-        raise _oauth_conflict()
-
-    healed_user = {
-        "id": identity["user_id"],
-        "email": recovered_email,
-        "password_hash": None,
-        "is_email_verified": bool(email_verified or identity.get("email_verified", False)),
-        "is_active": True,
-        "auth_providers": [provider],
-        "created_at": now,
-        "updated_at": now,
-        "last_login_at": now,
-    }
-    try:
-        await db.users.insert_one(healed_user)
-    except DuplicateKeyError:
-        healed_user = await _load_user_by_id(db, identity["user_id"])
-        if not healed_user:
-            raise _oauth_conflict()
-
-    await _ensure_subscription_exists(db, identity["user_id"])
-    await _touch_user_login(
-        db,
-        identity["user_id"],
-        provider,
-        now,
-        email_verified=bool(email_verified or identity.get("email_verified", False)),
-    )
-    await _record_identity_metadata(
-        db,
-        provider,
-        provider_subject,
-        now,
-        provider_email=provider_email,
-        email_verified=email_verified,
-    )
-    healed_user["last_login_at"] = now
-    if email_verified:
-        healed_user["is_email_verified"] = True
-    logger.warning(
-        "Self-healed OAuth identity for missing user %s (provider=%s sub=%s)",
+    logger.error(
+        "OAuth identity references missing user %s (provider=%s sub=%s)",
         identity["user_id"],
         provider,
         provider_subject,
     )
-    return healed_user
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail="Authentication error. Please try again.",
+    )
 
 
 async def _load_or_self_heal_identity_user(
@@ -317,6 +359,13 @@ async def _resolve_existing_user_login(
         )
         raise _oauth_conflict()
 
+    user = await _promote_verified_oauth_email(
+        db,
+        user=user,
+        provider_email=provider_email,
+        email_verified=email_verified,
+        now=now,
+    )
     await _ensure_subscription_exists(db, user["id"])
     await _touch_user_login(
         db,
@@ -444,6 +493,13 @@ async def _find_or_create_oauth_user(
                 detail="Account is disabled. Please contact support.",
             )
 
+        user = await _promote_verified_oauth_email(
+            db,
+            user=user,
+            provider_email=provider_email_normalized,
+            email_verified=email_verified,
+            now=now,
+        )
         await _ensure_subscription_exists(db, user["id"])
         await _touch_user_login(
             db,
@@ -593,6 +649,19 @@ async def _find_or_create_oauth_user(
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
 
+@oauth_router.post("/oauth/challenge/{provider}", status_code=200)
+async def create_oauth_challenge(provider: str, request: Request):
+    provider_normalized = provider.strip().lower()
+    if provider_normalized not in _OAUTH_PROVIDERS:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unsupported OAuth provider.")
+    challenge = await _issue_oauth_challenge(request.app.state.db, provider_normalized)
+    return {
+        "state": challenge["state"],
+        "nonce": challenge["nonce"],
+        "expires_at": challenge["expires_at"],
+    }
+
+
 @oauth_router.post("/google", response_model=TokenResponse, status_code=200)
 async def auth_google(body: GoogleAuthRequest, request: Request):
     """Authenticate (or create an account) via Google ID token.
@@ -604,8 +673,9 @@ async def auth_google(body: GoogleAuthRequest, request: Request):
 
     Returns a RunIndex JWT on success.
     """
+    challenge = await _consume_oauth_challenge(request.app.state.db, "google", body.state)
     try:
-        claims = await verify_google_id_token(body.id_token)
+        claims = await verify_google_id_token(body.id_token, expected_nonce=challenge["nonce"])
     except ValueError as exc:
         logger.warning("Google ID token verification failed: %s", exc)
         raise HTTPException(
@@ -613,9 +683,8 @@ async def auth_google(body: GoogleAuthRequest, request: Request):
             detail=str(exc),
         )
 
-    db = request.app.state.db
     user = await _find_or_create_oauth_user(
-        db=db,
+        db=request.app.state.db,
         provider="google",
         provider_subject=claims["sub"],
         provider_email=claims.get("email"),
@@ -645,8 +714,9 @@ async def auth_apple(body: AppleAuthRequest, request: Request):
 
     Returns a RunIndex JWT on success.
     """
+    challenge = await _consume_oauth_challenge(request.app.state.db, "apple", body.state)
     try:
-        claims = await verify_apple_id_token(body.id_token)
+        claims = await verify_apple_id_token(body.id_token, expected_nonce=challenge["nonce"])
     except ValueError as exc:
         logger.warning("Apple ID token verification failed: %s", exc)
         raise HTTPException(
@@ -654,9 +724,8 @@ async def auth_apple(body: AppleAuthRequest, request: Request):
             detail=str(exc),
         )
 
-    db = request.app.state.db
     user = await _find_or_create_oauth_user(
-        db=db,
+        db=request.app.state.db,
         provider="apple",
         provider_subject=claims["sub"],
         provider_email=claims.get("email"),

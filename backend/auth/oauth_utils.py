@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import httpx
 import jwt as pyjwt
@@ -44,7 +44,7 @@ _GOOGLE_CERTS_URL = "https://www.googleapis.com/oauth2/v3/certs"
 _GOOGLE_ISSUERS = {"accounts.google.com", "https://accounts.google.com"}
 
 
-async def verify_google_id_token(id_token: str) -> Dict[str, Any]:
+async def verify_google_id_token(id_token: str, *, expected_nonce: Optional[str] = None) -> Dict[str, Any]:
     """Verify a Google ID token and return its claims.
 
     Fetches Google's public keys, verifies the JWT signature, and validates
@@ -118,6 +118,8 @@ async def verify_google_id_token(id_token: str) -> Dict[str, Any]:
 
     if not claims.get("email"):
         raise ValueError("Google ID token does not contain an email claim.")
+    if expected_nonce and claims.get("nonce") != expected_nonce:
+        raise ValueError("Google ID token nonce mismatch.")
 
     return {
         "sub": claims["sub"],
@@ -134,7 +136,7 @@ _APPLE_JWKS_URL = "https://appleid.apple.com/auth/keys"
 _APPLE_ISSUER = "https://appleid.apple.com"
 
 
-async def verify_apple_id_token(id_token: str) -> Dict[str, Any]:
+async def verify_apple_id_token(id_token: str, *, expected_nonce: Optional[str] = None) -> Dict[str, Any]:
     """Verify an Apple ID token and return its claims.
 
     Fetches Apple's public JWKS, verifies the JWT signature, and validates
@@ -206,6 +208,8 @@ async def verify_apple_id_token(id_token: str) -> Dict[str, Any]:
     # Validate issuer
     if claims.get("iss") != _APPLE_ISSUER:
         raise ValueError(f"Unexpected Apple ID token issuer: {claims.get('iss')}")
+    if expected_nonce and claims.get("nonce") != expected_nonce:
+        raise ValueError("Apple ID token nonce mismatch.")
 
     # email may be absent on subsequent logins — this is expected Apple behaviour
     return {

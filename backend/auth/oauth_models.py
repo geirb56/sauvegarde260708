@@ -14,12 +14,20 @@ class GoogleAuthRequest(BaseModel):
     """
 
     id_token: str
+    state: str
 
     @field_validator("id_token")
     @classmethod
     def id_token_not_empty(cls, v: str) -> str:
         if not v or not v.strip():
             raise ValueError("id_token must not be empty")
+        return v.strip()
+
+    @field_validator("state")
+    @classmethod
+    def state_not_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("state must not be empty")
         return v.strip()
 
 
@@ -36,6 +44,7 @@ class AppleAuthRequest(BaseModel):
     """
 
     id_token: str
+    state: str
     email: str | None = None  # optional — only present on first Apple sign-in
 
     @field_validator("id_token")
@@ -43,4 +52,11 @@ class AppleAuthRequest(BaseModel):
     def id_token_not_empty(cls, v: str) -> str:
         if not v or not v.strip():
             raise ValueError("id_token must not be empty")
+        return v.strip()
+
+    @field_validator("state")
+    @classmethod
+    def state_not_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("state must not be empty")
         return v.strip()

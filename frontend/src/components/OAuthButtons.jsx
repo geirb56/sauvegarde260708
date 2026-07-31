@@ -18,7 +18,7 @@
  *   - No Google / Apple session is created on the client side.
  */
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useState, useCallback } from "react";
 import axios from "axios";
 import { API_BASE_URL } from "@/config";
 import { useAuth } from "@/context/AuthContext";
@@ -34,6 +34,11 @@ const APPLE_CLIENT_ID = process.env.REACT_APP_APPLE_CLIENT_ID || "";
 const APPLE_REDIRECT_URI =
   process.env.REACT_APP_APPLE_REDIRECT_URI ||
   (typeof window !== "undefined" ? window.location.origin : "");
+
+async function fetchOAuthChallenge(provider) {
+  const res = await axios.post(`${API_BASE_URL}/auth/oauth/challenge/${provider}`);
+  return res.data;
+}
 
 // ── Google Sign-In ────────────────────────────────────────────────────────────
 
@@ -56,17 +61,6 @@ function useGoogleSignIn({ onSuccess, onError, t }) {
     script.async = true;
     script.defer = true;
     script.onload = () => {
-      window.google.accounts.id.initialize({
-        client_id: GOOGLE_CLIENT_ID,
-        callback: (response) => {
-          if (response.credential) {
-            handleGoogleCredential(response.credential);
-          } else {
-            onError(t("auth.googleCancelled"));
-          }
-        },
-        cancel_on_tap_outside: true,
-      });
       setReady(true);
     };
     script.onerror = () => {
@@ -76,22 +70,19 @@ function useGoogleSignIn({ onSuccess, onError, t }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleGoogleCredential = useCallback(
-    async (idToken) => {
-      setLoading(true);
-      try {
-        const res = await axios.post(`${API_BASE_URL}/auth/google`, {
-          id_token: idToken,
-        });
-        onSuccess(res.data);
-      } catch (err) {
-        onError(getAuthErrorMessage(t, err, "auth.googleFailed"));
-      } finally {
-        setLoading(false);
-      }
-    },
-    [onSuccess, onError, t]
-  );
+  const handleGoogleCredential = useCallback(async (idToken, state) => {
+   try {
+     const res = await axios.post(`${API_BASE_URL}/auth/google`, {
+       id_token: idToken,
+       state,
+     });
+     onSuccess(res.data);
+   } catch (err) {
+     onError(getAuthErrorMessage(t, err, "auth.googleFailed"));
+   } finally {
+     setLoading(false);
+   }
+  }, [onSuccess, onError, t]);
 
   const signIn = useCallback(() => {
     if (!GOOGLE_CLIENT_ID) {
@@ -102,30 +93,45 @@ function useGoogleSignIn({ onSuccess, onError, t }) {
       onError(t("auth.googleUnavailable"));
       return;
     }
-    window.google.accounts.id.prompt((notification) => {
-      if (
-        notification.isNotDisplayed() ||
-        notification.isSkippedMoment()
-      ) {
-        // Fall back to the popup flow if One Tap is suppressed
-        window.google.accounts.id.renderButton(
-          document.createElement("div"),
-          { theme: "outline", size: "large" }
-        );
-        // Trigger popup directly
-        const btn = document.createElement("div");
-        btn.style.display = "none";
-        document.body.appendChild(btn);
-        window.google.accounts.id.renderButton(btn, {
-          theme: "outline",
-          size: "large",
-          click_listener: () => {},
+    setLoading(true);
+    fetchOAuthChallenge("google")
+      .then((challenge) => {
+        window.google.accounts.id.initialize({
+          client_id: GOOGLE_CLIENT_ID,
+          nonce: challenge.nonce,
+          callback: (response) => {
+            if (response.credential) {
+              handleGoogleCredential(response.credential, challenge.state);
+            } else {
+              setLoading(false);
+              onError(t("auth.googleCancelled"));
+            }
+          },
+          cancel_on_tap_outside: true,
         });
-        btn.querySelector("div[role='button']")?.click();
-        document.body.removeChild(btn);
-      }
-    });
-  }, [onError, t]);
+        window.google.accounts.id.prompt((notification) => {
+          if (
+            notification.isNotDisplayed() ||
+            notification.isSkippedMoment()
+          ) {
+            const btn = document.createElement("div");
+            btn.style.display = "none";
+            document.body.appendChild(btn);
+            window.google.accounts.id.renderButton(btn, {
+              theme: "outline",
+              size: "large",
+              click_listener: () => {},
+            });
+            btn.querySelector("div[role='button']")?.click();
+            document.body.removeChild(btn);
+          }
+        });
+      })
+      .catch((err) => {
+        setLoading(false);
+        onError(getAuthErrorMessage(t, err, "auth.googleFailed"));
+      });
+  }, [handleGoogleCredential, onError, t]);
 
   return { signIn, ready: ready && !!GOOGLE_CLIENT_ID, loading };
 }
@@ -151,12 +157,6 @@ function useAppleSignIn({ onSuccess, onError, t }) {
     script.async = true;
     script.defer = true;
     script.onload = () => {
-      window.AppleID.auth.init({
-        clientId: APPLE_CLIENT_ID,
-        scope: "name email",
-        redirectURI: APPLE_REDIRECT_URI,
-        usePopup: true,
-      });
       setReady(true);
     };
     script.onerror = () => {
@@ -178,18 +178,33 @@ function useAppleSignIn({ onSuccess, onError, t }) {
 
     setLoading(true);
     try {
+    const challenge = await fetchOAuthChallenge("apple");
+    window.AppleID.auth.init({
+      clientId: APPLE_CLIENT_ID,
+      scope: "name email",
+      redirectURI: APPLE_REDIRECT_URI,
+      usePopup: true,
+      state: challenge.state,
+      nonce: challenge.nonce,
+    });
       const result = await window.AppleID.auth.signIn();
       const idToken = result?.authorization?.id_token;
+      const returnedState = result?.authorization?.state || challenge.state;
       const email = result?.user?.email || null;
 
       if (!idToken) {
         onError(t("auth.appleNoToken"));
         return;
       }
+      if (returnedState !== challenge.state) {
+        onError(t("auth.appleFailed"));
+        return;
+      }
 
       const res = await axios.post(`${API_BASE_URL}/auth/apple`, {
         id_token: idToken,
         email: email,
+        state: challenge.state,
       });
       onSuccess(res.data);
     } catch (err) {

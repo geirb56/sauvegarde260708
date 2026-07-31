@@ -76,17 +76,19 @@ async def _with_apple_jwks(jwks, coro):
 async def test_google_rs256_valid_token_is_accepted():
     private_key, jwks = _generate_rsa_material("google-kid-1")
     now, exp = _now_claims()
+    expected_nonce = "nonce-google-1"
     token = _encode_rs256(private_key, "google-kid-1", {
         "sub": "google-sub-crypto-1",
         "email": "crypto@gmail.com",
         "email_verified": True,
         "iss": "https://accounts.google.com",
         "aud": os.environ["GOOGLE_CLIENT_ID"],
+        "nonce": expected_nonce,
         "iat": now,
         "exp": exp,
     })
 
-    claims = await _with_google_jwks(jwks, verify_google_id_token(token))
+    claims = await _with_google_jwks(jwks, verify_google_id_token(token, expected_nonce=expected_nonce))
     assert claims["sub"] == "google-sub-crypto-1"
     assert claims["email"] == "crypto@gmail.com"
     assert claims["email_verified"] is True
@@ -211,18 +213,38 @@ async def test_google_missing_email_is_rejected():
         await _with_google_jwks(jwks, verify_google_id_token(token))
 
 
-async def test_apple_rs256_valid_token_is_accepted_without_email():
-    private_key, jwks = _generate_rsa_material("apple-kid-1")
+async def test_google_nonce_mismatch_is_rejected():
+    private_key, jwks = _generate_rsa_material("google-kid-9")
     now, exp = _now_claims()
-    token = _encode_rs256(private_key, "apple-kid-1", {
-        "sub": "apple-sub-crypto-1",
-        "iss": "https://appleid.apple.com",
-        "aud": os.environ["APPLE_CLIENT_ID"],
+    token = _encode_rs256(private_key, "google-kid-9", {
+        "sub": "google-sub-crypto-9",
+        "email": "crypto@gmail.com",
+        "email_verified": True,
+        "iss": "https://accounts.google.com",
+        "aud": os.environ["GOOGLE_CLIENT_ID"],
+        "nonce": "wrong-nonce",
         "iat": now,
         "exp": exp,
     })
 
-    claims = await _with_apple_jwks(jwks, verify_apple_id_token(token))
+    with pytest.raises(ValueError, match="nonce mismatch"):
+        await _with_google_jwks(jwks, verify_google_id_token(token, expected_nonce="expected-nonce"))
+
+
+async def test_apple_rs256_valid_token_is_accepted_without_email():
+    private_key, jwks = _generate_rsa_material("apple-kid-1")
+    now, exp = _now_claims()
+    expected_nonce = "nonce-apple-1"
+    token = _encode_rs256(private_key, "apple-kid-1", {
+        "sub": "apple-sub-crypto-1",
+        "iss": "https://appleid.apple.com",
+        "aud": os.environ["APPLE_CLIENT_ID"],
+        "nonce": expected_nonce,
+        "iat": now,
+        "exp": exp,
+    })
+
+    claims = await _with_apple_jwks(jwks, verify_apple_id_token(token, expected_nonce=expected_nonce))
     assert claims["sub"] == "apple-sub-crypto-1"
     assert claims["email"] is None
 
@@ -257,3 +279,19 @@ async def test_apple_wrong_issuer_is_rejected():
 
     with pytest.raises(ValueError, match="issuer"):
         await _with_apple_jwks(jwks, verify_apple_id_token(token))
+
+
+async def test_apple_nonce_mismatch_is_rejected():
+    private_key, jwks = _generate_rsa_material("apple-kid-4")
+    now, exp = _now_claims()
+    token = _encode_rs256(private_key, "apple-kid-4", {
+        "sub": "apple-sub-crypto-4",
+        "iss": "https://appleid.apple.com",
+        "aud": os.environ["APPLE_CLIENT_ID"],
+        "nonce": "wrong-nonce",
+        "iat": now,
+        "exp": exp,
+    })
+
+    with pytest.raises(ValueError, match="nonce mismatch"):
+        await _with_apple_jwks(jwks, verify_apple_id_token(token, expected_nonce="expected-nonce"))

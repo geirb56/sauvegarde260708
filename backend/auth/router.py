@@ -132,9 +132,11 @@ async def register(body: UserCreate, request: Request):
     import uuid as _uuid
 
     now = datetime.now(timezone.utc)
+    user_id = str(_uuid.uuid4())
+    user_email = body.email
     user_doc = {
-        "id": str(_uuid.uuid4()),
-        "email": body.email,
+        "id": user_id,
+        "email": user_email,
         "password_hash": hash_password(body.password),
         "auth_providers": ["password"],
         "is_email_verified": False,
@@ -157,10 +159,10 @@ async def register(body: UserCreate, request: Request):
     # identity is verified via activate_garmin_trial() (server-side, never from
     # the frontend).  See subscription_manager.activate_garmin_trial() and the
     # BLOCKER note in subscription_manager.py.
-    await create_free_subscription(db, user_doc["id"])
-    logger.info("FREE subscription created for user: %s", user_doc["id"])
+    await create_free_subscription(db, user_id)
+    logger.info("FREE subscription created for user: %s", user_id)
 
-    access_token = create_access_token(user_doc["id"], user_doc["email"])
+    access_token = create_access_token(user_id, user_email)
     return TokenResponse(
         access_token=access_token,
         user=_user_to_response(user_doc),
