@@ -107,6 +107,32 @@ def test_connect_skips_trial_activation_when_auth_status_email_missing():
     mock_activate.assert_not_awaited()
 
 
+
+def test_trial_activation_cancelled_error_is_propagated():
+    """asyncio.CancelledError must not be swallowed during trial activation."""
+    import pytest
+
+    db = MagicMock()
+    db.garmin_connections.update_one = AsyncMock()
+
+    provider = MagicMock()
+    provider.connect.return_value = SimpleNamespace(status=STATUS_CONNECTED, detail="Garmin connected")
+    provider.get_profile.return_value = {"email": "user@example.com"}
+
+    async def _raise_cancelled(db, user_id, garmin_identity):  # noqa: ARG001
+        raise asyncio.CancelledError()
+
+    async def _run_connect():
+        with (
+            patch.object(svc, "get_provider_for_user", return_value=provider),
+            patch.object(svc, "activate_garmin_trial", side_effect=_raise_cancelled),
+        ):
+            await svc.connect(db, "user-1", garmin_username="u@e.com", garmin_password="pw")
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(_run_connect())
+
+
 def test_gccli_connect_log_does_not_expose_sensitive_error(caplog):
     runner = MagicMock()
     runner.is_available.return_value = True

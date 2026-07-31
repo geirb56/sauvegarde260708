@@ -6,6 +6,7 @@ business data (connection status + activities). Never stores Garmin passwords.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from datetime import datetime, timezone
@@ -74,6 +75,8 @@ async def connect(db, user_id: str, garmin_username: Optional[str] = None,
                     "[GarminTrial] Missing authenticated Garmin email for user=%s; trial not activated",
                     user_id,
                 )
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.warning(
                 "[GarminTrial] Trial activation failed for user=%s",
