@@ -295,6 +295,31 @@ async def test_register_invalid_password(client):
     assert res.status_code == 422
 
 
+async def test_register_ignores_frontend_privilege_fields(client, fake_db):
+    res = await client.post(
+        "/auth/register",
+        json={
+            "email": "privilege@example.com",
+            "password": "Password1!",
+            "user_id": "frontend-chosen-id",
+            "subscription_status": "premium",
+            "trial": True,
+            "premium": True,
+        },
+    )
+    assert res.status_code == 201
+    created_user = await fake_db.users.find_one({"email": "privilege@example.com"})
+    assert created_user is not None
+    assert created_user["id"] != "frontend-chosen-id"
+    assert "subscription_status" not in created_user
+    assert "trial" not in created_user
+    assert "premium" not in created_user
+
+    subscription = await fake_db.subscriptions.find_one({"user_id": created_user["id"]})
+    assert subscription["status"] == "free"
+    assert subscription["trial_used"] is False
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Test 4 — Login success
 # ═══════════════════════════════════════════════════════════════════════════════

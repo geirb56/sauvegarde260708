@@ -737,6 +737,59 @@ class TestOAuthAccountLinking:
         assert resp.status_code == 200
         assert resp.json()["user"]["email"] == "apple.apple-sub-no-token-email@oauth.runindex.internal"
 
+    async def test_apple_frontend_email_is_ignored_when_token_email_exists(self, client):
+        claims = _make_apple_claims("apple-sub-real-email", email="relay@privaterelay.appleid.com", email_verified=True)
+        with patch("auth.oauth_router.verify_apple_id_token", new=AsyncMock(return_value=claims)):
+            resp = await _post_apple(
+                client,
+                {"id_token": "tok", "email": "spoofed@example.com", "user_id": "frontend-user"},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["user"]["email"] == "relay@privaterelay.appleid.com"
+
+    async def test_google_payload_cannot_override_identity_or_subscription_fields(self, client, fake_db):
+        claims = _make_google_claims("google-sub-secure-fields", "secure@gmail.com", True)
+        with patch("auth.oauth_router.verify_google_id_token", new=AsyncMock(return_value=claims)):
+            resp = await _post_google(
+                client,
+                {
+                    "id_token": "tok",
+                    "user_id": "frontend-user",
+                    "subscription_status": "premium",
+                    "trial": True,
+                    "premium": True,
+                },
+            )
+
+        assert resp.status_code == 200
+        created_user = await fake_db.users.find_one({"email": "secure@gmail.com"})
+        assert created_user is not None
+        assert created_user["id"] != "frontend-user"
+        assert "subscription_status" not in created_user
+        assert "trial" not in created_user
+        assert "premium" not in created_user
+        subscription = await fake_db.subscriptions.find_one({"user_id": created_user["id"]})
+        assert subscription["status"] == "free"
+        assert subscription["trial_used"] is False
+
+    async def test_apple_relay_email_keeps_stable_sub_identity(self, client):
+        claims_first = _make_apple_claims(
+            "apple-sub-relay-stable",
+            "relay-user@privaterelay.appleid.com",
+            True,
+        )
+        claims_repeat = _make_apple_claims("apple-sub-relay-stable", None, False)
+
+        with patch("auth.oauth_router.verify_apple_id_token", new=AsyncMock(return_value=claims_first)):
+            first = await _post_apple(client, {"id_token": "tok-1"})
+        with patch("auth.oauth_router.verify_apple_id_token", new=AsyncMock(return_value=claims_repeat)):
+            second = await _post_apple(client, {"id_token": "tok-2", "email": "spoofed@example.com"})
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert first.json()["user"]["id"] == second.json()["user"]["id"]
+
 
 class TestOAuthHardening:
     async def test_oauth_state_is_single_use(self, client):
