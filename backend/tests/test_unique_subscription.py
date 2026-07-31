@@ -26,6 +26,7 @@ from typing import Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import pymongo.errors
 
 # ---------------------------------------------------------------------------
 # Minimal motor stub so we can import backend modules without a real MongoDB
@@ -512,6 +513,36 @@ class TestIndexIdempotence:
             db.subscriptions.create_index.assert_not_called()
         _run(go())
 
+    def test_startup_legacy_nonunique_index_succeeds_and_creates_unique(self):
+        """
+        Simulates a production database that already has a non-unique index on
+        user_id (legacy schema, pre-PR49).  Verifies that:
+          1. The startup helper (_ensure_subscriptions_unique_index) does NOT raise
+             — i.e. startup succeeds on a legacy database.
+          2. The old non-unique index is dropped exactly once.
+          3. A new index is created with unique=True and sparse=True.
+
+        This is the authoritative regression test for the PR49 fix: the startup
+        path must go through the helper exclusively; a bare create_index call
+        would fail with a OperationFailure on a legacy DB with a non-unique index.
+        """
+        async def go():
+            from services.subscription_index import ensure_subscriptions_unique_index
+            db = self._make_db([
+                # Only the legacy non-unique index exists — no "unique" key.
+                {"name": "user_id_1", "key": {"user_id": 1}},
+            ])
+            # Must not raise — startup must succeed on a legacy database.
+            await ensure_subscriptions_unique_index(db)
+            # The old non-unique index must be dropped.
+            db.subscriptions.drop_index.assert_called_once_with("user_id_1")
+            # A new UNIQUE + sparse index must be created.
+            db.subscriptions.create_index.assert_called_once()
+            call_kwargs = db.subscriptions.create_index.call_args[1]
+            assert call_kwargs.get("unique") is True, "Index must be UNIQUE"
+            assert call_kwargs.get("sparse") is True, "Index must be sparse"
+        _run(go())
+
     def test_duplicates_prevent_index_no_data_deleted(self):
         """
         Scenario 4: if MongoDB refuses to create the unique index because duplicate
@@ -519,7 +550,6 @@ class TestIndexIdempotence:
         must re-raise the error WITHOUT deleting or modifying any document.
         """
         async def go():
-            import pymongo.errors
             from services.subscription_index import ensure_subscriptions_unique_index
             col = self._make_col([{"name": "_id_", "key": {"_id": 1}}])
             # Simulate MongoDB refusing the unique index due to duplicate keys.
