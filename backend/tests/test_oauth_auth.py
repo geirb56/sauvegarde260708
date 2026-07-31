@@ -38,7 +38,6 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import pytest_asyncio
 import httpx
-from pymongo.errors import DuplicateKeyError
 
 # Allow importing from the backend root
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -51,6 +50,8 @@ os.environ.setdefault("MONGO_URL", "mongodb://localhost:27017")
 os.environ.setdefault("DB_NAME", "test_db")
 os.environ.setdefault("GOOGLE_CLIENT_ID", "test-google-client-id.apps.googleusercontent.com")
 os.environ.setdefault("APPLE_CLIENT_ID", "com.runindex.app")
+
+from auth.mongo_errors import DuplicateKeyError
 
 pytestmark = pytest.mark.asyncio
 

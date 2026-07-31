@@ -33,9 +33,9 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request, status
-from pymongo.errors import DuplicateKeyError
 
 from auth.jwt_utils import create_access_token
+from auth.mongo_errors import DuplicateKeyError
 from auth.models import TokenResponse, UserResponse
 from auth.oauth_models import AppleAuthRequest, GoogleAuthRequest
 from auth.oauth_utils import verify_apple_id_token, verify_google_id_token
@@ -491,7 +491,7 @@ async def _find_or_create_oauth_user(
             return existing_user
 
     # 3) Unknown identity: create a new RunIndex user.
-    if provider_email_normalized:
+    if provider_email_normalized and email_verified:
         display_email = provider_email_normalized
     else:
         display_email = _oauth_placeholder_email(provider, provider_subject)

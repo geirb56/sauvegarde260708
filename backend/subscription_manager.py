@@ -41,11 +41,16 @@ Garmin identity model:
 """
 
 from datetime import datetime, timezone, timedelta
-from typing import Optional, Dict
+from typing import Any, Dict, Optional, TYPE_CHECKING
 from uuid import uuid4
 import logging
-from motor.motor_asyncio import AsyncIOMotorDatabase
-from pymongo.errors import DuplicateKeyError
+
+from auth.mongo_errors import DuplicateKeyError
+
+if TYPE_CHECKING:
+    from motor.motor_asyncio import AsyncIOMotorDatabase
+else:  # pragma: no cover - runtime typing fallback for constrained environments
+    AsyncIOMotorDatabase = Any
 
 logger = logging.getLogger(__name__)
 
