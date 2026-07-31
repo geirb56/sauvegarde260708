@@ -35,6 +35,8 @@ jest.mock("@/hooks/useAutoSync", () => ({
 
 jest.mock("@/components/ChatCoach", () => () => null);
 
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+
 function makeAuthOverrides(overrides = {}) {
   return {
     user: { id: "user-1", email: "user@example.com" },
@@ -78,6 +80,16 @@ async function flush() {
   });
 }
 
+function setFieldValue(element, value) {
+  const descriptor = Object.getOwnPropertyDescriptor(
+    window.HTMLInputElement.prototype,
+    "value"
+  );
+  descriptor.set.call(element, value);
+  element.dispatchEvent(new Event("input", { bubbles: true }));
+  element.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
 describe("auth pages and oauth UI", () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -114,10 +126,8 @@ describe("auth pages and oauth UI", () => {
     window.localStorage.setItem(LANGUAGE_STORAGE_KEY, "fr");
 
     const { container, unmount } = renderWithProviders(<Login />);
-    container.querySelector("#email").value = "user@example.com";
-    container.querySelector("#email").dispatchEvent(new Event("input", { bubbles: true }));
-    container.querySelector("#password").value = "Password1!";
-    container.querySelector("#password").dispatchEvent(new Event("input", { bubbles: true }));
+    setFieldValue(container.querySelector("#email"), "user@example.com");
+    setFieldValue(container.querySelector("#password"), "Password1!");
 
     await act(async () => {
       container.querySelector("form").dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
@@ -136,12 +146,9 @@ describe("auth pages and oauth UI", () => {
     window.localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
     const { container, unmount } = renderWithProviders(<Register />);
 
-    container.querySelector("#email").value = "user@example.com";
-    container.querySelector("#email").dispatchEvent(new Event("input", { bubbles: true }));
-    container.querySelector("#password").value = "Password1!";
-    container.querySelector("#password").dispatchEvent(new Event("input", { bubbles: true }));
-    container.querySelector("#confirmPassword").value = "Mismatch1!";
-    container.querySelector("#confirmPassword").dispatchEvent(new Event("input", { bubbles: true }));
+    setFieldValue(container.querySelector("#email"), "user@example.com");
+    setFieldValue(container.querySelector("#password"), "Password1!");
+    setFieldValue(container.querySelector("#confirmPassword"), "Mismatch1!");
 
     await act(async () => {
       container.querySelector("form").dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
