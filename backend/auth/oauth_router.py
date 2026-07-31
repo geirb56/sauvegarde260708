@@ -519,7 +519,7 @@ async def _find_or_create_oauth_user(
         user["last_login_at"] = now
         if email_verified:
             user["is_email_verified"] = True
-        logger.info("OAuth login: user=%s provider=%s", user["id"], provider)
+        logger.info("OAuth login completed for provider=%s", provider)
         return user
 
     # 2) Unknown identity + verified email: reuse existing RunIndex user by email.
@@ -539,8 +539,7 @@ async def _find_or_create_oauth_user(
                 email_verified=True,
             )
             logger.info(
-                "OAuth identity linked to existing user: user=%s provider=%s",
-                existing_user["id"],
+                "OAuth identity linked to an existing user for provider=%s",
                 provider,
             )
             return existing_user

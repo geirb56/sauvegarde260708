@@ -207,12 +207,12 @@ async def create_free_subscription(db: AsyncIOMotorDatabase, user_id: str) -> Di
 
     try:
         await db.subscriptions.insert_one(subscription)
-        logger.info("Created FREE subscription for user '%s'", user_id)
+        logger.info("Created FREE subscription")
     except DuplicateKeyError:
         existing_subscription = await db.subscriptions.find_one({"user_id": user_id}, {"_id": 0})
         if not existing_subscription or existing_subscription.get("user_id") != user_id:
             raise
-        logger.info("FREE subscription already exists for user '%s'", user_id)
+        logger.info("FREE subscription already exists")
         return existing_subscription
 
     subscription.pop("_id", None)
