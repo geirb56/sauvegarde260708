@@ -247,48 +247,39 @@ export default function OAuthButtons({ onError, onSuccess }) {
   const google = useGoogleSignIn({ onSuccess: handleSuccess, onError, t });
   const apple = useAppleSignIn({ onSuccess: handleSuccess, onError, t });
 
-  const hasGoogle = !!GOOGLE_CLIENT_ID;
-  const hasApple = !!APPLE_CLIENT_ID;
-
-  if (!hasGoogle && !hasApple) return null;
-
   return (
     <div className="space-y-2">
-      {hasGoogle && (
-        <Button
-          type="button"
-          variant="outline"
-          className="w-full flex items-center justify-center gap-2"
-          onClick={google.signIn}
-          disabled={!google.ready || google.loading}
-          aria-label={t("auth.continueWithGoogle")}
-        >
-          {google.loading ? (
-            <Loader2 className="w-4 h-4 animate-spin" />
-          ) : (
-            <GoogleIcon />
-          )}
-          {t("auth.continueWithGoogle")}
-        </Button>
-      )}
+      <Button
+        type="button"
+        variant="outline"
+        className="w-full flex items-center justify-center gap-2"
+        onClick={google.signIn}
+        disabled={google.loading}
+        aria-label={t("auth.continueWithGoogle")}
+      >
+        {google.loading ? (
+          <Loader2 className="w-4 h-4 animate-spin" />
+        ) : (
+          <GoogleIcon />
+        )}
+        {t("auth.continueWithGoogle")}
+      </Button>
 
-      {hasApple && (
-        <Button
-          type="button"
-          variant="outline"
-          className="w-full flex items-center justify-center gap-2"
-          onClick={apple.signIn}
-          disabled={!apple.ready || apple.loading}
-          aria-label={t("auth.continueWithApple")}
-        >
-          {apple.loading ? (
-            <Loader2 className="w-4 h-4 animate-spin" />
-          ) : (
-            <AppleIcon />
-          )}
-          {t("auth.continueWithApple")}
-        </Button>
-      )}
+      <Button
+        type="button"
+        variant="outline"
+        className="w-full flex items-center justify-center gap-2"
+        onClick={apple.signIn}
+        disabled={apple.loading}
+        aria-label={t("auth.continueWithApple")}
+      >
+        {apple.loading ? (
+          <Loader2 className="w-4 h-4 animate-spin" />
+        ) : (
+          <AppleIcon />
+        )}
+        {t("auth.continueWithApple")}
+      </Button>
     </div>
   );
 }

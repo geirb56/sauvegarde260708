@@ -7,7 +7,6 @@ import { Loader2, Check, ShieldAlert, Activity } from "lucide-react";
 import { toast } from "sonner";
 
 import { API_BASE_URL } from "@/config";
-import { useAuth } from "@/context/AuthContext";
 import { useLanguage } from "@/context/LanguageContext";
 const API = API_BASE_URL;
 
@@ -33,9 +32,7 @@ function OptionGrid({ options, value, onSelect, testIdPrefix }) {
 }
 
 export default function Onboarding() {
-  const { user } = useAuth();
   const { t } = useLanguage();
-  const userId = user?.id;
   const navigate = useNavigate();
   const [stepIndex, setStepIndex] = useState(0);
   const [fitnessLevel, setFitnessLevel] = useState("");
@@ -179,12 +176,8 @@ export default function Onboarding() {
 
     setSaving(true);
     try {
-      await axios.post(`${API}/training/set-goal?goal=${targetMap[target]}`, {}, {
-        headers: { "X-User-Id": userId },
-      });
-      await axios.post(`${API}/training/refresh?sessions=${sessionsMap[frequency] || 4}`, {}, {
-        headers: { "X-User-Id": userId },
-      });
+      await axios.post(`${API}/training/set-goal?goal=${targetMap[target]}`, {});
+      await axios.post(`${API}/training/refresh?sessions=${sessionsMap[frequency] || 4}`, {});
       toast.success(t("onboarding.planUpdated"));
       navigate("/training");
     } catch (err) {
