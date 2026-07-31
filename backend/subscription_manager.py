@@ -29,20 +29,15 @@ NOTE: Legacy statuses (early_adopter, active, starter, confort, pro) are
 All access decisions MUST go through access_control.get_user_access().
 This module handles only the CRUD operations on subscription documents.
 
-BLOCKER (Garmin identity):
-    activate_garmin_trial() requires a stable, per-user Garmin identity
-    (a unique Garmin account identifier, NOT the RunIndex user_id, NOT email,
-    NOT a frontend-provided value).
+Garmin identity model:
+    activate_garmin_trial() receives the garmin_identity derived server-side
+    from gccli auth status (the authenticated Garmin email, normalised via
+    strip().lower()).  The frontend never provides this value.
 
-    The current Garmin integration uses a SINGLE shared backend Garmin account
-    (GARMIN_USERNAME env var) for all RunIndex users.  There is no per-user
-    Garmin identity stored in the system.  Therefore the "1 Garmin = 1 Trial"
-    guarantee cannot yet be enforced at the identity level.
-
-    Until the Garmin integration is migrated to per-user OAuth / per-user
-    Garmin accounts, activate_garmin_trial() will raise NotImplementedError
-    when a garmin_identity is not provided, and callers must document this
-    limitation in the PR.
+    Each RunIndex user operates their own isolated GCCLI session (per-user
+    HOME directory under GCCLI_HOME/{user_id}).  After a successful gccli
+    login the connect endpoint calls provider.get_profile() to obtain the
+    real Garmin email, then passes it to activate_garmin_trial().
 """
 
 from datetime import datetime, timezone, timedelta
@@ -162,7 +157,7 @@ async def get_user_subscription(db: AsyncIOMotorDatabase, user_id: str) -> Dict:
     subscription = await db.subscriptions.find_one({"user_id": user_id})
 
     if not subscription:
-        # New users start as FREE — trial requires Garmin identity (see BLOCKER above)
+        # New users start as FREE — trial is activated separately via activate_garmin_trial()
         subscription = await create_free_subscription(db, user_id)
 
     # Lazily persist trial expiration to DB
@@ -284,21 +279,7 @@ async def activate_garmin_trial(
         The updated subscription document (status may be "trial" or "free").
 
     Raises:
-        NotImplementedError: If _GARMIN_IDENTITY_AVAILABLE is False, meaning the
-                             Garmin per-user identity architecture is not yet in
-                             place (see BLOCKER note at the top of this module).
-        ValueError:          If garmin_identity is empty or None (fail safe).
-
-    BLOCKER NOTE:
-        This function raises NotImplementedError until the Garmin multi-user
-        OAuth integration ships a stable per-user Garmin identity.  The current
-        integration uses a single shared backend Garmin account; there is no
-        per-user Garmin identifier to use as garmin_identity.
-
-        When unblocked, the caller (garmin connect endpoint) should:
-          1. Obtain the per-user Garmin identity from the Garmin OAuth response.
-          2. Call this function with that identity.
-          3. The function will enforce "1 Garmin = 1 Trial" atomically.
+        ValueError: If garmin_identity is empty or None (fail safe).
     """
     if not _GARMIN_IDENTITY_AVAILABLE:
         raise NotImplementedError(
