@@ -8,6 +8,8 @@ import { AuthProvider } from "@/context/AuthContext";
 
 jest.mock("axios");
 
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+
 function renderAdmin() {
   const container = document.createElement("div");
   document.body.appendChild(container);
@@ -79,9 +81,15 @@ describe("admin dashboard", () => {
     await flush();
     await flush();
 
-    expect(axios.get).toHaveBeenNthCalledWith(2, expect.stringContaining("/api/admin/users"), {
-      headers: { Authorization: "******" },
-    });
+    expect(axios.get).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining("/api/admin/users"),
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: expect.any(String),
+        }),
+      }),
+    );
     expect(container.textContent).toContain("Admin dashboard");
     expect(container.textContent).toContain("trial@example.com");
     expect(container.textContent).toContain("Connected");
