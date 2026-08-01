@@ -111,7 +111,7 @@ export const Layout = () => {
       </main>
 
       {/* Bottom Navigation */}
-      <nav className="bottom-nav-modern fixed bottom-0 left-0 right-0 flex items-center justify-between px-2 py-2 safe-area-pb">
+      <nav className="bottom-nav-modern fixed bottom-0 left-0 right-0 flex items-stretch justify-between gap-0.5 px-2 py-2 safe-area-pb overflow-x-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
         {navItems.map((item) => {
           const isActive = item.path === "/"
             ? location.pathname === item.path
@@ -120,7 +120,7 @@ export const Layout = () => {
             <NavLink
               key={item.path}
               to={item.path}
-              className={`nav-item-modern flex-1 ${isActive ? "active" : ""}`}
+              className={`nav-item-modern flex-1 min-w-[48px] min-h-[44px] ${isActive ? "active" : ""}`}
             >
               <div className="relative">
                 <item.icon className="nav-icon w-5 h-5" />
