@@ -28,12 +28,16 @@ Security notes:
 from __future__ import annotations
 
 import logging
+import os
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from urllib.parse import urlencode
 
-from fastapi import APIRouter, HTTPException, Request, status
+import httpx
+from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi.responses import RedirectResponse
 
 from auth.jwt_utils import create_access_token
 from auth.mongo_errors import DuplicateKeyError
@@ -47,6 +51,8 @@ logger = logging.getLogger(__name__)
 oauth_router = APIRouter(prefix="/auth", tags=["auth"])
 _OAUTH_PROVIDERS = {"google", "apple"}
 _OAUTH_CHALLENGE_TTL_SECONDS = 600
+_GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+_GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 
 _SAFE_USER_PROJECTION = {
     "_id": 0,
@@ -110,6 +116,97 @@ async def _issue_oauth_challenge(db, provider: str) -> dict:
         "nonce": challenge["nonce"],
         "expires_at": challenge["expires_at"],
     }
+
+
+def _get_frontend_url() -> str:
+    frontend_url = os.getenv("FRONTEND_URL", "").strip()
+    if not frontend_url:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="FRONTEND_URL is not configured on the server.",
+        )
+    return frontend_url.rstrip("/")
+
+
+def _google_callback_url(request: Request) -> str:
+    return str(request.url_for("auth_google_callback"))
+
+
+def _google_authorization_url(request: Request, *, state: str, nonce: str) -> str:
+    client_id = os.getenv("GOOGLE_CLIENT_ID", "").strip()
+    if not client_id:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="GOOGLE_CLIENT_ID is not configured on the server.",
+        )
+    query = urlencode(
+        {
+            "client_id": client_id,
+            "redirect_uri": _google_callback_url(request),
+            "response_type": "code",
+            "scope": "openid email profile",
+            "state": state,
+            "nonce": nonce,
+            "prompt": "select_account",
+        }
+    )
+    return f"{_GOOGLE_AUTH_URL}?{query}"
+
+
+def _build_frontend_redirect(*, access_token: Optional[str] = None, error: Optional[str] = None) -> str:
+    params = {}
+    if access_token:
+        params["access_token"] = access_token
+        params["token_type"] = "Bearer"
+    if error:
+        params["auth_error"] = error
+    query = urlencode(params)
+    base = _get_frontend_url()
+    if not query:
+        return base
+    return f"{base}/#{query}"
+
+
+async def _exchange_google_code(request: Request, *, code: str) -> dict:
+    client_id = os.getenv("GOOGLE_CLIENT_ID", "").strip()
+    client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "").strip()
+    if not client_id:
+        raise ValueError("GOOGLE_CLIENT_ID is not configured on the server.")
+    if not client_secret:
+        raise ValueError("GOOGLE_CLIENT_SECRET is not configured on the server.")
+
+    payload = {
+        "code": code,
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "redirect_uri": _google_callback_url(request),
+        "grant_type": "authorization_code",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(_GOOGLE_TOKEN_URL, data=payload)
+            response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        logger.warning("Google token exchange failed: %s", exc)
+        raise ValueError("Google authorization code exchange failed.") from exc
+    except Exception as exc:
+        logger.warning("Google token exchange unavailable: %s", exc)
+        raise ValueError("Could not verify Google identity (provider unavailable).") from exc
+
+    token_payload = response.json()
+    id_token = token_payload.get("id_token")
+    if not id_token:
+        raise ValueError("Google token exchange did not return an ID token.")
+    return token_payload
+
+
+def _require_verified_google_email(claims: dict) -> dict:
+    if not claims.get("email_verified", False):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Google account email must be verified.",
+        )
+    return claims
 
 
 async def _consume_oauth_challenge(db, provider: str, state: str) -> dict:
@@ -661,6 +758,19 @@ async def create_oauth_challenge(provider: str, request: Request):
     }
 
 
+@oauth_router.get("/google", status_code=307)
+async def start_google_auth(request: Request):
+    challenge = await _issue_oauth_challenge(request.app.state.db, "google")
+    return RedirectResponse(
+        url=_google_authorization_url(
+            request,
+            state=challenge["state"],
+            nonce=challenge["nonce"],
+        ),
+        status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+    )
+
+
 @oauth_router.post("/google", response_model=TokenResponse, status_code=200)
 async def auth_google(body: GoogleAuthRequest, request: Request):
     """Authenticate (or create an account) via Google ID token.
@@ -681,6 +791,7 @@ async def auth_google(body: GoogleAuthRequest, request: Request):
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(exc),
         )
+    claims = _require_verified_google_email(claims)
 
     user = await _find_or_create_oauth_user(
         db=request.app.state.db,
@@ -694,6 +805,61 @@ async def auth_google(body: GoogleAuthRequest, request: Request):
     return TokenResponse(
         access_token=access_token,
         user=_user_to_response(user),
+    )
+
+
+@oauth_router.get("/google/callback", status_code=307)
+async def auth_google_callback(
+    request: Request,
+    state: str = Query(..., min_length=1),
+    code: Optional[str] = Query(None),
+    error: Optional[str] = Query(None),
+):
+    if error:
+        return RedirectResponse(
+            url=_build_frontend_redirect(error=f"google_oauth_error:{error}"),
+            status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+        )
+
+    if not code:
+        return RedirectResponse(
+            url=_build_frontend_redirect(error="google_oauth_error:missing_code"),
+            status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+        )
+
+    try:
+        challenge = await _consume_oauth_challenge(request.app.state.db, "google", state)
+        token_payload = await _exchange_google_code(request, code=code)
+        claims = await verify_google_id_token(
+            token_payload["id_token"],
+            expected_nonce=challenge["nonce"],
+        )
+        claims = _require_verified_google_email(claims)
+        user = await _find_or_create_oauth_user(
+            db=request.app.state.db,
+            provider="google",
+            provider_subject=claims["sub"],
+            provider_email=claims.get("email"),
+            email_verified=claims.get("email_verified", False),
+        )
+        access_token = create_access_token(user["id"], user["email"])
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_401_UNAUTHORIZED:
+            return RedirectResponse(
+                url=_build_frontend_redirect(error="google_oauth_error:unauthorized"),
+                status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+            )
+        raise
+    except ValueError as exc:
+        logger.warning("Google OAuth callback failed: %s", exc)
+        return RedirectResponse(
+            url=_build_frontend_redirect(error="google_oauth_error:invalid_google_identity"),
+            status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+        )
+
+    return RedirectResponse(
+        url=_build_frontend_redirect(access_token=access_token),
+        status_code=status.HTTP_307_TEMPORARY_REDIRECT,
     )
 
 

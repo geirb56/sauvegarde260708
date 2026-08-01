@@ -33,6 +33,7 @@ import sys
 import uuid
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
+from urllib.parse import parse_qs, urlparse
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -49,8 +50,11 @@ os.environ.setdefault("ENVIRONMENT", "test")
 os.environ.setdefault("MONGO_URL", "mongodb://localhost:27017")
 os.environ.setdefault("DB_NAME", "test_db")
 os.environ.setdefault("GOOGLE_CLIENT_ID", "test-google-client-id.apps.googleusercontent.com")
+os.environ.setdefault("GOOGLE_CLIENT_SECRET", "test-google-client-secret")
 os.environ.setdefault("APPLE_CLIENT_ID", "com.runindex.app")
+os.environ.setdefault("FRONTEND_URL", "http://frontend.test")
 
+from auth.jwt_utils import decode_access_token
 from auth.mongo_errors import DuplicateKeyError
 
 pytestmark = pytest.mark.asyncio
@@ -268,6 +272,19 @@ async def _post_google(client, payload: dict) -> httpx.Response:
     return await client.post("/auth/google", json=body)
 
 
+async def _start_google_redirect(client) -> tuple[httpx.Response, dict[str, str]]:
+    response = await client.get("/auth/google")
+    assert response.status_code == 307
+    location = response.headers["location"]
+    parsed = urlparse(location)
+    query = parse_qs(parsed.query)
+    return response, {
+        "state": query["state"][0],
+        "nonce": query["nonce"][0],
+        "redirect_uri": query["redirect_uri"][0],
+    }
+
+
 async def _post_apple(client, payload: dict) -> httpx.Response:
     challenge = await client.post("/auth/oauth/challenge/apple")
     assert challenge.status_code == 200
@@ -325,6 +342,86 @@ class TestGoogleNewUser:
         assert "fake-token" not in body
         assert "password" not in body.lower()
         assert "secret" not in body.lower()
+
+    async def test_unverified_google_email_is_rejected(self, client):
+        claims = _make_google_claims("google-sub-unverified", "unverified@gmail.com", False)
+        with patch("auth.oauth_router.verify_google_id_token", new=AsyncMock(return_value=claims)):
+            resp = await _post_google(client, {"id_token": "fake-token"})
+        assert resp.status_code == 401
+        assert "verified" in resp.json()["detail"].lower()
+
+    async def test_google_redirect_endpoint_returns_google_authorize_url(self, client, fake_db):
+        response, params = await _start_google_redirect(client)
+        location = response.headers["location"]
+        assert location.startswith("https://accounts.google.com/o/oauth2/v2/auth?")
+        assert params["state"]
+        assert params["nonce"]
+        assert params["redirect_uri"] == "http://test/auth/google/callback"
+        challenge = await fake_db.oauth_states.find_one({"provider": "google", "state": params["state"]})
+        assert challenge is not None
+        assert challenge["nonce"] == params["nonce"]
+
+    async def test_google_callback_valid_redirects_with_runindex_jwt(self, client, fake_db):
+        _, params = await _start_google_redirect(client)
+        claims = _make_google_claims("google-sub-callback", "callback@gmail.com")
+        with patch(
+            "auth.oauth_router._exchange_google_code",
+            new=AsyncMock(return_value={"id_token": "google-id-token"}),
+        ), patch(
+            "auth.oauth_router.verify_google_id_token",
+            new=AsyncMock(return_value=claims),
+        ):
+            resp = await client.get(
+                f"/auth/google/callback?code=oauth-code&state={params['state']}"
+            )
+
+        assert resp.status_code == 307
+        redirect = urlparse(resp.headers["location"])
+        fragment = parse_qs(redirect.fragment)
+        token = fragment["access_token"][0]
+        payload = decode_access_token(token)
+        assert fragment["token_type"][0] == "Bearer"
+        assert redirect.scheme == "http"
+        assert redirect.netloc == "frontend.test"
+        user = await fake_db.users.find_one({"id": payload["sub"]})
+        assert user is not None
+        assert user["email"] == "callback@gmail.com"
+        assert user["id"] != "default"
+
+    async def test_google_callback_invalid_identity_redirects_with_error(self, client):
+        _, params = await _start_google_redirect(client)
+        with patch(
+            "auth.oauth_router._exchange_google_code",
+            new=AsyncMock(return_value={"id_token": "google-id-token"}),
+        ), patch(
+            "auth.oauth_router.verify_google_id_token",
+            new=AsyncMock(side_effect=ValueError("Invalid Google ID token.")),
+        ):
+            resp = await client.get(
+                f"/auth/google/callback?code=oauth-code&state={params['state']}"
+            )
+
+        assert resp.status_code == 307
+        fragment = parse_qs(urlparse(resp.headers["location"]).fragment)
+        assert fragment["auth_error"][0] == "google_oauth_error:invalid_google_identity"
+
+    async def test_google_callback_unverified_email_redirects_with_error(self, client):
+        _, params = await _start_google_redirect(client)
+        claims = _make_google_claims("google-sub-callback-unverified", "callback-unverified@gmail.com", False)
+        with patch(
+            "auth.oauth_router._exchange_google_code",
+            new=AsyncMock(return_value={"id_token": "google-id-token"}),
+        ), patch(
+            "auth.oauth_router.verify_google_id_token",
+            new=AsyncMock(return_value=claims),
+        ):
+            resp = await client.get(
+                f"/auth/google/callback?code=oauth-code&state={params['state']}"
+            )
+
+        assert resp.status_code == 307
+        fragment = parse_qs(urlparse(resp.headers["location"]).fragment)
+        assert fragment["auth_error"][0] == "google_oauth_error:unauthorized"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -714,7 +811,7 @@ class TestOAuthAccountLinking:
         assert len(identities) == 1
         assert identities[0]["user_id"] == existing_user_id
 
-    async def test_unverified_google_email_does_not_auto_link(self, client):
+    async def test_unverified_google_email_is_rejected_for_existing_account(self, client):
         register = await client.post(
             "/auth/register",
             json={"email": "no-link@example.com", "password": "Password1!"},
@@ -726,8 +823,8 @@ class TestOAuthAccountLinking:
         with patch("auth.oauth_router.verify_google_id_token", new=AsyncMock(return_value=claims)):
             resp = await _post_google(client, {"id_token": "tok"})
 
-        assert resp.status_code == 200
-        assert resp.json()["user"]["id"] != existing_user_id
+        assert resp.status_code == 401
+        assert "verified" in resp.json()["detail"].lower()
 
     async def test_apple_frontend_email_is_ignored_when_token_has_no_email(self, client):
         claims = _make_apple_claims("apple-sub-no-token-email", email=None, email_verified=False)
