@@ -8,7 +8,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 # Auth module — JWT-based multi-user identity
 from auth.router import auth_router
 from auth.oauth_router import oauth_router
-from auth.dependencies import get_current_user
+from auth.dependencies import get_current_user, require_admin
 from admin.router import admin_router
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -5232,8 +5232,8 @@ async def get_coach_cache_stats():
 
 
 @api_router.delete("/cache/clear")
-async def clear_coach_cache():
-    """Clear all coach service caches"""
+async def clear_coach_cache(_admin: dict = Depends(require_admin)):
+    """Clear all coach service caches. Admin only."""
     result = clear_cache()
     logger.info(f"Cache cleared: {result}")
     return {"success": True, **result}
@@ -5249,8 +5249,8 @@ async def get_service_metrics():
 
 
 @api_router.delete("/metrics/reset")
-async def reset_service_metrics():
-    """Reset coach service metrics"""
+async def reset_service_metrics(_admin: dict = Depends(require_admin)):
+    """Reset coach service metrics. Admin only."""
     old_metrics = reset_coach_metrics()
     logger.info(f"Metrics reset. Previous: {old_metrics}")
     return {"success": True, "previous": old_metrics}
@@ -5357,11 +5357,21 @@ async def cancel_user_subscription(user: dict = Depends(auth_user)):
     }
 
 
+def _dev_endpoint_guard() -> None:
+    """Raise 404 when accessed in production. DEV/TEST-only endpoints."""
+    env = os.getenv("ENVIRONMENT", "development").strip().lower()
+    if env == "production":
+        raise HTTPException(status_code=404, detail="Not Found")
+
+
 @api_router.post("/subscription/simulate-trial-end")
 async def simulate_trial_end(user: dict = Depends(auth_user)):
     """
     [DEV ONLY] Simulate end of free trial to test paywall.
+
+    Unavailable in production (returns 404 when ENVIRONMENT=production).
     """
+    _dev_endpoint_guard()
     user_id = user["id"]
     await db.subscriptions.update_one(
         {"user_id": user_id},
@@ -5383,7 +5393,10 @@ async def simulate_trial_end(user: dict = Depends(auth_user)):
 async def reset_to_trial(user: dict = Depends(auth_user)):
     """
     [DEV ONLY] Reset user to free trial.
+
+    Unavailable in production (returns 404 when ENVIRONMENT=production).
     """
+    _dev_endpoint_guard()
     user_id = user["id"]
     now = datetime.now(timezone.utc)
     trial_end = now + timedelta(days=TRIAL_DURATION_DAYS)

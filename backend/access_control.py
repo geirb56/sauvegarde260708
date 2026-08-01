@@ -476,6 +476,11 @@ ROUTE_ACCESS_MAP: Dict[str, RouteAccess] = {
     "/api/run-index":           RouteAccess.FREE,
     "/api/cache/":              RouteAccess.FREE,
     "/api/metrics":             RouteAccess.FREE,
+    # Admin routes: classified FREE at the subscription-middleware level so a
+    # real administrator is never blocked by tier checks. Admin RBAC is
+    # enforced by `Depends(require_admin)` on every /api/admin/* endpoint
+    # (returns 403 for non-admins, 401 for unauthenticated).
+    "/api/admin/":              RouteAccess.FREE,
     # Chat history is free; send is handled separately (quota enforcement)
     "/api/chat/history":        RouteAccess.FREE,
     "/api/chat/store-response": RouteAccess.FREE,
