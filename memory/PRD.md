@@ -3,7 +3,7 @@
 ## Problem Statement
 Pull https://github.com/geirb56/sauvegarde260629 and set it up so it runs. Replace /app contents.
 
-## Changelog — Garmin per-user connection fix (June 2026)
+## Changelog — Garmin per-user connection fix (August 1, 2026)
 - Removed global .env credential fallback (`GARMIN_USERNAME`/`GARMIN_PASSWORD`) for user connections in `garmin/providers/gccli_provider.py` (new `allow_global_account` flag; only bootstrap may use env).
 - `garmin/factory.py`: `get_provider_for_user` → `allow_global_account=False`; `get_provider` (bootstrap) → `True`.
 - Frontend `Onboarding.jsx`: each user now enters their own Garmin email+password (fixes 422 empty-body call); password cleared after success. i18n keys added.

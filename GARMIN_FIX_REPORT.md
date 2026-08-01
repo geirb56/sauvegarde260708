@@ -1,6 +1,6 @@
 # Garmin Fix Report
 
-Branche : PR34 (HEAD PR#61) · Date : Juin 2026 · Périmètre : connexion Garmin par utilisateur.
+Branche : PR34 (HEAD PR#61) · Date : 1er août 2026 · Périmètre : connexion Garmin par utilisateur.
 Contraintes respectées : aucun changement Paddle / abonnements / JWT / PR59 / PR61 / PR62 / Google OAuth ;
 aucun refactor massif ; autres providers (Terra, Apple, Fitbit, Whoop) laissés désactivés et intacts.
 
