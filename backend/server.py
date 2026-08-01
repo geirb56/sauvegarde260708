@@ -922,9 +922,9 @@ async def get_vma_estimate(user: dict = Depends(auth_user), language: str = "en"
     # Check if user has a goal (race performance to use)
     user_goal = await db.user_goals.find_one({"user_id": user_id}, {"_id": 0})
     
-    # Get all running workouts
+    # Get all running workouts (scoped to authenticated user)
     all_workouts = await db.workouts.find(
-        {"type": "run"}, 
+        {"type": "run", "user_id": user_id},
         {"_id": 0}
     ).sort("date", -1).to_list(100)
     
@@ -3426,7 +3426,7 @@ async def refresh_training_plan(sessions: int = None, user: dict = Depends(auth_
 @api_router.delete("/training/goal")
 async def delete_training_goal(user: dict = Depends(auth_user)):
     """Delete the training goal"""
-
+    user_id = user["id"]
     result = await db.training_goals.delete_one({"user_id": user_id})
     await db.training_context.delete_one({"user_id": user_id})
     await db.training_cycles.delete_one({"user_id": user_id})
@@ -3597,7 +3597,7 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     # Falls back to neutral defaults if run-index is unavailable
     fatigue_data_source = "garmin"
     try:
-        run_index_data = await get_run_index(user_id=user["id"])
+        run_index_data = await get_run_index(user=user)
         _cc_metrics = run_index_data.get("metrics", {}) or {}
         fatigue_ratio = _cc_metrics.get("fatigue_ratio")
         fatigue_status = _cc_metrics.get("fatigue_status")
@@ -3790,8 +3790,10 @@ async def get_race_predictions(user: dict = Depends(auth_user)):
     today = datetime.now(timezone.utc)
     six_weeks_ago = today - timedelta(days=42)  # 6 semaines comme pour VO2MAX
     
-    # Récupérer les activités des 6 dernières semaines
+    user_id = user["id"]
+    # Récupérer les activités des 6 dernières semaines (scoped to authenticated user)
     activities = await db.workouts.find({
+        "user_id": user_id,
         "date": {"$gte": six_weeks_ago.isoformat()}
     }).to_list(500)
     
@@ -4064,9 +4066,10 @@ async def get_vma_history(user: dict = Depends(auth_user)):
     """
     today = datetime.now(timezone.utc)
     twelve_months_ago = today - timedelta(days=365)
-    
-    # Récupérer toutes les activités des 12 derniers mois
+    user_id = user["id"]
+    # Récupérer toutes les activités des 12 derniers mois (scoped to authenticated user)
     activities = await db.workouts.find({
+        "user_id": user_id,
         "date": {"$gte": twelve_months_ago.isoformat()}
     }).to_list(2000)
     
