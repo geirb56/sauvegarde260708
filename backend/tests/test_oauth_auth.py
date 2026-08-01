@@ -238,6 +238,20 @@ def _make_app(fake_db):
     return app
 
 
+def _make_api_prefixed_app(fake_db):
+    from fastapi import APIRouter, FastAPI
+    from auth.router import auth_router
+    from auth.oauth_router import oauth_router
+
+    app = FastAPI()
+    api_router = APIRouter(prefix="/api")
+    api_router.include_router(auth_router)
+    api_router.include_router(oauth_router)
+    app.include_router(api_router)
+    app.state.db = fake_db
+    return app
+
+
 # ─── Fixtures ─────────────────────────────────────────────────────────────────
 
 @pytest.fixture
@@ -252,6 +266,15 @@ def app(fake_db):
 
 @pytest_asyncio.fixture
 async def client(app):
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as c:
+        yield c
+
+
+@pytest_asyncio.fixture
+async def api_client(fake_db):
+    app = _make_api_prefixed_app(fake_db)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as c:
@@ -360,6 +383,18 @@ class TestGoogleNewUser:
         challenge = await fake_db.oauth_states.find_one({"provider": "google", "state": params["state"]})
         assert challenge is not None
         assert challenge["nonce"] == params["nonce"]
+
+    async def test_api_google_redirect_uses_api_callback_url(self, api_client, fake_db):
+        response = await api_client.get("/api/auth/google")
+        assert response.status_code == 307
+        parsed = urlparse(response.headers["location"])
+        query = parse_qs(parsed.query)
+        assert query["redirect_uri"][0] == "http://test/api/auth/google/callback"
+        challenge = await fake_db.oauth_states.find_one(
+            {"provider": "google", "state": query["state"][0]}
+        )
+        assert challenge is not None
+        assert challenge["nonce"] == query["nonce"][0]
 
     async def test_google_callback_valid_redirects_with_runindex_jwt(self, client, fake_db):
         _, params = await _start_google_redirect(client)

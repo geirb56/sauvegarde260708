@@ -159,15 +159,28 @@ describe("auth pages and oauth UI", () => {
     unmount();
   });
 
-  test("oauth buttons show translated configuration errors when credentials are absent", async () => {
+  test("google oauth redirects through the backend without frontend Google config", async () => {
+    const assignSpy = jest.spyOn(window.location, "assign").mockImplementation(() => {});
+    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
+    const { container, unmount } = renderWithProviders(<Login />);
+    const googleButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent.includes("Google")
+    );
+
+    await act(async () => {
+      googleButton.click();
+    });
+
+    expect(assignSpy).toHaveBeenCalledWith("http://localhost:3000/api/auth/google");
+    expect(container.textContent).not.toContain("El inicio de sesión con Google no está configurado.");
+    assignSpy.mockRestore();
+    unmount();
+  });
+
+  test("apple oauth shows translated configuration error when credentials are absent", async () => {
     window.localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
     const { container, unmount } = renderWithProviders(<Login />);
     const buttons = Array.from(container.querySelectorAll("button"));
-
-    await act(async () => {
-      buttons.find((button) => button.textContent.includes("Google")).click();
-    });
-    expect(container.textContent).toContain("El inicio de sesión con Google no está configurado.");
 
     await act(async () => {
       buttons.find((button) => button.textContent.includes("Apple")).click();
