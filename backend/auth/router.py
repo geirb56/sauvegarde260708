@@ -44,6 +44,38 @@ logger = logging.getLogger(__name__)
 
 auth_router = APIRouter(prefix="/auth", tags=["auth"])
 
+# ── IP extraction ──────────────────────────────────────────────────────────────
+
+def _get_client_ip(request: Request) -> str:
+    """Return the reliable client IP for rate-limiting.
+
+    By default (``TRUSTED_PROXY_COUNT`` unset or 0), ``X-Forwarded-For`` is
+    **ignored** — only the direct TCP-connection IP is used.  This is the only
+    value that cannot be spoofed by the client.
+
+    When the service runs behind a known number of trusted reverse-proxy hops,
+    set ``TRUSTED_PROXY_COUNT=N`` (e.g. 1 for a single load balancer).  The
+    header is then read right-to-left so the client-controlled leftmost entry
+    cannot be used to bypass the limiter:
+
+        X-Forwarded-For: <client>, <proxy1>, …, <proxyN>
+
+    With ``TRUSTED_PROXY_COUNT=1`` the entry at index ``len(parts) - 1`` is the
+    IP the last trusted proxy received, which equals the client IP when there is
+    exactly one proxy hop.
+    """
+    trusted = int(os.getenv("TRUSTED_PROXY_COUNT", "0"))
+    if trusted > 0:
+        forwarded = request.headers.get("X-Forwarded-For", "")
+        if forwarded:
+            parts = [p.strip() for p in forwarded.split(",")]
+            # Take the entry just outside the trusted proxy chain (right-to-left)
+            idx = max(0, len(parts) - trusted)
+            return parts[idx]
+    # Safe default: direct connection IP — cannot be spoofed by the client
+    return request.client.host if request.client else "unknown"
+
+
 # ── Auth-specific rate limiter ─────────────────────────────────────────────────
 
 class _InMemoryAuthRateLimiter:
@@ -59,10 +91,7 @@ class _InMemoryAuthRateLimiter:
         self._store: Dict[str, List[float]] = defaultdict(list)
 
     def _key(self, request: Request, email: str = "") -> str:
-        forwarded = request.headers.get("X-Forwarded-For", "")
-        ip = forwarded.split(",")[0].strip() if forwarded else (
-            request.client.host if request.client else "unknown"
-        )
+        ip = _get_client_ip(request)
         return f"{ip}:{email.lower()}"
 
     def _prune(self, key: str) -> None:
@@ -98,10 +127,7 @@ class _RedisAuthRateLimiter:
         self._fallback = _InMemoryAuthRateLimiter(max_attempts, window_seconds)
 
     def _redis_key(self, request: Request, email: str = "") -> str:
-        forwarded = request.headers.get("X-Forwarded-For", "")
-        ip = forwarded.split(",")[0].strip() if forwarded else (
-            request.client.host if request.client else "unknown"
-        )
+        ip = _get_client_ip(request)
         email_hash = hashlib.sha256(email.lower().encode()).hexdigest()[:16] if email else "nomail"
         return f"auth:rl:{ip}:{email_hash}"
 

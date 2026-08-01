@@ -266,3 +266,38 @@ async def test_rate_limit_keys_are_per_email(client):
     )
     # Not 429 — different key
     assert res.status_code != 429
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# IP spoofing: X-Forwarded-For must NOT bypass the rate limiter by default
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def test_spoofed_x_forwarded_for_does_not_bypass_rate_limit(client, monkeypatch):
+    """A spoofed X-Forwarded-For header must not reset the rate-limit counter.
+
+    With TRUSTED_PROXY_COUNT=0 (the default), the limiter uses the direct
+    connection IP (always 'testclient' in ASGI tests).  Cycling through fake
+    XFF values must not allow unlimited attempts.
+    """
+    import os as _os
+    monkeypatch.setenv("TRUSTED_PROXY_COUNT", "0")
+
+    email = "rl-xff@example.com"
+
+    # 3 attempts with rotating spoofed IPs — should still exhaust the limit
+    fake_ips = ["10.0.0.1", "10.0.0.2", "10.0.0.3"]
+    for fake_ip in fake_ips:
+        res = await client.post(
+            "/auth/login",
+            json={"email": email, "password": "Bad1!"},
+            headers={"X-Forwarded-For": fake_ip},
+        )
+        assert res.status_code == 401  # not yet limited
+
+    # 4th attempt — still from the same real connection IP → must be 429
+    res = await client.post(
+        "/auth/login",
+        json={"email": email, "password": "Bad1!"},
+        headers={"X-Forwarded-For": "99.99.99.99"},
+    )
+    assert res.status_code == 429
