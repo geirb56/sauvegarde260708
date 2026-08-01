@@ -7,7 +7,7 @@ SINGLE SOURCE OF TRUTH for all subscription and feature access decisions.
 Commercial tiers:
     FREE    — trial expired, no active paid subscription
     TRIAL   — 30-day free trial (full Premium access)
-    PREMIUM — active paid subscription via Paddle (or Stripe legacy)
+    PREMIUM — active paid subscription via Paddle
 
 Architecture:
     JWT authenticated user

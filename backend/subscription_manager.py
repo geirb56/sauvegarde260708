@@ -11,7 +11,7 @@ RunIndex uses three commercial tiers:
               Full Premium access during trial period.
               One trial per Garmin account (enforced server-side).
 
-    PREMIUM — Active paid subscription via Stripe.
+    PREMIUM — Active paid subscription via Paddle.
               Full Premium access while subscription is valid.
 
 Trial eligibility rule (product rule):
@@ -21,10 +21,6 @@ Trial eligibility rule (product rule):
 
     NEW USERS START AS FREE.  The trial is only activated via
     activate_garmin_trial() after a Garmin connection is established.
-
-NOTE: Legacy statuses (early_adopter, active, starter, confort, pro) are
-      transparently mapped to PREMIUM by access_control.py.  They should not
-      appear in new subscription documents.
 
 All access decisions MUST go through access_control.get_user_access().
 This module handles only the CRUD operations on subscription documents.
@@ -68,30 +64,17 @@ _GARMIN_IDENTITY_AVAILABLE: bool = True
 # Free trial duration
 TRIAL_DURATION_DAYS = 30
 
-# Legacy — kept for backward-compat references in existing endpoints
-EARLY_ADOPTER_PRICE = 4.99
-EARLY_ADOPTER_PRICE_ID = "price_early_adopter_499"
-
 
 # ---------------------------------------------------------------------------
 # Canonical subscription statuses
 # ---------------------------------------------------------------------------
 
 class SubscriptionStatus:
-    # Current canonical statuses
-    TRIAL   = "trial"
-    FREE    = "free"
-    PREMIUM = "premium"
-
-    # Legacy statuses — kept for migration compatibility only.
-    # These are no longer created for new subscriptions.
-    EARLY_ADOPTER = "early_adopter"   # → maps to PREMIUM
-    ACTIVE        = "active"          # Stripe "active" → maps to PREMIUM
-    STARTER       = "starter"         # → maps to PREMIUM
-    CONFORT       = "confort"         # → maps to PREMIUM
-    PRO           = "pro"             # → maps to PREMIUM
-    EXPIRED       = "expired"         # → maps to FREE
-    CANCELLED     = "cancelled"       # → maps to FREE
+    TRIAL     = "trial"
+    FREE      = "free"
+    PREMIUM   = "premium"
+    EXPIRED   = "expired"
+    CANCELLED = "cancelled"
 
 
 # ---------------------------------------------------------------------------
@@ -120,9 +103,6 @@ FEATURES = {
     SubscriptionStatus.TRIAL:   _premium_features(True),
     SubscriptionStatus.PREMIUM: _premium_features(True),
     SubscriptionStatus.FREE:    _premium_features(False),
-    # Legacy entries — map to the same feature set as their equivalent tier
-    SubscriptionStatus.EARLY_ADOPTER: _premium_features(True),
-    SubscriptionStatus.ACTIVE:        _premium_features(True),
 }
 
 # ---------------------------------------------------------------------------
@@ -199,9 +179,6 @@ async def create_free_subscription(db: AsyncIOMotorDatabase, user_id: str) -> Di
         "paddle_subscription_id": None,
         "paddle_customer_id": None,
         "premium_expires_at": None,
-        # Legacy Stripe fields — kept for migration compatibility
-        "stripe_customer_id": None,
-        "stripe_subscription_id": None,
         "updated_at": now.isoformat(),
     }
 
@@ -248,9 +225,6 @@ async def create_trial_subscription(db: AsyncIOMotorDatabase, user_id: str) -> D
         "paddle_subscription_id": None,
         "paddle_customer_id": None,
         "premium_expires_at": None,
-        # Legacy Stripe fields — kept for migration compatibility
-        "stripe_customer_id": None,
-        "stripe_subscription_id": None,
         "updated_at": now.isoformat(),
     }
 
@@ -423,14 +397,12 @@ async def check_premium_expiration(db: AsyncIOMotorDatabase, subscription: Dict)
     Lazily check whether a Premium subscription has expired and update MongoDB.
 
     PREMIUM → FREE transition is persisted atomically.
-    Applies to canonical PREMIUM status and to the legacy "active" status.
     """
     status = subscription.get("status")
-    if status not in (SubscriptionStatus.PREMIUM, SubscriptionStatus.ACTIVE):
+    if status != SubscriptionStatus.PREMIUM:
         return subscription
 
-    expires_field = "premium_expires_at" if status == SubscriptionStatus.PREMIUM else "expires_at"
-    expires_str = subscription.get(expires_field)
+    expires_str = subscription.get("premium_expires_at")
     if not expires_str:
         return subscription
 
@@ -575,46 +547,6 @@ async def cancel_subscription(db: AsyncIOMotorDatabase, user_id: str) -> Dict:
 
 
 # ---------------------------------------------------------------------------
-# Legacy wrapper — kept for backward compatibility with existing call sites
-# ---------------------------------------------------------------------------
-
-async def activate_early_adopter(
-    db: AsyncIOMotorDatabase,
-    user_id: str,
-    stripe_customer_id: str = "",
-    stripe_subscription_id: str = "",
-) -> Dict:
-    """
-    Legacy activation wrapper (Early Adopter → PREMIUM).
-
-    New code should call activate_premium() instead.
-    Kept to avoid breaking existing admin/testing endpoints.
-    """
-    now = datetime.now(timezone.utc)
-    await db.subscriptions.update_one(
-        {"user_id": user_id},
-        {
-            "$set": {
-                "status": SubscriptionStatus.PREMIUM,
-                "stripe_customer_id": stripe_customer_id or f"cus_legacy_{user_id}",
-                "stripe_subscription_id": stripe_subscription_id or f"sub_legacy_{user_id}",
-                # Legacy display price — not used for access decisions
-                "price_locked": EARLY_ADOPTER_PRICE,
-                "activated_at": now.isoformat(),
-                "updated_at": now.isoformat(),
-                # No expiry for grandfathered early adopters
-                "premium_expires_at": None,
-            }
-        },
-        upsert=True,
-    )
-    logger.info(f"(Legacy) Activated Early Adopter → PREMIUM for user '{user_id}'")
-    subscription = await db.subscriptions.find_one({"user_id": user_id})
-    subscription.pop("_id", None)
-    return subscription
-
-
-# ---------------------------------------------------------------------------
 # Display helpers
 # ---------------------------------------------------------------------------
 
@@ -642,10 +574,7 @@ def has_feature_access(subscription: Dict, feature: str) -> bool:
     This function is kept for backward-compat display use only.
     """
     status = subscription.get("status", SubscriptionStatus.FREE)
-    # Normalise legacy statuses to their canonical feature set
-    from access_control import normalize_legacy_status, Tier
-    tier = normalize_legacy_status(status)
-    if tier in (Tier.TRIAL, Tier.PREMIUM):
+    if status in (SubscriptionStatus.TRIAL, SubscriptionStatus.PREMIUM):
         feature_set = _premium_features(True)
     else:
         feature_set = _premium_features(False)
@@ -665,16 +594,12 @@ def get_subscription_display(subscription: Dict, lang: str = "en") -> Dict:
     """Return UI display information for the subscription status."""
     status = subscription.get("status", SubscriptionStatus.FREE)
 
-    # Normalise legacy statuses for display
-    from access_control import normalize_legacy_status, Tier
-    tier = normalize_legacy_status(status)
-
-    if tier == Tier.TRIAL:
+    if status == SubscriptionStatus.TRIAL:
         displays = {
             "fr": {"label": "Essai gratuit actif", "description": "Profite de toutes les fonctionnalités", "badge": "ESSAI", "badge_color": "blue"},
             "en": {"label": "Free trial active", "description": "Enjoy all features", "badge": "TRIAL", "badge_color": "blue"},
         }
-    elif tier == Tier.PREMIUM:
+    elif status == SubscriptionStatus.PREMIUM:
         displays = {
             "fr": {"label": "Premium", "description": "Accès complet à toutes les fonctionnalités", "badge": "PREMIUM", "badge_color": "violet"},
             "en": {"label": "Premium", "description": "Full access to all features", "badge": "PREMIUM", "badge_color": "violet"},
@@ -687,7 +612,7 @@ def get_subscription_display(subscription: Dict, lang: str = "en") -> Dict:
 
     display = displays.get(lang, displays["en"]).copy()
 
-    if tier == Tier.TRIAL:
+    if status == SubscriptionStatus.TRIAL:
         days_remaining = get_trial_days_remaining(subscription)
         if days_remaining is not None:
             display["days_remaining"] = days_remaining
