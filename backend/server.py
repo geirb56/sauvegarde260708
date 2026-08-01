@@ -4772,6 +4772,7 @@ async def send_chat_message(request: ChatRequest, user: dict = Depends(auth_user
     # access_control.get_user_access() handles all legacy statuses, expiration
     # checks, DEMO_MODE, DB errors (fail-closed), and the canonical tier model.
     user_access = await get_user_access(db, user_id)
+    tier = user_access.tier
 
     is_unlimited = user_access.is_unlimited_chat
     messages_limit = user_access.chat_monthly_quota or CHAT_QUOTA_FREE  # int for FREE tier
