@@ -47,8 +47,10 @@ async def _safe_enqueue(user_id: str):
 class GarminConnectRequest(BaseModel):
     # Garmin Connect credentials for this user's own account.
     # Used once for the headless gccli login; never stored by the backend.
-    garmin_username: str = Field(..., description="Garmin Connect email address")
-    garmin_password: str = Field(..., description="Garmin Connect password")
+    # Optional: when absent the backend falls back to GARMIN_USERNAME / GARMIN_PASSWORD
+    # env variables (server-side only — credentials never come from the frontend).
+    garmin_username: Optional[str] = Field(None, description="Garmin Connect email address")
+    garmin_password: Optional[str] = Field(None, description="Garmin Connect password")
     # Optional, testing-only hook to exercise the MFA (Mode 2) code path.
     simulate_mfa: bool = False
 

@@ -10,23 +10,44 @@ import { API_BASE_URL } from "@/config";
 import { useLanguage } from "@/context/LanguageContext";
 const API = API_BASE_URL;
 
-function OptionGrid({ options, value, onSelect, testIdPrefix }) {
+// Connections other than Garmin are temporarily disabled.
+// Each entry: { key: string, disabled: boolean }
+// Set disabled: false to re-enable an option when the integration is ready.
+const DEVICE_OPTION_CONFIG = [
+  { key: "garmin",      disabled: false },
+  { key: "appleHealth", disabled: true  },
+  { key: "whoop",       disabled: true  },
+  { key: "fitbit",      disabled: true  },
+];
+
+function OptionGrid({ options, value, onSelect, testIdPrefix, disabledOptions = [] }) {
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-      {options.map((option) => (
-        <button
-          key={option}
-          onClick={() => onSelect(option)}
-          className={`text-left px-4 py-3 rounded-lg border transition-all font-mono text-sm ${
-            value === option
-              ? "border-primary bg-primary/10 text-primary"
-              : "border-border bg-card text-foreground hover:border-primary/40"
-          }`}
-          data-testid={`${testIdPrefix}-${option.replace(/\s+/g, "-").toLowerCase()}`}
-        >
-          {option}
-        </button>
-      ))}
+      {options.map((option) => {
+        const isDisabled = disabledOptions.includes(option);
+        return (
+          <button
+            key={option}
+            onClick={() => !isDisabled && onSelect(option)}
+            disabled={isDisabled}
+            className={`text-left px-4 py-3 rounded-lg border transition-all font-mono text-sm ${
+              isDisabled
+                ? "border-border bg-muted/30 text-muted-foreground cursor-not-allowed opacity-50"
+                : value === option
+                  ? "border-primary bg-primary/10 text-primary"
+                  : "border-border bg-card text-foreground hover:border-primary/40"
+            }`}
+            data-testid={`${testIdPrefix}-${option.replace(/\s+/g, "-").toLowerCase()}`}
+          >
+            {option}
+            {isDisabled && (
+              <span className="ml-2 text-[10px] uppercase tracking-widest text-muted-foreground/60">
+                bientôt
+              </span>
+            )}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -75,6 +96,13 @@ export default function Onboarding() {
   const DEVICE_OPTIONS = [
     t("onboarding.deviceOptions.appleHealth"),
     t("onboarding.deviceOptions.garmin"),
+    t("onboarding.deviceOptions.whoop"),
+    t("onboarding.deviceOptions.fitbit"),
+  ];
+  // Temporarily disabled: only Garmin is active. Other options are shown as
+  // "coming soon" and are not selectable. Remove from this list to re-enable.
+  const DISABLED_DEVICE_OPTIONS = [
+    t("onboarding.deviceOptions.appleHealth"),
     t("onboarding.deviceOptions.whoop"),
     t("onboarding.deviceOptions.fitbit"),
   ];
@@ -243,7 +271,7 @@ export default function Onboarding() {
           {stepKey === "device" && (
             <div className="space-y-3">
               <h2 className="text-lg font-semibold">{t("onboarding.connectDevice")}</h2>
-              <OptionGrid options={DEVICE_OPTIONS} value={device} onSelect={setDevice} testIdPrefix="device-option" />
+              <OptionGrid options={DEVICE_OPTIONS} value={device} onSelect={setDevice} testIdPrefix="device-option" disabledOptions={DISABLED_DEVICE_OPTIONS} />
 
               {device === t("onboarding.deviceOptions.garmin") && (
                 <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-3" data-testid="garmin-connect-panel">

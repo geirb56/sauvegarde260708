@@ -146,6 +146,27 @@ _PADDLE_API_BASES = {
 }
 PADDLE_API_BASE = _PADDLE_API_BASES.get(PADDLE_ENVIRONMENT, _PADDLE_API_BASES["sandbox"])
 
+# ── Third-party wearable integrations ─────────────────────────────────────────
+# Set TERRA_INTEGRATION_ENABLED=true in the environment to re-enable Terra.
+# Default: disabled — Garmin (gccli) is the only active sync source.
+# Terra routes return 503 when this flag is false (reversible, no code removed).
+TERRA_INTEGRATION_ENABLED: bool = (
+    os.environ.get("TERRA_INTEGRATION_ENABLED", "false").strip().lower()
+    in ("true", "1", "yes")
+)
+
+
+def _require_terra_enabled() -> None:
+    """Raise 503 unless Terra integration is explicitly enabled via env."""
+    if not TERRA_INTEGRATION_ENABLED:
+        raise HTTPException(
+            status_code=503,
+            detail="Terra integration is temporarily unavailable. "
+                   "Only Garmin (gccli) is active. "
+                   "Set TERRA_INTEGRATION_ENABLED=true to re-enable.",
+        )
+
+
 # Subscription tiers configuration
 SUBSCRIPTION_TIERS = {
     "free": {
@@ -2600,6 +2621,7 @@ class TerraConnectRequest(BaseModel):
 @api_router.get("/terra/status")
 async def get_terra_status(user: dict = Depends(auth_user)):
     """Get Terra connection status for a user."""
+    _require_terra_enabled()
     user_id = user["id"]
     token_doc = await db.terra_tokens.find_one({"user_id": user_id}, {"_id": 0})
 
@@ -2633,6 +2655,7 @@ async def terra_connect(req: TerraConnectRequest, user: dict = Depends(auth_user
     The client obtains a Terra user token via the Terra Connect Widget and
     posts it here to persist the connection.
     """
+    _require_terra_enabled()
     user_id = user["id"]
     if not req.token:
         raise HTTPException(status_code=400, detail="Terra token is required")
@@ -2663,6 +2686,7 @@ async def sync_terra(user: dict = Depends(auth_user)):
     Calls syncTerraWorkouts and syncDailyMetrics then regenerates the
     recovery score, training load, and workout recommendation.
     """
+    _require_terra_enabled()
     user_id = user["id"]
     token_doc = await db.terra_tokens.find_one({"user_id": user_id}, {"_id": 0})
     if not token_doc:
@@ -2697,6 +2721,7 @@ async def sync_terra_daily(user: dict = Depends(auth_user)):
 
     Useful for a lightweight, metrics-only refresh without re-importing workouts.
     """
+    _require_terra_enabled()
     user_id = user["id"]
     token_doc = await db.terra_tokens.find_one({"user_id": user_id}, {"_id": 0})
     if not token_doc:
@@ -2726,6 +2751,7 @@ async def sync_terra_daily(user: dict = Depends(auth_user)):
 @api_router.delete("/terra/disconnect")
 async def disconnect_terra(user: dict = Depends(auth_user)):
     """Disconnect Terra for a user (remove stored token)."""
+    _require_terra_enabled()
     user_id = user["id"]
     await db.terra_tokens.delete_one({"user_id": user_id})
     logger.info("Terra disconnected for user: %s", user_id)
@@ -2738,6 +2764,7 @@ async def get_terra_recovery(user: dict = Depends(auth_user)):
 
     If no score exists for today, triggers a fresh computation.
     """
+    _require_terra_enabled()
     user_id = user["id"]
     today = datetime.now(timezone.utc).date().isoformat()
     doc = await db.recovery_scores.find_one({"user_id": user_id, "date": today}, {"_id": 0})
@@ -2766,6 +2793,7 @@ async def get_terra_recommendation(user: dict = Depends(auth_user)):
 
     Triggers computation if no recommendation exists for today.
     """
+    _require_terra_enabled()
     user_id = user["id"]
     today = datetime.now(timezone.utc).date().isoformat()
     doc = await db.workout_recommendations.find_one(
@@ -2793,6 +2821,7 @@ async def get_terra_recommendation(user: dict = Depends(auth_user)):
 @api_router.get("/terra/daily-metrics")
 async def get_terra_daily_metrics(user: dict = Depends(auth_user)):
     """Return the latest daily metrics (HRV, RHR, sleep) for a user."""
+    _require_terra_enabled()
     user_id = user["id"]
     today = datetime.now(timezone.utc).date().isoformat()
     doc = await db.daily_metrics.find_one({"user_id": user_id, "date": today}, {"_id": 0})
