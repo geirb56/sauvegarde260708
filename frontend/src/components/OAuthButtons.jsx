@@ -1,19 +1,14 @@
 /**
  * OAuthButtons — Google and Apple sign-in buttons.
  *
- * Handles the entire OAuth flow:
- *   1. Loads the provider SDK (Google GSI / Apple JS SDK) on mount.
- *   2. Triggers the provider's auth dialog when the button is clicked.
- *   3. Receives the provider's ID token client-side.
- *   4. Sends only the ID token to the RunIndex backend for server-side
- *      verification — the frontend never derives identity from the token.
- *   5. Stores the RunIndex JWT returned by the backend.
- *   6. Calls loginWithToken() to update AuthContext.
+ * Handles the OAuth flow:
+ *   1. Google redirects straight to the backend OAuth endpoint.
+ *   2. Apple still uses the provider SDK and sends only the ID token to the backend.
+ *   3. The backend verifies the provider identity and issues the RunIndex JWT.
+ *   4. The frontend stores only the RunIndex JWT.
  *
  * Security notes:
- *   - REACT_APP_GOOGLE_CLIENT_ID and REACT_APP_APPLE_CLIENT_ID are public
- *     OAuth identifiers, not secrets.  They are safe to include in the
- *     frontend bundle.
+ *   - Google OAuth secrets stay on the backend only.
  *   - The frontend never reads claims from the provider ID token.
  *   - No Google / Apple session is created on the client side.
  */
@@ -29,7 +24,6 @@ import { getAuthErrorMessage } from "@/lib/authErrors";
 
 // ── Configuration (public IDs, not secrets) ───────────────────────────────────
 
-const GOOGLE_CLIENT_ID = process.env.REACT_APP_GOOGLE_CLIENT_ID || "";
 const APPLE_CLIENT_ID = process.env.REACT_APP_APPLE_CLIENT_ID || "";
 const APPLE_REDIRECT_URI =
   process.env.REACT_APP_APPLE_REDIRECT_URI ||
@@ -40,100 +34,19 @@ async function fetchOAuthChallenge(provider) {
   return res.data;
 }
 
-// ── Google Sign-In ────────────────────────────────────────────────────────────
-
 function useGoogleSignIn({ onSuccess, onError, t }) {
-  const [ready, setReady] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    if (!GOOGLE_CLIENT_ID) return;
-
-    // Load Google Identity Services script
-    if (document.getElementById("google-gsi-script")) {
-      if (window.google?.accounts) setReady(true);
-      return;
-    }
-
-    const script = document.createElement("script");
-    script.id = "google-gsi-script";
-    script.src = "https://accounts.google.com/gsi/client";
-    script.async = true;
-    script.defer = true;
-    script.onload = () => {
-      setReady(true);
-    };
-    script.onerror = () => {
-      onError(t("auth.googleLoadFailed"));
-    };
-    document.head.appendChild(script);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const handleGoogleCredential = useCallback(async (idToken, state) => {
-   try {
-     const res = await axios.post(`${API_BASE_URL}/auth/google`, {
-       id_token: idToken,
-       state,
-     });
-     onSuccess(res.data);
-   } catch (err) {
-     onError(getAuthErrorMessage(t, err, "auth.googleFailed"));
-   } finally {
-     setLoading(false);
-   }
-  }, [onSuccess, onError, t]);
-
   const signIn = useCallback(() => {
-    if (!GOOGLE_CLIENT_ID) {
-      onError(t("auth.googleNotConfigured"));
-      return;
-    }
-    if (!window.google?.accounts) {
-      onError(t("auth.googleUnavailable"));
-      return;
-    }
-    setLoading(true);
-    fetchOAuthChallenge("google")
-      .then((challenge) => {
-        window.google.accounts.id.initialize({
-          client_id: GOOGLE_CLIENT_ID,
-          nonce: challenge.nonce,
-          callback: (response) => {
-            if (response.credential) {
-              handleGoogleCredential(response.credential, challenge.state);
-            } else {
-              setLoading(false);
-              onError(t("auth.googleCancelled"));
-            }
-          },
-          cancel_on_tap_outside: true,
-        });
-        window.google.accounts.id.prompt((notification) => {
-          if (
-            notification.isNotDisplayed() ||
-            notification.isSkippedMoment()
-          ) {
-            const btn = document.createElement("div");
-            btn.style.display = "none";
-            document.body.appendChild(btn);
-            window.google.accounts.id.renderButton(btn, {
-              theme: "outline",
-              size: "large",
-              click_listener: () => {},
-            });
-            btn.querySelector("div[role='button']")?.click();
-            document.body.removeChild(btn);
-          }
-        });
-      })
-      .catch((err) => {
-        setLoading(false);
-        onError(getAuthErrorMessage(t, err, "auth.googleFailed"));
-      });
-  }, [handleGoogleCredential, onError, t]);
+   if (typeof window === "undefined") {
+     onError(t("auth.googleUnavailable"));
+     return;
+   }
+   setLoading(true);
+   window.location.assign(`${API_BASE_URL}/auth/google`);
+  }, [onError, t]);
 
-  return { signIn, ready: ready && !!GOOGLE_CLIENT_ID, loading };
+  return { signIn, ready: true, loading };
 }
 
 // ── Apple Sign-In ─────────────────────────────────────────────────────────────

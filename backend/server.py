@@ -319,44 +319,8 @@ async def auth_user(
     request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> dict:
-    """Authentication dependency.
-
-    Validates a JWT token produced by /api/auth/login or /api/auth/register.
-    Raises 401 if no valid JWT is present (Step 2: legacy fallbacks removed).
-
-    Returns dict with at least {"id": "<user_id>", "authenticated": True}.
-    """
-    import jwt as _jwt
-    from auth.jwt_utils import decode_access_token
-
-    _raise_401 = HTTPException(
-        status_code=401,
-        detail="Authentication required",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-
-    if not credentials or not credentials.credentials:
-        raise _raise_401
-
-    try:
-        payload = decode_access_token(credentials.credentials)
-        user_id = payload.get("sub")
-        if not user_id:
-            raise _raise_401
-    except _jwt.ExpiredSignatureError:
-        raise HTTPException(
-            status_code=401,
-            detail="Token has expired",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    except _jwt.InvalidTokenError:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid authentication token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    return {"id": user_id, "authenticated": True}
+    """Compatibility wrapper over the canonical JWT dependency."""
+    return await get_current_user(request, credentials)
 
 
 @app.middleware("http")

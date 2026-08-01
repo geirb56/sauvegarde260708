@@ -45,6 +45,26 @@ function removeToken() {
   }
 }
 
+function consumeOAuthRedirectToken() {
+  if (typeof window === "undefined" || !window.location.hash) {
+    return null;
+  }
+
+  const params = new URLSearchParams(window.location.hash.slice(1));
+  const accessToken = params.get("access_token");
+  if (!accessToken) {
+    return null;
+  }
+
+  saveToken(accessToken);
+  window.history.replaceState(
+    {},
+    document.title,
+    `${window.location.pathname}${window.location.search}`
+  );
+  return accessToken;
+}
+
 // ── Provider ─────────────────────────────────────────────────────────────────
 
 export function AuthProvider({ children }) {
@@ -78,6 +98,7 @@ export function AuthProvider({ children }) {
 
   // On mount, validate any stored token
   useEffect(() => {
+    consumeOAuthRedirectToken();
     refreshUser();
   }, [refreshUser]);
 
@@ -126,9 +147,11 @@ export function AuthProvider({ children }) {
    * @param {object} userData      User object returned by the backend.
    * @returns {{ ok: true }}
    */
-  const loginWithToken = useCallback((access_token, userData) => {
+  const loginWithToken = useCallback((access_token, userData = null) => {
     saveToken(access_token);
-    setUser(userData);
+    if (userData) {
+      setUser(userData);
+    }
     return { ok: true };
   }, []);
 
