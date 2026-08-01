@@ -255,10 +255,13 @@ async def real_client():
     ]
 
     started = []
+    had_original_state_db = hasattr(server.app.state, "db")
+    original_state_db = getattr(server.app.state, "db", None)
     try:
         for p in patches:
             p.start()
             started.append(p)
+        server.app.state.db = fake_db
 
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=server.app),
@@ -266,6 +269,10 @@ async def real_client():
         ) as client:
             yield client, fake_db
     finally:
+        if had_original_state_db:
+            server.app.state.db = original_state_db
+        elif hasattr(server.app.state, "db"):
+            delattr(server.app.state, "db")
         for p in reversed(started):
             p.stop()
 

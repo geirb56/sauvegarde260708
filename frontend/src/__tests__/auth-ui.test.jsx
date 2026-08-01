@@ -81,13 +81,15 @@ async function flush() {
 }
 
 function setFieldValue(element, value) {
-  const descriptor = Object.getOwnPropertyDescriptor(
-    window.HTMLInputElement.prototype,
-    "value"
-  );
-  descriptor.set.call(element, value);
-  element.dispatchEvent(new Event("input", { bubbles: true }));
-  element.dispatchEvent(new Event("change", { bubbles: true }));
+  act(() => {
+    const descriptor = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype,
+      "value"
+    );
+    descriptor.set.call(element, value);
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+  });
 }
 
 describe("auth pages and oauth UI", () => {
@@ -160,7 +162,14 @@ describe("auth pages and oauth UI", () => {
   });
 
   test("google oauth redirects through the backend without frontend Google config", async () => {
-    const assignSpy = jest.spyOn(window.location, "assign").mockImplementation(() => {});
+    const originalLocation = window.location;
+    const assignMock = jest.fn();
+    delete window.location;
+    window.location = {
+      ...originalLocation,
+      origin: "http://localhost:3000",
+      assign: assignMock,
+    };
     window.localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
     const { container, unmount } = renderWithProviders(<Login />);
     const googleButton = Array.from(container.querySelectorAll("button")).find((button) =>
@@ -171,9 +180,9 @@ describe("auth pages and oauth UI", () => {
       googleButton.click();
     });
 
-    expect(assignSpy).toHaveBeenCalledWith("http://localhost:3000/api/auth/google");
+    expect(assignMock).toHaveBeenCalledWith("http://localhost/api/auth/google");
     expect(container.textContent).not.toContain("El inicio de sesión con Google no está configurado.");
-    assignSpy.mockRestore();
+    window.location = originalLocation;
     unmount();
   });
 
