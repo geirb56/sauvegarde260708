@@ -3,6 +3,15 @@
 ## Problem Statement
 Pull https://github.com/geirb56/sauvegarde260629 and set it up so it runs. Replace /app contents.
 
+## Changelog — Garmin per-user connection fix (June 2026)
+- Removed global .env credential fallback (`GARMIN_USERNAME`/`GARMIN_PASSWORD`) for user connections in `garmin/providers/gccli_provider.py` (new `allow_global_account` flag; only bootstrap may use env).
+- `garmin/factory.py`: `get_provider_for_user` → `allow_global_account=False`; `get_provider` (bootstrap) → `True`.
+- Frontend `Onboarding.jsx`: each user now enters their own Garmin email+password (fixes 422 empty-body call); password cleared after success. i18n keys added.
+- Isolation: JWT-only identity (`current_user["id"]`), per-user `GCCLI_HOME/{user_id}`, all Mongo scoped by `user_id`; no creds in API responses/logs.
+- Tests: `backend/tests/test_garmin_user_connection.py` (58 Garmin tests pass). E2E: 401 no-JWT, 422 no-creds, error on fake creds (never global data). `yarn build` OK.
+- Report: `/app/GARMIN_FIX_REPORT.md`. Verdict: GARMIN READY (gccli unofficial; real login depends on user's Garmin/MFA — documented limitation).
+
+
 ## App Overview
 RunIndex — running/cardio training coach. Garmin (gccli) integration, AI coach (LLM), RunIndex/readiness engines, training plans, Stripe subscriptions, Terra integration.
 

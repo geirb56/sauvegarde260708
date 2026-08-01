@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Loader2, Check, ShieldAlert, Activity } from "lucide-react";
 import { toast } from "sonner";
 
@@ -43,9 +44,12 @@ export default function Onboarding() {
   const [physioData, setPhysioData] = useState(null);
   const [loadingPhysio, setLoadingPhysio] = useState(true);
   const [saving, setSaving] = useState(false);
-  // Garmin connection (invisible, OAuth-like — no password ever collected)
+  // Garmin connection — each user connects THEIR OWN Garmin account.
+  // Credentials are sent once for the login, never stored client-side.
   const [garminStatus, setGarminStatus] = useState("idle"); // idle | connecting | connected | mfa_required | error
   const [garminCount, setGarminCount] = useState(0);
+  const [garminEmail, setGarminEmail] = useState("");
+  const [garminPassword, setGarminPassword] = useState("");
 
   const STEPS = useMemo(() => [
     { key: "welcome", title: t("onboarding.welcome") },
@@ -81,10 +85,20 @@ export default function Onboarding() {
   const TARGET_OPTIONS = ["5km", "10km", "semi", "marathon", "ultra trail"];
 
   const connectGarmin = async () => {
+    if (!garminEmail.trim() || !garminPassword) {
+      toast.error(t("onboarding.garminCredsRequired"));
+      setGarminStatus("error");
+      return;
+    }
     setGarminStatus("connecting");
     try {
-      const res = await axios.post(`${API}/garmin/connect`, {});
+      const res = await axios.post(`${API}/garmin/connect`, {
+        garmin_username: garminEmail.trim(),
+        garmin_password: garminPassword,
+      });
       if (res.data?.status === "connected") {
+        // Clear the password from memory as soon as the login succeeds.
+        setGarminPassword("");
         try {
           const sync = await axios.post(`${API}/garmin/sync`, {});
           setGarminCount(sync.data?.synced_count || 0);
@@ -254,49 +268,52 @@ export default function Onboarding() {
                         {t("onboarding.garminConnected").replace("{count}", garminCount)}
                       </span>
                     </div>
-                  ) : garminStatus === "mfa_required" ? (
-                    <div className="space-y-3" data-testid="garmin-mfa">
-                      <div className="flex items-start gap-2 text-amber-400">
-                        <ShieldAlert className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                        <span className="font-mono text-xs">
-                          {t("onboarding.garminMfa")}
-                        </span>
-                      </div>
-                      <Button
-                        onClick={connectGarmin}
-                        className="w-full bg-primary text-white font-bold uppercase tracking-wider text-xs h-9"
-                        data-testid="garmin-retry"
-                      >
-                        {t("onboarding.garminRetry")}
-                      </Button>
-                    </div>
-                  ) : garminStatus === "error" ? (
-                    <div className="space-y-3" data-testid="garmin-error">
-                      <p className="font-mono text-xs text-destructive">
-                        {t("onboarding.garminFailed")}
-                      </p>
-                      <Button
-                        onClick={connectGarmin}
-                        className="w-full bg-primary text-white font-bold uppercase tracking-wider text-xs h-9"
-                        data-testid="garmin-retry"
-                      >
-                        {t("onboarding.garminTryAgain")}
-                      </Button>
-                    </div>
                   ) : (
-                    <Button
-                      onClick={connectGarmin}
-                      disabled={garminStatus === "connecting"}
-                      className="w-full bg-primary text-white font-bold uppercase tracking-wider text-xs h-9"
-                      data-testid="garmin-connect"
-                    >
-                      {garminStatus === "connecting" ? (
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                      ) : (
-                        <Activity className="w-4 h-4" />
+                    <div className="space-y-3">
+                      <p className="font-mono text-[11px] text-muted-foreground">
+                        {t("onboarding.garminCredsHint")}
+                      </p>
+                      <Input
+                        type="email"
+                        autoComplete="off"
+                        placeholder={t("onboarding.garminEmailPlaceholder")}
+                        value={garminEmail}
+                        onChange={(e) => setGarminEmail(e.target.value)}
+                        data-testid="garmin-email-input"
+                      />
+                      <Input
+                        type="password"
+                        autoComplete="off"
+                        placeholder={t("onboarding.garminPasswordPlaceholder")}
+                        value={garminPassword}
+                        onChange={(e) => setGarminPassword(e.target.value)}
+                        data-testid="garmin-password-input"
+                      />
+                      {garminStatus === "mfa_required" && (
+                        <div className="flex items-start gap-2 text-amber-400" data-testid="garmin-mfa">
+                          <ShieldAlert className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                          <span className="font-mono text-xs">{t("onboarding.garminMfa")}</span>
+                        </div>
                       )}
-                      {garminStatus === "connecting" ? t("onboarding.garminConnecting") : t("onboarding.garminConnect")}
-                    </Button>
+                      {garminStatus === "error" && (
+                        <p className="font-mono text-xs text-destructive" data-testid="garmin-error">
+                          {t("onboarding.garminFailed")}
+                        </p>
+                      )}
+                      <Button
+                        onClick={connectGarmin}
+                        disabled={garminStatus === "connecting"}
+                        className="w-full bg-primary text-white font-bold uppercase tracking-wider text-xs h-9"
+                        data-testid="garmin-connect"
+                      >
+                        {garminStatus === "connecting" ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Activity className="w-4 h-4" />
+                        )}
+                        {garminStatus === "connecting" ? t("onboarding.garminConnecting") : t("onboarding.garminConnect")}
+                      </Button>
+                    </div>
                   )}
                 </div>
               )}

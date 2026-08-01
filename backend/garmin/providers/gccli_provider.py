@@ -28,14 +28,23 @@ logger = logging.getLogger(__name__)
 class GccliProvider(Provider):
     name = "gccli"
 
-    def __init__(self, runner: GccliRunner, account: Optional[str] = None):
+    def __init__(self, runner: GccliRunner, account: Optional[str] = None,
+                 allow_global_account: bool = False):
         self._runner = runner
-        # Per-user Garmin account email.  Falls back to the global env var only
-        # for the legacy global bootstrap provider (account=None).
+        # Per-user Garmin account email, bound at construction time.
         self._garmin_account = account
+        # The global .env credentials (GARMIN_USERNAME/GARMIN_PASSWORD) may be
+        # used ONLY by the legacy startup bootstrap provider. A per-user provider
+        # MUST NEVER fall back to them — doing so would connect a RunIndex user
+        # to the shared global Garmin account (data leak / broken multi-user).
+        self._allow_global_account = allow_global_account
 
     def _account(self) -> Optional[str]:
-        return self._garmin_account or get_secret("GARMIN_USERNAME")
+        if self._garmin_account:
+            return self._garmin_account
+        if self._allow_global_account:
+            return get_secret("GARMIN_USERNAME")
+        return None
 
     def connect(self, user_id: str, garmin_username: Optional[str] = None,
                 garmin_password: Optional[str] = None,
@@ -43,18 +52,28 @@ class GccliProvider(Provider):
         if not self._runner.is_available():
             return ConnectResult(status=STATUS_ERROR, detail="Garmin connector unavailable.")
 
-        # Prefer the explicitly supplied credentials; fall back to the account
-        # bound at construction time (already logged-in user reconnecting).
-        account = garmin_username or self._account()
+        # Per-user identity ONLY: the account comes from the credentials the
+        # authenticated user supplied (or the account bound to this per-user
+        # provider on reconnect). The global .env account is never used for a
+        # user connection.
+        account = garmin_username or self._garmin_account
+        if self._allow_global_account and not account:
+            account = get_secret("GARMIN_USERNAME")
         if not account:
-            return ConnectResult(status=STATUS_ERROR, detail="Garmin account not configured.")
+            return ConnectResult(
+                status=STATUS_ERROR,
+                detail="Garmin credentials required. Please provide your Garmin username and password.",
+            )
 
-        # Already authenticated (token persisted) -> connected immediately.
+        # Already authenticated (per-user token persisted) -> connected immediately.
         if self._runner.is_authenticated(account):
             return ConnectResult(status=STATUS_CONNECTED, detail="Garmin connected")
 
-        # Need a one-time login using the provided credentials.
-        password = garmin_password or get_secret("GARMIN_PASSWORD")
+        # A one-time login is required. The password MUST be supplied by the
+        # user for this request — no global .env password fallback for users.
+        password = garmin_password
+        if self._allow_global_account and not password:
+            password = get_secret("GARMIN_PASSWORD")
         if not password:
             return ConnectResult(
                 status=STATUS_ERROR,

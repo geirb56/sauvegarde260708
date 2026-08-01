@@ -615,6 +615,10 @@ export const translations = {
       garminConnect: "Connect Garmin",
       garminConnecting: "Connecting…",
       garminConnectedToast: "Garmin connected",
+      garminCredsRequired: "Please enter your Garmin email and password.",
+      garminCredsHint: "Sign in with your own Garmin Connect account. Your credentials are used once to connect and are never stored.",
+      garminEmailPlaceholder: "Garmin email",
+      garminPasswordPlaceholder: "Garmin password",
     },
   },
 
@@ -1230,6 +1234,10 @@ export const translations = {
       garminConnect: "Connecter Garmin",
       garminConnecting: "Connexion…",
       garminConnectedToast: "Garmin connecté",
+      garminCredsRequired: "Veuillez saisir votre e-mail et mot de passe Garmin.",
+      garminCredsHint: "Connectez-vous avec votre propre compte Garmin Connect. Vos identifiants servent une seule fois à la connexion et ne sont jamais stockés.",
+      garminEmailPlaceholder: "E-mail Garmin",
+      garminPasswordPlaceholder: "Mot de passe Garmin",
     },
   },
   

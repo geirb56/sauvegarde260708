@@ -35,16 +35,22 @@ def get_provider_for_user(user_id: str, garmin_account: Optional[str] = None) ->
 
     Each user gets their own HOME directory under the base GCCLI_HOME so their
     OAuth token is completely isolated from every other user's session.
+
+    allow_global_account=False: a per-user provider MUST NEVER fall back to the
+    global .env credentials (GARMIN_USERNAME/GARMIN_PASSWORD).
     """
     user_home = os.path.join(_base_home(), user_id)
     runner = _make_runner(user_home)
-    return GccliProvider(runner=runner, account=garmin_account)
+    return GccliProvider(runner=runner, account=garmin_account, allow_global_account=False)
 
 
 def get_provider() -> Provider:
-    """Global provider using the base GCCLI_HOME (used by bootstrap only)."""
+    """Global provider using the base GCCLI_HOME (used by bootstrap only).
+
+    This is the ONLY provider allowed to use the global .env credentials.
+    """
     runner = _make_runner(_base_home())
-    return GccliProvider(runner=runner)
+    return GccliProvider(runner=runner, allow_global_account=True)
 
 
 def active_provider_name() -> str:
