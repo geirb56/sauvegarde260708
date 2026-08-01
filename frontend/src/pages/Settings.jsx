@@ -502,7 +502,7 @@ export default function Settings() {
                             value={targetHours}
                             onChange={(e) => setTargetHours(e.target.value)}
                             placeholder="0"
-                            className="bg-muted border-border font-mono text-sm w-20 text-center"
+                            className="bg-muted border-border font-mono text-sm w-16 sm:w-20 text-center"
                             data-testid="goal-hours-input"
                           />
                           <span className="font-mono text-sm text-muted-foreground">h</span>
@@ -513,7 +513,7 @@ export default function Settings() {
                             value={targetMinutes}
                             onChange={(e) => setTargetMinutes(e.target.value)}
                             placeholder="00"
-                            className="bg-muted border-border font-mono text-sm w-20 text-center"
+                            className="bg-muted border-border font-mono text-sm w-16 sm:w-20 text-center"
                             data-testid="goal-minutes-input"
                           />
                           <span className="font-mono text-sm text-muted-foreground">min</span>
@@ -613,13 +613,13 @@ export default function Settings() {
                       <label className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground mb-2 block">
                         {t("settingsExtended.sessionsPerWeekLabel")}
                       </label>
-                      <div className="flex gap-2">
+                      <div className="flex flex-wrap gap-2">
                         {SESSIONS_OPTIONS.map((num) => (
                           <button
                             key={num}
                             onClick={() => handleSetSessionsPerWeek(num)}
                             disabled={updatingTrainingPlan}
-                            className={`w-12 h-12 rounded-lg text-sm font-bold transition-all ${
+                            className={`w-11 h-11 sm:w-12 sm:h-12 rounded-lg text-sm font-bold transition-all ${
                               sessionsPerWeek === num 
                                 ? "text-white" 
                                 : "text-muted-foreground hover:text-foreground"

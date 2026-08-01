@@ -498,7 +498,7 @@ export default function WorkoutDetail() {
       {/* 2) SNAPSHOT - 3 Cards: Intensité, Charge, Type */}
       <div className="grid grid-cols-3 gap-2 mb-3">
         {/* Intensité */}
-        <Card className="bg-card border-border">
+        <Card className="bg-card border-border overflow-hidden">
           <CardContent className="p-2">
             <div className="flex items-center gap-1 mb-1">
               <Zap className="w-3 h-3 text-muted-foreground" />
@@ -774,17 +774,17 @@ export default function WorkoutDetail() {
                       </span>
                     </div>
                     <div className="grid grid-cols-3 gap-2 text-xs">
-                      <div>
+                      <div className="min-w-0">
                         <p className="font-mono text-[10px] text-muted-foreground">{t("workoutDetailExtended.min")}</p>
-                        <p className="font-mono font-semibold">{ragAnalysis.workout.hr_analysis.min_hr} bpm</p>
+                        <p className="font-mono font-semibold whitespace-nowrap">{ragAnalysis.workout.hr_analysis.min_hr} bpm</p>
                       </div>
-                      <div>
+                      <div className="min-w-0">
                         <p className="font-mono text-[10px] text-muted-foreground">{t("workoutDetailExtended.avg")}</p>
-                        <p className="font-mono font-semibold">{ragAnalysis.workout.hr_analysis.avg_hr} bpm</p>
+                        <p className="font-mono font-semibold whitespace-nowrap">{ragAnalysis.workout.hr_analysis.avg_hr} bpm</p>
                       </div>
-                      <div>
+                      <div className="min-w-0">
                         <p className="font-mono text-[10px] text-muted-foreground">{t("workoutDetailExtended.max")}</p>
-                        <p className="font-mono font-semibold">{ragAnalysis.workout.hr_analysis.max_hr} bpm</p>
+                        <p className="font-mono font-semibold whitespace-nowrap">{ragAnalysis.workout.hr_analysis.max_hr} bpm</p>
                       </div>
                     </div>
                     {ragAnalysis.workout.hr_analysis.hr_drift !== 0 && (

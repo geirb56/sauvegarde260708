@@ -196,11 +196,11 @@ const ChatCoach = ({ isOpen, onClose }) => {
               <span className="text-[9px] text-green-500">Instant</span>
             </div>
             {messages.length > 0 && (
-              <Button 
-                variant="ghost" 
-                size="icon" 
+              <Button
+                variant="ghost"
+                size="icon"
                 onClick={clearHistory}
-                className="h-8 w-8"
+                className="h-11 w-11 min-h-[44px] min-w-[44px]"
                 title={t("chat.clearHistory")}
               >
                 <Trash2 className="w-4 h-4 text-muted-foreground" />

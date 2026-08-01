@@ -130,13 +130,13 @@ export default function Paywall({ onClose, returnPath = "/training" }) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 overflow-y-auto"
       style={{
         background: "linear-gradient(180deg, rgba(0,0,0,0.95) 0%, rgba(15,10,30,0.98) 100%)",
       }}
       data-testid="paywall"
     >
-      <div className="max-w-md w-full space-y-6">
+      <div className="max-w-md w-full space-y-6 max-h-[calc(100dvh-2rem)] overflow-y-auto my-auto">
         {/* Lock icon */}
         <div className="flex justify-center">
           <div

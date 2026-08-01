@@ -380,7 +380,7 @@ export default function Progress() {
       </div>
 
       {/* Weekly & Monthly Stats */}
-      <div className="grid grid-cols-3 gap-3 mb-8">
+      <div className="grid grid-cols-3 gap-2 sm:gap-3 mb-8">
         {/* Séances 7 jours */}
         <Card className="bg-card border-border">
           <CardContent className="p-4">
@@ -390,7 +390,7 @@ export default function Progress() {
                 {t("progressExtended.sessions7d")}
               </span>
             </div>
-            <p className="font-heading text-3xl font-bold text-white">
+            <p className="font-heading text-xl sm:text-3xl font-bold text-white break-words">
               {sessions7Days}
             </p>
           </CardContent>
@@ -405,7 +405,7 @@ export default function Progress() {
                 {t("progressExtended.km7d")}
               </span>
             </div>
-            <p className="font-heading text-3xl font-bold text-white">
+            <p className="font-heading text-xl sm:text-3xl font-bold text-white break-words">
               {formatDistance(km7Days, { unitSystem })}
             </p>
           </CardContent>
@@ -420,7 +420,7 @@ export default function Progress() {
                 {t("progressExtended.km30d")}
               </span>
             </div>
-            <p className="font-heading text-3xl font-bold text-white">
+            <p className="font-heading text-xl sm:text-3xl font-bold text-white break-words">
               {formatDistance(km30Days, { unitSystem })}
             </p>
           </CardContent>
@@ -436,7 +436,7 @@ export default function Progress() {
               Garmin Health · 7 days
             </h2>
           </div>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-3 gap-2 sm:gap-3">
             <Card className="bg-card border-border" data-testid="garmin-hrv">
               <CardContent className="p-4">
                 <div className="flex items-center gap-2 mb-2">
@@ -445,7 +445,7 @@ export default function Progress() {
                     HRV
                   </span>
                 </div>
-                <p className="font-heading text-3xl font-bold text-white">
+                <p className="font-heading text-xl sm:text-3xl font-bold text-white break-words">
                   {garminHealth.latest.hrv ?? "--"}
                   <span className="text-sm text-muted-foreground ml-1">ms</span>
                 </p>
@@ -460,7 +460,7 @@ export default function Progress() {
                     Resting HR
                   </span>
                 </div>
-                <p className="font-heading text-3xl font-bold text-white">
+                <p className="font-heading text-xl sm:text-3xl font-bold text-white break-words">
                   {garminHealth.latest.resting_hr ?? "--"}
                   <span className="text-sm text-muted-foreground ml-1">bpm</span>
                 </p>
@@ -475,7 +475,7 @@ export default function Progress() {
                     Sleep
                   </span>
                 </div>
-                <p className="font-heading text-3xl font-bold text-white">
+                <p className="font-heading text-xl sm:text-3xl font-bold text-white break-words">
                   {garminHealth.latest.sleep_hours ?? "--"}
                   <span className="text-sm text-muted-foreground ml-1">h</span>
                 </p>

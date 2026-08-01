@@ -410,24 +410,24 @@ export default function Digest() {
             {t("digest.essentialNumbers")}
           </p>
           <div className="flex items-center justify-between divide-x divide-border">
-            <div className="flex-1 text-center pr-3">
-              <p className="font-mono text-2xl font-bold text-foreground">
+            <div className="flex-1 min-w-0 text-center pr-2 sm:pr-3">
+              <p className="font-mono text-xl sm:text-2xl font-bold text-foreground break-words">
                 {metrics.total_sessions || 0}
               </p>
               <p className="font-mono text-[9px] uppercase tracking-widest text-muted-foreground">
                 {t("digest.sessions")}
               </p>
             </div>
-            <div className="flex-1 text-center px-3">
-              <p className="font-mono text-2xl font-bold text-foreground">
+            <div className="flex-1 min-w-0 text-center px-2 sm:px-3">
+              <p className="font-mono text-xl sm:text-2xl font-bold text-foreground break-words">
                 {formatDistance(metrics.total_distance_km || 0, { unitSystem })}
               </p>
               <p className="font-mono text-[9px] uppercase tracking-widest text-muted-foreground">
                 {t("digest.km")}
               </p>
             </div>
-            <div className="flex-1 text-center pl-3">
-              <p className="font-mono text-2xl font-bold text-foreground">
+            <div className="flex-1 min-w-0 text-center pl-2 sm:pl-3">
+              <p className="font-mono text-xl sm:text-2xl font-bold text-foreground break-words">
                 {formatHours(metrics.total_duration_min)}
               </p>
               <p className="font-mono text-[9px] uppercase tracking-widest text-muted-foreground">

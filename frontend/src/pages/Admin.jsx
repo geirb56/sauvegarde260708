@@ -91,9 +91,9 @@ export default function Admin() {
 
   if (!user?.is_admin) {
     return (
-      <div className="p-6 max-w-5xl mx-auto">
-        <div className="rounded-2xl border border-white/10 bg-black/20 p-6">
-          <h1 className="text-2xl font-semibold mb-2">Admin</h1>
+      <div className="p-4 sm:p-6 max-w-5xl mx-auto">
+        <div className="rounded-2xl border border-white/10 bg-black/20 p-4 sm:p-6">
+          <h1 className="text-xl sm:text-2xl font-semibold mb-2">Admin</h1>
           <p className="text-sm text-muted-foreground">Access denied. This page is reserved for administrators.</p>
         </div>
       </div>
@@ -101,39 +101,39 @@ export default function Admin() {
   }
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-semibold">Admin dashboard</h1>
+    <div className="p-4 sm:p-6 max-w-7xl mx-auto space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
+        <div className="min-w-0">
+          <h1 className="text-2xl sm:text-3xl font-semibold break-words">Admin dashboard</h1>
           <p className="text-sm text-muted-foreground">Users, subscription tier, trial usage, and Garmin connection status.</p>
         </div>
         <StatusBadge tone="admin">admin only</StatusBadge>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-4">
-        <div className="rounded-2xl border border-white/10 bg-black/20 p-4"><div className="text-sm text-muted-foreground">Users</div><div className="text-3xl font-semibold">{summary.total}</div></div>
-        <div className="rounded-2xl border border-white/10 bg-black/20 p-4"><div className="text-sm text-muted-foreground">FREE / TRIAL / PREMIUM</div><div className="text-xl font-semibold">{summary.free} / {summary.trial} / {summary.premium}</div></div>
-        <div className="rounded-2xl border border-white/10 bg-black/20 p-4"><div className="text-sm text-muted-foreground">Trial active</div><div className="text-3xl font-semibold">{summary.trialActive}</div></div>
-        <div className="rounded-2xl border border-white/10 bg-black/20 p-4"><div className="text-sm text-muted-foreground">Garmin connected</div><div className="text-3xl font-semibold">{summary.garmin}</div></div>
+      <div className="grid gap-3 sm:gap-4 grid-cols-2 md:grid-cols-4">
+        <div className="rounded-2xl border border-white/10 bg-black/20 p-4"><div className="text-sm text-muted-foreground">Users</div><div className="text-2xl sm:text-3xl font-semibold break-words">{summary.total}</div></div>
+        <div className="rounded-2xl border border-white/10 bg-black/20 p-4"><div className="text-sm text-muted-foreground">FREE / TRIAL / PREMIUM</div><div className="text-base sm:text-xl font-semibold break-words">{summary.free} / {summary.trial} / {summary.premium}</div></div>
+        <div className="rounded-2xl border border-white/10 bg-black/20 p-4"><div className="text-sm text-muted-foreground">Trial active</div><div className="text-2xl sm:text-3xl font-semibold break-words">{summary.trialActive}</div></div>
+        <div className="rounded-2xl border border-white/10 bg-black/20 p-4"><div className="text-sm text-muted-foreground">Garmin connected</div><div className="text-2xl sm:text-3xl font-semibold break-words">{summary.garmin}</div></div>
       </div>
 
-      <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+      <div className="rounded-2xl border border-white/10 bg-black/20 p-3 sm:p-4">
         {loading ? (
           <p className="text-sm text-muted-foreground">Loading admin data…</p>
         ) : error ? (
           <p className="text-sm text-red-300">{error}</p>
         ) : (
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto -mx-3 sm:mx-0">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-white/10 text-left text-muted-foreground">
-                  <th className="px-3 py-3 font-medium">User</th>
-                  <th className="px-3 py-3 font-medium">Role</th>
-                  <th className="px-3 py-3 font-medium">Status</th>
-                  <th className="px-3 py-3 font-medium">Trial</th>
-                  <th className="px-3 py-3 font-medium">Garmin</th>
-                  <th className="px-3 py-3 font-medium">Created</th>
-                  <th className="px-3 py-3 font-medium">Last login</th>
+                  <th className="px-3 py-3 font-medium whitespace-nowrap">User</th>
+                  <th className="px-3 py-3 font-medium whitespace-nowrap">Role</th>
+                  <th className="px-3 py-3 font-medium whitespace-nowrap">Status</th>
+                  <th className="px-3 py-3 font-medium whitespace-nowrap">Trial</th>
+                  <th className="px-3 py-3 font-medium whitespace-nowrap">Garmin</th>
+                  <th className="px-3 py-3 font-medium whitespace-nowrap">Created</th>
+                  <th className="px-3 py-3 font-medium whitespace-nowrap">Last login</th>
                 </tr>
               </thead>
               <tbody>

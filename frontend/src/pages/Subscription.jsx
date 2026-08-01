@@ -332,7 +332,7 @@ export default function Subscription() {
 
         {/* Illustration cards */}
         <div className="relative mt-14 w-full max-w-lg mx-auto px-4">
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-3 gap-2 sm:gap-3">
             {[
               { icon: Activity, label: "RunIndex", value: "87", color: "text-primary" },
               { icon: Heart, label: "Récupération", value: "94 %", color: "text-rose-400" },
@@ -340,11 +340,11 @@ export default function Subscription() {
             ].map(({ icon: Icon, label, value, color }) => (
               <div
                 key={label}
-                className="rounded-xl border border-border bg-card/60 p-4 text-center backdrop-blur-sm"
+                className="rounded-xl border border-border bg-card/60 p-3 sm:p-4 text-center backdrop-blur-sm min-w-0"
               >
                 <Icon className={`w-5 h-5 mx-auto mb-2 ${color}`} />
-                <div className={`text-xl font-bold ${color}`}>{value}</div>
-                <div className="text-[10px] text-muted-foreground mt-1">{label}</div>
+                <div className={`text-lg sm:text-xl font-bold ${color} break-words`}>{value}</div>
+                <div className="text-[10px] text-muted-foreground mt-1 truncate">{label}</div>
               </div>
             ))}
           </div>

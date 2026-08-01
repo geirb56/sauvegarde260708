@@ -81,17 +81,21 @@ export const Layout = () => {
         </div>
         
         <div className="header-actions">
-          <button 
-            className="p-2 rounded-lg transition-colors hover:bg-white/5"
+          <button
+            type="button"
+            aria-label="Refresh"
+            className="p-2 rounded-lg transition-colors hover:bg-white/5 min-w-[44px] min-h-[44px] flex items-center justify-center"
             style={{ color: "var(--text-tertiary)" }}
           >
             <RefreshCw className="w-5 h-5" />
           </button>
           <button
+            type="button"
             onClick={logout}
-            className="p-2 rounded-lg transition-colors hover:bg-white/5"
+            className="p-2 rounded-lg transition-colors hover:bg-white/5 min-w-[44px] min-h-[44px] flex items-center justify-center"
             style={{ color: "var(--text-tertiary)" }}
             title={t("auth.logout")}
+            aria-label={t("auth.logout")}
           >
             <LogOut className="w-5 h-5" />
           </button>
@@ -102,12 +106,12 @@ export const Layout = () => {
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 overflow-auto pb-20">
+      <main className="flex-1 overflow-x-hidden overflow-y-auto pb-[calc(5rem+env(safe-area-inset-bottom))]">
         <Outlet />
       </main>
 
       {/* Bottom Navigation */}
-      <nav className="bottom-nav-modern fixed bottom-0 left-0 right-0 flex items-center justify-between px-2 py-2 safe-area-pb">
+      <nav className="bottom-nav-modern fixed bottom-0 left-0 right-0 flex items-stretch justify-between gap-0.5 px-2 py-2 safe-area-pb overflow-x-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
         {navItems.map((item) => {
           const isActive = item.path === "/"
             ? location.pathname === item.path
@@ -116,7 +120,7 @@ export const Layout = () => {
             <NavLink
               key={item.path}
               to={item.path}
-              className={`nav-item-modern flex-1 ${isActive ? "active" : ""}`}
+              className={`nav-item-modern flex-1 min-w-[48px] min-h-[44px] ${isActive ? "active" : ""}`}
             >
               <div className="relative">
                 <item.icon className="nav-icon w-5 h-5" />
@@ -127,7 +131,7 @@ export const Layout = () => {
                   />
                 )}
               </div>
-              <span className="nav-label text-[9px]">{item.label ?? t(item.labelKey)}</span>
+              <span className="nav-label text-[10px] leading-tight truncate max-w-full">{item.label ?? t(item.labelKey)}</span>
             </NavLink>
           );
         })}

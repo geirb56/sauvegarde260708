@@ -190,8 +190,8 @@ function MetricWidget({ icon: Icon, label, value, unit, status, detail }) {
   const colors = STATUS_COLORS[status] || STATUS_COLORS.green;
   return (
     <div
-      className="flex-shrink-0 rounded-2xl p-4 flex flex-col gap-1"
-      style={{ width: 140, background: colors.bg, border: `1px solid ${colors.border}` }}
+      className="flex-shrink-0 rounded-2xl p-4 flex flex-col gap-1 w-[140px] snap-start"
+      style={{ background: colors.bg, border: `1px solid ${colors.border}` }}
     >
       <div className="flex items-center justify-between">
         <Icon size={18} color={colors.text} />
@@ -320,7 +320,13 @@ function MiniLineChart({ data = [] }) {
   }).join(" ");
 
   return (
-    <svg width={width} height={height} className="mt-2">
+    <svg
+      viewBox={`0 0 ${width} ${height}`}
+      preserveAspectRatio="none"
+      width="100%"
+      height={height}
+      className="mt-2 block"
+    >
       <defs>
         <linearGradient id="lineGradient" x1="0%" y1="0%" x2="100%" y2="0%">
           <stop offset="0%" stopColor="var(--accent-green)" stopOpacity="0.3" />
@@ -626,10 +632,10 @@ export default function Dashboard() {
                   </div>
                   
                   {/* Run Readiness Score - Big Display */}
-                  <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-3 sm:gap-4 flex-wrap">
                     <div className="flex flex-col items-center">
-                      <span 
-                        className="text-6xl font-black"
+                      <span
+                        className="text-5xl sm:text-6xl font-black"
                         style={{ color: recStyle.accent }}
                       >
                         {runReadinessScore}
@@ -638,9 +644,9 @@ export default function Dashboard() {
                         {t("dashboard.readinessScore") || "Run Readiness"}
                       </span>
                     </div>
-                    <div className="h-16 w-px" style={{ background: `${recStyle.accent}40` }} />
-                    <div className="flex items-center gap-2">
-                      <span className="text-2xl font-black tracking-tight" style={{ color: recStyle.accent }}>
+                    <div className="h-16 w-px hidden sm:block" style={{ background: `${recStyle.accent}40` }} />
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                      <span className="text-xl sm:text-2xl font-black tracking-tight break-words" style={{ color: recStyle.accent }}>
                         {cardioData?.recommendation || "—"}
                       </span>
                     </div>
@@ -662,7 +668,7 @@ export default function Dashboard() {
                     {t("dashboard.todaysMetrics")}
                   </h2>
                   <div
-                    className="flex gap-3 overflow-x-auto pb-2 -mx-4 px-4"
+                    className="flex gap-3 overflow-x-auto pb-2 -mx-4 px-4 snap-x snap-mandatory"
                     style={{ scrollbarWidth: "none" }}
                     data-testid="metrics-scroll"
                   >
