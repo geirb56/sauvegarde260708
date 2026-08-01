@@ -81,17 +81,21 @@ export const Layout = () => {
         </div>
         
         <div className="header-actions">
-          <button 
-            className="p-2 rounded-lg transition-colors hover:bg-white/5"
+          <button
+            type="button"
+            aria-label="Refresh"
+            className="p-2 rounded-lg transition-colors hover:bg-white/5 min-w-[44px] min-h-[44px] flex items-center justify-center"
             style={{ color: "var(--text-tertiary)" }}
           >
             <RefreshCw className="w-5 h-5" />
           </button>
           <button
+            type="button"
             onClick={logout}
-            className="p-2 rounded-lg transition-colors hover:bg-white/5"
+            className="p-2 rounded-lg transition-colors hover:bg-white/5 min-w-[44px] min-h-[44px] flex items-center justify-center"
             style={{ color: "var(--text-tertiary)" }}
             title={t("auth.logout")}
+            aria-label={t("auth.logout")}
           >
             <LogOut className="w-5 h-5" />
           </button>
@@ -102,7 +106,7 @@ export const Layout = () => {
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 overflow-auto pb-20">
+      <main className="flex-1 overflow-x-hidden overflow-y-auto pb-[calc(5rem+env(safe-area-inset-bottom))]">
         <Outlet />
       </main>
 
@@ -127,7 +131,7 @@ export const Layout = () => {
                   />
                 )}
               </div>
-              <span className="nav-label text-[9px]">{item.label ?? t(item.labelKey)}</span>
+              <span className="nav-label text-[10px] leading-tight truncate max-w-full">{item.label ?? t(item.labelKey)}</span>
             </NavLink>
           );
         })}

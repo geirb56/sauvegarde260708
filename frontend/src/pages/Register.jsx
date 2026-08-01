@@ -110,7 +110,7 @@ export default function Register() {
                   <button
                     type="button"
                     onClick={() => setShowPassword((v) => !v)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    className="absolute right-1 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground min-w-[44px] min-h-[44px] flex items-center justify-center rounded"
                     aria-label={showPassword ? t("auth.hidePassword") : t("auth.showPassword")}
                     tabIndex={-1}
                   >

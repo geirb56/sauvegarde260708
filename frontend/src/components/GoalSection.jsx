@@ -228,7 +228,7 @@ export const GoalSection = ({ goal, lang, t, onUpdate }) => {
                       value={targetHours}
                       onChange={(e) => setTargetHours(e.target.value)}
                       placeholder="0"
-                      className="bg-muted border-border font-mono text-sm w-20 text-center"
+                      className="bg-muted border-border font-mono text-sm w-16 sm:w-20 text-center"
                     />
                     <span className="font-mono text-sm text-muted-foreground">h</span>
                     <Input
@@ -238,7 +238,7 @@ export const GoalSection = ({ goal, lang, t, onUpdate }) => {
                       value={targetMinutes}
                       onChange={(e) => setTargetMinutes(e.target.value)}
                       placeholder="00"
-                      className="bg-muted border-border font-mono text-sm w-20 text-center"
+                      className="bg-muted border-border font-mono text-sm w-16 sm:w-20 text-center"
                     />
                     <span className="font-mono text-sm text-muted-foreground">min</span>
                   </div>

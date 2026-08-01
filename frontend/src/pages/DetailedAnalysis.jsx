@@ -230,7 +230,7 @@ export default function DetailedAnalysis() {
         <Button
           onClick={goToAskCoach}
           data-testid="ask-coach-btn"
-          className="w-full bg-muted hover:bg-muted/80 text-foreground border border-border rounded-none h-10 font-mono text-xs uppercase tracking-wider flex items-center justify-center gap-2"
+          className="w-full bg-muted hover:bg-muted/80 text-foreground border border-border rounded-none h-11 sm:h-10 font-mono text-xs uppercase tracking-wider flex items-center justify-center gap-2"
         >
           <MessageSquare className="w-3.5 h-3.5" />
           {t("detailedAnalysis.askCoach")}
