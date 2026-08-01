@@ -65,7 +65,6 @@ export function SubscriptionProvider({ children }) {
   // Helper functions
   const isActive = subscription?.status !== "free";
   const isTrial = subscription?.status === "trial";
-  const isEarlyAdopter = subscription?.status === "early_adopter";
   const isPremium = subscription?.status === "premium";
   const isFree = subscription?.status === "free";
 
@@ -83,7 +82,6 @@ export function SubscriptionProvider({ children }) {
     // Status helpers
     isActive,
     isTrial,
-    isEarlyAdopter,
     isPremium,
     isFree,
     // Feature helpers

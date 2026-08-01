@@ -30,7 +30,6 @@ const FEATURE_ICONS = {
 };
 
 // Single Premium offer: 4.99 EUR/month via Paddle.
-// The old Stripe / Early Adopter / multi-tier flow is removed.
 const PREMIUM_OFFER = {
   offer_name: "Premium",
   price_display: "4,99 € / mois",

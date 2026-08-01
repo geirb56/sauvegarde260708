@@ -5105,6 +5105,17 @@ async def reset_to_trial(user: dict = Depends(auth_user)):
     }
 
 
+class PaddleCheckoutRequest(BaseModel):
+    price_id: Optional[str] = None
+
+
+class PaddleCheckoutResponse(BaseModel):
+    transaction_id: str
+    paddle_environment: str
+    paddle_client_token: str
+    price_id: str
+
+
 @api_router.post("/subscription/paddle/checkout", response_model=PaddleCheckoutResponse)
 async def create_paddle_checkout(
     request: PaddleCheckoutRequest,

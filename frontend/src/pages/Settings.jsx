@@ -36,13 +36,13 @@ const SESSIONS_OPTIONS = [3, 4, 5, 6];
 
 export default function Settings() {
   const { t, lang, setLang } = useLanguage();
-  const { 
-    subscription, 
-    isTrial, 
-    isEarlyAdopter, 
-    isFree, 
+  const {
+    subscription,
+    isTrial,
+    isPremium,
+    isFree,
     trialDaysRemaining,
-    refreshSubscription 
+    refreshSubscription
   } = useSubscription();
   const { unitSystem, setUnitSystem } = useUnitSystem();
   const navigate = useNavigate();
@@ -71,7 +71,7 @@ export default function Settings() {
     loadGoal();
     loadTrainingPlan();
 
-    // Clean up any stale Stripe-era query params that may linger in the URL
+    // Clean up any stale legacy checkout query params that may linger in the URL
     const sessionId = searchParams.get("session_id");
     const premiumParam = searchParams.get("premium");
     const subscriptionParam = searchParams.get("subscription");
@@ -706,32 +706,32 @@ export default function Settings() {
           </CardContent>
         </Card>
 
-        {/* Subscription Status - Early Adopter System */}
+        {/* Subscription Status */}
         <Card className={`border-border ${
-          isEarlyAdopter 
-            ? "bg-gradient-to-br from-amber-500/10 to-orange-500/10 border-amber-500/30" 
-            : isTrial 
+          isPremium
+            ? "bg-gradient-to-br from-amber-500/10 to-orange-500/10 border-amber-500/30"
+            : isTrial
               ? "bg-gradient-to-br from-blue-500/10 to-violet-500/10 border-blue-500/30"
               : "bg-card"
         }`}>
           <CardContent className="p-6">
             <div className="flex items-start gap-4">
               <div className={`w-10 h-10 flex items-center justify-center flex-shrink-0 rounded-lg ${
-                isEarlyAdopter 
-                  ? "bg-gradient-to-br from-amber-500 to-orange-500" 
+                isPremium
+                  ? "bg-gradient-to-br from-amber-500 to-orange-500"
                   : isTrial
                     ? "bg-gradient-to-br from-blue-500 to-violet-500"
                     : "bg-muted border border-border"
               }`}>
-                <Crown className={`w-5 h-5 ${(isEarlyAdopter || isTrial) ? "text-white" : "text-muted-foreground"}`} />
+                <Crown className={`w-5 h-5 ${(isPremium || isTrial) ? "text-white" : "text-muted-foreground"}`} />
               </div>
               <div className="flex-1">
                 <div className="flex items-center gap-2 mb-1">
                   <h2 className="font-heading text-lg uppercase tracking-tight font-semibold">
                     {t("settingsExtended.subscription")}
                   </h2>
-                  {isEarlyAdopter && (
-                    <Badge className="bg-amber-500 text-white text-[9px]">{t("settingsExtended.earlyAdopterBadge")}</Badge>
+                  {isPremium && (
+                    <Badge className="bg-amber-500 text-white text-[9px]">{t("settingsExtended.premiumBadge")}</Badge>
                   )}
                   {isTrial && (
                     <Badge className="bg-blue-500 text-white text-[9px]">{t("settingsExtended.trialBadge")}</Badge>
@@ -740,10 +740,10 @@ export default function Settings() {
                     <Badge className="bg-gray-500 text-white text-[9px]">{t("settingsExtended.limitedBadge")}</Badge>
                   )}
                 </div>
-                
+
                 {/* Status Display */}
                 <p className="font-mono text-sm text-foreground mb-1">
-                  {isEarlyAdopter && t("settingsExtended.earlyAdopterPrice")}
+                  {isPremium && t("settingsExtended.premiumPrice")}
                   {isTrial && t("settingsExtended.freeTrialActive")}
                   {isFree && t("settingsExtended.limitedAccess")}
                 </p>
@@ -768,8 +768,8 @@ export default function Settings() {
                   </div>
                 )}
                 
-                {/* Early Adopter benefits */}
-                {isEarlyAdopter && (
+                {/* Premium benefits */}
+                {isPremium && (
                   <div className="mt-4 space-y-2">
                     <p className="font-mono text-xs text-muted-foreground mb-2">
                       {t("settingsExtended.featuresIncluded")}
@@ -797,7 +797,7 @@ export default function Settings() {
                       <div className="flex items-center gap-2 mb-2">
                         <Sparkles className="w-4 h-4 text-amber-400" />
                         <span className="font-bold text-amber-400">
-                          {t("settingsExtended.earlyAdopterOffer")}
+                          {t("settingsExtended.premiumOffer")}
                         </span>
                       </div>
                       <p className="text-2xl font-bold text-white mb-1">4,99 € <span className="text-sm font-normal text-muted-foreground">/ {t("subscription.perMonth")}</span></p>
@@ -822,7 +822,7 @@ export default function Settings() {
                     <Button
                       onClick={handleSubscribe}
                       disabled={processingPayment}
-                      data-testid="subscribe-early-adopter"
+                      data-testid="subscribe-premium"
                       className="w-full bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white rounded-lg uppercase font-bold tracking-wider text-sm h-12 flex items-center justify-center gap-2"
                     >
                       {processingPayment ? (
