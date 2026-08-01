@@ -23,11 +23,6 @@ test.describe('Training Plan with VMA - Dynamic Paces', () => {
       });
       observer.observe(document.body, { childList: true, subtree: true });
     });
-    
-    // Ensure user has access (activate early adopter if needed)
-    await page.request.post(`${BASE_URL}/api/subscription/activate-early-adopter`, {
-      data: { user_id: 'default' }
-    });
   });
 
   test('Training plan page loads successfully', async ({ page }) => {
