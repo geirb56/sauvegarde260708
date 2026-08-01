@@ -283,7 +283,7 @@ def get_user_id_from_request(request: Request) -> str:
 
     Resolution order (Step 2: JWT-only for client identity):
     1. JWT ****** — Authorization: ****** (sub claim)
-    2. IP address        — last-resort fallback
+    2. IP address        — last-resort fallback (TRUSTED_PROXY_COUNT-aware)
     """
     # 1. Try JWT ****** first
     auth_header = request.headers.get("Authorization", "")
@@ -298,10 +298,16 @@ def get_user_id_from_request(request: Request) -> str:
         except Exception:
             pass  # Fall through to next resolution method
 
-    # 2. Fallback to IP
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    # 2. Fallback to IP — honour TRUSTED_PROXY_COUNT to prevent spoofing.
+    #    By default (0), X-Forwarded-For is ignored entirely.
+    trusted = int(os.getenv("TRUSTED_PROXY_COUNT", "0"))
+    if trusted > 0:
+        forwarded = request.headers.get("X-Forwarded-For", "")
+        if forwarded:
+            parts = [p.strip() for p in forwarded.split(",")]
+            # Take the entry just outside the trusted proxy chain (right-to-left)
+            idx = max(0, len(parts) - trusted)
+            return parts[idx]
     return request.client.host if request.client else "unknown"
 
 
