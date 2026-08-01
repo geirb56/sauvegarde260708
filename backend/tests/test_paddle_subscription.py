@@ -120,6 +120,32 @@ class TestPaddleWebhookSecurity:
             event = verify_and_parse_paddle_event(body, sig, self.SECRET)
             assert event["event_type"] == etype
 
+    # ── Timestamp validation (PR62) ───────────────────────────────────────────
+
+    def test_stale_timestamp_raises(self):
+        """A webhook with a timestamp older than 5 minutes must be rejected."""
+        body = self._body()
+        stale_ts = str(int(time.time()) - 301)  # 5 min + 1 s ago
+        sig = _make_sig(self.SECRET, stale_ts, body)
+        with pytest.raises(PaddleWebhookError, match="outside the allowed window"):
+            verify_and_parse_paddle_event(body, sig, self.SECRET)
+
+    def test_future_timestamp_raises(self):
+        """A webhook with a timestamp far in the future must be rejected."""
+        body = self._body()
+        future_ts = str(int(time.time()) + 301)  # 5 min + 1 s ahead
+        sig = _make_sig(self.SECRET, future_ts, body)
+        with pytest.raises(PaddleWebhookError, match="outside the allowed window"):
+            verify_and_parse_paddle_event(body, sig, self.SECRET)
+
+    def test_timestamp_within_tolerance_accepted(self):
+        """A webhook within the 5-minute window must be accepted."""
+        body = self._body()
+        ts = str(int(time.time()) - 299)  # just inside the window
+        sig = _make_sig(self.SECRET, ts, body)
+        event = verify_and_parse_paddle_event(body, sig, self.SECRET)
+        assert isinstance(event, dict)
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # access_control — single source of truth (no motor required)
