@@ -2,8 +2,8 @@
 demo_mode.py — RunIndex Demo Subscription Patch
 ===================================================
 
-Active un mode démonstration qui simule un abonnement actif (early_adopter)
-pour tous les utilisateurs, sans toucher à la base de données.
+Active un mode démonstration qui simule un abonnement premium actif pour tous
+les utilisateurs, sans toucher à la base de données.
 
 Utilisation :
   Ajouter dans .env (ou config) :
@@ -64,18 +64,16 @@ def log_demo_mode_status() -> None:
 
 def _build_demo_subscription(user_id: str = "demo_user") -> Dict:
     """
-    Construit un dict subscription qui imite un early_adopter actif.
+    Construit un dict subscription qui imite un abonnement premium actif.
     Compatible avec le schéma attendu par subscription_manager.py.
     """
     now = datetime.now(timezone.utc)
     return {
         "user_id": user_id,
-        "status": "early_adopter",       # Accès complet (voir FEATURES dans subscription_manager.py)
+        "status": "premium",             # Accès complet (voir FEATURES dans subscription_manager.py)
         "created_at": now.isoformat(),
         "trial_start": None,
         "trial_end": None,
-        "stripe_customer_id": "cus_DEMO_MODE",
-        "stripe_subscription_id": "sub_DEMO_MODE",
         "price_locked": 4.99,
         "activated_at": now.isoformat(),
         "updated_at": now.isoformat(),
@@ -93,12 +91,11 @@ def is_subscription_active(subscription: Optional[Dict]) -> bool:
 
     Règles :
       - Si DEMO_MODE est True  → toujours True, peu importe le contenu de `subscription`.
-      - Si DEMO_MODE est False → vérifie le statut réel (trial, early_adopter, premium).
+      - Si DEMO_MODE est False → vérifie le statut réel (trial, premium).
 
     Statuts considérés "actifs" :
-      - "trial"          : essai gratuit non expiré
-      - "early_adopter"  : abonnement payant actif
-      - "premium"        : réservé pour le futur
+      - "trial"    : essai gratuit non expiré
+      - "premium"  : abonnement payant actif via Paddle
 
     Usage dans server.py :
         from demo_mode import is_subscription_active
@@ -122,7 +119,7 @@ def is_subscription_active(subscription: Optional[Dict]) -> bool:
 
     status = subscription.get("status", "free")
 
-    ACTIVE_STATUSES = {"trial", "early_adopter", "premium"}
+    ACTIVE_STATUSES = {"trial", "premium"}
     return status in ACTIVE_STATUSES
 
 
@@ -162,7 +159,7 @@ def patch_subscription_status_response(response: Dict, user_id: str) -> Dict:
     """
     Patch optionnel à appliquer sur la réponse de /api/subscription/status.
 
-    Si DEMO_MODE est True, force is_premium=True et tier="early_adopter".
+    Si DEMO_MODE est True, force is_premium=True et tier="premium".
     Si DEMO_MODE est False, retourne la réponse inchangée.
 
     Usage dans server.py (endpoint get_subscription_status) :
@@ -176,8 +173,8 @@ def patch_subscription_status_response(response: Dict, user_id: str) -> Dict:
     logger.debug(f"DEMO_MODE — patching subscription status response for user '{user_id}'")
     patched = response.copy()
     patched.update({
-        "tier": "early_adopter",
-        "tier_name": "Early Adopter (DEMO)",
+        "tier": "premium",
+        "tier_name": "Premium (DEMO)",
         "is_premium": True,
         "is_unlimited": True,
         "messages_remaining": 999,

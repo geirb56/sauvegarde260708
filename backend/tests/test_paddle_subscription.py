@@ -208,32 +208,6 @@ class TestAccessControlResolve:
         for feat in ["training_plan", "llm_access", "rag_access", "coach_detailed"]:
             assert access.can(feat)
 
-    # ── Legacy statuses ───────────────────────────────────────────────────
-
-    def test_early_adopter_is_premium(self):
-        """Grandfathered early_adopter must remain Premium."""
-        access = _resolve_access("u1", self._sub(status="early_adopter"))
-        assert access.tier == Tier.PREMIUM
-
-    def test_active_stripe_unexpired_is_premium(self):
-        future = (datetime.now(timezone.utc) + timedelta(days=5)).isoformat()
-        access = _resolve_access("u1", self._sub(status="active", expires_at=future))
-        assert access.tier == Tier.PREMIUM
-
-    def test_active_stripe_expired_is_free(self):
-        past = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
-        access = _resolve_access("u1", self._sub(status="active", expires_at=past))
-        assert access.tier == Tier.FREE
-
-    def test_starter_is_premium(self):
-        assert _resolve_access("u1", self._sub(status="starter")).tier == Tier.PREMIUM
-
-    def test_confort_is_premium(self):
-        assert _resolve_access("u1", self._sub(status="confort")).tier == Tier.PREMIUM
-
-    def test_pro_is_premium(self):
-        assert _resolve_access("u1", self._sub(status="pro")).tier == Tier.PREMIUM
-
     # ── Fail-closed defaults ──────────────────────────────────────────────
 
     def test_unknown_status_returns_free(self):
@@ -369,7 +343,6 @@ class TestSubscriptionManager:
             assert "paddle_subscription_id" in sub
             assert sub["paddle_subscription_id"] is None
             assert "paddle_customer_id" in sub
-            assert "stripe_customer_id" in sub  # Legacy field preserved
         _run(go())
 
     def test_activate_premium_sets_status(self):

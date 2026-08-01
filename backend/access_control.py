@@ -7,7 +7,7 @@ SINGLE SOURCE OF TRUTH for all subscription and feature access decisions.
 Commercial tiers:
     FREE    — trial expired, no active paid subscription
     TRIAL   — 30-day free trial (full Premium access)
-    PREMIUM — active paid subscription via Paddle (or Stripe legacy)
+    PREMIUM — active paid subscription via Paddle
 
 Architecture:
     JWT authenticated user
@@ -117,53 +117,6 @@ FREE_FEATURES: frozenset = frozenset({
 CHAT_QUOTA_FREE: int = 10
 # Anti-abuse hard cap applied on top of is_unlimited (not a commercial quota)
 CHAT_ANTIABUSE_CAP: int = 500
-
-# ---------------------------------------------------------------------------
-# Legacy status → Tier mapping
-#
-# The old system had: starter, premium, confort, pro, early_adopter, active,
-# trial, free.  These are all mapped to the three canonical tiers below.
-# Legacy "premium-equivalent" statuses still need an active subscription or
-# no expiration date to be treated as PREMIUM; "active" checks expires_at.
-# ---------------------------------------------------------------------------
-
-_LEGACY_PREMIUM_STATUSES: frozenset = frozenset({
-    "early_adopter",
-    "active",
-    "starter",
-    "confort",
-    "pro",
-})
-
-_LEGACY_FREE_STATUSES: frozenset = frozenset({
-    "free",
-    "expired",
-    "cancelled",
-    "suspended",
-})
-
-
-def normalize_legacy_status(status: Optional[str]) -> Tier:
-    """
-    Map any legacy or current subscription status string to a canonical Tier.
-
-    This is used for display/migration purposes only.
-    The authoritative tier resolution for access control is _resolve_access().
-    """
-    if not status:
-        return Tier.FREE
-    s = status.lower()
-    if s == "trial":
-        return Tier.TRIAL
-    if s == "premium":
-        return Tier.PREMIUM
-    if s in _LEGACY_PREMIUM_STATUSES:
-        return Tier.PREMIUM
-    if s in _LEGACY_FREE_STATUSES:
-        return Tier.FREE
-    logger.warning(f"[AccessControl] Unknown subscription status '{status}' → FREE")
-    return Tier.FREE
-
 
 # ---------------------------------------------------------------------------
 # UserAccess — the resolved access object
@@ -383,13 +336,9 @@ def _resolve_access(user_id: str, subscription: dict) -> UserAccess:
     """
     Convert a raw subscription document into a UserAccess.
 
-    This is the authoritative tier-resolution logic. It handles both current
-    canonical statuses (trial, premium, free) and all known legacy statuses
-    (early_adopter, active, starter, confort, pro, expired, etc.).
-
-    Expiration is checked here in memory; DB updates happen lazily via
-    check_trial_expiration() and check_premium_expiration() in
-    subscription_manager.py.
+    Handles the three canonical statuses (trial, premium, free). Expiration is
+    checked here in memory; DB updates happen lazily via check_trial_expiration()
+    and check_premium_expiration() in subscription_manager.py.
     """
     status = (subscription.get("status") or "free").lower()
     now = datetime.now(timezone.utc)
@@ -410,37 +359,12 @@ def _resolve_access(user_id: str, subscription: dict) -> UserAccess:
             return UserAccess(
                 user_id=user_id, tier=Tier.FREE, premium_expires_at=premium_expires_at
             )
-        paddle_id = (
-            subscription.get("paddle_subscription_id")
-            or subscription.get("stripe_subscription_id")
-        )
+        paddle_id = subscription.get("paddle_subscription_id")
         return UserAccess(
             user_id=user_id,
             tier=Tier.PREMIUM,
             premium_expires_at=premium_expires_at,
             paddle_subscription_id=paddle_id,
-        )
-
-    # ── LEGACY PREMIUM statuses ───────────────────────────────────────────
-    # early_adopter, active (Stripe), starter, confort, pro
-    if status in _LEGACY_PREMIUM_STATUSES:
-        # "active" (Stripe) — verify expires_at
-        if status == "active":
-            expires_at = _parse_dt(subscription.get("expires_at"))
-            if expires_at and now > expires_at:
-                logger.info(
-                    f"[AccessControl] Legacy 'active' subscription expired for '{user_id}'"
-                )
-                return UserAccess(user_id=user_id, tier=Tier.FREE)
-        # All other legacy premium statuses had no expiration date in the old system.
-        # Treat them as PREMIUM with no expiry (grandfathered).
-        premium_expires_at = _parse_dt(
-            subscription.get("premium_expires_at") or subscription.get("expires_at")
-        )
-        return UserAccess(
-            user_id=user_id,
-            tier=Tier.PREMIUM,
-            premium_expires_at=premium_expires_at,
         )
 
     # ── FREE / EXPIRED / UNKNOWN ──────────────────────────────────────────

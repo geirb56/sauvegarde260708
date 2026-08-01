@@ -73,23 +73,15 @@ from training_engine import (
     get_phase_description,
 )
 
-# Import Stripe integration
-from emergentintegrations.payments.stripe.checkout import (
-    StripeCheckout, 
-    CheckoutSessionRequest
-)
-
 # Import subscription manager
 from subscription_manager import (
     get_user_subscription,
-    activate_early_adopter,
     cancel_subscription,
     get_trial_days_remaining,
     is_route_protected,
     get_subscription_display,
     SubscriptionStatus,
     FEATURES,
-    EARLY_ADOPTER_PRICE,
     TRIAL_DURATION_DAYS
 )
 
@@ -109,7 +101,6 @@ from access_control import (
     CHAT_QUOTA_FREE,
     CHAT_ANTIABUSE_CAP,
 )
-from services.stripe_webhook_security import verify_and_parse_stripe_event
 from services.paddle_webhook_security import verify_and_parse_paddle_event, PaddleWebhookError
 
 # Import physiological engine dashboard router
@@ -134,9 +125,6 @@ mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
-# Stripe configuration (legacy — read-only, kept for historical data)
-STRIPE_API_KEY = os.environ.get('STRIPE_API_KEY', '')
-STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "development").strip().lower()
 
 # ── Paddle configuration (new payment provider) ───────────────────────────────
@@ -172,30 +160,9 @@ SUBSCRIPTION_TIERS = {
         "price_monthly": 4.99,
         "price_annual": 49.99,
         "messages_limit": 25,
-        "description": "Getting started"
-    },
-    "confort": {
-        "name": "Confort",
-        "price_monthly": 5.99,
-        "price_annual": 59.99,
-        "messages_limit": 50,
-        "description": "Regular usage"
-    },
-    "pro": {
-        "name": "Pro",
-        "price_monthly": 9.99,
-        "price_annual": 99.99,
-        "messages_limit": 150,  # Soft limit (fair-use)
-        "unlimited": True,
-        "description": "Unlimited"
+        "description": "Full access"
     }
 }
-
-def normalize_subscription_tier(tier: Optional[str]) -> str:
-    """Normalize legacy tier IDs to current ones."""
-    if tier == "starter":
-        return "premium"
-    return tier or "premium"
 
 
 
@@ -3322,7 +3289,7 @@ def _generate_run_index_analysis(
         return " ".join(parts)
 
 
-# ========== PREMIUM SUBSCRIPTION (STRIPE) ==========
+# ========== PREMIUM SUBSCRIPTION ==========
 
 
 class SubscriptionStatusResponse(BaseModel):
@@ -3336,17 +3303,6 @@ class SubscriptionStatusResponse(BaseModel):
     messages_limit: int = 10
     messages_remaining: int = 10
     is_unlimited: bool = False
-
-
-class CreateCheckoutRequest(BaseModel):
-    origin_url: str
-    tier: str = "premium"  # premium, confort, pro
-    billing_period: str = "monthly"  # monthly, annual
-
-
-class CreateCheckoutResponse(BaseModel):
-    checkout_url: str
-    session_id: str
 
 
 class ChatRequest(BaseModel):
@@ -4717,237 +4673,6 @@ async def get_user_features(user: dict = Depends(auth_user)):
     }
 
 
-@api_router.post("/subscription/checkout", response_model=CreateCheckoutResponse)
-async def create_subscription_checkout(request: CreateCheckoutRequest, http_request: Request, user: dict = Depends(auth_user)):
-    """Create Stripe checkout session for subscription"""
-    
-    user_id = user["id"]
-    if not STRIPE_API_KEY:
-        raise HTTPException(status_code=500, detail="Stripe not configured")
-    
-    # Validate tier
-    requested_tier = normalize_subscription_tier(request.tier)
-    if requested_tier not in ["premium", "confort", "pro"]:
-        raise HTTPException(status_code=400, detail="Invalid subscription tier")
-    
-    tier_config = SUBSCRIPTION_TIERS[requested_tier]
-    
-    # Get price based on billing period
-    if request.billing_period == "annual":
-        amount = tier_config["price_annual"]
-    else:
-        amount = tier_config["price_monthly"]
-    
-    # Build URLs
-    success_url = f"{request.origin_url}/settings?session_id={{CHECKOUT_SESSION_ID}}&subscription=success"
-    cancel_url = f"{request.origin_url}/settings?subscription=cancelled"
-    
-    # Initialize Stripe
-    webhook_url = f"{str(http_request.base_url)}api/webhook/stripe"
-    stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
-    
-    # Create checkout session
-    checkout_request = CheckoutSessionRequest(
-        amount=amount,
-        currency="eur",
-        success_url=success_url,
-        cancel_url=cancel_url,
-        metadata={
-            "user_id": user_id,
-            "product": f"runindex_{requested_tier}",
-            "tier": requested_tier,
-            "billing_period": request.billing_period,
-            "type": "subscription"
-        }
-    )
-    
-    try:
-        session = await stripe_checkout.create_checkout_session(checkout_request)
-        
-        # Record transaction as pending
-        await db.payment_transactions.insert_one({
-            "session_id": session.session_id,
-            "user_id": user_id,
-            "amount": amount,
-            "currency": "eur",
-            "tier": requested_tier,
-            "billing_period": request.billing_period,
-            "status": "pending",
-            "product": f"runindex_{requested_tier}",
-            "created_at": datetime.now(timezone.utc).isoformat()
-        })
-        
-        logger.info("Checkout session created")
-        
-        return CreateCheckoutResponse(
-            checkout_url=session.url,
-            session_id=session.session_id
-        )
-    
-    except Exception as e:
-        logger.error(f"Stripe checkout error: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to create checkout: {str(e)}")
-
-
-# Keep old endpoint for backward compatibility
-@api_router.post("/premium/checkout", response_model=CreateCheckoutResponse)
-async def create_premium_checkout_compat(request: CreateCheckoutRequest, http_request: Request, user: dict = Depends(auth_user)):
-    """Create Stripe checkout session (backward compat)"""
-    user_id = user["id"]
-    # Convert old request to new format - default to premium monthly
-    new_request = CreateCheckoutRequest(
-        origin_url=request.origin_url,
-        tier=getattr(request, 'tier', 'premium'),
-        billing_period=getattr(request, 'billing_period', 'monthly')
-    )
-    return await create_subscription_checkout(new_request, http_request, user)
-
-
-@api_router.get("/subscription/checkout/status/{session_id}")
-async def check_subscription_status(session_id: str, http_request: Request, user: dict = Depends(auth_user)):
-    """Check status of a checkout session and activate subscription if paid"""
-    
-    user_id = user["id"]
-    if not STRIPE_API_KEY:
-        raise HTTPException(status_code=500, detail="Stripe not configured")
-    
-    # Check if already processed
-    existing = await db.payment_transactions.find_one({"session_id": session_id})
-    if existing and existing.get("status") == "completed":
-        return {"status": "completed", "message": "Already processed"}
-    
-    # Initialize Stripe
-    webhook_url = f"{str(http_request.base_url)}api/webhook/stripe"
-    stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
-    
-    try:
-        status = await stripe_checkout.get_checkout_status(session_id)
-        
-        if status.payment_status == "paid":
-            # Get tier and billing from transaction
-            transaction = await db.payment_transactions.find_one({"session_id": session_id})
-            actual_user_id = transaction.get("user_id", user_id) if transaction else user_id
-            tier = normalize_subscription_tier(transaction.get("tier", "premium") if transaction else "premium")
-            if tier not in SUBSCRIPTION_TIERS:
-                tier = "premium"
-            billing_period = transaction.get("billing_period", "monthly") if transaction else "monthly"
-            
-            # Update transaction
-            await db.payment_transactions.update_one(
-                {"session_id": session_id},
-                {"$set": {
-                    "status": "completed",
-                    "payment_status": status.payment_status,
-                    "completed_at": datetime.now(timezone.utc).isoformat()
-                }}
-            )
-            
-            # Calculate expiration (30 days for monthly, 365 for annual)
-            days = 365 if billing_period == "annual" else 30
-            expires_at = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
-            
-            # Create/update subscription
-            await db.subscriptions.update_one(
-                {"user_id": actual_user_id},
-                {"$set": {
-                    "user_id": actual_user_id,
-                    "subscription_id": session_id,
-                    "tier": tier,
-                    "billing_period": billing_period,
-                    "status": "active",
-                    "amount": transaction.get("amount") if transaction else 0,
-                    "currency": "eur",
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                    "expires_at": expires_at
-                }},
-                upsert=True
-            )
-            
-            tier_name = SUBSCRIPTION_TIERS.get(tier, {}).get("name", "Premium")
-            logger.info(f"Subscription activated for user {actual_user_id}: {tier} ({billing_period})")
-            
-            return {
-                "status": "completed",
-                "payment_status": status.payment_status,
-                "tier": tier,
-                "message": f"Abonnement {tier_name} activé ! Bienvenue dans RunIndex."
-            }
-        
-        elif status.payment_status == "unpaid":
-            return {"status": "pending", "payment_status": status.payment_status}
-        
-        else:
-            await db.payment_transactions.update_one(
-                {"session_id": session_id},
-                {"$set": {"status": status.payment_status}}
-            )
-            return {"status": status.status, "payment_status": status.payment_status}
-    
-    except Exception as e:
-        logger.error(f"Checkout status error: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to check status: {str(e)}")
-
-
-# Backward compat endpoint
-@api_router.get("/premium/checkout/status/{session_id}")
-async def check_checkout_status_compat(session_id: str, http_request: Request, user: dict = Depends(auth_user)):
-    """Check checkout status (backward compat)"""
-    user_id = user["id"]
-    return await check_subscription_status(session_id, http_request, user)
-
-
-@api_router.post("/webhook/stripe")
-async def stripe_webhook(request: Request):
-    """Handle Stripe webhooks"""
-    
-    if not STRIPE_API_KEY:
-        raise HTTPException(status_code=500, detail="Stripe not configured")
-    if not STRIPE_WEBHOOK_SECRET:
-        raise HTTPException(status_code=500, detail="Stripe webhook secret not configured")
-    
-    body = await request.body()
-    signature = request.headers.get("Stripe-Signature")
-    verified_event = verify_and_parse_stripe_event(body, signature, STRIPE_WEBHOOK_SECRET)
-    
-    webhook_url = f"{str(request.base_url)}api/webhook/stripe"
-    stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
-    
-    try:
-        webhook_response = await stripe_checkout.handle_webhook(body, signature)
-        
-        event_type = webhook_response.event_type or verified_event.get("type", "unknown")
-        logger.info(f"Stripe webhook: {event_type} - {webhook_response.session_id}")
-        
-        if webhook_response.payment_status == "paid":
-            # Activate premium (same logic as checkout status)
-            user_id = webhook_response.metadata.get("user_id", "default")
-            
-            await db.payment_transactions.update_one(
-                {"session_id": webhook_response.session_id},
-                {"$set": {
-                    "status": "completed",
-                    "payment_status": "paid",
-                    "webhook_event": webhook_response.event_type,
-                    "completed_at": datetime.now(timezone.utc).isoformat()
-                }}
-            )
-            
-            expires_at = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
-            await db.subscriptions.update_one(
-                {"user_id": user_id},
-                {"$set": {
-                    "status": "active",
-                    "expires_at": expires_at
-                }},
-                upsert=True
-            )
-        
-        return {"received": True}
-    
-    except Exception as e:
-        logger.error(f"Webhook error: {e}")
-        raise HTTPException(status_code=400, detail=f"Webhook processing failed: {str(e)}")
-
 
 # ========== CHAT COACH (PREMIUM ONLY) ==========
 
@@ -5256,24 +4981,16 @@ async def reset_service_metrics(_admin: dict = Depends(require_admin)):
     return {"success": True, "previous": old_metrics}
 
 
-# ========== SUBSCRIPTION SYSTEM (Early Adopter) ==========
+# ========== SUBSCRIPTION SYSTEM ==========
 
 class SubscriptionInfo(BaseModel):
     """Informations d'abonnement utilisateur"""
     user_id: str
-    status: str  # trial, free, early_adopter, premium
+    status: str  # trial, free, premium
     display: Dict
     features: Dict
     trial_days_remaining: Optional[int] = None
     price_locked: Optional[float] = None
-    stripe_customer_id: Optional[str] = None
-
-
-class ActivateSubscriptionRequest(BaseModel):
-    """Requête pour activer un abonnement"""
-    user_id: str = "default"
-    stripe_customer_id: Optional[str] = None
-    stripe_subscription_id: Optional[str] = None
 
 
 @api_router.get("/subscription/info")
@@ -5292,7 +5009,7 @@ async def get_subscription_info(user: dict = Depends(auth_user), language: str =
     # Use access_control as single source of truth for tier resolution
     user_access = await get_user_access(db, user_id)
 
-    # Also fetch raw subscription doc for legacy display fields (price_locked, etc.)
+    # Also fetch raw subscription doc for display fields (price_locked, etc.)
     subscription = await db.subscriptions.find_one({"user_id": user_id}, {"_id": 0}) or {}
 
     status = user_access.tier.value
@@ -5304,40 +5021,8 @@ async def get_subscription_info(user: dict = Depends(auth_user), language: str =
         "features": FEATURES.get(status, FEATURES[SubscriptionStatus.FREE]),
         "trial_days_remaining": user_access.trial_days_remaining,
         "price_locked": subscription.get("price_locked"),
-        "stripe_customer_id": subscription.get("stripe_customer_id"),
         "created_at": subscription.get("created_at"),
         "activated_at": subscription.get("activated_at"),
-    }
-
-
-@api_router.post("/subscription/activate-early-adopter")
-async def activate_early_adopter_subscription(
-    request: ActivateSubscriptionRequest,
-    user: dict = Depends(auth_user),
-):
-    """
-    Active l'abonnement Early Adopter (legacy) pour l'utilisateur authentifié.
-
-    SECURITY: user_id is always taken from the JWT token, never from the request
-    body. The `user_id` field in `ActivateSubscriptionRequest` is ignored.
-
-    This endpoint is kept for admin/testing purposes only. New subscriptions
-    should flow through the Paddle webhook.
-    """
-    # Always use JWT identity — never trust the body's user_id
-    user_id = user["id"]
-    subscription = await activate_early_adopter(
-        db,
-        user_id,
-        request.stripe_customer_id or f"cus_legacy_{user_id}",
-        request.stripe_subscription_id or f"sub_legacy_{user_id}",
-    )
-
-    return {
-        "success": True,
-        "status": subscription.get("status"),
-        "message": "Abonnement Early Adopter activé ! Prix garanti à vie: 4.99€/mois",
-        "subscription": subscription,
     }
 
 
@@ -5420,235 +5105,11 @@ async def reset_to_trial(user: dict = Depends(auth_user)):
     }
 
 
-@api_router.get("/subscription/early-adopter-offer")
-async def get_early_adopter_offer(language: str = "en"):
-    """
-    Returns details of the Early Adopter offer.
-    """
-    if language == "fr":
-        return {
-            "title": "Active ton coach running",
-            "subtitle": "Ton plan d'entraînement personnalisé est prêt",
-            "description": "Active ton abonnement pour y accéder.",
-            "offer_name": "Early Adopter",
-            "price": EARLY_ADOPTER_PRICE,
-            "price_display": f"{EARLY_ADOPTER_PRICE:.2f} € / mois",
-            "price_guarantee": "Prix garanti à vie",
-            "features": [
-                "Plan d'entraînement personnalisé",
-                "Adaptation automatique du plan",
-                "Analyse intelligente des séances",
-                "Coach IA conversationnel",
-                "Synchronisation montres/apps",
-                "Prédictions de course"
-            ],
-            "cta_button": "Activer mon coach",
-            "trial_cta": "Profite de ton essai gratuit"
-        }
-    elif language == "es":
-        return {
-            "title": "Activa tu coach de running",
-            "subtitle": "Tu plan personalizado está listo",
-            "description": "Activa tu suscripción para acceder.",
-            "offer_name": "Early Adopter",
-            "price": EARLY_ADOPTER_PRICE,
-            "price_display": f"{EARLY_ADOPTER_PRICE:.2f} € / mes",
-            "price_guarantee": "Precio garantizado de por vida",
-            "features": [
-                "Plan de entrenamiento personalizado",
-                "Adaptación automática del plan",
-                "Análisis inteligente de sesiones",
-                "Coach IA conversacional",
-                "Sincronización relojes/apps",
-                "Predicciones de carrera"
-            ],
-            "cta_button": "Activar mi coach",
-            "trial_cta": "Disfruta tu prueba gratuita"
-        }
-    else:
-        return {
-            "title": "Activate your running coach",
-            "subtitle": "Your personalized training plan is ready",
-            "description": "Activate your subscription to access it.",
-            "offer_name": "Early Adopter",
-            "price": EARLY_ADOPTER_PRICE,
-            "price_display": f"€{EARLY_ADOPTER_PRICE:.2f} / month",
-            "price_guarantee": "Price guaranteed for life",
-            "features": [
-                "Personalized training plan",
-                "Automatic plan adaptation",
-                "Smart session analysis",
-                "AI conversational coach",
-                "Watch/app synchronization",
-                "Race predictions"
-            ],
-            "cta_button": "Activate my coach",
-            "trial_cta": "Enjoy your free trial"
-        }
-
-
-@api_router.post("/subscription/early-adopter/checkout")
-async def create_early_adopter_checkout(http_request: Request, user: dict = Depends(auth_user), origin_url: str = None):
-    """
-    Create a Stripe Checkout session for the Early Adopter offer.
-    Price: 4.99€/month, guaranteed for life.
-    """
-    user_id = user["id"]
-    if not STRIPE_API_KEY:
-        raise HTTPException(status_code=500, detail="Stripe not configured")
-
-    # Determine origin URL
-    if not origin_url:
-        origin_url = str(http_request.base_url).rstrip('/')
-        # In preview, use frontend URL
-        if "preview.emergentagent.com" in origin_url:
-            origin_url = origin_url.replace("/api", "").rstrip('/')
-
-    # Redirect URLs
-    success_url = f"{origin_url}/settings?session_id={{CHECKOUT_SESSION_ID}}&subscription=early_adopter_success"
-    cancel_url = f"{origin_url}/settings?subscription=cancelled"
-
-    # Webhook URL
-    webhook_url = f"{str(http_request.base_url).rstrip('/')}/api/webhook/stripe/early-adopter"
-
-    # Initialize Stripe
-    stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
-
-    # Create checkout session
-    checkout_request = CheckoutSessionRequest(
-        amount=float(EARLY_ADOPTER_PRICE),  # In euros (float format required by Stripe Emergent)
-        currency="eur",
-        success_url=success_url,
-        cancel_url=cancel_url,
-        metadata={
-            "user_id": user_id,
-            "product": "runindex_early_adopter",
-            "price_locked": str(EARLY_ADOPTER_PRICE),
-            "type": "subscription",
-            "plan": "early_adopter"
-        }
-    )
-    
-    try:
-        session = await stripe_checkout.create_checkout_session(checkout_request)
-        
-        # Enregistrer la transaction en attente
-        await db.payment_transactions.insert_one({
-            "session_id": session.session_id,
-            "user_id": user_id,
-            "amount": EARLY_ADOPTER_PRICE,
-            "currency": "eur",
-            "plan": "early_adopter",
-            "status": "pending",
-            "product": "runindex_early_adopter",
-            "created_at": datetime.now(timezone.utc).isoformat()
-        })
-        
-        logger.info(f"Early Adopter checkout session created for user {user_id}: {session.session_id}")
-        
-        return {
-            "checkout_url": session.url,
-            "session_id": session.session_id
-        }
-    
-    except Exception as e:
-        logger.error(f"Early Adopter Stripe checkout error: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to create checkout: {str(e)}")
-
-
-@api_router.post("/webhook/stripe/early-adopter")
-async def stripe_early_adopter_webhook(request: Request):
-    """
-    Webhook Stripe pour les paiements Early Adopter.
-    Active l'abonnement une fois le paiement confirmé.
-    """
-    if not STRIPE_WEBHOOK_SECRET:
-        raise HTTPException(status_code=500, detail="Stripe webhook secret not configured")
-    try:
-        payload = await request.body()
-        signature = request.headers.get("Stripe-Signature")
-        event = verify_and_parse_stripe_event(payload, signature, STRIPE_WEBHOOK_SECRET)
-        
-        event_type = event.get("type", "")
-        logger.info(f"Early Adopter webhook received: {event_type}")
-        
-        if event_type == "checkout.session.completed":
-            session = event.get("data", {}).get("object", {})
-            metadata = session.get("metadata", {})
-            
-            user_id = metadata.get("user_id", "default")
-            session_id = session.get("id")
-            customer_id = session.get("customer")
-            subscription_id = session.get("subscription")
-            
-            # Activer l'abonnement Early Adopter
-            await activate_early_adopter(
-                db,
-                user_id,
-                customer_id or f"cus_{session_id}",
-                subscription_id or f"sub_{session_id}"
-            )
-            
-            # Mettre à jour la transaction
-            await db.payment_transactions.update_one(
-                {"session_id": session_id},
-                {
-                    "$set": {
-                        "status": "completed",
-                        "stripe_customer_id": customer_id,
-                        "stripe_subscription_id": subscription_id,
-                        "completed_at": datetime.now(timezone.utc).isoformat()
-                    }
-                }
-            )
-            
-            logger.info(f"Early Adopter activated for user {user_id}")
-        
-        return {"received": True}
-    
-    except Exception as e:
-        logger.error(f"Early Adopter webhook error: {e}")
-        return {"received": True, "error": str(e)}
-
-
-@api_router.get("/subscription/verify-checkout/{session_id}")
-async def verify_checkout_session(session_id: str, user: dict = Depends(auth_user)):
-    """
-    DEPRECATED AND DISABLED — This endpoint previously activated Premium based solely
-    on a frontend-supplied session_id, bypassing real payment verification.
-
-    Premium is now activated exclusively by the Paddle webhook handler
-    (POST /api/webhook/paddle), which verifies the Paddle-Signature before
-    making any subscription change.
-
-    Clients that still call this URL during a transition period will receive
-    a read-only status from the database; they MUST NOT rely on this endpoint
-    to grant or confirm Premium access.
-    """
-    raise HTTPException(
-        status_code=410,
-        detail={
-            "error": "endpoint_disabled",
-            "message": (
-                "This endpoint has been disabled for security reasons. "
-                "Premium activation is handled exclusively via the Paddle webhook. "
-                "Refresh your subscription status from GET /api/subscription/info."
-            ),
-        },
-    )
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# PADDLE — new payment provider
-# ═══════════════════════════════════════════════════════════════════════════════
-
 class PaddleCheckoutRequest(BaseModel):
-    """Request body to create a Paddle transaction / checkout."""
-    price_id: Optional[str] = None  # Override price; uses PADDLE_PRICE_ID if omitted
+    price_id: Optional[str] = None
 
 
 class PaddleCheckoutResponse(BaseModel):
-    """Response from the Paddle checkout creation endpoint."""
     transaction_id: str
     paddle_environment: str
     paddle_client_token: str

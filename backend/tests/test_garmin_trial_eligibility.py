@@ -23,7 +23,6 @@ Access control
 FREE   → limited access
 TRIAL  → premium access
 PREMIUM → premium access
-early_adopter (legacy) → premium access
 
 Auth / isolation
 ----------------
@@ -557,8 +556,6 @@ async def test_frontend_value_mutation_no_effect(db):
         "trial_end": past,
         "trial_used": True,
         "garmin_identity": garmin_id,
-        "stripe_customer_id": None,
-        "stripe_subscription_id": None,
         "updated_at": now.isoformat(),
     })
 
@@ -607,14 +604,6 @@ def test_premium_user_premium_access():
     assert access.can("llm_access") is True
 
 
-def test_early_adopter_premium_access():
-    """early_adopter (legacy) → premium access."""
-    sub = _sub("early_adopter")
-    access = _resolve_access(sub["user_id"], sub)
-    assert access.tier == Tier.PREMIUM
-    assert access.has_premium_access is True
-
-
 def test_expired_trial_is_free():
     """Expired trial → FREE in-memory."""
     past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
@@ -645,7 +634,7 @@ async def test_user_isolation(db):
 
     await create_free_subscription(db, user_a)
 
-    # Directly insert premium subscription for user_b (simulates Stripe webhook)
+    # Directly insert premium subscription for user_b (simulates Paddle webhook)
     await db.subscriptions.insert_one({
         "user_id": user_b,
         "status": "premium",

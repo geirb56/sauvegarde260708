@@ -144,9 +144,7 @@ const FAQ_ITEMS = [
 ];
 
 // Tiers whose subscription counts as "premium" in the UI.
-// Legacy tiers (starter, confort, pro) are kept for backward compatibility with
-// existing subscribers who may still be on those plans in the backend.
-const PREMIUM_TIERS = new Set(["premium", "starter", "confort", "pro", "early_adopter"]);
+const PREMIUM_TIERS = new Set(["premium"]);
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -168,7 +166,7 @@ export default function Subscription() {
 
     loadStatus();
 
-    // Clean up any stale Stripe-era query params
+    // Clean up any stale legacy checkout query params
     const sessionId = searchParams.get("session_id");
     const subParam = searchParams.get("subscription");
     if (sessionId || subParam) {
