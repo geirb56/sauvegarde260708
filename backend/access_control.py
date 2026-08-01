@@ -470,6 +470,10 @@ ROUTE_ACCESS_MAP: Dict[str, RouteAccess] = {
     "/api/subscription/":       RouteAccess.FREE,
     "/api/premium/":            RouteAccess.FREE,
     "/api/user/":               RouteAccess.FREE,
+    # Admin endpoints are gated by JWT + require_admin at the route level, not
+    # by subscription tier. Classify them as FREE here so the subscription
+    # middleware does not block a FREE-tier admin from reaching /api/admin/*.
+    "/api/admin/":              RouteAccess.FREE,
     "/api/dashboard/insight":   RouteAccess.FREE,
     "/api/stats":               RouteAccess.FREE,
     "/api/workouts":            RouteAccess.FREE,

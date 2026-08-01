@@ -171,6 +171,16 @@ async def test_admin_users_rejects_non_admin(client):
     assert response.json()["detail"] == "Admin access required"
 
 
+def test_admin_route_is_not_premium_gated():
+    """`/api/admin/*` must be classified as FREE so the subscription middleware
+    does not block a FREE-tier admin. JWT + require_admin still enforces
+    admin-only access at the route level."""
+    from access_control import RouteAccess, get_route_access
+
+    assert get_route_access("/api/admin/users") == RouteAccess.FREE
+    assert get_route_access("/api/admin/") == RouteAccess.FREE
+
+
 @pytest.mark.asyncio
 async def test_admin_users_returns_status_trial_and_garmin_flags(client):
     response = await client.get(
