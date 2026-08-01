@@ -534,7 +534,6 @@ class CoachRequest(BaseModel):
     context: Optional[str] = None  # Additional context like recent stats
     language: Optional[str] = "en"  # "en" or "fr"
     deep_analysis: Optional[bool] = False  # Trigger deep workout analysis
-    user_id: Optional[str] = "default"  # For memory persistence
 
 
 class CoachResponse(BaseModel):
@@ -544,7 +543,6 @@ class CoachResponse(BaseModel):
 
 class GuidanceRequest(BaseModel):
     language: Optional[str] = "en"
-    user_id: Optional[str] = "default"
 
 
 class GuidanceResponse(BaseModel):
@@ -1739,7 +1737,7 @@ async def analyze_with_coach(request: CoachRequest, user: dict = Depends(auth_us
 
     # 5. If workout_id specified, enrich context with session details
     if request.workout_id:
-        workout = await db.workouts.find_one({"id": request.workout_id})
+        workout = await db.workouts.find_one({"id": request.workout_id, "user_id": user_id})
         
         if workout:
             context["workout_detail"] = {
@@ -1815,9 +1813,10 @@ async def clear_conversation_history(user: dict = Depends(auth_user)):
 
 
 @api_router.get("/messages")
-async def get_messages(limit: int = 20):
+async def get_messages(user: dict = Depends(auth_user), limit: int = 20):
     """Get recent coach messages (legacy endpoint)"""
-    messages = await db.conversations.find({}, {"_id": 0}).sort("timestamp", -1).to_list(limit)
+    user_id = user["id"]
+    messages = await db.conversations.find({"user_id": user_id}, {"_id": 0}).sort("timestamp", -1).to_list(limit)
     return messages
 
 
@@ -2250,7 +2249,7 @@ async def get_rag_workout_analysis(workout_id: str, user: dict = Depends(auth_us
     user_id = user["id"]
     # Fetch the workout
     workout = await db.workouts.find_one(
-        {"id": workout_id},
+        {"id": workout_id, "user_id": user_id},
         {"_id": 0}
     )
     
@@ -2411,10 +2410,8 @@ async def get_mobile_workout_analysis(workout_id: str, language: str = "en", use
     user_id = user["id"]
     all_workouts = await db.workouts.find({"user_id": user_id}, {"_id": 0}).sort("date", -1).to_list(100)
     
-    # Find the workout
-    workout = await db.workouts.find_one({"id": workout_id}, {"_id": 0})
-    if not workout:
-        workout = next((w for w in all_workouts if w["id"] == workout_id), None)
+    # Find the workout (only within user's own workouts to prevent IDOR)
+    workout = next((w for w in all_workouts if w["id"] == workout_id), None)
     
     if not workout:
         raise HTTPException(status_code=404, detail="Workout not found")
@@ -2496,10 +2493,8 @@ async def get_detailed_analysis(workout_id: str, language: str = "en", user: dic
     user_id = user["id"]
     all_workouts = await db.workouts.find({"user_id": user_id}, {"_id": 0}).sort("date", -1).to_list(100)
     
-    # Find the workout
-    workout = await db.workouts.find_one({"id": workout_id}, {"_id": 0})
-    if not workout:
-        workout = next((w for w in all_workouts if w["id"] == workout_id), None)
+    # Find the workout (only within user's own workouts to prevent IDOR)
+    workout = next((w for w in all_workouts if w["id"] == workout_id), None)
     
     if not workout:
         raise HTTPException(status_code=404, detail="Workout not found")
@@ -3307,7 +3302,6 @@ class SubscriptionStatusResponse(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
-    user_id: str = "default"
     use_local_llm: bool = False  # True if using WebLLM on client
     language: Optional[str] = "en"  # Response language: "en" or "fr"
 
@@ -4778,6 +4772,7 @@ async def send_chat_message(request: ChatRequest, user: dict = Depends(auth_user
     # access_control.get_user_access() handles all legacy statuses, expiration
     # checks, DEMO_MODE, DB errors (fail-closed), and the canonical tier model.
     user_access = await get_user_access(db, user_id)
+    tier = user_access.tier
 
     is_unlimited = user_access.is_unlimited_chat
     messages_limit = user_access.chat_monthly_quota or CHAT_QUOTA_FREE  # int for FREE tier
@@ -4806,7 +4801,7 @@ async def send_chat_message(request: ChatRequest, user: dict = Depends(auth_user
             )
 
     # Get user's recent workouts for context
-    workouts = await db.workouts.find({}, {"_id": 0}).sort("date", -1).to_list(50)
+    workouts = await db.workouts.find({"user_id": user_id}, {"_id": 0}).sort("date", -1).to_list(50)
     
     # Get user goal
     user_goal = await db.user_goals.find_one({"user_id": user_id}, {"_id": 0})
