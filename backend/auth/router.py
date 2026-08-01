@@ -18,7 +18,7 @@ import secrets
 import time
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
@@ -46,8 +46,8 @@ auth_router = APIRouter(prefix="/auth", tags=["auth"])
 
 # ── Auth-specific rate limiter ─────────────────────────────────────────────────
 
-class _AuthRateLimiter:
-    """Stricter rate limiter for authentication endpoints.
+class _InMemoryAuthRateLimiter:
+    """Fallback in-memory rate limiter (used when Redis is unavailable).
 
     Keyed on ``ip:email`` so it protects against both IP-only and
     credential-stuffing attacks without relying on an authenticated identity.
@@ -81,11 +81,58 @@ class _AuthRateLimiter:
         self._store[key].append(time.time())
 
 
-_auth_limiter = _AuthRateLimiter(max_attempts=10, window_seconds=60)
+class _RedisAuthRateLimiter:
+    """Redis-backed fixed-window rate limiter for authentication endpoints.
+
+    Uses INCR + EXPIRE (pipeline) for atomic counters stored in Redis.
+    Falls back to the in-memory implementation when Redis is unavailable or
+    ``REDIS_URL`` is not configured (e.g. in unit tests).
+
+    Key format: ``auth:rl:{client_ip}:{sha256(email)[:16]}``
+    PII (email) is never stored directly in Redis keys.
+    """
+
+    def __init__(self, max_attempts: int = 10, window_seconds: int = 60):
+        self.max_attempts = max_attempts
+        self.window_seconds = window_seconds
+        self._fallback = _InMemoryAuthRateLimiter(max_attempts, window_seconds)
+
+    def _redis_key(self, request: Request, email: str = "") -> str:
+        forwarded = request.headers.get("X-Forwarded-For", "")
+        ip = forwarded.split(",")[0].strip() if forwarded else (
+            request.client.host if request.client else "unknown"
+        )
+        email_hash = hashlib.sha256(email.lower().encode()).hexdigest()[:16] if email else "nomail"
+        return f"auth:rl:{ip}:{email_hash}"
+
+    async def is_limited(self, request: Request, email: str = "") -> bool:
+        key = self._redis_key(request, email)
+        try:
+            from jobs.redis_client import get_redis
+            r = get_redis()
+            count = await r.get(key)
+            return int(count or 0) >= self.max_attempts
+        except Exception:
+            return self._fallback.is_limited(request, email)
+
+    async def record(self, request: Request, email: str = "") -> None:
+        key = self._redis_key(request, email)
+        try:
+            from jobs.redis_client import get_redis
+            r = get_redis()
+            pipe = r.pipeline()
+            pipe.incr(key)
+            pipe.expire(key, self.window_seconds)
+            await pipe.execute()
+        except Exception:
+            self._fallback.record(request, email)
 
 
-def _check_rate_limit(request: Request, email: str = "") -> None:
-    if _auth_limiter.is_limited(request, email):
+_auth_limiter = _RedisAuthRateLimiter(max_attempts=10, window_seconds=60)
+
+
+async def _check_rate_limit(request: Request, email: str = "") -> None:
+    if await _auth_limiter.is_limited(request, email):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Too many attempts. Please try again later.",
@@ -119,8 +166,8 @@ def _hash_token(token: str) -> str:
 @auth_router.post("/register", response_model=TokenResponse, status_code=201)
 async def register(body: UserCreate, request: Request):
     """Create a new user account and return a JWT."""
-    _check_rate_limit(request, body.email)
-    _auth_limiter.record(request, body.email)
+    await _check_rate_limit(request, body.email)
+    await _auth_limiter.record(request, body.email)
 
     db = request.app.state.db
 
@@ -176,11 +223,10 @@ async def register(body: UserCreate, request: Request):
 @auth_router.post("/login", response_model=TokenResponse)
 async def login(body: UserLogin, request: Request):
     """Authenticate with email + password and return a JWT."""
-    _check_rate_limit(request, body.email)
-    _auth_limiter.record(request, body.email)
+    await _check_rate_limit(request, body.email)
+    await _auth_limiter.record(request, body.email)
 
     db = request.app.state.db
-
     user = await db.users.find_one({"email": body.email})
 
     # Constant-time check — always verify even when user is not found to prevent
@@ -263,8 +309,8 @@ async def forgot_password(body: ForgotPasswordRequest, request: Request):
     Always returns 200 to prevent user enumeration — the response is identical
     whether the email is registered or not.
     """
-    _check_rate_limit(request, body.email)
-    _auth_limiter.record(request, body.email)
+    await _check_rate_limit(request, body.email)
+    await _auth_limiter.record(request, body.email)
 
     db = request.app.state.db
     user = await db.users.find_one({"email": body.email}, {"id": 1, "email": 1})
@@ -294,8 +340,8 @@ async def forgot_password(body: ForgotPasswordRequest, request: Request):
 @auth_router.post("/reset-password", status_code=200)
 async def reset_password(body: ResetPasswordRequest, request: Request):
     """Apply a password reset using the token from the reset email."""
-    _check_rate_limit(request)
-    _auth_limiter.record(request)
+    await _check_rate_limit(request)
+    await _auth_limiter.record(request)
 
     db = request.app.state.db
 
@@ -339,7 +385,7 @@ def _send_reset_email(email: str, raw_token: str) -> None:
 
     Production: set EMAIL_PROVIDER + credentials in the environment and replace
     this stub with calls to SendGrid / Resend / SES / Postmark.
-    Development: the token is logged at INFO level so it can be used in tests.
+    Development: logs that the email would be sent (token is never logged).
 
     Required env vars for production:
         EMAIL_PROVIDER          (sendgrid | resend | ses | smtp)
@@ -347,17 +393,9 @@ def _send_reset_email(email: str, raw_token: str) -> None:
         EMAIL_API_KEY           Provider API key
         FRONTEND_URL            Base URL for the reset link
     """
-    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
-    reset_link = f"{frontend_url}/reset-password?token={raw_token}"
-
     env = os.getenv("ENVIRONMENT", "development").lower()
     if env != "production":
-        # Safe to log in dev — never log tokens in production
-        logger.info(
-            "[DEV] Password reset link for %s: %s",
-            email,
-            reset_link,
-        )
+        logger.info("[DEV] Password reset email would be sent to %s", email)
     else:
         logger.info("Password reset email dispatched to %s", email)
         # TODO: integrate a transactional email provider here
