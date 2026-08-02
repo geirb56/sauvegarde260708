@@ -11,6 +11,7 @@ Endpoints:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import os
@@ -186,6 +187,28 @@ def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+async def _enqueue_post_login_garmin_sync(user_id: str) -> None:
+    from jobs.queue import enqueue_sync
+
+    result = await enqueue_sync(user_id)
+    logger.info("[Garmin] post-login sync status=%s user=%s", result.get("status"), user_id)
+
+
+async def _maybe_trigger_post_login_garmin_sync(db, user_id: str) -> None:
+    try:
+        conn = await db.garmin_connections.find_one(
+            {"user_id": user_id, "connected": True},
+            {"_id": 0, "user_id": 1},
+        )
+        if not conn:
+            return
+        await _enqueue_post_login_garmin_sync(user_id)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.warning("[Garmin] post-login sync skipped user=%s", user_id, exc_info=True)
+
+
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
 
@@ -283,6 +306,7 @@ async def login(body: UserLogin, request: Request):
 
     access_token = create_access_token(user["id"], user["email"])
     logger.info("User logged in: %s", user["id"])
+    asyncio.create_task(_maybe_trigger_post_login_garmin_sync(db, user["id"]))
 
     return TokenResponse(
         access_token=access_token,

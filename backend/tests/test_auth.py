@@ -34,6 +34,7 @@ import os
 import secrets as _secrets
 import sys
 from datetime import datetime, timezone, timedelta
+from unittest.mock import AsyncMock, patch
 import pytest
 import pytest_asyncio
 import httpx
@@ -51,6 +52,7 @@ os.environ.setdefault("DB_NAME", "test_db")
 
 import jwt
 
+import auth.router as auth_router_module
 from auth.password import hash_password, verify_password
 from auth.jwt_utils import create_access_token, decode_access_token
 from auth.mongo_errors import DuplicateKeyError
@@ -134,6 +136,7 @@ class _FakeDB:
     def __init__(self):
         self.users = _FakeCollection(unique_fields=("email", "id"))
         self.subscriptions = _FakeCollection(unique_fields=("user_id",))
+        self.garmin_connections = _FakeCollection(unique_fields=("user_id",))
 
     def __getattr__(self, name):
         return _FakeCollection()
@@ -177,6 +180,23 @@ async def _register(client, email="user@example.com", pw="Password1!"):
 
 def _auth(token):
     return {"Authorization": "Bearer " + token}
+
+
+async def _drain(tasks):
+    if tasks:
+        await asyncio.gather(*tasks)
+
+
+def _capture_background_tasks():
+    tasks = []
+    original_create_task = auth_router_module.asyncio.create_task
+
+    def _schedule(coro):
+        task = original_create_task(coro)
+        tasks.append(task)
+        return task
+
+    return tasks, _schedule
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -329,6 +349,109 @@ async def test_login_success(client):
     res = await client.post("/auth/login", json={"email": "login4@example.com", "password": "Password1!"})
     assert res.status_code == 200
     assert "access_token" in res.json()
+
+
+async def test_login_connected_garmin_triggers_sync_job(client, fake_db):
+    await _register(client, email="garmin-login@example.com")
+    user = await fake_db.users.find_one({"email": "garmin-login@example.com"})
+    await fake_db.garmin_connections.insert_one({"user_id": user["id"], "connected": True})
+    tasks, schedule = _capture_background_tasks()
+
+    with patch.object(auth_router_module, "_enqueue_post_login_garmin_sync", new=AsyncMock()) as mock_enqueue, \
+         patch.object(auth_router_module.asyncio, "create_task", side_effect=schedule):
+        res = await client.post(
+            "/auth/login",
+            json={"email": "garmin-login@example.com", "password": "Password1!"},
+        )
+        await _drain(tasks)
+
+    assert res.status_code == 200
+    mock_enqueue.assert_awaited_once_with(user["id"])
+
+
+async def test_login_without_garmin_connection_does_not_trigger_sync_job(client):
+    await _register(client, email="no-garmin@example.com")
+    tasks, schedule = _capture_background_tasks()
+
+    with patch.object(auth_router_module, "_enqueue_post_login_garmin_sync", new=AsyncMock()) as mock_enqueue, \
+         patch.object(auth_router_module.asyncio, "create_task", side_effect=schedule):
+        res = await client.post(
+            "/auth/login",
+            json={"email": "no-garmin@example.com", "password": "Password1!"},
+        )
+        await _drain(tasks)
+
+    assert res.status_code == 200
+    mock_enqueue.assert_not_awaited()
+
+
+async def test_login_connected_garmin_already_syncing_does_not_duplicate_job(client, fake_db):
+    await _register(client, email="already-syncing@example.com")
+    user = await fake_db.users.find_one({"email": "already-syncing@example.com"})
+    await fake_db.garmin_connections.insert_one({"user_id": user["id"], "connected": True})
+    tasks, schedule = _capture_background_tasks()
+
+    with patch.object(
+        auth_router_module,
+        "_enqueue_post_login_garmin_sync",
+        new=AsyncMock(return_value={"status": "already_queued"}),
+    ) as mock_enqueue, patch.object(auth_router_module.asyncio, "create_task", side_effect=schedule):
+        res = await client.post(
+            "/auth/login",
+            json={"email": "already-syncing@example.com", "password": "Password1!"},
+        )
+        await _drain(tasks)
+
+    assert res.status_code == 200
+    mock_enqueue.assert_awaited_once_with(user["id"])
+
+
+async def test_login_remains_successful_when_post_login_sync_enqueue_fails(client, fake_db):
+    await _register(client, email="enqueue-fail@example.com")
+    user = await fake_db.users.find_one({"email": "enqueue-fail@example.com"})
+    await fake_db.garmin_connections.insert_one({"user_id": user["id"], "connected": True})
+    tasks, schedule = _capture_background_tasks()
+
+    with patch.object(
+        auth_router_module,
+        "_enqueue_post_login_garmin_sync",
+        new=AsyncMock(side_effect=RuntimeError("redis unavailable")),
+    ) as mock_enqueue, patch.object(auth_router_module.asyncio, "create_task", side_effect=schedule):
+        res = await client.post(
+            "/auth/login",
+            json={"email": "enqueue-fail@example.com", "password": "Password1!"},
+        )
+        await _drain(tasks)
+
+    assert res.status_code == 200
+    assert "access_token" in res.json()
+    mock_enqueue.assert_awaited_once_with(user["id"])
+
+
+async def test_login_cannot_trigger_sync_for_another_user(client, fake_db):
+    await _register(client, email="user-a@example.com")
+    await _register(client, email="user-b@example.com")
+    user_a = await fake_db.users.find_one({"email": "user-a@example.com"})
+    user_b = await fake_db.users.find_one({"email": "user-b@example.com"})
+    await fake_db.garmin_connections.insert_one({"user_id": user_a["id"], "connected": True})
+    await fake_db.garmin_connections.insert_one({"user_id": user_b["id"], "connected": True})
+    tasks, schedule = _capture_background_tasks()
+
+    with patch.object(auth_router_module, "_enqueue_post_login_garmin_sync", new=AsyncMock()) as mock_enqueue, \
+         patch.object(auth_router_module.asyncio, "create_task", side_effect=schedule):
+        res = await client.post(
+            "/auth/login",
+            json={
+                "email": "user-a@example.com",
+                "password": "Password1!",
+                "user_id": user_b["id"],
+            },
+        )
+        await _drain(tasks)
+
+    assert res.status_code == 200
+    mock_enqueue.assert_awaited_once_with(user_a["id"])
+    assert mock_enqueue.await_args.args[0] != user_b["id"]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
