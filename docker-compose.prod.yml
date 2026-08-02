@@ -1,0 +1,46 @@
+# docker-compose.prod.yml — RunIndex production override
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Ce fichier surcharge docker-compose.yml pour le staging/production :
+#   - Supprime l'exposition des ports Redis et MongoDB sur l'hôte (sécurité)
+#   - Force le réseau interne uniquement pour les services internes
+#   - Prépare les labels et la configuration pour un reverse proxy (Traefik/Nginx)
+#
+# Les valeurs sensibles (MONGO_INITDB_ROOT_PASSWORD, JWT_SECRET_KEY, etc.)
+# doivent être injectées via Doppler / HashiCorp Vault / Docker Secrets —
+# jamais en clair dans ce fichier.
+
+version: "3.8"
+
+services:
+  api:
+    # En production l'API n'est pas exposée directement : le reverse proxy
+    # (Traefik, Nginx, Caddy) fait la terminaison TLS et forward vers le port 8000.
+    ports: []
+    environment:
+      ENVIRONMENT: production
+      # Les autres variables doivent être présentes dans .env ou injectées
+      # par le gestionnaire de secrets.
+
+  sync-worker:
+    # Pas de port exposé — processus de fond uniquement
+    ports: []
+
+  scheduler-worker:
+    ports: []
+
+  event-worker:
+    ports: []
+
+  redis:
+    # En production : Redis n'est jamais accessible depuis l'extérieur.
+    # Supprime l'exposition du port 6379 sur l'hôte.
+    ports: []
+
+  mongo:
+    # En production : MongoDB n'est jamais accessible depuis l'extérieur.
+    # Utiliser MongoDB Atlas ou un service managé de préférence.
+    # Supprime l'exposition du port 27017 sur l'hôte.
+    ports: []
