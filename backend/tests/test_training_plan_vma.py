@@ -26,7 +26,6 @@ def get_plan_cached():
         time.sleep(1)  # Rate limiting protection
         response = requests.get(
             f"{BASE_URL}/api/training/plan",
-            headers={"X-User-Id": "default"}
         )
         if response.status_code == 200:
             _plan_cache = response.json()
@@ -254,7 +253,6 @@ class TestTrainingPlanRefresh:
         time.sleep(2)  # Rate limiting protection
         response = requests.post(
             f"{BASE_URL}/api/training/refresh",
-            headers={"X-User-Id": "default"}
         )
         assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
         data = response.json()
@@ -271,7 +269,6 @@ class TestTrainingPlanRefresh:
         sessions = 4
         response = requests.post(
             f"{BASE_URL}/api/training/refresh?sessions={sessions}",
-            headers={"X-User-Id": "default"}
         )
         assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
         data = response.json()
@@ -296,7 +293,6 @@ def get_full_cycle_cached():
         time.sleep(2)  # Rate limiting protection
         response = requests.get(
             f"{BASE_URL}/api/training/full-cycle",
-            headers={"X-User-Id": "default"}
         )
         if response.status_code == 200:
             _full_cycle_cache = response.json()

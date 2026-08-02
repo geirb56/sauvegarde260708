@@ -13,13 +13,13 @@ class TestWeeklyDigestAPI:
     
     def test_digest_endpoint_returns_200(self):
         """Test that digest endpoint returns 200 status"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?user_id=default&language=en")
+        response = requests.get(f"{BASE_URL}/api/coach/digest?language=en")
         assert response.status_code == 200, f"Expected 200, got {response.status_code}"
         print(f"SUCCESS: Digest endpoint returned 200")
     
     def test_digest_response_structure(self):
         """Test that digest response has required fields"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?user_id=default&language=en")
+        response = requests.get(f"{BASE_URL}/api/coach/digest?language=en")
         assert response.status_code == 200
         
         data = response.json()
@@ -33,7 +33,7 @@ class TestWeeklyDigestAPI:
     
     def test_digest_executive_summary_is_short(self):
         """Test that executive summary is concise (max 1 sentence)"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?user_id=default&language=en")
+        response = requests.get(f"{BASE_URL}/api/coach/digest?language=en")
         assert response.status_code == 200
         
         data = response.json()
@@ -49,7 +49,7 @@ class TestWeeklyDigestAPI:
     
     def test_digest_metrics_structure(self):
         """Test that metrics contain expected fields"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?user_id=default&language=en")
+        response = requests.get(f"{BASE_URL}/api/coach/digest?language=en")
         assert response.status_code == 200
         
         data = response.json()
@@ -69,7 +69,7 @@ class TestWeeklyDigestAPI:
     
     def test_digest_signals_structure(self):
         """Test that signals contain Volume, Intensity, Consistency indicators"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?user_id=default&language=en")
+        response = requests.get(f"{BASE_URL}/api/coach/digest?language=en")
         assert response.status_code == 200
         
         data = response.json()
@@ -92,7 +92,7 @@ class TestWeeklyDigestAPI:
     
     def test_digest_insights_max_three(self):
         """Test that insights contain max 3 items"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?user_id=default&language=en")
+        response = requests.get(f"{BASE_URL}/api/coach/digest?language=en")
         assert response.status_code == 200
         
         data = response.json()
@@ -111,7 +111,7 @@ class TestWeeklyDigestAPI:
     
     def test_digest_zone_distribution(self):
         """Test that zone distribution is included in metrics"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?user_id=default&language=en")
+        response = requests.get(f"{BASE_URL}/api/coach/digest?language=en")
         assert response.status_code == 200
         
         data = response.json()
@@ -134,7 +134,7 @@ class TestWeeklyDigestAPI:
     
     def test_digest_french_language(self):
         """Test that French language returns French content"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?user_id=default&language=fr")
+        response = requests.get(f"{BASE_URL}/api/coach/digest?language=fr")
         assert response.status_code == 200
         
         data = response.json()
@@ -144,7 +144,7 @@ class TestWeeklyDigestAPI:
         assert len(summary) > 0, "French executive summary should not be empty"
         
         # French content should be different from English (AI generates in French)
-        en_response = requests.get(f"{BASE_URL}/api/coach/digest?user_id=default&language=en")
+        en_response = requests.get(f"{BASE_URL}/api/coach/digest?language=en")
         en_data = en_response.json()
         en_summary = en_data.get('executive_summary', '')
         
@@ -153,7 +153,7 @@ class TestWeeklyDigestAPI:
     
     def test_digest_no_strava_garmin_references(self):
         """Test that digest content doesn't reference Strava or Garmin"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?user_id=default&language=en")
+        response = requests.get(f"{BASE_URL}/api/coach/digest?language=en")
         assert response.status_code == 200
         
         data = response.json()
@@ -169,7 +169,7 @@ class TestWeeklyDigestAPI:
     
     def test_digest_period_dates_valid(self):
         """Test that period dates are valid ISO format"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?user_id=default&language=en")
+        response = requests.get(f"{BASE_URL}/api/coach/digest?language=en")
         assert response.status_code == 200
         
         data = response.json()
@@ -194,7 +194,7 @@ class TestWeeklyDigestAPI:
     
     def test_digest_generated_at_timestamp(self):
         """Test that generated_at is a valid timestamp"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?user_id=default&language=en")
+        response = requests.get(f"{BASE_URL}/api/coach/digest?language=en")
         assert response.status_code == 200
         
         data = response.json()
@@ -215,7 +215,7 @@ class TestDigestLatestEndpoint:
     
     def test_digest_latest_endpoint(self):
         """Test that digest/latest endpoint works"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest/latest?user_id=default")
+        response = requests.get(f"{BASE_URL}/api/coach/digest/latest")
         
         # May return 200 with data or null if no cached digest
         assert response.status_code == 200, f"Expected 200, got {response.status_code}"

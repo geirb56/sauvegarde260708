@@ -22,7 +22,8 @@ import pytest
 import requests
 
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://charge-load.preview.emergentagent.com").rstrip("/")
-USER_ID = "default"
+# Identity is resolved from JWT token; user_id params below are ignored by authenticated endpoints
+USER_ID = None
 API = f"{BASE_URL}/api"
 
 
