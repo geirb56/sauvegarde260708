@@ -3,6 +3,14 @@
 ## Problem Statement
 Pull https://github.com/geirb56/sauvegarde260629 and set it up so it runs. Replace /app contents.
 
+## Changelog — Paddle sandbox configured & validated (August 2, 2026)
+- Configured all 5 Paddle env vars in backend/.env (sandbox): PADDLE_API_KEY, PADDLE_CLIENT_TOKEN, PADDLE_PRICE_ID (pri_01kz18h08y4yq9pyh05axvaczj = RunIndex PREMIUM 4,99€/mo), PADDLE_WEBHOOK_SECRET (notif dest "PREMIUM", 4 events), PADDLE_ENVIRONMENT=sandbox.
+- Paddle default payment link / domain approved in dashboard.
+- Validated: /api/subscription/paddle/config → configured:true; /paddle/checkout creates real transaction (200); browser test → Paddle overlay opens with no error (fr-FR locale). The "en-US@posix" error was a headless-locale artifact only.
+- Added data-testid="premium-subscribe-btn" to Subscription.jsx premium button.
+- REMAINING: real test-card payment (webhook → Premium) to be done manually; for PRODUCTION, replicate the 5 PADDLE_* vars + webhook destination/domain on the prod URL.
+
+
 ## Changelog — Free trial button fix (August 1, 2026)
 - Bug: "Démarrer mon essai gratuit" (Subscription.jsx) called handleSubscribe → Paddle checkout (card required) instead of activating a free trial.
 - Backend: new `POST /api/subscription/start-trial` (auth JWT, user["id"] only) — activates 30-day trial, no card, no Paddle; refuses a 2nd trial (409 via `trial_used`).
