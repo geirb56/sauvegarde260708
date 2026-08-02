@@ -686,6 +686,48 @@ async def root():
     return {"message": "RunIndex API"}
 
 
+@api_router.get("/health")
+async def health_check():
+    """Health check endpoint for deployment monitoring.
+
+    Probes MongoDB and Redis connectivity so orchestrators (ECS health checks,
+    Kubernetes readiness probes, load-balancer health checks) can confirm the
+    backend is fully operational before sending traffic.
+
+    Returns 200 when all dependencies are reachable, 503 otherwise.
+    """
+    checks: dict = {"status": "ok", "mongo": "ok", "redis": "ok"}
+    healthy = True
+
+    # MongoDB ping
+    try:
+        await client.admin.command("ping")
+    except Exception as exc:
+        logger.error("[health] MongoDB unreachable: %s", exc)
+        checks["mongo"] = "error"
+        healthy = False
+
+    # Redis ping (optional — Redis may not be configured in every deployment)
+    redis_url = os.environ.get("REDIS_URL", "")
+    if redis_url:
+        try:
+            import redis.asyncio as _aioredis
+            _r = _aioredis.from_url(redis_url, socket_connect_timeout=3)
+            await _r.ping()
+            await _r.aclose()
+        except Exception as exc:
+            logger.error("[health] Redis unreachable: %s", exc)
+            checks["redis"] = "error"
+            healthy = False
+    else:
+        checks["redis"] = "not_configured"
+
+    if not healthy:
+        checks["status"] = "degraded"
+        return JSONResponse(status_code=503, content=checks)
+    return checks
+
+
 @api_router.get("/workouts", response_model=List[dict])
 async def get_workouts(user: dict = Depends(auth_user)):
     """Get all workouts for a user, sorted by date descending"""
