@@ -243,6 +243,30 @@ export default function Subscription() {
     }
   };
 
+  // ── Free trial (no card, no checkout) ───────────────────────────────────
+  // Activates a 30-day trial for the authenticated Free user. Premium activation
+  // (Paddle) stays on the pricing "Subscribe" button below.
+  const handleStartTrial = async () => {
+    setSubscribing(true);
+    try {
+      const res = await axios.post(API + "/subscription/start-trial", {});
+      if (res.data?.success) {
+        toast.success(t("subscription.trialStarted") || "Essai gratuit de 30 jours activé !");
+        await refreshSubscription();
+        await loadStatus();
+      }
+    } catch (e) {
+      if (e?.response?.status === 409) {
+        toast.error(t("subscription.trialAlreadyUsed") || "Essai gratuit déjà utilisé.");
+        await loadStatus();
+      } else {
+        toast.error(t("common.error") || "Impossible d'activer l'essai gratuit");
+      }
+    } finally {
+      setSubscribing(false);
+    }
+  };
+
   const scrollTo = (id) => {
     const el = document.getElementById(id);
     if (!el) return;
@@ -297,12 +321,13 @@ export default function Subscription() {
 
           <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
             <Button
-              onClick={isCurrentlyPremium ? () => scrollTo("pricing") : handleSubscribe}
+              onClick={isCurrentlyPremium || isInTrial ? () => scrollTo("pricing") : handleStartTrial}
               disabled={subscribing}
               className="h-12 px-8 text-base font-semibold rounded-xl"
+              data-testid="start-free-trial-btn"
             >
               {subscribing && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
-              {isCurrentlyPremium ? "Voir mon abonnement" : "Démarrer mon essai gratuit"}
+              {isCurrentlyPremium ? "Voir mon abonnement" : isInTrial ? "Essai en cours" : "Démarrer mon essai gratuit"}
             </Button>
             <Button
               variant="outline"

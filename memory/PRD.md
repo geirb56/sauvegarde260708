@@ -3,6 +3,13 @@
 ## Problem Statement
 Pull https://github.com/geirb56/sauvegarde260629 and set it up so it runs. Replace /app contents.
 
+## Changelog — Free trial button fix (August 1, 2026)
+- Bug: "Démarrer mon essai gratuit" (Subscription.jsx) called handleSubscribe → Paddle checkout (card required) instead of activating a free trial.
+- Backend: new `POST /api/subscription/start-trial` (auth JWT, user["id"] only) — activates 30-day trial, no card, no Paddle; refuses a 2nd trial (409 via `trial_used`).
+- Frontend: hero button now calls start-trial for Free users (handleSubscribe/Paddle kept for premium subscribe). i18n keys `trialStarted`/`trialAlreadyUsed` (FR/EN).
+- Tests: `backend/tests/test_start_trial.py` (3 passed): 401 no-JWT, Free→trial no-card, 2nd trial→409. E2E confirmed (free→trial, is_premium True).
+
+
 ## Changelog — Garmin per-user connection fix (August 1, 2026)
 - Removed global .env credential fallback (`GARMIN_USERNAME`/`GARMIN_PASSWORD`) for user connections in `garmin/providers/gccli_provider.py` (new `allow_global_account` flag; only bootstrap may use env).
 - `garmin/factory.py`: `get_provider_for_user` → `allow_global_account=False`; `get_provider` (bootstrap) → `True`.
