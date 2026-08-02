@@ -1,0 +1,28 @@
+# Railway worker image — runs ALL Garmin workers in one service.
+# Build context = repo root.  Command = python -m workers.run_all
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+# gccli needs a few runtime libs + curl to self-install the binary at boot.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates libstdc++6 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app/backend
+
+# Install Python deps first (better layer caching).
+COPY backend/requirements.txt /app/backend/requirements.txt
+RUN pip install -r /app/backend/requirements.txt \
+    && pip install "emergentintegrations" --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ || true
+
+# App code.
+COPY backend /app/backend
+
+# gccli binary self-installs on first boot via ensure_gccli_installed().
+# Persist per-user gccli sessions on a Railway VOLUME mounted at /data/gccli.
+ENV GCCLI_HOME=/data/gccli
+
+# No inbound port needed for workers.
+CMD ["python", "-m", "workers.run_all"]
