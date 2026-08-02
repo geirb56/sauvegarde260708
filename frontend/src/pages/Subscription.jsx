@@ -648,6 +648,7 @@ export default function Subscription() {
                   onClick={handleSubscribe}
                   disabled={subscribing}
                   className="w-full mt-4"
+                  data-testid="premium-subscribe-btn"
                 >
                   {subscribing ? (
                     <Loader2 className="w-4 h-4 animate-spin mr-2" />
