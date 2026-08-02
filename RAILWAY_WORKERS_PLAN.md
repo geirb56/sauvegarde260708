@@ -79,6 +79,12 @@ depuis l'environnement. Rien à modifier pour pointer vers Upstash.
 2. Activer **TLS** (par défaut). Récupérer l'URL de connexion **`rediss://default:<PASSWORD>@<host>:6379`**.
 3. (Prod) choisir un plan adapté au trafic bloquant (pas seulement free tier).
 
+> ✅ **Provisionné + compatibilité vérifiée (2 août 2026)** : base `needed-martin-174232.upstash.io`.
+> Test réussi avec le client Redis de l'app : `PING`, `SET/GET`, `XADD/XLEN` (Streams SSE) et
+> `BLMOVE` (queue bloquante) OK. Schéma **`rediss://`** (TLS) requis.
+> ⚠️ Le secret/`REDIS_URL` complet est fourni hors dépôt (à coller dans les variables Emergent prod
+> + Railway) — **ne pas commiter** dans le repo.
+
 ### 2.B — Railway (workers)
 1. **New Project → Deploy from GitHub repo** (`geirb56/sauvegarde260708`, branche voulue).
 2. Service unique « **garmin-workers** » :
