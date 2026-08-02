@@ -218,9 +218,9 @@ class TestWeeklyReviewWithGoal:
             "event_name": "Marathon de Paris",
             "event_date": "2026-04-05"
         }
-        requests.post(f"{BASE_URL}/api/user/goal?user_id=default", json=goal_data)
+        requests.post(f"{BASE_URL}/api/user/goal", json=goal_data)
         
-        response = requests.get(f"{BASE_URL}/api/coach/digest?user_id=default&language=en")
+        response = requests.get(f"{BASE_URL}/api/coach/digest?language=en")
         assert response.status_code == 200, f"Expected 200, got {response.status_code}"
         
         data = response.json()
@@ -228,7 +228,7 @@ class TestWeeklyReviewWithGoal:
         
     def test_digest_user_goal_has_correct_fields(self):
         """user_goal in digest should have event_name and event_date"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?user_id=default&language=en")
+        response = requests.get(f"{BASE_URL}/api/coach/digest?language=en")
         assert response.status_code == 200
         
         user_goal = response.json().get("user_goal")
@@ -238,7 +238,7 @@ class TestWeeklyReviewWithGoal:
             
     def test_digest_returns_recommendations_followup(self):
         """GET /api/coach/digest should return recommendations_followup field"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?user_id=default&language=en")
+        response = requests.get(f"{BASE_URL}/api/coach/digest?language=en")
         assert response.status_code == 200
         
         data = response.json()
@@ -246,7 +246,7 @@ class TestWeeklyReviewWithGoal:
         
     def test_digest_recommendations_followup_is_string(self):
         """recommendations_followup should be a string (can be empty)"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?user_id=default&language=en")
+        response = requests.get(f"{BASE_URL}/api/coach/digest?language=en")
         assert response.status_code == 200
         
         followup = response.json().get("recommendations_followup")
@@ -254,7 +254,7 @@ class TestWeeklyReviewWithGoal:
         
     def test_digest_french_with_goal(self):
         """French digest should also include user_goal and recommendations_followup"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?user_id=default&language=fr")
+        response = requests.get(f"{BASE_URL}/api/coach/digest?language=fr")
         assert response.status_code == 200
         
         data = response.json()
@@ -263,7 +263,7 @@ class TestWeeklyReviewWithGoal:
         
     def test_digest_still_has_core_fields(self):
         """Digest should still have all core fields (coach_summary, signals, metrics, etc.)"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?user_id=default&language=en")
+        response = requests.get(f"{BASE_URL}/api/coach/digest?language=en")
         assert response.status_code == 200
         
         data = response.json()

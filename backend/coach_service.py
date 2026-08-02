@@ -131,7 +131,7 @@ def _cleanup_cache(cache: dict) -> None:
 async def analyze_workout(
     workout: dict,
     rag_result: dict,
-    user_id: str = "default",
+    user_id: Optional[str] = None,
     language: str = "fr"
 ) -> Tuple[str, bool]:
     """Session analysis with cache + metrics + cascade strategy."""
@@ -193,7 +193,7 @@ async def analyze_workout(
 
 async def weekly_review(
     rag_result: dict,
-    user_id: str = "default",
+    user_id: Optional[str] = None,
     language: str = "fr"
 ) -> Tuple[str, bool]:
     """Weekly review with cache + metrics + cascade strategy."""

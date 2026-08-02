@@ -19,9 +19,9 @@ class TestEnhancedGoalAPI:
     @pytest.fixture(autouse=True)
     def cleanup(self):
         """Clean up goal before and after each test"""
-        requests.delete(f"{BASE_URL}/api/user/goal?user_id=default")
+        requests.delete(f"{BASE_URL}/api/user/goal")
         yield
-        requests.delete(f"{BASE_URL}/api/user/goal?user_id=default")
+        requests.delete(f"{BASE_URL}/api/user/goal")
     
     def test_api_health(self):
         """Test API is accessible"""
@@ -32,7 +32,7 @@ class TestEnhancedGoalAPI:
     # Test distance type options
     def test_create_goal_5k(self):
         """Test creating 5k goal with target time"""
-        response = requests.post(f"{BASE_URL}/api/user/goal?user_id=default", json={
+        response = requests.post(f"{BASE_URL}/api/user/goal", json={
             "event_name": "TEST_5k Race",
             "event_date": "2026-06-15",
             "distance_type": "5k",
@@ -55,7 +55,7 @@ class TestEnhancedGoalAPI:
     
     def test_create_goal_10k(self):
         """Test creating 10k goal with target time"""
-        response = requests.post(f"{BASE_URL}/api/user/goal?user_id=default", json={
+        response = requests.post(f"{BASE_URL}/api/user/goal", json={
             "event_name": "TEST_10k Race",
             "event_date": "2026-07-20",
             "distance_type": "10k",
@@ -71,7 +71,7 @@ class TestEnhancedGoalAPI:
     
     def test_create_goal_semi_marathon(self):
         """Test creating semi-marathon (half marathon) goal"""
-        response = requests.post(f"{BASE_URL}/api/user/goal?user_id=default", json={
+        response = requests.post(f"{BASE_URL}/api/user/goal", json={
             "event_name": "TEST_Half Marathon",
             "event_date": "2026-09-10",
             "distance_type": "semi",
@@ -92,7 +92,7 @@ class TestEnhancedGoalAPI:
     
     def test_create_goal_marathon(self):
         """Test creating marathon goal with target time"""
-        response = requests.post(f"{BASE_URL}/api/user/goal?user_id=default", json={
+        response = requests.post(f"{BASE_URL}/api/user/goal", json={
             "event_name": "TEST_Marathon de Paris",
             "event_date": "2026-04-05",
             "distance_type": "marathon",
@@ -112,7 +112,7 @@ class TestEnhancedGoalAPI:
     
     def test_create_goal_ultra(self):
         """Test creating ultra marathon goal"""
-        response = requests.post(f"{BASE_URL}/api/user/goal?user_id=default", json={
+        response = requests.post(f"{BASE_URL}/api/user/goal", json={
             "event_name": "TEST_Ultra Trail",
             "event_date": "2026-08-15",
             "distance_type": "ultra",
@@ -132,7 +132,7 @@ class TestEnhancedGoalAPI:
     
     def test_goal_without_target_time(self):
         """Test creating goal without target time - pace should be null"""
-        response = requests.post(f"{BASE_URL}/api/user/goal?user_id=default", json={
+        response = requests.post(f"{BASE_URL}/api/user/goal", json={
             "event_name": "TEST_Fun Run",
             "event_date": "2026-05-01",
             "distance_type": "10k",
@@ -148,7 +148,7 @@ class TestEnhancedGoalAPI:
     
     def test_goal_with_zero_target_time(self):
         """Test creating goal with zero target time - pace should be null"""
-        response = requests.post(f"{BASE_URL}/api/user/goal?user_id=default", json={
+        response = requests.post(f"{BASE_URL}/api/user/goal", json={
             "event_name": "TEST_Casual Race",
             "event_date": "2026-05-15",
             "distance_type": "5k"
@@ -164,7 +164,7 @@ class TestEnhancedGoalAPI:
     def test_get_goal_returns_all_fields(self):
         """Test GET goal returns all enhanced fields"""
         # Create goal first
-        requests.post(f"{BASE_URL}/api/user/goal?user_id=default", json={
+        requests.post(f"{BASE_URL}/api/user/goal", json={
             "event_name": "TEST_Complete Goal",
             "event_date": "2026-10-01",
             "distance_type": "marathon",
@@ -172,7 +172,7 @@ class TestEnhancedGoalAPI:
         })
         
         # Get goal
-        response = requests.get(f"{BASE_URL}/api/user/goal?user_id=default")
+        response = requests.get(f"{BASE_URL}/api/user/goal")
         assert response.status_code == 200
         goal = response.json()
         
@@ -198,19 +198,19 @@ class TestEnhancedGoalAPI:
     def test_delete_goal(self):
         """Test deleting goal"""
         # Create goal
-        requests.post(f"{BASE_URL}/api/user/goal?user_id=default", json={
+        requests.post(f"{BASE_URL}/api/user/goal", json={
             "event_name": "TEST_To Delete",
             "event_date": "2026-12-01",
             "distance_type": "5k"
         })
         
         # Delete
-        response = requests.delete(f"{BASE_URL}/api/user/goal?user_id=default")
+        response = requests.delete(f"{BASE_URL}/api/user/goal")
         assert response.status_code == 200
         assert response.json()["deleted"] == True
         
         # Verify deleted
-        get_response = requests.get(f"{BASE_URL}/api/user/goal?user_id=default")
+        get_response = requests.get(f"{BASE_URL}/api/user/goal")
         assert get_response.status_code == 200
         assert get_response.json() is None
 
@@ -221,19 +221,19 @@ class TestGoalInDigest:
     @pytest.fixture(autouse=True)
     def setup_goal(self):
         """Set up a goal for digest tests"""
-        requests.delete(f"{BASE_URL}/api/user/goal?user_id=default")
-        requests.post(f"{BASE_URL}/api/user/goal?user_id=default", json={
+        requests.delete(f"{BASE_URL}/api/user/goal")
+        requests.post(f"{BASE_URL}/api/user/goal", json={
             "event_name": "TEST_Marathon Test",
             "event_date": "2026-06-01",
             "distance_type": "marathon",
             "target_time_minutes": 210  # 3h30 = 210 minutes
         })
         yield
-        requests.delete(f"{BASE_URL}/api/user/goal?user_id=default")
+        requests.delete(f"{BASE_URL}/api/user/goal")
     
     def test_digest_includes_goal_with_pace(self):
         """Test weekly digest includes goal with target_pace"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?user_id=default&language=en")
+        response = requests.get(f"{BASE_URL}/api/coach/digest?language=en")
         assert response.status_code == 200
         data = response.json()
         
@@ -259,13 +259,13 @@ class TestPaceCalculation:
     @pytest.fixture(autouse=True)
     def cleanup(self):
         """Clean up goal before and after each test"""
-        requests.delete(f"{BASE_URL}/api/user/goal?user_id=default")
+        requests.delete(f"{BASE_URL}/api/user/goal")
         yield
-        requests.delete(f"{BASE_URL}/api/user/goal?user_id=default")
+        requests.delete(f"{BASE_URL}/api/user/goal")
     
     def test_pace_5k_in_25min(self):
         """5k in 25 minutes = 5:00/km"""
-        response = requests.post(f"{BASE_URL}/api/user/goal?user_id=default", json={
+        response = requests.post(f"{BASE_URL}/api/user/goal", json={
             "event_name": "TEST_Pace Test 1",
             "event_date": "2026-01-01",
             "distance_type": "5k",
@@ -276,7 +276,7 @@ class TestPaceCalculation:
     
     def test_pace_10k_in_45min(self):
         """10k in 45 minutes = 4:30/km"""
-        response = requests.post(f"{BASE_URL}/api/user/goal?user_id=default", json={
+        response = requests.post(f"{BASE_URL}/api/user/goal", json={
             "event_name": "TEST_Pace Test 2",
             "event_date": "2026-01-01",
             "distance_type": "10k",
@@ -287,7 +287,7 @@ class TestPaceCalculation:
     
     def test_pace_marathon_in_3h45(self):
         """Marathon in 3h45 (225min) = ~5:19/km"""
-        response = requests.post(f"{BASE_URL}/api/user/goal?user_id=default", json={
+        response = requests.post(f"{BASE_URL}/api/user/goal", json={
             "event_name": "TEST_Pace Test 3",
             "event_date": "2026-01-01",
             "distance_type": "marathon",
@@ -301,7 +301,7 @@ class TestPaceCalculation:
     
     def test_pace_semi_in_1h30(self):
         """Semi-marathon in 1h30 (90min) = ~4:16/km"""
-        response = requests.post(f"{BASE_URL}/api/user/goal?user_id=default", json={
+        response = requests.post(f"{BASE_URL}/api/user/goal", json={
             "event_name": "TEST_Pace Test 4",
             "event_date": "2026-01-01",
             "distance_type": "semi",

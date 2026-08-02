@@ -22,7 +22,6 @@ VALID_COLORS = {"green", "yellow", "red"}
 VALID_STATUSES = {"green", "yellow", "red"}
 
 # Use a test-only user ID that will not have a Terra token stored.
-TEST_USER = "test_cardio_coach_user_no_terra"
 
 
 class TestCardioCoachEndpoint:
@@ -30,12 +29,12 @@ class TestCardioCoachEndpoint:
 
     def test_endpoint_returns_200(self):
         """Should always return HTTP 200."""
-        response = requests.get(f"{BASE_URL}/api/cardio-coach?user_id={TEST_USER}")
+        response = requests.get(f"{BASE_URL}/api/cardio-coach")
         assert response.status_code == 200, response.text
 
     def test_response_contains_top_level_fields(self):
         """Response must include all required top-level keys."""
-        response = requests.get(f"{BASE_URL}/api/cardio-coach?user_id={TEST_USER}")
+        response = requests.get(f"{BASE_URL}/api/cardio-coach")
         assert response.status_code == 200
         data = response.json()
         required_keys = {
@@ -54,7 +53,7 @@ class TestCardioCoachEndpoint:
 
     def test_recommendation_is_valid(self):
         """Recommendation must be one of RUN HARD, EASY RUN, REST."""
-        response = requests.get(f"{BASE_URL}/api/cardio-coach?user_id={TEST_USER}")
+        response = requests.get(f"{BASE_URL}/api/cardio-coach")
         assert response.status_code == 200
         data = response.json()
         assert data["recommendation"] in VALID_RECOMMENDATIONS, (
@@ -64,7 +63,7 @@ class TestCardioCoachEndpoint:
 
     def test_recommendation_color_is_valid(self):
         """recommendation_color must be one of green / yellow / red."""
-        response = requests.get(f"{BASE_URL}/api/cardio-coach?user_id={TEST_USER}")
+        response = requests.get(f"{BASE_URL}/api/cardio-coach")
         assert response.status_code == 200
         data = response.json()
         assert data["recommendation_color"] in VALID_COLORS, (
@@ -73,7 +72,7 @@ class TestCardioCoachEndpoint:
 
     def test_metrics_contains_required_fields(self):
         """metrics object must contain all expected computed fields."""
-        response = requests.get(f"{BASE_URL}/api/cardio-coach?user_id={TEST_USER}")
+        response = requests.get(f"{BASE_URL}/api/cardio-coach")
         assert response.status_code == 200
         metrics = response.json()["metrics"]
         required_metric_keys = {
@@ -101,7 +100,7 @@ class TestCardioCoachEndpoint:
 
     def test_metric_status_values_are_valid(self):
         """All *_status fields in metrics must be green, yellow, or red."""
-        response = requests.get(f"{BASE_URL}/api/cardio-coach?user_id={TEST_USER}")
+        response = requests.get(f"{BASE_URL}/api/cardio-coach")
         assert response.status_code == 200
         metrics = response.json()["metrics"]
         status_keys = ["hrv_status", "rhr_status", "sleep_status", "training_load_status", "fatigue_status"]
@@ -113,7 +112,7 @@ class TestCardioCoachEndpoint:
 
     def test_reasons_is_non_empty_list(self):
         """reasons must be a non-empty list of strings."""
-        response = requests.get(f"{BASE_URL}/api/cardio-coach?user_id={TEST_USER}")
+        response = requests.get(f"{BASE_URL}/api/cardio-coach")
         assert response.status_code == 200
         reasons = response.json()["reasons"]
         assert isinstance(reasons, list), "reasons should be a list"
@@ -124,7 +123,7 @@ class TestCardioCoachEndpoint:
 
     def test_history_has_at_most_7_entries(self):
         """history must have at most 7 entries."""
-        response = requests.get(f"{BASE_URL}/api/cardio-coach?user_id={TEST_USER}")
+        response = requests.get(f"{BASE_URL}/api/cardio-coach")
         assert response.status_code == 200
         history = response.json()["history"]
         assert isinstance(history, list), "history should be a list"
@@ -133,7 +132,7 @@ class TestCardioCoachEndpoint:
 
     def test_history_entries_have_required_fields(self):
         """Each history entry must have day, training_load, fatigue_ratio."""
-        response = requests.get(f"{BASE_URL}/api/cardio-coach?user_id={TEST_USER}")
+        response = requests.get(f"{BASE_URL}/api/cardio-coach")
         assert response.status_code == 200
         history = response.json()["history"]
         for entry in history:
@@ -144,7 +143,7 @@ class TestCardioCoachEndpoint:
 
     def test_next_workout_has_label(self):
         """next_workout must contain a non-empty label."""
-        response = requests.get(f"{BASE_URL}/api/cardio-coach?user_id={TEST_USER}")
+        response = requests.get(f"{BASE_URL}/api/cardio-coach")
         assert response.status_code == 200
         nw = response.json()["next_workout"]
         assert isinstance(nw, dict), "next_workout should be a dict"
@@ -153,7 +152,7 @@ class TestCardioCoachEndpoint:
 
     def test_mock_flag_is_present(self):
         """mock field must be a boolean."""
-        response = requests.get(f"{BASE_URL}/api/cardio-coach?user_id={TEST_USER}")
+        response = requests.get(f"{BASE_URL}/api/cardio-coach")
         assert response.status_code == 200
         data = response.json()
         assert isinstance(data["mock"], bool), "mock should be a boolean"
@@ -161,8 +160,3 @@ class TestCardioCoachEndpoint:
         assert data["mock"] is True, "Should return mock=True when no Terra token exists"
         print(f"✓ mock={data['mock']}")
 
-    def test_default_user_id_works(self):
-        """Endpoint should be callable without user_id (defaults to 'default')."""
-        response = requests.get(f"{BASE_URL}/api/cardio-coach")
-        assert response.status_code == 200, response.text
-        print(f"✓ Default user_id works: {response.json()['recommendation']}")

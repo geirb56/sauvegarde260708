@@ -18,7 +18,7 @@ from typing import Dict, Any
 
 # External base URL from frontend/.env
 BASE_URL = "https://charge-load.preview.emergentagent.com/api"
-USER_ID = "default"
+# Identity resolved from JWT token on authenticated endpoints
 
 # Test results tracking
 test_results = []
@@ -44,7 +44,7 @@ def test_1_cardio_coach_real_data():
     print("="*80)
     
     try:
-        url = f"{BASE_URL}/cardio-coach?user_id={USER_ID}"
+        url = f"{BASE_URL}/cardio-coach"
         response = requests.get(url, timeout=30)
         
         print(f"Status Code: {response.status_code}")
@@ -186,14 +186,13 @@ def test_1_cardio_coach_real_data():
 
 
 def test_2_regression_vma_history():
-    """Test 2: Regression - GET /api/training/vma-history with header X-User-Id: default"""
+    """Test 2: Regression - GET /api/training/vma-history (JWT authentication required)"""
     print("\n" + "="*80)
     print("TEST 2: Regression - VMA history endpoint")
     print("="*80)
     
     try:
         url = f"{BASE_URL}/training/vma-history"
-        headers = {"X-User-Id": USER_ID}
         response = requests.get(url, headers=headers, timeout=30)
         
         print(f"Status Code: {response.status_code}")
@@ -220,14 +219,13 @@ def test_2_regression_vma_history():
 
 
 def test_3_regression_race_predictions():
-    """Test 3: Regression - GET /api/training/race-predictions with header X-User-Id: default"""
+    """Test 3: Regression - GET /api/training/race-predictions (JWT authentication required)"""
     print("\n" + "="*80)
     print("TEST 3: Regression - Race predictions endpoint")
     print("="*80)
     
     try:
         url = f"{BASE_URL}/training/race-predictions"
-        headers = {"X-User-Id": USER_ID}
         response = requests.get(url, headers=headers, timeout=30)
         
         print(f"Status Code: {response.status_code}")
@@ -260,7 +258,7 @@ def test_4_regression_workouts():
     print("="*80)
     
     try:
-        url = f"{BASE_URL}/workouts?user_id={USER_ID}"
+        url = f"{BASE_URL}/workouts"
         response = requests.get(url, timeout=30)
         
         print(f"Status Code: {response.status_code}")
@@ -301,7 +299,7 @@ def test_5_garmin_status():
     print("="*80)
     
     try:
-        url = f"{BASE_URL}/garmin/status?user_id={USER_ID}"
+        url = f"{BASE_URL}/garmin/status"
         response = requests.get(url, timeout=30)
         
         print(f"Status Code: {response.status_code}")

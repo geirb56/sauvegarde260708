@@ -212,9 +212,7 @@ test.describe('Training Plan API Integration', () => {
   const BASE_URL = 'https://charge-load.preview.emergentagent.com';
 
   test('API returns VMA and paces in plan response', async ({ request }) => {
-    const response = await request.get(`${BASE_URL}/api/training/plan`, {
-      headers: { 'X-User-Id': 'default' }
-    });
+    const response = await request.get(`${BASE_URL}/api/training/plan`);
     
     expect(response.status()).toBe(200);
     const data = await response.json();
@@ -247,9 +245,7 @@ test.describe('Training Plan API Integration', () => {
   });
 
   test('Sessions contain VMA-derived paces in details', async ({ request }) => {
-    const response = await request.get(`${BASE_URL}/api/training/plan`, {
-      headers: { 'X-User-Id': 'default' }
-    });
+    const response = await request.get(`${BASE_URL}/api/training/plan`);
     
     expect(response.status()).toBe(200);
     const data = await response.json();

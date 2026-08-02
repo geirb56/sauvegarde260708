@@ -20,13 +20,13 @@ class TestWeeklyReviewEndpoint:
     
     def test_digest_endpoint_returns_200(self):
         """Test that /api/coach/digest returns 200 OK"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?user_id=default&language=en", timeout=60)
+        response = requests.get(f"{BASE_URL}/api/coach/digest?language=en", timeout=60)
         assert response.status_code == 200, f"Expected 200, got {response.status_code}"
         print("✓ GET /api/coach/digest returns 200 OK")
     
     def test_response_has_coach_summary(self):
         """Test that response contains coach_summary (CARTE 1)"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?user_id=default&language=en", timeout=60)
+        response = requests.get(f"{BASE_URL}/api/coach/digest?language=en", timeout=60)
         data = response.json()
         assert "coach_summary" in data, "Missing coach_summary field"
         assert isinstance(data["coach_summary"], str), "coach_summary should be a string"
@@ -35,7 +35,7 @@ class TestWeeklyReviewEndpoint:
     
     def test_response_has_signals(self):
         """Test that response contains signals array (CARTE 2)"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?user_id=default&language=en", timeout=60)
+        response = requests.get(f"{BASE_URL}/api/coach/digest?language=en", timeout=60)
         data = response.json()
         assert "signals" in data, "Missing signals field"
         assert isinstance(data["signals"], list), "signals should be a list"
@@ -50,7 +50,7 @@ class TestWeeklyReviewEndpoint:
     
     def test_signals_have_correct_structure(self):
         """Test that each signal has key, status, and value fields"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?user_id=default&language=en", timeout=60)
+        response = requests.get(f"{BASE_URL}/api/coach/digest?language=en", timeout=60)
         data = response.json()
         
         for signal in data["signals"]:
@@ -70,7 +70,7 @@ class TestWeeklyReviewEndpoint:
     
     def test_response_has_metrics(self):
         """Test that response contains metrics (CARTE 3)"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?user_id=default&language=en", timeout=60)
+        response = requests.get(f"{BASE_URL}/api/coach/digest?language=en", timeout=60)
         data = response.json()
         assert "metrics" in data, "Missing metrics field"
         
@@ -87,7 +87,7 @@ class TestWeeklyReviewEndpoint:
     
     def test_response_has_comparison(self):
         """Test that response contains comparison vs last week"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?user_id=default&language=en", timeout=60)
+        response = requests.get(f"{BASE_URL}/api/coach/digest?language=en", timeout=60)
         data = response.json()
         assert "comparison" in data, "Missing comparison field"
         
@@ -101,7 +101,7 @@ class TestWeeklyReviewEndpoint:
     
     def test_response_has_coach_reading(self):
         """Test that response contains coach_reading (CARTE 4)"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?user_id=default&language=en", timeout=60)
+        response = requests.get(f"{BASE_URL}/api/coach/digest?language=en", timeout=60)
         data = response.json()
         assert "coach_reading" in data, "Missing coach_reading field"
         assert isinstance(data["coach_reading"], str), "coach_reading should be a string"
@@ -110,7 +110,7 @@ class TestWeeklyReviewEndpoint:
     
     def test_response_has_recommendations(self):
         """Test that response contains recommendations (CARTE 5)"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?user_id=default&language=en", timeout=60)
+        response = requests.get(f"{BASE_URL}/api/coach/digest?language=en", timeout=60)
         data = response.json()
         assert "recommendations" in data, "Missing recommendations field"
         assert isinstance(data["recommendations"], list), "recommendations should be a list"
@@ -122,7 +122,7 @@ class TestWeeklyReviewEndpoint:
     
     def test_response_has_period_dates(self):
         """Test that response contains period_start and period_end"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?user_id=default&language=en", timeout=60)
+        response = requests.get(f"{BASE_URL}/api/coach/digest?language=en", timeout=60)
         data = response.json()
         assert "period_start" in data, "Missing period_start field"
         assert "period_end" in data, "Missing period_end field"
@@ -140,13 +140,13 @@ class TestWeeklyReviewFrench:
     
     def test_french_digest_returns_200(self):
         """Test that French digest returns 200 OK"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?user_id=default&language=fr", timeout=60)
+        response = requests.get(f"{BASE_URL}/api/coach/digest?language=fr", timeout=60)
         assert response.status_code == 200, f"Expected 200, got {response.status_code}"
         print("✓ GET /api/coach/digest?language=fr returns 200 OK")
     
     def test_french_coach_summary_is_french(self):
         """Test that French coach_summary is in French"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?user_id=default&language=fr", timeout=60)
+        response = requests.get(f"{BASE_URL}/api/coach/digest?language=fr", timeout=60)
         data = response.json()
         
         # Check for French words/patterns
@@ -165,7 +165,7 @@ class TestWeeklyReviewFrench:
     
     def test_french_response_has_same_structure(self):
         """Test that French response has same structure as English"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?user_id=default&language=fr", timeout=60)
+        response = requests.get(f"{BASE_URL}/api/coach/digest?language=fr", timeout=60)
         data = response.json()
         
         required_fields = ["period_start", "period_end", "coach_summary", "coach_reading", 
@@ -182,7 +182,7 @@ class TestWeeklyReviewContentQuality:
     
     def test_coach_summary_is_one_sentence(self):
         """Test that coach_summary is approximately one sentence"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?user_id=default&language=en", timeout=60)
+        response = requests.get(f"{BASE_URL}/api/coach/digest?language=en", timeout=60)
         data = response.json()
         
         coach_summary = data.get("coach_summary", "")
@@ -195,7 +195,7 @@ class TestWeeklyReviewContentQuality:
     
     def test_coach_reading_is_2_3_sentences(self):
         """Test that coach_reading is 2-3 sentences"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?user_id=default&language=en", timeout=60)
+        response = requests.get(f"{BASE_URL}/api/coach/digest?language=en", timeout=60)
         data = response.json()
         
         coach_reading = data.get("coach_reading", "")
@@ -208,7 +208,7 @@ class TestWeeklyReviewContentQuality:
     
     def test_recommendations_are_action_oriented(self):
         """Test that recommendations are action-oriented"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?user_id=default&language=en", timeout=60)
+        response = requests.get(f"{BASE_URL}/api/coach/digest?language=en", timeout=60)
         data = response.json()
         
         recommendations = data.get("recommendations", [])
@@ -226,7 +226,7 @@ class TestWeeklyReviewContentQuality:
     
     def test_no_markdown_in_content(self):
         """Test that content has no markdown formatting"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?user_id=default&language=en", timeout=60)
+        response = requests.get(f"{BASE_URL}/api/coach/digest?language=en", timeout=60)
         data = response.json()
         
         content_fields = ["coach_summary", "coach_reading"]
@@ -246,7 +246,7 @@ class TestWeeklyReviewLatestEndpoint:
     
     def test_latest_digest_returns_200_or_null(self):
         """Test that /api/coach/digest/latest returns 200"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest/latest?user_id=default", timeout=30)
+        response = requests.get(f"{BASE_URL}/api/coach/digest/latest", timeout=30)
         assert response.status_code == 200, f"Expected 200, got {response.status_code}"
         print("✓ GET /api/coach/digest/latest returns 200 OK")
 
