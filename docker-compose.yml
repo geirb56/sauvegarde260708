@@ -1,36 +1,98 @@
 version: "3.8"
+
 services:
   api:
-    build: ./api
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
     env_file: .env
     ports:
       - "8000:8000"
     depends_on:
-      - redis
-      - postgres
-    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --proxy-headers
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: uvicorn server:app --host 0.0.0.0 --port 8000 --proxy-headers
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
 
-  worker:
-    build: ./worker
+  sync-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
     env_file: .env
     depends_on:
-      - redis
-      - postgres
-    command: celery -A tasks.sync_tasks worker --loglevel=info -Q SYNC_USER,FETCH_NEW_ACTIVITIES,PROCESS_ACTIVITY,COMPUTE_METRICS
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: python -m workers.sync_worker
+    restart: unless-stopped
+
+  scheduler-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file: .env
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: python -m workers.scheduler_worker
+    restart: unless-stopped
+
+  event-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file: .env
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: python -m workers.event_worker
+    restart: unless-stopped
 
   redis:
-    image: redis:7
+    image: redis:7-alpine
     ports:
       - "6379:6379"
-
-  postgres:
-    image: postgres:15
-    environment:
-      POSTGRES_DB: cardiodb
-      POSTGRES_USER: cardio
-      POSTGRES_PASSWORD: secret
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  mongo:
+    image: mongo:7
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME:-runindex}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD:?MONGO_INITDB_ROOT_PASSWORD is required}
+      MONGO_INITDB_DATABASE: ${DB_NAME:-runindex}
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodata:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
 
 volumes:
-  pgdata:
+  mongodata:
+  redisdata:
+
