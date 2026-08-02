@@ -3,6 +3,13 @@
 ## Problem Statement
 Pull https://github.com/geirb56/sauvegarde260629 and set it up so it runs. Replace /app contents.
 
+## Changelog — gccli session sharing via MongoDB (August 2, 2026)
+- New backend/garmin/session_store.py: save/restore/ensure/delete per-user gccli session, encrypted (Fernet; key = GCCLI_SESSION_KEY or derived from JWT_SECRET_KEY). Collection garmin_sessions, keyed by user_id (strict isolation).
+- garmin/service.py hooks: save_session after /connect; ensure_session before sync/incremental_sync (graceful "session_unavailable" if missing); re-save after successful sync/deep_sync/incremental; delete_session on disconnect.
+- Enables workers on a separate host (Railway) to hydrate the gccli session created by the Emergent backend. Worker must share the same encryption key (GCCLI_SESSION_KEY or JWT_SECRET_KEY).
+- Tests: test_garmin_session_store.py (5) + adapted deep_sync dispatch tests. Auth/Paddle/Stripe untouched. Nothing deployed.
+
+
 ## Changelog — Paddle sandbox configured & validated (August 2, 2026)
 - Configured all 5 Paddle env vars in backend/.env (sandbox): PADDLE_API_KEY, PADDLE_CLIENT_TOKEN, PADDLE_PRICE_ID (pri_01kz18h08y4yq9pyh05axvaczj = RunIndex PREMIUM 4,99€/mo), PADDLE_WEBHOOK_SECRET (notif dest "PREMIUM", 4 events), PADDLE_ENVIRONMENT=sandbox.
 - Paddle default payment link / domain approved in dashboard.

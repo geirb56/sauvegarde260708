@@ -14,6 +14,7 @@ from typing import Optional
 
 from .factory import get_provider_for_user, active_provider_name
 from .providers.base import STATUS_CONNECTED, STATUS_MFA_REQUIRED
+from . import session_store
 from events.stream import emit_activity_created
 from subscription_manager import activate_garmin_trial
 
@@ -62,6 +63,10 @@ async def connect(db, user_id: str, garmin_username: Optional[str] = None,
             {"$set": update_doc},
             upsert=True,
         )
+
+        # Persist the freshly-created gccli session so out-of-process workers
+        # (possibly on another host) can hydrate it before syncing.
+        await session_store.save_session(db, user_id)
 
         # Trial identity must come from server-side gccli auth status, never from
         # frontend-provided username/email.
@@ -232,6 +237,8 @@ async def deep_sync(db, user_id: str) -> dict:
         logger.warning("[Garmin] deep sync daily metrics skipped user=%s: %s", user_id, exc)
 
     await _finalize_connection(db, user_id, ingest["newest_start"])
+    # Persist any token refresh performed by gccli during the deep sync.
+    await session_store.save_session(db, user_id)
     logger.info(
         "[Garmin] deep sync completed synced=%d new=%d metrics=%d user=%s",
         ingest["synced"], ingest["new"], metrics_count, user_id,
@@ -261,6 +268,13 @@ async def sync(db, user_id: str, since: Optional[str] = None) -> dict:
     conn = await db.garmin_connections.find_one({"user_id": user_id}, {"_id": 0})
     if not conn or not conn.get("connected"):
         return {"success": False, "synced_count": 0, "metrics_count": 0, "message": "Garmin not connected"}
+
+    # Hydrate the gccli session from Mongo when running out-of-process (worker on
+    # another host). If no usable session exists, degrade gracefully.
+    if not await session_store.ensure_session(db, user_id):
+        logger.warning("[Garmin] no gccli session available for user=%s — reconnect required", user_id)
+        return {"success": False, "synced_count": 0, "metrics_count": 0,
+                "message": "Garmin session unavailable, please reconnect", "error": "session_unavailable"}
 
     # First-connection deep sync: enabled by default, triggered once per user.
     deep_sync_enabled = os.environ.get("GARMIN_DEEP_SYNC_ENABLED", "true").lower() not in (
@@ -300,6 +314,8 @@ async def sync(db, user_id: str, since: Optional[str] = None) -> dict:
         logger.warning("[Garmin] daily metrics sync skipped user=%s: %s", user_id, exc)
 
     await _finalize_connection(db, user_id, ingest["newest_start"])
+    # Persist any token refresh performed by gccli during this sync.
+    await session_store.save_session(db, user_id)
     logger.info("[Garmin] synced %d activities (%d new), %d daily metrics user=%s",
                 ingest["synced"], ingest["new"], metrics_count, user_id)
     return {
@@ -322,6 +338,11 @@ async def incremental_sync(db, user_id: str) -> dict:
     if not conn or not conn.get("connected"):
         return {"success": False, "synced_count": 0, "new_count": 0, "message": "Garmin not connected"}
 
+    if not await session_store.ensure_session(db, user_id):
+        logger.warning("[Garmin] no gccli session available for user=%s — reconnect required", user_id)
+        return {"success": False, "synced_count": 0, "new_count": 0,
+                "message": "Garmin session unavailable, please reconnect", "error": "session_unavailable"}
+
     last = await db.garmin_activities.find_one(
         {"user_id": user_id}, {"_id": 0, "start_time": 1}, sort=[("start_time", -1)]
     )
@@ -337,6 +358,7 @@ async def incremental_sync(db, user_id: str) -> dict:
 
     ingest = await _ingest_activities(db, user_id, activities)
     await _finalize_connection(db, user_id, ingest["newest_start"])
+    await session_store.save_session(db, user_id)
     logger.info("[Garmin] incremental synced=%d new=%d user=%s since=%s",
                 ingest["synced"], ingest["new"], user_id, since)
     return {
@@ -371,6 +393,8 @@ async def disconnect(db, user_id: str) -> dict:
     await db.garmin_daily_metrics.delete_many({"user_id": user_id})
     # Remove mirrored Garmin workouts only (keep manual/other-source workouts)
     await db.workouts.delete_many({"user_id": user_id, "data_source": "garmin"})
+    # Remove the stored gccli session (isolation + no stale token reuse).
+    await session_store.delete_session(db, user_id)
     logger.info("[Garmin] disconnected user=%s", user_id)
     return {"success": True, "message": "Garmin disconnected"}
 

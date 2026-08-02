@@ -359,6 +359,8 @@ class TestSyncDispatch:
 
         with (
             patch.dict("os.environ", {"GARMIN_DEEP_SYNC_ENABLED": "true"}),
+            patch.object(svc.session_store, "ensure_session", new=AsyncMock(return_value=True)),
+            patch.object(svc.session_store, "save_session", new=AsyncMock(return_value=True)),
             patch.object(svc, "deep_sync", new=AsyncMock(
                 return_value={"success": True, "synced_count": 100, "new_count": 100,
                               "metrics_count": 0, "message": "ok", "deep_sync": True}
@@ -380,6 +382,8 @@ class TestSyncDispatch:
 
         with (
             patch.dict("os.environ", {"GARMIN_DEEP_SYNC_ENABLED": "true"}),
+            patch.object(svc.session_store, "ensure_session", new=AsyncMock(return_value=True)),
+            patch.object(svc.session_store, "save_session", new=AsyncMock(return_value=True)),
             patch.object(svc, "get_provider_for_user", return_value=mock_provider),
             patch.object(svc, "deep_sync", new=AsyncMock()) as mock_deep,
             patch.object(svc, "emit_activity_created", new=AsyncMock()),
@@ -400,6 +404,8 @@ class TestSyncDispatch:
 
         with (
             patch.dict("os.environ", {"GARMIN_DEEP_SYNC_ENABLED": "false"}),
+            patch.object(svc.session_store, "ensure_session", new=AsyncMock(return_value=True)),
+            patch.object(svc.session_store, "save_session", new=AsyncMock(return_value=True)),
             patch.object(svc, "get_provider_for_user", return_value=mock_provider),
             patch.object(svc, "deep_sync", new=AsyncMock()) as mock_deep,
             patch.object(svc, "emit_activity_created", new=AsyncMock()),
@@ -419,6 +425,8 @@ class TestSyncDispatch:
         from garmin import service as svc
 
         with (
+            patch.object(svc.session_store, "ensure_session", new=AsyncMock(return_value=True)),
+            patch.object(svc.session_store, "save_session", new=AsyncMock(return_value=True)),
             patch.object(svc, "get_provider_for_user", return_value=mock_provider),
             patch.object(svc, "deep_sync", new=AsyncMock()) as mock_deep,
             patch.object(svc, "emit_activity_created", new=AsyncMock()),

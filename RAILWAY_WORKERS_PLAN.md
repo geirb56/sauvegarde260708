@@ -28,26 +28,32 @@ Sans le résoudre, la synchro Garmin ne fonctionnera pas en prod. Solutions en �
 
 ## 1. Changements de code nécessaires
 
-### 1.A — CRITIQUE : partager la session gccli backend ↔ worker (à implémenter)
+### 1.A — CRITIQUE : partager la session gccli backend ↔ worker  ✅ IMPLÉMENTÉ
 Cause : `/api/garmin/connect` (backend Emergent) fait le login gccli et persiste un **token
 OAuth** dans `GCCLI_HOME/{user_id}/` (disque local). `sync_worker` (Railway) appelle
 `get_provider_for_user(user_id)` qui lit ce même dossier — **absent** sur Railway.
 
-Solution recommandée (minimale, sans OAuth officiel, sans toucher Auth/Paddle) :
-**persister la session gccli dans MongoDB et l'hydrater côté worker.**
+Solution implémentée (sans OAuth officiel, sans toucher Auth/Paddle/Stripe) :
+**session gccli persistée dans MongoDB (chiffrée) et hydratée côté worker.**
 
-1. Après un login réussi dans `garmin/service.connect(...)` : sérialiser le contenu de
-   `GCCLI_HOME/{user_id}/` (fichiers keyring/token — petits) → stocker en base
-   (`garmin_sessions` : `{user_id, files: {relpath: base64}, updated_at}`), chiffré au repos.
-2. Dans `garmin/factory.get_provider_for_user(user_id)` **côté worker** (ou au début de
-   `service.sync`) : si `GCCLI_HOME/{user_id}/` est vide, **hydrater** depuis `garmin_sessions`
-   avant d'appeler gccli. Après un refresh de token par gccli, ré-écrire la session en base.
-3. Alternative si un **Volume partagé** est acceptable : monter un stockage réseau commun — non
-   applicable entre Emergent et Railway (FS séparés) → la voie DB est la bonne.
+- Nouveau module **`garmin/session_store.py`** :
+  - `save_session(db, user_id)` : sérialise `GCCLI_HOME/{user_id}/`, **chiffre (Fernet)** et
+    upsert dans `garmin_sessions` (clé `user_id`).
+  - `restore_session(db, user_id)` : déchiffre et réécrit les fichiers sur le disque local.
+  - `ensure_session(db, user_id)` : si présent localement → OK ; sinon restore depuis Mongo ;
+    False si aucune session (missing/expired).
+  - `delete_session(db, user_id)` : purge au disconnect.
+  - Chiffrement : `GCCLI_SESSION_KEY` si défini, sinon dérivé de `JWT_SECRET_KEY`
+    (les tokens ne sont **jamais** en clair).
+- **`garmin/service.py`** (hooks, sans autre changement) :
+  - après `/connect` réussi → `save_session` ;
+  - au début de `sync` / `incremental_sync` → `ensure_session` (sinon retour gracieux
+    `error: "session_unavailable"`, « please reconnect ») ;
+  - après `sync` / `deep_sync` / `incremental_sync` réussis → `save_session` (persiste le refresh) ;
+  - au `disconnect` → `delete_session`.
 
-> Impact : ~1 helper `garmin/session_store.py` + 2 points d'appel (connect / avant sync).
-> Aucune modification d'Auth/Paddle/Stripe. À faire avant que la synchro prod fonctionne.
-> ⚠️ Non implémenté ici (ce livrable est un plan) — à valider avec vous avant écriture.
+⚠️ **Clé de chiffrement partagée** : le worker Railway doit avoir la **même** `GCCLI_SESSION_KEY`
+(ou le même `JWT_SECRET_KEY`) que le backend, sinon il ne peut pas déchiffrer les sessions.
 
 ### 1.B — Runner unique pour Railway (déjà ajouté, additif, non déployé)
 - **`backend/workers/run_all.py`** (créé) : lance `sync/event/scheduler/monitor` `main()` en
