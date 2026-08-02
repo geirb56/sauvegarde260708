@@ -32,8 +32,7 @@ import { getAuthErrorMessage } from "@/lib/authErrors";
 const GOOGLE_CLIENT_ID = process.env.REACT_APP_GOOGLE_CLIENT_ID || "";
 const APPLE_CLIENT_ID = process.env.REACT_APP_APPLE_CLIENT_ID || "";
 const APPLE_REDIRECT_URI =
-  process.env.REACT_APP_APPLE_REDIRECT_URI ||
-  (typeof window !== "undefined" ? window.location.origin : "");
+  typeof window !== "undefined" ? window.location.origin : "";
 
 async function fetchOAuthChallenge(provider) {
   const res = await axios.post(`${API_BASE_URL}/auth/oauth/challenge/${provider}`);
