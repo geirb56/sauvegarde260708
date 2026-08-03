@@ -66,7 +66,11 @@ def _sum_load(workouts: Sequence[dict], days: int, reference_date=None) -> float
 def compute_acwr(workouts: Sequence[dict], reference_date=None) -> float:
     """Compute the Acute:Chronic Workload Ratio.
 
-    ACWR = load_last_7_days / load_last_28_days
+    ACWR = load_last_7_days / (load_last_28_days / 4)
+
+    The chronic load is divided by 4 so that acute (7d) and chronic
+    (weekly average over 28d) are on the same weekly scale. This is the
+    canonical formulation and matches ``training_engine.compute_acwr``.
 
     Returns 1.0 when chronic load is zero (no historic data).
     """
@@ -75,7 +79,7 @@ def compute_acwr(workouts: Sequence[dict], reference_date=None) -> float:
 
     if load_28 == 0:
         return 1.0
-    return round(load_7 / load_28, 3)
+    return round(load_7 / (load_28 / 4), 3)
 
 
 def compute_training_load_score(acwr: float) -> float:
