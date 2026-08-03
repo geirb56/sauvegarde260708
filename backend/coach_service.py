@@ -31,6 +31,7 @@ from training_engine import (
     VOLUME_GOAL_CONFIG,
     compute_current_weekly_km,
     compute_cycle_dates,
+    compute_resume_guard,
     compute_target_km,
     compute_week_number,
     determine_phase,
@@ -576,7 +577,7 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
 
     week = cycle_dates["current_week"] if cycle_status == "active" else adjusted_weeks
     phase = determine_phase(week, adjusted_weeks)
-    target_km_debug = compute_target_km(weekly_km, goal, phase)
+    target_km_debug = compute_target_km(weekly_km, goal, phase, km_7=km_7_running)
 
     # 8. Calculate ACWR and TSB
     chronic_avg = km_28 / 4 if km_28 > 0 else 1
@@ -687,6 +688,7 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
             "km_7": round(km_7_running, 1),
             "km_28": round(km_28_running, 1),
             "current_weekly_km": round(weekly_km, 1),
+            **compute_resume_guard(weekly_km, km_7_running),
             "target_km": target_km_debug,
             "phase": phase,
         },

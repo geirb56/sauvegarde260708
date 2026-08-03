@@ -66,6 +66,7 @@ from training_engine import (
     GOAL_CONFIG,
     compute_current_weekly_km,
     compute_cycle_dates,
+    compute_resume_guard,
     compute_target_km,
     vma_pace,
     vma_pace_range,
@@ -4474,7 +4475,7 @@ async def get_week_plan(user: dict = Depends(auth_user)):
         # Fallback: plan générique basé sur la phase
         plan = _generate_fallback_week_plan(context, phase, target_load, goal["goal_type"])
     
-    target_km_debug = compute_target_km(context.get("weekly_km", DEFAULT_WEEKLY_KM), goal["goal_type"], phase)
+    target_km_debug = compute_target_km(context.get("weekly_km", DEFAULT_WEEKLY_KM), goal["goal_type"], phase, km_7=km_7_running)
 
     return {
         "goal": {
@@ -4490,6 +4491,7 @@ async def get_week_plan(user: dict = Depends(auth_user)):
             "km_7": round(km_7_running, 1),
             "km_28": round(km_28_running, 1),
             "current_weekly_km": round(context.get("weekly_km", DEFAULT_WEEKLY_KM), 1),
+            **compute_resume_guard(context.get("weekly_km", DEFAULT_WEEKLY_KM), km_7_running),
             "target_km": target_km_debug,
             "phase": phase,
         },

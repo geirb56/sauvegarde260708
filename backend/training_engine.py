@@ -135,7 +135,36 @@ VOLUME_GOAL_CONFIG = {
 PHASE_VOLUME_MULTIPLIERS = {"build": 1.0, "deload": 0.7, "intensification": 1.05, "taper": 0.5, "race": 0.3}
 
 
-def compute_target_km(current_weekly_km: float, goal: str, phase: str) -> int:
+def compute_resume_guard(current_weekly_km: float, km_7: Optional[float]) -> dict:
+    """PR75 — Resume guard: detects a return-to-training situation and limits
+    weekly progression to +5% instead of the normal +10%.
+
+    A resumption is detected when the last 7-day running volume (km_7) is
+    strictly less than 50% of current_weekly_km.  When km_7 is None (absent
+    or unknown) the guard is NOT triggered — absence of evidence ≠ evidence
+    of resumption.
+
+    Returns a dict with:
+        resume_detected     bool    True when km_7 < 0.5 * current_weekly_km
+        max_progression     float   0.05 (resumption) or 0.10 (normal)
+        resume_threshold_km float | None   0.5 * current_weekly_km threshold
+    """
+    if km_7 is None or current_weekly_km <= 0:
+        return {
+            "resume_detected": False,
+            "max_progression": 0.10,
+            "resume_threshold_km": None,
+        }
+    threshold = 0.5 * current_weekly_km
+    detected = km_7 < threshold
+    return {
+        "resume_detected": detected,
+        "max_progression": 0.05 if detected else 0.10,
+        "resume_threshold_km": round(threshold, 2),
+    }
+
+
+def compute_target_km(current_weekly_km: float, goal: str, phase: str, km_7: Optional[float] = None) -> int:
     """Single source of truth for weekly target volume (km).
 
     Progression rule (PR2): the plan MUST NOT jump straight to ``config["min"]``
@@ -144,15 +173,23 @@ def compute_target_km(current_weekly_km: float, goal: str, phase: str) -> int:
     +10% of the current volume, BEFORE applying the phase multiplier. The
     result is still bounded by ``config["max"]``.
 
+    PR75 — Resume guard: when ``km_7`` (running km over the last 7 days) is
+    provided and is strictly less than 50% of ``current_weekly_km``, a
+    return-to-training situation is detected and progression is capped at +5%
+    instead of +10%.  When ``km_7`` is ``None`` the guard is not triggered
+    and normal PR2 behaviour is preserved.
+
     current_weekly_km: athlete's recent average weekly volume (km_28 / 4)
     goal: 5K / 10K / SEMI / MARATHON / ULTRA
     phase: build / deload / intensification / taper / race
+    km_7: total running km over the last 7 days (optional)
     """
     config = VOLUME_GOAL_CONFIG.get(goal, VOLUME_GOAL_CONFIG["SEMI"])
     current = max(0.0, float(current_weekly_km or 0))
-    # Cap progression to +10% of the athlete's current volume (never enforce
-    # config["min"] brutally); still bounded above by config["max"].
-    base = min(config["max"], current * 1.10)
+    guard = compute_resume_guard(current, km_7)
+    # Cap progression to the guard-determined maximum (+10% normal, +5% resumption)
+    # of the athlete's current volume; still bounded above by config["max"].
+    base = min(config["max"], current * (1.0 + guard["max_progression"]))
     return round(base * PHASE_VOLUME_MULTIPLIERS.get(phase, 1.0))
 
 
@@ -807,6 +844,7 @@ __all__ = [
     "GOAL_CONFIG",
     "VOLUME_GOAL_CONFIG",
     "PHASE_VOLUME_MULTIPLIERS",
+    "compute_resume_guard",
     "compute_target_km",
     "compute_long_run_km",
     "vma_pace",
