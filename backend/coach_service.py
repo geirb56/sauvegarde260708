@@ -437,11 +437,6 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
             avg_speed = 60 / avg_pace
             estimated_vma = avg_speed / 0.70
             vma_method = "average"
-        
-        # Sanity check
-        if estimated_vma * 3.5 > 70:
-            estimated_vma = 14.0  # Realistic default value
-            vma_method = "default"
     else:
         estimated_vma = 12.0  # Default VMA
         vma_method = "default"
@@ -496,7 +491,7 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
     if readiness_score >= 90:
         # Very ready → short preparation (-25%)
         adjusted_weeks = max(4, int(base_weeks * 0.75))
-        prep_status = "advanced"
+        prep_status = "avancé"
     elif readiness_score >= 70:
         # Ready → normal preparation
         adjusted_weeks = base_weeks
@@ -504,11 +499,11 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
     elif readiness_score >= 50:
         # Need to progress → long preparation (+25%)
         adjusted_weeks = int(base_weeks * 1.25)
-        prep_status = "progressive"
+        prep_status = "progressif"
     else:
         # Beginner → very long preparation (+50%)
         adjusted_weeks = int(base_weeks * 1.5)
-        prep_status = "beginner"
+        prep_status = "débutant"
 
     # Cap to time available before the race (never exceed event_date).
     # event_date comes from user_goals (single source of truth).

@@ -279,8 +279,9 @@ async def generate_cycle_week(
     # Target weekly volume — single source of truth shared with cycle overview
     target_km = compute_target_km(current_weekly_km, goal, phase)
 
-    # Long run distance, capped so it never exceeds the weekly target
-    target_long_run = min(compute_long_run_km(target_km, goal), max(0, round(target_km * 0.5)))
+    # Long run distance — compute_long_run_km in training_engine is the single
+    # source of truth. Do not re-cap here.
+    target_long_run = compute_long_run_km(target_km, goal)
 
     # Use personalized paces or defaults
     paces = personalized_paces or context.get('paces', {})
