@@ -4489,6 +4489,11 @@ async def get_week_plan(user: dict = Depends(auth_user)):
     if plan_weekly_km > target_km_protected:
         plan = _generate_fallback_week_plan(context, phase, target_load, goal["goal_type"])
 
+    # Hard clamp: absolute safety net — guarantee weekly_km ≤ target_km_protected
+    # regardless of which generation/fallback path was taken (e.g. float rounding).
+    if isinstance(plan, dict):
+        plan["weekly_km"] = min(plan.get("weekly_km", 0), float(target_km_protected))
+
     return {
         "goal": {
             "type": goal["goal_type"],

@@ -672,6 +672,11 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
         )
         week_plan = _deterministic_plan(context, phase, target_load, goal, sessions_per_week, personalized_paces)
 
+    # Hard clamp: absolute safety net — guarantee weekly_km ≤ target_km_protected
+    # regardless of which generation/fallback path was taken (e.g. float rounding).
+    if isinstance(week_plan, dict):
+        week_plan["weekly_km"] = min(week_plan.get("weekly_km", 0), float(target_km_protected))
+
     # 13. Build result
     result = {
         "week": week,

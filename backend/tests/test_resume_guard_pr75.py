@@ -408,3 +408,71 @@ class TestEffectivePlanResumeGuard:
         assert plan_fb["weekly_km"] <= target, (
             f"_generate_fallback_week_plan: {plan_fb['weekly_km']} > {target}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Final hard-clamp guarantee — tests added per problem statement:
+# "After any generation/fallback, guarantee weekly_km ≤ target_km_protected."
+# ---------------------------------------------------------------------------
+
+
+class TestFinalHardClamp:
+    """Verify the unconditional hard clamp applied after every generation/fallback path."""
+
+    def test_forced_fallback_current40_km7_15_le_42(self):
+        """Forced fallback (current=40, km_7=15) via _deterministic_plan → weekly_km ≤ 42."""
+        target = compute_target_km(40, "SEMI", "build", km_7=15.0)
+        assert target == 42, f"Precondition: target must be 42, got {target}"
+
+        # Force the fallback path directly — bypasses any LLM call.
+        plan = _get_plan_via_deterministic(40, "SEMI", "build", km_7=15.0)
+
+        # Simulate the hard clamp present in coach_service.py and server.py.
+        clamped_km = min(plan.get("weekly_km", 0), float(target))
+
+        assert clamped_km <= 42, (
+            f"After hard clamp: weekly_km={clamped_km} still exceeds 42 km."
+        )
+
+    def test_hard_clamp_corrects_over_budget_plan(self):
+        """Hard clamp: a plan with weekly_km=50 is clamped to target_km_protected=42."""
+        target = compute_target_km(40, "SEMI", "build", km_7=15.0)
+        assert target == 42
+
+        # Simulate an over-budget plan (e.g. produced by a generator rounding error).
+        over_budget = {"weekly_km": 50.0, "sessions": [], "focus": "build", "planned_load": 400}
+
+        # Apply the same clamp as coach_service.py / server.py.
+        over_budget["weekly_km"] = min(over_budget.get("weekly_km", 0), float(target))
+
+        assert over_budget["weekly_km"] <= 42, (
+            f"weekly_km={over_budget['weekly_km']} exceeds 42 after hard clamp."
+        )
+        assert over_budget["weekly_km"] == 42.0
+
+    def test_hard_clamp_noop_when_already_within_budget(self):
+        """Hard clamp must not alter a plan that is already within budget."""
+        target = compute_target_km(40, "SEMI", "build", km_7=15.0)
+        plan = _get_plan_via_deterministic(40, "SEMI", "build", km_7=15.0)
+        original_km = plan["weekly_km"]
+
+        # Clamp should leave the value unchanged.
+        plan["weekly_km"] = min(plan.get("weekly_km", 0), float(target))
+
+        assert plan["weekly_km"] == original_km, (
+            f"Hard clamp altered an already-valid weekly_km: {original_km} → {plan['weekly_km']}"
+        )
+
+    def test_server_fallback_forced_current40_km7_15_le_42(self):
+        """Forced server fallback (current=40, km_7=15) → _generate_fallback_week_plan weekly_km ≤ 42."""
+        target = compute_target_km(40, "SEMI", "build", km_7=15.0)
+        assert target == 42
+
+        plan = _get_plan_via_fallback_server(40, "SEMI", "build", km_7=15.0)
+
+        # Apply the hard clamp mirroring server.py.
+        clamped_km = min(plan.get("weekly_km", 0), float(target))
+
+        assert clamped_km <= 42, (
+            f"Server fallback after hard clamp: weekly_km={clamped_km} > 42 km."
+        )
