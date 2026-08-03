@@ -67,6 +67,7 @@ from training_engine import (
     compute_current_weekly_km,
     compute_cycle_dates,
     compute_target_km,
+    apply_resume_guard,
     vma_pace,
     vma_pace_range,
     adapt_session_to_readiness,
@@ -4334,6 +4335,11 @@ async def get_full_training_cycle(
     km_28 = sum(normalized_distance_km(w) for w in workouts_28 if is_running(w))
     base_weekly_km = compute_current_weekly_km(workouts_28)
 
+    # PR76 resume guard: also look at last 7 days to detect resuming athletes
+    seven_days_ago = today - timedelta(days=7)
+    workouts_7 = [w for w in workouts_28 if (w.get("date") or "") >= seven_days_ago.isoformat()]
+    km_7 = sum(normalized_distance_km(w) for w in workouts_7 if is_running(w))
+
     # Generate overview of all weeks
     weeks_overview = []
     
@@ -4341,8 +4347,10 @@ async def get_full_training_cycle(
         phase = determine_phase(week_num, total_weeks)
         phase_info = get_phase_description(phase, lang)
         
-        # Target volume — SAME engine as the detailed week plan so cards match sessions
+        # Target volume — SAME engine as the detailed week plan so cards match sessions.
+        # PR76 resume guard caps the target when the athlete is resuming.
         target_km = compute_target_km(base_weekly_km, goal, phase)
+        target_km = apply_resume_guard(target_km, km_7, base_weekly_km)
         
         # Session type keys (frontend translates via i18n trainingPlan.sessionType.*)
         if phase == "build":
@@ -4373,6 +4381,7 @@ async def get_full_training_cycle(
     
     current_phase = determine_phase(current_week, total_weeks)
     current_target_km = compute_target_km(base_weekly_km, goal, current_phase)
+    current_target_km = apply_resume_guard(current_target_km, km_7, base_weekly_km)
 
     return {
         "goal": goal,
@@ -4387,7 +4396,7 @@ async def get_full_training_cycle(
         "sessions_per_week": sessions_per_week,
         "base_weekly_km": round(base_weekly_km),
         "debug_volume": {
-            "km_7": None,
+            "km_7": round(km_7, 1),
             "km_28": round(km_28, 1),
             "current_weekly_km": round(base_weekly_km, 1),
             "target_km": current_target_km,
@@ -4475,6 +4484,10 @@ async def get_week_plan(user: dict = Depends(auth_user)):
         plan = _generate_fallback_week_plan(context, phase, target_load, goal["goal_type"])
     
     target_km_debug = compute_target_km(context.get("weekly_km", DEFAULT_WEEKLY_KM), goal["goal_type"], phase)
+    target_km_debug = apply_resume_guard(target_km_debug, km_7_running, context.get("weekly_km", DEFAULT_WEEKLY_KM))
+    # PR76: pass protected target into context so generate_cycle_week respects it
+    context["target_km_protected"] = target_km_debug
+    context["km_7"] = round(km_7_running, 1)
 
     return {
         "goal": {
