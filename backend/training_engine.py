@@ -235,6 +235,7 @@ def compute_cycle_dates(
     event_date: Optional[datetime.date],
     total_weeks: int,
     today: Optional[datetime.date] = None,
+    effective_start_date: Optional[datetime.date] = None,
 ) -> Dict:
     """Align the training cycle with the user's target race date.
 
@@ -255,6 +256,12 @@ def compute_cycle_dates(
     - If *event_date* is None the legacy behaviour is preserved:
         * start_date = today, end_date = today + total_weeks × 7 days
         * status always "active"
+    - If *effective_start_date* is provided it represents the real start of a
+      new plan whose theoretical start_date is already in the past.  In that
+      case start_date is overridden to *effective_start_date*, current_week is
+      reset to 1, and status is forced to "active".  event_date, total_weeks,
+      and days_to_race are preserved unchanged.  When *effective_start_date* is
+      not provided the behaviour is identical to the previous version.
 
     To cap *total_weeks* to the time available before the race (e.g. when the
     user registers late), the caller should compute:
@@ -304,6 +311,20 @@ def compute_cycle_dates(
             "days_to_race": days_to_race,
             "days_to_start": None,
             "status": "completed",
+        }
+
+    # New plan whose theoretical start is already in the past: override start
+    # with effective_start_date, reset to week 1, and mark the cycle active.
+    if effective_start_date is not None and _today >= start:
+        return {
+            "start_date": effective_start_date,
+            "end_date": end,
+            "event_date": event_date,
+            "total_weeks": total_weeks,
+            "current_week": 1,
+            "days_to_race": days_to_race,
+            "days_to_start": None,
+            "status": "active",
         }
 
     # Cycle hasn't started yet.

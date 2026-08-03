@@ -291,3 +291,138 @@ class TestEdgeCases:
         result = compute_cycle_dates(event_date=event_date, total_weeks=12, today=today)
         assert result["total_weeks"] == 12
 
+
+# ===========================================================================
+# 6. effective_start_date — new plan whose theoretical start is already past
+# ===========================================================================
+
+class TestEffectiveStartDatePastTheoretical:
+    """Scenario 1: new plan, theoretical start_date already passed.
+
+    Race is 5 weeks away, standard cycle is 12 weeks.  Theoretical start
+    would be 7 weeks in the past.  Passing effective_start_date=today must
+    reset current_week to 1 and keep event_date/total_weeks unchanged.
+    """
+
+    def setup_method(self):
+        today = _today()
+        self.today = today
+        self.event_date = today + _days(5 * 7)   # race in 5 weeks
+        self.total_weeks = 12                      # standard recommended cycle
+        self.result = compute_cycle_dates(
+            event_date=self.event_date,
+            total_weeks=self.total_weeks,
+            today=today,
+            effective_start_date=today,
+        )
+
+    def test_current_week_is_1(self):
+        assert self.result["current_week"] == 1
+
+    def test_status_is_active(self):
+        assert self.result["status"] == "active"
+
+    def test_total_weeks_unchanged(self):
+        assert self.result["total_weeks"] == 12
+
+    def test_event_date_unchanged(self):
+        assert self.result["event_date"] == self.event_date
+
+    def test_end_date_equals_event_date(self):
+        assert self.result["end_date"] == self.event_date
+
+    def test_start_date_is_today(self):
+        assert self.result["start_date"] == self.today
+
+    def test_days_to_race_unchanged(self):
+        # days_to_race must still point at the real race date
+        assert self.result["days_to_race"] == 5 * 7
+
+
+class TestEffectiveStartDateSemiIn5Weeks:
+    """Scenario 2: semi-marathon in 5 weeks / standard 12-week cycle.
+
+    This is the canonical bug scenario from the problem statement.
+    """
+
+    def setup_method(self):
+        today = _today()
+        self.today = today
+        self.event_date = today + _days(5 * 7)
+        self.result = compute_cycle_dates(
+            event_date=self.event_date,
+            total_weeks=12,
+            today=today,
+            effective_start_date=today,
+        )
+
+    def test_current_week_is_1(self):
+        assert self.result["current_week"] == 1
+
+    def test_total_weeks_is_12(self):
+        assert self.result["total_weeks"] == 12
+
+    def test_event_date_unchanged(self):
+        assert self.result["event_date"] == self.event_date
+
+    def test_days_to_race_unchanged(self):
+        assert self.result["days_to_race"] == 5 * 7
+
+
+class TestEffectiveStartDateFutureStartUnchanged:
+    """Scenario 4: future start — no effective_start_date → behaviour unchanged."""
+
+    def test_upcoming_without_effective_start_date(self):
+        today = _today()
+        event_date = today + _days(20 * 7)
+        result = compute_cycle_dates(event_date=event_date, total_weeks=12, today=today)
+        assert result["status"] == "upcoming"
+        assert result["current_week"] == 0
+
+    def test_upcoming_with_effective_start_date_ignored_when_start_in_future(self):
+        """effective_start_date has no effect when theoretical start is in the future."""
+        today = _today()
+        event_date = today + _days(20 * 7)  # start = today + 8*7 (future)
+        effective = today + _days(8 * 7)    # same as theoretical start
+        result = compute_cycle_dates(
+            event_date=event_date,
+            total_weeks=12,
+            today=today,
+            effective_start_date=effective,
+        )
+        # theoretical start is in the future → upcoming branch executes first
+        assert result["status"] == "upcoming"
+
+
+class TestEffectiveStartDateExactlyToday:
+    """Scenario 5: theoretical start exactly today → week 1 (no effective_start_date needed)."""
+
+    def test_start_today_is_week_1(self):
+        today = _today()
+        event_date = today + _days(12 * 7)
+        result = compute_cycle_dates(event_date=event_date, total_weeks=12, today=today)
+        assert result["current_week"] == 1
+        assert result["status"] == "active"
+
+
+class TestEffectiveStartDateRetrocompat:
+    """Scenario 6: calls without effective_start_date remain backward-compatible."""
+
+    def test_active_cycle_computes_current_week_normally(self):
+        today = _today()
+        # 3 weeks into a 12-week cycle
+        event_date = today + _days(9 * 7)
+        result = compute_cycle_dates(event_date=event_date, total_weeks=12, today=today)
+        assert result["current_week"] == 4  # same as TestStatusActive
+
+    def test_upcoming_not_affected(self):
+        today = _today()
+        event_date = today + _days(20 * 7)
+        result = compute_cycle_dates(event_date=event_date, total_weeks=12, today=today)
+        assert result["status"] == "upcoming"
+
+    def test_no_event_date_legacy_unchanged(self):
+        today = _today()
+        result = compute_cycle_dates(event_date=None, total_weeks=12, today=today)
+        assert result["status"] == "active"
+        assert result["current_week"] == 1
