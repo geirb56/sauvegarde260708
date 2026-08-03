@@ -157,3 +157,124 @@ class TestResumeGuardIntegration:
                 assert protected == raw_target, (
                     f"phase={phase}: guard must not increase target_km."
                 )
+
+
+# ---------------------------------------------------------------------------
+# PR76 — new tests: None/zero km_7 handling
+# ---------------------------------------------------------------------------
+
+
+def test_none_km7_does_not_trigger_resume_guard():
+    """km_7=None means no recent data → guard must be INACTIVE."""
+    result = apply_resume_guard(
+        target_km=44.0,
+        km_7=None,
+        current_weekly_km=40.0,
+    )
+    assert result == 44.0, (
+        f"km_7=None must never trigger resume guard. Got {result}, expected 44.0."
+    )
+
+
+def test_zero_km7_triggers_resume_guard():
+    """km_7=0 means zero running last week → guard must be ACTIVE."""
+    result = apply_resume_guard(
+        target_km=50.0,
+        km_7=0,
+        current_weekly_km=40.0,
+    )
+    cap = 40.0 * 1.05
+    assert result == cap, (
+        f"km_7=0 must trigger resume guard (cap={cap}). Got {result}."
+    )
+
+
+def test_40_15_guard_active():
+    """current_weekly_km=40, km_7=15 → 15 < 20 → guard active → cap=42."""
+    result = apply_resume_guard(
+        target_km=50.0,
+        km_7=15.0,
+        current_weekly_km=40.0,
+    )
+    assert result == 42.0, f"Expected 42.0, got {result}."
+
+
+def test_40_20_guard_inactive():
+    """current_weekly_km=40, km_7=20 → exactly 50% → guard NOT active."""
+    target = 44.0
+    result = apply_resume_guard(
+        target_km=target,
+        km_7=20.0,
+        current_weekly_km=40.0,
+    )
+    assert result == target, f"km_7=20 at 50% must not trigger guard. Got {result}."
+
+
+def test_40_25_guard_inactive():
+    """current_weekly_km=40, km_7=25 → 62.5% → guard NOT active."""
+    target = 44.0
+    result = apply_resume_guard(
+        target_km=target,
+        km_7=25.0,
+        current_weekly_km=40.0,
+    )
+    assert result == target, f"km_7=25 above 50% must not trigger guard. Got {result}."
+
+
+# ---------------------------------------------------------------------------
+# PR76 — fallback plan volume test
+# ---------------------------------------------------------------------------
+
+
+def _simulate_fallback_plan(current_weekly_km: float, km_7: float, phase: str = "build", goal: str = "MARATHON") -> dict:
+    """Simulate the server-side fallback logic (pure, no server import needed)."""
+    phase_multipliers = {
+        "build": 1.0,
+        "deload": 0.7,
+        "intensification": 1.05,
+        "taper": 0.6,
+        "race": 0.25,
+    }
+
+    # Build sessions template (same as server.py "else" branch)
+    sessions = [
+        {"day": "monday",    "distance_km": 0},
+        {"day": "tuesday",   "distance_km": 8},
+        {"day": "wednesday", "distance_km": 7},
+        {"day": "thursday",  "distance_km": 5},
+        {"day": "friday",    "distance_km": 0},
+        {"day": "saturday",  "distance_km": 8},
+        {"day": "sunday",    "distance_km": 12},
+    ]
+
+    # Compute target (same formula as server.py)
+    raw_target = compute_target_km(current_weekly_km, goal, phase)
+    target_km_protected = apply_resume_guard(raw_target, km_7, current_weekly_km)
+
+    adjusted_km = current_weekly_km * phase_multipliers.get(phase, 1.0)
+    if target_km_protected is not None:
+        adjusted_km = min(adjusted_km, target_km_protected)
+
+    total_km = sum(s["distance_km"] for s in sessions)
+    if total_km > adjusted_km > 0:
+        scale = adjusted_km / total_km
+        for s in sessions:
+            if s["distance_km"] > 0:
+                s["distance_km"] = round(s["distance_km"] * scale, 1)
+        total_km = sum(s["distance_km"] for s in sessions)
+
+    return {"weekly_km": round(total_km, 1), "target_km_protected": target_km_protected}
+
+
+def test_fallback_40_15_plan_leq_42():
+    """
+    current_weekly_km=40, km_7=15 → target_km_protected=42 → fallback plan ≤ 42 km.
+    This tests the actual plan volume, not just the target value.
+    """
+    result = _simulate_fallback_plan(current_weekly_km=40.0, km_7=15.0, phase="build")
+    assert result["target_km_protected"] == 42.0, (
+        f"target_km_protected must be 42.0, got {result['target_km_protected']}."
+    )
+    assert result["weekly_km"] <= 42.0, (
+        f"Fallback plan weekly_km ({result['weekly_km']}) must be ≤ 42 km when guard fires."
+    )

@@ -158,7 +158,7 @@ def compute_target_km(current_weekly_km: float, goal: str, phase: str) -> int:
 
 def apply_resume_guard(
     target_km: float,
-    km_7: float,
+    km_7,
     current_weekly_km: float,
 ) -> float:
     """Resume guard (PR76): cap weekly target when the athlete is resuming.
@@ -171,9 +171,14 @@ def apply_resume_guard(
 
     Returns the *protected* target (≤ ``current_weekly_km * 1.05`` if guard
     is triggered, otherwise the original ``target_km`` unchanged).
+
+    ``km_7=None`` means no recent data is available → guard is NOT triggered.
+    ``km_7=0`` means the athlete ran zero km last week → guard IS triggered.
     """
+    if km_7 is None:
+        return float(target_km)
     chronic = max(0.0, float(current_weekly_km or 0))
-    recent = max(0.0, float(km_7 or 0))
+    recent = max(0.0, float(km_7))
     if chronic > 0 and recent < chronic * 0.5:
         cap = chronic * 1.05
         return min(float(target_km), cap)
