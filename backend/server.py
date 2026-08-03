@@ -4440,7 +4440,9 @@ async def get_week_plan(user: dict = Depends(auth_user)):
         "atl": load_7 if load_7 > 0 else 35,
         "tsb": (load_28 / 4 - load_7) if load_28 > 0 else -5,
         "acwr": (load_7 / (load_28 / 4)) if load_28 > 0 else 1.0,
-        "weekly_km": compute_current_weekly_km(workouts_28)
+        "weekly_km": compute_current_weekly_km(workouts_28),
+        # PR75 — propagate km_7 so generate_cycle_week can apply the resume guard.
+        "km_7": round(km_7_running, 1),
     }
     
     # Calculer la phase
@@ -4458,11 +4460,17 @@ async def get_week_plan(user: dict = Depends(auth_user)):
     
     phase = determine_phase(current_week, cycle_weeks)
     
+    # PR75 — compute the guarded target BEFORE generation; used as single source of truth.
+    target_km_protected = compute_target_km(
+        context["weekly_km"], goal["goal_type"], phase, km_7=km_7_running
+    )
+
     # Calculer la charge cible
     from training_engine import determine_target_load
     target_load = determine_target_load(context, phase)
     
     # Générer le plan via LLM
+    # context["km_7"] is set above so generate_cycle_week will apply the resume guard.
     plan, success, metadata = await generate_cycle_week(
         context=context,
         phase=phase,
@@ -4474,8 +4482,12 @@ async def get_week_plan(user: dict = Depends(auth_user)):
     if not success or not plan:
         # Fallback: plan générique basé sur la phase
         plan = _generate_fallback_week_plan(context, phase, target_load, goal["goal_type"])
-    
-    target_km_debug = compute_target_km(context.get("weekly_km", DEFAULT_WEEKLY_KM), goal["goal_type"], phase, km_7=km_7_running)
+
+    # PR75 — Final guard: if the generated plan exceeds the protected target, replace
+    # it with the fallback which will be correctly scaled to target_km_protected.
+    plan_weekly_km = plan.get("weekly_km", 0) if isinstance(plan, dict) else 0
+    if plan_weekly_km > target_km_protected:
+        plan = _generate_fallback_week_plan(context, phase, target_load, goal["goal_type"])
 
     return {
         "goal": {
@@ -4490,9 +4502,9 @@ async def get_week_plan(user: dict = Depends(auth_user)):
         "debug_volume": {
             "km_7": round(km_7_running, 1),
             "km_28": round(km_28_running, 1),
-            "current_weekly_km": round(context.get("weekly_km", DEFAULT_WEEKLY_KM), 1),
-            **compute_resume_guard(context.get("weekly_km", DEFAULT_WEEKLY_KM), km_7_running),
-            "target_km": target_km_debug,
+            "current_weekly_km": round(context["weekly_km"], 1),
+            **compute_resume_guard(context["weekly_km"], km_7_running),
+            "target_km": target_km_protected,
             "phase": phase,
         },
         "plan": plan,
@@ -4504,16 +4516,9 @@ async def get_week_plan(user: dict = Depends(auth_user)):
 def _generate_fallback_week_plan(context: dict, phase: str, target_load: int, goal: str) -> dict:
     """Génère un plan de secours basé sur des templates."""
     weekly_km = context.get("weekly_km", DEFAULT_WEEKLY_KM)
-    
-    # Ajuster selon la phase
-    phase_multipliers = {
-        "build": 1.0,
-        "deload": 0.7,
-        "intensification": 1.05,
-        "taper": 0.6,
-        "race": 0.25
-    }
-    adjusted_km = weekly_km * phase_multipliers.get(phase, 1.0)
+    # PR75 — use compute_target_km so the resume guard (km_7 from context) is applied.
+    km_7 = context.get("km_7")
+    adjusted_km = compute_target_km(weekly_km, goal, phase, km_7=km_7)
     
     # Allures de référence (à personnaliser selon le profil utilisateur)
     # Format: allure en min:sec/km
@@ -4570,6 +4575,16 @@ def _generate_fallback_week_plan(context: dict, phase: str, target_load: int, go
     
     total_tss = sum(s["estimated_tss"] for s in sessions)
     total_km = sum(s.get("distance_km", 0) for s in sessions)
+
+    # PR75 — Final guard: if hardcoded session distances exceed the guarded target,
+    # scale them proportionally to stay within adjusted_km while preserving structure.
+    if total_km > adjusted_km > 0:
+        scale = adjusted_km / total_km
+        for s in sessions:
+            s["distance_km"] = round(s["distance_km"] * scale, 1)
+            s["estimated_tss"] = round(s["estimated_tss"] * scale)
+        total_km = round(sum(s.get("distance_km", 0) for s in sessions), 1)
+        total_tss = sum(s["estimated_tss"] for s in sessions)
     
     return {
         "focus": phase,

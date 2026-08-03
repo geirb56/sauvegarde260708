@@ -187,3 +187,224 @@ class TestComputeTargetKmResumeGuard:
             assert target <= cap_resume, (
                 f"Resumption cap exceeded for goal={goal}: got {target}, cap {cap_resume}."
             )
+
+
+# ---------------------------------------------------------------------------
+# Effective-plan tests — PR75 fix: the PLAN must respect the guarded target,
+# not just compute_target_km().
+# ---------------------------------------------------------------------------
+
+
+import asyncio
+
+# Determine which plan generator to use (sync wrapper around async function).
+# We import generate_cycle_week from llm_coach and _deterministic_plan from
+# coach_service.  Both must produce a plan whose weekly_km respects the guard.
+
+def _get_plan_via_generate_cycle_week(current_weekly_km, goal, phase, km_7):
+    """Run generate_cycle_week synchronously and return the plan dict."""
+    import sys, os
+    _BACKEND = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if _BACKEND not in sys.path:
+        sys.path.insert(0, _BACKEND)
+    from llm_coach import generate_cycle_week
+
+    context = {
+        "weekly_km": current_weekly_km,
+        "km_7": km_7,
+        "ctl": current_weekly_km * 10 / 4,
+        "atl": (km_7 or 0) * 10,
+        "tsb": 0,
+        "acwr": 1.0,
+    }
+    # generate_cycle_week is async; run in a new event loop.
+    plan, success, _ = asyncio.get_event_loop().run_until_complete(
+        generate_cycle_week(
+            context=context,
+            phase=phase,
+            target_load=int(current_weekly_km * 10),
+            goal=goal,
+        )
+    )
+    return plan, success
+
+
+def _get_plan_via_deterministic(current_weekly_km, goal, phase, km_7):
+    """Run _deterministic_plan (from coach_service) and return the plan dict."""
+    import sys, os
+    _BACKEND = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if _BACKEND not in sys.path:
+        sys.path.insert(0, _BACKEND)
+    from coach_service import _deterministic_plan
+
+    context = {
+        "weekly_km": current_weekly_km,
+        "km_7": km_7,
+        "ctl": current_weekly_km * 10 / 4,
+        "atl": (km_7 or 0) * 10,
+        "tsb": 0,
+        "acwr": 1.0,
+    }
+    plan = _deterministic_plan(
+        context=context,
+        phase=phase,
+        target_load=int(current_weekly_km * 10),
+        goal=goal,
+    )
+    return plan
+
+
+def _get_plan_via_fallback_server(current_weekly_km, goal, phase, km_7):
+    """Run _generate_fallback_week_plan (from server) and return the plan dict."""
+    import sys, os
+    _BACKEND = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if _BACKEND not in sys.path:
+        sys.path.insert(0, _BACKEND)
+    # Provide required env vars so server.py can be imported without a live DB.
+    os.environ.setdefault("MONGO_URL", "mongodb://localhost:27017")
+    os.environ.setdefault("DB_NAME", "test_db")
+    os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-32chars-for-testing!!")
+    os.environ.setdefault("JWT_ALGORITHM", "HS256")
+    os.environ.setdefault("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "60")
+    os.environ.setdefault("ENVIRONMENT", "test")
+    from server import _generate_fallback_week_plan
+
+    context = {
+        "weekly_km": current_weekly_km,
+        "km_7": km_7,
+    }
+    plan = _generate_fallback_week_plan(
+        context=context,
+        phase=phase,
+        target_load=int(current_weekly_km * 10),
+        goal=goal,
+    )
+    return plan
+
+
+class TestEffectivePlanResumeGuard:
+    """PR75 fix — verify the EFFECTIVE plan respects the guarded weekly target."""
+
+    # ----- Test A: resume guard active, current=40, km_7=15 -----
+
+    def test_A_generate_cycle_week_resume_guard_active(self):
+        """A — generate_cycle_week: current=40, km_7=15 → guard active → plan ≤ 42 km."""
+        target = compute_target_km(40, "SEMI", "build", km_7=15.0)
+        assert target == 42, f"Precondition: expected target=42, got {target}"
+        plan, success = _get_plan_via_generate_cycle_week(40, "SEMI", "build", km_7=15.0)
+        assert success, "Plan generation failed"
+        weekly_km = plan["weekly_km"]
+        assert weekly_km <= target, (
+            f"Plan weekly_km={weekly_km} exceeds guarded target={target} km."
+        )
+
+    def test_A_deterministic_plan_resume_guard_active(self):
+        """A — _deterministic_plan: current=40, km_7=15 → guard active → plan ≤ 42 km."""
+        target = compute_target_km(40, "SEMI", "build", km_7=15.0)
+        plan = _get_plan_via_deterministic(40, "SEMI", "build", km_7=15.0)
+        weekly_km = plan["weekly_km"]
+        assert weekly_km <= target, (
+            f"Deterministic plan weekly_km={weekly_km} exceeds guarded target={target} km."
+        )
+
+    def test_A_fallback_server_resume_guard_active(self):
+        """A — _generate_fallback_week_plan: current=40, km_7=15 → guard active → plan ≤ 42 km."""
+        target = compute_target_km(40, "SEMI", "build", km_7=15.0)
+        plan = _get_plan_via_fallback_server(40, "SEMI", "build", km_7=15.0)
+        weekly_km = plan["weekly_km"]
+        assert weekly_km <= target, (
+            f"Server fallback weekly_km={weekly_km} exceeds guarded target={target} km."
+        )
+
+    # ----- Test B: guard inactive (km_7 == 50%) -----
+
+    def test_B_guard_inactive_exact_threshold(self):
+        """B — current=40, km_7=20 (exact 50%) → guard inactive → target=44 km."""
+        target = compute_target_km(40, "SEMI", "build", km_7=20.0)
+        assert target == 44, f"Expected target=44, got {target}"
+        plan, success = _get_plan_via_generate_cycle_week(40, "SEMI", "build", km_7=20.0)
+        assert success
+        assert plan["weekly_km"] <= target
+
+    # ----- Test C: guard inactive (km_7 > 50%) -----
+
+    def test_C_guard_inactive_above_threshold(self):
+        """C — current=40, km_7=25 → guard inactive → target=44 km."""
+        target = compute_target_km(40, "SEMI", "build", km_7=25.0)
+        assert target == 44, f"Expected target=44, got {target}"
+        plan, success = _get_plan_via_generate_cycle_week(40, "SEMI", "build", km_7=25.0)
+        assert success
+        assert plan["weekly_km"] <= target
+
+    # ----- Test D: km_7=0, guard active -----
+
+    def test_D_km_7_zero_guard_active(self):
+        """D — current=40, km_7=0 → guard active → target=42 km."""
+        target = compute_target_km(40, "SEMI", "build", km_7=0.0)
+        assert target == 42, f"Expected target=42, got {target}"
+        plan, success = _get_plan_via_generate_cycle_week(40, "SEMI", "build", km_7=0.0)
+        assert success
+        weekly_km = plan["weekly_km"]
+        assert weekly_km <= target, (
+            f"Plan weekly_km={weekly_km} exceeds guarded target={target} km."
+        )
+
+    def test_D_deterministic_km_7_zero(self):
+        """D — _deterministic_plan: current=40, km_7=0 → plan ≤ 42 km."""
+        target = compute_target_km(40, "SEMI", "build", km_7=0.0)
+        plan = _get_plan_via_deterministic(40, "SEMI", "build", km_7=0.0)
+        assert plan["weekly_km"] <= target
+
+    # ----- Test E: km_7=None → no guard, normal PR2 behaviour -----
+
+    def test_E_km_7_none_no_guard(self):
+        """E — current=40, km_7=None → no guard → target=44 km (PR2 behaviour unchanged)."""
+        target_none = compute_target_km(40, "SEMI", "build", km_7=None)
+        target_normal = compute_target_km(40, "SEMI", "build")
+        assert target_none == target_normal == 44
+        plan, success = _get_plan_via_generate_cycle_week(40, "SEMI", "build", km_7=None)
+        assert success
+        assert plan["weekly_km"] <= target_none
+
+    # ----- Test F: forced fallback path -----
+
+    def test_F_fallback_respects_guard(self):
+        """F — _deterministic_plan fallback: current=40, km_7=15 → plan ≤ 42 km."""
+        target = compute_target_km(40, "SEMI", "build", km_7=15.0)
+        plan = _get_plan_via_deterministic(40, "SEMI", "build", km_7=15.0)
+        weekly_km = plan["weekly_km"]
+        assert weekly_km <= target, (
+            f"Fallback plan weekly_km={weekly_km} exceeds guarded target={target} km."
+        )
+
+    def test_F_server_fallback_respects_guard(self):
+        """F — _generate_fallback_week_plan: current=40, km_7=15 → plan ≤ 42 km."""
+        target = compute_target_km(40, "SEMI", "build", km_7=15.0)
+        plan = _get_plan_via_fallback_server(40, "SEMI", "build", km_7=15.0)
+        weekly_km = plan["weekly_km"]
+        assert weekly_km <= target, (
+            f"Server fallback plan weekly_km={weekly_km} exceeds guarded target={target} km."
+        )
+
+    # ----- Test G: endpoint-equivalent — same data, all paths ≤ 42 km -----
+
+    def test_G_endpoint_equivalent_all_paths_respect_guard(self):
+        """G — Both generators produce plans ≤ 42 km for current=40, km_7=15."""
+        target = compute_target_km(40, "SEMI", "build", km_7=15.0)
+        assert target == 42
+
+        plan_gen, success = _get_plan_via_generate_cycle_week(40, "SEMI", "build", km_7=15.0)
+        assert success
+        assert plan_gen["weekly_km"] <= target, (
+            f"generate_cycle_week: {plan_gen['weekly_km']} > {target}"
+        )
+
+        plan_det = _get_plan_via_deterministic(40, "SEMI", "build", km_7=15.0)
+        assert plan_det["weekly_km"] <= target, (
+            f"_deterministic_plan: {plan_det['weekly_km']} > {target}"
+        )
+
+        plan_fb = _get_plan_via_fallback_server(40, "SEMI", "build", km_7=15.0)
+        assert plan_fb["weekly_km"] <= target, (
+            f"_generate_fallback_week_plan: {plan_fb['weekly_km']} > {target}"
+        )

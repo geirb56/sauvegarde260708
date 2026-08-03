@@ -577,7 +577,9 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
 
     week = cycle_dates["current_week"] if cycle_status == "active" else adjusted_weeks
     phase = determine_phase(week, adjusted_weeks)
-    target_km_debug = compute_target_km(weekly_km, goal, phase, km_7=km_7_running)
+    # PR75 — compute the guarded target BEFORE plan generation; this is the single
+    # source of truth used by generators AND the final validation guard.
+    target_km_protected = compute_target_km(weekly_km, goal, phase, km_7=km_7_running)
 
     # 8. Calculate ACWR and TSB
     chronic_avg = km_28 / 4 if km_28 > 0 else 1
@@ -633,6 +635,8 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
             return cached_plan
 
     # 12. Generate plan via LLM with personalized paces
+    # context["km_7"] is already set (line 618) so generate_cycle_week will read it
+    # and apply the resume guard automatically via compute_target_km.
     try:
         week_plan, success, meta = await generate_cycle_week(
             context=context,
@@ -655,6 +659,17 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
     except Exception as e:
         logger.warning(f"[Coach] Plan fallback: {e}")
         metrics.llm_fallback += 1
+        week_plan = _deterministic_plan(context, phase, target_load, goal, sessions_per_week, personalized_paces)
+
+    # PR75 — Final guard: if the generated plan exceeds the protected target (e.g.
+    # due to rounding or an unexpected code path), fall back to the deterministic
+    # plan which also reads km_7 from context and will respect the guard.
+    plan_weekly_km = week_plan.get("weekly_km", 0) if isinstance(week_plan, dict) else 0
+    if plan_weekly_km > target_km_protected:
+        logger.warning(
+            f"[Coach] PR75 guard triggered: plan={plan_weekly_km} km > target={target_km_protected} km. "
+            "Replacing with deterministic plan."
+        )
         week_plan = _deterministic_plan(context, phase, target_load, goal, sessions_per_week, personalized_paces)
 
     # 13. Build result
@@ -689,7 +704,7 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
             "km_28": round(km_28_running, 1),
             "current_weekly_km": round(weekly_km, 1),
             **compute_resume_guard(weekly_km, km_7_running),
-            "target_km": target_km_debug,
+            "target_km": target_km_protected,
             "phase": phase,
         },
         "generated_at": datetime.now(timezone.utc).isoformat()
@@ -735,8 +750,9 @@ def _deterministic_plan(context: dict, phase: str, target_load: int, goal: str, 
     num_sessions = sessions_per_week if sessions_per_week in [3, 4, 5, 6] else config["sessions"]
     num_rest_days = 7 - num_sessions
 
-    # Target weekly volume — single source of truth shared with cycle overview
-    target_km = compute_target_km(current_weekly_km, goal, phase)
+    # Target weekly volume — PR75: propagate km_7 from context so resume guard is applied.
+    km_7 = context.get("km_7")
+    target_km = compute_target_km(current_weekly_km, goal, phase, km_7=km_7)
 
     # Proportional long run
     long_ratio = (target_km - config["min"]) / (config["max"] - config["min"]) if config["max"] > config["min"] else 0.5

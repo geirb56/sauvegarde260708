@@ -281,8 +281,9 @@ async def generate_cycle_week(
     # Number of sessions
     target_sessions = sessions_per_week if sessions_per_week in [3, 4, 5, 6] else config["sessions"]
 
-    # Target weekly volume — single source of truth shared with cycle overview
-    target_km = compute_target_km(current_weekly_km, goal, phase)
+    # Target weekly volume — PR75: read km_7 from context so resume guard is applied.
+    km_7 = context.get("km_7")
+    target_km = compute_target_km(current_weekly_km, goal, phase, km_7=km_7)
 
     # Long run distance — compute_long_run_km in training_engine is the single
     # source of truth. Do not re-cap here.
