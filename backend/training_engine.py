@@ -82,13 +82,21 @@ PHASE_VOLUME_MULTIPLIERS = {"build": 1.0, "deload": 0.7, "intensification": 1.05
 def compute_target_km(current_weekly_km: float, goal: str, phase: str) -> int:
     """Single source of truth for weekly target volume (km).
 
+    Progression rule (PR2): the plan MUST NOT jump straight to ``config["min"]``
+    just because the athlete is below the recommended floor for the goal.
+    Current volume is the reference, and the maximum weekly progression is
+    +10% of the current volume, BEFORE applying the phase multiplier. The
+    result is still bounded by ``config["max"]``.
+
     current_weekly_km: athlete's recent average weekly volume (km_28 / 4)
     goal: 5K / 10K / SEMI / MARATHON / ULTRA
     phase: build / deload / intensification / taper / race
     """
     config = VOLUME_GOAL_CONFIG.get(goal, VOLUME_GOAL_CONFIG["SEMI"])
-    volume_min = max(current_weekly_km, config["min"])
-    base = max(volume_min, min(config["max"], round(current_weekly_km * 1.07)))
+    current = max(0.0, float(current_weekly_km or 0))
+    # Cap progression to +10% of the athlete's current volume (never enforce
+    # config["min"] brutally); still bounded above by config["max"].
+    base = min(config["max"], current * 1.10)
     return round(base * PHASE_VOLUME_MULTIPLIERS.get(phase, 1.0))
 
 
