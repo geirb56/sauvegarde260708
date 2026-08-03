@@ -18,7 +18,12 @@ import asyncio
 import logging
 from typing import Dict, List, Optional, Tuple
 from dotenv import load_dotenv
-from training_engine import compute_target_km, compute_long_run_km, VOLUME_GOAL_CONFIG
+from training_engine import (
+    DEFAULT_WEEKLY_KM,
+    compute_target_km,
+    compute_long_run_km,
+    VOLUME_GOAL_CONFIG,
+)
 
 load_dotenv()
 
@@ -269,7 +274,7 @@ async def generate_cycle_week(
     }
     
     # Athlete's current volume (based on last 4 weeks)
-    current_weekly_km = context.get('weekly_km', 30)
+    current_weekly_km = context.get('weekly_km', DEFAULT_WEEKLY_KM)
 
     config = VOLUME_GOAL_CONFIG.get(goal, VOLUME_GOAL_CONFIG["SEMI"])
 

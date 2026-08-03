@@ -17,7 +17,7 @@ Usage:
 """
 
 import datetime
-from typing import Dict, Optional, List
+from typing import Any, Dict, Optional, List
 
 
 # ============================================================
@@ -65,6 +65,62 @@ GOAL_CONFIG = {
 # (server.py /training/full-cycle) so the displayed target_km always
 # matches the sum of the generated sessions.
 # ============================================================
+
+DEFAULT_WEEKLY_KM = 20
+RUNNING_ACTIVITY_TYPES = {"run", "running", "trail_running", "treadmill_running"}
+
+
+def is_running(workout: Dict[str, Any]) -> bool:
+    """Returns True when a workout is a running activity."""
+    if not isinstance(workout, dict):
+        return False
+    activity_type = (
+        workout.get("type")
+        or workout.get("sport_type")
+        or workout.get("activity_type")
+        or workout.get("workout_type")
+    )
+    if activity_type is None:
+        return False
+    normalized = str(activity_type).strip().lower().replace(" ", "_")
+    return normalized in RUNNING_ACTIVITY_TYPES
+
+
+def normalized_distance_km(workout: Dict[str, Any]) -> float:
+    """Normalizes workout distance to kilometers without mutating input."""
+
+    def _to_float(value: Any) -> Optional[float]:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    if not isinstance(workout, dict):
+        return 0.0
+
+    if "distance_km" in workout:
+        dist_km = _to_float(workout.get("distance_km"))
+        return dist_km if dist_km and dist_km > 0 else 0.0
+
+    distance = _to_float(workout.get("distance"))
+    if not distance or distance <= 0:
+        return 0.0
+    if distance > 1000:
+        return distance / 1000.0
+    return distance
+
+
+def compute_current_weekly_km(workouts_28: List[Dict[str, Any]]) -> float:
+    """Single source of truth for current weekly running volume."""
+    km_28 = sum(
+        normalized_distance_km(w)
+        for w in (workouts_28 or [])
+        if is_running(w)
+    )
+    if km_28 > 0:
+        return km_28 / 4.0
+    return float(DEFAULT_WEEKLY_KM)
+
 
 # Recommended weekly volume bounds (km/week) and long-run bounds per goal
 VOLUME_GOAL_CONFIG = {
@@ -606,7 +662,7 @@ def determine_target_km(context: Dict, phase: str, goal: str = "10K") -> float:
     """
     Determines the target mileage for the week.
     """
-    weekly_km = context.get("weekly_km", 30)
+    weekly_km = context.get("weekly_km", DEFAULT_WEEKLY_KM)
 
     phase_multipliers = {
         "build": 1.05,
@@ -743,6 +799,11 @@ def generate_week_recommendation(
 # ============================================================
 
 __all__ = [
+    "DEFAULT_WEEKLY_KM",
+    "RUNNING_ACTIVITY_TYPES",
+    "is_running",
+    "normalized_distance_km",
+    "compute_current_weekly_km",
     "GOAL_CONFIG",
     "VOLUME_GOAL_CONFIG",
     "PHASE_VOLUME_MULTIPLIERS",

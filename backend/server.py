@@ -62,7 +62,9 @@ from rag_engine import (
 
 # Import training engine for periodization
 from training_engine import (
+    DEFAULT_WEEKLY_KM,
     GOAL_CONFIG,
+    compute_current_weekly_km,
     compute_cycle_dates,
     compute_target_km,
     vma_pace,
@@ -71,6 +73,8 @@ from training_engine import (
     compute_week_number,
     determine_phase,
     get_phase_description,
+    is_running,
+    normalized_distance_km,
 )
 
 # Import subscription manager
@@ -4327,8 +4331,8 @@ async def get_full_training_cycle(
         "date": {"$gte": twenty_eight_days_ago.isoformat()}
     }).to_list(300)
     
-    km_28 = sum(w.get("distance_km", 0) for w in workouts_28)
-    base_weekly_km = km_28 / 4 if km_28 > 0 else 25  # Base weekly volume (athlete's recent avg)
+    km_28 = sum(normalized_distance_km(w) for w in workouts_28 if is_running(w))
+    base_weekly_km = compute_current_weekly_km(workouts_28)
 
     # Generate overview of all weeks
     weeks_overview = []
@@ -4367,6 +4371,9 @@ async def get_full_training_cycle(
             "intensity_pct": phase_info.get("intensity_pct", 15)
         })
     
+    current_phase = determine_phase(current_week, total_weeks)
+    current_target_km = compute_target_km(base_weekly_km, goal, current_phase)
+
     return {
         "goal": goal,
         "goal_description": config["description"],
@@ -4379,6 +4386,13 @@ async def get_full_training_cycle(
         "status": cycle_status,
         "sessions_per_week": sessions_per_week,
         "base_weekly_km": round(base_weekly_km),
+        "debug_volume": {
+            "km_7": None,
+            "km_28": round(km_28, 1),
+            "current_weekly_km": round(base_weekly_km, 1),
+            "target_km": current_target_km,
+            "phase": current_phase,
+        },
         "weeks": weeks_overview
     }
 
@@ -4414,6 +4428,8 @@ async def get_week_plan(user: dict = Depends(auth_user)):
     # Calculer les métriques
     km_7 = sum(w.get("distance_km", 0) or 0 for w in workouts_7)
     km_28 = sum(w.get("distance_km", 0) or 0 for w in workouts_28)
+    km_7_running = sum(normalized_distance_km(w) for w in workouts_7 if is_running(w))
+    km_28_running = sum(normalized_distance_km(w) for w in workouts_28 if is_running(w))
     load_7 = km_7 * 10
     load_28 = km_28 * 10
     
@@ -4423,7 +4439,7 @@ async def get_week_plan(user: dict = Depends(auth_user)):
         "atl": load_7 if load_7 > 0 else 35,
         "tsb": (load_28 / 4 - load_7) if load_28 > 0 else -5,
         "acwr": (load_7 / (load_28 / 4)) if load_28 > 0 else 1.0,
-        "weekly_km": km_28 / 4 if km_28 > 0 else 20
+        "weekly_km": compute_current_weekly_km(workouts_28)
     }
     
     # Calculer la phase
@@ -4458,6 +4474,8 @@ async def get_week_plan(user: dict = Depends(auth_user)):
         # Fallback: plan générique basé sur la phase
         plan = _generate_fallback_week_plan(context, phase, target_load, goal["goal_type"])
     
+    target_km_debug = compute_target_km(context.get("weekly_km", DEFAULT_WEEKLY_KM), goal["goal_type"], phase)
+
     return {
         "goal": {
             "type": goal["goal_type"],
@@ -4468,6 +4486,13 @@ async def get_week_plan(user: dict = Depends(auth_user)):
         "total_weeks": cycle_weeks,
         "phase": phase,
         "context": context,
+        "debug_volume": {
+            "km_7": round(km_7_running, 1),
+            "km_28": round(km_28_running, 1),
+            "current_weekly_km": round(context.get("weekly_km", DEFAULT_WEEKLY_KM), 1),
+            "target_km": target_km_debug,
+            "phase": phase,
+        },
         "plan": plan,
         "generated_by": "llm" if success else "fallback",
         "metadata": metadata
@@ -4476,7 +4501,7 @@ async def get_week_plan(user: dict = Depends(auth_user)):
 
 def _generate_fallback_week_plan(context: dict, phase: str, target_load: int, goal: str) -> dict:
     """Génère un plan de secours basé sur des templates."""
-    weekly_km = context.get("weekly_km", 30)
+    weekly_km = context.get("weekly_km", DEFAULT_WEEKLY_KM)
     
     # Ajuster selon la phase
     phase_multipliers = {

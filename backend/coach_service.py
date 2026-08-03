@@ -26,15 +26,19 @@ from llm_coach import (
     LLM_MODEL
 )
 from training_engine import (
+    DEFAULT_WEEKLY_KM,
     GOAL_CONFIG,
     VOLUME_GOAL_CONFIG,
+    compute_current_weekly_km,
     compute_cycle_dates,
     compute_target_km,
     compute_week_number,
     determine_phase,
     build_training_context,
     determine_target_load,
-    get_phase_description
+    get_phase_description,
+    is_running,
+    normalized_distance_km,
 )
 
 logger = logging.getLogger(__name__)
@@ -395,7 +399,9 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
     
     km_7 = sum(get_distance_km(w) for w in workouts_7)
     km_28 = sum(get_distance_km(w) for w in workouts_28)
-    weekly_km = km_28 / 4 if km_28 > 0 else 20
+    km_7_running = sum(normalized_distance_km(w) for w in workouts_7 if is_running(w))
+    km_28_running = sum(normalized_distance_km(w) for w in workouts_28 if is_running(w))
+    weekly_km = compute_current_weekly_km(workouts_28)
 
     # 4. CALCULATE VMA (same logic as /api/training/vma-history)
     vma_efforts = []
@@ -570,6 +576,7 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
 
     week = cycle_dates["current_week"] if cycle_status == "active" else adjusted_weeks
     phase = determine_phase(week, adjusted_weeks)
+    target_km_debug = compute_target_km(weekly_km, goal, phase)
 
     # 8. Calculate ACWR and TSB
     chronic_avg = km_28 / 4 if km_28 > 0 else 1
@@ -607,6 +614,8 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
     context["prep_status"] = prep_status
     context["adjusted_weeks"] = adjusted_weeks
     context["prep_insufficient"] = prep_insufficient
+    context["km_7"] = round(km_7_running, 1)
+    context["km_28"] = round(km_28_running, 1)
 
     # 10. Calculate target load
     target_load = determine_target_load(context, phase)
@@ -674,6 +683,13 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
         "total_weeks": adjusted_weeks,
         "days_to_race": cycle_dates["days_to_race"],
         "status": cycle_dates["status"],
+        "debug_volume": {
+            "km_7": round(km_7_running, 1),
+            "km_28": round(km_28_running, 1),
+            "current_weekly_km": round(weekly_km, 1),
+            "target_km": target_km_debug,
+            "phase": phase,
+        },
         "generated_at": datetime.now(timezone.utc).isoformat()
     }
 
@@ -709,7 +725,7 @@ def _deterministic_plan(context: dict, phase: str, target_load: int, goal: str, 
     """Generates a deterministic fallback plan with personalized VMA-based paces."""
 
     # Athlete's current volume (based on last 4 weeks)
-    current_weekly_km = context.get("weekly_km", 30)
+    current_weekly_km = context.get("weekly_km", DEFAULT_WEEKLY_KM)
 
     config = VOLUME_GOAL_CONFIG.get(goal, VOLUME_GOAL_CONFIG["SEMI"])
 
