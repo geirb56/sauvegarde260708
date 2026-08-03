@@ -596,9 +596,11 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
     context["vma"] = estimated_vma
     context["vo2max"] = vo2max
     context["vma_method"] = vma_method
-    # VMA confidence: effort=derived from a real hard effort (reliable),
-    # average=rough estimate from mean training speed, default=hardcoded fallback.
-    vma_confidence = {"effort": "high", "average": "medium", "default": "low"}.get(vma_method, "low")
+    # VMA confidence: effort=derived from a real hard effort (reliable).
+    # average=VMA extrapolated from mean training speed via /0.70 fallback —
+    # NOT a reliable VMA, so flag it as low confidence (PR2). default=hardcoded
+    # fallback (also low).
+    vma_confidence = {"effort": "high", "average": "low", "default": "low"}.get(vma_method, "low")
     context["vma_confidence"] = vma_confidence
     context["paces"] = personalized_paces
     context["readiness_score"] = round(readiness_score, 1)
