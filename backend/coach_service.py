@@ -32,6 +32,7 @@ from training_engine import (
     compute_current_weekly_km,
     compute_cycle_dates,
     compute_target_km,
+    apply_resume_guard,
     compute_week_number,
     determine_phase,
     build_training_context,
@@ -577,6 +578,7 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
     week = cycle_dates["current_week"] if cycle_status == "active" else adjusted_weeks
     phase = determine_phase(week, adjusted_weeks)
     target_km_debug = compute_target_km(weekly_km, goal, phase)
+    target_km_debug = apply_resume_guard(target_km_debug, km_7_running, weekly_km)
 
     # 8. Calculate ACWR and TSB
     chronic_avg = km_28 / 4 if km_28 > 0 else 1
@@ -616,6 +618,8 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
     context["prep_insufficient"] = prep_insufficient
     context["km_7"] = round(km_7_running, 1)
     context["km_28"] = round(km_28_running, 1)
+    # PR76 resume guard: store protected target so plan generators cap volume
+    context["target_km_protected"] = target_km_debug
 
     # 10. Calculate target load
     target_load = determine_target_load(context, phase)
@@ -625,11 +629,20 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
     if cache_key in _plan_cache:
         cached_plan, timestamp = _plan_cache[cache_key]
         if _is_cache_valid(timestamp):
-            metrics.cache_hits += 1
-            latency = (time.time() - start) * 1000
-            _update_latency(latency, is_cache=True)
-            logger.debug(f"[Coach] Plan cache hit ({latency:.1f}ms)")
-            return cached_plan
+            cached_weekly_km = cached_plan.get("weekly_km")
+            # PR76: bypass cache if the cached plan's volume exceeds the
+            # current resume-guard cap (target_km_protected).
+            if target_km_debug is not None and cached_weekly_km is not None and cached_weekly_km > target_km_debug:
+                logger.debug(
+                    f"[Coach] Plan cache bypassed: cached_weekly_km={cached_weekly_km} "
+                    f"> target_km_protected={target_km_debug}"
+                )
+            else:
+                metrics.cache_hits += 1
+                latency = (time.time() - start) * 1000
+                _update_latency(latency, is_cache=True)
+                logger.debug(f"[Coach] Plan cache hit ({latency:.1f}ms)")
+                return cached_plan
 
     # 12. Generate plan via LLM with personalized paces
     try:
@@ -733,8 +746,10 @@ def _deterministic_plan(context: dict, phase: str, target_load: int, goal: str, 
     num_sessions = sessions_per_week if sessions_per_week in [3, 4, 5, 6] else config["sessions"]
     num_rest_days = 7 - num_sessions
 
-    # Target weekly volume — single source of truth shared with cycle overview
-    target_km = compute_target_km(current_weekly_km, goal, phase)
+    # Target weekly volume — single source of truth shared with cycle overview.
+    # PR76: honour target_km_protected if the resume guard was triggered upstream.
+    target_km = context.get("target_km_protected") or compute_target_km(current_weekly_km, goal, phase)
+    target_km = apply_resume_guard(target_km, context.get("km_7", current_weekly_km), current_weekly_km)
 
     # Proportional long run
     long_ratio = (target_km - config["min"]) / (config["max"] - config["min"]) if config["max"] > config["min"] else 0.5

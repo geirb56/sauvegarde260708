@@ -67,6 +67,7 @@ from training_engine import (
     compute_current_weekly_km,
     compute_cycle_dates,
     compute_target_km,
+    apply_resume_guard,
     vma_pace,
     vma_pace_range,
     adapt_session_to_readiness,
@@ -4334,6 +4335,11 @@ async def get_full_training_cycle(
     km_28 = sum(normalized_distance_km(w) for w in workouts_28 if is_running(w))
     base_weekly_km = compute_current_weekly_km(workouts_28)
 
+    # PR76 resume guard: also look at last 7 days to detect resuming athletes
+    seven_days_ago = today - timedelta(days=7)
+    workouts_7 = [w for w in workouts_28 if (w.get("date") or "") >= seven_days_ago.isoformat()]
+    km_7 = sum(normalized_distance_km(w) for w in workouts_7 if is_running(w))
+
     # Generate overview of all weeks
     weeks_overview = []
     
@@ -4341,8 +4347,10 @@ async def get_full_training_cycle(
         phase = determine_phase(week_num, total_weeks)
         phase_info = get_phase_description(phase, lang)
         
-        # Target volume — SAME engine as the detailed week plan so cards match sessions
+        # Target volume — SAME engine as the detailed week plan so cards match sessions.
+        # PR76 resume guard caps the target when the athlete is resuming.
         target_km = compute_target_km(base_weekly_km, goal, phase)
+        target_km = apply_resume_guard(target_km, km_7, base_weekly_km)
         
         # Session type keys (frontend translates via i18n trainingPlan.sessionType.*)
         if phase == "build":
@@ -4373,6 +4381,7 @@ async def get_full_training_cycle(
     
     current_phase = determine_phase(current_week, total_weeks)
     current_target_km = compute_target_km(base_weekly_km, goal, current_phase)
+    current_target_km = apply_resume_guard(current_target_km, km_7, base_weekly_km)
 
     return {
         "goal": goal,
@@ -4387,7 +4396,7 @@ async def get_full_training_cycle(
         "sessions_per_week": sessions_per_week,
         "base_weekly_km": round(base_weekly_km),
         "debug_volume": {
-            "km_7": None,
+            "km_7": round(km_7, 1),
             "km_28": round(km_28, 1),
             "current_weekly_km": round(base_weekly_km, 1),
             "target_km": current_target_km,
@@ -4460,7 +4469,14 @@ async def get_week_plan(user: dict = Depends(auth_user)):
     # Calculer la charge cible
     from training_engine import determine_target_load
     target_load = determine_target_load(context, phase)
-    
+
+    # PR76: compute the protected target BEFORE generation so both LLM and
+    # fallback paths use the same capped value.
+    target_km_protected = compute_target_km(context.get("weekly_km", DEFAULT_WEEKLY_KM), goal["goal_type"], phase)
+    target_km_protected = apply_resume_guard(target_km_protected, km_7_running, context.get("weekly_km", DEFAULT_WEEKLY_KM))
+    context["target_km_protected"] = target_km_protected
+    context["km_7"] = round(km_7_running, 1)
+
     # Générer le plan via LLM
     plan, success, metadata = await generate_cycle_week(
         context=context,
@@ -4469,12 +4485,12 @@ async def get_week_plan(user: dict = Depends(auth_user)):
         goal=goal["goal_type"],
         user_id=user_id
     )
-    
+
     if not success or not plan:
-        # Fallback: plan générique basé sur la phase
-        plan = _generate_fallback_week_plan(context, phase, target_load, goal["goal_type"])
-    
-    target_km_debug = compute_target_km(context.get("weekly_km", DEFAULT_WEEKLY_KM), goal["goal_type"], phase)
+        # Fallback: plan générique basé sur la phase, respectant target_km_protected
+        plan = _generate_fallback_week_plan(context, phase, target_load, goal["goal_type"], target_km_protected)
+
+    target_km_debug = target_km_protected
 
     return {
         "goal": {
@@ -4499,7 +4515,7 @@ async def get_week_plan(user: dict = Depends(auth_user)):
     }
 
 
-def _generate_fallback_week_plan(context: dict, phase: str, target_load: int, goal: str) -> dict:
+def _generate_fallback_week_plan(context: dict, phase: str, target_load: int, goal: str, target_km_protected: float = None) -> dict:
     """Génère un plan de secours basé sur des templates."""
     weekly_km = context.get("weekly_km", DEFAULT_WEEKLY_KM)
     
@@ -4512,6 +4528,11 @@ def _generate_fallback_week_plan(context: dict, phase: str, target_load: int, go
         "race": 0.25
     }
     adjusted_km = weekly_km * phase_multipliers.get(phase, 1.0)
+
+    # PR76: honour the pre-computed protected target so the fallback never
+    # exceeds the resume-guard cap.
+    if target_km_protected is not None:
+        adjusted_km = min(adjusted_km, target_km_protected)
     
     # Allures de référence (à personnaliser selon le profil utilisateur)
     # Format: allure en min:sec/km
@@ -4568,7 +4589,16 @@ def _generate_fallback_week_plan(context: dict, phase: str, target_load: int, go
     
     total_tss = sum(s["estimated_tss"] for s in sessions)
     total_km = sum(s.get("distance_km", 0) for s in sessions)
-    
+
+    # PR76: if adjusted_km caps the total, scale all running sessions down
+    # proportionally so the plan respects target_km_protected.
+    if total_km > adjusted_km > 0:
+        scale = adjusted_km / total_km
+        for s in sessions:
+            if s.get("distance_km", 0) > 0:
+                s["distance_km"] = round(s["distance_km"] * scale, 1)
+        total_km = sum(s.get("distance_km", 0) for s in sessions)
+
     return {
         "focus": phase,
         "planned_load": target_load,
