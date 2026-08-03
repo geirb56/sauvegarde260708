@@ -629,11 +629,20 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
     if cache_key in _plan_cache:
         cached_plan, timestamp = _plan_cache[cache_key]
         if _is_cache_valid(timestamp):
-            metrics.cache_hits += 1
-            latency = (time.time() - start) * 1000
-            _update_latency(latency, is_cache=True)
-            logger.debug(f"[Coach] Plan cache hit ({latency:.1f}ms)")
-            return cached_plan
+            cached_weekly_km = cached_plan.get("weekly_km")
+            # PR76: bypass cache if the cached plan's volume exceeds the
+            # current resume-guard cap (target_km_protected).
+            if target_km_debug is not None and cached_weekly_km is not None and cached_weekly_km > target_km_debug:
+                logger.debug(
+                    f"[Coach] Plan cache bypassed: cached_weekly_km={cached_weekly_km} "
+                    f"> target_km_protected={target_km_debug}"
+                )
+            else:
+                metrics.cache_hits += 1
+                latency = (time.time() - start) * 1000
+                _update_latency(latency, is_cache=True)
+                logger.debug(f"[Coach] Plan cache hit ({latency:.1f}ms)")
+                return cached_plan
 
     # 12. Generate plan via LLM with personalized paces
     try:
