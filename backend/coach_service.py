@@ -629,7 +629,9 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
     if cache_key in _plan_cache:
         cached_plan, timestamp = _plan_cache[cache_key]
         if _is_cache_valid(timestamp):
-            cached_weekly_km = cached_plan.get("weekly_km")
+            # The cached object is the full result wrapper; the weekly volume
+            # lives under result["plan"]["weekly_km"] (not at the top level).
+            cached_weekly_km = (cached_plan.get("plan") or {}).get("weekly_km")
             # PR76: bypass cache if the cached plan's volume exceeds the
             # current resume-guard cap (target_km_protected).
             if target_km_debug is not None and cached_weekly_km is not None and cached_weekly_km > target_km_debug:
