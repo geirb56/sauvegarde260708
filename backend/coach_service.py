@@ -486,27 +486,21 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
     fitness_score = min(100, (vo2max / req["min_vo2max"]) * 100) if req["min_vo2max"] > 0 else 50
     readiness_score = (volume_score * 0.6 + fitness_score * 0.4)  # Volume counts more
 
-    # Adjust number of weeks based on athlete readiness
+    # Plan duration is driven ONLY by the goal's base weeks.
+    # Readiness_score is still computed (and used elsewhere to adapt load /
+    # sessions) but MUST NOT influence cycle length.
     base_weeks = req["base_weeks"]
+    adjusted_weeks = base_weeks
     if readiness_score >= 90:
-        # Very ready → short preparation (-25%)
-        adjusted_weeks = max(4, int(base_weeks * 0.75))
         prep_status = "avancé"
     elif readiness_score >= 70:
-        # Ready → normal preparation
-        adjusted_weeks = base_weeks
         prep_status = "normal"
     elif readiness_score >= 50:
-        # Need to progress → long preparation (+25%)
-        adjusted_weeks = int(base_weeks * 1.25)
         prep_status = "progressif"
     else:
-        # Beginner → very long preparation (+50%)
-        adjusted_weeks = int(base_weeks * 1.5)
         prep_status = "débutant"
 
-    # Cap to time available before the race (never exceed event_date).
-    # event_date comes from user_goals (single source of truth).
+    # Resolve event_date (single source of truth: user_goals).
     user_goal = await db.user_goals.find_one({"user_id": user_id})
     raw_event_date = (user_goal or {}).get("event_date") if user_goal else None
     event_date_obj = None
@@ -520,9 +514,13 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
             event_date_obj = None
 
     _today_date = today.date() if hasattr(today, "date") else today
+    # Detect "insufficient preparation" without silently shrinking the plan.
+    # We keep the recommended duration equal to base_weeks and only flag it.
+    prep_insufficient = False
     if event_date_obj is not None:
-        weeks_available = max(1, (event_date_obj - _today_date).days // 7)
-        adjusted_weeks = min(adjusted_weeks, weeks_available)
+        weeks_available = max(0, (event_date_obj - _today_date).days // 7)
+        if weeks_available < adjusted_weeks:
+            prep_insufficient = True
 
     # Update config with adapted duration
     config = {**config, "cycle_weeks": adjusted_weeks}
@@ -556,6 +554,7 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
             "readiness_score": round(readiness_score, 1),
             "prep_status": prep_status,
             "adjusted_weeks": adjusted_weeks,
+            "prep_insufficient": prep_insufficient,
             "event_date": event_date_obj.isoformat() if event_date_obj else None,
             "start_date": cycle_dates["start_date"].isoformat(),
             "end_date": cycle_dates["end_date"].isoformat(),
@@ -606,6 +605,7 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
     context["readiness_score"] = round(readiness_score, 1)
     context["prep_status"] = prep_status
     context["adjusted_weeks"] = adjusted_weeks
+    context["prep_insufficient"] = prep_insufficient
 
     # 10. Calculate target load
     target_load = determine_target_load(context, phase)
@@ -664,6 +664,7 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
         "readiness_score": round(readiness_score, 1),
         "prep_status": prep_status,
         "adjusted_weeks": adjusted_weeks,
+        "prep_insufficient": prep_insufficient,
         # Cycle temporal alignment (computed dynamically, not stored in DB)
         "event_date": event_date_obj.isoformat() if event_date_obj else None,
         "start_date": cycle_dates["start_date"].isoformat(),
