@@ -634,11 +634,26 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
     if cache_key in _plan_cache:
         cached_plan, timestamp = _plan_cache[cache_key]
         if _is_cache_valid(timestamp):
-            metrics.cache_hits += 1
-            latency = (time.time() - start) * 1000
-            _update_latency(latency, is_cache=True)
-            logger.debug(f"[Coach] Plan cache hit ({latency:.1f}ms)")
-            return cached_plan
+            # PR75 — GARDE FINALE: re-validate cached plan against current
+            # target_km_protected before returning.  The cache key already
+            # embeds km_7/weekly_km so this guard should always pass for
+            # legitimately-stored plans; it is kept as a belt-and-suspenders
+            # safety net.
+            cached_weekly_km = (
+                cached_plan.get("plan", {}).get("weekly_km", 0)
+                if isinstance(cached_plan, dict)
+                else 0
+            )
+            if cached_weekly_km <= target_km_protected:
+                metrics.cache_hits += 1
+                latency = (time.time() - start) * 1000
+                _update_latency(latency, is_cache=True)
+                logger.debug(f"[Coach] Plan cache hit ({latency:.1f}ms)")
+                return cached_plan
+            logger.warning(
+                f"[Coach] PR75 cache guard: cached plan weekly_km={cached_weekly_km} "
+                f"> target={target_km_protected}. Discarding and regenerating."
+            )
 
     # 12. Generate plan via LLM with personalized paces
     # context["km_7"] is already set (line 618) so generate_cycle_week will read it

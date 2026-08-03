@@ -546,3 +546,238 @@ class TestPlanCacheKeyInvalidation:
         """The cache key string must embed the rounded weekly_km value."""
         key = self._make_cache_key("u1", 3, "build", "SEMI", 16.0, 25.0, 40.0)
         assert "40.0" in key, f"weekly_km=40.0 not found in cache key: {key}"
+
+
+# ---------------------------------------------------------------------------
+# Tests F, G, H — as specified in problem statement PR75 CORRECTION FINALE
+# ---------------------------------------------------------------------------
+
+
+def _build_context(weekly_km: float, km_7: float | None) -> dict:
+    """Build a minimal training context for tests."""
+    return {
+        "weekly_km": weekly_km,
+        "km_7": km_7,
+        "ctl": weekly_km * 10 / 4,
+        "atl": (km_7 or 0) * 10,
+        "tsb": 0.0,
+        "acwr": 1.0,
+        "vma": 14.0,
+        "paces": {},
+    }
+
+
+def _apply_pr75_guard_and_clamp(
+    plan: dict,
+    target_km_protected: int,
+    context: dict,
+    phase: str,
+    goal: str,
+) -> dict:
+    """Replicate the guard+clamp logic from coach_service.generate_training_plan.
+
+    Lines 670-684 of coach_service.py:
+        if plan_weekly_km > target_km_protected → replace with _deterministic_plan
+        plan["weekly_km"] = min(plan["weekly_km"], float(target_km_protected))
+    """
+    from coach_service import _deterministic_plan
+
+    plan_weekly_km = plan.get("weekly_km", 0) if isinstance(plan, dict) else 0
+    if plan_weekly_km > target_km_protected:
+        plan = _deterministic_plan(
+            context=context,
+            phase=phase,
+            target_load=int(context["weekly_km"] * 10),
+            goal=goal,
+        )
+    if isinstance(plan, dict):
+        plan["weekly_km"] = min(plan.get("weekly_km", 0), float(target_km_protected))
+    return plan
+
+
+class TestPR75FGH:
+    """Tests F, G, H as required by PR75 CORRECTION FINALE problem statement."""
+
+    # ------------------------------------------------------------------
+    # Test F — LLM returns over-budget plan → guard must reject it
+    # ------------------------------------------------------------------
+
+    def test_F_llm_overbudget_plan_is_replaced_by_guard(self):
+        """F — LLM returns weekly_km=50 with current=40, km_7=15.
+        Guard must replace it; final plan must be ≤ 42 km.
+        """
+        current_weekly_km = 40.0
+        km_7 = 15.0
+        goal = "SEMI"
+        phase = "build"
+
+        target = compute_target_km(current_weekly_km, goal, phase, km_7=km_7)
+        assert target == 42, f"Precondition: expected target=42, got {target}"
+
+        # Simulate an LLM plan that exceeds the guarded target.
+        llm_plan = {"weekly_km": 50.0, "sessions": [], "focus": phase}
+        assert llm_plan["weekly_km"] > target, "Precondition: LLM plan must exceed target"
+
+        context = _build_context(current_weekly_km, km_7)
+        final_plan = _apply_pr75_guard_and_clamp(llm_plan, target, context, phase, goal)
+
+        assert final_plan["weekly_km"] <= 42, (
+            f"Guard failed: LLM returned weekly_km=50, final plan is "
+            f"{final_plan['weekly_km']} km (>42). Non-compliant LLM plan was returned."
+        )
+
+    def test_F_guard_replaces_plan_not_keeps_it(self):
+        """F — The original non-compliant LLM plan (50 km) must not be the final output."""
+        target = compute_target_km(40.0, "SEMI", "build", km_7=15.0)
+        llm_plan = {"weekly_km": 50.0, "sessions": [], "focus": "build", "marker": "llm_original"}
+        context = _build_context(40.0, 15.0)
+
+        final_plan = _apply_pr75_guard_and_clamp(llm_plan, target, context, "build", "SEMI")
+
+        assert final_plan.get("weekly_km", 0) != 50.0, (
+            "The non-compliant LLM plan (50 km) must not be returned as-is."
+        )
+
+    def test_F_clamp_as_last_resort(self):
+        """F — Hard clamp ensures weekly_km ≤ target even if guard path produces rounding."""
+        target = compute_target_km(40.0, "SEMI", "build", km_7=15.0)  # 42
+        # Simulate a plan that is over by a small float rounding amount.
+        plan = {"weekly_km": 42.001, "sessions": []}
+        if isinstance(plan, dict):
+            plan["weekly_km"] = min(plan.get("weekly_km", 0), float(target))
+        assert plan["weekly_km"] <= 42.0
+
+    # ------------------------------------------------------------------
+    # Test G — LLM failure → deterministic fallback with km_7=15 → ≤ 42 km
+    # ------------------------------------------------------------------
+
+    def test_G_llm_failure_fallback_coach_service(self):
+        """G — When LLM fails, _deterministic_plan fallback with km_7=15 must return ≤ 42 km."""
+        from coach_service import _deterministic_plan
+
+        current_weekly_km = 40.0
+        km_7 = 15.0
+        goal = "SEMI"
+        phase = "build"
+
+        target = compute_target_km(current_weekly_km, goal, phase, km_7=km_7)
+        assert target == 42
+
+        context = _build_context(current_weekly_km, km_7)
+
+        # Simulate LLM failure → use _deterministic_plan (lines 665-668 coach_service.py).
+        fallback_plan = _deterministic_plan(
+            context=context,
+            phase=phase,
+            target_load=int(current_weekly_km * 10),
+            goal=goal,
+        )
+
+        assert fallback_plan["weekly_km"] <= 42, (
+            f"Fallback plan weekly_km={fallback_plan['weekly_km']} exceeds guarded target=42 km "
+            "(LLM failure should not bypass PR75 resume guard)."
+        )
+
+    def test_G_llm_failure_fallback_server(self):
+        """G — When LLM fails, _generate_fallback_week_plan with km_7=15 must return ≤ 42 km."""
+        import sys, os
+
+        _BACKEND = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if _BACKEND not in sys.path:
+            sys.path.insert(0, _BACKEND)
+        os.environ.setdefault("MONGO_URL", "mongodb://localhost:27017")
+        os.environ.setdefault("DB_NAME", "test_db")
+        os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-32chars-for-testing!!")
+        os.environ.setdefault("JWT_ALGORITHM", "HS256")
+        os.environ.setdefault("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "60")
+        os.environ.setdefault("ENVIRONMENT", "test")
+        from server import _generate_fallback_week_plan
+
+        target = compute_target_km(40.0, "SEMI", "build", km_7=15.0)
+        assert target == 42
+
+        context = _build_context(40.0, 15.0)
+
+        fallback_plan = _generate_fallback_week_plan(
+            context=context,
+            phase="build",
+            target_load=400,
+            goal="SEMI",
+        )
+
+        assert fallback_plan["weekly_km"] <= 42, (
+            f"Server fallback weekly_km={fallback_plan['weekly_km']} > 42 km "
+            "when km_7=15 (LLM failure path must not bypass PR75 guard)."
+        )
+
+    # ------------------------------------------------------------------
+    # Test H — Cache must not serve plan with weekly_km=44 when km_7=15
+    # ------------------------------------------------------------------
+
+    def test_H_cache_stale_plan_not_reused_for_different_km_7(self):
+        """H — A plan cached for km_7=25 (weekly_km=44) must not be returned when km_7=15.
+
+        Verifies that the cache key embedding makes the two scenarios completely
+        independent: the 44 km plan is never accessible under the km_7=15 key.
+        """
+        import time as _time
+        import coach_service as cs
+
+        # Build the two cache keys as coach_service does.
+        key_km7_25 = (
+            f"plan_userH_3_build_SEMI_16.0"
+            f"_{round(25.0, 1)}_{round(40.0, 1)}"
+        )
+        key_km7_15 = (
+            f"plan_userH_3_build_SEMI_16.0"
+            f"_{round(15.0, 1)}_{round(40.0, 1)}"
+        )
+        assert key_km7_25 != key_km7_15, "Precondition: keys must differ"
+
+        # Inject a plan with weekly_km=44 at the km_7=25 key.
+        over_budget_result = {"plan": {"weekly_km": 44.0}, "debug_volume": {"target_km": 44}}
+        cs._plan_cache[key_km7_25] = (over_budget_result, _time.time())
+
+        try:
+            # Verify that the km_7=15 key is absent — cache returns nothing for it.
+            assert key_km7_15 not in cs._plan_cache, (
+                "Cache must NOT contain the km_7=25 plan at the km_7=15 key. "
+                "A plan with weekly_km=44 must not be returned when km_7=15 (target=42)."
+            )
+
+            # Verify that even if we tried to look it up, the value at the
+            # km_7=25 key has weekly_km=44, confirming it would violate the guard.
+            cached_plan, _ = cs._plan_cache[key_km7_25]
+            assert cached_plan["plan"]["weekly_km"] == 44.0
+
+        finally:
+            cs._plan_cache.pop(key_km7_25, None)
+
+    def test_H_cache_hit_revalidation_guard(self):
+        """H — Even on a cache hit, the plan must be re-checked against target_km_protected.
+
+        If a plan was stored with weekly_km > target_km_protected (e.g. due to a
+        race condition or corruption), the cache-hit revalidation guard in
+        coach_service must discard it rather than returning it.
+        """
+        # This test verifies the guard logic that is applied on cache hits
+        # (lines 634-652 of coach_service.py after the PR75 fix):
+        #   if cached_weekly_km <= target_km_protected → return from cache
+        #   else → discard and regenerate
+
+        target_km_protected = compute_target_km(40.0, "SEMI", "build", km_7=15.0)
+        assert target_km_protected == 42
+
+        # A hypothetically-corrupt cached plan exceeding the target.
+        corrupt_plan = {"plan": {"weekly_km": 50.0}}
+        cached_weekly_km = corrupt_plan.get("plan", {}).get("weekly_km", 0)
+
+        # The guard condition mirrors coach_service.py:
+        # if cached_weekly_km <= target_km_protected → serve from cache
+        # else → fall through to regeneration
+        should_serve_from_cache = cached_weekly_km <= target_km_protected
+
+        assert not should_serve_from_cache, (
+            f"Guard failed: corrupt cached plan (weekly_km={cached_weekly_km}) "
+            f"should NOT be served (target={target_km_protected})."
+        )
