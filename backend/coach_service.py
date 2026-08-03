@@ -530,6 +530,7 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
         event_date=event_date_obj,
         total_weeks=adjusted_weeks,
         today=_today_date,
+        effective_start_date=_today_date if prep_insufficient else None,
     )
     cycle_status = cycle_dates["status"]
 
