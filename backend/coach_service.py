@@ -624,7 +624,13 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
     target_load = determine_target_load(context, phase)
 
     # 11. Check cache
-    cache_key = f"plan_{user_id}_{week}_{phase}_{goal}_{estimated_vma}"
+    # PR75: include km_7 and weekly_km in the key so that a change in the
+    # 7-day running volume or current base invalidates any cached plan that
+    # was generated under different guard conditions.
+    cache_key = (
+        f"plan_{user_id}_{week}_{phase}_{goal}_{estimated_vma}"
+        f"_{round(km_7_running, 1)}_{round(weekly_km, 1)}"
+    )
     if cache_key in _plan_cache:
         cached_plan, timestamp = _plan_cache[cache_key]
         if _is_cache_valid(timestamp):

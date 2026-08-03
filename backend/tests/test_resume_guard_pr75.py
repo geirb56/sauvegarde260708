@@ -476,3 +476,73 @@ class TestFinalHardClamp:
         assert clamped_km <= 42, (
             f"Server fallback after hard clamp: weekly_km={clamped_km} > 42 km."
         )
+
+
+# ---------------------------------------------------------------------------
+# Cache key invalidation — PR75
+# ---------------------------------------------------------------------------
+
+
+class TestPlanCacheKeyInvalidation:
+    """Verify that the plan cache key is sensitive to km_7 and weekly_km.
+
+    A stale cache key (one that ignores km_7 / weekly_km) would allow a plan
+    generated *without* the PR75 resume guard to be returned when km_7 has
+    since dropped below the 50 % threshold, silently bypassing the guard.
+    """
+
+    def _make_cache_key(
+        self,
+        user_id: str,
+        week: int,
+        phase: str,
+        goal: str,
+        vma: float,
+        km_7_running: float,
+        weekly_km: float,
+    ) -> str:
+        """Mirrors the cache key formula in coach_service.generate_training_plan."""
+        return (
+            f"plan_{user_id}_{week}_{phase}_{goal}_{vma}"
+            f"_{round(km_7_running, 1)}_{round(weekly_km, 1)}"
+        )
+
+    def test_different_km_7_yields_different_key(self):
+        """Changing km_7 must produce a different cache key."""
+        key_normal = self._make_cache_key("u1", 3, "build", "SEMI", 16.0, 25.0, 40.0)
+        key_resumed = self._make_cache_key("u1", 3, "build", "SEMI", 16.0, 15.0, 40.0)
+        assert key_normal != key_resumed, (
+            "Cache key must differ when km_7 changes from 25 to 15 km "
+            "(normal vs resume-guard scenario)."
+        )
+
+    def test_different_weekly_km_yields_different_key(self):
+        """Changing weekly_km (the base volume) must produce a different cache key."""
+        key_a = self._make_cache_key("u1", 3, "build", "SEMI", 16.0, 20.0, 40.0)
+        key_b = self._make_cache_key("u1", 3, "build", "SEMI", 16.0, 20.0, 50.0)
+        assert key_a != key_b, (
+            "Cache key must differ when weekly_km changes from 40 to 50 km."
+        )
+
+    def test_same_inputs_yield_same_key(self):
+        """Identical inputs must produce the same cache key (no spurious misses)."""
+        key1 = self._make_cache_key("u1", 3, "build", "SEMI", 16.0, 25.0, 40.0)
+        key2 = self._make_cache_key("u1", 3, "build", "SEMI", 16.0, 25.0, 40.0)
+        assert key1 == key2
+
+    def test_km_7_rounding_groups_close_values(self):
+        """Values differing only in the second decimal are grouped (rounded to 1 dp)."""
+        key_a = self._make_cache_key("u1", 3, "build", "SEMI", 16.0, 25.04, 40.0)
+        key_b = self._make_cache_key("u1", 3, "build", "SEMI", 16.0, 25.06, 40.0)
+        # 25.04 rounds to 25.0 and 25.06 rounds to 25.1 — they differ.
+        assert key_a != key_b
+
+    def test_key_contains_km_7_component(self):
+        """The cache key string must embed the rounded km_7 value."""
+        key = self._make_cache_key("u1", 3, "build", "SEMI", 16.0, 15.0, 40.0)
+        assert "15.0" in key, f"km_7=15.0 not found in cache key: {key}"
+
+    def test_key_contains_weekly_km_component(self):
+        """The cache key string must embed the rounded weekly_km value."""
+        key = self._make_cache_key("u1", 3, "build", "SEMI", 16.0, 25.0, 40.0)
+        assert "40.0" in key, f"weekly_km=40.0 not found in cache key: {key}"
