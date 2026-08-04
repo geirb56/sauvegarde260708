@@ -545,7 +545,13 @@ export default function Dashboard() {
 
       {/* ── RUN RECOMMENDATION SECTION ────────────────────────────────────── */}
       <div className="animate-in" style={{ animationDelay: "300ms" }}>
-        <h2 className="section-header">{t("dashboard.runReadiness")}</h2>
+        <h2
+          className="text-2xl font-black uppercase tracking-[0.14em]"
+          style={{ color: "#6EEB5A", fontFamily: "'Barlow Condensed', sans-serif" }}
+          data-testid="run-readiness-title"
+        >
+          {t("dashboard.runReadiness")}
+        </h2>
         <p className="text-xs mt-1" style={{ color: "var(--text-tertiary)" }}>
           {t("dashboard.runReadinessDescription")}
         </p>
