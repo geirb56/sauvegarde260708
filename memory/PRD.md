@@ -4,6 +4,8 @@
 Pull https://github.com/geirb56/sauvegarde260629 and set it up so it runs. Replace /app contents.
 
 ## Changelog — Reprise après arrêt / comeback (PR77, June 2026)
+- Durées de reprise profonde calées sur le niveau antérieur (fenêtre 6 sem, jours 28-42) via reprise_deep_durations: plancher 30/35/40 min (débutant/inconnu) -> 35/45/55 min (ex-coureur ~40km/sem). 3 séances, facile-only, AFFICHÉ EN MINUTES (weekly_minutes), plus en km. prior_weekly_km calculé dans coach_service.
+- Frontend TrainingPlan.jsx: bandeau "Mode reprise" (deep/partial), carte semaine courante en minutes ("~105 min • 3 séances"). i18n FR/EN/ES.
 - HEAD pulled to sauvegarde/main d0612d4 (PR#76 resume guard). Then reprise work (not pushed; use Save to Github).
 - REAL-PATH bug found & fixed in PR76 cache bypass: coach_service.generate_dynamic_training_plan read cached_plan.get("weekly_km") (top-level, always None) → stale plan served. Now reads cached_plan["plan"]["weekly_km"].
 - Reprise logic centralized in training_engine.py (single source): resolve_chronic_base (active-weeks avg, no /4 dilution), classify_training_state (deep_reprise/partial_reprise/reprise_exit/normal), resolve_reprise_plan, build_reprise_week_structure, cap_long_run_for_low_volume (≤40% target below goal floor), REPRISE_BASE_KM=12, REPRISE_STABLE_WEEKS=3, REPRISE_DEEP_SESSION_MINUTES=[20,25,30].
