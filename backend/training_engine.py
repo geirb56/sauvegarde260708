@@ -190,17 +190,49 @@ def apply_resume_guard(
 REPRISE_BASE_KM = 12.0
 
 
-def resolve_chronic_base(weekly_km: float, km_28_running: float) -> float:
-    """Return the chronic base used to derive the weekly target.
+def resolve_chronic_base(workouts_28: List[Dict[str, Any]], now=None) -> float:
+    """Return the chronic weekly base (km) used to derive the training target.
 
-    ``compute_current_weekly_km`` falls back to ``DEFAULT_WEEKLY_KM`` when there
-    is no data, which would treat a genuinely detrained athlete (0 real running
-    km over 28 days) as if they ran 20 km/week. In that case we use a gentle
-    ``REPRISE_BASE_KM`` instead so the plan ramps up conservatively.
+    ``compute_current_weekly_km`` always divides the 28-day running volume by 4,
+    which understates the current fitness of an athlete who only has a few weeks
+    of data (e.g. week 2 of a comeback: 12.6 km in the last 7 days would collapse
+    to 3.15 km/week and the plan would regress instead of progressing).
+
+    This function averages the running volume over the *active* weeks only
+    (weeks that actually contain running), so a resuming athlete keeps a base
+    consistent with what they have really been doing:
+
+    - no active week (genuine detraining) -> conservative ``REPRISE_BASE_KM``
+    - N active weeks -> total running km over those weeks / N
+
+    For a steady 4-week athlete this returns exactly the same value as
+    ``compute_current_weekly_km`` (km_28 / 4).
     """
-    if (km_28_running or 0) <= 0:
+    _now = now or datetime.datetime.now(datetime.timezone.utc)
+    buckets = [0.0, 0.0, 0.0, 0.0]  # weeks 0-7, 7-14, 14-21, 21-28 days ago
+    for w in (workouts_28 or []):
+        if not is_running(w):
+            continue
+        raw = w.get("date")
+        dt = None
+        if isinstance(raw, str):
+            try:
+                dt = datetime.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            except ValueError:
+                dt = None
+        elif isinstance(raw, datetime.datetime):
+            dt = raw
+        if dt is None:
+            continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+        days_ago = (_now - dt).days
+        if 0 <= days_ago < 28:
+            buckets[days_ago // 7] += normalized_distance_km(w)
+    active = [km for km in buckets if km > 0]
+    if not active:
         return REPRISE_BASE_KM
-    return weekly_km
+    return sum(active) / len(active)
 
 
 def cap_long_run_for_low_volume(long_run: float, target_km: float, goal: str) -> float:

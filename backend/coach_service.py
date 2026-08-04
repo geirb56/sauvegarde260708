@@ -580,8 +580,10 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
     week = cycle_dates["current_week"] if cycle_status == "active" else adjusted_weeks
     phase = determine_phase(week, adjusted_weeks)
     # PR76b: a genuine detraining (0 real running km in 28 days) must not be
-    # treated as the 20 km/week default — use a conservative reprise base.
-    target_base_km = resolve_chronic_base(weekly_km, km_28_running)
+    # treated as the 20 km/week default; and sparse recent data (a comeback
+    # ramping up) must not be diluted by the fixed /4 divisor. Use the average
+    # over active weeks as the target base.
+    target_base_km = resolve_chronic_base(workouts_28)
     target_km_debug = compute_target_km(target_base_km, goal, phase)
     target_km_debug = apply_resume_guard(target_km_debug, km_7_running, target_base_km)
 

@@ -141,6 +141,39 @@ def test_real_reprise_zero_km_is_conservative_and_coherent():
     asyncio.run(_run())
 
 
+def test_real_week2_comeback_progresses_not_regresses():
+    """Week 2 of a comeback must PROGRESS, not collapse.
+
+    After completing week 1 (~12.6 km in the last 7 days) with no data before,
+    the fixed /4 divisor of compute_current_weekly_km would dilute the base to
+    ~3 km and prescribe a 3 km week. The active-weeks base must instead keep the
+    base near the real recent volume so week 2 progresses by ~+10 %.
+    """
+    from datetime import datetime, timezone, timedelta
+
+    def _week1_runs():
+        now = datetime.now(timezone.utc)
+        return [
+            {"type": "running", "distance_km": 3.15, "moving_time": int(3.15 * 6 * 60),
+             "date": (now - timedelta(days=d)).isoformat()}
+            for d in (1, 3, 5, 6)  # 4 x 3.15 = 12.6 km, all within last 7 days
+        ]
+
+    async def _run():
+        coach_service.clear_cache()
+        db = _FakeDB(_week1_runs())
+        db.training_cycles = _FakeCollection(single={"user_id": "u1", "goal": "SEMI"})
+        r = await generate_dynamic_training_plan(db, "u1")
+        target = r["debug_volume"]["target_km"]
+        weekly = r["plan"]["weekly_km"]
+        print(f"[week2] target={target} weekly={weekly}")
+        # Must not regress below what was just done (12.6 km) and must progress.
+        assert target >= 12.6, f"Week 2 must not regress below week 1 (12.6). Got {target}."
+        assert target <= 12.6 * 1.10 + 0.5, f"Week 2 progression must stay ~+10%. Got {target}."
+
+    asyncio.run(_run())
+
+
 if __name__ == "__main__":
     test_real_cache_bypass_44_to_42()
     print("PASSED")
