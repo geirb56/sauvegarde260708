@@ -97,8 +97,11 @@ Nouveau test verrou : `test_weekly_total_matches_target_no_rounding_drift`.
 ## Déploiement
 Aucun. Correctifs à publier via **Save to Github** dans une PR dédiée à la reprise.
 
-## Frontend — Bandeau « Mode reprise »
+## Frontend — Bandeau « Mode reprise » + affichage en minutes
 - `frontend/src/pages/TrainingPlan.jsx` : bandeau affiché quand `context.training_state` ∈ {`deep_reprise`, `partial_reprise`} (`data-testid="reprise-mode-banner"`), avec badge (REPRISE EN DOUCEUR / REMISE EN ROUTE), icône `Sprout`, et texte rassurant.
+- **Reprise affichée en minutes, pas en km** (choix utilisateur) : les séances de reprise (deep + partial) sont exprimées par durée (`weekly_minutes`, ex. 75 min), la carte de semaine courante montre `~75 min • 3 séances` au lieu d'un kilométrage. Le km reste calculé en interne (progression) mais n'est plus affiché en reprise.
+- Backend `llm_coach.generate_cycle_week` : ajoute `weekly_minutes` + `reprise` au plan ; détails de séance reformatés en minutes ("35 min en aisance • effort très facile"). Reprise partielle bascule en structure durée.
+- Nombre de séances de la semaine de reprise = 3 (cohérent avec la structure facile-only).
 - i18n FR/EN/ES ajoutés (`trainingPlanExtended.reprise*`).
-- Arrondi source : `resolve_reprise_plan` arrondit `base_km`/`target_km` à 0,1 (supprime le bruit flottant `12.600000000000001`).
-- Vérifié e2e : nouvel utilisateur (0 donnée) → bandeau « Comeback mode / GENTLE RESTART », aperçu du cycle en séances faciles, séance par durée « 20 min en aisance • marche/course possible ».
+- Arrondi source : `resolve_reprise_plan` arrondit `base_km`/`target_km` à 0,1.
+- Vérifié e2e (screenshot) : bandeau « Comeback mode / GENTLE RESTART », carte `~75 min • 3 séances`, séances "20/25/30 min en aisance • marche/course possible".

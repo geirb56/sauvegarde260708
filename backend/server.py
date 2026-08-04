@@ -4382,16 +4382,24 @@ async def get_full_training_cycle(
             session_types = ["endurance", "long_run"]
 
         # Reprise: the current week is easy-only (no threshold/tempo/long run).
-        if is_current_week and reprise_state in ("deep_reprise", "partial_reprise"):
+        is_reprise_week = is_current_week and reprise_state in ("deep_reprise", "partial_reprise")
+        if is_reprise_week:
             session_types = ["endurance", "recovery", "endurance"]
-        
+
+        if is_reprise_week:
+            week_sessions = len(session_types)
+        elif phase in ["taper", "race"]:
+            week_sessions = min(3, sessions_per_week)
+        else:
+            week_sessions = sessions_per_week
+
         weeks_overview.append({
             "week": week_num,
             "phase": phase,
             "phase_name": phase_info.get("name", phase),
             "phase_focus": phase_info.get("focus", ""),
             "target_km": target_km,
-            "sessions": sessions_per_week if phase not in ["taper", "race"] else min(3, sessions_per_week),
+            "sessions": week_sessions,
             "session_types": session_types[:sessions_per_week],
             "is_current": is_current_week,
             "is_completed": cycle_status == "active" and week_num < current_week,

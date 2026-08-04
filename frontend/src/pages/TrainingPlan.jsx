@@ -257,6 +257,7 @@ export default function TrainingPlan() {
   const context = plan?.context || {};
   const trainingState = context.training_state || null;
   const isReprise = trainingState === "deep_reprise" || trainingState === "partial_reprise";
+  const repriseMinutes = plan?.plan?.weekly_minutes || null;
   const sessions = plan?.plan?.sessions || [];
   const weeks = fullCycle?.weeks || [];
   const currentWeek = fullCycle?.current_week || 1;
@@ -658,7 +659,9 @@ export default function TrainingPlan() {
                         </span>
                         <span className="text-[10px]" style={{ color: "var(--text-tertiary)" }}>•</span>
                         <span className="text-[10px] font-mono" style={{ color: "var(--text-tertiary)" }}>
-                          ~{week.target_km} km
+                          {isReprise && isCurrent && repriseMinutes
+                            ? `~${repriseMinutes} min`
+                            : `~${week.target_km} km`}
                         </span>
                         <span className="text-[10px]" style={{ color: "var(--text-tertiary)" }}>•</span>
                         <span className="text-[10px] font-mono" style={{ color: "var(--text-tertiary)" }}>
