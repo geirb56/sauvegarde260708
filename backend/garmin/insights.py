@@ -278,8 +278,8 @@ async def compute_run_index(db, user_id: str, language: str = "fr") -> Optional[
           "en": f"Fatigue Ratio {fatigue_ratio:.2f}"}
     reasons.append(_t.get(lang, _t["fr"]))
 
-    # --- 7-day history (oldest -> newest) ---
-    recent = list(reversed(metrics_docs[:7]))
+    # --- 30-day history (oldest -> newest) ---
+    recent = list(reversed(metrics_docs[:30]))
     history = []
     for doc in recent:
         d = _parse_day(doc.get("date", ""))

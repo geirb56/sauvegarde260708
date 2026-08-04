@@ -227,3 +227,8 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
 - Données réelles confirmées: `garmin_daily_metrics` a ~8 jours/user (RHR+sommeil réels; HRV non enregistrée par l'appareil → affiche "—"). Après fix, readiness historique varie: ex default `[48,65,40,76,75,77,77]`, user reprise `[70,70,70,70,100,38,25]`.
 - Note: platitude résiduelle possible = réelle (athlète frais ACWR~1 → ~100 ; surcharge continue → plancher). HRV manquante réduit la variation physiologique.
 - Vérifié: compute_run_index (python), frontend "Compiled successfully" + screenshot (4 tuiles + courbe variée). ACWR "today" et compute_current_weekly_km inchangés.
+
+## 2026-08-04 — Courbe readiness sur 30 jours
+- Historique readiness passé de 7 à 30 jours: insights.py `metrics_docs[:30]`. Aucun sélecteur de période.
+- Dashboard.jsx: label `dashboard.monthlyReadiness` (FR "Forme sur 30 jours" / EN "30-Day Readiness" / ES "Forma 30 días"). Labels d'axe = date début (history[0].date) et date fin (MM-DD), au lieu d'un libellé par jour (illisible à 30 points).
+- Vérifié: frontend "Compiled successfully" + screenshot (courbe 30 pts variée, 07-01→07-30). Note: users réels ont ~8 jours de métriques -> la courbe se remplit jusqu'à 30 au fil du temps.

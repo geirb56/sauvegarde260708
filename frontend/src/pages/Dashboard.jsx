@@ -726,12 +726,12 @@ export default function Dashboard() {
                     />
                   </div>
 
-                  {/* 7-day Run Readiness trend */}
+                  {/* 30-day Run Readiness trend */}
                   {history.filter((h) => h.run_readiness !== undefined && h.run_readiness !== null).length >= 2 && (
                     <div className="pt-1" data-testid="readiness-trend">
                       <div className="flex items-center justify-between mb-1">
                         <p className="text-[11px] uppercase tracking-wider font-semibold" style={{ color: "var(--text-tertiary)" }}>
-                          {t("dashboard.weeklyReadiness")}
+                          {t("dashboard.monthlyReadiness")}
                         </p>
                         <span className="text-[11px] font-bold" style={{ color: "#6EEB5A" }}>
                           {history[history.length - 1]?.run_readiness ?? "—"} / 100
@@ -739,11 +739,12 @@ export default function Dashboard() {
                       </div>
                       <MiniLineChart data={history.map((h) => h.run_readiness ?? 0)} />
                       <div className="flex justify-between mt-1">
-                        {history.map((h, i) => (
-                          <span key={i} className="text-[9px]" style={{ color: "var(--text-tertiary)" }}>
-                            {h.day}
-                          </span>
-                        ))}
+                        <span className="text-[9px]" style={{ color: "var(--text-tertiary)" }}>
+                          {history[0]?.date ? history[0].date.slice(5) : ""}
+                        </span>
+                        <span className="text-[9px]" style={{ color: "var(--text-tertiary)" }}>
+                          {history[history.length - 1]?.date ? history[history.length - 1].date.slice(5) : ""}
+                        </span>
                       </div>
                     </div>
                   )}
