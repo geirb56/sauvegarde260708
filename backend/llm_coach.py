@@ -515,6 +515,19 @@ async def generate_cycle_week(
         else:
             sessions.append(build_session(day, session_type, custom_distance=distances.get((day, session_type))))
 
+    # Normalize rounding drift: session distances are each rounded to 0.1 km, so
+    # their sum can drift from target_km (e.g. 16.06+9.88+16.06 -> 42.1 vs 42.0).
+    # Apply the residual to the largest running session so the weekly total
+    # matches the intended target_km exactly.
+    intended_total = round(long_total + remaining, 1)
+    current_total = round(sum(s["distance_km"] for s in sessions), 1)
+    residual = round(intended_total - current_total, 1)
+    if abs(residual) >= 0.1:
+        running = [s for s in sessions if s.get("distance_km", 0) > 0]
+        if running:
+            biggest = max(running, key=lambda s: s["distance_km"])
+            biggest["distance_km"] = round(biggest["distance_km"] + residual, 1)
+
     # Calculate totals
     total_km = round(sum(s["distance_km"] for s in sessions), 1)
     total_tss = sum(s["estimated_tss"] for s in sessions)

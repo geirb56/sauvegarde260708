@@ -154,6 +154,25 @@ def test_volume_and_intensity_not_simultaneous():
     asyncio.run(_run())
 
 
+# 8. No rounding drift: the weekly total matches target_km exactly.
+def test_weekly_total_matches_target_no_rounding_drift():
+    async def _run():
+        # This scenario used to yield 42.1 instead of 42.0 (rounding drift of the
+        # 3-way easy split in partial_reprise). The generator now normalizes it.
+        w = _runs([(40, [24, 26]), (40, [17, 19]), (40, [10, 12]), (15, [2, 4])])
+        for goal in ("MARATHON", "SEMI", "10K"):
+            coach_service.clear_cache()
+            db = _FakeDB(w)
+            db.training_cycles = _FakeCollection(single={"user_id": "u1", "goal": goal})
+            r = await generate_dynamic_training_plan(db, "u1")
+            target = r["debug_volume"]["target_km"]
+            weekly = r["plan"]["weekly_km"]
+            assert abs(weekly - target) < 0.05, (
+                f"{goal}: weekly {weekly} must equal target {target} (no rounding drift)."
+            )
+    asyncio.run(_run())
+
+
 if __name__ == "__main__":
     for fn in [
         test_deep_reprise_zero_km_is_easy_and_duration_based,
@@ -163,6 +182,7 @@ if __name__ == "__main__":
         test_abrupt_overload_is_dampened,
         test_normal_athlete_no_regression,
         test_volume_and_intensity_not_simultaneous,
+        test_weekly_total_matches_target_no_rounding_drift,
     ]:
         fn()
         print(f"PASSED {fn.__name__}")

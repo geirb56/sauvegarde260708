@@ -50,6 +50,14 @@ quand chute > 50 %). En reprise, **seul le volume** progresse ; l'intensité res
 `cap_long_run_for_low_volume` (≤ 40 % du target sous le plancher de l'objectif).
 `_deterministic_plan` y est routé. Plus de plancher `long_min` imposé en faible volume.
 
+### 5. Normalisation de l'arrondi (chemin réel corrigé)
+`generate_cycle_week` arrondissait chaque distance de séance à 0,1 km indépendamment,
+donc la somme dérivait du `target_km` (ex. 16,06 + 9,88 + 16,06 → **42,1** au lieu de 42,0).
+Correctif : après construction des séances, le résidu (`target_km − somme`) est appliqué à
+la **plus grande séance de course**, garantissant `weekly_km == target_km` exactement.
+Le test (tolérance qui masquait le symptôme) a été remis en assertion **stricte** (`≤ 42`).
+Nouveau test verrou : `test_weekly_total_matches_target_no_rounding_drift`.
+
 ## Scénarios testés (`test_reprise_pr77.py`) et résultats
 | # | Scénario | Résultat |
 |---|---|---|
