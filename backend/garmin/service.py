@@ -219,10 +219,10 @@ async def deep_sync(db, user_id: str) -> dict:
         {"$set": {"deep_sync_done": True}},
     )
 
-    # Daily health metrics (last 7 days — same as normal sync).
+    # Daily health metrics (last 30 days — backfill readiness history).
     metrics_count = 0
     try:
-        metrics = provider.get_daily_metrics(user_id, days=7)
+        metrics = provider.get_daily_metrics(user_id, days=30)
         for m in metrics:
             day = m.get("date")
             if not day:
@@ -299,7 +299,7 @@ async def sync(db, user_id: str, since: Optional[str] = None) -> dict:
     # --- Daily health metrics (Phase 2: HRV / resting HR / sleep) ---
     metrics_count = 0
     try:
-        metrics = provider.get_daily_metrics(user_id, days=7)
+        metrics = provider.get_daily_metrics(user_id, days=30)
         for m in metrics:
             day = m.get("date")
             if not day:

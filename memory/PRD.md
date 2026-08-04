@@ -237,3 +237,10 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
 - Retiré le score "{n} / 100" à droite de l'en-tête de la courbe (Dashboard.jsx). En-tête = libellé seul.
 - Platitude visuelle corrigée: `MiniLineChart` accepte désormais une prop `height` (défaut 60), la courbe readiness est passée à 110px. La platitude venait du ratio largeur/hauteur (très large, 60px) ; MiniLineChart normalise déjà min-max donc les variations ressortent nettement à 110px.
 - Vérifié: screenshot (courbe 30j haute avec pics/creux visibles, plus de score à droite).
+
+## 2026-08-04 — Fenêtre métriques Garmin: 7 → 30 jours
+- Cause du "8 jours" identifiée: la synchro Garmin ne demandait que 7 jours de métriques bien-être (runner.fetch_daily_metrics days=7 ; service.get_daily_metrics days=7 aux 2 appels). Les activités remontent loin (limite 200), pas les métriques quotidiennes.
+- Fix: `backend/garmin/service.py` → `provider.get_daily_metrics(user_id, days=30)` sur les 2 chemins (deep_sync ligne 225, sync régulière ligne 302). Le paramètre `days` transite jusqu'à runner.fetch_daily_metrics.
+- ⚠️ Nécessite une NOUVELLE synchro Garmin (côté user) pour backfiller l'historique 30 jours. Upsert idempotent.
+- ⚠️ Perf: 30 jours × 3 endpoints gccli = ~90 sous-process par sync (plus lent, risque rate-limit Garmin). Si trop lourd: garder deep_sync=30 et repasser la sync régulière à 7. À surveiller.
+- Vérifié: backend health 200, code transmet bien days=30. NON testé en réel (nécessite session gccli live + vraie sync).
