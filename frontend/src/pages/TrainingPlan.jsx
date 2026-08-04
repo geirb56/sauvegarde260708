@@ -539,15 +539,17 @@ export default function TrainingPlan() {
             </span>
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-2xl font-bold" style={{ color: getAcwrColor(trainingMetrics?.acwr_status) }}>
-              {trainingMetrics?.acwr?.toFixed(2) || "1.00"}
+            <span className="text-2xl font-bold" style={{ color: getAcwrColor(trainingMetrics?.acwr_status) }} data-testid="acwr-value">
+              {trainingMetrics?.acwr_reliable === false ? "—" : (trainingMetrics?.acwr?.toFixed(2) || "1.00")}
             </span>
             {trainingMetrics?.acwr_status === "optimal" && (
               <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "#22c55e20", color: "#22c55e" }}>✓</span>
             )}
           </div>
           <p className="text-xs mt-1" style={{ color: getAcwrColor(trainingMetrics?.acwr_status) }}>
-            {trainingMetrics?.acwr_status ? t(`dashboard.acwr_status.${trainingMetrics.acwr_status}`) : t("dashboard.acwr_status.optimal")}
+            {trainingMetrics?.acwr_reliable === false
+              ? t("dashboard.acwr_status.building")
+              : (trainingMetrics?.acwr_status ? t(`dashboard.acwr_status.${trainingMetrics.acwr_status}`) : t("dashboard.acwr_status.optimal"))}
           </p>
         </div>
 

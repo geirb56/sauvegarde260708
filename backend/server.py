@@ -70,6 +70,7 @@ from training_engine import (
     apply_resume_guard,
     resolve_chronic_base,
     resolve_reprise_plan,
+    classify_training_state,
     REPRISE_STABLE_WEEKS,
     vma_pace,
     vma_pace_range,
@@ -3744,8 +3745,18 @@ async def get_training_metrics(user: dict = Depends(auth_user)):
     # Strain = Load * Monotony
     strain = round(load_7 * monotony, 0) if monotony > 0 else 0
     
+    # ACWR reliability: the rolling-average ACWR needs ~4 weeks of chronic data
+    # to be valid. During a comeback (reprise) the chronic base is built from
+    # sparse data, which spikes the ratio into a false "Danger". In that case we
+    # mark it as unreliable so the UI shows "baseline building" instead.
+    reprise_state = classify_training_state(activities_28)
+    acwr_reliable = reprise_state not in ("deep_reprise", "partial_reprise")
+
     # Interpréter ACWR
-    if acwr < 0.8:
+    if not acwr_reliable:
+        acwr_status = "building"
+        acwr_label = "Base en construction"
+    elif acwr < 0.8:
         acwr_status = "low"
         acwr_label = "Sous-entraînement"
     elif acwr <= 1.3:
@@ -3776,6 +3787,7 @@ async def get_training_metrics(user: dict = Depends(auth_user)):
         "acwr": acwr,
         "acwr_status": acwr_status,
         "acwr_label": acwr_label,
+        "acwr_reliable": acwr_reliable,
         "tsb": tsb,
         "tsb_status": tsb_status,
         "tsb_label": tsb_label,

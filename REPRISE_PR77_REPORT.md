@@ -98,6 +98,12 @@ Nouveau test verrou : `test_weekly_total_matches_target_no_rounding_drift`.
   target/sortie longue mais ne forcent pas la structure facile-only.
 - gccli non officiel : dépend de la synchronisation Garmin réelle.
 
+## Vérification & fix ACWR (reprise)
+- **Formule correcte** (modèle standard rolling-average coupled) : `ACWR = charge 7j / (charge 28j ÷ 4)`, cohérente dans coach_service / server.py / training_engine. Validée numériquement (stable=1.0, pic=1.33, sous-charge=0.5).
+- **Problème** : en reprise, la base chronique éparse fait exploser l'ACWR (S1=4.0 « Danger ») — limite connue (besoin de ≥4 semaines de chronique). Message contradictoire avec le plan reprise.
+- **Fix (formule inchangée)** : `/training/metrics` classe l'état via `classify_training_state`; si `deep_reprise`/`partial_reprise` → `acwr_reliable=False`, `acwr_status="building"`. Front : affiche « — / Base en construction » (gris neutre) au lieu du ratio alarmant. i18n FR/EN/ES (`dashboard.acwr_status.building`).
+- Vérifié e2e (screenshot user reprise) : ACWR « — / Baseline building », plus de fausse alerte.
+
 ## Déploiement
 Aucun. Correctifs à publier via **Save to Github** dans une PR dédiée à la reprise.
 
