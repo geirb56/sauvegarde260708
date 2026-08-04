@@ -338,11 +338,10 @@ function ReadinessTile({ icon: Icon, label, value, status, testId, onClick }) {
 }
 
 // Mini Line Chart Component
-function MiniLineChart({ data = [] }) {
+function MiniLineChart({ data = [], height = 60 }) {
   if (!data.length) return null;
   
   const width = 280;
-  const height = 60;
   const padding = 10;
   
   const maxVal = Math.max(...data);
@@ -729,15 +728,10 @@ export default function Dashboard() {
                   {/* 30-day Run Readiness trend */}
                   {history.filter((h) => h.run_readiness !== undefined && h.run_readiness !== null).length >= 2 && (
                     <div className="pt-1" data-testid="readiness-trend">
-                      <div className="flex items-center justify-between mb-1">
-                        <p className="text-[11px] uppercase tracking-wider font-semibold" style={{ color: "var(--text-tertiary)" }}>
-                          {t("dashboard.monthlyReadiness")}
-                        </p>
-                        <span className="text-[11px] font-bold" style={{ color: "#6EEB5A" }}>
-                          {history[history.length - 1]?.run_readiness ?? "—"} / 100
-                        </span>
-                      </div>
-                      <MiniLineChart data={history.map((h) => h.run_readiness ?? 0)} />
+                      <p className="text-[11px] uppercase tracking-wider font-semibold mb-1" style={{ color: "var(--text-tertiary)" }}>
+                        {t("dashboard.monthlyReadiness")}
+                      </p>
+                      <MiniLineChart data={history.map((h) => h.run_readiness ?? 0)} height={110} />
                       <div className="flex justify-between mt-1">
                         <span className="text-[9px]" style={{ color: "var(--text-tertiary)" }}>
                           {history[0]?.date ? history[0].date.slice(5) : ""}

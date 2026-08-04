@@ -232,3 +232,8 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
 - Historique readiness passé de 7 à 30 jours: insights.py `metrics_docs[:30]`. Aucun sélecteur de période.
 - Dashboard.jsx: label `dashboard.monthlyReadiness` (FR "Forme sur 30 jours" / EN "30-Day Readiness" / ES "Forma 30 días"). Labels d'axe = date début (history[0].date) et date fin (MM-DD), au lieu d'un libellé par jour (illisible à 30 points).
 - Vérifié: frontend "Compiled successfully" + screenshot (courbe 30 pts variée, 07-01→07-30). Note: users réels ont ~8 jours de métriques -> la courbe se remplit jusqu'à 30 au fil du temps.
+
+## 2026-08-04 — Courbe readiness: retrait score + hauteur
+- Retiré le score "{n} / 100" à droite de l'en-tête de la courbe (Dashboard.jsx). En-tête = libellé seul.
+- Platitude visuelle corrigée: `MiniLineChart` accepte désormais une prop `height` (défaut 60), la courbe readiness est passée à 110px. La platitude venait du ratio largeur/hauteur (très large, 60px) ; MiniLineChart normalise déjà min-max donc les variations ressortent nettement à 110px.
+- Vérifié: screenshot (courbe 30j haute avec pics/creux visibles, plus de score à droite).
