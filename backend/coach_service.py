@@ -630,6 +630,14 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
     # PR76 resume guard: store protected target so plan generators cap volume
     context["target_km_protected"] = target_km_debug
     context["training_state"] = training_state
+    # Prior fitness (before the break): running volume in the older part of the
+    # 6-week window (days 28-42). Used to scale deep-reprise session durations.
+    prior_runs = [
+        w for w in workouts_6w
+        if is_running(w) and (w.get("date") or "") < twenty_eight_days_ago.isoformat()
+    ]
+    prior_km = sum(normalized_distance_km(w) for w in prior_runs)
+    context["prior_weekly_km"] = round(prior_km / 2.0, 1)
 
     # 10. Calculate target load
     target_load = determine_target_load(context, phase)

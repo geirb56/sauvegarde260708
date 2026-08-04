@@ -25,6 +25,7 @@ from training_engine import (
     compute_long_run_km,
     build_reprise_week_structure,
     REPRISE_DEEP_SESSION_MINUTES,
+    reprise_deep_durations,
     VOLUME_GOAL_CONFIG,
 )
 
@@ -455,7 +456,7 @@ async def generate_cycle_week(
         easy_pace = pace_z1 or 7.0
         reprise_sessions = []
         used_days = ["tuesday", "thursday", "sunday"]
-        durations = REPRISE_DEEP_SESSION_MINUTES
+        durations = reprise_deep_durations(context.get("prior_weekly_km", 0))
         for i, day in enumerate(["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]):
             if day in used_days:
                 idx = used_days.index(day)

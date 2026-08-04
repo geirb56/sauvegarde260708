@@ -197,7 +197,24 @@ REPRISE_STABLE_WEEKS = 3
 
 # Deep reprise (0 km / 28 days): the first week back is prescribed by DURATION
 # (easy minutes, run/walk allowed) rather than an imposed weekly mileage.
-REPRISE_DEEP_SESSION_MINUTES = [20, 25, 30]
+# Session durations are scaled to the athlete's PRIOR fitness (6-week window):
+# a true beginner / unknown gets the floor, a former trained runner gets longer.
+REPRISE_DEEP_SESSION_MINUTES = [30, 35, 40]           # floor (beginner / unknown)
+REPRISE_DEEP_SESSION_MINUTES_TRAINED = [35, 45, 55]   # former trained runner
+
+
+def reprise_deep_durations(prior_weekly_km: float = 0.0) -> List[int]:
+    """Deep-reprise session durations (minutes), scaled to prior fitness.
+
+    prior_weekly_km is the athlete's weekly running volume BEFORE the break,
+    measured on the older part of the 6-week window (days 28-42). It linearly
+    interpolates session length between the floor (<=15 km/week or unknown) and
+    the trained profile (>=40 km/week)."""
+    floor = REPRISE_DEEP_SESSION_MINUTES
+    top = REPRISE_DEEP_SESSION_MINUTES_TRAINED
+    p = max(0.0, float(prior_weekly_km or 0))
+    frac = max(0.0, min(1.0, (p - 15.0) / (40.0 - 15.0)))
+    return [int(round(floor[i] + frac * (top[i] - floor[i]))) for i in range(len(floor))]
 
 
 def _weekly_running_buckets(workouts_28: List[Dict[str, Any]], now=None) -> List[float]:
@@ -1015,6 +1032,7 @@ __all__ = [
     "REPRISE_BASE_KM",
     "REPRISE_STABLE_WEEKS",
     "REPRISE_DEEP_SESSION_MINUTES",
+    "reprise_deep_durations",
     "compute_long_run_km",
     "vma_pace",
     "vma_pace_range",

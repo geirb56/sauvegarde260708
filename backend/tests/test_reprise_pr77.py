@@ -66,7 +66,7 @@ def test_deep_reprise_zero_km_is_easy_and_duration_based():
             res = await _plan(_runs([]), goal)
             assert res["state"] == "deep_reprise", f"{goal}: expected deep_reprise, got {res['state']}"
             assert not _has_hard(res["types"]), f"{goal}: deep reprise must have NO hard sessions."
-            assert res["weekly"] <= 15, f"{goal}: deep reprise weekly ({res['weekly']}) must stay conservative."
+            assert res["weekly"] <= 20, f"{goal}: deep reprise weekly ({res['weekly']}) must stay conservative."
             # Duration-based: session details expressed in minutes with run/walk.
             run_sessions = [s for s in res["sessions"] if s["type"] != "rest"]
             assert all("min" in s["duration"] for s in run_sessions)
@@ -74,14 +74,33 @@ def test_deep_reprise_zero_km_is_easy_and_duration_based():
     asyncio.run(_run())
 
 
+# 1b. Deep reprise scales with prior fitness (former trained runner -> longer).
+def test_deep_reprise_scales_with_prior_fitness():
+    async def _run():
+        # 0 km in last 28 days, but ~40 km/week in the older 6-week window (days 28-42).
+        w = _runs([(40, [30, 32, 34, 37]), (40, [39, 41])])
+        beginner = await _plan(_runs([]))            # no prior history -> floor durations
+        trained = await _plan(w)                     # prior ~40 -> longer durations
+        assert trained["state"] == "deep_reprise" and beginner["state"] == "deep_reprise"
+        tr_mins = [int(s["duration"].replace("min", "")) for s in trained["sessions"] if s["type"] != "rest"]
+        bg_mins = [int(s["duration"].replace("min", "")) for s in beginner["sessions"] if s["type"] != "rest"]
+        assert max(tr_mins) > max(bg_mins), f"Trained durations {tr_mins} must exceed beginner {bg_mins}."
+        assert max(tr_mins) >= 50, f"Former trained runner should get a longer session, got {tr_mins}."
+    asyncio.run(_run())
+
+
 # 2. S1 -> S2 -> S3 progression must not collapse.
 def test_reprise_progression_s1_s2_s3():
     async def _run():
-        s1 = await _plan(_runs([]))                                  # week 1: nothing yet
-        s2 = await _plan(_runs([(12.6, [1, 3, 5, 6])]))              # week 2: did ~12.6 last 7d
-        s3 = await _plan(_runs([(12.6, [8, 10, 12, 13]), (14, [1, 3, 5, 6])]))  # week 3
-        assert s2["weekly"] >= s1["weekly"], "S2 must not collapse below S1."
-        assert s3["weekly"] >= s2["weekly"] - 0.5, "S3 must keep progressing (no regression)."
+        s1 = await _plan(_runs([]))                                  # week 1: deep reprise
+        w1 = round(s1["weekly"], 1)
+        # week 2: the athlete actually did ~w1 km last week.
+        s2 = await _plan(_runs([(w1, [1, 3, 5, 6])]))
+        w2 = round(s2["weekly"], 1)
+        # week 3: week 1 volume (days 8-13) + week 2 volume (last 7d).
+        s3 = await _plan(_runs([(w1, [8, 10, 12, 13]), (w2, [1, 3, 5, 6])]))
+        assert w2 >= w1 - 0.5, f"S2 ({w2}) must not collapse below S1 ({w1})."
+        assert s3["weekly"] >= w2 - 0.5, f"S3 ({s3['weekly']}) must keep progressing (>= S2 {w2})."
         assert s2["state"] == "partial_reprise" and s3["state"] == "partial_reprise"
     asyncio.run(_run())
 
@@ -176,6 +195,7 @@ def test_weekly_total_matches_target_no_rounding_drift():
 if __name__ == "__main__":
     for fn in [
         test_deep_reprise_zero_km_is_easy_and_duration_based,
+        test_deep_reprise_scales_with_prior_fitness,
         test_reprise_progression_s1_s2_s3,
         test_long_run_never_disproportionate,
         test_partial_reprise_after_break,

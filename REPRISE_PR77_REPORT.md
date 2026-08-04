@@ -30,6 +30,9 @@ pour un athlète avec peu de semaines de données. 0 semaine active → `REPRISE
 ### 2. Classification adaptative (pas de durée fixe)
 `classify_training_state` renvoie :
 - `deep_reprise` : 0 km / 28 j → 1re semaine **par durée** (facile, run/walk), sans km imposé.
+  Durées **calées sur le niveau antérieur** (`reprise_deep_durations`, fenêtre 6 sem, jours
+  28-42) : plancher 30/35/40 min (débutant/inconnu) → 35/45/55 min (ex-coureur ~40 km/sem),
+  interpolé linéairement. 3 séances faciles.
 - `partial_reprise` : données récentes mais comeback précoce (< `REPRISE_STABLE_WEEKS`=3
   semaines actives tolérées) **ou** chute > 50 % du volume (resume guard) → facile-only,
   le volume progresse, l'intensité reste gelée.
