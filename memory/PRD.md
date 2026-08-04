@@ -220,3 +220,10 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
 - **Détail au tap**: chaque `ReadinessTile` est un bouton (icône ⓘ + point d'état) qui ouvre un `Dialog` (shadcn) avec explication courte de la composante. i18n `dashboard.readinessInfo.{hrv,rhr,sleep,load,ratio}` FR/EN/ES. data-testid `readiness-info-dialog`.
 - ⚠️ LEÇON: NE PAS faire plusieurs `search_replace` en parallèle sur le MÊME fichier — une course a fait perdre l'import `Dialog` et créé un bloc dupliqué en fin de Dashboard.jsx (corrigé). Éditer un même fichier séquentiellement.
 - Vérifié: frontend "Compiled successfully"; screenshots Dashboard (tuiles+courbe+dialog) et /training (TSB building). Backend inchangé sur ACWR/compute_current_weekly_km.
+
+## 2026-08-04 — Run Readiness: 4 tuiles + courbe ACWR par jour
+- Tuile "Ratio fatigue" retirée du front (Dashboard.jsx). Grille passée à `grid-cols-2 sm:grid-cols-4` → 4 tuiles (VFC, FC, Sommeil, Charge) sur une ligne.
+- Courbe 7 jours plate corrigée: insights.py calcule désormais un **ACWR glissant par jour** (`_compute_acwr(activities, jour)`) au lieu de réutiliser l'ACWR global pour chaque jour. `run_readiness` par jour = 100 - physio_penalty_jour - acwr_penalty_jour. `history.training_load` = ACWR du jour.
+- Données réelles confirmées: `garmin_daily_metrics` a ~8 jours/user (RHR+sommeil réels; HRV non enregistrée par l'appareil → affiche "—"). Après fix, readiness historique varie: ex default `[48,65,40,76,75,77,77]`, user reprise `[70,70,70,70,100,38,25]`.
+- Note: platitude résiduelle possible = réelle (athlète frais ACWR~1 → ~100 ; surcharge continue → plancher). HRV manquante réduit la variation physiologique.
+- Vérifié: compute_run_index (python), frontend "Compiled successfully" + screenshot (4 tuiles + courbe variée). ACWR "today" et compute_current_weekly_km inchangés.

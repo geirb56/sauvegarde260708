@@ -295,12 +295,21 @@ async def compute_run_index(db, user_id: str, language: str = "fr") -> Optional[
             doc_fp = 0.6 * doc_rhr_delta + 0.4 * doc_sleep_penalty
         doc_fatigue_ratio = 1.0 + max(0.0, doc_fp) / 10.0
         doc_physio_penalty = min(60.0, max(0.0, doc_fp) * 6.0)
-        doc_readiness = int(round(max(5.0, min(100.0, 100.0 - doc_physio_penalty - acwr_penalty))))
+        # Per-day ACWR (rolling, computed as of that day) so the readiness trend
+        # reflects real day-to-day training load instead of reusing one global value.
+        doc_acwr = _compute_acwr(activities, d.date()) if d else acwr
+        if doc_acwr > 1.3:
+            doc_acwr_penalty = min(60.0, (doc_acwr - 1.3) * 130.0)
+        elif doc_acwr < 0.8:
+            doc_acwr_penalty = min(30.0, (0.8 - doc_acwr) * 60.0)
+        else:
+            doc_acwr_penalty = 0.0
+        doc_readiness = int(round(max(5.0, min(100.0, 100.0 - doc_physio_penalty - doc_acwr_penalty))))
         history.append({
             "day": day_label,
             "date": doc.get("date"),
             "hrv": round(float(doc_hrv), 1) if doc_hrv is not None else None,
-            "training_load": round(training_load, 2),
+            "training_load": round(doc_acwr, 2),
             "fatigue_ratio": round(doc_fatigue_ratio, 2),
             "run_readiness": doc_readiness,
         })

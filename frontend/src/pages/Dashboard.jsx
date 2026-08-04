@@ -691,7 +691,7 @@ export default function Dashboard() {
                   </div>
 
                   {/* Component tiles — compact grid, tappable for info */}
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3" data-testid="run-readiness-pillars">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3" data-testid="run-readiness-pillars">
                     <ReadinessTile
                       icon={Heart}
                       label={t("dashboard.readinessPillars.hrv")}
@@ -723,14 +723,6 @@ export default function Dashboard() {
                       status={m.training_load_status || "green"}
                       testId="load"
                       onClick={() => setInfoMetric("load")}
-                    />
-                    <ReadinessTile
-                      icon={TrendingUp}
-                      label={t("dashboard.readinessPillars.ratio")}
-                      value={(m.fatigue_ratio === undefined || m.fatigue_ratio === null) ? "—" : `${m.fatigue_ratio}`}
-                      status={m.fatigue_status || "green"}
-                      testId="ratio"
-                      onClick={() => setInfoMetric("ratio")}
                     />
                   </div>
 
