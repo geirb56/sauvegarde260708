@@ -317,7 +317,7 @@ def resolve_reprise_plan(
         # Introduce intensity (normal structure) but HOLD the volume: no +10 %.
         hold = round(base * PHASE_VOLUME_MULTIPLIERS.get(phase, 1.0))
         target_km = min(target_km, hold)
-    return {"state": state, "base_km": base, "target_km": target_km}
+    return {"state": state, "base_km": round(base, 1), "target_km": round(target_km, 1)}
 
 
 def build_reprise_week_structure(sessions: int = 3) -> List[tuple]:

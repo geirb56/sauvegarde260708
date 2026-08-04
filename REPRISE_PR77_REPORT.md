@@ -96,3 +96,9 @@ Nouveau test verrou : `test_weekly_total_matches_target_no_rounding_drift`.
 
 ## Déploiement
 Aucun. Correctifs à publier via **Save to Github** dans une PR dédiée à la reprise.
+
+## Frontend — Bandeau « Mode reprise »
+- `frontend/src/pages/TrainingPlan.jsx` : bandeau affiché quand `context.training_state` ∈ {`deep_reprise`, `partial_reprise`} (`data-testid="reprise-mode-banner"`), avec badge (REPRISE EN DOUCEUR / REMISE EN ROUTE), icône `Sprout`, et texte rassurant.
+- i18n FR/EN/ES ajoutés (`trainingPlanExtended.reprise*`).
+- Arrondi source : `resolve_reprise_plan` arrondit `base_km`/`target_km` à 0,1 (supprime le bruit flottant `12.600000000000001`).
+- Vérifié e2e : nouvel utilisateur (0 donnée) → bandeau « Comeback mode / GENTLE RESTART », aperçu du cycle en séances faciles, séance par durée « 20 min en aisance • marche/course possible ».

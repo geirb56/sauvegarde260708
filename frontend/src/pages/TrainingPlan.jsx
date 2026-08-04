@@ -6,7 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   TrendingUp, RefreshCw, CheckCircle2,
   Zap, Clock, Activity, ChevronDown, ChevronUp,
-  Trophy, Mountain, Calendar, Heart
+  Trophy, Mountain, Calendar, Heart, Sprout
 } from "lucide-react";
 import { toast } from "sonner";
 import axios from "axios";
@@ -255,6 +255,8 @@ export default function TrainingPlan() {
   }
 
   const context = plan?.context || {};
+  const trainingState = context.training_state || null;
+  const isReprise = trainingState === "deep_reprise" || trainingState === "partial_reprise";
   const sessions = plan?.plan?.sessions || [];
   const weeks = fullCycle?.weeks || [];
   const currentWeek = fullCycle?.current_week || 1;
@@ -345,6 +347,39 @@ export default function TrainingPlan() {
           {t("trainingPlanExtended.refresh")}
         </Button>
       </div>
+
+      {/* Reprise Banner — deep / partial comeback */}
+      {isReprise && cycleStatus !== "upcoming" && (
+        <div
+          className="card-modern p-4"
+          style={{ background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.35)", borderRadius: "16px" }}
+          data-testid="reprise-mode-banner"
+        >
+          <div className="flex items-start gap-3">
+            <Sprout className="w-5 h-5 mt-0.5 flex-shrink-0" style={{ color: "#34d399" }} />
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-semibold text-white" data-testid="reprise-mode-title">
+                  {t("trainingPlanExtended.repriseTitle")}
+                </span>
+                <span
+                  className="px-2 py-0.5 rounded-full text-[10px] font-bold"
+                  style={{ background: "#10b98120", color: "#6ee7b7", border: "1px solid #10b981" }}
+                >
+                  {trainingState === "deep_reprise"
+                    ? t("trainingPlanExtended.repriseBadgeDeep")
+                    : t("trainingPlanExtended.repriseBadgePartial")}
+                </span>
+              </div>
+              <p className="text-sm mt-1" style={{ color: "var(--text-tertiary)" }} data-testid="reprise-mode-desc">
+                {trainingState === "deep_reprise"
+                  ? t("trainingPlanExtended.repriseDescDeep")
+                  : t("trainingPlanExtended.repriseDescPartial")}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Status Banner — Upcoming */}
       {cycleStatus === "upcoming" && (
