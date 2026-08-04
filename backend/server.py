@@ -3770,7 +3770,14 @@ async def get_training_metrics(user: dict = Depends(auth_user)):
         acwr_label = "Danger"
     
     # Interpréter TSB
-    if tsb > 10:
+    # TSB s'appuie sur CTL/ATL construits sur ~4 semaines ; pendant une reprise la
+    # base chronique est éparse et rend le TSB trompeur → on le marque "building"
+    # comme l'ACWR pour afficher "Base en construction".
+    tsb_reliable = acwr_reliable
+    if not tsb_reliable:
+        tsb_status = "building"
+        tsb_label = "Base en construction"
+    elif tsb > 10:
         tsb_status = "fresh"
         tsb_label = "Très frais"
     elif tsb > 0:
@@ -3791,6 +3798,7 @@ async def get_training_metrics(user: dict = Depends(auth_user)):
         "tsb": tsb,
         "tsb_status": tsb_status,
         "tsb_label": tsb_label,
+        "tsb_reliable": tsb_reliable,
         "load_7": round(load_7, 1),
         "load_28": round(load_28, 1),
         "monotony": monotony,

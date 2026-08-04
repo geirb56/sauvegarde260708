@@ -294,12 +294,15 @@ async def compute_run_index(db, user_id: str, language: str = "fr") -> Optional[
         else:
             doc_fp = 0.6 * doc_rhr_delta + 0.4 * doc_sleep_penalty
         doc_fatigue_ratio = 1.0 + max(0.0, doc_fp) / 10.0
+        doc_physio_penalty = min(60.0, max(0.0, doc_fp) * 6.0)
+        doc_readiness = int(round(max(5.0, min(100.0, 100.0 - doc_physio_penalty - acwr_penalty))))
         history.append({
             "day": day_label,
             "date": doc.get("date"),
             "hrv": round(float(doc_hrv), 1) if doc_hrv is not None else None,
             "training_load": round(training_load, 2),
             "fatigue_ratio": round(doc_fatigue_ratio, 2),
+            "run_readiness": doc_readiness,
         })
 
     return {

@@ -213,3 +213,10 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
 - Nouveau composant `ReadinessPillar` dans Dashboard.jsx; nouvelles clés i18n `dashboard.readinessPillars.{hrv,rhr,sleep,load,ratio}` FR/EN/ES. Anciens `MetricWidget`/decision-card retirés du rendu.
 - data-testid: run-readiness-card, run-readiness-title, run-readiness-score, run-readiness-recommendation, run-readiness-refresh, run-readiness-pillars, readiness-pillar-{hrv,rhr,sleep,load,ratio}.
 - Vérifié: frontend "Compiled successfully"; screenshot (données interceptées) confirme carte jumelle RunIndex, score 68/100 orange, 5 barres de statut + valeurs. Backend inchangé.
+
+## 2026-08-04 — Run Readiness: TSB building, mini-historique 7j, tap-info
+- **TSB « base en construction »**: backend `/api/training/metrics` renvoie `tsb_reliable` (= acwr_reliable) et `tsb_status="building"` en reprise (deep/partial). TrainingPlan.jsx affiche « — / Base en construction » (gris) comme l'ACWR. i18n `dashboard.tsb_status.building` FR/EN/ES. Vérifié: curl (tsb_reliable=false, tsb_status=building) + screenshot /training (— / Baseline building).
+- **Mini-historique 7 jours**: backend insights.py ajoute `run_readiness` par jour dans `history` (100 - physio_penalty_jour - acwr_penalty). Dashboard.jsx affiche une courbe `MiniLineChart` sous les tuiles ("7-DAY READINESS" + score du jour + labels jours). data-testid `readiness-trend`.
+- **Détail au tap**: chaque `ReadinessTile` est un bouton (icône ⓘ + point d'état) qui ouvre un `Dialog` (shadcn) avec explication courte de la composante. i18n `dashboard.readinessInfo.{hrv,rhr,sleep,load,ratio}` FR/EN/ES. data-testid `readiness-info-dialog`.
+- ⚠️ LEÇON: NE PAS faire plusieurs `search_replace` en parallèle sur le MÊME fichier — une course a fait perdre l'import `Dialog` et créé un bloc dupliqué en fin de Dashboard.jsx (corrigé). Éditer un même fichier séquentiellement.
+- Vérifié: frontend "Compiled successfully"; screenshots Dashboard (tuiles+courbe+dialog) et /training (TSB building). Backend inchangé sur ACWR/compute_current_weekly_km.

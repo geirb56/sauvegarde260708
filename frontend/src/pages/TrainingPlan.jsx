@@ -569,12 +569,14 @@ export default function TrainingPlan() {
             </span>
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-2xl font-bold" style={{ color: getTsbColor(trainingMetrics?.tsb_status) }}>
-              {trainingMetrics?.tsb?.toFixed(1) || "0.0"}
+            <span className="text-2xl font-bold" style={{ color: getTsbColor(trainingMetrics?.tsb_status) }} data-testid="tsb-value">
+              {trainingMetrics?.tsb_reliable === false ? "—" : (trainingMetrics?.tsb?.toFixed(1) || "0.0")}
             </span>
           </div>
           <p className="text-xs mt-1" style={{ color: getTsbColor(trainingMetrics?.tsb_status) }}>
-            {trainingMetrics?.tsb_label || t("dashboard.tsb_status.training")}
+            {trainingMetrics?.tsb_reliable === false
+              ? t("dashboard.tsb_status.building")
+              : (trainingMetrics?.tsb_label || t("dashboard.tsb_status.training"))}
           </p>
         </div>
       </div>

@@ -18,6 +18,7 @@ import {
   X,
   TrendingUp,
   Target,
+  Info,
 } from "lucide-react";
 import {
   BarChart,
@@ -34,6 +35,13 @@ import { useUnitSystem } from "@/context/UnitContext";
 import { Button } from "@/components/ui/button";
 import { BrandSplash } from "@/components/LoadingSpinner";
 import { toast } from "sonner";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 
 import { API_BASE_URL } from "@/config";
 const API = API_BASE_URL;
@@ -301,18 +309,23 @@ function RunIndexPillar({ icon: Icon, label, value, color }) {
   );
 }
 
-// Readiness tile — compact stat card: icon + status dot + label + value (status-colored)
-function ReadinessTile({ icon: Icon, label, value, status, testId }) {
+// Readiness tile — compact stat card: icon + status dot + label + value (status-colored), tappable for info
+function ReadinessTile({ icon: Icon, label, value, status, testId, onClick }) {
   const color = status === "yellow" ? "#f59e0b" : status === "red" ? "#ef4444" : "#22c55e";
   return (
-    <div
-      className="rounded-2xl p-3 flex flex-col gap-2 transition-transform duration-200 hover:-translate-y-0.5"
+    <button
+      type="button"
+      onClick={onClick}
+      className="text-left rounded-2xl p-3 flex flex-col gap-2 transition-transform duration-200 hover:-translate-y-0.5 active:scale-[0.98]"
       style={{ background: `${color}12`, border: `1px solid ${color}33` }}
       data-testid={`readiness-tile-${testId}`}
     >
       <div className="flex items-center justify-between">
         {Icon && <Icon className="w-4 h-4 shrink-0" style={{ color }} />}
-        <span className="w-2 h-2 rounded-full shrink-0" style={{ background: color }} />
+        <div className="flex items-center gap-1.5">
+          <Info className="w-3 h-3 opacity-40" style={{ color: "var(--text-tertiary)" }} />
+          <span className="w-2 h-2 rounded-full shrink-0" style={{ background: color }} />
+        </div>
       </div>
       <span className="text-[11px] font-medium leading-tight" style={{ color: "var(--text-tertiary)" }}>
         {label}
@@ -320,7 +333,7 @@ function ReadinessTile({ icon: Icon, label, value, status, testId }) {
       <span className="text-lg font-black leading-none" style={{ color }} data-testid={`readiness-value-${testId}`}>
         {value}
       </span>
-    </div>
+    </button>
   );
 }
 
@@ -378,6 +391,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
   const [sessionFeedback, setSessionFeedback] = useState({});
+  const [infoMetric, setInfoMetric] = useState(null);
   const { t, lang } = useLanguage();
   const { unitSystem } = useUnitSystem();
   const fetchedRef = useRef(false);
@@ -676,7 +690,7 @@ export default function Dashboard() {
                     </span>
                   </div>
 
-                  {/* Component tiles — compact grid */}
+                  {/* Component tiles — compact grid, tappable for info */}
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-3" data-testid="run-readiness-pillars">
                     <ReadinessTile
                       icon={Heart}
@@ -684,6 +698,7 @@ export default function Dashboard() {
                       value={(m.hrv_delta === undefined || m.hrv_delta === null) ? "—" : `${m.hrv_delta >= 0 ? "+" : ""}${m.hrv_delta} ms`}
                       status={m.hrv_status || "green"}
                       testId="hrv"
+                      onClick={() => setInfoMetric("hrv")}
                     />
                     <ReadinessTile
                       icon={Activity}
@@ -691,6 +706,7 @@ export default function Dashboard() {
                       value={(m.rhr_today === undefined || m.rhr_today === null) ? "—" : `${m.rhr_today} bpm`}
                       status={m.rhr_status || "green"}
                       testId="rhr"
+                      onClick={() => setInfoMetric("rhr")}
                     />
                     <ReadinessTile
                       icon={Moon}
@@ -698,6 +714,7 @@ export default function Dashboard() {
                       value={(m.sleep_hours === undefined || m.sleep_hours === null) ? "—" : `${m.sleep_hours} h`}
                       status={m.sleep_status || "green"}
                       testId="sleep"
+                      onClick={() => setInfoMetric("sleep")}
                     />
                     <ReadinessTile
                       icon={BarChart2}
@@ -705,6 +722,7 @@ export default function Dashboard() {
                       value={(m.training_load === undefined || m.training_load === null) ? "—" : `${m.training_load}`}
                       status={m.training_load_status || "green"}
                       testId="load"
+                      onClick={() => setInfoMetric("load")}
                     />
                     <ReadinessTile
                       icon={TrendingUp}
@@ -712,8 +730,31 @@ export default function Dashboard() {
                       value={(m.fatigue_ratio === undefined || m.fatigue_ratio === null) ? "—" : `${m.fatigue_ratio}`}
                       status={m.fatigue_status || "green"}
                       testId="ratio"
+                      onClick={() => setInfoMetric("ratio")}
                     />
                   </div>
+
+                  {/* 7-day Run Readiness trend */}
+                  {history.filter((h) => h.run_readiness !== undefined && h.run_readiness !== null).length >= 2 && (
+                    <div className="pt-1" data-testid="readiness-trend">
+                      <div className="flex items-center justify-between mb-1">
+                        <p className="text-[11px] uppercase tracking-wider font-semibold" style={{ color: "var(--text-tertiary)" }}>
+                          {t("dashboard.weeklyReadiness")}
+                        </p>
+                        <span className="text-[11px] font-bold" style={{ color: "#6EEB5A" }}>
+                          {history[history.length - 1]?.run_readiness ?? "—"} / 100
+                        </span>
+                      </div>
+                      <MiniLineChart data={history.map((h) => h.run_readiness ?? 0)} />
+                      <div className="flex justify-between mt-1">
+                        {history.map((h, i) => (
+                          <span key={i} className="text-[9px]" style={{ color: "var(--text-tertiary)" }}>
+                            {h.day}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   {cardioData?.mock && (
                     <p className="text-center text-[10px]" style={{ color: "var(--text-tertiary)" }}>
@@ -839,6 +880,24 @@ export default function Dashboard() {
           </>
         )}
       </div>
+
+      {/* Metric explanation dialog */}
+      <Dialog open={!!infoMetric} onOpenChange={(o) => !o && setInfoMetric(null)}>
+        <DialogContent
+          className="max-w-sm"
+          style={{ background: "var(--bg-card)", border: "1px solid var(--border-color)", color: "var(--text-primary)" }}
+          data-testid="readiness-info-dialog"
+        >
+          <DialogHeader>
+            <DialogTitle style={{ color: "var(--text-primary)" }}>
+              {infoMetric ? t(`dashboard.readinessPillars.${infoMetric}`) : ""}
+            </DialogTitle>
+            <DialogDescription style={{ color: "var(--text-secondary)" }}>
+              {infoMetric ? t(`dashboard.readinessInfo.${infoMetric}`) : ""}
+            </DialogDescription>
+          </DialogHeader>
+        </DialogContent>
+      </Dialog>
 
     </div>
   );
