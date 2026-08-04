@@ -33,6 +33,8 @@ from training_engine import (
     compute_cycle_dates,
     compute_target_km,
     apply_resume_guard,
+    resolve_chronic_base,
+    cap_long_run_for_low_volume,
     compute_week_number,
     determine_phase,
     build_training_context,
@@ -577,8 +579,11 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
 
     week = cycle_dates["current_week"] if cycle_status == "active" else adjusted_weeks
     phase = determine_phase(week, adjusted_weeks)
-    target_km_debug = compute_target_km(weekly_km, goal, phase)
-    target_km_debug = apply_resume_guard(target_km_debug, km_7_running, weekly_km)
+    # PR76b: a genuine detraining (0 real running km in 28 days) must not be
+    # treated as the 20 km/week default — use a conservative reprise base.
+    target_base_km = resolve_chronic_base(weekly_km, km_28_running)
+    target_km_debug = compute_target_km(target_base_km, goal, phase)
+    target_km_debug = apply_resume_guard(target_km_debug, km_7_running, target_base_km)
 
     # 8. Calculate ACWR and TSB
     chronic_avg = km_28 / 4 if km_28 > 0 else 1
@@ -757,6 +762,9 @@ def _deterministic_plan(context: dict, phase: str, target_load: int, goal: str, 
     long_ratio = (target_km - config["min"]) / (config["max"] - config["min"]) if config["max"] > config["min"] else 0.5
     long_run = round(config["long_min"] + long_ratio * (config["long_max"] - config["long_min"]))
     long_run = max(config["long_min"], min(config["long_max"], long_run))
+    # PR76b: when weekly volume is below the goal floor (reprise / beginner),
+    # keep the long run from dominating the week.
+    long_run = cap_long_run_for_low_volume(long_run, target_km, goal)
 
     # Distribution of remaining volume
     remaining = target_km - long_run

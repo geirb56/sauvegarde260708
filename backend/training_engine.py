@@ -185,6 +185,38 @@ def apply_resume_guard(
     return float(target_km)
 
 
+# Conservative weekly base (km) for an athlete resuming with no measurable
+# running volume in the last 28 days (e.g. returning after a long break).
+REPRISE_BASE_KM = 12.0
+
+
+def resolve_chronic_base(weekly_km: float, km_28_running: float) -> float:
+    """Return the chronic base used to derive the weekly target.
+
+    ``compute_current_weekly_km`` falls back to ``DEFAULT_WEEKLY_KM`` when there
+    is no data, which would treat a genuinely detrained athlete (0 real running
+    km over 28 days) as if they ran 20 km/week. In that case we use a gentle
+    ``REPRISE_BASE_KM`` instead so the plan ramps up conservatively.
+    """
+    if (km_28_running or 0) <= 0:
+        return REPRISE_BASE_KM
+    return weekly_km
+
+
+def cap_long_run_for_low_volume(long_run: float, target_km: float, goal: str) -> float:
+    """Keep the long run from dominating the week when weekly volume is below
+    the goal's recommended floor (reprise / beginner).
+
+    In normal training (``target_km >= config["min"]``) the long run is left
+    untouched. Below the floor it is capped at 40 % of the weekly target so a
+    returning athlete never gets a disproportionate long run.
+    """
+    config = VOLUME_GOAL_CONFIG.get(goal, VOLUME_GOAL_CONFIG["SEMI"])
+    if target_km < config["min"]:
+        return min(long_run, max(4, round(target_km * 0.40)))
+    return long_run
+
+
 def compute_long_run_km(target_km: float, goal: str) -> int:
     """Long-run distance derived from target volume, bounded by goal limits."""
     config = VOLUME_GOAL_CONFIG.get(goal, VOLUME_GOAL_CONFIG["SEMI"])
@@ -192,7 +224,10 @@ def compute_long_run_km(target_km: float, goal: str) -> int:
     ratio = (target_km - config["min"]) / span if span > 0 else 0.5
     ratio = max(0.0, min(1.0, ratio))
     long_run = round(config["long_min"] + ratio * (config["long_max"] - config["long_min"]))
-    return max(config["long_min"], min(config["long_max"], long_run))
+    long_run = max(config["long_min"], min(config["long_max"], long_run))
+    # PR76b: below the goal's recommended weekly floor (reprise / beginner)
+    # the long-run floor must not dominate the week — cap at 40 % of target.
+    return int(cap_long_run_for_low_volume(long_run, target_km, goal))
 
 
 # ============================================================
@@ -838,6 +873,9 @@ __all__ = [
     "PHASE_VOLUME_MULTIPLIERS",
     "compute_target_km",
     "apply_resume_guard",
+    "resolve_chronic_base",
+    "cap_long_run_for_low_volume",
+    "REPRISE_BASE_KM",
     "compute_long_run_km",
     "vma_pace",
     "vma_pace_range",

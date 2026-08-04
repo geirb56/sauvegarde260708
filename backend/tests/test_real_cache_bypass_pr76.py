@@ -114,6 +114,33 @@ def test_real_cache_bypass_44_to_42():
     asyncio.run(_run())
 
 
+def test_real_reprise_zero_km_is_conservative_and_coherent():
+    """Athlete resuming after 4 weeks of rest (0 km over 28 days).
+
+    - The chronic base must NOT default to 20 km/week: a conservative reprise
+      base is used so the weekly target stays low (~12.6 km).
+    - The long run must NOT dominate the week: it is capped at 40 % of target.
+    """
+    async def _run():
+        for goal in ("5K", "10K", "SEMI", "MARATHON"):
+            coach_service.clear_cache()
+            db = _FakeDB([])  # zero workouts anywhere
+            db.training_cycles = _FakeCollection(single={"user_id": "u1", "goal": goal})
+            r = await generate_dynamic_training_plan(db, "u1")
+            plan = r["plan"]
+            weekly = plan["weekly_km"]
+            longest = max((s.get("distance_km", 0) for s in plan["sessions"]), default=0)
+            print(f"[{goal}] target={r['debug_volume']['target_km']} weekly={weekly} longest={longest}")
+            # Conservative reprise: far below the old 21 km default output.
+            assert weekly <= 15, f"{goal}: reprise weekly ({weekly}) must be conservative (<=15)."
+            # Long run must never dominate: <= 45 % of the weekly volume.
+            assert longest <= weekly * 0.45 + 0.1, (
+                f"{goal}: long run ({longest}) must not dominate the week ({weekly})."
+            )
+
+    asyncio.run(_run())
+
+
 if __name__ == "__main__":
     test_real_cache_bypass_44_to_42()
     print("PASSED")

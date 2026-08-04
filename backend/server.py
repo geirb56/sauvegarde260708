@@ -68,6 +68,7 @@ from training_engine import (
     compute_cycle_dates,
     compute_target_km,
     apply_resume_guard,
+    resolve_chronic_base,
     vma_pace,
     vma_pace_range,
     adapt_session_to_readiness,
@@ -4334,6 +4335,9 @@ async def get_full_training_cycle(
     
     km_28 = sum(normalized_distance_km(w) for w in workouts_28 if is_running(w))
     base_weekly_km = compute_current_weekly_km(workouts_28)
+    # PR76b: use a conservative reprise base when there is no real running
+    # volume over 28 days (detrained athlete) instead of the 20 km default.
+    target_base_km = resolve_chronic_base(base_weekly_km, km_28)
 
     # PR76 resume guard: also look at last 7 days to detect resuming athletes
     seven_days_ago = today - timedelta(days=7)
@@ -4349,8 +4353,8 @@ async def get_full_training_cycle(
         
         # Target volume — SAME engine as the detailed week plan so cards match sessions.
         # PR76 resume guard caps the target when the athlete is resuming.
-        target_km = compute_target_km(base_weekly_km, goal, phase)
-        target_km = apply_resume_guard(target_km, km_7, base_weekly_km)
+        target_km = compute_target_km(target_base_km, goal, phase)
+        target_km = apply_resume_guard(target_km, km_7, target_base_km)
         
         # Session type keys (frontend translates via i18n trainingPlan.sessionType.*)
         if phase == "build":
@@ -4380,8 +4384,8 @@ async def get_full_training_cycle(
         })
     
     current_phase = determine_phase(current_week, total_weeks)
-    current_target_km = compute_target_km(base_weekly_km, goal, current_phase)
-    current_target_km = apply_resume_guard(current_target_km, km_7, base_weekly_km)
+    current_target_km = compute_target_km(target_base_km, goal, current_phase)
+    current_target_km = apply_resume_guard(current_target_km, km_7, target_base_km)
 
     return {
         "goal": goal,
@@ -4472,8 +4476,11 @@ async def get_week_plan(user: dict = Depends(auth_user)):
 
     # PR76: compute the protected target BEFORE generation so both LLM and
     # fallback paths use the same capped value.
-    target_km_protected = compute_target_km(context.get("weekly_km", DEFAULT_WEEKLY_KM), goal["goal_type"], phase)
-    target_km_protected = apply_resume_guard(target_km_protected, km_7_running, context.get("weekly_km", DEFAULT_WEEKLY_KM))
+    # PR76b: use a conservative reprise base when there is no real running
+    # volume over 28 days (detrained athlete).
+    _target_base_km = resolve_chronic_base(context.get("weekly_km", DEFAULT_WEEKLY_KM), km_28_running)
+    target_km_protected = compute_target_km(_target_base_km, goal["goal_type"], phase)
+    target_km_protected = apply_resume_guard(target_km_protected, km_7_running, _target_base_km)
     context["target_km_protected"] = target_km_protected
     context["km_7"] = round(km_7_running, 1)
 
