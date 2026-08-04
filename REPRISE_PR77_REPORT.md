@@ -109,3 +109,10 @@ Aucun. Correctifs à publier via **Save to Github** dans une PR dédiée à la r
 - i18n FR/EN/ES ajoutés (`trainingPlanExtended.reprise*`).
 - Arrondi source : `resolve_reprise_plan` arrondit `base_km`/`target_km` à 0,1.
 - Vérifié e2e (screenshot) : bandeau « Comeback mode / GENTLE RESTART », carte `~75 min • 3 séances`, séances "20/25/30 min en aisance • marche/course possible".
+
+### Améliorations UI reprise (suite)
+- **Focus reprise** : la carte de la semaine de reprise affiche un focus dédié (`repriseFocus`, ex. « Reprise — base aérobie facile (en durée) ») au lieu du focus de phase.
+- **Compteur de reprise** : le bandeau affiche « Semaine {n} de reprise / ~3 » (`reprise_active_weeks + 1`).
+- **Aperçu transition** : la semaine où l'intensité revient (`reprise_exit`, calendrier = `current_week + (REPRISE_STABLE_WEEKS − active_weeks)`) est marquée d'un badge « RETOUR INTENSITÉ » dans l'aperçu du cycle.
+- Backend `full-cycle` : nouveaux champs par semaine `is_reprise`, `is_reprise_transition`. i18n FR/EN/ES.
+- Vérifié e2e (screenshot, user partiel) : « Comeback week 2 / ~3 », focus reprise, badge « INTENSITY RETURNS » sur la semaine 3.

@@ -70,6 +70,7 @@ from training_engine import (
     apply_resume_guard,
     resolve_chronic_base,
     resolve_reprise_plan,
+    REPRISE_STABLE_WEEKS,
     vma_pace,
     vma_pace_range,
     adapt_session_to_readiness,
@@ -4350,6 +4351,13 @@ async def get_full_training_cycle(
     current_phase = determine_phase(current_week, total_weeks)
     reprise = resolve_reprise_plan(workouts_28, goal, current_phase, km_7=km_7)
     reprise_state = reprise["state"]
+    reprise_active = reprise_state in ("deep_reprise", "partial_reprise")
+    # Projected calendar week where intensity is re-introduced (reprise_exit):
+    # once REPRISE_STABLE_WEEKS active weeks are completed.
+    reprise_transition_week = (
+        current_week + max(0, REPRISE_STABLE_WEEKS - reprise["active_weeks"])
+        if reprise_active else None
+    )
 
     # Generate overview of all weeks
     weeks_overview = []
@@ -4403,6 +4411,8 @@ async def get_full_training_cycle(
             "session_types": session_types[:sessions_per_week],
             "is_current": is_current_week,
             "is_completed": cycle_status == "active" and week_num < current_week,
+            "is_reprise": is_reprise_week,
+            "is_reprise_transition": reprise_active and reprise_transition_week is not None and week_num == reprise_transition_week,
             "intensity_pct": phase_info.get("intensity_pct", 15)
         })
     

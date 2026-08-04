@@ -258,6 +258,7 @@ export default function TrainingPlan() {
   const trainingState = context.training_state || null;
   const isReprise = trainingState === "deep_reprise" || trainingState === "partial_reprise";
   const repriseMinutes = plan?.plan?.weekly_minutes || null;
+  const repriseWeekNum = (context.reprise_active_weeks || 0) + 1;
   const sessions = plan?.plan?.sessions || [];
   const weeks = fullCycle?.weeks || [];
   const currentWeek = fullCycle?.current_week || 1;
@@ -370,6 +371,9 @@ export default function TrainingPlan() {
                   {trainingState === "deep_reprise"
                     ? t("trainingPlanExtended.repriseBadgeDeep")
                     : t("trainingPlanExtended.repriseBadgePartial")}
+                </span>
+                <span className="text-[10px] font-mono" style={{ color: "var(--text-tertiary)" }} data-testid="reprise-week-counter">
+                  {t("trainingPlanExtended.repriseWeekCounter").replace("{n}", repriseWeekNum).replace("{total}", 3)}
                 </span>
               </div>
               <p className="text-sm mt-1" style={{ color: "var(--text-tertiary)" }} data-testid="reprise-mode-desc">
@@ -649,6 +653,15 @@ export default function TrainingPlan() {
                             <Trophy className="w-3 h-3" /> COURSE
                           </span>
                         )}
+                        {week.is_reprise_transition && (
+                          <span
+                            className="px-2 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-1"
+                            style={{ background: "#f59e0b20", color: "#fbbf24", border: "1px solid #f59e0b" }}
+                            data-testid={`reprise-transition-badge-${week.week}`}
+                          >
+                            <Zap className="w-3 h-3" /> {t("trainingPlanExtended.repriseTransitionBadge")}
+                          </span>
+                        )}
                       </div>
                       <div className="flex items-center gap-2 mt-0.5">
                         <span 
@@ -680,7 +693,7 @@ export default function TrainingPlan() {
                 {isExpanded && (
                   <div className="px-3 pb-3 space-y-2">
                     <div className="text-xs p-2 rounded-lg" style={{ background: "rgba(0,0,0,0.2)", color: "var(--text-secondary)" }}>
-                      <strong>{t("trainingPlanExtended.focus")}</strong> {week.phase_focus}
+                      <strong>{t("trainingPlanExtended.focus")}</strong> {week.is_reprise ? t("trainingPlanExtended.repriseFocus") : week.phase_focus}
                     </div>
                     
                     {/* Session types for this week */}
