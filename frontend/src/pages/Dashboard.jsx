@@ -523,15 +523,6 @@ export default function Dashboard() {
                 {t("dashboard.runIndexLevel")}
               </p>
             </div>
-
-            <div className="md:text-right">
-              <p className="text-xs uppercase tracking-[0.2em]" style={{ color: "#6EEB5A" }}>
-                {t("dashboard.runIndexVsReadinessTitle")}
-              </p>
-              <p className="text-sm mt-2" style={{ color: "rgba(255,255,255,0.72)" }}>
-                {t("dashboard.runIndexVsReadinessBody")}
-              </p>
-            </div>
           </div>
 
           <div className="grid gap-3">
@@ -545,16 +536,16 @@ export default function Dashboard() {
 
       {/* ── RUN RECOMMENDATION SECTION ────────────────────────────────────── */}
       <div className="animate-in" style={{ animationDelay: "300ms" }}>
-        <h2
-          className="text-2xl font-black uppercase tracking-[0.14em]"
-          style={{ color: "#6EEB5A", fontFamily: "'Barlow Condensed', sans-serif" }}
+        <p
+          className="text-xs font-semibold uppercase tracking-[0.22em]"
+          style={{ color: "#6EEB5A" }}
           data-testid="run-readiness-title"
         >
           {t("dashboard.runReadiness")}
-        </h2>
-        <p className="text-xs mt-1" style={{ color: "var(--text-tertiary)" }}>
-          {t("dashboard.runReadinessDescription")}
         </p>
+        <h2 className="text-lg font-black mt-1" style={{ color: "#ffffff" }}>
+          {t("dashboard.runReadinessDescription")}
+        </h2>
       </div>
 
       {cardioLoading ? (
