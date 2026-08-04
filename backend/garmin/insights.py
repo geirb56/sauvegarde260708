@@ -278,6 +278,14 @@ async def compute_run_index(db, user_id: str, language: str = "fr") -> Optional[
           "en": f"Fatigue Ratio {fatigue_ratio:.2f}"}
     reasons.append(_t.get(lang, _t["fr"]))
 
+    # --- Pre-compute daily load totals from activities ---
+    _daily_load: dict = {}
+    for act in activities:
+        d_act = _parse_day(act.get("start_time") or act.get("synced_at") or "")
+        if d_act:
+            key = d_act.date().isoformat()
+            _daily_load[key] = _daily_load.get(key, 0.0) + _activity_load(act)
+
     # --- 30-day history (oldest -> newest) ---
     recent = list(reversed(metrics_docs[:30]))
     history = []
@@ -309,7 +317,7 @@ async def compute_run_index(db, user_id: str, language: str = "fr") -> Optional[
             "day": day_label,
             "date": doc.get("date"),
             "hrv": round(float(doc_hrv), 1) if doc_hrv is not None else None,
-            "training_load": round(doc_acwr, 2),
+            "training_load": round(_daily_load.get(doc.get("date", ""), 0.0), 1),
             "fatigue_ratio": round(doc_fatigue_ratio, 2),
             "run_readiness": doc_readiness,
         })
