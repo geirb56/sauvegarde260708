@@ -301,6 +301,33 @@ function RunIndexPillar({ icon: Icon, label, value, color }) {
   );
 }
 
+// Readiness pillar — status-colored bar + real value (no invented percentage)
+function ReadinessPillar({ icon: Icon, label, value, status, testId }) {
+  const color = status === "yellow" ? "#f59e0b" : status === "red" ? "#ef4444" : "#22c55e";
+  return (
+    <div className="space-y-1.5" data-testid={`readiness-pillar-${testId}`}>
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-sm font-medium" style={{ color: "var(--text-secondary)" }}>
+          {Icon && <Icon className="w-4 h-4 shrink-0" style={{ color }} />}
+          <span>{label}</span>
+        </div>
+        <span className="text-sm font-bold" style={{ color }} data-testid={`readiness-value-${testId}`}>
+          {value}
+        </span>
+      </div>
+      <div
+        className="h-2 rounded-full overflow-hidden"
+        style={{ background: "rgba(255,255,255,0.08)" }}
+      >
+        <div
+          className="h-full w-full rounded-full transition-all duration-700"
+          style={{ background: color }}
+        />
+      </div>
+    </div>
+  );
+}
+
 // Mini Line Chart Component
 function MiniLineChart({ data = [] }) {
   if (!data.length) return null;
@@ -534,20 +561,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* ── RUN RECOMMENDATION SECTION ────────────────────────────────────── */}
-      <div className="animate-in" style={{ animationDelay: "300ms" }}>
-        <p
-          className="text-xs font-semibold uppercase tracking-[0.22em]"
-          style={{ color: "#6EEB5A" }}
-          data-testid="run-readiness-title"
-        >
-          {t("dashboard.runReadiness")}
-        </p>
-        <h2 className="text-lg font-black mt-1" style={{ color: "#ffffff" }}>
-          {t("dashboard.runReadinessDescription")}
-        </h2>
-      </div>
-
+      {/* ── RUN READINESS SECTION ────────────────────────────────────── */}
       {cardioLoading ? (
         <div
           className="flex flex-col items-center justify-center py-8 gap-3"
@@ -611,112 +625,106 @@ export default function Dashboard() {
             return (
               <>
                 <div
-                  className="rounded-2xl p-5 space-y-3"
-                  style={{ background: recStyle.bg, border: `1px solid ${recStyle.accent}30` }}
-                  data-testid="decision-card"
+                  className="rounded-3xl p-5 space-y-4 animate-in"
+                  style={{
+                    background: "linear-gradient(135deg, #0d1a10 0%, #111827 60%, #0d1a10 100%)",
+                    border: "1px solid rgba(110, 235, 90, 0.22)",
+                    boxShadow: "0 16px 40px rgba(15, 23, 42, 0.22)",
+                  }}
+                  data-testid="run-readiness-card"
                 >
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold uppercase tracking-widest" style={{ color: recStyle.accent }}>
-                      {t("dashboard.todaysRecommendation")}
-                    </span>
-                    <button
-                      onClick={fetchCardioData}
-                      className="p-1 rounded-lg opacity-60 hover:opacity-100 transition-opacity"
-                      aria-label="Refresh"
-                    >
-                      <RefreshCw size={14} style={{ color: recStyle.accent }} />
-                    </button>
-                  </div>
-                  
-                  {/* Run Readiness Score - Big Display */}
-                  <div className="flex items-center gap-3 sm:gap-4 flex-wrap">
-                    <div className="flex flex-col items-center">
-                      <span
-                        className="text-5xl sm:text-6xl font-black"
-                        style={{ color: recStyle.accent }}
+                  {/* Header — same structure as RunIndex */}
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <p
+                        className="text-xs font-semibold uppercase tracking-[0.22em]"
+                        style={{ color: "#6EEB5A" }}
+                        data-testid="run-readiness-title"
                       >
-                        {runReadinessScore}
-                      </span>
-                      <span className="text-xs uppercase tracking-wider mt-1" style={{ color: "var(--text-tertiary)" }}>
-                        {t("dashboard.readinessScore") || "Run Readiness"}
-                      </span>
+                        {t("dashboard.runReadiness")}
+                      </p>
+                      <h2 className="text-lg font-black mt-1" style={{ color: "#ffffff" }}>
+                        {t("dashboard.runReadinessDescription")}
+                      </h2>
                     </div>
-                    <div className="h-16 w-px hidden sm:block" style={{ background: `${recStyle.accent}40` }} />
-                    <div className="flex items-center gap-2 min-w-0 flex-1">
-                      <span className="text-xl sm:text-2xl font-black tracking-tight break-words" style={{ color: recStyle.accent }}>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span
+                        className="px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider"
+                        style={{ background: `${recStyle.accent}1f`, color: recStyle.accent }}
+                        data-testid="run-readiness-recommendation"
+                      >
                         {cardioData?.recommendation || "—"}
                       </span>
+                      <button
+                        onClick={fetchCardioData}
+                        className="p-1 rounded-lg opacity-60 hover:opacity-100 transition-opacity"
+                        aria-label="Refresh"
+                        data-testid="run-readiness-refresh"
+                      >
+                        <RefreshCw size={14} style={{ color: recStyle.accent }} />
+                      </button>
                     </div>
                   </div>
-                  
-                  <ul className="space-y-1">
-                    {(cardioData?.reasons || []).map((r, i) => (
-                      <li key={i} className="flex items-start gap-2 text-xs" style={{ color: "var(--text-secondary)" }}>
-                        <span className="mt-0.5 shrink-0" style={{ color: recStyle.accent }}>›</span>
-                        {r}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
 
-                {/* Metric widgets */}
-                <div>
-                  <h2 className="text-xs uppercase tracking-widest mb-3 font-semibold" style={{ color: "var(--text-tertiary)" }}>
-                    {t("dashboard.todaysMetrics")}
-                  </h2>
-                  <div
-                    className="flex gap-3 overflow-x-auto pb-2 -mx-4 px-4 snap-x snap-mandatory"
-                    style={{ scrollbarWidth: "none" }}
-                    data-testid="metrics-scroll"
-                  >
-                    <MetricWidget
+                  {/* Big score — same font as RunIndex, out of 100, colored by fitness state */}
+                  <div className="flex items-end gap-2">
+                    <span
+                      className="text-6xl font-black leading-none"
+                      style={{ color: recStyle.accent }}
+                      data-testid="run-readiness-score"
+                    >
+                      {runReadinessScore}
+                    </span>
+                    <span className="text-xl font-semibold pb-1" style={{ color: "#6EEB5A" }}>
+                      / 100
+                    </span>
+                  </div>
+
+                  {/* Component pillars — same graphic style as RunIndex pillars */}
+                  <div className="grid gap-3" data-testid="run-readiness-pillars">
+                    <ReadinessPillar
                       icon={Heart}
-                      label={t("dashboard.hrvDeviation")}
-                      value={(m.hrv_delta === undefined || m.hrv_delta === null) ? "—" : (m.hrv_delta >= 0 ? `+${m.hrv_delta}` : `${m.hrv_delta}`)}
-                      unit="ms"
+                      label={t("dashboard.readinessPillars.hrv")}
+                      value={(m.hrv_delta === undefined || m.hrv_delta === null) ? "—" : `${m.hrv_delta >= 0 ? "+" : ""}${m.hrv_delta} ms`}
                       status={m.hrv_status || "green"}
-                      detail={`${t("dashboard.today")} ${m.hrv_today ?? "—"} ms`}
+                      testId="hrv"
                     />
-                    <MetricWidget
-                      icon={Moon}
-                      label={t("dashboard.restingHR")}
-                      value={m.rhr_today ?? "—"}
-                      unit="bpm"
-                      status={m.rhr_status || "green"}
-                      detail={`${t("dashboard.baseline")} ${m.rhr_baseline ?? "—"} bpm`}
-                    />
-                    <MetricWidget
-                      icon={Zap}
-                      label={t("dashboard.sleep")}
-                      value={m.sleep_hours ?? "—"}
-                      unit="h"
-                      status={m.sleep_status || "green"}
-                      detail={`${m.sleep_efficiency !== undefined ? Math.round(m.sleep_efficiency * 100) : "—"}% ${t("dashboard.efficiency")}`}
-                    />
-                    <MetricWidget
-                      icon={BarChart2}
-                      label={t("dashboard.trainingLoad")}
-                      value={m.training_load ?? "—"}
-                      unit="ACWR"
-                      status={m.training_load_status || "green"}
-                      detail={m.training_load >= LOAD_OPTIMAL_MIN && m.training_load <= LOAD_OPTIMAL_MAX ? t("dashboard.optimalZone") : t("dashboard.outsideZone")}
-                    />
-                    <MetricWidget
+                    <ReadinessPillar
                       icon={Activity}
-                      label={t("dashboard.fatigueRatio")}
-                      value={m.fatigue_ratio ?? "—"}
-                      unit=""
+                      label={t("dashboard.readinessPillars.rhr")}
+                      value={(m.rhr_today === undefined || m.rhr_today === null) ? "—" : `${m.rhr_today} bpm`}
+                      status={m.rhr_status || "green"}
+                      testId="rhr"
+                    />
+                    <ReadinessPillar
+                      icon={Moon}
+                      label={t("dashboard.readinessPillars.sleep")}
+                      value={(m.sleep_hours === undefined || m.sleep_hours === null) ? "—" : `${m.sleep_hours} h`}
+                      status={m.sleep_status || "green"}
+                      testId="sleep"
+                    />
+                    <ReadinessPillar
+                      icon={BarChart2}
+                      label={t("dashboard.readinessPillars.load")}
+                      value={(m.training_load === undefined || m.training_load === null) ? "—" : `${m.training_load}`}
+                      status={m.training_load_status || "green"}
+                      testId="load"
+                    />
+                    <ReadinessPillar
+                      icon={TrendingUp}
+                      label={t("dashboard.readinessPillars.ratio")}
+                      value={(m.fatigue_ratio === undefined || m.fatigue_ratio === null) ? "—" : `${m.fatigue_ratio}`}
                       status={m.fatigue_status || "green"}
-                      detail={m.fatigue_ratio <= FATIGUE_EASY_THRESHOLD ? t("dashboard.lowFatigue") : m.fatigue_ratio <= FATIGUE_REST_THRESHOLD ? t("dashboard.moderate") : t("dashboard.highFatigue")}
+                      testId="ratio"
                     />
                   </div>
-                </div>
 
-                {cardioData?.mock && (
-                  <p className="text-center text-[10px]" style={{ color: "var(--text-tertiary)" }}>
-                    {t("dashboard.demoDataNotice")}
-                  </p>
-                )}
+                  {cardioData?.mock && (
+                    <p className="text-center text-[10px]" style={{ color: "var(--text-tertiary)" }}>
+                      {t("dashboard.demoDataNotice")}
+                    </p>
+                  )}
+                </div>
               </>
             );
           })()}

@@ -205,3 +205,11 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
 - Fix upstream requis (dans api/garmin.py): (a) supprimer le bloc d'en-tête dupliqué (garder 1 seul, `from __future__` en tout début), (b) remplacer l'import supabase par: `from auth.jwt_utils import decode_access_token` et dans _resolve_user_id utiliser `decode_access_token(creds.credentials).get("sub")`.
 - Toujours aucune clé PADDLE_ dans l'env.
 - STOP + report (code Garmin protégé + décision requise). Fix local non appliqué sans accord.
+
+## 2026-08-04 — Dashboard: encart Run Readiness aligné sur RunIndex
+- Suppression du bloc comparatif "RunIndex vs état du jour" (Dashboard.jsx + i18n).
+- Run Readiness transformé en encart identique à RunIndex (même dégradé/bordure/ombre): label vert "RUN READINESS", sous-titre blanc, grand chiffre `text-6xl font-black` coloré selon l'état de forme (vert/orange/rouge) suivi de "/ 100" vert, pastille de recommandation + refresh en haut à droite.
+- Composantes VFC/FC/Sommeil/Charge/Ratio affichées en style piliers RunIndex (choix user: option b): barre pleine colorée selon le statut (vert/orange/rouge) + vraie valeur à droite (ex: +6 ms, 52 bpm, 7.2 h, 1.42, 1.18), SANS pourcentage inventé.
+- Nouveau composant `ReadinessPillar` dans Dashboard.jsx; nouvelles clés i18n `dashboard.readinessPillars.{hrv,rhr,sleep,load,ratio}` FR/EN/ES. Anciens `MetricWidget`/decision-card retirés du rendu.
+- data-testid: run-readiness-card, run-readiness-title, run-readiness-score, run-readiness-recommendation, run-readiness-refresh, run-readiness-pillars, readiness-pillar-{hrv,rhr,sleep,load,ratio}.
+- Vérifié: frontend "Compiled successfully"; screenshot (données interceptées) confirme carte jumelle RunIndex, score 68/100 orange, 5 barres de statut + valeurs. Backend inchangé.
