@@ -26,6 +26,7 @@ from training_engine import (
     build_reprise_week_structure,
     REPRISE_DEEP_SESSION_MINUTES,
     reprise_deep_durations,
+    reprise_durations,
     VOLUME_GOAL_CONFIG,
 )
 
@@ -446,25 +447,28 @@ async def generate_cycle_week(
         # Keep intensity, reduce volume
         week_structure = [(d, "recovery" if t == "endurance" else t) for d, t in week_structure]
 
-    # Reprise handling (comeback after a break). Intensity stays easy: no
-    # threshold/tempo, no disproportionate long run. `reprise_exit`/`normal`
-    # keep the standard structure (intensity is (re)introduced there).
+    # Reprise handling (comeback after a break). Both deep (0 km/28d) and partial
+    # reprise are prescribed by DURATION (easy minutes, run/walk), scaled to prior
+    # fitness and growing per completed active week — never a tiny mileage split.
+    # `reprise_exit`/`normal` keep the standard structure (intensity re-introduced).
     training_state = context.get("training_state", "normal")
-    if training_state == "deep_reprise":
-        # Deep reprise (0 km / 28 days): prescribe by DURATION (easy minutes,
-        # run/walk allowed), no imposed weekly mileage.
+    if training_state in ("deep_reprise", "partial_reprise"):
         easy_pace = pace_z1 or 7.0
+        prior = context.get("prior_weekly_km", 0)
+        active_weeks = context.get("reprise_active_weeks", 0)
+        durations = reprise_durations(prior, active_weeks)  # sorted ascending [a,b,c]
+        # thursday = recovery (shortest), tuesday = mid, sunday = long easy (max)
+        day_dur = {"tuesday": ("endurance", durations[1]),
+                   "thursday": ("recovery", durations[0]),
+                   "sunday": ("endurance", durations[2])}
         reprise_sessions = []
-        used_days = ["tuesday", "thursday", "sunday"]
-        durations = reprise_deep_durations(context.get("prior_weekly_km", 0))
-        for i, day in enumerate(["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]):
-            if day in used_days:
-                idx = used_days.index(day)
-                dur = durations[min(idx, len(durations) - 1)]
+        for day in ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]:
+            if day in day_dur:
+                stype, dur = day_dur[day]
                 dist = round(dur / easy_pace, 1)
                 reprise_sessions.append({
                     "day": day,
-                    "type": "endurance",
+                    "type": stype,
                     "duration": f"{dur}min",
                     "details": f"{dur} min en aisance • {format_pace(easy_pace)} • marche/course possible • effort très facile",
                     "intensity": "easy",
@@ -475,24 +479,25 @@ async def generate_cycle_week(
                 reprise_sessions.append(build_session(day, "rest"))
         total_km = round(sum(s["distance_km"] for s in reprise_sessions), 1)
         total_tss = sum(s["estimated_tss"] for s in reprise_sessions)
-        weekly_minutes = sum(int(s["duration"].replace("min", "") or 0) for s in reprise_sessions if s["type"] != "rest")
+        weekly_minutes = sum(durations)
+        deep = training_state == "deep_reprise"
         plan = {
-            "focus": "Reprise en douceur — endurance très facile (durée, run/walk)",
+            "focus": "Reprise en douceur — endurance facile (durée, run/walk)" if deep else "Reprise — endurance facile (durée)",
             "planned_load": target_load,
             "weekly_km": total_km,
             "weekly_minutes": weekly_minutes,
             "reprise": True,
             "sessions": reprise_sessions,
             "total_tss": total_tss,
-            "advice": "Reprise après arrêt : séances faciles basées sur la durée, marche/course autorisée. Priorité à la régularité et à la récupération, pas au kilométrage.",
+            "advice": (
+                f"Reprise : ~{weekly_minutes} min faciles cette semaine, en aisance (marche/course possible). "
+                "On augmente la durée progressivement ; l'intensité viendra une fois le corps réhabitué."
+            ),
         }
         elapsed = time.time() - start_time
         metadata["duration_sec"] = round(elapsed, 2)
         metadata["success"] = True
         return plan, True, metadata
-    elif training_state == "partial_reprise":
-        # Easy-only structure; volume progresses, intensity frozen.
-        week_structure = build_reprise_week_structure(min(3, target_sessions))
 
     # Build all sessions — VOLUME-DRIVEN so the sum matches target_km exactly.
     # The long run takes its bounded distance; the remaining volume is split
@@ -536,16 +541,6 @@ async def generate_cycle_week(
     total_km = round(sum(s["distance_km"] for s in sessions), 1)
     total_tss = sum(s["estimated_tss"] for s in sessions)
 
-    # Partial reprise: express sessions by DURATION (minutes), not mileage.
-    weekly_minutes = None
-    if training_state == "partial_reprise":
-        weekly_minutes = 0
-        for s in sessions:
-            if s.get("distance_km", 0) > 0:
-                mins = int(str(s.get("duration", "0")).replace("min", "") or 0)
-                weekly_minutes += mins
-                s["details"] = f"{mins} min en aisance • {format_pace(pace_z1 or 7.0)} • effort très facile"
-    
     # Generate focus text based on phase
     focus_texts = {
         "build": "Volume en endurance fondamentale (Z1-Z2)",
@@ -555,20 +550,16 @@ async def generate_cycle_week(
         "race": "Semaine de course - fraîcheur maximale"
     }
     
-    # Build plan
+    # Build plan (normal / reprise_exit — reprise weeks returned earlier)
     plan = {
-        "focus": "Reprise — endurance facile (durée)" if training_state == "partial_reprise" else focus_texts.get(phase, "Construction aérobie"),
+        "focus": focus_texts.get(phase, "Construction aérobie"),
         "planned_load": target_load,
         "weekly_km": total_km,
-        "weekly_minutes": weekly_minutes,
-        "reprise": training_state == "partial_reprise",
+        "weekly_minutes": None,
+        "reprise": False,
         "sessions": sessions,
         "total_tss": total_tss,
-        "advice": (
-            f"Reprise : ~{weekly_minutes} min faciles cette semaine. On augmente la durée progressivement, l'intensité viendra plus tard."
-            if training_state == "partial_reprise"
-            else f"Volume actuel: {current_weekly_km} km → cible: {target_km} km. Sortie longue: {target_long_run} km."
-        )
+        "advice": f"Volume actuel: {current_weekly_km} km → cible: {target_km} km. Sortie longue: {target_long_run} km."
     }
     
     elapsed = time.time() - start_time

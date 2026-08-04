@@ -176,14 +176,15 @@ def test_volume_and_intensity_not_simultaneous():
 # 8. No rounding drift: the weekly total matches target_km exactly.
 def test_weekly_total_matches_target_no_rounding_drift():
     async def _run():
-        # This scenario used to yield 42.1 instead of 42.0 (rounding drift of the
-        # 3-way easy split in partial_reprise). The generator now normalizes it.
-        w = _runs([(40, [24, 26]), (40, [17, 19]), (40, [10, 12]), (15, [2, 4])])
+        # NORMAL athlete (volume-driven path): the weekly total must equal
+        # target_km exactly (the generator normalizes per-session rounding drift).
+        w = _runs([(30, [24, 26]), (30, [17, 19]), (30, [10, 12]), (30, [2, 4])])
         for goal in ("MARATHON", "SEMI", "10K"):
             coach_service.clear_cache()
             db = _FakeDB(w)
             db.training_cycles = _FakeCollection(single={"user_id": "u1", "goal": goal})
             r = await generate_dynamic_training_plan(db, "u1")
+            assert r["context"].get("training_state") == "normal", f"{goal}: scenario must be normal"
             target = r["debug_volume"]["target_km"]
             weekly = r["plan"]["weekly_km"]
             assert abs(weekly - target) < 0.05, (

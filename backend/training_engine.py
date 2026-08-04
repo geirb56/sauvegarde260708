@@ -203,6 +203,18 @@ REPRISE_DEEP_SESSION_MINUTES = [30, 35, 40]           # floor (beginner / unknow
 REPRISE_DEEP_SESSION_MINUTES_TRAINED = [35, 45, 55]   # former trained runner
 
 
+def reprise_durations(prior_weekly_km: float = 0.0, active_weeks: int = 0) -> List[int]:
+    """Reprise session durations (minutes), sorted ascending.
+
+    Starts from the deep-reprise baseline (scaled to prior fitness) and grows by
+    ~12 % per already-completed active week, so a comeback keeps getting longer
+    sessions (time on feet) instead of collapsing to a tiny volume-driven split.
+    Capped at +60 %."""
+    base = reprise_deep_durations(prior_weekly_km)
+    factor = min(1.0 + 0.12 * max(0, int(active_weeks or 0)), 1.6)
+    return sorted(int(round(b * factor)) for b in base)
+
+
 def reprise_deep_durations(prior_weekly_km: float = 0.0) -> List[int]:
     """Deep-reprise session durations (minutes), scaled to prior fitness.
 
@@ -327,6 +339,7 @@ def resolve_reprise_plan(
     """
     base = resolve_chronic_base(workouts_28, now)
     state = classify_training_state(workouts_28, km_7=km_7, now=now, recovery_red_flag=recovery_red_flag)
+    active_weeks = sum(1 for km in _weekly_running_buckets(workouts_28, now) if km > 0)
     target_km = compute_target_km(base, goal, phase)
     recent = _weekly_running_buckets(workouts_28, now)[0] if km_7 is None else km_7
     target_km = apply_resume_guard(target_km, recent, base)
@@ -334,7 +347,7 @@ def resolve_reprise_plan(
         # Introduce intensity (normal structure) but HOLD the volume: no +10 %.
         hold = round(base * PHASE_VOLUME_MULTIPLIERS.get(phase, 1.0))
         target_km = min(target_km, hold)
-    return {"state": state, "base_km": round(base, 1), "target_km": round(target_km, 1)}
+    return {"state": state, "base_km": round(base, 1), "target_km": round(target_km, 1), "active_weeks": active_weeks}
 
 
 def build_reprise_week_structure(sessions: int = 3) -> List[tuple]:
@@ -1033,6 +1046,7 @@ __all__ = [
     "REPRISE_STABLE_WEEKS",
     "REPRISE_DEEP_SESSION_MINUTES",
     "reprise_deep_durations",
+    "reprise_durations",
     "compute_long_run_km",
     "vma_pace",
     "vma_pace_range",

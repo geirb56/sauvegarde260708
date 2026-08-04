@@ -33,9 +33,10 @@ pour un athlète avec peu de semaines de données. 0 semaine active → `REPRISE
   Durées **calées sur le niveau antérieur** (`reprise_deep_durations`, fenêtre 6 sem, jours
   28-42) : plancher 30/35/40 min (débutant/inconnu) → 35/45/55 min (ex-coureur ~40 km/sem),
   interpolé linéairement. 3 séances faciles.
-- `partial_reprise` : données récentes mais comeback précoce (< `REPRISE_STABLE_WEEKS`=3
-  semaines actives tolérées) **ou** chute > 50 % du volume (resume guard) → facile-only,
-  le volume progresse, l'intensité reste gelée.
+- `partial_reprise` : données récentes mais comeback précoce → **mêmes séances par durée**
+  que la reprise profonde, qui **progressent** de ~12 %/semaine active complétée
+  (`reprise_durations(prior, active_weeks)`), jamais un découpage km minuscule.
+  Ex. : 105 min (S1) → 118 min (S2) → 130 min (S3). Facile-only, intensité gelée.
 - `reprise_exit` : assez de semaines tolérées → réintroduction de l'intensité **en tenant
   le volume** (jamais volume + intensité simultanément).
 - `normal` : moteur standard.

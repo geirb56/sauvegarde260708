@@ -630,6 +630,7 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
     # PR76 resume guard: store protected target so plan generators cap volume
     context["target_km_protected"] = target_km_debug
     context["training_state"] = training_state
+    context["reprise_active_weeks"] = reprise["active_weeks"]
     # Prior fitness (before the break): running volume in the older part of the
     # 6-week window (days 28-42). Used to scale deep-reprise session durations.
     prior_runs = [
