@@ -251,3 +251,9 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
 - Info-bulle au tap: cibles transparentes r=7 par point (data-testid readiness-point-{i}); tap affiche tooltip (score /100 + date MM-DD) + repère vertical vert. Re-tap ferme.
 - Note: échelle 0-100 => courbe moins "étirée" que min-max mais lecture correcte grâce aux zones (design type Garmin/Whoop).
 - Vérifié: frontend "Compiled successfully" + screenshot (bandes visibles, tooltip "90/100 · 07-17"). data-testid: readiness-chart, readiness-tooltip, readiness-point-{i}.
+
+## 2026-08-04 — Pull sauvegarde/main (PR#78)
+- `git fetch` + `git merge --ff-only sauvegarde/main` : FAST-FORWARD propre `b128c34 → b11b510`. Aucun conflit (mon commit b128c34 = base du remote).
+- PR#78 (#78 runindex-history-7j-training-load) modifie UNIQUEMENT `backend/garmin/insights.py`: pré-calcule `_daily_load` par jour et met `history.training_load = charge d'activité du jour` au lieu de l'ACWR/jour. Conserve mon historique 30 jours et mes `run_readiness`. Champ non utilisé par mon UI → aucun impact visuel.
+- Protégés intacts: backend/.env, frontend/.env, /app/memory (14 fichiers). Backup /tmp/pull_backup.
+- Vérifié: backend health 200, compute_run_index OK (9 pts, run_readiness variés, training_load = charge réelle jour). Mes features readiness (tuiles/zones/tooltip/30j/TSB) préservées.
