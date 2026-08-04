@@ -244,3 +244,10 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
 - ⚠️ Nécessite une NOUVELLE synchro Garmin (côté user) pour backfiller l'historique 30 jours. Upsert idempotent.
 - ⚠️ Perf: 30 jours × 3 endpoints gccli = ~90 sous-process par sync (plus lent, risque rate-limit Garmin). Si trop lourd: garder deep_sync=30 et repasser la sync régulière à 7. À surveiller.
 - Vérifié: backend health 200, code transmet bien days=30. NON testé en réel (nécessite session gccli live + vraie sync).
+
+## 2026-08-04 — Courbe readiness: zones d'état + info-bulle
+- Nouveau composant `ReadinessChart` (Dashboard.jsx) remplace MiniLineChart pour la readiness. Échelle ABSOLUE 0-100 (nécessaire pour aligner les zones).
+- Zones de fond (bandes horizontales, opacity ~0.13): INTENSE vert ≥75, FACILE ambre 55-75, REPOS rouge <55, avec libellés i18n `dashboard.readinessZones.{rest,easy,intense}` FR/EN/ES et lignes de séparation à 55/75.
+- Info-bulle au tap: cibles transparentes r=7 par point (data-testid readiness-point-{i}); tap affiche tooltip (score /100 + date MM-DD) + repère vertical vert. Re-tap ferme.
+- Note: échelle 0-100 => courbe moins "étirée" que min-max mais lecture correcte grâce aux zones (design type Garmin/Whoop).
+- Vérifié: frontend "Compiled successfully" + screenshot (bandes visibles, tooltip "90/100 · 07-17"). data-testid: readiness-chart, readiness-tooltip, readiness-point-{i}.

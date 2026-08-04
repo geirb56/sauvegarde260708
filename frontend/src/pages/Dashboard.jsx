@@ -380,6 +380,104 @@ function MiniLineChart({ data = [], height = 60 }) {
   );
 }
 
+// Readiness chart — absolute 0-100 scale with rest/easy/intense colour bands + tap tooltip
+function ReadinessChart({ data = [], height = 150 }) {
+  const [selected, setSelected] = useState(null);
+  const { t } = useLanguage();
+  const points = (data || []).filter((d) => d && d.run_readiness !== undefined && d.run_readiness !== null);
+  if (points.length < 2) return null;
+
+  const width = 300;
+  const padX = 6;
+  const padY = 8;
+  const n = points.length;
+  const xAt = (i) => padX + (i / (n - 1)) * (width - 2 * padX);
+  const yAt = (v) => padY + (1 - Math.max(0, Math.min(100, v)) / 100) * (height - 2 * padY);
+
+  const zones = [
+    { from: 75, to: 100, color: "#22c55e", key: "intense" },
+    { from: 55, to: 75, color: "#f59e0b", key: "easy" },
+    { from: 0, to: 55, color: "#ef4444", key: "rest" },
+  ];
+
+  const linePts = points.map((p, i) => `${xAt(i)},${yAt(p.run_readiness)}`).join(" ");
+
+  return (
+    <div className="relative w-full" style={{ height }} data-testid="readiness-chart">
+      <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" width="100%" height={height} className="block">
+        {zones.map((z) => {
+          const yTop = yAt(z.to);
+          const yBot = yAt(z.from);
+          return <rect key={z.key} x="0" y={yTop} width={width} height={yBot - yTop} fill={z.color} opacity="0.13" />;
+        })}
+        {[55, 75].map((v) => (
+          <line key={v} x1="0" y1={yAt(v)} x2={width} y2={yAt(v)} stroke="rgba(255,255,255,0.10)" strokeWidth="0.5" />
+        ))}
+        <polyline
+          points={linePts}
+          fill="none"
+          stroke="#ffffff"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          vectorEffect="non-scaling-stroke"
+        />
+        {selected !== null && (
+          <line x1={xAt(selected)} y1={padY} x2={xAt(selected)} y2={height - padY} stroke="#6EEB5A" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+        )}
+        {points.map((p, i) => (
+          <g key={i}>
+            <circle cx={xAt(i)} cy={yAt(p.run_readiness)} r="2" fill="#6EEB5A" />
+            <circle
+              cx={xAt(i)}
+              cy={yAt(p.run_readiness)}
+              r="7"
+              fill="transparent"
+              style={{ cursor: "pointer" }}
+              onClick={() => setSelected(selected === i ? null : i)}
+              data-testid={`readiness-point-${i}`}
+            />
+          </g>
+        ))}
+      </svg>
+
+      {/* Zone labels */}
+      <div className="pointer-events-none absolute inset-0">
+        {zones.map((z) => {
+          const yMid = (yAt(z.from) + yAt(z.to)) / 2;
+          return (
+            <span
+              key={z.key}
+              className="absolute text-[8px] uppercase tracking-wider font-semibold"
+              style={{ left: 4, top: `${(yMid / height) * 100}%`, transform: "translateY(-50%)", color: z.color, opacity: 0.85 }}
+            >
+              {t(`dashboard.readinessZones.${z.key}`)}
+            </span>
+          );
+        })}
+      </div>
+
+      {/* Tap tooltip */}
+      {selected !== null && (
+        <div
+          className="absolute z-10 px-2 py-1 rounded-lg text-[10px] whitespace-nowrap text-center"
+          style={{
+            left: `${(xAt(selected) / width) * 100}%`,
+            top: 0,
+            transform: "translate(-50%, -2px)",
+            background: "var(--bg-card)",
+            border: "1px solid var(--border-color)",
+          }}
+          data-testid="readiness-tooltip"
+        >
+          <div className="font-bold" style={{ color: "#6EEB5A" }}>{points[selected].run_readiness} / 100</div>
+          <div style={{ color: "var(--text-tertiary)" }}>{points[selected].date ? points[selected].date.slice(5) : ""}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const [insight, setInsight] = useState(null);
   const [todaySession, setTodaySession] = useState(null);
@@ -731,7 +829,7 @@ export default function Dashboard() {
                       <p className="text-[11px] uppercase tracking-wider font-semibold mb-1" style={{ color: "var(--text-tertiary)" }}>
                         {t("dashboard.monthlyReadiness")}
                       </p>
-                      <MiniLineChart data={history.map((h) => h.run_readiness ?? 0)} height={110} />
+                      <ReadinessChart data={history} height={150} />
                       <div className="flex justify-between mt-1">
                         <span className="text-[9px]" style={{ color: "var(--text-tertiary)" }}>
                           {history[0]?.date ? history[0].date.slice(5) : ""}
