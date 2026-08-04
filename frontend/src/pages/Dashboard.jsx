@@ -301,29 +301,25 @@ function RunIndexPillar({ icon: Icon, label, value, color }) {
   );
 }
 
-// Readiness pillar — status-colored bar + real value (no invented percentage)
-function ReadinessPillar({ icon: Icon, label, value, status, testId }) {
+// Readiness tile — compact stat card: icon + status dot + label + value (status-colored)
+function ReadinessTile({ icon: Icon, label, value, status, testId }) {
   const color = status === "yellow" ? "#f59e0b" : status === "red" ? "#ef4444" : "#22c55e";
   return (
-    <div className="space-y-1.5" data-testid={`readiness-pillar-${testId}`}>
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-sm font-medium" style={{ color: "var(--text-secondary)" }}>
-          {Icon && <Icon className="w-4 h-4 shrink-0" style={{ color }} />}
-          <span>{label}</span>
-        </div>
-        <span className="text-sm font-bold" style={{ color }} data-testid={`readiness-value-${testId}`}>
-          {value}
-        </span>
+    <div
+      className="rounded-2xl p-3 flex flex-col gap-2 transition-transform duration-200 hover:-translate-y-0.5"
+      style={{ background: `${color}12`, border: `1px solid ${color}33` }}
+      data-testid={`readiness-tile-${testId}`}
+    >
+      <div className="flex items-center justify-between">
+        {Icon && <Icon className="w-4 h-4 shrink-0" style={{ color }} />}
+        <span className="w-2 h-2 rounded-full shrink-0" style={{ background: color }} />
       </div>
-      <div
-        className="h-2 rounded-full overflow-hidden"
-        style={{ background: "rgba(255,255,255,0.08)" }}
-      >
-        <div
-          className="h-full w-full rounded-full transition-all duration-700"
-          style={{ background: color }}
-        />
-      </div>
+      <span className="text-[11px] font-medium leading-tight" style={{ color: "var(--text-tertiary)" }}>
+        {label}
+      </span>
+      <span className="text-lg font-black leading-none" style={{ color }} data-testid={`readiness-value-${testId}`}>
+        {value}
+      </span>
     </div>
   );
 }
@@ -666,11 +662,11 @@ export default function Dashboard() {
                     </div>
                   </div>
 
-                  {/* Big score — same font as RunIndex, out of 100, colored by fitness state */}
+                  {/* Big score — same font as RunIndex, out of 100, white number */}
                   <div className="flex items-end gap-2">
                     <span
                       className="text-6xl font-black leading-none"
-                      style={{ color: recStyle.accent }}
+                      style={{ color: "#ffffff" }}
                       data-testid="run-readiness-score"
                     >
                       {runReadinessScore}
@@ -680,37 +676,37 @@ export default function Dashboard() {
                     </span>
                   </div>
 
-                  {/* Component pillars — same graphic style as RunIndex pillars */}
-                  <div className="grid gap-3" data-testid="run-readiness-pillars">
-                    <ReadinessPillar
+                  {/* Component tiles — compact grid */}
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3" data-testid="run-readiness-pillars">
+                    <ReadinessTile
                       icon={Heart}
                       label={t("dashboard.readinessPillars.hrv")}
                       value={(m.hrv_delta === undefined || m.hrv_delta === null) ? "—" : `${m.hrv_delta >= 0 ? "+" : ""}${m.hrv_delta} ms`}
                       status={m.hrv_status || "green"}
                       testId="hrv"
                     />
-                    <ReadinessPillar
+                    <ReadinessTile
                       icon={Activity}
                       label={t("dashboard.readinessPillars.rhr")}
                       value={(m.rhr_today === undefined || m.rhr_today === null) ? "—" : `${m.rhr_today} bpm`}
                       status={m.rhr_status || "green"}
                       testId="rhr"
                     />
-                    <ReadinessPillar
+                    <ReadinessTile
                       icon={Moon}
                       label={t("dashboard.readinessPillars.sleep")}
                       value={(m.sleep_hours === undefined || m.sleep_hours === null) ? "—" : `${m.sleep_hours} h`}
                       status={m.sleep_status || "green"}
                       testId="sleep"
                     />
-                    <ReadinessPillar
+                    <ReadinessTile
                       icon={BarChart2}
                       label={t("dashboard.readinessPillars.load")}
                       value={(m.training_load === undefined || m.training_load === null) ? "—" : `${m.training_load}`}
                       status={m.training_load_status || "green"}
                       testId="load"
                     />
-                    <ReadinessPillar
+                    <ReadinessTile
                       icon={TrendingUp}
                       label={t("dashboard.readinessPillars.ratio")}
                       value={(m.fatigue_ratio === undefined || m.fatigue_ratio === null) ? "—" : `${m.fatigue_ratio}`}
