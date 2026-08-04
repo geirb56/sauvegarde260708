@@ -34,7 +34,9 @@ from training_engine import (
     compute_target_km,
     apply_resume_guard,
     resolve_chronic_base,
+    resolve_reprise_plan,
     cap_long_run_for_low_volume,
+    compute_long_run_km,
     compute_week_number,
     determine_phase,
     build_training_context,
@@ -579,13 +581,13 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
 
     week = cycle_dates["current_week"] if cycle_status == "active" else adjusted_weeks
     phase = determine_phase(week, adjusted_weeks)
-    # PR76b: a genuine detraining (0 real running km in 28 days) must not be
-    # treated as the 20 km/week default; and sparse recent data (a comeback
-    # ramping up) must not be diluted by the fixed /4 divisor. Use the average
-    # over active weeks as the target base.
-    target_base_km = resolve_chronic_base(workouts_28)
-    target_km_debug = compute_target_km(target_base_km, goal, phase)
-    target_km_debug = apply_resume_guard(target_km_debug, km_7_running, target_base_km)
+    # PR76b/PR-reprise: single source of truth for the reprise-aware target.
+    # Uses the active-week base (no /4 dilution), classifies the comeback state
+    # and applies the resume guard + "hold volume on exit" rule.
+    reprise = resolve_reprise_plan(workouts_28, goal, phase, km_7=km_7_running)
+    target_base_km = reprise["base_km"]
+    target_km_debug = reprise["target_km"]
+    training_state = reprise["state"]
 
     # 8. Calculate ACWR and TSB
     chronic_avg = km_28 / 4 if km_28 > 0 else 1
@@ -627,6 +629,7 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
     context["km_28"] = round(km_28_running, 1)
     # PR76 resume guard: store protected target so plan generators cap volume
     context["target_km_protected"] = target_km_debug
+    context["training_state"] = training_state
 
     # 10. Calculate target load
     target_load = determine_target_load(context, phase)
@@ -760,13 +763,9 @@ def _deterministic_plan(context: dict, phase: str, target_load: int, goal: str, 
     target_km = context.get("target_km_protected") or compute_target_km(current_weekly_km, goal, phase)
     target_km = apply_resume_guard(target_km, context.get("km_7", current_weekly_km), current_weekly_km)
 
-    # Proportional long run
-    long_ratio = (target_km - config["min"]) / (config["max"] - config["min"]) if config["max"] > config["min"] else 0.5
-    long_run = round(config["long_min"] + long_ratio * (config["long_max"] - config["long_min"]))
-    long_run = max(config["long_min"], min(config["long_max"], long_run))
-    # PR76b: when weekly volume is below the goal floor (reprise / beginner),
-    # keep the long run from dominating the week.
-    long_run = cap_long_run_for_low_volume(long_run, target_km, goal)
+    # Proportional long run — compute_long_run_km is the single source of truth
+    # (it already caps the long run at 40 % of target in low-volume / reprise).
+    long_run = compute_long_run_km(target_km, goal)
 
     # Distribution of remaining volume
     remaining = target_km - long_run

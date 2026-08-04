@@ -3,6 +3,16 @@
 ## Problem Statement
 Pull https://github.com/geirb56/sauvegarde260629 and set it up so it runs. Replace /app contents.
 
+## Changelog — Reprise après arrêt / comeback (PR77, June 2026)
+- HEAD pulled to sauvegarde/main d0612d4 (PR#76 resume guard). Then reprise work (not pushed; use Save to Github).
+- REAL-PATH bug found & fixed in PR76 cache bypass: coach_service.generate_dynamic_training_plan read cached_plan.get("weekly_km") (top-level, always None) → stale plan served. Now reads cached_plan["plan"]["weekly_km"].
+- Reprise logic centralized in training_engine.py (single source): resolve_chronic_base (active-weeks avg, no /4 dilution), classify_training_state (deep_reprise/partial_reprise/reprise_exit/normal), resolve_reprise_plan, build_reprise_week_structure, cap_long_run_for_low_volume (≤40% target below goal floor), REPRISE_BASE_KM=12, REPRISE_STABLE_WEEKS=3, REPRISE_DEEP_SESSION_MINUTES=[20,25,30].
+- deep_reprise (0km/28d): duration-based easy sessions (run/walk), no imposed km. partial_reprise: easy-only, volume progresses, intensity frozen. reprise_exit: intensity reintroduced + volume HELD (never both at once). normal: unchanged.
+- Adaptive exit driven by completed active weeks (not fixed calendar). recovery_red_flag hook present (default False) for a future alert-signals PR. compute_current_weekly_km (ACWR/readiness contract) UNTOUCHED.
+- Wired into 3 paths: coach_service.generate_dynamic_training_plan, server.py /training/full-cycle, /training/week-plan. Long run consolidated through compute_long_run_km.
+- Tests: backend/tests/test_reprise_pr77.py (7 mandatory scenarios) + test_real_cache_bypass_pr76.py. 150 passed across plan suites. e2e HTTP: new user → /training/plan state=deep_reprise, 20/25/30min. Report: /app/REPRISE_PR77_REPORT.md. Nothing deployed.
+
+
 ## Changelog — gccli session sharing via MongoDB (August 2, 2026)
 - New backend/garmin/session_store.py: save/restore/ensure/delete per-user gccli session, encrypted (Fernet; key = GCCLI_SESSION_KEY or derived from JWT_SECRET_KEY). Collection garmin_sessions, keyed by user_id (strict isolation).
 - garmin/service.py hooks: save_session after /connect; ensure_session before sync/incremental_sync (graceful "session_unavailable" if missing); re-save after successful sync/deep_sync/incremental; delete_session on disconnect.

@@ -69,6 +69,7 @@ from training_engine import (
     compute_target_km,
     apply_resume_guard,
     resolve_chronic_base,
+    resolve_reprise_plan,
     vma_pace,
     vma_pace_range,
     adapt_session_to_readiness,
@@ -4345,6 +4346,11 @@ async def get_full_training_cycle(
     workouts_7 = [w for w in workouts_28 if (w.get("date") or "") >= seven_days_ago.isoformat()]
     km_7 = sum(normalized_distance_km(w) for w in workouts_7 if is_running(w))
 
+    # Reprise-aware target/state for the CURRENT week (single source of truth).
+    current_phase = determine_phase(current_week, total_weeks)
+    reprise = resolve_reprise_plan(workouts_28, goal, current_phase, km_7=km_7)
+    reprise_state = reprise["state"]
+
     # Generate overview of all weeks
     weeks_overview = []
     
@@ -4353,9 +4359,13 @@ async def get_full_training_cycle(
         phase_info = get_phase_description(phase, lang)
         
         # Target volume — SAME engine as the detailed week plan so cards match sessions.
-        # PR76 resume guard caps the target when the athlete is resuming.
-        target_km = compute_target_km(target_base_km, goal, phase)
-        target_km = apply_resume_guard(target_km, km_7, target_base_km)
+        # The current week uses the reprise-aware target; future weeks project normally.
+        is_current_week = cycle_status == "active" and week_num == current_week
+        if is_current_week:
+            target_km = reprise["target_km"]
+        else:
+            target_km = compute_target_km(target_base_km, goal, phase)
+            target_km = apply_resume_guard(target_km, km_7, target_base_km)
         
         # Session type keys (frontend translates via i18n trainingPlan.sessionType.*)
         if phase == "build":
@@ -4370,6 +4380,10 @@ async def get_full_training_cycle(
             session_types = ["activation", "race"]
         else:
             session_types = ["endurance", "long_run"]
+
+        # Reprise: the current week is easy-only (no threshold/tempo/long run).
+        if is_current_week and reprise_state in ("deep_reprise", "partial_reprise"):
+            session_types = ["endurance", "recovery", "endurance"]
         
         weeks_overview.append({
             "week": week_num,
@@ -4379,14 +4393,12 @@ async def get_full_training_cycle(
             "target_km": target_km,
             "sessions": sessions_per_week if phase not in ["taper", "race"] else min(3, sessions_per_week),
             "session_types": session_types[:sessions_per_week],
-            "is_current": cycle_status == "active" and week_num == current_week,
+            "is_current": is_current_week,
             "is_completed": cycle_status == "active" and week_num < current_week,
             "intensity_pct": phase_info.get("intensity_pct", 15)
         })
     
-    current_phase = determine_phase(current_week, total_weeks)
-    current_target_km = compute_target_km(target_base_km, goal, current_phase)
-    current_target_km = apply_resume_guard(current_target_km, km_7, target_base_km)
+    current_target_km = reprise["target_km"]
 
     return {
         "goal": goal,
@@ -4477,12 +4489,13 @@ async def get_week_plan(user: dict = Depends(auth_user)):
 
     # PR76: compute the protected target BEFORE generation so both LLM and
     # fallback paths use the same capped value.
-    # PR76b: active-weeks base so a comeback is not diluted by the /4 divisor.
-    _target_base_km = resolve_chronic_base(workouts_28)
-    target_km_protected = compute_target_km(_target_base_km, goal["goal_type"], phase)
-    target_km_protected = apply_resume_guard(target_km_protected, km_7_running, _target_base_km)
+    # PR76b/reprise: single source of truth (active-weeks base + state + guard).
+    reprise = resolve_reprise_plan(workouts_28, goal["goal_type"], phase, km_7=km_7_running)
+    _target_base_km = reprise["base_km"]
+    target_km_protected = reprise["target_km"]
     context["target_km_protected"] = target_km_protected
     context["km_7"] = round(km_7_running, 1)
+    context["training_state"] = reprise["state"]
 
     # Générer le plan via LLM
     plan, success, metadata = await generate_cycle_week(

@@ -189,27 +189,22 @@ def apply_resume_guard(
 # running volume in the last 28 days (e.g. returning after a long break).
 REPRISE_BASE_KM = 12.0
 
+# Number of well-tolerated active weeks required before a comeback exits the
+# reprise phase. This is derived from the data (weeks actually completed), NOT
+# a hard-coded calendar duration: an athlete who trains 3 consistent weeks
+# graduates, one who keeps skipping weeks stays in reprise longer.
+REPRISE_STABLE_WEEKS = 3
 
-def resolve_chronic_base(workouts_28: List[Dict[str, Any]], now=None) -> float:
-    """Return the chronic weekly base (km) used to derive the training target.
+# Deep reprise (0 km / 28 days): the first week back is prescribed by DURATION
+# (easy minutes, run/walk allowed) rather than an imposed weekly mileage.
+REPRISE_DEEP_SESSION_MINUTES = [20, 25, 30]
 
-    ``compute_current_weekly_km`` always divides the 28-day running volume by 4,
-    which understates the current fitness of an athlete who only has a few weeks
-    of data (e.g. week 2 of a comeback: 12.6 km in the last 7 days would collapse
-    to 3.15 km/week and the plan would regress instead of progressing).
 
-    This function averages the running volume over the *active* weeks only
-    (weeks that actually contain running), so a resuming athlete keeps a base
-    consistent with what they have really been doing:
-
-    - no active week (genuine detraining) -> conservative ``REPRISE_BASE_KM``
-    - N active weeks -> total running km over those weeks / N
-
-    For a steady 4-week athlete this returns exactly the same value as
-    ``compute_current_weekly_km`` (km_28 / 4).
-    """
+def _weekly_running_buckets(workouts_28: List[Dict[str, Any]], now=None) -> List[float]:
+    """Bucket running distance into the last 4 weeks (0-7, 7-14, 14-21, 21-28
+    days ago). Index 0 is the most recent 7 days."""
     _now = now or datetime.datetime.now(datetime.timezone.utc)
-    buckets = [0.0, 0.0, 0.0, 0.0]  # weeks 0-7, 7-14, 14-21, 21-28 days ago
+    buckets = [0.0, 0.0, 0.0, 0.0]
     for w in (workouts_28 or []):
         if not is_running(w):
             continue
@@ -229,10 +224,117 @@ def resolve_chronic_base(workouts_28: List[Dict[str, Any]], now=None) -> float:
         days_ago = (_now - dt).days
         if 0 <= days_ago < 28:
             buckets[days_ago // 7] += normalized_distance_km(w)
+    return buckets
+
+
+def resolve_chronic_base(workouts_28: List[Dict[str, Any]], now=None) -> float:
+    """Return the chronic weekly base (km) used to derive the training target.
+
+    ``compute_current_weekly_km`` always divides the 28-day running volume by 4,
+    which understates the current fitness of an athlete who only has a few weeks
+    of data (e.g. week 2 of a comeback: 12.6 km in the last 7 days would collapse
+    to 3.15 km/week and the plan would regress instead of progressing).
+
+    This function averages the running volume over the *active* weeks only
+    (weeks that actually contain running), so a resuming athlete keeps a base
+    consistent with what they have really been doing:
+
+    - no active week (genuine detraining) -> conservative ``REPRISE_BASE_KM``
+    - N active weeks -> total running km over those weeks / N
+
+    For a steady 4-week athlete this returns exactly the same value as
+    ``compute_current_weekly_km`` (km_28 / 4).
+    """
+    buckets = _weekly_running_buckets(workouts_28, now)
     active = [km for km in buckets if km > 0]
     if not active:
         return REPRISE_BASE_KM
     return sum(active) / len(active)
+
+
+def classify_training_state(
+    workouts_28: List[Dict[str, Any]],
+    km_7: Optional[float] = None,
+    now=None,
+    recovery_red_flag: bool = False,
+) -> str:
+    """Classify how the athlete should be treated by the plan engine.
+
+    Returns one of:
+    - ``deep_reprise``    : 0 running km over 28 days (returning after a break).
+                            First week is prescribed by DURATION, easy only.
+    - ``partial_reprise`` : running data exists but the athlete is still early
+                            in the comeback (< REPRISE_STABLE_WEEKS tolerated
+                            weeks) OR the last 7 days dropped below 50 % of the
+                            active-week base (resume-guard territory), OR a
+                            recovery red flag is present. Easy only, volume
+                            progresses but intensity stays frozen.
+    - ``reprise_exit``    : enough tolerated weeks — introduce intensity while
+                            HOLDING the volume (never grow volume AND intensity
+                            at once).
+    - ``normal``          : standard periodization engine.
+
+    The exit is adaptive (data-driven via completed active weeks), never a fixed
+    calendar duration.
+    """
+    buckets = _weekly_running_buckets(workouts_28, now)
+    active_weeks = sum(1 for km in buckets if km > 0)
+    if active_weeks == 0:
+        return "deep_reprise"
+
+    base = sum(km for km in buckets if km > 0) / active_weeks
+    recent = buckets[0] if km_7 is None else float(km_7)
+    resuming = base > 0 and recent < base * 0.5
+
+    if recovery_red_flag or resuming or active_weeks < REPRISE_STABLE_WEEKS:
+        return "partial_reprise"
+    if active_weeks == REPRISE_STABLE_WEEKS:
+        return "reprise_exit"
+    return "normal"
+
+
+def resolve_reprise_plan(
+    workouts_28: List[Dict[str, Any]],
+    goal: str,
+    phase: str,
+    km_7: Optional[float] = None,
+    now=None,
+    recovery_red_flag: bool = False,
+) -> Dict[str, Any]:
+    """Single source of truth for the reprise-aware weekly target.
+
+    Combines active-week base + state classification + resume guard + the
+    "never grow volume AND intensity simultaneously" rule.
+
+    Returns ``{"state", "base_km", "target_km"}``.
+    """
+    base = resolve_chronic_base(workouts_28, now)
+    state = classify_training_state(workouts_28, km_7=km_7, now=now, recovery_red_flag=recovery_red_flag)
+    target_km = compute_target_km(base, goal, phase)
+    recent = _weekly_running_buckets(workouts_28, now)[0] if km_7 is None else km_7
+    target_km = apply_resume_guard(target_km, recent, base)
+    if state == "reprise_exit":
+        # Introduce intensity (normal structure) but HOLD the volume: no +10 %.
+        hold = round(base * PHASE_VOLUME_MULTIPLIERS.get(phase, 1.0))
+        target_km = min(target_km, hold)
+    return {"state": state, "base_km": base, "target_km": target_km}
+
+
+def build_reprise_week_structure(sessions: int = 3) -> List[tuple]:
+    """Easy-only weekly structure for a reprise week: ~3 easy sessions with
+    recovery between them, NO threshold/tempo, NO disproportionate long run."""
+    sessions = max(2, min(3, sessions or 3))
+    if sessions <= 2:
+        return [
+            ("monday", "rest"), ("tuesday", "endurance"), ("wednesday", "rest"),
+            ("thursday", "rest"), ("friday", "rest"), ("saturday", "rest"),
+            ("sunday", "endurance"),
+        ]
+    return [
+        ("monday", "rest"), ("tuesday", "endurance"), ("wednesday", "rest"),
+        ("thursday", "recovery"), ("friday", "rest"), ("saturday", "rest"),
+        ("sunday", "endurance"),
+    ]
 
 
 def cap_long_run_for_low_volume(long_run: float, target_km: float, goal: str) -> float:
@@ -906,8 +1008,13 @@ __all__ = [
     "compute_target_km",
     "apply_resume_guard",
     "resolve_chronic_base",
+    "classify_training_state",
+    "resolve_reprise_plan",
+    "build_reprise_week_structure",
     "cap_long_run_for_low_volume",
     "REPRISE_BASE_KM",
+    "REPRISE_STABLE_WEEKS",
+    "REPRISE_DEEP_SESSION_MINUTES",
     "compute_long_run_km",
     "vma_pace",
     "vma_pace_range",

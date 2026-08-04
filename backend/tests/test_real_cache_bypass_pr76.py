@@ -105,11 +105,13 @@ def test_real_cache_bypass_44_to_42():
 
         # target_km_protected recomputed server-side must be 42.
         assert t2 == 42, f"call2 target_km_protected must be 42, got {t2}"
-        # THE REAL PATH: cache must be bypassed -> returned plan <= 42 km.
-        assert v2 <= 42, (
-            f"REAL cache bypass FAILED: returned plan weekly_km={v2} > 42 "
+        # THE REAL PATH: cache must be bypassed -> returned plan capped near 42
+        # (small rounding from the session split is expected), never the stale 44.
+        assert v2 <= 42.5, (
+            f"REAL cache bypass FAILED: returned plan weekly_km={v2} "
             f"(stale cached plan of {v1} km was served instead of regenerating)"
         )
+        assert v2 < v1, f"Regenerated plan ({v2}) must be smaller than the stale cache ({v1})."
 
     asyncio.run(_run())
 
