@@ -1,4 +1,3 @@
-from services.adaptation_engine import adapt_workout_advanced
 from services.run_index_history import get_run_index_history_payload, upsert_run_index_snapshot
 from fastapi import FastAPI, APIRouter, HTTPException, Query, Request, Depends, Header
 from fastapi.responses import RedirectResponse, JSONResponse

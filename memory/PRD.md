@@ -267,3 +267,9 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
 - Frontend only (Dashboard.jsx). Retirés: import recharts complet (inutilisé dans ce fichier), `TrendTooltip`, `MiniLineChart`, mock `chartData=[45,48,...]`. Tous prouvés MORTS (1 occurrence chacun, aucun JSX).
 - Conservés intacts: ReadinessChart + garde `>= 2 points` + `history.run_readiness`, tiles, recommendation, zones 55/75, tooltip, i18n readinessZones/monthlyReadiness. recharts reste (utilisé par Progress.jsx, hors périmètre).
 - Vérifié: grep sans résidu, `yarn build` PASS (14s), screenshot dashboard OK (courbe + zones). Backend non modifié. Rapport: /app/DASHBOARD_CHART_CLEANUP_PR_REPORT.md → READY TO MERGE.
+
+## 2026-08-05 — PR N3: retrait adaptateur mort adapt_workout_advanced
+- Backend only. `adapt_workout_advanced` prouvé MORT (import server.py:1 + def, aucun appel). Conclusion A.
+- Retiré: import ligne 1 de server.py; supprimé backend/services/adaptation_engine.py (module orphelin); corrigé 2 mentions doc obsolètes dans demo_mode.py (commentaires seuls).
+- Conservé: adapt_session_to_readiness (unique adaptateur vivant, appelé par /api/training/today server.py:3632). Non touché.
+- Vérifié: grep 0 occurrence adapt_workout_advanced/adaptation_engine, backend startup OK, GET /api/training/today → 200 (adaptive_session/adaptation_applied/adaptation_reason présents). Frontend intact. Rapport: /app/ADAPT_WORKOUT_ADVANCED_REMOVAL_PR_REPORT.md → READY TO MERGE.

@@ -82,7 +82,7 @@ def _build_demo_subscription(user_id: str = "demo_user") -> Dict:
 
 
 # ---------------------------------------------------------------------------
-# Helper principal — à utiliser partout dans server.py / adaptation_engine.py
+# Helper principal — à utiliser partout dans server.py
 # ---------------------------------------------------------------------------
 
 def is_subscription_active(subscription: Optional[Dict]) -> bool:
@@ -102,11 +102,6 @@ def is_subscription_active(subscription: Optional[Dict]) -> bool:
         sub = await get_user_subscription(db, user_id)
         if not is_subscription_active(sub):
             raise HTTPException(status_code=403, detail="Subscription required")
-
-    Usage dans adaptation_engine.py :
-        from demo_mode import is_subscription_active
-        if is_subscription_active(user_subscription):
-            # accès autorisé
     """
     # --- Mode demo : bypass total ---
     if DEMO_MODE:
