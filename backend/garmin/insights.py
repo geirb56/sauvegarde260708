@@ -216,13 +216,10 @@ async def compute_run_index(db, user_id: str, language: str = "fr") -> Optional[
     # --- Recommendation derived from readiness (number & badge always agree) ---
     if run_readiness >= 75:
         recommendation, rec_emoji, rec_color = "RUN HARD", "🟢", "green"
-        nw_label, nw_icon = "Intervals – 6 x 800 m", "run"
     elif run_readiness >= 55:
         recommendation, rec_emoji, rec_color = "EASY RUN", "🟡", "yellow"
-        nw_label, nw_icon = "Easy Run – 45 min Z2", "run"
     else:
         recommendation, rec_emoji, rec_color = "REST", "🔴", "red"
-        nw_label, nw_icon = "Rest Day", "rest"
     readiness_status = rec_color
 
     # Localize the user-facing labels (fr default / es / en).
@@ -231,14 +228,8 @@ async def compute_run_index(db, user_id: str, language: str = "fr") -> Optional[
         "EASY RUN": {"fr": "FOOTING FACILE", "es": "CARRERA SUAVE"},
         "REST": {"fr": "REPOS", "es": "DESCANSO"},
     }
-    _NW_I18N = {
-        "Intervals – 6 x 800 m": {"fr": "Fractionné – 6 x 800 m", "es": "Series – 6 x 800 m"},
-        "Easy Run – 45 min Z2": {"fr": "Footing facile – 45 min Z2", "es": "Carrera suave – 45 min Z2"},
-        "Rest Day": {"fr": "Jour de repos", "es": "Día de descanso"},
-    }
     if lang != "en":
         recommendation = _REC_I18N.get(recommendation, {}).get(lang, recommendation)
-        nw_label = _NW_I18N.get(nw_label, {}).get(lang, nw_label)
 
     # --- Statuses ---
     hrv_status = "green"
@@ -328,7 +319,6 @@ async def compute_run_index(db, user_id: str, language: str = "fr") -> Optional[
         "recommendation": recommendation,
         "recommendation_emoji": rec_emoji,
         "recommendation_color": rec_color,
-        "next_workout": {"label": nw_label, "icon": nw_icon},
         "reasons": reasons,
         "metrics": {
             "hrv_today": round(float(hrv_today), 1) if have_hrv else None,
