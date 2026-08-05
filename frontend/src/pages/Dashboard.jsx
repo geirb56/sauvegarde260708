@@ -7,7 +7,6 @@ import {
   RefreshCw,
   Loader2,
   Heart,
-  Timer,
   Activity,
   Moon,
   BarChart2,
@@ -20,17 +19,6 @@ import {
   Target,
   Info,
 } from "lucide-react";
-import {
-  BarChart,
-  Bar,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  Legend,
-} from "recharts";
 import { useUnitSystem } from "@/context/UnitContext";
 import { Button } from "@/components/ui/button";
 import { BrandSplash } from "@/components/LoadingSpinner";
@@ -227,62 +215,6 @@ function MetricWidget({ icon: Icon, label, value, unit, status, detail }) {
   );
 }
 
-function TrendTooltip({ active, payload, label }) {
-  if (!active || !payload?.length) return null;
-  return (
-    <div
-      className="rounded-xl p-3 text-xs shadow-lg"
-      style={{
-        background: "var(--bg-card)",
-        border: "1px solid var(--border-color)",
-        color: "var(--text-primary)",
-      }}
-    >
-      <p className="font-bold mb-1">{label}</p>
-      {payload.map((p) => (
-        <p key={p.dataKey} style={{ color: p.color }}>
-          {p.name}: {typeof p.value === "number" ? p.value.toFixed(2) : p.value}
-        </p>
-      ))}
-    </div>
-  );
-}
-
-// Workout type configuration (labels from t("workoutTypes.*"))
-// Circular Gauge Component
-function CircularGauge({ value, max = 100, size = 64 }) {
-  const strokeWidth = 5;
-  const radius = (size - strokeWidth) / 2;
-  const circumference = 2 * Math.PI * radius;
-  const progress = (value / max) * circumference;
-
-  return (
-    <div className="circular-gauge" style={{ width: size, height: size }}>
-      <svg width={size} height={size}>
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius}
-          fill="none"
-          strokeWidth={strokeWidth}
-          className="gauge-bg"
-        />
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius}
-          fill="none"
-          strokeWidth={strokeWidth}
-          strokeDasharray={circumference}
-          strokeDashoffset={circumference - progress}
-          className="gauge-progress"
-        />
-      </svg>
-      <div className="gauge-text">{value}%</div>
-    </div>
-  );
-}
-
 function RunIndexPillar({ icon: Icon, label, value, color }) {
   const safeValue = Number.isFinite(value) ? value : 0;
   return (
@@ -334,49 +266,6 @@ function ReadinessTile({ icon: Icon, label, value, status, testId, onClick }) {
         {value}
       </span>
     </button>
-  );
-}
-
-// Mini Line Chart Component
-function MiniLineChart({ data = [], height = 60 }) {
-  if (!data.length) return null;
-  
-  const width = 280;
-  const padding = 10;
-  
-  const maxVal = Math.max(...data);
-  const minVal = Math.min(...data);
-  const range = maxVal - minVal || 1;
-  
-  const points = data.map((val, i) => {
-    const x = padding + (i / (data.length - 1)) * (width - 2 * padding);
-    const y = height - padding - ((val - minVal) / range) * (height - 2 * padding);
-    return `${x},${y}`;
-  }).join(" ");
-
-  return (
-    <svg
-      viewBox={`0 0 ${width} ${height}`}
-      preserveAspectRatio="none"
-      width="100%"
-      height={height}
-      className="mt-2 block"
-    >
-      <defs>
-        <linearGradient id="lineGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-          <stop offset="0%" stopColor="var(--accent-green)" stopOpacity="0.3" />
-          <stop offset="100%" stopColor="var(--accent-green)" />
-        </linearGradient>
-      </defs>
-      <polyline
-        points={points}
-        fill="none"
-        stroke="url(#lineGradient)"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
   );
 }
 
@@ -575,37 +464,12 @@ export default function Dashboard() {
     fetchCardioData();
   }, [fetchCardioData]);
 
-  // ACWR color helper
-  const getAcwrColor = (status) => {
-    switch(status) {
-      case "optimal": return "#22c55e";
-      case "low": return "#3b82f6";
-      case "warning": return "#f59e0b";
-      case "danger": return "#ef4444";
-      default: return "#22c55e";
-    }
-  };
-
-  // TSB color helper
-  const getTsbColor = (status) => {
-    switch(status) {
-      case "fresh": return "#22c55e";
-      case "ready": return "#3b82f6";
-      case "training": return "#f59e0b";
-      case "fatigued": return "#ef4444";
-      default: return "#3b82f6";
-    }
-  };
-
   if (loading) {
     return <BrandSplash text={t("common.loading")} />;
   }
 
   const weekStats = insight?.week || { sessions: 0, volume_km: 0 };
   const monthStats = insight?.month || { volume_km: 0 };
-  
-  // Mock data for the chart (would come from real data)
-  const chartData = [45, 48, 42, 50, 55, 58, 62, 68];
   
   // Calculate weekly progress
   const weeklyKmTarget = trainingMetrics?.load_28 ? Math.round(trainingMetrics.load_28 / 4 * 1.1) : 80;
