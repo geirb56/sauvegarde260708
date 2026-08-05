@@ -42,7 +42,6 @@ class TestCardioCoachEndpoint:
             "recommendation",
             "recommendation_emoji",
             "recommendation_color",
-            "next_workout",
             "metrics",
             "reasons",
             "history",
@@ -141,14 +140,12 @@ class TestCardioCoachEndpoint:
             assert "fatigue_ratio" in entry, "history entry missing 'fatigue_ratio'"
         print(f"✓ history entry fields valid")
 
-    def test_next_workout_has_label(self):
-        """next_workout must contain a non-empty label."""
+    def test_next_workout_is_not_exposed(self):
+        """next_workout should not be exposed by the endpoint."""
         response = requests.get(f"{BASE_URL}/api/cardio-coach")
         assert response.status_code == 200
-        nw = response.json()["next_workout"]
-        assert isinstance(nw, dict), "next_workout should be a dict"
-        assert "label" in nw and nw["label"], "next_workout.label should be non-empty"
-        print(f"✓ next_workout: {nw}")
+        assert "next_workout" not in response.json()
+        print("✓ next_workout removed from payload")
 
     def test_mock_flag_is_present(self):
         """mock field must be a boolean."""
@@ -159,4 +156,3 @@ class TestCardioCoachEndpoint:
         # For a user without Terra, mock should be True.
         assert data["mock"] is True, "Should return mock=True when no Terra token exists"
         print(f"✓ mock={data['mock']}")
-
