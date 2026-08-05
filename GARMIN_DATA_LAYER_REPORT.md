@@ -1,0 +1,30 @@
+# Garmin Data Layer Report
+
+- fichiers créés
+  - `backend/garmin/models.py`
+  - `backend/tests/test_garmin_models.py`
+  - `GARMIN_DATA_LAYER_REPORT.md`
+- fichiers modifiés
+  - `backend/garmin/providers/base.py`
+  - `backend/garmin/providers/gccli_provider.py`
+  - `backend/garmin/runner.py`
+  - `backend/garmin/service.py`
+- nouveaux modèles
+  - `GarminActivity`
+  - `GarminDailyMetrics`
+  - `GarminCapabilities`
+- nouveaux champs
+  - activité: `activity_id`, `distance_m`, `moving_duration_s`, `average_moving_speed_mps`, `max_hr`, `min_hr`, `average_run_cadence`, `max_run_cadence`, `stride_length`, `steps`, `moderate_intensity_minutes`, `vigorous_intensity_minutes`, `lap_count`, `has_hr_zones`, `has_splits`, `details_available`, etc.
+  - métriques journalières: `stress`, `body_battery`, `respiration`, `hrv` avec `None` sans fallback
+  - capacités: `has_hrv`, `has_vo2max`, `has_training_readiness`, `has_training_status`, `has_body_battery`, `has_stress`, `has_running_dynamics`, `has_power`, `has_race_predictions`
+- compatibilité avec l'existant
+  - les champs historiques d'activité restent présents
+  - les réponses publiques existantes conservent leur structure
+  - les nouvelles données sont ajoutées comme enrichissement interne
+- couverture de tests
+  - normalisation activity summary/details
+  - modèles `None`
+  - payloads `{}`, `[]`
+  - capacités vides
+- points bloquants éventuels
+  - aucun JSON audité dédié trouvé dans le dépôt; les tests couvrent des payloads représentatifs dérivés des champs gccli attendus

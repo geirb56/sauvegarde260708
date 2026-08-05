@@ -13,6 +13,7 @@ from typing import Dict, List, Optional
 
 from config.secrets import get_secret
 
+from ..models import GarminActivity
 from ..runner import GccliRunner, GccliUnavailable, GccliMfaRequired, GccliError
 from .base import (
     ConnectResult,
@@ -170,6 +171,9 @@ class GccliProvider(Provider):
         account = self._account()
         return self._runner.fetch_daily_metrics(days=days, account=account)
 
+    def get_capabilities(self, user_id: str) -> Dict:
+        return self._runner.fetch_capabilities(account=self._account())
+
     def get_profile(self, user_id: str) -> Dict:
         return self._runner.get_profile(account=self._account())
 
@@ -180,6 +184,28 @@ class GccliProvider(Provider):
             atype = atype.get("typeKey")
         distance_m = raw.get("distance")
         duration_s = raw.get("duration")
+        moving_duration_s = raw.get("movingDuration")
+        average_speed_mps = raw.get("averageSpeed")
+        average_moving_speed_mps = raw.get("averageMovingSpeed")
+        max_speed_mps = raw.get("maxSpeed")
+        average_hr = int(raw["averageHR"]) if raw.get("averageHR") else None
+        max_hr = int(raw["maxHR"]) if raw.get("maxHR") else None
+        min_hr = int(raw["minHR"]) if raw.get("minHR") else None
+        average_run_cadence = raw.get("averageRunCadence")
+        max_run_cadence = raw.get("maxRunCadence")
+        stride_length = raw.get("strideLength")
+        steps = raw.get("steps")
+        elevation_gain = raw.get("elevationGain")
+        elevation_loss = raw.get("elevationLoss")
+        calories = raw.get("calories")
+        moderate_intensity_minutes = raw.get("moderateIntensityMinutes")
+        vigorous_intensity_minutes = raw.get("vigorousIntensityMinutes")
+        lap_count = raw.get("lapCount")
+        has_hr_zones = bool(raw.get("hrTimeInZone_1")) if any(
+            key in raw for key in ("hrTimeInZone_1", "hrTimeInZone_2", "hrTimeInZone_3", "hrTimeInZone_4", "hrTimeInZone_5")
+        ) else None
+        has_splits = bool(raw.get("splitSummaries")) if "splitSummaries" in raw else None
+        details_available = raw.get("detailsAvailable")
         pace_spk = None
         if distance_m and duration_s and distance_m > 0:
             pace_spk = round(duration_s / (distance_m / 1000.0), 1)
@@ -192,24 +218,45 @@ class GccliProvider(Provider):
                 m += 1
                 s = 0
             pace_str = f"{m}:{s:02d}"
+        normalized = GarminActivity(
+            activity_id=str(ext_id) if ext_id is not None else None,
+            activity_type=atype or "running",
+            start_time=raw.get("startTimeLocal") or raw.get("startTimeGMT"),
+            distance_m=distance_m,
+            duration_s=duration_s,
+            moving_duration_s=moving_duration_s,
+            average_speed_mps=average_speed_mps,
+            average_moving_speed_mps=average_moving_speed_mps,
+            max_speed_mps=max_speed_mps,
+            average_hr=average_hr,
+            max_hr=max_hr,
+            min_hr=min_hr,
+            average_run_cadence=average_run_cadence,
+            max_run_cadence=max_run_cadence,
+            stride_length=stride_length,
+            steps=steps,
+            elevation_gain=elevation_gain,
+            elevation_loss=elevation_loss,
+            calories=calories,
+            moderate_intensity_minutes=moderate_intensity_minutes,
+            vigorous_intensity_minutes=vigorous_intensity_minutes,
+            lap_count=lap_count,
+            has_hr_zones=has_hr_zones,
+            has_splits=has_splits,
+            details_available=details_available,
+            source="garmin",
+        ).to_dict()
         return {
-            "external_id": str(ext_id) if ext_id is not None else None,
-            "source": "garmin",
+            "external_id": normalized["activity_id"],
+            "source": normalized["source"],
             "name": raw.get("activityName"),
-            "activity_type": atype or "running",
-            "start_time": raw.get("startTimeLocal") or raw.get("startTimeGMT"),
-            "distance": distance_m,
-            "duration": duration_s,
-            "avg_hr": int(raw["averageHR"]) if raw.get("averageHR") else None,
+            "activity_type": normalized["activity_type"],
+            "start_time": normalized["start_time"],
+            "distance": normalized["distance_m"],
+            "duration": normalized["duration_s"],
+            "avg_hr": normalized["average_hr"],
             "pace": pace_str,
             "pace_seconds_per_km": pace_spk,
-            "raw_payload": {
-                "activityId": ext_id,
-                "distance": distance_m,
-                "duration": duration_s,
-                "averageHR": raw.get("averageHR"),
-                "averageSpeed": raw.get("averageSpeed"),
-                "calories": raw.get("calories"),
-                "elevationGain": raw.get("elevationGain"),
-            },
+            "garmin_activity": normalized,
+            "raw_payload": raw,
         }

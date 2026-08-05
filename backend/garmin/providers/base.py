@@ -64,6 +64,9 @@ class Provider(ABC):
         """
         raise NotImplementedError
 
+    def get_capabilities(self, user_id: str) -> Dict:
+        raise NotImplementedError
+
     @abstractmethod
     def get_profile(self, user_id: str) -> Dict:
         raise NotImplementedError

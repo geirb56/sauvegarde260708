@@ -372,18 +372,27 @@ async def incremental_sync(db, user_id: str) -> dict:
 
 async def get_status(db, user_id: str) -> dict:
     conn = await db.garmin_connections.find_one({"user_id": user_id}, {"_id": 0})
+    capabilities = None
+    if conn and conn.get("connected"):
+        try:
+            provider = get_provider_for_user(user_id, garmin_account=conn.get("garmin_username"))
+            capabilities = provider.get_capabilities(user_id)
+        except Exception:
+            capabilities = None
     if not conn:
         return {
             "connected": False,
             "provider": active_provider_name(),
             "last_sync": None,
             "activity_count": 0,
+            "capabilities": capabilities,
         }
     return {
         "connected": bool(conn.get("connected")),
         "provider": conn.get("provider", active_provider_name()),
         "last_sync": conn.get("last_sync"),
         "activity_count": conn.get("activity_count", 0),
+        "capabilities": capabilities,
     }
 
 

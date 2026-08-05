@@ -28,6 +28,8 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
+from .models import GarminCapabilities, GarminDailyMetrics
+
 logger = logging.getLogger(__name__)
 
 
@@ -225,12 +227,12 @@ class GccliRunner:
         return data.get("activities", []) if isinstance(data, dict) else []
 
     def fetch_daily_metrics(self, days: int = 7, account: Optional[str] = None) -> List[Dict]:
-        """Combine resting HR (health hr), sleep, and HRV per day."""
+        """Combine resting HR, sleep, stress, body battery, respiration, and HRV per day."""
         metrics: List[Dict] = []
         now = datetime.now(timezone.utc)
         for i in range(1, days + 1):  # start from yesterday (today often incomplete)
             day = (now - timedelta(days=i)).date().isoformat()
-            entry: Dict = {"date": day, "source": "garmin"}
+            entry: Dict = GarminDailyMetrics(date=day, source="garmin").to_dict()
 
             # Resting HR (from health hr — health rhr endpoint 404s on some accounts)
             try:
@@ -253,6 +255,28 @@ class GccliRunner:
                 entry["sleep_hours"] = None
                 entry["sleep_score"] = None
 
+            try:
+                stress = self._run_json(["health", "stress", day], account=account)
+                if isinstance(stress, dict):
+                    entry["stress"] = stress.get("averageStressLevel") or stress.get("stressPercentage")
+            except GccliError:
+                entry["stress"] = None
+
+            try:
+                body_battery = self._run_json(["health", "body-battery", day], account=account)
+                if isinstance(body_battery, dict):
+                    entry["body_battery"] = body_battery.get("chargedValue") or body_battery.get("endingBodyBattery")
+            except GccliError:
+                entry["body_battery"] = None
+
+            try:
+                respiration = self._run_json(["health", "respiration", day], account=account)
+                if isinstance(respiration, dict):
+                    summary = respiration.get("respirationSummary", {})
+                    entry["respiration"] = summary.get("avgWakingRespirationValue") or summary.get("avgSleepRespirationValue")
+            except GccliError:
+                entry["respiration"] = None
+
             # HRV (may be empty for accounts/devices without HRV)
             try:
                 hrv = self._run_json(["health", "hrv", day], account=account)
@@ -262,9 +286,30 @@ class GccliRunner:
                 entry["hrv"] = None
 
             # Only keep days that have at least one real metric
-            if any(entry.get(k) is not None for k in ("resting_hr", "sleep_hours", "hrv")):
+            if any(entry.get(k) is not None for k in ("resting_hr", "sleep_hours", "sleep_score", "stress", "body_battery", "respiration", "hrv")):
                 metrics.append(entry)
         return metrics
+
+    def fetch_capabilities(self, account: Optional[str] = None) -> Dict:
+        capabilities = GarminCapabilities().to_dict()
+        probes = {
+            "has_hrv": ["health", "hrv"],
+            "has_body_battery": ["health", "body-battery"],
+            "has_stress": ["health", "stress"],
+            "has_training_readiness": ["metrics", "training-readiness"],
+            "has_training_status": ["metrics", "training-status"],
+            "has_vo2max": ["metrics", "vo2max"],
+            "has_race_predictions": ["metrics", "race-predictions"],
+            "has_power": ["activities", "list", "--limit", "1"],
+            "has_running_dynamics": ["activities", "list", "--limit", "1"],
+        }
+        for key, args in probes.items():
+            try:
+                data = self._run_json(args + ([datetime.now(timezone.utc).date().isoformat()] if args[0] == "health" else []), account=account)
+                capabilities[key] = bool(data) if data not in ({}, [], None) else False
+            except GccliError:
+                capabilities[key] = False
+        return capabilities
 
     def get_profile(self, account: Optional[str] = None) -> Dict:
         try:
