@@ -57,6 +57,24 @@ def _has_data(x: Any) -> bool:
     return True
 
 
+def _deep_has_positive_number(obj: Any, key_pred) -> bool:
+    """True if anywhere in obj a key matching ``key_pred`` holds a real
+    positive number (> 0). Used to reject payloads that are non-empty but whose
+    business values are all null (e.g. ``[{"vo2MaxValue": null}]``)."""
+    stack = [obj]
+    while stack:
+        cur = stack.pop()
+        if isinstance(cur, dict):
+            for k, v in cur.items():
+                if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 and key_pred(k):
+                    return True
+                if isinstance(v, (dict, list)):
+                    stack.append(v)
+        elif isinstance(cur, list):
+            stack.extend(cur)
+    return False
+
+
 # --------------------------------------------------------------------------- #
 # GarminActivity
 # --------------------------------------------------------------------------- #
@@ -238,6 +256,11 @@ class GarminDailyMetrics(BaseModel):
 class GarminCapabilities(BaseModel):
     """Describes what the user's watch actually produces.
 
+    SEMANTICS — a field set to ``True`` means: **a usable, non-null value was
+    actually observed for this account/device**. It does NOT merely mean that
+    the corresponding gccli command exists. A non-empty payload whose business
+    values are all null (e.g. ``[{"vo2MaxValue": null}]``) yields ``False``.
+
     Future frontend usage: show "Non disponible sur votre montre" instead of
     0 / "--" when a capability is False.
     """
@@ -258,6 +281,23 @@ class GarminCapabilities(BaseModel):
     def _hrv_ok(hrv: Any) -> bool:
         s = _dict(_dict(hrv).get("hrvSummary"))
         return _num(s.get("lastNightAvg")) is not None or _num(s.get("weeklyAvg")) is not None
+
+    @staticmethod
+    def _vo2max_ok(max_metrics: Any) -> bool:
+        # gccli max-metrics items expose vo2Max* fields (generic/cycling blocks).
+        return _deep_has_positive_number(max_metrics, lambda k: "vo2" in k.lower())
+
+    @staticmethod
+    def _training_readiness_ok(tr: Any) -> bool:
+        # training-readiness items expose a top-level "score".
+        return _deep_has_positive_number(
+            tr, lambda k: k.lower() == "score" or "readinessscore" in k.lower()
+        )
+
+    @staticmethod
+    def _race_predictions_ok(rp: Any) -> bool:
+        # race-predictions expose timeXXX fields (time5K, time10K, ...).
+        return _deep_has_positive_number(rp, lambda k: k.lower().startswith("time"))
 
     @staticmethod
     def _status_ok(ts: Any) -> bool:
@@ -314,12 +354,12 @@ class GarminCapabilities(BaseModel):
     ) -> "GarminCapabilities":
         return cls(
             has_hrv=cls._hrv_ok(hrv),
-            has_vo2max=_has_data(max_metrics),
-            has_training_readiness=_has_data(training_readiness),
+            has_vo2max=cls._vo2max_ok(max_metrics),
+            has_training_readiness=cls._training_readiness_ok(training_readiness),
             has_training_status=cls._status_ok(training_status),
             has_body_battery=_has_data(body_battery),
             has_stress=cls._stress_ok(stress),
             has_running_dynamics=cls._running_dynamics_ok(activity_summary, activity_details),
             has_power=cls._power_ok(activity_summary),
-            has_race_predictions=_has_data(race_predictions),
+            has_race_predictions=cls._race_predictions_ok(race_predictions),
         )

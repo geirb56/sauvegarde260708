@@ -273,9 +273,3 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
 - Retiré: import ligne 1 de server.py; supprimé backend/services/adaptation_engine.py (module orphelin); corrigé 2 mentions doc obsolètes dans demo_mode.py (commentaires seuls).
 - Conservé: adapt_session_to_readiness (unique adaptateur vivant, appelé par /api/training/today server.py:3632). Non touché.
 - Vérifié: grep 0 occurrence adapt_workout_advanced/adaptation_engine, backend startup OK, GET /api/training/today → 200 (adaptive_session/adaptation_applied/adaptation_reason présents). Frontend intact. Rapport: /app/ADAPT_WORKOUT_ADVANCED_REMOVAL_PR_REPORT.md → READY TO MERGE.
-
-## 2026-08-05 — PR01 RunIndex v2: Garmin Data Layer (additive)
-- Créé backend/garmin/data_layer.py: modèles Pydantic v2 GarminActivity / GarminDailyMetrics / GarminCapabilities (pure normalisation, no fallback, {}/[]/null -> None valide). Non branché (aucun import ailleurs).
-- Enrichit vs runner._normalize: maxHR/minHR/movingDuration/averageMovingSpeed/maxSpeed/cadences/strideLength/steps/elevGain+Loss/calories/intensityMinutes/lapCount/hasHrZones/hasSplits/detailsAvailable + daily sleep_score/stress/body_battery/respiration.
-- Tests: backend/tests/test_garmin_data_layer.py (JSON réels audités + {}/[]/null) -> 10 passed. Backend health 200, aucun fichier existant modifié.
-- Rapport: /app/GARMIN_DATA_LAYER_PR01_REPORT.md -> READY TO MERGE. Branchement en base = PR ultérieure.

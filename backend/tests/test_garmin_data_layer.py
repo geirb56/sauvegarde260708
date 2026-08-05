@@ -274,3 +274,27 @@ def test_capabilities_all_empty():
         "has_training_status": False, "has_body_battery": False, "has_stress": False,
         "has_running_dynamics": False, "has_power": False, "has_race_predictions": False,
     }
+
+
+# --------------------------------------------------------------------------- #
+# Non-empty payloads whose business values are all null must yield False
+# --------------------------------------------------------------------------- #
+
+def test_capabilities_vo2max_null_value_is_false():
+    assert GarminCapabilities.from_probe(max_metrics=[{"vo2MaxValue": None}]).has_vo2max is False
+    # positive value -> True
+    assert GarminCapabilities.from_probe(max_metrics=[{"generic": {"vo2MaxValue": 52.0}}]).has_vo2max is True
+
+
+def test_capabilities_training_readiness_null_score_is_false():
+    assert GarminCapabilities.from_probe(training_readiness=[{"score": None}]).has_training_readiness is False
+    assert GarminCapabilities.from_probe(training_readiness=[{"score": 70}]).has_training_readiness is True
+
+
+def test_capabilities_race_predictions_all_null_is_false():
+    assert GarminCapabilities.from_probe(
+        race_predictions={"time5K": None, "time10K": None, "timeHalfMarathon": None}
+    ).has_race_predictions is False
+    assert GarminCapabilities.from_probe(
+        race_predictions={"time5K": 1500, "time10K": None}
+    ).has_race_predictions is True

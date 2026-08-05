@@ -13,7 +13,7 @@ Créer la **couche de données Garmin normalisée** qui deviendra l'unique sourc
 | `GARMIN_DATA_LAYER_PR01_REPORT.md` | Ce rapport |
 
 ## B. Fichiers modifiés
-**Aucun.** Rien d'existant n'a été touché (ni `server.py`, ni `insights.py`, ni `runner.py`, ni `service.py`, ni frontend). La couche n'est encore branchée nulle part — elle sera consommée par les PR suivantes.
+**Aucun fichier existant modifié.** Les changements hors périmètre initialement introduits par PR01 sur `memory/PRD.md` et `.emergent/emergent.yml` ont été **annulés** (restaurés à l'état pré-PR01). Le diff de PR01 contient donc uniquement les 3 fichiers ci-dessus.
 
 ---
 
@@ -36,8 +36,15 @@ Champs : `date, resting_hr, sleep_hours, sleep_score, stress, body_battery, resp
 ### 3. `GarminCapabilities` — `GarminCapabilities.from_probe(...)`
 Décrit ce que la montre produit réellement (pour afficher plus tard « Non disponible sur votre montre »).
 
+**Sémantique (importante) :** un booléen `True` signifie **qu'une donnée exploitable (valeur non nulle) a été réellement observée pour ce compte/appareil** — *pas* seulement que la commande existe dans gccli. Un payload non vide dont toutes les valeurs métier sont nulles produit `False`.
+
 Champs : `has_hrv, has_vo2max, has_training_readiness, has_training_status, has_body_battery, has_stress, has_running_dynamics, has_power, has_race_predictions`.
-- Détection : `{}` / `[]` / `null` / `404` ⇒ capacité `False` ; `training_status` tout-`null` ⇒ `False` ; `has_power` via `metadataDTO.hasPowerTimeInZones` ; `has_running_dynamics` via marqueurs GCT / oscillation verticale dans le summary ou les `metricDescriptors`.
+- Détection valeur-réelle via `_deep_has_positive_number(...)` :
+  - `has_vo2max` : cherche une clé contenant `vo2` avec valeur > 0 (`[{"vo2MaxValue": null}]` → **False**).
+  - `has_training_readiness` : cherche `score` > 0 (`[{"score": null}]` → **False**).
+  - `has_race_predictions` : cherche une clé `time*` > 0 (`{"time5K": null, "time10K": null}` → **False**).
+- Autres : `has_hrv` via `hrvSummary.lastNightAvg/weeklyAvg` ; `has_training_status` via `mostRecent*` non-null ; `has_stress` via `avgStressLevel >= 0` ; `has_power` via `metadataDTO.hasPowerTimeInZones` ; `has_running_dynamics` via marqueurs GCT / oscillation verticale ; `has_body_battery` via présence de contenu.
+- `{}` / `[]` / `null` / `404` ⇒ `False`.
 
 ---
 
@@ -57,7 +64,7 @@ Côté daily : ajout de `sleep_score, stress, body_battery, respiration` (en plu
 
 ---
 
-## F. Couverture de tests — `pytest tests/test_garmin_data_layer.py` : **10 passed**
+## F. Couverture de tests — `pytest tests/test_garmin_data_layer.py` : **13 passed**
 | Test | Vérifie |
 |---|---|
 | `test_activity_from_summary_real` | `activity summary` réel → tous les champs |
@@ -70,6 +77,9 @@ Côté daily : ajout de `sleep_score, stress, body_battery, respiration` (en plu
 | `test_activity_empty_inputs` | `{}` / `[]` / `null` → modèle valide |
 | `test_daily_metrics_empty_inputs` | tous payloads vides → tous champs `None` |
 | `test_capabilities_all_empty` | tous vides → toutes capacités `False` |
+| `test_capabilities_vo2max_null_value_is_false` | `[{"vo2MaxValue": null}]` → **False** (positif → True) |
+| `test_capabilities_training_readiness_null_score_is_false` | `[{"score": null}]` → **False** (score → True) |
+| `test_capabilities_race_predictions_all_null_is_false` | `{"time5K": null, ...}` → **False** (temps → True) |
 
 Les JSON de test proviennent des payloads **réellement audités** (activity summary/details, sleep, stress, body battery, hr-zones).
 
