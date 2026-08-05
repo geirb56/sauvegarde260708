@@ -262,3 +262,8 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
 - Local avait divergé de 1 commit (fc92aa3, MAJ PRD.md) ; remote +2 commits (PR#79 remove-next-workout-faux-contenu). `git merge --no-edit sauvegarde/main` → merge propre (ort), AUCUN conflit (fichiers disjoints). HEAD=42f3b81.
 - PR#79 retire `next_workout` (faux contenu) de insights.py + server.py, ajuste 2 tests, ajoute NEXT_WORKOUT_REMOVAL_PR_REPORT.md. N'impacte pas mon UI readiness.
 - Protégés intacts (backend/.env, frontend/.env, memory). Vérifié: backend 200, compute_run_index OK (next_workout absent), frontend compiled.
+
+## 2026-08-05 — PR N2: cleanup Dashboard (code mort chart/mock)
+- Frontend only (Dashboard.jsx). Retirés: import recharts complet (inutilisé dans ce fichier), `TrendTooltip`, `MiniLineChart`, mock `chartData=[45,48,...]`. Tous prouvés MORTS (1 occurrence chacun, aucun JSX).
+- Conservés intacts: ReadinessChart + garde `>= 2 points` + `history.run_readiness`, tiles, recommendation, zones 55/75, tooltip, i18n readinessZones/monthlyReadiness. recharts reste (utilisé par Progress.jsx, hors périmètre).
+- Vérifié: grep sans résidu, `yarn build` PASS (14s), screenshot dashboard OK (courbe + zones). Backend non modifié. Rapport: /app/DASHBOARD_CHART_CLEANUP_PR_REPORT.md → READY TO MERGE.

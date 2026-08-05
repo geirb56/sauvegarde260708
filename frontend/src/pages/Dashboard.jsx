@@ -20,17 +20,6 @@ import {
   Target,
   Info,
 } from "lucide-react";
-import {
-  BarChart,
-  Bar,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  Legend,
-} from "recharts";
 import { useUnitSystem } from "@/context/UnitContext";
 import { Button } from "@/components/ui/button";
 import { BrandSplash } from "@/components/LoadingSpinner";
@@ -227,27 +216,6 @@ function MetricWidget({ icon: Icon, label, value, unit, status, detail }) {
   );
 }
 
-function TrendTooltip({ active, payload, label }) {
-  if (!active || !payload?.length) return null;
-  return (
-    <div
-      className="rounded-xl p-3 text-xs shadow-lg"
-      style={{
-        background: "var(--bg-card)",
-        border: "1px solid var(--border-color)",
-        color: "var(--text-primary)",
-      }}
-    >
-      <p className="font-bold mb-1">{label}</p>
-      {payload.map((p) => (
-        <p key={p.dataKey} style={{ color: p.color }}>
-          {p.name}: {typeof p.value === "number" ? p.value.toFixed(2) : p.value}
-        </p>
-      ))}
-    </div>
-  );
-}
-
 // Workout type configuration (labels from t("workoutTypes.*"))
 // Circular Gauge Component
 function CircularGauge({ value, max = 100, size = 64 }) {
@@ -334,49 +302,6 @@ function ReadinessTile({ icon: Icon, label, value, status, testId, onClick }) {
         {value}
       </span>
     </button>
-  );
-}
-
-// Mini Line Chart Component
-function MiniLineChart({ data = [], height = 60 }) {
-  if (!data.length) return null;
-  
-  const width = 280;
-  const padding = 10;
-  
-  const maxVal = Math.max(...data);
-  const minVal = Math.min(...data);
-  const range = maxVal - minVal || 1;
-  
-  const points = data.map((val, i) => {
-    const x = padding + (i / (data.length - 1)) * (width - 2 * padding);
-    const y = height - padding - ((val - minVal) / range) * (height - 2 * padding);
-    return `${x},${y}`;
-  }).join(" ");
-
-  return (
-    <svg
-      viewBox={`0 0 ${width} ${height}`}
-      preserveAspectRatio="none"
-      width="100%"
-      height={height}
-      className="mt-2 block"
-    >
-      <defs>
-        <linearGradient id="lineGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-          <stop offset="0%" stopColor="var(--accent-green)" stopOpacity="0.3" />
-          <stop offset="100%" stopColor="var(--accent-green)" />
-        </linearGradient>
-      </defs>
-      <polyline
-        points={points}
-        fill="none"
-        stroke="url(#lineGradient)"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
   );
 }
 
@@ -603,9 +528,6 @@ export default function Dashboard() {
 
   const weekStats = insight?.week || { sessions: 0, volume_km: 0 };
   const monthStats = insight?.month || { volume_km: 0 };
-  
-  // Mock data for the chart (would come from real data)
-  const chartData = [45, 48, 42, 50, 55, 58, 62, 68];
   
   // Calculate weekly progress
   const weeklyKmTarget = trainingMetrics?.load_28 ? Math.round(trainingMetrics.load_28 / 4 * 1.1) : 80;
