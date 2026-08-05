@@ -257,3 +257,8 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
 - PR#78 (#78 runindex-history-7j-training-load) modifie UNIQUEMENT `backend/garmin/insights.py`: pré-calcule `_daily_load` par jour et met `history.training_load = charge d'activité du jour` au lieu de l'ACWR/jour. Conserve mon historique 30 jours et mes `run_readiness`. Champ non utilisé par mon UI → aucun impact visuel.
 - Protégés intacts: backend/.env, frontend/.env, /app/memory (14 fichiers). Backup /tmp/pull_backup.
 - Vérifié: backend health 200, compute_run_index OK (9 pts, run_readiness variés, training_load = charge réelle jour). Mes features readiness (tuiles/zones/tooltip/30j/TSB) préservées.
+
+## 2026-08-04 — Pull sauvegarde/main (PR#79)
+- Local avait divergé de 1 commit (fc92aa3, MAJ PRD.md) ; remote +2 commits (PR#79 remove-next-workout-faux-contenu). `git merge --no-edit sauvegarde/main` → merge propre (ort), AUCUN conflit (fichiers disjoints). HEAD=42f3b81.
+- PR#79 retire `next_workout` (faux contenu) de insights.py + server.py, ajuste 2 tests, ajoute NEXT_WORKOUT_REMOVAL_PR_REPORT.md. N'impacte pas mon UI readiness.
+- Protégés intacts (backend/.env, frontend/.env, memory). Vérifié: backend 200, compute_run_index OK (next_workout absent), frontend compiled.
