@@ -2868,7 +2868,6 @@ _CARDIO_COACH_NO_DATA = {
     "recommendation": None,
     "recommendation_emoji": None,
     "recommendation_color": "gray",
-    "next_workout": None,
     "reasons": [],
     "metrics": None,
     "history": [],
@@ -2993,20 +2992,14 @@ async def get_run_index(user: dict = Depends(auth_user), language: str = "fr"):
         recommendation = "REST"
         recommendation_emoji = "🔴"
         recommendation_color = "red"
-        next_workout_label = "Rest Day"
-        next_workout_icon = "rest"
     elif fatigue_ratio > 1.2:
         recommendation = "EASY RUN"
         recommendation_emoji = "🟡"
         recommendation_color = "yellow"
-        next_workout_label = "Easy Run – 45 min Z2"
-        next_workout_icon = "run"
     else:
         recommendation = "RUN HARD"
         recommendation_emoji = "🟢"
         recommendation_color = "green"
-        next_workout_label = "Intervals – 6 x 800 m"
-        next_workout_icon = "run"
 
     # ----------------------------------------------------------------
     # Per-metric status colours.
@@ -3081,7 +3074,6 @@ async def get_run_index(user: dict = Depends(auth_user), language: str = "fr"):
         "recommendation": recommendation,
         "recommendation_emoji": recommendation_emoji,
         "recommendation_color": recommendation_color,
-        "next_workout": {"label": next_workout_label, "icon": next_workout_icon},
         "metrics": {
             "hrv_today": round(float(hrv_today), 1),
             "hrv_baseline": round(float(hrv_baseline), 1),
