@@ -7,7 +7,7 @@ Design rules
 - reference_date must be supplied explicitly by the caller — datetime.now()
   is NEVER called inside this module.
 - RunnerProfile centralises durable or semi-durable athlete characteristics.
-  It does NOT decide reprise / fatigue / overload / readiness states.
+  It does NOT decide resumption / fatigue / overload / readiness states.
 
 Source priority
 ---------------
@@ -140,7 +140,7 @@ def _parse_positive_float(value: Any) -> Optional[float]:
 
 def _parse_int_like(value: Any) -> Optional[int]:
     number = _parse_float(value)
-    if number is None or not float(number).is_integer():
+    if number is None or not number.is_integer():
         return None
     return int(number)
 
@@ -229,12 +229,12 @@ def _window_value(
     training_history: TrainingHistory,
     extractor: Callable[[TrainingWindow], Any],
     parser: Callable[[Any], Optional[float]],
-) -> Optional[float]:
+) -> tuple[Optional[float], Optional[int]]:
     for window in (training_history.window_30d, training_history.window_90d):
         parsed = parser(extractor(window))
         if parsed is not None:
-            return parsed
-    return None
+            return parsed, window.days
+    return None, None
 
 
 def _history_metric_or_declared(
@@ -242,12 +242,14 @@ def _history_metric_or_declared(
     extractor: Callable[[TrainingWindow], Any],
     declared_value: Any,
     parser: Callable[[Any], Optional[float]],
-    observed_transform: Optional[Callable[[float], float]] = None,
+    observed_transform: Optional[Callable[[float, int], float]] = None,
 ) -> Optional[float]:
-    observed = _window_value(training_history, extractor, parser)
+    observed, window_days = _window_value(training_history, extractor, parser)
     if observed is not None:
         return _round_optional(
-            observed_transform(observed) if observed_transform is not None else observed
+            observed_transform(observed, window_days or 30)
+            if observed_transform is not None
+            else observed
         )
     declared = parser(declared_value)
     if declared is None:
@@ -292,7 +294,6 @@ def build_runner_profile(
     intentionally does not derive any fatigue, reprise, overload, or readiness
     decision from it.
     """
-    _ = training_load
 
     profile = user_profile if isinstance(user_profile, Mapping) else {}
     physiology = physiological_metrics if isinstance(physiological_metrics, Mapping) else {}
@@ -332,21 +333,21 @@ def build_runner_profile(
         lambda window: window.distance_km,
         profile.get("weekly_km"),
         _parse_positive_float,
-        lambda value: value * 7.0 / 30.0,
+        lambda value, window_days: value * 7.0 / float(window_days),
     )
     typical_weekly_hours = _history_metric_or_declared(
         training_history,
         lambda window: window.duration_hours,
         profile.get("weekly_hours"),
         _parse_positive_float,
-        lambda value: value * 7.0 / 30.0,
+        lambda value, window_days: value * 7.0 / float(window_days),
     )
     typical_runs_per_week = _history_metric_or_declared(
         training_history,
         lambda window: window.activity_count,
         profile.get("runs_per_week"),
         _parse_positive_float,
-        lambda value: value * 7.0 / 30.0,
+        lambda value, window_days: value * 7.0 / float(window_days),
     )
     typical_long_run_km = _history_metric_or_declared(
         training_history,

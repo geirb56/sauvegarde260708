@@ -83,15 +83,17 @@ aucune readiness et ne modifie aucune recommandation existante.
 
 ## Calcul des métriques habituelles
 
-- `typical_weekly_km = window.distance_km * 7 / 30`
-- `typical_weekly_hours = window.duration_hours * 7 / 30`
-- `typical_runs_per_week = window.activity_count * 7 / 30`
+- `typical_weekly_km = window.distance_km * 7 / window.days`
+- `typical_weekly_hours = window.duration_hours * 7 / window.days`
+- `typical_runs_per_week = window.activity_count * 7 / window.days`
 - `typical_long_run_km = window.longest_run_km`
 - `typical_speed_kmh = window.average_speed_kmh`
 
 Règles appliquées :
 
 - priorité à la fenêtre 30 jours
+- quand le secours 90 jours est utilisé, la conversion hebdomadaire reste basée
+  sur `window.days` pour éviter tout sur-calcul
 - fenêtre 90 jours uniquement en secours si la 30 jours ne fournit pas de
   donnée exploitable
 - aucun fallback arbitraire

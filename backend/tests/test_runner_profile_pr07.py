@@ -349,7 +349,7 @@ def test_90d_window_is_only_a_fallback_when_30d_is_insufficient():
             window_90d=_window(days=90, distance_km=180.0, duration_hours=18.0, activity_count=18, longest_run_km=22.0),
         )
     )
-    assert profile.typical_weekly_km == 42.0
-    assert profile.typical_weekly_hours == 4.2
-    assert profile.typical_runs_per_week == 4.2
+    assert profile.typical_weekly_km == 14.0
+    assert profile.typical_weekly_hours == 1.4
+    assert profile.typical_runs_per_week == 1.4
     assert profile.typical_long_run_km == 22.0
