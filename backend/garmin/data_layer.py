@@ -189,6 +189,11 @@ def _latest_body_battery(bb: Any) -> Optional[int]:
     return None
 
 
+def _extract_daily_date(payload: Any) -> Optional[str]:
+    payload = _dict(payload)
+    return _str(payload.get("calendarDate")) or _str(payload.get("date"))
+
+
 class GarminDailyMetrics(BaseModel):
     """Normalized daily wellness metrics for a single date."""
 
@@ -219,9 +224,11 @@ class GarminDailyMetrics(BaseModel):
         stress = _dict(stress)
         hrv = _dict(hrv)
 
+        body_battery_latest = body_battery[-1] if isinstance(body_battery, list) and body_battery else body_battery
+        body_battery_latest = _dict(body_battery_latest)
         dto = _dict(sleep.get("dailySleepDTO"))
         sleep_secs = _num(dto.get("sleepTimeSeconds"))
-        sleep_hours = round(sleep_secs / 3600, 1) if sleep_secs else None
+        sleep_hours = round(sleep_secs / 3600, 1) if sleep_secs is not None else None
         scores = _dict(dto.get("sleepScores"))
         overall = _dict(scores.get("overall"))
         sleep_score = _int(overall.get("value"))
@@ -237,8 +244,18 @@ class GarminDailyMetrics(BaseModel):
         if hrv_val is None:
             hrv_val = _num(hrv_summary.get("weeklyAvg"))
 
+        resolved_date = (
+            _extract_daily_date(hr)
+            or _extract_daily_date(sleep)
+            or _extract_daily_date(stress)
+            or _extract_daily_date(hrv)
+            or _extract_daily_date(body_battery_latest)
+            or _str(dto.get("calendarDate"))
+            or _str(date)
+        )
+
         return cls(
-            date=_str(date),
+            date=resolved_date,
             resting_hr=_int(hr.get("restingHeartRate")),
             sleep_hours=sleep_hours,
             sleep_score=sleep_score,
