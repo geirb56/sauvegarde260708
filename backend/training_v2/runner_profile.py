@@ -132,9 +132,12 @@ def _as_positive_float(value: Any) -> Optional[float]:
 
 def _as_int_in_range(value: Any, *, minimum: int, maximum: int) -> Optional[int]:
     result = _as_float(value)
-    if result is None or not result.is_integer():
+    if result is None:
         return None
-    int_result = int(result)
+    rounded = round(result)
+    if abs(result - rounded) > 1e-9:
+        return None
+    int_result = int(rounded)
     if int_result < minimum or int_result > maximum:
         return None
     return int_result
@@ -280,15 +283,13 @@ def build_runner_profile(
     observed_weekly_window = (
         training_history.window_30d if available_history_days >= 30 else None
     )
-    observed_support_window = _history_metric_window(training_history, "distance_km")
-
     typical_weekly_km = (
         _weekly_from_window(observed_weekly_window, "distance_km")
         if observed_weekly_window is not None
         else None
     )
-    if typical_weekly_km is None and observed_support_window is not None and observed_support_window.days == 90:
-        typical_weekly_km = _weekly_from_window(observed_support_window, "distance_km")
+    if typical_weekly_km is None and available_history_days >= 90:
+        typical_weekly_km = _weekly_from_window(training_history.window_90d, "distance_km")
     if typical_weekly_km is None:
         typical_weekly_km = _as_positive_float(
             _first_present(user, "typical_weekly_km", "weekly_km", "weekly_distance_km")
