@@ -315,100 +315,104 @@ def test_status_unavailable_without_denominator():
 # ---------------------------------------------------------------------------
 
 
-def _snap_with_acwr(target_acwr: float) -> TrainingLoadSnapshot:
-    """Build a snapshot with an approximately known ACWR.
+def _acwr_acute_minutes(target_acwr: float, B_min: float = 60.0) -> float:
+    """Return A (minutes) so that ACWR = 4A / (B + A) = target_acwr.
 
-    Strategy: put ONLY activity in the acute window (7d).
-    chronic_weekly = acute/4 normally, so we need two independent windows.
-    We put 4 × target_acwr minutes in 28d spread evenly, and target_acwr × 1
-    minute in acute.
-    Simplest approach: put 4 activities of 15 min in 28d (chronic=15) and
-    target_acwr × 15 min in acute window.
+    Derivation:
+        target_acwr × (B + A) = 4A
+        target_acwr × B = A × (4 - target_acwr)
+        A = target_acwr × B / (4 - target_acwr)
+
+    Note: the acute load A is also included in load_28d, so
+        chronic_weekly_load = (B + A) / 4
+        ACWR = A / chronic_weekly_load = 4A / (B + A)
     """
-    # 28d base: 4 activities of 15 min each in days 8-27 (outside acute)
-    base = [_running(8 + i, duration_s=900.0) for i in range(4)]  # 4 × 15 min = 60 min in 28d
-    # chronic_weekly = 60/4 = 15 min
-    # acute target: target_acwr × 15 min
-    acute_minutes = target_acwr * 15.0
-    acute_act = _running(1, duration_s=acute_minutes * 60.0)
-    return snap(base + [acute_act])
+    return target_acwr * B_min / (4.0 - target_acwr)
+
+
+def _snap_for_acwr(target_acwr: float, B_min: float = 60.0) -> TrainingLoadSnapshot:
+    """Build a snapshot whose computed ACWR equals target_acwr.
+
+    B_min minutes are spread across days 8-11 (inside 28-day window,
+    outside the 7-day acute window).
+    A = target_acwr × B / (4 - target_acwr) minutes are placed at day 1
+    (inside the acute window).
+    """
+    base = [_running(8 + i, duration_s=B_min / 4 * 60.0) for i in range(4)]
+    A_min = _acwr_acute_minutes(target_acwr, B_min)
+    return snap(base + [_running(1, duration_s=A_min * 60.0)])
 
 
 def test_status_very_low():
-    # acwr < 0.50  →  e.g. 0.30 × 15 = 4.5 min
-    s = snap(
-        [_running(8 + i, duration_s=900.0) for i in range(4)]
-        + [_running(1, duration_s=270.0)]   # 4.5 min → acwr = 4.5/15 = 0.30
-    )
+    # ACWR < 0.50 — target 0.30
+    # B=60 min, A = 0.30×60/3.70 = 18/3.7 min; ACWR = 4A/(60+A) = 72/240 = 0.30
+    s = _snap_for_acwr(0.30)
+    assert s.acwr == pytest.approx(0.30, abs=0.001)
     assert s.status == "very_low"
 
 
-def test_status_low():
-    # 0.50 ≤ acwr < 0.80 → use 0.60 × 15 = 9 min acute
-    s = snap(
-        [_running(8 + i, duration_s=900.0) for i in range(4)]
-        + [_running(1, duration_s=540.0)]   # 9 min → acwr = 0.60
-    )
+def test_status_at_very_low_boundary():
+    # ACWR = 0.50 exactly (lower bound of "low")
+    # B=60, A = 0.50×60/3.50 = 60/7 min; ACWR = 4×(60/7)/(60+60/7) = 240/480 = 0.50
+    s = _snap_for_acwr(0.50)
+    assert s.acwr == pytest.approx(0.50, abs=0.001)
     assert s.status == "low"
 
 
+def test_status_low():
+    # 0.50 ≤ ACWR < 0.80 — interior value 0.60
+    # B=60, A = 0.60×60/3.40 = 180/17 min; ACWR = 4×(180/17)/(60+180/17) = 720/1200 = 0.60
+    s = _snap_for_acwr(0.60)
+    assert s.acwr == pytest.approx(0.60, abs=0.001)
+    assert s.status == "low"
+
+
+def test_status_at_balanced_low_boundary():
+    # ACWR = 0.80 exactly (lower bound of "balanced")
+    # B=60, A = 0.80×60/3.20 = 15 min = 900 s; ACWR = 4×15/(60+15) = 60/75 = 0.80
+    s = _snap_for_acwr(0.80)
+    assert s.acwr == pytest.approx(0.80, abs=0.001)
+    assert s.status == "balanced"
+
+
 def test_status_balanced():
-    # 0.80 ≤ acwr ≤ 1.30  →  use 1.0 × 15 = 15 min acute
-    s = snap(
-        [_running(8 + i, duration_s=900.0) for i in range(4)]
-        + [_running(1, duration_s=900.0)]   # 15 min → acwr = 1.0
-    )
+    # 0.80 ≤ ACWR ≤ 1.30 — interior value 1.00
+    # B=60, A = 1.00×60/3.00 = 20 min; ACWR = 4×20/(60+20) = 80/80 = 1.00
+    s = _snap_for_acwr(1.00)
+    assert s.acwr == pytest.approx(1.00, abs=0.001)
+    assert s.status == "balanced"
+
+
+def test_status_at_balanced_high_boundary():
+    # ACWR = 1.30 exactly (upper bound of "balanced")
+    # B=60, A = 1.30×60/2.70 = 260/9 min; ACWR = 4×(260/9)/(60+260/9) = 1040/800 = 1.30
+    s = _snap_for_acwr(1.30)
+    assert s.acwr == pytest.approx(1.30, abs=0.001)
     assert s.status == "balanced"
 
 
 def test_status_elevated():
-    # 1.30 < acwr ≤ 1.50
-    # Base: 4 × 900s = 4×15min = 60 min (days 8-11, in 28d but not acute)
-    # acute_min = m; load_28d = 60+m; chronic_weekly = (60+m)/4
-    # acwr = 4m/(60+m) → target ≈ 1.40 → m = 84/2.6 ≈ 32.308 min → 1939 s
-    s = snap(
-        [_running(8 + i, duration_s=900.0) for i in range(4)]
-        + [_running(1, duration_s=1939.0)]
-    )
+    # 1.30 < ACWR ≤ 1.50 — interior value 1.40
+    # B=60, A = 1.40×60/2.60 = 420/13 min; ACWR = 4×(420/13)/(60+420/13) = 1680/1200 = 1.40
+    s = _snap_for_acwr(1.40)
+    assert s.acwr == pytest.approx(1.40, abs=0.001)
+    assert s.status == "elevated"
+
+
+def test_status_at_elevated_high_boundary():
+    # ACWR = 1.50 exactly (upper bound of "elevated")
+    # B=60, A = 1.50×60/2.50 = 36 min = 2160 s; ACWR = 4×36/(60+36) = 144/96 = 1.50
+    s = _snap_for_acwr(1.50)
+    assert s.acwr == pytest.approx(1.50, abs=0.001)
     assert s.status == "elevated"
 
 
 def test_status_high():
-    # acwr > 1.50 → use acwr = 2.0 → m = 120/2.0 = 60 min → 3600 s
-    s = snap(
-        [_running(8 + i, duration_s=900.0) for i in range(4)]
-        + [_running(1, duration_s=3600.0)]
-    )
+    # ACWR > 1.50 — use 1.60
+    # B=60, A = 1.60×60/2.40 = 40 min = 2400 s; ACWR = 4×40/(60+40) = 160/100 = 1.60
+    s = _snap_for_acwr(1.60)
+    assert s.acwr == pytest.approx(1.60, abs=0.001)
     assert s.status == "high"
-
-
-def test_status_at_very_low_boundary():
-    # acwr exactly at 0.50 boundary → "low" (0.50 ≤ acwr < 0.80)
-    # acwr = 4m/(60+m) = 0.50 → m = 30/3.5 ≈ 8.571 min → 515 s gives 0.5006 → "low"
-    s = snap(
-        [_running(8 + i, duration_s=900.0) for i in range(4)]
-        + [_running(1, duration_s=515.0)]
-    )
-    assert s.status == "low"
-
-
-def test_status_at_balanced_high_boundary():
-    # acwr exactly 1.30 → "balanced"
-    s = snap(
-        [_running(8 + i, duration_s=900.0) for i in range(4)]
-        + [_running(1, duration_s=1170.0)]  # 19.5 min → acwr = 1.30
-    )
-    assert s.status == "balanced"
-
-
-def test_status_at_elevated_high_boundary():
-    # acwr exactly 1.50 → "elevated" (1.30 < 1.50 ≤ 1.50)
-    # acwr = 4m/(60+m) = 1.50 → 2.5m = 90 → m = 36 min → 2160 s
-    s = snap(
-        [_running(8 + i, duration_s=900.0) for i in range(4)]
-        + [_running(1, duration_s=2160.0)]  # 36 min → acwr = 4*36/96 = 1.50
-    )
-    assert s.status == "elevated"
 
 
 # ---------------------------------------------------------------------------
@@ -479,15 +483,16 @@ def test_insufficient_history():
 
 
 def test_exactly_sufficient_history():
-    # Activity exactly 28 days ago: available_history_days = 28 days
-    s = snap([_running(27)])  # J-27 → available_history = (REF - (REF-27)).days = 27
-    # 27 < 28 → not sufficient
-    assert s.has_sufficient_history is False
+    # With inclusive convention: activity at J-27 →
+    # available_history_days = (REF - (REF-27)).days + 1 = 27 + 1 = 28 → sufficient
+    s = snap([_running(27)])
+    assert s.has_sufficient_history is True
+    assert s.confidence == "high"
 
-    # Activity 28 days ago: available_history = (REF - (REF-28)).days = 28
-    s2 = snap([_running(28)])
-    assert s2.has_sufficient_history is True
-    assert s2.confidence == "high"
+    # Activity at J-26 → available_history_days = 26 + 1 = 27 < 28 → not sufficient
+    s2 = snap([_running(26)])
+    assert s2.has_sufficient_history is False
+    assert s2.confidence == "medium"
 
 
 # ---------------------------------------------------------------------------
@@ -516,6 +521,37 @@ def test_confidence_high():
     # 30 days of history (>= 28)
     s = snap([_running(30)])
     assert s.confidence == "high"
+
+
+# Inclusive boundary transitions (convention: available_history_days = days_elapsed + 1)
+def test_confidence_low_at_boundary():
+    # 13 days of history → "low" (< 14)
+    # days_ago=12 → available = 12 + 1 = 13
+    s = snap([_running(12)])
+    assert s.confidence == "low"
+
+
+def test_confidence_medium_at_lower_boundary():
+    # 14 days of history → "medium" (>= 14)
+    # days_ago=13 → available = 13 + 1 = 14
+    s = snap([_running(13)])
+    assert s.confidence == "medium"
+
+
+def test_confidence_medium_at_upper_boundary():
+    # 27 days of history → still "medium" (< 28)
+    # days_ago=26 → available = 26 + 1 = 27
+    s = snap([_running(26)])
+    assert s.confidence == "medium"
+    assert s.has_sufficient_history is False
+
+
+def test_confidence_high_at_boundary():
+    # 28 days of history → "high" (>= 28)
+    # days_ago=27 → available = 27 + 1 = 28
+    s = snap([_running(27)])
+    assert s.confidence == "high"
+    assert s.has_sufficient_history is True
 
 
 # ---------------------------------------------------------------------------
@@ -619,14 +655,13 @@ def test_only_valid_distance():
 def test_28d_window_not_30d():
     """Explicit coherence check: the chronic window is 28 days, not 30 days.
 
-    An activity at J-28 (days_ago=28) has available_history_days=28.
-    An activity at J-29 (days_ago=29) is WITHIN the 28d window.
-    An activity at J-30 (days_ago=30) would be OUTSIDE the 28d window.
+    The chronic window is [J-27 ; J] (inclusive on both ends) — 28 calendar days.
+    An activity at J-28 (days_ago=28) is OUTSIDE the chronic window.
+    An activity at J-27 (days_ago=27) is the earliest date inside the window.
 
-    The chronic window ends at J-27 (days_ago=27 → CHRONIC_START).
-    J-28 (days_ago=28) is outside the chronic 28d window.
+    J-28 and beyond are NOT in the 28-day window.
     """
-    # Activity exactly at J-28 — outside the 28-day window
+    # Activity exactly at J-28 — outside the 28-day window [J-27 … J]
     s_j28 = snap([_running(28)])
     assert s_j28.load_28d == 0.0   # J-28 is NOT in [J-27 … J+0]
     assert s_j28.activities_28d == 0

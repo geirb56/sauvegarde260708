@@ -299,7 +299,8 @@ def build_training_load(
 
     if valid_dates:
         first_date = min(valid_dates)
-        available_history_days = (reference_date - first_date).days
+        # Inclusive convention: J-27 to J = 28 calendar days (both ends counted)
+        available_history_days = (reference_date - first_date).days + 1
     else:
         available_history_days = 0
 
