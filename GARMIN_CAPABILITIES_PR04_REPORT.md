@@ -193,5 +193,5 @@ python -m py_compile garmin/service.py  → OK
 - ✅ Aucun moteur métier modifié (Training Engine, RunIndex Score, Readiness, etc.)
 - ✅ Aucun frontend modifié
 - ✅ Endpoint `/api/garmin/status` enrichi de manière additive uniquement
-- ✅ Tous les tests passent (104 tests au total)
+- ✅ Tous les tests passent (77 tests au total)
 - ✅ Diff limité : 3 fichiers
