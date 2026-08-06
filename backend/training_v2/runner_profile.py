@@ -135,7 +135,7 @@ def _as_int_in_range(value: Any, *, minimum: int, maximum: int) -> Optional[int]
     if result is None:
         return None
     rounded = round(result)
-    if abs(result - rounded) > 1e-9:
+    if abs(result - rounded) > 1e-6:
         return None
     int_result = int(rounded)
     if int_result < minimum or int_result > maximum:
