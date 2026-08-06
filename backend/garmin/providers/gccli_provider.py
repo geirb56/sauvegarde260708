@@ -13,6 +13,7 @@ from typing import Dict, List, Optional
 
 from config.secrets import get_secret
 
+from ..data_layer import GarminActivity
 from ..runner import GccliRunner, GccliUnavailable, GccliMfaRequired, GccliError
 from .base import (
     ConnectResult,
@@ -175,15 +176,14 @@ class GccliProvider(Provider):
 
     @staticmethod
     def _normalize(raw: Dict) -> Dict:
-        atype = raw.get("activityType")
-        if isinstance(atype, dict):
-            atype = atype.get("typeKey")
-        distance_m = raw.get("distance")
-        duration_s = raw.get("duration")
+        # Delegate all field extraction to GarminActivity (PR01 model).
+        normalized = GarminActivity.from_summary(raw)
+
+        distance_m = normalized.distance_m
+        duration_s = normalized.duration_s
         pace_spk = None
         if distance_m and duration_s and distance_m > 0:
             pace_spk = round(duration_s / (distance_m / 1000.0), 1)
-        ext_id = raw.get("activityId") or raw.get("id")
         pace_str = None
         if pace_spk:
             m = int(pace_spk // 60)
@@ -192,24 +192,39 @@ class GccliProvider(Provider):
                 m += 1
                 s = 0
             pace_str = f"{m}:{s:02d}"
-        return {
-            "external_id": str(ext_id) if ext_id is not None else None,
-            "source": "garmin",
-            "name": raw.get("activityName"),
-            "activity_type": atype or "running",
-            "start_time": raw.get("startTimeLocal") or raw.get("startTimeGMT"),
+
+        ext_id = normalized.activity_id
+        avg_hr = int(normalized.average_hr) if normalized.average_hr is not None else None
+        # No fallback to "running": absent type must surface as None.
+        activity_type = normalized.activity_type
+
+        # Preserve the historical raw_payload shape (keyed from the original raw dict).
+        raw_payload = {
+            "activityId": raw.get("activityId") or raw.get("id"),
             "distance": distance_m,
             "duration": duration_s,
-            "avg_hr": int(raw["averageHR"]) if raw.get("averageHR") else None,
+            "averageHR": raw.get("averageHR"),
+            "averageSpeed": raw.get("averageSpeed"),
+            "calories": raw.get("calories"),
+            "elevationGain": raw.get("elevationGain"),
+        }
+
+        # Historical contract: Local takes priority over GMT for the top-level start_time.
+        # (garmin_activity sub-document preserves model convention: GMT first.)
+        start_time = raw.get("startTimeLocal") or raw.get("startTimeGMT")
+
+        return {
+            "external_id": ext_id,
+            "source": "garmin",
+            "name": raw.get("activityName"),
+            "activity_type": activity_type,
+            "start_time": start_time,
+            "distance": distance_m,
+            "duration": duration_s,
+            "avg_hr": avg_hr,
             "pace": pace_str,
             "pace_seconds_per_km": pace_spk,
-            "raw_payload": {
-                "activityId": ext_id,
-                "distance": distance_m,
-                "duration": duration_s,
-                "averageHR": raw.get("averageHR"),
-                "averageSpeed": raw.get("averageSpeed"),
-                "calories": raw.get("calories"),
-                "elevationGain": raw.get("elevationGain"),
-            },
+            "raw_payload": raw_payload,
+            # New field added in PR02: full normalized model
+            "garmin_activity": normalized.model_dump(),
         }
