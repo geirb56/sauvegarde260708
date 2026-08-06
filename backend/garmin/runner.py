@@ -263,8 +263,9 @@ class GccliRunner:
                 sleep=sleep,
                 hrv=hrv,
             )
-            entry = normalized.model_dump()
-            entry["garmin_daily_metrics"] = normalized.model_dump()
+            normalized_doc = normalized.model_dump()
+            entry = dict(normalized_doc)
+            entry["garmin_daily_metrics"] = normalized_doc
 
             # Only keep days that have at least one real metric
             if any(entry.get(k) is not None for k in ("resting_hr", "sleep_hours", "hrv")):
