@@ -201,7 +201,11 @@ Si `garmin_capabilities` est absent, tous restent à `False`.
 
 ## Résultats exacts
 
-En attente d’exécution dans l’étape de validation de cette tâche.
+- `python -m py_compile training_v2/runner_profile.py training_v2/__init__.py` ✅
+- `python -m pytest tests/test_runner_profile_pr07.py -q` → `35 passed`
+- `python -m pytest tests/test_training_history_pr05.py -q` → `53 passed`
+- `python -m pytest tests/test_training_v2_training_load.py -q` → `50 passed`
+- `python -m pytest tests/test_garmin_data_layer.py -q` → `13 passed`
 
 ## Risques résiduels
 
