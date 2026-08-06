@@ -228,7 +228,7 @@ class GarminDailyMetrics(BaseModel):
         body_battery_latest = _dict(body_battery_latest)
         dto = _dict(sleep.get("dailySleepDTO"))
         sleep_secs = _num(dto.get("sleepTimeSeconds"))
-        sleep_hours = round(sleep_secs / 3600, 1) if sleep_secs is not None else None
+        sleep_hours = round(sleep_secs / 3600, 1) if sleep_secs is not None and sleep_secs > 0 else None
         scores = _dict(dto.get("sleepScores"))
         overall = _dict(scores.get("overall"))
         sleep_score = _int(overall.get("value"))

@@ -36,6 +36,11 @@ def test_pr03_sleep_real_payload_normalization():
     assert m.respiration == 12.0
 
 
+def test_pr03_sleep_zero_seconds_is_none():
+    m = GarminDailyMetrics.from_gccli(sleep={"dailySleepDTO": {"sleepTimeSeconds": 0}})
+    assert m.sleep_hours is None
+
+
 def test_pr03_hrv_absent_is_none():
     m = GarminDailyMetrics.from_gccli(hrv={})
     assert m.hrv is None

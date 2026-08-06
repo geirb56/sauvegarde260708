@@ -62,6 +62,12 @@ Ajout additif:
 
 Règle appliquée: donnée absente Garmin => `None`.
 
+Sémantique sommeil historique préservée:
+- `sleepTimeSeconds` absent => `sleep_hours = None`
+- `sleepTimeSeconds = null` => `sleep_hours = None`
+- `sleepTimeSeconds = 0` => `sleep_hours = None`
+- `sleepTimeSeconds > 0` => conversion en heures, arrondie à 1 décimale
+
 Vérifié par tests PR03 pour:
 - `resting_hr`
 - `sleep_hours`
