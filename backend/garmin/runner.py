@@ -28,6 +28,8 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
+from .data_layer import GarminDailyMetrics
+
 logger = logging.getLogger(__name__)
 
 
@@ -225,41 +227,45 @@ class GccliRunner:
         return data.get("activities", []) if isinstance(data, dict) else []
 
     def fetch_daily_metrics(self, days: int = 7, account: Optional[str] = None) -> List[Dict]:
-        """Combine resting HR (health hr), sleep, and HRV per day."""
+        """Fetch daily gccli payloads and normalize via GarminDailyMetrics."""
         metrics: List[Dict] = []
         now = datetime.now(timezone.utc)
         for i in range(1, days + 1):  # start from yesterday (today often incomplete)
             day = (now - timedelta(days=i)).date().isoformat()
-            entry: Dict = {"date": day, "source": "garmin"}
+            hr: Dict = {}
+            sleep: Dict = {}
+            hrv: Dict = {}
 
             # Resting HR (from health hr — health rhr endpoint 404s on some accounts)
             try:
-                hr = self._run_json(["health", "hr", day], account=account)
-                if isinstance(hr, dict):
-                    entry["resting_hr"] = hr.get("restingHeartRate")
+                hr_payload = self._run_json(["health", "hr", day], account=account)
+                hr = hr_payload if isinstance(hr_payload, dict) else {}
             except GccliError:
-                entry["resting_hr"] = None
+                hr = {}
 
             # Sleep
             try:
-                sleep = self._run_json(["health", "sleep", day], account=account)
-                dto = sleep.get("dailySleepDTO", {}) if isinstance(sleep, dict) else {}
-                secs = dto.get("sleepTimeSeconds")
-                entry["sleep_hours"] = round(secs / 3600, 1) if secs else None
-                scores = dto.get("sleepScores") or {}
-                overall = scores.get("overall") or {}
-                entry["sleep_score"] = overall.get("value")
+                sleep_payload = self._run_json(["health", "sleep", day], account=account)
+                sleep = sleep_payload if isinstance(sleep_payload, dict) else {}
             except GccliError:
-                entry["sleep_hours"] = None
-                entry["sleep_score"] = None
+                sleep = {}
 
             # HRV (may be empty for accounts/devices without HRV)
             try:
-                hrv = self._run_json(["health", "hrv", day], account=account)
-                summary = hrv.get("hrvSummary", {}) if isinstance(hrv, dict) else {}
-                entry["hrv"] = summary.get("lastNightAvg") or summary.get("weeklyAvg")
+                hrv_payload = self._run_json(["health", "hrv", day], account=account)
+                hrv = hrv_payload if isinstance(hrv_payload, dict) else {}
             except GccliError:
-                entry["hrv"] = None
+                hrv = {}
+
+            normalized = GarminDailyMetrics.from_gccli(
+                date=day,
+                hr=hr,
+                sleep=sleep,
+                hrv=hrv,
+            )
+            normalized_doc = normalized.model_dump()
+            entry = dict(normalized_doc)
+            entry["garmin_daily_metrics"] = normalized_doc
 
             # Only keep days that have at least one real metric
             if any(entry.get(k) is not None for k in ("resting_hr", "sleep_hours", "hrv")):
