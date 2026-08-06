@@ -15,10 +15,77 @@ from typing import Optional
 from .factory import get_provider_for_user, active_provider_name
 from .providers.base import STATUS_CONNECTED, STATUS_MFA_REQUIRED
 from . import session_store
+from .data_layer import GarminCapabilities
 from events.stream import emit_activity_created
 from subscription_manager import activate_garmin_trial
 
 logger = logging.getLogger(__name__)
+
+
+async def _persist_capabilities(db, user_id: str, capabilities: GarminCapabilities) -> None:
+    """Upsert the garmin_capabilities sub-document into garmin_connections.
+
+    Targeted $set so no other field in the document is touched (multi-user safe).
+    """
+    await db.garmin_connections.update_one(
+        {"user_id": user_id},
+        {
+            "$set": {
+                "garmin_capabilities": capabilities.model_dump(),
+                "capabilities_updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        },
+        upsert=True,
+    )
+
+
+async def _build_and_persist_capabilities(db, user_id: str) -> None:
+    """Build GarminCapabilities from already-stored daily metrics and persist them.
+
+    Uses ONLY data already in garmin_daily_metrics — no new gccli calls.
+
+    Stored shapes (from GarminDailyMetrics.model_dump):
+    - ``hrv``          : scalar float (lastNightAvg or weeklyAvg) → reconstituted as
+                         ``{"hrvSummary": {"lastNightAvg": val}}`` for from_probe
+    - ``stress``       : int (avgStressLevel, Garmin -1/-2 stripped at storage time,
+                         but stored as None when absent) → reconstituted as
+                         ``{"avgStressLevel": val}``
+    - ``body_battery`` : int scalar → passed directly (from_probe uses _has_data)
+    """
+    latest_hrv_doc = await db.garmin_daily_metrics.find_one(
+        {"user_id": user_id, "hrv": {"$ne": None}},
+        {"_id": 0, "hrv": 1},
+        sort=[("date", -1)],
+    )
+    hrv_val = (latest_hrv_doc or {}).get("hrv")
+    # hrv_val is a scalar float stored by GarminDailyMetrics; wrap into the shape
+    # expected by GarminCapabilities._hrv_ok ({"hrvSummary": {"lastNightAvg": ...}}).
+    hrv_payload = {"hrvSummary": {"lastNightAvg": hrv_val}} if hrv_val is not None else {}
+
+    latest_bb_doc = await db.garmin_daily_metrics.find_one(
+        {"user_id": user_id, "body_battery": {"$ne": None}},
+        {"_id": 0, "body_battery": 1},
+        sort=[("date", -1)],
+    )
+    bb_val = (latest_bb_doc or {}).get("body_battery")
+
+    latest_stress_doc = await db.garmin_daily_metrics.find_one(
+        {"user_id": user_id, "stress": {"$ne": None}},
+        {"_id": 0, "stress": 1},
+        sort=[("date", -1)],
+    )
+    stress_val = (latest_stress_doc or {}).get("stress")
+    # stress_val is the int already stripped of Garmin -1/-2 sentinels at storage
+    # time; wrap into the shape expected by GarminCapabilities._stress_ok.
+    stress_payload = {"avgStressLevel": stress_val} if stress_val is not None else {}
+
+    capabilities = GarminCapabilities.from_probe(
+        hrv=hrv_payload,
+        body_battery=bb_val,
+        stress=stress_payload,
+    )
+    await _persist_capabilities(db, user_id, capabilities)
+    logger.info("[Garmin] capabilities persisted user=%s %s", user_id, capabilities.model_dump())
 
 
 def _derive_garmin_identity_from_profile(profile: dict) -> Optional[str]:
@@ -237,6 +304,14 @@ async def deep_sync(db, user_id: str) -> dict:
         logger.warning("[Garmin] deep sync daily metrics skipped user=%s: %s", user_id, exc)
 
     await _finalize_connection(db, user_id, ingest["newest_start"])
+
+    # --- Capabilities: built from payloads already collected above ---
+    # Use the most recent daily metric row that has an HRV payload (if any).
+    try:
+        await _build_and_persist_capabilities(db, user_id)
+    except Exception as exc:
+        logger.warning("[Garmin] capabilities persist skipped user=%s: %s", user_id, exc)
+
     # Persist any token refresh performed by gccli during the deep sync.
     await session_store.save_session(db, user_id)
     logger.info(
@@ -314,6 +389,13 @@ async def sync(db, user_id: str, since: Optional[str] = None) -> dict:
         logger.warning("[Garmin] daily metrics sync skipped user=%s: %s", user_id, exc)
 
     await _finalize_connection(db, user_id, ingest["newest_start"])
+
+    # --- Capabilities: derived from payloads already in DB ---
+    try:
+        await _build_and_persist_capabilities(db, user_id)
+    except Exception as exc:
+        logger.warning("[Garmin] capabilities persist skipped user=%s: %s", user_id, exc)
+
     # Persist any token refresh performed by gccli during this sync.
     await session_store.save_session(db, user_id)
     logger.info("[Garmin] synced %d activities (%d new), %d daily metrics user=%s",
@@ -384,6 +466,8 @@ async def get_status(db, user_id: str) -> dict:
         "provider": conn.get("provider", active_provider_name()),
         "last_sync": conn.get("last_sync"),
         "activity_count": conn.get("activity_count", 0),
+        "garmin_capabilities": conn.get("garmin_capabilities"),
+        "capabilities_updated_at": conn.get("capabilities_updated_at"),
     }
 
 
