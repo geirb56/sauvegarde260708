@@ -68,7 +68,7 @@ def test_experience_and_confidence_follow_history_depth_only():
     assert p_45d.experience_level == "developing"
     assert p_45d.profile_confidence == "medium"
 
-    acts_365d = [_act(364), _act(150), _act(2)]
+    acts_365d = [_act(365), _act(150), _act(2)]
     p_365d = _profile(acts_365d)
     assert p_365d.experience_level == "experienced"
     assert p_365d.profile_confidence == "high"
@@ -80,7 +80,8 @@ def test_observed_30d_priority_then_90d_fallback_per_metric():
     activities = [
         _act(5, distance_m=10_000, duration_s=None),      # adds distance in 30d, no speed
         _act(85, distance_m=18_000, duration_s=5400),     # contributes speed in 90d only
-        _act(89, distance_m=12_000, duration_s=3600),     # ensures >=90 days available
+        _act(89, distance_m=12_000, duration_s=3600),
+        _act(90, distance_m=5_000, duration_s=None),       # ensures >=90 days of history
     ]
 
     p = _profile(activities)

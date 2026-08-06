@@ -2,11 +2,11 @@
 
 ## Scope PR07
 - Added pure, deterministic, immutable `RunnerProfile` layer in:
-  - `/home/runner/work/sauvegarde260708/sauvegarde260708/backend/training_v2/runner_profile.py`
+  - `backend/training_v2/runner_profile.py`
 - Added exports in:
-  - `/home/runner/work/sauvegarde260708/sauvegarde260708/backend/training_v2/__init__.py`
+  - `backend/training_v2/__init__.py`
 - Added tests in:
-  - `/home/runner/work/sauvegarde260708/sauvegarde260708/backend/tests/test_runner_profile_pr07.py`
+  - `backend/tests/test_runner_profile_pr07.py`
 
 ## Business rules implemented
 - Uses required inputs: `TrainingHistory`, `TrainingLoadSnapshot`, `GarminCapabilities`, `user_profile`, `physiological_metrics`, `reference_date`.
