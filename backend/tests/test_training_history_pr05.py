@@ -433,3 +433,133 @@ class TestRounding:
         speed = h.window_7d.average_speed_kmh
         assert speed is not None
         assert round(speed, 2) == speed
+
+
+# ---------------------------------------------------------------------------
+# 13. Garmin date formats (PR89)
+# ---------------------------------------------------------------------------
+
+
+class TestGarminDateFormats:
+    """Verify that all real-world Garmin date strings are parsed correctly."""
+
+    # REF = 2026-08-06 ; J-4 = 2026-08-02
+    _EXPECTED_DISTANCE = 10.0
+
+    def _h_with_start_time(self, start_time: str):
+        act = {
+            "activity_type": "running",
+            "start_time": start_time,
+            "distance": 10_000.0,
+            "duration": 3600.0,
+        }
+        return build_training_history([act], REF)
+
+    def test_space_separated(self):
+        """Garmin native format with space: '2026-08-02 10:08:20'."""
+        h = self._h_with_start_time("2026-08-02 10:08:20")
+        assert h.window_7d.activity_count == 1
+        assert h.window_7d.distance_km == self._EXPECTED_DISTANCE
+
+    def test_t_separated(self):
+        h = self._h_with_start_time("2026-08-02T10:08:20")
+        assert h.window_7d.activity_count == 1
+
+    def test_t_separated_with_z(self):
+        h = self._h_with_start_time("2026-08-02T10:08:20Z")
+        assert h.window_7d.activity_count == 1
+
+    def test_t_separated_with_tz_offset(self):
+        h = self._h_with_start_time("2026-08-02T10:08:20+02:00")
+        assert h.window_7d.activity_count == 1
+
+    def test_date_only(self):
+        h = self._h_with_start_time("2026-08-02")
+        assert h.window_7d.activity_count == 1
+
+    def test_space_separated_enters_correct_windows(self):
+        """J-4 must be in 7d, 30d, 90d windows but not outside them."""
+        h = self._h_with_start_time("2026-08-02 10:08:20")
+        assert h.window_7d.activity_count == 1
+        assert h.window_30d.activity_count == 1
+        assert h.window_90d.activity_count == 1
+
+    def test_invalid_date_graceful(self):
+        """Unparseable date must be silently skipped, not raise."""
+        act = {
+            "activity_type": "running",
+            "start_time": "not-a-date",
+            "distance": 10_000.0,
+            "duration": 3600.0,
+        }
+        h = build_training_history([act], REF)
+        assert h.window_7d.activity_count == 0
+
+
+# ---------------------------------------------------------------------------
+# 14. Secured average_speed_kmh (PR89)
+# ---------------------------------------------------------------------------
+
+
+class TestSecuredAverageSpeed:
+    """Speed numerator/denominator must only include activities with
+    BOTH valid distance AND valid duration simultaneously."""
+
+    def test_dist_only_does_not_inflate_speed(self):
+        """Activity with distance but no duration must not push speed upward
+        by reducing the effective duration pool."""
+        acts = [
+            # proper activity: 10 km in 1 h → 10 km/h
+            _act("running", 2, distance_m=10_000.0, duration_s=3600.0),
+            # distance only — must not enter speed calculation
+            _act("running", 3, distance_m=100_000.0, duration_s=None),
+        ]
+        h = build_training_history(acts, REF)
+        # Speed must be 10 km / 1 h = 10 km/h, not (110 km / 1 h)
+        assert h.window_7d.average_speed_kmh == pytest.approx(10.0, abs=0.01)
+        # But total distance must include both contributions
+        assert h.window_7d.distance_km == pytest.approx(110.0, abs=0.01)
+
+    def test_dur_only_does_not_dilute_speed(self):
+        """Activity with duration but no distance must not dilute speed by
+        adding to the effective duration pool."""
+        acts = [
+            # proper activity: 10 km in 1 h → 10 km/h
+            _act("running", 2, distance_m=10_000.0, duration_s=3600.0),
+            # duration only — must not enter speed calculation
+            _act("running", 3, distance_m=None, duration_s=7200.0),
+        ]
+        h = build_training_history(acts, REF)
+        # Speed must be 10 km / 1 h = 10 km/h, not (10 km / 3 h)
+        assert h.window_7d.average_speed_kmh == pytest.approx(10.0, abs=0.01)
+        # But total duration must include both contributions
+        assert h.window_7d.duration_hours == pytest.approx(3.0, abs=0.01)
+
+    def test_no_speed_when_all_dist_only(self):
+        """No speed when every activity has distance but no duration."""
+        acts = [
+            _act("running", 1, distance_m=10_000.0, duration_s=None),
+            _act("running", 2, distance_m=5_000.0, duration_s=None),
+        ]
+        h = build_training_history(acts, REF)
+        assert h.window_7d.average_speed_kmh is None
+
+    def test_no_speed_when_all_dur_only(self):
+        """No speed when every activity has duration but no distance."""
+        acts = [
+            _act("running", 1, distance_m=None, duration_s=3600.0),
+        ]
+        h = build_training_history(acts, REF)
+        assert h.window_7d.average_speed_kmh is None
+
+    def test_speed_correct_with_mixed_activities(self):
+        """Mixed pool: only pairs (dist, dur) contribute to speed."""
+        acts = [
+            _act("running", 1, distance_m=10_000.0, duration_s=3600.0),  # pair
+            _act("running", 2, distance_m=5_000.0, duration_s=900.0),    # pair
+            _act("running", 3, distance_m=20_000.0, duration_s=None),    # dist-only
+            _act("running", 4, distance_m=None, duration_s=7200.0),      # dur-only
+        ]
+        h = build_training_history(acts, REF)
+        # Speed = (10+5) km / (1+0.25) h = 12 km/h
+        assert h.window_7d.average_speed_kmh == pytest.approx(12.0, abs=0.01)

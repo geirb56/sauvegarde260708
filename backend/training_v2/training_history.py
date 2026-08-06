@@ -173,7 +173,17 @@ def _extract_fields(activity: Any) -> Optional[Dict[str, Any]]:
 
 
 def _parse_date(value: Any) -> Optional[date]:
-    """Parse an ISO-8601 datetime string into a ``date``, or return None."""
+    """Parse a date/datetime value into a ``date``, or return None.
+
+    Accepted string formats (non-exhaustive):
+      - "2026-08-02"
+      - "2026-08-02T10:08:20"
+      - "2026-08-02T10:08:20.0"
+      - "2026-08-02T10:08:20Z"          (Z → +00:00)
+      - "2026-08-02T10:08:20+02:00"     (timezone-aware)
+      - "2026-08-02 10:08:20"           (Garmin space-separated format)
+      - "2026-08-02 10:08:20.0"
+    """
     if value is None:
         return None
     if isinstance(value, date) and not isinstance(value, datetime):
@@ -182,11 +192,26 @@ def _parse_date(value: Any) -> Optional[date]:
         return value.date()
     if not isinstance(value, str) or value == "":
         return None
-    for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+
+    s = value.strip()
+
+    # Normalise Z suffix so fromisoformat can handle it (Python < 3.11)
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+
+    # Try datetime.fromisoformat first (handles T-separated and tz-aware)
+    try:
+        return datetime.fromisoformat(s).date()
+    except (ValueError, TypeError):
+        pass
+
+    # Fallback: Garmin space-separated format "YYYY-MM-DD HH:MM:SS[.f]"
+    for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
         try:
-            return datetime.strptime(value[:26], fmt).date()
+            return datetime.strptime(s, fmt).date()
         except (ValueError, TypeError):
             continue
+
     return None
 
 
@@ -231,6 +256,9 @@ def _build_window(
 
     total_distance_km = 0.0
     total_duration_hours = 0.0
+    # Accumulators for speed: only activities with BOTH valid dist AND dur
+    speed_distance_km = 0.0
+    speed_duration_hours = 0.0
     count = 0
     longest_km: Optional[float] = None
 
@@ -260,8 +288,13 @@ def _build_window(
         if dur_s is not None:
             total_duration_hours += dur_s / 3600.0
 
-    if total_duration_hours > 0:
-        avg_speed = round(total_distance_km / total_duration_hours, _ROUND)
+        # Speed pool: only when both are valid simultaneously
+        if dist_m is not None and dur_s is not None:
+            speed_distance_km += dist_m / 1000.0
+            speed_duration_hours += dur_s / 3600.0
+
+    if speed_duration_hours > 0:
+        avg_speed = round(speed_distance_km / speed_duration_hours, _ROUND)
     else:
         avg_speed = None
 

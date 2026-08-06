@@ -115,10 +115,16 @@ Valeurs invalides exclues du calcul :
 La vitesse est **pondérée par la durée**, calculée à partir des totaux :
 
 ```
-average_speed_kmh = total_distance_km / total_duration_hours
+average_speed_kmh = speed_distance_km / speed_duration_hours
 ```
 
-Si la durée totale est nulle ou absente : `average_speed_kmh = None`.
+Seules les activités ayant **simultanément** `distance_m > 0` ET `duration_s > 0`
+contribuent aux accumulateurs de vitesse (`speed_distance_km`, `speed_duration_hours`).
+
+- Une activité avec distance mais sans durée augmente `distance_km` mais **n'entre pas** dans le calcul de vitesse.
+- Une activité avec durée mais sans distance augmente `duration_hours` mais **n'entre pas** dans le calcul de vitesse.
+
+Si `speed_duration_hours == 0` (aucune activité paire valide) : `average_speed_kmh = None`.
 
 La moyenne simple des vitesses individuelles de chaque séance est **interdite**.
 
@@ -183,11 +189,11 @@ non le nombre de jours actifs.
 | Fichier                                              | Rôle                              |
 |------------------------------------------------------|-----------------------------------|
 | `backend/training_v2/__init__.py`                    | Point d'entrée du module          |
-| `backend/training_v2/training_history.py`            | Logique métier pure (PR05)        |
-| `backend/tests/test_training_history_pr05.py`        | Suite de tests (41 cas)           |
+| `backend/training_v2/training_history.py`            | Logique métier pure (PR05 + PR89) |
+| `backend/tests/test_training_history_pr05.py`        | Suite de tests (53 cas)           |
 | `TRAINING_HISTORY_PR05_REPORT.md`                    | Ce rapport                        |
 
-Aucun fichier existant n'a été modifié.
+Aucun fichier existant hors PR05 n'a été modifié.
 
 ---
 
@@ -201,25 +207,27 @@ python -m pytest tests/test_training_history_pr05.py -q
 ### Résultats
 
 ```
-41 passed in 0.48s
+53 passed in 0.55s
 ```
 
 ### Couverture des cas de test
 
-| # | Cas                                  | Résultat |
-|---|--------------------------------------|----------|
-| 1 | Historique vide                      | ✅ PASS  |
-| 2 | Filtrage des types d'activité        | ✅ PASS  |
-| 3 | Fenêtres J-2 / J-10 / J-45 / J-100  | ✅ PASS  |
-| 4 | Limites inclusives (J-6/7/29/30/89/90) | ✅ PASS |
-| 5 | Activité future ignorée              | ✅ PASS  |
-| 6 | Distances et durées invalides        | ✅ PASS  |
-| 7 | Vitesse moyenne pondérée             | ✅ PASS  |
-| 8 | Sortie la plus longue                | ✅ PASS  |
-| 9 | Dernière course et jours écoulés     | ✅ PASS  |
-| 10 | Profondeur d'historique             | ✅ PASS  |
-| 11 | Compatibilité formats (flat / sub-doc) | ✅ PASS |
-| 12 | Arrondi des distances et vitesses    | ✅ PASS  |
+| # | Cas                                        | Résultat |
+|---|--------------------------------------------|----------|
+| 1 | Historique vide                            | ✅ PASS  |
+| 2 | Filtrage des types d'activité              | ✅ PASS  |
+| 3 | Fenêtres J-2 / J-10 / J-45 / J-100        | ✅ PASS  |
+| 4 | Limites inclusives (J-6/7/29/30/89/90)     | ✅ PASS  |
+| 5 | Activité future ignorée                    | ✅ PASS  |
+| 6 | Distances et durées invalides              | ✅ PASS  |
+| 7 | Vitesse moyenne pondérée                   | ✅ PASS  |
+| 8 | Sortie la plus longue                      | ✅ PASS  |
+| 9 | Dernière course et jours écoulés           | ✅ PASS  |
+| 10 | Profondeur d'historique                   | ✅ PASS  |
+| 11 | Compatibilité formats (flat / sub-doc)    | ✅ PASS  |
+| 12 | Arrondi des distances et vitesses         | ✅ PASS  |
+| 13 | Formats de dates Garmin réels (PR89)      | ✅ PASS  |
+| 14 | Sécurisation average_speed_kmh (PR89)     | ✅ PASS  |
 
 ### Non-régression
 
@@ -233,7 +241,7 @@ python -m pytest tests/test_garmin_deep_sync.py -q                    → inclus
 Note : `test_garmin_capabilities_pr04.py` échoue avec
 `ModuleNotFoundError: No module named 'redis'` — erreur **pré-existante**
 d'environnement (absence du package Redis dans l'environnement de test CI),
-sans rapport avec PR05.
+sans rapport avec PR05 ni PR89.
 
 ---
 
