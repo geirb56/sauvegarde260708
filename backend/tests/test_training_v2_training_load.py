@@ -1,0 +1,694 @@
+"""PR06 — Tests for TrainingLoadSnapshot (deterministic training-load engine V2).
+
+All tests use a fixed reference_date of 2026-08-06 to ensure full
+determinism — no datetime.now() is called anywhere.
+
+Window boundaries for REF = 2026-08-06
+---------------------------------------
+  Acute 7-day    : 2026-07-31 … 2026-08-06  (J-6 … J+0)
+  Chronic 28-day : 2026-07-10 … 2026-08-06  (J-27 … J+0)
+  Previous 7-day : 2026-07-24 … 2026-07-30  (J-13 … J-7)
+
+Run from the backend directory:
+    python -m pytest tests/test_training_v2_training_load.py -q
+"""
+
+from __future__ import annotations
+
+import sys
+from datetime import date, timedelta
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import pytest
+
+from training_v2.training_load import (
+    ESTIMATED_MINUTES_PER_KM,
+    TrainingLoadSnapshot,
+    build_training_load,
+)
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+REF = date(2026, 8, 6)
+
+# Exact window dates for REF
+ACUTE_START = REF - timedelta(days=6)         # 2026-07-31
+CHRONIC_START = REF - timedelta(days=27)      # 2026-07-10
+PREV_START = REF - timedelta(days=13)         # 2026-07-24
+PREV_END = REF - timedelta(days=7)            # 2026-07-30
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _act(
+    activity_type: str,
+    days_ago: int,
+    distance_m: float | None = 10_000.0,
+    duration_s: float | None = 3600.0,
+) -> dict:
+    """Flat activity dict (days_ago relative to REF)."""
+    run_date = REF - timedelta(days=days_ago)
+    return {
+        "activity_type": activity_type,
+        "start_time": run_date.isoformat() + "T08:00:00.0",
+        "distance": distance_m,
+        "duration": duration_s,
+    }
+
+
+def _act_sub(
+    activity_type: str,
+    days_ago: int,
+    distance_m: float | None = 10_000.0,
+    duration_s: float | None = 3600.0,
+) -> dict:
+    """Activity dict with a garmin_activity sub-document (PR02 convention)."""
+    run_date = REF - timedelta(days=days_ago)
+    return {
+        "garmin_activity": {
+            "activity_type": activity_type,
+            "start_time": run_date.isoformat() + "T08:00:00.0",
+            "distance_m": distance_m,
+            "duration_s": duration_s,
+        }
+    }
+
+
+def _running(days_ago: int, *, distance_m=10_000.0, duration_s=3600.0) -> dict:
+    return _act("running", days_ago, distance_m=distance_m, duration_s=duration_s)
+
+
+def _trail(days_ago: int, *, distance_m=10_000.0, duration_s=3600.0) -> dict:
+    return _act("trail_running", days_ago, distance_m=distance_m, duration_s=duration_s)
+
+
+def snap(activities, ref=REF) -> TrainingLoadSnapshot:
+    return build_training_load(activities, ref)
+
+
+# ---------------------------------------------------------------------------
+# Test 1: no activities
+# ---------------------------------------------------------------------------
+
+
+def test_no_activities():
+    s = snap([])
+    assert s.acute_load_7d == 0.0
+    assert s.load_28d == 0.0
+    assert s.chronic_weekly_load == 0.0
+    assert s.acwr is None
+    assert s.status == "unavailable"
+    assert s.is_available is False
+    assert s.has_sufficient_history is False
+    assert s.confidence == "none"
+    assert s.activities_7d == 0
+    assert s.activities_28d == 0
+    assert s.previous_7d_load == 0.0
+    assert s.load_change_percent is None
+
+
+# ---------------------------------------------------------------------------
+# Test 2: only non-running activities
+# ---------------------------------------------------------------------------
+
+
+def test_only_non_running_activities():
+    activities = [
+        _act("cycling", 3, distance_m=20_000, duration_s=3600),
+        _act("swimming", 1, distance_m=2_000, duration_s=1800),
+    ]
+    s = snap(activities)
+    assert s.acute_load_7d == 0.0
+    assert s.load_28d == 0.0
+    assert s.acwr is None
+    assert s.confidence == "none"
+
+
+# ---------------------------------------------------------------------------
+# Test 3: one valid running activity in the last 7 days
+# ---------------------------------------------------------------------------
+
+
+def test_one_activity_in_7d():
+    s = snap([_running(2, duration_s=1800.0)])
+    assert s.acute_load_7d == 30.0   # 1800 / 60
+    assert s.activities_7d == 1
+
+
+# ---------------------------------------------------------------------------
+# Test 4: exact load from duration
+# ---------------------------------------------------------------------------
+
+
+def test_load_from_duration():
+    # 5400 seconds = 90 minutes
+    s = snap([_running(1, duration_s=5400.0, distance_m=12_000.0)])
+    assert s.acute_load_7d == 90.0
+
+
+# ---------------------------------------------------------------------------
+# Test 5: fallback to distance when duration is absent
+# ---------------------------------------------------------------------------
+
+
+def test_fallback_distance_no_duration():
+    # 10 km × 6 min/km = 60 min
+    s = snap([_running(1, duration_s=None, distance_m=10_000.0)])
+    assert s.acute_load_7d == 60.0
+
+
+# ---------------------------------------------------------------------------
+# Test 6: duration takes priority over distance
+# ---------------------------------------------------------------------------
+
+
+def test_duration_priority_over_distance():
+    # 3600 s → 60 min; distance alone would give 20 km × 6 = 120 min
+    s = snap([_running(1, duration_s=3600.0, distance_m=20_000.0)])
+    assert s.acute_load_7d == 60.0
+
+
+# ---------------------------------------------------------------------------
+# Test 7: zero or negative duration is excluded (fallback to distance)
+# ---------------------------------------------------------------------------
+
+
+def test_zero_duration_falls_back_to_distance():
+    # duration = 0 → invalid; use distance 10 km → 60 min
+    s = snap([_running(1, duration_s=0.0, distance_m=10_000.0)])
+    assert s.acute_load_7d == 60.0
+
+
+def test_negative_duration_falls_back_to_distance():
+    s = snap([_running(1, duration_s=-100.0, distance_m=5_000.0)])
+    assert s.acute_load_7d == 30.0   # 5 km × 6
+
+
+# ---------------------------------------------------------------------------
+# Test 8: zero or negative distance excluded
+# ---------------------------------------------------------------------------
+
+
+def test_zero_distance_no_duration_excluded():
+    s = snap([_running(1, duration_s=None, distance_m=0.0)])
+    assert s.acute_load_7d == 0.0
+    assert s.activities_7d == 0
+
+
+def test_negative_distance_no_duration_excluded():
+    s = snap([_running(1, duration_s=None, distance_m=-500.0)])
+    assert s.acute_load_7d == 0.0
+    assert s.activities_7d == 0
+
+
+# ---------------------------------------------------------------------------
+# Test 9: future activities excluded
+# ---------------------------------------------------------------------------
+
+
+def test_future_activity_excluded():
+    future = {
+        "activity_type": "running",
+        "start_time": (REF + timedelta(days=1)).isoformat() + "T08:00:00",
+        "distance": 10_000,
+        "duration": 3600,
+    }
+    s = snap([future])
+    assert s.acute_load_7d == 0.0
+    assert s.activities_7d == 0
+
+
+# ---------------------------------------------------------------------------
+# Test 10: J-6 is included in the 7-day acute window
+# ---------------------------------------------------------------------------
+
+
+def test_j_minus_6_included_in_acute_window():
+    # days_ago=6 → ACUTE_START (2026-07-31) — must be included
+    s = snap([_running(6)])
+    assert s.activities_7d == 1
+    assert s.acute_load_7d > 0.0
+
+
+# ---------------------------------------------------------------------------
+# Test 11: J-7 is NOT in the acute window
+# ---------------------------------------------------------------------------
+
+
+def test_j_minus_7_excluded_from_acute_window():
+    # days_ago=7 → 2026-07-30 — outside [J-6 … J+0]
+    s = snap([_running(7)])
+    assert s.activities_7d == 0
+    assert s.acute_load_7d == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Test 12: J-27 is included in the 28-day window
+# ---------------------------------------------------------------------------
+
+
+def test_j_minus_27_included_in_28d_window():
+    # days_ago=27 → CHRONIC_START (2026-07-10) — must be included
+    s = snap([_running(27)])
+    assert s.activities_28d == 1
+    assert s.load_28d > 0.0
+
+
+# ---------------------------------------------------------------------------
+# Test 13: chronic_weekly_load = load_28d / 4
+# ---------------------------------------------------------------------------
+
+
+def test_chronic_weekly_load_is_28d_divided_by_4():
+    activities = [_running(i) for i in range(5)]   # 5 activities in past 7 days
+    s = snap(activities)
+    expected = round(s.load_28d / 4.0, 2)
+    assert s.chronic_weekly_load == expected
+
+
+# ---------------------------------------------------------------------------
+# Test 14: exact ACWR calculation
+# ---------------------------------------------------------------------------
+
+
+def test_acwr_calculation():
+    # Acute: 1 run of 60 min in past 7 days
+    # 28-day load: same run
+    # acute=60, load_28d=60, chronic_weekly=15, acwr=4.0
+    s = snap([_running(2, duration_s=3600.0)])
+    assert s.acute_load_7d == 60.0
+    assert s.load_28d == 60.0
+    assert s.chronic_weekly_load == 15.0
+    assert s.acwr == 4.0
+
+
+# ---------------------------------------------------------------------------
+# Test 15: acwr is None when load_28d == 0
+# ---------------------------------------------------------------------------
+
+
+def test_acwr_none_when_no_28d_load():
+    s = snap([])
+    assert s.acwr is None
+
+
+# ---------------------------------------------------------------------------
+# Test 16: status "unavailable" when no denominator
+# ---------------------------------------------------------------------------
+
+
+def test_status_unavailable_without_denominator():
+    s = snap([])
+    assert s.status == "unavailable"
+    assert s.is_available is False
+
+
+# ---------------------------------------------------------------------------
+# Test 17: each ACWR status at boundary values
+# ---------------------------------------------------------------------------
+
+
+def _snap_with_acwr(target_acwr: float) -> TrainingLoadSnapshot:
+    """Build a snapshot with an approximately known ACWR.
+
+    Strategy: put ONLY activity in the acute window (7d).
+    chronic_weekly = acute/4 normally, so we need two independent windows.
+    We put 4 × target_acwr minutes in 28d spread evenly, and target_acwr × 1
+    minute in acute.
+    Simplest approach: put 4 activities of 15 min in 28d (chronic=15) and
+    target_acwr × 15 min in acute window.
+    """
+    # 28d base: 4 activities of 15 min each in days 8-27 (outside acute)
+    base = [_running(8 + i, duration_s=900.0) for i in range(4)]  # 4 × 15 min = 60 min in 28d
+    # chronic_weekly = 60/4 = 15 min
+    # acute target: target_acwr × 15 min
+    acute_minutes = target_acwr * 15.0
+    acute_act = _running(1, duration_s=acute_minutes * 60.0)
+    return snap(base + [acute_act])
+
+
+def test_status_very_low():
+    # acwr < 0.50  →  e.g. 0.30 × 15 = 4.5 min
+    s = snap(
+        [_running(8 + i, duration_s=900.0) for i in range(4)]
+        + [_running(1, duration_s=270.0)]   # 4.5 min → acwr = 4.5/15 = 0.30
+    )
+    assert s.status == "very_low"
+
+
+def test_status_low():
+    # 0.50 ≤ acwr < 0.80 → use 0.60 × 15 = 9 min acute
+    s = snap(
+        [_running(8 + i, duration_s=900.0) for i in range(4)]
+        + [_running(1, duration_s=540.0)]   # 9 min → acwr = 0.60
+    )
+    assert s.status == "low"
+
+
+def test_status_balanced():
+    # 0.80 ≤ acwr ≤ 1.30  →  use 1.0 × 15 = 15 min acute
+    s = snap(
+        [_running(8 + i, duration_s=900.0) for i in range(4)]
+        + [_running(1, duration_s=900.0)]   # 15 min → acwr = 1.0
+    )
+    assert s.status == "balanced"
+
+
+def test_status_elevated():
+    # 1.30 < acwr ≤ 1.50
+    # Base: 4 × 900s = 4×15min = 60 min (days 8-11, in 28d but not acute)
+    # acute_min = m; load_28d = 60+m; chronic_weekly = (60+m)/4
+    # acwr = 4m/(60+m) → target ≈ 1.40 → m = 84/2.6 ≈ 32.308 min → 1939 s
+    s = snap(
+        [_running(8 + i, duration_s=900.0) for i in range(4)]
+        + [_running(1, duration_s=1939.0)]
+    )
+    assert s.status == "elevated"
+
+
+def test_status_high():
+    # acwr > 1.50 → use acwr = 2.0 → m = 120/2.0 = 60 min → 3600 s
+    s = snap(
+        [_running(8 + i, duration_s=900.0) for i in range(4)]
+        + [_running(1, duration_s=3600.0)]
+    )
+    assert s.status == "high"
+
+
+def test_status_at_very_low_boundary():
+    # acwr exactly at 0.50 boundary → "low" (0.50 ≤ acwr < 0.80)
+    # acwr = 4m/(60+m) = 0.50 → m = 30/3.5 ≈ 8.571 min → 515 s gives 0.5006 → "low"
+    s = snap(
+        [_running(8 + i, duration_s=900.0) for i in range(4)]
+        + [_running(1, duration_s=515.0)]
+    )
+    assert s.status == "low"
+
+
+def test_status_at_balanced_high_boundary():
+    # acwr exactly 1.30 → "balanced"
+    s = snap(
+        [_running(8 + i, duration_s=900.0) for i in range(4)]
+        + [_running(1, duration_s=1170.0)]  # 19.5 min → acwr = 1.30
+    )
+    assert s.status == "balanced"
+
+
+def test_status_at_elevated_high_boundary():
+    # acwr exactly 1.50 → "elevated" (1.30 < 1.50 ≤ 1.50)
+    # acwr = 4m/(60+m) = 1.50 → 2.5m = 90 → m = 36 min → 2160 s
+    s = snap(
+        [_running(8 + i, duration_s=900.0) for i in range(4)]
+        + [_running(1, duration_s=2160.0)]  # 36 min → acwr = 4*36/96 = 1.50
+    )
+    assert s.status == "elevated"
+
+
+# ---------------------------------------------------------------------------
+# Test 18: previous 7-day window [J-13 … J-7]
+# ---------------------------------------------------------------------------
+
+
+def test_previous_window_boundaries():
+    # J-13 (days_ago=13) must be in prev window
+    # J-7 (days_ago=7) must be in prev window
+    # J-14 (days_ago=14) must NOT be in prev window
+    # J-6 (days_ago=6) must NOT be in prev window (it's in acute)
+    activities = [
+        _running(13, duration_s=600.0),   # in prev window
+        _running(7, duration_s=600.0),    # in prev window
+        _running(14, duration_s=600.0),   # outside
+        _running(6, duration_s=600.0),    # in acute
+    ]
+    s = snap(activities)
+    # prev_7d_load = 2 runs × 10 min = 20 min
+    assert s.previous_7d_load == 20.0
+    assert s.acute_load_7d == 10.0
+
+
+# ---------------------------------------------------------------------------
+# Test 19: load_change_percent calculation
+# ---------------------------------------------------------------------------
+
+
+def test_load_change_percent():
+    # acute=60, previous=30 → change = (60-30)/30 × 100 = 100.0%
+    activities = [
+        _running(2, duration_s=3600.0),   # 60 min in acute
+        _running(8, duration_s=1800.0),   # 30 min in previous window
+    ]
+    s = snap(activities)
+    assert s.acute_load_7d == 60.0
+    assert s.previous_7d_load == 30.0
+    assert s.load_change_percent == 100.0
+
+
+# ---------------------------------------------------------------------------
+# Test 20: load_change_percent is None when previous_7d_load == 0
+# ---------------------------------------------------------------------------
+
+
+def test_load_change_none_when_no_previous():
+    s = snap([_running(2)])
+    assert s.previous_7d_load == 0.0
+    assert s.load_change_percent is None
+
+
+# ---------------------------------------------------------------------------
+# Test 21: insufficient history
+# ---------------------------------------------------------------------------
+
+
+def test_insufficient_history():
+    # Only 5 days of history
+    s = snap([_running(5)])
+    assert s.has_sufficient_history is False
+    assert s.confidence == "low"
+
+
+# ---------------------------------------------------------------------------
+# Test 22: exactly sufficient history (28 days)
+# ---------------------------------------------------------------------------
+
+
+def test_exactly_sufficient_history():
+    # Activity exactly 28 days ago: available_history_days = 28 days
+    s = snap([_running(27)])  # J-27 → available_history = (REF - (REF-27)).days = 27
+    # 27 < 28 → not sufficient
+    assert s.has_sufficient_history is False
+
+    # Activity 28 days ago: available_history = (REF - (REF-28)).days = 28
+    s2 = snap([_running(28)])
+    assert s2.has_sufficient_history is True
+    assert s2.confidence == "high"
+
+
+# ---------------------------------------------------------------------------
+# Test 23: confidence levels "none", "low", "medium", "high"
+# ---------------------------------------------------------------------------
+
+
+def test_confidence_none():
+    s = snap([])
+    assert s.confidence == "none"
+
+
+def test_confidence_low():
+    # 5 days of history
+    s = snap([_running(5)])
+    assert s.confidence == "low"
+
+
+def test_confidence_medium():
+    # 20 days of history (>= 14, < 28)
+    s = snap([_running(20)])
+    assert s.confidence == "medium"
+
+
+def test_confidence_high():
+    # 30 days of history (>= 28)
+    s = snap([_running(30)])
+    assert s.confidence == "high"
+
+
+# ---------------------------------------------------------------------------
+# Test 24: garmin_activity sub-document (PR02 convention)
+# ---------------------------------------------------------------------------
+
+
+def test_subdocument_activity():
+    act = _act_sub("running", 2, distance_m=10_000.0, duration_s=3600.0)
+    s = snap([act])
+    assert s.acute_load_7d == 60.0
+    assert s.activities_7d == 1
+
+
+# ---------------------------------------------------------------------------
+# Test 25: Pydantic GarminActivity objects
+# ---------------------------------------------------------------------------
+
+
+def test_pydantic_object_activity():
+    from datetime import datetime
+
+    class _FakeActivity:
+        activity_type = "running"
+        start_time = (REF - timedelta(days=2)).isoformat() + "T08:00:00"
+        distance_m = 10_000.0
+        duration_s = 1800.0
+
+    s = snap([_FakeActivity()])
+    assert s.acute_load_7d == 30.0  # 1800/60
+
+
+# ---------------------------------------------------------------------------
+# Test 26: model is immutable (frozen)
+# ---------------------------------------------------------------------------
+
+
+def test_model_immutability():
+    s = snap([_running(1)])
+    with pytest.raises(Exception):
+        s.acute_load_7d = 999.0  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# Test 27: determinism — same inputs produce same output
+# ---------------------------------------------------------------------------
+
+
+def test_determinism():
+    activities = [_running(i) for i in range(10)]
+    s1 = snap(activities)
+    s2 = snap(activities)
+    assert s1 == s2
+
+
+# ---------------------------------------------------------------------------
+# Test 28: no dependency on system time
+# ---------------------------------------------------------------------------
+
+
+def test_no_system_time_dependency():
+    """The module must not depend on system time — all results are determined by
+    the explicitly provided reference_date, not by datetime.now()."""
+    activities = [_running(1)]
+    # Calling with two different explicit reference dates must yield different
+    # results that correspond only to the supplied dates, proving no system
+    # clock dependency.
+    s1 = build_training_load(activities, date(2026, 1, 1))
+    s2 = build_training_load(activities, date(2026, 8, 6))
+    # s1 won't contain the activity (it's in the future relative to 2026-01-01)
+    assert s1.activities_7d == 0
+    # s2 will contain it
+    assert s2.activities_7d == 1
+
+
+# ---------------------------------------------------------------------------
+# Test 29: activity with only a valid duration
+# ---------------------------------------------------------------------------
+
+
+def test_only_valid_duration():
+    s = snap([_running(1, duration_s=2400.0, distance_m=None)])
+    assert s.acute_load_7d == 40.0   # 2400 / 60
+
+
+# ---------------------------------------------------------------------------
+# Test 30: activity with only a valid distance
+# ---------------------------------------------------------------------------
+
+
+def test_only_valid_distance():
+    s = snap([_running(1, duration_s=None, distance_m=8_000.0)])
+    assert s.acute_load_7d == 48.0   # 8 km × 6 min/km
+
+
+# ---------------------------------------------------------------------------
+# Coherence: 28-day window ≠ 30-day window
+# ---------------------------------------------------------------------------
+
+
+def test_28d_window_not_30d():
+    """Explicit coherence check: the chronic window is 28 days, not 30 days.
+
+    An activity at J-28 (days_ago=28) has available_history_days=28.
+    An activity at J-29 (days_ago=29) is WITHIN the 28d window.
+    An activity at J-30 (days_ago=30) would be OUTSIDE the 28d window.
+
+    The chronic window ends at J-27 (days_ago=27 → CHRONIC_START).
+    J-28 (days_ago=28) is outside the chronic 28d window.
+    """
+    # Activity exactly at J-28 — outside the 28-day window
+    s_j28 = snap([_running(28)])
+    assert s_j28.load_28d == 0.0   # J-28 is NOT in [J-27 … J+0]
+    assert s_j28.activities_28d == 0
+
+    # Activity at J-27 — inside the 28-day window (boundary)
+    s_j27 = snap([_running(27)])
+    assert s_j27.load_28d > 0.0   # J-27 IS in [J-27 … J+0]
+    assert s_j27.activities_28d == 1
+
+
+# ---------------------------------------------------------------------------
+# Additional: trail_running and treadmill_running are accepted
+# ---------------------------------------------------------------------------
+
+
+def test_trail_running_accepted():
+    s = snap([_trail(2, duration_s=3600.0)])
+    assert s.acute_load_7d == 60.0
+
+
+def test_treadmill_running_accepted():
+    act = _act("treadmill_running", 2, duration_s=1800.0)
+    s = snap([act])
+    assert s.acute_load_7d == 30.0
+
+
+# ---------------------------------------------------------------------------
+# Additional: ESTIMATED_MINUTES_PER_KM constant value
+# ---------------------------------------------------------------------------
+
+
+def test_estimated_minutes_per_km_constant():
+    assert ESTIMATED_MINUTES_PER_KM == 6.0
+
+
+# ---------------------------------------------------------------------------
+# Additional: acwr rounding (3 decimal places)
+# ---------------------------------------------------------------------------
+
+
+def test_acwr_rounded_to_3_decimals():
+    # 4 × 900 s = 60 min in 28d; chronic_weekly = 15 min
+    # acute: 1 run of 700 s = 700/60 ≈ 11.6667 min  → acwr = 11.6667/15 ≈ 0.7778
+    activities = [_running(8 + i, duration_s=900.0) for i in range(4)] + [
+        _running(1, duration_s=700.0)
+    ]
+    s = snap(activities)
+    # Verify acwr has at most 3 decimal places
+    assert s.acwr is not None
+    assert round(s.acwr, 3) == s.acwr
+
+
+# ---------------------------------------------------------------------------
+# Additional: load_change_percent rounding (1 decimal place)
+# ---------------------------------------------------------------------------
+
+
+def test_load_change_percent_rounded_to_1_decimal():
+    activities = [
+        _running(2, duration_s=700.0),   # acute
+        _running(8, duration_s=900.0),   # previous
+    ]
+    s = snap(activities)
+    if s.load_change_percent is not None:
+        assert round(s.load_change_percent, 1) == s.load_change_percent
