@@ -195,7 +195,8 @@ class GccliProvider(Provider):
 
         ext_id = normalized.activity_id
         avg_hr = int(normalized.average_hr) if normalized.average_hr is not None else None
-        activity_type = normalized.activity_type or "running"
+        # No fallback to "running": absent type must surface as None.
+        activity_type = normalized.activity_type
 
         # Preserve the historical raw_payload shape (keyed from the original raw dict).
         raw_payload = {
@@ -208,12 +209,16 @@ class GccliProvider(Provider):
             "elevationGain": raw.get("elevationGain"),
         }
 
+        # Historical contract: Local takes priority over GMT for the top-level start_time.
+        # (garmin_activity sub-document preserves model convention: GMT first.)
+        start_time = raw.get("startTimeLocal") or raw.get("startTimeGMT")
+
         return {
             "external_id": ext_id,
             "source": "garmin",
             "name": raw.get("activityName"),
             "activity_type": activity_type,
-            "start_time": normalized.start_time,
+            "start_time": start_time,
             "distance": distance_m,
             "duration": duration_s,
             "avg_hr": avg_hr,

@@ -125,7 +125,7 @@ class GarminActivity(BaseModel):
         atype = raw.get("activityTypeDTO") or raw.get("activityType")
         activity_type = _str(_dict(atype).get("typeKey")) if isinstance(atype, dict) else _str(atype)
 
-        aid = raw.get("activityId")
+        aid = raw.get("activityId") or raw.get("id")
         activity_id = str(aid) if isinstance(aid, (int, str)) and aid != "" else None
 
         # cadence: summary uses averageRunCadence; list shape uses *InStepsPerMinute

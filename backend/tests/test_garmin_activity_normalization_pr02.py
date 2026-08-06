@@ -5,13 +5,16 @@ Coverage:
 - activities-list flat item is correctly converted via GarminActivity
 - all historical contract keys are present in the result
 - garmin_activity field is added and mirrors normalized.model_dump()
-- degenerate inputs ({}, [], None) raise no exception
+- absent activity_type yields None (no fallback to "running")
+- startTimeLocal takes priority over startTimeGMT for the top-level start_time
+- "id" key is accepted as an alternative to "activityId"
+- {} on GccliProvider._normalize does not raise
+- [] and None tested on GarminActivity.from_summary only (provider expects a dict)
 """
 
 from __future__ import annotations
 
 import sys
-import os
 from pathlib import Path
 from types import ModuleType
 from unittest.mock import MagicMock
@@ -105,13 +108,16 @@ class TestContractPreserved:
         result = normalize(FLAT_ACTIVITY)
         assert result["activity_type"] == "running"
 
-    def test_start_time_present(self):
+    def test_start_time_prefers_local_over_gmt(self):
+        # Historical contract: startTimeLocal takes priority.
         result = normalize(FLAT_ACTIVITY)
-        # start_time is one of the two possible values (GMT preferred by model)
-        assert result["start_time"] in (
-            "2026-08-02T08:08:20.0",
-            "2026-08-02T10:08:20.0",
-        )
+        assert result["start_time"] == "2026-08-02T10:08:20.0"
+
+    def test_start_time_falls_back_to_gmt_when_local_absent(self):
+        raw = {**FLAT_ACTIVITY}
+        del raw["startTimeLocal"]
+        result = normalize(raw)
+        assert result["start_time"] == "2026-08-02T08:08:20.0"
 
     def test_distance(self):
         result = normalize(FLAT_ACTIVITY)
@@ -145,6 +151,30 @@ class TestContractPreserved:
             assert key in rp
 
 
+class TestActivityTypeNoFallback:
+    """Absent activity type must yield None — no silent fallback to 'running'."""
+
+    def test_absent_type_is_none(self):
+        result = normalize({"activityId": 1, "distance": 1000, "duration": 300})
+        assert result["activity_type"] is None
+
+    def test_explicit_type_preserved(self):
+        result = normalize({**FLAT_ACTIVITY, "activityType": {"typeKey": "cycling"}})
+        assert result["activity_type"] == "cycling"
+
+
+class TestAlternativeIdKey:
+    """Provider must accept 'id' as a fallback when 'activityId' is absent."""
+
+    def test_id_key_sets_external_id(self):
+        result = normalize({"id": 123, "distance": 5000, "duration": 1800})
+        assert result["external_id"] == "123"
+
+    def test_id_key_sets_garmin_activity_id(self):
+        result = normalize({"id": 123, "distance": 5000, "duration": 1800})
+        assert result["garmin_activity"]["activity_id"] == "123"
+
+
 class TestGarminActivityAdded:
     """PR02 new field: garmin_activity must be present and mirror the model."""
 
@@ -173,34 +203,45 @@ class TestGarminActivityAdded:
         result = normalize(FLAT_ACTIVITY)
         assert result["garmin_activity"]["average_hr"] == pytest.approx(146.0)
 
+    def test_garmin_activity_start_time_gmt_convention(self):
+        # garmin_activity sub-document uses model convention (GMT first).
+        # This is documented as a known residual difference from the top-level start_time.
+        result = normalize(FLAT_ACTIVITY)
+        assert result["garmin_activity"]["start_time"] == "2026-08-02T08:08:20.0"
+
 
 class TestDegenerateInputs:
-    """Empty / null inputs must never raise an exception."""
+    """Robustness tests — scope is documented carefully.
 
-    def test_empty_dict_does_not_raise(self):
+    GccliProvider._normalize: tested with {} (empty dict) only.
+      It expects a dict; [] and None are not its documented contract.
+    GarminActivity.from_summary: tested with {}, [], and None — it must
+      tolerate all three (PR01 guarantee).
+    """
+
+    def test_empty_dict_on_normalize_does_not_raise(self):
         result = normalize({})
         assert isinstance(result, dict)
         for key in CONTRACT_KEYS:
             assert key in result
 
-    def test_empty_dict_has_garmin_activity(self):
+    def test_empty_dict_on_normalize_has_garmin_activity(self):
         result = normalize({})
         assert "garmin_activity" in result
+        assert isinstance(result["garmin_activity"], dict)
 
-    def test_none_input_via_from_summary_does_not_raise(self):
-        # GarminActivity.from_summary must tolerate None
+    def test_none_on_from_summary_does_not_raise(self):
         act = GarminActivity.from_summary(None)
         assert act.activity_id is None
         assert act.distance_m is None
 
-    def test_empty_list_via_from_summary_does_not_raise(self):
+    def test_empty_list_on_from_summary_does_not_raise(self):
         act = GarminActivity.from_summary([])
         assert act.activity_id is None
 
-    def test_activity_type_fallback_to_running(self):
-        # When activityType is absent, activity_type defaults to "running"
-        result = normalize({"activityId": 1, "distance": 1000, "duration": 300})
-        assert result["activity_type"] == "running"
+    def test_empty_dict_on_from_summary_does_not_raise(self):
+        act = GarminActivity.from_summary({})
+        assert act.activity_id is None
 
     def test_missing_hr_gives_none(self):
         result = normalize({"activityId": 1})
@@ -211,7 +252,3 @@ class TestDegenerateInputs:
         assert result["pace"] is None
         assert result["pace_seconds_per_km"] is None
 
-    def test_no_exception_on_garmin_activity_field_for_empty(self):
-        result = normalize({})
-        # garmin_activity must be a dict (model_dump() of a valid model)
-        assert isinstance(result["garmin_activity"], dict)
