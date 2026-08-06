@@ -344,7 +344,7 @@ def test_identical_inputs_produce_identical_models():
 def test_90d_window_is_only_a_fallback_when_30d_is_insufficient():
     profile = _build(
         training_history=_history(
-            available_history_days=20,
+            available_history_days=90,
             window_30d=_window(days=30),
             window_90d=_window(days=90, distance_km=180.0, duration_hours=18.0, activity_count=18, longest_run_km=22.0),
         )
@@ -353,3 +353,70 @@ def test_90d_window_is_only_a_fallback_when_30d_is_insufficient():
     assert profile.typical_weekly_hours == 1.4
     assert profile.typical_runs_per_week == 1.4
     assert profile.typical_long_run_km == 22.0
+
+
+def test_90d_fallback_is_blocked_when_history_depth_is_below_90_days():
+    profile = _build(
+        training_history=_history(
+            available_history_days=45,
+            window_30d=_window(days=30, average_speed_kmh=None),
+            window_90d=_window(days=90, average_speed_kmh=11.5),
+        ),
+        user_profile={},
+    )
+    assert profile.typical_speed_kmh is None
+
+
+def test_90d_fallback_is_used_when_history_depth_reaches_90_days():
+    profile = _build(
+        training_history=_history(
+            available_history_days=90,
+            window_30d=_window(days=30, average_speed_kmh=None),
+            window_90d=_window(days=90, average_speed_kmh=11.5),
+        )
+    )
+    assert profile.typical_speed_kmh == 11.5
+
+
+def test_declared_metric_aliases_use_first_valid_value():
+    profile = _build(
+        user_profile={
+            "typical_weekly_km": 42,
+            "weekly_km": 39,
+            "typical_weekly_hours": 4.5,
+            "weekly_hours": 4.0,
+            "typical_runs_per_week": 5,
+            "runs_per_week": 4,
+            "typical_long_run_km": 21,
+            "long_run_km": 18,
+            "typical_speed_kmh": 12.5,
+            "average_speed_kmh": 11.0,
+        }
+    )
+    assert profile.typical_weekly_km == 42.0
+    assert profile.typical_weekly_hours == 4.5
+    assert profile.typical_runs_per_week == 5.0
+    assert profile.typical_long_run_km == 21.0
+    assert profile.typical_speed_kmh == 12.5
+
+
+def test_declared_metric_aliases_fall_back_to_official_secondary_keys():
+    profile = _build(
+        user_profile={
+            "typical_weekly_km": None,
+            "weekly_km": 39,
+            "typical_weekly_hours": "",
+            "weekly_hours": 4.0,
+            "typical_runs_per_week": 0,
+            "runs_per_week": 4,
+            "typical_long_run_km": -1,
+            "long_run_km": 18,
+            "typical_speed_kmh": "invalid",
+            "average_speed_kmh": 11.0,
+        }
+    )
+    assert profile.typical_weekly_km == 39.0
+    assert profile.typical_weekly_hours == 4.0
+    assert profile.typical_runs_per_week == 4.0
+    assert profile.typical_long_run_km == 18.0
+    assert profile.typical_speed_kmh == 11.0

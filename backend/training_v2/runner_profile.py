@@ -227,24 +227,30 @@ def _first_valid_string(source: Optional[Mapping[str, Any]], *keys: str) -> Opti
 
 def _window_value(
     training_history: TrainingHistory,
+    available_history_days: int,
     extractor: Callable[[TrainingWindow], Any],
     parser: Callable[[Any], Optional[float]],
 ) -> tuple[Optional[float], Optional[int]]:
-    for window in (training_history.window_30d, training_history.window_90d):
-        parsed = parser(extractor(window))
-        if parsed is not None:
-            return parsed, window.days
+    parsed_30d = parser(extractor(training_history.window_30d))
+    if parsed_30d is not None:
+        return parsed_30d, training_history.window_30d.days
+
+    if available_history_days >= 90:
+        parsed_90d = parser(extractor(training_history.window_90d))
+        if parsed_90d is not None:
+            return parsed_90d, training_history.window_90d.days
     return None, None
 
 
 def _history_metric_or_declared(
     training_history: TrainingHistory,
+    available_history_days: int,
     extractor: Callable[[TrainingWindow], Any],
     declared_value: Any,
     parser: Callable[[Any], Optional[float]],
     observed_transform: Optional[Callable[[float, int], float]] = None,
 ) -> Optional[float]:
-    observed, window_days = _window_value(training_history, extractor, parser)
+    observed, window_days = _window_value(training_history, available_history_days, extractor, parser)
     if observed is not None:
         return _round_optional(
             observed_transform(observed, window_days or 30)
@@ -327,38 +333,44 @@ def build_runner_profile(
     preferred_long_run_day = _first_valid_string(profile, "preferred_long_run_day", "long_run_day")
     injury_constraints = _normalize_string_list(profile.get("injury_constraints"))
     availability_constraints = _normalize_string_list(profile.get("availability_constraints"))
+    available_history_days = max(0, int(training_history.available_history_days or 0))
 
     typical_weekly_km = _history_metric_or_declared(
         training_history,
+        available_history_days,
         lambda window: window.distance_km,
-        profile.get("weekly_km"),
+        _first_valid_number(profile, _parse_positive_float, "typical_weekly_km", "weekly_km"),
         _parse_positive_float,
         lambda value, window_days: value * 7.0 / float(window_days),
     )
     typical_weekly_hours = _history_metric_or_declared(
         training_history,
+        available_history_days,
         lambda window: window.duration_hours,
-        profile.get("weekly_hours"),
+        _first_valid_number(profile, _parse_positive_float, "typical_weekly_hours", "weekly_hours"),
         _parse_positive_float,
         lambda value, window_days: value * 7.0 / float(window_days),
     )
     typical_runs_per_week = _history_metric_or_declared(
         training_history,
+        available_history_days,
         lambda window: window.activity_count,
-        profile.get("runs_per_week"),
+        _first_valid_number(profile, _parse_positive_float, "typical_runs_per_week", "runs_per_week"),
         _parse_positive_float,
         lambda value, window_days: value * 7.0 / float(window_days),
     )
     typical_long_run_km = _history_metric_or_declared(
         training_history,
+        available_history_days,
         lambda window: window.longest_run_km,
-        profile.get("long_run_km"),
+        _first_valid_number(profile, _parse_positive_float, "typical_long_run_km", "long_run_km"),
         _parse_positive_float,
     )
     typical_speed_kmh = _history_metric_or_declared(
         training_history,
+        available_history_days,
         lambda window: window.average_speed_kmh,
-        profile.get("average_speed_kmh"),
+        _first_valid_number(profile, _parse_positive_float, "typical_speed_kmh", "average_speed_kmh"),
         _parse_positive_float,
     )
 
@@ -377,8 +389,6 @@ def build_runner_profile(
     resting_hr = _first_valid_number(physiology, _parse_hr, "resting_hr", "resting_heart_rate")
     if resting_hr is None:
         resting_hr = _first_valid_number(profile, _parse_hr, "resting_hr", "resting_heart_rate")
-
-    available_history_days = max(0, int(training_history.available_history_days or 0))
 
     has_usable_profile_data = any(
         value is not None
