@@ -89,7 +89,11 @@
 - `cd backend && python -m py_compile training_v2/runner_profile.py training_v2/__init__.py`
 
 ## Résultats exacts
-- À compléter après exécution.
+- `python -m pytest tests/test_runner_profile_pr07.py -q` → `27 passed in 0.50s`
+- `python -m pytest tests/test_training_history_pr05.py -q` → `53 passed in 1.03s`
+- `python -m pytest tests/test_training_v2_training_load.py -q` → `50 passed in 1.12s`
+- `python -m pytest tests/test_garmin_data_layer.py -q` → `13 passed in 1.09s`
+- `python -m py_compile training_v2/runner_profile.py training_v2/__init__.py` → succès
 
 ## Risques résiduels
 - Le profil reste dépendant du niveau d’agrégation déjà fourni par `TrainingHistory`.
