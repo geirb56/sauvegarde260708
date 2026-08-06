@@ -24,7 +24,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import pytest
 
 from training_v2.training_load import (
-    ESTIMATED_MINUTES_PER_KM,
     TrainingLoadSnapshot,
     build_training_load,
 )
@@ -154,56 +153,56 @@ def test_load_from_duration():
 
 
 # ---------------------------------------------------------------------------
-# Test 5: fallback to distance when duration is absent
+# Test 5: distance alone produces no load (no fallback)
 # ---------------------------------------------------------------------------
 
 
-def test_fallback_distance_no_duration():
-    # 10 km × 6 min/km = 60 min
+def test_distance_only_produces_no_load():
+    # Duration absent → no load, even with a valid distance.
+    # Distance may be used by TrainingHistory for volume metrics but does NOT
+    # generate a synthetic load in TrainingLoadSnapshot.
     s = snap([_running(1, duration_s=None, distance_m=10_000.0)])
-    assert s.acute_load_7d == 60.0
+    assert s.acute_load_7d == 0.0
+    assert s.activities_7d == 0
 
 
 # ---------------------------------------------------------------------------
-# Test 6: duration takes priority over distance
+# Test 6: duration is the sole source of load
 # ---------------------------------------------------------------------------
 
 
-def test_duration_priority_over_distance():
-    # 3600 s → 60 min; distance alone would give 20 km × 6 = 120 min
+def test_duration_is_sole_load_source():
+    # 3600 s → 60 min regardless of distance value
     s = snap([_running(1, duration_s=3600.0, distance_m=20_000.0)])
     assert s.acute_load_7d == 60.0
 
 
 # ---------------------------------------------------------------------------
-# Test 7: zero or negative duration is excluded (fallback to distance)
+# Test 7: zero or negative duration produces no load (no distance fallback)
 # ---------------------------------------------------------------------------
 
 
-def test_zero_duration_falls_back_to_distance():
-    # duration = 0 → invalid; use distance 10 km → 60 min
+def test_zero_duration_no_load():
+    # duration = 0 → invalid; distance present but ignored
     s = snap([_running(1, duration_s=0.0, distance_m=10_000.0)])
-    assert s.acute_load_7d == 60.0
-
-
-def test_negative_duration_falls_back_to_distance():
-    s = snap([_running(1, duration_s=-100.0, distance_m=5_000.0)])
-    assert s.acute_load_7d == 30.0   # 5 km × 6
-
-
-# ---------------------------------------------------------------------------
-# Test 8: zero or negative distance excluded
-# ---------------------------------------------------------------------------
-
-
-def test_zero_distance_no_duration_excluded():
-    s = snap([_running(1, duration_s=None, distance_m=0.0)])
     assert s.acute_load_7d == 0.0
     assert s.activities_7d == 0
 
 
-def test_negative_distance_no_duration_excluded():
-    s = snap([_running(1, duration_s=None, distance_m=-500.0)])
+def test_negative_duration_no_load():
+    # duration < 0 → invalid; distance present but ignored
+    s = snap([_running(1, duration_s=-100.0, distance_m=5_000.0)])
+    assert s.acute_load_7d == 0.0
+    assert s.activities_7d == 0
+
+
+# ---------------------------------------------------------------------------
+# Test 8: no duration and no distance → excluded
+# ---------------------------------------------------------------------------
+
+
+def test_no_duration_no_distance_excluded():
+    s = snap([_running(1, duration_s=None, distance_m=None)])
     assert s.acute_load_7d == 0.0
     assert s.activities_7d == 0
 
@@ -638,16 +637,6 @@ def test_only_valid_duration():
 
 
 # ---------------------------------------------------------------------------
-# Test 30: activity with only a valid distance
-# ---------------------------------------------------------------------------
-
-
-def test_only_valid_distance():
-    s = snap([_running(1, duration_s=None, distance_m=8_000.0)])
-    assert s.acute_load_7d == 48.0   # 8 km × 6 min/km
-
-
-# ---------------------------------------------------------------------------
 # Coherence: 28-day window ≠ 30-day window
 # ---------------------------------------------------------------------------
 
@@ -686,15 +675,6 @@ def test_treadmill_running_accepted():
     act = _act("treadmill_running", 2, duration_s=1800.0)
     s = snap([act])
     assert s.acute_load_7d == 30.0
-
-
-# ---------------------------------------------------------------------------
-# Additional: ESTIMATED_MINUTES_PER_KM constant value
-# ---------------------------------------------------------------------------
-
-
-def test_estimated_minutes_per_km_constant():
-    assert ESTIMATED_MINUTES_PER_KM == 6.0
 
 
 # ---------------------------------------------------------------------------

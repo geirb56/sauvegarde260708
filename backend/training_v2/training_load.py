@@ -8,22 +8,41 @@ Design rules
   is NEVER called inside this module.
 - All results are deterministic and fully reproducible for identical inputs.
 
-Training-load definition
-------------------------
-The load of an activity is a *volume proxy*, not a physiological metric such
-as TSS, TRIMP or Garmin Training Load.
+Distinction with TrainingHistory
+---------------------------------
+Two separate modules handle training data with different objectives:
+
+  TrainingHistory (PR05)
+      Business / overview windows: 7 days, 30 days, 90 days.
+      Aggregates volume (distance, duration) for display and trend analysis.
+
+  TrainingLoadSnapshot (PR06, this module)
+      Technical ACWR windows: acute = 7 days, chronic = 28 days (= 4 exact weeks).
+      Computes the Acute:Chronic Workload Ratio from duration-based load only.
+
+These two modules serve different purposes; the difference in window sizes
+(30 vs 28 days) is intentional, not an inconsistency.
+
+Training-load definition (duration only)
+-----------------------------------------
+The load of an activity is a *volume proxy based solely on duration*.
+No physiological metric is involved:
 
   load (minutes) = valid duration in seconds / 60
 
-When duration is absent or invalid, a distance-based fallback is used:
+Activities with absent, zero, or negative duration contribute NO load,
+even when a valid distance is present.  Distance is NOT used as a fallback
+for load computation in this module.
 
-  load (minutes) = valid distance in kilometres × ESTIMATED_MINUTES_PER_KM
-
-Duration is always preferred; distance is never added on top of duration for
-the same activity.
-
-No heart-rate, elevation, Training Effect, calories, speed, RPE, intensity
-coefficient or trail-specific factor is included in PR06.
+Specifically excluded from load calculation:
+  - TRIMP (Training Impulse)
+  - TSS (Training Stress Score)
+  - Garmin Training Load
+  - Heart rate / HR zones
+  - Intensity factor
+  - Elevation / gradient
+  - RPE (Rate of Perceived Exertion)
+  - Distance × pace estimation
 
 Window convention (inclusive on both ends)
 ------------------------------------------
@@ -83,15 +102,12 @@ from pydantic import BaseModel, ConfigDict
 from training_v2.training_history import (
     RUNNING_TYPES,
     _extract_fields,
-    _valid_distance,
     _valid_duration,
 )
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-
-ESTIMATED_MINUTES_PER_KM: float = 6.0
 
 # Confidence thresholds (calendar days of available history)
 _HISTORY_MEDIUM_DAYS = 14
@@ -164,18 +180,14 @@ class TrainingLoadSnapshot(BaseModel):
 def _activity_load_minutes(fields: Dict[str, Any]) -> Optional[float]:
     """Return the load (minutes) of a single activity.
 
-    Priority: valid duration (seconds → minutes).
-    Fallback: valid distance (metres → km × ESTIMATED_MINUTES_PER_KM).
-    Returns None when neither is available.
+    Only valid duration is accepted: load (minutes) = duration_s / 60.
+    Activities with absent, zero, or negative duration produce no load.
+    Distance is intentionally NOT used as a fallback — this module must not
+    manufacture a synthetic duration from pace estimates.
     """
     dur_s = _valid_duration(fields.get("duration_s"))
     if dur_s is not None:
         return dur_s / 60.0
-
-    dist_m = _valid_distance(fields.get("distance_m"))
-    if dist_m is not None:
-        return (dist_m / 1000.0) * ESTIMATED_MINUTES_PER_KM
-
     return None
 
 

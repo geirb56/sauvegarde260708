@@ -1,6 +1,6 @@
 # PR06 — Rapport final : Charge d'entraînement déterministe (Training Load V2)
 
-> **Correctif ciblé PR90** — convention inclusive de profondeur d'historique et tests ACWR exacts.
+> **Correctifs PR90** — convention inclusive, tests ACWR exacts, suppression du fallback distance, documentation de la séparation TrainingHistory / TrainingLoadSnapshot.
 
 ## 1. SHA de départ
 
@@ -17,7 +17,7 @@ Branche de travail courante (preview) issue de la fusion PR01→PR05.
 | Fichier | Rôle |
 |---|---|
 | `backend/training_v2/training_load.py` | Module métier principal — calcul déterministe de la charge V2 |
-| `backend/tests/test_training_v2_training_load.py` | Suite de tests PR06 (53 tests) |
+| `backend/tests/test_training_v2_training_load.py` | Suite de tests PR06 (50 tests) |
 | `backend/PR06_rapport_final.md` | Ce rapport |
 
 ## 4. Fichiers modifiés
@@ -28,24 +28,49 @@ Branche de travail courante (preview) issue de la fusion PR01→PR05.
 
 Aucun autre fichier modifié. Aucune route, recommandation, plan, frontend, `.env` ou fichier protégé touché.
 
-## 5. Définition exacte de la charge
+## 5. Séparation explicite des deux modules
 
-La charge d'une activité est un **proxy de volume d'entraînement**, et non une mesure physiologique (pas de TSS, TRIMP, HR, calories, dénivelé, vitesse, RPE, intensité).
+Deux modules coexistent dans `training_v2/` avec des objectifs distincts :
+
+| Module | Fenêtres | Objectif |
+|---|---|---|
+| `TrainingHistory` (PR05) | 7 jours, **30 jours**, 90 jours | Vision métier / historique : agrégation de volume (distance, durée) pour l'affichage et les tendances |
+| `TrainingLoadSnapshot` (PR06) | aiguë = 7 jours, chronique = **28 jours** (= 4 semaines exactes) | Vision technique ACWR : ratio Acute:Chronic Workload Ratio basé sur la durée |
+
+La différence entre 30 jours (TrainingHistory) et 28 jours (TrainingLoadSnapshot) est **intentionnelle** : 28 jours représente exactement 4 semaines calendaires, ce qui est la définition standard de la charge chronique pour l'ACWR.
+
+## 6. Définition de la charge (durée uniquement)
+
+La charge d'une activité est un **proxy de volume basé uniquement sur la durée** :
 
 ```
-Priorité 1 : charge (min) = durée valide (secondes) / 60
-Priorité 2 : charge (min) = distance valide (km) × ESTIMATED_MINUTES_PER_KM
+charge (min) = durée valide (secondes) / 60
 ```
 
-La constante `ESTIMATED_MINUTES_PER_KM = 6.0` est explicite et centralisée.
+**Comportement strict :**
 
-Durée et distance ne sont jamais additionnées pour la même activité.
+| Cas | Résultat |
+|---|---|
+| Durée valide (> 0) | charge = durée / 60 min |
+| Durée absente / nulle / négative | aucune charge (0) |
+| Distance seule, sans durée | **aucune charge** — pas de fallback artificiel |
 
-Valeurs invalides (None, 0, négatives, non-numériques) → exclues.
+La distance peut être utilisée par `TrainingHistory` pour les métriques de volume, mais **ne génère pas de durée synthétique** dans ce module.
+
+**Explicitement exclu du calcul de charge :**
+
+- TRIMP (Training Impulse)
+- TSS (Training Stress Score)
+- Garmin Training Load
+- Fréquence cardiaque / zones FC
+- Facteur d'intensité
+- Dénivelé / gradient
+- RPE (Rate of Perceived Exertion)
+- Estimation distance × allure (`ESTIMATED_MINUTES_PER_KM` supprimée)
 
 Types de course acceptés : `running`, `trail_running`, `treadmill_running`.
 
-## 6. Conventions des fenêtres temporelles
+## 7. Conventions des fenêtres temporelles
 
 Pour une `reference_date` donnée (fenêtres inclusives) :
 
@@ -180,7 +205,7 @@ La confiance est basée sur l'ensemble de l'historique disponible, pas uniquemen
 
 ## 13. Tests ajoutés
 
-53 tests déterministes couvrant :
+50 tests déterministes couvrant :
 
 | # | Cas de test |
 |---|---|
@@ -188,54 +213,51 @@ La confiance est basée sur l'ensemble de l'historique disponible, pas uniquemen
 | 2 | Uniquement des activités non-running |
 | 3 | Une activité valide dans les 7 derniers jours |
 | 4 | Calcul exact depuis la durée |
-| 5 | Fallback distance quand durée absente |
-| 6 | Priorité durée sur distance |
-| 7 | Durée nulle → fallback distance |
-| 8 | Durée négative → fallback distance |
-| 9 | Distance nulle sans durée → exclue |
-| 10 | Distance négative sans durée → exclue |
-| 11 | Activité future exclue |
-| 12 | J-6 inclus dans la fenêtre aiguë |
-| 13 | J-7 exclu de la fenêtre aiguë |
-| 14 | J-27 inclus dans la fenêtre 28j |
-| 15 | `chronic_weekly_load = load_28d / 4` |
-| 16 | Calcul exact ACWR |
-| 17 | `acwr=None` si charge 28j nulle |
-| 18 | Statut `"unavailable"` sans dénominateur |
-| 19 | ACWR = 0.30 → `very_low` (+ assertion s.acwr) |
-| 20 | ACWR = 0.50 → `low` (borne exacte + assertion s.acwr) |
-| 21 | ACWR = 0.60 → `low` (intérieur + assertion s.acwr) |
-| 22 | ACWR = 0.80 → `balanced` (borne exacte + assertion s.acwr) |
-| 23 | ACWR = 1.00 → `balanced` (intérieur + assertion s.acwr) |
-| 24 | ACWR = 1.30 → `balanced` (borne haute exacte + assertion s.acwr) |
-| 25 | ACWR = 1.40 → `elevated` (intérieur + assertion s.acwr) |
-| 26 | ACWR = 1.50 → `elevated` (borne exacte + assertion s.acwr) |
-| 27 | ACWR = 1.60 → `high` (+ assertion s.acwr) |
-| 28 | Fenêtre précédente J-13 à J-7 |
-| 29 | Calcul `load_change_percent` |
-| 30 | Variation `None` si charge précédente = 0 |
-| 31 | Historique insuffisant |
-| 32 | Historique exactement suffisant — J-27 → True (convention inclusive) |
-| 33 | confidence `"none"` |
-| 34 | confidence `"low"` (intérieur) |
-| 35 | confidence `"medium"` (intérieur) |
-| 36 | confidence `"high"` (intérieur) |
-| 37 | confidence `"low"` à la borne haute (13 jours) |
-| 38 | confidence `"medium"` à la borne basse (14 jours) |
-| 39 | confidence `"medium"` à la borne haute (27 jours) |
-| 40 | confidence `"high"` à la borne basse (28 jours = J-27) |
-| 41 | Sub-document `garmin_activity` (PR02) |
-| 42 | Objets Pydantic |
-| 43 | Immutabilité du modèle |
-| 44 | Déterminisme |
-| 45 | Indépendance au temps système |
-| 46 | Activité avec seulement durée valide |
-| 47 | Activité avec seulement distance valide |
-| 48-49 | Cohérence 28j ≠ 30j (fenêtre [J-27 ; J], commentaires corrigés) |
-| 50 | `trail_running` accepté |
-| 51 | `treadmill_running` accepté |
-| 52 | Constante `ESTIMATED_MINUTES_PER_KM == 6.0` |
-| 53 | Arrondi ACWR à 3 décimales |
+| 5 | Distance seule sans durée → **aucune charge** (pas de fallback) |
+| 6 | Durée seule source de charge (distance ignorée) |
+| 7 | Durée nulle → aucune charge (pas de fallback distance) |
+| 8 | Durée négative → aucune charge (pas de fallback distance) |
+| 9 | Ni durée ni distance → exclu |
+| 10 | Activité future exclue |
+| 11 | J-6 inclus dans la fenêtre aiguë |
+| 12 | J-7 exclu de la fenêtre aiguë |
+| 13 | J-27 inclus dans la fenêtre 28j |
+| 14 | `chronic_weekly_load = load_28d / 4` |
+| 15 | Calcul exact ACWR |
+| 16 | `acwr=None` si charge 28j nulle |
+| 17 | Statut `"unavailable"` sans dénominateur |
+| 18 | ACWR = 0.30 → `very_low` (+ assertion s.acwr) |
+| 19 | ACWR = 0.50 → `low` (borne exacte + assertion s.acwr) |
+| 20 | ACWR = 0.60 → `low` (intérieur + assertion s.acwr) |
+| 21 | ACWR = 0.80 → `balanced` (borne exacte + assertion s.acwr) |
+| 22 | ACWR = 1.00 → `balanced` (intérieur + assertion s.acwr) |
+| 23 | ACWR = 1.30 → `balanced` (borne haute exacte + assertion s.acwr) |
+| 24 | ACWR = 1.40 → `elevated` (intérieur + assertion s.acwr) |
+| 25 | ACWR = 1.50 → `elevated` (borne exacte + assertion s.acwr) |
+| 26 | ACWR = 1.60 → `high` (+ assertion s.acwr) |
+| 27 | Fenêtre précédente J-13 à J-7 |
+| 28 | Calcul `load_change_percent` |
+| 29 | Variation `None` si charge précédente = 0 |
+| 30 | Historique insuffisant |
+| 31 | Historique exactement suffisant — J-27 → True (convention inclusive) |
+| 32 | confidence `"none"` |
+| 33 | confidence `"low"` (intérieur) |
+| 34 | confidence `"medium"` (intérieur) |
+| 35 | confidence `"high"` (intérieur) |
+| 36 | confidence `"low"` à la borne haute (13 jours) |
+| 37 | confidence `"medium"` à la borne basse (14 jours) |
+| 38 | confidence `"medium"` à la borne haute (27 jours) |
+| 39 | confidence `"high"` à la borne basse (28 jours = J-27) |
+| 40 | Sub-document `garmin_activity` (PR02) |
+| 41 | Objets Pydantic |
+| 42 | Immutabilité du modèle |
+| 43 | Déterminisme |
+| 44 | Indépendance au temps système |
+| 45 | Activité avec seulement durée valide |
+| 46-47 | Cohérence 28j ≠ 30j (fenêtre [J-27 ; J]) |
+| 48 | `trail_running` accepté |
+| 49 | `treadmill_running` accepté |
+| 50 | Arrondi ACWR à 3 décimales |
 
 ## 14. Commandes exécutées
 
@@ -250,13 +272,13 @@ PYTHONPATH=/app/backend python -m pytest tests/test_training_v2_training_load.py
 ### Suite PR06
 
 ```
-53 passed in 0.43s
+50 passed in 0.66s
 ```
 
 ### Suite PR01→PR06
 
 ```
-189 passed in 0.73s
+186 passed in 1.34s
 ```
 
 0 failed, 0 errors.
@@ -284,12 +306,12 @@ Non testé en isolation dans cet environnement (pas de serveur démarré localem
 - Frontend : non touché
 - Abonnements / Paddle / authentification : non touchés
 
-## 19. Fichiers modifiés par ce correctif ciblé (PR90)
+## 19. Fichiers modifiés (PR90 — corrections d'architecture)
 
 | Fichier | Modification |
 |---|---|
-| `backend/training_v2/training_load.py` | `available_history_days = (reference_date - first_date).days + 1` (convention inclusive) |
-| `backend/tests/test_training_v2_training_load.py` | Helper ACWR exact, tests de seuils avec assertion s.acwr, tests frontières confiance (13/14/27/28), correction commentaire test_28d, test_exactly_sufficient_history mis à jour |
+| `backend/training_v2/training_load.py` | Suppression `ESTIMATED_MINUTES_PER_KM` et fallback distance×6 ; docstring enrichi (séparation TrainingHistory/TrainingLoadSnapshot, exclusions explicites) |
+| `backend/tests/test_training_v2_training_load.py` | Remplacement tests fallback par tests "distance seule → 0 charge" ; suppression `test_only_valid_distance` et `test_estimated_minutes_per_km_constant` |
 | `backend/PR06_rapport_final.md` | Ce rapport mis à jour |
 
 Aucun autre fichier touché.
