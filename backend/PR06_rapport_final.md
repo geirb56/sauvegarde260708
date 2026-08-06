@@ -82,7 +82,7 @@ Pour une `reference_date` donnée (fenêtres inclusives) :
 
 La fenêtre chronique est **28 jours** (non 30 jours). Un test de cohérence explicite le vérifie.
 
-## 7. Formule ACWR
+## 8. Formule ACWR
 
 ```
 chronic_weekly_load = load_28d / 4
@@ -103,7 +103,7 @@ acwr = A / ((B + A) / 4) = 4A / (B + A)
 Si `chronic_weekly_load == 0` → `acwr = None`.  
 Le calcul utilise la précision flottante complète ; l'arrondi (3 décimales) s'applique uniquement au champ final.
 
-## 8. Convention inclusive de profondeur d'historique (correctif PR90)
+## 9. Convention inclusive de profondeur d'historique (correctif PR90)
 
 **Formule corrigée :**
 
@@ -127,7 +127,7 @@ Le `+ 1` applique la convention inclusive : J-27 à J = 28 jours calendaires (le
 
 `has_sufficient_history = available_history_days >= 28`
 
-## 9. Gestion du cas sans historique
+## 10. Gestion du cas sans historique
 
 Aucun `acwr = 1.0` artificiel en l'absence d'historique.
 
@@ -139,7 +139,7 @@ si load_28d == 0 :
     is_available = False
 ```
 
-## 10. Statuts et seuils ACWR
+## 11. Statuts et seuils ACWR
 
 Les seuils sont centralisés comme constantes dans le module :
 
@@ -154,7 +154,7 @@ Les seuils sont centralisés comme constantes dans le module :
 
 Le terme `"overtraining_risk"` n'est pas utilisé — l'ACWR seul ne permet pas d'établir un diagnostic de surentraînement.
 
-## 11. Tests des seuils ACWR (correctif PR90)
+## 12. Tests des seuils ACWR (correctif PR90)
 
 ### Helper de test
 
@@ -182,7 +182,7 @@ Ce helper inverse la formule `ACWR = 4A/(B+A)` pour calculer la charge aiguë ex
 
 Chaque test vérifie `s.acwr ≈ target (abs=0.001)` avant de vérifier `s.status`.
 
-## 12. Confiance et disponibilité
+## 13. Confiance et disponibilité
 
 ### Disponibilité
 
@@ -203,7 +203,7 @@ Chaque test vérifie `s.acwr ≈ target (abs=0.001)` avant de vérifier `s.statu
 
 La confiance est basée sur l'ensemble de l'historique disponible, pas uniquement sur la fenêtre 28j.
 
-## 13. Tests ajoutés
+## 14. Tests ajoutés
 
 50 tests déterministes couvrant :
 
@@ -259,7 +259,7 @@ La confiance est basée sur l'ensemble de l'historique disponible, pas uniquemen
 | 49 | `treadmill_running` accepté |
 | 50 | Arrondi ACWR à 3 décimales |
 
-## 14. Commandes exécutées
+## 15. Commandes exécutées
 
 ```bash
 # Suite PR06 uniquement
@@ -267,7 +267,7 @@ cd backend
 PYTHONPATH=/app/backend python -m pytest tests/test_training_v2_training_load.py -q
 ```
 
-## 15. Résultats exacts des tests
+## 16. Résultats exacts des tests
 
 ### Suite PR06
 
@@ -283,11 +283,11 @@ PYTHONPATH=/app/backend python -m pytest tests/test_training_v2_training_load.py
 
 0 failed, 0 errors.
 
-## 16. Résultat du backend health
+## 17. Résultat du backend health
 
 Non testé en isolation dans cet environnement (pas de serveur démarré localement). Aucune route, aucun serveur, aucun middleware n'a été modifié par PR06 ni par ce correctif. `GET /api/health` reste intact.
 
-## 17. Confirmation : aucune route, recommandation ou plan modifié
+## 18. Confirmation : aucune route, recommandation ou plan modifié
 
 - Aucun fichier dans `backend/engine/` modifié
 - `training_engine.py` non modifié
@@ -298,7 +298,7 @@ Non testé en isolation dans cet environnement (pas de serveur démarré localem
 - Aucun plan de génération modifié
 - `backend/engine/training_load_engine.py` non modifié, non supprimé
 
-## 18. Confirmation : aucun fichier protégé touché
+## 19. Confirmation : aucun fichier protégé touché
 
 - `.env` : non touché
 - Fichiers de configuration : non touchés
@@ -306,7 +306,7 @@ Non testé en isolation dans cet environnement (pas de serveur démarré localem
 - Frontend : non touché
 - Abonnements / Paddle / authentification : non touchés
 
-## 19. Fichiers modifiés (PR90 — corrections d'architecture)
+## 20. Fichiers modifiés (PR90 — corrections d'architecture)
 
 | Fichier | Modification |
 |---|---|
@@ -316,7 +316,7 @@ Non testé en isolation dans cet environnement (pas de serveur démarré localem
 
 Aucun autre fichier touché.
 
-## 20. SHA final du commit
+## 21. SHA final du commit
 
 Disponible après le push (généré par `engine-tools-report_progress`).
 
