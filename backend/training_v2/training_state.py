@@ -215,14 +215,6 @@ def _observable_baseline_km(runner_profile: RunnerProfile) -> Optional[float]:
     return runner_profile.typical_weekly_km  # may still be None
 
 
-def _has_recent_run(training_history: TrainingHistory, days: int, reference_date: date) -> bool:
-    """Return True if there is at least one valid run in the last *days* days."""
-    days_since = training_history.days_since_last_run
-    if days_since is None:
-        return False
-    return days_since < days
-
-
 def _classify_continuity(
     training_history: TrainingHistory,
     runner_profile: RunnerProfile,
@@ -240,10 +232,10 @@ def _classify_continuity(
         return "no_history", codes
 
     # From here onwards: prior history exists.
-    days_since = training_history.days_since_last_run  # int (not None)
+    days_since = training_history.days_since_last_run  # int (guaranteed when has_any_running_history)
 
     # ── deep_reprise ──────────────────────────────────────────────────────
-    if days_since is not None and days_since >= NO_RUN_DEEP_REPRISE_DAYS:
+    if days_since >= NO_RUN_DEEP_REPRISE_DAYS:
         codes.append("NO_RUN_LAST_28D")
         return "deep_reprise", codes
 

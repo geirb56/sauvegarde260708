@@ -398,11 +398,37 @@ def test_determinism():
 
 def test_determinism_different_dates():
     acts = [_act(days_ago=d) for d in range(0, 60, 5)]
+    # Two different reference dates must independently produce consistent results
     ref1 = date(2026, 8, 6)
-    ref2 = date(2026, 8, 6)
-    state1 = _build(acts, reference_date=ref1)
-    state2 = _build(acts, reference_date=ref2)
-    assert state1 == state2
+    ref2 = date(2026, 8, 7)
+
+    def _build_at(ref):
+        history = build_training_history(acts, ref)
+        load_snap = build_training_load(acts, ref)
+        runner = build_runner_profile(
+            training_history=history,
+            training_load=load_snap,
+            user_profile={},
+            reference_date=ref,
+        )
+        return build_training_state(
+            training_history=history,
+            training_load=load_snap,
+            runner_profile=runner,
+            reference_date=ref,
+        )
+
+    # Each call to the same ref is deterministic
+    s1a = _build_at(ref1)
+    s1b = _build_at(ref1)
+    assert s1a == s1b
+
+    s2a = _build_at(ref2)
+    s2b = _build_at(ref2)
+    assert s2a == s2b
+
+    # Different reference dates produce different reference_date fields
+    assert s1a.reference_date != s2a.reference_date
 
 
 # ---------------------------------------------------------------------------
