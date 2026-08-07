@@ -577,13 +577,32 @@ def test_34_deep_reprise_no_phase_change():
 # ---------------------------------------------------------------------------
 
 def test_35_high_load_no_phase_change():
+    """A high load state must NOT change the calendar phase."""
+    from training_v2.training_state import TrainingState
+
     race = date(2026, 6, 1)
     ref = date(2025, 6, 1)
     goal = _goal("marathon", race_date=race)
 
     snap_no_state = _snap_no_anchor(goal, ref)
-    # Pass a dummy TrainingState — phase must be identical
-    snap_with_state = build_periodization(goal, ref, training_state=None)
+
+    ts = TrainingState(
+        reference_date=ref,
+        continuity_state="normal",
+        continuity_confidence="high",
+        load_state="high",
+        load_confidence="high",
+        overall_confidence="high",
+        days_since_last_run=1,
+        recent_7d_km=80.0,
+        recent_30d_km=280.0,
+        acute_load=600.0,
+        chronic_weekly_load=500.0,
+        acwr=1.2,
+        reason_codes=["CONTINUITY_STABLE", "LOAD_HIGH"],
+    )
+
+    snap_with_state = build_periodization(goal, ref, training_state=ts)
     assert snap_with_state.phase == snap_no_state.phase
 
 

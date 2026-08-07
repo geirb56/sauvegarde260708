@@ -366,11 +366,10 @@ def _compute_continuous(
 
     days_since_anchor = (reference_date - cycle_anchor_date).days
 
-    # Handle anchor in the future (be robust)
-    if days_since_anchor < 0:
-        days_since_anchor = (-days_since_anchor) % (CONTINUOUS_CYCLE_LENGTH_WEEKS * 7)
-
     cycle_total_days = CONTINUOUS_CYCLE_LENGTH_WEEKS * 7
+    # Python's modulo handles negative values correctly:
+    # a runner "before" the anchor is placed at an equivalent position in
+    # the nearest preceding cycle, preserving full determinism.
     position_in_cycle = days_since_anchor % cycle_total_days
 
     # Cumulative boundaries (in days)
