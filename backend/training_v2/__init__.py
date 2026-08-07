@@ -1,17 +1,22 @@
 """training_v2 — Pure business layer for RunIndex v2.
 
-PR05 exposes: TrainingWindow, TrainingHistory, build_training_history.
+PR05 (PlanGoal) exposes: PlanGoal, GoalType, build_plan_goal.
+PR05 (History) exposes:  TrainingWindow, TrainingHistory, build_training_history.
 PR06 exposes: TrainingLoadSnapshot, build_training_load.
 PR07 exposes: RunnerProfile, build_runner_profile.
 PR04 exposes: TrainingState, build_training_state.
 """
 
+from .plan_goal import GoalType, PlanGoal, build_plan_goal
 from .runner_profile import RunnerProfile, build_runner_profile
 from .training_history import TrainingHistory, TrainingWindow, build_training_history
 from .training_load import TrainingLoadSnapshot, build_training_load
 from .training_state import TrainingState, build_training_state
 
 __all__ = [
+    "GoalType",
+    "PlanGoal",
+    "build_plan_goal",
     "RunnerProfile",
     "build_runner_profile",
     "TrainingHistory",
