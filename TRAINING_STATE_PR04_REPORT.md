@@ -304,15 +304,14 @@ Si ces deux fenêtres sont vides (toutes les activités sont plus vieilles que 9
 
 **Correction** : Le test est remplacé par `== "reprise_exit"` avec calcul arithmétique explicite démontrant pourquoi ce scénario produit exactement `reprise_exit`.
 
-**Règle exacte `partial_reprise → reprise_exit → normal`** (inchangée, rendue visible) :
+**Règle exacte `partial_reprise → reprise_exit → normal`** (corrigée par Correction 4) :
 
 ```
 if recent_weekly < 50% × baseline_observed:
     → partial_reprise
 
 elif available_history_days < REPRISE_EXIT_STABLE_WEEKS × 7:  # < 28 jours
-    if w7.activity_count > 0:
-        → reprise_exit
+    → reprise_exit  # (w7.activity_count ignoré — garanti days_since < 28)
 
 elif (recent_weekly < baseline AND w30.activity_count < 12):
     → reprise_exit
