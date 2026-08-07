@@ -2,11 +2,19 @@
 
 PR05 (PlanGoal) exposes: PlanGoal, GoalType, build_plan_goal.
 PR05 (History) exposes:  TrainingWindow, TrainingHistory, build_training_history.
-PR06 exposes: TrainingLoadSnapshot, build_training_load.
-PR07 exposes: RunnerProfile, build_runner_profile.
-PR04 exposes: TrainingState, build_training_state.
+PR06 (Load)    exposes:  TrainingLoadSnapshot, build_training_load.
+PR06 (Period.) exposes:  PeriodizationSnapshot, PeriodizationPhase,
+                         PeriodizationMode, build_periodization.
+PR07 exposes:            RunnerProfile, build_runner_profile.
+PR04 exposes:            TrainingState, build_training_state.
 """
 
+from .periodization import (
+    PeriodizationMode,
+    PeriodizationPhase,
+    PeriodizationSnapshot,
+    build_periodization,
+)
 from .plan_goal import GoalType, PlanGoal, build_plan_goal
 from .runner_profile import RunnerProfile, build_runner_profile
 from .training_history import TrainingHistory, TrainingWindow, build_training_history
@@ -17,6 +25,10 @@ __all__ = [
     "GoalType",
     "PlanGoal",
     "build_plan_goal",
+    "PeriodizationMode",
+    "PeriodizationPhase",
+    "PeriodizationSnapshot",
+    "build_periodization",
     "RunnerProfile",
     "build_runner_profile",
     "TrainingHistory",
