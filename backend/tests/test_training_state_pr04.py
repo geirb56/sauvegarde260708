@@ -147,21 +147,162 @@ def test_reprise_exit_short_history():
 
 
 def test_partial_reprise_to_reprise_exit_boundary():
-    """Volume just above 50% of baseline but history too short → reprise_exit."""
+    """Volume just above 50% of baseline but history sparse → reprise_exit.
+
+    Scenario:
+      - Historical runs every 7 days from day 8 to day 57 (8 runs, 10 km each).
+      - 30d window: runs at days 8, 15, 22, 29 + recent day 2 = 5 runs, 46 km.
+      - Baseline (weekly equivalent): 46 * 7 / 30 ≈ 10.73 km.
+      - Recent weekly (w7): 6 km.
+      - 6 km ≥ 50% of 10.73 km (= 5.37) → NOT partial_reprise.
+      - available_history_days = 57, w30.activity_count = 5 < 12 → reprise_exit.
+    """
     baseline_acts = [_act(days_ago=d, distance_m=10_000.0) for d in range(8, 60, 7)]
-    # Recent: ~6 km this week — above 50% of ~10 km baseline but history short
     recent_acts = [_act(days_ago=2, distance_m=6_000.0)]
     acts = baseline_acts + recent_acts
     state = _build(acts)
-    # Must not be partial_reprise (volume >= 50% of baseline)
+    assert state.continuity_state == "reprise_exit"
+
+
+# ---------------------------------------------------------------------------
+# 5b. Declared baseline must NOT be used as observable baseline (Fix 1)
+# ---------------------------------------------------------------------------
+
+
+def test_declared_baseline_no_history_no_partial_reprise():
+    """Declared weekly_km with no observed history must NOT trigger partial_reprise.
+
+    This test validates the 'declared weekly km ≠ observed baseline' invariant.
+
+    Scenario (from problem statement):
+      - No observed running history at all.
+      - User declares weekly_km = 40 in their profile.
+      - Result: no_history (never partial_reprise) because there is no
+        observed baseline to compare against.
+    """
+    state = _build([], profile={"weekly_km": 40})
+    assert state.continuity_state == "no_history"
     assert state.continuity_state != "partial_reprise"
-    # Should be either reprise_exit or normal
-    assert state.continuity_state in ("reprise_exit", "normal")
+
+
+def test_declared_baseline_not_used_as_observable_baseline():
+    """typical_weekly_km_is_observed must be False when only declared data exists.
+
+    Validates that RunnerProfile correctly exposes provenance, and that the
+    observed baseline from the 30d window (1.17 km/week) is used instead of
+    the declared value (40 km/week).
+
+    With 1 recent run at 5 km and declared 40 km/week:
+      - window_30d contributes: 5 km × 7 / 30 ≈ 1.17 km/week (observed, is_observed=True).
+      - Declared 40 km/week is ignored.
+      - Recent weekly (5 km) > 50% of observed baseline (0.58 km) → NOT partial_reprise.
+    """
+    acts = [_act(days_ago=2, distance_m=5_000.0)]
+    history = build_training_history(acts, REF)
+    load_snap = build_training_load(acts, REF)
+    runner = build_runner_profile(
+        training_history=history,
+        training_load=load_snap,
+        user_profile={"weekly_km": 40},
+        reference_date=REF,
+    )
+    # Provenance flag must be True: the 30d window has a run → observed.
+    assert runner.typical_weekly_km_is_observed is True
+    # Observed baseline is ~1.17 km/week, NOT 40 km/week.
+    assert runner.typical_weekly_km is not None
+    assert runner.typical_weekly_km < 40
+    state = build_training_state(
+        training_history=history,
+        training_load=load_snap,
+        runner_profile=runner,
+        reference_date=REF,
+    )
+    assert state.continuity_state != "partial_reprise"
+
+
+def test_no_history_typical_weekly_km_is_observed_false():
+    """With no observed history, typical_weekly_km_is_observed must be False."""
+    history = build_training_history([], REF)
+    load_snap = build_training_load([], REF)
+    runner = build_runner_profile(
+        training_history=history,
+        training_load=load_snap,
+        user_profile={"weekly_km": 40},
+        reference_date=REF,
+    )
+    assert runner.typical_weekly_km_is_observed is False
 
 
 # ---------------------------------------------------------------------------
-# 6. Normal
+# 5c. Deterministic partial_reprise → reprise_exit → normal sequence (Fix 3)
+#
+# Scenarios use a controlled baseline (10 fixed runs in days 8-29,
+# each 10 km) so the arithmetic is exact and reproducible.
+#
+# Baseline (before adding recent run):
+#   10 runs × 10 km = 100 km in 30d
+#   typical_weekly_km = 100 × 7 / 30 ≈ 23.33 km/week (but recalculated
+#   after adding the recent run — see per-test comments).
+#
+# available_history_days = 29 ≥ REPRISE_EXIT_STABLE_WEEKS × 7 = 28
+#   → second reprise_exit branch applies (sparse-w30 criterion).
 # ---------------------------------------------------------------------------
+
+_BASELINE_DAYS = [8, 10, 12, 14, 16, 18, 20, 22, 24, 29]  # 10 runs, oldest day 29
+
+
+def test_partial_reprise_volume_below_50pct():
+    """Volume strictly below 50% of observed baseline → partial_reprise.
+
+    Scenario: 10 baseline runs (days 8-29, 10 km each) + 1 recent run
+    at day 2 (12 km).
+      - w30 distance = 100 + 12 = 112 km → baseline = 112 × 7/30 ≈ 26.13 km/week.
+      - recent_weekly = 12 km.
+      - 12 < 0.5 × 26.13 = 13.07 → partial_reprise.
+    """
+    acts = [_act(days_ago=d) for d in _BASELINE_DAYS] + [
+        _act(days_ago=2, distance_m=12_000.0)
+    ]
+    state = _build(acts)
+    assert state.continuity_state == "partial_reprise"
+    assert "RECENT_VOLUME_FAR_BELOW_BASELINE" in state.reason_codes
+
+
+def test_reprise_exit_volume_above_50pct_sparse_w30():
+    """Volume above 50% of baseline but w30 sparse (< 12 runs) → reprise_exit.
+
+    Scenario: 10 baseline runs (days 8-29, 10 km each) + 1 recent run
+    at day 2 (15 km).
+      - w30 distance = 100 + 15 = 115 km → baseline = 115 × 7/30 ≈ 26.83 km/week.
+      - recent_weekly = 15 km.
+      - 15 ≥ 0.5 × 26.83 = 13.42 → NOT partial_reprise.
+      - w30.activity_count = 11 < 12 → reprise_exit.
+    """
+    acts = [_act(days_ago=d) for d in _BASELINE_DAYS] + [
+        _act(days_ago=2, distance_m=15_000.0)
+    ]
+    state = _build(acts)
+    assert state.continuity_state == "reprise_exit"
+    assert "RECENT_VOLUME_RECOVERING" in state.reason_codes
+
+
+def test_normal_volume_above_50pct_dense_w30():
+    """Volume above 50% of baseline AND w30 dense (≥ 12 runs) → normal.
+
+    Scenario: 11 baseline runs (days 8-29 + day 26, 10 km each) + 1 recent
+    run at day 2 (15 km). w30.activity_count = 12.
+      - w30 distance = 110 + 15 = 125 km → baseline = 125 × 7/30 ≈ 29.17 km/week.
+      - recent_weekly = 15 km < 29.17 (volume below baseline).
+      - w30.activity_count = 12, NOT < 12 → reprise_exit branch skipped → normal.
+    """
+    acts = [_act(days_ago=d) for d in _BASELINE_DAYS + [26]] + [
+        _act(days_ago=2, distance_m=15_000.0)
+    ]
+    state = _build(acts)
+    assert state.continuity_state == "normal"
+    assert "CONTINUITY_STABLE" in state.reason_codes
+
+
 
 
 def test_normal():

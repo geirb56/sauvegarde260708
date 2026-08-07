@@ -259,3 +259,94 @@ python -m py_compile training_v2/training_state.py training_v2/__init__.py
 - **Baseline déclarée ignorée**: Si `runner_profile.typical_weekly_km` vient uniquement du profil déclaré (sans historique), aucune comparaison de volume n'est effectuée. La règle `partial_reprise` ne s'applique pas dans ce cas. Ceci est conforme au principe V2 : absence de données ≠ valeur normale.
 - **`available_history_days` convention**: Héritée de PR05 : `(ref_date - first_run_date).days`. Une seule sortie le jour même = 0 jour → confidence `"none"`. Si la spec souhaite "1 sortie = low", il faudra ajuster cette convention dans `training_history.py` (hors scope PR04).
 - **Load metrics (`acute_load`, `chronic_weekly_load`)**: Retournés `None` si `training_load.is_available == False`. Aucun fallback inventé.
+
+---
+
+## Corrections PR04 / PR #94 (2026-08-07)
+
+### Correction 1 — Provenance de la baseline (BLOQUANT)
+
+**Problème** : `_observable_baseline_km` utilisait `available_history_days > 0` pour décider si `typical_weekly_km` est observable. Cette heuristique était incorrecte : `available_history_days > 0` signifie seulement qu'il existe au moins une activité quelque part dans l'historique — elle ne garantit pas que `typical_weekly_km` a été calculé à partir des fenêtres `window_30d` ou `window_90d`.
+
+Si ces deux fenêtres sont vides (toutes les activités sont plus vieilles que 90 jours), `_history_metric_or_declared` retombe sur la valeur déclarée, mais `available_history_days > 0` reste vrai → la valeur déclarée était utilisée comme baseline. Violation de "declared weekly km ≠ observed baseline".
+
+**Correction** :
+
+1. `RunnerProfile` expose maintenant un flag `typical_weekly_km_is_observed: bool` (champ Pydantic, documenté).  
+   - `True` : valeur issue d'une fenêtre historique (30d ou 90d).  
+   - `False` : valeur déclarée uniquement, ou `None`.  
+   - Calculé dans `_history_metric_or_declared` qui retourne désormais `(value, is_observed)`.
+
+2. `_observable_baseline_km` dans `training_state.py` utilise `runner_profile.typical_weekly_km_is_observed` au lieu de `available_history_days > 0`.
+
+**Règle** : Si `typical_weekly_km_is_observed is False` → `_observable_baseline_km` retourne `None` → aucun test `partial_reprise` / `reprise_exit` basé sur le volume n'est effectué.
+
+**Tests ajoutés** :
+- `test_declared_baseline_no_history_no_partial_reprise` : profil déclaré 40 km/semaine, aucun historique → `no_history`, jamais `partial_reprise`.
+- `test_declared_baseline_not_used_as_observable_baseline` : 1 sortie récente (5 km) + déclaré 40 km/semaine → `is_observed=True`, baseline = 1.17 km/week (observé), PAS 40 km/week (déclaré).
+- `test_no_history_typical_weekly_km_is_observed_false` : aucun historique → `is_observed=False`.
+
+---
+
+### Correction 2 — Renommage `recent_28d_km` → `recent_30d_km`
+
+**Problème** : Le champ `recent_28d_km` de `TrainingState` était alimenté par `training_history.window_30d.distance_km` (fenêtre de **30 jours**). L'étiquette était fausse.
+
+**Correction** :
+- `TrainingState.recent_28d_km` → `TrainingState.recent_30d_km` (modèle Pydantic, build function, commentaires).
+- Aucune nouvelle fenêtre 28 jours n'est créée. La fenêtre `window_30d` existante est conservée.
+
+---
+
+### Correction 3 — Frontière `reprise_exit` déterministe
+
+**Problème** : `test_partial_reprise_to_reprise_exit_boundary` testait `continuity_state in ("reprise_exit", "normal")` — un test non-déterministe qui ne valide pas la règle métier.
+
+**Correction** : Le test est remplacé par `== "reprise_exit"` avec calcul arithmétique explicite démontrant pourquoi ce scénario produit exactement `reprise_exit`.
+
+**Règle exacte `partial_reprise → reprise_exit → normal`** (inchangée, rendue visible) :
+
+```
+if recent_weekly < 50% × baseline_observed:
+    → partial_reprise
+
+elif available_history_days < REPRISE_EXIT_STABLE_WEEKS × 7:  # < 28 jours
+    if w7.activity_count > 0:
+        → reprise_exit
+
+elif (recent_weekly < baseline AND w30.activity_count < 12):
+    → reprise_exit
+
+else:
+    → normal
+```
+
+Cas de frontière testés avec `==` (scénario contrôlé : 10 runs jours 8–29, 10 km chacun) :
+- `test_partial_reprise_volume_below_50pct` : récent = 12 km < 13.07 = 50% de 26.13 → `partial_reprise`.
+- `test_reprise_exit_volume_above_50pct_sparse_w30` : récent = 15 km > 13.42, `w30.count = 11 < 12` → `reprise_exit`.
+- `test_normal_volume_above_50pct_dense_w30` : récent = 15 km, `w30.count = 12 ≥ 12` → `normal`.
+
+---
+
+### Fichiers modifiés (corrections PR #94)
+
+| Fichier | Modification |
+|---|---|
+| `backend/training_v2/runner_profile.py` | Nouveau champ `typical_weekly_km_is_observed: bool` + `_history_metric_or_declared` retourne `(value, is_observed)` |
+| `backend/training_v2/training_state.py` | `_observable_baseline_km` utilise `is_observed`, `recent_28d_km` → `recent_30d_km` |
+| `backend/tests/test_training_state_pr04.py` | 6 tests ajoutés, 1 test corrigé (`in` → `==`) |
+| `TRAINING_STATE_PR04_REPORT.md` | Ce rapport |
+
+---
+
+### Résultats des tests (2026-08-07)
+
+```
+python -m pytest tests/test_training_state_pr04.py -q
+```
+**37 passed in 0.54s**  (31 originaux + 6 nouveaux)
+
+```
+python -m pytest tests/test_training_state_pr04.py tests/test_training_history_pr05.py tests/test_runner_profile_pr07.py -q
+```
+**129 passed in 0.58s**

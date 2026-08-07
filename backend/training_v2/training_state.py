@@ -153,7 +153,14 @@ class TrainingState(BaseModel):
     days_since_last_run: Optional[int]
 
     recent_7d_km: Optional[float]
-    recent_28d_km: Optional[float]
+    recent_30d_km: Optional[float]
+    """Distance (km) accumulated in the 30-day window (window_30d).
+
+    Previously labelled ``recent_28d_km`` — the label was wrong: the window
+    is and always was 30 days (TrainingHistory.window_30d).  The field is
+    renamed to reflect the actual window length.  No new 28-day window is
+    introduced.
+    """
 
     acute_load: Optional[float]
     chronic_weekly_load: Optional[float]
@@ -191,9 +198,8 @@ def _min_confidence(a: str, b: str) -> str:
 def _recent_weekly_equivalent_km(training_history: TrainingHistory) -> Optional[float]:
     """Return the most relevant recent weekly equivalent distance in km.
 
-    Uses the 28-day window (window_30d covers 30 days; we use the 7-day
-    window for acute weekly comparison).  The 7-day window is the most direct
-    representation of current weekly volume.
+    Uses the 7-day window for acute weekly comparison.  The 7-day window is
+    the most direct representation of current weekly volume.
     """
     w7 = training_history.window_7d
     if w7.activity_count > 0 and w7.distance_km > 0:
@@ -204,13 +210,17 @@ def _recent_weekly_equivalent_km(training_history: TrainingHistory) -> Optional[
 def _observable_baseline_km(runner_profile: RunnerProfile) -> Optional[float]:
     """Return the observable (history-derived) typical_weekly_km from RunnerProfile.
 
-    Returns None if no history-based baseline is available.
-    The declared profile value alone MUST NOT produce a baseline.
-    RunnerProfile.typical_weekly_km already uses history-first priority
-    (30d observed → 90d fallback → declared).  We accept it directly but
-    only when the history depth is sufficient (available_history_days > 0).
+    Returns None if typical_weekly_km was not derived from observed history.
+
+    Uses ``runner_profile.typical_weekly_km_is_observed`` — the explicit
+    provenance flag set by RunnerProfile — instead of inferring provenance from
+    ``available_history_days``.  The latter does NOT guarantee that
+    ``typical_weekly_km`` was drawn from a history window: it is set whenever
+    *any* running activity exists, even if that activity falls outside the 30d
+    and 90d windows used to compute the baseline.  Using the flag is the only
+    safe way to distinguish "declared weekly km" from "observed baseline".
     """
-    if runner_profile.available_history_days <= 0:
+    if not runner_profile.typical_weekly_km_is_observed:
         return None
     return runner_profile.typical_weekly_km  # may still be None
 
@@ -349,7 +359,7 @@ def build_training_state(
     w30 = training_history.window_30d
 
     recent_7d_km: Optional[float] = w7.distance_km if w7.activity_count > 0 else None
-    recent_28d_km: Optional[float] = w30.distance_km if w30.activity_count > 0 else None
+    recent_30d_km: Optional[float] = w30.distance_km if w30.activity_count > 0 else None
 
     acute_load: Optional[float] = (
         training_load.acute_load_7d if training_load.is_available else None
@@ -368,7 +378,7 @@ def build_training_state(
         overall_confidence=overall_conf,
         days_since_last_run=training_history.days_since_last_run,
         recent_7d_km=recent_7d_km,
-        recent_28d_km=recent_28d_km,
+        recent_30d_km=recent_30d_km,
         acute_load=acute_load,
         chronic_weekly_load=chronic_weekly_load,
         acwr=acwr,
