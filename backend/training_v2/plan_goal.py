@@ -159,10 +159,10 @@ class PlanGoal(BaseModel):
         # ── standard distances ────────────────────────────────────────────
         if goal.value in _STANDARD_GOAL_DISTANCES:
             canonical = _STANDARD_GOAL_DISTANCES[goal.value]
-            # target_distance_km is always set to the canonical value by
-            # build_plan_goal.  If a caller constructs PlanGoal directly
-            # (not via build_plan_goal), we validate it here.
-            if self.target_distance_km is not None and self.target_distance_km != canonical:
+            # The builder always sets this to the canonical value.
+            # Direct PlanGoal construction without the builder must also
+            # supply exactly the canonical distance.
+            if self.target_distance_km != canonical:
                 raise ValueError(
                     f"target_distance_km for {goal.value} must be exactly "
                     f"{canonical}, got {self.target_distance_km}"
@@ -210,8 +210,9 @@ def build_plan_goal(
     race_date:
         Optional scheduled race date.  No implicit use of today's date.
     target_distance_km:
-        Required for ultra goals.  Ignored (overridden to canonical value)
-        for standard distance goals.  Must be absent for maintenance.
+        Must be absent (None) for maintenance and standard distance goals
+        (5k, 10k, half_marathon, marathon) — the distance is derived automatically.
+        Required and strictly > 42.195 for ultra goals.
     created_from:
         Provenance of this goal: "user" (explicit choice) or "default"
         (built by RunIndex in the absence of user input).
@@ -219,12 +220,16 @@ def build_plan_goal(
     if isinstance(goal_type, str):
         goal_type = GoalType(goal_type)
 
-    # Resolve target_distance_km for standard distances (canonical, not caller-supplied).
+    # Standard distances: distance is derived from goal_type — caller must NOT supply it.
     if goal_type.value in _STANDARD_GOAL_DISTANCES:
+        if target_distance_km is not None:
+            raise ValueError(
+                f"target_distance_km must not be provided for {goal_type.value!r}: "
+                "the distance is automatically derived from the goal type."
+            )
         target_distance_km = _STANDARD_GOAL_DISTANCES[goal_type.value]
 
-    # For maintenance: caller must not pass distance/date/time
-    # (validation is handled inside the model — we pass through as-is).
+    # For maintenance and ultra: validation is handled inside the model.
 
     return PlanGoal(
         goal_type=goal_type,

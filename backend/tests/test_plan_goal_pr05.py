@@ -91,6 +91,35 @@ def test_08_marathon_canonical_distance():
 
 
 # ---------------------------------------------------------------------------
+# 8b. standard distance goal rejects caller-provided target_distance_km
+# ---------------------------------------------------------------------------
+
+def test_08b_standard_rejects_caller_distance_5k():
+    with pytest.raises(ValueError):
+        build_plan_goal(goal_type="5k", target_distance_km=5.0)
+
+
+def test_08b_standard_rejects_caller_distance_10k():
+    with pytest.raises(ValueError):
+        build_plan_goal(goal_type="10k", target_distance_km=10.0)
+
+
+def test_08b_standard_rejects_caller_distance_half():
+    with pytest.raises(ValueError):
+        build_plan_goal(goal_type="half_marathon", target_distance_km=21.0975)
+
+
+def test_08b_standard_rejects_caller_distance_marathon():
+    with pytest.raises(ValueError):
+        build_plan_goal(goal_type="marathon", target_distance_km=42.195)
+
+
+def test_08b_standard_rejects_wrong_distance_10k():
+    with pytest.raises(ValueError):
+        build_plan_goal(goal_type="10k", target_distance_km=15.0)
+
+
+# ---------------------------------------------------------------------------
 # 9. chrono without race_date accepted
 # ---------------------------------------------------------------------------
 

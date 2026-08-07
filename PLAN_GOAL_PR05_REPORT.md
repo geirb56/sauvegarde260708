@@ -67,7 +67,26 @@ Centralisées dans `plan_goal.py` — jamais dispersées :
 | `half_marathon`| 21.0975 km         |
 | `marathon`     | 42.195 km          |
 
-Pour ces quatre objectifs, `target_distance_km` est dérivé du `goal_type` via `build_plan_goal`. Une valeur fournie par l'appelant est ignorée au profit de la valeur canonique. La validation du modèle rejette toute valeur non canonique si `PlanGoal` est construit directement.
+Pour ces quatre objectifs, `target_distance_km` est **entièrement dérivé du `goal_type`** — l'appelant ne doit pas fournir `target_distance_km`. Toute tentative de le fournir (même avec la valeur correcte) produit une `ValueError`.
+
+```python
+# Correct
+build_plan_goal(goal_type="10k")  # → target_distance_km = 10.0
+
+# Refusé — même si la valeur est correcte
+build_plan_goal(goal_type="10k", target_distance_km=10.0)  # ValueError
+```
+
+## Contrat final par objectif
+
+| Objectif       | `target_distance_km`                        |
+|----------------|---------------------------------------------|
+| `maintenance`  | Interdit — toujours `None`                  |
+| `5k`           | Dérivé automatiquement : `5.0`              |
+| `10k`          | Dérivé automatiquement : `10.0`             |
+| `half_marathon`| Dérivé automatiquement : `21.0975`          |
+| `marathon`     | Dérivé automatiquement : `42.195`           |
+| `ultra`        | Fourni obligatoirement par l'appelant (> 42.195) |
 
 ---
 
@@ -132,7 +151,7 @@ L'objectif par défaut est `maintenance` avec `created_from = "default"`. Cela n
 | `maintenance` + chrono                       | `ValidationError`                            |
 | `maintenance` + `race_date`                  | `ValidationError`                            |
 | `maintenance` + `target_distance_km`         | `ValidationError`                            |
-| Distance standard, valeur non canonique      | `ValidationError`                            |
+| Standard + `target_distance_km` fourni       | `ValueError` (même valeur correcte)          |
 | `ultra` sans distance                        | `ValidationError`                            |
 | `ultra` avec distance ≤ 42.195               | `ValidationError`                            |
 | `target_time_seconds = 0`                    | `ValidationError`                            |
@@ -184,7 +203,7 @@ Aucun fichier legacy modifié. Aucun fichier frontend modifié.
 
 ## Tests exécutés
 
-### PR05 — PlanGoal (29 tests)
+### PR05 — PlanGoal (34 tests)
 
 ```
 tests/test_plan_goal_pr05.py::test_01_maintenance_valid_no_extras          PASSED
@@ -195,6 +214,11 @@ tests/test_plan_goal_pr05.py::test_05_5k_canonical_distance                PASSE
 tests/test_plan_goal_pr05.py::test_06_10k_canonical_distance               PASSED
 tests/test_plan_goal_pr05.py::test_07_half_marathon_canonical_distance     PASSED
 tests/test_plan_goal_pr05.py::test_08_marathon_canonical_distance          PASSED
+tests/test_plan_goal_pr05.py::test_08b_standard_rejects_caller_distance_5k     PASSED
+tests/test_plan_goal_pr05.py::test_08b_standard_rejects_caller_distance_10k    PASSED
+tests/test_plan_goal_pr05.py::test_08b_standard_rejects_caller_distance_half   PASSED
+tests/test_plan_goal_pr05.py::test_08b_standard_rejects_caller_distance_marathon PASSED
+tests/test_plan_goal_pr05.py::test_08b_standard_rejects_wrong_distance_10k    PASSED
 tests/test_plan_goal_pr05.py::test_09_chrono_without_race_date             PASSED
 tests/test_plan_goal_pr05.py::test_10_date_without_chrono                  PASSED
 tests/test_plan_goal_pr05.py::test_11_date_and_chrono                      PASSED
@@ -217,7 +241,7 @@ tests/test_plan_goal_pr05.py::test_27_no_legacy_imports                    PASSE
 tests/test_plan_goal_pr05.py::test_nr_py_compile_plan_goal                 PASSED
 tests/test_plan_goal_pr05.py::test_nr_exports                              PASSED
 
-29 passed in 0.50s
+34 passed in 0.46s
 ```
 
 ### Non-régression (197 tests)
@@ -231,5 +255,7 @@ tests/test_garmin_data_layer.py         — PASSED (toutes)
 
 197 passed in 0.79s
 ```
+
+Total session : 231 passed (34 PR05 + 197 non-régression) ✅
 
 Aucun comportement existant modifié.
