@@ -81,6 +81,17 @@ class RunnerProfile(BaseModel):
     experience_level: str
 
     typical_weekly_km: Optional[float]
+    typical_weekly_km_is_observed: bool
+    """True when typical_weekly_km is derived from observed history windows.
+
+    False when typical_weekly_km comes exclusively from the user's declared
+    profile (``user_profile["typical_weekly_km"]`` / ``"weekly_km"``).
+    False also when typical_weekly_km is None.
+
+    This flag MUST be used instead of ``available_history_days > 0`` whenever
+    a caller needs a *history-backed* baseline — the mere existence of history
+    does not guarantee that ``typical_weekly_km`` was drawn from it.
+    """
     typical_weekly_hours: Optional[float]
     typical_runs_per_week: Optional[float]
     typical_long_run_km: Optional[float]
@@ -249,18 +260,26 @@ def _history_metric_or_declared(
     declared_value: Any,
     parser: Callable[[Any], Optional[float]],
     observed_transform: Optional[Callable[[float, int], float]] = None,
-) -> Optional[float]:
+) -> tuple[Optional[float], bool]:
+    """Return (value, is_observed).
+
+    ``is_observed`` is True when the value was derived from an observed history
+    window (30d or 90d), False when it falls back to the declared value.
+    """
     observed, window_days = _window_value(training_history, available_history_days, extractor, parser)
     if observed is not None:
-        return _round_optional(
-            observed_transform(observed, window_days or 30)
-            if observed_transform is not None
-            else observed
+        return (
+            _round_optional(
+                observed_transform(observed, window_days or 30)
+                if observed_transform is not None
+                else observed
+            ),
+            True,
         )
     declared = parser(declared_value)
     if declared is None:
-        return None
-    return _round_optional(declared)
+        return None, False
+    return _round_optional(declared), False
 
 
 def _experience_level(available_history_days: int) -> str:
@@ -335,7 +354,7 @@ def build_runner_profile(
     availability_constraints = _normalize_string_list(profile.get("availability_constraints"))
     available_history_days = max(0, int(training_history.available_history_days or 0))
 
-    typical_weekly_km = _history_metric_or_declared(
+    typical_weekly_km, typical_weekly_km_is_observed = _history_metric_or_declared(
         training_history,
         available_history_days,
         lambda window: window.distance_km,
@@ -343,7 +362,7 @@ def build_runner_profile(
         _parse_positive_float,
         lambda value, window_days: value * 7.0 / float(window_days),
     )
-    typical_weekly_hours = _history_metric_or_declared(
+    typical_weekly_hours, _ = _history_metric_or_declared(
         training_history,
         available_history_days,
         lambda window: window.duration_hours,
@@ -351,7 +370,7 @@ def build_runner_profile(
         _parse_positive_float,
         lambda value, window_days: value * 7.0 / float(window_days),
     )
-    typical_runs_per_week = _history_metric_or_declared(
+    typical_runs_per_week, _ = _history_metric_or_declared(
         training_history,
         available_history_days,
         lambda window: window.activity_count,
@@ -359,14 +378,14 @@ def build_runner_profile(
         _parse_positive_float,
         lambda value, window_days: value * 7.0 / float(window_days),
     )
-    typical_long_run_km = _history_metric_or_declared(
+    typical_long_run_km, _ = _history_metric_or_declared(
         training_history,
         available_history_days,
         lambda window: window.longest_run_km,
         _first_valid_number(profile, _parse_positive_float, "typical_long_run_km", "long_run_km"),
         _parse_positive_float,
     )
-    typical_speed_kmh = _history_metric_or_declared(
+    typical_speed_kmh, _ = _history_metric_or_declared(
         training_history,
         available_history_days,
         lambda window: window.average_speed_kmh,
@@ -426,6 +445,7 @@ def build_runner_profile(
         primary_discipline=primary_discipline,
         experience_level=_experience_level(available_history_days),
         typical_weekly_km=typical_weekly_km,
+        typical_weekly_km_is_observed=typical_weekly_km_is_observed,
         typical_weekly_hours=typical_weekly_hours,
         typical_runs_per_week=typical_runs_per_week,
         typical_long_run_km=typical_long_run_km,
