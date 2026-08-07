@@ -249,7 +249,7 @@ python -m py_compile training_v2/training_state.py training_v2/__init__.py
 13. ✅ Immutabilité du modèle Pydantic
 14. ✅ Déterminisme (deux appels identiques → résultat identique)
 15. ✅ Absence d'imports legacy (AST check)
-16. ✅ `load_state` et `acwr` mirent exactement `TrainingLoadSnapshot`
+16. ✅ `load_state` et `acwr` reflètent exactement `TrainingLoadSnapshot`
 
 ---
 
