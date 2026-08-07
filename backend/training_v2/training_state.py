@@ -34,7 +34,10 @@ Continuity states
   "reprise_exit"   : Continuity is recovering but not yet stable.
                      Two detection paths:
                      (a) available_history_days < REPRISE_EXIT_STABLE_WEEKS × 7
-                         AND at least one run in the last 7 days.
+                         AND days_since_last_run < NO_RUN_DEEP_REPRISE_DAYS
+                         (guaranteed by the deep_reprise guard above).
+                         Note: w7.activity_count may be 0 (last run 8–27 days
+                         ago) — short history cannot be "normal" regardless.
                      (b) volume is between 50% and 100% of observable baseline
                          AND window_30d has fewer than REPRISE_EXIT_STABLE_WEEKS × 3
                          activities.
@@ -278,15 +281,11 @@ def _classify_continuity(
 
     if available_days < reprise_exit_min_days:
         # History too short to be "normal".
-        # NOTE: if w7.activity_count == 0 (last run was 8–27 days ago), this
-        # branch falls through and the runner may be classified as "normal"
-        # despite having very little history.  This is a known limitation of
-        # the current two-condition reprise_exit logic.  Fixing it would require
-        # a third business rule (e.g. "short history + last run > 7d → reprise_exit")
-        # which is out of scope for this correction PR.  See TRAINING_STATE_PR04_REPORT.md.
-        if w7.activity_count > 0:
-            codes.append("RECENT_VOLUME_RECOVERING")
-            return "reprise_exit", codes
+        # days_since < NO_RUN_DEEP_REPRISE_DAYS is guaranteed here (checked above).
+        # Regardless of whether the last run was in the past 7 days or 8–27 days
+        # ago, a short history cannot be considered stable enough for "normal".
+        codes.append("RECENT_VOLUME_RECOVERING")
+        return "reprise_exit", codes
 
     # Even with sufficient history depth, if volume is below baseline
     # but above 50% threshold, still in reprise_exit.

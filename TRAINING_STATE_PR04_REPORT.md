@@ -89,7 +89,7 @@ Aucune valeur par défaut de volume n'est inventée. Si la baseline est `None`, 
 REPRISE_EXIT_STABLE_WEEKS = 4
 ```
 
-**Condition principale** : `available_history_days < 4 × 7 = 28` ET au moins une sortie dans la fenêtre 7j.
+**Condition principale** : `available_history_days < 4 × 7 = 28` ET `days_since_last_run < NO_RUN_DEEP_REPRISE_DAYS` (garanti par le garde `deep_reprise` précédent). Le champ `w7.activity_count` n'est **pas** pris en compte : un historique court ne peut pas produire `normal` quelle que soit la position de la dernière sortie dans la fenêtre 8–27 jours.
 
 **Condition secondaire** (lorsque l'historique est plus long mais le volume reste en zone de récupération) : volume >= 50 % de la baseline MAIS < baseline ET activité 30j < 12 sorties (= 4 × 3).
 
@@ -328,25 +328,75 @@ Cas de frontière testés avec `==` (scénario contrôlé : 10 runs jours 8–29
 
 ---
 
+### Correction 4 — reprise_exit pour historiques courts sans sortie 7j (PR94 finale)
+
+**Problème** : Un coureur avec `available_history_days < 28` et dernière sortie entre 8 et 27 jours (donc `w7.activity_count == 0`) tombait en `normal` car la branche `reprise_exit` exigeait `w7.activity_count > 0`.
+
+**Correction** :
+
+La branche `available_history_days < reprise_exit_min_days` déclenche désormais `reprise_exit` sans condition sur `w7.activity_count`. En effet, `days_since < NO_RUN_DEEP_REPRISE_DAYS` (= 28) est **déjà garanti** par le garde `deep_reprise` positionné plus haut. Un historique trop court pour être "normal" ne peut pas produire `normal`, quelle que soit la position de la dernière sortie dans la fenêtre 7–27 jours.
+
+**Règle finale de classification** :
+
+```
+# Priorité décroissante :
+
+1. not has_any_running_history
+   → no_history
+
+2. days_since_last_run >= NO_RUN_DEEP_REPRISE_DAYS (28)
+   → deep_reprise
+
+3. baseline_km is not None AND baseline_km > 0
+   AND recent_weekly_km is not None
+   AND recent_weekly_km < PARTIAL_REPRISE_VOLUME_RATIO (0.50) × baseline_km
+   → partial_reprise
+
+4. available_history_days < REPRISE_EXIT_STABLE_WEEKS (4) × 7
+   (days_since < 28 garanti ici)
+   → reprise_exit
+
+5. baseline_km is not None AND baseline_km > 0
+   AND recent_weekly_km is not None
+   AND recent_weekly_km < baseline_km
+   AND w30.activity_count < REPRISE_EXIT_STABLE_WEEKS × 3
+   → reprise_exit
+
+6. (aucune règle déclenchée)
+   → normal
+```
+
+**Tests ajoutés (PR94)** :
+
+| Test | Scénario | Attendu |
+|---|---|---|
+| `test_pr94_cas1_short_history_last_run_10d` | available_history_days < 28, dernière sortie il y a 10j, w7=0 | `reprise_exit` |
+| `test_pr94_cas2_history_27d_last_run_27d` | 1 seule sortie il y a 27j | `reprise_exit` |
+| `test_pr94_cas3_frontier_deep_reprise` | Historique > 28j, dernière sortie exactement 28j | `deep_reprise` |
+| `test_pr94_cas4_partial_reprise_prioritaire` | Historique court + baseline observée + volume < 50% | `partial_reprise` |
+| `test_pr94_cas5_normal_deep_history_stable` | Historique profond, continuité stable | `normal` |
+
+---
+
 ### Fichiers modifiés (corrections PR #94)
 
 | Fichier | Modification |
 |---|---|
 | `backend/training_v2/runner_profile.py` | Nouveau champ `typical_weekly_km_is_observed: bool` + `_history_metric_or_declared` retourne `(value, is_observed)` |
-| `backend/training_v2/training_state.py` | `_observable_baseline_km` utilise `is_observed`, `recent_28d_km` → `recent_30d_km` |
-| `backend/tests/test_training_state_pr04.py` | 6 tests ajoutés, 1 test corrigé (`in` → `==`) |
+| `backend/training_v2/training_state.py` | `_observable_baseline_km` utilise `is_observed`, `recent_28d_km` → `recent_30d_km`, branche `reprise_exit` corrigée (suppression du garde `w7.activity_count > 0`) |
+| `backend/tests/test_training_state_pr04.py` | 11 tests ajoutés (6 PR#94 corrections 1–3, 5 PR94 finale), 1 test corrigé (`in` → `==`) |
 | `TRAINING_STATE_PR04_REPORT.md` | Ce rapport |
 
 ---
 
-### Résultats des tests (2026-08-07)
+### Résultats des tests (PR94 finale)
 
 ```
-python -m pytest tests/test_training_state_pr04.py -q
+python -m pytest tests/test_training_state_pr04.py -v
 ```
-**37 passed in 0.54s**  (31 originaux + 6 nouveaux)
+**42 passed in 0.56s**  (37 existants + 5 nouveaux PR94)
 
 ```
 python -m pytest tests/test_training_state_pr04.py tests/test_training_history_pr05.py tests/test_runner_profile_pr07.py -q
 ```
-**129 passed in 0.58s**
+**134 passed in 0.64s**

@@ -632,3 +632,80 @@ def test_load_state_mirrors_snapshot():
     assert state.load_state == load_snap.status
     assert state.acwr == load_snap.acwr
     assert state.load_confidence == load_snap.confidence
+
+
+# ---------------------------------------------------------------------------
+# PR94 — Correction finale : reprise_exit pour historiques courts
+# ---------------------------------------------------------------------------
+
+
+def test_pr94_cas1_short_history_last_run_10d():
+    """Cas 1 — available_history_days=20, days_since_last_run=10 → reprise_exit.
+
+    Scenario: single run 10 days ago.
+      - has_any_running_history = True
+      - available_history_days = 0 (only one run, same day as first → 0 days span)
+        but days_since_last_run = 10 < 28 (not deep_reprise)
+      - available_history_days < REPRISE_EXIT_STABLE_WEEKS * 7 = 28
+      - No partial_reprise trigger (no observable baseline > 0)
+      → reprise_exit (regardless of w7.activity_count == 0)
+    """
+    # A few runs spread over 20 days, last one 10 days ago
+    acts = [_act(days_ago=d) for d in [10, 14, 18, 20]]
+    state = _build(acts)
+    assert state.continuity_state == "reprise_exit"
+    assert "RECENT_VOLUME_RECOVERING" in state.reason_codes
+
+
+def test_pr94_cas2_history_27d_last_run_27d():
+    """Cas 2 — available_history_days=27, days_since_last_run=27 → reprise_exit.
+
+    Scenario: single run exactly 27 days ago.
+      - has_any_running_history = True
+      - days_since_last_run = 27 < 28 → NOT deep_reprise
+      - available_history_days = 0 (single-run span) < 28
+      - w7.activity_count = 0 (last run was 27 days ago)
+      → reprise_exit
+    """
+    acts = [_act(days_ago=27)]
+    state = _build(acts)
+    assert state.continuity_state == "reprise_exit"
+    assert "RECENT_VOLUME_RECOVERING" in state.reason_codes
+
+
+def test_pr94_cas3_frontier_deep_reprise():
+    """Cas 3 — available_history_days > 28, days_since_last_run = 28 → deep_reprise."""
+    # Plenty of history, but last run was exactly 28 days ago
+    acts = [_act(days_ago=d) for d in range(28, 150, 7)]
+    state = _build(acts)
+    assert state.continuity_state == "deep_reprise"
+    assert "NO_RUN_LAST_28D" in state.reason_codes
+
+
+def test_pr94_cas4_partial_reprise_prioritaire():
+    """Cas 4 — historique court + baseline valide + volume récent < 50% → partial_reprise.
+
+    partial_reprise must remain prioritaire over reprise_exit.
+
+    Scenario:
+      - Short history: runs at days 8, 10, 12, 14, 16 (5 runs, 10 km each, span 16 days)
+        → available_history_days = 16 < 28
+      - Recent run at day 3: 2 km
+      - w30 distance = 52 km → baseline ≈ 52 × 7/30 ≈ 12.13 km/week
+      - recent_weekly = 2 km < 50% × 12.13 = 6.07 → partial_reprise
+    """
+    baseline_acts = [_act(days_ago=d) for d in [8, 10, 12, 14, 16]]
+    recent_acts = [_act(days_ago=3, distance_m=2_000.0)]
+    acts = baseline_acts + recent_acts
+    state = _build(acts)
+    assert state.continuity_state == "partial_reprise"
+    assert "RECENT_VOLUME_FAR_BELOW_BASELINE" in state.reason_codes
+
+
+def test_pr94_cas5_normal_deep_history_stable():
+    """Cas 5 — historique suffisamment profond et continuité stable → normal."""
+    # ~120 days of 3 runs/week, each 10 km
+    acts = [_act(days_ago=d) for d in range(0, 120, 3)]
+    state = _build(acts)
+    assert state.continuity_state == "normal"
+    assert "CONTINUITY_STABLE" in state.reason_codes
