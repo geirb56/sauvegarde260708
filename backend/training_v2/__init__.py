@@ -2,11 +2,14 @@
 
 PR05 exposes: TrainingWindow, TrainingHistory, build_training_history.
 PR06 exposes: TrainingLoadSnapshot, build_training_load.
+PR07 exposes: RunnerProfile, build_runner_profile.
+PR04 exposes: TrainingState, build_training_state.
 """
 
 from .runner_profile import RunnerProfile, build_runner_profile
 from .training_history import TrainingHistory, TrainingWindow, build_training_history
 from .training_load import TrainingLoadSnapshot, build_training_load
+from .training_state import TrainingState, build_training_state
 
 __all__ = [
     "RunnerProfile",
@@ -16,4 +19,6 @@ __all__ = [
     "build_training_history",
     "TrainingLoadSnapshot",
     "build_training_load",
+    "TrainingState",
+    "build_training_state",
 ]
