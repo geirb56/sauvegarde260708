@@ -54,7 +54,18 @@ Phase computation (race_calendar)
 -----------------------------------
   Phase boundaries are calculated from race_plan_start_date to race_date.
   race_plan_start_date is injected by the caller — never invented internally.
-  If not provided, reference_date is used (= "plan starts today" semantics).
+  For a future dated race (race_date > reference_date), race_plan_start_date
+  is REQUIRED.  The engine never silently replaces an absent plan start date
+  with reference_date.
+
+  Validation (future dated race):
+    race_plan_start_date <= reference_date < race_date
+    - race_plan_start_date is None        → ValueError
+    - race_plan_start_date > reference_date → ValueError
+    - race_plan_start_date > race_date      → ValueError
+
+  A short preparation is valid: the engine compresses available phases.
+  No minimum preparation duration is imposed.
 
   Proportions are applied to total pre-taper days:
     pre_taper_days = (race_date - plan_start_date).days - taper_days
@@ -451,10 +462,20 @@ def build_periodization(
         Required when mode is continuous.  The explicit origin of the
         repeating cycle.  Never invented internally.
     race_plan_start_date:
-        Optional start date for race_calendar mode.  When provided, phase
-        boundaries are computed from this date to race_date.  When absent,
-        reference_date is used as the plan start ("plan starts today").
-        Must be <= reference_date <= race_date to be meaningful.
+        Start date for race_calendar mode when the race is in the future
+        (race_date > reference_date).  Required in that case — the engine
+        never silently substitutes reference_date.
+
+        Validation rule (future dated race):
+            race_plan_start_date <= reference_date < race_date
+
+        Raises ValueError when:
+          - race_plan_start_date is None (future race)
+          - race_plan_start_date > reference_date
+          - race_plan_start_date > race_date
+
+        Not required for race-day (reference_date == race_date) or
+        post-race (reference_date > race_date).
 
     Returns
     -------
@@ -475,8 +496,36 @@ def build_periodization(
     )
 
     if has_race_date:
-        plan_start = race_plan_start_date if race_plan_start_date is not None else reference_date
-        return _compute_race_calendar(plan_goal, reference_date, plan_start)
+        race_date_val: date = plan_goal.race_date  # type: ignore[assignment]
+
+        # Race passed: no plan_start needed.
+        if reference_date > race_date_val:
+            return _compute_race_calendar(plan_goal, reference_date, race_date_val)
+
+        # Race day: no plan_start needed.
+        if reference_date == race_date_val:
+            return _compute_race_calendar(plan_goal, reference_date, race_date_val)
+
+        # Future dated race: race_plan_start_date is REQUIRED.
+        if race_plan_start_date is None:
+            raise ValueError(
+                f"race_plan_start_date is required for a future dated race "
+                f"(race_date={race_date_val}, reference_date={reference_date}). "
+                "The engine never silently replaces a missing plan start date "
+                "with reference_date."
+            )
+        if race_plan_start_date > reference_date:
+            raise ValueError(
+                f"race_plan_start_date ({race_plan_start_date}) must be <= "
+                f"reference_date ({reference_date}). "
+                "The plan cannot be considered started before its start date."
+            )
+        if race_plan_start_date > race_date_val:
+            raise ValueError(
+                f"race_plan_start_date ({race_plan_start_date}) must be <= "
+                f"race_date ({race_date_val})."
+            )
+        return _compute_race_calendar(plan_goal, reference_date, race_plan_start_date)
 
     # Continuous mode: cycle_anchor_date must be provided.
     if cycle_anchor_date is None:

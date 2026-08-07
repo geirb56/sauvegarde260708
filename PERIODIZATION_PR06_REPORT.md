@@ -27,7 +27,10 @@ Periodization positionne le coureur dans son cycle d'entraînement à partir de 
 
 Activé quand `PlanGoal.race_date is not None` et `goal_type in {5k, 10k, half_marathon, marathon, ultra}`.
 
-Le planning est calculé à partir de `race_plan_start_date` (ou `reference_date` si absent) vers `race_date`.
+Le planning est calculé à partir de `race_plan_start_date` vers `race_date`.
+
+**Pour une course future datée (`race_date > reference_date`), `race_plan_start_date` est OBLIGATOIRE.**
+Le moteur ne remplace jamais silencieusement une date de début absente par `reference_date`.
 
 ### `continuous`
 
@@ -103,7 +106,36 @@ Cette méthode garantit que `base + build + specific + taper == total` exactemen
 
 ---
 
-## Comportement des préparations courtes
+## Validation de race_plan_start_date (course future datée)
+
+Règle finale : `race_plan_start_date <= reference_date < race_date`
+
+| Cas | Résultat |
+|---|---|
+| `race_plan_start_date is None` (course future) | `ValueError` |
+| `race_plan_start_date > reference_date` | `ValueError` — le plan ne peut pas être considéré comme commencé avant sa date de début |
+| `race_plan_start_date > race_date` | `ValueError` |
+| `race_plan_start_date == reference_date` | Valide |
+| `race_plan_start_date < reference_date` | Valide — le coureur est déjà dans son cycle |
+| `reference_date == race_date` (jour de course) | `race_plan_start_date` non requis |
+| `reference_date > race_date` (course passée) | `race_plan_start_date` non requis |
+
+---
+
+## Préparations courtes
+
+Une durée courte entre le début du plan et la course n'est **pas** une erreur.
+
+Exemples valides :
+- début du plan = 1 septembre, course = 15 octobre
+- début du plan = 10 octobre, course = 15 octobre
+
+Periodization compresse les phases disponibles ; aucune durée minimale n'est imposée.
+`SHORT_PREPARATION` est émis quand pertinent.
+
+---
+
+
 
 Si le temps disponible ne permet pas toutes les phases, les phases les plus éloignées de la course sont supprimées en premier :
 
@@ -268,7 +300,7 @@ Toutes testées explicitement avec `==` :
 |---|---|
 | `backend/training_v2/periodization.py` | Nouveau module — couche métier pure |
 | `backend/training_v2/__init__.py` | Export des symboles publics PR06 |
-| `backend/tests/test_periodization_pr06.py` | 40 tests PR06 |
+| `backend/tests/test_periodization_pr06.py` | 48 tests PR06 (40 originaux + 8 nouveaux) |
 | `PERIODIZATION_PR06_REPORT.md` | Ce rapport |
 
 ---
@@ -278,10 +310,10 @@ Toutes testées explicitement avec `==` :
 ### Tests PR06 spécifiques
 
 ```
-backend/tests/test_periodization_pr06.py — 40 tests
+backend/tests/test_periodization_pr06.py — 48 tests
 ```
 
-**Résultat : 40 passed**
+**Résultat : 48 passed**
 
 ### Non-régression
 
@@ -339,6 +371,14 @@ test_37_ultra_without_date_continuous        PASSED
 test_38_target_time_no_phase_influence       PASSED
 test_py_compile_periodization                PASSED
 test_py_compile_init                         PASSED
+test_n1_future_race_no_plan_start_raises     PASSED
+test_n2_plan_start_equals_reference_date_accepted PASSED
+test_n3_plan_start_before_reference_date_accepted PASSED
+test_n4_plan_start_after_reference_date_raises    PASSED
+test_n5_plan_start_after_race_date_raises         PASSED
+test_n6_5_days_before_5k_is_taper                 PASSED
+test_n7_10_days_before_5k_first_day_is_build      PASSED
+test_n8_phase_boundaries_fixed_across_reference_dates PASSED
 
-40 passed in 0.54s
+48 passed in 0.52s
 ```
