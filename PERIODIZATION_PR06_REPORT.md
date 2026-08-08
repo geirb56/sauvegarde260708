@@ -300,7 +300,7 @@ Toutes testées explicitement avec `==` :
 |---|---|
 | `backend/training_v2/periodization.py` | Nouveau module — couche métier pure |
 | `backend/training_v2/__init__.py` | Export des symboles publics PR06 |
-| `backend/tests/test_periodization_pr06.py` | 48 tests PR06 (40 originaux + 8 nouveaux) |
+| `backend/tests/test_periodization_pr06.py` | 51 tests PR06 (38 originaux + 8 nouveaux race_plan_start_date + 3 nouveaux SP1/SP2/SP3 SHORT_PREPARATION) |
 | `PERIODIZATION_PR06_REPORT.md` | Ce rapport |
 
 ---
@@ -310,21 +310,23 @@ Toutes testées explicitement avec `==` :
 ### Tests PR06 spécifiques
 
 ```
-backend/tests/test_periodization_pr06.py — 48 tests
+backend/tests/test_periodization_pr06.py — 51 tests
 ```
 
-**Résultat : 48 passed**
+**Résultat : 51 passed**
 
 ### Non-régression
 
 ```
-tests/test_plan_goal_pr05.py       — PR05 PlanGoal
-tests/test_training_state_pr04.py  — PR04 TrainingState
-tests/test_training_history_pr05.py — PR05 History
-tests/test_garmin_data_layer.py    — Garmin Data Layer
+tests/test_plan_goal_pr05.py          — PR05 PlanGoal
+tests/test_training_state_pr04.py     — PR04 TrainingState
+tests/test_runner_profile_pr07.py     — PR07 RunnerProfile
+tests/test_training_history_pr05.py   — PR05 History
+tests/test_training_v2_training_load.py — TrainingLoad
+tests/test_garmin_data_layer.py       — Garmin Data Layer
 ```
 
-**Résultat : 142 passed**
+**Résultat : 231 passed**
 
 ---
 
@@ -379,6 +381,9 @@ test_n5_plan_start_after_race_date_raises         PASSED
 test_n6_5_days_before_5k_is_taper                 PASSED
 test_n7_10_days_before_5k_first_day_is_build      PASSED
 test_n8_phase_boundaries_fixed_across_reference_dates PASSED
+test_sp1_normal_plan_short_preparation_stable_absent  PASSED
+test_sp2_short_plan_short_preparation_stable_present  PASSED
+test_sp3_long_plan_near_race_no_short_preparation     PASSED
 
-48 passed in 0.52s
+51 passed in 0.55s
 ```
