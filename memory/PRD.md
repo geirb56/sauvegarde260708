@@ -273,3 +273,10 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
 - Retiré: import ligne 1 de server.py; supprimé backend/services/adaptation_engine.py (module orphelin); corrigé 2 mentions doc obsolètes dans demo_mode.py (commentaires seuls).
 - Conservé: adapt_session_to_readiness (unique adaptateur vivant, appelé par /api/training/today server.py:3632). Non touché.
 - Vérifié: grep 0 occurrence adapt_workout_advanced/adaptation_engine, backend startup OK, GET /api/training/today → 200 (adaptive_session/adaptation_applied/adaptation_reason présents). Frontend intact. Rapport: /app/ADAPT_WORKOUT_ADVANCED_REMOVAL_PR_REPORT.md → READY TO MERGE.
+
+## 2026-08-08 — Benchmark Garmin réel (avant refonte Onboarding) — AUDIT READ-ONLY
+- Aucune modif code applicatif, aucune donnée réelle touchée. Persistance mesurée sur base isolée jetable `<DB_NAME>_bench_tmp` (droppée). Data réelle user da8505ef intacte (143 activités / 31 daily / 143 workouts).
+- Pipeline: /connect & /sync NON-BLOQUANTS (Redis queue → sync_worker hors-process → gccli → upsert Mongo → compute_run_index). RunIndex+Readiness = même fonction.
+- Mesures (session WARM): session 11ms · activités fetch 161–588ms (143, ~3 pages) · **daily metrics days=30 = 12.3s / 90 appels gccli (3/jour) = GOULOT ~95%** · persist 54+19ms · compute RunIndex+Readiness 4.7ms · enqueue Redis 3ms.
+- Total deep sync ≈ 13s (dominé par daily metrics). Incrémental < 1s. HRV absente (device). VFC/HRV ❌, sommeil ✅ RHR ✅.
+- Cold onboarding NON TESTÉ (login à froid non mesurable sans mot de passe). Rapport: /app/GARMIN_ONBOARDING_BENCHMARK.md · JSON brut: /tmp/garmin_benchmark_result.json.
