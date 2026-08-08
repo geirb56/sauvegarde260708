@@ -241,7 +241,7 @@ C'est `WeeklyTarget` / `WorkoutGenerator` (PR07+) qui adapteront la prescription
 | `PHASE_RACE` | Jour de course |
 | `PHASE_CONSOLIDATION` | Phase consolidation (continuous) |
 | `RACE_DATE_PASSED` | Course dépassée, basculement en continuous |
-| `SHORT_PREPARATION` | Préparation courte (<taper + 1 semaine) |
+| `SHORT_PREPARATION` | Préparation courte : `(race_date - race_plan_start_date).days < taper_days + 7`. **`SHORT_PREPARATION` caractérise la durée initiale du plan entre `race_plan_start_date` et `race_date`. Il ne dépend pas de la proximité actuelle de la course.** `reference_date` sert uniquement à déterminer la phase actuelle. |
 | `NO_RACE_DATE` | Objectif sans date de course |
 | `MAINTENANCE_GOAL` | Objectif maintenance |
 

@@ -337,7 +337,8 @@ def _compute_race_calendar(
 
     reason_codes.append(f"PHASE_{phase.value.upper()}")
 
-    if days_to_race < taper_days + 7:
+    total_plan_days = (race_date - plan_start).days
+    if total_plan_days < taper_days + 7:
         reason_codes.append("SHORT_PREPARATION")
 
     return PeriodizationSnapshot(

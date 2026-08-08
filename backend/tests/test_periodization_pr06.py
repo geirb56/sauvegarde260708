@@ -779,3 +779,75 @@ def test_n8_phase_boundaries_fixed_across_reference_dates():
     assert phase_order.index(snap_a.phase) <= phase_order.index(snap_b.phase), (
         f"Expected phase at ref_b ({snap_b.phase}) to be >= phase at ref_a ({snap_a.phase})"
     )
+
+
+# ---------------------------------------------------------------------------
+# Tests ciblés SHORT_PREPARATION (correction PR #96)
+# ---------------------------------------------------------------------------
+
+# SP1 — Plan normal (> taper + 7 jours) : SHORT_PREPARATION absent à toutes les dates
+def test_sp1_normal_plan_short_preparation_stable_absent():
+    """Plan suffisamment long : SHORT_PREPARATION doit être absent quelle que
+    soit la reference_date, y compris peu avant la course."""
+    # marathon : taper = 14j → seuil = 21j → plan de 5 mois largement au-dessus
+    race = date(2025, 10, 20)
+    plan_start = date(2025, 6, 1)
+    goal = _goal("marathon", race_date=race)
+
+    reference_dates = [
+        plan_start,                  # premier jour
+        date(2025, 7, 1),            # juillet
+        date(2025, 8, 1),            # août
+        date(2025, 9, 1),            # septembre
+        date(2025, 10, 10),          # 10 jours avant la course
+        date(2025, 10, 19),          # veille de la course
+    ]
+    for ref in reference_dates:
+        snap = build_periodization(goal, ref, race_plan_start_date=plan_start)
+        assert "SHORT_PREPARATION" not in snap.reason_codes, (
+            f"SHORT_PREPARATION should be absent for ref={ref} "
+            f"(plan_start={plan_start}, race={race})"
+        )
+
+
+# SP2 — Plan court : SHORT_PREPARATION présent à toutes les dates
+def test_sp2_short_plan_short_preparation_stable_present():
+    """Plan dont la durée totale est inférieure au seuil (taper+7j) :
+    SHORT_PREPARATION doit être présent à chaque reference_date."""
+    # 5k : taper = 7j → seuil = 14j → plan de 10 jours = court
+    race = date(2025, 8, 20)
+    plan_start = date(2025, 8, 10)   # 10 jours de plan
+    goal = _goal("5k", race_date=race)
+
+    reference_dates = [
+        plan_start,                  # premier jour
+        date(2025, 8, 12),
+        date(2025, 8, 15),
+        date(2025, 8, 18),           # 2 jours avant la course
+        date(2025, 8, 19),           # veille
+    ]
+    for ref in reference_dates:
+        snap = build_periodization(goal, ref, race_plan_start_date=plan_start)
+        assert "SHORT_PREPARATION" in snap.reason_codes, (
+            f"SHORT_PREPARATION should be present for ref={ref} "
+            f"(plan_start={plan_start}, race={race})"
+        )
+
+
+# SP3 — Plan commencé tôt, reference_date quelques jours avant la course
+def test_sp3_long_plan_near_race_no_short_preparation():
+    """Un plan démarré suffisamment tôt ne doit pas devenir SHORT_PREPARATION
+    simplement parce que la reference_date est proche de la course."""
+    # half_marathon : taper = 14j → seuil = 21j
+    # plan de 4 mois (~122j) : normal
+    race = date(2025, 9, 15)
+    plan_start = date(2025, 5, 15)   # 4 mois de plan
+    goal = _goal("half_marathon", race_date=race)
+
+    # reference_date placée 5 jours avant la course (en zone taper)
+    ref_near_race = date(2025, 9, 10)
+    snap = build_periodization(goal, ref_near_race, race_plan_start_date=plan_start)
+    assert "SHORT_PREPARATION" not in snap.reason_codes, (
+        "Proximity to race date must not trigger SHORT_PREPARATION "
+        "for a plan that started sufficiently early."
+    )
