@@ -236,7 +236,7 @@ class GccliRunner:
         metrics: List[Dict] = []
         now = datetime.now(timezone.utc)
         end_days_ago = start_days_ago + max(days, 0)
-        for i in range(start_days_ago, end_days_ago):  # start from yesterday (today often incomplete)
+        for i in range(start_days_ago, end_days_ago):  # start from the requested day offset
             day = (now - timedelta(days=i)).date().isoformat()
             hr: Dict = {}
             sleep: Dict = {}

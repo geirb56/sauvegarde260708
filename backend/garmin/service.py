@@ -363,11 +363,11 @@ async def _complete_post_activities_pipeline(
                 readiness_status="pending",
                 error_code=None,
             )
-            metrics_7d = provider.get_daily_metrics(
+            metrics_7d = list(provider.get_daily_metrics(
                 user_id,
                 days=INITIAL_DAILY_METRICS_DAYS,
                 start_days_ago=1,
-            )
+            ))
             metrics_count += await _persist_daily_metrics(db, user_id, metrics_7d)
             await _build_and_persist_capabilities(db, user_id)
             readiness_payload = await compute_run_index(db, user_id)
@@ -398,11 +398,11 @@ async def _complete_post_activities_pipeline(
             readiness_status=readiness_status,
             error_code=None,
         )
-        metrics_30d = provider.get_daily_metrics(
+        metrics_30d = list(provider.get_daily_metrics(
             user_id,
             days=ENRICHMENT_DAILY_METRICS_DAYS,
             start_days_ago=ENRICHMENT_DAILY_METRICS_START_DAYS_AGO,
-        )
+        ))
         metrics_count += await _persist_daily_metrics(db, user_id, metrics_30d)
         await _build_and_persist_capabilities(db, user_id)
         workouts = None if run_index_refresh is None else run_index_refresh.get("workouts")
@@ -437,9 +437,9 @@ async def _complete_post_activities_pipeline(
             "history_backfill": history_backfill,
         }
     except Exception as exc:
-        phase_error_code = "daily_metrics_enrichment_failed" if resume_from == "metrics_enrichment" else (
-            "daily_metrics_7d_failed" if daily_metrics_status == "pending" else "daily_metrics_enrichment_failed"
-        )
+        phase_error_code = "daily_metrics_enrichment_failed"
+        if resume_from != "metrics_enrichment" and daily_metrics_status == "pending":
+            phase_error_code = "daily_metrics_7d_failed"
         await update_sync_progress(
             user_id,
             phase="partial_success",
