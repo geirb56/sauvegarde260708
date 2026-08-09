@@ -226,11 +226,17 @@ class GccliRunner:
             return data
         return data.get("activities", []) if isinstance(data, dict) else []
 
-    def fetch_daily_metrics(self, days: int = 7, account: Optional[str] = None) -> List[Dict]:
+    def fetch_daily_metrics(
+        self,
+        days: int = 7,
+        start_days_ago: int = 1,
+        account: Optional[str] = None,
+    ) -> List[Dict]:
         """Fetch daily gccli payloads and normalize via GarminDailyMetrics."""
         metrics: List[Dict] = []
         now = datetime.now(timezone.utc)
-        for i in range(1, days + 1):  # start from yesterday (today often incomplete)
+        end_days_ago = start_days_ago + max(days, 0)
+        for i in range(start_days_ago, end_days_ago):  # start from yesterday (today often incomplete)
             day = (now - timedelta(days=i)).date().isoformat()
             hr: Dict = {}
             sleep: Dict = {}

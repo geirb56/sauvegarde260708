@@ -16,10 +16,19 @@ from .factory import get_provider_for_user, active_provider_name
 from .providers.base import STATUS_CONNECTED, STATUS_MFA_REQUIRED
 from . import session_store
 from .data_layer import GarminCapabilities
+from .sync_progress import get_sync_progress, update_sync_progress
 from events.stream import emit_activity_created
+from garmin.insights import compute_run_index
+from services.run_index_history import (
+    backfill_run_index_history_after_garmin_sync,
+    refresh_today_run_index_after_garmin_activities,
+)
 from subscription_manager import activate_garmin_trial
 
 logger = logging.getLogger(__name__)
+INITIAL_DAILY_METRICS_DAYS = 7
+ENRICHMENT_DAILY_METRICS_START_DAYS_AGO = 8
+ENRICHMENT_DAILY_METRICS_DAYS = 23
 
 
 async def _persist_capabilities(db, user_id: str, capabilities: GarminCapabilities) -> None:
@@ -246,6 +255,218 @@ async def _finalize_connection(db, user_id: str, newest_start: Optional[str]) ->
     return total
 
 
+async def _persist_daily_metrics(db, user_id: str, metrics: list[dict]) -> int:
+    metrics_count = 0
+    for metric in metrics:
+        day = metric.get("date")
+        if not day:
+            continue
+        await db.garmin_daily_metrics.update_one(
+            {"user_id": user_id, "date": day},
+            {"$set": {**metric, "user_id": user_id, "synced_at": datetime.now(timezone.utc).isoformat()}},
+            upsert=True,
+        )
+        metrics_count += 1
+    return metrics_count
+
+
+def _has_usable_physio_data(metrics: list[dict]) -> bool:
+    for metric in metrics:
+        if any(metric.get(key) is not None for key in ("hrv", "resting_hr", "sleep_hours", "sleep_score")):
+            return True
+    return False
+
+
+async def _current_activity_count(db, user_id: str) -> int:
+    return await db.garmin_activities.count_documents({"user_id": user_id})
+
+
+async def _safe_save_session(db, user_id: str) -> None:
+    try:
+        await session_store.save_session(db, user_id)
+    except Exception as exc:
+        logger.warning("[Garmin] session persist skipped user=%s: %s", user_id, exc)
+
+
+async def _mark_sync_failed(user_id: str, error_code: str, **fields) -> None:
+    await update_sync_progress(
+        user_id,
+        phase="failed",
+        error_code=error_code,
+        readiness_status=fields.pop("readiness_status", "unavailable"),
+        **fields,
+    )
+
+
+def _resume_phase_from_progress(progress: Optional[dict]) -> Optional[str]:
+    if not progress:
+        return None
+    if progress.get("run_index_status") != "ready":
+        return None
+    if progress.get("daily_metrics_status") not in {"failed", "pending"}:
+        return None
+    if progress.get("readiness_status") == "ready":
+        return "metrics_enrichment"
+    return "metrics_7d"
+
+
+async def _complete_post_activities_pipeline(
+    db,
+    user_id: str,
+    provider,
+    *,
+    activity_count: int,
+    synced_count: int,
+    new_count: int,
+    deep_sync: bool = False,
+    resume_from: Optional[str] = None,
+) -> dict:
+    metrics_count = 0
+    history_backfill = None
+    run_index_refresh = None
+    readiness_payload = None
+    readiness_status = "pending"
+    daily_metrics_status = "pending"
+
+    if resume_from not in {"metrics_7d", "metrics_enrichment"}:
+        await update_sync_progress(
+            user_id,
+            phase="activities_ready",
+            activities_status="ready",
+            activities_count=activity_count,
+            run_index_status="pending",
+            daily_metrics_status="pending",
+            readiness_status="pending",
+            error_code=None,
+        )
+        run_index_refresh = await refresh_today_run_index_after_garmin_activities(db, user_id)
+        await update_sync_progress(
+            user_id,
+            phase="run_index_ready",
+            activities_status="ready",
+            activities_count=activity_count,
+            run_index_status="ready",
+            daily_metrics_status="pending",
+            readiness_status="pending",
+            error_code=None,
+        )
+
+    try:
+        if resume_from != "metrics_enrichment":
+            await update_sync_progress(
+                user_id,
+                phase="metrics_7d_fetching",
+                activities_status="ready",
+                activities_count=activity_count,
+                run_index_status="ready",
+                daily_metrics_status="pending",
+                readiness_status="pending",
+                error_code=None,
+            )
+            metrics_7d = provider.get_daily_metrics(
+                user_id,
+                days=INITIAL_DAILY_METRICS_DAYS,
+                start_days_ago=1,
+            )
+            metrics_count += await _persist_daily_metrics(db, user_id, metrics_7d)
+            await _build_and_persist_capabilities(db, user_id)
+            readiness_payload = await compute_run_index(db, user_id)
+            daily_metrics_status = "ready" if _has_usable_physio_data(metrics_7d) else "no_usable_data"
+            readiness_status = "ready" if daily_metrics_status == "ready" and readiness_payload else "unavailable"
+            await update_sync_progress(
+                user_id,
+                phase="readiness_ready" if readiness_status == "ready" else "readiness_unavailable",
+                activities_status="ready",
+                activities_count=activity_count,
+                run_index_status="ready",
+                daily_metrics_status=daily_metrics_status,
+                readiness_status=readiness_status,
+                error_code=None,
+            )
+        else:
+            progress = await get_sync_progress(user_id) or {}
+            daily_metrics_status = progress.get("daily_metrics_status", "ready")
+            readiness_status = progress.get("readiness_status", "ready")
+
+        await update_sync_progress(
+            user_id,
+            phase="enriching",
+            activities_status="ready",
+            activities_count=activity_count,
+            run_index_status="ready",
+            daily_metrics_status=daily_metrics_status,
+            readiness_status=readiness_status,
+            error_code=None,
+        )
+        metrics_30d = provider.get_daily_metrics(
+            user_id,
+            days=ENRICHMENT_DAILY_METRICS_DAYS,
+            start_days_ago=ENRICHMENT_DAILY_METRICS_START_DAYS_AGO,
+        )
+        metrics_count += await _persist_daily_metrics(db, user_id, metrics_30d)
+        await _build_and_persist_capabilities(db, user_id)
+        workouts = None if run_index_refresh is None else run_index_refresh.get("workouts")
+        history_backfill = await backfill_run_index_history_after_garmin_sync(
+            db,
+            user_id,
+            workouts=workouts,
+        )
+        await update_sync_progress(
+            user_id,
+            phase="complete",
+            activities_status="ready",
+            activities_count=activity_count,
+            run_index_status="ready",
+            daily_metrics_status=daily_metrics_status,
+            readiness_status=readiness_status,
+            error_code=None,
+        )
+        return {
+            "success": True,
+            "status": "complete",
+            "synced_count": synced_count,
+            "new_count": new_count,
+            "metrics_count": metrics_count,
+            "activities_status": "ready",
+            "run_index_status": "ready",
+            "daily_metrics_status": daily_metrics_status,
+            "readiness_status": readiness_status,
+            "message": f"Imported {synced_count} activities",
+            "deep_sync": deep_sync,
+            "today_snapshot": None if run_index_refresh is None else run_index_refresh.get("today_snapshot"),
+            "history_backfill": history_backfill,
+        }
+    except Exception as exc:
+        phase_error_code = "daily_metrics_enrichment_failed" if resume_from == "metrics_enrichment" else (
+            "daily_metrics_7d_failed" if daily_metrics_status == "pending" else "daily_metrics_enrichment_failed"
+        )
+        await update_sync_progress(
+            user_id,
+            phase="partial_success",
+            activities_status="ready",
+            activities_count=activity_count,
+            run_index_status="ready",
+            daily_metrics_status="failed",
+            readiness_status="ready" if readiness_status == "ready" else "unavailable",
+            error_code=phase_error_code,
+        )
+        logger.warning("[Garmin] phased metrics sync partial user=%s: %s", user_id, exc)
+        return {
+            "success": True,
+            "status": "partial_success",
+            "synced_count": synced_count,
+            "new_count": new_count,
+            "metrics_count": metrics_count,
+            "activities_status": "ready",
+            "run_index_status": "ready",
+            "daily_metrics_status": "failed",
+            "readiness_status": "ready" if readiness_status == "ready" else "unavailable",
+            "error": phase_error_code,
+            "message": "Activities and RunIndex ready; daily metrics incomplete",
+            "deep_sync": deep_sync,
+        }
+
+
 async def deep_sync(db, user_id: str) -> dict:
     """Full historical import for a user's first Garmin connection.
 
@@ -270,9 +491,25 @@ async def deep_sync(db, user_id: str) -> dict:
 
     logger.info("[Garmin] deep sync starting user=%s page_size=%d", user_id, page_size)
     try:
+        await update_sync_progress(
+            user_id,
+            phase="activities_fetching",
+            activities_status="pending",
+            run_index_status="pending",
+            daily_metrics_status="pending",
+            readiness_status="pending",
+            error_code=None,
+        )
         activities = provider.fetch_all_activities(page_size=page_size)
     except Exception as exc:
         logger.error("[Garmin] deep sync fetch failed user=%s: %s", user_id, exc)
+        await _mark_sync_failed(
+            user_id,
+            "activities_fetch_failed",
+            activities_status="failed",
+            run_index_status="failed",
+            daily_metrics_status="pending",
+        )
         return {
             "success": False, "synced_count": 0, "metrics_count": 0,
             "message": "Deep sync failed, please reconnect",
@@ -285,47 +522,39 @@ async def deep_sync(db, user_id: str) -> dict:
         {"user_id": user_id},
         {"$set": {"deep_sync_done": True}},
     )
-
-    # Daily health metrics (last 30 days — backfill readiness history).
-    metrics_count = 0
+    activity_count = await _finalize_connection(db, user_id, ingest["newest_start"])
     try:
-        metrics = provider.get_daily_metrics(user_id, days=30)
-        for m in metrics:
-            day = m.get("date")
-            if not day:
-                continue
-            await db.garmin_daily_metrics.update_one(
-                {"user_id": user_id, "date": day},
-                {"$set": {**m, "user_id": user_id, "synced_at": datetime.now(timezone.utc).isoformat()}},
-                upsert=True,
+        try:
+            result = await _complete_post_activities_pipeline(
+                db,
+                user_id,
+                provider,
+                activity_count=activity_count,
+                synced_count=ingest["synced"],
+                new_count=ingest["new"],
+                deep_sync=True,
             )
-            metrics_count += 1
-    except Exception as exc:
-        logger.warning("[Garmin] deep sync daily metrics skipped user=%s: %s", user_id, exc)
-
-    await _finalize_connection(db, user_id, ingest["newest_start"])
-
-    # --- Capabilities: built from payloads already collected above ---
-    # Use the most recent daily metric row that has an HRV payload (if any).
-    try:
-        await _build_and_persist_capabilities(db, user_id)
-    except Exception as exc:
-        logger.warning("[Garmin] capabilities persist skipped user=%s: %s", user_id, exc)
-
-    # Persist any token refresh performed by gccli during the deep sync.
-    await session_store.save_session(db, user_id)
-    logger.info(
-        "[Garmin] deep sync completed synced=%d new=%d metrics=%d user=%s",
-        ingest["synced"], ingest["new"], metrics_count, user_id,
-    )
-    return {
-        "success": True,
-        "synced_count": ingest["synced"],
-        "new_count": ingest["new"],
-        "metrics_count": metrics_count,
-        "message": f"Deep sync: imported {ingest['synced']} activities",
-        "deep_sync": True,
-    }
+            result["message"] = f"Deep sync: imported {ingest['synced']} activities"
+            return result
+        except Exception as exc:
+            logger.error("[Garmin] deep sync run-index refresh failed user=%s: %s", user_id, exc)
+            await _mark_sync_failed(
+                user_id,
+                "run_index_refresh_failed",
+                activities_status="ready",
+                activities_count=activity_count,
+                run_index_status="failed",
+                daily_metrics_status="pending",
+            )
+            return {
+                "success": False,
+                "synced_count": ingest["synced"],
+                "new_count": ingest["new"],
+                "metrics_count": 0,
+                "message": "RunIndex refresh failed",
+            }
+    finally:
+        await _safe_save_session(db, user_id)
 
 
 async def sync(db, user_id: str, since: Optional[str] = None) -> dict:
@@ -348,65 +577,109 @@ async def sync(db, user_id: str, since: Optional[str] = None) -> dict:
     # another host). If no usable session exists, degrade gracefully.
     if not await session_store.ensure_session(db, user_id):
         logger.warning("[Garmin] no gccli session available for user=%s — reconnect required", user_id)
+        await _mark_sync_failed(
+            user_id,
+            "session_unavailable",
+            activities_status="failed",
+            run_index_status="failed",
+            daily_metrics_status="failed",
+        )
         return {"success": False, "synced_count": 0, "metrics_count": 0,
                 "message": "Garmin session unavailable, please reconnect", "error": "session_unavailable"}
+
+    resume_from = _resume_phase_from_progress(await get_sync_progress(user_id))
 
     # First-connection deep sync: enabled by default, triggered once per user.
     deep_sync_enabled = os.environ.get("GARMIN_DEEP_SYNC_ENABLED", "true").lower() not in (
         "0", "false", "no",
     )
-    if deep_sync_enabled and not conn.get("deep_sync_done"):
+    if deep_sync_enabled and not conn.get("deep_sync_done") and resume_from is None:
         logger.info("[Garmin] first sync detected for user=%s — starting deep sync", user_id)
         return await deep_sync(db, user_id)
 
     garmin_account = conn.get("garmin_username")
     provider = get_provider_for_user(user_id, garmin_account=garmin_account)
 
+    if resume_from in {"metrics_7d", "metrics_enrichment"}:
+        logger.info("[Garmin] resuming phased sync user=%s from=%s", user_id, resume_from)
+        try:
+            return await _complete_post_activities_pipeline(
+                db,
+                user_id,
+                provider,
+                activity_count=await _current_activity_count(db, user_id),
+                synced_count=0,
+                new_count=0,
+                deep_sync=False,
+                resume_from=resume_from,
+            )
+        finally:
+            await _safe_save_session(db, user_id)
+
     # --- Activities ---
     try:
+        await update_sync_progress(
+            user_id,
+            phase="activities_fetching",
+            activities_status="pending",
+            run_index_status="pending",
+            daily_metrics_status="pending",
+            readiness_status="pending",
+            error_code=None,
+        )
         activities = provider.sync_activities(user_id, since=since)
     except Exception as exc:  # provider/runner failures -> graceful
         logger.error("[Garmin] activity sync failed user=%s: %s", user_id, exc)
+        await _mark_sync_failed(
+            user_id,
+            "activities_fetch_failed",
+            activities_status="failed",
+            run_index_status="failed",
+            daily_metrics_status="pending",
+        )
         return {"success": False, "synced_count": 0, "metrics_count": 0, "message": "Sync failed, please reconnect"}
 
     ingest = await _ingest_activities(db, user_id, activities)
-
-    # --- Daily health metrics (Phase 2: HRV / resting HR / sleep) ---
-    metrics_count = 0
+    activity_count = await _finalize_connection(db, user_id, ingest["newest_start"])
     try:
-        metrics = provider.get_daily_metrics(user_id, days=30)
-        for m in metrics:
-            day = m.get("date")
-            if not day:
-                continue
-            await db.garmin_daily_metrics.update_one(
-                {"user_id": user_id, "date": day},
-                {"$set": {**m, "user_id": user_id, "synced_at": datetime.now(timezone.utc).isoformat()}},
-                upsert=True,
+        try:
+            result = await _complete_post_activities_pipeline(
+                db,
+                user_id,
+                provider,
+                activity_count=activity_count,
+                synced_count=ingest["synced"],
+                new_count=ingest["new"],
+                deep_sync=False,
             )
-            metrics_count += 1
-    except Exception as exc:
-        logger.warning("[Garmin] daily metrics sync skipped user=%s: %s", user_id, exc)
-
-    await _finalize_connection(db, user_id, ingest["newest_start"])
-
-    # --- Capabilities: derived from payloads already in DB ---
-    try:
-        await _build_and_persist_capabilities(db, user_id)
-    except Exception as exc:
-        logger.warning("[Garmin] capabilities persist skipped user=%s: %s", user_id, exc)
-
-    # Persist any token refresh performed by gccli during this sync.
-    await session_store.save_session(db, user_id)
-    logger.info("[Garmin] synced %d activities (%d new), %d daily metrics user=%s",
-                ingest["synced"], ingest["new"], metrics_count, user_id)
-    return {
-        "success": True,
-        "synced_count": ingest["synced"],
-        "new_count": ingest["new"],
-        "metrics_count": metrics_count,
-        "message": f"Imported {ingest['synced']} activities",
-    }
+            logger.info(
+                "[Garmin] synced %d activities (%d new), %d daily metrics user=%s status=%s",
+                ingest["synced"],
+                ingest["new"],
+                result.get("metrics_count"),
+                user_id,
+                result.get("status"),
+            )
+            return result
+        except Exception as exc:
+            logger.error("[Garmin] run-index refresh failed user=%s: %s", user_id, exc)
+            await _mark_sync_failed(
+                user_id,
+                "run_index_refresh_failed",
+                activities_status="ready",
+                activities_count=activity_count,
+                run_index_status="failed",
+                daily_metrics_status="pending",
+            )
+            return {
+                "success": False,
+                "synced_count": ingest["synced"],
+                "new_count": ingest["new"],
+                "metrics_count": 0,
+                "message": "RunIndex refresh failed",
+            }
+    finally:
+        await _safe_save_session(db, user_id)
 
 
 async def incremental_sync(db, user_id: str) -> dict:
@@ -422,6 +695,13 @@ async def incremental_sync(db, user_id: str) -> dict:
 
     if not await session_store.ensure_session(db, user_id):
         logger.warning("[Garmin] no gccli session available for user=%s — reconnect required", user_id)
+        await _mark_sync_failed(
+            user_id,
+            "session_unavailable",
+            activities_status="failed",
+            run_index_status="failed",
+            daily_metrics_status="failed",
+        )
         return {"success": False, "synced_count": 0, "new_count": 0,
                 "message": "Garmin session unavailable, please reconnect", "error": "session_unavailable"}
 
@@ -433,18 +713,69 @@ async def incremental_sync(db, user_id: str) -> dict:
     garmin_account = conn.get("garmin_username")
     provider = get_provider_for_user(user_id, garmin_account=garmin_account)
     try:
+        await update_sync_progress(
+            user_id,
+            phase="activities_fetching",
+            activities_status="pending",
+            run_index_status="pending",
+            daily_metrics_status="pending",
+            readiness_status="pending",
+            error_code=None,
+        )
         activities = provider.sync_activities(user_id, since=since)
     except Exception as exc:
         logger.error("[Garmin] incremental sync failed user=%s: %s", user_id, exc)
+        await _mark_sync_failed(
+            user_id,
+            "activities_fetch_failed",
+            activities_status="failed",
+            run_index_status="failed",
+            daily_metrics_status="pending",
+        )
         return {"success": False, "synced_count": 0, "new_count": 0, "message": "Sync failed"}
 
     ingest = await _ingest_activities(db, user_id, activities)
-    await _finalize_connection(db, user_id, ingest["newest_start"])
-    await session_store.save_session(db, user_id)
+    activity_count = await _finalize_connection(db, user_id, ingest["newest_start"])
+    try:
+        refreshed = await refresh_today_run_index_after_garmin_activities(db, user_id)
+        await backfill_run_index_history_after_garmin_sync(
+            db,
+            user_id,
+            workouts=refreshed.get("workouts"),
+        )
+        await update_sync_progress(
+            user_id,
+            phase="complete",
+            activities_status="ready",
+            activities_count=activity_count,
+            run_index_status="ready",
+            daily_metrics_status="pending",
+            readiness_status="pending",
+            error_code=None,
+        )
+    except Exception as exc:
+        logger.error("[Garmin] incremental run-index refresh failed user=%s: %s", user_id, exc)
+        await _mark_sync_failed(
+            user_id,
+            "run_index_refresh_failed",
+            activities_status="ready",
+            activities_count=activity_count,
+            run_index_status="failed",
+            daily_metrics_status="pending",
+        )
+        return {
+            "success": False,
+            "synced_count": ingest["synced"],
+            "new_count": ingest["new"],
+            "metrics_count": 0,
+            "message": "RunIndex refresh failed",
+        }
+    await _safe_save_session(db, user_id)
     logger.info("[Garmin] incremental synced=%d new=%d user=%s since=%s",
                 ingest["synced"], ingest["new"], user_id, since)
     return {
         "success": True,
+        "status": "complete",
         "synced_count": ingest["synced"],
         "new_count": ingest["new"],
         "metrics_count": 0,
@@ -454,12 +785,14 @@ async def incremental_sync(db, user_id: str) -> dict:
 
 async def get_status(db, user_id: str) -> dict:
     conn = await db.garmin_connections.find_one({"user_id": user_id}, {"_id": 0})
+    sync_status = await get_sync_progress(user_id)
     if not conn:
         return {
             "connected": False,
             "provider": active_provider_name(),
             "last_sync": None,
             "activity_count": 0,
+            "sync_status": sync_status,
         }
     return {
         "connected": bool(conn.get("connected")),
@@ -468,6 +801,7 @@ async def get_status(db, user_id: str) -> dict:
         "activity_count": conn.get("activity_count", 0),
         "garmin_capabilities": conn.get("garmin_capabilities"),
         "capabilities_updated_at": conn.get("capabilities_updated_at"),
+        "sync_status": sync_status,
     }
 
 

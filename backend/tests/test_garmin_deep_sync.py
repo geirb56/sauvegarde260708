@@ -307,6 +307,14 @@ class TestDeepSync:
         with (
             patch.object(svc, "get_provider_for_user", return_value=mock_provider),
             patch.object(svc, "emit_activity_created", new=AsyncMock()),
+            patch.object(svc, "_build_and_persist_capabilities", new=AsyncMock()),
+            patch.object(svc, "compute_run_index", new=AsyncMock(return_value=None)),
+            patch.object(
+                svc,
+                "refresh_today_run_index_after_garmin_activities",
+                new=AsyncMock(return_value={"today_snapshot": {"date": "2026-08-09"}, "workouts": []}),
+            ),
+            patch.object(svc, "backfill_run_index_history_after_garmin_sync", new=AsyncMock(return_value={})),
         ):
             result = _run(svc.deep_sync(db, "user-1"))
 
@@ -327,6 +335,14 @@ class TestDeepSync:
         with (
             patch.object(svc, "get_provider_for_user", return_value=mock_provider),
             patch.object(svc, "emit_activity_created", new=AsyncMock()),
+            patch.object(svc, "_build_and_persist_capabilities", new=AsyncMock()),
+            patch.object(svc, "compute_run_index", new=AsyncMock(return_value=None)),
+            patch.object(
+                svc,
+                "refresh_today_run_index_after_garmin_activities",
+                new=AsyncMock(return_value={"today_snapshot": {"date": "2026-08-09"}, "workouts": []}),
+            ),
+            patch.object(svc, "backfill_run_index_history_after_garmin_sync", new=AsyncMock(return_value={})),
         ):
             _run(svc.deep_sync(db, "user-1"))
 
@@ -387,6 +403,14 @@ class TestSyncDispatch:
             patch.object(svc, "get_provider_for_user", return_value=mock_provider),
             patch.object(svc, "deep_sync", new=AsyncMock()) as mock_deep,
             patch.object(svc, "emit_activity_created", new=AsyncMock()),
+            patch.object(svc, "_build_and_persist_capabilities", new=AsyncMock()),
+            patch.object(svc, "compute_run_index", new=AsyncMock(return_value=None)),
+            patch.object(
+                svc,
+                "refresh_today_run_index_after_garmin_activities",
+                new=AsyncMock(return_value={"today_snapshot": {"date": "2026-08-09"}, "workouts": []}),
+            ),
+            patch.object(svc, "backfill_run_index_history_after_garmin_sync", new=AsyncMock(return_value={})),
         ):
             result = _run(svc.sync(db, "user-1"))
 
@@ -409,6 +433,14 @@ class TestSyncDispatch:
             patch.object(svc, "get_provider_for_user", return_value=mock_provider),
             patch.object(svc, "deep_sync", new=AsyncMock()) as mock_deep,
             patch.object(svc, "emit_activity_created", new=AsyncMock()),
+            patch.object(svc, "_build_and_persist_capabilities", new=AsyncMock()),
+            patch.object(svc, "compute_run_index", new=AsyncMock(return_value=None)),
+            patch.object(
+                svc,
+                "refresh_today_run_index_after_garmin_activities",
+                new=AsyncMock(return_value={"today_snapshot": {"date": "2026-08-09"}, "workouts": []}),
+            ),
+            patch.object(svc, "backfill_run_index_history_after_garmin_sync", new=AsyncMock(return_value={})),
         ):
             result = _run(svc.sync(db, "user-1"))
 
@@ -430,6 +462,12 @@ class TestSyncDispatch:
             patch.object(svc, "get_provider_for_user", return_value=mock_provider),
             patch.object(svc, "deep_sync", new=AsyncMock()) as mock_deep,
             patch.object(svc, "emit_activity_created", new=AsyncMock()),
+            patch.object(
+                svc,
+                "refresh_today_run_index_after_garmin_activities",
+                new=AsyncMock(return_value={"today_snapshot": {"date": "2026-08-09"}, "workouts": []}),
+            ),
+            patch.object(svc, "backfill_run_index_history_after_garmin_sync", new=AsyncMock(return_value={})),
         ):
             result = _run(svc.incremental_sync(db, "user-1"))
 
@@ -470,6 +508,14 @@ class TestRunIndexBackfillAfterDeepSync:
         with (
             patch.object(svc, "get_provider_for_user", return_value=mock_provider),
             patch.object(svc, "emit_activity_created", new=AsyncMock()),
+            patch.object(svc, "_build_and_persist_capabilities", new=AsyncMock()),
+            patch.object(svc, "compute_run_index", new=AsyncMock(return_value=None)),
+            patch.object(
+                svc,
+                "refresh_today_run_index_after_garmin_activities",
+                new=AsyncMock(return_value={"today_snapshot": {"date": "2026-08-09"}, "workouts": []}),
+            ),
+            patch.object(svc, "backfill_run_index_history_after_garmin_sync", new=AsyncMock(return_value={})),
         ):
             result = _run(svc.deep_sync(db, "user-1"))
 
