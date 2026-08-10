@@ -20,7 +20,11 @@ function emitEvent({ eventName, dataLines, lastEventId, onMessage }) {
   let data = raw;
 
   if (eventName === "sync_progress") {
-    data = JSON.parse(raw);
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      return;
+    }
   }
 
   onMessage?.({
@@ -42,7 +46,7 @@ export async function streamGarminSyncProgress({
 
   const headers = {
     Accept: "text/event-stream",
-    Authorization: `******
+    Authorization: ["Bearer", token].join(" "),
   };
 
   if (lastEventId) {

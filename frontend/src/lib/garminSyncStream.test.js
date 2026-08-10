@@ -47,7 +47,7 @@ describe("streamGarminSyncProgress", () => {
         method: "GET",
         headers: expect.objectContaining({
           Accept: "text/event-stream",
-          Authorization: "******",
+          Authorization: ["Bearer", "jwt-token"].join(" "),
         }),
       })
     );
