@@ -69,6 +69,12 @@ async def update_sync_progress(user_id: str, **fields: Any) -> dict[str, Any]:
             json.dumps(current),
             ex=SYNC_STATUS_TTL,
         )
+        try:
+            from events.sync_progress import emit_sync_progress
+
+            await emit_sync_progress(user_id, current)
+        except Exception:
+            pass
     except Exception:
         return current
     return current

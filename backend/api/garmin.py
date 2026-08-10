@@ -24,6 +24,7 @@ from jobs.health import queue_health
 from jobs.redis_client import get_redis
 from feed import realtime_cache
 from feed.sse import event_stream
+from feed.sync_progress_sse import sync_progress_stream
 
 import logging
 import time
@@ -178,6 +179,24 @@ async def garmin_feed_stream(
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",  # disable proxy buffering for SSE
+        },
+    )
+
+
+@garmin_router.get("/sync/stream")
+async def garmin_sync_stream(
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """Server-Sent Events stream of Garmin sync progress for the authenticated user."""
+    user_id = user["id"]
+    return StreamingResponse(
+        sync_progress_stream(user_id, request),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
         },
     )
 
