@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import { Card, CardContent } from "@/components/ui/card";
@@ -9,6 +9,7 @@ import { toast } from "sonner";
 
 import { API_BASE_URL } from "@/config";
 import { useLanguage } from "@/context/LanguageContext";
+import { streamGarminSyncProgress } from "@/lib/garminSyncStream";
 const API = API_BASE_URL;
 
 function OptionGrid({ options, value, onSelect, testIdPrefix }) {
@@ -50,6 +51,63 @@ export default function Onboarding() {
   const [garminCount, setGarminCount] = useState(0);
   const [garminEmail, setGarminEmail] = useState("");
   const [garminPassword, setGarminPassword] = useState("");
+  const garminStreamAbortRef = useRef(null);
+
+  const stopGarminStream = () => {
+    garminStreamAbortRef.current?.abort();
+    garminStreamAbortRef.current = null;
+  };
+
+  const startGarminStream = () => {
+    stopGarminStream();
+    const controller = new AbortController();
+    garminStreamAbortRef.current = controller;
+
+    void streamGarminSyncProgress({
+      signal: controller.signal,
+      onMessage: ({ event, data }) => {
+        if (event !== "sync_progress" || !data || typeof data !== "object") {
+          return;
+        }
+
+        if (typeof data.activities_count === "number") {
+          setGarminCount(data.activities_count);
+        }
+
+        if (data.status === "failed") {
+          setGarminStatus("error");
+          stopGarminStream();
+          return;
+        }
+
+        if (
+          data.status === "complete" ||
+          data.status === "partial_success" ||
+          data.run_index_status === "ready" ||
+          data.daily_metrics_status === "ready" ||
+          data.readiness_status === "ready"
+        ) {
+          setGarminStatus("connected");
+          if (data.status === "complete" || data.status === "partial_success") {
+            stopGarminStream();
+          }
+          return;
+        }
+
+        setGarminStatus("connecting");
+      },
+    })
+      .then(() => {
+        if (!controller.signal.aborted) {
+          setGarminStatus((current) => (current === "connected" ? current : "error"));
+        }
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setGarminStatus((current) => (current === "connected" ? current : "error"));
+        }
+      });
+  };
 
   const STEPS = useMemo(() => [
     { key: "welcome", title: t("onboarding.welcome") },
@@ -99,14 +157,13 @@ export default function Onboarding() {
       if (res.data?.status === "connected") {
         // Clear the password from memory as soon as the login succeeds.
         setGarminPassword("");
+        setGarminCount(0);
+        startGarminStream();
         try {
-          const sync = await axios.post(`${API}/garmin/sync`, {});
-          setGarminCount(sync.data?.synced_count || 0);
-        } catch (syncErr) {
-          // connected but sync failed — still mark connected
-          setGarminCount(0);
+          await axios.post(`${API}/garmin/sync`, {});
+        } catch {
+          // Connect already queues a sync; this retry is best-effort only.
         }
-        setGarminStatus("connected");
         toast.success(t("onboarding.garminConnectedToast"));
       } else if (res.data?.status === "mfa_required") {
         setGarminStatus("mfa_required");
@@ -114,6 +171,7 @@ export default function Onboarding() {
         setGarminStatus("error");
       }
     } catch (err) {
+      stopGarminStream();
       setGarminStatus("error");
     }
   };
@@ -131,6 +189,9 @@ export default function Onboarding() {
       }
     };
     loadPhysio();
+    return () => {
+      stopGarminStream();
+    };
   }, []);
 
   const canContinue = useMemo(() => {
