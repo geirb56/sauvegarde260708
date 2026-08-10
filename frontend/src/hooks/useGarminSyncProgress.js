@@ -231,7 +231,6 @@ export function useGarminSyncProgress({ enabled = true } = {}) {
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       bufferRef.current = "";
-      let terminalReceived = false;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -260,19 +259,17 @@ export function useGarminSyncProgress({ enabled = true } = {}) {
               const safeError = ev.data?.error_code || "sync_failed";
               if (isMountedRef.current) setError(safeError);
             }
-            terminalReceived = true;
             setIsStreaming(false);
             reader.cancel();
             return;
           }
         }
-
-        if (terminalReceived) break;
       }
 
-      // Stream closed cleanly by server (no terminal status seen in events).
+      // Stream closed cleanly by server (done=true) with no terminal status seen.
       // This can happen due to a network proxy closing the connection.
       // Apply the same recovery as a network error: check /garmin/status.
+      // Exception: voluntary abort (enabled=false clean-close) — skip recovery.
       if (isMountedRef.current && !voluntaryAbortRef.current) {
         setIsStreaming(false);
         const isTerminal = await fetchStatusFallback();
@@ -281,6 +278,8 @@ export function useGarminSyncProgress({ enabled = true } = {}) {
           scheduleReconnect(openStream);
         }
       } else if (isMountedRef.current) {
+        // Voluntary abort path where the stream happened to close cleanly
+        // (e.g. enabled=false fired just as the server closed the connection).
         setIsStreaming(false);
       }
     } catch (err) {
