@@ -510,3 +510,312 @@ test("F21: unmounting during back-off timer cancels reconnect", async () => {
     .filter((u) => u.includes("/garmin/sync/stream"));
   expect(newStreamCalls).toHaveLength(0);
 });
+
+// ---------------------------------------------------------------------------
+// F22 — synthetic "snapshot" id is never stored as last_id cursor
+// ---------------------------------------------------------------------------
+test("F22: synthetic 'snapshot' id is not used as last_id in reconnect URL", async () => {
+  const fetchCallUrls = [];
+  let callCount = 0;
+  jest.spyOn(global, "fetch").mockImplementation((url) => {
+    fetchCallUrls.push(url);
+    callCount++;
+    if (url.includes("/garmin/sync/stream")) {
+      if (callCount === 1) {
+        // First call: emit snapshot event then close cleanly.
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          body: makeSSEBody([
+            "id: snapshot\nevent: sync_progress\ndata: {\"status\":\"in_progress\"}\n\n",
+          ]),
+        });
+      }
+      // Second call (reconnect): just hang.
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        body: { getReader() { return { read: () => new Promise(() => {}), cancel: jest.fn() }; } },
+      });
+    }
+    // Status fallback for clean-close recovery: return in_progress to trigger reconnect.
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      json: async () => ({ sync_status: { status: "in_progress" } }),
+    });
+  });
+
+  renderHook(() => useGarminSyncProgress({ enabled: true }));
+
+  // Let first stream complete + fallback run.
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  // Advance back-off timer to trigger reconnect.
+  await act(async () => {
+    jest.runAllTimers();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  // The reconnect URL must NOT contain last_id=snapshot.
+  const reconnectCalls = fetchCallUrls.filter((u) => u.includes("/garmin/sync/stream"));
+  expect(reconnectCalls.length).toBeGreaterThanOrEqual(2);
+  for (const u of reconnectCalls) {
+    expect(u).not.toContain("last_id=snapshot");
+  }
+});
+
+// ---------------------------------------------------------------------------
+// F23 — clean stream close + active fallback → backoff → reconnect
+// ---------------------------------------------------------------------------
+test("F23: clean stream close without terminal + in_progress fallback → reconnect", async () => {
+  let streamCallCount = 0;
+  jest.spyOn(global, "fetch").mockImplementation((url) => {
+    if (url.includes("/garmin/sync/stream")) {
+      streamCallCount++;
+      if (streamCallCount === 1) {
+        // Clean close (done=true) with no terminal event.
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          body: makeSSEBody([": heartbeat\n\n"]),
+        });
+      }
+      // Subsequent reconnects: hang.
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        body: { getReader() { return { read: () => new Promise(() => {}), cancel: jest.fn() }; } },
+      });
+    }
+    // /garmin/status fallback: in_progress → reconnect.
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      json: async () => ({ sync_status: { status: "in_progress" } }),
+    });
+  });
+
+  renderHook(() => useGarminSyncProgress({ enabled: true }));
+
+  // Let clean close + fallback run.
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  expect(streamCallCount).toBe(1);
+
+  // Trigger back-off → reconnect.
+  await act(async () => {
+    jest.runAllTimers();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  expect(streamCallCount).toBeGreaterThan(1);
+});
+
+// ---------------------------------------------------------------------------
+// F24 — clean stream close + complete fallback → no reconnect
+// ---------------------------------------------------------------------------
+test("F24: clean stream close without terminal + complete fallback → no reconnect", async () => {
+  const fetchSpy = jest.spyOn(global, "fetch").mockImplementation((url) => {
+    if (url.includes("/garmin/sync/stream")) {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        body: makeSSEBody([": heartbeat\n\n"]),
+      });
+    }
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      json: async () => ({ sync_status: { status: "complete" } }),
+    });
+  });
+
+  const { result } = renderHook(() => useGarminSyncProgress({ enabled: true }));
+
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  await act(async () => { jest.runAllTimers(); await Promise.resolve(); });
+
+  const streamCalls = fetchSpy.mock.calls.filter(([u]) => u.includes("/garmin/sync/stream"));
+  expect(streamCalls).toHaveLength(1);
+  expect(result.current.isStreaming).toBe(false);
+});
+
+// ---------------------------------------------------------------------------
+// F25 — clean stream close + partial_success fallback → no reconnect
+// ---------------------------------------------------------------------------
+test("F25: clean stream close without terminal + partial_success fallback → no reconnect", async () => {
+  const fetchSpy = jest.spyOn(global, "fetch").mockImplementation((url) => {
+    if (url.includes("/garmin/sync/stream")) {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        body: makeSSEBody([": heartbeat\n\n"]),
+      });
+    }
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      json: async () => ({ sync_status: { status: "partial_success" } }),
+    });
+  });
+
+  const { result } = renderHook(() => useGarminSyncProgress({ enabled: true }));
+
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  await act(async () => { jest.runAllTimers(); await Promise.resolve(); });
+
+  const streamCalls = fetchSpy.mock.calls.filter(([u]) => u.includes("/garmin/sync/stream"));
+  expect(streamCalls).toHaveLength(1);
+  expect(result.current.isStreaming).toBe(false);
+});
+
+// ---------------------------------------------------------------------------
+// F26 — clean stream close + failed fallback → no reconnect
+// ---------------------------------------------------------------------------
+test("F26: clean stream close without terminal + failed fallback → no reconnect", async () => {
+  const fetchSpy = jest.spyOn(global, "fetch").mockImplementation((url) => {
+    if (url.includes("/garmin/sync/stream")) {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        body: makeSSEBody([": heartbeat\n\n"]),
+      });
+    }
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      json: async () => ({ sync_status: { status: "failed" } }),
+    });
+  });
+
+  const { result } = renderHook(() => useGarminSyncProgress({ enabled: true }));
+
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  await act(async () => { jest.runAllTimers(); await Promise.resolve(); });
+
+  const streamCalls = fetchSpy.mock.calls.filter(([u]) => u.includes("/garmin/sync/stream"));
+  expect(streamCalls).toHaveLength(1);
+  expect(result.current.isStreaming).toBe(false);
+});
+
+// ---------------------------------------------------------------------------
+// F27 — status=failed via SSE sets safe error (error_code or "sync_failed")
+// ---------------------------------------------------------------------------
+test("F27: SSE status=failed with error_code sets safe error code", async () => {
+  const payload = { status: "failed", error_code: "metrics_failed" };
+  mockSSEFetch([`event: sync_progress\ndata: ${JSON.stringify(payload)}\n\n`]);
+
+  const { result } = renderHook(() => useGarminSyncProgress({ enabled: true }));
+
+  await waitFor(() => expect(result.current.error).not.toBeNull(), { timeout: 2000 });
+
+  expect(result.current.error).toBe("metrics_failed");
+  expect(result.current.isStreaming).toBe(false);
+  // Must not contain stacktrace or raw exception text.
+  expect(typeof result.current.error).toBe("string");
+  expect(result.current.error).not.toMatch(/Error|stack|exception/i);
+});
+
+test("F27b: SSE status=failed without error_code sets generic safe error", async () => {
+  const payload = { status: "failed" };
+  mockSSEFetch([`event: sync_progress\ndata: ${JSON.stringify(payload)}\n\n`]);
+
+  const { result } = renderHook(() => useGarminSyncProgress({ enabled: true }));
+
+  await waitFor(() => expect(result.current.error).not.toBeNull(), { timeout: 2000 });
+
+  expect(result.current.error).toBe("sync_failed");
+  expect(result.current.isStreaming).toBe(false);
+});
+
+// ---------------------------------------------------------------------------
+// F28 — voluntary abort/unmount does NOT trigger fallback or reconnect
+// ---------------------------------------------------------------------------
+test("F28: unmount during clean stream does not trigger fallback or reconnect", async () => {
+  // Use a half-open stream: first read delivers heartbeat (no terminal), second hangs.
+  // This ensures unmount happens while the read loop is waiting, so voluntaryAbortRef
+  // is set before the clean-close recovery path can run.
+  const fetchSpy = jest.spyOn(global, "fetch").mockImplementation((url) => {
+    if (url.includes("/garmin/sync/stream")) {
+      let idx = 0;
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        body: {
+          getReader() {
+            return {
+              read() {
+                if (idx === 0) {
+                  idx++;
+                  return Promise.resolve({ done: false, value: encoder.encode(": heartbeat\n\n") });
+                }
+                // Second read hangs forever — simulates a half-open connection.
+                return new Promise(() => {});
+              },
+              cancel: jest.fn(),
+            };
+          },
+        },
+      });
+    }
+    // Should NOT be called — /garmin/status must not be reached.
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      json: async () => ({ sync_status: { status: "complete" } }),
+    });
+  });
+
+  const { unmount } = renderHook(() => useGarminSyncProgress({ enabled: true }));
+
+  // Let the first read (heartbeat) be consumed; second read now hangs.
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  // Unmount while the hook is blocked on the second read.
+  unmount();
+
+  await act(async () => {
+    jest.runAllTimers();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  // /garmin/status must NOT have been called.
+  const statusCalls = fetchSpy.mock.calls.filter(([u]) => u.includes("/garmin/status"));
+  expect(statusCalls).toHaveLength(0);
+
+  // No additional stream reconnect beyond the original one.
+  const streamCalls = fetchSpy.mock.calls.filter(([u]) => u.includes("/garmin/sync/stream"));
+  expect(streamCalls).toHaveLength(1);
+});

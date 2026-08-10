@@ -11,10 +11,15 @@
  *    fields and CRLF / LF line endings, across fragmented chunks.
  *  - Terminal statuses (complete, partial_success, failed) received via SSE
  *    or from the /garmin/status fallback stop streaming immediately.
- *  - On network error / disconnect: fetch /garmin/status first.
+ *  - The synthetic snapshot id ("snapshot") is NEVER stored as a Last-Event-ID
+ *    cursor; only real Redis Stream IDs are stored.
+ *  - On network error / clean stream close (done=true) without terminal status:
+ *    fetch /garmin/status first.
  *      • Terminal status → update progress, do NOT reconnect.
  *      • Active status  → exponential back-off, then reconnect.
+ *  - Voluntary abort (unmount / enabled=false) → no fallback, no reconnect.
  *  - 401 / 403 → set error, do NOT retry.
+ *  - status=failed via SSE → sets safe error (error_code or "sync_failed").
  *  - Exposes { progress, isStreaming, error }.
  *
  * Back-off schedule (ms): 1 000 → 2 000 → 4 000 → 8 000 → … → 30 000 cap.
@@ -127,6 +132,9 @@ export function useGarminSyncProgress({ enabled = true } = {}) {
   const lastIdRef = useRef(null);
   const bufferRef = useRef("");
   const isMountedRef = useRef(true);
+  // Set to true when the stream is voluntarily stopped (unmount / enabled=false / abort).
+  // Prevents recovery or reconnect on voluntary close.
+  const voluntaryAbortRef = useRef(false);
 
   // ------------------------------------------------------------------
   // Fallback: fetch current status via REST.
@@ -166,6 +174,9 @@ export function useGarminSyncProgress({ enabled = true } = {}) {
   // Stream opener
   // ------------------------------------------------------------------
   const openStream = useCallback(async () => {
+    // Reset voluntary-abort flag at the start of every new connection attempt.
+    voluntaryAbortRef.current = false;
+
     const token = getToken();
     if (!token) {
       setError("unauthenticated");
@@ -235,13 +246,20 @@ export function useGarminSyncProgress({ enabled = true } = {}) {
 
           setProgress(ev.data);
 
-          // Update Last-Event-ID cursor from the real SSE `id:` field.
-          if (ev.id !== null && ev.id !== undefined) {
+          // Update Last-Event-ID cursor — but never store the synthetic
+          // "snapshot" id emitted by the backend for the initial snapshot;
+          // that is not a valid Redis Stream cursor.
+          if (ev.id !== null && ev.id !== undefined && ev.id !== "snapshot") {
             lastIdRef.current = ev.id;
           }
 
           // Terminal status via SSE → stop streaming, no reconnect.
           if (TERMINAL_STATUSES.has(ev.data?.status)) {
+            // For failed status, expose a safe error code — never raw payloads.
+            if (ev.data.status === "failed") {
+              const safeError = ev.data?.error_code || "sync_failed";
+              if (isMountedRef.current) setError(safeError);
+            }
             terminalReceived = true;
             setIsStreaming(false);
             reader.cancel();
@@ -253,7 +271,18 @@ export function useGarminSyncProgress({ enabled = true } = {}) {
       }
 
       // Stream closed cleanly by server (no terminal status seen in events).
-      if (isMountedRef.current) setIsStreaming(false);
+      // This can happen due to a network proxy closing the connection.
+      // Apply the same recovery as a network error: check /garmin/status.
+      if (isMountedRef.current && !voluntaryAbortRef.current) {
+        setIsStreaming(false);
+        const isTerminal = await fetchStatusFallback();
+        if (!isMountedRef.current) return;
+        if (!isTerminal) {
+          scheduleReconnect(openStream);
+        }
+      } else if (isMountedRef.current) {
+        setIsStreaming(false);
+      }
     } catch (err) {
       // Voluntary abort (unmount or enabled=false) — never treat as error.
       if (err.name === "AbortError" || !isMountedRef.current) return;
@@ -284,6 +313,7 @@ export function useGarminSyncProgress({ enabled = true } = {}) {
 
     return () => {
       isMountedRef.current = false;
+      voluntaryAbortRef.current = true;
       abortRef.current?.abort();
       clearTimeout(retryTimerRef.current);
     };
