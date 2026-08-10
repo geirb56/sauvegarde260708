@@ -24,6 +24,7 @@ from jobs.health import queue_health
 from jobs.redis_client import get_redis
 from feed import realtime_cache
 from feed.sse import event_stream
+from feed.sync_progress_sse import sync_progress_event_stream
 
 import logging
 import time
@@ -154,6 +155,35 @@ async def garmin_backfill_endpoint(
     result = await garmin_backfill.backfill_user(db, user_id)
     history = await backfill_run_index_history(db, user_id)
     return {"status": "ok", **result, "run_index_history": history}
+
+
+@garmin_router.get("/sync/stream")
+async def garmin_sync_progress_stream(
+    request: Request,
+    user: dict = Depends(get_current_user),
+    last_id: Optional[str] = None,
+):
+    """Server-Sent Events stream of SYNC_PROGRESS for the authenticated user.
+
+    Emits an immediate snapshot of the current sync state, then streams future
+    progress events from the dedicated Redis Stream in real time.
+
+    - Reconnect-safe: resumes from the `Last-Event-ID` header or `last_id` query param.
+    - User-isolated: only events for the authenticated user are forwarded.
+    - No sync trigger, no gccli, no DB writes — pure delivery layer.
+    - Heartbeat: `: ping` comment frames every ~20 s.
+    """
+    user_id = user["id"]
+    start_id = last_id or request.headers.get("Last-Event-ID") or "$"
+    return StreamingResponse(
+        sync_progress_event_stream(user_id, request, start_id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @garmin_router.get("/feed/stream")

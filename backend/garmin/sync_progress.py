@@ -71,4 +71,13 @@ async def update_sync_progress(user_id: str, **fields: Any) -> dict[str, Any]:
         )
     except Exception:
         return current
+
+    # Publish to the dedicated sync-progress stream (best-effort).
+    try:
+        from events.sync_progress_stream import emit_sync_progress
+
+        await emit_sync_progress(user_id, current)
+    except Exception:
+        pass
+
     return current
