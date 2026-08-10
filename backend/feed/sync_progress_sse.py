@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import time
 
 import redis.asyncio as aioredis
 
@@ -36,7 +35,6 @@ async def sync_progress_stream(user_id: str, request):
         socket_connect_timeout=5,
     )
     last_id = request.headers.get("Last-Event-ID") or "$"
-    last_beat = time.monotonic()
     try:
         yield ": connected\n\n"
 
@@ -59,7 +57,6 @@ async def sync_progress_stream(user_id: str, request):
 
             if not resp:
                 yield ": ping\n\n"
-                last_beat = time.monotonic()
                 continue
 
             for _stream, entries in resp:
@@ -72,11 +69,6 @@ async def sync_progress_stream(user_id: str, request):
                     payload["type"] = EVENT_SYNC_PROGRESS
                     payload["user_id"] = user_id
                     yield _format_sync_progress_frame(payload, event_id=entry_id)
-
-            now = time.monotonic()
-            if now - last_beat >= SSE_HEARTBEAT_S:
-                yield ": ping\n\n"
-                last_beat = now
     finally:
         try:
             await redis.aclose()
