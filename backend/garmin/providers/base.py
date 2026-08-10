@@ -57,7 +57,12 @@ class Provider(ABC):
         )
 
     @abstractmethod
-    def get_daily_metrics(self, user_id: str, days: int = 7) -> List[Dict]:
+    def get_daily_metrics(
+        self,
+        user_id: str,
+        days: int = 7,
+        start_days_ago: int = 1,
+    ) -> List[Dict]:
         """Return recent daily health metrics (HRV, resting HR, sleep).
 
         Each item: {date, hrv, resting_hr, sleep_hours, sleep_score, source}.

@@ -167,9 +167,18 @@ class GccliProvider(Provider):
         logger.info("[gccli] deep sync complete total=%d", len(all_activities))
         return all_activities
 
-    def get_daily_metrics(self, user_id: str, days: int = 7) -> List[Dict]:
+    def get_daily_metrics(
+        self,
+        user_id: str,
+        days: int = 7,
+        start_days_ago: int = 1,
+    ) -> List[Dict]:
         account = self._account()
-        return self._runner.fetch_daily_metrics(days=days, account=account)
+        return self._runner.fetch_daily_metrics(
+            days=days,
+            start_days_ago=start_days_ago,
+            account=account,
+        )
 
     def get_profile(self, user_id: str) -> Dict:
         return self._runner.get_profile(account=self._account())

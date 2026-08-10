@@ -52,7 +52,7 @@ from jobs.queue import (
 from sync import rate_limiter
 from garmin import service as garmin_service
 from garmin.bootstrap import ensure_gccli_installed
-from services.run_index_history import refresh_run_index_after_garmin_sync
+from garmin.sync_progress import update_sync_progress
 
 logging.basicConfig(
     level=logging.INFO,
@@ -106,19 +106,14 @@ async def process_job(db, redis, raw: str, job: dict) -> None:
     logger.info("[worker] sync_start type=%s user=%s attempt=%s", job_type, user_id, attempts + 1)
     try:
         result = await asyncio.wait_for(_run_job(db, job_type, user_id), timeout=JOB_TIMEOUT)
-        if result.get("success"):
-            history_result = await refresh_run_index_after_garmin_sync(db, user_id)
-            logger.info(
-                "[worker] run_index_history user=%s today=%s history_backfill=%s",
-                user_id,
-                history_result["today_snapshot"]["date"],
-                bool(history_result.get("history_backfill")),
-            )
+        if not result.get("success"):
+            raise RuntimeError(result.get("error") or result.get("message") or "sync failed")
         duration = round(time.time() - start, 2)
         logger.info(
-            "[worker] sync_success type=%s user=%s duration=%ss synced=%s new=%s metrics=%s",
+            "[worker] sync_success type=%s user=%s duration=%ss synced=%s new=%s metrics=%s status=%s",
             job_type, user_id, duration,
             result.get("synced_count"), result.get("new_count"), result.get("metrics_count"),
+            result.get("status", "complete"),
         )
         await redis.delete(f"{PENDING_PREFIX}{user_id}")
         # Cooldown: throttle auto-syncs for this user after a successful run.
@@ -141,6 +136,11 @@ async def process_job(db, redis, raw: str, job: dict) -> None:
             logger.error(
                 "[worker] sync_failed type=%s user=%s attempts=%s duration=%ss err=%s",
                 job_type, user_id, attempts, duration, exc,
+            )
+            await update_sync_progress(
+                user_id,
+                phase="failed",
+                error_code="worker_sync_failed",
             )
             await redis.delete(f"{PENDING_PREFIX}{user_id}")
             # Monitoring counter only (additive; failure handling unchanged).
