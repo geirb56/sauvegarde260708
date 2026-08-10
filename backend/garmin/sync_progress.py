@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -19,6 +20,7 @@ _DEFAULT_STATUS = {
 }
 _SENSITIVE_SUBSTRINGS = ("password", "token", "session", "secret", "credential", "cookie")
 _FINAL_PHASES = {"complete", "partial_success", "failed"}
+logger = logging.getLogger(__name__)
 
 
 def _now_iso() -> str:
@@ -73,8 +75,8 @@ async def update_sync_progress(user_id: str, **fields: Any) -> dict[str, Any]:
             from events.sync_progress import emit_sync_progress
 
             await emit_sync_progress(user_id, current)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("[Garmin] emit_sync_progress failed user=%s: %s", user_id, exc)
     except Exception:
         return current
     return current

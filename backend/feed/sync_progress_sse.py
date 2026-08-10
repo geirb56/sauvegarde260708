@@ -35,7 +35,7 @@ async def sync_progress_stream(user_id: str, request):
         socket_timeout=None,
         socket_connect_timeout=5,
     )
-    last_id = "$"
+    last_id = request.headers.get("Last-Event-ID") or "$"
     last_beat = time.monotonic()
     try:
         yield ": connected\n\n"
@@ -46,8 +46,6 @@ async def sync_progress_stream(user_id: str, request):
             payload["type"] = EVENT_SYNC_PROGRESS
             payload["user_id"] = user_id
             yield _format_sync_progress_frame(payload)
-        else:
-            last_id = request.headers.get("Last-Event-ID") or "$"
 
         while True:
             if await request.is_disconnected():
@@ -59,10 +57,9 @@ async def sync_progress_stream(user_id: str, request):
                 yield ": ping\n\n"
                 continue
 
-            now = time.monotonic()
             if not resp:
                 yield ": ping\n\n"
-                last_beat = now
+                last_beat = time.monotonic()
                 continue
 
             for _stream, entries in resp:
@@ -76,6 +73,7 @@ async def sync_progress_stream(user_id: str, request):
                     payload["user_id"] = user_id
                     yield _format_sync_progress_frame(payload, event_id=entry_id)
 
+            now = time.monotonic()
             if now - last_beat >= SSE_HEARTBEAT_S:
                 yield ": ping\n\n"
                 last_beat = now
