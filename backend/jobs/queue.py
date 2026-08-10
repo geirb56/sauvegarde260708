@@ -66,6 +66,9 @@ async def _enqueue_deduped(job_type: str, user_id: str) -> dict:
     if not fresh:
         logger.info("[queue] job=%s already pending user=%s (skipped)", job_type, user_id)
         return {"status": "already_queued"}
+    from garmin.sync_progress import update_sync_progress
+
+    await update_sync_progress(user_id, phase="queued", error_code=None)
     await _push(job_type, user_id)
     logger.info("[queue] enqueued job=%s user=%s", job_type, user_id)
     return {"status": "queued"}

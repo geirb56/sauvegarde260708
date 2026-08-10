@@ -353,12 +353,21 @@ async def backfill_run_index_history(
     return summary.as_dict()
 
 
-async def refresh_run_index_after_garmin_sync(db, user_id: str) -> dict:
+async def refresh_today_run_index_after_garmin_activities(db, user_id: str) -> dict:
     from garmin.backfill import backfill_user as backfill_garmin_workouts
 
     await backfill_garmin_workouts(db, user_id, prune=False)
     workouts = await load_user_workouts(db, user_id)
     today_snapshot = await upsert_run_index_snapshot(db, user_id, workouts)
+    return {"today_snapshot": today_snapshot, "workouts": workouts}
+
+
+async def backfill_run_index_history_after_garmin_sync(
+    db,
+    user_id: str,
+    workouts: Optional[list[dict]] = None,
+) -> dict:
+    workouts = workouts if workouts is not None else await load_user_workouts(db, user_id)
     history = await backfill_run_index_history(db, user_id, workouts=workouts)
 
     conn = await db.garmin_connections.find_one({"user_id": user_id}, {"_id": 0})
@@ -368,7 +377,17 @@ async def refresh_run_index_after_garmin_sync(db, user_id: str) -> dict:
             {"$set": {"run_index_history_backfilled_at": datetime.now(timezone.utc).isoformat()}},
         )
 
-    return {"today_snapshot": today_snapshot, "history_backfill": history}
+    return history
+
+
+async def refresh_run_index_after_garmin_sync(db, user_id: str) -> dict:
+    refreshed = await refresh_today_run_index_after_garmin_activities(db, user_id)
+    history = await backfill_run_index_history_after_garmin_sync(
+        db,
+        user_id,
+        workouts=refreshed["workouts"],
+    )
+    return {"today_snapshot": refreshed["today_snapshot"], "history_backfill": history}
 
 
 async def backfill_connected_users_run_index_history(db) -> dict:
