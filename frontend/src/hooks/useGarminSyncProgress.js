@@ -3,15 +3,25 @@
  *
  * Streams Garmin sync-progress events from the backend SSE endpoint using
  * the Fetch API (NOT the native EventSource, which cannot set Authorization
- * headers — RunIndex uses JWT in localStorage + ******
+ * headers — RunIndex uses JWT in localStorage).
  *
  * Behaviour:
  *  - Opens GET /api/garmin/sync/stream with Authorization: ******
- *  - Parses `event: sync_progress` frames; ignores heartbeat comments.
- *  - On disconnect / error: exponential back-off then retries.
- *  - Falls back to GET /api/garmin/status on reconnect failure or when
- *    the stream is closed by the server (e.g. sync complete).
+ *  - Parses `event: sync_progress` frames; supports `id:`, `event:`, `data:`
+ *    fields and CRLF / LF line endings, across fragmented chunks.
+ *  - Terminal statuses (complete, partial_success, failed) received via SSE
+ *    or from the /garmin/status fallback stop streaming immediately.
+ *  - On network error / disconnect: fetch /garmin/status first.
+ *      • Terminal status → update progress, do NOT reconnect.
+ *      • Active status  → exponential back-off, then reconnect.
+ *  - 401 / 403 → set error, do NOT retry.
  *  - Exposes { progress, isStreaming, error }.
+ *
+ * Back-off schedule (ms): 1 000 → 2 000 → 4 000 → 8 000 → … → 30 000 cap.
+ * Back-off counter is reset after a successful SSE connection.
+ *
+ * Cleanup: AbortController + clearTimeout on unmount or enabled=false.
+ * A voluntary abort is never treated as a network error.
  *
  * Usage:
  *   const { progress, isStreaming } = useGarminSyncProgress({ enabled: true });
@@ -25,52 +35,85 @@ const STATUS_URL = `${API_BASE_URL}/garmin/status`;
 
 const INITIAL_RETRY_MS = 1_000;
 const MAX_RETRY_MS = 30_000;
-const MAX_RETRIES = 8;
+
+/** Statuses that mean the sync has finished — no reconnect needed. */
+const TERMINAL_STATUSES = new Set(["complete", "partial_success", "failed"]);
 
 function getToken() {
   return localStorage.getItem("token") || localStorage.getItem("access_token") || null;
 }
 
-function parseSSEFrames(chunk, buffer) {
-  const lines = (buffer + chunk).split("\n");
+/**
+ * parseSSEFrames
+ *
+ * Parses raw SSE text (possibly fragmented across network chunks) into
+ * complete events.  Supports:
+ *   - `id:`, `event:`, `data:` fields
+ *   - CRLF (\r\n) and LF (\n) line endings
+ *   - Multiple `data:` lines per frame (concatenated with \n per spec)
+ *   - Heartbeat / comment lines (`:`)
+ *
+ * Returns { events, buffer } where `buffer` is the incomplete tail to prepend
+ * to the next chunk.  Each event object is { id, event, data } where `data`
+ * is the parsed JSON object and `id` is the parsed id field (or null).
+ *
+ * Frames are detected by splitting on "\n\n" (the SSE frame separator after
+ * CRLF normalisation).  This correctly handles frames that span multiple
+ * network chunks because incomplete frames stay in the buffer until "\n\n"
+ * arrives.
+ */
+export function parseSSEFrames(rawChunk, prevBuffer) {
+  // Normalise CRLF → LF so we can split on \n uniformly.
+  const text = prevBuffer + rawChunk.replace(/\r\n/g, "\n");
+
+  // Split into complete frames (terminated by \n\n) and keep the remainder.
   const events = [];
-  let currentEvent = null;
-  let currentData = null;
-  let newBuffer = "";
+  let pos = 0;
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+  while (true) {
+    const sep = text.indexOf("\n\n", pos);
+    if (sep === -1) break; // No complete frame yet — keep the rest in buffer.
 
-    // Incomplete last line — keep it in the buffer.
-    if (i === lines.length - 1 && !chunk.endsWith("\n")) {
-      newBuffer = line;
-      break;
-    }
+    const frame = text.slice(pos, sep);
+    pos = sep + 2;
 
-    if (line.startsWith(":")) {
-      // Comment / heartbeat — skip.
-      continue;
-    }
+    let currentId = null;
+    let currentEvent = null;
+    const currentDataLines = [];
 
-    if (line.startsWith("event:")) {
-      currentEvent = line.slice(6).trim();
-    } else if (line.startsWith("data:")) {
-      currentData = line.slice(5).trim();
-    } else if (line === "") {
-      // End of frame.
-      if (currentEvent === "sync_progress" && currentData) {
-        try {
-          events.push(JSON.parse(currentData));
-        } catch (_) {
-          // Malformed JSON — ignore.
-        }
+    for (const line of frame.split("\n")) {
+      if (line === "" || line.startsWith(":")) continue; // blank / comment
+
+      const colonIdx = line.indexOf(":");
+      if (colonIdx === -1) continue; // bare field name — skip per spec
+
+      const field = line.slice(0, colonIdx);
+      // Per SSE spec: strip exactly one leading space after the colon.
+      const value = colonIdx + 1 < line.length
+        ? (line[colonIdx + 1] === " " ? line.slice(colonIdx + 2) : line.slice(colonIdx + 1))
+        : "";
+
+      if (field === "id") {
+        currentId = value;
+      } else if (field === "event") {
+        currentEvent = value;
+      } else if (field === "data") {
+        currentDataLines.push(value);
       }
-      currentEvent = null;
-      currentData = null;
+    }
+
+    if (currentEvent === "sync_progress" && currentDataLines.length > 0) {
+      const dataStr = currentDataLines.join("\n");
+      try {
+        const parsed = JSON.parse(dataStr);
+        events.push({ id: currentId, event: currentEvent, data: parsed });
+      } catch (_) {
+        // Malformed JSON — ignore frame.
+      }
     }
   }
 
-  return { events, buffer: newBuffer };
+  return { events, buffer: text.slice(pos) };
 }
 
 export function useGarminSyncProgress({ enabled = true } = {}) {
@@ -81,36 +124,57 @@ export function useGarminSyncProgress({ enabled = true } = {}) {
   const abortRef = useRef(null);
   const retryCountRef = useRef(0);
   const retryTimerRef = useRef(null);
-  const lastIdRef = useRef("$");
+  const lastIdRef = useRef(null);
   const bufferRef = useRef("");
   const isMountedRef = useRef(true);
 
-  // --- Fallback: fetch current status via REST ---------------------
+  // ------------------------------------------------------------------
+  // Fallback: fetch current status via REST.
+  // Returns true if a terminal status was found (no reconnect needed).
+  // ------------------------------------------------------------------
   const fetchStatusFallback = useCallback(async () => {
     const token = getToken();
-    if (!token) return;
+    if (!token) return false;
     try {
       const res = await fetch(STATUS_URL, {
         headers: { Authorization: "Bearer " + token },
       });
-      if (!res.ok) return;
+      if (!res.ok) return false;
       const data = await res.json();
-      if (isMountedRef.current) setProgress(data);
+      // The endpoint returns { sync_status: {...} }
+      const snapshot = data.sync_status ?? null;
+      if (isMountedRef.current) setProgress(snapshot);
+      return TERMINAL_STATUSES.has(snapshot?.status);
     } catch (_) {
-      // Silent — fallback is best-effort.
+      return false;
     }
   }, []);
 
-  // --- Stream opener -----------------------------------------------
+  // ------------------------------------------------------------------
+  // Schedule a reconnect with exponential back-off.
+  // ------------------------------------------------------------------
+  const scheduleReconnect = useCallback((openStreamFn) => {
+    const count = retryCountRef.current;
+    const delay = Math.min(INITIAL_RETRY_MS * 2 ** count, MAX_RETRY_MS);
+    retryCountRef.current = count + 1;
+    retryTimerRef.current = setTimeout(() => {
+      if (isMountedRef.current) openStreamFn();
+    }, delay);
+  }, []);
+
+  // ------------------------------------------------------------------
+  // Stream opener
+  // ------------------------------------------------------------------
   const openStream = useCallback(async () => {
     const token = getToken();
     if (!token) {
       setError("unauthenticated");
+      setIsStreaming(false);
       return;
     }
 
     const url =
-      lastIdRef.current && lastIdRef.current !== "$"
+      lastIdRef.current
         ? `${STREAM_URL}?last_id=${encodeURIComponent(lastIdRef.current)}`
         : STREAM_URL;
 
@@ -129,13 +193,34 @@ export function useGarminSyncProgress({ enabled = true } = {}) {
         signal: controller.signal,
       });
 
+      // 401 / 403 → auth error, no retry.
+      if (res.status === 401) {
+        if (isMountedRef.current) {
+          setError("unauthenticated");
+          setIsStreaming(false);
+        }
+        return;
+      }
+      if (res.status === 403) {
+        if (isMountedRef.current) {
+          setError("forbidden");
+          setIsStreaming(false);
+        }
+        return;
+      }
+
       if (!res.ok) {
+        // 5xx or other — treat as network error below.
         throw new Error(`SSE HTTP ${res.status}`);
       }
+
+      // Successful connection — reset back-off counter.
+      retryCountRef.current = 0;
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       bufferRef.current = "";
+      let terminalReceived = false;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -146,39 +231,48 @@ export function useGarminSyncProgress({ enabled = true } = {}) {
         bufferRef.current = buffer;
 
         for (const ev of events) {
-          if (isMountedRef.current) {
-            setProgress(ev);
-            // Track Last-Event-ID for reconnect (skip synthetic "snapshot" id).
-            if (ev._id && ev._id !== "snapshot") {
-              lastIdRef.current = ev._id;
-            }
+          if (!isMountedRef.current) break;
+
+          setProgress(ev.data);
+
+          // Update Last-Event-ID cursor from the real SSE `id:` field.
+          if (ev.id !== null && ev.id !== undefined) {
+            lastIdRef.current = ev.id;
+          }
+
+          // Terminal status via SSE → stop streaming, no reconnect.
+          if (TERMINAL_STATUSES.has(ev.data?.status)) {
+            terminalReceived = true;
+            setIsStreaming(false);
+            reader.cancel();
+            return;
           }
         }
+
+        if (terminalReceived) break;
       }
 
-      // Stream closed cleanly by server.
-      retryCountRef.current = 0;
+      // Stream closed cleanly by server (no terminal status seen in events).
       if (isMountedRef.current) setIsStreaming(false);
     } catch (err) {
+      // Voluntary abort (unmount or enabled=false) — never treat as error.
       if (err.name === "AbortError" || !isMountedRef.current) return;
 
       if (isMountedRef.current) setIsStreaming(false);
 
-      const count = retryCountRef.current;
-      if (count >= MAX_RETRIES) {
-        setError("max_retries");
-        await fetchStatusFallback();
+      // Recovery: check /garmin/status BEFORE deciding to reconnect.
+      const isTerminal = await fetchStatusFallback();
+      if (!isMountedRef.current) return;
+
+      if (isTerminal) {
+        // Sync finished — do not reconnect.
         return;
       }
 
-      const delay = Math.min(INITIAL_RETRY_MS * 2 ** count, MAX_RETRY_MS);
-      retryCountRef.current = count + 1;
-
-      retryTimerRef.current = setTimeout(() => {
-        if (isMountedRef.current) openStream();
-      }, delay);
+      // Still active — schedule reconnect with back-off.
+      scheduleReconnect(openStream);
     }
-  }, [fetchStatusFallback]);
+  }, [fetchStatusFallback, scheduleReconnect]);
 
   // --- Lifecycle ---------------------------------------------------
   useEffect(() => {
