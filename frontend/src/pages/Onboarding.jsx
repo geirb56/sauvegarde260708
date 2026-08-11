@@ -273,22 +273,53 @@ export default function Onboarding() {
                       <p className="font-mono text-[11px] text-muted-foreground">
                         {t("onboarding.garminCredsHint")}
                       </p>
-                      <Input
-                        type="email"
-                        autoComplete="off"
-                        placeholder={t("onboarding.garminEmailPlaceholder")}
-                        value={garminEmail}
-                        onChange={(e) => setGarminEmail(e.target.value)}
-                        data-testid="garmin-email-input"
-                      />
-                      <Input
-                        type="password"
-                        autoComplete="off"
-                        placeholder={t("onboarding.garminPasswordPlaceholder")}
-                        value={garminPassword}
-                        onChange={(e) => setGarminPassword(e.target.value)}
-                        data-testid="garmin-password-input"
-                      />
+                      <form
+                        className="space-y-3"
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          connectGarmin();
+                        }}
+                      >
+                        <label htmlFor="garmin-connect-email" className="sr-only">
+                          {t("onboarding.garminEmailPlaceholder")}
+                        </label>
+                        <Input
+                          type="email"
+                          name="username"
+                          id="garmin-connect-email"
+                          autoComplete="section-garmin username"
+                          placeholder={t("onboarding.garminEmailPlaceholder")}
+                          value={garminEmail}
+                          onChange={(e) => setGarminEmail(e.target.value)}
+                          data-testid="garmin-email-input"
+                        />
+                        <label htmlFor="garmin-connect-password" className="sr-only">
+                          {t("onboarding.garminPasswordPlaceholder")}
+                        </label>
+                        <Input
+                          type="password"
+                          name="password"
+                          id="garmin-connect-password"
+                          autoComplete="section-garmin current-password"
+                          placeholder={t("onboarding.garminPasswordPlaceholder")}
+                          value={garminPassword}
+                          onChange={(e) => setGarminPassword(e.target.value)}
+                          data-testid="garmin-password-input"
+                        />
+                        <Button
+                          type="submit"
+                          disabled={garminStatus === "connecting"}
+                          className="w-full bg-primary text-white font-bold uppercase tracking-wider text-xs h-9"
+                          data-testid="garmin-connect"
+                        >
+                          {garminStatus === "connecting" ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <Activity className="w-4 h-4" />
+                          )}
+                          {garminStatus === "connecting" ? t("onboarding.garminConnecting") : t("onboarding.garminConnect")}
+                        </Button>
+                      </form>
                       {garminStatus === "mfa_required" && (
                         <div className="flex items-start gap-2 text-amber-400" data-testid="garmin-mfa">
                           <ShieldAlert className="w-4 h-4 flex-shrink-0 mt-0.5" />
@@ -300,19 +331,6 @@ export default function Onboarding() {
                           {t("onboarding.garminFailed")}
                         </p>
                       )}
-                      <Button
-                        onClick={connectGarmin}
-                        disabled={garminStatus === "connecting"}
-                        className="w-full bg-primary text-white font-bold uppercase tracking-wider text-xs h-9"
-                        data-testid="garmin-connect"
-                      >
-                        {garminStatus === "connecting" ? (
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                        ) : (
-                          <Activity className="w-4 h-4" />
-                        )}
-                        {garminStatus === "connecting" ? t("onboarding.garminConnecting") : t("onboarding.garminConnect")}
-                      </Button>
                     </div>
                   )}
                 </div>
