@@ -26,7 +26,9 @@ class SSEAwareGZipMiddleware(GZipMiddleware):
         if scope["type"] == "http":
             headers = {k.lower(): v for k, v in scope.get("headers", [])}
             accept = headers.get(b"accept", b"").decode("latin-1")
-            if "text/event-stream" in accept:
+            is_sse_accept = "text/event-stream" in accept
+            is_garmin_sync_stream = scope.get("path") == "/api/garmin/sync/stream"
+            if is_sse_accept or is_garmin_sync_stream:
                 await self.app(scope, receive, send)
                 return
         await super().__call__(scope, receive, send)
