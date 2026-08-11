@@ -165,7 +165,10 @@ describe("onboarding garmin login autofill semantics", () => {
     setFieldValue(emailInput, "athlete@example.com");
     setFieldValue(passwordInput, "Password123!");
     await act(async () => {
-      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      const submitEvent = typeof SubmitEvent === "function"
+        ? new SubmitEvent("submit", { bubbles: true, cancelable: true })
+        : new Event("submit", { bubbles: true, cancelable: true });
+      form.dispatchEvent(submitEvent);
     });
     await flush();
 
