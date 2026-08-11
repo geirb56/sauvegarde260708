@@ -52,9 +52,11 @@ function click(container, selector) {
 function setFieldValue(element, value) {
   expect(element).toBeTruthy();
   const descriptor = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
-  descriptor.set.call(element, value);
-  element.dispatchEvent(new Event("input", { bubbles: true }));
-  element.dispatchEvent(new Event("change", { bubbles: true }));
+  act(() => {
+    descriptor.set.call(element, value);
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+  });
 }
 
 async function flush() {
