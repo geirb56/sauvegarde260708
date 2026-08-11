@@ -1,7 +1,7 @@
 from services.run_index_history import get_run_index_history_payload, upsert_run_index_snapshot
 from fastapi import FastAPI, APIRouter, HTTPException, Query, Request, Depends, Header
 from fastapi.responses import RedirectResponse, JSONResponse
-from fastapi.middleware.gzip import GZipMiddleware
+from middleware import SSEAwareGZipMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 # Auth module — JWT-based multi-user identity
@@ -199,8 +199,8 @@ def _compute_cors_origins() -> List[str]:
 # Create the main app
 app = FastAPI()
 
-# GZip compression for responses > 1KB
-app.add_middleware(GZipMiddleware, minimum_size=1000)
+# GZip compression for responses > 1KB — SSE (text/event-stream) is exempt.
+app.add_middleware(SSEAwareGZipMiddleware, minimum_size=1000)
 
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")

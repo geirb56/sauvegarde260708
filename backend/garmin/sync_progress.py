@@ -13,8 +13,10 @@ _DEFAULT_STATUS = {
     "activities_status": "pending",
     "activities_count": 0,
     "run_index_status": "pending",
+    "run_index": None,
     "daily_metrics_status": "pending",
     "readiness_status": "pending",
+    "readiness": None,
     "error_code": None,
 }
 _SENSITIVE_SUBSTRINGS = ("password", "token", "session", "secret", "credential", "cookie")
