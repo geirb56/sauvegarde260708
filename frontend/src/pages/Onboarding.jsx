@@ -9,6 +9,7 @@ import { toast } from "sonner";
 
 import { API_BASE_URL } from "@/config";
 import { useLanguage } from "@/context/LanguageContext";
+import { useGarminSyncProgress } from "@/hooks/useGarminSyncProgress";
 const API = API_BASE_URL;
 
 function OptionGrid({ options, value, onSelect, testIdPrefix }) {
@@ -50,6 +51,13 @@ export default function Onboarding() {
   const [garminCount, setGarminCount] = useState(0);
   const [garminEmail, setGarminEmail] = useState("");
   const [garminPassword, setGarminPassword] = useState("");
+  const [garminSyncEnabled, setGarminSyncEnabled] = useState(false);
+
+  const { progress: syncProgress, isStreaming: isSyncStreaming, error: syncError } = useGarminSyncProgress({ enabled: garminSyncEnabled });
+
+  const runIndexReady = syncProgress?.run_index_status === "ready";
+  const readinessReady = syncProgress?.readiness_status === "ready";
+  const syncedCount = syncProgress?.synced_count ?? garminCount;
 
   const STEPS = useMemo(() => [
     { key: "welcome", title: t("onboarding.welcome") },
@@ -107,6 +115,7 @@ export default function Onboarding() {
           setGarminCount(0);
         }
         setGarminStatus("connected");
+        setGarminSyncEnabled(true);
         toast.success(t("onboarding.garminConnectedToast"));
       } else if (res.data?.status === "mfa_required") {
         setGarminStatus("mfa_required");
@@ -262,33 +271,130 @@ export default function Onboarding() {
               {device === t("onboarding.deviceOptions.garmin") && (
                 <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-3" data-testid="garmin-connect-panel">
                   {garminStatus === "connected" ? (
-                    <div className="flex items-center gap-2 text-chart-2" data-testid="garmin-connected">
-                      <Check className="w-4 h-4 flex-shrink-0" />
-                      <span className="font-mono text-xs uppercase tracking-wider">
-                        {t("onboarding.garminConnected").replace("{count}", garminCount)}
-                      </span>
+                    <div className="space-y-3" data-testid="garmin-sync-panel">
+                      <div className="flex items-center gap-2 text-chart-2" data-testid="garmin-connected">
+                        <Check className="w-4 h-4 flex-shrink-0" />
+                        <span className="font-mono text-xs uppercase tracking-wider">
+                          {t("onboarding.garminConnectedToast")}
+                        </span>
+                      </div>
+
+                      {/* Phase 1: streaming, no RunIndex yet */}
+                      {isSyncStreaming && !runIndexReady && (
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground" data-testid="garmin-syncing">
+                          <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" />
+                          <span>{t("onboarding.garminSyncing")}</span>
+                        </div>
+                      )}
+
+                      {/* Activity count once available */}
+                      {syncedCount > 0 && (
+                        <p className="font-mono text-xs text-muted-foreground" data-testid="garmin-activity-count">
+                          {t("onboarding.garminActivitiesImported").replace("{count}", syncedCount)}
+                        </p>
+                      )}
+
+                      {/* Phase 2: RunIndex ready */}
+                      {runIndexReady && (
+                        <div className="space-y-2" data-testid="garmin-runindex-panel">
+                          <div className="flex items-center justify-between py-1 border-b border-border">
+                            <span className="font-mono text-xs uppercase tracking-wider text-muted-foreground">RunIndex</span>
+                            <span className="font-black text-lg" data-testid="garmin-runindex-value">{syncProgress.run_index ?? "—"}</span>
+                          </div>
+
+                          {/* Phase 3: Readiness ready */}
+                          {readinessReady && (
+                            <div className="flex items-center justify-between py-1 border-b border-border" data-testid="garmin-readiness-panel">
+                              <span className="font-mono text-xs uppercase tracking-wider text-muted-foreground">Readiness</span>
+                              <span className="font-black text-lg" data-testid="garmin-readiness-value">{syncProgress.readiness ?? "—"}</span>
+                            </div>
+                          )}
+
+                          <Button
+                            onClick={() => navigate("/dashboard")}
+                            className="w-full bg-primary text-white font-bold uppercase tracking-wider text-xs h-9 mt-2"
+                            data-testid="garmin-see-dashboard"
+                          >
+                            {t("onboarding.garminSeeDashboard")}
+                          </Button>
+                          <div className="text-center">
+                            <a
+                              href="/training"
+                              className="font-mono text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+                              data-testid="garmin-adjust-goal"
+                            >
+                              {t("onboarding.garminAdjustGoal")}
+                            </a>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* No usable data */}
+                      {!isSyncStreaming && !runIndexReady && !syncError && syncProgress && (
+                        <p className="font-mono text-xs text-muted-foreground" data-testid="garmin-no-data">
+                          {t("onboarding.garminNoData")}
+                        </p>
+                      )}
+
+                      {/* Sync error (auth errors are handled by the hook internally) */}
+                      {syncError && !isSyncStreaming && (
+                        <p className="font-mono text-xs text-destructive" data-testid="garmin-sync-error">
+                          {t("onboarding.garminSyncFailed")}
+                        </p>
+                      )}
                     </div>
                   ) : (
                     <div className="space-y-3">
                       <p className="font-mono text-[11px] text-muted-foreground">
                         {t("onboarding.garminCredsHint")}
                       </p>
-                      <Input
-                        type="email"
-                        autoComplete="off"
-                        placeholder={t("onboarding.garminEmailPlaceholder")}
-                        value={garminEmail}
-                        onChange={(e) => setGarminEmail(e.target.value)}
-                        data-testid="garmin-email-input"
-                      />
-                      <Input
-                        type="password"
-                        autoComplete="off"
-                        placeholder={t("onboarding.garminPasswordPlaceholder")}
-                        value={garminPassword}
-                        onChange={(e) => setGarminPassword(e.target.value)}
-                        data-testid="garmin-password-input"
-                      />
+                      <form
+                        className="space-y-3"
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          connectGarmin();
+                        }}
+                      >
+                        <label htmlFor="garmin-connect-email" className="sr-only">
+                          {t("onboarding.garminEmailPlaceholder")}
+                        </label>
+                        <Input
+                          type="email"
+                          name="username"
+                          id="garmin-connect-email"
+                          autoComplete="section-garmin username"
+                          placeholder={t("onboarding.garminEmailPlaceholder")}
+                          value={garminEmail}
+                          onChange={(e) => setGarminEmail(e.target.value)}
+                          data-testid="garmin-email-input"
+                        />
+                        <label htmlFor="garmin-connect-password" className="sr-only">
+                          {t("onboarding.garminPasswordPlaceholder")}
+                        </label>
+                        <Input
+                          type="password"
+                          name="password"
+                          id="garmin-connect-password"
+                          autoComplete="section-garmin current-password"
+                          placeholder={t("onboarding.garminPasswordPlaceholder")}
+                          value={garminPassword}
+                          onChange={(e) => setGarminPassword(e.target.value)}
+                          data-testid="garmin-password-input"
+                        />
+                        <Button
+                          type="submit"
+                          disabled={garminStatus === "connecting"}
+                          className="w-full bg-primary text-white font-bold uppercase tracking-wider text-xs h-9"
+                          data-testid="garmin-connect"
+                        >
+                          {garminStatus === "connecting" ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <Activity className="w-4 h-4" />
+                          )}
+                          {garminStatus === "connecting" ? t("onboarding.garminConnecting") : t("onboarding.garminConnect")}
+                        </Button>
+                      </form>
                       {garminStatus === "mfa_required" && (
                         <div className="flex items-start gap-2 text-amber-400" data-testid="garmin-mfa">
                           <ShieldAlert className="w-4 h-4 flex-shrink-0 mt-0.5" />
@@ -300,19 +406,6 @@ export default function Onboarding() {
                           {t("onboarding.garminFailed")}
                         </p>
                       )}
-                      <Button
-                        onClick={connectGarmin}
-                        disabled={garminStatus === "connecting"}
-                        className="w-full bg-primary text-white font-bold uppercase tracking-wider text-xs h-9"
-                        data-testid="garmin-connect"
-                      >
-                        {garminStatus === "connecting" ? (
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                        ) : (
-                          <Activity className="w-4 h-4" />
-                        )}
-                        {garminStatus === "connecting" ? t("onboarding.garminConnecting") : t("onboarding.garminConnect")}
-                      </Button>
                     </div>
                   )}
                 </div>
