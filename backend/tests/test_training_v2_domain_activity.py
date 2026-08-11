@@ -6,9 +6,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from garmin.data_layer import GarminActivity
-from garmin.domain_adapter import to_domain_activity
-from training_v2 import DomainActivity
+from garmin.data_layer import GarminActivity, GarminCapabilities
+from garmin.domain_adapter import to_domain_activity, to_domain_capabilities
+from training_v2 import DomainActivity, DomainCapabilities
 from training_v2.training_history import build_training_history
 from training_v2.training_load import build_training_load
 
@@ -35,6 +35,30 @@ def test_garmin_to_domain_activity():
         start_time="2026-08-04T08:00:00.0",
         distance_m=12345.6,
         duration_s=4321.0,
+    )
+
+
+def test_garmin_to_domain_capabilities():
+    garmin_capabilities = GarminCapabilities(
+        has_hrv=True,
+        has_vo2max=False,
+        has_training_readiness=True,
+        has_training_status=True,
+        has_body_battery=True,
+        has_stress=True,
+        has_running_dynamics=False,
+        has_power=True,
+        has_race_predictions=True,
+    )
+
+    domain_capabilities = to_domain_capabilities(garmin_capabilities)
+
+    assert domain_capabilities == DomainCapabilities(
+        has_hrv=True,
+        has_vo2max=False,
+        has_training_readiness=True,
+        has_power=True,
+        has_running_dynamics=False,
     )
 
 

@@ -17,7 +17,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import pytest
 
 from garmin.data_layer import GarminCapabilities
-from training_v2 import RunnerProfile, TrainingHistory, TrainingLoadSnapshot, TrainingWindow, build_runner_profile
+from garmin.domain_adapter import to_domain_capabilities
+from training_v2 import (
+    DomainCapabilities,
+    RunnerProfile,
+    TrainingHistory,
+    TrainingLoadSnapshot,
+    TrainingWindow,
+    build_runner_profile,
+)
 
 REF = date(2026, 8, 6)
 
@@ -95,14 +103,14 @@ def _build(
     *,
     training_history: TrainingHistory | None = None,
     user_profile: dict | None = None,
-    garmin_capabilities: GarminCapabilities | None = None,
+    capabilities: DomainCapabilities | None = None,
     physiological_metrics: dict | None = None,
 ) -> RunnerProfile:
     return build_runner_profile(
         training_history=training_history or _history(),
         training_load=_load(),
         user_profile=user_profile,
-        garmin_capabilities=garmin_capabilities,
+        capabilities=capabilities,
         physiological_metrics=physiological_metrics,
         reference_date=REF,
     )
@@ -250,7 +258,7 @@ def test_no_implicit_vma_or_max_hr_estimation():
 
 def test_capabilities_are_copied_deterministically():
     profile = _build(
-        garmin_capabilities=GarminCapabilities(
+        capabilities=DomainCapabilities(
             has_hrv=True,
             has_vo2max=False,
             has_training_readiness=True,
@@ -258,6 +266,28 @@ def test_capabilities_are_copied_deterministically():
             has_running_dynamics=True,
         )
     )
+    assert profile.has_hrv is True
+    assert profile.has_vo2max is False
+    assert profile.has_training_readiness is True
+    assert profile.has_power is False
+    assert profile.has_running_dynamics is True
+
+
+def test_runner_profile_keeps_same_flags_after_garmin_adapter_conversion():
+    garmin_capabilities = GarminCapabilities(
+        has_hrv=True,
+        has_vo2max=False,
+        has_training_readiness=True,
+        has_training_status=True,
+        has_body_battery=True,
+        has_stress=True,
+        has_running_dynamics=True,
+        has_power=False,
+        has_race_predictions=True,
+    )
+
+    profile = _build(capabilities=to_domain_capabilities(garmin_capabilities))
+
     assert profile.has_hrv is True
     assert profile.has_vo2max is False
     assert profile.has_training_readiness is True
@@ -333,12 +363,20 @@ def test_identical_inputs_produce_identical_models():
     kwargs = {
         "training_history": history,
         "user_profile": {"discipline": "road", "preferred_days_per_week": 3},
-        "garmin_capabilities": GarminCapabilities(has_hrv=True),
+        "capabilities": DomainCapabilities(has_hrv=True),
         "physiological_metrics": {"resting_hr": 50},
     }
     profile_a = _build(**kwargs)
     profile_b = _build(**kwargs)
     assert profile_a == profile_b
+
+
+def test_runner_profile_module_has_no_garmin_dependency():
+    runner_profile_path = Path(__file__).resolve().parents[1] / "training_v2" / "runner_profile.py"
+    content = runner_profile_path.read_text()
+
+    assert "from garmin." not in content
+    assert "import garmin." not in content
 
 
 def test_90d_window_is_only_a_fallback_when_30d_is_insufficient():

@@ -10,6 +10,7 @@ PR04 exposes:            TrainingState, build_training_state.
 """
 
 from .domain_activity import DomainActivity
+from .domain_capabilities import DomainCapabilities
 from .periodization import (
     PeriodizationMode,
     PeriodizationPhase,
@@ -24,6 +25,7 @@ from .training_state import TrainingState, build_training_state
 
 __all__ = [
     "DomainActivity",
+    "DomainCapabilities",
     "GoalType",
     "PlanGoal",
     "build_plan_goal",
