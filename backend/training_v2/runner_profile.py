@@ -42,8 +42,7 @@ from typing import Any, Callable, Mapping, Optional
 
 from pydantic import BaseModel, ConfigDict
 
-from garmin.data_layer import GarminCapabilities
-
+from .domain_capabilities import DomainCapabilities
 from .training_history import TrainingHistory, TrainingWindow
 from .training_load import TrainingLoadSnapshot
 
@@ -309,7 +308,7 @@ def build_runner_profile(
     training_history: TrainingHistory,
     training_load: TrainingLoadSnapshot,
     user_profile: Optional[dict] = None,
-    garmin_capabilities: Optional[GarminCapabilities] = None,
+    capabilities: Optional[DomainCapabilities] = None,
     physiological_metrics: Optional[dict] = None,
     reference_date: date,
 ) -> RunnerProfile:
@@ -322,7 +321,7 @@ def build_runner_profile(
 
     profile = user_profile if isinstance(user_profile, Mapping) else {}
     physiology = physiological_metrics if isinstance(physiological_metrics, Mapping) else {}
-    capabilities = garmin_capabilities or GarminCapabilities()
+    capabilities = capabilities or DomainCapabilities()
 
     age = _first_valid_number(profile, _parse_age, "age")
     sex = _first_valid_string(profile, "sex", "gender")
