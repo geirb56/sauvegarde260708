@@ -169,6 +169,8 @@ class GarminActivity(BaseModel):
 
     def to_domain_activity(self):
         """Convert the normalized Garmin activity into the Training V2 business model."""
+        # Imported lazily to avoid the garmin.data_layer ↔ training_v2.runner_profile
+        # import cycle triggered by training_v2.__init__.py side effects.
         from training_v2.domain_activity import DomainActivity
 
         return DomainActivity(

@@ -19,8 +19,14 @@ class DomainActivity(BaseModel):
     duration_s: Optional[float] = None
 
 
+def _domain_start_time(value: Any) -> Optional[Union[str, date, datetime]]:
+    if isinstance(value, (str, date, datetime)):
+        return value
+    return None
+
+
 def to_domain_activity(activity: Any) -> DomainActivity:
-    """Coerce a generic activity object into a DomainActivity."""
+    """Coerce a generic activity object into a DomainActivity without raising."""
     if isinstance(activity, DomainActivity):
         return activity
 
@@ -37,7 +43,7 @@ def to_domain_activity(activity: Any) -> DomainActivity:
 
     return DomainActivity(
         activity_type=act_type if isinstance(act_type, str) else None,
-        start_time=start,
+        start_time=_domain_start_time(start),
         distance_m=dist if isinstance(dist, (int, float)) and not isinstance(dist, bool) else None,
         duration_s=dur if isinstance(dur, (int, float)) and not isinstance(dur, bool) else None,
     )
