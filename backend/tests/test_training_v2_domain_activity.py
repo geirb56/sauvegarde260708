@@ -7,6 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from garmin.data_layer import GarminActivity
+from garmin.domain_adapter import to_domain_activity
 from training_v2 import DomainActivity
 from training_v2.training_history import build_training_history
 from training_v2.training_load import build_training_load
@@ -27,7 +28,7 @@ RAW_GARMIN_ACTIVITY = {
 def test_garmin_to_domain_activity():
     garmin_activity = GarminActivity.from_summary(RAW_GARMIN_ACTIVITY)
 
-    domain_activity = garmin_activity.to_domain_activity()
+    domain_activity = to_domain_activity(garmin_activity)
 
     assert domain_activity == DomainActivity(
         activity_type="running",
@@ -35,6 +36,13 @@ def test_garmin_to_domain_activity():
         distance_m=12345.6,
         duration_s=4321.0,
     )
+
+
+def test_garmin_data_layer_has_no_training_v2_dependency():
+    data_layer_path = Path(__file__).resolve().parents[1] / "garmin" / "data_layer.py"
+    content = data_layer_path.read_text()
+
+    assert "training_v2" not in content
 
 
 def test_training_history_accepts_domain_activity():
