@@ -280,6 +280,9 @@ export default function Onboarding() {
                           connectGarmin();
                         }}
                       >
+                        <label htmlFor="garmin-connect-email" className="sr-only">
+                          {t("onboarding.garminEmailPlaceholder")}
+                        </label>
                         <Input
                           type="email"
                           name="username"
@@ -290,6 +293,9 @@ export default function Onboarding() {
                           onChange={(e) => setGarminEmail(e.target.value)}
                           data-testid="garmin-email-input"
                         />
+                        <label htmlFor="garmin-connect-password" className="sr-only">
+                          {t("onboarding.garminPasswordPlaceholder")}
+                        </label>
                         <Input
                           type="password"
                           name="password"
