@@ -27,6 +27,9 @@ def _domain_start_time(value: Any) -> Optional[Union[str, date, datetime]]:
 
 def to_domain_activity(activity: Any) -> DomainActivity:
     """Coerce a generic activity object into a DomainActivity without raising."""
+    if activity is None:
+        return DomainActivity()
+
     if isinstance(activity, DomainActivity):
         return activity
 
