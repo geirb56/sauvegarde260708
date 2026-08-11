@@ -57,7 +57,7 @@ export default function Onboarding() {
 
   const runIndexReady = syncProgress?.run_index_status === "ready";
   const readinessReady = syncProgress?.readiness_status === "ready";
-  const syncedCount = syncProgress?.synced_count ?? garminCount;
+  const syncedCount = syncProgress?.activities_count ?? garminCount;
 
   const STEPS = useMemo(() => [
     { key: "welcome", title: t("onboarding.welcome") },

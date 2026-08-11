@@ -340,12 +340,14 @@ async def _complete_post_activities_pipeline(
             error_code=None,
         )
         run_index_refresh = await refresh_today_run_index_after_garmin_activities(db, user_id)
+        run_index_value = (run_index_refresh.get("today_snapshot") or {}).get("run_index")
         await update_sync_progress(
             user_id,
             phase="run_index_ready",
             activities_status="ready",
             activities_count=activity_count,
             run_index_status="ready",
+            run_index=run_index_value,
             daily_metrics_status="pending",
             readiness_status="pending",
             error_code=None,
@@ -373,6 +375,7 @@ async def _complete_post_activities_pipeline(
             readiness_payload = await compute_run_index(db, user_id)
             daily_metrics_status = "ready" if _has_usable_physio_data(metrics_7d) else "no_usable_data"
             readiness_status = "ready" if daily_metrics_status == "ready" and readiness_payload else "unavailable"
+            readiness_value = ((readiness_payload or {}).get("metrics") or {}).get("run_readiness") if readiness_status == "ready" else None
             await update_sync_progress(
                 user_id,
                 phase="readiness_ready" if readiness_status == "ready" else "readiness_unavailable",
@@ -381,6 +384,7 @@ async def _complete_post_activities_pipeline(
                 run_index_status="ready",
                 daily_metrics_status=daily_metrics_status,
                 readiness_status=readiness_status,
+                readiness=readiness_value,
                 error_code=None,
             )
         else:

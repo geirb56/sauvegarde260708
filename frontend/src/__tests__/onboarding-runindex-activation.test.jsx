@@ -137,7 +137,7 @@ test("T1: run_index_status=ready shows RunIndex without Readiness", async () => 
       run_index_status: "ready",
       readiness_status: "pending",
       run_index: 72,
-      synced_count: 15,
+      activities_count: 15,
     },
     isStreaming: false,
     error: null,
@@ -160,6 +160,39 @@ test("T1: run_index_status=ready shows RunIndex without Readiness", async () => 
 });
 
 // ---------------------------------------------------------------------------
+// Test T1b — activities_count from SSE is displayed in the activity counter
+// ---------------------------------------------------------------------------
+
+test("T1b: activities_count=144 in SSE progress displays '144 activités importées'", async () => {
+  // Use French locale so we match the canonical FR string.
+  window.localStorage.setItem(LANGUAGE_STORAGE_KEY, "fr");
+
+  useGarminSyncProgress.mockReturnValue({
+    progress: {
+      status: "in_progress",
+      run_index_status: "ready",
+      readiness_status: "pending",
+      run_index: 72,
+      activities_count: 144,
+    },
+    isStreaming: false,
+    error: null,
+  });
+
+  axios.post
+    .mockResolvedValueOnce({ data: { status: "connected" } })
+    .mockResolvedValueOnce({ data: { synced_count: 0 } });
+
+  const { container, unmount } = renderOnboarding();
+  goToDeviceStep(container);
+  await connectGarmin(container);
+
+  expect(container.textContent).toContain("144 activités importées");
+
+  unmount();
+});
+
+// ---------------------------------------------------------------------------
 // Test 2 — readiness_status=ready adds Readiness row
 // ---------------------------------------------------------------------------
 
@@ -171,7 +204,7 @@ test("T2: readiness_status=ready adds Readiness row alongside RunIndex", async (
       readiness_status: "ready",
       run_index: 68,
       readiness: 85,
-      synced_count: 20,
+      activities_count: 20,
     },
     isStreaming: false,
     error: null,
@@ -204,7 +237,7 @@ test("T3: readiness still in-progress does not hide RunIndex", async () => {
       run_index_status: "ready",
       readiness_status: "computing",
       run_index: 55,
-      synced_count: 10,
+      activities_count: 10,
     },
     isStreaming: true,
     error: null,
@@ -241,7 +274,7 @@ test("T4: no usable data shows honest message without fabricating a score", asyn
       status: "partial_success",
       run_index_status: "insufficient_data",
       readiness_status: "insufficient_data",
-      synced_count: 2,
+      activities_count: 2,
     },
     isStreaming: false,
     error: null,
@@ -277,7 +310,7 @@ test("T5: CTA See my dashboard is present and navigates to /dashboard", async ()
       readiness_status: "ready",
       run_index: 60,
       readiness: 90,
-      synced_count: 25,
+      activities_count: 25,
     },
     isStreaming: false,
     error: null,
