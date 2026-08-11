@@ -2,7 +2,7 @@
 
 Design rules
 ------------
-- PURE: no MongoDB, no Garmin calls, no API calls, no LLM, no cache,
+- PURE: no MongoDB, no provider-specific calls, no API calls, no LLM, no cache,
   no global mutable state, no environment variables.
 - reference_date must be supplied explicitly by the caller — datetime.now()
   is NEVER called inside this module.
@@ -37,7 +37,7 @@ for load computation in this module.
 Specifically excluded from load calculation:
   - TRIMP (Training Impulse)
   - TSS (Training Stress Score)
-  - Garmin Training Load
+  - Provider-native training load
   - Heart rate / HR zones
   - Intensity factor
   - Elevation / gradient
@@ -99,11 +99,7 @@ from typing import Any, Dict, List, Optional, Sequence
 from pydantic import BaseModel, ConfigDict
 
 # Reuse the shared extraction helpers from PR05 to avoid code duplication.
-from training_v2.training_history import (
-    RUNNING_TYPES,
-    _extract_fields,
-    _valid_duration,
-)
+from training_v2.training_history import RUNNING_TYPES, _extract_fields, _valid_duration
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -168,7 +164,7 @@ class TrainingLoadSnapshot(BaseModel):
         activities: Sequence[Any],
         reference_date: date,
     ) -> "TrainingLoadSnapshot":
-        """Build a TrainingLoadSnapshot from a sequence of raw activity objects."""
+        """Build a TrainingLoadSnapshot from activity records coercible to DomainActivity."""
         return build_training_load(activities, reference_date)
 
 
@@ -253,9 +249,7 @@ def build_training_load(
     Parameters
     ----------
     activities:
-        Iterable of raw activity records — dicts with an optional
-        ``garmin_activity`` sub-document (PR02 convention) or Pydantic
-        GarminActivity objects.
+        Iterable of activity records coercible to ``DomainActivity``.
     reference_date:
         Anchor date for all window calculations.  Activities strictly after
         this date are ignored.  Must be supplied explicitly by the caller.
@@ -264,8 +258,6 @@ def build_training_load(
     run_activities: List[Dict[str, Any]] = []
     for raw in activities:
         fields = _extract_fields(raw)
-        if fields is None:
-            continue
         act_type = fields.get("activity_type") or ""
         if act_type not in RUNNING_TYPES:
             continue

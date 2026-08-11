@@ -1,7 +1,7 @@
 """training_v2 — Pure business layer for RunIndex v2.
 
 PR05 (PlanGoal) exposes: PlanGoal, GoalType, build_plan_goal.
-PR05 (History) exposes:  TrainingWindow, TrainingHistory, build_training_history.
+PR05 (History) exposes:  DomainActivity, TrainingWindow, TrainingHistory, build_training_history.
 PR06 (Load)    exposes:  TrainingLoadSnapshot, build_training_load.
 PR06 (Period.) exposes:  PeriodizationSnapshot, PeriodizationPhase,
                          PeriodizationMode, build_periodization.
@@ -9,6 +9,7 @@ PR07 exposes:            RunnerProfile, build_runner_profile.
 PR04 exposes:            TrainingState, build_training_state.
 """
 
+from .domain_activity import DomainActivity
 from .periodization import (
     PeriodizationMode,
     PeriodizationPhase,
@@ -22,6 +23,7 @@ from .training_load import TrainingLoadSnapshot, build_training_load
 from .training_state import TrainingState, build_training_state
 
 __all__ = [
+    "DomainActivity",
     "GoalType",
     "PlanGoal",
     "build_plan_goal",
