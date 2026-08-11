@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pytest
 
+from training_v2 import DomainActivity
 from training_v2.training_history import (
     TrainingHistory,
     TrainingWindow,
@@ -47,29 +48,6 @@ def _act(
         "start_time": run_date.isoformat() + "T08:00:00.0",
         "distance": distance_m,
         "duration": duration_s,
-    }
-
-
-def _act_sub(
-    activity_type: str,
-    days_ago: int,
-    distance_m: float | None = 10_000.0,
-    duration_s: float | None = 3600.0,
-) -> dict:
-    """Build an activity dict with a garmin_activity sub-document (PR02)."""
-    run_date = REF - timedelta(days=days_ago)
-    sub = {
-        "activity_type": activity_type,
-        "start_time": run_date.isoformat() + "T08:00:00.0",
-        "distance_m": distance_m,
-        "duration_s": duration_s,
-    }
-    return {
-        "activity_type": "SHOULD_BE_IGNORED",  # must be overridden by sub-doc
-        "start_time": "SHOULD_BE_IGNORED",
-        "distance": 99_999_999,
-        "duration": 99_999_999,
-        "garmin_activity": sub,
     }
 
 
@@ -385,25 +363,35 @@ class TestInputCompatibility:
         h = build_training_history(acts, REF)
         assert h.window_7d.distance_km == 10.0
 
-    def test_garmin_activity_subdoc(self):
-        """garmin_activity sub-document must take priority over flat fields."""
-        acts = [_act_sub("running", 2, distance_m=12_000.0, duration_s=3600.0)]
+    def test_domain_activity(self):
+        acts = [
+            DomainActivity(
+                activity_type="running",
+                start_time=(REF - timedelta(days=2)).isoformat() + "T08:00:00.0",
+                distance_m=12_000.0,
+                duration_s=3600.0,
+            )
+        ]
         h = build_training_history(acts, REF)
-        # Must use sub-doc distance (12 km), not flat 99_999_999 m
         assert h.window_7d.distance_km == 12.0
 
-    def test_subdoc_type_overrides_flat(self):
-        """activity_type from sub-doc must be used, not flat."""
-        # flat says cycling, sub-doc says running → must count as running
-        act = _act_sub("running", 2, distance_m=5_000.0, duration_s=1800.0)
-        act["activity_type"] = "cycling"
-        h = build_training_history([act], REF)
+    def test_generic_object_with_domain_fields(self):
+        class _Activity:
+            activity_type = "running"
+            start_time = (REF - timedelta(days=2)).isoformat() + "T08:00:00.0"
+            distance_m = 5_000.0
+            duration_s = 1800.0
+
+        h = build_training_history([_Activity()], REF)
         assert h.window_7d.activity_count == 1
 
-    def test_flat_cycling_subdoc_excluded(self):
-        """Sub-doc cycling must be excluded even if flat says running."""
-        act = _act_sub("cycling", 2, distance_m=5_000.0, duration_s=1800.0)
-        act["activity_type"] = "running"
+    def test_non_running_domain_activity_excluded(self):
+        act = DomainActivity(
+            activity_type="cycling",
+            start_time=(REF - timedelta(days=2)).isoformat() + "T08:00:00.0",
+            distance_m=5_000.0,
+            duration_s=1800.0,
+        )
         h = build_training_history([act], REF)
         assert h.window_7d.activity_count == 0
 

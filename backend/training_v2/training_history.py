@@ -22,8 +22,8 @@ Activities dated strictly after reference_date are ignored.
 
 Units
 -----
-- Garmin distances are stored in metres  → distance_km = distance_m / 1000
-- Garmin durations are stored in seconds → duration_hours = duration_s / 3600
+- Distances are stored in metres  → distance_km = distance_m / 1000
+- Durations are stored in seconds → duration_hours = duration_s / 3600
 - Rounding is applied only to final model fields (2 decimal places).
 
 Activity filter
@@ -31,14 +31,12 @@ Activity filter
 Only the following activity_type values are treated as running:
   "running", "trail_running", "treadmill_running"
 
-Source priority
----------------
-When a dict activity is provided:
-  1. Use the nested ``garmin_activity`` sub-document (PR02 convention) when
-     present, extracting: activity_type, start_time, distance_m, duration_s.
-  2. Fall back to flat top-level fields: activity_type, start_time,
-     distance (metres), duration (seconds).
-  3. Pydantic GarminActivity objects are also accepted directly.
+Input model
+-----------
+Training V2 consumes provider-neutral ``DomainActivity`` objects.
+Generic dict/object inputs are coerced to this minimal model by using only the
+shared business fields: activity_type, start_time, distance_m, duration_s.
+Flat aliases ``distance`` and ``duration`` are still accepted for compatibility.
 
 Invalid values
 --------------
@@ -52,6 +50,8 @@ from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Sequence, Union
 
 from pydantic import BaseModel, ConfigDict
+
+from .domain_activity import DomainActivity, to_domain_activity
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -81,7 +81,7 @@ class TrainingWindow(BaseModel):
 
 
 class TrainingHistory(BaseModel):
-    """Complete training history built from normalised Garmin activities.
+    """Complete training history built from provider-neutral DomainActivity inputs.
 
     Computed for three overlapping sliding windows (7, 30, 90 days) ending
     at *reference_date* (inclusive).
@@ -112,15 +112,12 @@ class TrainingHistory(BaseModel):
         activities: Sequence[Any],
         reference_date: date,
     ) -> "TrainingHistory":
-        """Build a TrainingHistory from a sequence of raw activity objects.
+        """Build a TrainingHistory from a sequence of activity records.
 
         Parameters
         ----------
         activities:
-            Any iterable of activity records.  Each record can be:
-              - a plain ``dict`` with an optional ``garmin_activity`` sub-doc
-              - a Pydantic object exposing ``activity_type``, ``start_time``,
-                ``distance_m``, ``duration_s`` attributes
+            Any iterable of activity records coercible to ``DomainActivity``.
         reference_date:
             The anchor date for all window calculations.  Activities strictly
             after this date are silently ignored.
@@ -133,42 +130,15 @@ class TrainingHistory(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _extract_fields(activity: Any) -> Optional[Dict[str, Any]]:
-    """Return a normalised dict with keys:
-
-        activity_type, activity_date, distance_m, duration_s
-
-    Returns ``None`` when the activity cannot be parsed at all.
-    The returned dict may still contain ``None`` values for individual fields.
-    """
-    if isinstance(activity, dict):
-        # Priority 1: garmin_activity sub-document (PR02 convention)
-        sub = activity.get("garmin_activity")
-        if isinstance(sub, dict) and sub:
-            act_type = sub.get("activity_type")
-            start = sub.get("start_time")
-            dist = sub.get("distance_m")
-            dur = sub.get("duration_s")
-        else:
-            # Priority 2: flat top-level fields
-            act_type = activity.get("activity_type")
-            start = activity.get("start_time")
-            dist = activity.get("distance")  # flat field is already metres
-            dur = activity.get("duration")   # flat field is already seconds
-    else:
-        # Pydantic / object with attributes
-        act_type = getattr(activity, "activity_type", None)
-        start = getattr(activity, "start_time", None)
-        # Objects from GarminActivity use distance_m / duration_s directly
-        dist = getattr(activity, "distance_m", getattr(activity, "distance", None))
-        dur = getattr(activity, "duration_s", getattr(activity, "duration", None))
-
-    act_date = _parse_date(start)
+def _extract_fields(activity: Any) -> Dict[str, Any]:
+    """Return the business fields extracted from a DomainActivity input."""
+    domain_activity = to_domain_activity(activity)
+    act_date = _parse_date(domain_activity.start_time)
     return {
-        "activity_type": act_type if isinstance(act_type, str) else None,
+        "activity_type": domain_activity.activity_type,
         "activity_date": act_date,
-        "distance_m": dist,
-        "duration_s": dur,
+        "distance_m": domain_activity.distance_m,
+        "duration_s": domain_activity.duration_s,
     }
 
 
@@ -322,7 +292,7 @@ def build_training_history(
     Parameters
     ----------
     activities:
-        Iterable of raw activity records (dicts or Pydantic objects).
+        Iterable of activity records coercible to ``DomainActivity``.
     reference_date:
         Anchor date (inclusive upper bound for all windows).  Activities
         strictly after this date are ignored.
@@ -331,8 +301,6 @@ def build_training_history(
     run_activities: List[Dict[str, Any]] = []
     for raw in activities:
         fields = _extract_fields(raw)
-        if fields is None:
-            continue
         act_type = fields.get("activity_type") or ""
         if act_type not in RUNNING_TYPES:
             continue

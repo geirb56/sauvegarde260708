@@ -167,6 +167,17 @@ class GarminActivity(BaseModel):
             details_available=details_available,
         )
 
+    def to_domain_activity(self):
+        """Convert the normalized Garmin activity into the Training V2 business model."""
+        from training_v2.domain_activity import DomainActivity
+
+        return DomainActivity(
+            activity_type=self.activity_type,
+            start_time=self.start_time,
+            distance_m=self.distance_m,
+            duration_s=self.duration_s,
+        )
+
 
 # --------------------------------------------------------------------------- #
 # GarminDailyMetrics

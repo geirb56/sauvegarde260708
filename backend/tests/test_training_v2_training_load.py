@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pytest
 
+from training_v2 import DomainActivity
 from training_v2.training_load import (
     TrainingLoadSnapshot,
     build_training_load,
@@ -59,24 +60,6 @@ def _act(
         "start_time": run_date.isoformat() + "T08:00:00.0",
         "distance": distance_m,
         "duration": duration_s,
-    }
-
-
-def _act_sub(
-    activity_type: str,
-    days_ago: int,
-    distance_m: float | None = 10_000.0,
-    duration_s: float | None = 3600.0,
-) -> dict:
-    """Activity dict with a garmin_activity sub-document (PR02 convention)."""
-    run_date = REF - timedelta(days=days_ago)
-    return {
-        "garmin_activity": {
-            "activity_type": activity_type,
-            "start_time": run_date.isoformat() + "T08:00:00.0",
-            "distance_m": distance_m,
-            "duration_s": duration_s,
-        }
     }
 
 
@@ -554,25 +537,28 @@ def test_confidence_high_at_boundary():
 
 
 # ---------------------------------------------------------------------------
-# Test 24: garmin_activity sub-document (PR02 convention)
+# Test 24: DomainActivity input
 # ---------------------------------------------------------------------------
 
 
-def test_subdocument_activity():
-    act = _act_sub("running", 2, distance_m=10_000.0, duration_s=3600.0)
+def test_domain_activity_input():
+    act = DomainActivity(
+        activity_type="running",
+        start_time=(REF - timedelta(days=2)).isoformat() + "T08:00:00",
+        distance_m=10_000.0,
+        duration_s=3600.0,
+    )
     s = snap([act])
     assert s.acute_load_7d == 60.0
     assert s.activities_7d == 1
 
 
 # ---------------------------------------------------------------------------
-# Test 25: Pydantic GarminActivity objects
+# Test 25: generic object with domain fields
 # ---------------------------------------------------------------------------
 
 
-def test_pydantic_object_activity():
-    from datetime import datetime
-
+def test_generic_object_activity():
     class _FakeActivity:
         activity_type = "running"
         start_time = (REF - timedelta(days=2)).isoformat() + "T08:00:00"
