@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from garmin.data_layer import GarminActivity, GarminCapabilities
 from garmin.domain_adapter import to_domain_activity, to_domain_capabilities
 from training_v2 import DomainActivity, DomainCapabilities
+from training_v2.domain_activity import to_domain_activity as coerce_domain_activity
 from training_v2.training_history import build_training_history
 from training_v2.training_load import build_training_load
 
@@ -35,6 +36,8 @@ def test_garmin_to_domain_activity():
         start_time="2026-08-04T08:00:00.0",
         distance_m=12345.6,
         duration_s=4321.0,
+        source="garmin",
+        source_activity_id="123",
     )
 
 
@@ -99,6 +102,40 @@ def test_training_load_results_preserved_for_domain_activity():
     )
 
     assert build_training_load([domain_activity], REF) == build_training_load([legacy_input], REF)
+
+
+def test_domain_activity_provenance_defaults_to_none_when_absent():
+    domain_activity = coerce_domain_activity(
+        {
+            "activity_type": "running",
+            "start_time": (REF - timedelta(days=1)).isoformat() + "T08:00:00.0",
+            "distance_m": 5000.0,
+            "duration_s": 1800.0,
+        }
+    )
+
+    assert domain_activity.source is None
+    assert domain_activity.source_activity_id is None
+
+
+def test_training_history_and_load_ignore_provenance_fields():
+    base_activity = DomainActivity(
+        activity_type="running",
+        start_time=(REF - timedelta(days=2)).isoformat() + "T08:00:00.0",
+        distance_m=10000.0,
+        duration_s=3600.0,
+    )
+    same_activity_with_provenance = DomainActivity(
+        activity_type=base_activity.activity_type,
+        start_time=base_activity.start_time,
+        distance_m=base_activity.distance_m,
+        duration_s=base_activity.duration_s,
+        source="garmin",
+        source_activity_id="abc123",
+    )
+
+    assert build_training_history([same_activity_with_provenance], REF) == build_training_history([base_activity], REF)
+    assert build_training_load([same_activity_with_provenance], REF) == build_training_load([base_activity], REF)
 
 
 def test_training_v2_activity_path_has_no_garmin_references():
