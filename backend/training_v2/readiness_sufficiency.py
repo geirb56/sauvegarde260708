@@ -130,16 +130,13 @@ class SleepRecord(BaseModel):
     """Minimal sleep information.
 
     A present (non-None) SleepRecord means a recent sleep record exists.
-    None means no recent sleep data.
+    Pass ``None`` to ``ReadinessSufficiencyInput.sleep`` to signal absent sleep.
+
+    Additional fields (duration_hours, score, etc.) are intentionally absent
+    to avoid fabricating neutral values.
     """
 
     model_config = ConfigDict(frozen=True)
-
-    # At minimum a record must exist; no numeric fields are required here.
-    # The mere presence of the SleepRecord object signals exploitable sleep.
-    # Additional fields (duration_hours, score, etc.) are intentionally absent
-    # to avoid fabricating neutral values.
-    present: bool = True  # always True when the object is instantiated
 
 
 class ReadinessSufficiencyInput(BaseModel):
@@ -255,7 +252,7 @@ def build_readiness_sufficiency(
     # ------------------------------------------------------------------
     # 2. Sleep
     # ------------------------------------------------------------------
-    sleep_missing = inputs.sleep is None or not inputs.sleep.present
+    sleep_missing = inputs.sleep is None
     if sleep_missing:
         reasons.append(ReasonCode.missing_sleep)
 
