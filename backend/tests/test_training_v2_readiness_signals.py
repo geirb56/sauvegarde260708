@@ -10,13 +10,12 @@ from __future__ import annotations
 
 import ast
 import sys
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pytest
-from datetime import timedelta
 
 from training_v2.readiness_sufficiency import PhysioBaseline, PhysioSignal, SleepRecord
 from training_v2.readiness_signals import (
@@ -210,18 +209,25 @@ class TestExtractLoadSignal:
         assert extract_load_signal(snap) is None
 
     def test_acwr_none_stays_none(self):
-        """When the snapshot has acwr=None but is still available, it stays None."""
-        # Build a snapshot where acute exists but chronic=0 (only activities in
-        # the acute window, nothing older → chronic_weekly_load = 0)
-        activities = [_act(REF)]  # one very recent activity
-        snap = build_training_load(activities, REF)
-        # acwr may or may not be available depending on activities; handle both
-        if snap.is_available:
-            sig = extract_load_signal(snap)
-            assert sig is not None
-            assert sig.acwr == snap.acwr
-        else:
-            assert extract_load_signal(snap) is None
+        """acwr=None in snapshot propagates as None in the signal."""
+        snap = TrainingLoadSnapshot(
+            reference_date=REF,
+            acute_load_7d=60.0,
+            load_28d=240.0,
+            chronic_weekly_load=60.0,
+            acwr=None,
+            status="unavailable",
+            is_available=True,
+            has_sufficient_history=True,
+            confidence="high",
+            activities_7d=1,
+            activities_28d=4,
+            previous_7d_load=60.0,
+            load_change_percent=0.0,
+        )
+        sig = extract_load_signal(snap)
+        assert sig is not None
+        assert sig.acwr is None
 
     def test_load_change_percent_none_stays_none(self):
         """load_change_percent=None in snapshot → None in signal."""
