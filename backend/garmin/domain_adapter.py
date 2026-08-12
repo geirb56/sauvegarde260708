@@ -14,6 +14,18 @@ def to_domain_activity(activity: GarminActivity) -> DomainActivity:
         start_time=activity.start_time,
         distance_m=activity.distance_m,
         duration_s=activity.duration_s,
+        source=activity.source,
+        source_activity_id=activity.activity_id,
+        moderate_intensity_minutes=(
+            float(activity.moderate_intensity_minutes)
+            if activity.moderate_intensity_minutes is not None
+            else None
+        ),
+        vigorous_intensity_minutes=(
+            float(activity.vigorous_intensity_minutes)
+            if activity.vigorous_intensity_minutes is not None
+            else None
+        ),
     )
 
 

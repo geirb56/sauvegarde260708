@@ -327,7 +327,7 @@ def build_training_history(
         last_date = max(valid_dates)
         first_date = min(valid_dates)
         days_since = (reference_date - last_date).days
-        available_days = (reference_date - first_date).days
+        available_days = (reference_date - first_date).days + 1
     else:
         last_date = None
         days_since = None

@@ -17,12 +17,36 @@ class DomainActivity(BaseModel):
     start_time: Optional[Union[str, date, datetime]] = None
     distance_m: Optional[float] = None
     duration_s: Optional[float] = None
+    source: Optional[str] = None
+    source_activity_id: Optional[str] = None
+    moderate_intensity_minutes: Optional[float] = None
+    vigorous_intensity_minutes: Optional[float] = None
 
 
 def _domain_start_time(value: Any) -> Optional[Union[str, date, datetime]]:
     if isinstance(value, (str, date, datetime)):
         return value
     return None
+
+
+def _domain_source(value: Any) -> Optional[str]:
+    return value if isinstance(value, str) else None
+
+
+def _domain_source_activity_id(value: Any) -> Optional[str]:
+    if isinstance(value, (int, str)) and not isinstance(value, bool) and value != "":
+        return str(value)
+    return None
+
+
+def _domain_intensity_minutes(value: Any) -> Optional[float]:
+    """Return a non-negative float, or None when the value is absent/invalid."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    f = float(value)
+    if f < 0:
+        return None
+    return f
 
 
 def to_domain_activity(activity: Any) -> DomainActivity:
@@ -38,15 +62,31 @@ def to_domain_activity(activity: Any) -> DomainActivity:
         start = activity.get('start_time')
         dist = activity.get('distance_m', activity.get('distance'))
         dur = activity.get('duration_s', activity.get('duration'))
+        source = activity.get('source')
+        source_activity_id = activity.get('source_activity_id', activity.get('activity_id'))
+        moderate = activity.get('moderate_intensity_minutes')
+        vigorous = activity.get('vigorous_intensity_minutes')
     else:
         act_type = getattr(activity, 'activity_type', None)
         start = getattr(activity, 'start_time', None)
         dist = getattr(activity, 'distance_m', getattr(activity, 'distance', None))
         dur = getattr(activity, 'duration_s', getattr(activity, 'duration', None))
+        source = getattr(activity, 'source', None)
+        source_activity_id = getattr(
+            activity,
+            'source_activity_id',
+            getattr(activity, 'activity_id', None),
+        )
+        moderate = getattr(activity, 'moderate_intensity_minutes', None)
+        vigorous = getattr(activity, 'vigorous_intensity_minutes', None)
 
     return DomainActivity(
         activity_type=act_type if isinstance(act_type, str) else None,
         start_time=_domain_start_time(start),
         distance_m=dist if isinstance(dist, (int, float)) and not isinstance(dist, bool) else None,
         duration_s=dur if isinstance(dur, (int, float)) and not isinstance(dur, bool) else None,
+        source=_domain_source(source),
+        source_activity_id=_domain_source_activity_id(source_activity_id),
+        moderate_intensity_minutes=_domain_intensity_minutes(moderate),
+        vigorous_intensity_minutes=_domain_intensity_minutes(vigorous),
     )
