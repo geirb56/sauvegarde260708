@@ -228,11 +228,12 @@ class TestLoadAbsent:
 
 
 class TestThinBaselineRHR:
-    """RHR baseline < 5 measures → DEGRADED + thin_baseline_rhr."""
+    """RHR baseline thin — behaviour depends on whether HRV is a solid fallback."""
 
-    def test_degraded_thin_rhr_baseline(self):
+    def test_sufficient_thin_rhr_solid_hrv(self):
+        """RHR thin + HRV solid → SUFFICIENT, reason thin_baseline_rhr kept."""
         result = _build(_thin_rhr(), _solid_hrv(), _sleep(), "high")
-        assert result.level == SufficiencyLevel.DEGRADED
+        assert result.level == SufficiencyLevel.SUFFICIENT
         assert ReasonCode.thin_baseline_rhr in result.reasons
 
     def test_degraded_thin_rhr_no_hrv(self):
@@ -249,11 +250,12 @@ class TestThinBaselineRHR:
 
 
 class TestThinBaselineHRV:
-    """HRV baseline < 5 measures → DEGRADED + thin_baseline_hrv."""
+    """HRV baseline thin — behaviour depends on whether RHR is a solid fallback."""
 
-    def test_degraded_thin_hrv_baseline(self):
+    def test_sufficient_thin_hrv_solid_rhr(self):
+        """HRV thin + RHR solid → SUFFICIENT, reason thin_baseline_hrv kept."""
         result = _build(_solid_rhr(), _thin_hrv(), _sleep(), "high")
-        assert result.level == SufficiencyLevel.DEGRADED
+        assert result.level == SufficiencyLevel.SUFFICIENT
         assert ReasonCode.thin_baseline_hrv in result.reasons
 
     def test_degraded_thin_hrv_no_rhr(self):
@@ -269,7 +271,42 @@ class TestThinBaselineHRV:
         assert ReasonCode.thin_baseline_hrv not in result.reasons
 
 
-class TestThinLoadHistory:
+class TestThinBaselineLockCases:
+    """Lock the four canonical thin-baseline cases from the spec."""
+
+    def test_rhr_solid_hrv_thin_sufficient(self):
+        """HRV solide + RHR thin → SUFFICIENT."""
+        result = _build(_thin_rhr(), _solid_hrv(), _sleep(), "high")
+        assert result.level == SufficiencyLevel.SUFFICIENT
+        assert ReasonCode.thin_baseline_rhr in result.reasons
+
+    def test_hrv_solid_rhr_thin_sufficient(self):
+        """RHR solide + HRV thin → SUFFICIENT."""
+        result = _build(_solid_rhr(), _thin_hrv(), _sleep(), "high")
+        assert result.level == SufficiencyLevel.SUFFICIENT
+        assert ReasonCode.thin_baseline_hrv in result.reasons
+
+    def test_rhr_thin_hrv_thin_degraded(self):
+        """RHR thin + HRV thin → DEGRADED."""
+        result = _build(_thin_rhr(), _thin_hrv(), _sleep(), "high")
+        assert result.level == SufficiencyLevel.DEGRADED
+        assert ReasonCode.thin_baseline_rhr in result.reasons
+        assert ReasonCode.thin_baseline_hrv in result.reasons
+
+    def test_single_signal_thin_degraded_rhr_only(self):
+        """Only RHR present with thin baseline → DEGRADED."""
+        result = _build(_thin_rhr(), _absent_signal(), _sleep(), "high")
+        assert result.level == SufficiencyLevel.DEGRADED
+        assert ReasonCode.thin_baseline_rhr in result.reasons
+
+    def test_single_signal_thin_degraded_hrv_only(self):
+        """Only HRV present with thin baseline → DEGRADED."""
+        result = _build(_absent_signal(), _thin_hrv(), _sleep(), "high")
+        assert result.level == SufficiencyLevel.DEGRADED
+        assert ReasonCode.thin_baseline_hrv in result.reasons
+
+
+
     """Load history < 14 days → DEGRADED + thin_load_history."""
 
     def test_degraded_thin_load_history(self):
@@ -288,6 +325,7 @@ class TestMultipleAnomalies:
         assert ReasonCode.thin_load_history in result.reasons
 
     def test_missing_sleep_thin_rhr_baseline_thin_load(self):
+        """Thin RHR + solid HRV + no sleep + thin load → DEGRADED (sleep+load drive it)."""
         result = _build(_thin_rhr(), _solid_hrv(), None, "low")
         assert result.level == SufficiencyLevel.DEGRADED
         reasons = result.reasons

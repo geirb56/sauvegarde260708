@@ -292,9 +292,17 @@ def build_readiness_sufficiency(
             degraded = True
 
         # Thin baseline of the signal(s) actually used
-        # If only one signal is present, its thin baseline causes DEGRADED.
-        # If both signals are present, either thin baseline causes DEGRADED.
-        if rhr_baseline_thin or hrv_baseline_thin:
+        # A thin baseline only causes DEGRADED when no solid alternative
+        # physiological signal is available:
+        #   - only one signal present and its baseline is thin → DEGRADED
+        #   - both signals present but both baselines are thin  → DEGRADED
+        #   - both signals present, one thin + one solid        → NOT DEGRADED
+        rhr_solid = rhr_present and _has_solid_baseline(inputs.rhr)
+        hrv_solid = hrv_present and _has_solid_baseline(inputs.hrv)
+        physio_side_degraded = (rhr_baseline_thin or hrv_baseline_thin) and not (
+            rhr_solid or hrv_solid
+        )
+        if physio_side_degraded:
             degraded = True
 
         level = SufficiencyLevel.DEGRADED if degraded else SufficiencyLevel.SUFFICIENT
