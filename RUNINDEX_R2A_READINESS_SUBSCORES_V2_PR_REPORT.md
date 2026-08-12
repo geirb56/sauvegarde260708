@@ -64,9 +64,12 @@
 
 ## 7) Résultats
 
-- `tests/test_training_v2_readiness_subscores.py`: **44 passed**
-- `tests/test_training_v2_readiness_signals.py` + `tests/test_training_v2_readiness_sufficiency.py` + `tests/test_training_intensity_r1_7b.py`: **94 passed**
-- Exécution combinée ciblée (4 suites): **138 passed**
+- `tests/test_training_v2_readiness_subscores.py`: **41 passed**
+- `tests/test_training_v2_readiness_signals.py`: **29 passed**
+- `tests/test_training_v2_readiness_sufficiency.py`: **46 passed**
+- `tests/test_training_intensity_r1_7b.py`: **19 passed**
+- Exécution combinée ciblée (4 suites): **135 passed**
+- Suite V2 disponible `tests/test_training_v2_*.py`: **185 passed**
 
 ## 8) Confirmation qu'aucun consumer produit n'a été migré
 
