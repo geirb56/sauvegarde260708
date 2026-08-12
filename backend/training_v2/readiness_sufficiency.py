@@ -105,11 +105,14 @@ class ReasonCode(str, Enum):
 class PhysioBaseline(BaseModel):
     """Baseline information for a single physiological signal (RHR or HRV).
 
+    value         : personal baseline value actually computed for this signal.
+                    None when not yet available — never fabricated.
     valid_measures: number of valid measurements collected over the last 14 days.
     """
 
     model_config = ConfigDict(frozen=True)
 
+    value: Optional[float] = None
     valid_measures: int
 
 
@@ -132,11 +135,16 @@ class SleepRecord(BaseModel):
     A present (non-None) SleepRecord means a recent sleep record exists.
     Pass ``None`` to ``ReadinessSufficiencyInput.sleep`` to signal absent sleep.
 
-    Additional fields (duration_hours, score, etc.) are intentionally absent
-    to avoid fabricating neutral values.
+    duration_hours: actual sleep duration in hours, when available.  None = absent.
+    score         : sleep quality score (provider scale), when available.  None = absent.
+
+    Neither field is ever replaced with a neutral default value (7 h, 70/100, etc.).
     """
 
     model_config = ConfigDict(frozen=True)
+
+    duration_hours: Optional[float] = None
+    score: Optional[float] = None
 
 
 class ReadinessSufficiencyInput(BaseModel):
