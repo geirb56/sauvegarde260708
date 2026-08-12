@@ -167,7 +167,6 @@ class GarminActivity(BaseModel):
             details_available=details_available,
         )
 
-
 # --------------------------------------------------------------------------- #
 # GarminDailyMetrics
 # --------------------------------------------------------------------------- #

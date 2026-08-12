@@ -886,31 +886,6 @@ def determine_target_load(context: Dict, phase: str) -> int:
     return int(adjusted)
 
 
-def determine_target_km(context: Dict, phase: str, goal: str = "10K") -> float:
-    """
-    Determines the target mileage for the week.
-    """
-    weekly_km = context.get("weekly_km", DEFAULT_WEEKLY_KM)
-
-    phase_multipliers = {
-        "build": 1.05,
-        "deload": 0.75,
-        "intensification": 1.0,
-        "taper": 0.60,
-        "race": 0.25
-    }
-
-    multiplier = phase_multipliers.get(phase, 1.0)
-    target = weekly_km * multiplier
-
-    # ACWR adjustment
-    acwr = context.get("acwr", 1.0)
-    if acwr > ACWR_SAFE_MAX:
-        target *= 0.85
-
-    return round(target, 1)
-
-
 # ============================================================
 # CONTEXT BUILDING
 # ============================================================
@@ -983,46 +958,6 @@ def evaluate_risk(acwr: float, tsb: float) -> str:
 
 
 # ============================================================
-# RECOMMENDATIONS
-# ============================================================
-
-def generate_week_recommendation(
-    context: Dict,
-    phase: str,
-    goal: str = "10K"
-) -> Dict:
-    """
-    Generates recommendations for the week.
-    """
-    goal_config = GOAL_CONFIG.get(goal, GOAL_CONFIG["10K"])
-    phase_info = get_phase_description(phase)
-
-    target_load = determine_target_load(context, phase)
-    target_km = determine_target_km(context, phase, goal)
-
-    # Recommended distribution
-    long_run_km = round(target_km * goal_config["long_run_ratio"], 1)
-    easy_km = round(target_km * (1 - goal_config["long_run_ratio"] - goal_config["intensity_pct"]/100), 1)
-    intensity_km = round(target_km * goal_config["intensity_pct"] / 100, 1)
-
-    return {
-        "phase": phase,
-        "phase_info": phase_info,
-        "target_load": target_load,
-        "target_km": target_km,
-        "distribution": {
-            "long_run_km": long_run_km,
-            "easy_km": easy_km,
-            "intensity_km": intensity_km
-        },
-        "risk_level": context.get("risk_level", "low"),
-        "acwr": context.get("acwr", 1.0),
-        "tsb": context.get("tsb", 0),
-        "advice": phase_info.get("advice", "")
-    }
-
-
-# ============================================================
 # EXPORTS
 # ============================================================
 
@@ -1060,8 +995,6 @@ __all__ = [
     "get_phase_description",
     "adjust_load_by_fatigue",
     "determine_target_load",
-    "determine_target_km",
     "build_training_context",
-    "evaluate_risk",
-    "generate_week_recommendation"
+    "evaluate_risk"
 ]
