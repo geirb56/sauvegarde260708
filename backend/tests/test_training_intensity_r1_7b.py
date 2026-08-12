@@ -225,21 +225,25 @@ def test_k_determinism():
 
 
 def test_l_no_provider_dependency():
-    import importlib
+    import ast
     import training_v2.training_intensity as mod
 
     source = mod.__file__
     with open(source) as fh:
-        lines = fh.readlines()
+        tree = ast.parse(fh.read(), filename=source)
 
-    # Detect actual import statements referencing provider namespaces.
-    for line in lines:
-        stripped = line.strip()
-        if not stripped.startswith(("#", '"""', "'")):
-            for forbidden in ("import garmin", "import terra", "import strava",
-                              "from garmin", "from terra", "from strava"):
-                assert forbidden not in stripped, (
-                    f"training_intensity.py must not import provider namespace: {stripped!r}"
+    forbidden_top_level = {"garmin", "terra", "strava"}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            if isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+            else:
+                module = ""
+            names = [alias.name for alias in node.names]
+            for name in [module] + names:
+                top = name.split(".")[0]
+                assert top not in forbidden_top_level, (
+                    f"training_intensity.py must not import provider namespace: {name!r}"
                 )
 
 
