@@ -551,3 +551,84 @@ class TestSecuredAverageSpeed:
         h = build_training_history(acts, REF)
         # Speed = (10+5) km / (1+0.25) h = 12 km/h
         assert h.window_7d.average_speed_kmh == pytest.approx(12.0, abs=0.01)
+
+
+# ---------------------------------------------------------------------------
+# 15. available_history_days — inclusive convention (DQ.1)
+# ---------------------------------------------------------------------------
+
+
+class TestAvailableHistoryDaysInclusiveConvention:
+    """available_history_days must use the inclusive convention:
+    (reference_date - first_date).days + 1.
+
+    So a single activity on J yields 1 day, on J-6 → 7, J-7 → 8, etc.
+    """
+
+    def _days(self, days_ago: int) -> int:
+        acts = [_act("running", days_ago)]
+        return build_training_history(acts, REF).available_history_days
+
+    def test_activity_on_J_is_1_day(self):
+        assert self._days(0) == 1
+
+    def test_activity_on_J_minus_6_is_7_days(self):
+        assert self._days(6) == 7
+
+    def test_activity_on_J_minus_7_is_8_days(self):
+        assert self._days(7) == 8
+
+    def test_activity_on_J_minus_27_is_28_days(self):
+        assert self._days(27) == 28
+
+    def test_activity_on_J_minus_29_is_30_days(self):
+        assert self._days(29) == 30
+
+    def test_activity_on_J_minus_89_is_90_days(self):
+        assert self._days(89) == 90
+
+
+# ---------------------------------------------------------------------------
+# 16. Consistency between TrainingHistory and TrainingLoad (DQ.1)
+# ---------------------------------------------------------------------------
+
+
+class TestHistoryLoadDepthConsistency:
+    """TrainingHistory and TrainingLoadSnapshot must report the same
+    available_history_days for identical activity inputs."""
+
+    @staticmethod
+    def _load_available_days(acts: list) -> int:
+        """Replicate the available_history_days calculation from TrainingLoad."""
+        from training_v2.training_load import _extract_fields, _activity_load_minutes
+        from training_v2.training_history import RUNNING_TYPES
+
+        run_activities = []
+        for raw in acts:
+            fields = _extract_fields(raw)
+            if fields.get("activity_type") in RUNNING_TYPES:
+                act_date = fields.get("activity_date")
+                if act_date is None or act_date <= REF:
+                    run_activities.append(fields)
+
+        valid_dates = [
+            f["activity_date"] for f in run_activities
+            if f["activity_date"] is not None
+            and f["activity_date"] <= REF
+            and _activity_load_minutes(f) is not None
+        ]
+        return (REF - min(valid_dates)).days + 1 if valid_dates else 0
+
+    def test_same_depth_single_activity(self):
+        acts = [_act("running", 27)]
+        h = build_training_history(acts, REF)
+        assert h.available_history_days == self._load_available_days(acts) == 28
+
+    def test_same_depth_multiple_activities(self):
+        acts = [
+            _act("running", 89),
+            _act("running", 30),
+            _act("running", 2),
+        ]
+        h = build_training_history(acts, REF)
+        assert h.available_history_days == self._load_available_days(acts)
