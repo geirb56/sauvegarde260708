@@ -420,3 +420,84 @@ class TestNoNeutralValues:
         assert not hasattr(result, "score")
         assert not hasattr(result, "readiness_score")
         assert not hasattr(result, "value")
+
+
+# ---------------------------------------------------------------------------
+# R1.5 — New field contract tests
+# ---------------------------------------------------------------------------
+
+
+class TestPhysioBaselineValue:
+    """PhysioBaseline.value carries the personal computed baseline."""
+
+    def test_baseline_rhr_with_value(self):
+        baseline = PhysioBaseline(value=58.5, valid_measures=7)
+        assert baseline.value == 58.5
+        assert baseline.valid_measures == 7
+
+    def test_baseline_hrv_with_value(self):
+        baseline = PhysioBaseline(value=42.3, valid_measures=6)
+        assert baseline.value == 42.3
+
+    def test_baseline_value_none_accepted(self):
+        baseline = PhysioBaseline(value=None, valid_measures=3)
+        assert baseline.value is None
+
+    def test_baseline_value_defaults_to_none(self):
+        baseline = PhysioBaseline(valid_measures=5)
+        assert baseline.value is None
+
+    def test_baseline_value_does_not_affect_r1_classification(self):
+        """PhysioBaseline.value has no effect on sufficiency classification."""
+        rhr_with = PhysioSignal(
+            recent_value=58.0,
+            baseline=PhysioBaseline(value=58.5, valid_measures=7),
+        )
+        rhr_without = PhysioSignal(
+            recent_value=58.0,
+            baseline=PhysioBaseline(valid_measures=7),
+        )
+        result_with = _build(rhr_with, _solid_hrv(), _sleep(), "high")
+        result_without = _build(rhr_without, _solid_hrv(), _sleep(), "high")
+        assert result_with.level == result_without.level
+        assert result_with.reasons == result_without.reasons
+
+
+class TestSleepRecordFields:
+    """SleepRecord.duration_hours and .score carry real available values."""
+
+    def test_sleep_with_duration_hours(self):
+        sr = SleepRecord(duration_hours=7.5)
+        assert sr.duration_hours == 7.5
+        assert sr.score is None
+
+    def test_sleep_with_score(self):
+        sr = SleepRecord(score=82.0)
+        assert sr.score == 82.0
+        assert sr.duration_hours is None
+
+    def test_sleep_with_both(self):
+        sr = SleepRecord(duration_hours=6.8, score=75.0)
+        assert sr.duration_hours == 6.8
+        assert sr.score == 75.0
+
+    def test_sleep_fields_absent_stay_none(self):
+        sr = SleepRecord()
+        assert sr.duration_hours is None
+        assert sr.score is None
+
+    def test_sleep_presence_determined_by_none_not_by_fields(self):
+        """R1: sleep presence is inputs.sleep is not None, regardless of field values."""
+        sleep_no_fields = SleepRecord()
+        sleep_with_duration = SleepRecord(duration_hours=7.0)
+        sleep_with_score = SleepRecord(score=80.0)
+
+        for sleep in (sleep_no_fields, sleep_with_duration, sleep_with_score):
+            result = _build(_solid_rhr(), _solid_hrv(), sleep, "high")
+            assert result.level == SufficiencyLevel.SUFFICIENT
+            assert ReasonCode.missing_sleep not in result.reasons
+
+    def test_absent_sleep_is_still_none(self):
+        result = _build(_solid_rhr(), _solid_hrv(), None, "high")
+        assert result.level == SufficiencyLevel.DEGRADED
+        assert ReasonCode.missing_sleep in result.reasons
