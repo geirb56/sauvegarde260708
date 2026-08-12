@@ -19,6 +19,8 @@ class DomainActivity(BaseModel):
     duration_s: Optional[float] = None
     source: Optional[str] = None
     source_activity_id: Optional[str] = None
+    moderate_intensity_minutes: Optional[float] = None
+    vigorous_intensity_minutes: Optional[float] = None
 
 
 def _domain_start_time(value: Any) -> Optional[Union[str, date, datetime]]:
@@ -37,6 +39,16 @@ def _domain_source_activity_id(value: Any) -> Optional[str]:
     return None
 
 
+def _domain_intensity_minutes(value: Any) -> Optional[float]:
+    """Return a non-negative float, or None when the value is absent/invalid."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    f = float(value)
+    if f < 0:
+        return None
+    return f
+
+
 def to_domain_activity(activity: Any) -> DomainActivity:
     """Coerce a generic activity object into a DomainActivity without raising."""
     if activity is None:
@@ -52,6 +64,8 @@ def to_domain_activity(activity: Any) -> DomainActivity:
         dur = activity.get('duration_s', activity.get('duration'))
         source = activity.get('source')
         source_activity_id = activity.get('source_activity_id', activity.get('activity_id'))
+        moderate = activity.get('moderate_intensity_minutes')
+        vigorous = activity.get('vigorous_intensity_minutes')
     else:
         act_type = getattr(activity, 'activity_type', None)
         start = getattr(activity, 'start_time', None)
@@ -63,6 +77,8 @@ def to_domain_activity(activity: Any) -> DomainActivity:
             'source_activity_id',
             getattr(activity, 'activity_id', None),
         )
+        moderate = getattr(activity, 'moderate_intensity_minutes', None)
+        vigorous = getattr(activity, 'vigorous_intensity_minutes', None)
 
     return DomainActivity(
         activity_type=act_type if isinstance(act_type, str) else None,
@@ -71,4 +87,6 @@ def to_domain_activity(activity: Any) -> DomainActivity:
         duration_s=dur if isinstance(dur, (int, float)) and not isinstance(dur, bool) else None,
         source=_domain_source(source),
         source_activity_id=_domain_source_activity_id(source_activity_id),
+        moderate_intensity_minutes=_domain_intensity_minutes(moderate),
+        vigorous_intensity_minutes=_domain_intensity_minutes(vigorous),
     )
