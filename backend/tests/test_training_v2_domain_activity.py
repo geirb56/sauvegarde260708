@@ -150,3 +150,123 @@ def test_training_v2_activity_path_has_no_garmin_references():
         content = file_path.read_text()
         assert "GarminActivity" not in content
         assert "garmin_activity" not in content
+
+
+# ---------------------------------------------------------------------------
+# R1.7A — intensity minutes tests
+# ---------------------------------------------------------------------------
+
+def test_intensity_minutes_a_positive_values():
+    """A) moderate=30, vigorous=10 → preserved exactly."""
+    da = coerce_domain_activity({"moderate_intensity_minutes": 30, "vigorous_intensity_minutes": 10})
+    assert da.moderate_intensity_minutes == 30.0
+    assert da.vigorous_intensity_minutes == 10.0
+
+
+def test_intensity_minutes_b_zero_values():
+    """B) moderate=0, vigorous=0 → preserved as 0, not None."""
+    da = coerce_domain_activity({"moderate_intensity_minutes": 0, "vigorous_intensity_minutes": 0})
+    assert da.moderate_intensity_minutes == 0.0
+    assert da.vigorous_intensity_minutes == 0.0
+
+
+def test_intensity_minutes_c_none_values():
+    """C) moderate=None, vigorous=None → preserved as None."""
+    da = coerce_domain_activity({"moderate_intensity_minutes": None, "vigorous_intensity_minutes": None})
+    assert da.moderate_intensity_minutes is None
+    assert da.vigorous_intensity_minutes is None
+
+
+def test_intensity_minutes_d_negative_values():
+    """D) Negative values → None."""
+    da = coerce_domain_activity({"moderate_intensity_minutes": -1, "vigorous_intensity_minutes": -5.5})
+    assert da.moderate_intensity_minutes is None
+    assert da.vigorous_intensity_minutes is None
+
+
+def test_intensity_minutes_e_bool_values():
+    """E) Bool → None."""
+    da = coerce_domain_activity({"moderate_intensity_minutes": True, "vigorous_intensity_minutes": False})
+    assert da.moderate_intensity_minutes is None
+    assert da.vigorous_intensity_minutes is None
+
+
+def test_intensity_minutes_f_non_numeric_values():
+    """F) Non-numeric → None."""
+    da = coerce_domain_activity({"moderate_intensity_minutes": "30", "vigorous_intensity_minutes": [10]})
+    assert da.moderate_intensity_minutes is None
+    assert da.vigorous_intensity_minutes is None
+
+
+def test_intensity_minutes_g_garmin_adapter_passes_values():
+    """G) GarminActivity with intensity minutes → adapter → DomainActivity with same values."""
+    raw = {
+        "activityId": 999,
+        "activityType": {"typeKey": "running"},
+        "summaryDTO": {
+            "startTimeGMT": "2026-08-04T08:00:00.0",
+            "distance": 10000.0,
+            "duration": 3600.0,
+            "moderateIntensityMinutes": 30,
+            "vigorousIntensityMinutes": 10,
+        },
+    }
+    garmin_activity = GarminActivity.from_summary(raw)
+    da = to_domain_activity(garmin_activity)
+    assert da.moderate_intensity_minutes == 30.0
+    assert da.vigorous_intensity_minutes == 10.0
+
+
+def test_intensity_minutes_h_garmin_adapter_no_intensity():
+    """H) GarminActivity without intensity minutes → DomainActivity None, no fallback."""
+    raw = {
+        "activityId": 998,
+        "activityType": {"typeKey": "running"},
+        "summaryDTO": {
+            "startTimeGMT": "2026-08-04T08:00:00.0",
+            "distance": 10000.0,
+            "duration": 3600.0,
+        },
+    }
+    garmin_activity = GarminActivity.from_summary(raw)
+    da = to_domain_activity(garmin_activity)
+    assert da.moderate_intensity_minutes is None
+    assert da.vigorous_intensity_minutes is None
+
+
+def test_intensity_minutes_i_training_load_unchanged():
+    """I) TrainingHistory/TrainingLoad results identical with or without intensity fields."""
+    base = DomainActivity(
+        activity_type="running",
+        start_time=(REF - timedelta(days=2)).isoformat() + "T08:00:00.0",
+        distance_m=10000.0,
+        duration_s=3600.0,
+    )
+    with_intensity = DomainActivity(
+        activity_type="running",
+        start_time=(REF - timedelta(days=2)).isoformat() + "T08:00:00.0",
+        distance_m=10000.0,
+        duration_s=3600.0,
+        moderate_intensity_minutes=30.0,
+        vigorous_intensity_minutes=10.0,
+    )
+
+    assert build_training_history([base], REF) == build_training_history([with_intensity], REF)
+    assert build_training_load([base], REF) == build_training_load([with_intensity], REF)
+
+
+def test_domain_activity_no_provider_imports():
+    """Provider-neutrality: training_v2/domain_activity.py has no garmin/terra/strava imports."""
+    domain_activity_path = Path(__file__).resolve().parents[1] / "training_v2" / "domain_activity.py"
+    content = domain_activity_path.read_text()
+    for provider in ("garmin", "terra", "strava"):
+        assert provider not in content, f"Unexpected '{provider}' reference in domain_activity.py"
+
+
+def test_zero_and_none_are_distinct():
+    """0 and None must remain distinguishable after coercion."""
+    zero = coerce_domain_activity({"moderate_intensity_minutes": 0, "vigorous_intensity_minutes": 0})
+    none_ = coerce_domain_activity({})
+    assert zero.moderate_intensity_minutes == 0.0
+    assert none_.moderate_intensity_minutes is None
+    assert zero.moderate_intensity_minutes != none_.moderate_intensity_minutes
