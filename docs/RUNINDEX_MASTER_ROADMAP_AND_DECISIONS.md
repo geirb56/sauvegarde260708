@@ -9,9 +9,9 @@ Ce document est :
 - la roadmap d'exécution ;
 - un moyen d'éviter la perte de contexte entre sessions/outils.
 
-Last verified against main: `bd9d423322307405dec82dec7f185610b49e903f` (Merge PR #114)
+Last verified against main: `38b677d419c2fe75d094e58cadf44c2f8c74a829` (Merge PR #115)
 
-HEAD PR (R1.7B): see current branch HEAD
+HEAD PR (R2A): see current branch HEAD
 
 Date: `2026-08-12`
 
@@ -21,7 +21,7 @@ Date: `2026-08-12`
 
 Source de vérité utilisée pour ce document :
 
-1. HEAD réel de `main` (`bd9d423`) ;
+1. HEAD réel de `main` (`38b677d`) ;
 2. audit des merges PR sur `main` ;
 3. audit du code réellement présent (`backend/`, `frontend/`, `backend/training_v2/`) ;
 4. croisement avec les rapports versionnés (`*_REPORT.md`).
@@ -50,7 +50,7 @@ Règle: rien n'est marqué DONE/MERGED s'il n'est pas réellement présent sur `
 
 ---
 
-## 4) Readiness V2 — état canonique R1 -> R1.7A
+## 4) Readiness V2 — état canonique R1 -> R1.7B
 
 ## R1 — Sufficiency layer — PR #110 — MERGED
 
@@ -123,11 +123,9 @@ Fichier réel: `backend/training_v2/domain_activity.py`
 
 ---
 
-## 5) NEXT canonique
+## 5) R1.7B — TrainingIntensityProfile
 
-## R1.7B — TrainingIntensityProfile
-
-Status: **IMPLEMENTED IN PR / PENDING MERGE**
+Status: **MERGED** (PR #115)
 
 Fichier réel: `backend/training_v2/training_intensity.py`
 
@@ -204,7 +202,7 @@ Elle ne modifie pas `TrainingLoad`.
 
 ## 6) R2A — Subscores
 
-Status: **NEXT** (immédiatement après R1.7B)
+Status: **IMPLEMENTED IN PR / PENDING MERGE**
 
 Architecture cible:
 
@@ -212,7 +210,7 @@ Architecture cible:
 - HRV deviation % -> HRV subscore
 - RHR + HRV -> PhysioSubscore
 - Sleep duration -> SleepSubscore
-- Weekly load context + Acute recovery context J/J-1 -> LoadSubscore
+- Load signal context (`load_change_percent`) + optional intensity context -> LoadSubscore
 
 Sorties:
 
@@ -221,7 +219,7 @@ Sorties:
 
 Règle: **AUCUNE agrégation finale dans R2A**.
 
-### Calibration V1 envisagée
+### Calibration V1 implémentée
 
 - **PRODUCT CALIBRATION V1**
 - **RECALIBRATABLE**
@@ -258,16 +256,22 @@ Ne pas pénaliser automatiquement `> 9 h`.
 
 LOAD en R2A:
 
-- ne pas figer une formule complète maintenant;
-- utiliser `load_change_percent`, `recent_duration_minutes_2d`, `recent_moderate_minutes_2d`, `recent_vigorous_minutes_2d`;
-- ACWR reste contexte/annotation;
-- ne pas écrire `moderate + 2 × vigorous` comme formule de récupération.
+- calibration principale par `load_change_percent`:
+  - `<= 10 %` -> `100`
+  - `>10 à 25 %` -> `90`
+  - `>25 à 40 %` -> `75`
+  - `>40 à 60 %` -> `55`
+  - `>60 %` -> `35`
+- les valeurs négatives restent dans le cas `<= 10 %` (pas de pénalité automatique sur baisse de charge);
+- modificateur intensité secondaire, plafonné, uniquement si couverture exploitable;
+- aucune formule `moderate + 2 × vigorous`;
+- aucune conversion LT1/LT2, TRIMP, TSS, EPOC ou Recovery Time.
 
 ---
 
 ## 7) R2B — Aggregation
 
-Status: **PLANNED**
+Status: **NEXT**
 
 Règles:
 
@@ -563,8 +567,8 @@ Puis:
 - [x] R1.5 Values
 - [x] R1.6 Signals
 - [x] R1.7A Intensity transport
-- [x] R1.7B TrainingIntensityProfile (IMPLEMENTED IN PR / PENDING MERGE)
-- [ ] R2A Subscores (NEXT)
+- [x] R1.7B TrainingIntensityProfile (MERGED, PR #115)
+- [x] R2A Subscores (IMPLEMENTED IN PR / PENDING MERGE)
 - [ ] R2B Aggregation
 - [ ] R3 /run-index migration
 - [ ] R4 kill legacy
@@ -607,37 +611,54 @@ Ces sujets restent secondaires et ne précèdent pas la roadmap principale Readi
 
 ---
 
-## 21) Périmètre strict de cette PR
+## 21) Périmètre strict de la mise à jour canonique
 
-- Uniquement `docs/RUNINDEX_MASTER_ROADMAP_AND_DECISIONS.md`
-- Aucun code applicatif
-- Aucun refactor
-- Aucune configuration
-- Aucun test applicatif
-- Aucun autre fichier
+Ce document suit l'état réel de `main` et des PR en cours:
+
+- R1.7B est **MERGED** (PR #115).
+- R2A est **IMPLEMENTED IN PR / PENDING MERGE**.
+- R2B est **NEXT**.
 
 ---
 
-## 22) FUTURE — Thresholds et distribution d'intensité avancée
+## 22) Décision produit canonique — LT1 / LT2 (phase grand public)
 
-Ces sujets viennent **après** la construction de la Readiness V2.
-Ils ne font PAS partie de R1.7B.
+RunIndex est une application grand public.
+La version LT1/LT2 initiale ne dépend pas de mesures laboratoire.
 
-### FUTURE — Personalized LT1/LT2 thresholds
+Cible produit:
 
-Status: **FUTURE** (après R2A et Readiness V2)
+- estimation automatique personnalisée LT1/LT2 basée sur les données d'entraînement disponibles ;
+- ~85% de fiabilité pratique visée en validation produit.
 
-Objectif: calibration personnalisée des seuils LT1/LT2 par athlète,
-à partir de données physiologiques réelles (HRV, FC, tests terrain).
+Important:
 
-Aucune implémentation dans R1.7B ni R2A.
+- 85% est une cible produit, pas une précision scientifique déjà démontrée ;
+- aucune confiance ne doit être présentée comme validée avant benchmark.
 
-### FUTURE — Training intensity distribution V2
+Roadmap post-Readiness V2:
 
-Status: **FUTURE** (après Personalized LT1/LT2)
+- P1 — enrichissement provider-neutral des faits activité (dont FC quand réellement disponible)
+- P2 — ThresholdEvidence
+- P3 — LT2 Estimator V1
+- P4 — LT1 Estimator V1
+- P5 — Confidence / Calibration
 
-Objectif: distribution fine de l'intensité d'entraînement en zones
-calibrées (Z1/Z2/Z3+), en s'appuyant sur les seuils LT1/LT2 personnalisés.
+puis:
 
-Aucune pondération `moderate + 2 × vigorous` ne sera introduite
-avant que ces seuils soient disponibles et validés.
+- Weekly Target V2
+- Workout Generator V2
+- Training Intensity Distribution LT1/LT2
+- Workout Analysis V2
+- Daily Adaptation V2
+
+Principes:
+
+- pas de laboratoire requis ;
+- pas de `%FCmax` fixe présenté comme LT1/LT2 individuel ;
+- pas de faux seuil quand les données sont insuffisantes ;
+- LT1 peut être `None` alors que LT2 est estimable, et inversement ;
+- estimation basée sur convergence de preuves historiques ;
+- confidence explicite ;
+- aucune assimilation automatique: `Garmin moderate/vigorous == LT1/LT2` ;
+- les minutes Garmin R1.7B restent des faits provider-normalisés.
