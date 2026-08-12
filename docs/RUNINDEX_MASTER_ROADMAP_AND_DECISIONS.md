@@ -9,7 +9,9 @@ Ce document est :
 - la roadmap d'exécution ;
 - un moyen d'éviter la perte de contexte entre sessions/outils.
 
-Last verified against main: `3d03d99` (Merge PR #113)
+Last verified against main: `bd9d423322307405dec82dec7f185610b49e903f` (Merge PR #114)
+
+HEAD PR (R1.7B): see current branch HEAD
 
 Date: `2026-08-12`
 
@@ -19,7 +21,7 @@ Date: `2026-08-12`
 
 Source de vérité utilisée pour ce document :
 
-1. HEAD réel de `main` (`3d03d99`) ;
+1. HEAD réel de `main` (`bd9d423`) ;
 2. audit des merges PR sur `main` ;
 3. audit du code réellement présent (`backend/`, `frontend/`, `backend/training_v2/`) ;
 4. croisement avec les rapports versionnés (`*_REPORT.md`).
@@ -123,32 +125,86 @@ Fichier réel: `backend/training_v2/domain_activity.py`
 
 ## 5) NEXT canonique
 
-## R1.7B — Acute Recovery Context
+## R1.7B — TrainingIntensityProfile
 
-Status: **NEXT**
+Status: **IMPLEMENTED IN PR / PENDING MERGE**
 
-Objectif:
+Fichier réel: `backend/training_v2/training_intensity.py`
 
-Agréger séparément sur **J + J-1** (date-based):
+### Couche pure
 
-- `recent_duration_minutes_2d`
-- `recent_moderate_minutes_2d`
-- `recent_vigorous_minutes_2d`
+`TrainingIntensityProfile` est une couche métier pure et provider-neutral.
+Aucun import `garmin.*`, `terra.*`, `strava.*`.
+Aucune interprétation physiologique.
 
-Contraintes:
+### Contrat `TrainingIntensityProfile`
 
-- J + J-1, pas vrai rolling 48h tant que le domaine est date-based;
-- aucune formule de Recovery Time;
-- aucun `moderate + 2 × vigorous`;
-- aucune pondération;
-- aucun score 0-100;
-- aucune tentative de reproduire Garmin / Firstbeat.
+| Champ | Type | Rôle |
+|---|---|---|
+| `reference_date` | `date` | Date de référence J (explicite) |
+| `window_days` | `int` | Largeur fenêtre (V1 = 2) |
+| `duration_minutes` | `float` | Somme durées running valides / 60 |
+| `moderate_minutes` | `Optional[float]` | Somme moderate connues (None = inconnu) |
+| `vigorous_minutes` | `Optional[float]` | Somme vigorous connues (None = inconnu) |
+| `activities_total` | `int` | Activités running dans la fenêtre |
+| `activities_with_intensity` | `int` | Avec ≥ 1 champ intensité connu |
+| `activities_without_intensity` | `int` | Sans aucun champ intensité connu |
+| `intensity_coverage_ratio` | `Optional[float]` | with / total ; None si total == 0 |
+
+### Fenêtre V1 : J-1 → J inclus
+
+`window_days = 2`
+
+Fenêtre : `[reference_date - 1 jour, reference_date]`
+
+Ce n'est PAS un rolling 48 heures. C'est une fenêtre calendaire date-based.
+
+`window_days` est conservé dans le contrat pour permettre l'évolution future.
+
+### Durée
+
+`duration_minutes = Σ(duration_s / 60)` pour les activités running de la fenêtre.
+
+`duration_s` utilisable : numérique, non-bool, > 0.
+
+Aucune estimation par distance.
+
+### Règle fondamentale : None ≠ 0
+
+- `None` = valeur inconnue / indisponible.
+- `0` = valeur connue et nulle.
+
+Conséquences:
+- Si aucune activité de la fenêtre n'a de valeur `moderate` connue → `moderate_minutes = None`.
+- `0 + None → 0` (pas None).
+
+### Couverture
+
+Activité "with_intensity" : au moins un champ (`moderate` ou `vigorous`) is not None.
+
+`intensity_coverage_ratio = activities_with_intensity / activities_total`
+
+Si `activities_total == 0` → `intensity_coverage_ratio = None` (pas 0.0).
+
+### Aucune pondération, aucun LT1/LT2, aucun Recovery Time
+
+Interdit dans R1.7B :
+
+- `moderate + 2 × vigorous`
+- LT1 / LT2
+- TRIMP / TSS / EPOC
+- Recovery Time Garmin/Firstbeat
+- Score 0-100
+- Pondération quelconque
+
+`TrainingIntensityProfile` est une couche **parallèle** de signaux bruts.
+Elle ne modifie pas `TrainingLoad`.
 
 ---
 
 ## 6) R2A — Subscores
 
-Status: **PLANNED** (immédiatement après R1.7B)
+Status: **NEXT** (immédiatement après R1.7B)
 
 Architecture cible:
 
@@ -507,8 +563,8 @@ Puis:
 - [x] R1.5 Values
 - [x] R1.6 Signals
 - [x] R1.7A Intensity transport
-- [ ] R1.7B Acute Recovery Context
-- [ ] R2A Subscores
+- [x] R1.7B TrainingIntensityProfile (IMPLEMENTED IN PR / PENDING MERGE)
+- [ ] R2A Subscores (NEXT)
 - [ ] R2B Aggregation
 - [ ] R3 /run-index migration
 - [ ] R4 kill legacy
@@ -559,3 +615,29 @@ Ces sujets restent secondaires et ne précèdent pas la roadmap principale Readi
 - Aucune configuration
 - Aucun test applicatif
 - Aucun autre fichier
+
+---
+
+## 22) FUTURE — Thresholds et distribution d'intensité avancée
+
+Ces sujets viennent **après** la construction de la Readiness V2.
+Ils ne font PAS partie de R1.7B.
+
+### FUTURE — Personalized LT1/LT2 thresholds
+
+Status: **FUTURE** (après R2A et Readiness V2)
+
+Objectif: calibration personnalisée des seuils LT1/LT2 par athlète,
+à partir de données physiologiques réelles (HRV, FC, tests terrain).
+
+Aucune implémentation dans R1.7B ni R2A.
+
+### FUTURE — Training intensity distribution V2
+
+Status: **FUTURE** (après Personalized LT1/LT2)
+
+Objectif: distribution fine de l'intensité d'entraînement en zones
+calibrées (Z1/Z2/Z3+), en s'appuyant sur les seuils LT1/LT2 personnalisés.
+
+Aucune pondération `moderate + 2 × vigorous` ne sera introduite
+avant que ces seuils soient disponibles et validés.
