@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import ast
 import sys
-from datetime import date
 from pathlib import Path
 
 import pytest
@@ -22,7 +21,6 @@ from training_v2.readiness_subscores import (
     build_readiness_subscores,
     build_sleep_subscore,
 )
-from training_v2.training_intensity import TrainingIntensityProfile
 
 
 def _load_signal(change: float | None) -> ReadinessLoadSignal:
@@ -31,25 +29,6 @@ def _load_signal(change: float | None) -> ReadinessLoadSignal:
         chronic_weekly_load=250.0,
         load_change_percent=change,
         acwr=1.2,
-    )
-
-
-def _intensity_profile(
-    *,
-    coverage: float | None,
-    moderate: float | None,
-    vigorous: float | None,
-) -> TrainingIntensityProfile:
-    return TrainingIntensityProfile(
-        reference_date=date(2026, 8, 12),
-        window_days=2,
-        duration_minutes=60.0,
-        moderate_minutes=moderate,
-        vigorous_minutes=vigorous,
-        activities_total=1 if coverage is not None else 0,
-        activities_with_intensity=1 if coverage and coverage > 0 else 0,
-        activities_without_intensity=0 if coverage and coverage > 0 else 1 if coverage is not None else 0,
-        intensity_coverage_ratio=coverage,
     )
 
 
@@ -139,72 +118,55 @@ class TestSleepSubscore:
 
 class TestLoadSubscore:
     def test_stable_load(self):
-        assert build_load_subscore(load_signal=_load_signal(0.0), recent_intensity_profile=None).score == 100.0
+        assert build_load_subscore(load_signal=_load_signal(0.0)).score == 100.0
 
     def test_plus_10_percent(self):
-        assert build_load_subscore(load_signal=_load_signal(10.0), recent_intensity_profile=None).score == 100.0
+        assert build_load_subscore(load_signal=_load_signal(10.0)).score == 100.0
 
     def test_plus_20_percent(self):
-        assert build_load_subscore(load_signal=_load_signal(20.0), recent_intensity_profile=None).score == 90.0
+        assert build_load_subscore(load_signal=_load_signal(20.0)).score == 90.0
+
+    def test_25_percent(self):
+        assert build_load_subscore(load_signal=_load_signal(25.0)).score == 90.0
 
     def test_plus_30_percent(self):
-        assert build_load_subscore(load_signal=_load_signal(30.0), recent_intensity_profile=None).score == 75.0
+        assert build_load_subscore(load_signal=_load_signal(30.0)).score == 75.0
+
+    def test_40_percent(self):
+        assert build_load_subscore(load_signal=_load_signal(40.0)).score == 75.0
 
     def test_plus_50_percent(self):
-        assert build_load_subscore(load_signal=_load_signal(50.0), recent_intensity_profile=None).score == 55.0
+        assert build_load_subscore(load_signal=_load_signal(50.0)).score == 55.0
 
     def test_60_percent(self):
-        assert build_load_subscore(load_signal=_load_signal(60.0), recent_intensity_profile=None).score == 55.0
+        assert build_load_subscore(load_signal=_load_signal(60.0)).score == 55.0
+
+    def test_above_60_percent(self):
+        assert build_load_subscore(load_signal=_load_signal(61.0)).score == 35.0
 
     def test_load_decrease(self):
-        assert build_load_subscore(load_signal=_load_signal(-20.0), recent_intensity_profile=None).score == 100.0
+        assert build_load_subscore(load_signal=_load_signal(-20.0)).score == 100.0
 
     def test_load_change_percent_none(self):
-        assert build_load_subscore(load_signal=_load_signal(None), recent_intensity_profile=None).score is None
-
-    def test_intensity_profile_absent_no_modifier(self):
-        assert build_load_subscore(load_signal=_load_signal(20.0), recent_intensity_profile=None).score == 90.0
-
-    def test_coverage_none_no_modifier(self):
-        profile = _intensity_profile(coverage=None, moderate=10.0, vigorous=10.0)
-        assert build_load_subscore(load_signal=_load_signal(20.0), recent_intensity_profile=profile).score == 90.0
-
-    def test_moderate_none_and_vigorous_none_no_modifier(self):
-        profile = _intensity_profile(coverage=0.5, moderate=None, vigorous=None)
-        assert build_load_subscore(load_signal=_load_signal(20.0), recent_intensity_profile=profile).score == 90.0
-
-    def test_explicit_zero_is_not_none(self):
-        profile = _intensity_profile(coverage=1.0, moderate=0.0, vigorous=0.0)
-        assert build_load_subscore(load_signal=_load_signal(20.0), recent_intensity_profile=profile).score == 90.0
-
-    def test_partial_data_moderate_only_small_penalty(self):
-        profile = _intensity_profile(coverage=1.0, moderate=20.0, vigorous=None)
-        assert build_load_subscore(load_signal=_load_signal(20.0), recent_intensity_profile=profile).score == 85.0
-
-    def test_vigorous_known_extra_penalty_capped(self):
-        profile = _intensity_profile(coverage=1.0, moderate=10.0, vigorous=5.0)
-        assert build_load_subscore(load_signal=_load_signal(20.0), recent_intensity_profile=profile).score == 80.0
+        assert build_load_subscore(load_signal=_load_signal(None)).score is None
 
     def test_load_signal_none(self):
-        assert build_load_subscore(load_signal=None, recent_intensity_profile=None).score is None
+        assert build_load_subscore(load_signal=None).score is None
 
 
 class TestArchitecture:
     def test_bundle_determinism(self):
-        profile = _intensity_profile(coverage=1.0, moderate=20.0, vigorous=0.0)
         s1 = build_readiness_subscores(
             rhr_delta_bpm=3.0,
             hrv_delta_percent=-15.0,
             sleep_duration_hours=7.5,
             load_signal=_load_signal(30.0),
-            recent_intensity_profile=profile,
         )
         s2 = build_readiness_subscores(
             rhr_delta_bpm=3.0,
             hrv_delta_percent=-15.0,
             sleep_duration_hours=7.5,
             load_signal=_load_signal(30.0),
-            recent_intensity_profile=profile,
         )
         assert s1 == s2
 
@@ -214,7 +176,6 @@ class TestArchitecture:
             hrv_delta_percent=-999.0,
             sleep_duration_hours=100.0,
             load_signal=_load_signal(999.0),
-            recent_intensity_profile=_intensity_profile(coverage=1.0, moderate=1000.0, vigorous=1000.0),
         )
         for score in (subs.physio.score, subs.sleep.score, subs.load.score):
             assert score is not None
@@ -226,7 +187,6 @@ class TestArchitecture:
             hrv_delta_percent=None,
             sleep_duration_hours=None,
             load_signal=None,
-            recent_intensity_profile=None,
         )
         assert not hasattr(subs, "readiness_score")
         assert not hasattr(subs, "readiness_status")
@@ -239,7 +199,6 @@ class TestArchitecture:
             hrv_delta_percent=-7.0,
             sleep_duration_hours=7.5,
             load_signal=_load_signal(20.0),
-            recent_intensity_profile=None,
         )
         assert isinstance(subs, ReadinessSubscores)
         assert isinstance(subs.physio, PhysioSubscore)

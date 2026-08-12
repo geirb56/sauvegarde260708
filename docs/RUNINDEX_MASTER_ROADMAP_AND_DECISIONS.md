@@ -210,7 +210,7 @@ Architecture cible:
 - HRV deviation % -> HRV subscore
 - RHR + HRV -> PhysioSubscore
 - Sleep duration -> SleepSubscore
-- Load signal context (`load_change_percent`) + optional intensity context -> LoadSubscore
+- Load signal context (`load_change_percent`) -> LoadSubscore
 
 Sorties:
 
@@ -263,9 +263,12 @@ LOAD en R2A:
   - `>40 à 60 %` -> `55`
   - `>60 %` -> `35`
 - les valeurs négatives restent dans le cas `<= 10 %` (pas de pénalité automatique sur baisse de charge);
-- modificateur intensité secondaire, plafonné, uniquement si couverture exploitable;
+- aucun modificateur basé sur `TrainingIntensityProfile`;
 - aucune formule `moderate + 2 × vigorous`;
 - aucune conversion LT1/LT2, TRIMP, TSS, EPOC ou Recovery Time.
+
+R2A LoadSubscore V1 utilise uniquement `load_change_percent`.
+`TrainingIntensityProfile` n'entre pas dans le score R2A et reste une couche de faits indépendante pour une calibration future.
 
 ---
 

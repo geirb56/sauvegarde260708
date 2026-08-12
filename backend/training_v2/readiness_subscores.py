@@ -19,7 +19,6 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict
 
 from training_v2.readiness_signals import ReadinessLoadSignal
-from training_v2.training_intensity import TrainingIntensityProfile
 
 # ---------------------------------------------------------------------------
 # PRODUCT_CALIBRATION_V1 (explicitly product calibration, not universal science)
@@ -53,12 +52,6 @@ PRODUCT_CALIBRATION_V1_LOAD_SCORE_10_TO_25 = 90.0
 PRODUCT_CALIBRATION_V1_LOAD_SCORE_25_TO_40 = 75.0
 PRODUCT_CALIBRATION_V1_LOAD_SCORE_40_TO_60 = 55.0
 PRODUCT_CALIBRATION_V1_LOAD_SCORE_ABOVE_60 = 35.0
-
-# Load intensity modifier (secondary, conservative, capped)
-PRODUCT_CALIBRATION_V1_LOAD_MODERATE_PRESENT_PENALTY = 5.0
-PRODUCT_CALIBRATION_V1_LOAD_VIGOROUS_PRESENT_EXTRA_PENALTY = 5.0
-PRODUCT_CALIBRATION_V1_LOAD_INTENSITY_MAX_PENALTY = 10.0
-
 
 # ---------------------------------------------------------------------------
 # Output contracts
@@ -160,31 +153,6 @@ def _load_base_component(load_change_percent: Optional[float]) -> Optional[float
     return PRODUCT_CALIBRATION_V1_LOAD_SCORE_ABOVE_60
 
 
-def _load_intensity_penalty(
-    recent_intensity_profile: Optional[TrainingIntensityProfile],
-) -> float:
-    if recent_intensity_profile is None:
-        return 0.0
-    if recent_intensity_profile.intensity_coverage_ratio is None:
-        return 0.0
-
-    penalty = 0.0
-
-    if (
-        recent_intensity_profile.moderate_minutes is not None
-        and recent_intensity_profile.moderate_minutes > 0
-    ):
-        penalty += PRODUCT_CALIBRATION_V1_LOAD_MODERATE_PRESENT_PENALTY
-
-    if (
-        recent_intensity_profile.vigorous_minutes is not None
-        and recent_intensity_profile.vigorous_minutes > 0
-    ):
-        penalty += PRODUCT_CALIBRATION_V1_LOAD_VIGOROUS_PRESENT_EXTRA_PENALTY
-
-    return min(penalty, PRODUCT_CALIBRATION_V1_LOAD_INTENSITY_MAX_PENALTY)
-
-
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -218,7 +186,6 @@ def build_sleep_subscore(*, sleep_duration_hours: Optional[float]) -> SleepSubsc
 def build_load_subscore(
     *,
     load_signal: Optional[ReadinessLoadSignal],
-    recent_intensity_profile: Optional[TrainingIntensityProfile],
 ) -> LoadSubscore:
     if load_signal is None:
         return LoadSubscore(score=None)
@@ -227,8 +194,7 @@ def build_load_subscore(
     if base_score is None:
         return LoadSubscore(score=None)
 
-    penalty = _load_intensity_penalty(recent_intensity_profile)
-    return LoadSubscore(score=_bounded(base_score - penalty))
+    return LoadSubscore(score=_bounded(base_score))
 
 
 def build_readiness_subscores(
@@ -237,7 +203,6 @@ def build_readiness_subscores(
     hrv_delta_percent: Optional[float],
     sleep_duration_hours: Optional[float],
     load_signal: Optional[ReadinessLoadSignal],
-    recent_intensity_profile: Optional[TrainingIntensityProfile] = None,
 ) -> ReadinessSubscores:
     return ReadinessSubscores(
         physio=build_physio_subscore(
@@ -247,6 +212,5 @@ def build_readiness_subscores(
         sleep=build_sleep_subscore(sleep_duration_hours=sleep_duration_hours),
         load=build_load_subscore(
             load_signal=load_signal,
-            recent_intensity_profile=recent_intensity_profile,
         ),
     )

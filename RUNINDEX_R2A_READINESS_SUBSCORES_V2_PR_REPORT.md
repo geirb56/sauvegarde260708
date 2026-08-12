@@ -48,18 +48,12 @@
   - `(25, 40] -> 75`
   - `(40, 60] -> 55`
   - `> 60 -> 35`
-- Modificateur intensité Load (secondaire, plafonné):
-  - aucune modification si profil absent ou couverture `None`
-  - pénalité modérée faible si `moderate_minutes > 0`
-  - pénalité supplémentaire si `vigorous_minutes > 0`
-  - pénalité totale plafonnée
 
 ## 5) Comportement `None`
 
 - Aucun fallback neutre inventé.
 - `None` reste `None` sur chaque composant et chaque subscore.
 - `load_change_percent is None -> LoadSubscore.score is None`.
-- `None != 0` respecté pour moderate/vigorous.
 
 ## 6) Tests exécutés
 
@@ -96,6 +90,7 @@
 ## 11) Limites connues du LoadSubscore V1
 
 - V1 reste volontairement conservateur et centré sur `load_change_percent`.
-- Le modificateur intensité est volontairement faible et plafonné.
+- `TrainingIntensityProfile` est volontairement hors calcul du LoadSubscore R2A.
+- Aucune relation entre minutes moderate/vigorous et récupération n'est inventée en V1.
 - Aucune conversion physiologique (LT1/LT2/TRIMP/TSS/EPOC/Recovery Time) n'est faite.
 - Des calibrations plus fines sont reportées à des phases ultérieures.
