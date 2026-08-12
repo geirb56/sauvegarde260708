@@ -30,7 +30,9 @@ Non-running, future, and out-of-window activities are silently ignored.
 Duration
 --------
 duration_minutes = sum(duration_s / 60) for each running activity in the
-window where duration_s is numeric (int or float, not bool) and > 0.
+window where DomainActivity.duration_s is not None and > 0.
+Invalid raw values (bool, negative, non-numeric) are sanitised to None by
+to_domain_activity() before they reach this layer.
 
 Intensity minutes
 -----------------
@@ -54,14 +56,14 @@ When activities_total == 0 the ratio is None (not 0.0).
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
-from typing import Any, List, Optional, Sequence, Union
+from typing import Any, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict
 
+from .domain_activity import to_domain_activity
 # Reuse the canonical set of running activity types from training_history to
-# avoid duplication.  Import at function level only if needed to sidestep any
-# future circular-import risk; here a direct module-level import is safe
-# because training_history does NOT import training_intensity.
+# avoid duplication.  Import at module level; this is safe because
+# training_history does NOT import training_intensity.
 from .training_history import RUNNING_TYPES
 
 # ---------------------------------------------------------------------------
@@ -72,7 +74,10 @@ _DEFAULT_WINDOW_DAYS = 2
 
 
 def _activity_date(activity: Any) -> Optional[date]:
-    """Return the calendar date for an activity's start_time, or None."""
+    """Return the calendar date for a DomainActivity's start_time, or None.
+
+    DomainActivity.start_time may be a date, datetime, or ISO-8601 str.
+    """
     start = getattr(activity, "start_time", None)
     if start is None:
         return None
@@ -86,13 +91,6 @@ def _activity_date(activity: Any) -> Optional[date]:
         except ValueError:
             pass
     return None
-
-
-def _valid_duration(value: Any) -> bool:
-    """Return True when *value* is a numeric, non-bool, positive duration."""
-    if value is None or isinstance(value, bool):
-        return False
-    return isinstance(value, (int, float)) and value > 0
 
 
 def _add_intensity(accumulator: Optional[float], value: Optional[float]) -> Optional[float]:
@@ -155,18 +153,28 @@ def build_training_intensity_profile(
 ) -> TrainingIntensityProfile:
     """Build a :class:`TrainingIntensityProfile` from a collection of activities.
 
+    Each entry in *activities* is first normalised through
+    :func:`~training_v2.domain_activity.to_domain_activity`, which is the
+    single, canonical provider-neutral normalisation boundary.  The builder
+    then works exclusively with the resulting :class:`DomainActivity` fields.
+
+    This means the pipeline is:
+
+        raw activity (dict / object / DomainActivity)
+            ↓
+        to_domain_activity()
+            ↓
+        DomainActivity
+            ↓
+        TrainingIntensityProfile
+
     Parameters
     ----------
     activities:
-        Any sequence of objects that expose the following attributes
-        (provider-neutral ``DomainActivity`` instances are the canonical
-        input, but plain objects or dicts with the same fields work too):
-
-        - ``activity_type`` (str or None)
-        - ``start_time``    (date | datetime | ISO-8601 str | None)
-        - ``duration_s``    (int | float | None)
-        - ``moderate_intensity_minutes`` (int | float | None)
-        - ``vigorous_intensity_minutes`` (int | float | None)
+        Any sequence of raw activities accepted by
+        :func:`~training_v2.domain_activity.to_domain_activity`:
+        :class:`DomainActivity` instances, plain objects, or dicts with the
+        standard business fields.
 
     reference_date:
         The anchor date J.  The window covers [J - (window_days - 1), J].
@@ -187,10 +195,11 @@ def build_training_intensity_profile(
     moderate_acc: Optional[float] = None
     vigorous_acc: Optional[float] = None
 
-    for activity in activities:
+    for raw_activity in activities:
+        activity = to_domain_activity(raw_activity)
+
         # --- Type filter ---
-        act_type = getattr(activity, "activity_type", None)
-        if act_type not in RUNNING_TYPES:
+        if activity.activity_type not in RUNNING_TYPES:
             continue
 
         # --- Window filter ---
@@ -203,13 +212,17 @@ def build_training_intensity_profile(
         total += 1
 
         # --- Duration ---
-        dur = getattr(activity, "duration_s", None)
-        if _valid_duration(dur):
-            duration_s_sum += float(dur)  # type: ignore[arg-type]
+        # DomainActivity.duration_s is already validated by to_domain_activity:
+        # None for missing/invalid; a positive-or-zero float otherwise.
+        # We still require > 0 to exclude an explicit zero-duration.
+        dur = activity.duration_s
+        if dur is not None and dur > 0:
+            duration_s_sum += dur
 
         # --- Intensity ---
-        moderate = getattr(activity, "moderate_intensity_minutes", None)
-        vigorous = getattr(activity, "vigorous_intensity_minutes", None)
+        # DomainActivity fields are already normalised (bool/negative/non-numeric → None).
+        moderate = activity.moderate_intensity_minutes
+        vigorous = activity.vigorous_intensity_minutes
 
         moderate_acc = _add_intensity(moderate_acc, moderate)
         vigorous_acc = _add_intensity(vigorous_acc, vigorous)

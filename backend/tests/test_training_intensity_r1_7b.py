@@ -299,3 +299,93 @@ def test_profile_is_immutable():
     profile = build_training_intensity_profile([], REF)
     with pytest.raises(Exception):
         profile.duration_minutes = 999.0  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# N — dict input is properly normalised via to_domain_activity()
+# ---------------------------------------------------------------------------
+
+
+def test_n_dict_input():
+    """A plain dict must be accepted and normalised via to_domain_activity()."""
+    raw = {
+        "activity_type": "running",
+        "start_time": REF,
+        "duration_s": 3600,
+        "moderate_intensity_minutes": 20,
+        "vigorous_intensity_minutes": 10,
+    }
+    profile = build_training_intensity_profile([raw], REF)
+    assert profile.activities_total == 1
+    assert profile.duration_minutes == 60.0
+    assert profile.moderate_minutes == 20.0
+    assert profile.vigorous_minutes == 10.0
+    assert profile.activities_with_intensity == 1
+    assert profile.intensity_coverage_ratio == 1.0
+
+
+# ---------------------------------------------------------------------------
+# O — None vs 0 preserved via dict input
+# ---------------------------------------------------------------------------
+
+
+def test_o_none_vs_zero_via_dict():
+    """moderate=0 (known) and vigorous=None (unknown) must stay distinct."""
+    raw = {
+        "activity_type": "running",
+        "start_time": REF,
+        "duration_s": 1800,
+        "moderate_intensity_minutes": 0,
+        "vigorous_intensity_minutes": None,
+    }
+    profile = build_training_intensity_profile([raw], REF)
+    assert profile.moderate_minutes == 0.0
+    assert profile.vigorous_minutes is None
+    assert profile.activities_with_intensity == 1
+    assert profile.activities_without_intensity == 0
+
+
+# ---------------------------------------------------------------------------
+# P — invalid intensity values are sanitised by to_domain_activity()
+# ---------------------------------------------------------------------------
+
+
+def test_p_invalid_intensity_values_normalised():
+    """to_domain_activity() converts bool/negative/non-numeric intensity to None.
+
+    The behaviour verified here is exactly what DomainActivity guarantees:
+    - bool  → None
+    - negative float → None
+    - non-numeric string → None
+
+    The builder must NOT see these as known values.
+    """
+    from training_v2.domain_activity import DomainActivity
+
+    # bool True for moderate, negative for vigorous
+    raw_bool_neg = {
+        "activity_type": "running",
+        "start_time": REF,
+        "duration_s": 1800,
+        "moderate_intensity_minutes": True,   # bool → None after normalisation
+        "vigorous_intensity_minutes": -5.0,   # negative → None after normalisation
+    }
+    profile = build_training_intensity_profile([raw_bool_neg], REF)
+    # Both fields normalised to None → activity is WITHOUT intensity
+    assert profile.moderate_minutes is None
+    assert profile.vigorous_minutes is None
+    assert profile.activities_with_intensity == 0
+    assert profile.activities_without_intensity == 1
+
+    # non-numeric string
+    raw_str = {
+        "activity_type": "running",
+        "start_time": REF,
+        "duration_s": 1800,
+        "moderate_intensity_minutes": "bad_value",
+        "vigorous_intensity_minutes": None,
+    }
+    profile2 = build_training_intensity_profile([raw_str], REF)
+    assert profile2.moderate_minutes is None
+    assert profile2.vigorous_minutes is None
+    assert profile2.activities_without_intensity == 1
