@@ -696,7 +696,7 @@ Puis:
 - [x] R2B Aggregation (MERGED — PR #117)
 - [x] R3 /run-index migration (MERGED — PR #118)
 - [x] R3 validation runtime
-- [ ] R4A suppression legacy CURRENT
+- [x] R4A suppression legacy CURRENT (IMPLEMENTED IN PR / PENDING MERGE)
 - [ ] R4B migration historique Readiness V2
 
 ### TRAINING ENGINE
