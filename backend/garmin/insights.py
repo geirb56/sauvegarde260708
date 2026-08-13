@@ -69,63 +69,6 @@ def _activity_load(act: dict) -> float:
     return 0.0
 
 
-def _compute_acwr(activities: List[dict], today) -> float:
-    """Acute:Chronic Workload Ratio from real activities (7d vs 28d daily avg)."""
-    return compute_load_metrics(activities, today)["acwr_raw"]
-
-
-def compute_load_metrics(activities: List[dict], today) -> dict:
-    """Duration-based training-load metrics — SINGLE SOURCE OF TRUTH.
-
-    Used by both the Dashboard (/run-index) and the Training page
-    (/training/metrics) so ACWR and TSB are identical across the app.
-    Load proxy = session duration (TRIMP-like) via _activity_load().
-    """
-    acute = 0.0
-    chronic = 0.0
-    for act in activities:
-        d = _parse_day(act.get("start_time") or act.get("synced_at") or "")
-        if not d:
-            continue
-        days_ago = (today - d.date()).days
-        if days_ago < 0:
-            continue
-        load = _activity_load(act)
-        if days_ago < 28:
-            chronic += load
-        if days_ago < 7:
-            acute += load
-    acute_avg = acute / 7.0
-    chronic_avg = chronic / 28.0
-    acwr_raw = (acute_avg / chronic_avg) if chronic_avg > 0 else 1.0
-    ctl = chronic / 4.0   # chronic base (weekly-average load)
-    atl = acute           # acute fatigue (current week load)
-    return {
-        "acute": round(acute, 1),
-        "chronic": round(chronic, 1),
-        "acwr_raw": acwr_raw,
-        "acwr": round(acwr_raw, 2),
-        "ctl": round(ctl, 1),
-        "atl": round(atl, 1),
-        "tsb": round(ctl - atl, 1),
-    }
-
-
-async def compute_training_load_metrics(db, user_id: str) -> Optional[dict]:
-    """Fetch the user's real Garmin activities and return duration-based
-    load metrics (ACWR, CTL, ATL, TSB). Returns None when no activities."""
-    activities = await (
-        db.garmin_activities.find({"user_id": user_id}, {"_id": 0})
-        .sort("start_time", -1)
-        .limit(200)
-        .to_list(length=200)
-    )
-    if not activities:
-        return None
-    today = datetime.now(timezone.utc).date()
-    return compute_load_metrics(activities, today)
-
-
 def _mean(values: List[float]) -> Optional[float]:
     vals = [v for v in values if v is not None]
     if not vals:

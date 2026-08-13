@@ -39,7 +39,7 @@ Conservé :
 - `fatigue_physio` et `fatigue_ratio`;
 - `history[].run_readiness`;
 - `/training/metrics` legacy;
-- helpers encore appelés (`compute_load_metrics`, `_compute_acwr`, etc.).
+- helpers TrainingLoad legacy encore appelés.
 
 ---
 
@@ -77,7 +77,7 @@ Conservé :
 ## Dettes explicitement conservées
 
 - `history[].run_readiness` garde son calcul historique actuel;
-- `/training/metrics` garde `compute_load_metrics()` legacy;
+- `/training/metrics` garde un helper TrainingLoad legacy;
 - la divergence baseline RHR / historique reste hors périmètre.
 
 ---
