@@ -60,6 +60,7 @@ from rag_engine import (
 )
 
 # Import training engine for periodization
+from training_v2.training_load import build_training_load
 from training_engine import (
     DEFAULT_WEEKLY_KM,
     GOAL_CONFIG,
@@ -3672,8 +3673,6 @@ async def get_training_metrics(user: dict = Depends(auth_user)):
     - acwr is None when chronic_weekly_load == 0 (no valid Garmin duration data).
     - No ACWR=1.0 fallback.  No distance→duration estimation.
     """
-    from training_v2.training_load import build_training_load
-
     today = datetime.now(timezone.utc)
     today_date = today.date()
     seven_days_ago = today - timedelta(days=7)
@@ -3771,6 +3770,9 @@ async def get_training_metrics(user: dict = Depends(auth_user)):
 
     # --- Interpréter TSB ---
     # TSB needs ~4 weeks of chronic data; mark "building" when history is short.
+    # tsb_reliable mirrors acwr_reliable intentionally: both depend on
+    # has_sufficient_history (≥28 calendar days). A short history inflates
+    # acute/chronic ratio and makes TSB equally misleading.
     tsb_reliable = acwr_reliable
     if tsb is None:
         tsb_status = "unavailable"
