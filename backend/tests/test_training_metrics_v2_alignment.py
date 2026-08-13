@@ -74,14 +74,24 @@ def _acwr_from_snapshot(activities: List[dict], ref: date = _REF) -> Optional[fl
 # ---------------------------------------------------------------------------
 
 
-def _simulate_endpoint(garmin_activities: List[dict], ref: date = _REF) -> dict:
-    """Simulate the migrated /training/metrics ACWR/TSB logic."""
+def _simulate_endpoint(
+    garmin_activities: List[dict],
+    ref: date = _REF,
+    load_7_km: float = 0.0,
+    load_28_km: float = 0.0,
+) -> dict:
+    """Simulate the current /training/metrics ACWR/TSB logic (PR #123).
+
+    ACWR comes from TrainingLoadSnapshot V2 (duration-based, single source of truth).
+    TSB is kept as a LEGACY km-based formula (distance workouts) until a dedicated
+    migration PR replaces it with V2 duration-based units.
+    ctl / atl are None (not consumed by the frontend; V2 aliases removed).
+    """
     load_snapshot: TrainingLoadSnapshot = build_training_load(garmin_activities, ref)
 
     acwr: Optional[float] = load_snapshot.acwr
-    ctl: Optional[float] = load_snapshot.chronic_weekly_load if load_snapshot.is_available else None
-    atl: Optional[float] = load_snapshot.acute_load_7d if load_snapshot.is_available else None
-    tsb: Optional[float] = round(ctl - atl, 1) if (ctl is not None and atl is not None) else None
+    # TSB — LEGACY km-based (distance workouts, NOT V2 duration metrics)
+    tsb: Optional[float] = round(load_28_km / 4 - load_7_km, 1) if load_28_km > 0 else None
     acwr_reliable: bool = load_snapshot.has_sufficient_history
 
     # ACWR status
@@ -103,8 +113,9 @@ def _simulate_endpoint(garmin_activities: List[dict], ref: date = _REF) -> dict:
         "acwr_status": acwr_status,
         "acwr_reliable": acwr_reliable,
         "tsb": tsb,
-        "ctl": ctl,
-        "atl": atl,
+        # ctl/atl not exposed by V2; set to None until migration PR
+        "ctl": None,
+        "atl": None,
     }
 
 
@@ -268,18 +279,19 @@ def test_e_acwr_unavailable_wins_over_reliable_flag():
 
 
 def test_f_tsb_none_when_no_load():
-    """F. tsb is None when no valid Garmin activities."""
+    """F. tsb is None when no distance-based workouts (load_28_km == 0)."""
     result = _simulate_endpoint([])
     assert result["tsb"] is None
     assert result["ctl"] is None
     assert result["atl"] is None
 
 
-def test_f_tsb_non_none_with_load():
-    """F. tsb is a number when load data is available."""
+def test_f_tsb_non_none_with_km_load():
+    """F. tsb is a number when km-based workouts data is available."""
     acts = [_garmin_act(_USER_A, days_ago=d, duration_s=1800.0) for d in range(28)]
-    result = _simulate_endpoint(acts)
+    # TSB is LEGACY km-based; pass non-zero load_28_km to get a non-None tsb
+    result = _simulate_endpoint(acts, load_7_km=35.0, load_28_km=140.0)
     assert result["tsb"] is not None
     assert isinstance(result["tsb"], float)
-    # For uniform load: chronic_weekly_load == acute_load_7d, so tsb ~ 0
-    # (slight variation due to 7-day vs 28-day windows)
+    # tsb = 140/4 - 35 = 35 - 35 = 0.0
+    assert result["tsb"] == 0.0

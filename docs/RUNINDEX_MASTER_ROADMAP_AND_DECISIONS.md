@@ -537,14 +537,14 @@ sans toucher :
 ### Dettes restantes après R4A+R4B
 
 - `fatigue_ratio` dans `history[]` utilise encore la formule legacy (hors périmètre R4B) ;
-- `/training/metrics` utilise encore `compute_load_metrics()` legacy ;
+- `/training/metrics` : migration en cours — PR #123 (CTL/ATL V2 incorrects retirés ; TSB legacy km temporaire ; ctl/atl → None) ;
 - divergence baseline RHR / historique documentée et hors périmètre.
 
 ---
 
 ## 9b) R4B — history[].run_readiness migré vers Readiness V2
 
-Status: **IMPLEMENTED / PENDING MERGE — PR #122**
+Status: **MERGED — PR #122**
 
 ### Objectif R4B
 
@@ -568,7 +568,8 @@ Pour chaque date historique J :
 ### Dettes restantes après R4B
 
 - `fatigue_ratio` dans `history[]` utilise encore la formule legacy (hors périmètre) ;
-- `/training/metrics` utilise encore `compute_load_metrics()` legacy ;
+- `/training/metrics` : migration vers TrainingLoad V2 IMPLÉMENTÉE / PENDING MERGE — PR #123
+  (CTL/ATL v2 incorrects retirés, TSB legacy km conservé temporairement, ctl/atl → None) ;
 - baseline RHR historique : divergence documentée et hors périmètre.
 
 ---
@@ -808,7 +809,8 @@ Puis:
 - [x] R3 validation runtime (PASSED)
 - [x] R3.5 TrainingLoad V2 source unique /run-index (MERGED — PR #120 — runtime PASS)
 - [x] R4A kill current readiness legacy (MERGED — PR #121)
-- [x] R4B history[].run_readiness → Readiness V2 (IMPLEMENTED / PENDING MERGE — PR #122)
+- [x] R4B history[].run_readiness → Readiness V2 (MERGED — PR #122)
+- [x] TrainingLoad /training/metrics alignment (IMPLEMENTED / PENDING MERGE — PR #123)
 
 ### TRAINING ENGINE
 
@@ -858,8 +860,11 @@ Ce document suit l'état réel de `main` et des PR en cours:
 - R3 est **MERGED — PR #118 — runtime PASS**.
 - R3.5 est **MERGED — PR #120 — runtime PASS**.
 - R4A est **MERGED — PR #121**.
-- R4B est **IMPLEMENTED / PENDING MERGE — PR #122** (`history[].run_readiness` → Readiness V2).
-- Dettes restantes : `fatigue_ratio` history (formule legacy), `/training/metrics` legacy, baseline RHR historique.
+- R4B est **MERGED — PR #122** (`history[].run_readiness` → Readiness V2).
+- TrainingLoad `/training/metrics` alignment est **IMPLEMENTED / PENDING MERGE — PR #123**
+  (CTL/ATL V2 incorrects retirés; TSB legacy km conservé temporairement; ctl/atl → None;
+  `has_sufficient_history` commentaire non-reprise retiré).
+- Dettes restantes : `fatigue_ratio` history (formule legacy), TSB `/training/metrics` migration V2 unités, baseline RHR historique.
 
 ---
 

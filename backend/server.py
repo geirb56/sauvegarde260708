@@ -3709,13 +3709,14 @@ async def get_training_metrics(user: dict = Depends(auth_user)):
     # ACWR — None when no chronic load (no fallback to 1.0)
     acwr: Optional[float] = load_snapshot.acwr
 
-    # CTL / ATL / TSB derived from V2 snapshot (duration-minutes units)
-    # ctl  ≡ chronic_weekly_load  (28-day load / 4 weeks)
-    # atl  ≡ acute_load_7d        (current 7-day load, fatigue proxy)
-    # tsb  ≡ ctl − atl
-    ctl: Optional[float] = load_snapshot.chronic_weekly_load if load_snapshot.is_available else None
-    atl: Optional[float] = load_snapshot.acute_load_7d if load_snapshot.is_available else None
-    tsb: Optional[float] = round(ctl - atl, 1) if (ctl is not None and atl is not None) else None
+    # TSB — LEGACY distance-based (km).
+    # chronic_weekly_load and acute_load_7d from TrainingLoadSnapshot V2 are
+    # duration-minutes metrics and MUST NOT be aliased as CTL/ATL, which are
+    # physiological TSS-based concepts.  TSB migration to V2 units is deferred
+    # to a dedicated PR; the km-based formula is preserved here for backward
+    # compatibility with the frontend TSB display.
+    # ctl/atl response fields are set to None (not consumed by the frontend).
+    tsb: Optional[float] = round(load_28 / 4 - load_7, 1) if load_28 > 0 else None
 
     # --- Monotonie (distance-based, 7-day display only) ---
     daily_loads = []
@@ -3744,8 +3745,11 @@ async def get_training_metrics(user: dict = Depends(auth_user)):
     strain = round(load_7 * monotony, 0) if monotony > 0 else 0
 
     # --- ACWR reliability: requires ≥ 28 days of history ---
-    # V2 has_sufficient_history == True iff available_history_days >= 28,
-    # equivalent to the old "non-reprise" criterion.
+    # has_sufficient_history captures ONLY the depth of available history
+    # (available_history_days >= 28).  It is NOT equivalent to "non-reprise":
+    # an athlete may have ≥ 28 days of data while still resuming after a break.
+    # For this PR the acwr_reliable semantics are preserved unchanged;
+    # a future PR will refine the acwr_reliable criterion if needed.
     acwr_reliable = load_snapshot.has_sufficient_history
 
     # --- Interpréter ACWR ---
@@ -3806,8 +3810,10 @@ async def get_training_metrics(user: dict = Depends(auth_user)):
         "load_28": round(load_28, 1),
         "monotony": monotony,
         "strain": strain,
-        "ctl": round(ctl, 1) if ctl is not None else None,
-        "atl": round(atl, 1) if atl is not None else None,
+        # ctl/atl: not consumed by the frontend; set to None until a dedicated
+        # migration PR replaces them with V2-aligned duration-based values.
+        "ctl": None,
+        "atl": None,
     }
 
 
