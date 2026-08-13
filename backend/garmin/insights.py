@@ -19,6 +19,16 @@ The legacy physio-penalty formula is still computed and exposed under
 NOT used for the recommendation or any score output.
 This hybrid state will remain until runtime validation is satisfactory;
 see docs/RUNINDEX_MASTER_ROADMAP_AND_DECISIONS.md R3/R4.
+
+R3.5 — Training Load V2 alignment
+-----------------------------------
+``TrainingLoadSnapshot`` (V2) is now the SINGLE SOURCE OF TRUTH for all
+load metrics in the /run-index path:
+- ``build_training_load()`` is called exactly once per request.
+- The resulting snapshot is shared with Readiness V2 (no second computation).
+- Legacy behaviors removed from /run-index: ACWR fallback=1.0, distance-based
+  duration estimation, and the competing 7/28-day average formula.
+- ``metrics.training_load_v2`` exposes the V2 snapshot for observability.
 """
 
 from __future__ import annotations
@@ -28,10 +38,25 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 from garmin.readiness_adapter import build_readiness_v2_from_garmin_data
+from training_v2.training_load import build_training_load
 
 logger = logging.getLogger(__name__)
 
 _DAY_ABBREVS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+# Map V2 ACWR status labels to Dashboard colour tokens.
+_ACWR_STATUS_COLOR: dict = {
+    "balanced": "green",
+    "elevated": "yellow",
+    "high": "red",
+    "low": "yellow",
+    "very_low": "yellow",
+    "unavailable": "gray",
+}
+
+
+def _acwr_status_to_color(status: str) -> str:
+    return _ACWR_STATUS_COLOR.get(status, "gray")
 
 
 def _parse_day(value: str) -> Optional[datetime]:
@@ -204,9 +229,12 @@ async def compute_run_index(
         sleep_efficiency = 0.85
     sleep_hours_val = sleep_hours if sleep_hours is not None else 7.0
 
-    # --- Training load / ACWR from real activities ---
-    acwr = _compute_acwr(activities, today)
-    training_load = max(0.1, acwr)
+    # --- Training Load V2 — single source of truth (R3.5) ---
+    # build_training_load() is called exactly once; the snapshot is shared
+    # with Readiness V2 via the load_snapshot kwarg so there is no second
+    # computation and no divergence between Dashboard and Readiness.
+    load_snapshot = build_training_load(activities, today)
+    acwr: Optional[float] = load_snapshot.acwr
 
     # --- Fatigue model (reweight when HRV is missing) ---
     hrv_delta = (float(hrv_baseline) - float(hrv_today)) if (have_hrv and hrv_baseline is not None) else None
@@ -228,10 +256,12 @@ async def compute_run_index(
     fatigue_ratio = 1.0 + fatigue_physio / 10.0
 
     # --- Run Readiness V2 (R3 — single source of truth from R2B) ---
-    # build_readiness_v2_from_garmin_data runs the full V2 chain:
-    #   R1 Sufficiency → R1.6 Signals → R2A Subscores → R2B Aggregation
+    # Pass the already-built load_snapshot so Readiness V2 reuses it directly;
+    # no second call to build_training_load().
     # INSUFFICIENT → score=None → run_readiness=None (no fallback).
-    _v2_result = build_readiness_v2_from_garmin_data(metrics_docs, activities, today)
+    _v2_result = build_readiness_v2_from_garmin_data(
+        metrics_docs, activities, today, load_snapshot=load_snapshot
+    )
     run_readiness_v2: Optional[float] = _v2_result.score
     readiness_v2_confidence: str = _v2_result.confidence.value
     readiness_v2_sufficiency: str = _v2_result.sufficiency_level.value
@@ -239,10 +269,11 @@ async def compute_run_index(
 
     # --- Legacy readiness (kept for diagnostic comparison — NOT used for output) ---
     # R4 will remove this block after runtime validation is satisfactory.
+    # acwr may be None (no chronic load) → legacy penalty defaults to 0.
     physio_penalty = min(60.0, fatigue_physio * 6.0)
-    if acwr > 1.3:
+    if acwr is not None and acwr > 1.3:
         acwr_penalty = min(60.0, (acwr - 1.3) * 130.0)
-    elif acwr < 0.8:
+    elif acwr is not None and acwr < 0.8:
         acwr_penalty = min(30.0, (0.8 - acwr) * 60.0)
     else:
         acwr_penalty = 0.0
@@ -280,7 +311,8 @@ async def compute_run_index(
         hrv_status = "green" if hrv_delta <= 5 else ("yellow" if hrv_delta <= 10 else "red")
     rhr_status = "green" if rhr_delta <= 3 else ("yellow" if rhr_delta <= 7 else "red")
     sleep_status = "green" if sleep_penalty <= 1.0 else ("yellow" if sleep_penalty <= 2.5 else "red")
-    load_status = "green" if 0.8 <= acwr <= 1.3 else ("yellow" if acwr <= 1.5 else "red")
+    # Load status is derived from the V2 snapshot status label (no fallback colour).
+    load_status = _acwr_status_to_color(load_snapshot.status)
     fatigue_status = "green" if fatigue_ratio <= 1.2 else ("yellow" if fatigue_ratio <= 1.5 else "red")
 
     # --- Reasons (omit HRV when unavailable) — localized ---
@@ -305,8 +337,14 @@ async def compute_run_index(
     _t = {"fr": f"Sommeil {sleep_hours_val:.1f} h", "es": f"Sueño {sleep_hours_val:.1f} h",
           "en": f"Sleep {sleep_hours_val:.1f} h"}
     reasons.append(_t.get(lang, _t["fr"]))
-    _t = {"fr": f"Charge d'entraînement (ACWR) {acwr:.2f}", "es": f"Carga de entrenamiento (ACWR) {acwr:.2f}",
-          "en": f"Training Load (ACWR) {acwr:.2f}"}
+    if acwr is not None:
+        _t = {"fr": f"Charge d'entraînement (ACWR) {acwr:.2f}",
+              "es": f"Carga de entrenamiento (ACWR) {acwr:.2f}",
+              "en": f"Training Load (ACWR) {acwr:.2f}"}
+    else:
+        _t = {"fr": "Charge d'entraînement (ACWR) indisponible",
+              "es": "Carga de entrenamiento (ACWR) no disponible",
+              "en": "Training Load (ACWR) unavailable"}
     reasons.append(_t.get(lang, _t["fr"]))
     _t = {"fr": f"Ratio de fatigue {fatigue_ratio:.2f}", "es": f"Ratio de fatiga {fatigue_ratio:.2f}",
           "en": f"Fatigue Ratio {fatigue_ratio:.2f}"}
@@ -377,7 +415,9 @@ async def compute_run_index(
             "sleep_efficiency": round(sleep_efficiency, 2),
             "sleep_score": round(sleep_penalty, 2),
             "sleep_status": sleep_status,
-            "training_load": round(training_load, 2),
+            # training_load now mirrors snapshot.acwr (Optional); frontend must
+            # accept null (no chronic load = unavailable, never a fake 1.0).
+            "training_load": round(acwr, 3) if acwr is not None else None,
             "training_load_status": load_status,
             "fatigue_physio": round(fatigue_physio, 2),
             "fatigue_ratio": round(fatigue_ratio, 2),
@@ -390,6 +430,17 @@ async def compute_run_index(
             "readiness_reasons": readiness_v2_reasons,
             # Legacy readiness — diagnostic only (NOT authoritative). Remove in R4.
             "legacy_run_readiness": _legacy_run_readiness,
+            # R3.5 observability — V2 snapshot fields for runtime verification.
+            "training_load_v2": {
+                "acute_load_7d": load_snapshot.acute_load_7d,
+                "load_28d": load_snapshot.load_28d,
+                "chronic_weekly_load": load_snapshot.chronic_weekly_load,
+                "previous_7d_load": load_snapshot.previous_7d_load,
+                "load_change_percent": load_snapshot.load_change_percent,
+                "acwr": load_snapshot.acwr,
+                "status": load_snapshot.status,
+                "confidence": load_snapshot.confidence,
+            },
         },
         "history": history,
     }
