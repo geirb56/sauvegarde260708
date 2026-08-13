@@ -35,7 +35,7 @@ function buildCardioPayload({ run_readiness }) {
   return {
     mock: false,
     source: "garmin",
-    recommendation: run_readiness === null ? "REPOS" : "SÉANCE INTENSE",
+    recommendation: run_readiness === null ? "INDISPONIBLE" : "SÉANCE INTENSE",
     recommendation_color: run_readiness === null ? "gray" : "green",
     recommendation_emoji: run_readiness === null ? "⚪" : "🟢",
     reasons: [],

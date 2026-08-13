@@ -105,7 +105,7 @@ class _FakeQuery:
         self._docs = self._docs[:n]
         return self
 
-    async def to_list(self, length: int = 0) -> List[dict]:
+    async def to_list(self, length: int = None) -> List[dict]:
         return list(self._docs)
 
 
