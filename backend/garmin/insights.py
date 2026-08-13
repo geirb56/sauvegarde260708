@@ -329,12 +329,20 @@ async def compute_run_index(
             key = d_act.date().isoformat()
             _daily_load[key] = _daily_load.get(key, 0.0) + _activity_load(act)
 
-    # --- 30-day history (oldest -> newest) ---
+    # --- 30-day history (oldest -> newest) — run_readiness = Readiness V2 ---
+    # For each historical day J:
+    #   - metrics filtered to date <= J (newest-first, no future leakage)
+    #   - activities filtered to start_time <= J (no future leakage)
+    #   - Readiness V2 built with reference_date=J
+    #   - score = float 0–100 or None (INSUFFICIENT → None, never a fallback)
     recent = list(reversed(metrics_docs[:30]))
     history = []
     for doc in recent:
         d = _parse_day(doc.get("date", ""))
-        day_label = _DAY_ABBREVS[d.weekday()] if d else (doc.get("date", "")[-2:] or "?")
+        if d is None:
+            # Skip docs with no parseable date — no anchor to filter future data.
+            continue
+        day_label = _DAY_ABBREVS[d.weekday()]
         doc_hrv = doc.get("hrv")
         doc_rhr = doc.get("resting_hr")
         doc_sleep = doc.get("sleep_hours") or 7.0
@@ -345,17 +353,31 @@ async def compute_run_index(
         else:
             doc_fp = 0.6 * doc_rhr_delta + 0.4 * doc_sleep_penalty
         doc_fatigue_ratio = 1.0 + max(0.0, doc_fp) / 10.0
-        doc_physio_penalty = min(60.0, max(0.0, doc_fp) * 6.0)
-        # Per-day ACWR (rolling, computed as of that day) so the readiness trend
-        # reflects real day-to-day training load instead of reusing one global value.
-        doc_acwr = _compute_acwr(activities, d.date()) if d else acwr
-        if doc_acwr > 1.3:
-            doc_acwr_penalty = min(60.0, (doc_acwr - 1.3) * 130.0)
-        elif doc_acwr < 0.8:
-            doc_acwr_penalty = min(30.0, (0.8 - doc_acwr) * 60.0)
+
+        # run_readiness V2: only data available at day J, no legacy fallbacks.
+        if d is not None:
+            hist_day = d.date()
+            hist_day_iso = hist_day.isoformat()
+            # Metrics available at J: date field must be present, valid, and <= J.
+            # Absent or invalid dates are excluded (never assumed available).
+            hist_metrics = []
+            for m in metrics_docs:
+                raw = m.get("date")
+                parsed = _parse_day(raw) if raw is not None else None
+                if parsed is not None and parsed.date() <= hist_day:
+                    hist_metrics.append(m)
+            # Activities available at J: start_time date must be valid and <= J.
+            # Absent or unparseable start_time → excluded.
+            hist_activities = []
+            for a in activities:
+                act_dt = _parse_day(a.get("start_time") or a.get("synced_at") or "")
+                if act_dt is not None and act_dt.date() <= hist_day:
+                    hist_activities.append(a)
+            hist_v2 = build_readiness_v2_from_garmin_data(hist_metrics, hist_activities, hist_day)
+            doc_readiness: Optional[float] = hist_v2.score  # float 0–100 or None
         else:
-            doc_acwr_penalty = 0.0
-        doc_readiness = int(round(max(5.0, min(100.0, 100.0 - doc_physio_penalty - doc_acwr_penalty))))
+            doc_readiness = None
+
         history.append({
             "day": day_label,
             "date": doc.get("date"),
