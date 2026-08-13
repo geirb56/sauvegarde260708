@@ -479,7 +479,9 @@ R3.5 garantit une source unique de vérité uniquement pour :
 - Readiness V2
 
 Pas encore pour toute l'application.
-La migration de `/training/metrics` vers TrainingLoad V2 est prévue en R4 (hors périmètre PR #120).
+`/training/metrics` utilise encore `compute_load_metrics()` legacy.
+Sa migration vers TrainingLoad V2 sera traitée dans une PR dédiée de consumer alignment,
+séparée de R4 Readiness.
 
 ### Tests (21 passés — 100%)
 

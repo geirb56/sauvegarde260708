@@ -112,8 +112,9 @@ R3.5 garantit une source unique de vérité **uniquement pour** :
 - `/run-index`
 - Readiness V2
 
-La migration de `/training/metrics` vers `build_training_load()` est prévue en R4
-(hors périmètre PR #120).  Ne pas supprimer `compute_load_metrics()` tant que
+`/training/metrics` utilise encore `compute_load_metrics()` legacy.
+Sa migration vers TrainingLoad V2 sera traitée dans une PR dédiée de consumer alignment,
+séparée de R4 Readiness.  Ne pas supprimer `compute_load_metrics()` tant que
 `/training/metrics` l'appelle.
 
 ---
@@ -178,4 +179,20 @@ Ce qui n'a PAS été fait (hors périmètre) :
 
 ---
 
-*Rapport généré sur branche PR #120 — NE PAS MERGER avant validation runtime.*
+Validation runtime réelle à effectuer sur Emergent après merge/déploiement de #120,
+avant toute décision de modifier les calibrations ou de supprimer d'autres chemins legacy.
+
+La validation runtime post-merge devra relever :
+
+- `metrics.training_load`
+- `training_load_v2.acwr`
+- `acute_load_7d`
+- `load_28d`
+- `chronic_weekly_load`
+- `previous_7d_load`
+- `load_change_percent`
+- `status`
+- `confidence`
+- Readiness final
+
+Objectif : expliquer précisément le précédent cas ACWR 2.85 / Readiness 77.5.
