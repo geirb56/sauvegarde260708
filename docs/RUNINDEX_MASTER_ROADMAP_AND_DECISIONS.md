@@ -569,9 +569,40 @@ Pour chaque date historique J :
 ### Dettes restantes après R4B
 
 - `fatigue_ratio` dans `history[]` utilise encore la formule legacy (hors périmètre) ;
-- `history[].training_load` reste adossé à `_activity_load` (legacy) ;
+- `history[].training_load` reste adossé à `_activity_load` (legacy) — résolu par R4C ci-dessous ;
 - `/training/metrics` : migration vers TrainingLoad V2 MERGED — PR #123
   (CTL/ATL v2 incorrects retirés, TSB legacy km conservé temporairement, ctl/atl → None) ;
+- baseline RHR historique : divergence documentée et hors périmètre.
+
+---
+
+## 9c) R4C — history[].training_load migré vers TrainingLoad V2
+
+Status: **IMPLEMENTED / PENDING MERGE — PR #125**
+
+### Objectif R4C
+
+Aligner uniquement `history[].training_load` sur TrainingLoad V2.
+
+Pour chaque date historique J :
+- `build_training_load(activités disponibles à J, reference_date=J)` ;
+- `history[].training_load = snapshot.acwr` ;
+- `None` reste `None` (pas de fallback, pas d'estimation distance→durée) ;
+- aucune donnée future utilisée.
+
+### Implémentation R4C
+
+- `backend/garmin/insights.py` : suppression de `_activity_load()` et du bloc `_daily_load` ;
+  dans la boucle history, appel à `build_training_load(hist_activities, hist_day).acwr`
+  après filtrage strict des activités (start_time ≤ J) ;
+- `backend/tests/test_run_index_r4c_history_load_v2.py` : 6 tests couvrant
+  l'alignement ACWR V2, l'absence de fuite future, les activités distance-only → None,
+  l'historique insuffisant, la non-régression de `metrics.training_load`, et la shape.
+
+### Dettes restantes après R4C
+
+- `fatigue_ratio` dans `history[]` utilise encore la formule legacy (hors périmètre) ;
+- TSB dans `/training/metrics` : legacy km conservé temporairement (hors périmètre) ;
 - baseline RHR historique : divergence documentée et hors périmètre.
 
 ---
@@ -813,7 +844,8 @@ Puis:
 - [x] R4A kill current readiness legacy (MERGED — PR #121)
 - [x] R4B history[].run_readiness → Readiness V2 (MERGED — PR #122)
 - [x] TrainingLoad /training/metrics alignment (MERGED — PR #123)
-- [x] Cleanup helpers TrainingLoad legacy morts (IMPLEMENTED / PENDING MERGE — PR #124)
+- [x] Cleanup helpers TrainingLoad legacy morts (MERGED — PR #124)
+- [x] R4C history[].training_load → TrainingLoad V2 (IMPLEMENTED / PENDING MERGE — PR #125)
 
 ### TRAINING ENGINE
 
@@ -867,8 +899,11 @@ Ce document suit l'état réel de `main` et des PR en cours:
 - TrainingLoad `/training/metrics` alignment est **MERGED — PR #123**
   (CTL/ATL V2 incorrects retirés; TSB legacy km conservé temporairement; ctl/atl → None;
   `has_sufficient_history` commentaire non-reprise retiré).
-- Cleanup helpers TrainingLoad legacy morts est **IMPLEMENTED / PENDING MERGE — PR #124**.
-- Dettes restantes : `_activity_load`/`history.training_load` (legacy), `fatigue_ratio` history (formule legacy), TSB `/training/metrics` legacy, baseline RHR historique.
+- Cleanup helpers TrainingLoad legacy morts est **MERGED — PR #124**.
+- R4C history[].training_load → TrainingLoad V2 est **IMPLEMENTED / PENDING MERGE — PR #125**
+  (`history[].training_load = build_training_load(acts_at_J, J).acwr` ;
+  `_activity_load` supprimé ; aucune fuite future ; aucun fallback distance→durée).
+- Dettes restantes : `fatigue_ratio` history (formule legacy), TSB `/training/metrics` legacy, baseline RHR historique.
 
 ---
 
