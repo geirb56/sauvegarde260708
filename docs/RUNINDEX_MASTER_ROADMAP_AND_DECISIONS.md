@@ -304,9 +304,15 @@ Poids produit V1 (PRODUCT_CALIBRATION_V1):
 Règles:
 
 - R1 = `INSUFFICIENT` -> `readiness_score = None`, `confidence = NONE`
-- R1 = `SUFFICIENT` -> calcul normal, `confidence = NORMAL`
+- R1 = `SUFFICIENT` + 3 sous-scores présents -> calcul normal, `confidence = NORMAL`
+- R1 = `SUFFICIENT` + sous-score(s) manquant(s) -> calcul renormalisé, `confidence = REDUCED` (sufficiency_level reste SUFFICIENT)
 - R1 = `DEGRADED` -> n'utiliser que les sous-scores disponibles, renormaliser les poids, `confidence = REDUCED`
 - Cas défensif (SUFFICIENT/DEGRADED sans sous-score utilisable) -> `score = None`, `confidence = NONE`
+
+`ReadinessConfidence`:
+- `NORMAL` → sufficiency SUFFICIENT ET les 3 sous-scores sont effectivement disponibles
+- `REDUCED` → sufficiency DEGRADED OU sufficiency SUFFICIENT mais un ou plusieurs sous-scores sont indisponibles
+- `NONE` → INSUFFICIENT OU aucun sous-score exploitable
 
 Aucun score fictif pour donnée manquante. None reste None.
 

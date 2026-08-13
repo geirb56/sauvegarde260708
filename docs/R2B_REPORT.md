@@ -56,7 +56,7 @@ sufficiency.level == INSUFFICIENT
 ```
 Même si des sous-scores sont fournis, aucun calcul n'est tenté.
 
-### CAS 2 — SUFFICIENT
+### CAS 2 — SUFFICIENT + 3 sous-scores présents
 
 ```
 score = (physio×40 + sleep×30 + load×30) / 100
@@ -65,6 +65,17 @@ confidence = NORMAL
 
 Exemple : physio=80, sleep=90, load=70
 → (80×40 + 90×30 + 70×30) / 100 = 80.0
+
+### CAS 2b — SUFFICIENT + sous-score(s) manquant(s)
+
+```
+score = Σ(valeur_i × poids_i) / Σ(poids_i)   (renormalisé)
+confidence = REDUCED
+sufficiency_level = SUFFICIENT  (inchangé)
+```
+
+Exemple : physio=80, sleep=None, load=70
+→ (80×40 + 70×30) / (40+30) = 5300/70 ≈ 75.7
 
 ### CAS 3 — DEGRADED
 
@@ -107,8 +118,9 @@ La confidence est **toujours** un `ReadinessConfidence` (str Enum).
 | Niveau | Confidence |
 |--------|-----------|
 | INSUFFICIENT | NONE |
-| SUFFICIENT | NORMAL |
-| DEGRADED | REDUCED |
+| SUFFICIENT + 3 sous-scores présents | NORMAL |
+| SUFFICIENT + sous-score(s) manquant(s) | REDUCED |
+| DEGRADED + score calculable | REDUCED |
 | Défensif (pas de sous-score) | NONE |
 
 Aucune valeur numérique (ex : `0.82`, `82`) n'est produite ni acceptée.
@@ -120,11 +132,12 @@ Suite : `backend/tests/test_training_v2_readiness.py`
 Classes de tests :
 - `TestInsufficient` (6 tests)
 - `TestSufficient` (6 tests)
+- `TestSufficientWithMissingSubscores` (5 tests)
 - `TestDegraded` (5 tests)
 - `TestDefensive` (3 tests)
 - `TestArchitectureInvariants` (14 tests)
 
-Total : **34 tests**
+Total : **39 tests**
 
 ## 10. Résultats
 

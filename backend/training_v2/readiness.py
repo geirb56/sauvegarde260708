@@ -19,8 +19,12 @@ Design rules
 Aggregation rules
 -----------------
 INSUFFICIENT  → score=None, confidence=NONE, reasons propagated from R1.
-SUFFICIENT    → full weighted average (physio×40 + sleep×30 + load×30) / 100,
+SUFFICIENT + all 3 subscores available
+              → full weighted average (physio×40 + sleep×30 + load×30) / 100,
                 confidence=NORMAL.
+SUFFICIENT + at least one subscore missing
+              → renormalized weighted average over available subscores only,
+                confidence=REDUCED (sufficiency_level stays SUFFICIENT).
 DEGRADED      → renormalized weighted average over available subscores only,
                 confidence=REDUCED.
 Defensive     → if level is SUFFICIENT/DEGRADED but no usable subscore is
@@ -173,10 +177,18 @@ def build_readiness_result(
 
     # ------------------------------------------------------------------
     # Confidence — categorical, never numeric.
+    # SUFFICIENT + all 3 subscores present → NORMAL
+    # SUFFICIENT + at least one subscore missing → REDUCED
+    # DEGRADED → REDUCED
     # ------------------------------------------------------------------
-    if level == SufficiencyLevel.SUFFICIENT:
+    all_subscores_available = (
+        physio_score is not None
+        and sleep_score is not None
+        and load_score is not None
+    )
+    if level == SufficiencyLevel.SUFFICIENT and all_subscores_available:
         confidence = ReadinessConfidence.NORMAL
-    else:  # DEGRADED
+    else:
         confidence = ReadinessConfidence.REDUCED
 
     return ReadinessResult(

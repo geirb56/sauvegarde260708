@@ -187,6 +187,73 @@ class TestSufficient:
 
 
 # ---------------------------------------------------------------------------
+# CAS 2b — SUFFICIENT + sous-score(s) manquant(s) → REDUCED
+# ---------------------------------------------------------------------------
+
+
+class TestSufficientWithMissingSubscores:
+    def test_sufficient_sleep_none(self):
+        # physio=80, sleep=None, load=70
+        # (80×40 + 70×30) / (40+30) = (3200+2100)/70 = 5300/70 ≈ 75.714... → 75.7
+        result = build_readiness_result(
+            sufficiency=_suf(SufficiencyLevel.SUFFICIENT),
+            physio=_physio(80),
+            sleep=_sleep(None),
+            load=_load(70),
+        )
+        assert result.score == 75.7
+        assert result.confidence == ReadinessConfidence.REDUCED
+        assert result.sufficiency_level == SufficiencyLevel.SUFFICIENT
+
+    def test_sufficient_load_none(self):
+        # physio=80, sleep=90, load=None
+        # (80×40 + 90×30) / (40+30) = (3200+2700)/70 = 5900/70 ≈ 84.285... → 84.3
+        result = build_readiness_result(
+            sufficiency=_suf(SufficiencyLevel.SUFFICIENT),
+            physio=_physio(80),
+            sleep=_sleep(90),
+            load=_load(None),
+        )
+        assert result.score == 84.3
+        assert result.confidence == ReadinessConfidence.REDUCED
+        assert result.sufficiency_level == SufficiencyLevel.SUFFICIENT
+
+    def test_sufficient_physio_none(self):
+        # physio=None, sleep=90, load=80
+        # (90×30 + 80×30) / (30+30) = (2700+2400)/60 = 5100/60 = 85.0
+        result = build_readiness_result(
+            sufficiency=_suf(SufficiencyLevel.SUFFICIENT),
+            physio=_physio(None),
+            sleep=_sleep(90),
+            load=_load(80),
+        )
+        assert result.score == 85.0
+        assert result.confidence == ReadinessConfidence.REDUCED
+        assert result.sufficiency_level == SufficiencyLevel.SUFFICIENT
+
+    def test_sufficient_all_available_still_normal(self):
+        # All three subscores present → NORMAL (regression guard)
+        result = build_readiness_result(
+            sufficiency=_suf(SufficiencyLevel.SUFFICIENT),
+            physio=_physio(80),
+            sleep=_sleep(90),
+            load=_load(70),
+        )
+        assert result.confidence == ReadinessConfidence.NORMAL
+
+    def test_sufficient_no_subscores_none_confidence(self):
+        # No usable subscores → NONE (defensive, regression guard)
+        result = build_readiness_result(
+            sufficiency=_suf(SufficiencyLevel.SUFFICIENT),
+            physio=_physio(None),
+            sleep=_sleep(None),
+            load=_load(None),
+        )
+        assert result.score is None
+        assert result.confidence == ReadinessConfidence.NONE
+
+
+# ---------------------------------------------------------------------------
 # CAS 3 — DEGRADED
 # ---------------------------------------------------------------------------
 
