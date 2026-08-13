@@ -324,11 +324,14 @@ Tests: 52 passés (`backend/tests/test_training_v2_readiness.py`).
 
 ## 8) R3 — Migration `/run-index`
 
-Status: **IMPLEMENTED IN PR / PENDING MERGE**
+Status: **MERGED — PR #118**
+
+runtime validation = PASSED
+E2E Dashboard = PASSED
 
 Objectif: brancher Readiness V2 dans le vrai chemin produit `/run-index`.
 
-### Implémentation (cette PR)
+### Implémentation (PR #118 — mergée)
 
 Fichiers créés / modifiés:
 
@@ -403,35 +406,111 @@ score affiché. Il sera supprimé en R4 après validation runtime satisfaisante.
 | + | Bornes [0,100] | score always in range |
 | + | Reason codes valides | all reasons are ReasonCode |
 
-### Validation runtime (AVANT merge — obligatoire)
+---
 
-La validation runtime doit être effectuée sur la branche PR, AVANT le merge.
-Un compte Garmin personnel réel est disponible comme compte de test.
+## 8.5) R3.5 — TrainingLoad V2 source unique dans `/run-index`
 
-**Procédure :**
+Status: **IMPLEMENTED IN PR / PENDING MERGE** (PR #120)
 
-1. Lancer une sync réelle (compte Garmin test).
-2. Appeler `GET /api/run-index`.
-3. Relever exactement :
-   - `metrics.run_readiness` (float ou null)
-   - `metrics.confidence`
-   - `metrics.sufficiency_level`
-   - `metrics.readiness_reasons`
-   - `metrics.legacy_run_readiness`
-4. Vérifier les données Garmin réellement disponibles (RHR, HRV, sleep, activités).
-5. Confirmer que `run_readiness` provient de V2 (non du chemin legacy).
-6. Comparer `run_readiness` vs `legacy_run_readiness` pour diagnostic uniquement — égalité non exigée.
-7. Vérifier sync progress :
-   - score présent → `ready`
-   - score None → `unavailable`
-8. Documenter les valeurs runtime réelles dans le rapport R3.
-9. Ne jamais fabriquer le résultat si runtime inaccessible.
+HEAD de départ: `9d9074d40e589a45c35343b8395099540a334f01`
 
-**Statut :** À VALIDER avant merge.
+### Objectif R3.5
 
-*R3 runtime validation = PENDING*
+`TrainingLoadSnapshot` V2 devient source unique de vérité pour la charge exposée
+dans `/run-index` ET pour Readiness V2.
+
+- `/run-index` utilise désormais TrainingLoad V2 (`build_training_load()`) comme seule source de charge.
+- `compute_load_metrics()` legacy reste encore utilisé par `/training/metrics`.
+- Cette dette n'est **PAS** supprimée dans PR #120.
+- NEXT = **R4A** : current readiness legacy cleanup.
+
+### Implémentation (PR #120)
+
+Fichiers modifiés :
+
+- `backend/garmin/insights.py` — `build_training_load()` appelé exactement une fois ; snapshot partagé avec Readiness V2 via `load_snapshot=` ; suppression fallback ACWR=1.0 legacy ; `metrics.training_load_v2` exposé pour observabilité.
+- `backend/garmin/readiness_adapter.py` — paramètre `load_snapshot` accepté ; skip double calcul.
+- `backend/tests/test_run_index_r3_5_load_alignment.py` — 21 tests déterministes dont 9 appels réels à `compute_run_index(db, user_id, reference_date=...)` avec fake DB.
+- `docs/RUNINDEX_R3_5_REPORT.md` — rapport R3.5.
+
+### Chaîne effective R3.5
+
+```
+garmin_activities (MongoDB)
+  → build_training_load(activities, today)       ← appelé UNE FOIS
+      → TrainingLoadSnapshot                     ← source unique
+  ↓
+  compute_run_index:
+    metrics.training_load       = snapshot.acwr  (None si unavailable)
+    metrics.training_load_v2    = snapshot.*     (observabilité)
+    metrics.training_load_status = acwr_status_to_color(snapshot.status)
+  ↓
+  build_readiness_v2_from_garmin_data(
+      ..., load_snapshot=snapshot               ← réutilise, pas de second calcul
+  )
+```
+
+### Contrat API `/run-index` enrichi (R3.5)
+
+```json
+{
+  "metrics": {
+    "training_load": 1.05,          // float (acwr arrondi 3 dp) | null
+    "training_load_status": "green",
+    "training_load_v2": {
+      "acute_load_7d": 280.0,
+      "load_28d": 1050.0,
+      "chronic_weekly_load": 262.5,
+      "previous_7d_load": 266.5,
+      "load_change_percent": 5.1,
+      "acwr": 1.067,
+      "status": "balanced",
+      "confidence": "high"
+    }
+  }
+}
+```
+
+### Dette restante
+
+`compute_load_metrics()` (legacy) reste encore utilisé par `/training/metrics`.
+R3.5 garantit une source unique de vérité uniquement pour :
+- `/run-index`
+- Readiness V2
+
+Pas encore pour toute l'application.
+`/training/metrics` utilise encore `compute_load_metrics()` legacy.
+Sa migration vers TrainingLoad V2 sera traitée dans une PR dédiée de consumer alignment,
+séparée de R4 Readiness.
+
+### Tests (21 passés — 100%)
+
+| ID | Scénario | Résultat |
+|----|----------|---------|
+| A | `metrics.training_load == round(snapshot.acwr, 3)` via `compute_run_index` réel | PASS |
+| B | `metrics.training_load_v2.acwr == snapshot.acwr` via `compute_run_index` réel | PASS |
+| C | `metrics.training_load_v2.acute_load_7d == snapshot.acute_load_7d` | PASS |
+| D | `metrics.training_load_v2.load_28d == snapshot.load_28d` | PASS |
+| E | `metrics.training_load_v2.previous_7d_load == snapshot.previous_7d_load` | PASS |
+| F | `metrics.training_load_v2.load_change_percent == snapshot.load_change_percent` | PASS |
+| G | 0 activités → `training_load=None`, `acwr=None`, `status=gray` | PASS |
+| H | distance sans duration → `training_load=None` (pas de charge inventée) | PASS |
+| I | multi-user : `compute_run_index(userA)` n'utilise pas activités userB | PASS |
+| + | no ACWR fallback 1.0 quand load absent | PASS |
+| + | ACWR None quand pas de chronic load | PASS |
+| + | distance-only → acwr None, loads 0.0 | PASS |
+| + | distance-only (load=0) | PASS |
+| + | durée drive load, pas la distance | PASS |
+| + | readiness score identique avec snapshot shared vs calcul interne | PASS |
+| + | déterminisme cross-calls | PASS |
+| + | isolation multi-user (pure build_training_load) | PASS |
+| + | snapshot.acwr None → training_load_response None | PASS |
+| + | cohérence interne champs snapshot | PASS |
+| + | snapshot zéro activités | PASS |
+| + | _acwr_status_to_color mapping | PASS |
 
 ---
+
 
 ## 9) R4 — Kill readiness legacy
 
@@ -681,9 +760,10 @@ Puis:
 - [x] R1.7B TrainingIntensityProfile (MERGED, PR #115)
 - [x] R2A Subscores (MERGED, PR #116)
 - [x] R2B Aggregation (MERGED — PR #117)
-- [x] R3 /run-index migration (IMPLEMENTED IN PR / PENDING MERGE)
-- [ ] R3 validation runtime
-- [ ] R4 kill legacy
+- [x] R3 /run-index migration (MERGED — PR #118 — runtime validation PASSED — E2E Dashboard PASSED)
+- [x] R3 validation runtime (PASSED)
+- [x] R3.5 TrainingLoad V2 source unique /run-index (IMPLEMENTED IN PR / PENDING MERGE — PR #120)
+- [ ] R4A kill current readiness legacy (NEXT)
 
 ### TRAINING ENGINE
 

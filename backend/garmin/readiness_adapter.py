@@ -15,12 +15,17 @@ Design rules
 Entry-point
 -----------
     build_readiness_v2_from_garmin_data(
-        metrics_docs, activities, reference_date
+        metrics_docs, activities, reference_date,
+        load_snapshot=None,
     ) -> ReadinessResult
 
-    metrics_docs : list of garmin_daily_metrics documents, sorted newest-first.
-    activities   : list of garmin_activities documents.
+    metrics_docs   : list of garmin_daily_metrics documents, sorted newest-first.
+    activities     : list of garmin_activities documents.
     reference_date : datetime.date — anchor for load window calculations.
+    load_snapshot  : optional pre-built TrainingLoadSnapshot.  When supplied the
+                     adapter uses it directly and skips calling build_training_load(),
+                     so the /run-index path can share a single snapshot with the
+                     Dashboard metrics without a duplicate computation.
 """
 
 from __future__ import annotations
@@ -49,7 +54,7 @@ from training_v2.readiness_sufficiency import (
     build_readiness_sufficiency,
 )
 
-from training_v2.training_load import build_training_load
+from training_v2.training_load import build_training_load, TrainingLoadSnapshot
 
 # ---------------------------------------------------------------------------
 # Baseline thresholds (must stay aligned with R1 module)
@@ -165,6 +170,7 @@ def build_readiness_v2_from_garmin_data(
     metrics_docs: List[dict],
     activities: List[dict],
     reference_date: date,
+    load_snapshot: Optional[TrainingLoadSnapshot] = None,
 ) -> ReadinessResult:
     """Build a ReadinessResult (V2) from pre-fetched Garmin/MongoDB data.
 
@@ -178,6 +184,11 @@ def build_readiness_v2_from_garmin_data(
     reference_date:
         Anchor date for load window calculations.  Must be supplied by the
         caller; this function never calls datetime.now().
+    load_snapshot:
+        Optional pre-built :class:`TrainingLoadSnapshot`.  When supplied the
+        function uses it directly instead of calling :func:`build_training_load`,
+        so the /run-index path can share a single V2 snapshot across both the
+        Dashboard metrics and Readiness V2 without a second computation.
 
     Returns
     -------
@@ -199,11 +210,12 @@ def build_readiness_v2_from_garmin_data(
     sleep_record = _build_sleep_record(metrics_docs)
 
     # ------------------------------------------------------------------
-    # 3. Build TrainingLoadSnapshot from garmin_activities via V2 engine.
-    #    This is the single source of truth for load; no duplication of
-    #    legacy ACWR formulas.
+    # 3. TrainingLoadSnapshot — use the caller-supplied one when available
+    #    so that /run-index computes load only once and shares it with
+    #    Readiness V2.  Fall back to build_training_load() when not given.
     # ------------------------------------------------------------------
-    load_snapshot = build_training_load(activities, reference_date)
+    if load_snapshot is None:
+        load_snapshot = build_training_load(activities, reference_date)
 
     # ------------------------------------------------------------------
     # 4. R1 — Sufficiency classification.
