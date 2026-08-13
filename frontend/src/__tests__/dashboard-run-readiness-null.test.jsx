@@ -117,14 +117,13 @@ describe("Dashboard run_readiness null handling", () => {
     await waitForCardioLoaded(container);
 
     const scoreEl = container.querySelector('[data-testid="run-readiness-score"]');
-    if (scoreEl) {
-      const text = scoreEl.textContent;
-      // Must NOT show a bare number (0 or 100 as a score)
-      expect(text).not.toBe("0");
-      expect(text).not.toBe("100");
-      // Must NOT be empty
-      expect(text.trim().length).toBeGreaterThan(0);
-    }
+    expect(scoreEl).not.toBeNull();
+    const text = scoreEl.textContent;
+    // Must NOT show a bare number (0 or 100 as a score)
+    expect(text).not.toBe("0");
+    expect(text).not.toBe("100");
+    // Must NOT be empty
+    expect(text.trim().length).toBeGreaterThan(0);
 
     unmount();
   });
@@ -138,14 +137,12 @@ describe("Dashboard run_readiness null handling", () => {
     const { container, unmount } = renderDashboard();
     await waitForCardioLoaded(container);
 
-    const card = container.querySelector('[data-testid="run-readiness-card"]');
-    if (card) {
-      // "/ 100" suffix must not appear next to the score when unavailable
-      const scoreParent = container.querySelector('[data-testid="run-readiness-score"]')?.parentElement;
-      if (scoreParent) {
-        expect(scoreParent.textContent).not.toMatch(/^\s*\d+\s*\/\s*100\s*$/);
-      }
-    }
+    const scoreEl = container.querySelector('[data-testid="run-readiness-score"]');
+    expect(scoreEl).not.toBeNull();
+    const scoreParent = scoreEl.parentElement;
+    expect(scoreParent).not.toBeNull();
+    // "/ 100" suffix must not appear next to the score when unavailable
+    expect(scoreParent.textContent).not.toMatch(/^\s*\d+\s*\/\s*100\s*$/);
 
     unmount();
   });
@@ -160,10 +157,9 @@ describe("Dashboard run_readiness null handling", () => {
     await waitForCardioLoaded(container);
 
     const scoreEl = container.querySelector('[data-testid="run-readiness-score"]');
-    if (scoreEl) {
-      // Should contain the numeric value
-      expect(scoreEl.textContent).toContain("78.5");
-    }
+    expect(scoreEl).not.toBeNull();
+    // Should contain the numeric value
+    expect(scoreEl.textContent).toContain("78.5");
 
     unmount();
   });

@@ -350,7 +350,7 @@ async def compute_run_index(db, user_id: str, language: str = "fr") -> Optional[
             "hrv_available": have_hrv,
             "rhr_today": round(float(rhr_today), 1) if have_rhr else None,
             "rhr_baseline": round(float(rhr_baseline), 1) if rhr_baseline is not None else None,
-            "rhr_delta": round(rhr_delta, 1),
+            "rhr_delta": round(rhr_delta, 1) if rhr_delta is not None else None,
             "rhr_status": rhr_status,
             "sleep_hours": round(sleep_hours_val, 1),
             "sleep_efficiency": round(sleep_efficiency, 2),
