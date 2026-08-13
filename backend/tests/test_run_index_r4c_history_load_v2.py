@@ -81,6 +81,11 @@ def _distance_only_activities(n: int = 10, ref: date = _TODAY) -> List[dict]:
     return acts
 
 
+class AsyncMock(MagicMock):
+    async def __call__(self, *args, **kwargs):
+        return super().__call__(*args, **kwargs)
+
+
 def _make_db(metrics_docs: List[dict], activity_docs: List[dict]) -> MagicMock:
     db = MagicMock()
 
@@ -101,11 +106,6 @@ def _make_db(metrics_docs: List[dict], activity_docs: List[dict]) -> MagicMock:
     db.garmin_daily_metrics.find = _metrics_find
     db.garmin_activities.find = _activities_find
     return db
-
-
-class AsyncMock(MagicMock):
-    async def __call__(self, *args, **kwargs):
-        return super().__call__(*args, **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -270,4 +270,6 @@ def test_history_entry_shape_includes_training_load_key():
         assert "training_load" in entry, f"history entry missing 'training_load': {entry}"
         assert "day" in entry
         assert "date" in entry
+        assert "hrv" in entry
+        assert "fatigue_ratio" in entry
         assert "run_readiness" in entry
