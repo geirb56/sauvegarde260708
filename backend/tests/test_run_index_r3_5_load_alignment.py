@@ -1,14 +1,22 @@
 """R3.5 — Training Load V2 alignment tests for /run-index.
 
 Verifies the requirements from the R3.5 problem statement:
-1. metrics.acwr  ==  TrainingLoadSnapshot.acwr  (V2 is the single source of truth)
-2. No fictitious 1.0 ACWR fallback when load is unavailable
-3. Distance is never used as a duration fallback for load computation
-4. Readiness score is unchanged for identical inputs (snapshot reuse is transparent)
-5. Multi-user: each user's snapshot is independent
-6. training_load field is None when ACWR is unavailable (frontend null-safety)
-7. training_load_v2 debug block always present in metrics
-8. load_snapshot parameter accepted by build_readiness_v2_from_garmin_data
+A. payload["metrics"]["training_load"] == build_training_load(activities, ref).acwr
+B. payload["metrics"]["training_load_v2"]["acwr"] == snapshot.acwr
+C. payload["metrics"]["training_load_v2"]["acute_load_7d"] == snapshot.acute_load_7d
+D. payload["metrics"]["training_load_v2"]["load_28d"] == snapshot.load_28d
+E. payload["metrics"]["training_load_v2"]["previous_7d_load"] == snapshot.previous_7d_load
+F. payload["metrics"]["training_load_v2"]["load_change_percent"] == snapshot.load_change_percent
+G. no valid activities → training_load is None, training_load_v2.acwr is None,
+   training_load_status == "gray"
+H. distance present but duration absent → no load invented, training_load is None
+I. multi-user: compute_run_index(userA) does not use userB activities
+
+Additionally:
+- Readiness score unchanged when snapshot is shared vs. computed internally
+- No fictitious 1.0 ACWR fallback when load is unavailable
+- Distance is never used as a duration fallback for load computation
+- load_snapshot parameter accepted by build_readiness_v2_from_garmin_data
 """
 
 from __future__ import annotations
@@ -29,10 +37,305 @@ from garmin.readiness_adapter import build_readiness_v2_from_garmin_data
 from training_v2.training_load import build_training_load, TrainingLoadSnapshot
 
 # ---------------------------------------------------------------------------
-# Shared fixtures
+# Shared constants
 # ---------------------------------------------------------------------------
 
 _REF = date(2026, 1, 28)
+_USER_A = "user_alpha"
+_USER_B = "user_beta"
+
+
+# ---------------------------------------------------------------------------
+# Fake DB infrastructure (deterministic, multi-user aware)
+# ---------------------------------------------------------------------------
+
+
+class _FakeQuery:
+    """Chainable fake MongoDB query that returns a fixed list via to_list()."""
+
+    def __init__(self, docs: List[dict]) -> None:
+        self._docs = docs
+
+    def sort(self, *args, **kwargs) -> "_FakeQuery":
+        return self
+
+    def limit(self, n: int) -> "_FakeQuery":
+        self._docs = self._docs[:n]
+        return self
+
+    async def to_list(self, length: int = None) -> List[dict]:
+        return list(self._docs)
+
+
+class _FakeCollection:
+    """Fake MongoDB collection whose find() filters by user_id."""
+
+    def __init__(self, all_docs: List[dict]) -> None:
+        self._all = all_docs
+
+    def find(self, filter_: dict, projection: dict = None) -> _FakeQuery:
+        uid = filter_.get("user_id")
+        docs = [d for d in self._all if d.get("user_id") == uid] if uid else list(self._all)
+        return _FakeQuery(docs)
+
+
+class _FakeDB:
+    """Fake async DB with garmin_daily_metrics and garmin_activities collections."""
+
+    def __init__(
+        self,
+        metrics_docs: List[dict],
+        activity_docs: List[dict],
+    ) -> None:
+        self.garmin_daily_metrics = _FakeCollection(metrics_docs)
+        self.garmin_activities = _FakeCollection(activity_docs)
+
+
+# ---------------------------------------------------------------------------
+# Helper builders
+# ---------------------------------------------------------------------------
+
+
+def _metrics_docs(
+    user_id: str,
+    *,
+    n: int = 14,
+    rhr: Optional[float] = 52.0,
+    hrv: Optional[float] = 65.0,
+    sleep_hours: Optional[float] = 7.5,
+    sleep_score: Optional[float] = 80.0,
+    ref: date = _REF,
+) -> List[dict]:
+    docs = []
+    for i in range(n):
+        d = ref - timedelta(days=i)
+        docs.append({
+            "user_id": user_id,
+            "date": d.isoformat(),
+            "resting_hr": rhr,
+            "hrv": hrv,
+            "sleep_hours": sleep_hours,
+            "sleep_score": sleep_score,
+        })
+    return docs
+
+
+def _activity_docs(
+    user_id: str,
+    *,
+    n: int = 28,
+    duration_s: float = 2400.0,
+    distance_m: Optional[float] = 6000.0,
+    include_duration: bool = True,
+    ref: date = _REF,
+) -> List[dict]:
+    acts = []
+    for i in range(n):
+        d = ref - timedelta(days=i)
+        act: dict = {
+            "user_id": user_id,
+            "activity_type": "running",
+            "start_time": f"{d.isoformat()}T08:00:00",
+        }
+        if include_duration:
+            act["duration_s"] = duration_s
+        if distance_m is not None:
+            act["distance_m"] = distance_m
+        acts.append(act)
+    return acts
+
+
+# ---------------------------------------------------------------------------
+# A. payload["metrics"]["training_load"] == build_training_load(activities, ref).acwr
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_A_training_load_equals_snapshot_acwr():
+    """A. metrics.training_load == round(build_training_load(activities, ref).acwr, 3)."""
+    acts = _activity_docs(_USER_A)
+    db = _FakeDB(_metrics_docs(_USER_A), acts)
+    payload = await compute_run_index(db, _USER_A, reference_date=_REF)
+    assert payload is not None
+
+    # Compute the expected snapshot independently
+    snapshot = build_training_load(acts, _REF)
+    assert snapshot.acwr is not None
+
+    expected = round(snapshot.acwr, 3)
+    assert payload["metrics"]["training_load"] == expected
+
+
+# ---------------------------------------------------------------------------
+# B. payload["metrics"]["training_load_v2"]["acwr"] == snapshot.acwr
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_B_training_load_v2_acwr_matches_snapshot():
+    """B. metrics.training_load_v2.acwr == build_training_load(activities, ref).acwr."""
+    acts = _activity_docs(_USER_A)
+    db = _FakeDB(_metrics_docs(_USER_A), acts)
+    payload = await compute_run_index(db, _USER_A, reference_date=_REF)
+    assert payload is not None
+
+    snapshot = build_training_load(acts, _REF)
+    assert payload["metrics"]["training_load_v2"]["acwr"] == snapshot.acwr
+
+
+# ---------------------------------------------------------------------------
+# C. payload["metrics"]["training_load_v2"]["acute_load_7d"] == snapshot.acute_load_7d
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_C_training_load_v2_acute_load_7d():
+    """C. metrics.training_load_v2.acute_load_7d == snapshot.acute_load_7d."""
+    acts = _activity_docs(_USER_A)
+    db = _FakeDB(_metrics_docs(_USER_A), acts)
+    payload = await compute_run_index(db, _USER_A, reference_date=_REF)
+    assert payload is not None
+
+    snapshot = build_training_load(acts, _REF)
+    assert payload["metrics"]["training_load_v2"]["acute_load_7d"] == snapshot.acute_load_7d
+
+
+# ---------------------------------------------------------------------------
+# D. payload["metrics"]["training_load_v2"]["load_28d"] == snapshot.load_28d
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_D_training_load_v2_load_28d():
+    """D. metrics.training_load_v2.load_28d == snapshot.load_28d."""
+    acts = _activity_docs(_USER_A)
+    db = _FakeDB(_metrics_docs(_USER_A), acts)
+    payload = await compute_run_index(db, _USER_A, reference_date=_REF)
+    assert payload is not None
+
+    snapshot = build_training_load(acts, _REF)
+    assert payload["metrics"]["training_load_v2"]["load_28d"] == snapshot.load_28d
+
+
+# ---------------------------------------------------------------------------
+# E. payload["metrics"]["training_load_v2"]["previous_7d_load"] == snapshot.previous_7d_load
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_E_training_load_v2_previous_7d_load():
+    """E. metrics.training_load_v2.previous_7d_load == snapshot.previous_7d_load."""
+    acts = _activity_docs(_USER_A)
+    db = _FakeDB(_metrics_docs(_USER_A), acts)
+    payload = await compute_run_index(db, _USER_A, reference_date=_REF)
+    assert payload is not None
+
+    snapshot = build_training_load(acts, _REF)
+    assert payload["metrics"]["training_load_v2"]["previous_7d_load"] == snapshot.previous_7d_load
+
+
+# ---------------------------------------------------------------------------
+# F. payload["metrics"]["training_load_v2"]["load_change_percent"] == snapshot.load_change_percent
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_F_training_load_v2_load_change_percent():
+    """F. metrics.training_load_v2.load_change_percent == snapshot.load_change_percent."""
+    acts = _activity_docs(_USER_A)
+    db = _FakeDB(_metrics_docs(_USER_A), acts)
+    payload = await compute_run_index(db, _USER_A, reference_date=_REF)
+    assert payload is not None
+
+    snapshot = build_training_load(acts, _REF)
+    assert payload["metrics"]["training_load_v2"]["load_change_percent"] == snapshot.load_change_percent
+
+
+# ---------------------------------------------------------------------------
+# G. no valid activities → training_load is None, acwr is None, status gray
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_G_no_activities_training_load_none_status_gray():
+    """G. no valid activities → training_load is None, training_load_v2.acwr is None,
+    training_load_status == 'gray'."""
+    db = _FakeDB(_metrics_docs(_USER_A), [])
+    payload = await compute_run_index(db, _USER_A, reference_date=_REF)
+    assert payload is not None
+
+    m = payload["metrics"]
+    assert m["training_load"] is None, "training_load must be None when no activities"
+    assert m["training_load_v2"]["acwr"] is None, "training_load_v2.acwr must be None"
+    assert m["training_load_status"] == "gray", "training_load_status must be gray"
+
+
+# ---------------------------------------------------------------------------
+# H. distance present but duration absent → no load invented, training_load is None
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_H_distance_only_no_load():
+    """H. activities with distance but no duration → training_load is None (no fabrication)."""
+    acts = _activity_docs(_USER_A, include_duration=False, distance_m=6000.0)
+    db = _FakeDB(_metrics_docs(_USER_A), acts)
+    payload = await compute_run_index(db, _USER_A, reference_date=_REF)
+    assert payload is not None
+
+    m = payload["metrics"]
+    assert m["training_load"] is None, "distance without duration must not produce a load"
+    assert m["training_load_v2"]["acwr"] is None
+    assert m["training_load_v2"]["acute_load_7d"] == 0.0
+    assert m["training_load_v2"]["load_28d"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# I. multi-user: compute_run_index(userA) does not use userB activities
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_I_multi_user_isolation():
+    """I. userA result is independent of userB activities."""
+    acts_a = _activity_docs(_USER_A, duration_s=1800.0)
+    acts_b = _activity_docs(_USER_B, duration_s=3600.0)
+    metrics_a = _metrics_docs(_USER_A)
+    metrics_b = _metrics_docs(_USER_B)
+
+    # DB contains docs for both users
+    all_metrics = metrics_a + metrics_b
+    all_acts = acts_a + acts_b
+    db = _FakeDB(all_metrics, all_acts)
+
+    payload_a = await compute_run_index(db, _USER_A, reference_date=_REF)
+    payload_b = await compute_run_index(db, _USER_B, reference_date=_REF)
+
+    assert payload_a is not None
+    assert payload_b is not None
+
+    # Expected snapshots from each user's activities alone
+    snap_a = build_training_load(acts_a, _REF)
+    snap_b = build_training_load(acts_b, _REF)
+
+    # userA payload must match userA-only snapshot
+    assert payload_a["metrics"]["training_load_v2"]["acute_load_7d"] == snap_a.acute_load_7d
+    assert payload_a["metrics"]["training_load_v2"]["load_28d"] == snap_a.load_28d
+    assert payload_a["metrics"]["training_load_v2"]["acwr"] == snap_a.acwr
+
+    # userB payload must match userB-only snapshot
+    assert payload_b["metrics"]["training_load_v2"]["acute_load_7d"] == snap_b.acute_load_7d
+    assert payload_b["metrics"]["training_load_v2"]["load_28d"] == snap_b.load_28d
+    assert payload_b["metrics"]["training_load_v2"]["acwr"] == snap_b.acwr
+
+    # The two payloads must differ (userA sessions are shorter → less load)
+    assert snap_a.acute_load_7d != snap_b.acute_load_7d
+
+
+
+# ---------------------------------------------------------------------------
+# Helper builders for pure unit tests (no DB, no user_id)
+# ---------------------------------------------------------------------------
 
 
 def _metrics(
@@ -78,30 +381,6 @@ def _activities(
             act["distance_m"] = distance_m
         acts.append(act)
     return acts
-
-
-# ---------------------------------------------------------------------------
-# 1. metrics.acwr == TrainingLoadSnapshot.acwr
-# ---------------------------------------------------------------------------
-
-
-def test_acwr_matches_v2_snapshot():
-    """The ACWR exposed by compute_run_index equals the V2 snapshot ACWR."""
-    acts = _activities()
-    snapshot = build_training_load(acts, _REF)
-
-    # precondition: activities are present → acwr is not None
-    assert snapshot.acwr is not None
-
-    # Confirm the adapter accepts the pre-built snapshot without error and
-    # produces a concrete result type.
-    result = build_readiness_v2_from_garmin_data(
-        _metrics(), acts, _REF, load_snapshot=snapshot
-    )
-    assert isinstance(result.score, (float, type(None)))
-
-
-
 
 
 # ---------------------------------------------------------------------------
