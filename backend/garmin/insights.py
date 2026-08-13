@@ -360,10 +360,12 @@ async def compute_run_index(
             hist_day_iso = hist_day.isoformat()
             # Metrics available at J: date field must be present, valid, and <= J.
             # Absent or invalid dates are excluded (never assumed available).
-            hist_metrics = [
-                m for m in metrics_docs
-                if (lambda raw: raw is not None and raw <= hist_day_iso)(m.get("date"))
-            ]
+            hist_metrics = []
+            for m in metrics_docs:
+                raw = m.get("date")
+                parsed = _parse_day(raw) if raw is not None else None
+                if parsed is not None and parsed.date() <= hist_day:
+                    hist_metrics.append(m)
             # Activities available at J: start_time date must be valid and <= J.
             # Absent or unparseable start_time → excluded.
             hist_activities = []

@@ -542,3 +542,42 @@ async def test_history_future_data_excluded_strict():
         f"Future data leaked into history[{target_day}]: "
         f"got {entry['run_readiness']!r}, expected {expected.score!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Test 13 — metric with invalid date is never included in historical calculation
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_history_invalid_date_metric_excluded():
+    """A metric with an absent or invalid date must never enter the historical V2 calc."""
+    target_day = _TODAY - timedelta(days=3)
+
+    valid_docs = [
+        {"date": (target_day - timedelta(days=i)).isoformat(),
+         "resting_hr": 55.0, "hrv": 65.0, "sleep_hours": 7.5}
+        for i in range(7)
+    ]
+    # Metrics with invalid / absent dates — must be excluded regardless of lexicographic order
+    invalid_docs = [
+        {"date": "not-a-date", "resting_hr": 40.0, "hrv": 90.0, "sleep_hours": 9.0},
+        {"date": "9999-99-99", "resting_hr": 40.0, "hrv": 90.0, "sleep_hours": 9.0},
+        {"date": "", "resting_hr": 40.0, "hrv": 90.0, "sleep_hours": 9.0},
+        {"resting_hr": 40.0, "hrv": 90.0, "sleep_hours": 9.0},  # missing "date" key
+    ]
+    all_docs = valid_docs + invalid_docs
+
+    db = _make_db(all_docs, [])
+    payload = await compute_run_index(db, "userA", reference_date=_TODAY)
+    assert payload is not None
+
+    entry = next((e for e in payload["history"] if e["date"] == target_day.isoformat()), None)
+    assert entry is not None, f"No history entry for {target_day}"
+
+    # Expected: compute with only valid docs (invalid ones excluded)
+    expected_metrics = [m for m in valid_docs if m["date"] <= target_day.isoformat()]
+    expected = build_readiness_v2_from_garmin_data(expected_metrics, [], target_day)
+    assert entry["run_readiness"] == expected.score, (
+        f"Invalid-date metric leaked into history[{target_day}]: "
+        f"got {entry['run_readiness']!r}, expected {expected.score!r}"
+    )
