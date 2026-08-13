@@ -45,6 +45,7 @@ function buildCardioPayload({ run_readiness }) {
       confidence: run_readiness === null ? "none" : "normal",
       sufficiency_level: run_readiness === null ? "insufficient" : "sufficient",
       readiness_reasons: run_readiness === null ? ["missing_load", "missing_physio"] : [],
+      legacy_run_readiness: 72,
       hrv_today: null,
       hrv_baseline: null,
       hrv_delta: null,
