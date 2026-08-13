@@ -11,7 +11,9 @@ Ce document est :
 
 Last verified against main: `f9bada97d72d4e159c2e7f6cc86781b110efe82c` (Merge PR #116)
 
-HEAD PR (R2B): see current branch HEAD
+HEAD PR (R2B): dec045016a7efa4499f4d9155f362bfed6fdf894
+
+HEAD PR (R3): see current branch HEAD
 
 Date: `2026-08-13`
 
@@ -274,7 +276,7 @@ R2A LoadSubscore V1 utilise uniquement `load_change_percent`.
 
 ## 7) R2B — Aggregation
 
-Status: **IMPLEMENTED IN PR / PENDING MERGE**
+Status: **MERGED — PR #117**
 
 Module: `backend/training_v2/readiness.py`
 
@@ -322,30 +324,122 @@ Tests: 52 passés (`backend/tests/test_training_v2_readiness.py`).
 
 ## 8) R3 — Migration `/run-index`
 
-Status: **PLANNED**
+Status: **IMPLEMENTED IN PR / PENDING MERGE**
 
-Objectif:
+Objectif: brancher Readiness V2 dans le vrai chemin produit `/run-index`.
 
-Brancher Readiness V2 dans le vrai chemin produit `/run-index`.
+### Implémentation (cette PR)
 
-Prévoir:
+Fichiers créés / modifiés:
 
-- comparaison legacy / V2;
-- `reasons`;
-- `confidence`;
-- `score=None` si insuffisant;
-- non-régression API;
-- validation runtime;
-- aucun fallback neutre.
+- `backend/garmin/readiness_adapter.py` ← **CRÉÉ** — boundary Garmin/Mongo → V2 input contract
+- `backend/garmin/insights.py` ← **MODIFIÉ** — `compute_run_index` branchée sur V2
+- `backend/garmin/service.py` ← **MODIFIÉ** — `readiness_status` basé sur score V2
+- `backend/tests/test_run_index_r3_readiness_v2.py` ← **CRÉÉ** — 17 tests déterministes
+
+### Chaîne effective
+
+```
+garmin_daily_metrics + garmin_activities (MongoDB)
+  → readiness_adapter.build_readiness_v2_from_garmin_data()
+    → R1 build_readiness_sufficiency()
+    → R1.6 compute_rhr_deviation / compute_hrv_deviation / extract_sleep_signal / extract_load_signal
+    → R2A build_physio_subscore / build_sleep_subscore / build_load_subscore
+    → R2B build_readiness_result()
+  → ReadinessResult
+  → /run-index metrics.run_readiness (float|null)
+```
+
+### Contrat API `/run-index` enrichi (R3)
+
+```json
+{
+  "metrics": {
+    "run_readiness": 72.3,          // float | null (null si INSUFFICIENT)
+    "run_readiness_status": "green",
+    "confidence": "NORMAL",         // NORMAL | REDUCED | NONE
+    "sufficiency_level": "SUFFICIENT",  // SUFFICIENT | DEGRADED | INSUFFICIENT
+    "readiness_reasons": [],        // liste de ReasonCode strings
+    "legacy_run_readiness": 68      // diagnostic ONLY — supprimer en R4
+  }
+}
+```
+
+### État transitoire R3
+
+`metrics.legacy_run_readiness` = résultat de l'ancienne formule physio-penalty, exposé
+uniquement pour diagnostic côte-à-côte. Il N'EST PAS utilisé pour la recommandation ou le
+score affiché. Il sera supprimé en R4 après validation runtime satisfaisante.
+
+### Règles respectées
+
+- `training_v2` reste pur, sans DB/Garmin/I/O.
+- Aucun fallback fictif : pas de RHR=55, sleep=7h, ACWR=1, readiness=5/70/100.
+- `None` reste `None`.
+- `metrics.run_readiness = ReadinessResult.score`.
+- INSUFFICIENT → `run_readiness=null`.
+- TrainingLoad V2 alimente le LoadSubscore (via `build_training_load`).
+- Aucune formule R1/R2A/R2B dupliquée.
+
+### Tests déterministes (17 passés)
+
+| # | Scénario | Résultat attendu |
+|---|----------|-----------------|
+| 1 | Données complètes | score not None, SUFFICIENT, NORMAL |
+| 2 | HRV absente | score computed from RHR, missing_hrv |
+| 3 | RHR absente | score computed from HRV, missing_rhr |
+| 4 | Sommeil absent | DEGRADED, score not None, missing_sleep |
+| 5 | Charge absente (0 activités) | INSUFFICIENT, score=None, missing_load |
+| 6 | load_change_percent=None | score still computed (REDUCED) |
+| 7 | Données insuffisantes (no physio + no load) | INSUFFICIENT, score=None |
+| 7b | Physio absent seul | INSUFFICIENT, missing_physio |
+| 8 | Isolation user_id | adapter pur, résultats indépendants par user |
+| 9 | Backward compat API | run_readiness key always present (float\|null) |
+| 10 | No fallback RHR | missing_physio reason present |
+| 10b | No fallback sleep | missing_sleep reason present |
+| 10c | No fallback ACWR | missing_load reason present |
+| + | Déterminisme | mêmes inputs → mêmes outputs |
+| + | Immutabilité | ReadinessResult frozen |
+| + | Bornes [0,100] | score always in range |
+| + | Reason codes valides | all reasons are ReasonCode |
+
+### Validation runtime (AVANT merge — obligatoire)
+
+La validation runtime doit être effectuée sur la branche PR, AVANT le merge.
+Un compte Garmin personnel réel est disponible comme compte de test.
+
+**Procédure :**
+
+1. Lancer une sync réelle (compte Garmin test).
+2. Appeler `GET /api/run-index`.
+3. Relever exactement :
+   - `metrics.run_readiness` (float ou null)
+   - `metrics.confidence`
+   - `metrics.sufficiency_level`
+   - `metrics.readiness_reasons`
+   - `metrics.legacy_run_readiness`
+4. Vérifier les données Garmin réellement disponibles (RHR, HRV, sleep, activités).
+5. Confirmer que `run_readiness` provient de V2 (non du chemin legacy).
+6. Comparer `run_readiness` vs `legacy_run_readiness` pour diagnostic uniquement — égalité non exigée.
+7. Vérifier sync progress :
+   - score présent → `ready`
+   - score None → `unavailable`
+8. Documenter les valeurs runtime réelles dans le rapport R3.
+9. Ne jamais fabriquer le résultat si runtime inaccessible.
+
+**Statut :** À VALIDER avant merge.
+
+*R3 runtime validation = PENDING*
 
 ---
 
 ## 9) R4 — Kill readiness legacy
 
-Status: **PLANNED** (après validation R3)
+Status: **PLANNED** (après validation R3 runtime)
 
-Supprimer seulement après migration validée:
+Supprimer seulement après validation runtime R3 satisfaisante:
 
+- `metrics.legacy_run_readiness` dans `garmin/insights.py`;
 - ancien `readiness_engine`;
 - formules concurrentes;
 - fallback readiness `70`;
@@ -586,8 +680,9 @@ Puis:
 - [x] R1.7A Intensity transport
 - [x] R1.7B TrainingIntensityProfile (MERGED, PR #115)
 - [x] R2A Subscores (MERGED, PR #116)
-- [x] R2B Aggregation (IMPLEMENTED IN PR / PENDING MERGE)
-- [ ] R3 /run-index migration
+- [x] R2B Aggregation (MERGED — PR #117)
+- [x] R3 /run-index migration (IMPLEMENTED IN PR / PENDING MERGE)
+- [ ] R3 validation runtime
 - [ ] R4 kill legacy
 
 ### TRAINING ENGINE
@@ -634,8 +729,10 @@ Ce document suit l'état réel de `main` et des PR en cours:
 
 - R1.7B est **MERGED** (PR #115).
 - R2A est **MERGED** (PR #116).
-- R2B est **IMPLEMENTED IN PR / PENDING MERGE**.
-- R3 est **NEXT**.
+- R2B est **MERGED — PR #117**.
+- R3 est **IMPLEMENTED IN PR / PENDING MERGE** (cette PR).
+- NEXT = R4 uniquement si validation runtime R3 satisfaisante.
+- Sinon : documenter précisément le blocage avant d'ouvrir R4.
 
 ---
 

@@ -10,6 +10,15 @@ and the HRV fields are returned as null so the UI shows "—".
 
 The returned dict matches the shape the existing /api/run-index endpoint and
 the Dashboard frontend expect.
+
+R3 — Transitional state (readiness V2)
+---------------------------------------
+``metrics.run_readiness`` is now sourced from Readiness V2 (R2B).
+The legacy physio-penalty formula is still computed and exposed under
+``metrics.legacy_run_readiness`` for diagnostic comparison ONLY — it is
+NOT used for the recommendation or any score output.
+This hybrid state will remain until runtime validation is satisfactory;
+see docs/RUNINDEX_MASTER_ROADMAP_AND_DECISIONS.md R3/R4.
 """
 
 from __future__ import annotations
@@ -17,6 +26,8 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
+
+from garmin.readiness_adapter import build_readiness_v2_from_garmin_data
 
 logger = logging.getLogger(__name__)
 
@@ -123,8 +134,27 @@ def _latest_with(metrics_docs: List[dict], key: str) -> Optional[dict]:
     return None
 
 
-async def compute_run_index(db, user_id: str, language: str = "fr") -> Optional[dict]:
-    """Build the run-index payload from real Garmin data, or None if no data."""
+async def compute_run_index(
+    db,
+    user_id: str,
+    language: str = "fr",
+    reference_date=None,
+) -> Optional[dict]:
+    """Build the run-index payload from real Garmin data, or None if no data.
+
+    Parameters
+    ----------
+    db:
+        Async database handle with garmin_daily_metrics and garmin_activities.
+    user_id:
+        User whose data to fetch.
+    language:
+        i18n locale key (``"fr"``, ``"en"``, ``"es"``).  Defaults to ``"fr"``.
+    reference_date:
+        Anchor date for all time-windowed calculations (load, sufficiency,
+        history).  When *None* the current UTC date is used.  Pass an explicit
+        :class:`datetime.date` in tests to make them deterministic.
+    """
     lang = (language or "fr").lower()
     # --- Daily health metrics (most recent first) ---
     metrics_docs = await (
@@ -143,7 +173,7 @@ async def compute_run_index(db, user_id: str, language: str = "fr") -> Optional[
     if not metrics_docs and not activities:
         return None
 
-    today = datetime.now(timezone.utc).date()
+    today = reference_date if reference_date is not None else datetime.now(timezone.utc).date()
 
     # Use the most RECENT REAL (non-null) reading per metric. If the device
     # actually reported HRV, that real value is used (never recomputed/faked).
@@ -197,13 +227,18 @@ async def compute_run_index(db, user_id: str, language: str = "fr") -> Optional[
     # 1.0 fresh · ~1.2 moderate · >1.5 high.
     fatigue_ratio = 1.0 + fatigue_physio / 10.0
 
-    # --- Run Readiness (SINGLE SOURCE OF TRUTH, computed backend-side) ---
-    # Score 0-100. Two penalties subtracted from a fresh baseline of 100:
-    #  1. Physiological fatigue (RHR/HRV/sleep). Works WITH OR WITHOUT HRV
-    #     because fatigue_physio already reweights when HRV is unavailable
-    #     (many Garmin devices do not record HRV).
-    #  2. ACWR load risk, penalised on BOTH sides of the optimal 0.8-1.3 zone:
-    #     overload (>1.3) penalised steeply, detraining (<0.8) penalised mildly.
+    # --- Run Readiness V2 (R3 — single source of truth from R2B) ---
+    # build_readiness_v2_from_garmin_data runs the full V2 chain:
+    #   R1 Sufficiency → R1.6 Signals → R2A Subscores → R2B Aggregation
+    # INSUFFICIENT → score=None → run_readiness=None (no fallback).
+    _v2_result = build_readiness_v2_from_garmin_data(metrics_docs, activities, today)
+    run_readiness_v2: Optional[float] = _v2_result.score
+    readiness_v2_confidence: str = _v2_result.confidence.value
+    readiness_v2_sufficiency: str = _v2_result.sufficiency_level.value
+    readiness_v2_reasons: list = [r.value for r in _v2_result.reasons]
+
+    # --- Legacy readiness (kept for diagnostic comparison — NOT used for output) ---
+    # R4 will remove this block after runtime validation is satisfactory.
     physio_penalty = min(60.0, fatigue_physio * 6.0)
     if acwr > 1.3:
         acwr_penalty = min(60.0, (acwr - 1.3) * 130.0)
@@ -211,15 +246,22 @@ async def compute_run_index(db, user_id: str, language: str = "fr") -> Optional[
         acwr_penalty = min(30.0, (0.8 - acwr) * 60.0)
     else:
         acwr_penalty = 0.0
-    run_readiness = int(round(max(5.0, min(100.0, 100.0 - physio_penalty - acwr_penalty))))
+    _legacy_run_readiness = int(round(max(5.0, min(100.0, 100.0 - physio_penalty - acwr_penalty))))
+
+    # V2 is authoritative.  INSUFFICIENT → None → recommendation is UNAVAILABLE.
+    run_readiness = run_readiness_v2  # Optional[float] or None
 
     # --- Recommendation derived from readiness (number & badge always agree) ---
-    if run_readiness >= 75:
+    # When run_readiness is None (INSUFFICIENT) the state is UNAVAILABLE — not
+    # a training recommendation.  None must NEVER map to REST/EASY RUN/RUN HARD.
+    if run_readiness is not None and run_readiness >= 75:
         recommendation, rec_emoji, rec_color = "RUN HARD", "🟢", "green"
-    elif run_readiness >= 55:
+    elif run_readiness is not None and run_readiness >= 55:
         recommendation, rec_emoji, rec_color = "EASY RUN", "🟡", "yellow"
-    else:
+    elif run_readiness is not None:
         recommendation, rec_emoji, rec_color = "REST", "🔴", "red"
+    else:
+        recommendation, rec_emoji, rec_color = "UNAVAILABLE", "⚪", "gray"
     readiness_status = rec_color
 
     # Localize the user-facing labels (fr default / es / en).
@@ -227,6 +269,7 @@ async def compute_run_index(db, user_id: str, language: str = "fr") -> Optional[
         "RUN HARD": {"fr": "SÉANCE INTENSE", "es": "ENTRENO INTENSO"},
         "EASY RUN": {"fr": "FOOTING FACILE", "es": "CARRERA SUAVE"},
         "REST": {"fr": "REPOS", "es": "DESCANSO"},
+        "UNAVAILABLE": {"fr": "INDISPONIBLE", "es": "NO DISPONIBLE"},
     }
     if lang != "en":
         recommendation = _REC_I18N.get(recommendation, {}).get(lang, recommendation)
@@ -327,8 +370,8 @@ async def compute_run_index(db, user_id: str, language: str = "fr") -> Optional[
             "hrv_status": hrv_status,
             "hrv_available": have_hrv,
             "rhr_today": round(float(rhr_today), 1) if have_rhr else None,
-            "rhr_baseline": round(float(rhr_baseline), 1),
-            "rhr_delta": round(rhr_delta, 1),
+            "rhr_baseline": round(float(rhr_baseline), 1) if rhr_baseline is not None else None,
+            "rhr_delta": round(rhr_delta, 1) if rhr_delta is not None else None,
             "rhr_status": rhr_status,
             "sleep_hours": round(sleep_hours_val, 1),
             "sleep_efficiency": round(sleep_efficiency, 2),
@@ -339,8 +382,14 @@ async def compute_run_index(db, user_id: str, language: str = "fr") -> Optional[
             "fatigue_physio": round(fatigue_physio, 2),
             "fatigue_ratio": round(fatigue_ratio, 2),
             "fatigue_status": fatigue_status,
-            "run_readiness": run_readiness,
+            # V2 readiness fields (R3) — authoritative.
+            "run_readiness": run_readiness,  # float or None (INSUFFICIENT)
             "run_readiness_status": readiness_status,
+            "confidence": readiness_v2_confidence,
+            "sufficiency_level": readiness_v2_sufficiency,
+            "readiness_reasons": readiness_v2_reasons,
+            # Legacy readiness — diagnostic only (NOT authoritative). Remove in R4.
+            "legacy_run_readiness": _legacy_run_readiness,
         },
         "history": history,
     }
