@@ -3746,13 +3746,13 @@ async def get_training_metrics(user: dict = Depends(auth_user)):
 
     strain = round(load_7 * monotony, 0) if monotony > 0 else 0
 
-    # --- ACWR reliability: requires ≥ 28 days of history ---
-    # has_sufficient_history captures ONLY the depth of available history
-    # (available_history_days >= 28).  It is NOT equivalent to "non-reprise":
-    # an athlete may have ≥ 28 days of data while still resuming after a break.
-    # For this PR the acwr_reliable semantics are preserved unchanged;
-    # a future PR will refine the acwr_reliable criterion if needed.
-    acwr_reliable = load_snapshot.has_sufficient_history
+    # --- ACWR reliability: based on training state (reprise detection) ---
+    # has_sufficient_history captures ONLY the depth of available history and
+    # must NOT be used here.  An athlete with ≥ 28 days of Garmin data may
+    # still be resuming after a break (deep_reprise / partial_reprise), making
+    # the ACWR unreliable regardless of history depth.
+    reprise_state = classify_training_state(activities_28)
+    acwr_reliable = reprise_state not in ("deep_reprise", "partial_reprise")
 
     # --- Interpréter ACWR ---
     if acwr is None:
@@ -3775,10 +3775,9 @@ async def get_training_metrics(user: dict = Depends(auth_user)):
         acwr_label = "Danger"
 
     # --- Interpréter TSB ---
-    # TSB needs ~4 weeks of chronic data; mark "building" when history is short.
-    # tsb_reliable mirrors acwr_reliable intentionally: both depend on
-    # has_sufficient_history (≥28 calendar days). A short history inflates
-    # acute/chronic ratio and makes TSB equally misleading.
+    # TSB needs a stable training base; mark "building" during reprise.
+    # tsb_reliable mirrors acwr_reliable: both are unreliable when the athlete
+    # is in deep_reprise or partial_reprise, regardless of history depth.
     tsb_reliable = acwr_reliable
     if tsb is None:
         tsb_status = "unavailable"

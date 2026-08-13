@@ -396,3 +396,54 @@ async def test_d_user_a_acwr_not_influenced_by_user_b():
     payload = r.json()
     expected_snap = build_training_load(acts_a, today)
     assert payload["acwr"] == expected_snap.acwr
+
+
+# ---------------------------------------------------------------------------
+# E. acwr_reliable uses reprise state — NOT has_sufficient_history
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_e_long_garmin_history_but_reprise_acwr_reliable_false():
+    """E. Athlete with >28 days of Garmin history is in reprise → acwr_reliable=False.
+
+    has_sufficient_history would be True (≥28 days of Garmin data), but the
+    athlete has NO workout records over the past 28 days, so
+    classify_training_state(activities_28) returns "deep_reprise" and
+    acwr_reliable must be False.
+
+    This test validates that acwr_reliable is driven by the reprise-state
+    classification, never by load_snapshot.has_sufficient_history.
+    """
+    today = date.today()
+    # >28 days of Garmin activities → has_sufficient_history is True
+    garmin_acts = [
+        _garmin_act(_USER_A, days_ago=d, duration_s=1800.0) for d in range(35)
+    ]
+    # No workout records → classify_training_state([]) returns "deep_reprise"
+    fake_db = _FakeDB(garmin_activities=garmin_acts, workouts=[])
+    patches = _make_client(fake_db)
+    started = []
+    try:
+        for p in patches:
+            p.start()
+            started.append(p)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=server.app),
+            base_url="http://test",
+        ) as client:
+            r = await client.get("/api/training/metrics", headers=_bearer(_USER_A))
+    finally:
+        for p in reversed(started):
+            p.stop()
+
+    assert r.status_code == 200, r.text
+    payload = r.json()
+    # Garmin data is present → acwr is a number (not None)
+    assert payload["acwr"] is not None, "acwr should be computable from Garmin data"
+    # But the athlete is in deep_reprise → acwr_reliable must be False
+    assert payload["acwr_reliable"] is False, (
+        "acwr_reliable must be False when athlete is in reprise, "
+        "even if Garmin history spans >28 days"
+    )
+    assert payload["acwr_status"] == "building"
