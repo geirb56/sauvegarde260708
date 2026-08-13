@@ -164,4 +164,4 @@ Fichier : `docs/RUNINDEX_MASTER_ROADMAP_AND_DECISIONS.md`
 
 ---
 
-*R2B n'est pas merger. Ce rapport est produit au moment de l'ouverture de la PR.*
+*R2B n'est pas mergé. Ce rapport est produit au moment de l'ouverture de la PR.*

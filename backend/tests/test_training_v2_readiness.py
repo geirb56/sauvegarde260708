@@ -377,6 +377,9 @@ class TestArchitectureInvariants:
         assert LoadSubscore is not None
         assert PhysioSubscore is not None
         assert SleepSubscore is not None
+        assert build_load_subscore is not None
+        assert build_physio_subscore is not None
+        assert build_sleep_subscore is not None
 
     def test_imports_r1_valid(self):
         from training_v2.readiness_sufficiency import (
