@@ -142,7 +142,7 @@ Total : **39 tests**
 ## 10. Résultats
 
 ```
-34 passed in 0.45s
+39 passed in 0.49s
 ```
 
 ✅ Tous les tests passent.
