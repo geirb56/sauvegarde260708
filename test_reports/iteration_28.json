@@ -1,0 +1,64 @@
+{
+  "summary": "E2E visual validation of Dashboard after Readiness V2 migration (PR R3). Injected JWT via localStorage 'access_token' and navigated to '/' (Dashboard is index route, not '/dashboard'). Both accounts render correctly with expected Readiness V2 behavior and zero console errors.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_results": {
+    "TEST_A_real_garmin": {
+      "dashboard_loads": true,
+      "run_readiness_score_displayed": "92.5",
+      "score_suffix": "/ 100",
+      "recommendation_pill": "RUN HARD (green)",
+      "status_green_coherent": true,
+      "legacy_40_shown_as_main_score": false,
+      "confidence_sufficiency_breaks_ui": false,
+      "readiness_chart_visible": true,
+      "readiness_chart_testid": "readiness-chart present with 30-day trend line and points",
+      "pillars": {"hrv": "—", "rhr": "45 bpm", "sleep": "8.6 h", "load": "2.23"},
+      "console_errors": "NONE (only benign PWA/DevTools info logs)",
+      "score_text_color": "rgb(255,255,255) white — status color shown via RUN HARD pill (green) and chart/line + tile dots, not the digit itself"
+    },
+    "TEST_B_testrunner_no_garmin": {
+      "dashboard_loads": true,
+      "readiness_card_rendered": false,
+      "no_data_state_shown": true,
+      "no_data_message": "No data yet — Connect your Garmin to see your readiness and daily metrics.",
+      "connect_garmin_button_visible": true,
+      "fake_0_100_score_shown": false,
+      "fake_recommendation_shown_on_readiness": false,
+      "console_errors": "NONE",
+      "note": "The 'TODAY' session card shows a session-intensity badge (e.g. 'RUN HARD' on testrunner, 'SÉANCE INTENSE' on real). This is a training-plan session label, not a readiness recommendation, so it does not violate the 'no fake recommendation' requirement — but the inconsistency between EN ('RUN HARD') and FR ('SÉANCE INTENSE') labels across accounts may indicate an i18n edge-case worth checking separately (out of scope for R3)."
+    }
+  },
+  "console_logs_verbatim": {
+    "real": [
+      "[log] [PWA] Service Worker registered successfully",
+      "[info] Download the React DevTools ...",
+      "[log] App Configuration: {BACKEND_URL, API_BASE_URL, NODE_ENV: development}"
+    ],
+    "test": [
+      "[log] [PWA] Service Worker registered successfully",
+      "[info] Download the React DevTools ...",
+      "[log] App Configuration: {...}"
+    ],
+    "errors_warnings_uncaught": "NONE for either account when navigating to '/'. A prior attempt to /dashboard produced React Router 'No routes matched location /dashboard' — this was tester error (Dashboard is at '/'), not an app bug."
+  },
+  "test_report_links": ["/app/test_reports/dashboard_real.png", "/app/test_reports/dashboard_test.png"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Dashboard.jsx is 900+ lines — consider splitting ReadinessTile/ReadinessChart/RunIndex sections into standalone components for maintainability (not blocking R3).",
+    "Score digit ('92.5') is rendered in white while status is only conveyed via the small 'RUN HARD' pill and dots. Consider tinting the score itself with the status color for stronger visual cohesion with 'green' status (minor UX).",
+    "Session-intensity badge on TODAY card is localized inconsistently across accounts ('RUN HARD' vs 'SÉANCE INTENSE') — likely i18n fallback based on user locale; unrelated to R3."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (skipped)", "frontend": "100% (8/8 criteria pass)"},
+  "test_credentials": "JWT tokens provided by main agent (real Garmin account + testrunner). Injected via localStorage 'access_token'.",
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Dashboard route is '/' (index route inside protected layout), NOT '/dashboard'. To auth: page.add_init_script to localStorage.setItem('access_token', TOKEN) BEFORE page.goto('/'). AuthContext reads TOKEN_KEY='access_token' and calls /api/auth/me on mount.",
+  "rca_of_the_issue": "N/A — no issues found. Readiness V2 renders correctly for both connected (92.5 green, RUN HARD, chart with 30-day trend, 4 pillars) and disconnected (gray 'No data yet' + CONNECT GARMIN CTA, no fake score) states."
+}
