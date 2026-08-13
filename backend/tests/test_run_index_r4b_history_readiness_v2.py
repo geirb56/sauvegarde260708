@@ -116,11 +116,11 @@ async def test_history_run_readiness_matches_v2_for_each_day():
         hist_day_iso = hist_day.isoformat()
         # Reproduce the same filtering done by insights.py
         hist_metrics = [m for m in metrics_docs if (m.get("date") or "") <= hist_day_iso]
-        from garmin.insights import _parse_day, _activity_load
+        from garmin.insights import _parse_day
         hist_activities = [
             a for a in activity_docs
             if (_parse_day(a.get("start_time") or a.get("synced_at") or "") or
-                type("_D", (), {"date": lambda self: hist_day})()).date()
+                datetime.combine(hist_day, datetime.min.time())).date()
             <= hist_day
         ]
         expected_v2 = build_readiness_v2_from_garmin_data(hist_metrics, hist_activities, hist_day)
@@ -261,11 +261,10 @@ async def test_history_insufficient_data_run_readiness_is_none():
     assert payload is not None
 
     for entry in payload["history"]:
-        # No physio (no resting_hr / hrv) + no load → INSUFFICIENT
+        # No physio (no resting_hr / hrv) + no load → INSUFFICIENT → None
         assert entry["run_readiness"] is None, (
             f"Expected None for day {entry['date']}, got {entry['run_readiness']!r}"
         )
-        assert entry["run_readiness"] != 0
 
 
 # ---------------------------------------------------------------------------
