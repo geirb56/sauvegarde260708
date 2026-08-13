@@ -374,8 +374,9 @@ async def _complete_post_activities_pipeline(
             await _build_and_persist_capabilities(db, user_id)
             readiness_payload = await compute_run_index(db, user_id)
             daily_metrics_status = "ready" if _has_usable_physio_data(metrics_7d) else "no_usable_data"
-            readiness_status = "ready" if daily_metrics_status == "ready" and readiness_payload else "unavailable"
-            readiness_value = ((readiness_payload or {}).get("metrics") or {}).get("run_readiness") if readiness_status == "ready" else None
+            # V2: score present (not None) → ready; score None (INSUFFICIENT) → unavailable.
+            readiness_value = ((readiness_payload or {}).get("metrics") or {}).get("run_readiness") if readiness_payload else None
+            readiness_status = "ready" if readiness_value is not None else "unavailable"
             await update_sync_progress(
                 user_id,
                 phase="readiness_ready" if readiness_status == "ready" else "readiness_unavailable",
