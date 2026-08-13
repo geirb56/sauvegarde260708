@@ -11,6 +11,12 @@ R1   exposes:            ReadinessSufficiency, ReadinessSufficiencyInput,
                          SufficiencyLevel, ReasonCode, PhysioSignal, PhysioBaseline,
                          SleepRecord, build_readiness_sufficiency.
 R1.7B exposes:           TrainingIntensityProfile, build_training_intensity_profile.
+R2A exposes:             PhysioSubscore, SleepSubscore, LoadSubscore,
+                         ReadinessSubscores, build_physio_subscore,
+                         build_sleep_subscore, build_load_subscore,
+                         build_readiness_subscores.
+R2B exposes:             ReadinessResult, ReadinessConfidence,
+                         build_readiness_result.
 """
 
 from .domain_activity import DomainActivity
@@ -31,6 +37,21 @@ from .readiness_sufficiency import (
     SleepRecord,
     SufficiencyLevel,
     build_readiness_sufficiency,
+)
+from .readiness_subscores import (
+    LoadSubscore,
+    PhysioSubscore,
+    ReadinessSubscores,
+    SleepSubscore,
+    build_load_subscore,
+    build_physio_subscore,
+    build_readiness_subscores,
+    build_sleep_subscore,
+)
+from .readiness import (
+    ReadinessConfidence,
+    ReadinessResult,
+    build_readiness_result,
 )
 from .runner_profile import RunnerProfile, build_runner_profile
 from .training_history import TrainingHistory, TrainingWindow, build_training_history
@@ -53,9 +74,20 @@ __all__ = [
     "ReasonCode",
     "ReadinessSufficiency",
     "ReadinessSufficiencyInput",
+    "ReadinessSubscores",
     "SleepRecord",
+    "SleepSubscore",
     "SufficiencyLevel",
+    "PhysioSubscore",
+    "LoadSubscore",
     "build_readiness_sufficiency",
+    "build_physio_subscore",
+    "build_sleep_subscore",
+    "build_load_subscore",
+    "build_readiness_subscores",
+    "ReadinessConfidence",
+    "ReadinessResult",
+    "build_readiness_result",
     "RunnerProfile",
     "build_runner_profile",
     "TrainingHistory",

@@ -9,11 +9,13 @@ Ce document est :
 - la roadmap d'exécution ;
 - un moyen d'éviter la perte de contexte entre sessions/outils.
 
-Last verified against main: `bd9d423322307405dec82dec7f185610b49e903f` (Merge PR #114)
+Last verified against main: `f9bada97d72d4e159c2e7f6cc86781b110efe82c` (Merge PR #116)
 
-HEAD PR (R1.7B): see current branch HEAD
+HEAD PR (R2B): dec045016a7efa4499f4d9155f362bfed6fdf894
 
-Date: `2026-08-12`
+HEAD PR (R3): see current branch HEAD
+
+Date: `2026-08-13`
 
 ---
 
@@ -21,7 +23,7 @@ Date: `2026-08-12`
 
 Source de vérité utilisée pour ce document :
 
-1. HEAD réel de `main` (`bd9d423`) ;
+1. HEAD réel de `main` (`f9bada97`) ;
 2. audit des merges PR sur `main` ;
 3. audit du code réellement présent (`backend/`, `frontend/`, `backend/training_v2/`) ;
 4. croisement avec les rapports versionnés (`*_REPORT.md`).
@@ -50,7 +52,7 @@ Règle: rien n'est marqué DONE/MERGED s'il n'est pas réellement présent sur `
 
 ---
 
-## 4) Readiness V2 — état canonique R1 -> R1.7A
+## 4) Readiness V2 — état canonique R1 -> R1.7B
 
 ## R1 — Sufficiency layer — PR #110 — MERGED
 
@@ -123,11 +125,9 @@ Fichier réel: `backend/training_v2/domain_activity.py`
 
 ---
 
-## 5) NEXT canonique
+## 5) R1.7B — TrainingIntensityProfile
 
-## R1.7B — TrainingIntensityProfile
-
-Status: **IMPLEMENTED IN PR / PENDING MERGE**
+Status: **MERGED** (PR #115)
 
 Fichier réel: `backend/training_v2/training_intensity.py`
 
@@ -204,7 +204,7 @@ Elle ne modifie pas `TrainingLoad`.
 
 ## 6) R2A — Subscores
 
-Status: **NEXT** (immédiatement après R1.7B)
+Status: **MERGED** — PR #116
 
 Architecture cible:
 
@@ -212,7 +212,7 @@ Architecture cible:
 - HRV deviation % -> HRV subscore
 - RHR + HRV -> PhysioSubscore
 - Sleep duration -> SleepSubscore
-- Weekly load context + Acute recovery context J/J-1 -> LoadSubscore
+- Load signal context (`load_change_percent`) -> LoadSubscore
 
 Sorties:
 
@@ -221,7 +221,7 @@ Sorties:
 
 Règle: **AUCUNE agrégation finale dans R2A**.
 
-### Calibration V1 envisagée
+### Calibration V1 implémentée
 
 - **PRODUCT CALIBRATION V1**
 - **RECALIBRATABLE**
@@ -258,73 +258,188 @@ Ne pas pénaliser automatiquement `> 9 h`.
 
 LOAD en R2A:
 
-- ne pas figer une formule complète maintenant;
-- utiliser `load_change_percent`, `recent_duration_minutes_2d`, `recent_moderate_minutes_2d`, `recent_vigorous_minutes_2d`;
-- ACWR reste contexte/annotation;
-- ne pas écrire `moderate + 2 × vigorous` comme formule de récupération.
+- calibration principale par `load_change_percent`:
+  - `<= 10 %` -> `100`
+  - `>10 à 25 %` -> `90`
+  - `>25 à 40 %` -> `75`
+  - `>40 à 60 %` -> `55`
+  - `>60 %` -> `35`
+- les valeurs négatives restent dans le cas `<= 10 %` (pas de pénalité automatique sur baisse de charge);
+- aucun modificateur basé sur `TrainingIntensityProfile`;
+- aucune formule `moderate + 2 × vigorous`;
+- aucune conversion LT1/LT2, TRIMP, TSS, EPOC ou Recovery Time.
+
+R2A LoadSubscore V1 utilise uniquement `load_change_percent`.
+`TrainingIntensityProfile` n'entre pas dans le score R2A et reste une couche de faits indépendante pour une calibration future.
 
 ---
 
 ## 7) R2B — Aggregation
 
-Status: **PLANNED**
+Status: **MERGED — PR #117**
 
-Règles:
+Module: `backend/training_v2/readiness.py`
 
-- R1 = `INSUFFICIENT` -> `readiness_score = None`
-- R1 = `SUFFICIENT` -> calcul normal
-- R1 = `DEGRADED` -> n'utiliser que les sous-scores disponibles, renormaliser les poids, marquer confidence reduced
+Contrat de sortie:
 
-Poids produit V1 envisagés:
+```python
+class ReadinessConfidence(str, Enum):
+    NONE = "NONE"
+    NORMAL = "NORMAL"
+    REDUCED = "REDUCED"
+
+class ReadinessResult(BaseModel):
+    score: Optional[float]           # 0–100 (1 décimale) ou None
+    confidence: ReadinessConfidence  # catégoriel uniquement, jamais numérique
+    sufficiency_level: SufficiencyLevel  # propagé depuis R1
+    reasons: Tuple[ReasonCode, ...]      # propagé depuis R1
+```
+
+Poids produit V1 (PRODUCT_CALIBRATION_V1):
 
 - Physio = 40%
 - Sleep = 30%
 - Load = 30%
 
-Mention obligatoire:
+> Product calibration V1, recalibratable, not a scientifically proven universal weighting.
 
-> Product calibration V1, not a scientifically proven universal weighting.
+Règles:
 
-Exemple:
+- R1 = `INSUFFICIENT` -> `readiness_score = None`, `confidence = NONE`
+- R1 = `SUFFICIENT` + 3 sous-scores présents -> calcul normal, `confidence = NORMAL`
+- R1 = `SUFFICIENT` + sous-score(s) manquant(s) -> calcul renormalisé, `confidence = REDUCED` (sufficiency_level reste SUFFICIENT)
+- R1 = `DEGRADED` -> n'utiliser que les sous-scores disponibles, renormaliser les poids, `confidence = REDUCED`
+- Cas défensif (SUFFICIENT/DEGRADED sans sous-score utilisable) -> `score = None`, `confidence = NONE`
 
-- Physio = 70
-- Sleep = None
-- Load = 80
+`ReadinessConfidence`:
+- `NORMAL` → sufficiency SUFFICIENT ET les 3 sous-scores sont effectivement disponibles
+- `REDUCED` → sufficiency DEGRADED OU sufficiency SUFFICIENT mais un ou plusieurs sous-scores sont indisponibles
+- `NONE` → INSUFFICIENT OU aucun sous-score exploitable
 
-Score:
+Aucun score fictif pour donnée manquante. None reste None.
 
-`(70×40 + 80×30) / 70 ≈ 74`
-
-Aucun SleepScore fictif.
+Tests: 52 passés (`backend/tests/test_training_v2_readiness.py`).
 
 ---
 
 ## 8) R3 — Migration `/run-index`
 
-Status: **PLANNED**
+Status: **IMPLEMENTED IN PR / PENDING MERGE**
 
-Objectif:
+Objectif: brancher Readiness V2 dans le vrai chemin produit `/run-index`.
 
-Brancher Readiness V2 dans le vrai chemin produit `/run-index`.
+### Implémentation (cette PR)
 
-Prévoir:
+Fichiers créés / modifiés:
 
-- comparaison legacy / V2;
-- `reasons`;
-- `confidence`;
-- `score=None` si insuffisant;
-- non-régression API;
-- validation runtime;
-- aucun fallback neutre.
+- `backend/garmin/readiness_adapter.py` ← **CRÉÉ** — boundary Garmin/Mongo → V2 input contract
+- `backend/garmin/insights.py` ← **MODIFIÉ** — `compute_run_index` branchée sur V2
+- `backend/garmin/service.py` ← **MODIFIÉ** — `readiness_status` basé sur score V2
+- `backend/tests/test_run_index_r3_readiness_v2.py` ← **CRÉÉ** — 17 tests déterministes
+
+### Chaîne effective
+
+```
+garmin_daily_metrics + garmin_activities (MongoDB)
+  → readiness_adapter.build_readiness_v2_from_garmin_data()
+    → R1 build_readiness_sufficiency()
+    → R1.6 compute_rhr_deviation / compute_hrv_deviation / extract_sleep_signal / extract_load_signal
+    → R2A build_physio_subscore / build_sleep_subscore / build_load_subscore
+    → R2B build_readiness_result()
+  → ReadinessResult
+  → /run-index metrics.run_readiness (float|null)
+```
+
+### Contrat API `/run-index` enrichi (R3)
+
+```json
+{
+  "metrics": {
+    "run_readiness": 72.3,          // float | null (null si INSUFFICIENT)
+    "run_readiness_status": "green",
+    "confidence": "NORMAL",         // NORMAL | REDUCED | NONE
+    "sufficiency_level": "SUFFICIENT",  // SUFFICIENT | DEGRADED | INSUFFICIENT
+    "readiness_reasons": [],        // liste de ReasonCode strings
+    "legacy_run_readiness": 68      // diagnostic ONLY — supprimer en R4
+  }
+}
+```
+
+### État transitoire R3
+
+`metrics.legacy_run_readiness` = résultat de l'ancienne formule physio-penalty, exposé
+uniquement pour diagnostic côte-à-côte. Il N'EST PAS utilisé pour la recommandation ou le
+score affiché. Il sera supprimé en R4 après validation runtime satisfaisante.
+
+### Règles respectées
+
+- `training_v2` reste pur, sans DB/Garmin/I/O.
+- Aucun fallback fictif : pas de RHR=55, sleep=7h, ACWR=1, readiness=5/70/100.
+- `None` reste `None`.
+- `metrics.run_readiness = ReadinessResult.score`.
+- INSUFFICIENT → `run_readiness=null`.
+- TrainingLoad V2 alimente le LoadSubscore (via `build_training_load`).
+- Aucune formule R1/R2A/R2B dupliquée.
+
+### Tests déterministes (17 passés)
+
+| # | Scénario | Résultat attendu |
+|---|----------|-----------------|
+| 1 | Données complètes | score not None, SUFFICIENT, NORMAL |
+| 2 | HRV absente | score computed from RHR, missing_hrv |
+| 3 | RHR absente | score computed from HRV, missing_rhr |
+| 4 | Sommeil absent | DEGRADED, score not None, missing_sleep |
+| 5 | Charge absente (0 activités) | INSUFFICIENT, score=None, missing_load |
+| 6 | load_change_percent=None | score still computed (REDUCED) |
+| 7 | Données insuffisantes (no physio + no load) | INSUFFICIENT, score=None |
+| 7b | Physio absent seul | INSUFFICIENT, missing_physio |
+| 8 | Isolation user_id | adapter pur, résultats indépendants par user |
+| 9 | Backward compat API | run_readiness key always present (float\|null) |
+| 10 | No fallback RHR | missing_physio reason present |
+| 10b | No fallback sleep | missing_sleep reason present |
+| 10c | No fallback ACWR | missing_load reason present |
+| + | Déterminisme | mêmes inputs → mêmes outputs |
+| + | Immutabilité | ReadinessResult frozen |
+| + | Bornes [0,100] | score always in range |
+| + | Reason codes valides | all reasons are ReasonCode |
+
+### Validation runtime (AVANT merge — obligatoire)
+
+La validation runtime doit être effectuée sur la branche PR, AVANT le merge.
+Un compte Garmin personnel réel est disponible comme compte de test.
+
+**Procédure :**
+
+1. Lancer une sync réelle (compte Garmin test).
+2. Appeler `GET /api/run-index`.
+3. Relever exactement :
+   - `metrics.run_readiness` (float ou null)
+   - `metrics.confidence`
+   - `metrics.sufficiency_level`
+   - `metrics.readiness_reasons`
+   - `metrics.legacy_run_readiness`
+4. Vérifier les données Garmin réellement disponibles (RHR, HRV, sleep, activités).
+5. Confirmer que `run_readiness` provient de V2 (non du chemin legacy).
+6. Comparer `run_readiness` vs `legacy_run_readiness` pour diagnostic uniquement — égalité non exigée.
+7. Vérifier sync progress :
+   - score présent → `ready`
+   - score None → `unavailable`
+8. Documenter les valeurs runtime réelles dans le rapport R3.
+9. Ne jamais fabriquer le résultat si runtime inaccessible.
+
+**Statut :** À VALIDER avant merge.
+
+*R3 runtime validation = PENDING*
 
 ---
 
 ## 9) R4 — Kill readiness legacy
 
-Status: **PLANNED** (après validation R3)
+Status: **PLANNED** (après validation R3 runtime)
 
-Supprimer seulement après migration validée:
+Supprimer seulement après validation runtime R3 satisfaisante:
 
+- `metrics.legacy_run_readiness` dans `garmin/insights.py`;
 - ancien `readiness_engine`;
 - formules concurrentes;
 - fallback readiness `70`;
@@ -563,10 +678,11 @@ Puis:
 - [x] R1.5 Values
 - [x] R1.6 Signals
 - [x] R1.7A Intensity transport
-- [x] R1.7B TrainingIntensityProfile (IMPLEMENTED IN PR / PENDING MERGE)
-- [ ] R2A Subscores (NEXT)
-- [ ] R2B Aggregation
-- [ ] R3 /run-index migration
+- [x] R1.7B TrainingIntensityProfile (MERGED, PR #115)
+- [x] R2A Subscores (MERGED, PR #116)
+- [x] R2B Aggregation (MERGED — PR #117)
+- [x] R3 /run-index migration (IMPLEMENTED IN PR / PENDING MERGE)
+- [ ] R3 validation runtime
 - [ ] R4 kill legacy
 
 ### TRAINING ENGINE
@@ -607,37 +723,51 @@ Ces sujets restent secondaires et ne précèdent pas la roadmap principale Readi
 
 ---
 
-## 21) Périmètre strict de cette PR
+## 21) Périmètre strict de la mise à jour canonique
 
-- Uniquement `docs/RUNINDEX_MASTER_ROADMAP_AND_DECISIONS.md`
-- Aucun code applicatif
-- Aucun refactor
-- Aucune configuration
-- Aucun test applicatif
-- Aucun autre fichier
+Ce document suit l'état réel de `main` et des PR en cours:
+
+- R1.7B est **MERGED** (PR #115).
+- R2A est **MERGED** (PR #116).
+- R2B est **MERGED — PR #117**.
+- R3 est **IMPLEMENTED IN PR / PENDING MERGE** (cette PR).
+- NEXT = R4 uniquement si validation runtime R3 satisfaisante.
+- Sinon : documenter précisément le blocage avant d'ouvrir R4.
 
 ---
 
-## 22) FUTURE — Thresholds et distribution d'intensité avancée
+## 22) Décision produit canonique — LT1 / LT2 (phase grand public)
 
-Ces sujets viennent **après** la construction de la Readiness V2.
-Ils ne font PAS partie de R1.7B.
+RunIndex est une application grand public.
+La version LT1/LT2 initiale ne dépend pas de mesures laboratoire.
 
-### FUTURE — Personalized LT1/LT2 thresholds
+Cible produit:
 
-Status: **FUTURE** (après R2A et Readiness V2)
+- estimation automatique personnalisée LT1/LT2 basée sur les données d'entraînement disponibles.
 
-Objectif: calibration personnalisée des seuils LT1/LT2 par athlète,
-à partir de données physiologiques réelles (HRV, FC, tests terrain).
+Roadmap post-Readiness V2:
 
-Aucune implémentation dans R1.7B ni R2A.
+- P1 — enrichissement provider-neutral des faits activité (dont FC quand réellement disponible)
+- P2 — ThresholdEvidence
+- P3 — LT2 Estimator V1
+- P4 — LT1 Estimator V1
+- P5 — Confidence / Calibration
 
-### FUTURE — Training intensity distribution V2
+puis:
 
-Status: **FUTURE** (après Personalized LT1/LT2)
+- Weekly Target V2
+- Workout Generator V2
+- Training Intensity Distribution LT1/LT2
+- Workout Analysis V2
+- Daily Adaptation V2
 
-Objectif: distribution fine de l'intensité d'entraînement en zones
-calibrées (Z1/Z2/Z3+), en s'appuyant sur les seuils LT1/LT2 personnalisés.
+Principes:
 
-Aucune pondération `moderate + 2 × vigorous` ne sera introduite
-avant que ces seuils soient disponibles et validés.
+- pas de laboratoire requis ;
+- pas de `%FCmax` fixe présenté comme LT1/LT2 individuel ;
+- pas de faux seuil quand les données sont insuffisantes ;
+- LT1 peut être `None` alors que LT2 est estimable, et inversement ;
+- estimation basée sur convergence de preuves historiques ;
+- confidence explicite ;
+- aucune assimilation automatique: `Garmin moderate/vigorous == LT1/LT2` ;
+- les minutes Garmin R1.7B restent des faits provider-normalisés.
