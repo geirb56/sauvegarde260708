@@ -169,7 +169,10 @@ def _get_user_access(db: Any, user_id: str) -> UserAccess:
 
 
 def _make_client(fake_db: _FakeDB):
-    """Context manager: patch server.db + get_user_access; return AsyncClient."""
+    """Returns a list of patches to start/stop around each test.
+
+    Patches server.db with fake_db and stubs get_user_access.
+    """
     patches = [
         patch.object(server, "db", fake_db),
         patch("server.get_user_access", AsyncMock(side_effect=_get_user_access)),

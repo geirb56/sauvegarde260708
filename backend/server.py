@@ -3670,7 +3670,9 @@ async def get_training_metrics(user: dict = Depends(auth_user)):
     display cards; they do NOT feed ACWR or TSB.
 
     None semantics:
-    - acwr is None when chronic_weekly_load == 0 (no valid Garmin duration data).
+    - acwr is None when there is no valid Garmin duration data (build_training_load
+      returns acwr=None when chronic load is zero or no running activities have
+      a valid duration).
     - No ACWR=1.0 fallback.  No distance→duration estimation.
     """
     today = datetime.now(timezone.utc)

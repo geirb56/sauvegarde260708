@@ -249,9 +249,10 @@ def test_d_multi_user_different_loads():
 
 def test_e_acwr_reliable_requires_28_days():
     """E. acwr_reliable is False when history < 28 calendar days."""
-    # Only 10 days of data
+    # Only 10 days of data — chronic load > 0, so acwr is computable but not reliable
     acts = [_garmin_act(_USER_A, days_ago=d, duration_s=1800.0) for d in range(10)]
     result = _simulate_endpoint(acts)
+    assert result["acwr"] is not None, "10 days of 30-min runs must produce a non-None acwr"
     assert result["acwr_reliable"] is False
     assert result["acwr_status"] == "building"
 
