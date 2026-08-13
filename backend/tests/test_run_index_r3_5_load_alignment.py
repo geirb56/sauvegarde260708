@@ -397,11 +397,7 @@ def test_no_acwr_fallback_when_no_activities():
 
 
 def test_training_load_none_when_no_chronic_load():
-    """Only acute activities (all in the last 7 days, none in prev 7–28d) →
-    chronic_weekly_load == 0 → acwr is None."""
-    # One activity in the last 6 days only → load_28d > 0 but chronic still computed
-    # from the same 28d window.  For acwr=None we need chronic_weekly_load == 0.
-    # Simplest: no activities at all.
+    """No activities → chronic_weekly_load == 0 → acwr is None (no fallback)."""
     snapshot = build_training_load([], _REF)
     assert snapshot.acwr is None
 
