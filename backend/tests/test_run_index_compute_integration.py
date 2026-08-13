@@ -142,7 +142,7 @@ class _FakeDB:
 async def test_run_readiness_matches_v2_score_sufficient():
     """metrics.run_readiness is a float when data is SUFFICIENT."""
     db = _FakeDB(_metrics_docs(_USER_A), _activity_docs(_USER_A))
-    payload = await compute_run_index(db, _USER_A)
+    payload = await compute_run_index(db, _USER_A, reference_date=_REF)
     assert payload is not None
     m = payload["metrics"]
     assert m["run_readiness"] is not None
@@ -154,7 +154,7 @@ async def test_run_readiness_matches_v2_score_sufficient():
 async def test_confidence_exposed():
     """metrics.confidence is present and non-empty."""
     db = _FakeDB(_metrics_docs(_USER_A), _activity_docs(_USER_A))
-    payload = await compute_run_index(db, _USER_A)
+    payload = await compute_run_index(db, _USER_A, reference_date=_REF)
     assert payload is not None
     assert "confidence" in payload["metrics"]
     assert payload["metrics"]["confidence"]
@@ -164,7 +164,7 @@ async def test_confidence_exposed():
 async def test_sufficiency_level_exposed():
     """metrics.sufficiency_level is present and non-empty."""
     db = _FakeDB(_metrics_docs(_USER_A), _activity_docs(_USER_A))
-    payload = await compute_run_index(db, _USER_A)
+    payload = await compute_run_index(db, _USER_A, reference_date=_REF)
     assert payload is not None
     assert "sufficiency_level" in payload["metrics"]
     assert payload["metrics"]["sufficiency_level"]
@@ -174,7 +174,7 @@ async def test_sufficiency_level_exposed():
 async def test_readiness_reasons_exposed():
     """metrics.readiness_reasons is a list (may be empty when SUFFICIENT)."""
     db = _FakeDB(_metrics_docs(_USER_A), _activity_docs(_USER_A))
-    payload = await compute_run_index(db, _USER_A)
+    payload = await compute_run_index(db, _USER_A, reference_date=_REF)
     assert payload is not None
     assert "readiness_reasons" in payload["metrics"]
     assert isinstance(payload["metrics"]["readiness_reasons"], list)
@@ -186,7 +186,7 @@ async def test_insufficient_run_readiness_is_none():
     # No physio, no activities → INSUFFICIENT
     empty_metrics = _metrics_docs(_USER_A, rhr=None, hrv=None)
     db = _FakeDB(empty_metrics, [])
-    payload = await compute_run_index(db, _USER_A)
+    payload = await compute_run_index(db, _USER_A, reference_date=_REF)
     assert payload is not None
     m = payload["metrics"]
     assert m["run_readiness"] is None
@@ -194,13 +194,25 @@ async def test_insufficient_run_readiness_is_none():
 
 
 @pytest.mark.asyncio
-async def test_insufficient_recommendation_is_rest_gray():
-    """INSUFFICIENT → recommendation_color is gray (no green fallback)."""
+async def test_insufficient_score_none_recommendation_unavailable_gray():
+    """INSUFFICIENT → score None → recommendation UNAVAILABLE, color gray.
+
+    None must NEVER produce REST / EASY RUN / RUN HARD: those are training
+    recommendations that require a valid score.  When data is insufficient
+    the state is purely informational (unavailable), not actionable.
+    """
     empty_metrics = _metrics_docs(_USER_A, rhr=None, hrv=None)
     db = _FakeDB(empty_metrics, [])
-    payload = await compute_run_index(db, _USER_A)
+    payload = await compute_run_index(db, _USER_A, reference_date=_REF)
     assert payload is not None
+    # Score must be None
+    assert payload["metrics"]["run_readiness"] is None
+    # Color is gray (unavailable state)
     assert payload["recommendation_color"] == "gray"
+    # Recommendation must NOT be a training directive
+    rec = payload["recommendation"]
+    assert rec not in {"REST", "EASY RUN", "RUN HARD", "REPOS", "FOOTING FACILE", "SÉANCE INTENSE",
+                       "DESCANSO", "CARRERA SUAVE", "ENTRENO INTENSO"}
 
 
 @pytest.mark.asyncio
@@ -212,7 +224,7 @@ async def test_legacy_run_readiness_present_but_not_authoritative():
     """
     empty_metrics = _metrics_docs(_USER_A, rhr=None, hrv=None)
     db = _FakeDB(empty_metrics, [])
-    payload = await compute_run_index(db, _USER_A)
+    payload = await compute_run_index(db, _USER_A, reference_date=_REF)
     assert payload is not None
     m = payload["metrics"]
     assert "legacy_run_readiness" in m
@@ -226,13 +238,13 @@ async def test_payload_backward_compatible_run_readiness_key_always_present():
     """run_readiness key is always present in metrics — value is float or None."""
     # Sufficient
     db_ok = _FakeDB(_metrics_docs(_USER_A), _activity_docs(_USER_A))
-    payload_ok = await compute_run_index(db_ok, _USER_A)
+    payload_ok = await compute_run_index(db_ok, _USER_A, reference_date=_REF)
     assert payload_ok is not None
     assert "run_readiness" in payload_ok["metrics"]
 
     # Insufficient
     db_bad = _FakeDB(_metrics_docs(_USER_A, rhr=None, hrv=None), [])
-    payload_bad = await compute_run_index(db_bad, _USER_A)
+    payload_bad = await compute_run_index(db_bad, _USER_A, reference_date=_REF)
     assert payload_bad is not None
     assert "run_readiness" in payload_bad["metrics"]
     assert payload_bad["metrics"]["run_readiness"] is None
@@ -243,7 +255,7 @@ async def test_run_readiness_never_zero_for_insufficient():
     """run_readiness must be None, not 0, when INSUFFICIENT."""
     empty_metrics = _metrics_docs(_USER_A, rhr=None, hrv=None)
     db = _FakeDB(empty_metrics, [])
-    payload = await compute_run_index(db, _USER_A)
+    payload = await compute_run_index(db, _USER_A, reference_date=_REF)
     assert payload is not None
     assert payload["metrics"]["run_readiness"] != 0
     assert payload["metrics"]["run_readiness"] is None
@@ -262,8 +274,8 @@ async def test_multi_user_isolation_via_db_layer():
 
     db = _FakeDB(all_metrics, all_activities)
 
-    payload_a = await compute_run_index(db, _USER_A)
-    payload_b = await compute_run_index(db, _USER_B)
+    payload_a = await compute_run_index(db, _USER_A, reference_date=_REF)
+    payload_b = await compute_run_index(db, _USER_B, reference_date=_REF)
 
     assert payload_a is not None
     assert payload_b is not None
@@ -289,7 +301,7 @@ async def test_queries_filtered_by_user_id():
     all_activities = _activity_docs(_USER_A)
 
     db = _FakeDB(all_metrics, all_activities)
-    payload = await compute_run_index(db, _USER_A)
+    payload = await compute_run_index(db, _USER_A, reference_date=_REF)
 
     assert payload is not None
     # If user B's docs leaked in, physio would be absent → INSUFFICIENT

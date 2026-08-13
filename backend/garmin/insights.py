@@ -134,8 +134,27 @@ def _latest_with(metrics_docs: List[dict], key: str) -> Optional[dict]:
     return None
 
 
-async def compute_run_index(db, user_id: str, language: str = "fr") -> Optional[dict]:
-    """Build the run-index payload from real Garmin data, or None if no data."""
+async def compute_run_index(
+    db,
+    user_id: str,
+    language: str = "fr",
+    reference_date=None,
+) -> Optional[dict]:
+    """Build the run-index payload from real Garmin data, or None if no data.
+
+    Parameters
+    ----------
+    db:
+        Async database handle with garmin_daily_metrics and garmin_activities.
+    user_id:
+        User whose data to fetch.
+    language:
+        i18n locale key (``"fr"``, ``"en"``, ``"es"``).  Defaults to ``"fr"``.
+    reference_date:
+        Anchor date for all time-windowed calculations (load, sufficiency,
+        history).  When *None* the current UTC date is used.  Pass an explicit
+        :class:`datetime.date` in tests to make them deterministic.
+    """
     lang = (language or "fr").lower()
     # --- Daily health metrics (most recent first) ---
     metrics_docs = await (
@@ -154,7 +173,7 @@ async def compute_run_index(db, user_id: str, language: str = "fr") -> Optional[
     if not metrics_docs and not activities:
         return None
 
-    today = datetime.now(timezone.utc).date()
+    today = reference_date if reference_date is not None else datetime.now(timezone.utc).date()
 
     # Use the most RECENT REAL (non-null) reading per metric. If the device
     # actually reported HRV, that real value is used (never recomputed/faked).
@@ -229,11 +248,12 @@ async def compute_run_index(db, user_id: str, language: str = "fr") -> Optional[
         acwr_penalty = 0.0
     _legacy_run_readiness = int(round(max(5.0, min(100.0, 100.0 - physio_penalty - acwr_penalty))))
 
-    # V2 is authoritative.  INSUFFICIENT → None → recommendation falls back to REST.
+    # V2 is authoritative.  INSUFFICIENT → None → recommendation is UNAVAILABLE.
     run_readiness = run_readiness_v2  # Optional[float] or None
 
     # --- Recommendation derived from readiness (number & badge always agree) ---
-    # When run_readiness is None (INSUFFICIENT) we default to REST / gray.
+    # When run_readiness is None (INSUFFICIENT) the state is UNAVAILABLE — not
+    # a training recommendation.  None must NEVER map to REST/EASY RUN/RUN HARD.
     if run_readiness is not None and run_readiness >= 75:
         recommendation, rec_emoji, rec_color = "RUN HARD", "🟢", "green"
     elif run_readiness is not None and run_readiness >= 55:
@@ -241,7 +261,7 @@ async def compute_run_index(db, user_id: str, language: str = "fr") -> Optional[
     elif run_readiness is not None:
         recommendation, rec_emoji, rec_color = "REST", "🔴", "red"
     else:
-        recommendation, rec_emoji, rec_color = "REST", "⚪", "gray"
+        recommendation, rec_emoji, rec_color = "UNAVAILABLE", "⚪", "gray"
     readiness_status = rec_color
 
     # Localize the user-facing labels (fr default / es / en).
@@ -249,6 +269,7 @@ async def compute_run_index(db, user_id: str, language: str = "fr") -> Optional[
         "RUN HARD": {"fr": "SÉANCE INTENSE", "es": "ENTRENO INTENSO"},
         "EASY RUN": {"fr": "FOOTING FACILE", "es": "CARRERA SUAVE"},
         "REST": {"fr": "REPOS", "es": "DESCANSO"},
+        "UNAVAILABLE": {"fr": "INDISPONIBLE", "es": "NO DISPONIBLE"},
     }
     if lang != "en":
         recommendation = _REC_I18N.get(recommendation, {}).get(lang, recommendation)
