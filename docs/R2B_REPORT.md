@@ -17,6 +17,11 @@ Merge pull request #116 — R2A Readiness Subscores V2
 | Modifié | `docs/RUNINDEX_MASTER_ROADMAP_AND_DECISIONS.md` |
 | Créé | `docs/R2B_REPORT.md` (ce fichier) |
 
+Corrections ciblées avant merge :
+- `reasons` est maintenant un `Tuple[ReasonCode, ...]` pour une immutabilité complète.
+- Validation des sous-scores : ValueError si valeur non finie (NaN, ±inf) ou hors [0, 100].
+- Cibles LT1/LT2 `±bpm` / pourcentages retirées de la PR (dédiée future PR).
+
 ## 3. Contrat ReadinessResult
 
 ```python
@@ -31,7 +36,7 @@ class ReadinessResult(BaseModel):
     score: Optional[float]            # 0–100 (1 décimale) ou None
     confidence: ReadinessConfidence   # catégoriel uniquement, jamais numérique
     sufficiency_level: SufficiencyLevel   # propagé depuis R1
-    reasons: List[ReasonCode]             # propagé depuis R1 à l'identique
+    reasons: Tuple[ReasonCode, ...]        # propagé depuis R1 à l'identique (tuple immutable)
 ```
 
 ## 4. Poids produit V1
@@ -135,14 +140,15 @@ Classes de tests :
 - `TestSufficientWithMissingSubscores` (5 tests)
 - `TestDegraded` (5 tests)
 - `TestDefensive` (3 tests)
-- `TestArchitectureInvariants` (14 tests)
+- `TestArchitectureInvariants` (16 tests)
+- `TestSubscoreValidation` (11 tests)
 
-Total : **39 tests**
+Total : **52 tests**
 
 ## 10. Résultats
 
 ```
-39 passed in 0.49s
+52 passed in 0.47s
 ```
 
 ✅ Tous les tests passent.
@@ -173,7 +179,7 @@ Fichier : `docs/RUNINDEX_MASTER_ROADMAP_AND_DECISIONS.md`
 - **R2A** : MERGED — PR #116 ✅
 - **R2B** : IMPLEMENTED IN PR / PENDING MERGE ✅
 - **NEXT** : R3 — Migration Readiness V2 into /run-index ✅
-- **Threshold Estimator V1** : cibles explicites LT1/LT2 avec tolérance bpm et métrique coverage séparée ✅
+- **Threshold Estimator V1** : cibles LT1/LT2 `±bpm` retirées de cette PR — PR dédiée future ✅
 
 ---
 

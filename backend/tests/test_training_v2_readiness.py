@@ -183,7 +183,7 @@ class TestSufficient:
             sleep=_sleep(90),
             load=_load(70),
         )
-        assert result.reasons == []
+        assert result.reasons == ()
 
 
 # ---------------------------------------------------------------------------
@@ -495,3 +495,132 @@ class TestArchitectureInvariants:
             + PRODUCT_CALIBRATION_V1_WEIGHT_LOAD
         )
         assert total == 100.0
+
+    def test_reasons_is_tuple(self):
+        """reasons must be a tuple, not a list, to guarantee immutability."""
+        result = build_readiness_result(
+            sufficiency=_suf(SufficiencyLevel.SUFFICIENT),
+            physio=_physio(80),
+            sleep=_sleep(90),
+            load=_load(70),
+        )
+        assert isinstance(result.reasons, tuple)
+
+    def test_reasons_tuple_cannot_be_mutated(self):
+        """Tuple reasons should raise TypeError on append attempt."""
+        result = build_readiness_result(
+            sufficiency=_suf(SufficiencyLevel.INSUFFICIENT, [ReasonCode.missing_physio]),
+            physio=None,
+            sleep=None,
+            load=None,
+        )
+        with pytest.raises((TypeError, AttributeError)):
+            result.reasons.append(ReasonCode.missing_load)  # type: ignore[attr-defined]
+
+
+# ---------------------------------------------------------------------------
+# Input validation — non-finite and out-of-range subscore values
+# ---------------------------------------------------------------------------
+
+
+class TestSubscoreValidation:
+    def test_physio_nan_raises(self):
+        with pytest.raises(ValueError, match="physio"):
+            build_readiness_result(
+                sufficiency=_suf(SufficiencyLevel.SUFFICIENT),
+                physio=_physio(float("nan")),
+                sleep=_sleep(90),
+                load=_load(70),
+            )
+
+    def test_sleep_nan_raises(self):
+        with pytest.raises(ValueError, match="sleep"):
+            build_readiness_result(
+                sufficiency=_suf(SufficiencyLevel.SUFFICIENT),
+                physio=_physio(80),
+                sleep=_sleep(float("nan")),
+                load=_load(70),
+            )
+
+    def test_load_nan_raises(self):
+        with pytest.raises(ValueError, match="load"):
+            build_readiness_result(
+                sufficiency=_suf(SufficiencyLevel.SUFFICIENT),
+                physio=_physio(80),
+                sleep=_sleep(90),
+                load=_load(float("nan")),
+            )
+
+    def test_physio_inf_raises(self):
+        with pytest.raises(ValueError, match="physio"):
+            build_readiness_result(
+                sufficiency=_suf(SufficiencyLevel.SUFFICIENT),
+                physio=_physio(float("inf")),
+                sleep=_sleep(90),
+                load=_load(70),
+            )
+
+    def test_physio_neg_inf_raises(self):
+        with pytest.raises(ValueError, match="physio"):
+            build_readiness_result(
+                sufficiency=_suf(SufficiencyLevel.SUFFICIENT),
+                physio=_physio(float("-inf")),
+                sleep=_sleep(90),
+                load=_load(70),
+            )
+
+    def test_physio_above_100_raises(self):
+        with pytest.raises(ValueError, match="physio"):
+            build_readiness_result(
+                sufficiency=_suf(SufficiencyLevel.SUFFICIENT),
+                physio=_physio(100.1),
+                sleep=_sleep(90),
+                load=_load(70),
+            )
+
+    def test_sleep_below_0_raises(self):
+        with pytest.raises(ValueError, match="sleep"):
+            build_readiness_result(
+                sufficiency=_suf(SufficiencyLevel.SUFFICIENT),
+                physio=_physio(80),
+                sleep=_sleep(-0.1),
+                load=_load(70),
+            )
+
+    def test_load_above_100_raises(self):
+        with pytest.raises(ValueError, match="load"):
+            build_readiness_result(
+                sufficiency=_suf(SufficiencyLevel.SUFFICIENT),
+                physio=_physio(80),
+                sleep=_sleep(90),
+                load=_load(101.0),
+            )
+
+    def test_boundary_0_accepted(self):
+        result = build_readiness_result(
+            sufficiency=_suf(SufficiencyLevel.SUFFICIENT),
+            physio=_physio(0.0),
+            sleep=_sleep(0.0),
+            load=_load(0.0),
+        )
+        assert result.score == 0.0
+
+    def test_boundary_100_accepted(self):
+        result = build_readiness_result(
+            sufficiency=_suf(SufficiencyLevel.SUFFICIENT),
+            physio=_physio(100.0),
+            sleep=_sleep(100.0),
+            load=_load(100.0),
+        )
+        assert result.score == 100.0
+
+    def test_invalid_subscore_insufficient_not_reached(self):
+        """INSUFFICIENT short-circuits before validation — no error raised."""
+        result = build_readiness_result(
+            sufficiency=_suf(SufficiencyLevel.INSUFFICIENT),
+            physio=_physio(float("nan")),
+            sleep=_sleep(float("inf")),
+            load=_load(-5.0),
+        )
+        assert result.score is None
+        assert result.confidence == ReadinessConfidence.NONE

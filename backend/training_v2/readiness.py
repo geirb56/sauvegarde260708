@@ -13,6 +13,8 @@ Design rules
 - R1 (ReadinessSufficiency) is the sole source of truth for sufficiency level.
 - R2B does NOT recalculate sufficiency from subscores.
 - R2B does NOT invent new reason codes.
+- Subscore values must be finite and in [0, 100]; ValueError raised otherwise.
+- reasons is a tuple — fully immutable.
 - Weights are product calibration V1, recalibratable, not a scientifically
   proven universal weighting.
 
@@ -41,8 +43,9 @@ Run from the backend directory
 
 from __future__ import annotations
 
+import math
 from enum import Enum
-from typing import List, Optional
+from typing import Optional, Tuple
 
 from pydantic import BaseModel, ConfigDict
 
@@ -80,7 +83,7 @@ class ReadinessResult(BaseModel):
     score            : float 0–100 (1 decimal) or None when undetermined.
     confidence       : categorical NONE | NORMAL | REDUCED (never numeric).
     sufficiency_level: propagated from R1 — source of truth.
-    reasons          : R1 reason codes propagated as-is.
+    reasons          : R1 reason codes propagated as-is (tuple, immutable).
     """
 
     model_config = ConfigDict(frozen=True)
@@ -88,7 +91,7 @@ class ReadinessResult(BaseModel):
     score: Optional[float]
     confidence: ReadinessConfidence
     sufficiency_level: SufficiencyLevel
-    reasons: List[ReasonCode]
+    reasons: Tuple[ReasonCode, ...]
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +125,7 @@ def build_readiness_result(
         Immutable final readiness result.
     """
     level = sufficiency.level
-    reasons = list(sufficiency.reasons)
+    reasons: tuple[ReasonCode, ...] = tuple(sufficiency.reasons)
 
     # ------------------------------------------------------------------
     # CAS 1 — INSUFFICIENT
@@ -137,11 +140,29 @@ def build_readiness_result(
 
     # ------------------------------------------------------------------
     # CAS 2 & 3 — SUFFICIENT / DEGRADED
-    # Extract available subscore values.
+    # Extract available subscore values, rejecting non-finite or
+    # out-of-range values to prevent silent corruption.
     # ------------------------------------------------------------------
-    physio_score: Optional[float] = physio.score if physio is not None else None
-    sleep_score: Optional[float] = sleep.score if sleep is not None else None
-    load_score: Optional[float] = load.score if load is not None else None
+    def _validate_score(v: Optional[float], name: str) -> Optional[float]:
+        if v is None:
+            return None
+        if not math.isfinite(v):
+            raise ValueError(f"Subscore '{name}' must be finite, got {v!r}")
+        if v < 0.0 or v > 100.0:
+            raise ValueError(
+                f"Subscore '{name}' must be in [0, 100], got {v!r}"
+            )
+        return v
+
+    physio_score: Optional[float] = _validate_score(
+        physio.score if physio is not None else None, "physio"
+    )
+    sleep_score: Optional[float] = _validate_score(
+        sleep.score if sleep is not None else None, "sleep"
+    )
+    load_score: Optional[float] = _validate_score(
+        load.score if load is not None else None, "load"
+    )
 
     # Build list of (value, weight) pairs for available subscores only.
     pairs: list[tuple[float, float]] = []

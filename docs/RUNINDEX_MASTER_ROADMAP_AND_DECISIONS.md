@@ -642,32 +642,15 @@ Ce document suit l'état réel de `main` et des PR en cours:
 RunIndex est une application grand public.
 La version LT1/LT2 initiale ne dépend pas de mesures laboratoire.
 
-### Threshold Estimator V1 — Objectifs d'ingénierie à valider (benchmarks produit)
+Cible produit:
 
-Ces nombres sont des **targets produit à benchmarker**, pas des performances scientifiquement acquises.
+- estimation automatique personnalisée LT1/LT2 basée sur les données d'entraînement disponibles ;
+- ~85% de fiabilité pratique visée en validation produit.
 
-| Seuil | Tolérance cible | Fiabilité cible |
-|-------|----------------|-----------------|
-| LT1   | ±7 bpm         | ≈ 75 % des estimations émises |
-| LT2   | ±5 bpm         | ≈ 85 % des estimations émises |
-| Global | dans tolérance respective | ≈ 80 % des estimations émises |
+Important:
 
-Métrique `coverage` (séparée) :
-
-Les cas où l'algorithme retourne `None` / données insuffisantes ne sont **pas** comptés comme estimations erronées.
-
-Important :
-
-- Ces cibles sont à valider en benchmark, pas des précisions déjà démontrées ;
+- 85% est une cible produit, pas une précision scientifique déjà démontrée ;
 - aucune confiance ne doit être présentée comme validée avant benchmark.
-
-### Roadmap Threshold Estimator (après Readiness V2)
-
-- P1 — Activity Physiology Facts
-- P2 — ThresholdEvidence
-- P3 — LT2 Estimator V1
-- P4 — LT1 Estimator V1
-- P5 — Confidence / Calibration
 
 Roadmap post-Readiness V2:
 
