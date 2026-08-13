@@ -28,7 +28,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import List, Optional
 
-from training_v2.readiness import build_readiness_result
+from training_v2.readiness import build_readiness_result, ReadinessResult
 from training_v2.readiness_signals import (
     ReadinessLoadSignal,
     compute_hrv_deviation,
@@ -48,7 +48,7 @@ from training_v2.readiness_sufficiency import (
     SleepRecord,
     build_readiness_sufficiency,
 )
-from training_v2.readiness import ReadinessResult  # re-exported for callers
+
 from training_v2.training_load import build_training_load
 
 # ---------------------------------------------------------------------------

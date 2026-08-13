@@ -212,18 +212,11 @@ async def compute_run_index(db, user_id: str, language: str = "fr") -> Optional[
     # build_readiness_v2_from_garmin_data runs the full V2 chain:
     #   R1 Sufficiency → R1.6 Signals → R2A Subscores → R2B Aggregation
     # INSUFFICIENT → score=None → run_readiness=None (no fallback).
-    try:
-        _v2_result = build_readiness_v2_from_garmin_data(metrics_docs, activities, today)
-        run_readiness_v2: Optional[float] = _v2_result.score
-        readiness_v2_confidence: str = _v2_result.confidence.value
-        readiness_v2_sufficiency: str = _v2_result.sufficiency_level.value
-        readiness_v2_reasons: list = [r.value for r in _v2_result.reasons]
-    except Exception:
-        logger.exception("[run-index] V2 readiness computation failed")
-        run_readiness_v2 = None
-        readiness_v2_confidence = "NONE"
-        readiness_v2_sufficiency = "INSUFFICIENT"
-        readiness_v2_reasons = []
+    _v2_result = build_readiness_v2_from_garmin_data(metrics_docs, activities, today)
+    run_readiness_v2: Optional[float] = _v2_result.score
+    readiness_v2_confidence: str = _v2_result.confidence.value
+    readiness_v2_sufficiency: str = _v2_result.sufficiency_level.value
+    readiness_v2_reasons: list = [r.value for r in _v2_result.reasons]
 
     # --- Legacy readiness (kept for diagnostic comparison — NOT used for output) ---
     # R4 will remove this block after runtime validation is satisfactory.

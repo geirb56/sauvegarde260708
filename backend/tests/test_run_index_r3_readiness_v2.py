@@ -241,8 +241,6 @@ def test_user_isolation_adapter_is_pure():
 def test_run_index_metrics_always_has_run_readiness_key():
     """run_readiness key is always in metrics — value is float or None, never absent."""
     # Complete data
-    from garmin.insights import _latest_with, _mean
-
     result_full = build_readiness_v2_from_garmin_data(
         _make_metrics(), _make_activities(), _REF_DATE
     )
