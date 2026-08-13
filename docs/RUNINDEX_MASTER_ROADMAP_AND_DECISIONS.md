@@ -290,7 +290,7 @@ class ReadinessResult(BaseModel):
     score: Optional[float]           # 0–100 (1 décimale) ou None
     confidence: ReadinessConfidence  # catégoriel uniquement, jamais numérique
     sufficiency_level: SufficiencyLevel  # propagé depuis R1
-    reasons: List[ReasonCode]            # propagé depuis R1
+    reasons: Tuple[ReasonCode, ...]      # propagé depuis R1
 ```
 
 Poids produit V1 (PRODUCT_CALIBRATION_V1):
@@ -315,6 +315,8 @@ Règles:
 - `NONE` → INSUFFICIENT OU aucun sous-score exploitable
 
 Aucun score fictif pour donnée manquante. None reste None.
+
+Tests: 52 passés (`backend/tests/test_training_v2_readiness.py`).
 
 ---
 
@@ -644,13 +646,7 @@ La version LT1/LT2 initiale ne dépend pas de mesures laboratoire.
 
 Cible produit:
 
-- estimation automatique personnalisée LT1/LT2 basée sur les données d'entraînement disponibles ;
-- ~85% de fiabilité pratique visée en validation produit.
-
-Important:
-
-- 85% est une cible produit, pas une précision scientifique déjà démontrée ;
-- aucune confiance ne doit être présentée comme validée avant benchmark.
+- estimation automatique personnalisée LT1/LT2 basée sur les données d'entraînement disponibles.
 
 Roadmap post-Readiness V2:
 
