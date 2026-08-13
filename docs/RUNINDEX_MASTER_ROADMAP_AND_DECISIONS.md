@@ -413,7 +413,7 @@ HEAD de départ: `9d9074d40e589a45c35343b8395099540a334f01`
 dans `/run-index` ET pour Readiness V2.
 
 - `/run-index` utilise désormais TrainingLoad V2 (`build_training_load()`) comme seule source de charge.
-- `compute_load_metrics()` legacy reste encore utilisé par `/training/metrics`.
+- `compute_load_metrics()` (legacy) reste encore utilisé par `/training/metrics`.
 - Cette dette n'est **PAS** supprimée dans PR #120.
 - NEXT = **R4A** : supprimer uniquement le current readiness legacy de `/run-index`.
 
@@ -537,7 +537,8 @@ sans toucher :
 ### Dettes restantes après R4A+R4B
 
 - `fatigue_ratio` dans `history[]` utilise encore la formule legacy (hors périmètre R4B) ;
-- `/training/metrics` : migration en cours — PR #123 (CTL/ATL V2 incorrects retirés ; TSB legacy km temporaire ; ctl/atl → None) ;
+- `history[].training_load` reste adossé à `_activity_load` (legacy) ;
+- `/training/metrics` : migration TrainingLoad V2 mergée — PR #123 (CTL/ATL V2 incorrects retirés ; TSB legacy km temporaire ; ctl/atl → None) ;
 - divergence baseline RHR / historique documentée et hors périmètre.
 
 ---
@@ -568,7 +569,8 @@ Pour chaque date historique J :
 ### Dettes restantes après R4B
 
 - `fatigue_ratio` dans `history[]` utilise encore la formule legacy (hors périmètre) ;
-- `/training/metrics` : migration vers TrainingLoad V2 IMPLÉMENTÉE / PENDING MERGE — PR #123
+- `history[].training_load` reste adossé à `_activity_load` (legacy) ;
+- `/training/metrics` : migration vers TrainingLoad V2 MERGED — PR #123
   (CTL/ATL v2 incorrects retirés, TSB legacy km conservé temporairement, ctl/atl → None) ;
 - baseline RHR historique : divergence documentée et hors périmètre.
 
@@ -810,7 +812,8 @@ Puis:
 - [x] R3.5 TrainingLoad V2 source unique /run-index (MERGED — PR #120 — runtime PASS)
 - [x] R4A kill current readiness legacy (MERGED — PR #121)
 - [x] R4B history[].run_readiness → Readiness V2 (MERGED — PR #122)
-- [x] TrainingLoad /training/metrics alignment (IMPLEMENTED / PENDING MERGE — PR #123)
+- [x] TrainingLoad /training/metrics alignment (MERGED — PR #123)
+- [x] Cleanup helpers TrainingLoad legacy morts (IMPLEMENTED / PENDING MERGE — PR #124)
 
 ### TRAINING ENGINE
 
@@ -861,10 +864,11 @@ Ce document suit l'état réel de `main` et des PR en cours:
 - R3.5 est **MERGED — PR #120 — runtime PASS**.
 - R4A est **MERGED — PR #121**.
 - R4B est **MERGED — PR #122** (`history[].run_readiness` → Readiness V2).
-- TrainingLoad `/training/metrics` alignment est **IMPLEMENTED / PENDING MERGE — PR #123**
+- TrainingLoad `/training/metrics` alignment est **MERGED — PR #123**
   (CTL/ATL V2 incorrects retirés; TSB legacy km conservé temporairement; ctl/atl → None;
   `has_sufficient_history` commentaire non-reprise retiré).
-- Dettes restantes : `fatigue_ratio` history (formule legacy), TSB `/training/metrics` migration V2 unités, baseline RHR historique.
+- Cleanup helpers TrainingLoad legacy morts est **IMPLEMENTED / PENDING MERGE — PR #124**.
+- Dettes restantes : `_activity_load`/`history.training_load` (legacy), `fatigue_ratio` history (formule legacy), TSB `/training/metrics` legacy, baseline RHR historique.
 
 ---
 
