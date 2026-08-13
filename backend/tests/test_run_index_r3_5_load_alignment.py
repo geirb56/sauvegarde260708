@@ -90,30 +90,18 @@ def test_acwr_matches_v2_snapshot():
     acts = _activities()
     snapshot = build_training_load(acts, _REF)
 
-    # Simulate what compute_run_index does: snapshot.acwr is exposed as training_load.
-    assert snapshot.acwr is not None  # precondition: activities are present
-    # training_load in response = round(acwr, 3) from the snapshot
-    expected = round(snapshot.acwr, 3)
+    # precondition: activities are present → acwr is not None
+    assert snapshot.acwr is not None
 
-    # Verify by calling insights directly via the adapter path
+    # Confirm the adapter accepts the pre-built snapshot without error and
+    # produces a concrete result type.
     result = build_readiness_v2_from_garmin_data(
         _metrics(), acts, _REF, load_snapshot=snapshot
     )
-    # The readiness result uses the same snapshot — score should be deterministic
-    assert result.score is not None or result.score is None  # just check no crash
+    assert isinstance(result.score, (float, type(None)))
 
 
-def test_training_load_v2_acwr_equals_snapshot():
-    """training_load_v2.acwr in the response block equals build_training_load().acwr."""
-    acts = _activities()
-    snapshot_direct = build_training_load(acts, _REF)
 
-    # When compute_run_index calls build_training_load it should match.
-    # We verify this by confirming the adapter honours the passed snapshot.
-    metrics_docs = _metrics()
-    r1 = build_readiness_v2_from_garmin_data(metrics_docs, acts, _REF, load_snapshot=snapshot_direct)
-    r2 = build_readiness_v2_from_garmin_data(metrics_docs, acts, _REF)  # builds internally
-    assert r1 == r2  # identical results because same activities
 
 
 # ---------------------------------------------------------------------------
@@ -234,12 +222,12 @@ def test_multi_user_isolation():
     m = _metrics()
     r_a = build_readiness_v2_from_garmin_data(m, acts_a, _REF, load_snapshot=snap_a)
     r_b = build_readiness_v2_from_garmin_data(m, acts_b, _REF, load_snapshot=snap_b)
-    # They can differ (different loads drive different load subscores)
-    assert r_a == r_a  # trivially, but confirms no cross-contamination
-    assert r_b == r_b
-    # Confirm snapshot identity is correct per user
+    # Each result must match building internally from the same activities —
+    # confirms the passed snapshot is used and not bleed from the other user.
     r_a_check = build_readiness_v2_from_garmin_data(m, acts_a, _REF)
+    r_b_check = build_readiness_v2_from_garmin_data(m, acts_b, _REF)
     assert r_a == r_a_check
+    assert r_b == r_b_check
 
 
 # ---------------------------------------------------------------------------
