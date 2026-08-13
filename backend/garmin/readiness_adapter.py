@@ -63,29 +63,36 @@ _BASELINE_WINDOW_DAYS = 14  # look-back window for valid_measures count
 # ---------------------------------------------------------------------------
 
 
-def _latest_non_none(docs: List[dict], field: str) -> Optional[float]:
-    """Return the most recent non-None value of *field* across docs."""
+def _latest_doc_with(docs: List[dict], field: str) -> Optional[dict]:
+    """Return the most recent document that has a non-None value for *field*."""
     for doc in docs:
-        v = doc.get(field)
-        if v is not None:
-            return float(v)
+        if doc.get(field) is not None:
+            return doc
     return None
 
 
 def _baseline_for(
     docs: List[dict],
     field: str,
-    reference_date: date,
+    recent_date: date,
 ) -> Optional[PhysioBaseline]:
     """Build a PhysioBaseline from garmin_daily_metrics documents.
 
-    Counts valid measures within the last ``_BASELINE_WINDOW_DAYS`` calendar
-    days (reference_date − 13 to reference_date inclusive = 14 days).
-    Returns None when no document contains a valid value.
+    Baseline window: recent_date − ``_BASELINE_WINDOW_DAYS`` days up to
+    recent_date − 1 day (inclusive).  The measurement at *recent_date* itself
+    is intentionally excluded so that a very abnormal day cannot distort its
+    own reference.
+
+    ``valid_measures`` is the exact count of documents with a non-None value
+    for *field* that fall within that window — no document outside the window
+    is ever counted.
+
+    Returns None when no prior document contains a valid value.
     """
-    window_start = reference_date - timedelta(days=_BASELINE_WINDOW_DAYS - 1)
+    window_end = recent_date - timedelta(days=1)
+    window_start = recent_date - timedelta(days=_BASELINE_WINDOW_DAYS)
+
     values: List[float] = []
-    valid_measures = 0
     for doc in docs:
         raw_date = doc.get("date")
         if raw_date is None:
@@ -94,18 +101,18 @@ def _baseline_for(
             doc_date = date.fromisoformat(str(raw_date)[:10])
         except ValueError:
             continue
+        if not (window_start <= doc_date <= window_end):
+            continue
         v = doc.get(field)
         if v is None:
             continue
         values.append(float(v))
-        if window_start <= doc_date <= reference_date:
-            valid_measures += 1
 
     if not values:
         return None
 
     baseline_value = sum(values) / len(values)
-    return PhysioBaseline(value=baseline_value, valid_measures=valid_measures)
+    return PhysioBaseline(value=baseline_value, valid_measures=len(values))
 
 
 def _build_physio_signal(
@@ -113,13 +120,26 @@ def _build_physio_signal(
     field: str,
     reference_date: date,
 ) -> Optional[PhysioSignal]:
-    """Build a PhysioSignal for *field* (e.g. 'resting_hr' or 'hrv')."""
-    recent_value = _latest_non_none(docs, field)
-    if recent_value is None:
-        # Signal entirely absent — return None (not a PhysioSignal with None inside)
-        # so that ReadinessSufficiency can detect missing_rhr / missing_hrv.
+    """Build a PhysioSignal for *field* (e.g. 'resting_hr' or 'hrv').
+
+    recent_value is taken from the most recent document that has a non-None
+    value for *field*.  The baseline is computed only from documents whose
+    date strictly precedes recent_date (within the 14-day window), so that
+    the recent measurement never inflates its own reference.
+    """
+    recent_doc = _latest_doc_with(docs, field)
+    if recent_doc is None:
+        # Signal entirely absent — return None so ReadinessSufficiency can
+        # detect missing_rhr / missing_hrv.
         return None
-    baseline = _baseline_for(docs, field, reference_date)
+    recent_value = float(recent_doc[field])
+    try:
+        recent_date = date.fromisoformat(str(recent_doc.get("date", ""))[:10])
+    except ValueError:
+        # Malformed date on the most recent doc — fall back to reference_date
+        # so the window anchor is still meaningful.
+        recent_date = reference_date
+    baseline = _baseline_for(docs, field, recent_date)
     return PhysioSignal(recent_value=recent_value, baseline=baseline)
 
 

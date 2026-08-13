@@ -321,3 +321,112 @@ def test_reasons_are_valid_reason_codes():
     )
     for reason in result.reasons:
         assert isinstance(reason, ReasonCode)
+
+
+# ---------------------------------------------------------------------------
+# Baseline correction tests (audit R3 — section 1)
+# ---------------------------------------------------------------------------
+
+
+def test_baseline_excludes_recent_value():
+    """The recent measurement must NOT be included in its own baseline.
+
+    We construct 15 documents: the most recent one (today = _REF_DATE) has
+    RHR=100 (abnormal spike), the 14 prior days all have RHR=52.
+    The baseline must be 52, not affected by the 100.
+    """
+    from garmin.readiness_adapter import _build_physio_signal, _BASELINE_WINDOW_DAYS
+
+    docs = []
+    # Most recent (today): abnormal spike
+    docs.append({"date": _REF_DATE.isoformat(), "resting_hr": 100.0})
+    # 14 prior days: normal
+    for i in range(1, _BASELINE_WINDOW_DAYS + 1):
+        docs.append({"date": (_REF_DATE - timedelta(days=i)).isoformat(), "resting_hr": 52.0})
+
+    signal = _build_physio_signal(docs, "resting_hr", _REF_DATE)
+    assert signal is not None
+    assert signal.recent_value == 100.0
+    assert signal.baseline is not None
+    assert abs(signal.baseline.value - 52.0) < 0.01, (
+        f"baseline should be 52.0, got {signal.baseline.value}"
+    )
+
+
+def test_abnormal_day_does_not_modify_own_baseline():
+    """A very abnormal today value does not distort today's baseline.
+
+    Concretely: score deviation is computed against the pre-existing baseline,
+    not against a baseline that includes today's value.
+    """
+    from garmin.readiness_adapter import _build_physio_signal
+
+    # Yesterday and before: stable at 50
+    docs_normal = [
+        {"date": (_REF_DATE - timedelta(days=i)).isoformat(), "resting_hr": 50.0}
+        for i in range(1, 15)
+    ]
+    # Today: extreme value
+    docs_with_spike = [{"date": _REF_DATE.isoformat(), "resting_hr": 999.0}] + docs_normal
+
+    signal_normal = _build_physio_signal(docs_normal, "resting_hr", _REF_DATE)
+    signal_spike = _build_physio_signal(docs_with_spike, "resting_hr", _REF_DATE)
+
+    # Both should have the same baseline (only prior days)
+    assert signal_spike is not None
+    assert signal_spike.baseline is not None
+    if signal_normal is not None and signal_normal.baseline is not None:
+        assert abs(signal_spike.baseline.value - signal_normal.baseline.value) < 0.01
+
+
+def test_values_outside_14_day_window_excluded():
+    """Values older than 14 days before recent_date are excluded from baseline."""
+    from garmin.readiness_adapter import _build_physio_signal, _BASELINE_WINDOW_DAYS
+
+    docs = []
+    # recent_date = _REF_DATE, so window = _REF_DATE - 14 .. _REF_DATE - 1
+    docs.append({"date": _REF_DATE.isoformat(), "resting_hr": 52.0})
+    # Within window: 14 days prior (valid)
+    docs.append({"date": (_REF_DATE - timedelta(days=_BASELINE_WINDOW_DAYS)).isoformat(), "resting_hr": 52.0})
+    # Outside window: 15 days prior (should be excluded)
+    docs.append({"date": (_REF_DATE - timedelta(days=_BASELINE_WINDOW_DAYS + 1)).isoformat(), "resting_hr": 999.0})
+
+    signal = _build_physio_signal(docs, "resting_hr", _REF_DATE)
+    assert signal is not None
+    assert signal.baseline is not None
+    # If the out-of-window 999 were included, value would be >> 52
+    assert abs(signal.baseline.value - 52.0) < 0.01
+
+
+def test_no_prior_data_baseline_is_none():
+    """When no data exists before recent_date, baseline is None (no invented value)."""
+    from garmin.readiness_adapter import _build_physio_signal
+
+    # Only today's document — no prior baseline
+    docs = [{"date": _REF_DATE.isoformat(), "resting_hr": 52.0}]
+    signal = _build_physio_signal(docs, "resting_hr", _REF_DATE)
+    assert signal is not None
+    assert signal.recent_value == 52.0
+    assert signal.baseline is None
+
+
+def test_valid_measures_exact_count():
+    """valid_measures equals the exact count of non-None values inside the window."""
+    from garmin.readiness_adapter import _build_physio_signal, _BASELINE_WINDOW_DAYS
+
+    docs = []
+    docs.append({"date": _REF_DATE.isoformat(), "resting_hr": 52.0})
+    # 5 days with values inside window
+    for i in range(1, 6):
+        docs.append({"date": (_REF_DATE - timedelta(days=i)).isoformat(), "resting_hr": 52.0})
+    # 3 days with None (missing, inside window — not counted)
+    for i in range(6, 9):
+        docs.append({"date": (_REF_DATE - timedelta(days=i)).isoformat(), "resting_hr": None})
+    # 2 days outside window (not counted)
+    for i in range(_BASELINE_WINDOW_DAYS + 1, _BASELINE_WINDOW_DAYS + 3):
+        docs.append({"date": (_REF_DATE - timedelta(days=i)).isoformat(), "resting_hr": 52.0})
+
+    signal = _build_physio_signal(docs, "resting_hr", _REF_DATE)
+    assert signal is not None
+    assert signal.baseline is not None
+    assert signal.baseline.valid_measures == 5

@@ -66,6 +66,12 @@ const REC_STYLES = {
     button: "#ef4444",
     buttonHover: "#dc2626",
   },
+  gray: {
+    bg: "linear-gradient(135deg, #111827 0%, #1f2937 100%)",
+    accent: "#6b7280",
+    button: "#6b7280",
+    buttonHover: "#4b5563",
+  },
 };
 
 // Couleurs pour les séances — dark theme (même style que TrainingPlan)
@@ -649,7 +655,9 @@ export default function Dashboard() {
             const history = cardioData?.history || [];
             
             // Run Readiness Score — single source of truth from backend (Garmin insights)
-            const runReadinessScore = m.run_readiness ?? 100;
+            // run_readiness may be null when data is INSUFFICIENT — do not default to 0 or 100.
+            const runReadinessScore = m.run_readiness ?? null;
+            const runReadinessUnavailable = runReadinessScore === null;
             
             return (
               <>
@@ -697,16 +705,29 @@ export default function Dashboard() {
 
                   {/* Big score — same font as RunIndex, out of 100, white number */}
                   <div className="flex items-end gap-2">
-                    <span
-                      className="text-6xl font-black leading-none"
-                      style={{ color: "#ffffff" }}
-                      data-testid="run-readiness-score"
-                    >
-                      {runReadinessScore}
-                    </span>
-                    <span className="text-xl font-semibold pb-1" style={{ color: "#6EEB5A" }}>
-                      / 100
-                    </span>
+                    {runReadinessUnavailable ? (
+                      <span
+                        className="text-2xl font-bold leading-none"
+                        style={{ color: "#6b7280" }}
+                        data-testid="run-readiness-score"
+                        aria-label={t("dashboard.runReadinessUnavailable")}
+                      >
+                        {t("dashboard.runReadinessUnavailable")}
+                      </span>
+                    ) : (
+                      <>
+                        <span
+                          className="text-6xl font-black leading-none"
+                          style={{ color: "#ffffff" }}
+                          data-testid="run-readiness-score"
+                        >
+                          {runReadinessScore}
+                        </span>
+                        <span className="text-xl font-semibold pb-1" style={{ color: "#6EEB5A" }}>
+                          / 100
+                        </span>
+                      </>
+                    )}
                   </div>
 
                   {/* Component tiles — compact grid, tappable for info */}

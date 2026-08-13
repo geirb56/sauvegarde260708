@@ -403,15 +403,33 @@ score affiché. Il sera supprimé en R4 après validation runtime satisfaisante.
 | + | Bornes [0,100] | score always in range |
 | + | Reason codes valides | all reasons are ReasonCode |
 
-### Validation runtime (à faire après merge)
+### Validation runtime (AVANT merge — obligatoire)
 
-1. Sync réelle compte Garmin test.
-2. Appel `GET /api/run-index`.
-3. Relever `score`, `confidence`, `sufficiency_level`, `readiness_reasons`.
-4. Vérifier les données Garmin réellement disponibles.
-5. Comparer `run_readiness` vs `legacy_run_readiness` (diagnostic, égalité non exigée).
-6. Si satisfaisant → ouvrir R4 (suppression legacy).
-7. Sinon → documenter précisément le blocage avant R4.
+La validation runtime doit être effectuée sur la branche PR, AVANT le merge.
+Un compte Garmin personnel réel est disponible comme compte de test.
+
+**Procédure :**
+
+1. Lancer une sync réelle (compte Garmin test).
+2. Appeler `GET /api/run-index`.
+3. Relever exactement :
+   - `metrics.run_readiness` (float ou null)
+   - `metrics.confidence`
+   - `metrics.sufficiency_level`
+   - `metrics.readiness_reasons`
+   - `metrics.legacy_run_readiness`
+4. Vérifier les données Garmin réellement disponibles (RHR, HRV, sleep, activités).
+5. Confirmer que `run_readiness` provient de V2 (non du chemin legacy).
+6. Comparer `run_readiness` vs `legacy_run_readiness` pour diagnostic uniquement — égalité non exigée.
+7. Vérifier sync progress :
+   - score présent → `ready`
+   - score None → `unavailable`
+8. Documenter les valeurs runtime réelles dans le rapport R3.
+9. Ne jamais fabriquer le résultat si runtime inaccessible.
+
+**Statut :** À VALIDER avant merge.
+
+*R3 runtime validation = PENDING*
 
 ---
 
