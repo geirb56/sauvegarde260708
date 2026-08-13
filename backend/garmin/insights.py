@@ -11,23 +11,10 @@ and the HRV fields are returned as null so the UI shows "—".
 The returned dict matches the shape the existing /api/run-index endpoint and
 the Dashboard frontend expect.
 
-R3 — Transitional state (readiness V2)
----------------------------------------
-``metrics.run_readiness`` is now sourced from Readiness V2 (R2B).
-The legacy physio-penalty formula is still computed and exposed under
-``metrics.legacy_run_readiness`` for diagnostic comparison ONLY — it is
-NOT used for the recommendation or any score output.
-This hybrid state will remain until runtime validation is satisfactory;
-see docs/RUNINDEX_MASTER_ROADMAP_AND_DECISIONS.md R3/R4.
-
-R3.5 — Training Load V2 alignment
------------------------------------
-``TrainingLoadSnapshot`` (V2) is now the SINGLE SOURCE OF TRUTH for all
-load metrics in the /run-index path:
+``TrainingLoadSnapshot`` (V2) is the SINGLE SOURCE OF TRUTH for all load
+metrics in the /run-index path:
 - ``build_training_load()`` is called exactly once per request.
 - The resulting snapshot is shared with Readiness V2 (no second computation).
-- Legacy behaviors removed from /run-index: ACWR fallback=1.0, distance-based
-  duration estimation, and the competing 7/28-day average formula.
 - ``metrics.training_load_v2`` exposes the V2 snapshot for observability.
 """
 
@@ -255,10 +242,7 @@ async def compute_run_index(
     # 1.0 fresh · ~1.2 moderate · >1.5 high.
     fatigue_ratio = 1.0 + fatigue_physio / 10.0
 
-    # --- Run Readiness V2 (R3 — single source of truth from R2B) ---
-    # Pass the already-built load_snapshot so Readiness V2 reuses it directly;
-    # no second call to build_training_load().
-    # INSUFFICIENT → score=None → run_readiness=None (no fallback).
+    # --- Run Readiness V2 ---
     _v2_result = build_readiness_v2_from_garmin_data(
         metrics_docs, activities, today, load_snapshot=load_snapshot
     )
@@ -267,20 +251,7 @@ async def compute_run_index(
     readiness_v2_sufficiency: str = _v2_result.sufficiency_level.value
     readiness_v2_reasons: list = [r.value for r in _v2_result.reasons]
 
-    # --- Legacy readiness (kept for diagnostic comparison — NOT used for output) ---
-    # R4 will remove this block after runtime validation is satisfactory.
-    # acwr may be None (no chronic load) → legacy penalty defaults to 0.
-    physio_penalty = min(60.0, fatigue_physio * 6.0)
-    if acwr is not None and acwr > 1.3:
-        acwr_penalty = min(60.0, (acwr - 1.3) * 130.0)
-    elif acwr is not None and acwr < 0.8:
-        acwr_penalty = min(30.0, (0.8 - acwr) * 60.0)
-    else:
-        acwr_penalty = 0.0
-    _legacy_run_readiness = int(round(max(5.0, min(100.0, 100.0 - physio_penalty - acwr_penalty))))
-
-    # V2 is authoritative.  INSUFFICIENT → None → recommendation is UNAVAILABLE.
-    run_readiness = run_readiness_v2  # Optional[float] or None
+    run_readiness = run_readiness_v2
 
     # --- Recommendation derived from readiness (number & badge always agree) ---
     # When run_readiness is None (INSUFFICIENT) the state is UNAVAILABLE — not
@@ -422,15 +393,11 @@ async def compute_run_index(
             "fatigue_physio": round(fatigue_physio, 2),
             "fatigue_ratio": round(fatigue_ratio, 2),
             "fatigue_status": fatigue_status,
-            # V2 readiness fields (R3) — authoritative.
             "run_readiness": run_readiness,  # float or None (INSUFFICIENT)
             "run_readiness_status": readiness_status,
             "confidence": readiness_v2_confidence,
             "sufficiency_level": readiness_v2_sufficiency,
             "readiness_reasons": readiness_v2_reasons,
-            # Legacy readiness — diagnostic only (NOT authoritative). Remove in R4.
-            "legacy_run_readiness": _legacy_run_readiness,
-            # R3.5 observability — V2 snapshot fields for runtime verification.
             "training_load_v2": {
                 "acute_load_7d": load_snapshot.acute_load_7d,
                 "load_28d": load_snapshot.load_28d,

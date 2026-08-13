@@ -362,17 +362,10 @@ garmin_daily_metrics + garmin_activities (MongoDB)
     "run_readiness_status": "green",
     "confidence": "NORMAL",         // NORMAL | REDUCED | NONE
     "sufficiency_level": "SUFFICIENT",  // SUFFICIENT | DEGRADED | INSUFFICIENT
-    "readiness_reasons": [],        // liste de ReasonCode strings
-    "legacy_run_readiness": 68      // diagnostic ONLY — supprimer en R4
+    "readiness_reasons": []         // liste de ReasonCode strings
   }
 }
 ```
-
-### État transitoire R3
-
-`metrics.legacy_run_readiness` = résultat de l'ancienne formule physio-penalty, exposé
-uniquement pour diagnostic côte-à-côte. Il N'EST PAS utilisé pour la recommandation ou le
-score affiché. Il sera supprimé en R4 après validation runtime satisfaisante.
 
 ### Règles respectées
 
@@ -410,7 +403,7 @@ score affiché. Il sera supprimé en R4 après validation runtime satisfaisante.
 
 ## 8.5) R3.5 — TrainingLoad V2 source unique dans `/run-index`
 
-Status: **IMPLEMENTED IN PR / PENDING MERGE** (PR #120)
+Status: **MERGED — PR #120 — runtime PASS**
 
 HEAD de départ: `9d9074d40e589a45c35343b8395099540a334f01`
 
@@ -422,7 +415,7 @@ dans `/run-index` ET pour Readiness V2.
 - `/run-index` utilise désormais TrainingLoad V2 (`build_training_load()`) comme seule source de charge.
 - `compute_load_metrics()` legacy reste encore utilisé par `/training/metrics`.
 - Cette dette n'est **PAS** supprimée dans PR #120.
-- NEXT = **R4A** : current readiness legacy cleanup.
+- NEXT = **R4A** : supprimer uniquement le current readiness legacy de `/run-index`.
 
 ### Implémentation (PR #120)
 
@@ -512,20 +505,45 @@ séparée de R4 Readiness.
 ---
 
 
-## 9) R4 — Kill readiness legacy
+## 9) R4A — Current readiness legacy cleanup dans `/run-index`
 
-Status: **PLANNED** (après validation R3 runtime)
+Status: **IMPLEMENTED / PENDING MERGE**
 
-Supprimer seulement après validation runtime R3 satisfaisante:
+HEAD de départ: `522fbed01c14eff741bb72401bb697a56ea38d13`
 
-- `metrics.legacy_run_readiness` dans `garmin/insights.py`;
-- ancien `readiness_engine`;
-- formules concurrentes;
-- fallback readiness `70`;
-- RHR fictive `55`;
-- sommeil fictif `7 h` / score neutre;
-- ACWR neutre inventé;
-- code mort associé.
+### Objectif R4A
+
+Supprimer uniquement le readiness current legacy encore exposé dans `/run-index`,
+sans toucher :
+
+- `history[].run_readiness`;
+- `/training/metrics` legacy;
+- la formule Readiness V2;
+- LT1/LT2;
+- migrations historiques.
+
+### Implémentation R4A
+
+- suppression de `metrics.legacy_run_readiness` dans `backend/garmin/insights.py`;
+- suppression du calcul current legacy associé (`physio_penalty`, `acwr_penalty`, `_legacy_run_readiness`);
+- conservation intacte de Readiness V2 comme source unique pour `metrics.run_readiness`;
+- conservation de `fatigue_physio`, `fatigue_ratio`, `training_load_v2` et du snapshot partagé;
+- conservation de l'historique readiness journalier existant.
+
+### Dettes restantes après R4A
+
+- `history[].run_readiness` reste encore calculé par la formule historique existante;
+- `/training/metrics` utilise encore `compute_load_metrics()` legacy;
+- la divergence baseline RHR / historique reste documentée et hors périmètre R4A.
+
+### NEXT
+
+Suivre la roadmap canonique sans élargir le scope R4A :
+
+- dette `history[].run_readiness`;
+- alignement futur `/training/metrics`;
+- divergence baseline RHR / historique;
+- puis cleanup legacy final après validations dédiées.
 
 ---
 
@@ -762,8 +780,8 @@ Puis:
 - [x] R2B Aggregation (MERGED — PR #117)
 - [x] R3 /run-index migration (MERGED — PR #118 — runtime validation PASSED — E2E Dashboard PASSED)
 - [x] R3 validation runtime (PASSED)
-- [x] R3.5 TrainingLoad V2 source unique /run-index (IMPLEMENTED IN PR / PENDING MERGE — PR #120)
-- [ ] R4A kill current readiness legacy (NEXT)
+- [x] R3.5 TrainingLoad V2 source unique /run-index (MERGED — PR #120 — runtime PASS)
+- [ ] R4A kill current readiness legacy (IMPLEMENTED / PENDING MERGE — NEXT)
 
 ### TRAINING ENGINE
 
@@ -810,9 +828,10 @@ Ce document suit l'état réel de `main` et des PR en cours:
 - R1.7B est **MERGED** (PR #115).
 - R2A est **MERGED** (PR #116).
 - R2B est **MERGED — PR #117**.
-- R3 est **IMPLEMENTED IN PR / PENDING MERGE** (cette PR).
-- NEXT = R4 uniquement si validation runtime R3 satisfaisante.
-- Sinon : documenter précisément le blocage avant d'ouvrir R4.
+- R3 est **MERGED — PR #118 — runtime PASS**.
+- R3.5 est **MERGED — PR #120 — runtime PASS**.
+- R4A est **IMPLEMENTED / PENDING MERGE**.
+- NEXT = poursuivre la roadmap canonique après R4A sans élargir le scope.
 
 ---
 
