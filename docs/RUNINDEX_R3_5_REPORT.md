@@ -25,7 +25,7 @@ PR : #120
 
 Avant R3.5, `/run-index` utilisait deux formules concurrentes pour la charge :
 
-1. helper TrainingLoad legacy (7j/28j) — fenêtres 7j/28j, ACWR fallback=1.0 quand
+1. `compute_load_metrics()` (legacy) — fenêtres 7j/28j, ACWR fallback=1.0 quand
    chronic=0, estimation de durée depuis la distance (`6 min/km`).
 2. `build_training_load()` (V2) — appelé via `readiness_adapter` pour alimenter
    `LoadSubscore` dans Readiness V2.
@@ -53,7 +53,7 @@ valeur V2 (sans fallback).
 |--------------------|--------|
 | ACWR fallback = 1.0 quand chronic_weekly_load == 0 | Supprimé |
 | Estimation durée depuis distance (`6 min/km`) | Supprimé |
-| Formule 7j/28j via helper TrainingLoad legacy pour le payload | Supprimé |
+| Formule 7j/28j via `compute_load_metrics()` pour le payload | Supprimé |
 | Double appel `build_training_load()` (insights + adapter) | Supprimé |
 
 ---
@@ -106,15 +106,15 @@ La distance n'est jamais utilisée pour estimer une durée dans `build_training_
 
 ## Dette /training/metrics restante
 
-Le helper TrainingLoad legacy reste encore utilisé par l'endpoint `/training/metrics`.
+`compute_load_metrics()` (legacy) reste encore utilisé par l'endpoint `/training/metrics`.
 
 R3.5 garantit une source unique de vérité **uniquement pour** :
 - `/run-index`
 - Readiness V2
 
-`/training/metrics` utilise encore un helper TrainingLoad legacy.
+`/training/metrics` utilise encore `compute_load_metrics()` legacy.
 Sa migration vers TrainingLoad V2 sera traitée dans une PR dédiée de consumer alignment,
-séparée de R4 Readiness.  Ne pas supprimer le helper TrainingLoad legacy tant que
+séparée de R4 Readiness.  Ne pas supprimer `compute_load_metrics()` tant que
 `/training/metrics` l'appelle.
 
 ---
@@ -168,7 +168,7 @@ Ce qui a été fait dans PR #120 :
 Ce qui n'a PAS été fait (hors périmètre) :
 
 - [ ] migration `/training/metrics` vers V2
-- [ ] suppression helper TrainingLoad legacy
+- [ ] suppression `compute_load_metrics()`
 - [ ] modification seuils ACWR
 - [ ] modification LoadSubscore
 - [ ] modification poids Readiness

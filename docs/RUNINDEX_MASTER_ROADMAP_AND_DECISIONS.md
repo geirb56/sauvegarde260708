@@ -537,6 +537,7 @@ sans toucher :
 ### Dettes restantes après R4A+R4B
 
 - `fatigue_ratio` dans `history[]` utilise encore la formule legacy (hors périmètre R4B) ;
+- `history[].training_load` reste adossé à `_activity_load` (legacy) ;
 - `/training/metrics` : migration TrainingLoad V2 mergée — PR #123 (CTL/ATL V2 incorrects retirés ; TSB legacy km temporaire ; ctl/atl → None) ;
 - divergence baseline RHR / historique documentée et hors périmètre.
 
@@ -568,6 +569,7 @@ Pour chaque date historique J :
 ### Dettes restantes après R4B
 
 - `fatigue_ratio` dans `history[]` utilise encore la formule legacy (hors périmètre) ;
+- `history[].training_load` reste adossé à `_activity_load` (legacy) ;
 - `/training/metrics` : migration vers TrainingLoad V2 MERGED — PR #123
   (CTL/ATL v2 incorrects retirés, TSB legacy km conservé temporairement, ctl/atl → None) ;
 - baseline RHR historique : divergence documentée et hors périmètre.
@@ -866,7 +868,7 @@ Ce document suit l'état réel de `main` et des PR en cours:
   (CTL/ATL V2 incorrects retirés; TSB legacy km conservé temporairement; ctl/atl → None;
   `has_sufficient_history` commentaire non-reprise retiré).
 - Cleanup helpers TrainingLoad legacy morts est **IMPLEMENTED / PENDING MERGE — PR en cours**.
-- Dettes restantes : `fatigue_ratio` history (formule legacy), TSB `/training/metrics` migration V2 unités, baseline RHR historique.
+- Dettes restantes : `_activity_load`/`history.training_load` (legacy), `fatigue_ratio` history (formule legacy), TSB `/training/metrics` legacy, baseline RHR historique.
 
 ---
 

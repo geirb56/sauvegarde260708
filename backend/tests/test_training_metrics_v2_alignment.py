@@ -1,6 +1,6 @@
 """RUNINDEX — /training/metrics consumer alignment tests.
 
-Verifies the migration from legacy TrainingLoad helpers to
+Verifies the migration from legacy compute_load_metrics() to
 TrainingLoadSnapshot V2 (build_training_load) in the /training/metrics
 endpoint logic.
 
