@@ -9,11 +9,11 @@ Ce document est :
 - la roadmap d'exécution ;
 - un moyen d'éviter la perte de contexte entre sessions/outils.
 
-Last verified against main: `38b677d419c2fe75d094e58cadf44c2f8c74a829` (Merge PR #115)
+Last verified against main: `f9bada97d72d4e159c2e7f6cc86781b110efe82c` (Merge PR #116)
 
-HEAD PR (R2A): see current branch HEAD
+HEAD PR (R2B): see current branch HEAD
 
-Date: `2026-08-12`
+Date: `2026-08-13`
 
 ---
 
@@ -21,7 +21,7 @@ Date: `2026-08-12`
 
 Source de vérité utilisée pour ce document :
 
-1. HEAD réel de `main` (`38b677d`) ;
+1. HEAD réel de `main` (`f9bada97`) ;
 2. audit des merges PR sur `main` ;
 3. audit du code réellement présent (`backend/`, `frontend/`, `backend/training_v2/`) ;
 4. croisement avec les rapports versionnés (`*_REPORT.md`).
@@ -202,7 +202,7 @@ Elle ne modifie pas `TrainingLoad`.
 
 ## 6) R2A — Subscores
 
-Status: **IMPLEMENTED IN PR / PENDING MERGE**
+Status: **MERGED** — PR #116
 
 Architecture cible:
 
@@ -274,35 +274,49 @@ R2A LoadSubscore V1 utilise uniquement `load_change_percent`.
 
 ## 7) R2B — Aggregation
 
-Status: **NEXT**
+Status: **IMPLEMENTED IN PR / PENDING MERGE**
 
-Règles:
+Module: `backend/training_v2/readiness.py`
 
-- R1 = `INSUFFICIENT` -> `readiness_score = None`
-- R1 = `SUFFICIENT` -> calcul normal
-- R1 = `DEGRADED` -> n'utiliser que les sous-scores disponibles, renormaliser les poids, marquer confidence reduced
+Contrat de sortie:
 
-Poids produit V1 envisagés:
+```python
+class ReadinessConfidence(str, Enum):
+    NONE = "NONE"
+    NORMAL = "NORMAL"
+    REDUCED = "REDUCED"
+
+class ReadinessResult(BaseModel):
+    score: Optional[float]           # 0–100 (1 décimale) ou None
+    confidence: ReadinessConfidence  # catégoriel uniquement, jamais numérique
+    sufficiency_level: SufficiencyLevel  # propagé depuis R1
+    reasons: Tuple[ReasonCode, ...]      # propagé depuis R1
+```
+
+Poids produit V1 (PRODUCT_CALIBRATION_V1):
 
 - Physio = 40%
 - Sleep = 30%
 - Load = 30%
 
-Mention obligatoire:
+> Product calibration V1, recalibratable, not a scientifically proven universal weighting.
 
-> Product calibration V1, not a scientifically proven universal weighting.
+Règles:
 
-Exemple:
+- R1 = `INSUFFICIENT` -> `readiness_score = None`, `confidence = NONE`
+- R1 = `SUFFICIENT` + 3 sous-scores présents -> calcul normal, `confidence = NORMAL`
+- R1 = `SUFFICIENT` + sous-score(s) manquant(s) -> calcul renormalisé, `confidence = REDUCED` (sufficiency_level reste SUFFICIENT)
+- R1 = `DEGRADED` -> n'utiliser que les sous-scores disponibles, renormaliser les poids, `confidence = REDUCED`
+- Cas défensif (SUFFICIENT/DEGRADED sans sous-score utilisable) -> `score = None`, `confidence = NONE`
 
-- Physio = 70
-- Sleep = None
-- Load = 80
+`ReadinessConfidence`:
+- `NORMAL` → sufficiency SUFFICIENT ET les 3 sous-scores sont effectivement disponibles
+- `REDUCED` → sufficiency DEGRADED OU sufficiency SUFFICIENT mais un ou plusieurs sous-scores sont indisponibles
+- `NONE` → INSUFFICIENT OU aucun sous-score exploitable
 
-Score:
+Aucun score fictif pour donnée manquante. None reste None.
 
-`(70×40 + 80×30) / 70 ≈ 74`
-
-Aucun SleepScore fictif.
+Tests: 52 passés (`backend/tests/test_training_v2_readiness.py`).
 
 ---
 
@@ -571,8 +585,8 @@ Puis:
 - [x] R1.6 Signals
 - [x] R1.7A Intensity transport
 - [x] R1.7B TrainingIntensityProfile (MERGED, PR #115)
-- [x] R2A Subscores (IMPLEMENTED IN PR / PENDING MERGE)
-- [ ] R2B Aggregation
+- [x] R2A Subscores (MERGED, PR #116)
+- [x] R2B Aggregation (IMPLEMENTED IN PR / PENDING MERGE)
 - [ ] R3 /run-index migration
 - [ ] R4 kill legacy
 
@@ -619,8 +633,9 @@ Ces sujets restent secondaires et ne précèdent pas la roadmap principale Readi
 Ce document suit l'état réel de `main` et des PR en cours:
 
 - R1.7B est **MERGED** (PR #115).
-- R2A est **IMPLEMENTED IN PR / PENDING MERGE**.
-- R2B est **NEXT**.
+- R2A est **MERGED** (PR #116).
+- R2B est **IMPLEMENTED IN PR / PENDING MERGE**.
+- R3 est **NEXT**.
 
 ---
 
@@ -631,13 +646,7 @@ La version LT1/LT2 initiale ne dépend pas de mesures laboratoire.
 
 Cible produit:
 
-- estimation automatique personnalisée LT1/LT2 basée sur les données d'entraînement disponibles ;
-- ~85% de fiabilité pratique visée en validation produit.
-
-Important:
-
-- 85% est une cible produit, pas une précision scientifique déjà démontrée ;
-- aucune confiance ne doit être présentée comme validée avant benchmark.
+- estimation automatique personnalisée LT1/LT2 basée sur les données d'entraînement disponibles.
 
 Roadmap post-Readiness V2:
 

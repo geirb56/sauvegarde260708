@@ -15,6 +15,8 @@ R2A exposes:             PhysioSubscore, SleepSubscore, LoadSubscore,
                          ReadinessSubscores, build_physio_subscore,
                          build_sleep_subscore, build_load_subscore,
                          build_readiness_subscores.
+R2B exposes:             ReadinessResult, ReadinessConfidence,
+                         build_readiness_result.
 """
 
 from .domain_activity import DomainActivity
@@ -45,6 +47,11 @@ from .readiness_subscores import (
     build_physio_subscore,
     build_readiness_subscores,
     build_sleep_subscore,
+)
+from .readiness import (
+    ReadinessConfidence,
+    ReadinessResult,
+    build_readiness_result,
 )
 from .runner_profile import RunnerProfile, build_runner_profile
 from .training_history import TrainingHistory, TrainingWindow, build_training_history
@@ -78,6 +85,9 @@ __all__ = [
     "build_sleep_subscore",
     "build_load_subscore",
     "build_readiness_subscores",
+    "ReadinessConfidence",
+    "ReadinessResult",
+    "build_readiness_result",
     "RunnerProfile",
     "build_runner_profile",
     "TrainingHistory",
