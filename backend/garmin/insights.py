@@ -339,7 +339,10 @@ async def compute_run_index(
     history = []
     for doc in recent:
         d = _parse_day(doc.get("date", ""))
-        day_label = _DAY_ABBREVS[d.weekday()] if d else (doc.get("date", "")[-2:] or "?")
+        if d is None:
+            # Skip docs with no parseable date — no anchor to filter future data.
+            continue
+        day_label = _DAY_ABBREVS[d.weekday()]
         doc_hrv = doc.get("hrv")
         doc_rhr = doc.get("resting_hr")
         doc_sleep = doc.get("sleep_hours") or 7.0
@@ -355,14 +358,19 @@ async def compute_run_index(
         if d is not None:
             hist_day = d.date()
             hist_day_iso = hist_day.isoformat()
-            # Metrics available at J: all docs whose date <= J (already newest-first)
-            hist_metrics = [m for m in metrics_docs if (m.get("date") or "") <= hist_day_iso]
-            # Activities available at J: those whose start_time date <= J
-            hist_activities = [
-                a for a in activities
-                if (_parse_day(a.get("start_time") or a.get("synced_at") or "") or d).date()
-                <= hist_day
+            # Metrics available at J: date field must be present, valid, and <= J.
+            # Absent or invalid dates are excluded (never assumed available).
+            hist_metrics = [
+                m for m in metrics_docs
+                if (lambda raw: raw is not None and raw <= hist_day_iso)(m.get("date"))
             ]
+            # Activities available at J: start_time date must be valid and <= J.
+            # Absent or unparseable start_time → excluded.
+            hist_activities = []
+            for a in activities:
+                act_dt = _parse_day(a.get("start_time") or a.get("synced_at") or "")
+                if act_dt is not None and act_dt.date() <= hist_day:
+                    hist_activities.append(a)
             hist_v2 = build_readiness_v2_from_garmin_data(hist_metrics, hist_activities, hist_day)
             doc_readiness: Optional[float] = hist_v2.score  # float 0–100 or None
         else:

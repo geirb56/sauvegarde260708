@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import List, Optional
 from unittest.mock import AsyncMock, MagicMock
@@ -114,15 +114,17 @@ async def test_history_run_readiness_matches_v2_for_each_day():
     for entry in history:
         hist_day = date.fromisoformat(entry["date"][:10])
         hist_day_iso = hist_day.isoformat()
-        # Reproduce the same filtering done by insights.py
-        hist_metrics = [m for m in metrics_docs if (m.get("date") or "") <= hist_day_iso]
-        from garmin.insights import _parse_day
-        hist_activities = [
-            a for a in activity_docs
-            if (_parse_day(a.get("start_time") or a.get("synced_at") or "") or
-                datetime.combine(hist_day, datetime.min.time())).date()
-            <= hist_day
+        # Reproduce the strict filtering done by insights.py
+        hist_metrics = [
+            m for m in metrics_docs
+            if m.get("date") is not None and m.get("date") <= hist_day_iso
         ]
+        from garmin.insights import _parse_day
+        hist_activities = []
+        for a in activity_docs:
+            act_dt = _parse_day(a.get("start_time") or a.get("synced_at") or "")
+            if act_dt is not None and act_dt.date() <= hist_day:
+                hist_activities.append(a)
         expected_v2 = build_readiness_v2_from_garmin_data(hist_metrics, hist_activities, hist_day)
         assert entry["run_readiness"] == expected_v2.score, (
             f"Mismatch on {hist_day}: got {entry['run_readiness']!r}, "
@@ -394,3 +396,149 @@ async def test_empty_metrics_no_history_no_crash():
     payload = await compute_run_index(db, "userA", reference_date=_TODAY)
     if payload is not None:
         assert payload["history"] == []
+
+
+# ---------------------------------------------------------------------------
+# Test 10 — activity without date is excluded from history filter
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_history_activity_without_date_excluded():
+    """An activity with no start_time/synced_at must be excluded from every day's filter."""
+    dateless_act = {
+        "user_id": "userA",
+        # no start_time, no synced_at
+        "duration": 2400,
+        "distance": 7000,
+    }
+    valid_act = {
+        "user_id": "userA",
+        "start_time": (_TODAY - timedelta(days=1)).isoformat() + "T08:00:00",
+        "duration": 2400,
+        "distance": 7000,
+    }
+
+    docs = _metrics(n=14, ref=_TODAY)
+    db = _make_db(docs, [dateless_act, valid_act])
+
+    payload = await compute_run_index(db, "userA", reference_date=_TODAY)
+    assert payload is not None
+
+    from garmin.insights import _parse_day
+
+    for entry in payload["history"]:
+        hist_day = date.fromisoformat(entry["date"][:10])
+        # Confirm dateless_act is never in the filtered activities for this day
+        act_dt = _parse_day(dateless_act.get("start_time") or dateless_act.get("synced_at") or "")
+        assert act_dt is None, "dateless activity should have no parseable date"
+        # The entry's V2 score must be computed without the dateless activity
+        hist_metrics = [m for m in docs if m.get("date") is not None and m.get("date") <= hist_day.isoformat()]
+        hist_acts = []
+        for a in [valid_act]:
+            dt = _parse_day(a.get("start_time") or "")
+            if dt is not None and dt.date() <= hist_day:
+                hist_acts.append(a)
+        expected = build_readiness_v2_from_garmin_data(hist_metrics, hist_acts, hist_day)
+        assert entry["run_readiness"] == expected.score, (
+            f"Day {hist_day}: expected {expected.score!r}, got {entry['run_readiness']!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test 11 — metric without date is excluded from history filter
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_history_metric_without_date_excluded():
+    """A metrics doc with no 'date' field must not be included for any historical day."""
+    docs = _metrics(n=5, ref=_TODAY)
+    # Insert a dateless metric doc (e.g. corrupted document)
+    dateless_metric = {"resting_hr": 45.0, "hrv": 80.0, "sleep_hours": 8.0}
+    docs_with_dateless = [dateless_metric] + docs  # dateless first (newest-first order)
+    acts = _activities(n=5, ref=_TODAY)
+    db = _make_db(docs_with_dateless, acts)
+
+    payload = await compute_run_index(db, "userA", reference_date=_TODAY)
+    assert payload is not None
+
+    # The dateless metric doc must not produce a history entry
+    history_dates = {e["date"] for e in payload["history"]}
+    assert None not in history_dates, "Dateless metric doc produced a None-dated history entry"
+
+    from garmin.insights import _parse_day
+
+    for entry in payload["history"]:
+        hist_day = date.fromisoformat(entry["date"][:10])
+        hist_day_iso = hist_day.isoformat()
+        # Strict filter: only metrics with a real date <= J
+        hist_metrics = [
+            m for m in docs_with_dateless
+            if m.get("date") is not None and m.get("date") <= hist_day_iso
+        ]
+        hist_acts = []
+        for a in acts:
+            dt = _parse_day(a.get("start_time") or "")
+            if dt is not None and dt.date() <= hist_day:
+                hist_acts.append(a)
+        expected = build_readiness_v2_from_garmin_data(hist_metrics, hist_acts, hist_day)
+        assert entry["run_readiness"] == expected.score, (
+            f"Day {hist_day}: expected {expected.score!r}, got {entry['run_readiness']!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test 12 — future data (metric and activity) are excluded from historical days
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_history_future_data_excluded_strict():
+    """Metrics docs and activities dated after J must never appear in J's V2 input."""
+    target_day = _TODAY - timedelta(days=4)
+
+    # Build metrics where some are future relative to target_day
+    past_docs = [
+        {"date": (target_day - timedelta(days=i)).isoformat(),
+         "resting_hr": 55.0, "hrv": 65.0, "sleep_hours": 7.5}
+        for i in range(7)
+    ]
+    future_docs = [
+        {"date": (target_day + timedelta(days=j)).isoformat(),
+         "resting_hr": 40.0, "hrv": 90.0, "sleep_hours": 9.0}
+        for j in range(1, 5)
+    ]
+    all_docs = sorted(past_docs + future_docs, key=lambda m: m["date"], reverse=True)
+
+    # Activity on target_day-1 (past) and one on target_day+2 (future)
+    past_act = {
+        "start_time": (target_day - timedelta(days=1)).isoformat() + "T08:00:00",
+        "duration": 2400, "distance": 7000,
+    }
+    future_act = {
+        "start_time": (target_day + timedelta(days=2)).isoformat() + "T08:00:00",
+        "duration": 2400, "distance": 7000,
+    }
+
+    db = _make_db(all_docs, [past_act, future_act])
+    payload = await compute_run_index(db, "userA", reference_date=_TODAY)
+    assert payload is not None
+
+    from garmin.insights import _parse_day
+
+    entry = next((e for e in payload["history"] if e["date"] == target_day.isoformat()), None)
+    assert entry is not None, f"No history entry for {target_day}"
+
+    # Strict filter: only past_docs (date <= target_day) and past_act
+    hist_metrics = [m for m in all_docs
+                    if m.get("date") is not None and m.get("date") <= target_day.isoformat()]
+    hist_acts = []
+    for a in [past_act, future_act]:
+        dt = _parse_day(a.get("start_time") or "")
+        if dt is not None and dt.date() <= target_day:
+            hist_acts.append(a)
+    assert len(hist_acts) == 1  # only past_act
+
+    expected = build_readiness_v2_from_garmin_data(hist_metrics, hist_acts, target_day)
+    assert entry["run_readiness"] == expected.score, (
+        f"Future data leaked into history[{target_day}]: "
+        f"got {entry['run_readiness']!r}, expected {expected.score!r}"
+    )

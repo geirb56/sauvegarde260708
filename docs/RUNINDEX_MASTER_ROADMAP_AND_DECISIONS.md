@@ -507,7 +507,7 @@ séparée de R4 Readiness.
 
 ## 9) R4A — Current readiness legacy cleanup dans `/run-index`
 
-Status: **IMPLEMENTED / PENDING MERGE**
+Status: **MERGED — PR #121**
 
 HEAD de départ: `522fbed01c14eff741bb72401bb697a56ea38d13`
 
@@ -530,20 +530,46 @@ sans toucher :
 - conservation de `fatigue_physio`, `fatigue_ratio`, `training_load_v2` et du snapshot partagé;
 - conservation de l'historique readiness journalier existant.
 
-### Dettes restantes après R4A
+### Dettes résolues par R4B
 
-- `history[].run_readiness` reste encore calculé par la formule historique existante;
-- `/training/metrics` utilise encore `compute_load_metrics()` legacy;
-- la divergence baseline RHR / historique reste documentée et hors périmètre R4A.
+- `history[].run_readiness` migré vers Readiness V2 (voir section R4B ci-dessous).
 
-### NEXT
+### Dettes restantes après R4A+R4B
 
-Suivre la roadmap canonique sans élargir le scope R4A :
+- `fatigue_ratio` dans `history[]` utilise encore la formule legacy (hors périmètre R4B) ;
+- `/training/metrics` utilise encore `compute_load_metrics()` legacy ;
+- divergence baseline RHR / historique documentée et hors périmètre.
 
-- dette `history[].run_readiness`;
-- alignement futur `/training/metrics`;
-- divergence baseline RHR / historique;
-- puis cleanup legacy final après validations dédiées.
+---
+
+## 9b) R4B — history[].run_readiness migré vers Readiness V2
+
+Status: **IMPLEMENTED / PENDING MERGE — PR #122**
+
+### Objectif R4B
+
+Remplacer uniquement le calcul legacy de `history[].run_readiness` par Readiness V2.
+
+Pour chaque date historique J :
+- `reference_date = J` ;
+- uniquement les données disponibles à J (metrics date ≤ J, activités start_time ≤ J) ;
+- données absentes / dates invalides → **exclues** (jamais de fallback) ;
+- appliquer Sufficiency → Signals → Subscores → Readiness V2 ;
+- `score = float 0–100` ou `None` (INSUFFICIENT → None).
+
+### Implémentation R4B
+
+- `backend/garmin/insights.py` : filtre strict (date valide ET ≤ J) sur metrics et activités ;
+  docs sans date exclus du tableau `history[]` ;
+- `backend/tests/test_run_index_r4b_history_readiness_v2.py` : 12 tests couvrant
+  les 9 exigences originales + activité sans date exclue, metric sans date exclue,
+  données futures exclues (strict).
+
+### Dettes restantes après R4B
+
+- `fatigue_ratio` dans `history[]` utilise encore la formule legacy (hors périmètre) ;
+- `/training/metrics` utilise encore `compute_load_metrics()` legacy ;
+- baseline RHR historique : divergence documentée et hors périmètre.
 
 ---
 
@@ -781,7 +807,8 @@ Puis:
 - [x] R3 /run-index migration (MERGED — PR #118 — runtime validation PASSED — E2E Dashboard PASSED)
 - [x] R3 validation runtime (PASSED)
 - [x] R3.5 TrainingLoad V2 source unique /run-index (MERGED — PR #120 — runtime PASS)
-- [ ] R4A kill current readiness legacy (IMPLEMENTED / PENDING MERGE — NEXT)
+- [x] R4A kill current readiness legacy (MERGED — PR #121)
+- [x] R4B history[].run_readiness → Readiness V2 (IMPLEMENTED / PENDING MERGE — PR #122)
 
 ### TRAINING ENGINE
 
@@ -830,8 +857,9 @@ Ce document suit l'état réel de `main` et des PR en cours:
 - R2B est **MERGED — PR #117**.
 - R3 est **MERGED — PR #118 — runtime PASS**.
 - R3.5 est **MERGED — PR #120 — runtime PASS**.
-- R4A est **IMPLEMENTED / PENDING MERGE**.
-- NEXT = poursuivre la roadmap canonique après R4A sans élargir le scope.
+- R4A est **MERGED — PR #121**.
+- R4B est **IMPLEMENTED / PENDING MERGE — PR #122** (`history[].run_readiness` → Readiness V2).
+- Dettes restantes : `fatigue_ratio` history (formule legacy), `/training/metrics` legacy, baseline RHR historique.
 
 ---
 
