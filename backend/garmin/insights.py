@@ -55,20 +55,6 @@ def _parse_day(value: str) -> Optional[datetime]:
         return None
 
 
-def _activity_load(act: dict) -> float:
-    """Training load proxy = session duration in minutes (TRIMP-like).
-
-    Falls back to an estimate from distance (~6 min/km) when duration is absent.
-    """
-    duration_s = act.get("duration") or 0
-    if duration_s:
-        return float(duration_s) / 60.0
-    distance_m = act.get("distance") or 0
-    if distance_m:
-        return (float(distance_m) / 1000.0) * 6.0
-    return 0.0
-
-
 def _mean(values: List[float]) -> Optional[float]:
     vals = [v for v in values if v is not None]
     if not vals:
@@ -264,19 +250,12 @@ async def compute_run_index(
           "en": f"Fatigue Ratio {fatigue_ratio:.2f}"}
     reasons.append(_t.get(lang, _t["fr"]))
 
-    # --- Pre-compute daily load totals from activities ---
-    _daily_load: dict = {}
-    for act in activities:
-        d_act = _parse_day(act.get("start_time") or act.get("synced_at") or "")
-        if d_act:
-            key = d_act.date().isoformat()
-            _daily_load[key] = _daily_load.get(key, 0.0) + _activity_load(act)
-
     # --- 30-day history (oldest -> newest) — run_readiness = Readiness V2 ---
     # For each historical day J:
     #   - metrics filtered to date <= J (newest-first, no future leakage)
     #   - activities filtered to start_time <= J (no future leakage)
     #   - Readiness V2 built with reference_date=J
+    #   - training_load = build_training_load(hist_activities, J).acwr (V2, None when unavailable)
     #   - score = float 0–100 or None (INSUFFICIENT → None, never a fallback)
     recent = list(reversed(metrics_docs[:30]))
     history = []
@@ -318,14 +297,17 @@ async def compute_run_index(
                     hist_activities.append(a)
             hist_v2 = build_readiness_v2_from_garmin_data(hist_metrics, hist_activities, hist_day)
             doc_readiness: Optional[float] = hist_v2.score  # float 0–100 or None
+            hist_load_snapshot = build_training_load(hist_activities, hist_day)
+            doc_training_load: Optional[float] = hist_load_snapshot.acwr
         else:
             doc_readiness = None
+            doc_training_load = None
 
         history.append({
             "day": day_label,
             "date": doc.get("date"),
             "hrv": round(float(doc_hrv), 1) if doc_hrv is not None else None,
-            "training_load": round(_daily_load.get(doc.get("date", ""), 0.0), 1),
+            "training_load": round(doc_training_load, 3) if doc_training_load is not None else None,
             "fatigue_ratio": round(doc_fatigue_ratio, 2),
             "run_readiness": doc_readiness,
         })
