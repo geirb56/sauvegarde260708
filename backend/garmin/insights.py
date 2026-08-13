@@ -11,14 +11,8 @@ and the HRV fields are returned as null so the UI shows "—".
 The returned dict matches the shape the existing /api/run-index endpoint and
 the Dashboard frontend expect.
 
-R3 — Transitional state (readiness V2)
----------------------------------------
-``metrics.run_readiness`` is now sourced from Readiness V2 (R2B).
-The legacy physio-penalty formula is still computed and exposed under
-``metrics.legacy_run_readiness`` for diagnostic comparison ONLY — it is
-NOT used for the recommendation or any score output.
-This hybrid state will remain until runtime validation is satisfactory;
-see docs/RUNINDEX_MASTER_ROADMAP_AND_DECISIONS.md R3/R4.
+Readiness CURRENT now uses Readiness V2 (R2B) exclusively for
+``metrics.run_readiness`` / ``ReadinessResult.score``.
 """
 
 from __future__ import annotations
@@ -227,7 +221,7 @@ async def compute_run_index(
     # 1.0 fresh · ~1.2 moderate · >1.5 high.
     fatigue_ratio = 1.0 + fatigue_physio / 10.0
 
-    # --- Run Readiness V2 (R3 — single source of truth from R2B) ---
+    # --- Run Readiness V2 (single source of truth from R2B) ---
     # build_readiness_v2_from_garmin_data runs the full V2 chain:
     #   R1 Sufficiency → R1.6 Signals → R2A Subscores → R2B Aggregation
     # INSUFFICIENT → score=None → run_readiness=None (no fallback).
@@ -237,18 +231,7 @@ async def compute_run_index(
     readiness_v2_sufficiency: str = _v2_result.sufficiency_level.value
     readiness_v2_reasons: list = [r.value for r in _v2_result.reasons]
 
-    # --- Legacy readiness (kept for diagnostic comparison — NOT used for output) ---
-    # R4 will remove this block after runtime validation is satisfactory.
-    physio_penalty = min(60.0, fatigue_physio * 6.0)
-    if acwr > 1.3:
-        acwr_penalty = min(60.0, (acwr - 1.3) * 130.0)
-    elif acwr < 0.8:
-        acwr_penalty = min(30.0, (0.8 - acwr) * 60.0)
-    else:
-        acwr_penalty = 0.0
-    _legacy_run_readiness = int(round(max(5.0, min(100.0, 100.0 - physio_penalty - acwr_penalty))))
-
-    # V2 is authoritative.  INSUFFICIENT → None → recommendation is UNAVAILABLE.
+    # INSUFFICIENT → None → recommendation is UNAVAILABLE.
     run_readiness = run_readiness_v2  # Optional[float] or None
 
     # --- Recommendation derived from readiness (number & badge always agree) ---
@@ -382,14 +365,12 @@ async def compute_run_index(
             "fatigue_physio": round(fatigue_physio, 2),
             "fatigue_ratio": round(fatigue_ratio, 2),
             "fatigue_status": fatigue_status,
-            # V2 readiness fields (R3) — authoritative.
+            # CURRENT readiness fields — authoritative V2 output.
             "run_readiness": run_readiness,  # float or None (INSUFFICIENT)
             "run_readiness_status": readiness_status,
             "confidence": readiness_v2_confidence,
             "sufficiency_level": readiness_v2_sufficiency,
             "readiness_reasons": readiness_v2_reasons,
-            # Legacy readiness — diagnostic only (NOT authoritative). Remove in R4.
-            "legacy_run_readiness": _legacy_run_readiness,
         },
         "history": history,
     }

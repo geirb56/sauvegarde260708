@@ -11,7 +11,7 @@ Test matrix
 - sufficiency_level is exposed in metrics
 - readiness_reasons is exposed in metrics
 - INSUFFICIENT → run_readiness = None
-- legacy_run_readiness is present but never used as score
+- legacy_run_readiness is absent from metrics
 - payload backward-compatible (run_readiness key always present)
 - multi-user: user A data does not bleed into user B result
 """
@@ -145,6 +145,7 @@ async def test_run_readiness_matches_v2_score_sufficient():
     payload = await compute_run_index(db, _USER_A, reference_date=_REF)
     assert payload is not None
     m = payload["metrics"]
+    assert "legacy_run_readiness" not in m
     assert m["run_readiness"] is not None
     assert isinstance(m["run_readiness"], float)
     assert 0.0 < m["run_readiness"] <= 100.0
@@ -216,20 +217,14 @@ async def test_insufficient_score_none_recommendation_unavailable_gray():
 
 
 @pytest.mark.asyncio
-async def test_legacy_run_readiness_present_but_not_authoritative():
-    """legacy_run_readiness is present in metrics for diagnostics only.
-
-    It must never equal run_readiness when the V2 score is None (INSUFFICIENT),
-    since legacy always produces an integer (never None).
-    """
+async def test_legacy_run_readiness_absent_from_metrics():
+    """legacy_run_readiness is no longer exposed in metrics."""
     empty_metrics = _metrics_docs(_USER_A, rhr=None, hrv=None)
     db = _FakeDB(empty_metrics, [])
     payload = await compute_run_index(db, _USER_A, reference_date=_REF)
     assert payload is not None
     m = payload["metrics"]
-    assert "legacy_run_readiness" in m
-    # legacy is always an int; V2 is None here
-    assert m["legacy_run_readiness"] is not None
+    assert "legacy_run_readiness" not in m
     assert m["run_readiness"] is None
 
 
