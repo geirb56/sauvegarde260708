@@ -1020,7 +1020,7 @@ Ce document suit l'état réel de `main` et des PR en cours:
 | `llm_coach.py prompt` | `tsb` | `fitness.get('tsb', 0)` | `fitness.get('tsb')` None-safe |
 | `frontend/TrainingPlan.jsx` | ACWR display | `\|\| "1.00"` fallback | `null`-safe (affiche "—") |
 | `frontend/TrainingPlan.jsx` | TSB display | `\|\| "0.0"` fallback | `null`-safe (affiche "—") |
-| `training_engine.determine_target_load` | `ctl`, `acwr`, `tsb` | crash si `None` | `None` traité comme neutre (40/1.0/0) |
+| `training_engine.determine_target_load` | `ctl`, `acwr`, `tsb` | crash si `None` | signaux absents ignorés : base calculée depuis `load_28/4`, `load_7` ou `weekly_km` si `ctl` absent ; `adjust_load_by_fatigue` sauté si `acwr` ou `tsb` absent |
 
 ### Champs supprimés
 

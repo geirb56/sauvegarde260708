@@ -504,3 +504,88 @@ def test_n_week_plan_context_acwr_none_supported():
         raise AssertionError(
             f"determine_target_load must support acwr=None in context, got: {e}"
         ) from e
+
+
+# ---------------------------------------------------------------------------
+# O. determine_target_load — absence de signaux (PR #127 correction finale)
+# ---------------------------------------------------------------------------
+
+class TestDetermineTargetLoadAbsentSignals:
+    """Absent signals must be ignored, not substituted with defaults."""
+
+    def setup_method(self):
+        from training_engine import determine_target_load
+        self.fn = determine_target_load
+
+    def test_ctl_none_uses_load_28_quarter(self):
+        """When ctl is absent, load_28/4 is used as base volume (not 40)."""
+        context = {"ctl": None, "load_28": 1200.0, "load_7": 300.0}
+        result = self.fn(context, "build")
+        expected = int(1200.0 / 4 * 1.05)
+        assert result == expected, f"Expected {expected}, got {result}"
+
+    def test_ctl_none_load_28_absent_uses_load_7(self):
+        """When ctl and load_28 are absent, load_7 is used as base."""
+        context = {"ctl": None, "load_7": 280.0}
+        result = self.fn(context, "build")
+        expected = int(280.0 * 1.05)
+        assert result == expected
+
+    def test_ctl_none_load_absent_uses_weekly_km(self):
+        """When ctl, load_7 and load_28 are absent, weekly_km is used."""
+        context = {"ctl": None, "weekly_km": 50.0}
+        result = self.fn(context, "deload")
+        expected = int(50.0 * 0.75)
+        assert result == expected
+
+    def test_all_signals_absent_returns_zero(self):
+        """When no volume signal at all, return 0 (not 40)."""
+        result = self.fn({}, "build")
+        assert result == 0
+
+    def test_ctl_none_no_fatigue_adjustment_when_both_absent(self):
+        """When acwr and tsb are both None, adjust_load_by_fatigue is not called."""
+        context = {"ctl": None, "load_28": 1200.0, "acwr": None, "tsb": None}
+        result = self.fn(context, "build")
+        # No fatigue adjustment — same as base from load_28/4 * 1.05
+        expected = int(1200.0 / 4 * 1.05)
+        assert result == expected
+
+    def test_only_acwr_available_no_fatigue_adjustment(self):
+        """When only acwr is available (tsb absent), skip adjust_load_by_fatigue."""
+        context = {"ctl": 50.0, "acwr": 1.5, "tsb": None}
+        result_only_acwr = self.fn(context, "build")
+        context_no_fatigue = {"ctl": 50.0}
+        result_no_fatigue = self.fn(context_no_fatigue, "build")
+        assert result_only_acwr == result_no_fatigue, (
+            "Single fatigue signal must not trigger partial adjustment"
+        )
+
+    def test_only_tsb_available_no_fatigue_adjustment(self):
+        """When only tsb is available (acwr absent), skip adjust_load_by_fatigue."""
+        context = {"ctl": 50.0, "acwr": None, "tsb": -25.0}
+        result_only_tsb = self.fn(context, "build")
+        context_no_fatigue = {"ctl": 50.0}
+        result_no_fatigue = self.fn(context_no_fatigue, "build")
+        assert result_only_tsb == result_no_fatigue, (
+            "Single fatigue signal must not trigger partial adjustment"
+        )
+
+    def test_both_fatigue_signals_present_adjustment_applied(self):
+        """When both acwr and tsb are present, fatigue adjustment IS applied."""
+        from training_engine import adjust_load_by_fatigue
+        ctl = 60.0
+        acwr = 1.4
+        tsb = -25.0
+        context = {"ctl": ctl, "acwr": acwr, "tsb": tsb}
+        result = self.fn(context, "build")
+        base = ctl * 1.05
+        expected = int(adjust_load_by_fatigue(base, tsb, acwr))
+        assert result == expected
+
+    def test_ctl_zero_is_not_substituted_with_40(self):
+        """ctl=0 must not be replaced by 40 (falsy value must not trigger fallback)."""
+        context = {"ctl": 0}
+        result = self.fn(context, "build")
+        # base = 0 * 1.05 = 0
+        assert result == 0, f"ctl=0 must yield 0 base, got {result}"

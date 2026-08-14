@@ -855,14 +855,35 @@ def determine_target_load(context: Dict, phase: str) -> int:
     Determines the target load for the week.
 
     Args:
-        context: Fitness data (ctl, atl, tsb, acwr)
+        context: Fitness data (ctl, atl, tsb, acwr, load_7, load_28, weekly_km)
         phase: Current phase of the cycle
+
+    Absent signals are ignored, not substituted:
+    - If ``ctl`` is absent, ``load_7``, ``load_28`` (weekly average), or
+      ``weekly_km`` is used as the base volume proxy.
+    - If both ``acwr`` and ``tsb`` are absent, fatigue adjustment is skipped.
+    - A single available fatigue signal is not completed with an invented value.
 
     Returns:
         Target load in load units (TSS/TRIMP)
     """
-    ctl = context.get("ctl") or 40
-    base = ctl
+    ctl = context.get("ctl")
+
+    # Build base from the best available volume signal.
+    if ctl is not None:
+        base = float(ctl)
+    else:
+        load_7 = context.get("load_7")
+        load_28 = context.get("load_28")
+        weekly_km = context.get("weekly_km")
+        if load_28 is not None:
+            base = float(load_28) / 4.0
+        elif load_7 is not None:
+            base = float(load_7)
+        elif weekly_km is not None:
+            base = float(weekly_km)
+        else:
+            return 0
 
     # Phase multipliers
     phase_multipliers = {
@@ -876,14 +897,13 @@ def determine_target_load(context: Dict, phase: str) -> int:
     multiplier = phase_multipliers.get(phase, 1.0)
     base *= multiplier
 
-    # Adjust based on fatigue; treat None acwr/tsb as neutral (no adjustment).
+    # Only apply fatigue adjustment when both signals are available.
     _acwr = context.get("acwr")
     _tsb = context.get("tsb")
-    adjusted = adjust_load_by_fatigue(
-        base,
-        _tsb if _tsb is not None else 0,
-        _acwr if _acwr is not None else 1.0
-    )
+    if _acwr is not None and _tsb is not None:
+        adjusted = adjust_load_by_fatigue(base, _tsb, _acwr)
+    else:
+        adjusted = base
 
     return int(adjusted)
 
