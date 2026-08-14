@@ -222,4 +222,4 @@ async def test_real_terra_load_behavior_is_preserved():
     assert load["training_load_score"] is not None
     assert result["readiness"] == expected
     assert result["recovery_score"] == expected
-    assert result["status"] == "ready"
+    assert result["status"] == ("ready" if expected >= 75 else "moderate" if expected >= 50 else "fatigued")
