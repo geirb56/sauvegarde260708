@@ -1281,3 +1281,69 @@ Viennent APRÈS : Weekly Target, Workout Generator, Workout Analysis, Daily Adap
 migration legacy, suppression training_engine.py, validation runtime.
 
 Raison : éviter d'ajouter une nouvelle physiologie dans une architecture encore partiellement legacy.
+
+---
+
+## 26) PR #129 et #130 — État canonique
+
+### PR #129 = MERGED
+
+Suppression `fatigue_ratio` / `fatigue_status` / `fatigue_physio` du moteur RunIndex.
+HEAD main au départ de #130 : `4c6982b1239075dfafde81ab5a062950805a8dcd`
+
+### PR #130 = Weekly Target V2 — IMPLEMENTED / PENDING MERGE
+
+Fichiers livrés :
+- `backend/training_v2/weekly_target.py` — couche WeeklyTarget V2
+- `backend/training_v2/training_history.py` — extension minimale `PriorRunningWindow`
+- `backend/tests/test_weekly_target_v2.py` — 43 tests (43 passed, 0 failed)
+- `RUNINDEX_PR130_REPORT.md`
+
+---
+
+## 27) Décisions PR #130
+
+### Comportement de reprise PR77 = contrainte de non-régression
+
+Le comportement de reprise PR77 est une contrainte de non-régression permanente.
+`training_engine.py` ne pourra être supprimé qu'après migration explicite
+de toutes ses protections dans les couches V2 correspondantes.
+
+### Reprise duration-based
+
+- `deep_reprise` et `no_history` → `target_basis = "duration"`, `target_km = None`, `allow_intensity = False`.
+- WorkoutGenerator #131 est responsable de la répartition en séances.
+
+### Prior fitness context = données observées uniquement
+
+Le niveau pré-arrêt doit venir exclusivement de données observées (`prior_running_window`).
+Jamais inventé. Jamais déduit de `experience_level` seul.
+
+### Fenêtre prior_running_window
+
+Convention exacte (documentée, testée) :
+
+```
+days_ago >= 28  AND  days_ago < 42
+→ [reference_date - 41 jours, reference_date - 28 jours] (bornes incluses)
+```
+
+Fenêtre de 14 jours = 2 semaines. weekly_km_equivalent = distance_km / 2.
+
+### DEFAULT_WEEKLY_KM supprimé conceptuellement
+
+Aucun équivalent fictif en V2. La baseline doit être observée ou None.
+
+---
+
+## 28) NEXT = #131 Workout Generator V2
+
+Responsabilités :
+- Structure de la semaine (répartition cible hebdo → séances)
+- Easy-only enforcement (`allow_intensity=False`)
+- Run/walk en `deep_reprise`
+- Cap long run / proportionnalité
+- Correction exacte des arrondis (`NO_ROUNDING_DRIFT`)
+- Migration `build_reprise_week_structure` depuis `training_engine.py`
+- Migration `compute_long_run_km` depuis `training_engine.py`
+- Migration `cap_long_run_for_low_volume` depuis `training_engine.py`
