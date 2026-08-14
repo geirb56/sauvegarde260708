@@ -16,7 +16,7 @@ PR #129 = MERGED
 | `backend/training_v2/training_history.py` | Modification minimale | Extension `PriorRunningWindow` |
 | `backend/training_v2/weekly_target.py` | Nouveau | Couche WeeklyTarget V2 |
 | `backend/training_v2/__init__.py` | Mise à jour | Export des nouveaux symboles |
-| `backend/tests/test_weekly_target_v2.py` | Nouveau | Matrice de tests complète (43 tests) |
+| `backend/tests/test_weekly_target_v2.py` | Nouveau | Matrice de tests complète (51 tests) |
 | `RUNINDEX_PR130_REPORT.md` | Nouveau | Ce rapport |
 | `docs/RUNINDEX_MASTER_ROADMAP_AND_DECISIONS.md` | Mise à jour | Roadmap canonique |
 
