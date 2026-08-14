@@ -30,8 +30,9 @@ The V2 implementation preserves all PR77 protection principles:
      via prior_running_window (observed data only, never invented).
   3. Progression depends on activity actually tolerated, not the calendar.
   4. partial_reprise stays easy-only (allow_intensity=False).
-  5. reprise_exit: volume HELD, intensity may resume — NEVER both grow
-     simultaneously.
+  5. reprise_exit: volume HELD, intensity may resume ONLY when a reliable
+     volume baseline exists — NEVER both grow simultaneously, and NEVER
+     intensity without an exploitable baseline (UNKNOWN BASELINE → NO INTENSITY RETURN).
   6. Brutal overload is damped: a spike week does not become the new baseline.
   7. S1 → S2 → S3 does not collapse.
 
@@ -451,12 +452,14 @@ def _target_reprise_exit(
     training_history: TrainingHistory,
     periodization: PeriodizationSnapshot,
     reason_codes: list[str],
-    allow_intensity: bool,
 ) -> tuple[str, Optional[float], Optional[int]]:
     """Build target for reprise_exit state.
 
     Volume HOLD: do not increase volume when intensity resumes.
-    The actual allow_intensity decision is made by the caller.
+    Returns ("distance", km, None) when a baseline is exploitable, or
+    ("duration", None, minutes) when no baseline exists.
+    The caller must derive allow_intensity from the returned target_basis:
+    True only when target_basis == "distance".
     """
     chronic = _chronic_base_km(runner_profile, training_history)
     recent = _recent_weekly_km(training_history)
@@ -549,18 +552,6 @@ def build_weekly_target(
     reason_codes: list[str] = []
     continuity = training_state.continuity_state
 
-    # ── Intensity ──────────────────────────────────────────────────────────
-    # Intensity is forbidden in all reprise states except reprise_exit.
-    # In reprise_exit, intensity may return ONLY if volume is not also growing.
-    if continuity in ("no_history", "deep_reprise", "partial_reprise"):
-        allow_intensity = False
-    elif continuity == "reprise_exit":
-        # Intensity returns, but volume must HOLD (enforced below in target builder).
-        allow_intensity = True
-        reason_codes.append("REPRISE_EXIT_INTENSITY_RETURNS")
-    else:  # normal
-        allow_intensity = True
-
     # ── Volume target ──────────────────────────────────────────────────────
     if continuity == "no_history":
         target_basis, target_km, target_minutes = _target_no_history(
@@ -579,13 +570,32 @@ def build_weekly_target(
 
     elif continuity == "reprise_exit":
         target_basis, target_km, target_minutes = _target_reprise_exit(
-            runner_profile, training_history, periodization, reason_codes, allow_intensity
+            runner_profile, training_history, periodization, reason_codes
         )
 
     else:  # normal
         target_basis, target_km, target_minutes = _target_normal(
             runner_profile, training_history, plan_goal, periodization, reason_codes
         )
+
+    # ── Intensity ──────────────────────────────────────────────────────────
+    # Intensity is forbidden in all reprise states except reprise_exit.
+    # For reprise_exit: intensity may return ONLY when a reliable volume baseline
+    # exists (target_basis == "distance"). Without a baseline, a duration fallback
+    # is prescribed and intensity is withheld (UNKNOWN BASELINE → NO INTENSITY RETURN).
+    if continuity in ("no_history", "deep_reprise", "partial_reprise"):
+        allow_intensity = False
+    elif continuity == "reprise_exit":
+        if target_basis == "distance":
+            # Baseline exploitable: volume HOLD + intensity resumes.
+            allow_intensity = True
+            reason_codes.append("REPRISE_EXIT_INTENSITY_RETURNS")
+        else:
+            # No exploitable baseline: duration fallback + intensity withheld.
+            allow_intensity = False
+            reason_codes.append("REPRISE_EXIT_INTENSITY_WITHHELD_NO_BASELINE")
+    else:  # normal
+        allow_intensity = True
 
     # ── Sessions ──────────────────────────────────────────────────────────
     target_sessions = _clamp_sessions(runner_profile, continuity)

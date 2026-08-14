@@ -391,15 +391,31 @@ def test_g_partial_reprise_no_baseline_duration():
 
 
 def test_h_reprise_exit_allow_intensity():
-    # 3 consecutive active weeks → reprise_exit.
+    # 3 consecutive active weeks → reprise_exit with exploitable baseline.
     acts = (
         [_make_activity(d, 5.0) for d in [15, 17, 19]]
         + [_make_activity(d, 5.0) for d in [8, 10, 12]]
         + [_make_activity(d, 5.0) for d in [1, 3, 5]]
     )
-    wt = _build(activities=acts)
-    if wt.target_basis == "distance" and "REPRISE_EXIT" in str(wt.reason_codes):
-        assert wt.allow_intensity is True
+    hist, prof = _profile(acts)
+    state = _state(hist, prof)
+    assert state.continuity_state == "reprise_exit", (
+        f"Expected reprise_exit, got {state.continuity_state!r} — scenario misconfigured"
+    )
+    goal = _goal()
+    period = build_periodization(goal, REF, training_state=state, cycle_anchor_date=CYCLE_ANCHOR)
+    wt = build_weekly_target(
+        runner_profile=prof,
+        training_history=hist,
+        training_state=state,
+        plan_goal=goal,
+        periodization=period,
+        reference_date=REF,
+    )
+    # Baseline is exploitable: distance target expected, intensity allowed.
+    assert wt.target_basis == "distance", f"Expected distance, got {wt.target_basis!r}"
+    assert wt.target_km is not None
+    assert wt.allow_intensity is True
 
 
 # ---------------------------------------------------------------------------
@@ -850,7 +866,7 @@ def test_reprise_exit_fallback_is_duration_not_km():
     period = build_periodization(goal, REF, training_state=state, cycle_anchor_date=CYCLE_ANCHOR)
 
     reason_codes: list[str] = []
-    basis, km, minutes = _target_reprise_exit(prof, hist, period, reason_codes, allow_intensity=True)
+    basis, km, minutes = _target_reprise_exit(prof, hist, period, reason_codes)
 
     assert basis == "duration", f"expected 'duration', got {basis!r}"
     assert km is None, f"expected None target_km, got {km}"
@@ -870,8 +886,114 @@ def test_reprise_exit_fallback_code_in_reason_codes():
     period = build_periodization(goal, REF, training_state=state, cycle_anchor_date=CYCLE_ANCHOR)
 
     reason_codes: list[str] = []
-    basis, km, _ = _target_reprise_exit(prof, hist, period, reason_codes, allow_intensity=True)
+    basis, km, _ = _target_reprise_exit(prof, hist, period, reason_codes)
 
     if "REPRISE_EXIT_HOLD_FALLBACK" in reason_codes:
         assert km is None, "REPRISE_EXIT_HOLD_FALLBACK must never produce a target_km"
         assert basis == "duration"
+
+
+# ---------------------------------------------------------------------------
+# reprise_exit × baseline presence — allow_intensity contract
+# ---------------------------------------------------------------------------
+
+
+def test_reprise_exit_no_baseline_intensity_withheld():
+    """reprise_exit with no exploitable baseline must withhold intensity.
+
+    UNKNOWN BASELINE → NO INTENSITY RETURN.
+
+    Scenario: duration-only running activities (distance_m=0) with short history
+    (< 28 days deep) → reprise_exit state, zero km in all 28d buckets,
+    chronic=None, recent=None → duration fallback → allow_intensity=False.
+
+    Expected:
+        continuity_state == "reprise_exit"
+        target_basis == "duration"
+        target_km is None
+        target_duration_minutes is not None
+        allow_intensity is False
+    """
+    # Duration-only activities: activity_type=running but distance_m=0.
+    # 3 sessions spread over ~18 days → available_days < 28 → reprise_exit.
+    # All 28d buckets stay at 0.0 km → no chronic, no recent km.
+    def make_duration_only(days_ago: int, duration_min: int = 30) -> dict:
+        d = REF - timedelta(days=days_ago)
+        return {
+            "activity_type": "running",
+            "start_time": d.isoformat(),
+            "distance_m": 0,
+            "duration_s": duration_min * 60,
+        }
+
+    acts = [make_duration_only(d) for d in [2, 9, 18]]
+    hist, prof = _profile(acts)
+    state = _state(hist, prof)
+
+    assert state.continuity_state == "reprise_exit", (
+        f"Expected reprise_exit, got {state.continuity_state!r} — scenario misconfigured"
+    )
+    assert all(b == 0.0 for b in hist.weekly_distance_buckets_28d), (
+        "Expected all 28d km buckets to be 0 (duration-only scenario)"
+    )
+
+    goal = _goal()
+    period = build_periodization(goal, REF, training_state=state, cycle_anchor_date=CYCLE_ANCHOR)
+    wt = build_weekly_target(
+        runner_profile=prof,
+        training_history=hist,
+        training_state=state,
+        plan_goal=goal,
+        periodization=period,
+        reference_date=REF,
+    )
+
+    assert wt.target_basis == "duration", (
+        f"Expected 'duration' fallback, got {wt.target_basis!r}"
+    )
+    assert wt.target_km is None, (
+        f"Expected target_km=None, got {wt.target_km}"
+    )
+    assert wt.target_duration_minutes is not None and wt.target_duration_minutes > 0
+    assert wt.allow_intensity is False, (
+        "allow_intensity must be False when reprise_exit has no exploitable baseline"
+    )
+    assert wt.allow_intensity is not True
+    assert "REPRISE_EXIT_INTENSITY_WITHHELD_NO_BASELINE" in wt.reason_codes, (
+        f"Expected reason code REPRISE_EXIT_INTENSITY_WITHHELD_NO_BASELINE in {wt.reason_codes}"
+    )
+
+
+def test_reprise_exit_with_baseline_intensity_allowed():
+    """reprise_exit with exploitable baseline must allow intensity and hold volume.
+
+    Expected:
+        continuity_state == "reprise_exit"
+        target_basis == "distance"
+        target_km is not None
+        allow_intensity is True
+    """
+    acts = (
+        [_make_activity(d, 5.0) for d in [15, 17, 19]]
+        + [_make_activity(d, 5.0) for d in [8, 10, 12]]
+        + [_make_activity(d, 5.0) for d in [1, 3, 5]]
+    )
+    hist, prof = _profile(acts)
+    state = _state(hist, prof)
+    assert state.continuity_state == "reprise_exit", (
+        f"Expected reprise_exit, got {state.continuity_state!r} — scenario misconfigured"
+    )
+    goal = _goal()
+    period = build_periodization(goal, REF, training_state=state, cycle_anchor_date=CYCLE_ANCHOR)
+    wt = build_weekly_target(
+        runner_profile=prof,
+        training_history=hist,
+        training_state=state,
+        plan_goal=goal,
+        periodization=period,
+        reference_date=REF,
+    )
+    assert wt.target_basis == "distance", f"Expected distance, got {wt.target_basis!r}"
+    assert wt.target_km is not None
+    assert wt.allow_intensity is True
+    assert "REPRISE_EXIT_INTENSITY_RETURNS" in wt.reason_codes

@@ -174,9 +174,21 @@ Les phases `deload` et `intensification` du legacy n'existent pas en V2.
 
 ### `reprise_exit`
 
-- `allow_intensity = True`
-- Volume **HOLD** : `target_km = chronic * phase_multiplier` (pas de progression).
-- **JAMAIS volume ET intensité augmentés simultanément** (test I inclus).
+- **Cas A — baseline exploitable** (target_basis = "distance") :
+  - `allow_intensity = True`
+  - Volume **HOLD** : `target_km = chronic * phase_multiplier` (pas de progression).
+  - Reason code : `REPRISE_EXIT_INTENSITY_RETURNS`
+  - **JAMAIS volume ET intensité augmentés simultanément** (test I inclus).
+
+- **Cas B — aucune baseline exploitable** (target_basis = "duration") :
+  - `allow_intensity = False`
+  - `target_km = None`, `target_duration_minutes = fallback prudent`.
+  - Reason code : `REPRISE_EXIT_INTENSITY_WITHHELD_NO_BASELINE`
+  - **Principe permanent : UNKNOWN BASELINE → NO INTENSITY RETURN.**
+
+> L'intensité ne revient en reprise_exit que lorsqu'un volume observé fiable
+> existe et est tenu. Sans baseline, la prescription bascule sur une durée
+> de secours et l'intensité reste interdite.
 
 ### `normal`
 
