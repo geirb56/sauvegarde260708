@@ -162,6 +162,32 @@ def _build_sleep_record(docs: List[dict]) -> Optional[SleepRecord]:
 
 
 # ---------------------------------------------------------------------------
+# Public helpers
+# ---------------------------------------------------------------------------
+
+
+def get_rhr_v2_baseline(
+    metrics_docs: List[dict],
+    reference_date: date,
+) -> Optional[float]:
+    """Return the RHR baseline value used by Readiness V2.
+
+    Delegates to the same ``_baseline_for`` / ``_build_physio_signal`` logic
+    used internally, so the value returned here is identical to the one used
+    when building a ReadinessResult.  Returns None when no prior documents
+    with a valid ``resting_hr`` exist within the 14-day window.
+
+    Callers (e.g. compute_run_index) must use this function as the single
+    source of truth for the displayed ``rhr_baseline`` and ``rhr_delta`` so
+    that the Dashboard and Readiness V2 always agree.
+    """
+    signal = _build_physio_signal(metrics_docs, "resting_hr", reference_date)
+    if signal is None or signal.baseline is None:
+        return None
+    return signal.baseline.value
+
+
+# ---------------------------------------------------------------------------
 # Public entry-point
 # ---------------------------------------------------------------------------
 

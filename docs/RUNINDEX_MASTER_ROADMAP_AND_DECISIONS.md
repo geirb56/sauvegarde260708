@@ -578,7 +578,7 @@ Pour chaque date historique J :
 
 ## 9c) R4C — history[].training_load migré vers TrainingLoad V2
 
-Status: **IMPLEMENTED / PENDING MERGE — PR #125**
+Status: **MERGED — PR #125**
 
 ### Objectif R4C
 
@@ -599,15 +599,100 @@ Pour chaque date historique J :
   l'alignement ACWR V2, l'absence de fuite future, les activités distance-only → None,
   l'historique insuffisant, la non-régression de `metrics.training_load`, et la shape.
 
-### Dettes restantes après R4C
+### Dettes restantes après R4C (résolues par #126)
 
-- `fatigue_ratio` dans `history[]` utilise encore la formule legacy (hors périmètre) ;
-- TSB dans `/training/metrics` : legacy km conservé temporairement (hors périmètre) ;
-- baseline RHR historique : divergence documentée et hors périmètre.
+- `fatigue_ratio` dans `history[]` utilise encore la formule legacy → **résolu en #126** ;
+- baseline RHR historique : divergence documentée → **résolue en #126** ;
+- TSB dans `/training/metrics` : legacy km conservé temporairement → **NEXT #127**.
 
 ---
 
-## 10) Training Engine V2 — état réel de `main`
+## 9d) #126 — Final /run-index physiology legacy cleanup
+
+Status: **IMPLEMENTED / PENDING MERGE — PR #126**
+
+### Objectif #126
+
+Finaliser l'alignement physiologique de `/run-index` avec Readiness V2.
+
+Deux axes :
+
+1. **HISTORY FATIGUE** — supprimer de `history[]` :
+   - `fatigue_ratio` (clé et valeur)
+   - formule legacy associée (`doc_sleep_penalty`, `doc_fp`, `doc_rhr_delta`, `doc_fatigue_ratio`)
+   - fallback `sleep=7h` sur `doc.get("sleep_hours") or 7.0`
+   - fallback `rhr_delta=0` sur doc absent
+
+2. **RHR BASELINE** — unification source unique avec Readiness V2 :
+   - `metrics.rhr_baseline` affiche désormais la même valeur que Readiness V2
+     (fenêtre 14 jours, excluding today, via `get_rhr_v2_baseline()`) ;
+   - suppression du fallback fictif `55.0` et du fallback `rhr_today` ;
+   - `metrics.rhr_delta` : `None` quand `rhr_today` ou `rhr_baseline` absent ;
+   - aucune modification de la calibration Readiness V2 (seulement une exposition
+     de la logique existante via `get_rhr_v2_baseline()` dans `readiness_adapter.py`).
+
+### Décisions exactes
+
+- `metrics.fatigue_ratio` **CONSERVÉ** (toujours consommé par CardioCoach / server.py).
+- `fatigue_status` **CONSERVÉ** (dérivé de `fatigue_ratio` courant).
+- `TSB / CTL / ATL`, `TrainingLoad V2`, `LT1/LT2`, `Training Engine` : **NON MODIFIÉS**.
+- La formule Readiness V2 n'a pas été modifiée — seule la surface d'exposition d'une
+  valeur interne existante (`_baseline_for`) a été rendue publique.
+
+### Legacy supprimé
+
+| Élément supprimé | Fichier | Raison |
+|---|---|---|
+| `fatigue_ratio` dans `history[]` | `garmin/insights.py` | formule legacy hors V2 |
+| `doc_sleep_penalty` dans boucle history | `garmin/insights.py` | fallback sleep=7h |
+| `doc_rhr_delta` dans boucle history | `garmin/insights.py` | fallback delta=0 |
+| `doc_fp` / `doc_fatigue_ratio` dans boucle history | `garmin/insights.py` | calcul fatigue legacy |
+| `rhr_baseline = _mean(30 docs)` + fallback `55.0` | `garmin/insights.py` | diverge de V2 |
+
+### Implémentation #126
+
+- `backend/garmin/readiness_adapter.py` : ajout de `get_rhr_v2_baseline()` (wrapper public
+  sur `_build_physio_signal` pour `resting_hr`) — source unique de vérité pour la baseline RHR.
+- `backend/garmin/insights.py` :
+  - import `get_rhr_v2_baseline` ;
+  - `rhr_baseline` calculé via `get_rhr_v2_baseline(metrics_docs, today)` ;
+  - suppression du fallback `55.0` / `rhr_today` ;
+  - `rhr_delta : Optional[float]` — None quand baseline absente ;
+  - `rhr_status` gère `rhr_delta=None` → **"gray"** (jamais "green" pour données absentes) ;
+  - raison RHR uniquement affichée quand `rhr_delta is not None` ;
+  - boucle history : suppression de toutes les variables fatigue legacy ;
+  - `history[]` : clé `fatigue_ratio` supprimée.
+- `frontend/src/pages/Dashboard.jsx` :
+  - `ReadinessTile` gère explicitement le statut `"gray"` (couleur `#6b7280`) ;
+  - tuile RHR : fallback `m.rhr_status || "gray"` (plus `|| "green"`) ;
+  - valeur absente (`rhr_today=null`) affichée `"—"`, aucun signal positif fictif.
+- `backend/tests/test_run_index_screen.py` / `test_cardio_coach_screen.py` :
+  - `VALID_STATUSES` étendu à `{"green", "yellow", "red", "gray"}`.
+- `backend/tests/test_run_index_r4b_history_readiness_v2.py` : shape mise à jour (sans `fatigue_ratio`).
+- `backend/tests/test_run_index_r4c_history_load_v2.py` : assertion inversée (`fatigue_ratio` absent).
+- `backend/tests/test_run_index_r5_history_fatigue_cleanup.py` : **nouveau** — 13 tests couvrant
+  l'absence de `fatigue_ratio` en history, la shape, la non-régression readiness/load,
+  l'alignement baseline RHR V2, `rhr_delta=None`, `rhr_baseline=None` sans données prior,
+  la non-régression `metrics.fatigue_ratio`, l'isolation multi-user, et la sémantique
+  **None ≠ green** pour `rhr_status` (tests 11-13).
+- `frontend/src/__tests__/dashboard-run-readiness-null.test.jsx` : tests RHR absent → tuile grise,
+  affichage `"—"`, absence de couleur verte, sans crash.
+
+### Règle sémantique RHR — None ≠ green
+
+> **`rhr_delta=None` → `rhr_status="gray"`, jamais `"green"`.**
+>
+> Une baseline ou valeur RHR absente n'est pas un signal positif. Le statut `"gray"` (indisponible)
+> est le seul mapping correct pour l'absence de données. Le statut `"green"` est réservé aux cas
+> où `rhr_delta` est présent et ≤ 3 bpm.
+
+### Dettes restantes après #126
+
+- TSB dans `/training/metrics` : legacy km conservé → NEXT **#127**.
+- `fatigue_ratio` dans `metrics` (courant) : toujours legacy (CardioCoach), à évaluer post-#127.
+- Frontend : adaptation aux nouvelles shapes (hors périmètre backend).
+
+### NEXT — #127 Training metrics / TSB cleanup
 
 | Layer | Status | Fichier / PR |
 |---|---|---|
@@ -845,7 +930,8 @@ Puis:
 - [x] R4B history[].run_readiness → Readiness V2 (MERGED — PR #122)
 - [x] TrainingLoad /training/metrics alignment (MERGED — PR #123)
 - [x] Cleanup helpers TrainingLoad legacy morts (MERGED — PR #124)
-- [x] R4C history[].training_load → TrainingLoad V2 (IMPLEMENTED / PENDING MERGE — PR #125)
+- [x] R4C history[].training_load → TrainingLoad V2 (MERGED — PR #125)
+- [x] #126 history[] fatigue legacy cleanup + RHR baseline unification (IMPLEMENTED / PENDING MERGE — PR #126)
 
 ### TRAINING ENGINE
 
@@ -900,10 +986,14 @@ Ce document suit l'état réel de `main` et des PR en cours:
   (CTL/ATL V2 incorrects retirés; TSB legacy km conservé temporairement; ctl/atl → None;
   `has_sufficient_history` commentaire non-reprise retiré).
 - Cleanup helpers TrainingLoad legacy morts est **MERGED — PR #124**.
-- R4C history[].training_load → TrainingLoad V2 est **IMPLEMENTED / PENDING MERGE — PR #125**
+- R4C history[].training_load → TrainingLoad V2 est **MERGED — PR #125**
   (`history[].training_load = build_training_load(acts_at_J, J).acwr` ;
   `_activity_load` supprimé ; aucune fuite future ; aucun fallback distance→durée).
-- Dettes restantes : `fatigue_ratio` history (formule legacy), TSB `/training/metrics` legacy, baseline RHR historique.
+- #126 final physiology legacy cleanup est **IMPLEMENTED / PENDING MERGE — PR #126**
+  (`fatigue_ratio` supprimé de `history[]` ; baseline RHR unifiée avec Readiness V2 via
+  `get_rhr_v2_baseline()` ; fallback `55.0` supprimé ; `rhr_delta=None` quand absent ;
+  `metrics.fatigue_ratio` conservé ; aucune modification calibration Readiness V2).
+- Dettes restantes : TSB `/training/metrics` legacy km → **NEXT #127**.
 
 ---
 

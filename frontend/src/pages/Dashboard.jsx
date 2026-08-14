@@ -285,7 +285,7 @@ function RunIndexPillar({ icon: Icon, label, value, color }) {
 
 // Readiness tile — compact stat card: icon + status dot + label + value (status-colored), tappable for info
 function ReadinessTile({ icon: Icon, label, value, status, testId, onClick }) {
-  const color = status === "yellow" ? "#f59e0b" : status === "red" ? "#ef4444" : "#22c55e";
+  const color = status === "yellow" ? "#f59e0b" : status === "red" ? "#ef4444" : status === "gray" ? "#6b7280" : "#22c55e";
   return (
     <button
       type="button"
@@ -744,7 +744,7 @@ export default function Dashboard() {
                       icon={Activity}
                       label={t("dashboard.readinessPillars.rhr")}
                       value={(m.rhr_today === undefined || m.rhr_today === null) ? "—" : `${m.rhr_today} bpm`}
-                      status={m.rhr_status || "green"}
+                      status={m.rhr_status || "gray"}
                       testId="rhr"
                       onClick={() => setInfoMetric("rhr")}
                     />

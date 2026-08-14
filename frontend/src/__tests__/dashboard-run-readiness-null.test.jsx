@@ -164,3 +164,91 @@ describe("Dashboard run_readiness null handling", () => {
     unmount();
   });
 });
+
+// ---------------------------------------------------------------------------
+// RHR absent → gray tile, no crash (#126 post-merge correction)
+// ---------------------------------------------------------------------------
+
+function buildRhrAbsentPayload() {
+  return {
+    mock: false,
+    source: "garmin",
+    recommendation: "EASY RUN",
+    recommendation_color: "yellow",
+    recommendation_emoji: "🟡",
+    reasons: [],
+    metrics: {
+      run_readiness: 60,
+      run_readiness_status: "yellow",
+      confidence: "low",
+      sufficiency_level: "partial",
+      readiness_reasons: [],
+      legacy_run_readiness: 60,
+      hrv_today: 45,
+      hrv_baseline: 50,
+      hrv_delta: 5,
+      hrv_status: "green",
+      hrv_available: true,
+      rhr_today: null,
+      rhr_baseline: null,
+      rhr_delta: null,
+      rhr_status: "gray",
+      sleep_hours: 7.5,
+      sleep_efficiency: 0.85,
+      sleep_score: 0.5,
+      sleep_status: "green",
+      training_load: 1.05,
+      training_load_status: "green",
+      fatigue_physio: 0.0,
+      fatigue_ratio: 1.0,
+      fatigue_status: "green",
+    },
+    history: [],
+  };
+}
+
+describe("Dashboard RHR absent — gray tile, no crash (#126)", () => {
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("renders RHR tile as '—' without crashing when rhr_today is null", async () => {
+    axios.get.mockImplementation((url) => {
+      if (url.includes("run-index")) return Promise.resolve({ data: buildRhrAbsentPayload() });
+      return Promise.resolve({ data: null });
+    });
+
+    const { container, unmount } = renderDashboard();
+    await waitForCardioLoaded(container);
+
+    // Dashboard must render without throwing — no crash
+    const rhrTile = container.querySelector('[data-testid="readiness-tile-rhr"]');
+    expect(rhrTile).not.toBeNull();
+
+    // Value display must be "—" (em dash) when rhr_today is null
+    const rhrValue = container.querySelector('[data-testid="readiness-value-rhr"]');
+    expect(rhrValue).not.toBeNull();
+    expect(rhrValue.textContent).toBe("—");
+
+    unmount();
+  });
+
+  it("applies gray color styling (not green) to RHR tile when rhr_status is 'gray'", async () => {
+    axios.get.mockImplementation((url) => {
+      if (url.includes("run-index")) return Promise.resolve({ data: buildRhrAbsentPayload() });
+      return Promise.resolve({ data: null });
+    });
+
+    const { container, unmount } = renderDashboard();
+    await waitForCardioLoaded(container);
+
+    const rhrTile = container.querySelector('[data-testid="readiness-tile-rhr"]');
+    expect(rhrTile).not.toBeNull();
+
+    // The tile background/border must NOT use the green color (#22c55e).
+    const tileStyle = rhrTile.getAttribute("style") || "";
+    expect(tileStyle).not.toContain("#22c55e");
+
+    unmount();
+  });
+});
