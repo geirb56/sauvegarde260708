@@ -322,7 +322,7 @@ class TestRepriseExitNoIntensity:
         wt = _wt_distance(25.0, sessions=4, allow_intensity=False)
         plan = _plan(wt)
         for s in _running_sessions(plan):
-            assert s.workout_type in ("easy", "recovery", "long_easy", "steady"), (
+            assert s.workout_type in ("easy", "recovery", "long_easy"), (
                 f"Unexpected: {s.workout_type}"
             )
 

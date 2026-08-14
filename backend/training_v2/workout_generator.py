@@ -515,9 +515,11 @@ def _assign_days(
         indices = sorted({min(int(round(i * step)), len(candidates) - 1) for i in range(max_days)})
         # Ensure we have exactly max_days indices (rounding may produce ties).
         if len(indices) < max_days:
+            indices_set = set(indices)
             for i in range(len(candidates)):
-                if i not in set(indices):
+                if i not in indices_set:
                     indices.append(i)
+                    indices_set.add(i)
                 if len(indices) >= max_days:
                     break
             indices = sorted(indices[:max_days])
