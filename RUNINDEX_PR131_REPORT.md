@@ -3,6 +3,7 @@
 **Status:** IMPLEMENTED / PENDING MERGE  
 **Base:** main HEAD `658b50ec3733cd40ff9d993c9b8541abe3344af0` (#130 merged)  
 **Branch:** PR131  
+**Audit correction:** HEAD `e4b1623a` — deux problèmes de contrat corrigés (voir §22).
 
 ---
 
@@ -10,9 +11,11 @@
 
 | Fichier | Action |
 |---|---|
-| `backend/training_v2/workout_generator.py` | Créé (couche métier pure) |
+| `backend/training_v2/weekly_target.py` | Mis à jour — ajout `continuity_state` dans `WeeklyTarget` |
+| `backend/training_v2/workout_generator.py` | Créé + corrigé (couche métier pure) |
 | `backend/training_v2/__init__.py` | Mis à jour (exports PR131) |
-| `backend/tests/test_workout_generator_v2.py` | Créé (87 tests) |
+| `backend/tests/test_workout_generator_v2.py` | Créé + étendu (sections N et O) |
+| `backend/tests/test_weekly_target_v2.py` | Étendu (section U — contrat continuity_state) |
 | `RUNINDEX_PR131_REPORT.md` | Ce fichier |
 | `docs/RUNINDEX_MASTER_ROADMAP_AND_DECISIONS.md` | Mis à jour |
 
@@ -88,6 +91,11 @@ Contraintes respectées :
 
 ¹ `quality` → `easy` si `allow_intensity == False` ou si déjà utilisé
 
+Ces placements sont le **fallback déterministe** (sans contraintes RunnerProfile).  
+`_assign_days()` réassigne les jours réels selon les contraintes `max_days_per_week`
+et `availability_constraints` de `RunnerProfile`.  
+Les types de séances ne changent pas ; seul le placement de jour varie.
+
 ---
 
 ## 6. Règle intensité V1
@@ -104,7 +112,7 @@ NE PAS recopier le legacy qui peut générer threshold + tempo la même semaine.
 
 ## 7. Comportement deep_reprise
 
-- Routage : `"continuity_deep_reprise"` dans `weekly_target.reason_codes`
+- Routage : `weekly_target.continuity_state == "deep_reprise"` (source de vérité)
 - Base : `target_basis == "duration"` (WeeklyTarget #130)
 - Split : `_split_durations(total_minutes, n=3)` — proportions `(27%, 33%, 40%)`
 - Placement : mar (court) / jeu (moyen) / dim (long)
@@ -117,7 +125,7 @@ NE PAS recopier le legacy qui peut générer threshold + tempo la même semaine.
 
 ## 8. Comportement partial_reprise
 
-- Routage : `"continuity_partial_reprise"` dans `weekly_target.reason_codes`
+- Routage : `weekly_target.continuity_state == "partial_reprise"` (source de vérité)
 - Easy-only (aucun quality, aucun steady)
 - Distance ou durée selon `target_basis`
 - Split distance : `(28%, 32%, 40%)` pour 3 sessions
@@ -278,7 +286,7 @@ Le résidu est ajouté à la plus grande séance (principe legacy PR77 préserv�
 
 ## 18. Tests
 
-**Total : 87 tests — 87 passés — 0 échoués**
+**Total : 156 tests — 156 passés — 0 échoués**
 
 | Classe | Sujet | N |
 |---|---|---|
@@ -296,6 +304,9 @@ Le résidu est ajouté à la plus grande séance (principe legacy PR77 préserv�
 | `TestNoFalsePrecision` | L — aucune FC/allure/import interdit | 9 |
 | `TestDeterminism` | M — même inputs → même output | 3 |
 | `TestNonRegression` | Non-régression WeeklyTarget / immutabilité | 5 |
+| `TestContractContinuityStateTransport` | N — contrat continuity_state end-to-end | 6 |
+| `TestDayAssignment` | O — assignation jours RunnerProfile | 6 |
+| `TestContinuityStateContract` (weekly_target) | U — propagation TrainingState → WeeklyTarget | 7 |
 
 ---
 
@@ -307,7 +318,7 @@ Le résidu est ajouté à la plus grande séance (principe legacy PR77 préserv�
 - ✅ Aucun import `training_engine`
 - ✅ Aucun import `llm_coach`
 - ✅ Aucun consumer runtime migré (server.py, coach_service.py inchangés)
-- ✅ `WeeklyTarget` inchangé
+- ✅ `WeeklyTarget` formulas inchangées (seul transport `continuity_state` ajouté)
 - ✅ Readiness inchangée
 - ✅ TrainingLoad inchangé
 - ✅ `training_engine.py` intact
@@ -317,7 +328,11 @@ Le résidu est ajouté à la plus grande séance (principe legacy PR77 préserv�
 - ✅ WeeklyPlan immutable (frozen Pydantic)
 - ✅ WorkoutPrescription immutable (frozen Pydantic)
 - ✅ `datetime.now()` / `date.today()` absents du code (vérifiés par AST)
-- ✅ 324 tests training_v2 passés (non-régression #130 + PR131)
+- ✅ `WeeklyTarget.continuity_state` transporté explicitement depuis `TrainingState`
+- ✅ `_infer_continuity()` supprimé — `reason_codes` ne déterminent plus l'état métier
+- ✅ `_assign_days()` implémenté — respecte `max_days_per_week` et `availability_constraints`
+- ✅ `SCHEDULE_CONSTRAINT_LIMITED` émis quand les contraintes empêchent le nombre de séances cible
+- ✅ Maximum 1 quality/semaine (confirmé par 14 tests)
 
 ---
 
@@ -332,10 +347,80 @@ Le résidu est ajouté à la plus grande séance (principe legacy PR77 préserv�
 | FC personnalisées par zone | `thresholds.py` (futur) |
 | Distribution d'intensité V2 (au-delà de "1 quality max") | Post-#133 |
 | Recalibration coefficients long run V1 | Post-#133 |
-| Respect des préférences de jours RunnerProfile | V2 post-#133 |
 
 ---
 
 ## 21. NEXT
 
 **#132 WorkoutAnalysis V2**
+
+---
+
+## 22. Audit corrections (post HEAD e4b1623a)
+
+### Problème 1 — Contrat `continuity_state`
+
+**Problème identifié :**  
+`WorkoutGenerator` inférait l'état de reprise depuis `WeeklyTarget.reason_codes`
+via `_infer_continuity()`, cherchant des codes comme `continuity_deep_reprise`
+qui n'existaient pas dans la production réelle de `WeeklyTarget` #130.
+
+**Conséquence :**  
+Une vraie `deep_reprise` / `partial_reprise` / `reprise_exit` pouvait être
+incorrectement routée comme "normal".
+
+**Correction :**
+
+1. `WeeklyTarget` reçoit un nouveau champ explicite :
+   ```python
+   continuity_state: str
+   # Valeurs : no_history | deep_reprise | partial_reprise | reprise_exit | normal
+   ```
+
+2. `build_weekly_target()` transporte directement depuis `TrainingState` :
+   ```python
+   continuity_state = training_state.continuity_state
+   ```
+   Aucune réinterprétation. Aucun mapping depuis `reason_codes`.
+
+3. `WorkoutGenerator` utilise directement :
+   ```python
+   continuity = weekly_target.continuity_state
+   ```
+
+4. `_infer_continuity()` est **supprimé**.
+
+**Décision architecturale permanente :**
+
+> `reason_codes` MUST NOT be used as hidden business-state transport.
+>
+> `reason_codes` are diagnostic / explanatory artefacts only.
+> Any business-state signal that must cross layer boundaries must be
+> transported as an explicit named field on the contract model.
+
+---
+
+### Problème 2 — `_assign_days()` inutilisée
+
+**Problème identifié :**  
+`_assign_days()` était définie mais non appelée dans `build_weekly_plan()`.
+La fonction ne faisait que retourner le squelette inchangé.
+Le contrat annoncé "respect des contraintes RunnerProfile" n'était pas implémenté.
+
+**Correction :**
+
+1. `_assign_days()` est réécrite pour respecter réellement :
+   - `availability_constraints` : jours de la semaine non disponibles
+   - `max_days_per_week` : nombre maximum de jours de course
+   - Espacement déterministe des séances
+   - `long_easy` placé en dernier ; `quality` non adjacent à `long_easy` si possible
+
+2. `build_weekly_plan()` appelle `_assign_days()` sur la branche normale / reprise_exit :
+   ```python
+   session_types = [t for _, t in skeleton if t != "rest"]
+   skeleton, constraint_codes = _assign_days(session_types, runner_profile)
+   ```
+
+3. Si les contraintes rendent impossible le nombre de séances cible :
+   `SCHEDULE_CONSTRAINT_LIMITED` est émis dans `plan.reason_codes`.
+   Aucun crash. Meilleur plan disponible produit.

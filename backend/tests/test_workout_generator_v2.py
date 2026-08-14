@@ -130,7 +130,8 @@ def _wt_duration(
     minutes: int,
     sessions: int = 3,
     allow_intensity: bool = False,
-    codes: tuple = ("continuity_deep_reprise",),
+    codes: tuple = (),
+    continuity_state: str = "deep_reprise",
 ) -> WeeklyTarget:
     return WeeklyTarget(
         reference_date=REF,
@@ -140,6 +141,7 @@ def _wt_duration(
         target_sessions=sessions,
         allow_intensity=allow_intensity,
         confidence="low",
+        continuity_state=continuity_state,
         reason_codes=codes,
     )
 
@@ -149,6 +151,7 @@ def _wt_distance(
     sessions: int = 4,
     allow_intensity: bool = True,
     codes: tuple = (),
+    continuity_state: str = "normal",
 ) -> WeeklyTarget:
     return WeeklyTarget(
         reference_date=REF,
@@ -158,6 +161,7 @@ def _wt_distance(
         target_sessions=sessions,
         allow_intensity=allow_intensity,
         confidence="medium",
+        continuity_state=continuity_state,
         reason_codes=codes,
     )
 
@@ -192,18 +196,18 @@ def _quality_sessions(plan: WeeklyPlan) -> list[WorkoutPrescription]:
 class TestDeepRepriseEasyOnly:
 
     def test_no_quality_session(self):
-        wt = _wt_duration(105, sessions=3, allow_intensity=False, codes=("continuity_deep_reprise",))
+        wt = _wt_duration(105, sessions=3, allow_intensity=False)
         plan = _plan(wt)
         assert len(_quality_sessions(plan)) == 0
 
     def test_all_running_sessions_are_easy_or_recovery(self):
-        wt = _wt_duration(105, sessions=3, allow_intensity=False, codes=("continuity_deep_reprise",))
+        wt = _wt_duration(105, sessions=3, allow_intensity=False)
         plan = _plan(wt)
         for s in _running_sessions(plan):
             assert s.workout_type in ("easy", "recovery"), f"Unexpected type: {s.workout_type}"
 
     def test_run_walk_reason_code_present(self):
-        wt = _wt_duration(105, sessions=3, allow_intensity=False, codes=("continuity_deep_reprise",))
+        wt = _wt_duration(105, sessions=3, allow_intensity=False)
         plan = _plan(wt)
         for s in _running_sessions(plan):
             assert "run_walk_allowed" in s.reason_codes, (
@@ -211,12 +215,12 @@ class TestDeepRepriseEasyOnly:
             )
 
     def test_route_code_present(self):
-        wt = _wt_duration(105, sessions=3, allow_intensity=False, codes=("continuity_deep_reprise",))
+        wt = _wt_duration(105, sessions=3, allow_intensity=False)
         plan = _plan(wt)
         assert "generator_route_deep_reprise" in plan.reason_codes
 
     def test_max_3_running_sessions(self):
-        wt = _wt_duration(135, sessions=3, allow_intensity=False, codes=("continuity_deep_reprise",))
+        wt = _wt_duration(135, sessions=3, allow_intensity=False)
         plan = _plan(wt)
         assert len(_running_sessions(plan)) <= 3
 
@@ -229,13 +233,13 @@ class TestDeepRepriseDurationSum:
 
     @pytest.mark.parametrize("minutes", [105, 135, 90, 120, 137, 200])
     def test_duration_sum_exact(self, minutes: int):
-        wt = _wt_duration(minutes, sessions=3, allow_intensity=False, codes=("continuity_deep_reprise",))
+        wt = _wt_duration(minutes, sessions=3, allow_intensity=False)
         plan = _plan(wt)
         total = sum(s.duration_minutes for s in _running_sessions(plan) if s.duration_minutes)
         assert total == minutes, f"Expected {minutes} min, got {total}"
 
     def test_planned_duration_matches(self):
-        wt = _wt_duration(105, sessions=3, codes=("continuity_deep_reprise",))
+        wt = _wt_duration(105, sessions=3)
         plan = _plan(wt)
         assert plan.planned_duration_minutes == 105
 
@@ -250,19 +254,19 @@ class TestPartialRepriseDistance:
     def test_distance_sum_exact(self, km: float):
         wt = _wt_distance(
             km, sessions=3, allow_intensity=False,
-            codes=("continuity_partial_reprise",),
+            continuity_state="partial_reprise",
         )
         plan = _plan(wt)
         total = round(sum(s.distance_km for s in _running_sessions(plan) if s.distance_km), 1)
         assert abs(total - km) <= 0.1, f"Expected {km} km, got {total}"
 
     def test_no_quality_session(self):
-        wt = _wt_distance(20.0, sessions=3, allow_intensity=False, codes=("continuity_partial_reprise",))
+        wt = _wt_distance(20.0, sessions=3, allow_intensity=False, continuity_state="partial_reprise")
         plan = _plan(wt)
         assert len(_quality_sessions(plan)) == 0
 
     def test_all_easy_or_recovery(self):
-        wt = _wt_distance(20.0, sessions=3, allow_intensity=False, codes=("continuity_partial_reprise",))
+        wt = _wt_distance(20.0, sessions=3, allow_intensity=False, continuity_state="partial_reprise")
         plan = _plan(wt)
         for s in _running_sessions(plan):
             assert s.workout_type in ("easy", "recovery", "long_easy"), (
@@ -270,7 +274,7 @@ class TestPartialRepriseDistance:
             )
 
     def test_route_code_present(self):
-        wt = _wt_distance(20.0, sessions=3, allow_intensity=False, codes=("continuity_partial_reprise",))
+        wt = _wt_distance(20.0, sessions=3, allow_intensity=False, continuity_state="partial_reprise")
         plan = _plan(wt)
         assert "generator_route_partial_reprise" in plan.reason_codes
 
@@ -523,7 +527,7 @@ class TestNoFalsePrecision:
 
     def test_no_distance_km_when_duration_target(self):
         """Duration-based plans must NOT invent distance_km from a pace fallback."""
-        wt = _wt_duration(120, sessions=3, codes=("continuity_deep_reprise",))
+        wt = _wt_duration(120, sessions=3)
         plan = _plan(wt)
         for s in _running_sessions(plan):
             assert s.distance_km is None, (
@@ -659,7 +663,7 @@ class TestDeterminism:
         assert plan1 == plan2
 
     def test_same_inputs_same_output_duration(self):
-        wt = _wt_duration(120, sessions=3, codes=("continuity_deep_reprise",))
+        wt = _wt_duration(120, sessions=3)
         plan1 = _plan(wt)
         plan2 = _plan(wt)
         assert plan1 == plan2
@@ -700,10 +704,39 @@ class TestNonRegression:
                 running[0].distance_km = 99.0  # type: ignore[misc]
 
     def test_session_count_matches_target_sessions(self):
-        """session_count in WeeklyPlan matches WeeklyTarget.target_sessions."""
+        """session_count in WeeklyPlan matches WeeklyTarget.target_sessions when no day constraints."""
+        # Use a profile with no max_days_per_week constraint so all session counts are reachable.
+        unconstrained_profile = RunnerProfile(
+            reference_date=REF,
+            age=35, sex="male",
+            primary_discipline="road",
+            experience_level="established",
+            typical_weekly_km=50.0,
+            typical_weekly_km_is_observed=True,
+            typical_weekly_hours=None,
+            typical_runs_per_week=5.0,
+            typical_long_run_km=None,
+            typical_speed_kmh=None,
+            available_history_days=120,
+            profile_confidence="medium",
+            vo2max=None, vma_kmh=None, max_hr=None, resting_hr=None,
+            has_hrv=False, has_vo2max=False, has_training_readiness=False,
+            has_power=False, has_running_dynamics=False,
+            preferred_days_per_week=None,
+            max_days_per_week=None,
+            preferred_long_run_day=None,
+            injury_constraints=[],
+            availability_constraints=[],
+        )
         for n in [2, 3, 4, 5, 6]:
             wt = _wt_distance(n * 8.0, sessions=n)
-            plan = _plan(wt)
+            plan = build_weekly_plan(
+                weekly_target=wt,
+                runner_profile=unconstrained_profile,
+                plan_goal=_plan_goal("marathon"),
+                periodization=_periodization("build"),
+                reference_date=REF,
+            )
             assert plan.session_count == n, (
                 f"target_sessions={n} but plan.session_count={plan.session_count}"
             )
@@ -713,3 +746,296 @@ class TestNonRegression:
         wt = _wt_distance(40.0, sessions=4)
         plan = _plan(wt)
         assert len(plan.sessions) == 7
+
+
+# ---------------------------------------------------------------------------
+# N. Contract — continuity_state end-to-end (PR131 audit correction)
+# ---------------------------------------------------------------------------
+# Tests the FULL chain: TrainingState → build_weekly_target() → build_weekly_plan()
+# Guarantees WeeklyTarget.continuity_state is the single routing signal for
+# WorkoutGenerator.  reason_codes MUST NOT affect routing.
+# ---------------------------------------------------------------------------
+
+from training_v2.training_state import TrainingState
+from training_v2.weekly_target import build_weekly_target
+from training_v2.training_history import build_training_history
+from training_v2.training_load import build_training_load
+from training_v2.runner_profile import build_runner_profile
+
+
+def _make_training_state(
+    continuity_state: str,
+    ref: date = REF,
+    reason_codes: list[str] | None = None,
+) -> TrainingState:
+    """Build a minimal TrainingState with the given continuity_state."""
+    return TrainingState(
+        reference_date=ref,
+        continuity_state=continuity_state,
+        continuity_confidence="medium",
+        load_state="balanced",
+        load_confidence="medium",
+        overall_confidence="medium",
+        days_since_last_run=None,
+        recent_7d_km=None,
+        recent_30d_km=None,
+        acute_load=None,
+        chronic_weekly_load=None,
+        acwr=None,
+        reason_codes=reason_codes or [],
+    )
+
+
+def _minimal_runner_profile(ref: date = REF) -> RunnerProfile:
+    hist = build_training_history([], ref)
+    return build_runner_profile(
+        training_history=hist,
+        training_load=build_training_load(activities=[], reference_date=ref),
+        user_profile={"typical_weekly_km": 30.0, "preferred_days_per_week": 3},
+        reference_date=ref,
+    )
+
+
+def _chain(
+    continuity_state: str,
+    ref: date = REF,
+    goal_type: str = "maintenance",
+    phase_name: str = "base",
+    reason_codes: list[str] | None = None,
+) -> tuple["WeeklyTarget", "WeeklyPlan"]:  # type: ignore[name-defined]
+    """Full chain: TrainingState → WeeklyTarget → WeeklyPlan."""
+    ts = _make_training_state(continuity_state, ref, reason_codes)
+    prof = _minimal_runner_profile(ref)
+    hist = build_training_history([], ref)
+    goal = _plan_goal(goal_type)
+    period = _periodization(phase_name, ref)
+
+    wt = build_weekly_target(
+        runner_profile=prof,
+        training_history=hist,
+        training_state=ts,
+        plan_goal=goal,
+        periodization=period,
+        reference_date=ref,
+    )
+    plan = build_weekly_plan(
+        weekly_target=wt,
+        runner_profile=prof,
+        plan_goal=goal,
+        periodization=period,
+        reference_date=ref,
+    )
+    return wt, plan
+
+
+class TestContractContinuityStateTransport:
+    """Section 5 — continuity_state contract tests.
+
+    These tests prove that WeeklyTarget.continuity_state is transported
+    explicitly from TrainingState and that WorkoutGenerator uses it directly.
+    reason_codes MUST NOT alter routing.
+    """
+
+    def test_5A_deep_reprise_transport_and_routing(self):
+        """A: TrainingState deep_reprise → WeeklyTarget.continuity_state == deep_reprise
+        → WeeklyPlan deep_reprise branch → no quality session."""
+        wt, plan = _chain("deep_reprise")
+        assert wt.continuity_state == "deep_reprise"
+        quality = [s for s in plan.sessions if s.workout_type == "quality"]
+        assert len(quality) == 0, "deep_reprise must produce zero quality sessions"
+        assert "generator_route_deep_reprise" in plan.reason_codes
+
+    def test_5B_partial_reprise_transport_and_routing(self):
+        """B: partial_reprise → WeeklyTarget.continuity_state == partial_reprise → easy-only."""
+        wt, plan = _chain("partial_reprise")
+        assert wt.continuity_state == "partial_reprise"
+        running = [s for s in plan.sessions if s.workout_type not in ("rest",)]
+        for s in running:
+            assert s.workout_type in ("easy", "recovery", "long_easy"), (
+                f"partial_reprise must be easy-only, got {s.workout_type}"
+            )
+        assert "generator_route_partial_reprise" in plan.reason_codes
+
+    def test_5C_reprise_exit_with_baseline_intensity(self):
+        """C: reprise_exit + baseline exploitable → allow_intensity=True → max 1 quality."""
+        wt, plan = _chain("reprise_exit")
+        assert wt.continuity_state == "reprise_exit"
+        if wt.allow_intensity:
+            quality = [s for s in plan.sessions if s.workout_type == "quality"]
+            assert len(quality) <= 1, "reprise_exit with intensity: max 1 quality"
+
+    def test_5D_reprise_exit_no_baseline_no_quality(self):
+        """D: reprise_exit → if allow_intensity=False → zero quality."""
+        wt, plan = _chain("reprise_exit")
+        assert wt.continuity_state == "reprise_exit"
+        if not wt.allow_intensity:
+            quality = [s for s in plan.sessions if s.workout_type == "quality"]
+            assert len(quality) == 0, "reprise_exit allow_intensity=False must yield 0 quality"
+
+    def test_5E_normal_uses_normal_routing(self):
+        """E: normal → continuity_state == normal → standard routing."""
+        wt, plan = _chain("normal")
+        assert wt.continuity_state == "normal"
+        assert "generator_route_normal" in plan.reason_codes
+
+    def test_5F_reason_codes_do_not_affect_routing(self):
+        """F: changing reason_codes without changing continuity_state MUST NOT change routing.
+
+        This test guarantees reason_codes are not a hidden business-state API.
+        """
+        base_wt = _wt_distance(30.0, sessions=4, allow_intensity=True, continuity_state="normal")
+        misleading_wt = _wt_distance(
+            30.0, sessions=4, allow_intensity=True,
+            codes=("continuity_deep_reprise", "continuity_partial_reprise", "SOME_OTHER_CODE"),
+            continuity_state="normal",  # continuity_state is the authority
+        )
+        plan_base = _plan(base_wt)
+        plan_misleading = _plan(misleading_wt)
+        # Both must use normal routing, not deep/partial reprise routing.
+        assert "generator_route_normal" in plan_base.reason_codes
+        assert "generator_route_normal" in plan_misleading.reason_codes
+        # Neither should use reprise-specific routing.
+        assert "generator_route_deep_reprise" not in plan_misleading.reason_codes
+        assert "generator_route_partial_reprise" not in plan_misleading.reason_codes
+
+
+# ---------------------------------------------------------------------------
+# O. Day assignment — RunnerProfile constraints (PR131 audit correction)
+# ---------------------------------------------------------------------------
+
+def _runner_profile_with_constraints(
+    *,
+    max_days: int | None = None,
+    unavailable_days: list[str] | None = None,
+    ref: date = REF,
+) -> RunnerProfile:
+    """Build a RunnerProfile with specific scheduling constraints."""
+    return RunnerProfile(
+        reference_date=ref,
+        age=30, sex="female",
+        primary_discipline="road",
+        experience_level="established",
+        typical_weekly_km=35.0,
+        typical_weekly_km_is_observed=True,
+        typical_weekly_hours=None,
+        typical_runs_per_week=3.0,
+        typical_long_run_km=None,
+        typical_speed_kmh=None,
+        available_history_days=90,
+        profile_confidence="medium",
+        vo2max=None, vma_kmh=None, max_hr=None, resting_hr=None,
+        has_hrv=False, has_vo2max=False, has_training_readiness=False,
+        has_power=False, has_running_dynamics=False,
+        preferred_days_per_week=3,
+        max_days_per_week=max_days,
+        preferred_long_run_day=None,
+        injury_constraints=[],
+        availability_constraints=unavailable_days or [],
+    )
+
+
+def _plan_with_profile(
+    weekly_target: "WeeklyTarget",  # type: ignore[name-defined]
+    runner_profile: RunnerProfile,
+    goal: str = "marathon",
+    phase: str = "build",
+) -> "WeeklyPlan":  # type: ignore[name-defined]
+    return build_weekly_plan(
+        weekly_target=weekly_target,
+        runner_profile=runner_profile,
+        plan_goal=_plan_goal(goal),
+        periodization=_periodization(phase),
+        reference_date=REF,
+    )
+
+
+class TestDayAssignment:
+    """Section 10 — day assignment respecting RunnerProfile constraints."""
+
+    def test_10A_no_constraints_fallback_deterministic(self):
+        """A: no constraints → fallback deterministic placement."""
+        profile = _runner_profile_with_constraints()
+        wt = _wt_distance(30.0, sessions=3)
+        plan1 = _plan_with_profile(wt, profile)
+        plan2 = _plan_with_profile(wt, profile)
+        days1 = [(s.day, s.workout_type) for s in plan1.sessions]
+        days2 = [(s.day, s.workout_type) for s in plan2.sessions]
+        assert days1 == days2, "No-constraint plans must be deterministic"
+        running = [s for s in plan1.sessions if s.workout_type != "rest"]
+        assert len(running) == 3
+
+    def test_10B_unavailable_days_respected(self):
+        """B: unavailable days must not contain running sessions."""
+        unavailable = ["monday", "tuesday", "wednesday"]
+        profile = _runner_profile_with_constraints(
+            unavailable_days=unavailable, max_days=4,
+        )
+        wt = _wt_distance(25.0, sessions=3)
+        plan = _plan_with_profile(wt, profile)
+        for s in plan.sessions:
+            if s.day in unavailable:
+                assert s.workout_type == "rest", (
+                    f"{s.day} is unavailable but has workout_type={s.workout_type}"
+                )
+
+    def test_10C_max_days_per_week_never_exceeded(self):
+        """C: max_days_per_week is never exceeded."""
+        for max_d in [2, 3, 4]:
+            profile = _runner_profile_with_constraints(max_days=max_d)
+            wt = _wt_distance(40.0, sessions=5)  # request more than max
+            plan = _plan_with_profile(wt, profile)
+            running = [s for s in plan.sessions if s.workout_type != "rest"]
+            assert len(running) <= max_d, (
+                f"max_days_per_week={max_d} exceeded: got {len(running)} running sessions"
+            )
+
+    def test_10D_quality_not_immediately_before_long_easy_when_avoidable(self):
+        """D: quality is not placed immediately (adjacent day) before long_easy
+        when another placement exists."""
+        profile = _runner_profile_with_constraints(max_days=7)
+        wt = _wt_distance(40.0, sessions=4, allow_intensity=True)
+        plan = _plan_with_profile(wt, profile)
+        days_order = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+        long_idx = next(
+            (i for i, d in enumerate(days_order) if plan.sessions[i].workout_type == "long_easy"),
+            None,
+        )
+        if long_idx is not None and long_idx > 0:
+            prev_session = plan.sessions[long_idx - 1]
+            # If there are 4+ sessions, quality should not be adjacent to long_easy
+            running = [s for s in plan.sessions if s.workout_type != "rest"]
+            if len(running) >= 3:
+                assert prev_session.workout_type != "quality", (
+                    f"quality placed immediately before long_easy on {prev_session.day}"
+                )
+
+    def test_10E_same_inputs_same_days(self):
+        """E: determinism — identical inputs always produce identical day assignments."""
+        profile = _runner_profile_with_constraints(
+            max_days=5, unavailable_days=["monday"],
+        )
+        wt = _wt_distance(35.0, sessions=4)
+        results = []
+        for _ in range(3):
+            plan = _plan_with_profile(wt, profile)
+            results.append([(s.day, s.workout_type) for s in plan.sessions])
+        assert results[0] == results[1] == results[2], "Non-deterministic day assignment"
+
+    def test_10F_impossible_constraints_reason_code_no_crash(self):
+        """F: constraints that make target_sessions impossible → SCHEDULE_CONSTRAINT_LIMITED
+        reason code + no crash (returns best available plan)."""
+        # Only 2 days available, requesting 4 sessions.
+        profile = _runner_profile_with_constraints(
+            unavailable_days=["monday", "tuesday", "wednesday", "thursday", "friday"],
+            max_days=2,
+        )
+        wt = _wt_distance(32.0, sessions=4)
+        # Must not crash.
+        plan = _plan_with_profile(wt, profile)
+        assert "SCHEDULE_CONSTRAINT_LIMITED" in plan.reason_codes, (
+            "Impossible constraints must produce SCHEDULE_CONSTRAINT_LIMITED"
+        )
+        # Running sessions must not exceed available days.
+        running = [s for s in plan.sessions if s.workout_type != "rest"]
+        assert len(running) <= 2
+        assert len(plan.sessions) == 7  # always 7-day plan

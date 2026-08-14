@@ -997,3 +997,90 @@ def test_reprise_exit_with_baseline_intensity_allowed():
     assert wt.target_km is not None
     assert wt.allow_intensity is True
     assert "REPRISE_EXIT_INTENSITY_RETURNS" in wt.reason_codes
+
+
+# ---------------------------------------------------------------------------
+# U. WeeklyTarget.continuity_state contract — explicit propagation from TrainingState
+# ---------------------------------------------------------------------------
+
+class TestContinuityStateContract:
+    """Verify that WeeklyTarget.continuity_state is transported directly from
+    TrainingState without any reinterpretation.
+
+    Architectural guarantee:
+      reason_codes are diagnostic artefacts ONLY.
+      WeeklyTarget.continuity_state == TrainingState.continuity_state (always).
+    """
+
+    @pytest.mark.parametrize("continuity", [
+        "no_history", "deep_reprise", "partial_reprise", "reprise_exit", "normal",
+    ])
+    def test_continuity_state_propagated_for_all_values(self, continuity: str):
+        """WeeklyTarget.continuity_state must equal TrainingState.continuity_state."""
+        hist, prof = _profile()
+        # Build a TrainingState with the desired continuity_state.
+        from training_v2.training_state import TrainingState as TS
+        ts = TS(
+            reference_date=REF,
+            continuity_state=continuity,
+            continuity_confidence="medium",
+            load_state="balanced",
+            load_confidence="medium",
+            overall_confidence="medium",
+            days_since_last_run=None,
+            recent_7d_km=None,
+            recent_30d_km=None,
+            acute_load=None,
+            chronic_weekly_load=None,
+            acwr=None,
+            reason_codes=[],
+        )
+        goal = _goal()
+        period = build_periodization(goal, REF, training_state=ts, cycle_anchor_date=CYCLE_ANCHOR)
+        wt = build_weekly_target(
+            runner_profile=prof,
+            training_history=hist,
+            training_state=ts,
+            plan_goal=goal,
+            periodization=period,
+            reference_date=REF,
+        )
+        assert wt.continuity_state == continuity, (
+            f"Expected continuity_state={continuity!r}, got {wt.continuity_state!r}"
+        )
+
+    def test_reason_codes_do_not_influence_continuity_state(self):
+        """Arbitrary reason_codes on TrainingState must not change WeeklyTarget.continuity_state."""
+        hist, prof = _profile()
+        from training_v2.training_state import TrainingState as TS
+        ts_normal = TS(
+            reference_date=REF,
+            continuity_state="normal",
+            continuity_confidence="high",
+            load_state="balanced",
+            load_confidence="high",
+            overall_confidence="high",
+            days_since_last_run=None,
+            recent_7d_km=None,
+            recent_30d_km=None,
+            acute_load=None,
+            chronic_weekly_load=None,
+            acwr=None,
+            # Deliberately misleading reason_codes that used to confuse _infer_continuity
+            reason_codes=["DEEP_REPRISE_PRIOR_TRAINED", "PARTIAL_REPRISE_DISTANCE_BASED",
+                          "continuity_deep_reprise", "continuity_partial_reprise"],
+        )
+        goal = _goal()
+        period = build_periodization(goal, REF, training_state=ts_normal, cycle_anchor_date=CYCLE_ANCHOR)
+        wt = build_weekly_target(
+            runner_profile=prof,
+            training_history=hist,
+            training_state=ts_normal,
+            plan_goal=goal,
+            periodization=period,
+            reference_date=REF,
+        )
+        # continuity_state=normal must not be overridden by misleading reason_codes
+        assert wt.continuity_state == "normal", (
+            f"reason_codes must not influence continuity_state; got {wt.continuity_state!r}"
+        )

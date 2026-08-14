@@ -479,20 +479,124 @@ def _get_skeleton(n: int) -> list[tuple[str, str]]:
 def _assign_days(
     session_slots: list[str],  # ordered session types to fill (no rest)
     runner_profile: RunnerProfile,
-) -> list[tuple[str, str]]:
-    """Assign running session types to days, respecting RunnerProfile constraints.
+) -> tuple[list[tuple[str, str]], list[str]]:
+    """Assign session types to days, respecting RunnerProfile constraints.
 
-    Returns a full 7-day list [(day, workout_type)] including rest days.
+    Returns ([(day, workout_type), ...] for all 7 days, extra_reason_codes).
 
-    V1 simple strategy:
-      1. If RunnerProfile has preferred_days_per_week or max_days_per_week,
-         validate and respect them.
-      2. Use a deterministic skeleton from _WEEK_SKELETONS.
-      3. Swap quality away from consecutive hard days where possible.
+    Strategy
+    --------
+    1. Treat availability_constraints items that match day names as unavailable days.
+    2. Apply max_days_per_week cap to the candidate set.
+    3. Select ``n`` days from candidates with maximum even spacing.
+    4. Assign session types: long_easy → last day; quality → not immediately before
+       long_easy when another position is available.
+    5. If constraints make it impossible to fit all sessions, emit
+       SCHEDULE_CONSTRAINT_LIMITED and use the best available days.
     """
     n = len(session_slots)
-    skeleton = _get_skeleton(n)
-    return skeleton[:]
+    extra_reason_codes: list[str] = []
+
+    # --- parse unavailable days from availability_constraints ---------------
+    # Any constraint string that matches a day name is treated as an unavailable day.
+    unavailable: set[str] = {
+        c.lower() for c in runner_profile.availability_constraints
+        if c.lower() in set(_ALL_DAYS)
+    }
+
+    # --- candidate days in week order ---------------------------------------
+    candidates: list[str] = [d for d in _ALL_DAYS if d not in unavailable]
+
+    # --- apply max_days_per_week cap ----------------------------------------
+    max_days = runner_profile.max_days_per_week
+    if max_days is not None and len(candidates) > max_days:
+        # Retain max_days days, evenly distributed across the week.
+        step = len(candidates) / max_days
+        indices = sorted({min(int(round(i * step)), len(candidates) - 1) for i in range(max_days)})
+        # Ensure we have exactly max_days indices (rounding may produce ties).
+        if len(indices) < max_days:
+            for i in range(len(candidates)):
+                if i not in set(indices):
+                    indices.append(i)
+                if len(indices) >= max_days:
+                    break
+            indices = sorted(indices[:max_days])
+        candidates = [candidates[i] for i in indices]
+
+    # --- check feasibility --------------------------------------------------
+    if n > len(candidates):
+        extra_reason_codes.append("SCHEDULE_CONSTRAINT_LIMITED")
+        n = len(candidates)
+        session_slots = list(session_slots[:n])
+
+    # --- select n days with maximum even spacing ----------------------------
+    if n == 0:
+        selected: list[str] = []
+    elif n >= len(candidates):
+        selected = list(candidates)
+    elif n == 1:
+        # Prefer the last available day (typically Sunday — long run day).
+        selected = [candidates[-1]]
+    else:
+        # Evenly spaced: pick indices 0, step, 2*step, … across candidates.
+        step_f = (len(candidates) - 1) / (n - 1)
+        raw_indices = [int(round(i * step_f)) for i in range(n)]
+        # Deduplicate while preserving spread.
+        seen: set[int] = set()
+        indices_dedup: list[int] = []
+        for idx in raw_indices:
+            adj = idx
+            while adj in seen and adj < len(candidates) - 1:
+                adj += 1
+            if adj not in seen:
+                seen.add(adj)
+                indices_dedup.append(adj)
+        # Fill remaining slots if deduplication reduced count.
+        if len(indices_dedup) < n:
+            for i in range(len(candidates)):
+                if i not in seen:
+                    seen.add(i)
+                    indices_dedup.append(i)
+                if len(indices_dedup) >= n:
+                    break
+        indices_dedup = sorted(indices_dedup[:n])
+        selected = [candidates[i] for i in indices_dedup]
+
+    # --- assign session types to selected days ------------------------------
+    ordered_slots = _order_session_slots(list(session_slots))
+
+    # Build full 7-day list.
+    day_to_type: dict[str, str] = dict(zip(selected, ordered_slots))
+    result: list[tuple[str, str]] = [(d, day_to_type.get(d, "rest")) for d in _ALL_DAYS]
+
+    return result, extra_reason_codes
+
+
+def _order_session_slots(slots: list[str]) -> list[str]:
+    """Order session types for day assignment.
+
+    Rules (applied in order):
+    1. long_easy is placed last (furthest in the week — typically Sunday).
+    2. quality is not placed immediately before long_easy when another
+       position is available (avoids quality→long_easy back-to-back).
+    """
+    if not slots:
+        return slots
+
+    # Put long_easy at end.
+    if "long_easy" in slots:
+        slots.remove("long_easy")
+        slots.append("long_easy")
+
+    # If quality would be second-to-last (immediately before long_easy), move it
+    # to an earlier position when a non-quality/non-long_easy slot exists there.
+    if len(slots) >= 3 and slots[-2] == "quality":
+        for i in range(len(slots) - 2):
+            if slots[i] not in ("quality", "long_easy"):
+                slots[i], slots[-2] = slots[-2], slots[i]
+                break
+
+    return slots
 
 
 # ---------------------------------------------------------------------------
@@ -790,7 +894,7 @@ def build_weekly_plan(
     target_basis = weekly_target.target_basis
     allow_intensity = weekly_target.allow_intensity
     n_sessions = weekly_target.target_sessions
-    continuity = _infer_continuity(weekly_target)
+    continuity = weekly_target.continuity_state
     goal_type = plan_goal.goal_type.value if hasattr(plan_goal.goal_type, "value") else str(plan_goal.goal_type)
     phase = periodization.phase
 
@@ -811,6 +915,10 @@ def build_weekly_plan(
         # reprise_exit or normal
         skeleton = _get_skeleton(n_sessions)
         skeleton = _apply_phase_modulation(skeleton, phase, allow_intensity)
+        # Re-assign days respecting RunnerProfile constraints
+        session_types = [t for _, t in skeleton if t != "rest"]
+        skeleton, constraint_codes = _assign_days(session_types, runner_profile)
+        reason_codes = list(reason_codes) + constraint_codes
         sessions, reason_codes = _route_normal(
             weekly_target, skeleton, goal_type, allow_intensity, reason_codes, phase
         )
@@ -848,24 +956,6 @@ def build_weekly_plan(
 # ---------------------------------------------------------------------------
 # Routing helpers
 # ---------------------------------------------------------------------------
-
-def _infer_continuity(weekly_target: WeeklyTarget) -> str:
-    """Infer the continuity state from WeeklyTarget reason codes.
-
-    WeeklyTarget embeds continuity reason codes in its reason_codes tuple.
-    We scan for known codes; fall back to "normal".
-    """
-    codes = set(weekly_target.reason_codes)
-    if "continuity_deep_reprise" in codes or "continuity_no_history" in codes:
-        return "deep_reprise"
-    if "continuity_partial_reprise" in codes:
-        return "partial_reprise"
-    if "continuity_reprise_exit" in codes:
-        return "reprise_exit"
-    # If target_basis == "duration" with allow_intensity=False, treat as reprise-like
-    # but let normal routing handle it (easy-only enforcement is done via allow_intensity).
-    return "normal"
-
 
 def _route_reprise_deep(
     weekly_target: WeeklyTarget,

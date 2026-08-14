@@ -1338,12 +1338,15 @@ Aucun équivalent fictif en V2. La baseline doit être observée ou None.
 
 ## 28) PR #131 — WorkoutGenerator V2 — IMPLEMENTED / PENDING MERGE
 
-HEAD main au départ de #131 : `658b50ec3733cd40ff9d993c9b8541abe3344af0` (#130 merged)
+HEAD main au départ de #131 : `658b50ec3733cd40ff9d993c9b8541abe3344af0` (#130 merged)  
+HEAD après correction audit : `e4b1623a…` + corrections contrat (voir §29b)
 
 Fichiers livrés :
+- `backend/training_v2/weekly_target.py` — étendu : champ `continuity_state` ajouté à `WeeklyTarget`
 - `backend/training_v2/workout_generator.py` — couche WorkoutGenerator V2
 - `backend/training_v2/__init__.py` — exports PR131
-- `backend/tests/test_workout_generator_v2.py` — 87 tests (87 passed, 0 failed)
+- `backend/tests/test_workout_generator_v2.py` — 99 tests (99 passed, 0 failed)
+- `backend/tests/test_weekly_target_v2.py` — étendu : section U (7 tests contrat continuity_state)
 - `RUNINDEX_PR131_REPORT.md`
 
 ---
@@ -1395,6 +1398,62 @@ Cap : `LONG_RUN_MAX_FRACTION = 0.45` (protection faible volume).
 - 3 séances maximum en deep_reprise
 - Séance la plus longue en dimanche
 - Somme exacte (NO_ROUNDING_DRIFT)
+
+---
+
+## 29b) Décisions architecturales permanentes — Corrections audit PR #131
+
+### `WeeklyTarget.continuity_state` — contrat explicite entre couches
+
+```python
+WeeklyTarget.continuity_state: str
+# Valeurs : no_history | deep_reprise | partial_reprise | reprise_exit | normal
+# Source : training_state.continuity_state (transport direct, aucune réinterprétation)
+```
+
+Ce champ est le **signal de routage officiel** entre TrainingState → WeeklyTarget → WorkoutGenerator.
+
+`build_weekly_target()` :
+```python
+continuity_state = training_state.continuity_state  # direct, no mapping
+```
+
+`build_weekly_plan()` :
+```python
+continuity = weekly_target.continuity_state  # direct, no inference
+```
+
+### reason_codes MUST NOT be used as hidden business-state transport
+
+**Décision permanente :**
+
+> `reason_codes` are diagnostic / explanatory artefacts ONLY.
+>
+> Any business-state signal that must cross layer boundaries MUST be
+> transported as an explicit named field on the contract model.
+>
+> `reason_codes` MUST NOT be scanned to infer or route business logic.
+> This applies to WeeklyTarget, WeeklyPlan, TrainingState, and all future
+> contract models in the training_v2 layer.
+
+`_infer_continuity()` est supprimé définitivement.  
+Tout futur state-routing doit passer par un champ explicite.
+
+### `_assign_days()` — assignation déterministe respectant RunnerProfile
+
+`_assign_days(session_slots, runner_profile)` retourne
+`([(day, workout_type), ...], extra_reason_codes)`.
+
+Stratégie :
+1. `availability_constraints` → jours non disponibles exclus
+2. `max_days_per_week` → cap du nombre de jours candidats
+3. Sélection de `n` jours à espacement maximal (déterministe)
+4. `long_easy` → dernier jour sélectionné
+5. `quality` → non adjacent à `long_easy` si possible
+
+Si les contraintes sont impossibles :
+- `SCHEDULE_CONSTRAINT_LIMITED` émis dans `plan.reason_codes`
+- Meilleur plan produit sans crash
 
 ---
 
