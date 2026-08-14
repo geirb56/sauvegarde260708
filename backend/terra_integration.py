@@ -36,10 +36,9 @@ from typing import Optional
 
 import httpx
 
-# Re-use the pure computation engines that are already in the project.
 from engine.readiness_engine import compute_readiness
-from engine.training_load_engine import compute_acwr, compute_training_load_score
 from engine.workout_selector import select_workout
+from training_v2.training_load import build_training_load
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +51,34 @@ TERRA_API_BASE = os.environ.get("TERRA_API_BASE_URL", "https://api.tryterra.co/v
 
 # HTTP timeout (seconds) for Terra API requests.
 TERRA_TIMEOUT = 20.0
+
+
+def _training_load_score_from_acwr(acwr: Optional[float]) -> Optional[float]:
+    """Map ACWR to the legacy 0-100 score without fabricating an ACWR value."""
+    if acwr is None:
+        return None
+    if 0.8 <= acwr <= 1.3:
+        score = 100.0
+    elif acwr > 1.3:
+        score = max(0.0, 100.0 - (acwr - 1.3) * 100.0)
+    else:
+        score = max(0.0, 100.0 - (0.8 - acwr) * 100.0)
+    return round(score, 1)
+
+
+def _workout_to_v2_activity(workout: dict) -> dict:
+    """Adapt a legacy workout record to the TrainingLoad V2 activity contract."""
+    activity = {
+        "activity_type": workout.get("activity_type") or workout.get("sport") or workout.get("type") or "running",
+        "start_time": workout.get("start_time") or workout.get("date"),
+    }
+    duration_minutes = workout.get("duration_minutes")
+    if isinstance(duration_minutes, (int, float)) and not isinstance(duration_minutes, bool):
+        activity["duration_s"] = float(duration_minutes) * 60.0
+    distance_km = workout.get("distance_km")
+    if isinstance(distance_km, (int, float)) and not isinstance(distance_km, bool):
+        activity["distance_m"] = float(distance_km) * 1000.0
+    return activity
 
 
 # ---------------------------------------------------------------------------
@@ -409,7 +436,9 @@ async def computeRecoveryScore(user_id: str, db) -> dict:
 
     # --- Compute training load score ---
     load_result = await computeTrainingLoad(user_id, db)
-    training_load_score = load_result.get("training_load_score", 70.0)
+    training_load_score = load_result.get("training_load_score")
+    if training_load_score is None:
+        training_load_score = 70.0
 
     # --- HRV score (0-100): normalise relative to baseline ---
     # At baseline → 100; below baseline → proportionally lower; above baseline → up to 120 (rewarded) but clamped to 100.
@@ -488,7 +517,7 @@ async def computeTrainingLoad(user_id: str, db) -> dict:
 
     Returns
     -------
-    Dict: ``{"acwr": float, "training_load_score": float,
+    Dict: ``{"acwr": float | None, "training_load_score": float | None,
              "status": str, "computed_at": str}``
     """
     cutoff = datetime.now(timezone.utc) - timedelta(days=28)
@@ -509,18 +538,18 @@ async def computeTrainingLoad(user_id: str, db) -> dict:
             user_id,
         )
 
-    acwr = compute_acwr(workouts)
-    training_load_score = compute_training_load_score(acwr)
+    now = datetime.now(timezone.utc)
+    today_date = now.date()
+    load_snapshot = build_training_load(
+        [_workout_to_v2_activity(workout) for workout in workouts],
+        today_date,
+    )
+    acwr = load_snapshot.acwr
+    training_load_score = _training_load_score_from_acwr(acwr)
+    status = load_snapshot.status
 
-    if acwr > 1.3:
-        status = "overtraining_risk"
-    elif acwr < 0.8:
-        status = "undertraining"
-    else:
-        status = "optimal"
-
-    computed_at = datetime.now(timezone.utc).isoformat()
-    today = datetime.now(timezone.utc).date().isoformat()
+    computed_at = now.isoformat()
+    today = today_date.isoformat()
 
     result = {
         "user_id": user_id,
@@ -539,7 +568,7 @@ async def computeTrainingLoad(user_id: str, db) -> dict:
     )
 
     logger.info(
-        "computeTrainingLoad: user=%s acwr=%.3f score=%.1f status=%s",
+        "computeTrainingLoad: user=%s acwr=%s score=%s status=%s",
         user_id, acwr, training_load_score, status,
     )
     return result
@@ -571,7 +600,7 @@ async def generateWorkoutRecommendation(user_id: str, db) -> dict:
     load_result = await computeTrainingLoad(user_id, db)
 
     readiness = recovery_result.get("readiness", 70.0)
-    acwr = load_result.get("acwr", 1.0)
+    acwr = load_result.get("acwr")
 
     recommendation = select_workout(readiness, acwr)
 

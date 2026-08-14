@@ -17,7 +17,7 @@ MODERATE_READINESS_THRESHOLD = 50
 MAX_SAFE_ACWR = 1.3
 
 
-def select_workout(readiness: float, acwr: float) -> dict:
+def select_workout(readiness: float, acwr: float | None) -> dict:
     """Return a workout recommendation for today.
 
     Parameters
@@ -25,7 +25,7 @@ def select_workout(readiness: float, acwr: float) -> dict:
     readiness:
         Readiness score in [0, 100].
     acwr:
-        Acute:Chronic Workload Ratio.
+        Acute:Chronic Workload Ratio, or None when unavailable.
 
     Returns
     -------
@@ -34,7 +34,7 @@ def select_workout(readiness: float, acwr: float) -> dict:
         ``duration``  – recommended duration in minutes
         ``intensity`` – "low" | "moderate" | "high"
     """
-    if readiness > HIGH_READINESS_THRESHOLD and acwr < MAX_SAFE_ACWR:
+    if readiness > HIGH_READINESS_THRESHOLD and acwr is not None and acwr < MAX_SAFE_ACWR:
         workout_type = "interval"
         duration = 45
         intensity = "high"
