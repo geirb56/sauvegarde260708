@@ -470,6 +470,12 @@ def _correct_rounding_drift_duration(
 _ALL_DAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 
 
+def _get_skeleton(n: int) -> list[tuple[str, str]]:
+    """Return the week skeleton for ``n`` running sessions (clamped to 1–6)."""
+    clamped = min(6, max(1, n))
+    return _WEEK_SKELETONS[clamped]
+
+
 def _assign_days(
     session_slots: list[str],  # ordered session types to fill (no rest)
     runner_profile: RunnerProfile,
@@ -485,7 +491,7 @@ def _assign_days(
       3. Swap quality away from consecutive hard days where possible.
     """
     n = len(session_slots)
-    skeleton = _WEEK_SKELETONS.get(n, _WEEK_SKELETONS[min(6, max(1, n))])
+    skeleton = _get_skeleton(n)
     return skeleton[:]
 
 
@@ -659,6 +665,7 @@ def _build_reprise_sessions_duration(
     day_to_dur = dict(zip(active_days, durations_sorted))
 
     run_walk_code = ("run_walk_allowed",) if allow_run_walk else ()
+    min_dur = min(durations_sorted)
     sessions: list[WorkoutPrescription] = []
 
     for day in _ALL_DAYS:
@@ -667,7 +674,7 @@ def _build_reprise_sessions_duration(
         else:
             dur = day_to_dur[day]
             sessions.append(_make_running_session(
-                day, "recovery" if dur == min(durations_sorted) else "easy",
+                day, "recovery" if dur == min_dur else "easy",
                 duration_minutes=dur,
                 reason_codes=base_reason_codes + run_walk_code,
             ))
@@ -703,6 +710,7 @@ def _build_reprise_sessions_distance(
     # Distances sorted ascending, assigned to days sorted ascending
     distances_sorted = sorted(round(target_km * s, 1) for s in splits)
     day_to_km = dict(zip(active_days, distances_sorted))
+    min_km = min(distances_sorted)
 
     sessions: list[WorkoutPrescription] = []
     for day in _ALL_DAYS:
@@ -711,7 +719,7 @@ def _build_reprise_sessions_distance(
         else:
             km = day_to_km[day]
             sessions.append(_make_running_session(
-                day, "recovery" if km == min(distances_sorted) else "easy",
+                day, "recovery" if km == min_km else "easy",
                 distance_km=km,
                 reason_codes=base_reason_codes,
             ))
@@ -740,10 +748,8 @@ def _apply_phase_modulation(
             for d, t in skeleton
         ]
     if phase == PeriodizationPhase.race:
-        # Conservative: only 2 easy sessions in race week
-        running_types = [t for _, t in skeleton if t != "rest"]
-        # Use minimal 2-session skeleton
-        return _WEEK_SKELETONS.get(min(2, len(running_types)), _WEEK_SKELETONS[2])
+        # Conservative: 2-session easy week regardless of incoming session count.
+        return _WEEK_SKELETONS[_RACE_WEEK_SESSIONS]
     return skeleton
 
 
@@ -803,7 +809,7 @@ def build_weekly_plan(
 
     else:
         # reprise_exit or normal
-        skeleton = _WEEK_SKELETONS.get(n_sessions, _WEEK_SKELETONS[min(6, max(1, n_sessions))])
+        skeleton = _get_skeleton(n_sessions)
         skeleton = _apply_phase_modulation(skeleton, phase, allow_intensity)
         sessions, reason_codes = _route_normal(
             weekly_target, skeleton, goal_type, allow_intensity, reason_codes, phase
