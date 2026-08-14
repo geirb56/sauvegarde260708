@@ -476,6 +476,40 @@ def _get_skeleton(n: int) -> list[tuple[str, str]]:
     return _WEEK_SKELETONS[clamped]
 
 
+def _select_evenly(candidates: list[str], n: int) -> list[str]:
+    """Select ``n`` evenly spaced elements from ``candidates`` (preserving order).
+
+    Deterministic: same inputs always produce the same output.
+    When n >= len(candidates), returns all candidates.
+    When n == 1, returns the last element (preferred end-of-week placement).
+    """
+    if n <= 0:
+        return []
+    if n >= len(candidates):
+        return list(candidates)
+    if n == 1:
+        return [candidates[-1]]
+    step_f = (len(candidates) - 1) / (n - 1)
+    raw_indices = [int(round(i * step_f)) for i in range(n)]
+    seen: set[int] = set()
+    dedup: list[int] = []
+    for idx in raw_indices:
+        adj = idx
+        while adj in seen and adj < len(candidates) - 1:
+            adj += 1
+        if adj not in seen:
+            seen.add(adj)
+            dedup.append(adj)
+    if len(dedup) < n:
+        for i in range(len(candidates)):
+            if i not in seen:
+                seen.add(i)
+                dedup.append(i)
+            if len(dedup) >= n:
+                break
+    return [candidates[i] for i in sorted(dedup[:n])]
+
+
 def _assign_days(
     session_slots: list[str],  # ordered session types to fill (no rest)
     runner_profile: RunnerProfile,
@@ -486,44 +520,37 @@ def _assign_days(
 
     Strategy
     --------
-    1. Treat availability_constraints items that match day names as unavailable days.
-    2. Apply max_days_per_week cap to the candidate set.
-    3. Select ``n`` days from candidates with maximum even spacing.
-    4. Assign session types: long_easy → last day; quality → not immediately before
-       long_easy when another position is available.
-    5. If constraints make it impossible to fit all sessions, emit
+    1. Treat availability_constraints items that exactly match a day name
+       (monday…sunday) as unavailable days.  All 7 days minus those form
+       the candidate pool — max_days_per_week does NOT reduce this pool.
+    2. Apply max_days_per_week as a CAP on the SESSION COUNT (n) only.
+    3. Select ``n`` days from the full candidate pool with maximum even spacing.
+    4. Honour preferred_long_run_day: if set, available, and the week contains
+       a long_easy session, pin long_easy to that day and distribute the
+       remaining sessions evenly.
+    5. Avoid placing quality on the calendar day immediately before long_easy
+       when another arrangement is possible.
+    6. If constraints make it impossible to fit all sessions, emit
        SCHEDULE_CONSTRAINT_LIMITED and use the best available days.
     """
     n = len(session_slots)
     extra_reason_codes: list[str] = []
 
-    # --- parse unavailable days from availability_constraints ---------------
-    # Any constraint string that matches a day name is treated as an unavailable day.
+    # --- parse unavailable days (V1 contract: exact day-name match only) ----
     unavailable: set[str] = {
         c.lower() for c in runner_profile.availability_constraints
         if c.lower() in set(_ALL_DAYS)
     }
 
-    # --- candidate days in week order ---------------------------------------
+    # --- full candidate pool (7 days minus unavailable) ---------------------
+    # max_days_per_week does NOT reduce this pool; it caps n instead.
     candidates: list[str] = [d for d in _ALL_DAYS if d not in unavailable]
 
-    # --- apply max_days_per_week cap ----------------------------------------
+    # --- max_days_per_week: cap on SESSION COUNT, not on candidate days -----
     max_days = runner_profile.max_days_per_week
-    if max_days is not None and len(candidates) > max_days:
-        # Retain max_days days, evenly distributed across the week.
-        step = len(candidates) / max_days
-        indices = sorted({min(int(round(i * step)), len(candidates) - 1) for i in range(max_days)})
-        # Ensure we have exactly max_days indices (rounding may produce ties).
-        if len(indices) < max_days:
-            indices_set = set(indices)
-            for i in range(len(candidates)):
-                if i not in indices_set:
-                    indices.append(i)
-                    indices_set.add(i)
-                if len(indices) >= max_days:
-                    break
-            indices = sorted(indices[:max_days])
-        candidates = [candidates[i] for i in indices]
+    if max_days is not None and n > max_days:
+        n = max_days
+        session_slots = list(session_slots[:n])
 
     # --- check feasibility --------------------------------------------------
     if n > len(candidates):
@@ -531,56 +558,79 @@ def _assign_days(
         n = len(candidates)
         session_slots = list(session_slots[:n])
 
-    # --- select n days with maximum even spacing ----------------------------
     if n == 0:
-        selected: list[str] = []
-    elif n >= len(candidates):
-        selected = list(candidates)
-    elif n == 1:
-        # Prefer the last available day (typically Sunday — long run day).
-        selected = [candidates[-1]]
+        return [(d, "rest") for d in _ALL_DAYS], extra_reason_codes
+
+    # --- preferred_long_run_day ---------------------------------------------
+    # If the week contains long_easy and the runner has a valid preferred day
+    # that is not unavailable, pin long_easy to that day.
+    has_long_easy = "long_easy" in session_slots
+    pref_long_day: Optional[str] = None
+    if has_long_easy and runner_profile.preferred_long_run_day:
+        pref = runner_profile.preferred_long_run_day.strip().lower()
+        if pref in set(_ALL_DAYS) and pref not in unavailable:
+            pref_long_day = pref
+
+    # --- select n days ------------------------------------------------------
+    _day_order: dict[str, int] = {d: i for i, d in enumerate(_ALL_DAYS)}
+
+    if n >= len(candidates):
+        selected: list[str] = list(candidates)
+    elif pref_long_day is not None:
+        # Pin pref_long_day; select n-1 others evenly from remaining candidates.
+        remaining = [d for d in candidates if d != pref_long_day]
+        others = _select_evenly(remaining, n - 1)
+        selected = sorted(others + [pref_long_day], key=lambda d: _day_order[d])
     else:
-        # Evenly spaced: pick indices 0, step, 2*step, … across candidates.
-        step_f = (len(candidates) - 1) / (n - 1)
-        raw_indices = [int(round(i * step_f)) for i in range(n)]
-        # Deduplicate while preserving spread.
-        seen: set[int] = set()
-        indices_dedup: list[int] = []
-        for idx in raw_indices:
-            adj = idx
-            while adj in seen and adj < len(candidates) - 1:
-                adj += 1
-            if adj not in seen:
-                seen.add(adj)
-                indices_dedup.append(adj)
-        # Fill remaining slots if deduplication reduced count.
-        if len(indices_dedup) < n:
-            for i in range(len(candidates)):
-                if i not in seen:
-                    seen.add(i)
-                    indices_dedup.append(i)
-                if len(indices_dedup) >= n:
-                    break
-        indices_dedup = sorted(indices_dedup[:n])
-        selected = [candidates[i] for i in indices_dedup]
+        selected = _select_evenly(candidates, n)
 
-    # --- assign session types to selected days ------------------------------
-    ordered_slots = _order_session_slots(list(session_slots))
+    # --- determine long_easy day --------------------------------------------
+    long_easy_day: Optional[str] = None
+    if has_long_easy:
+        long_easy_day = pref_long_day if pref_long_day is not None else selected[-1]
 
-    # Build full 7-day list.
-    day_to_type: dict[str, str] = dict(zip(selected, ordered_slots))
+    # --- build non-long slot assignment -------------------------------------
+    non_long_days = [d for d in selected if d != long_easy_day]
+    non_long_slots: list[str] = [s for s in session_slots if s != "long_easy"]
+
+    # Quality adjacency rule: avoid quality on the calendar day immediately
+    # before long_easy_day when another arrangement is possible.
+    if long_easy_day is not None and len(non_long_days) >= 2 and "quality" in non_long_slots:
+        long_pos = _day_order[long_easy_day]
+        days_before_long = [d for d in non_long_days if _day_order[d] < long_pos]
+        if days_before_long:
+            adjacent_day = max(days_before_long, key=lambda d: _day_order[d])
+            adj_idx = non_long_days.index(adjacent_day)
+            if non_long_slots[adj_idx] == "quality":
+                for i in range(len(non_long_slots)):
+                    if i != adj_idx and non_long_slots[i] not in ("quality", "long_easy"):
+                        non_long_slots[i], non_long_slots[adj_idx] = (
+                            non_long_slots[adj_idx],
+                            non_long_slots[i],
+                        )
+                        break
+
+    # --- build final day-to-type mapping ------------------------------------
+    day_to_type: dict[str, str] = {}
+    if long_easy_day is not None:
+        day_to_type[long_easy_day] = "long_easy"
+    for day, slot in zip(non_long_days, non_long_slots):
+        day_to_type[day] = slot
+
     result: list[tuple[str, str]] = [(d, day_to_type.get(d, "rest")) for d in _ALL_DAYS]
-
     return result, extra_reason_codes
 
 
 def _order_session_slots(slots: list[str]) -> list[str]:
-    """Order session types for day assignment.
+    """Order session types for day assignment (legacy helper, kept for reference).
 
     Rules (applied in order):
     1. long_easy is placed last (furthest in the week — typically Sunday).
     2. quality is not placed immediately before long_easy when another
        position is available (avoids quality→long_easy back-to-back).
+
+    Note: _assign_days implements the canonical ordering logic directly.
+    This function is retained for use in potential future callers.
     """
     if not slots:
         return slots
@@ -745,37 +795,41 @@ def _build_reprise_sessions_duration(
     n_sessions: int,
     allow_run_walk: bool,
     base_reason_codes: tuple[str, ...],
-) -> list[WorkoutPrescription]:
+    runner_profile: RunnerProfile,
+) -> tuple[list[WorkoutPrescription], list[str]]:
     """Build a reprise (deep_reprise / partial_reprise) duration-based week.
 
     - easy-only (recovery / easy)
     - run/walk noted in reason_codes when allow_run_walk=True
-    - sessions placed on tue/thu/sun (3) or tue/sun (2) or mon/wed/fri/sun (4)
+    - day placement delegates to _assign_days() so that availability_constraints
+      and max_days_per_week are respected for ALL reprise branches
     - no quality, no long_easy distinction (all sessions are "easy" or "recovery")
+
+    Returns (sessions, extra_reason_codes).
     """
-    durations = _split_durations(total_minutes, n_sessions)
-    durations_sorted = sorted(durations)  # ascending: short first
-
-    # Day placement by session count
-    day_placements: dict[int, list[str]] = {
-        1: ["sunday"],
-        2: ["tuesday", "sunday"],
-        3: ["tuesday", "thursday", "sunday"],
-        4: ["tuesday", "thursday", "saturday", "sunday"],
-    }
+    # Cap at domain maximum for reprise (4 sessions).
     n = min(n_sessions, 4)
-    active_days = day_placements.get(n, day_placements[3])
-    rest_days = [d for d in _ALL_DAYS if d not in active_days]
 
-    # Map day → duration (short durations to short days, longest to last)
+    # Delegate day selection to the common scheduler.
+    # Reprise sessions are all "easy" from a scheduling perspective.
+    slots = ["easy"] * n
+    skeleton, extra_codes = _assign_days(slots, runner_profile)
+    active_days = [d for d, t in skeleton if t != "rest"]
+    actual_n = len(active_days)  # may be < n if constraints further reduced it
+
+    # Split durations using the actual session count after constraint application.
+    durations = _split_durations(total_minutes, actual_n)
+    durations_sorted = sorted(durations)  # ascending: shorter sessions earlier in week
+
+    # Map day → duration (short durations to early days, longest to last)
     day_to_dur = dict(zip(active_days, durations_sorted))
 
     run_walk_code = ("run_walk_allowed",) if allow_run_walk else ()
-    min_dur = min(durations_sorted)
-    sessions: list[WorkoutPrescription] = []
+    min_dur = min(durations_sorted) if durations_sorted else 0
 
+    sessions: list[WorkoutPrescription] = []
     for day in _ALL_DAYS:
-        if day in rest_days:
+        if day not in day_to_dur:
             sessions.append(_make_rest(day))
         else:
             dur = day_to_dur[day]
@@ -785,42 +839,47 @@ def _build_reprise_sessions_duration(
                 reason_codes=base_reason_codes + run_walk_code,
             ))
 
-    return sessions
+    return sessions, extra_codes
 
 
 def _build_reprise_sessions_distance(
     target_km: float,
     n_sessions: int,
     base_reason_codes: tuple[str, ...],
-) -> list[WorkoutPrescription]:
-    """Build a partial_reprise distance-based week: easy-only, no quality."""
-    # Proportional split: 30% / 30% / 40% ascending for 3 sessions
+    runner_profile: RunnerProfile,
+) -> tuple[list[WorkoutPrescription], list[str]]:
+    """Build a partial_reprise distance-based week: easy-only, no quality.
+
+    Day placement delegates to _assign_days() so that availability_constraints
+    and max_days_per_week are respected for ALL reprise branches.
+
+    Returns (sessions, extra_reason_codes).
+    """
     splits_map: dict[int, list[float]] = {
         1: [1.0],
         2: [0.40, 0.60],
         3: [0.28, 0.32, 0.40],
         4: [0.20, 0.25, 0.25, 0.30],
     }
+    # Cap at domain maximum for reprise (4 sessions).
     n = min(n_sessions, 4)
-    splits = splits_map.get(n, splits_map[3])
 
-    day_placements: dict[int, list[str]] = {
-        1: ["sunday"],
-        2: ["tuesday", "sunday"],
-        3: ["tuesday", "thursday", "sunday"],
-        4: ["tuesday", "thursday", "saturday", "sunday"],
-    }
-    active_days = day_placements.get(n, day_placements[3])
-    rest_days = [d for d in _ALL_DAYS if d not in active_days]
+    # Delegate day selection to the common scheduler.
+    slots = ["easy"] * n
+    skeleton, extra_codes = _assign_days(slots, runner_profile)
+    active_days = [d for d, t in skeleton if t != "rest"]
+    actual_n = len(active_days)  # may be < n if constraints further reduced it
 
-    # Distances sorted ascending, assigned to days sorted ascending
+    splits = splits_map.get(actual_n, splits_map.get(min(actual_n, 4), [1.0]))
+
+    # Distances sorted ascending, assigned to days in week order (ascending)
     distances_sorted = sorted(round(target_km * s, 1) for s in splits)
     day_to_km = dict(zip(active_days, distances_sorted))
-    min_km = min(distances_sorted)
+    min_km = min(distances_sorted) if distances_sorted else 0.0
 
     sessions: list[WorkoutPrescription] = []
     for day in _ALL_DAYS:
-        if day in rest_days:
+        if day not in day_to_km:
             sessions.append(_make_rest(day))
         else:
             km = day_to_km[day]
@@ -830,7 +889,7 @@ def _build_reprise_sessions_distance(
                 reason_codes=base_reason_codes,
             ))
 
-    return sessions
+    return sessions, extra_codes
 
 
 # ---------------------------------------------------------------------------
@@ -905,12 +964,12 @@ def build_weekly_plan(
     # --- route by continuity state -----------------------------------------
     if continuity in ("no_history", "deep_reprise"):
         sessions, reason_codes = _route_reprise_deep(
-            weekly_target, n_sessions, allow_intensity, goal_type, reason_codes
+            weekly_target, n_sessions, allow_intensity, goal_type, reason_codes, runner_profile
         )
 
     elif continuity == "partial_reprise":
         sessions, reason_codes = _route_partial_reprise(
-            weekly_target, n_sessions, goal_type, reason_codes
+            weekly_target, n_sessions, goal_type, reason_codes, runner_profile
         )
 
     else:
@@ -965,6 +1024,7 @@ def _route_reprise_deep(
     allow_intensity: bool,
     goal_type: str,
     reason_codes: list[str],
+    runner_profile: RunnerProfile,
 ) -> tuple[list[WorkoutPrescription], list[str]]:
     """Route for deep_reprise / no_history: duration-based, easy-only, run/walk allowed."""
     reason_codes = list(reason_codes)
@@ -972,21 +1032,25 @@ def _route_reprise_deep(
 
     if weekly_target.target_basis == "duration" and weekly_target.target_duration_minutes:
         total_minutes = weekly_target.target_duration_minutes
-        sessions = _build_reprise_sessions_duration(
+        sessions, constraint_codes = _build_reprise_sessions_duration(
             total_minutes=total_minutes,
             n_sessions=min(n_sessions, 3),
             allow_run_walk=True,
             base_reason_codes=("reprise_easy_only",),
+            runner_profile=runner_profile,
         )
+        reason_codes = reason_codes + constraint_codes
         sessions = _correct_rounding_drift_duration(sessions, total_minutes)
     else:
         # Fallback: distance-based easy-only (no_history with distance target)
         target_km = weekly_target.target_km or 0.0
-        sessions = _build_reprise_sessions_distance(
+        sessions, constraint_codes = _build_reprise_sessions_distance(
             target_km=target_km,
             n_sessions=min(n_sessions, 3),
             base_reason_codes=("reprise_easy_only",),
+            runner_profile=runner_profile,
         )
+        reason_codes = reason_codes + constraint_codes
         sessions = _correct_rounding_drift_distance(sessions, target_km)
 
     return sessions, reason_codes
@@ -997,6 +1061,7 @@ def _route_partial_reprise(
     n_sessions: int,
     goal_type: str,
     reason_codes: list[str],
+    runner_profile: RunnerProfile,
 ) -> tuple[list[WorkoutPrescription], list[str]]:
     """Route for partial_reprise: easy-only, distance or duration."""
     reason_codes = list(reason_codes)
@@ -1004,20 +1069,24 @@ def _route_partial_reprise(
 
     if weekly_target.target_basis == "duration" and weekly_target.target_duration_minutes:
         total_minutes = weekly_target.target_duration_minutes
-        sessions = _build_reprise_sessions_duration(
+        sessions, constraint_codes = _build_reprise_sessions_duration(
             total_minutes=total_minutes,
             n_sessions=min(n_sessions, 4),
             allow_run_walk=False,
             base_reason_codes=("reprise_easy_only",),
+            runner_profile=runner_profile,
         )
+        reason_codes = reason_codes + constraint_codes
         sessions = _correct_rounding_drift_duration(sessions, total_minutes)
     else:
         target_km = weekly_target.target_km or 0.0
-        sessions = _build_reprise_sessions_distance(
+        sessions, constraint_codes = _build_reprise_sessions_distance(
             target_km=target_km,
             n_sessions=min(n_sessions, 4),
             base_reason_codes=("reprise_easy_only",),
+            runner_profile=runner_profile,
         )
+        reason_codes = reason_codes + constraint_codes
         sessions = _correct_rounding_drift_distance(sessions, target_km)
 
     return sessions, reason_codes

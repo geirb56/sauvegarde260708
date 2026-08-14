@@ -424,3 +424,167 @@ Le contrat annoncé "respect des contraintes RunnerProfile" n'était pas implém
 3. Si les contraintes rendent impossible le nombre de séances cible :
    `SCHEDULE_CONSTRAINT_LIMITED` est émis dans `plan.reason_codes`.
    Aucun crash. Meilleur plan disponible produit.
+
+---
+
+## 23. Corrections finales assignation des jours (post HEAD 792aba0)
+
+### Problème 3 — max_days_per_week réduisait arbitrairement les jours candidats
+
+**Problème identifié :**
+L'ancienne implémentation de `_assign_days()` utilisait `max_days_per_week` pour
+réduire l'ensemble des jours candidats (de 7 à N jours), avant même de sélectionner
+les séances. Exemple : `max_days_per_week=3` → seuls 3 jours "distribués" restaient
+candidats. Cela ne reflétait pas la sémantique correcte.
+
+**Sémantique correcte :**
+
+```
+max_days_per_week
+= CAP sur le nombre de séances par semaine
+
+≠ liste des jours disponibles
+```
+
+WeeklyTarget.target_sessions est déjà responsable du nombre de séances.
+`max_days_per_week` est un plafond additionnel, pas une liste.
+
+**Correction :**
+
+1. La réduction de candidats via `max_days_per_week` est **supprimée**.
+2. `max_days_per_week` est appliqué uniquement comme plafond sur `n` (nombre de séances) :
+   ```python
+   if max_days is not None and n > max_days:
+       n = max_days
+       session_slots = list(session_slots[:n])
+   ```
+3. Les 7 jours (moins les indisponibles) restent tous candidats.
+4. `_select_evenly()` extrait une nouvelle helper déterministe.
+
+---
+
+### Problème 4 — deep_reprise / partial_reprise utilisaient des jours fixes
+
+**Problème identifié :**
+`_build_reprise_sessions_duration()` et `_build_reprise_sessions_distance()`
+utilisaient des placements de jours hardcodés :
+```python
+{3: ["tuesday", "thursday", "sunday"], 4: ["tuesday", "thursday", "saturday", "sunday"]}
+```
+Ces jours fixes ignoraient complètement `availability_constraints` et `max_days_per_week`.
+
+**Correction :**
+
+1. Les deux fonctions acceptent désormais `runner_profile` comme paramètre.
+2. Elles délèguent le placement des jours à `_assign_days()` :
+   ```python
+   slots = ["easy"] * n
+   skeleton, extra_codes = _assign_days(slots, runner_profile)
+   active_days = [d for d, t in skeleton if t != "rest"]
+   ```
+3. Les durées/distances sont calculées **après** connaître le nombre réel de jours
+   (`actual_n = len(active_days)`), pour s'adapter aux contraintes.
+4. Les codes de contrainte sont propagés vers `reason_codes`.
+5. `_route_reprise_deep()` et `_route_partial_reprise()` acceptent `runner_profile`.
+6. `build_weekly_plan()` passe `runner_profile` aux routes reprise.
+
+---
+
+### Correction 5 — preferred_long_run_day
+
+**Nouveau comportement :**
+
+Si `runner_profile.preferred_long_run_day` est défini, que la semaine contient une
+session `long_easy`, et que le jour préféré est disponible :
+
+1. `long_easy` est épinglé sur `preferred_long_run_day`.
+2. Les `n-1` autres sessions sont réparties uniformément sur les jours restants.
+3. La règle d'adjacency qualité (pas de `quality` juste avant `long_easy`) est
+   appliquée en tenant compte du jour réel de `long_easy` dans le calendrier.
+
+Si `preferred_long_run_day` est indisponible ou absent : fallback déterministe
+normal (`long_easy` → dernier jour sélectionné).
+
+**Contrat V1 (documenté) :**
+> `preferred_long_run_day` est une préférence, jamais une contrainte absolue.
+> Si le jour est indisponible, fallback déterministe sans erreur.
+
+---
+
+### Contrat V1 — availability_constraints (sémantique)
+
+**Convention minimale documentée :**
+
+Si une entrée de `availability_constraints` correspond **exactement** à un nom de
+jour normalisé (`monday`, `tuesday`, `wednesday`, `thursday`, `friday`, `saturday`,
+`sunday`), elle signifie pour `WorkoutGenerator` : **jour indisponible**.
+
+Exemple :
+```python
+availability_constraints = ["monday", "friday"]
+# → lundi et vendredi indisponibles pour la planification
+```
+
+Valeurs non-jour (texte libre comme "pas le soir", "travail mardi matin") :
+→ ignorées silencieusement par `WorkoutGenerator` en V1.
+
+Aucun NLP. Aucun LLM. Aucune heuristique linguistique.
+
+---
+
+### SCHEDULE_CONSTRAINT_LIMITED — sémantique précisée
+
+`SCHEDULE_CONSTRAINT_LIMITED` est émis uniquement quand `availability_constraints`
+(indisponibilités calendaires) réduisent le nombre de jours disponibles en dessous
+du nombre de séances demandé.
+
+Il N'EST PAS émis quand `max_days_per_week` réduit le nombre de séances, car c'est
+un plafond voulu par le coureur (comportement attendu, pas une contrainte impossible).
+
+---
+
+### Tests ajoutés — Section 11 (A–J)
+
+| Test | Cas couvert |
+|---|---|
+| 11A | max_days_per_week comme cap de count, pool de 7 jours préservé |
+| 11A2 | max_days + unavailability : jours ne se réduisent pas à N |
+| 11B | monday indisponible → aucune séance lundi (route normal) |
+| 11C | deep_reprise tuesday indisponible → déplacement, easy/recovery, run_walk, durée exacte |
+| 11D | partial_reprise sunday indisponible → déplacement, easy-only, distance exacte |
+| 11E | preferred_long_run_day=saturday → long_easy samedi |
+| 11F | preferred_long_run_day=saturday indisponible → fallback déterministe |
+| 11G | contraintes impossibles : 5 jours bloqués, target=4 → SCHEDULE_CONSTRAINT_LIMITED |
+| 11G2 | reprise avec 1 seul jour disponible → SCHEDULE_CONSTRAINT_LIMITED |
+| 11H | quality pas adjacent à long_easy si autre disposition possible |
+| 11I | déterminisme normal (4 appels identiques) |
+| 11I2 | déterminisme deep_reprise |
+| 11J | deep_reprise : zéro quality + run_walk_allowed + durée totale exacte |
+| 11J2 | partial_reprise : zéro quality + distance totale exacte |
+
+**Total tests :** 113 (99 existants + 14 nouveaux) — tous PASSED.
+
+---
+
+## 24. Statut final PR #131
+
+| Élément | Statut |
+|---|---|
+| continuity_state source de vérité | ✅ WeeklyTarget.continuity_state |
+| reason_codes non utilisés comme état métier | ✅ diagnostic only |
+| max_days_per_week sémantique correcte | ✅ cap de count uniquement |
+| availability_constraints deep_reprise | ✅ _assign_days() utilisé |
+| availability_constraints partial_reprise | ✅ _assign_days() utilisé |
+| availability_constraints normal/reprise_exit | ✅ inchangé |
+| preferred_long_run_day | ✅ implémenté |
+| preferred_long_run_day unavailable fallback | ✅ déterministe |
+| SCHEDULE_CONSTRAINT_LIMITED | ✅ émis si availability impossible |
+| maximum 1 quality | ✅ inchangé |
+| NO_ROUNDING_DRIFT distance | ✅ inchangé |
+| NO_ROUNDING_DRIFT duration | ✅ inchangé |
+| training_engine.py intact | ✅ non modifié |
+| WeeklyTarget formules inchangées | ✅ |
+| TrainingLoad inchangé | ✅ |
+| Readiness inchangée | ✅ |
+| NEXT | #132 WorkoutAnalysis V2 |
+

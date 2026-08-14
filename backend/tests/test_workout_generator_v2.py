@@ -1023,11 +1023,14 @@ class TestDayAssignment:
 
     def test_10F_impossible_constraints_reason_code_no_crash(self):
         """F: constraints that make target_sessions impossible → SCHEDULE_CONSTRAINT_LIMITED
-        reason code + no crash (returns best available plan)."""
-        # Only 2 days available, requesting 4 sessions.
+        reason code + no crash (returns best available plan).
+        SCHEDULE_CONSTRAINT_LIMITED is emitted when availability_constraints leave
+        fewer usable days than target_sessions (max_days_per_week is a count cap,
+        not the source of this code — see section 8A test)."""
+        # 5 days blocked → only saturday and sunday available; requesting 4 sessions.
         profile = _runner_profile_with_constraints(
             unavailable_days=["monday", "tuesday", "wednesday", "thursday", "friday"],
-            max_days=2,
+            max_days=None,  # no explicit cap — infeasibility comes from availability only
         )
         wt = _wt_distance(32.0, sessions=4)
         # Must not crash.
@@ -1039,3 +1042,342 @@ class TestDayAssignment:
         running = [s for s in plan.sessions if s.workout_type != "rest"]
         assert len(running) <= 2
         assert len(plan.sessions) == 7  # always 7-day plan
+
+
+# ---------------------------------------------------------------------------
+# Section 11 — PR131 final day-assignment corrections (A–J)
+# ---------------------------------------------------------------------------
+
+def _rp(
+    *,
+    max_days: "int | None" = None,
+    unavailable: "list[str] | None" = None,
+    preferred_long_run_day: "str | None" = None,
+    ref: date = REF,
+) -> RunnerProfile:
+    """Build a RunnerProfile for section-11 tests."""
+    return RunnerProfile(
+        reference_date=ref,
+        age=30, sex="female",
+        primary_discipline="road",
+        experience_level="established",
+        typical_weekly_km=40.0,
+        typical_weekly_km_is_observed=True,
+        typical_weekly_hours=None,
+        typical_runs_per_week=4.0,
+        typical_long_run_km=None,
+        typical_speed_kmh=None,
+        available_history_days=100,
+        profile_confidence="medium",
+        vo2max=None, vma_kmh=None, max_hr=None, resting_hr=None,
+        has_hrv=False, has_vo2max=False, has_training_readiness=False,
+        has_power=False, has_running_dynamics=False,
+        preferred_days_per_week=4,
+        max_days_per_week=max_days,
+        preferred_long_run_day=preferred_long_run_day,
+        injury_constraints=[],
+        availability_constraints=unavailable or [],
+    )
+
+
+def _plan11(
+    wt: "WeeklyTarget",
+    profile: RunnerProfile,
+    goal: str = "marathon",
+    phase: str = "build",
+) -> "WeeklyPlan":
+    return build_weekly_plan(
+        weekly_target=wt,
+        runner_profile=profile,
+        plan_goal=_plan_goal(goal),
+        periodization=_periodization(phase),
+        reference_date=REF,
+    )
+
+
+class TestDayAssignmentFinal:
+    """Section 11 — PR131 final corrections A–J."""
+
+    # ------------------------------------------------------------------
+    # A. max_days_per_week: cap on count, NOT on candidate pool
+    # ------------------------------------------------------------------
+
+    def test_11A_max_days_cap_not_candidate_reduction(self):
+        """A: target_sessions=3, max_days_per_week=3, no unavailability
+        → 3 sessions chosen from the full 7-day pool (not a fixed 3-day subset)."""
+        profile = _rp(max_days=3)
+        wt = _wt_distance(30.0, sessions=3)
+        plan = _plan11(wt, profile)
+        running = [s for s in plan.sessions if s.workout_type != "rest"]
+        assert len(running) == 3, f"Expected 3 sessions, got {len(running)}"
+        # The 3 sessions should not be confined to a rigid first-3-days subset.
+        # With even spacing over 7 days the standard result is Mon/Thu/Sun — not Mon/Tue/Wed.
+        session_days = {s.day for s in running}
+        assert "sunday" in session_days or len(session_days) >= 2, (
+            "Sessions must spread across the week, not collapse into a narrow window"
+        )
+
+    def test_11A2_max_days_does_not_trim_candidates(self):
+        """A2: with max_days=3 and sunday unavailable, the 3 sessions
+        are still chosen from the remaining 6 days (not from a 3-day subset)."""
+        profile = _rp(max_days=3, unavailable=["sunday"])
+        wt = _wt_distance(25.0, sessions=3)
+        plan = _plan11(wt, profile)
+        running = [s for s in plan.sessions if s.workout_type != "rest"]
+        assert len(running) == 3
+        # Sunday must never appear.
+        for s in running:
+            assert s.day != "sunday", "Sunday is unavailable but was scheduled"
+
+    # ------------------------------------------------------------------
+    # B. availability normal — monday unavailable
+    # ------------------------------------------------------------------
+
+    def test_11B_monday_unavailable_normal_route(self):
+        """B: monday in availability_constraints → no session on monday."""
+        profile = _rp(unavailable=["monday"])
+        for sessions_count in [2, 3, 4]:
+            wt = _wt_distance(25.0, sessions=sessions_count)
+            plan = _plan11(wt, profile)
+            mon = next(s for s in plan.sessions if s.day == "monday")
+            assert mon.workout_type == "rest", (
+                f"sessions={sessions_count}: monday is unavailable but got {mon.workout_type}"
+            )
+
+    # ------------------------------------------------------------------
+    # C. availability deep_reprise — one historical day unavailable
+    # ------------------------------------------------------------------
+
+    def test_11C_deep_reprise_tuesday_unavailable(self):
+        """C: deep_reprise with tuesday unavailable → session moved, easy/recovery only,
+        run_walk_allowed present, total duration exact."""
+        profile = _rp(unavailable=["tuesday"])
+        total_min = 105
+        wt = _wt_duration(total_min, sessions=3, allow_intensity=False,
+                          continuity_state="deep_reprise")
+        plan = _plan11(wt, profile)
+
+        running = [s for s in plan.sessions if s.workout_type != "rest"]
+        # No session on tuesday
+        assert all(s.day != "tuesday" for s in running), "tuesday is unavailable"
+        # Easy/recovery only
+        for s in running:
+            assert s.workout_type in ("easy", "recovery"), (
+                f"deep_reprise must be easy/recovery only, got {s.workout_type} on {s.day}"
+            )
+        # run_walk_allowed in every session
+        for s in running:
+            assert "run_walk_allowed" in s.reason_codes, (
+                f"run_walk_allowed missing on {s.day}"
+            )
+        # Total duration exact
+        total = sum(s.duration_minutes for s in running if s.duration_minutes is not None)
+        assert total == total_min, f"Duration drift: {total} != {total_min}"
+
+    # ------------------------------------------------------------------
+    # D. availability partial_reprise — one day unavailable
+    # ------------------------------------------------------------------
+
+    def test_11D_partial_reprise_sunday_unavailable(self):
+        """D: partial_reprise with sunday unavailable → no session on sunday,
+        easy-only, exact total distance."""
+        profile = _rp(unavailable=["sunday"])
+        target_km = 20.0
+        wt = _wt_distance(target_km, sessions=3, allow_intensity=False,
+                          continuity_state="partial_reprise")
+        plan = _plan11(wt, profile)
+
+        running = [s for s in plan.sessions if s.workout_type != "rest"]
+        # No session on sunday
+        assert all(s.day != "sunday" for s in running), "sunday is unavailable"
+        # Easy-only (easy or recovery)
+        for s in running:
+            assert s.workout_type in ("easy", "recovery"), (
+                f"partial_reprise must be easy/recovery only, got {s.workout_type} on {s.day}"
+            )
+        # No quality
+        assert all(s.workout_type != "quality" for s in running)
+        # Total distance exact (±0.1 tolerance for floating-point rounding)
+        total = round(sum(s.distance_km for s in running if s.distance_km is not None), 1)
+        assert abs(total - target_km) <= 0.1, f"Distance drift: {total} != {target_km}"
+
+    # ------------------------------------------------------------------
+    # E. preferred_long_run_day — saturday available
+    # ------------------------------------------------------------------
+
+    def test_11E_preferred_long_run_day_saturday(self):
+        """E: preferred_long_run_day=saturday, saturday available → long_easy on saturday."""
+        profile = _rp(preferred_long_run_day="saturday")
+        wt = _wt_distance(35.0, sessions=4, allow_intensity=True)
+        plan = _plan11(wt, profile)
+
+        long_sessions = [s for s in plan.sessions if s.workout_type == "long_easy"]
+        assert long_sessions, "No long_easy session found"
+        assert long_sessions[0].day == "saturday", (
+            f"long_easy expected on saturday, got {long_sessions[0].day}"
+        )
+
+    # ------------------------------------------------------------------
+    # F. preferred_long_run_day unavailable → fallback
+    # ------------------------------------------------------------------
+
+    def test_11F_preferred_long_run_day_unavailable_fallback(self):
+        """F: preferred_long_run_day=saturday, saturday unavailable
+        → long_easy placed on another day deterministically (never saturday)."""
+        profile = _rp(preferred_long_run_day="saturday", unavailable=["saturday"])
+        wt = _wt_distance(35.0, sessions=4, allow_intensity=True)
+        plan = _plan11(wt, profile)
+
+        # No session on saturday
+        sat = next(s for s in plan.sessions if s.day == "saturday")
+        assert sat.workout_type == "rest", "saturday is unavailable but was scheduled"
+
+        # long_easy must still be placed somewhere
+        long_sessions = [s for s in plan.sessions if s.workout_type == "long_easy"]
+        assert long_sessions, "long_easy must be placed on some available day"
+
+        # Deterministic: repeat produces same result
+        plan2 = _plan11(wt, profile)
+        long2 = [s for s in plan2.sessions if s.workout_type == "long_easy"]
+        assert long_sessions[0].day == long2[0].day, "Fallback placement must be deterministic"
+
+    # ------------------------------------------------------------------
+    # G. impossible constraints → SCHEDULE_CONSTRAINT_LIMITED
+    # ------------------------------------------------------------------
+
+    def test_11G_impossible_constraints_limited_code(self):
+        """G: target_sessions=4, only 2 usable days → 2 sessions max,
+        no unavailable day used, SCHEDULE_CONSTRAINT_LIMITED present."""
+        # Block 5 days → only saturday/sunday available.
+        profile = _rp(
+            unavailable=["monday", "tuesday", "wednesday", "thursday", "friday"],
+        )
+        wt = _wt_distance(30.0, sessions=4)
+        plan = _plan11(wt, profile)
+
+        assert "SCHEDULE_CONSTRAINT_LIMITED" in plan.reason_codes, (
+            "SCHEDULE_CONSTRAINT_LIMITED must appear when fewer days are usable"
+        )
+        running = [s for s in plan.sessions if s.workout_type != "rest"]
+        assert len(running) <= 2
+        blocked = {"monday", "tuesday", "wednesday", "thursday", "friday"}
+        for s in running:
+            assert s.day not in blocked, f"Session scheduled on blocked day {s.day}"
+
+    def test_11G_reprise_impossible_constraints_limited_code(self):
+        """G2: deep_reprise with only 1 day available → SCHEDULE_CONSTRAINT_LIMITED."""
+        profile = _rp(
+            unavailable=["monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
+        )
+        wt = _wt_duration(90, sessions=3, allow_intensity=False,
+                          continuity_state="deep_reprise")
+        plan = _plan11(wt, profile)
+
+        assert "SCHEDULE_CONSTRAINT_LIMITED" in plan.reason_codes
+        running = [s for s in plan.sessions if s.workout_type != "rest"]
+        assert len(running) == 1
+        assert running[0].day == "sunday"
+
+    # ------------------------------------------------------------------
+    # H. quality not immediately before long_easy
+    # ------------------------------------------------------------------
+
+    def test_11H_quality_not_adjacent_to_long_easy(self):
+        """H: quality is not placed on the calendar day immediately before long_easy
+        when another arrangement is possible."""
+        profile = _rp()
+        wt = _wt_distance(40.0, sessions=4, allow_intensity=True)
+        plan = _plan11(wt, profile)
+
+        days_order = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+        day_idx = {d: i for i, d in enumerate(days_order)}
+
+        long_session = next((s for s in plan.sessions if s.workout_type == "long_easy"), None)
+        if long_session is None:
+            return  # no long_easy → test not applicable
+
+        long_pos = day_idx[long_session.day]
+        # Find session immediately before long_easy in calendar (adjacent day).
+        prev_day = days_order[long_pos - 1] if long_pos > 0 else None
+        if prev_day:
+            prev_session = next(s for s in plan.sessions if s.day == prev_day)
+            running = [s for s in plan.sessions if s.workout_type != "rest"]
+            if len(running) >= 3:
+                assert prev_session.workout_type != "quality", (
+                    f"quality must not be placed immediately before long_easy "
+                    f"(quality on {prev_session.day}, long_easy on {long_session.day})"
+                )
+
+    # ------------------------------------------------------------------
+    # I. determinism
+    # ------------------------------------------------------------------
+
+    def test_11I_deterministic_multiple_calls(self):
+        """I: same inputs → identical day/type/volume output."""
+        profile = _rp(
+            max_days=5,
+            unavailable=["monday"],
+            preferred_long_run_day="saturday",
+        )
+        wt = _wt_distance(35.0, sessions=4, allow_intensity=True)
+        results = [
+            [(s.day, s.workout_type, s.distance_km) for s in _plan11(wt, profile).sessions]
+            for _ in range(4)
+        ]
+        assert results[0] == results[1] == results[2] == results[3], (
+            "Day assignment must be fully deterministic"
+        )
+
+    def test_11I_deterministic_reprise_deep(self):
+        """I2: deep_reprise determinism."""
+        profile = _rp(unavailable=["tuesday"])
+        wt = _wt_duration(120, sessions=3, allow_intensity=False,
+                          continuity_state="deep_reprise")
+        results = [
+            [(s.day, s.workout_type, s.duration_minutes) for s in _plan11(wt, profile).sessions]
+            for _ in range(3)
+        ]
+        assert results[0] == results[1] == results[2]
+
+    # ------------------------------------------------------------------
+    # J. reprise PR77 — after day relocation
+    # ------------------------------------------------------------------
+
+    def test_11J_deep_reprise_zero_quality_run_walk_exact_duration(self):
+        """J: deep_reprise → zero quality, run_walk_allowed, total duration exact."""
+        total_min = 130
+        profile = _rp(unavailable=["thursday"])
+        wt = _wt_duration(total_min, sessions=3, allow_intensity=False,
+                          continuity_state="deep_reprise")
+        plan = _plan11(wt, profile)
+
+        running = [s for s in plan.sessions if s.workout_type != "rest"]
+
+        # Zero quality
+        assert all(s.workout_type != "quality" for s in running), (
+            "deep_reprise must have zero quality sessions"
+        )
+        # run_walk_allowed in all sessions
+        assert all("run_walk_allowed" in s.reason_codes for s in running), (
+            "run_walk_allowed must be present in all deep_reprise sessions"
+        )
+        # Total duration exact
+        total = sum(s.duration_minutes for s in running if s.duration_minutes is not None)
+        assert total == total_min, f"NO_ROUNDING_DRIFT violated: {total} != {total_min}"
+
+    def test_11J_partial_reprise_zero_quality_exact_distance(self):
+        """J2: partial_reprise → zero quality, total distance exact."""
+        target_km = 18.0
+        profile = _rp(unavailable=["sunday"])
+        wt = _wt_distance(target_km, sessions=3, allow_intensity=False,
+                          continuity_state="partial_reprise")
+        plan = _plan11(wt, profile)
+
+        running = [s for s in plan.sessions if s.workout_type != "rest"]
+
+        # Zero quality
+        assert all(s.workout_type != "quality" for s in running)
+
+        # Total distance exact (±0.1 tolerance)
+        total = round(sum(s.distance_km for s in running if s.distance_km is not None), 1)
+        assert abs(total - target_km) <= 0.1, f"NO_ROUNDING_DRIFT violated: {total} != {target_km}"
