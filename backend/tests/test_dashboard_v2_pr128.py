@@ -6,7 +6,7 @@ import os
 import sys
 from datetime import date, timedelta
 from typing import Any, List, Optional
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -30,6 +30,8 @@ if "config" in sys.modules:
             del sys.modules[_key]
 
 import server  # noqa: E402
+from api.dashboard import get_current_user  # noqa: E402
+from access_control import Tier, UserAccess  # noqa: E402
 from auth.jwt_utils import create_access_token  # noqa: E402
 from training_v2.training_load import build_training_load  # noqa: E402
 
@@ -96,6 +98,17 @@ def _bearer(user_id: str, email: str = "test@example.com") -> dict:
     return {"Authorization": "Bearer " + create_access_token(user_id, email)}
 
 
+def _get_user_access(_db: Any, user_id: str) -> UserAccess:
+    return UserAccess(user_id=user_id, tier=Tier.PREMIUM)
+
+
+def _override_user(user_id: str):
+    async def _inner():
+        return {"id": user_id}
+
+    return _inner
+
+
 def _garmin_act(user_id: str, days_ago: int, duration_s: Optional[float]) -> dict:
     act_date = date.today() - timedelta(days=days_ago)
     doc = {
@@ -128,12 +141,17 @@ async def test_dashboard_acwr_matches_training_load_v2():
     workouts = [{"user_id": user_id, "date": date.today().isoformat(), "distance_km": 10.0}]
     fake_db = _FakeDB(workouts=workouts, garmin_activities=acts, garmin_daily_metrics=metrics)
 
-    with patch.object(server.app.state, "db", fake_db):
+    server.app.dependency_overrides[get_current_user] = _override_user(user_id)
+    with (
+        patch.object(server.app.state, "db", fake_db, create=True),
+        patch("server.get_user_access", AsyncMock(side_effect=_get_user_access)),
+    ):
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=server.app),
             base_url="http://test",
         ) as client:
             response = await client.get("/api/dashboard", headers=_bearer(user_id))
+    server.app.dependency_overrides.clear()
 
     assert response.status_code == 200, response.text
     payload = response.json()
@@ -145,12 +163,17 @@ async def test_dashboard_no_history_returns_acwr_none():
     user_id = "dashboard-user-empty"
     fake_db = _FakeDB()
 
-    with patch.object(server.app.state, "db", fake_db):
+    server.app.dependency_overrides[get_current_user] = _override_user(user_id)
+    with (
+        patch.object(server.app.state, "db", fake_db, create=True),
+        patch("server.get_user_access", AsyncMock(side_effect=_get_user_access)),
+    ):
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=server.app),
             base_url="http://test",
         ) as client:
             response = await client.get("/api/dashboard", headers=_bearer(user_id))
+    server.app.dependency_overrides.clear()
 
     assert response.status_code == 200, response.text
     payload = response.json()
@@ -171,12 +194,17 @@ async def test_dashboard_multi_user_uses_only_request_user():
         garmin_daily_metrics=metrics_a + metrics_b,
     )
 
-    with patch.object(server.app.state, "db", fake_db):
+    server.app.dependency_overrides[get_current_user] = _override_user(user_b)
+    with (
+        patch.object(server.app.state, "db", fake_db, create=True),
+        patch("server.get_user_access", AsyncMock(side_effect=_get_user_access)),
+    ):
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=server.app),
             base_url="http://test",
         ) as client:
             response = await client.get("/api/dashboard", headers=_bearer(user_b, "b@example.com"))
+    server.app.dependency_overrides.clear()
 
     assert response.status_code == 200, response.text
     payload = response.json()
