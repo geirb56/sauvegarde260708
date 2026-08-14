@@ -60,6 +60,7 @@ from rag_engine import (
 )
 
 # Import training engine for periodization
+from training_v2.training_load import build_training_load
 from training_engine import (
     DEFAULT_WEEKLY_KM,
     GOAL_CONFIG,
@@ -3662,12 +3663,24 @@ async def get_training_metrics(user: dict = Depends(auth_user)):
     """
     Returns training metrics: ACWR, TSB, load, monotony.
     Used by Dashboard to display fitness status.
+
+    ACWR and load (duration-based) come from TrainingLoadSnapshot V2
+    (build_training_load) — the SINGLE SOURCE OF TRUTH, aligned with /run-index.
+    load_7 / load_28 remain distance-based (km) for the "THIS WEEK" / "28D LOAD"
+    display cards; they do NOT feed ACWR or TSB.
+
+    None semantics:
+    - acwr is None when there is no valid Garmin duration data (build_training_load
+      returns acwr=None when chronic load is zero or no running activities have
+      a valid duration).
+    - No ACWR=1.0 fallback.  No distance→duration estimation.
     """
     today = datetime.now(timezone.utc)
+    today_date = today.date()
     seven_days_ago = today - timedelta(days=7)
     twenty_eight_days_ago = today - timedelta(days=28)
 
-    # Retrieve activities (user-scoped)
+    # --- Distance-based display cards (km) — user workout records ---
     user_filter = {"user_id": user["id"]}
     activities_7 = await db.workouts.find({
         **user_filter,
@@ -3678,41 +3691,40 @@ async def get_training_metrics(user: dict = Depends(auth_user)):
         **user_filter,
         "date": {"$gte": twenty_eight_days_ago.isoformat()}
     }).to_list(300)
-    
-    # Calculer les charges (en km, simplifié)
+
     def get_distance(a):
-        dist = a.get("distance_km", 0)
-        return dist
-    
+        return a.get("distance_km", 0) or 0
+
     load_7 = sum(get_distance(a) for a in activities_7)
     load_28 = sum(get_distance(a) for a in activities_28)
-    
-    # ACWR & TSB — distance-based fallback (used only if no Garmin activities)
-    chronic_avg = load_28 / 4 if load_28 > 0 else 1
-    acwr = round(load_7 / chronic_avg, 2) if chronic_avg > 0 else 1.0
-    ctl = load_28 / 4  # Approximation fitness
-    atl = load_7  # Fatigue récente
-    tsb = round(ctl - atl, 1)
 
-    # SINGLE SOURCE OF TRUTH: align ACWR/CTL/ATL/TSB with the Dashboard
-    # (duration-based load on real Garmin activities). load_7/load_28 below
-    # stay distance-based (km) for the "THIS WEEK" / "28D LOAD" cards.
-    try:
-        from garmin.insights import compute_training_load_metrics
-        load_metrics = await compute_training_load_metrics(db, user["id"])
-        if load_metrics:
-            acwr = load_metrics["acwr"]
-            ctl = load_metrics["ctl"]
-            atl = load_metrics["atl"]
-            tsb = load_metrics["tsb"]
-    except Exception as e:
-        logger.warning(f"[training/metrics] Garmin load metrics unavailable, using distance fallback: {e}")
-    
-    # Calculer la monotonie (7 derniers jours)
+    # --- TrainingLoadSnapshot V2 — SINGLE SOURCE OF TRUTH ---
+    # Fetch real Garmin activities (same collection as /run-index).
+    garmin_activities = await (
+        db.garmin_activities.find({"user_id": user["id"]}, {"_id": 0})
+        .sort("start_time", -1)
+        .limit(200)
+        .to_list(length=200)
+    )
+    load_snapshot = build_training_load(garmin_activities, today_date)
+
+    # ACWR — None when no chronic load (no fallback to 1.0)
+    acwr: Optional[float] = load_snapshot.acwr
+
+    # TSB — LEGACY distance-based (km).
+    # chronic_weekly_load and acute_load_7d from TrainingLoadSnapshot V2 are
+    # duration-minutes metrics and MUST NOT be aliased as CTL/ATL, which are
+    # physiological TSS-based concepts.  TSB migration to V2 units is deferred
+    # to a dedicated PR; the km-based formula is preserved here for backward
+    # compatibility with the frontend TSB display.
+    # ctl/atl response fields are set to None (not consumed by the frontend).
+    tsb: Optional[float] = round(load_28 / 4 - load_7, 1) if load_28 > 0 else None
+
+    # --- Monotonie (distance-based, 7-day display only) ---
     daily_loads = []
     for i in range(7):
         day = (today - timedelta(days=i)).date()
-        day_load = 0
+        day_load = 0.0
         for a in activities_7:
             try:
                 a_date_str = a.get("start_date_local", a.get("date", ""))
@@ -3720,11 +3732,10 @@ async def get_training_metrics(user: dict = Depends(auth_user)):
                     a_date = datetime.fromisoformat(a_date_str.replace("Z", "+00:00")).date()
                     if a_date == day:
                         day_load += get_distance(a)
-            except:
+            except Exception:
                 pass
         daily_loads.append(day_load)
-    
-    # Monotonie = moyenne / écart-type
+
     if daily_loads and len(daily_loads) >= 2:
         avg_load = sum(daily_loads) / len(daily_loads)
         variance = sum((x - avg_load) ** 2 for x in daily_loads) / len(daily_loads)
@@ -3732,19 +3743,22 @@ async def get_training_metrics(user: dict = Depends(auth_user)):
         monotony = round(avg_load / std, 2) if std > 0 else 0
     else:
         monotony = 0
-    
-    # Strain = Load * Monotony
+
     strain = round(load_7 * monotony, 0) if monotony > 0 else 0
-    
-    # ACWR reliability: the rolling-average ACWR needs ~4 weeks of chronic data
-    # to be valid. During a comeback (reprise) the chronic base is built from
-    # sparse data, which spikes the ratio into a false "Danger". In that case we
-    # mark it as unreliable so the UI shows "baseline building" instead.
+
+    # --- ACWR reliability: based on training state (reprise detection) ---
+    # has_sufficient_history captures ONLY the depth of available history and
+    # must NOT be used here.  An athlete with ≥ 28 days of Garmin data may
+    # still be resuming after a break (deep_reprise / partial_reprise), making
+    # the ACWR unreliable regardless of history depth.
     reprise_state = classify_training_state(activities_28)
     acwr_reliable = reprise_state not in ("deep_reprise", "partial_reprise")
 
-    # Interpréter ACWR
-    if not acwr_reliable:
+    # --- Interpréter ACWR ---
+    if acwr is None:
+        acwr_status = "unavailable"
+        acwr_label = "Données insuffisantes"
+    elif not acwr_reliable:
         acwr_status = "building"
         acwr_label = "Base en construction"
     elif acwr < 0.8:
@@ -3759,13 +3773,16 @@ async def get_training_metrics(user: dict = Depends(auth_user)):
     else:
         acwr_status = "danger"
         acwr_label = "Danger"
-    
-    # Interpréter TSB
-    # TSB s'appuie sur CTL/ATL construits sur ~4 semaines ; pendant une reprise la
-    # base chronique est éparse et rend le TSB trompeur → on le marque "building"
-    # comme l'ACWR pour afficher "Base en construction".
+
+    # --- Interpréter TSB ---
+    # TSB needs a stable training base; mark "building" during reprise.
+    # tsb_reliable mirrors acwr_reliable: both are unreliable when the athlete
+    # is in deep_reprise or partial_reprise, regardless of history depth.
     tsb_reliable = acwr_reliable
-    if not tsb_reliable:
+    if tsb is None:
+        tsb_status = "unavailable"
+        tsb_label = "Données insuffisantes"
+    elif not tsb_reliable:
         tsb_status = "building"
         tsb_label = "Base en construction"
     elif tsb > 10:
@@ -3780,7 +3797,7 @@ async def get_training_metrics(user: dict = Depends(auth_user)):
     else:
         tsb_status = "fatigued"
         tsb_label = "Fatigué"
-    
+
     return {
         "acwr": acwr,
         "acwr_status": acwr_status,
@@ -3794,8 +3811,10 @@ async def get_training_metrics(user: dict = Depends(auth_user)):
         "load_28": round(load_28, 1),
         "monotony": monotony,
         "strain": strain,
-        "ctl": round(ctl, 1),
-        "atl": round(atl, 1)
+        # ctl/atl: not consumed by the frontend; set to None until a dedicated
+        # migration PR replaces them with V2-aligned duration-based values.
+        "ctl": None,
+        "atl": None,
     }
 
 

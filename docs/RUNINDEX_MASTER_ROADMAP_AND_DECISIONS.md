@@ -362,17 +362,10 @@ garmin_daily_metrics + garmin_activities (MongoDB)
     "run_readiness_status": "green",
     "confidence": "NORMAL",         // NORMAL | REDUCED | NONE
     "sufficiency_level": "SUFFICIENT",  // SUFFICIENT | DEGRADED | INSUFFICIENT
-    "readiness_reasons": [],        // liste de ReasonCode strings
-    "legacy_run_readiness": 68      // diagnostic ONLY — supprimer en R4
+    "readiness_reasons": []         // liste de ReasonCode strings
   }
 }
 ```
-
-### État transitoire R3
-
-`metrics.legacy_run_readiness` = résultat de l'ancienne formule physio-penalty, exposé
-uniquement pour diagnostic côte-à-côte. Il N'EST PAS utilisé pour la recommandation ou le
-score affiché. Il sera supprimé en R4 après validation runtime satisfaisante.
 
 ### Règles respectées
 
@@ -410,7 +403,7 @@ score affiché. Il sera supprimé en R4 après validation runtime satisfaisante.
 
 ## 8.5) R3.5 — TrainingLoad V2 source unique dans `/run-index`
 
-Status: **IMPLEMENTED IN PR / PENDING MERGE** (PR #120)
+Status: **MERGED — PR #120 — runtime PASS**
 
 HEAD de départ: `9d9074d40e589a45c35343b8395099540a334f01`
 
@@ -420,9 +413,9 @@ HEAD de départ: `9d9074d40e589a45c35343b8395099540a334f01`
 dans `/run-index` ET pour Readiness V2.
 
 - `/run-index` utilise désormais TrainingLoad V2 (`build_training_load()`) comme seule source de charge.
-- `compute_load_metrics()` legacy reste encore utilisé par `/training/metrics`.
+- `compute_load_metrics()` (legacy) reste encore utilisé par `/training/metrics`.
 - Cette dette n'est **PAS** supprimée dans PR #120.
-- NEXT = **R4A** : current readiness legacy cleanup.
+- NEXT = **R4A** : supprimer uniquement le current readiness legacy de `/run-index`.
 
 ### Implémentation (PR #120)
 
@@ -512,20 +505,105 @@ séparée de R4 Readiness.
 ---
 
 
-## 9) R4 — Kill readiness legacy
+## 9) R4A — Current readiness legacy cleanup dans `/run-index`
 
-Status: **PLANNED** (après validation R3 runtime)
+Status: **MERGED — PR #121**
 
-Supprimer seulement après validation runtime R3 satisfaisante:
+HEAD de départ: `522fbed01c14eff741bb72401bb697a56ea38d13`
 
-- `metrics.legacy_run_readiness` dans `garmin/insights.py`;
-- ancien `readiness_engine`;
-- formules concurrentes;
-- fallback readiness `70`;
-- RHR fictive `55`;
-- sommeil fictif `7 h` / score neutre;
-- ACWR neutre inventé;
-- code mort associé.
+### Objectif R4A
+
+Supprimer uniquement le readiness current legacy encore exposé dans `/run-index`,
+sans toucher :
+
+- `history[].run_readiness`;
+- `/training/metrics` legacy;
+- la formule Readiness V2;
+- LT1/LT2;
+- migrations historiques.
+
+### Implémentation R4A
+
+- suppression de `metrics.legacy_run_readiness` dans `backend/garmin/insights.py`;
+- suppression du calcul current legacy associé (`physio_penalty`, `acwr_penalty`, `_legacy_run_readiness`);
+- conservation intacte de Readiness V2 comme source unique pour `metrics.run_readiness`;
+- conservation de `fatigue_physio`, `fatigue_ratio`, `training_load_v2` et du snapshot partagé;
+- conservation de l'historique readiness journalier existant.
+
+### Dettes résolues par R4B
+
+- `history[].run_readiness` migré vers Readiness V2 (voir section R4B ci-dessous).
+
+### Dettes restantes après R4A+R4B
+
+- `fatigue_ratio` dans `history[]` utilise encore la formule legacy (hors périmètre R4B) ;
+- `history[].training_load` reste adossé à `_activity_load` (legacy) ;
+- `/training/metrics` : migration TrainingLoad V2 mergée — PR #123 (CTL/ATL V2 incorrects retirés ; TSB legacy km temporaire ; ctl/atl → None) ;
+- divergence baseline RHR / historique documentée et hors périmètre.
+
+---
+
+## 9b) R4B — history[].run_readiness migré vers Readiness V2
+
+Status: **MERGED — PR #122**
+
+### Objectif R4B
+
+Remplacer uniquement le calcul legacy de `history[].run_readiness` par Readiness V2.
+
+Pour chaque date historique J :
+- `reference_date = J` ;
+- uniquement les données disponibles à J (metrics date ≤ J, activités start_time ≤ J) ;
+- données absentes / dates invalides → **exclues** (jamais de fallback) ;
+- appliquer Sufficiency → Signals → Subscores → Readiness V2 ;
+- `score = float 0–100` ou `None` (INSUFFICIENT → None).
+
+### Implémentation R4B
+
+- `backend/garmin/insights.py` : filtre strict (date valide ET ≤ J) sur metrics et activités ;
+  docs sans date exclus du tableau `history[]` ;
+- `backend/tests/test_run_index_r4b_history_readiness_v2.py` : 12 tests couvrant
+  les 9 exigences originales + activité sans date exclue, metric sans date exclue,
+  données futures exclues (strict).
+
+### Dettes restantes après R4B
+
+- `fatigue_ratio` dans `history[]` utilise encore la formule legacy (hors périmètre) ;
+- `history[].training_load` reste adossé à `_activity_load` (legacy) — résolu par R4C ci-dessous ;
+- `/training/metrics` : migration vers TrainingLoad V2 MERGED — PR #123
+  (CTL/ATL v2 incorrects retirés, TSB legacy km conservé temporairement, ctl/atl → None) ;
+- baseline RHR historique : divergence documentée et hors périmètre.
+
+---
+
+## 9c) R4C — history[].training_load migré vers TrainingLoad V2
+
+Status: **IMPLEMENTED / PENDING MERGE — PR #125**
+
+### Objectif R4C
+
+Aligner uniquement `history[].training_load` sur TrainingLoad V2.
+
+Pour chaque date historique J :
+- `build_training_load(activités disponibles à J, reference_date=J)` ;
+- `history[].training_load = snapshot.acwr` ;
+- `None` reste `None` (pas de fallback, pas d'estimation distance→durée) ;
+- aucune donnée future utilisée.
+
+### Implémentation R4C
+
+- `backend/garmin/insights.py` : suppression de `_activity_load()` et du bloc `_daily_load` ;
+  dans la boucle history, appel à `build_training_load(hist_activities, hist_day).acwr`
+  après filtrage strict des activités (start_time ≤ J) ;
+- `backend/tests/test_run_index_r4c_history_load_v2.py` : 6 tests couvrant
+  l'alignement ACWR V2, l'absence de fuite future, les activités distance-only → None,
+  l'historique insuffisant, la non-régression de `metrics.training_load`, et la shape.
+
+### Dettes restantes après R4C
+
+- `fatigue_ratio` dans `history[]` utilise encore la formule legacy (hors périmètre) ;
+- TSB dans `/training/metrics` : legacy km conservé temporairement (hors périmètre) ;
+- baseline RHR historique : divergence documentée et hors périmètre.
 
 ---
 
@@ -762,8 +840,12 @@ Puis:
 - [x] R2B Aggregation (MERGED — PR #117)
 - [x] R3 /run-index migration (MERGED — PR #118 — runtime validation PASSED — E2E Dashboard PASSED)
 - [x] R3 validation runtime (PASSED)
-- [x] R3.5 TrainingLoad V2 source unique /run-index (IMPLEMENTED IN PR / PENDING MERGE — PR #120)
-- [ ] R4A kill current readiness legacy (NEXT)
+- [x] R3.5 TrainingLoad V2 source unique /run-index (MERGED — PR #120 — runtime PASS)
+- [x] R4A kill current readiness legacy (MERGED — PR #121)
+- [x] R4B history[].run_readiness → Readiness V2 (MERGED — PR #122)
+- [x] TrainingLoad /training/metrics alignment (MERGED — PR #123)
+- [x] Cleanup helpers TrainingLoad legacy morts (MERGED — PR #124)
+- [x] R4C history[].training_load → TrainingLoad V2 (IMPLEMENTED / PENDING MERGE — PR #125)
 
 ### TRAINING ENGINE
 
@@ -810,9 +892,18 @@ Ce document suit l'état réel de `main` et des PR en cours:
 - R1.7B est **MERGED** (PR #115).
 - R2A est **MERGED** (PR #116).
 - R2B est **MERGED — PR #117**.
-- R3 est **IMPLEMENTED IN PR / PENDING MERGE** (cette PR).
-- NEXT = R4 uniquement si validation runtime R3 satisfaisante.
-- Sinon : documenter précisément le blocage avant d'ouvrir R4.
+- R3 est **MERGED — PR #118 — runtime PASS**.
+- R3.5 est **MERGED — PR #120 — runtime PASS**.
+- R4A est **MERGED — PR #121**.
+- R4B est **MERGED — PR #122** (`history[].run_readiness` → Readiness V2).
+- TrainingLoad `/training/metrics` alignment est **MERGED — PR #123**
+  (CTL/ATL V2 incorrects retirés; TSB legacy km conservé temporairement; ctl/atl → None;
+  `has_sufficient_history` commentaire non-reprise retiré).
+- Cleanup helpers TrainingLoad legacy morts est **MERGED — PR #124**.
+- R4C history[].training_load → TrainingLoad V2 est **IMPLEMENTED / PENDING MERGE — PR #125**
+  (`history[].training_load = build_training_load(acts_at_J, J).acwr` ;
+  `_activity_load` supprimé ; aucune fuite future ; aucun fallback distance→durée).
+- Dettes restantes : `fatigue_ratio` history (formule legacy), TSB `/training/metrics` legacy, baseline RHR historique.
 
 ---
 

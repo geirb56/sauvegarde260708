@@ -11,7 +11,7 @@ Test matrix
 - sufficiency_level is exposed in metrics
 - readiness_reasons is exposed in metrics
 - INSUFFICIENT → run_readiness = None
-- legacy_run_readiness is present but never used as score
+- legacy_run_readiness is absent from metrics
 - payload backward-compatible (run_readiness key always present)
 - multi-user: user A data does not bleed into user B result
 """
@@ -34,6 +34,7 @@ if str(_BACKEND) not in sys.path:
     sys.path.insert(0, str(_BACKEND))
 
 from garmin.insights import compute_run_index
+from garmin.readiness_adapter import build_readiness_v2_from_garmin_data
 from training_v2.readiness_sufficiency import SufficiencyLevel
 
 # ---------------------------------------------------------------------------
@@ -141,13 +142,37 @@ class _FakeDB:
 @pytest.mark.asyncio
 async def test_run_readiness_matches_v2_score_sufficient():
     """metrics.run_readiness is a float when data is SUFFICIENT."""
-    db = _FakeDB(_metrics_docs(_USER_A), _activity_docs(_USER_A))
+    metrics_docs = _metrics_docs(_USER_A)
+    activity_docs = _activity_docs(_USER_A)
+    db = _FakeDB(metrics_docs, activity_docs)
     payload = await compute_run_index(db, _USER_A, reference_date=_REF)
     assert payload is not None
     m = payload["metrics"]
+    expected = build_readiness_v2_from_garmin_data(metrics_docs, activity_docs, _REF)
     assert m["run_readiness"] is not None
     assert isinstance(m["run_readiness"], float)
     assert 0.0 < m["run_readiness"] <= 100.0
+    assert m["run_readiness"] == expected.score
+    assert m["sufficiency_level"] == expected.sufficiency_level.value
+    assert m["confidence"] == expected.confidence.value
+
+
+@pytest.mark.asyncio
+async def test_degraded_run_readiness_keeps_v2_score():
+    """Missing sleep data → DEGRADED, V2 score still exposed."""
+    metrics_docs = _metrics_docs(_USER_A, sleep_hours=None, sleep_score=None)
+    activity_docs = _activity_docs(_USER_A)
+    db = _FakeDB(metrics_docs, activity_docs)
+    payload = await compute_run_index(db, _USER_A, reference_date=_REF)
+    assert payload is not None
+    m = payload["metrics"]
+    expected = build_readiness_v2_from_garmin_data(metrics_docs, activity_docs, _REF)
+
+    assert expected.sufficiency_level == SufficiencyLevel.DEGRADED
+    assert expected.score is not None
+    assert m["run_readiness"] == expected.score
+    assert m["sufficiency_level"] == SufficiencyLevel.DEGRADED.value
+    assert m["confidence"] == expected.confidence.value
 
 
 @pytest.mark.asyncio
@@ -216,20 +241,14 @@ async def test_insufficient_score_none_recommendation_unavailable_gray():
 
 
 @pytest.mark.asyncio
-async def test_legacy_run_readiness_present_but_not_authoritative():
-    """legacy_run_readiness is present in metrics for diagnostics only.
-
-    It must never equal run_readiness when the V2 score is None (INSUFFICIENT),
-    since legacy always produces an integer (never None).
-    """
+async def test_legacy_run_readiness_absent_from_metrics():
+    """legacy_run_readiness is removed from /run-index metrics."""
     empty_metrics = _metrics_docs(_USER_A, rhr=None, hrv=None)
     db = _FakeDB(empty_metrics, [])
     payload = await compute_run_index(db, _USER_A, reference_date=_REF)
     assert payload is not None
     m = payload["metrics"]
-    assert "legacy_run_readiness" in m
-    # legacy is always an int; V2 is None here
-    assert m["legacy_run_readiness"] is not None
+    assert "legacy_run_readiness" not in m
     assert m["run_readiness"] is None
 
 

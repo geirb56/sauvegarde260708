@@ -11,23 +11,10 @@ and the HRV fields are returned as null so the UI shows "—".
 The returned dict matches the shape the existing /api/run-index endpoint and
 the Dashboard frontend expect.
 
-R3 — Transitional state (readiness V2)
----------------------------------------
-``metrics.run_readiness`` is now sourced from Readiness V2 (R2B).
-The legacy physio-penalty formula is still computed and exposed under
-``metrics.legacy_run_readiness`` for diagnostic comparison ONLY — it is
-NOT used for the recommendation or any score output.
-This hybrid state will remain until runtime validation is satisfactory;
-see docs/RUNINDEX_MASTER_ROADMAP_AND_DECISIONS.md R3/R4.
-
-R3.5 — Training Load V2 alignment
------------------------------------
-``TrainingLoadSnapshot`` (V2) is now the SINGLE SOURCE OF TRUTH for all
-load metrics in the /run-index path:
+``TrainingLoadSnapshot`` (V2) is the SINGLE SOURCE OF TRUTH for all load
+metrics in the /run-index path:
 - ``build_training_load()`` is called exactly once per request.
 - The resulting snapshot is shared with Readiness V2 (no second computation).
-- Legacy behaviors removed from /run-index: ACWR fallback=1.0, distance-based
-  duration estimation, and the competing 7/28-day average formula.
 - ``metrics.training_load_v2`` exposes the V2 snapshot for observability.
 """
 
@@ -66,77 +53,6 @@ def _parse_day(value: str) -> Optional[datetime]:
         return datetime.fromisoformat(value[:10])
     except ValueError:
         return None
-
-
-def _activity_load(act: dict) -> float:
-    """Training load proxy = session duration in minutes (TRIMP-like).
-
-    Falls back to an estimate from distance (~6 min/km) when duration is absent.
-    """
-    duration_s = act.get("duration") or 0
-    if duration_s:
-        return float(duration_s) / 60.0
-    distance_m = act.get("distance") or 0
-    if distance_m:
-        return (float(distance_m) / 1000.0) * 6.0
-    return 0.0
-
-
-def _compute_acwr(activities: List[dict], today) -> float:
-    """Acute:Chronic Workload Ratio from real activities (7d vs 28d daily avg)."""
-    return compute_load_metrics(activities, today)["acwr_raw"]
-
-
-def compute_load_metrics(activities: List[dict], today) -> dict:
-    """Duration-based training-load metrics — SINGLE SOURCE OF TRUTH.
-
-    Used by both the Dashboard (/run-index) and the Training page
-    (/training/metrics) so ACWR and TSB are identical across the app.
-    Load proxy = session duration (TRIMP-like) via _activity_load().
-    """
-    acute = 0.0
-    chronic = 0.0
-    for act in activities:
-        d = _parse_day(act.get("start_time") or act.get("synced_at") or "")
-        if not d:
-            continue
-        days_ago = (today - d.date()).days
-        if days_ago < 0:
-            continue
-        load = _activity_load(act)
-        if days_ago < 28:
-            chronic += load
-        if days_ago < 7:
-            acute += load
-    acute_avg = acute / 7.0
-    chronic_avg = chronic / 28.0
-    acwr_raw = (acute_avg / chronic_avg) if chronic_avg > 0 else 1.0
-    ctl = chronic / 4.0   # chronic base (weekly-average load)
-    atl = acute           # acute fatigue (current week load)
-    return {
-        "acute": round(acute, 1),
-        "chronic": round(chronic, 1),
-        "acwr_raw": acwr_raw,
-        "acwr": round(acwr_raw, 2),
-        "ctl": round(ctl, 1),
-        "atl": round(atl, 1),
-        "tsb": round(ctl - atl, 1),
-    }
-
-
-async def compute_training_load_metrics(db, user_id: str) -> Optional[dict]:
-    """Fetch the user's real Garmin activities and return duration-based
-    load metrics (ACWR, CTL, ATL, TSB). Returns None when no activities."""
-    activities = await (
-        db.garmin_activities.find({"user_id": user_id}, {"_id": 0})
-        .sort("start_time", -1)
-        .limit(200)
-        .to_list(length=200)
-    )
-    if not activities:
-        return None
-    today = datetime.now(timezone.utc).date()
-    return compute_load_metrics(activities, today)
 
 
 def _mean(values: List[float]) -> Optional[float]:
@@ -255,10 +171,7 @@ async def compute_run_index(
     # 1.0 fresh · ~1.2 moderate · >1.5 high.
     fatigue_ratio = 1.0 + fatigue_physio / 10.0
 
-    # --- Run Readiness V2 (R3 — single source of truth from R2B) ---
-    # Pass the already-built load_snapshot so Readiness V2 reuses it directly;
-    # no second call to build_training_load().
-    # INSUFFICIENT → score=None → run_readiness=None (no fallback).
+    # --- Run Readiness V2 ---
     _v2_result = build_readiness_v2_from_garmin_data(
         metrics_docs, activities, today, load_snapshot=load_snapshot
     )
@@ -267,20 +180,7 @@ async def compute_run_index(
     readiness_v2_sufficiency: str = _v2_result.sufficiency_level.value
     readiness_v2_reasons: list = [r.value for r in _v2_result.reasons]
 
-    # --- Legacy readiness (kept for diagnostic comparison — NOT used for output) ---
-    # R4 will remove this block after runtime validation is satisfactory.
-    # acwr may be None (no chronic load) → legacy penalty defaults to 0.
-    physio_penalty = min(60.0, fatigue_physio * 6.0)
-    if acwr is not None and acwr > 1.3:
-        acwr_penalty = min(60.0, (acwr - 1.3) * 130.0)
-    elif acwr is not None and acwr < 0.8:
-        acwr_penalty = min(30.0, (0.8 - acwr) * 60.0)
-    else:
-        acwr_penalty = 0.0
-    _legacy_run_readiness = int(round(max(5.0, min(100.0, 100.0 - physio_penalty - acwr_penalty))))
-
-    # V2 is authoritative.  INSUFFICIENT → None → recommendation is UNAVAILABLE.
-    run_readiness = run_readiness_v2  # Optional[float] or None
+    run_readiness = run_readiness_v2
 
     # --- Recommendation derived from readiness (number & badge always agree) ---
     # When run_readiness is None (INSUFFICIENT) the state is UNAVAILABLE — not
@@ -350,20 +250,21 @@ async def compute_run_index(
           "en": f"Fatigue Ratio {fatigue_ratio:.2f}"}
     reasons.append(_t.get(lang, _t["fr"]))
 
-    # --- Pre-compute daily load totals from activities ---
-    _daily_load: dict = {}
-    for act in activities:
-        d_act = _parse_day(act.get("start_time") or act.get("synced_at") or "")
-        if d_act:
-            key = d_act.date().isoformat()
-            _daily_load[key] = _daily_load.get(key, 0.0) + _activity_load(act)
-
-    # --- 30-day history (oldest -> newest) ---
+    # --- 30-day history (oldest -> newest) — run_readiness = Readiness V2 ---
+    # For each historical day J:
+    #   - metrics filtered to date <= J (newest-first, no future leakage)
+    #   - activities filtered to start_time <= J (no future leakage)
+    #   - Readiness V2 built with reference_date=J
+    #   - training_load = build_training_load(hist_activities, J).acwr (V2, None when unavailable)
+    #   - score = float 0–100 or None (INSUFFICIENT → None, never a fallback)
     recent = list(reversed(metrics_docs[:30]))
     history = []
     for doc in recent:
         d = _parse_day(doc.get("date", ""))
-        day_label = _DAY_ABBREVS[d.weekday()] if d else (doc.get("date", "")[-2:] or "?")
+        if d is None:
+            # Skip docs with no parseable date — no anchor to filter future data.
+            continue
+        day_label = _DAY_ABBREVS[d.weekday()]
         doc_hrv = doc.get("hrv")
         doc_rhr = doc.get("resting_hr")
         doc_sleep = doc.get("sleep_hours") or 7.0
@@ -374,22 +275,39 @@ async def compute_run_index(
         else:
             doc_fp = 0.6 * doc_rhr_delta + 0.4 * doc_sleep_penalty
         doc_fatigue_ratio = 1.0 + max(0.0, doc_fp) / 10.0
-        doc_physio_penalty = min(60.0, max(0.0, doc_fp) * 6.0)
-        # Per-day ACWR (rolling, computed as of that day) so the readiness trend
-        # reflects real day-to-day training load instead of reusing one global value.
-        doc_acwr = _compute_acwr(activities, d.date()) if d else acwr
-        if doc_acwr > 1.3:
-            doc_acwr_penalty = min(60.0, (doc_acwr - 1.3) * 130.0)
-        elif doc_acwr < 0.8:
-            doc_acwr_penalty = min(30.0, (0.8 - doc_acwr) * 60.0)
+
+        # run_readiness V2: only data available at day J, no legacy fallbacks.
+        if d is not None:
+            hist_day = d.date()
+            hist_day_iso = hist_day.isoformat()
+            # Metrics available at J: date field must be present, valid, and <= J.
+            # Absent or invalid dates are excluded (never assumed available).
+            hist_metrics = []
+            for m in metrics_docs:
+                raw = m.get("date")
+                parsed = _parse_day(raw) if raw is not None else None
+                if parsed is not None and parsed.date() <= hist_day:
+                    hist_metrics.append(m)
+            # Activities available at J: start_time date must be valid and <= J.
+            # Absent or unparseable start_time → excluded.
+            hist_activities = []
+            for a in activities:
+                act_dt = _parse_day(a.get("start_time") or a.get("synced_at") or "")
+                if act_dt is not None and act_dt.date() <= hist_day:
+                    hist_activities.append(a)
+            hist_v2 = build_readiness_v2_from_garmin_data(hist_metrics, hist_activities, hist_day)
+            doc_readiness: Optional[float] = hist_v2.score  # float 0–100 or None
+            hist_load_snapshot = build_training_load(hist_activities, hist_day)
+            doc_training_load: Optional[float] = hist_load_snapshot.acwr
         else:
-            doc_acwr_penalty = 0.0
-        doc_readiness = int(round(max(5.0, min(100.0, 100.0 - doc_physio_penalty - doc_acwr_penalty))))
+            doc_readiness = None
+            doc_training_load = None
+
         history.append({
             "day": day_label,
             "date": doc.get("date"),
             "hrv": round(float(doc_hrv), 1) if doc_hrv is not None else None,
-            "training_load": round(_daily_load.get(doc.get("date", ""), 0.0), 1),
+            "training_load": round(doc_training_load, 3) if doc_training_load is not None else None,
             "fatigue_ratio": round(doc_fatigue_ratio, 2),
             "run_readiness": doc_readiness,
         })
@@ -422,15 +340,11 @@ async def compute_run_index(
             "fatigue_physio": round(fatigue_physio, 2),
             "fatigue_ratio": round(fatigue_ratio, 2),
             "fatigue_status": fatigue_status,
-            # V2 readiness fields (R3) — authoritative.
             "run_readiness": run_readiness,  # float or None (INSUFFICIENT)
             "run_readiness_status": readiness_status,
             "confidence": readiness_v2_confidence,
             "sufficiency_level": readiness_v2_sufficiency,
             "readiness_reasons": readiness_v2_reasons,
-            # Legacy readiness — diagnostic only (NOT authoritative). Remove in R4.
-            "legacy_run_readiness": _legacy_run_readiness,
-            # R3.5 observability — V2 snapshot fields for runtime verification.
             "training_load_v2": {
                 "acute_load_7d": load_snapshot.acute_load_7d,
                 "load_28d": load_snapshot.load_28d,
