@@ -24,7 +24,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
-from garmin.readiness_adapter import build_readiness_v2_from_garmin_data
+from garmin.readiness_adapter import build_readiness_v2_from_garmin_data, get_rhr_v2_baseline
 from training_v2.training_load import build_training_load
 
 logger = logging.getLogger(__name__)
@@ -132,9 +132,9 @@ async def compute_run_index(
 
     # --- Baselines (rolling mean over available history) ---
     hrv_baseline = _mean([d.get("hrv") for d in metrics_docs]) if have_hrv else None
-    rhr_baseline = _mean([d.get("resting_hr") for d in metrics_docs])
-    if rhr_baseline is None:
-        rhr_baseline = rhr_today if have_rhr else 55.0
+    # rhr_baseline: single source of truth aligned with Readiness V2 (14-day window,
+    # excludes today, no fictitious fallback — None remains None when no prior data).
+    rhr_baseline = get_rhr_v2_baseline(metrics_docs, today)
     if hrv_baseline is None and have_hrv:
         hrv_baseline = hrv_today
 
@@ -154,7 +154,12 @@ async def compute_run_index(
 
     # --- Fatigue model (reweight when HRV is missing) ---
     hrv_delta = (float(hrv_baseline) - float(hrv_today)) if (have_hrv and hrv_baseline is not None) else None
-    rhr_delta = (float(rhr_today) - float(rhr_baseline)) if have_rhr else 0.0
+    # rhr_delta for display: None when rhr_today or rhr_baseline unavailable (no fictitious fallback).
+    rhr_delta: Optional[float] = (
+        float(rhr_today) - float(rhr_baseline)
+        if (have_rhr and rhr_baseline is not None)
+        else None
+    )
     sleep_penalty = max(0.0, 8.0 - sleep_hours_val) + (1.0 - sleep_efficiency) * 2.0
 
     if have_hrv:
@@ -163,7 +168,8 @@ async def compute_run_index(
     else:
         w_hrv, w_rhr, w_sleep = 0.0, 0.6, 0.4
         hrv_term = 0.0
-    fatigue_physio = hrv_term + w_rhr * rhr_delta + w_sleep * sleep_penalty
+    # Use 0.0 for missing rhr_delta in fatigue computation (neutral, no fictional spike).
+    fatigue_physio = hrv_term + w_rhr * (rhr_delta if rhr_delta is not None else 0.0) + w_sleep * sleep_penalty
     # Fatigue cannot be negative; a very fresh state is simply 0.
     fatigue_physio = max(0.0, fatigue_physio)
     # Fatigue Ratio = physiological fatigue only (RHR/HRV/sleep), centred on 1.0.
@@ -209,7 +215,10 @@ async def compute_run_index(
     hrv_status = "green"
     if hrv_delta is not None:
         hrv_status = "green" if hrv_delta <= 5 else ("yellow" if hrv_delta <= 10 else "red")
-    rhr_status = "green" if rhr_delta <= 3 else ("yellow" if rhr_delta <= 7 else "red")
+    rhr_status = (
+        "green" if rhr_delta is None or rhr_delta <= 3
+        else ("yellow" if rhr_delta <= 7 else "red")
+    )
     sleep_status = "green" if sleep_penalty <= 1.0 else ("yellow" if sleep_penalty <= 2.5 else "red")
     # Load status is derived from the V2 snapshot status label (no fallback colour).
     load_status = _acwr_status_to_color(load_snapshot.status)
@@ -228,7 +237,7 @@ async def compute_run_index(
               "es": "VFC no registrada por tu dispositivo Garmin",
               "en": "HRV not recorded by your Garmin device"}
         reasons.append(_t.get(lang, _t["fr"]))
-    if have_rhr:
+    if have_rhr and rhr_delta is not None:
         sign = "+" if rhr_delta >= 0 else ""
         _t = {"fr": f"FC de repos {sign}{rhr_delta:.1f} bpm vs référence ({rhr_today:.0f} bpm)",
               "es": f"FC en reposo {sign}{rhr_delta:.1f} bpm vs referencia ({rhr_today:.0f} bpm)",
@@ -266,49 +275,34 @@ async def compute_run_index(
             continue
         day_label = _DAY_ABBREVS[d.weekday()]
         doc_hrv = doc.get("hrv")
-        doc_rhr = doc.get("resting_hr")
-        doc_sleep = doc.get("sleep_hours") or 7.0
-        doc_rhr_delta = (float(doc_rhr) - float(rhr_baseline)) if doc_rhr is not None else 0.0
-        doc_sleep_penalty = max(0.0, 8.0 - doc_sleep)
-        if doc_hrv is not None and hrv_baseline is not None:
-            doc_fp = 0.5 * (float(hrv_baseline) - float(doc_hrv)) + 0.3 * doc_rhr_delta + 0.2 * doc_sleep_penalty
-        else:
-            doc_fp = 0.6 * doc_rhr_delta + 0.4 * doc_sleep_penalty
-        doc_fatigue_ratio = 1.0 + max(0.0, doc_fp) / 10.0
 
         # run_readiness V2: only data available at day J, no legacy fallbacks.
-        if d is not None:
-            hist_day = d.date()
-            hist_day_iso = hist_day.isoformat()
-            # Metrics available at J: date field must be present, valid, and <= J.
-            # Absent or invalid dates are excluded (never assumed available).
-            hist_metrics = []
-            for m in metrics_docs:
-                raw = m.get("date")
-                parsed = _parse_day(raw) if raw is not None else None
-                if parsed is not None and parsed.date() <= hist_day:
-                    hist_metrics.append(m)
-            # Activities available at J: start_time date must be valid and <= J.
-            # Absent or unparseable start_time → excluded.
-            hist_activities = []
-            for a in activities:
-                act_dt = _parse_day(a.get("start_time") or a.get("synced_at") or "")
-                if act_dt is not None and act_dt.date() <= hist_day:
-                    hist_activities.append(a)
-            hist_v2 = build_readiness_v2_from_garmin_data(hist_metrics, hist_activities, hist_day)
-            doc_readiness: Optional[float] = hist_v2.score  # float 0–100 or None
-            hist_load_snapshot = build_training_load(hist_activities, hist_day)
-            doc_training_load: Optional[float] = hist_load_snapshot.acwr
-        else:
-            doc_readiness = None
-            doc_training_load = None
+        hist_day = d.date()
+        # Metrics available at J: date field must be present, valid, and <= J.
+        # Absent or invalid dates are excluded (never assumed available).
+        hist_metrics = []
+        for m in metrics_docs:
+            raw = m.get("date")
+            parsed = _parse_day(raw) if raw is not None else None
+            if parsed is not None and parsed.date() <= hist_day:
+                hist_metrics.append(m)
+        # Activities available at J: start_time date must be valid and <= J.
+        # Absent or unparseable start_time → excluded.
+        hist_activities = []
+        for a in activities:
+            act_dt = _parse_day(a.get("start_time") or a.get("synced_at") or "")
+            if act_dt is not None and act_dt.date() <= hist_day:
+                hist_activities.append(a)
+        hist_v2 = build_readiness_v2_from_garmin_data(hist_metrics, hist_activities, hist_day)
+        doc_readiness: Optional[float] = hist_v2.score  # float 0–100 or None
+        hist_load_snapshot = build_training_load(hist_activities, hist_day)
+        doc_training_load: Optional[float] = hist_load_snapshot.acwr
 
         history.append({
             "day": day_label,
             "date": doc.get("date"),
             "hrv": round(float(doc_hrv), 1) if doc_hrv is not None else None,
             "training_load": round(doc_training_load, 3) if doc_training_load is not None else None,
-            "fatigue_ratio": round(doc_fatigue_ratio, 2),
             "run_readiness": doc_readiness,
         })
 

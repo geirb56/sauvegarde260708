@@ -271,5 +271,5 @@ def test_history_entry_shape_includes_training_load_key():
         assert "day" in entry
         assert "date" in entry
         assert "hrv" in entry
-        assert "fatigue_ratio" in entry
+        assert "fatigue_ratio" not in entry, "fatigue_ratio must be removed from history[] (#126)"
         assert "run_readiness" in entry
