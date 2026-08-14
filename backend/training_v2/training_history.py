@@ -113,8 +113,8 @@ class PriorRunningWindow(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     # Window bounds (days ago, relative to reference_date)
-    days_ago_start: int = 28   # inclusive lower bound (further from today)
-    days_ago_end: int = 41     # inclusive upper bound (closer to today)
+    days_ago_start: int = 28   # inclusive lower bound (closer to today, more recent)
+    days_ago_end: int = 41     # inclusive upper bound (further from today, older)
     # Absolute: [reference_date - 41d, reference_date - 28d]
 
     distance_km: float

@@ -45,8 +45,8 @@ Prior fitness thresholds:
   PRIOR_TRAINED_KM_TOP   = 40.0   km/week equivalent (upper bound for interpolation)
 
 Deep reprise weekly durations (minutes) — calibration V1, recalibrable:
-  DEEP_REPRISE_WEEKLY_MINUTES_FLOOR   = 90   (true beginner / unknown; ~30+35+40 min / 3 sessions)
-  DEEP_REPRISE_WEEKLY_MINUTES_TRAINED = 135  (former trained runner; ~35+45+55 min / 3 sessions)
+  DEEP_REPRISE_WEEKLY_MINUTES_FLOOR   = 105  (true beginner / unknown; = sum [30,35,40])
+  DEEP_REPRISE_WEEKLY_MINUTES_TRAINED = 135  (former trained runner; = sum [35,45,55])
 
   The actual weekly target is linearly interpolated between FLOOR and TRAINED
   based on prior_weekly_km_equivalent.
@@ -128,7 +128,6 @@ DEEP_REPRISE_WEEKLY_MINUTES_FLOOR: int = 105
 """Weekly duration target (min) for deep_reprise — true beginner / unknown.
 Corresponds to sum of PR77 REPRISE_DEEP_SESSION_MINUTES = [30, 35, 40].
 Calibration V1, recalibrable."""
-
 DEEP_REPRISE_WEEKLY_MINUTES_TRAINED: int = 135
 """Weekly duration target (min) for deep_reprise — former trained runner.
 Corresponds to sum of PR77 REPRISE_DEEP_SESSION_MINUTES_TRAINED = [35, 45, 55].
@@ -141,6 +140,9 @@ Calibration V1, recalibrable. Capped at REPRISE_PROGRESSION_CAP."""
 
 REPRISE_PROGRESSION_CAP: float = 1.60
 """Maximum cumulative growth factor relative to the deep-reprise baseline (+60 %)."""
+
+REPRISE_PROGRESSION_FACTOR_PER_WEEK: float = REPRISE_PROGRESSION_FACTOR - 1.0
+"""Incremental growth per active week (= 0.12 from PR77). Derived from REPRISE_PROGRESSION_FACTOR."""
 
 # Normal weekly progression cap.
 NORMAL_MAX_PROGRESSION: float = 1.10
@@ -514,15 +516,6 @@ def _target_normal(
     target_km = round(proposed, 1)
     reason_codes.append("NORMAL_DISTANCE_BASED")
     return "distance", target_km, None
-
-
-# ---------------------------------------------------------------------------
-# Internal progression factor (separate from public constant for readability)
-# ---------------------------------------------------------------------------
-
-REPRISE_PROGRESSION_FACTOR_PER_WEEK: float = REPRISE_PROGRESSION_FACTOR - 1.0
-"""Incremental growth per active week (= 0.12 from PR77)."""
-
 
 # ---------------------------------------------------------------------------
 # Public entry-point
