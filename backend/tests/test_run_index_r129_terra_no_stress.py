@@ -145,7 +145,7 @@ def test_garmin_path_recommendation_color_unchanged():
 
 
 def test_garmin_path_readiness_v2_intact():
-    """D. Garmin path: run_readiness, confidence, sufficiency_level still present."""
+    """H. Garmin path: run_readiness, confidence, sufficiency_level still present."""
     from garmin.insights import compute_run_index
 
     docs = [_metric(i, _TODAY) for i in range(14)]
