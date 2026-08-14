@@ -632,3 +632,90 @@ class TestHistoryLoadDepthConsistency:
         ]
         h = build_training_history(acts, REF)
         assert h.available_history_days == self._load_available_days(acts)
+
+
+# ---------------------------------------------------------------------------
+# 17. weekly_distance_buckets_28d
+# ---------------------------------------------------------------------------
+
+
+class TestWeeklyDistanceBuckets28d:
+    """TrainingHistory.weekly_distance_buckets_28d returns four 7-day distance buckets."""
+
+    def test_no_activities_all_zeros(self):
+        h = build_training_history([], REF)
+        assert h.weekly_distance_buckets_28d == (0.0, 0.0, 0.0, 0.0)
+
+    def test_bucket0_is_current_week(self):
+        # J-0 to J-6 → bucket 0
+        acts = [_act("running", 3, distance_m=10000.0)]  # 3 days ago → bucket 0
+        h = build_training_history(acts, REF)
+        assert h.weekly_distance_buckets_28d[0] == 10.0
+        assert h.weekly_distance_buckets_28d[1] == 0.0
+        assert h.weekly_distance_buckets_28d[2] == 0.0
+        assert h.weekly_distance_buckets_28d[3] == 0.0
+
+    def test_bucket1_is_one_week_ago(self):
+        acts = [_act("running", 10, distance_m=8000.0)]  # 10 days ago → bucket 1
+        h = build_training_history(acts, REF)
+        assert h.weekly_distance_buckets_28d[0] == 0.0
+        assert h.weekly_distance_buckets_28d[1] == 8.0
+
+    def test_bucket2_is_two_weeks_ago(self):
+        acts = [_act("running", 17, distance_m=6000.0)]  # 17 days ago → bucket 2
+        h = build_training_history(acts, REF)
+        assert h.weekly_distance_buckets_28d[2] == 6.0
+
+    def test_bucket3_is_three_weeks_ago(self):
+        acts = [_act("running", 24, distance_m=5000.0)]  # 24 days ago → bucket 3
+        h = build_training_history(acts, REF)
+        assert h.weekly_distance_buckets_28d[3] == 5.0
+
+    def test_day27_is_in_bucket3(self):
+        acts = [_act("running", 27, distance_m=7000.0)]
+        h = build_training_history(acts, REF)
+        assert h.weekly_distance_buckets_28d[3] == 7.0
+
+    def test_day28_is_outside_all_buckets(self):
+        acts = [_act("running", 28, distance_m=7000.0)]
+        h = build_training_history(acts, REF)
+        assert h.weekly_distance_buckets_28d == (0.0, 0.0, 0.0, 0.0)
+
+    def test_multiple_activities_sum_within_bucket(self):
+        acts = [
+            _act("running", 1, distance_m=5000.0),
+            _act("running", 4, distance_m=6000.0),
+        ]
+        h = build_training_history(acts, REF)
+        assert round(h.weekly_distance_buckets_28d[0], 2) == 11.0
+
+    def test_four_active_weeks(self):
+        acts = [
+            _act("running", 2, distance_m=10000.0),
+            _act("running", 9, distance_m=9000.0),
+            _act("running", 16, distance_m=8000.0),
+            _act("running", 23, distance_m=7000.0),
+        ]
+        h = build_training_history(acts, REF)
+        assert h.weekly_distance_buckets_28d == (10.0, 9.0, 8.0, 7.0)
+
+    def test_non_running_activity_excluded(self):
+        acts = [_act("cycling", 3, distance_m=20000.0)]
+        h = build_training_history(acts, REF)
+        assert h.weekly_distance_buckets_28d == (0.0, 0.0, 0.0, 0.0)
+
+    def test_boundary_day0(self):
+        acts = [_act("running", 0, distance_m=5000.0)]
+        h = build_training_history(acts, REF)
+        assert h.weekly_distance_buckets_28d[0] == 5.0
+
+    def test_boundary_day6_in_bucket0(self):
+        acts = [_act("running", 6, distance_m=5000.0)]
+        h = build_training_history(acts, REF)
+        assert h.weekly_distance_buckets_28d[0] == 5.0
+
+    def test_boundary_day7_in_bucket1(self):
+        acts = [_act("running", 7, distance_m=5000.0)]
+        h = build_training_history(acts, REF)
+        assert h.weekly_distance_buckets_28d[0] == 0.0
+        assert h.weekly_distance_buckets_28d[1] == 5.0
