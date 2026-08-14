@@ -61,6 +61,8 @@ async def get_dashboard(
     run_index_payload = await compute_run_index(db, user_id, language="en") if user_id else None
     metrics = (run_index_payload or {}).get("metrics") or {}
     readiness = metrics.get("run_readiness")
+    # `/run-index` exposes ACWR under `metrics.training_load`; `/api/dashboard`
+    # mirrors that exact V2 field and renames it to `acwr` for its own contract.
     acwr = metrics.get("training_load")
     today_workout = select_workout(readiness, acwr) if readiness is not None else None
 
