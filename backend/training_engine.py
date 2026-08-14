@@ -861,7 +861,7 @@ def determine_target_load(context: Dict, phase: str) -> int:
     Returns:
         Target load in load units (TSS/TRIMP)
     """
-    ctl = context.get("ctl", 40)
+    ctl = context.get("ctl") or 40
     base = ctl
 
     # Phase multipliers
@@ -876,11 +876,11 @@ def determine_target_load(context: Dict, phase: str) -> int:
     multiplier = phase_multipliers.get(phase, 1.0)
     base *= multiplier
 
-    # Adjust based on fatigue
+    # Adjust based on fatigue; treat None acwr/tsb as neutral (no adjustment).
     adjusted = adjust_load_by_fatigue(
         base,
-        context.get("tsb", 0),
-        context.get("acwr", 1.0)
+        context.get("tsb") or 0,
+        context.get("acwr") or 1.0
     )
 
     return int(adjusted)

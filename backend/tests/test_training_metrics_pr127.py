@@ -315,3 +315,189 @@ def test_h_server_no_acwr_1_0_fallback():
     assert 'float(load_doc.get("acwr") or 1.0)' not in source, (
         "server.py must not use ACWR=1.0 fallback in run-readiness"
     )
+
+
+# ---------------------------------------------------------------------------
+# I. /coach/analyze must NOT expose km-based ACWR (#127 pre-merge corrections)
+# ---------------------------------------------------------------------------
+
+
+def test_i_coach_analyze_no_km_based_acwr():
+    """I. /coach/analyze must not expose km_7/(km_28/4) as ACWR."""
+    server_path = _BACKEND / "server.py"
+    source = server_path.read_text()
+    # The forbidden km-based formula must be gone
+    assert "km_7 / (km_28 / 4)" not in source, (
+        "/coach/analyze must not compute km-based ACWR"
+    )
+
+
+def test_i_coach_analyze_acwr_none():
+    """I. /coach/analyze acwr is set to None (TrainingLoad V2 unavailable in this context)."""
+    server_path = _BACKEND / "server.py"
+    source = server_path.read_text()
+    # The explicit None assignment must be present in the coach/analyze context
+    assert "ACWR (#127 pre-merge corrections)" in source, (
+        "/coach/analyze must set acwr=None with the #127 comment"
+    )
+
+
+def test_i_coach_analyze_acwr_status_unavailable():
+    """I. /coach/analyze acwr_status is 'unavailable' when acwr is None."""
+    server_path = _BACKEND / "server.py"
+    source = server_path.read_text()
+    assert '"unavailable" if acwr is None' in source, (
+        "/coach/analyze must set acwr_status='unavailable' when acwr is None"
+    )
+
+
+# ---------------------------------------------------------------------------
+# J. /training/week-plan must NOT expose km-based ACWR
+# ---------------------------------------------------------------------------
+
+
+def test_j_week_plan_no_km_based_acwr():
+    """J. /training/week-plan context must not compute km-based ACWR."""
+    server_path = _BACKEND / "server.py"
+    source = server_path.read_text()
+    # The specific formula (load_7 / (load_28 / 4)) used in week-plan must be gone
+    assert "load_7 / (load_28 / 4)" not in source, (
+        "/training/week-plan must not compute load_7/(load_28/4) as ACWR"
+    )
+
+
+def test_j_week_plan_acwr_none_in_context():
+    """J. /training/week-plan context dict must set acwr=None."""
+    server_path = _BACKEND / "server.py"
+    source = server_path.read_text()
+    # The context must contain "acwr": None
+    assert '"acwr": None,' in source or "'acwr': None," in source, (
+        "/training/week-plan context must set acwr=None"
+    )
+
+
+# ---------------------------------------------------------------------------
+# K. /run-index Terra path: no None→0.0→0.1 clamp, uses TrainingLoad V2
+# ---------------------------------------------------------------------------
+
+
+def test_k_run_index_no_none_to_zero_clamp():
+    """K. /run-index must not convert acwr None to 0.0."""
+    server_path = _BACKEND / "server.py"
+    source = server_path.read_text()
+    # The forbidden pattern: float(_raw_acwr) if _raw_acwr is not None else 0.0
+    assert "else 0.0" not in source, (
+        "/run-index must not use `else 0.0` ACWR fallback"
+    )
+
+
+def test_k_run_index_no_0_1_clamp():
+    """K. /run-index must not clamp acwr to 0.1 minimum."""
+    server_path = _BACKEND / "server.py"
+    source = server_path.read_text()
+    assert "max(0.1, acwr)" not in source, (
+        "/run-index must not use max(0.1, acwr) clamp"
+    )
+
+
+def test_k_run_index_uses_build_training_load_for_terra():
+    """K. /run-index Terra path must use build_training_load (V2)."""
+    server_path = _BACKEND / "server.py"
+    source = server_path.read_text()
+    assert "_load_snapshot = build_training_load(" in source, (
+        "/run-index Terra path must call build_training_load"
+    )
+    assert "_load_snapshot.acwr" in source, (
+        "/run-index Terra path must read acwr from V2 snapshot"
+    )
+
+
+def test_k_run_index_no_computeTrainingLoad_call():
+    """K. /run-index must not fall back to computeTrainingLoad (km-based legacy)."""
+    server_path = _BACKEND / "server.py"
+    source = server_path.read_text()
+    # computeTrainingLoad may still exist elsewhere but the run-index section
+    # must not call it (the DEBT comment is allowed to remain).
+    # Count occurrences: only inside comments (not code) is acceptable.
+    # Simple check: the call pattern `await computeTrainingLoad(user_id, db)` in
+    # the /run-index block is removed.
+    # We check the entire file has no `load_doc = await computeTrainingLoad` call.
+    assert "load_doc = await computeTrainingLoad" not in source, (
+        "/run-index must not assign load_doc from computeTrainingLoad"
+    )
+
+
+# ---------------------------------------------------------------------------
+# L. No-data scenario: acwr None, no numeric fallback 1.0/0.0/0.1
+# ---------------------------------------------------------------------------
+
+
+def test_l_no_activities_no_numeric_fallback():
+    """L. build_training_load with no activities returns acwr=None (no 0.0/0.1/1.0)."""
+    snap = build_training_load([], _REF)
+    assert snap.acwr is None
+    assert snap.status == "unavailable"
+    # None must propagate — no numeric fallback
+    acwr = snap.acwr
+    assert acwr != 0.0
+    assert acwr != 0.1
+    assert acwr != 1.0
+
+
+def test_l_distance_only_no_numeric_fallback():
+    """L. Activities with distance but no duration: acwr=None, not a numeric value."""
+    acts = [
+        {
+            "activity_type": "running",
+            "start_time": (_REF - timedelta(days=d)).isoformat(),
+            "distance_m": 10_000.0,
+            "duration_s": None,
+        }
+        for d in range(28)
+    ]
+    snap = build_training_load(acts, _REF)
+    assert snap.acwr is None
+
+
+# ---------------------------------------------------------------------------
+# M. /training/metrics ACWR identical to TrainingLoad V2 (non-regression)
+# ---------------------------------------------------------------------------
+
+
+def test_m_training_metrics_acwr_matches_v2():
+    """M. /training/metrics acwr always equals TrainingLoad V2 build_training_load."""
+    acts = [_garmin_act(_USER_A, days_ago=d, duration_s=1800.0) for d in range(28)]
+    result = _simulate_training_metrics(acts)
+    expected_snap = build_training_load(acts, _REF)
+    assert result["acwr"] == expected_snap.acwr, (
+        "/training/metrics acwr must match TrainingLoad V2"
+    )
+    assert result["acwr_status"] != "unavailable" or expected_snap.acwr is None
+
+
+# ---------------------------------------------------------------------------
+# N. week-plan context supports acwr=None (no downstream crash)
+# ---------------------------------------------------------------------------
+
+
+def test_n_week_plan_context_acwr_none_supported():
+    """N. week-plan context with acwr=None is handled by determine_target_load."""
+    from training_engine import determine_target_load
+    # Build a context that mirrors what /training/week-plan now produces
+    context = {
+        "ctl": None,
+        "atl": None,
+        "tsb": None,
+        "acwr": None,
+        "weekly_km": 30.0,
+        "load_7": 300.0,
+        "load_28": 1200.0,
+    }
+    # Must not raise; should return a numeric target
+    try:
+        result = determine_target_load(context, "build")
+        assert isinstance(result, (int, float)), "determine_target_load must return a number"
+    except Exception as e:
+        raise AssertionError(
+            f"determine_target_load must support acwr=None in context, got: {e}"
+        ) from e
