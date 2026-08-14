@@ -19,7 +19,7 @@ BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "http://localhost:8001").rstr
 
 VALID_RECOMMENDATIONS = {"RUN HARD", "EASY RUN", "REST"}
 VALID_COLORS = {"green", "yellow", "red"}
-VALID_STATUSES = {"green", "yellow", "red"}
+VALID_STATUSES = {"green", "yellow", "red", "gray"}
 
 # Use a test-only user ID that will not have a Terra token stored.
 

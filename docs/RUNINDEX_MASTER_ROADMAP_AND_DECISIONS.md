@@ -658,16 +658,33 @@ Deux axes :
   - `rhr_baseline` calculé via `get_rhr_v2_baseline(metrics_docs, today)` ;
   - suppression du fallback `55.0` / `rhr_today` ;
   - `rhr_delta : Optional[float]` — None quand baseline absente ;
-  - `rhr_status` gère `rhr_delta=None` (→ "green") ;
+  - `rhr_status` gère `rhr_delta=None` → **"gray"** (jamais "green" pour données absentes) ;
   - raison RHR uniquement affichée quand `rhr_delta is not None` ;
   - boucle history : suppression de toutes les variables fatigue legacy ;
   - `history[]` : clé `fatigue_ratio` supprimée.
+- `frontend/src/pages/Dashboard.jsx` :
+  - `ReadinessTile` gère explicitement le statut `"gray"` (couleur `#6b7280`) ;
+  - tuile RHR : fallback `m.rhr_status || "gray"` (plus `|| "green"`) ;
+  - valeur absente (`rhr_today=null`) affichée `"—"`, aucun signal positif fictif.
+- `backend/tests/test_run_index_screen.py` / `test_cardio_coach_screen.py` :
+  - `VALID_STATUSES` étendu à `{"green", "yellow", "red", "gray"}`.
 - `backend/tests/test_run_index_r4b_history_readiness_v2.py` : shape mise à jour (sans `fatigue_ratio`).
 - `backend/tests/test_run_index_r4c_history_load_v2.py` : assertion inversée (`fatigue_ratio` absent).
-- `backend/tests/test_run_index_r5_history_fatigue_cleanup.py` : **nouveau** — 10 tests couvrant
+- `backend/tests/test_run_index_r5_history_fatigue_cleanup.py` : **nouveau** — 13 tests couvrant
   l'absence de `fatigue_ratio` en history, la shape, la non-régression readiness/load,
   l'alignement baseline RHR V2, `rhr_delta=None`, `rhr_baseline=None` sans données prior,
-  la non-régression `metrics.fatigue_ratio`, et l'isolation multi-user.
+  la non-régression `metrics.fatigue_ratio`, l'isolation multi-user, et la sémantique
+  **None ≠ green** pour `rhr_status` (tests 11-13).
+- `frontend/src/__tests__/dashboard-run-readiness-null.test.jsx` : tests RHR absent → tuile grise,
+  affichage `"—"`, absence de couleur verte, sans crash.
+
+### Règle sémantique RHR — None ≠ green
+
+> **`rhr_delta=None` → `rhr_status="gray"`, jamais `"green"`.**
+>
+> Une baseline ou valeur RHR absente n'est pas un signal positif. Le statut `"gray"` (indisponible)
+> est le seul mapping correct pour l'absence de données. Le statut `"green"` est réservé aux cas
+> où `rhr_delta` est présent et ≤ 3 bpm.
 
 ### Dettes restantes après #126
 

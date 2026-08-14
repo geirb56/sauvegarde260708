@@ -216,8 +216,8 @@ async def compute_run_index(
     if hrv_delta is not None:
         hrv_status = "green" if hrv_delta <= 5 else ("yellow" if hrv_delta <= 10 else "red")
     rhr_status = (
-        "green" if rhr_delta is None or rhr_delta <= 3
-        else ("yellow" if rhr_delta <= 7 else "red")
+        "gray" if rhr_delta is None
+        else ("green" if rhr_delta <= 3 else ("yellow" if rhr_delta <= 7 else "red"))
     )
     sleep_status = "green" if sleep_penalty <= 1.0 else ("yellow" if sleep_penalty <= 2.5 else "red")
     # Load status is derived from the V2 snapshot status label (no fallback colour).

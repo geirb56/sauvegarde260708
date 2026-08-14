@@ -12,6 +12,9 @@ Test matrix (problem statement requirements)
 8.  rhr_baseline=None when no prior data (only today's doc, no 14-day history)
 9.  metrics.fatigue_ratio CURRENT non-regression (field present, value >= 1.0)
 10. multi-user isolation: each user's RHR baseline uses only their own data
+11. baseline RHR absent → rhr_delta=None (None ≠ green, #126 post-merge correction)
+12. rhr_status="gray" when rhr_delta=None — never "green" for absent data
+13. rhr_status normal range ("green"/"yellow"/"red") when rhr_delta is present
 """
 
 from __future__ import annotations
@@ -319,3 +322,79 @@ def test_multi_user_rhr_isolation():
             f"User A (low RHR) baseline {baseline_a} should be less than "
             f"user B (high RHR) baseline {baseline_b}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Test 11 — baseline RHR absent → rhr_delta=None (None ≠ green, #126 post-merge)
+# ---------------------------------------------------------------------------
+
+
+def test_baseline_rhr_absent_rhr_delta_is_none():
+    """When no prior RHR data exist, rhr_delta must be None — not a fallback value."""
+    # Today-only doc: no prior 14-day history → baseline cannot be computed.
+    today_doc = _metric(0, _TODAY, rhr=_RHR_NORMAL)
+    acts = _activities(n=3, ref=_TODAY)
+    db = _make_db([today_doc], acts)
+
+    payload = asyncio.run(compute_run_index(db, "userA", reference_date=_TODAY))
+    if payload is None:
+        return  # No data at all — acceptable
+    m = payload["metrics"]
+    assert m["rhr_delta"] is None, (
+        f"rhr_delta must be None when baseline is absent (None ≠ green), got {m['rhr_delta']}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 12 — rhr_status="gray" when rhr_delta=None — never "green" for absent data
+# ---------------------------------------------------------------------------
+
+
+def test_rhr_status_is_gray_when_rhr_delta_none():
+    """rhr_status must be 'gray' when rhr_delta is None — never 'green' for absent data."""
+    # Use only today's doc so baseline is absent and rhr_delta becomes None.
+    today_doc = _metric(0, _TODAY, rhr=_RHR_NORMAL)
+    acts = _activities(n=3, ref=_TODAY)
+    db = _make_db([today_doc], acts)
+
+    payload = asyncio.run(compute_run_index(db, "userA", reference_date=_TODAY))
+    if payload is None:
+        return  # No data at all — acceptable
+    m = payload["metrics"]
+
+    if m["rhr_delta"] is None:
+        assert m["rhr_status"] == "gray", (
+            f"rhr_status must be 'gray' when rhr_delta=None, got '{m['rhr_status']}' — "
+            f"None must never map to 'green'"
+        )
+    # Either way, "green" must never be produced from an absent delta.
+    assert m["rhr_status"] != "green" or m["rhr_delta"] is not None, (
+        "rhr_status='green' is only allowed when rhr_delta is a real (non-None) value"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 13 — rhr_status is "green"/"yellow"/"red" when rhr_delta is present
+# ---------------------------------------------------------------------------
+
+_VALID_RHR_STATUSES = {"green", "yellow", "red", "gray"}
+
+
+def test_rhr_status_valid_range_when_rhr_delta_present():
+    """When rhr_delta is not None, rhr_status must be green/yellow/red (not gray)."""
+    docs = _metrics(n=14, ref=_TODAY, rhr=_RHR_NORMAL)
+    acts = _activities(n=5, ref=_TODAY)
+    db = _make_db(docs, acts)
+
+    payload = asyncio.run(compute_run_index(db, "userA", reference_date=_TODAY))
+    assert payload is not None
+    m = payload["metrics"]
+
+    if m["rhr_delta"] is not None:
+        assert m["rhr_status"] in {"green", "yellow", "red"}, (
+            f"rhr_status should be green/yellow/red when rhr_delta={m['rhr_delta']}, "
+            f"got '{m['rhr_status']}'"
+        )
+    assert m["rhr_status"] in _VALID_RHR_STATUSES, (
+        f"rhr_status '{m['rhr_status']}' is not a valid status token"
+    )
