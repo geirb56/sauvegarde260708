@@ -3617,12 +3617,13 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
             raise ValueError("Missing recommendation from run-index")
             
     except Exception as e:
-        # Neutral defaults if run-index is unavailable (no mock dependency).
-        logger.warning(f"[TrainingToday] run-index unavailable, using neutral defaults: {e}")
-        fatigue_data_source = "default"
-        run_readiness = 100
-        recommendation = "RUN HARD"
-        recommendation_color = "green"
+        # Readiness unavailable — do NOT invent a physiological state.
+        # None/UNAVAILABLE/gray expresses "unknown", NOT "athlete is perfectly ready".
+        logger.warning(f"[TrainingToday] run-index unavailable: {e}")
+        fatigue_data_source = "unavailable"
+        run_readiness = None
+        recommendation = "UNAVAILABLE"
+        recommendation_color = "gray"
 
     # 3. Get historical feedback for this user
     feedback_cursor = db.training_feedback.find(

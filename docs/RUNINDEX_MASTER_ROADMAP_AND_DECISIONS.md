@@ -1132,10 +1132,24 @@ Aucune nouvelle formule physiologique parallèle à Readiness V2 n'est introduit
 |---|---|
 | `backend/garmin/insights.py` | calcul `fatigue_physio` / `fatigue_ratio` / `fatigue_status` ; poids `w_hrv/w_rhr/w_sleep/hrv_term` ; reason "Ratio de fatigue" ; champs `metrics.fatigue_physio` / `fatigue_ratio` / `fatigue_status` |
 | `backend/server.py` (Terra path) | calcul `fatigue_physio` / `fatigue_ratio` ; formule `_stress` (`0.5 * hrv_delta + 0.3 * rhr_delta + 0.2 * sleep_score`) et seuils `> 5.0` / `> 2.0` ; `fatigue_status` ; reason "Fatigue Ratio" ; champ historique `fatigue_ratio` ; champs `metrics.fatigue_physio` / `fatigue_ratio` / `fatigue_status` |
-| `backend/server.py` (training-today) | `fatigue_ratio` / `fatigue_status` du payload `fatigue` ; fallback `fatigue_ratio=1.0` / `fatigue_status="green"` |
+| `backend/server.py` (training-today) | `fatigue_ratio` / `fatigue_status` du payload `fatigue` ; fallback `fatigue_ratio=1.0` / `fatigue_status="green"` ; **fallback fictif `run_readiness=100` / `recommendation="RUN HARD"` / `recommendation_color="green"` remplacé par `run_readiness=None` / `recommendation="UNAVAILABLE"` / `recommendation_color="gray"`** |
 | `frontend/src/pages/Dashboard.jsx` | `fatigue_status` → `recommendation_color` |
 | `frontend/src/pages/Onboarding.jsx` | `fatigue_ratio` → `run_readiness` |
 | `frontend/src/__tests__/dashboard-run-readiness-null.test.jsx` | champs `fatigue_physio` / `fatigue_ratio` / `fatigue_status` des mocks |
+
+### Comportement /training/today quand /run-index est indisponible
+
+**Règle permanente :**
+
+```
+Readiness indisponible
+→ run_readiness        = None         (JAMAIS 100)
+→ recommendation       = "UNAVAILABLE" (JAMAIS "RUN HARD")
+→ recommendation_color = "gray"        (JAMAIS "green")
+```
+
+Une absence de Readiness ne signifie pas un athlète parfaitement prêt.
+Aucune décision physiologique n'est inventée pour combler l'absence de données.
 
 ### Comportement Terra retenu
 
@@ -1170,6 +1184,10 @@ mais ne sont pas recombinées dans une nouvelle pondération.
   absence de `_stress` / pondérations HRV/RHR/Sleep / seuils 5.0 / 2.0 dans le code Terra ;
   recommendation = UNAVAILABLE ; recommendation_color = gray ;
   Garmin path inchangé (recommendation_color green/yellow/red, Readiness V2 intacte).
+- `backend/tests/test_run_index_r129_training_today_fallback.py` (9 tests) :
+  fallback `/run-index` indisponible → `run_readiness=None` / `recommendation=UNAVAILABLE` / `recommendation_color=gray` ;
+  UNAVAILABLE ne produit pas d'adaptation RUN HARD / n'intensifie pas la séance ;
+  non-régression RUN HARD / EASY RUN / REST ; aucun champ fatigue legacy dans la sortie.
 - `backend/tests/test_run_index_r5_history_fatigue_cleanup.py` : test 9 mis à jour
   (absence de fatigue_ratio/status/physio au lieu de présence).
 

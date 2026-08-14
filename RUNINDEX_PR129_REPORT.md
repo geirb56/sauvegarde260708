@@ -58,6 +58,12 @@ redondants avec Readiness V2. Aucune métrique fatigue parallèle à Readiness V
 - Supprimé : fallback `fatigue_ratio = 1.0` / `fatigue_status = "green"`
 - Supprimé : `"fatigue_ratio"` / `"fatigue_status"` du payload `fatigue`
 - Conservé : `run_readiness`, `recommendation`, `recommendation_color`
+- **Corrigé (micro-correction finale)** : fallback fictif `run_readiness = 100` / `recommendation = "RUN HARD"` / `recommendation_color = "green"` remplacé par `run_readiness = None` / `recommendation = "UNAVAILABLE"` / `recommendation_color = "gray"` — une absence de Readiness n'implique pas un athlète parfaitement prêt.
+
+**Règle permanente :**
+- Readiness indisponible → `run_readiness = None`, `recommendation = "UNAVAILABLE"`, `recommendation_color = "gray"`
+- Jamais de fallback `100 / RUN HARD / green`.
+- Aucune nouvelle formule physiologique parallèle à Readiness V2 n'est introduite.
 
 ### backend/server.py — docstring
 
@@ -114,7 +120,23 @@ redondants avec Readiness V2. Aucune métrique fatigue parallèle à Readiness V
 | 7 | `test_reasons_no_fatigue_ratio_string` | pas de "Fatigue Ratio" dans les reasons |
 | 8 | `test_multi_user_no_fatigue_fields` | isolation multi-user |
 
-### backend/tests/test_run_index_r129_terra_no_stress.py
+### backend/tests/test_run_index_r129_training_today_fallback.py
+
+9 tests ciblant le fallback `/training/today` quand `/run-index` est indisponible :
+
+| # | Nom | Description |
+|---|---|---|
+| 1 | `test_fallback_run_readiness_is_none` | `run_readiness` est `None` (pas 100) |
+| 2 | `test_fallback_recommendation_is_unavailable` | `recommendation` est `UNAVAILABLE` (pas RUN HARD) |
+| 3 | `test_fallback_recommendation_color_is_gray` | `recommendation_color` est `gray` (pas green) |
+| 4 | `test_unavailable_does_not_produce_run_hard_adaptation` | UNAVAILABLE ne produit pas de raison RUN HARD |
+| 5 | `test_unavailable_does_not_intensify_session` | UNAVAILABLE n'augmente pas la charge |
+| 6 | `test_run_hard_recommendation_unchanged` | RUN HARD → pas d'adaptation (non-régression) |
+| 7 | `test_easy_run_recommendation_applies` | EASY RUN → adaptation appliquée (non-régression) |
+| 8 | `test_rest_recommendation_applies` | REST → adaptation appliquée (non-régression) |
+| 9 | `test_adapt_session_no_fatigue_ratio_field` | aucun champ fatigue legacy dans la sortie |
+
+
 
 10 tests :
 
@@ -131,7 +153,7 @@ redondants avec Readiness V2. Aucune métrique fatigue parallèle à Readiness V
 | 9 | `test_terra_section_contains_unavailable` | Terra → UNAVAILABLE |
 | 10 | `test_terra_section_contains_gray` | Terra → gray |
 
-**Résultat : 18 tests PASSED (10 nouveaux + 8 r129 existants)**
+**Résultat : 27 tests PASSED (9 nouveaux + 18 existants)**
 
 ---
 
@@ -166,12 +188,14 @@ redondants avec Readiness V2. Aucune métrique fatigue parallèle à Readiness V
 ```
 tests/test_run_index_r129_fatigue_removal.py          8 passed
 tests/test_run_index_r129_terra_no_stress.py         10 passed
+tests/test_run_index_r129_training_today_fallback.py  9 passed
 tests/test_run_index_r5_history_fatigue_cleanup.py   13 passed
-Total: 31 passed, 0 failed
+Total: 40 passed, 0 failed
 ```
 
 `/run-index` ne contient plus `fatigue_ratio` / `fatigue_status` / `fatigue_physio`.
 Aucune nouvelle formule physiologique parallèle à Readiness V2 n'est introduite.
 Terra : `recommendation = "UNAVAILABLE"` / `recommendation_color = "gray"`.
+Fallback `/training/today` : `run_readiness = None` / `recommendation = "UNAVAILABLE"` / `recommendation_color = "gray"` — jamais `100 / RUN HARD / green`.
 Dashboard / Onboarding migrent vers `recommendation_color` / `run_readiness`.
 Readiness V2 inchangée. Multi-user OK.
