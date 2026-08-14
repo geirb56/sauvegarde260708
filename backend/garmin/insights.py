@@ -162,21 +162,6 @@ async def compute_run_index(
     )
     sleep_penalty = max(0.0, 8.0 - sleep_hours_val) + (1.0 - sleep_efficiency) * 2.0
 
-    if have_hrv:
-        w_hrv, w_rhr, w_sleep = 0.5, 0.3, 0.2
-        hrv_term = w_hrv * (hrv_delta or 0.0)
-    else:
-        w_hrv, w_rhr, w_sleep = 0.0, 0.6, 0.4
-        hrv_term = 0.0
-    # Use 0.0 for missing rhr_delta in fatigue computation (neutral, no fictional spike).
-    fatigue_physio = hrv_term + w_rhr * (rhr_delta if rhr_delta is not None else 0.0) + w_sleep * sleep_penalty
-    # Fatigue cannot be negative; a very fresh state is simply 0.
-    fatigue_physio = max(0.0, fatigue_physio)
-    # Fatigue Ratio = physiological fatigue only (RHR/HRV/sleep), centred on 1.0.
-    # NOT divided by ACWR: training load is shown separately. Higher = more fatigued.
-    # 1.0 fresh · ~1.2 moderate · >1.5 high.
-    fatigue_ratio = 1.0 + fatigue_physio / 10.0
-
     # --- Run Readiness V2 ---
     _v2_result = build_readiness_v2_from_garmin_data(
         metrics_docs, activities, today, load_snapshot=load_snapshot
@@ -222,7 +207,6 @@ async def compute_run_index(
     sleep_status = "green" if sleep_penalty <= 1.0 else ("yellow" if sleep_penalty <= 2.5 else "red")
     # Load status is derived from the V2 snapshot status label (no fallback colour).
     load_status = _acwr_status_to_color(load_snapshot.status)
-    fatigue_status = "green" if fatigue_ratio <= 1.2 else ("yellow" if fatigue_ratio <= 1.5 else "red")
 
     # --- Reasons (omit HRV when unavailable) — localized ---
     reasons = []
@@ -254,9 +238,6 @@ async def compute_run_index(
         _t = {"fr": "Charge d'entraînement (ACWR) indisponible",
               "es": "Carga de entrenamiento (ACWR) no disponible",
               "en": "Training Load (ACWR) unavailable"}
-    reasons.append(_t.get(lang, _t["fr"]))
-    _t = {"fr": f"Ratio de fatigue {fatigue_ratio:.2f}", "es": f"Ratio de fatiga {fatigue_ratio:.2f}",
-          "en": f"Fatigue Ratio {fatigue_ratio:.2f}"}
     reasons.append(_t.get(lang, _t["fr"]))
 
     # --- 30-day history (oldest -> newest) — run_readiness = Readiness V2 ---
@@ -331,9 +312,6 @@ async def compute_run_index(
             # accept null (no chronic load = unavailable, never a fake 1.0).
             "training_load": round(acwr, 3) if acwr is not None else None,
             "training_load_status": load_status,
-            "fatigue_physio": round(fatigue_physio, 2),
-            "fatigue_ratio": round(fatigue_ratio, 2),
-            "fatigue_status": fatigue_status,
             "run_readiness": run_readiness,  # float or None (INSUFFICIENT)
             "run_readiness_status": readiness_status,
             "confidence": readiness_v2_confidence,

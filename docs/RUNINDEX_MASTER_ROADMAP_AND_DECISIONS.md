@@ -943,7 +943,8 @@ Puis:
 - [x] R4C history[].training_load → TrainingLoad V2 (MERGED — PR #125)
 - [x] #126 history[] fatigue legacy cleanup + RHR baseline unification (MERGED — PR #126)
 - [x] #127 Training metrics / TSB legacy cleanup (MERGED — PR #127)
-- [x] #128 Training Load Metrics single source cleanup (IMPLEMENTED / PENDING MERGE — PR #128)
+- [x] #128 Training Load Metrics single source cleanup (MERGED — PR #128 — runtime PASS)
+- [x] #129 Remove legacy fatigue_ratio / fatigue_status / fatigue_physio (IMPLEMENTED / PENDING MERGE — PR #129)
 
 ### TRAINING ENGINE
 
@@ -1007,12 +1008,17 @@ Ce document suit l'état réel de `main` et des PR en cours:
   `metrics.fatigue_ratio` conservé ; aucune modification calibration Readiness V2).
 - #127 Training metrics / TSB legacy cleanup est **MERGED — PR #127**
   (voir section 23 ci-dessous pour le détail complet).
-- #128 Training Load Metrics single source cleanup est **IMPLEMENTED / PENDING MERGE — PR #128**
+- #128 Training Load Metrics single source cleanup est **MERGED — PR #128 — runtime PASS**
   (source unique ACWR runtime, `/api/dashboard` migré V2, `coach_service` = V2 ou `None`,
   `CTL/ATL/TSB` non fabriqués, `backend/engine/training_load_engine.py` supprimé).
-- Dettes restantes exactes : `fatigue_ratio` courant reste legacy CardioCoach ; les couches
-  applicatives Weekly Target / Workout Generator / Workout Analysis restent legacy mais ne
-  fabriquent plus de faux ACWR/CTL/ATL/TSB.
+- #129 Remove legacy fatigue_ratio / fatigue_status / fatigue_physio est **IMPLEMENTED / PENDING MERGE — PR #129**
+  (`fatigue_ratio`, `fatigue_status`, `fatigue_physio` supprimés de `metrics` (Garmin et Terra),
+  de `history[]`, des `reasons`, et du consumer frontend/coach.
+  Aucune métrique fatigue parallèle à Readiness V2 — Readiness V2 et ses sous-scores inchangés.
+  Recommendation dérivée de Readiness V2 (Garmin path) ou signaux physio directs (Terra path).
+  Dashboard et Onboarding migrent vers `recommendation_color` / `run_readiness`.)
+- Dettes restantes exactes : Weekly Target / Workout Generator / Workout Analysis restent legacy mais
+  ne fabriquent plus de faux ACWR/CTL/ATL/TSB ni de fatigue_ratio.
 
 ---
 
@@ -1069,7 +1075,7 @@ Ce document suit l'état réel de `main` et des PR en cours:
 ### Décision NEXT
 
 Aucune dette bloquante restante sur la source unique ACWR.
-→ NEXT : **Threshold Estimator LT1/LT2** (voir section 22) après validation de #128.
+→ NEXT : **Threshold Estimator LT1/LT2** (voir section 22) après validation de #129.
 
 ---
 
@@ -1108,3 +1114,44 @@ Principes:
 - confidence explicite ;
 - aucune assimilation automatique: `Garmin moderate/vigorous == LT1/LT2` ;
 - les minutes Garmin R1.7B restent des faits provider-normalisés.
+
+---
+
+## 24) PR #129 — Remove legacy fatigue_ratio / fatigue_status / fatigue_physio (IMPLEMENTED / PENDING MERGE)
+
+### Objectif
+
+Supprimer complètement `fatigue_ratio`, `fatigue_status` et `fatigue_physio` devenus
+redondants avec Readiness V2. Aucune métrique fatigue parallèle à Readiness V2.
+
+### Suppressions
+
+| Fichier | Champ / code supprimé |
+|---|---|
+| `backend/garmin/insights.py` | calcul `fatigue_physio` / `fatigue_ratio` / `fatigue_status` ; poids `w_hrv/w_rhr/w_sleep/hrv_term` ; reason "Ratio de fatigue" ; champs `metrics.fatigue_physio` / `fatigue_ratio` / `fatigue_status` |
+| `backend/server.py` (Terra path) | calcul `fatigue_physio` / `fatigue_ratio` ; recommendation basée sur `fatigue_ratio` ; `fatigue_status` ; reason "Fatigue Ratio" ; champ historique `fatigue_ratio` ; champs `metrics.fatigue_physio` / `fatigue_ratio` / `fatigue_status` |
+| `backend/server.py` (training-today) | `fatigue_ratio` / `fatigue_status` du payload `fatigue` ; fallback `fatigue_ratio=1.0` / `fatigue_status="green"` |
+| `frontend/src/pages/Dashboard.jsx` | `fatigue_status` → `recommendation_color` |
+| `frontend/src/pages/Onboarding.jsx` | `fatigue_ratio` → `run_readiness` |
+| `frontend/src/__tests__/dashboard-run-readiness-null.test.jsx` | champs `fatigue_physio` / `fatigue_ratio` / `fatigue_status` des mocks |
+
+### Conservé intact
+
+- Readiness V2 (`run_readiness`, `run_readiness_status`, `confidence`, `sufficiency_level`, `readiness_reasons`)
+- Sous-scores physio/sleep/load de Readiness V2
+- TrainingLoad V2 (`training_load`, `training_load_status`, `training_load_v2`)
+- Recommandations (RUN HARD / EASY RUN / REST / UNAVAILABLE) dérivées de Readiness V2
+- LT1/LT2 hors scope
+
+### Tests
+
+- `backend/tests/test_run_index_r129_fatigue_removal.py` (8 tests) :
+  metrics sans fatigue_ratio/status/physio, history[] sans fatigue_ratio,
+  Readiness V2 inchangée, recommendation présente, reasons sans "Fatigue Ratio",
+  multi-user isolation.
+- `backend/tests/test_run_index_r5_history_fatigue_cleanup.py` : test 9 mis à jour
+  (absence de fatigue_ratio/status/physio au lieu de présence).
+
+### Décision NEXT
+
+→ **Threshold Estimator LT1/LT2** (voir section 22).

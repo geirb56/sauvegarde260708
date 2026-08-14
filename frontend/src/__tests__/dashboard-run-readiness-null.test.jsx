@@ -61,9 +61,6 @@ function buildCardioPayload({ run_readiness }) {
       sleep_status: "green",
       training_load: 1.05,
       training_load_status: "green",
-      fatigue_physio: 0.0,
-      fatigue_ratio: 1.0,
-      fatigue_status: "green",
     },
     history: [],
   };
@@ -199,9 +196,6 @@ function buildRhrAbsentPayload() {
       sleep_status: "green",
       training_load: 1.05,
       training_load_status: "green",
-      fatigue_physio: 0.0,
-      fatigue_ratio: 1.0,
-      fatigue_status: "green",
     },
     history: [],
   };

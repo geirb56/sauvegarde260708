@@ -2881,8 +2881,7 @@ async def get_run_index(user: dict = Depends(auth_user), language: str = "fr"):
     """Return the full RunIndex running-screen payload.
 
     Data source: 100% real Garmin (gccli). Resting HR + sleep come from gccli;
-    training load / ACWR / fatigue ratio / readiness are computed from the real
-    synced activities.
+    training load / ACWR / readiness are computed from the real synced activities.
 
     Terra is implemented for POSSIBLE FUTURE USE but is NOT connected: when no
     Terra token exists (current state), the endpoint returns a NO_DATA payload
@@ -3002,25 +3001,19 @@ async def get_run_index(user: dict = Depends(auth_user), language: str = "fr"):
     training_load: Optional[float] = acwr
 
     # ----------------------------------------------------------------
-    # Fatigue computations (as specified).
-    # hrv_delta: positive value means HRV dropped below baseline (worse recovery).
-    # rhr_delta: positive value means RHR rose above baseline (more fatigued).
+    # Recommendation — derived from Readiness V2 (aligned with Garmin path).
     # ----------------------------------------------------------------
+    sleep_score = max(0.0, 8.0 - sleep_hours) + (1.0 - sleep_efficiency) * 2.0
     hrv_delta = float(hrv_baseline) - float(hrv_today)            # positive → HRV below baseline (bad)
     rhr_delta = float(rhr_today) - float(rhr_baseline)            # positive → RHR above baseline (bad)
-    sleep_score = max(0.0, 8.0 - sleep_hours) + (1.0 - sleep_efficiency) * 2.0
-    fatigue_physio = 0.5 * hrv_delta + 0.3 * rhr_delta + 0.2 * sleep_score
-    # Fatigue Ratio = physiological fatigue only, centred on 1.0 (NOT divided by
-    # ACWR; training load is reported separately). Higher = more fatigued.
-    fatigue_ratio = 1.0 + max(0.0, fatigue_physio) / 10.0
-    # ----------------------------------------------------------------
-    # Recommendation.
-    # ----------------------------------------------------------------
-    if fatigue_ratio > 1.5:
+
+    # Derive recommendation from physio signals (no fatigue_ratio; Readiness V2 unavailable on Terra path).
+    _stress = 0.5 * hrv_delta + 0.3 * rhr_delta + 0.2 * sleep_score
+    if _stress > 5.0:
         recommendation = "REST"
         recommendation_emoji = "🔴"
         recommendation_color = "red"
-    elif fatigue_ratio > 1.2:
+    elif _stress > 2.0:
         recommendation = "EASY RUN"
         recommendation_emoji = "🟡"
         recommendation_color = "yellow"
@@ -3039,7 +3032,6 @@ async def get_run_index(user: dict = Depends(auth_user), language: str = "fr"):
         "gray" if acwr is None
         else ("green" if 0.8 <= acwr <= 1.3 else ("yellow" if acwr <= 1.5 else "red"))
     )
-    fatigue_status = "green" if fatigue_ratio <= 1.2 else ("yellow" if fatigue_ratio <= 1.5 else "red")
 
     # ----------------------------------------------------------------
     # Human-readable reasons.
@@ -3051,7 +3043,6 @@ async def get_run_index(user: dict = Depends(auth_user), language: str = "fr"):
         f"RHR {rhr_prefix}{rhr_delta:.1f} bpm vs baseline",
         f"Sleep {sleep_hours:.1f} h at {sleep_efficiency * 100:.0f}% efficiency",
         f"Training Load (ACWR) {acwr:.2f}" if acwr is not None else "Training Load (ACWR) unavailable",
-        f"Fatigue Ratio {fatigue_ratio:.2f}",
     ]
 
     # ----------------------------------------------------------------
@@ -3084,16 +3075,12 @@ async def get_run_index(user: dict = Depends(auth_user), language: str = "fr"):
             doc_eff = doc_sq / 100.0 if doc_sq > 1.0 else doc_sq
         else:
             doc_eff = 0.80
-        doc_sleep_score = max(0.0, 8.0 - doc_sleep) + (1.0 - doc_eff) * 2.0
-        doc_fatigue_physio = 0.5 * doc_hrv_delta + 0.3 * doc_rhr_delta + 0.2 * doc_sleep_score
-        doc_fatigue_ratio = 1.0 + max(0.0, doc_fatigue_physio) / 10.0
 
         history.append({
             "day": day_label,
             "date": doc_date,
             "hrv": round(float(doc_hrv), 1),
             "training_load": round(training_load, 2) if training_load is not None else None,
-            "fatigue_ratio": round(doc_fatigue_ratio, 2),
         })
 
     # Leave history empty if fewer than 7 days of data (no mock padding).
@@ -3120,9 +3107,6 @@ async def get_run_index(user: dict = Depends(auth_user), language: str = "fr"):
             "sleep_status": sleep_status,
             "training_load": round(acwr, 2) if acwr is not None else None,
             "training_load_status": load_status,
-            "fatigue_physio": round(fatigue_physio, 2),
-            "fatigue_ratio": round(fatigue_ratio, 2),
-            "fatigue_status": fatigue_status,
         },
         "reasons": reasons,
         "history": history,
@@ -3584,10 +3568,10 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     - Current fatigue level from /api/run-index
     - Historical feedback
 
-    Adaptation logic:
-    - Green (fatigue_ratio <= 1.2): Keep session as planned
-    - Orange (1.2 < fatigue_ratio <= 1.5): Reduce intensity/duration -20%, convert intervals to easy
-    - Red (fatigue_ratio > 1.5): Convert to recovery/Z1, reduce duration -40 to -50%
+    Adaptation logic (based on Run Readiness V2 recommendation):
+    - Green (RUN HARD): Keep session as planned
+    - Orange (EASY RUN): Reduce intensity/duration -20%, convert intervals to easy
+    - Red (REST): Convert to recovery/Z1, reduce duration -40 to -50%
     """
     from datetime import date as date_class
 
@@ -3631,22 +3615,18 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     try:
         run_index_data = await get_run_index(user=user)
         _cc_metrics = run_index_data.get("metrics", {}) or {}
-        fatigue_ratio = _cc_metrics.get("fatigue_ratio")
-        fatigue_status = _cc_metrics.get("fatigue_status")
         run_readiness = _cc_metrics.get("run_readiness")
         recommendation = run_index_data.get("recommendation")
         recommendation_color = run_index_data.get("recommendation_color")
-        
-        # Check if any critical value is None (would cause float() error downstream)
-        if fatigue_ratio is None or fatigue_status is None:
-            raise ValueError("Missing fatigue metrics from run-index")
+
+        # Check if recommendation is missing (would cause issues downstream)
+        if recommendation is None:
+            raise ValueError("Missing recommendation from run-index")
             
     except Exception as e:
         # Neutral defaults if run-index is unavailable (no mock dependency).
         logger.warning(f"[TrainingToday] run-index unavailable, using neutral defaults: {e}")
         fatigue_data_source = "default"
-        fatigue_ratio = 1.0
-        fatigue_status = "green"
         run_readiness = 100
         recommendation = "RUN HARD"
         recommendation_color = "green"
@@ -3676,8 +3656,6 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
         "adaptation_applied": adaptation_applied,
         "adaptation_reason": adaptation_reason,
         "fatigue": {
-            "fatigue_ratio": round(fatigue_ratio, 2),
-            "fatigue_status": fatigue_status,
             "run_readiness": run_readiness,
             "recommendation": recommendation,
             "recommendation_color": recommendation_color,

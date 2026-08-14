@@ -802,8 +802,8 @@ export default function Dashboard() {
         style={{ 
           animationDelay: "200ms",
           border: todaySession?.fatigue ? `2px solid ${
-            todaySession.fatigue.fatigue_status === "green" ? "#10b981" :
-            todaySession.fatigue.fatigue_status === "yellow" ? "#f59e0b" : "#ef4444"
+            todaySession.fatigue.recommendation_color === "green" ? "#10b981" :
+            todaySession.fatigue.recommendation_color === "yellow" ? "#f59e0b" : "#ef4444"
           }` : undefined
         }} 
         data-testid="today-workout-card"
@@ -814,10 +814,10 @@ export default function Dashboard() {
             <span
               className="px-3 py-1 rounded-full text-xs font-bold"
               style={{
-                background: todaySession.fatigue.fatigue_status === "green" ? "#10b98120" :
-                           todaySession.fatigue.fatigue_status === "yellow" ? "#f59e0b20" : "#ef444420",
-                color: todaySession.fatigue.fatigue_status === "green" ? "#10b981" :
-                       todaySession.fatigue.fatigue_status === "yellow" ? "#f59e0b" : "#ef4444"
+                background: todaySession.fatigue.recommendation_color === "green" ? "#10b98120" :
+                           todaySession.fatigue.recommendation_color === "yellow" ? "#f59e0b20" : "#ef444420",
+                color: todaySession.fatigue.recommendation_color === "green" ? "#10b981" :
+                       todaySession.fatigue.recommendation_color === "yellow" ? "#f59e0b" : "#ef4444"
               }}
             >
               {todaySession.fatigue.recommendation || "RUN HARD"}
