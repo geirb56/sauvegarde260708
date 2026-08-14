@@ -31,7 +31,9 @@ class _Collection:
         payload = dict(update.get("$set", {}))
         for index, doc in enumerate(self._docs):
             if all(doc.get(key) == value for key, value in query.items()):
-                self._docs[index] = payload
+                merged = dict(doc)
+                merged.update(payload)
+                self._docs[index] = merged
                 return
         if upsert:
             self._docs.append(payload)
