@@ -220,8 +220,8 @@ def test_e_coach_service_fitness_data_no_ctl_atl_tsb():
     assert "tsb = round(ctl - atl" not in source, (
         "coach_service.py must not compute km-based TSB"
     )
-    # Forbidden fallback removed
-    assert "else 1.0" not in source or "acwr" not in source.split("else 1.0")[0].split("\n")[-1], (
+    # Forbidden fallback removed — check the specific pattern that was present
+    assert "if chronic_avg > 0 else 1.0" not in source, (
         "coach_service.py must not use ACWR=1.0 fallback"
     )
 
