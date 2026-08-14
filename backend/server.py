@@ -1548,12 +1548,10 @@ async def analyze_with_coach(request: CoachRequest, user: dict = Depends(auth_us
     km_7 = sum(get_distance_km(w) for w in recent_activities)
     km_28 = sum(get_distance_km(w) for w in all_activities)
     
-    # ACWR & TSB
-    chronic_avg = km_28 / 4 if km_28 > 0 else 1
-    acwr = round(km_7 / chronic_avg, 2) if chronic_avg > 0 else 1.0
-    ctl = km_28 / 4
-    atl = km_7
-    tsb = round(ctl - atl, 1)
+    # ACWR — TrainingLoad V2 not available in this context (no garmin_activities).
+    # CTL/ATL/TSB km-based aliases removed (PR #127 — faux physiological metrics).
+    # km_7/(km_28/4) must NOT be exposed as ACWR (#127 pre-merge corrections).
+    acwr: Optional[float] = None
 
     # 4. Prepare summary of ALL sessions (not just 5)
     all_sessions_summary = []
@@ -1733,9 +1731,13 @@ async def analyze_with_coach(request: CoachRequest, user: dict = Depends(auth_us
         },
         "fitness": {
             "acwr": acwr,
-            "acwr_status": "optimal" if 0.8 <= acwr <= 1.3 else "attention",
-            "tsb": tsb,
-            "tsb_status": "fresh" if tsb > 0 else "fatigued" if tsb < -10 else "loaded"
+            "acwr_status": (
+                "unavailable" if acwr is None
+                else ("optimal" if 0.8 <= acwr <= 1.3 else "attention")
+            ),
+            # TSB removed (PR #127): no V2 equivalent; use None.
+            "tsb": None,
+            "tsb_status": "unavailable",
         },
         "all_sessions": "\n".join(all_sessions_summary) if all_sessions_summary else "No recorded sessions",
         "training_plan": training_plan_summary if training_plan_summary else "No active training plan",
@@ -2962,16 +2964,42 @@ async def get_run_index(user: dict = Depends(auth_user), language: str = "fr"):
     rhr_baseline = rhr_baseline or 55.0
     hrv_today = hrv_today or hrv_baseline
 
+    # Training load — TrainingLoad V2 (PR #127 correction: no None→0.0→0.1 clamp).
+    # Fetch Terra workouts and adapt them to the TrainingLoad V2 domain format so
+    # that build_training_load() can compute ACWR from duration data.
+    # If no duration data is present, acwr stays None — no numeric fallback.
     # ----------------------------------------------------------------
-    # Training load (ACWR).
-    # ----------------------------------------------------------------
-    load_doc = await db.training_load.find_one({"user_id": user_id, "date": today_iso})
-    if not load_doc:
-        load_doc = await computeTrainingLoad(user_id, db)
-    acwr: float = float(load_doc.get("acwr") or 1.0)
-    # Clamp to 0.1 minimum: prevents division-by-zero in fatigue_ratio and
-    # avoids wild amplification from spuriously low ACWR readings.
-    training_load = max(0.1, acwr)
+    _twenty_eight_days_ago = (today - timedelta(days=28)).isoformat()
+    _terra_workouts = await db.workouts.find(
+        {"user_id": user_id, "date": {"$gte": _twenty_eight_days_ago}},
+        {"type": 1, "date": 1, "distance_km": 1, "duration_minutes": 1, "_id": 0},
+    ).to_list(200)
+
+    def _adapt_workout_for_v2(w: dict) -> dict:
+        """Map a db.workouts document to a TrainingLoad V2-compatible activity dict."""
+        wtype = (w.get("type") or "").lower()
+        if wtype == "run":
+            act_type = "running"
+        elif wtype == "trail":
+            act_type = "trail_running"
+        elif wtype == "treadmill":
+            act_type = "treadmill_running"
+        else:
+            act_type = wtype  # non-running types are filtered out by build_training_load
+        dur_min = w.get("duration_minutes")
+        dist_km = w.get("distance_km")
+        return {
+            "activity_type": act_type,
+            "start_time": w.get("date"),
+            "distance_m": dist_km * 1000.0 if dist_km is not None else None,
+            "duration_s": dur_min * 60.0 if dur_min is not None else None,
+        }
+
+    _v2_activities = [_adapt_workout_for_v2(w) for w in _terra_workouts]
+    _load_snapshot = build_training_load(_v2_activities, today)
+    acwr: Optional[float] = _load_snapshot.acwr
+    # training_load mirrors acwr — None when unavailable (no 0.0/0.1 clamp).
+    training_load: Optional[float] = acwr
 
     # ----------------------------------------------------------------
     # Fatigue computations (as specified).
@@ -3007,7 +3035,10 @@ async def get_run_index(user: dict = Depends(auth_user), language: str = "fr"):
     hrv_status = "green" if hrv_delta <= 5 else ("yellow" if hrv_delta <= 10 else "red")
     rhr_status = "green" if rhr_delta <= 3 else ("yellow" if rhr_delta <= 7 else "red")
     sleep_status = "green" if sleep_score <= 1.0 else ("yellow" if sleep_score <= 2.5 else "red")
-    load_status = "green" if 0.8 <= acwr <= 1.3 else ("yellow" if acwr <= 1.5 else "red")
+    load_status = (
+        "gray" if acwr is None
+        else ("green" if 0.8 <= acwr <= 1.3 else ("yellow" if acwr <= 1.5 else "red"))
+    )
     fatigue_status = "green" if fatigue_ratio <= 1.2 else ("yellow" if fatigue_ratio <= 1.5 else "red")
 
     # ----------------------------------------------------------------
@@ -3019,7 +3050,7 @@ async def get_run_index(user: dict = Depends(auth_user), language: str = "fr"):
         f"HRV deviation {hrv_prefix}{hrv_delta:.1f} ms vs baseline",
         f"RHR {rhr_prefix}{rhr_delta:.1f} bpm vs baseline",
         f"Sleep {sleep_hours:.1f} h at {sleep_efficiency * 100:.0f}% efficiency",
-        f"Training Load (ACWR) {acwr:.2f}",
+        f"Training Load (ACWR) {acwr:.2f}" if acwr is not None else "Training Load (ACWR) unavailable",
         f"Fatigue Ratio {fatigue_ratio:.2f}",
     ]
 
@@ -3061,7 +3092,7 @@ async def get_run_index(user: dict = Depends(auth_user), language: str = "fr"):
             "day": day_label,
             "date": doc_date,
             "hrv": round(float(doc_hrv), 1),
-            "training_load": round(training_load, 2),
+            "training_load": round(training_load, 2) if training_load is not None else None,
             "fatigue_ratio": round(doc_fatigue_ratio, 2),
         })
 
@@ -3087,7 +3118,7 @@ async def get_run_index(user: dict = Depends(auth_user), language: str = "fr"):
             "sleep_efficiency": round(sleep_efficiency, 2),
             "sleep_score": round(sleep_score, 2),
             "sleep_status": sleep_status,
-            "training_load": round(acwr, 2),
+            "training_load": round(acwr, 2) if acwr is not None else None,
             "training_load_status": load_status,
             "fatigue_physio": round(fatigue_physio, 2),
             "fatigue_ratio": round(fatigue_ratio, 2),
@@ -3712,13 +3743,11 @@ async def get_training_metrics(user: dict = Depends(auth_user)):
     acwr: Optional[float] = load_snapshot.acwr
 
     # TSB — LEGACY distance-based (km).
-    # chronic_weekly_load and acute_load_7d from TrainingLoadSnapshot V2 are
-    # duration-minutes metrics and MUST NOT be aliased as CTL/ATL, which are
-    # physiological TSS-based concepts.  TSB migration to V2 units is deferred
-    # to a dedicated PR; the km-based formula is preserved here for backward
-    # compatibility with the frontend TSB display.
-    # ctl/atl response fields are set to None (not consumed by the frontend).
-    tsb: Optional[float] = round(load_28 / 4 - load_7, 1) if load_28 > 0 else None
+    # TSB — legacy km-based formula removed (PR #127).
+    # No V2 TSS-based equivalent is available.  Frontend consumers (TrainingPlan,
+    # Dashboard) handle None via the tsb_status / tsb_label fields.
+    # ctl/atl: also None (not consumed by the frontend).
+    tsb: Optional[float] = None
 
     # --- Monotonie (distance-based, 7-day display only) ---
     daily_loads = []
@@ -4508,12 +4537,18 @@ async def get_week_plan(user: dict = Depends(auth_user)):
     load_28 = km_28 * 10
     
     # Construire le contexte
+    # ctl/atl/tsb km-based aliases removed (PR #127 — faux physiological metrics).
+    # load_7/load_28 kept as volume inputs for determine_target_load().
+    # acwr=None — km_7/(km_28/4) must NOT be exposed as ACWR (#127 pre-merge corrections).
+    # TrainingLoad V2 not available in this context (no garmin_activities).
     context = {
-        "ctl": load_28 / 4 if load_28 > 0 else 30,
-        "atl": load_7 if load_7 > 0 else 35,
-        "tsb": (load_28 / 4 - load_7) if load_28 > 0 else -5,
-        "acwr": (load_7 / (load_28 / 4)) if load_28 > 0 else 1.0,
-        "weekly_km": compute_current_weekly_km(workouts_28)
+        "ctl": None,
+        "atl": None,
+        "tsb": None,
+        "acwr": None,
+        "weekly_km": compute_current_weekly_km(workouts_28),
+        "load_7": load_7,
+        "load_28": load_28,
     }
     
     # Calculer la phase

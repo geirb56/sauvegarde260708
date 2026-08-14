@@ -1,18 +1,13 @@
 """
 RunIndex - Training Engine
 
-Periodization engine and training load management.
-Calculations based on:
-- ACWR (Acute:Chronic Workload Ratio)
-- TSB (Training Stress Balance)
-- Preparation phases (Build, Intensification, Taper, Race)
+Periodization engine and training context helpers.
 
 Usage:
     from training_engine import (
         build_training_context,
         determine_phase,
         determine_target_load,
-        compute_acwr
     )
 """
 
@@ -646,33 +641,6 @@ def compute_week_number(start_date: datetime.date) -> int:
     return max(1, delta_days // 7 + 1)
 
 
-def compute_acwr(load_7: float, load_28: float) -> float:
-    """
-    Calculates the ACWR (Acute:Chronic Workload Ratio).
-
-    - < 0.8: Under-training
-    - 0.8-1.3: Optimal zone
-    - 1.3-1.5: Risk zone
-    - > 1.5: Injury danger
-    """
-    if load_28 == 0:
-        return 1.0
-    chronic_avg = load_28 / 4  # Average over 4 weeks
-    return round(load_7 / chronic_avg, 2)
-
-
-def compute_tsb(ctl: float, atl: float) -> float:
-    """
-    Calculates the TSB (Training Stress Balance).
-    TSB = CTL - ATL
-
-    - Negative: Accumulated fatigue
-    - Positive: Freshness
-    - Ideal for race: +5 to +15
-    """
-    return round(ctl - atl, 1)
-
-
 def compute_monotony(daily_loads: List[float]) -> float:
     """
     Calculates training monotony.
@@ -855,14 +823,35 @@ def determine_target_load(context: Dict, phase: str) -> int:
     Determines the target load for the week.
 
     Args:
-        context: Fitness data (ctl, atl, tsb, acwr)
+        context: Fitness data (ctl, atl, tsb, acwr, load_7, load_28, weekly_km)
         phase: Current phase of the cycle
+
+    Absent signals are ignored, not substituted:
+    - If ``ctl`` is absent, ``load_7``, ``load_28`` (weekly average), or
+      ``weekly_km`` is used as the base volume proxy.
+    - If both ``acwr`` and ``tsb`` are absent, fatigue adjustment is skipped.
+    - A single available fatigue signal is not completed with an invented value.
 
     Returns:
         Target load in load units (TSS/TRIMP)
     """
-    ctl = context.get("ctl", 40)
-    base = ctl
+    ctl = context.get("ctl")
+
+    # Build base from the best available volume signal.
+    if ctl is not None:
+        base = float(ctl)
+    else:
+        load_7 = context.get("load_7")
+        load_28 = context.get("load_28")
+        weekly_km = context.get("weekly_km")
+        if load_28 is not None:
+            base = float(load_28) / 4.0
+        elif load_7 is not None:
+            base = float(load_7)
+        elif weekly_km is not None:
+            base = float(weekly_km)
+        else:
+            return 0
 
     # Phase multipliers
     phase_multipliers = {
@@ -876,12 +865,13 @@ def determine_target_load(context: Dict, phase: str) -> int:
     multiplier = phase_multipliers.get(phase, 1.0)
     base *= multiplier
 
-    # Adjust based on fatigue
-    adjusted = adjust_load_by_fatigue(
-        base,
-        context.get("tsb", 0),
-        context.get("acwr", 1.0)
-    )
+    # Only apply fatigue adjustment when both signals are available.
+    _acwr = context.get("acwr")
+    _tsb = context.get("tsb")
+    if _acwr is not None and _tsb is not None:
+        adjusted = adjust_load_by_fatigue(base, _tsb, _acwr)
+    else:
+        adjusted = base
 
     return int(adjusted)
 
@@ -899,62 +889,30 @@ def build_training_context(
     Builds the complete training context.
 
     Args:
-        fitness_data: Fitness data (ctl, atl, load_7, load_28)
+        fitness_data: Fitness data (optional acwr/ctl/atl/tsb + raw load_7/load_28)
         weekly_km: Average weekly mileage
         daily_loads: Daily loads (for monotony)
 
     Returns:
         Complete context for recommendations
     """
-    load_7 = fitness_data.get("load_7", 300)
-    load_28 = fitness_data.get("load_28", 1200)
-    ctl = fitness_data.get("ctl", 40)
-    atl = fitness_data.get("atl", 45)
-
-    acwr = compute_acwr(load_7, load_28)
-    tsb = compute_tsb(ctl, atl)
-
     context = {
-        "ctl": ctl,
-        "atl": atl,
-        "tsb": tsb,
-        "acwr": acwr,
+        "ctl": fitness_data.get("ctl"),
+        "atl": fitness_data.get("atl"),
+        "tsb": fitness_data.get("tsb"),
+        "acwr": fitness_data.get("acwr"),
         "weekly_km": weekly_km,
-        "load_7": load_7,
-        "load_28": load_28
+        "load_7": fitness_data.get("load_7"),
+        "load_28": fitness_data.get("load_28"),
     }
 
     # Add monotony if data available
     if daily_loads:
         context["monotony"] = compute_monotony(daily_loads)
-        context["strain"] = compute_strain(load_7, context["monotony"])
-
-    # Risk assessment
-    context["risk_level"] = evaluate_risk(acwr, tsb)
+        base_load = context["load_7"] if context["load_7"] is not None else 0.0
+        context["strain"] = compute_strain(base_load, context["monotony"])
 
     return context
-
-
-def evaluate_risk(acwr: float, tsb: float) -> str:
-    """
-    Evaluates the risk level of injury/overtraining.
-
-    Returns:
-        "low", "moderate", "high", "critical"
-    """
-    if acwr > ACWR_DANGER or tsb < -30:
-        return "critical"
-
-    if acwr > ACWR_SAFE_MAX or tsb < TSB_FATIGUE_THRESHOLD:
-        return "high"
-
-    if acwr < ACWR_SAFE_MIN:
-        return "low"  # Under-training
-
-    if tsb < -10:
-        return "moderate"
-
-    return "low"
 
 
 # ============================================================
@@ -987,8 +945,6 @@ __all__ = [
     "vma_pace_range",
     "adapt_session_to_readiness",
     "compute_week_number",
-    "compute_acwr",
-    "compute_tsb",
     "compute_monotony",
     "compute_strain",
     "determine_phase",
@@ -996,5 +952,4 @@ __all__ = [
     "adjust_load_by_fatigue",
     "determine_target_load",
     "build_training_context",
-    "evaluate_risk"
 ]

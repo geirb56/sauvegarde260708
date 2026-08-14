@@ -578,7 +578,7 @@ Pour chaque date historique J :
 
 ## 9c) R4C — history[].training_load migré vers TrainingLoad V2
 
-Status: **IMPLEMENTED / PENDING MERGE — PR #125**
+Status: **MERGED — PR #125**
 
 ### Objectif R4C
 
@@ -599,15 +599,100 @@ Pour chaque date historique J :
   l'alignement ACWR V2, l'absence de fuite future, les activités distance-only → None,
   l'historique insuffisant, la non-régression de `metrics.training_load`, et la shape.
 
-### Dettes restantes après R4C
+### Dettes restantes après R4C (résolues par #126)
 
-- `fatigue_ratio` dans `history[]` utilise encore la formule legacy (hors périmètre) ;
-- TSB dans `/training/metrics` : legacy km conservé temporairement (hors périmètre) ;
-- baseline RHR historique : divergence documentée et hors périmètre.
+- `fatigue_ratio` dans `history[]` utilise encore la formule legacy → **résolu en #126** ;
+- baseline RHR historique : divergence documentée → **résolue en #126** ;
+- TSB dans `/training/metrics` : legacy km conservé temporairement → **NEXT #127**.
 
 ---
 
-## 10) Training Engine V2 — état réel de `main`
+## 9d) #126 — Final /run-index physiology legacy cleanup
+
+Status: **IMPLEMENTED / PENDING MERGE — PR #126**
+
+### Objectif #126
+
+Finaliser l'alignement physiologique de `/run-index` avec Readiness V2.
+
+Deux axes :
+
+1. **HISTORY FATIGUE** — supprimer de `history[]` :
+   - `fatigue_ratio` (clé et valeur)
+   - formule legacy associée (`doc_sleep_penalty`, `doc_fp`, `doc_rhr_delta`, `doc_fatigue_ratio`)
+   - fallback `sleep=7h` sur `doc.get("sleep_hours") or 7.0`
+   - fallback `rhr_delta=0` sur doc absent
+
+2. **RHR BASELINE** — unification source unique avec Readiness V2 :
+   - `metrics.rhr_baseline` affiche désormais la même valeur que Readiness V2
+     (fenêtre 14 jours, excluding today, via `get_rhr_v2_baseline()`) ;
+   - suppression du fallback fictif `55.0` et du fallback `rhr_today` ;
+   - `metrics.rhr_delta` : `None` quand `rhr_today` ou `rhr_baseline` absent ;
+   - aucune modification de la calibration Readiness V2 (seulement une exposition
+     de la logique existante via `get_rhr_v2_baseline()` dans `readiness_adapter.py`).
+
+### Décisions exactes
+
+- `metrics.fatigue_ratio` **CONSERVÉ** (toujours consommé par CardioCoach / server.py).
+- `fatigue_status` **CONSERVÉ** (dérivé de `fatigue_ratio` courant).
+- `TSB / CTL / ATL`, `TrainingLoad V2`, `LT1/LT2`, `Training Engine` : **NON MODIFIÉS**.
+- La formule Readiness V2 n'a pas été modifiée — seule la surface d'exposition d'une
+  valeur interne existante (`_baseline_for`) a été rendue publique.
+
+### Legacy supprimé
+
+| Élément supprimé | Fichier | Raison |
+|---|---|---|
+| `fatigue_ratio` dans `history[]` | `garmin/insights.py` | formule legacy hors V2 |
+| `doc_sleep_penalty` dans boucle history | `garmin/insights.py` | fallback sleep=7h |
+| `doc_rhr_delta` dans boucle history | `garmin/insights.py` | fallback delta=0 |
+| `doc_fp` / `doc_fatigue_ratio` dans boucle history | `garmin/insights.py` | calcul fatigue legacy |
+| `rhr_baseline = _mean(30 docs)` + fallback `55.0` | `garmin/insights.py` | diverge de V2 |
+
+### Implémentation #126
+
+- `backend/garmin/readiness_adapter.py` : ajout de `get_rhr_v2_baseline()` (wrapper public
+  sur `_build_physio_signal` pour `resting_hr`) — source unique de vérité pour la baseline RHR.
+- `backend/garmin/insights.py` :
+  - import `get_rhr_v2_baseline` ;
+  - `rhr_baseline` calculé via `get_rhr_v2_baseline(metrics_docs, today)` ;
+  - suppression du fallback `55.0` / `rhr_today` ;
+  - `rhr_delta : Optional[float]` — None quand baseline absente ;
+  - `rhr_status` gère `rhr_delta=None` → **"gray"** (jamais "green" pour données absentes) ;
+  - raison RHR uniquement affichée quand `rhr_delta is not None` ;
+  - boucle history : suppression de toutes les variables fatigue legacy ;
+  - `history[]` : clé `fatigue_ratio` supprimée.
+- `frontend/src/pages/Dashboard.jsx` :
+  - `ReadinessTile` gère explicitement le statut `"gray"` (couleur `#6b7280`) ;
+  - tuile RHR : fallback `m.rhr_status || "gray"` (plus `|| "green"`) ;
+  - valeur absente (`rhr_today=null`) affichée `"—"`, aucun signal positif fictif.
+- `backend/tests/test_run_index_screen.py` / `test_cardio_coach_screen.py` :
+  - `VALID_STATUSES` étendu à `{"green", "yellow", "red", "gray"}`.
+- `backend/tests/test_run_index_r4b_history_readiness_v2.py` : shape mise à jour (sans `fatigue_ratio`).
+- `backend/tests/test_run_index_r4c_history_load_v2.py` : assertion inversée (`fatigue_ratio` absent).
+- `backend/tests/test_run_index_r5_history_fatigue_cleanup.py` : **nouveau** — 13 tests couvrant
+  l'absence de `fatigue_ratio` en history, la shape, la non-régression readiness/load,
+  l'alignement baseline RHR V2, `rhr_delta=None`, `rhr_baseline=None` sans données prior,
+  la non-régression `metrics.fatigue_ratio`, l'isolation multi-user, et la sémantique
+  **None ≠ green** pour `rhr_status` (tests 11-13).
+- `frontend/src/__tests__/dashboard-run-readiness-null.test.jsx` : tests RHR absent → tuile grise,
+  affichage `"—"`, absence de couleur verte, sans crash.
+
+### Règle sémantique RHR — None ≠ green
+
+> **`rhr_delta=None` → `rhr_status="gray"`, jamais `"green"`.**
+>
+> Une baseline ou valeur RHR absente n'est pas un signal positif. Le statut `"gray"` (indisponible)
+> est le seul mapping correct pour l'absence de données. Le statut `"green"` est réservé aux cas
+> où `rhr_delta` est présent et ≤ 3 bpm.
+
+### Dettes restantes après #128
+
+- `fatigue_ratio` dans `metrics` (courant) reste legacy CardioCoach hors TrainingLoad V2.
+- `Weekly Target` / `Workout Generator` / `Workout Analysis` restent en pipeline legacy applicatif, hors périmètre ACWR.
+- LT1/LT2 ne démarre qu'après validation finale de cette cleanup.
+
+### #127 — Training metrics / TSB legacy cleanup (MERGED)
 
 | Layer | Status | Fichier / PR |
 |---|---|---|
@@ -625,6 +710,16 @@ Pour chaque date historique J :
 Conclusion canonique:
 
 Après `Periodization`, les consommateurs métier (weekly target/génération/analyse/recommandation) restent majoritairement en pipeline legacy actif, pas encore migrés en couches V2 pures dédiées.
+
+### #128 — Training Load Metrics single source cleanup (IMPLEMENTED / PENDING MERGE)
+
+- Source unique ACWR runtime = `training_v2.training_load.build_training_load()` / `TrainingLoadSnapshot.acwr`.
+- `/run-index`, `/training/metrics`, `/api/dashboard` et `coach_service` lisent désormais ACWR V2 ou `None`.
+- `CTL` / `ATL` / `TSB` ne sont plus calculés ni simulés quand aucune vraie implémentation n'existe.
+- `training_engine.build_training_context()` ne fabrique plus `load_7=300`, `load_28=1200`, `ctl=40`, `atl=45`, `acwr`, `tsb` ou `risk_level`.
+- `backend/engine/training_load_engine.py` est supprimé après migration des derniers callers runtime.
+- `terra_integration.computeTrainingLoad()` est aligné sur TrainingLoad V2 ; aucun fallback `ACWR=1.0`.
+- NEXT reste **LT1/LT2 uniquement après validation**.
 
 ---
 
@@ -845,7 +940,10 @@ Puis:
 - [x] R4B history[].run_readiness → Readiness V2 (MERGED — PR #122)
 - [x] TrainingLoad /training/metrics alignment (MERGED — PR #123)
 - [x] Cleanup helpers TrainingLoad legacy morts (MERGED — PR #124)
-- [x] R4C history[].training_load → TrainingLoad V2 (IMPLEMENTED / PENDING MERGE — PR #125)
+- [x] R4C history[].training_load → TrainingLoad V2 (MERGED — PR #125)
+- [x] #126 history[] fatigue legacy cleanup + RHR baseline unification (MERGED — PR #126)
+- [x] #127 Training metrics / TSB legacy cleanup (MERGED — PR #127)
+- [x] #128 Training Load Metrics single source cleanup (IMPLEMENTED / PENDING MERGE — PR #128)
 
 ### TRAINING ENGINE
 
@@ -900,10 +998,78 @@ Ce document suit l'état réel de `main` et des PR en cours:
   (CTL/ATL V2 incorrects retirés; TSB legacy km conservé temporairement; ctl/atl → None;
   `has_sufficient_history` commentaire non-reprise retiré).
 - Cleanup helpers TrainingLoad legacy morts est **MERGED — PR #124**.
-- R4C history[].training_load → TrainingLoad V2 est **IMPLEMENTED / PENDING MERGE — PR #125**
+- R4C history[].training_load → TrainingLoad V2 est **MERGED — PR #125**
   (`history[].training_load = build_training_load(acts_at_J, J).acwr` ;
   `_activity_load` supprimé ; aucune fuite future ; aucun fallback distance→durée).
-- Dettes restantes : `fatigue_ratio` history (formule legacy), TSB `/training/metrics` legacy, baseline RHR historique.
+- #126 final physiology legacy cleanup est **MERGED — PR #126**
+  (`fatigue_ratio` supprimé de `history[]` ; baseline RHR unifiée avec Readiness V2 via
+  `get_rhr_v2_baseline()` ; fallback `55.0` supprimé ; `rhr_delta=None` quand absent ;
+  `metrics.fatigue_ratio` conservé ; aucune modification calibration Readiness V2).
+- #127 Training metrics / TSB legacy cleanup est **MERGED — PR #127**
+  (voir section 23 ci-dessous pour le détail complet).
+- #128 Training Load Metrics single source cleanup est **IMPLEMENTED / PENDING MERGE — PR #128**
+  (source unique ACWR runtime, `/api/dashboard` migré V2, `coach_service` = V2 ou `None`,
+  `CTL/ATL/TSB` non fabriqués, `backend/engine/training_load_engine.py` supprimé).
+- Dettes restantes exactes : `fatigue_ratio` courant reste legacy CardioCoach ; les couches
+  applicatives Weekly Target / Workout Generator / Workout Analysis restent legacy mais ne
+  fabriquent plus de faux ACWR/CTL/ATL/TSB.
+
+---
+
+## 23) PR #127 — Training metrics / TSB legacy cleanup + corrections pré-merge (MERGED)
+
+### Callers audités
+
+| Consumer | Champ | Avant | Après |
+|---|---|---|---|
+| `server.py /training/metrics` | `tsb` | km-based `load_28/4 - load_7` | `None` (supprimé) |
+| `server.py /training/metrics` | `ctl`, `atl` | déjà `None` (#123) | `None` inchangé |
+| `server.py /training/metrics` | `acwr` | V2 `build_training_load` (#123) | V2 inchangé |
+| `server.py /coach/analyze` | `ctl`, `atl`, `tsb` | km-based calculés | supprimés |
+| `server.py /coach/analyze` | `acwr` | km-based `km_7/(km_28/4)` | `None` (V2 indisponible dans ce contexte) |
+| `server.py /run-index` (Terra path) | `acwr` | `float(...) if not None else 0.0` + `max(0.1, acwr)` | TrainingLoad V2 (`build_training_load` sur `db.workouts`), `None` si pas de données durée |
+| `server.py /training/week-plan` | `ctl`, `atl`, `tsb`, `acwr` | km-based avec fallbacks | `None`/`None`/`None`/`None` |
+| `coach_service.py` | `ctl`, `atl`, `tsb`, `acwr` | km-based calculés explicitement | supprimés ; `load_7/load_28` conservés pour training engine |
+| `llm_coach.py prompt` | `acwr` | `fitness.get('acwr', 1.0)` | `fitness.get('acwr')` None-safe |
+| `llm_coach.py prompt` | `tsb` | `fitness.get('tsb', 0)` | `fitness.get('tsb')` None-safe |
+| `frontend/TrainingPlan.jsx` | ACWR display | `\|\| "1.00"` fallback | `null`-safe (affiche "—") |
+| `frontend/TrainingPlan.jsx` | TSB display | `\|\| "0.0"` fallback | `null`-safe (affiche "—") |
+| `training_engine.determine_target_load` | `ctl`, `acwr`, `tsb` | crash si `None` | signaux absents ignorés : base calculée depuis `load_28/4`, `load_7` ou `weekly_km` si `ctl` absent ; `adjust_load_by_fatigue` sauté si `acwr` ou `tsb` absent |
+
+### Champs supprimés
+
+- `tsb` km-based dans `/training/metrics` → `None`
+- `ctl`/`atl`/`tsb` km-based dans `/coach/analyze` context fitness
+- `ctl`/`atl`/`tsb` km-based dans `coach_service.py` fitness_data
+- Calcul km-based `km_7/(km_28/4)` dans `/coach/analyze` (remplacé par `None`)
+- Calcul km-based `load_7/(load_28/4)` dans `/training/week-plan` (remplacé par `None`)
+- Fallback `acwr=1.0` dans `/coach/analyze`, `coach_service.py`
+- Fallback `acwr=1.0` et `tsb=0` dans `llm_coach.py` prompt
+- `None→0.0→clamp 0.1` dans `/run-index` Terra path (remplacé par V2 propagation `None`)
+
+### Champs conservés
+
+- `load_7`/`load_28` en km dans `coach_service.py` (inputs volume pour training engine interne, non présentés comme métriques physiologiques)
+- `/run-index` Terra path migré vers TrainingLoad V2 (`build_training_load` sur `db.workouts` adaptés) ; `acwr=None` si pas de durées disponibles
+
+### Dettes réellement restantes
+
+- `fatigue_ratio` dans `metrics` (CardioCoach / Terra path) : hors périmètre #127, repris en état exact section #128.
+- NEXT LT1/LT2 : aucun consumer ne produit plus de faux ACWR km-based exposé (condition remplie).
+
+### Tests couverts (PR #127)
+
+- `tests/test_training_metrics_pr127.py` (32 tests) :
+  TSB=None, ACWR=None (no fallback), ACWR V2 alignment, acwr_reliable non-régressé,
+  no duplicate km CTL/ATL/TSB dans coach_service, no fallback LLM, multi-user isolation,
+  no km-based ACWR dans /coach/analyze, no km-based ACWR dans /training/week-plan,
+  no None→0.0→0.1 clamp dans /run-index, V2 migration vérifiée, week-plan acwr=None supporté.
+- `tests/test_training_metrics_endpoint.py` (non-régression, 8 tests PASSED).
+
+### Décision NEXT
+
+Aucune dette bloquante restante sur la source unique ACWR.
+→ NEXT : **Threshold Estimator LT1/LT2** (voir section 22) après validation de #128.
 
 ---
 

@@ -9,7 +9,7 @@ Test matrix (problem statement requirements)
 5.  most-recent history entry is consistent with the top-level V2 score
 6.  multi-user isolation: each user's history uses only their own data
 7.  R3.5/R4A non-regression: metrics.run_readiness and training_load_v2 unchanged
-8.  history[] shape preserved: day, date, hrv, training_load, fatigue_ratio, run_readiness
+8.  history[] shape: day, date, hrv, training_load, run_readiness (fatigue_ratio removed in #126)
 9.  empty metrics_docs → no history entries (no crash)
 """
 
@@ -375,7 +375,7 @@ async def test_history_shape_preserved():
     payload = await compute_run_index(db, "userA", reference_date=_TODAY)
     assert payload is not None
 
-    required_keys = {"day", "date", "hrv", "training_load", "fatigue_ratio", "run_readiness"}
+    required_keys = {"day", "date", "hrv", "training_load", "run_readiness"}
     for entry in payload["history"]:
         missing = required_keys - entry.keys()
         assert not missing, f"history entry missing keys: {missing}"
