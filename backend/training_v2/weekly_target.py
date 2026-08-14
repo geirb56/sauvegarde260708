@@ -292,23 +292,13 @@ def _interpolate_deep_reprise_minutes(prior_km: float) -> int:
     return int(round(interpolated))
 
 
-def _active_weeks_from_28d_buckets(training_history: TrainingHistory) -> int:
+def _active_weeks_from_28d(training_history: TrainingHistory) -> int:
     """Return the number of truly active weeks in the last 28 days.
 
     Uses ``weekly_distance_buckets_28d`` to count weeks with non-zero running
     distance — no approximation needed.  Bounded [0, 4].
     """
     return sum(1 for km in training_history.weekly_distance_buckets_28d if km > 0)
-
-
-def _active_weeks_from_30d(training_history: TrainingHistory) -> int:
-    """Return the number of active weeks in the last 28 days.
-
-    Delegates to :func:`_active_weeks_from_28d_buckets` for a deterministic,
-    per-bucket count.  The old ``activity_count // 3`` approximation has been
-    replaced by the exact bucket-based approach.
-    """
-    return _active_weeks_from_28d_buckets(training_history)
 
 
 def _apply_resume_guard(
@@ -420,7 +410,7 @@ def _target_deep_reprise(
         reason_codes.append("DEEP_REPRISE_PRIOR_UNKNOWN")
 
     # Active weeks so far in the comeback (0 for first week back).
-    active_weeks = _active_weeks_from_30d(training_history)
+    active_weeks = _active_weeks_from_28d(training_history)
     if active_weeks > 0:
         factor = min(REPRISE_PROGRESSION_CAP, 1.0 + REPRISE_PROGRESSION_FACTOR_PER_WEEK * active_weeks)
         minutes = int(round(minutes * factor))
