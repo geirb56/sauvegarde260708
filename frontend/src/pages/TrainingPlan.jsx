@@ -540,7 +540,7 @@ export default function TrainingPlan() {
           </div>
           <div className="flex items-center gap-2">
             <span className="text-2xl font-bold" style={{ color: getAcwrColor(trainingMetrics?.acwr_status) }} data-testid="acwr-value">
-              {trainingMetrics?.acwr_reliable === false ? "—" : (trainingMetrics?.acwr?.toFixed(2) || "1.00")}
+              {(trainingMetrics?.acwr_reliable === false || trainingMetrics?.acwr == null) ? "—" : trainingMetrics.acwr.toFixed(2)}
             </span>
             {trainingMetrics?.acwr_status === "optimal" && (
               <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "#22c55e20", color: "#22c55e" }}>✓</span>
@@ -570,7 +570,7 @@ export default function TrainingPlan() {
           </div>
           <div className="flex items-center gap-2">
             <span className="text-2xl font-bold" style={{ color: getTsbColor(trainingMetrics?.tsb_status) }} data-testid="tsb-value">
-              {trainingMetrics?.tsb_reliable === false ? "—" : (trainingMetrics?.tsb?.toFixed(1) || "0.0")}
+              {(trainingMetrics?.tsb_reliable === false || trainingMetrics?.tsb == null) ? "—" : trainingMetrics.tsb.toFixed(1)}
             </span>
           </div>
           <p className="text-xs mt-1" style={{ color: getTsbColor(trainingMetrics?.tsb_status) }}>

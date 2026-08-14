@@ -1548,12 +1548,9 @@ async def analyze_with_coach(request: CoachRequest, user: dict = Depends(auth_us
     km_7 = sum(get_distance_km(w) for w in recent_activities)
     km_28 = sum(get_distance_km(w) for w in all_activities)
     
-    # ACWR & TSB
-    chronic_avg = km_28 / 4 if km_28 > 0 else 1
-    acwr = round(km_7 / chronic_avg, 2) if chronic_avg > 0 else 1.0
-    ctl = km_28 / 4
-    atl = km_7
-    tsb = round(ctl - atl, 1)
+    # ACWR — no V2 garmin_activities available in this context; no 1.0 fallback.
+    # CTL/ATL/TSB km-based aliases removed (PR #127 — faux physiological metrics).
+    acwr: Optional[float] = round(km_7 / (km_28 / 4), 2) if km_28 > 0 else None
 
     # 4. Prepare summary of ALL sessions (not just 5)
     all_sessions_summary = []
@@ -1733,9 +1730,13 @@ async def analyze_with_coach(request: CoachRequest, user: dict = Depends(auth_us
         },
         "fitness": {
             "acwr": acwr,
-            "acwr_status": "optimal" if 0.8 <= acwr <= 1.3 else "attention",
-            "tsb": tsb,
-            "tsb_status": "fresh" if tsb > 0 else "fatigued" if tsb < -10 else "loaded"
+            "acwr_status": (
+                "unavailable" if acwr is None
+                else ("optimal" if 0.8 <= acwr <= 1.3 else "attention")
+            ),
+            # TSB removed (PR #127): no V2 equivalent; use None.
+            "tsb": None,
+            "tsb_status": "unavailable",
         },
         "all_sessions": "\n".join(all_sessions_summary) if all_sessions_summary else "No recorded sessions",
         "training_plan": training_plan_summary if training_plan_summary else "No active training plan",
@@ -2962,13 +2963,18 @@ async def get_run_index(user: dict = Depends(auth_user), language: str = "fr"):
     rhr_baseline = rhr_baseline or 55.0
     hrv_today = hrv_today or hrv_baseline
 
-    # ----------------------------------------------------------------
     # Training load (ACWR).
+    # DEBT #127: computeTrainingLoad uses km-based ACWR with an internal 1.0
+    # fallback for empty chronic load (training_load_engine.compute_acwr).
+    # Migration to TrainingLoad V2 deferred to a dedicated Readiness PR.
+    # The outer `or 1.0` override is removed here so that a truly absent acwr
+    # field in the DB reads as 0.0 (no-data) rather than being silently masked.
     # ----------------------------------------------------------------
     load_doc = await db.training_load.find_one({"user_id": user_id, "date": today_iso})
     if not load_doc:
         load_doc = await computeTrainingLoad(user_id, db)
-    acwr: float = float(load_doc.get("acwr") or 1.0)
+    _raw_acwr = load_doc.get("acwr")
+    acwr: float = float(_raw_acwr) if _raw_acwr is not None else 0.0
     # Clamp to 0.1 minimum: prevents division-by-zero in fatigue_ratio and
     # avoids wild amplification from spuriously low ACWR readings.
     training_load = max(0.1, acwr)
@@ -3712,13 +3718,11 @@ async def get_training_metrics(user: dict = Depends(auth_user)):
     acwr: Optional[float] = load_snapshot.acwr
 
     # TSB — LEGACY distance-based (km).
-    # chronic_weekly_load and acute_load_7d from TrainingLoadSnapshot V2 are
-    # duration-minutes metrics and MUST NOT be aliased as CTL/ATL, which are
-    # physiological TSS-based concepts.  TSB migration to V2 units is deferred
-    # to a dedicated PR; the km-based formula is preserved here for backward
-    # compatibility with the frontend TSB display.
-    # ctl/atl response fields are set to None (not consumed by the frontend).
-    tsb: Optional[float] = round(load_28 / 4 - load_7, 1) if load_28 > 0 else None
+    # TSB — legacy km-based formula removed (PR #127).
+    # No V2 TSS-based equivalent is available.  Frontend consumers (TrainingPlan,
+    # Dashboard) handle None via the tsb_status / tsb_label fields.
+    # ctl/atl: also None (not consumed by the frontend).
+    tsb: Optional[float] = None
 
     # --- Monotonie (distance-based, 7-day display only) ---
     daily_loads = []
@@ -4508,12 +4512,17 @@ async def get_week_plan(user: dict = Depends(auth_user)):
     load_28 = km_28 * 10
     
     # Construire le contexte
+    # ctl/atl/tsb km-based aliases removed (PR #127 — faux physiological metrics).
+    # load_7/load_28 kept as volume inputs for determine_target_load().
+    # acwr=None (no V2 garmin_activities available here; no 1.0 fallback).
     context = {
-        "ctl": load_28 / 4 if load_28 > 0 else 30,
-        "atl": load_7 if load_7 > 0 else 35,
-        "tsb": (load_28 / 4 - load_7) if load_28 > 0 else -5,
-        "acwr": (load_7 / (load_28 / 4)) if load_28 > 0 else 1.0,
-        "weekly_km": compute_current_weekly_km(workouts_28)
+        "ctl": None,
+        "atl": None,
+        "tsb": None,
+        "acwr": (load_7 / (load_28 / 4)) if load_28 > 0 else None,
+        "weekly_km": compute_current_weekly_km(workouts_28),
+        "load_7": load_7,
+        "load_28": load_28,
     }
     
     # Calculer la phase
