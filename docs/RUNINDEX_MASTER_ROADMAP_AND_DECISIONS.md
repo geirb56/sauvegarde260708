@@ -686,13 +686,13 @@ Deux axes :
 > est le seul mapping correct pour l'absence de données. Le statut `"green"` est réservé aux cas
 > où `rhr_delta` est présent et ≤ 3 bpm.
 
-### Dettes restantes après #126
+### Dettes restantes après #128
 
-- TSB dans `/training/metrics` : legacy km → **SUPPRIMÉ en #127**.
-- `fatigue_ratio` dans `metrics` (courant) : toujours legacy (CardioCoach), à évaluer post-#127.
-- Frontend : adaptation null TSB/ACWR → **FAIT en #127**.
+- `fatigue_ratio` dans `metrics` (courant) reste legacy CardioCoach hors TrainingLoad V2.
+- `Weekly Target` / `Workout Generator` / `Workout Analysis` restent en pipeline legacy applicatif, hors périmètre ACWR.
+- LT1/LT2 ne démarre qu'après validation finale de cette cleanup.
 
-### #127 — Training metrics / TSB legacy cleanup (IMPLEMENTED / PENDING MERGE)
+### #127 — Training metrics / TSB legacy cleanup (MERGED)
 
 | Layer | Status | Fichier / PR |
 |---|---|---|
@@ -710,6 +710,16 @@ Deux axes :
 Conclusion canonique:
 
 Après `Periodization`, les consommateurs métier (weekly target/génération/analyse/recommandation) restent majoritairement en pipeline legacy actif, pas encore migrés en couches V2 pures dédiées.
+
+### #128 — Training Load Metrics single source cleanup (IMPLEMENTED / PENDING MERGE)
+
+- Source unique ACWR runtime = `training_v2.training_load.build_training_load()` / `TrainingLoadSnapshot.acwr`.
+- `/run-index`, `/training/metrics`, `/api/dashboard` et `coach_service` lisent désormais ACWR V2 ou `None`.
+- `CTL` / `ATL` / `TSB` ne sont plus calculés ni simulés quand aucune vraie implémentation n'existe.
+- `training_engine.build_training_context()` ne fabrique plus `load_7=300`, `load_28=1200`, `ctl=40`, `atl=45`, `acwr`, `tsb` ou `risk_level`.
+- `backend/engine/training_load_engine.py` est supprimé après migration des derniers callers runtime.
+- `terra_integration.computeTrainingLoad()` est aligné sur TrainingLoad V2 ; aucun fallback `ACWR=1.0`.
+- NEXT reste **LT1/LT2 uniquement après validation**.
 
 ---
 
@@ -932,7 +942,8 @@ Puis:
 - [x] Cleanup helpers TrainingLoad legacy morts (MERGED — PR #124)
 - [x] R4C history[].training_load → TrainingLoad V2 (MERGED — PR #125)
 - [x] #126 history[] fatigue legacy cleanup + RHR baseline unification (MERGED — PR #126)
-- [x] #127 Training metrics / TSB legacy cleanup (IMPLEMENTED / PENDING MERGE — PR #127)
+- [x] #127 Training metrics / TSB legacy cleanup (MERGED — PR #127)
+- [x] #128 Training Load Metrics single source cleanup (IMPLEMENTED / PENDING MERGE — PR #128)
 
 ### TRAINING ENGINE
 
@@ -994,15 +1005,18 @@ Ce document suit l'état réel de `main` et des PR en cours:
   (`fatigue_ratio` supprimé de `history[]` ; baseline RHR unifiée avec Readiness V2 via
   `get_rhr_v2_baseline()` ; fallback `55.0` supprimé ; `rhr_delta=None` quand absent ;
   `metrics.fatigue_ratio` conservé ; aucune modification calibration Readiness V2).
-- #127 Training metrics / TSB legacy cleanup est **IMPLEMENTED / PENDING MERGE — PR #127**
+- #127 Training metrics / TSB legacy cleanup est **MERGED — PR #127**
   (voir section 23 ci-dessous pour le détail complet).
-- Dettes restantes après corrections pré-merge : `fatigue_ratio` dans `metrics` : toujours
-  legacy CardioCoach, à évaluer post-#127. `computeTrainingLoad` (terra_integration.py) reste
-  en place mais n'est plus appelé par `/run-index` ; il peut être supprimé dans une PR dédiée.
+- #128 Training Load Metrics single source cleanup est **IMPLEMENTED / PENDING MERGE — PR #128**
+  (source unique ACWR runtime, `/api/dashboard` migré V2, `coach_service` = V2 ou `None`,
+  `CTL/ATL/TSB` non fabriqués, `backend/engine/training_load_engine.py` supprimé).
+- Dettes restantes exactes : `fatigue_ratio` courant reste legacy CardioCoach ; les couches
+  applicatives Weekly Target / Workout Generator / Workout Analysis restent legacy mais ne
+  fabriquent plus de faux ACWR/CTL/ATL/TSB.
 
 ---
 
-## 23) PR #127 — Training metrics / TSB legacy cleanup + corrections pré-merge (IMPLEMENTED)
+## 23) PR #127 — Training metrics / TSB legacy cleanup + corrections pré-merge (MERGED)
 
 ### Callers audités
 
@@ -1040,8 +1054,7 @@ Ce document suit l'état réel de `main` et des PR en cours:
 
 ### Dettes réellement restantes
 
-- `fatigue_ratio` dans `metrics` (CardioCoach / Terra path) : hors périmètre #127, à évaluer post-merge.
-- `computeTrainingLoad` (terra_integration.py) n'est plus appelé par `/run-index` mais reste dans le code ; peut être supprimé dans une PR dédiée nettoyage.
+- `fatigue_ratio` dans `metrics` (CardioCoach / Terra path) : hors périmètre #127, repris en état exact section #128.
 - NEXT LT1/LT2 : aucun consumer ne produit plus de faux ACWR km-based exposé (condition remplie).
 
 ### Tests couverts (PR #127)
@@ -1055,8 +1068,8 @@ Ce document suit l'état réel de `main` et des PR en cours:
 
 ### Décision NEXT
 
-Aucune dette bloquante sur le contrat Training metrics V2. Aucun consumer ne produit de faux ACWR.
-→ NEXT : **Threshold Estimator LT1/LT2** (voir section 22).
+Aucune dette bloquante restante sur la source unique ACWR.
+→ NEXT : **Threshold Estimator LT1/LT2** (voir section 22) après validation de #128.
 
 ---
 

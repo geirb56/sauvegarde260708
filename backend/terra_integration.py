@@ -36,10 +36,9 @@ from typing import Optional
 
 import httpx
 
-# Re-use the pure computation engines that are already in the project.
-from engine.readiness_engine import compute_readiness
-from engine.training_load_engine import compute_acwr, compute_training_load_score
+from engine.readiness_engine import compute_readiness, compute_rhr_score
 from engine.workout_selector import select_workout
+from training_v2.training_load import build_training_load
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +51,73 @@ TERRA_API_BASE = os.environ.get("TERRA_API_BASE_URL", "https://api.tryterra.co/v
 
 # HTTP timeout (seconds) for Terra API requests.
 TERRA_TIMEOUT = 20.0
+
+
+def _training_load_score_from_acwr(acwr: Optional[float]) -> Optional[float]:
+    """Map ACWR to the legacy 0-100 score without fabricating an ACWR value."""
+    if acwr is None:
+        return None
+    if 0.8 <= acwr <= 1.3:
+        score = 100.0
+    elif acwr > 1.3:
+        score = max(0.0, 100.0 - (acwr - 1.3) * 100.0)
+    else:
+        score = max(0.0, 100.0 - (0.8 - acwr) * 100.0)
+    return round(score, 1)
+
+
+def _workout_to_v2_activity(workout: dict) -> dict:
+    """Adapt a legacy workout record to the TrainingLoad V2 activity contract."""
+    activity = {
+        "activity_type": workout.get("activity_type") or workout.get("sport") or workout.get("type"),
+        "start_time": workout.get("start_time") or workout.get("date"),
+    }
+    duration_minutes = workout.get("duration_minutes")
+    if isinstance(duration_minutes, (int, float)) and not isinstance(duration_minutes, bool):
+        activity["duration_s"] = float(duration_minutes) * 60.0
+    distance_km = workout.get("distance_km")
+    if isinstance(distance_km, (int, float)) and not isinstance(distance_km, bool):
+        activity["distance_m"] = float(distance_km) * 1000.0
+    return activity
+
+
+def _compute_legacy_recovery_readiness(
+    *,
+    training_load_score: Optional[float],
+    sleep_score: float,
+    sleep_signal_available: bool,
+    hrv_score: Optional[float],
+    rhr_today: Optional[float],
+    baseline_rhr: Optional[float],
+) -> Optional[float]:
+    """Compute legacy Terra readiness without fabricating a missing load signal."""
+    if training_load_score is not None:
+        return compute_readiness(
+            training_load_score=training_load_score,
+            sleep_score=sleep_score,
+            hrv_score=hrv_score,
+            rhr_today=rhr_today,
+            baseline_rhr=baseline_rhr,
+        )
+
+    weighted_total = 0.0
+    total_weight = 0.0
+
+    if hrv_score is not None:
+        weighted_total += 0.4 * max(0.0, min(100.0, hrv_score))
+        total_weight += 0.4
+    elif rhr_today is not None and baseline_rhr is not None:
+        weighted_total += 0.4 * compute_rhr_score(rhr_today, baseline_rhr)
+        total_weight += 0.4
+
+    if sleep_signal_available:
+        weighted_total += 0.3 * max(0.0, min(100.0, sleep_score))
+        total_weight += 0.3
+
+    if total_weight <= 0.0:
+        return None
+
+    return round(max(0.0, min(100.0, weighted_total / total_weight)), 1)
 
 
 # ---------------------------------------------------------------------------
@@ -392,6 +458,7 @@ async def computeRecoveryScore(user_id: str, db) -> dict:
     sleep_quality = daily_doc.get("sleep_quality")
 
     # --- Compute sleep score (0-100) ---
+    sleep_signal_available = sleep_quality is not None or sleep_hours is not None
     if sleep_quality is not None:
         sleep_score = float(sleep_quality)
         # Normalise if expressed as 0-1 fraction
@@ -409,7 +476,7 @@ async def computeRecoveryScore(user_id: str, db) -> dict:
 
     # --- Compute training load score ---
     load_result = await computeTrainingLoad(user_id, db)
-    training_load_score = load_result.get("training_load_score", 70.0)
+    training_load_score = load_result.get("training_load_score")
 
     # --- HRV score (0-100): normalise relative to baseline ---
     # At baseline → 100; below baseline → proportionally lower; above baseline → up to 120 (rewarded) but clamped to 100.
@@ -426,24 +493,30 @@ async def computeRecoveryScore(user_id: str, db) -> dict:
             hrv_score = min(100.0, max(0.0, (float(hrv) - 20.0) / 60.0 * 100.0))
 
     # --- Readiness score ---
-    readiness = compute_readiness(
+    readiness = _compute_legacy_recovery_readiness(
         training_load_score=training_load_score,
         sleep_score=sleep_score,
+        sleep_signal_available=sleep_signal_available,
         hrv_score=hrv_score,
         rhr_today=float(rhr) if rhr else None,
         baseline_rhr=float(baseline_rhr) if baseline_rhr else None,
     )
 
     # --- Derive recovery and fatigue scores ---
-    recovery_score = round(readiness, 1)
-    fatigue_score = round(100.0 - readiness, 1)
-
-    if readiness >= 75:
-        status = "ready"
-    elif readiness >= 50:
-        status = "moderate"
+    if readiness is None:
+        recovery_score = None
+        fatigue_score = None
+        status = "unavailable"
     else:
-        status = "fatigued"
+        recovery_score = round(readiness, 1)
+        fatigue_score = round(100.0 - readiness, 1)
+
+        if readiness >= 75:
+            status = "ready"
+        elif readiness >= 50:
+            status = "moderate"
+        else:
+            status = "fatigued"
 
     computed_at = datetime.now(timezone.utc).isoformat()
 
@@ -466,7 +539,7 @@ async def computeRecoveryScore(user_id: str, db) -> dict:
     )
 
     logger.info(
-        "computeRecoveryScore: user=%s recovery=%.1f fatigue=%.1f status=%s",
+        "computeRecoveryScore: user=%s recovery=%s fatigue=%s status=%s",
         user_id, recovery_score, fatigue_score, status,
     )
     return result
@@ -488,7 +561,7 @@ async def computeTrainingLoad(user_id: str, db) -> dict:
 
     Returns
     -------
-    Dict: ``{"acwr": float, "training_load_score": float,
+    Dict: ``{"acwr": float | None, "training_load_score": float | None,
              "status": str, "computed_at": str}``
     """
     cutoff = datetime.now(timezone.utc) - timedelta(days=28)
@@ -500,7 +573,15 @@ async def computeTrainingLoad(user_id: str, db) -> dict:
             "user_id": user_id,
             "date": {"$gte": cutoff_iso},
         },
-        {"date": 1, "duration_minutes": 1, "distance_km": 1, "_id": 0},
+        {
+            "date": 1,
+            "duration_minutes": 1,
+            "distance_km": 1,
+            "activity_type": 1,
+            "sport": 1,
+            "type": 1,
+            "_id": 0,
+        },
     ).to_list(500)
 
     if len(workouts) == 500:
@@ -509,18 +590,18 @@ async def computeTrainingLoad(user_id: str, db) -> dict:
             user_id,
         )
 
-    acwr = compute_acwr(workouts)
-    training_load_score = compute_training_load_score(acwr)
+    now = datetime.now(timezone.utc)
+    today_date = now.date()
+    load_snapshot = build_training_load(
+        [_workout_to_v2_activity(workout) for workout in workouts],
+        today_date,
+    )
+    acwr = load_snapshot.acwr
+    training_load_score = _training_load_score_from_acwr(acwr)
+    status = load_snapshot.status
 
-    if acwr > 1.3:
-        status = "overtraining_risk"
-    elif acwr < 0.8:
-        status = "undertraining"
-    else:
-        status = "optimal"
-
-    computed_at = datetime.now(timezone.utc).isoformat()
-    today = datetime.now(timezone.utc).date().isoformat()
+    computed_at = now.isoformat()
+    today = today_date.isoformat()
 
     result = {
         "user_id": user_id,
@@ -539,7 +620,7 @@ async def computeTrainingLoad(user_id: str, db) -> dict:
     )
 
     logger.info(
-        "computeTrainingLoad: user=%s acwr=%.3f score=%.1f status=%s",
+        "computeTrainingLoad: user=%s acwr=%s score=%s status=%s",
         user_id, acwr, training_load_score, status,
     )
     return result
@@ -570,10 +651,13 @@ async def generateWorkoutRecommendation(user_id: str, db) -> dict:
     recovery_result = await computeRecoveryScore(user_id, db)
     load_result = await computeTrainingLoad(user_id, db)
 
-    readiness = recovery_result.get("readiness", 70.0)
-    acwr = load_result.get("acwr", 1.0)
+    readiness = recovery_result.get("readiness")
+    acwr = load_result.get("acwr")
 
-    recommendation = select_workout(readiness, acwr)
+    if readiness is None:
+        recommendation = {"type": None, "duration": None, "intensity": None}
+    else:
+        recommendation = select_workout(readiness, acwr)
 
     computed_at = datetime.now(timezone.utc).isoformat()
 

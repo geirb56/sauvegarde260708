@@ -25,6 +25,7 @@ from llm_coach import (
     generate_cycle_week,
     LLM_MODEL
 )
+from training_v2.training_load import build_training_load
 from training_engine import (
     DEFAULT_WEEKLY_KM,
     GOAL_CONFIG,
@@ -378,6 +379,12 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
         "user_id": user_id,
         "date": {"$gte": six_weeks_ago.isoformat()}
     }).to_list(500)
+    garmin_activities = await (
+        db.garmin_activities.find({"user_id": user_id}, {"_id": 0})
+        .sort("start_time", -1)
+        .limit(200)
+        .to_list(length=200)
+    )
 
     # 3. Calculate base metrics
     def get_distance_km(w):
@@ -595,6 +602,8 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
     # load_7/load_28 are kept as raw km×10 volume inputs for determine_target_load()
     # internal weighting; they are NOT presented as physiological metrics.
     fitness_data = {
+        "acwr": build_training_load(garmin_activities, _today_date).acwr,
+        "tsb": None,
         "load_7": km_7 * 10,
         "load_28": km_28 * 10,
     }
