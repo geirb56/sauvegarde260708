@@ -385,9 +385,12 @@ def test_k_run_index_no_none_to_zero_clamp():
     """K. /run-index must not convert acwr None to 0.0."""
     server_path = _BACKEND / "server.py"
     source = server_path.read_text()
-    # The forbidden pattern: float(_raw_acwr) if _raw_acwr is not None else 0.0
-    assert "else 0.0" not in source, (
+    # The forbidden specific pattern from the old run-index Terra block
+    assert "if _raw_acwr is not None else 0.0" not in source, (
         "/run-index must not use `else 0.0` ACWR fallback"
+    )
+    assert "float(_raw_acwr) if _raw_acwr is not None else 0.0" not in source, (
+        "/run-index must not assign acwr=0.0 when _raw_acwr is None"
     )
 
 

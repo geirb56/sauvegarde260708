@@ -877,10 +877,12 @@ def determine_target_load(context: Dict, phase: str) -> int:
     base *= multiplier
 
     # Adjust based on fatigue; treat None acwr/tsb as neutral (no adjustment).
+    _acwr = context.get("acwr")
+    _tsb = context.get("tsb")
     adjusted = adjust_load_by_fatigue(
         base,
-        context.get("tsb") or 0,
-        context.get("acwr") or 1.0
+        _tsb if _tsb is not None else 0,
+        _acwr if _acwr is not None else 1.0
     )
 
     return int(adjusted)
