@@ -943,7 +943,8 @@ Puis:
 - [x] R4C history[].training_load → TrainingLoad V2 (MERGED — PR #125)
 - [x] #126 history[] fatigue legacy cleanup + RHR baseline unification (MERGED — PR #126)
 - [x] #127 Training metrics / TSB legacy cleanup (MERGED — PR #127)
-- [x] #128 Training Load Metrics single source cleanup (IMPLEMENTED / PENDING MERGE — PR #128)
+- [x] #128 Training Load Metrics single source cleanup (MERGED — PR #128 — runtime PASS)
+- [x] #129 Remove legacy fatigue_ratio / fatigue_status / fatigue_physio (IMPLEMENTED / PENDING MERGE — PR #129)
 
 ### TRAINING ENGINE
 
@@ -1007,12 +1008,17 @@ Ce document suit l'état réel de `main` et des PR en cours:
   `metrics.fatigue_ratio` conservé ; aucune modification calibration Readiness V2).
 - #127 Training metrics / TSB legacy cleanup est **MERGED — PR #127**
   (voir section 23 ci-dessous pour le détail complet).
-- #128 Training Load Metrics single source cleanup est **IMPLEMENTED / PENDING MERGE — PR #128**
+- #128 Training Load Metrics single source cleanup est **MERGED — PR #128 — runtime PASS**
   (source unique ACWR runtime, `/api/dashboard` migré V2, `coach_service` = V2 ou `None`,
   `CTL/ATL/TSB` non fabriqués, `backend/engine/training_load_engine.py` supprimé).
-- Dettes restantes exactes : `fatigue_ratio` courant reste legacy CardioCoach ; les couches
-  applicatives Weekly Target / Workout Generator / Workout Analysis restent legacy mais ne
-  fabriquent plus de faux ACWR/CTL/ATL/TSB.
+- #129 Remove legacy fatigue_ratio / fatigue_status / fatigue_physio est **IMPLEMENTED / PENDING MERGE — PR #129**
+  (`fatigue_ratio`, `fatigue_status`, `fatigue_physio` supprimés de `metrics` (Garmin et Terra),
+  de `history[]`, des `reasons`, et du consumer frontend/coach.
+  Aucune métrique fatigue parallèle à Readiness V2 — Readiness V2 et ses sous-scores inchangés.
+  Recommendation dérivée de Readiness V2 (Garmin path) ou signaux physio directs (Terra path).
+  Dashboard et Onboarding migrent vers `recommendation_color` / `run_readiness`.)
+- Dettes restantes exactes : Weekly Target / Workout Generator / Workout Analysis restent legacy mais
+  ne fabriquent plus de faux ACWR/CTL/ATL/TSB ni de fatigue_ratio.
 
 ---
 
@@ -1069,7 +1075,7 @@ Ce document suit l'état réel de `main` et des PR en cours:
 ### Décision NEXT
 
 Aucune dette bloquante restante sur la source unique ACWR.
-→ NEXT : **Threshold Estimator LT1/LT2** (voir section 22) après validation de #128.
+→ NEXT : **#130 — migration consumers legacy déjà couverts par V2 + Weekly Target V2 si nécessaire**.
 
 ---
 
@@ -1108,3 +1114,170 @@ Principes:
 - confidence explicite ;
 - aucune assimilation automatique: `Garmin moderate/vigorous == LT1/LT2` ;
 - les minutes Garmin R1.7B restent des faits provider-normalisés.
+
+---
+
+## 24) PR #129 — Remove legacy fatigue_ratio / fatigue_status / fatigue_physio (IMPLEMENTED / PENDING MERGE)
+
+### Objectif
+
+Supprimer complètement `fatigue_ratio`, `fatigue_status` et `fatigue_physio` devenus
+redondants avec Readiness V2. Aucune métrique fatigue parallèle à Readiness V2.
+
+Aucune nouvelle formule physiologique parallèle à Readiness V2 n'est introduite.
+
+### Suppressions
+
+| Fichier | Champ / code supprimé |
+|---|---|
+| `backend/garmin/insights.py` | calcul `fatigue_physio` / `fatigue_ratio` / `fatigue_status` ; poids `w_hrv/w_rhr/w_sleep/hrv_term` ; reason "Ratio de fatigue" ; champs `metrics.fatigue_physio` / `fatigue_ratio` / `fatigue_status` |
+| `backend/server.py` (Terra path) | calcul `fatigue_physio` / `fatigue_ratio` ; formule `_stress` (`0.5 * hrv_delta + 0.3 * rhr_delta + 0.2 * sleep_score`) et seuils `> 5.0` / `> 2.0` ; `fatigue_status` ; reason "Fatigue Ratio" ; champ historique `fatigue_ratio` ; champs `metrics.fatigue_physio` / `fatigue_ratio` / `fatigue_status` |
+| `backend/server.py` (training-today) | `fatigue_ratio` / `fatigue_status` du payload `fatigue` ; fallback `fatigue_ratio=1.0` / `fatigue_status="green"` ; **fallback fictif `run_readiness=100` / `recommendation="RUN HARD"` / `recommendation_color="green"` remplacé par `run_readiness=None` / `recommendation="UNAVAILABLE"` / `recommendation_color="gray"`** |
+| `frontend/src/pages/Dashboard.jsx` | `fatigue_status` → `recommendation_color` |
+| `frontend/src/pages/Onboarding.jsx` | `fatigue_ratio` → `run_readiness` |
+| `frontend/src/__tests__/dashboard-run-readiness-null.test.jsx` | champs `fatigue_physio` / `fatigue_ratio` / `fatigue_status` des mocks |
+
+### Comportement /training/today quand /run-index est indisponible
+
+**Règle permanente :**
+
+```
+Readiness indisponible
+→ run_readiness        = None         (JAMAIS 100)
+→ recommendation       = "UNAVAILABLE" (JAMAIS "RUN HARD")
+→ recommendation_color = "gray"        (JAMAIS "green")
+```
+
+Une absence de Readiness ne signifie pas un athlète parfaitement prêt.
+Aucune décision physiologique n'est inventée pour combler l'absence de données.
+
+### Comportement Terra retenu
+
+Terra est actuellement non connecté / future use.
+Readiness V2 n'est pas disponible sur ce chemin.
+Aucune formule physiologique de remplacement n'est inventée.
+Le chemin Terra retourne explicitement :
+
+```
+recommendation      = "UNAVAILABLE"
+recommendation_color = "gray"
+```
+
+Les données brutes (hrv_delta, rhr_delta, sleep_score) sont préservées pour affichage/debug
+mais ne sont pas recombinées dans une nouvelle pondération.
+
+### Conservé intact
+
+- Readiness V2 (`run_readiness`, `run_readiness_status`, `confidence`, `sufficiency_level`, `readiness_reasons`)
+- Sous-scores physio/sleep/load de Readiness V2
+- TrainingLoad V2 (`training_load`, `training_load_status`, `training_load_v2`)
+- Recommandations Garmin (RUN HARD / EASY RUN / REST) dérivées de Readiness V2
+- LT1/LT2 hors scope
+
+### Tests
+
+- `backend/tests/test_run_index_r129_fatigue_removal.py` (8 tests) :
+  metrics sans fatigue_ratio/status/physio, history[] sans fatigue_ratio,
+  Readiness V2 inchangée, recommendation présente, reasons sans "Fatigue Ratio",
+  multi-user isolation.
+- `backend/tests/test_run_index_r129_terra_no_stress.py` (10 tests) :
+  absence de `_stress` / pondérations HRV/RHR/Sleep / seuils 5.0 / 2.0 dans le code Terra ;
+  recommendation = UNAVAILABLE ; recommendation_color = gray ;
+  Garmin path inchangé (recommendation_color green/yellow/red, Readiness V2 intacte).
+- `backend/tests/test_run_index_r129_training_today_fallback.py` (9 tests) :
+  fallback `/run-index` indisponible → `run_readiness=None` / `recommendation=UNAVAILABLE` / `recommendation_color=gray` ;
+  UNAVAILABLE ne produit pas d'adaptation RUN HARD / n'intensifie pas la séance ;
+  non-régression RUN HARD / EASY RUN / REST ; aucun champ fatigue legacy dans la sortie.
+- `backend/tests/test_run_index_r5_history_fatigue_cleanup.py` : test 9 mis à jour
+  (absence de fatigue_ratio/status/physio au lieu de présence).
+
+### Décision NEXT
+
+→ **#130 — migration consumers legacy déjà couverts par V2 + Weekly Target V2 si nécessaire**.
+
+---
+
+## 25) Trajectoire canonique Training Engine V2 (post #129)
+
+### Séquence décidée
+
+```
+#129  suppression fatigue_ratio / fatigue_status / fatigue_physio  ← EN COURS
+
+#130  migration consumers legacy déjà couverts par Readiness V2
+      + Weekly Target V2 si nécessaire
+
+#131  Workout Generator V2
+
+#132  Workout Analysis V2
+
+#133  Daily Adaptation V2
+
+→     migration des derniers callers de training_engine.py
+→     extraction éventuelle de performance.py (VMA / allures / capacités)
+→     suppression complète de training_engine.py
+→     validation runtime réelle
+
+ENSUITE seulement :
+
+      thresholds.py  →  LT1/LT2 personnalisés
+      Training Intensity Distribution V2
+```
+
+### Architecture cible training_v2/
+
+```
+training_v2/
+    domain_activity.py
+    training_history.py
+    training_load.py
+    runner_profile.py
+    training_state.py
+    plan_goal.py
+    periodization.py
+
+    weekly_target.py
+    workout_generator.py
+    workout_analysis.py
+    daily_adaptation.py
+
+    performance.py      # VMA/allures si nécessaire (extraction future)
+    thresholds.py       # LT1/LT2 — après suppression legacy
+```
+
+Flux :
+
+```
+Données / profil / état / objectif
+        ↓
+Weekly Target
+        ↓
+Workout Generator
+        ↓
+Workout Analysis
+        ↓
+Daily Adaptation
+        ↓
+API / Coach / UI
+```
+
+### Interdiction planner monolithique
+
+Ne pas créer `training_v2/planner.py` contenant volume cible + reprise + long run +
+génération séance + analyse + adaptation.
+Si un orchestrateur apparaît, il doit seulement chaîner les modules sans porter leur logique métier.
+
+### performance.py
+
+VMA / allures / capacités :
+- ne pas mettre dans WeeklyTarget ni WorkoutGenerator par défaut.
+- si extraction nécessaire depuis le legacy : `training_v2/performance.py`.
+- responsabilité : estimation des capacités du coureur, séparée de la construction du plan.
+- aucune extraction nécessaire dans #129.
+
+### LT1 / LT2
+
+Viennent APRÈS : Weekly Target, Workout Generator, Workout Analysis, Daily Adaptation,
+migration legacy, suppression training_engine.py, validation runtime.
+
+Raison : éviter d'ajouter une nouvelle physiologie dans une architecture encore partiellement legacy.

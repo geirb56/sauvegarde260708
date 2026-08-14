@@ -1,4 +1,5 @@
 """#126 — history[] legacy fatigue cleanup + RHR baseline unification.
+#129 — fatigue_ratio / fatigue_status / fatigue_physio fully removed from metrics.
 
 Test matrix (problem statement requirements)
 --------------------------------------------
@@ -10,7 +11,7 @@ Test matrix (problem statement requirements)
 6.  metrics.rhr_delta == rhr_today - rhr_baseline (V2-aligned, or None)
 7.  RHR absent → rhr_today=None, rhr_baseline=None, rhr_delta=None (no fallback)
 8.  rhr_baseline=None when no prior data (only today's doc, no 14-day history)
-9.  metrics.fatigue_ratio CURRENT non-regression (field present, value >= 1.0)
+9.  metrics.fatigue_ratio ABSENT after #129 (fatigue_ratio/status/physio removed)
 10. multi-user isolation: each user's RHR baseline uses only their own data
 11. baseline RHR absent → rhr_delta=None (None ≠ green, #126 post-merge correction)
 12. rhr_status="gray" when rhr_delta=None — never "green" for absent data
@@ -275,12 +276,12 @@ def test_rhr_baseline_none_no_prior_data():
 
 
 # ---------------------------------------------------------------------------
-# Test 9 — metrics.fatigue_ratio present and >= 1.0 (non-regression)
+# Test 9 — metrics.fatigue_ratio ABSENT after #129 (legacy removed)
 # ---------------------------------------------------------------------------
 
 
-def test_metrics_fatigue_ratio_non_regression():
-    """metrics.fatigue_ratio must still be present and >= 1.0."""
+def test_metrics_fatigue_ratio_absent():
+    """metrics must NOT contain fatigue_ratio / fatigue_status / fatigue_physio after #129."""
     docs = _metrics(n=14, ref=_TODAY)
     acts = _activities(n=5, ref=_TODAY)
     db = _make_db(docs, acts)
@@ -288,10 +289,10 @@ def test_metrics_fatigue_ratio_non_regression():
     payload = asyncio.run(compute_run_index(db, "userA", reference_date=_TODAY))
     assert payload is not None
 
-    fr = payload["metrics"].get("fatigue_ratio")
-    assert fr is not None, "metrics.fatigue_ratio must still be present after #126"
-    assert isinstance(fr, (int, float)), f"fatigue_ratio should be numeric, got {fr!r}"
-    assert fr >= 1.0, f"fatigue_ratio should be >= 1.0 (centred on 1.0), got {fr}"
+    m = payload["metrics"]
+    assert "fatigue_ratio" not in m, f"fatigue_ratio must be removed after #129, found {m.get('fatigue_ratio')}"
+    assert "fatigue_status" not in m, f"fatigue_status must be removed after #129, found {m.get('fatigue_status')}"
+    assert "fatigue_physio" not in m, f"fatigue_physio must be removed after #129, found {m.get('fatigue_physio')}"
 
 
 # ---------------------------------------------------------------------------

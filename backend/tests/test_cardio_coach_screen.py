@@ -89,9 +89,6 @@ class TestCardioCoachEndpoint:
             "sleep_status",
             "training_load",
             "training_load_status",
-            "fatigue_physio",
-            "fatigue_ratio",
-            "fatigue_status",
         }
         for key in required_metric_keys:
             assert key in metrics, f"Missing metric key: {key}"
@@ -102,7 +99,7 @@ class TestCardioCoachEndpoint:
         response = requests.get(f"{BASE_URL}/api/cardio-coach")
         assert response.status_code == 200
         metrics = response.json()["metrics"]
-        status_keys = ["hrv_status", "rhr_status", "sleep_status", "training_load_status", "fatigue_status"]
+        status_keys = ["hrv_status", "rhr_status", "sleep_status", "training_load_status"]
         for key in status_keys:
             assert metrics[key] in VALID_STATUSES, (
                 f"Invalid status '{metrics[key]}' for {key}"
@@ -130,14 +127,14 @@ class TestCardioCoachEndpoint:
         print(f"✓ history entries: {len(history)}")
 
     def test_history_entries_have_required_fields(self):
-        """Each history entry must have day, training_load, fatigue_ratio."""
+        """Each history entry must have day and training_load."""
         response = requests.get(f"{BASE_URL}/api/cardio-coach")
         assert response.status_code == 200
         history = response.json()["history"]
         for entry in history:
             assert "day" in entry, "history entry missing 'day'"
             assert "training_load" in entry, "history entry missing 'training_load'"
-            assert "fatigue_ratio" in entry, "history entry missing 'fatigue_ratio'"
+            assert "fatigue_ratio" not in entry, "history entry must not contain legacy 'fatigue_ratio'"
         print(f"✓ history entry fields valid")
 
     def test_next_workout_is_not_exposed(self):
