@@ -688,11 +688,11 @@ Deux axes :
 
 ### Dettes restantes après #126
 
-- TSB dans `/training/metrics` : legacy km conservé → NEXT **#127**.
+- TSB dans `/training/metrics` : legacy km → **SUPPRIMÉ en #127**.
 - `fatigue_ratio` dans `metrics` (courant) : toujours legacy (CardioCoach), à évaluer post-#127.
-- Frontend : adaptation aux nouvelles shapes (hors périmètre backend).
+- Frontend : adaptation null TSB/ACWR → **FAIT en #127**.
 
-### NEXT — #127 Training metrics / TSB cleanup
+### #127 — Training metrics / TSB legacy cleanup (IMPLEMENTED / PENDING MERGE)
 
 | Layer | Status | Fichier / PR |
 |---|---|---|
@@ -931,7 +931,8 @@ Puis:
 - [x] TrainingLoad /training/metrics alignment (MERGED — PR #123)
 - [x] Cleanup helpers TrainingLoad legacy morts (MERGED — PR #124)
 - [x] R4C history[].training_load → TrainingLoad V2 (MERGED — PR #125)
-- [x] #126 history[] fatigue legacy cleanup + RHR baseline unification (IMPLEMENTED / PENDING MERGE — PR #126)
+- [x] #126 history[] fatigue legacy cleanup + RHR baseline unification (MERGED — PR #126)
+- [x] #127 Training metrics / TSB legacy cleanup (IMPLEMENTED / PENDING MERGE — PR #127)
 
 ### TRAINING ENGINE
 
@@ -989,11 +990,73 @@ Ce document suit l'état réel de `main` et des PR en cours:
 - R4C history[].training_load → TrainingLoad V2 est **MERGED — PR #125**
   (`history[].training_load = build_training_load(acts_at_J, J).acwr` ;
   `_activity_load` supprimé ; aucune fuite future ; aucun fallback distance→durée).
-- #126 final physiology legacy cleanup est **IMPLEMENTED / PENDING MERGE — PR #126**
+- #126 final physiology legacy cleanup est **MERGED — PR #126**
   (`fatigue_ratio` supprimé de `history[]` ; baseline RHR unifiée avec Readiness V2 via
   `get_rhr_v2_baseline()` ; fallback `55.0` supprimé ; `rhr_delta=None` quand absent ;
   `metrics.fatigue_ratio` conservé ; aucune modification calibration Readiness V2).
-- Dettes restantes : TSB `/training/metrics` legacy km → **NEXT #127**.
+- #127 Training metrics / TSB legacy cleanup est **IMPLEMENTED / PENDING MERGE — PR #127**
+  (voir section 23 ci-dessous pour le détail complet).
+- Dettes restantes après corrections pré-merge : `fatigue_ratio` dans `metrics` : toujours
+  legacy CardioCoach, à évaluer post-#127. `computeTrainingLoad` (terra_integration.py) reste
+  en place mais n'est plus appelé par `/run-index` ; il peut être supprimé dans une PR dédiée.
+
+---
+
+## 23) PR #127 — Training metrics / TSB legacy cleanup + corrections pré-merge (IMPLEMENTED)
+
+### Callers audités
+
+| Consumer | Champ | Avant | Après |
+|---|---|---|---|
+| `server.py /training/metrics` | `tsb` | km-based `load_28/4 - load_7` | `None` (supprimé) |
+| `server.py /training/metrics` | `ctl`, `atl` | déjà `None` (#123) | `None` inchangé |
+| `server.py /training/metrics` | `acwr` | V2 `build_training_load` (#123) | V2 inchangé |
+| `server.py /coach/analyze` | `ctl`, `atl`, `tsb` | km-based calculés | supprimés |
+| `server.py /coach/analyze` | `acwr` | km-based `km_7/(km_28/4)` | `None` (V2 indisponible dans ce contexte) |
+| `server.py /run-index` (Terra path) | `acwr` | `float(...) if not None else 0.0` + `max(0.1, acwr)` | TrainingLoad V2 (`build_training_load` sur `db.workouts`), `None` si pas de données durée |
+| `server.py /training/week-plan` | `ctl`, `atl`, `tsb`, `acwr` | km-based avec fallbacks | `None`/`None`/`None`/`None` |
+| `coach_service.py` | `ctl`, `atl`, `tsb`, `acwr` | km-based calculés explicitement | supprimés ; `load_7/load_28` conservés pour training engine |
+| `llm_coach.py prompt` | `acwr` | `fitness.get('acwr', 1.0)` | `fitness.get('acwr')` None-safe |
+| `llm_coach.py prompt` | `tsb` | `fitness.get('tsb', 0)` | `fitness.get('tsb')` None-safe |
+| `frontend/TrainingPlan.jsx` | ACWR display | `\|\| "1.00"` fallback | `null`-safe (affiche "—") |
+| `frontend/TrainingPlan.jsx` | TSB display | `\|\| "0.0"` fallback | `null`-safe (affiche "—") |
+| `training_engine.determine_target_load` | `ctl`, `acwr`, `tsb` | crash si `None` | signaux absents ignorés : base calculée depuis `load_28/4`, `load_7` ou `weekly_km` si `ctl` absent ; `adjust_load_by_fatigue` sauté si `acwr` ou `tsb` absent |
+
+### Champs supprimés
+
+- `tsb` km-based dans `/training/metrics` → `None`
+- `ctl`/`atl`/`tsb` km-based dans `/coach/analyze` context fitness
+- `ctl`/`atl`/`tsb` km-based dans `coach_service.py` fitness_data
+- Calcul km-based `km_7/(km_28/4)` dans `/coach/analyze` (remplacé par `None`)
+- Calcul km-based `load_7/(load_28/4)` dans `/training/week-plan` (remplacé par `None`)
+- Fallback `acwr=1.0` dans `/coach/analyze`, `coach_service.py`
+- Fallback `acwr=1.0` et `tsb=0` dans `llm_coach.py` prompt
+- `None→0.0→clamp 0.1` dans `/run-index` Terra path (remplacé par V2 propagation `None`)
+
+### Champs conservés
+
+- `load_7`/`load_28` en km dans `coach_service.py` (inputs volume pour training engine interne, non présentés comme métriques physiologiques)
+- `/run-index` Terra path migré vers TrainingLoad V2 (`build_training_load` sur `db.workouts` adaptés) ; `acwr=None` si pas de durées disponibles
+
+### Dettes réellement restantes
+
+- `fatigue_ratio` dans `metrics` (CardioCoach / Terra path) : hors périmètre #127, à évaluer post-merge.
+- `computeTrainingLoad` (terra_integration.py) n'est plus appelé par `/run-index` mais reste dans le code ; peut être supprimé dans une PR dédiée nettoyage.
+- NEXT LT1/LT2 : aucun consumer ne produit plus de faux ACWR km-based exposé (condition remplie).
+
+### Tests couverts (PR #127)
+
+- `tests/test_training_metrics_pr127.py` (32 tests) :
+  TSB=None, ACWR=None (no fallback), ACWR V2 alignment, acwr_reliable non-régressé,
+  no duplicate km CTL/ATL/TSB dans coach_service, no fallback LLM, multi-user isolation,
+  no km-based ACWR dans /coach/analyze, no km-based ACWR dans /training/week-plan,
+  no None→0.0→0.1 clamp dans /run-index, V2 migration vérifiée, week-plan acwr=None supporté.
+- `tests/test_training_metrics_endpoint.py` (non-régression, 8 tests PASSED).
+
+### Décision NEXT
+
+Aucune dette bloquante sur le contrat Training metrics V2. Aucun consumer ne produit de faux ACWR.
+→ NEXT : **Threshold Estimator LT1/LT2** (voir section 22).
 
 ---
 

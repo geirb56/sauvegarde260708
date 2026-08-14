@@ -168,8 +168,8 @@ async def enrich_chat_response(
 - Sessions: {stats_28.get('sessions', 0)}
 
 💪 FITNESS STATUS:
-- ACWR: {fitness.get('acwr', 1.0)} ({fitness.get('acwr_status', 'ok')})
-- TSB: {fitness.get('tsb', 0)} ({fitness.get('tsb_status', 'normal')})
+- ACWR: {fitness.get('acwr') if fitness.get('acwr') is not None else 'N/A'} ({fitness.get('acwr_status', 'unavailable')})
+- TSB: {fitness.get('tsb') if fitness.get('tsb') is not None else 'N/A'} ({fitness.get('tsb_status', 'unavailable')})
 
 📋 TRAINING PLAN:
 {training_plan if training_plan else "No active plan"}

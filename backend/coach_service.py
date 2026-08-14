@@ -589,24 +589,14 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
     target_km_debug = reprise["target_km"]
     training_state = reprise["state"]
 
-    # 8. Calculate ACWR and TSB
-    chronic_avg = km_28 / 4 if km_28 > 0 else 1
-    acwr = round(km_7 / chronic_avg, 2) if chronic_avg > 0 else 1.0
-    
-    ctl = km_28 / 4
-    atl = km_7
-    tsb = round(ctl - atl, 1)
-    
-    load_7 = km_7 * 10
-    load_28 = km_28 * 10
-    
+    # Section 8: fitness_data — volume metrics only.
+    # CTL/ATL/TSB km-based aliases removed (PR #127 — faux physiological metrics).
+    # ACWR from TrainingLoad V2 requires garmin_activities, not available here.
+    # load_7/load_28 are kept as raw km×10 volume inputs for determine_target_load()
+    # internal weighting; they are NOT presented as physiological metrics.
     fitness_data = {
-        "ctl": ctl,
-        "atl": atl,
-        "tsb": tsb,
-        "load_7": load_7,
-        "load_28": load_28,
-        "acwr": acwr
+        "load_7": km_7 * 10,
+        "load_28": km_28 * 10,
     }
 
     # 9. Build enriched context with VMA
