@@ -44,13 +44,13 @@ redondants avec Readiness V2. Aucune métrique fatigue parallèle à Readiness V
 ### backend/server.py — Terra path (non-Garmin)
 
 - Supprimé : calcul `fatigue_physio`, `fatigue_ratio`
-- Supprimé : recommendation basée sur `fatigue_ratio` (REST/EASY RUN/RUN HARD)
-- Remplacé par : recommendation directe depuis signaux physio (`_stress` score)
+- Supprimé : formule parallèle `_stress = 0.5 * hrv_delta + 0.3 * rhr_delta + 0.2 * sleep_score` et seuils `> 5.0` / `> 2.0`
 - Supprimé : `fatigue_status`
 - Supprimé : reason `f"Fatigue Ratio {fatigue_ratio:.2f}"`
 - Supprimé : variables `doc_fatigue_physio`, `doc_fatigue_ratio` dans la boucle history
 - Supprimé : `"fatigue_ratio"` dans les entrées history
 - Supprimé : champs `metrics.fatigue_physio`, `metrics.fatigue_ratio`, `metrics.fatigue_status`
+- Retenu : `recommendation = "UNAVAILABLE"` / `recommendation_color = "gray"` (Readiness V2 indisponible sur ce chemin — aucune formule physio inventée)
 
 ### backend/server.py — training-today (cardio-coach)
 
@@ -114,7 +114,24 @@ redondants avec Readiness V2. Aucune métrique fatigue parallèle à Readiness V
 | 7 | `test_reasons_no_fatigue_ratio_string` | pas de "Fatigue Ratio" dans les reasons |
 | 8 | `test_multi_user_no_fatigue_fields` | isolation multi-user |
 
-**Résultat : 21 tests PASSED (8 nouveaux + 13 r5 existants)**
+### backend/tests/test_run_index_r129_terra_no_stress.py
+
+10 tests :
+
+| # | Nom | Description |
+|---|---|---|
+| 1 | `test_no_stress_variable_assignment` | `_stress` absent du code Terra |
+| 2 | `test_no_hrv_weighting` | `0.5 * hrv_delta` absent |
+| 3 | `test_no_rhr_weighting` | `0.3 * rhr_delta` absent |
+| 4 | `test_no_sleep_score_weighting` | `0.2 * sleep_score` absent |
+| 5 | `test_no_physio_threshold_5` | seuil `> 5.0` absent |
+| 6 | `test_no_physio_threshold_2` | seuil `> 2.0` absent |
+| 7 | `test_garmin_path_recommendation_color_unchanged` | Garmin → green/yellow/red |
+| 8 | `test_garmin_path_readiness_v2_intact` | Garmin → run_readiness/confidence/sufficiency_level |
+| 9 | `test_terra_section_contains_unavailable` | Terra → UNAVAILABLE |
+| 10 | `test_terra_section_contains_gray` | Terra → gray |
+
+**Résultat : 18 tests PASSED (10 nouveaux + 8 r129 existants)**
 
 ---
 
@@ -136,19 +153,25 @@ redondants avec Readiness V2. Aucune métrique fatigue parallèle à Readiness V
 - `#129` = IMPLEMENTED / PENDING MERGE
 - `fatigue_ratio` legacy supprimé (metrics, history, reasons, frontend, coach)
 - Aucune métrique fatigue parallèle à Readiness V2
-- NEXT = LT1/LT2 Threshold Estimator
-- Section 24 ajoutée
+- Aucune nouvelle formule physiologique parallèle à Readiness V2 n'est introduite
+- Comportement Terra : `recommendation = "UNAVAILABLE"` / `recommendation_color = "gray"`
+- NEXT = #130 migration consumers legacy + Weekly Target V2
+- Section 24 mise à jour (comportement Terra documenté)
+- Section 25 ajoutée (trajectoire canonique #130→#133→LT1/LT2, architecture training_v2/, interdiction planner monolithique)
 
 ---
 
 ## Résumé de validation
 
 ```
-tests/test_run_index_r129_fatigue_removal.py   8 passed
-tests/test_run_index_r5_history_fatigue_cleanup.py  13 passed
-Total: 21 passed, 0 failed
+tests/test_run_index_r129_fatigue_removal.py          8 passed
+tests/test_run_index_r129_terra_no_stress.py         10 passed
+tests/test_run_index_r5_history_fatigue_cleanup.py   13 passed
+Total: 31 passed, 0 failed
 ```
 
 `/run-index` ne contient plus `fatigue_ratio` / `fatigue_status` / `fatigue_physio`.
+Aucune nouvelle formule physiologique parallèle à Readiness V2 n'est introduite.
+Terra : `recommendation = "UNAVAILABLE"` / `recommendation_color = "gray"`.
 Dashboard / Onboarding migrent vers `recommendation_color` / `run_readiness`.
-Readiness V2 inchangée. Recommandations inchangées. Multi-user OK.
+Readiness V2 inchangée. Multi-user OK.

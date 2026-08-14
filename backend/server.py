@@ -3001,29 +3001,22 @@ async def get_run_index(user: dict = Depends(auth_user), language: str = "fr"):
     training_load: Optional[float] = acwr
 
     # ----------------------------------------------------------------
-    # Recommendation — derived from Readiness V2 (aligned with Garmin path).
+    # Recommendation — Terra path.
+    # Terra is currently non-connected / future use.  Readiness V2 is NOT
+    # available on this path, so no physiological formula is invented.
+    # A neutral UNAVAILABLE state is returned explicitly.
     # ----------------------------------------------------------------
-    sleep_score = max(0.0, 8.0 - sleep_hours) + (1.0 - sleep_efficiency) * 2.0
     hrv_delta = float(hrv_baseline) - float(hrv_today)            # positive → HRV below baseline (bad)
     rhr_delta = float(rhr_today) - float(rhr_baseline)            # positive → RHR above baseline (bad)
+    sleep_score = max(0.0, 8.0 - sleep_hours) + (1.0 - sleep_efficiency) * 2.0
 
-    # Derive recommendation from physio signals (no fatigue_ratio; Readiness V2 unavailable on Terra path).
-    _stress = 0.5 * hrv_delta + 0.3 * rhr_delta + 0.2 * sleep_score
-    if _stress > 5.0:
-        recommendation = "REST"
-        recommendation_emoji = "🔴"
-        recommendation_color = "red"
-    elif _stress > 2.0:
-        recommendation = "EASY RUN"
-        recommendation_emoji = "🟡"
-        recommendation_color = "yellow"
-    else:
-        recommendation = "RUN HARD"
-        recommendation_emoji = "🟢"
-        recommendation_color = "green"
+    # Readiness V2 unavailable on Terra path — no parallel physio formula.
+    recommendation = "UNAVAILABLE"
+    recommendation_emoji = "⚫"
+    recommendation_color = "gray"
 
     # ----------------------------------------------------------------
-    # Per-metric status colours.
+    # Per-metric status colours (raw data preserved for display/debug).
     # ----------------------------------------------------------------
     hrv_status = "green" if hrv_delta <= 5 else ("yellow" if hrv_delta <= 10 else "red")
     rhr_status = "green" if rhr_delta <= 3 else ("yellow" if rhr_delta <= 7 else "red")
