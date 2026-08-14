@@ -428,11 +428,11 @@ def test_i_reprise_exit_no_volume_and_intensity():
         reference_date=REF,
     )
     if wt.allow_intensity:
-        # Volume must be HOLD — not grow beyond 10% above recent actual level.
-        # Reference: recent 30d active-weeks average ≈ chronic.
-        w30 = hist.window_30d
-        active_weeks = max(1, w30.activity_count // 3)
-        chronic = w30.distance_km / float(active_weeks)
+        # Volume must be HOLD — not grow beyond 5% above the chronic base.
+        # Reference: mean of non-zero distance buckets (same as _chronic_base_km).
+        buckets = hist.weekly_distance_buckets_28d
+        active_buckets = [km for km in buckets if km > 0]
+        chronic = sum(active_buckets) / float(len(active_buckets)) if active_buckets else 0.0
         if wt.target_basis == "distance" and wt.target_km is not None:
             assert wt.target_km <= chronic * 1.05 + 0.5, (
                 f"reprise_exit: volume {wt.target_km} should be held near chronic {chronic}"
@@ -772,3 +772,106 @@ def test_prior_running_window_weekly_equivalent():
     pw = hist.prior_running_window
     assert pw.activity_count == 2
     assert abs(pw.weekly_km_equivalent - pw.distance_km / 2.0) < 0.01
+
+
+# ---------------------------------------------------------------------------
+# V2 additions: weekly_distance_buckets_28d, active weeks, reprise_exit fallback
+# ---------------------------------------------------------------------------
+
+
+def test_weekly_distance_buckets_four_active_weeks():
+    """Four activities in four distinct weeks all produce non-zero buckets."""
+    acts = [
+        _make_activity(2, 10.0),
+        _make_activity(9, 9.0),
+        _make_activity(16, 8.0),
+        _make_activity(23, 7.0),
+    ]
+    hist = _history(acts)
+    b = hist.weekly_distance_buckets_28d
+    assert b[0] > 0
+    assert b[1] > 0
+    assert b[2] > 0
+    assert b[3] > 0
+
+
+def test_weekly_distance_buckets_empty_history():
+    hist = _history([])
+    assert hist.weekly_distance_buckets_28d == (0.0, 0.0, 0.0, 0.0)
+
+
+def test_active_weeks_exact_count_vs_approximation():
+    """Runner with 1 run per week (1 session) should be counted as 3 active weeks.
+
+    Old approximation: 3 // 3 = 1 (undercount).
+    New bucket method: 3 non-zero buckets = 3.
+    """
+    acts = [
+        _make_activity(2, 10.0),   # bucket 0
+        _make_activity(9, 10.0),   # bucket 1
+        _make_activity(16, 10.0),  # bucket 2
+    ]
+    hist = _history(acts)
+    # Bucket-based: 3 non-zero buckets
+    active_weeks = sum(1 for km in hist.weekly_distance_buckets_28d if km > 0)
+    assert active_weeks == 3
+
+
+def test_chronic_base_uses_mean_of_active_buckets():
+    """chronic_base_km should be the mean of non-zero buckets, not a diluted average."""
+    # 2 active weeks: 20 km each. Chronic should be 20 km, not 10 (20+20)/4.
+    acts = [
+        _make_activity(2, 20.0),
+        _make_activity(9, 20.0),
+    ]
+    hist, prof = _profile(acts)
+    # Direct check: mean of non-zero buckets
+    buckets = hist.weekly_distance_buckets_28d
+    active = [km for km in buckets if km > 0]
+    assert active, "should have active buckets"
+    expected_chronic = sum(active) / len(active)
+    assert abs(expected_chronic - 20.0) < 0.5
+
+
+def test_reprise_exit_fallback_is_duration_not_km():
+    """reprise_exit with no observable baseline must not return target_km=10.0.
+
+    It should return target_basis='duration', target_km=None.
+    """
+    from training_v2.weekly_target import _target_reprise_exit
+    from training_v2.periodization import build_periodization
+
+    # Build a minimal history/profile/periodization with NO recent km data
+    # but enough continuity state to trigger reprise_exit path if called directly.
+    hist = _history([])
+    _, prof = _profile([])
+    state = _state(hist, prof)
+    goal = _goal()
+    period = build_periodization(goal, REF, training_state=state, cycle_anchor_date=CYCLE_ANCHOR)
+
+    reason_codes: list[str] = []
+    basis, km, minutes = _target_reprise_exit(prof, hist, period, reason_codes, allow_intensity=True)
+
+    assert basis == "duration", f"expected 'duration', got {basis!r}"
+    assert km is None, f"expected None target_km, got {km}"
+    assert minutes is not None and minutes > 0
+    assert "REPRISE_EXIT_HOLD_FALLBACK" in reason_codes
+
+
+def test_reprise_exit_fallback_code_in_reason_codes():
+    """REPRISE_EXIT_HOLD_FALLBACK code must not produce a distance target."""
+    from training_v2.weekly_target import _target_reprise_exit
+    from training_v2.periodization import build_periodization
+
+    hist = _history([])
+    _, prof = _profile([])
+    state = _state(hist, prof)
+    goal = _goal()
+    period = build_periodization(goal, REF, training_state=state, cycle_anchor_date=CYCLE_ANCHOR)
+
+    reason_codes: list[str] = []
+    basis, km, _ = _target_reprise_exit(prof, hist, period, reason_codes, allow_intensity=True)
+
+    if "REPRISE_EXIT_HOLD_FALLBACK" in reason_codes:
+        assert km is None, "REPRISE_EXIT_HOLD_FALLBACK must never produce a target_km"
+        assert basis == "duration"

@@ -168,6 +168,16 @@ class TrainingHistory(BaseModel):
         activity_count=0,
     )
 
+    # Deterministic 28-day context: four consecutive 7-day distance buckets
+    # covering the last 28 days, ordered from most recent to oldest:
+    #   [0] J-0..6   → [reference_date - 6,  reference_date]
+    #   [1] J-7..13  → [reference_date - 13, reference_date - 7]
+    #   [2] J-14..20 → [reference_date - 20, reference_date - 14]
+    #   [3] J-21..27 → [reference_date - 27, reference_date - 21]
+    # Each value is the total running distance (km) in that 7-day window.
+    # Default: all zeros (backward-compatible).
+    weekly_distance_buckets_28d: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
+
     days_since_last_run: Optional[int]
     last_run_date: Optional[str]  # ISO-8601 date string (YYYY-MM-DD)
 
@@ -285,6 +295,48 @@ def _valid_duration(value: Any) -> Optional[float]:
 # ---------------------------------------------------------------------------
 # Window builder
 # ---------------------------------------------------------------------------
+
+
+def _build_weekly_distance_buckets_28d(
+    run_activities: List[Dict[str, Any]],
+    reference_date: date,
+) -> "tuple[float, float, float, float]":
+    """Build four consecutive 7-day distance buckets covering the last 28 days.
+
+    Bucket layout (ordered most-recent first):
+        [0] J-0..6   → [reference_date - 6,  reference_date]
+        [1] J-7..13  → [reference_date - 13, reference_date - 7]
+        [2] J-14..20 → [reference_date - 20, reference_date - 14]
+        [3] J-21..27 → [reference_date - 27, reference_date - 21]
+
+    Each value is the total running distance (km) for that 7-day window.
+    """
+    # Boundaries for each bucket (start, end) — both ends inclusive.
+    # bucket i covers [reference_date - (7*(i+1) - 1), reference_date - 7*i]
+    #   i=0: [ref-6, ref]
+    #   i=1: [ref-13, ref-7]
+    #   i=2: [ref-20, ref-14]
+    #   i=3: [ref-27, ref-21]
+    bucket_totals = [0.0, 0.0, 0.0, 0.0]
+
+    for act in run_activities:
+        act_date = act["activity_date"]
+        if act_date is None:
+            continue
+        days_ago = (reference_date - act_date).days
+        if days_ago < 0 or days_ago > 27:
+            continue
+        bucket_index = days_ago // 7  # 0..3
+        dist_m = _valid_distance(act["distance_m"])
+        if dist_m is not None:
+            bucket_totals[bucket_index] += dist_m / 1000.0
+
+    return (
+        round(bucket_totals[0], _ROUND),
+        round(bucket_totals[1], _ROUND),
+        round(bucket_totals[2], _ROUND),
+        round(bucket_totals[3], _ROUND),
+    )
 
 
 def _build_prior_running_window(
@@ -435,6 +487,7 @@ def build_training_history(
     window_30d = _build_window(run_activities, 30, reference_date)
     window_90d = _build_window(run_activities, 90, reference_date)
     prior_running_window = _build_prior_running_window(run_activities, reference_date)
+    weekly_distance_buckets_28d = _build_weekly_distance_buckets_28d(run_activities, reference_date)
 
     # Step 3 — last run and history depth
     valid_dates = [
@@ -462,6 +515,7 @@ def build_training_history(
         window_30d=window_30d,
         window_90d=window_90d,
         prior_running_window=prior_running_window,
+        weekly_distance_buckets_28d=weekly_distance_buckets_28d,
         days_since_last_run=days_since,
         last_run_date=last_date.isoformat() if last_date else None,
         available_history_days=available_days,

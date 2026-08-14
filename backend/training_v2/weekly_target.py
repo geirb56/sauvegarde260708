@@ -292,17 +292,23 @@ def _interpolate_deep_reprise_minutes(prior_km: float) -> int:
     return int(round(interpolated))
 
 
-def _active_weeks_from_30d(training_history: TrainingHistory) -> int:
-    """Estimate the number of active weeks in the last 30 days.
+def _active_weeks_from_28d_buckets(training_history: TrainingHistory) -> int:
+    """Return the number of truly active weeks in the last 28 days.
 
-    Uses the 30-day window to approximate active weeks by dividing total
-    activity count by a reasonable sessions-per-week value (3), bounded [0, 4].
-    This is an approximation — the V2 history does not expose per-week buckets.
+    Uses ``weekly_distance_buckets_28d`` to count weeks with non-zero running
+    distance — no approximation needed.  Bounded [0, 4].
     """
-    count = training_history.window_30d.activity_count
-    # Each active week has ~3 runs; count // 3 gives approximate active weeks.
-    estimated = min(4, max(0, count // 3))
-    return estimated
+    return sum(1 for km in training_history.weekly_distance_buckets_28d if km > 0)
+
+
+def _active_weeks_from_30d(training_history: TrainingHistory) -> int:
+    """Return the number of active weeks in the last 28 days.
+
+    Delegates to :func:`_active_weeks_from_28d_buckets` for a deterministic,
+    per-bucket count.  The old ``activity_count // 3`` approximation has been
+    replaced by the exact bucket-based approach.
+    """
+    return _active_weeks_from_28d_buckets(training_history)
 
 
 def _apply_resume_guard(
@@ -346,10 +352,10 @@ def _chronic_base_km(runner_profile: RunnerProfile, training_history: TrainingHi
     """Return the chronic baseline km using the active-weeks principle from PR77.
 
     Priority:
-    1. 30-day window divided by observed active weeks (PR77 resolve_chronic_base).
-       This avoids diluting a comeback athlete's baseline with empty weeks.
+    1. Mean of truly active weeks from ``weekly_distance_buckets_28d``
+       (non-zero buckets only — the exact PR77 principle without approximation).
     2. runner_profile.typical_weekly_km when is_observed=True (for the case
-       where 30d is empty but RunnerProfile has a derived value from 90d fallback).
+       where 28d is empty but RunnerProfile has a derived value from 90d fallback).
     3. None.
 
     Why active_weeks instead of calendar weeks:
@@ -357,16 +363,15 @@ def _chronic_base_km(runner_profile: RunnerProfile, training_history: TrainingHi
        weekly base of ~10 km — not 10/4 = 2.5 km (which is what dividing by
        the full 4-week window would give).
 
-    active_weeks estimation: count // 3 (assuming 3 sessions per active week),
-    bounded below at 1. This matches PR77's approach.
+    active_weeks: count of non-zero distance buckets in weekly_distance_buckets_28d
+    (exact, no approximation).  Bounded below at 1 when distance is present.
     """
-    w30 = training_history.window_30d
-    if w30.activity_count > 0 and w30.distance_km > 0:
-        # Active-weeks average — the PR77 principle.
-        active_weeks = max(1, w30.activity_count // 3)
-        return w30.distance_km / float(active_weeks)
+    buckets = training_history.weekly_distance_buckets_28d
+    active_buckets = [km for km in buckets if km > 0]
+    if active_buckets:
+        return sum(active_buckets) / float(len(active_buckets))
 
-    # 30d window empty: fall back to RunnerProfile (may be from 90d window).
+    # 28d window empty: fall back to RunnerProfile (may be from 90d window).
     if runner_profile.typical_weekly_km_is_observed and runner_profile.typical_weekly_km is not None:
         return runner_profile.typical_weekly_km
 
@@ -470,16 +475,16 @@ def _target_reprise_exit(
         # HOLD: apply phase multiplier to chronic base, no progression.
         target_km = round(chronic * _phase_multiplier(periodization.phase), 1)
         reason_codes.append("REPRISE_EXIT_VOLUME_HOLD")
+        return "distance", target_km, None
     elif recent is not None and recent > 0:
         # No chronic observable: hold at recent level.
         target_km = round(recent * _phase_multiplier(periodization.phase), 1)
         reason_codes.append("REPRISE_EXIT_HOLD_RECENT")
+        return "distance", target_km, None
     else:
-        # Fallback to conservative distance.
-        target_km = 10.0
+        # No baseline available: duration-based fallback, no invented km floor.
         reason_codes.append("REPRISE_EXIT_HOLD_FALLBACK")
-
-    return "distance", target_km, None
+        return "duration", None, PARTIAL_REPRISE_FALLBACK_WEEKLY_MINUTES
 
 
 def _target_normal(
