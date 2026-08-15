@@ -1291,7 +1291,7 @@ Raison : éviter d'ajouter une nouvelle physiologie dans une architecture encore
 Suppression `fatigue_ratio` / `fatigue_status` / `fatigue_physio` du moteur RunIndex.
 HEAD main au départ de #130 : `4c6982b1239075dfafde81ab5a062950805a8dcd`
 
-### PR #130 = Weekly Target V2 — IMPLEMENTED / PENDING MERGE
+### PR #130 = Weekly Target V2 — MERGED
 
 Fichiers livrés :
 - `backend/training_v2/weekly_target.py` — couche WeeklyTarget V2
@@ -1336,14 +1336,130 @@ Aucun équivalent fictif en V2. La baseline doit être observée ou None.
 
 ---
 
-## 28) NEXT = #131 Workout Generator V2
+## 28) PR #131 — WorkoutGenerator V2 — IMPLEMENTED / PENDING MERGE
+
+HEAD main au départ de #131 : `658b50ec3733cd40ff9d993c9b8541abe3344af0` (#130 merged)  
+HEAD après correction audit : `e4b1623a…` + corrections contrat (voir §29b)
+
+Fichiers livrés :
+- `backend/training_v2/weekly_target.py` — étendu : champ `continuity_state` ajouté à `WeeklyTarget`
+- `backend/training_v2/workout_generator.py` — couche WorkoutGenerator V2
+- `backend/training_v2/__init__.py` — exports PR131
+- `backend/tests/test_workout_generator_v2.py` — 99 tests (99 passed, 0 failed)
+- `backend/tests/test_weekly_target_v2.py` — étendu : section U (7 tests contrat continuity_state)
+- `RUNINDEX_PR131_REPORT.md`
+
+---
+
+## 29) Décisions PR #131
+
+### WorkoutGenerator ne recalcule jamais WeeklyTarget
+
+`build_weekly_plan` répartit la cible hebdomadaire en séances.
+Il ne recalcule jamais le volume total.
+
+### allow_intensity=False → easy-only
+
+Si `weekly_target.allow_intensity == False` :
+→ 100% des séances de course sont `easy` / `recovery` / `long_easy`.
+Aucun `quality`, aucun `steady`, aucun `threshold`, aucun `tempo`.
+
+### V1 allow_intensity=True → maximum 1 quality/semaine
+
+Même avec 5 ou 6 séances, au maximum une seule session `quality` par semaine.
+Calibration produit V1, recalibrable après distribution LT1/LT2.
+
+### Aucune FC / allure arbitraire
+
+Pas de FC hardcodée. Pas de pace fallback.
+`distance_km = None` si `target_basis == "duration"`.
+`duration_minutes = None` si `target_basis == "distance"`.
+`None > fausse précision`.
+
+### Distance target → somme km exacte
+
+`sum(session.distance_km) == weekly_target.target_km` (±0.1 km).
+Résidu d'arrondi appliqué à la plus grande séance.
+
+### Duration target → somme minutes exacte
+
+`sum(session.duration_minutes) == weekly_target.target_duration_minutes` (exact).
+Résidu appliqué à la plus grande séance.
+
+### Long run proportionnée au volume réel
+
+Long run = fraction du volume hebdomadaire (V1 : 35% ± ajustement objectif).
+Aucun plancher minimum arbitraire (ni 16 km pour semi, ni 28 km pour marathon).
+Cap : `LONG_RUN_MAX_FRACTION = 0.45` (protection faible volume).
+
+### Aucune perte des protections reprise PR77
+
+- run/walk en deep_reprise (`run_walk_allowed` reason code)
+- 3 séances maximum en deep_reprise
+- Séance la plus longue en dimanche
+- Somme exacte (NO_ROUNDING_DRIFT)
+
+---
+
+## 29b) Décisions architecturales permanentes — Corrections audit PR #131
+
+### `WeeklyTarget.continuity_state` — contrat explicite entre couches
+
+```python
+WeeklyTarget.continuity_state: str
+# Valeurs : no_history | deep_reprise | partial_reprise | reprise_exit | normal
+# Source : training_state.continuity_state (transport direct, aucune réinterprétation)
+```
+
+Ce champ est le **signal de routage officiel** entre TrainingState → WeeklyTarget → WorkoutGenerator.
+
+`build_weekly_target()` :
+```python
+continuity_state = training_state.continuity_state  # direct, no mapping
+```
+
+`build_weekly_plan()` :
+```python
+continuity = weekly_target.continuity_state  # direct, no inference
+```
+
+### reason_codes MUST NOT be used as hidden business-state transport
+
+**Décision permanente :**
+
+> `reason_codes` are diagnostic / explanatory artefacts ONLY.
+>
+> Any business-state signal that must cross layer boundaries MUST be
+> transported as an explicit named field on the contract model.
+>
+> `reason_codes` MUST NOT be scanned to infer or route business logic.
+> This applies to WeeklyTarget, WeeklyPlan, TrainingState, and all future
+> contract models in the training_v2 layer.
+
+`_infer_continuity()` est supprimé définitivement.  
+Tout futur state-routing doit passer par un champ explicite.
+
+### `_assign_days()` — assignation déterministe respectant RunnerProfile
+
+`_assign_days(session_slots, runner_profile)` retourne
+`([(day, workout_type), ...], extra_reason_codes)`.
+
+Stratégie :
+1. `availability_constraints` → jours non disponibles exclus
+2. `max_days_per_week` → cap du nombre de jours candidats
+3. Sélection de `n` jours à espacement maximal (déterministe)
+4. `long_easy` → dernier jour sélectionné
+5. `quality` → non adjacent à `long_easy` si possible
+
+Si les contraintes sont impossibles :
+- `SCHEDULE_CONSTRAINT_LIMITED` émis dans `plan.reason_codes`
+- Meilleur plan produit sans crash
+
+---
+
+## 30) NEXT = #132 Workout Analysis V2
 
 Responsabilités :
-- Structure de la semaine (répartition cible hebdo → séances)
-- Easy-only enforcement (`allow_intensity=False`)
-- Run/walk en `deep_reprise`
-- Cap long run / proportionnalité
-- Correction exacte des arrondis (`NO_ROUNDING_DRIFT`)
-- Migration `build_reprise_week_structure` depuis `training_engine.py`
-- Migration `compute_long_run_km` depuis `training_engine.py`
-- Migration `cap_long_run_for_low_volume` depuis `training_engine.py`
+- Analyser la semaine réalisée vs planifiée
+- Calculer les métriques de performance observées
+- Préparer les inputs pour DailyAdaptation #133

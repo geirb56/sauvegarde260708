@@ -219,6 +219,20 @@ class WeeklyTarget(BaseModel):
     confidence: str
     """Overall confidence in this prescription: "none" | "low" | "medium" | "high"."""
 
+    continuity_state: str
+    """Explicit continuity state from TrainingState.
+
+    Values: no_history | deep_reprise | partial_reprise | reprise_exit | normal
+
+    This is the single source of truth for WorkoutGenerator routing.
+    WorkoutGenerator MUST use this field directly and MUST NOT derive the
+    continuity state by inspecting reason_codes.
+
+    Architectural decision (permanent):
+      reason_codes are diagnostic / explanatory artefacts only.
+      They MUST NOT be used as a hidden business-state transport.
+    """
+
     reason_codes: tuple[str, ...]
     """Deterministic, language-neutral diagnostic codes."""
 
@@ -611,6 +625,7 @@ def build_weekly_target(
         target_sessions=target_sessions,
         allow_intensity=allow_intensity,
         confidence=confidence,
+        continuity_state=continuity,
         reason_codes=tuple(reason_codes),
     )
 
