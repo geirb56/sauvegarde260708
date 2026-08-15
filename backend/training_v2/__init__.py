@@ -17,6 +17,9 @@ R2A exposes:             PhysioSubscore, SleepSubscore, LoadSubscore,
                          build_readiness_subscores.
 R2B exposes:             ReadinessResult, ReadinessConfidence,
                          build_readiness_result.
+PR130 exposes:           WeeklyTarget, build_weekly_target.
+                         PriorRunningWindow (TrainingHistory extension).
+PR131 exposes:           WorkoutPrescription, WeeklyPlan, build_weekly_plan.
 """
 
 from .domain_activity import DomainActivity
@@ -54,10 +57,17 @@ from .readiness import (
     build_readiness_result,
 )
 from .runner_profile import RunnerProfile, build_runner_profile
-from .training_history import TrainingHistory, TrainingWindow, build_training_history
+from .training_history import (
+    PriorRunningWindow,
+    TrainingHistory,
+    TrainingWindow,
+    build_training_history,
+)
 from .training_intensity import TrainingIntensityProfile, build_training_intensity_profile
 from .training_load import TrainingLoadSnapshot, build_training_load
 from .training_state import TrainingState, build_training_state
+from .weekly_target import WeeklyTarget, build_weekly_target
+from .workout_generator import WeeklyPlan, WorkoutPrescription, build_weekly_plan
 
 __all__ = [
     "DomainActivity",
@@ -90,6 +100,7 @@ __all__ = [
     "build_readiness_result",
     "RunnerProfile",
     "build_runner_profile",
+    "PriorRunningWindow",
     "TrainingHistory",
     "TrainingWindow",
     "build_training_history",
@@ -99,4 +110,9 @@ __all__ = [
     "build_training_load",
     "TrainingState",
     "build_training_state",
+    "WeeklyTarget",
+    "build_weekly_target",
+    "WeeklyPlan",
+    "WorkoutPrescription",
+    "build_weekly_plan",
 ]

@@ -18,6 +18,31 @@ Examples with reference_date = 2026-08-06:
   30-day window: 2026-07-08 … 2026-08-06  (30 days inclusive)
   90-day window: 2026-05-09 … 2026-08-06  (90 days inclusive)
 
+Prior running window (PR130 extension — pre-stop fitness context)
+-----------------------------------------------------------------
+To distinguish a trained runner returning from a break from a genuine
+beginner, WeeklyTarget V2 needs an observable running level BEFORE the
+recent stopping period.
+
+Convention (fixed, documented, tested):
+    days_ago >= 28 AND days_ago < 42
+    i.e. [reference_date - 41, reference_date - 28]   (both inclusive)
+
+Translated to absolute dates:
+    prior_start = reference_date - timedelta(days=41)
+    prior_end   = reference_date - timedelta(days=28)
+
+This window sits immediately before the 28-day "gap" that triggers
+deep_reprise in TrainingState, so it captures the training level
+present just before the break started.
+
+The equivalent weekly distance can be computed as:
+    weekly_km_equivalent = prior_running_window.distance_km / 2.0
+(the window spans 14 days = 2 weeks).
+
+The window produces: distance_km, duration_hours, activity_count.
+It does NOT include longest_run_km or average_speed_kmh to keep scope minimal.
+
 Activities dated strictly after reference_date are ignored.
 
 Units
@@ -67,6 +92,46 @@ _ROUND = 2  # decimal places for all output fields
 # ---------------------------------------------------------------------------
 
 
+class PriorRunningWindow(BaseModel):
+    """Running activity in the pre-stop window: days_ago >= 28 and < 42.
+
+    Absolute date range (both ends inclusive):
+        [reference_date - 41 days, reference_date - 28 days]
+
+    This is a 14-day window (2 calendar weeks), so the weekly equivalent is:
+        weekly_km_equivalent = distance_km / 2.0
+
+    This window is the canonical source for prior fitness context in
+    WeeklyTarget V2: it captures the training level immediately before
+    the break that triggered deep_reprise, without diluting it with the
+    silence period that follows.
+
+    DO NOT use window_90d as a substitute — it conflates pre-break fitness
+    with the inactivity period and produces an underestimate.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    # Window bounds (days ago, relative to reference_date)
+    days_ago_start: int = 28   # inclusive lower bound (closer to today, more recent)
+    days_ago_end: int = 41     # inclusive upper bound (further from today, older)
+    # Absolute: [reference_date - 41d, reference_date - 28d]
+
+    distance_km: float
+    duration_hours: float
+    activity_count: int
+
+    @property
+    def weekly_km_equivalent(self) -> float:
+        """Estimated weekly km based on the 14-day window (distance / 2)."""
+        return round(self.distance_km / 2.0, 2)
+
+    @property
+    def has_activity(self) -> bool:
+        """True when at least one running activity exists in this window."""
+        return self.activity_count > 0
+
+
 class TrainingWindow(BaseModel):
     """Aggregated statistics for a sliding window of N days."""
 
@@ -92,6 +157,26 @@ class TrainingHistory(BaseModel):
     window_7d: TrainingWindow
     window_30d: TrainingWindow
     window_90d: TrainingWindow
+
+    # PR130 — pre-stop fitness context window (days_ago in [28, 41] inclusive).
+    # See module docstring for exact convention and usage contract.
+    # Default: empty window (backward-compatible for callers that construct
+    # TrainingHistory directly without using build_training_history).
+    prior_running_window: PriorRunningWindow = PriorRunningWindow(
+        distance_km=0.0,
+        duration_hours=0.0,
+        activity_count=0,
+    )
+
+    # Deterministic 28-day context: four consecutive 7-day distance buckets
+    # covering the last 28 days, ordered from most recent to oldest:
+    #   [0] J-0..6   → [reference_date - 6,  reference_date]
+    #   [1] J-7..13  → [reference_date - 13, reference_date - 7]
+    #   [2] J-14..20 → [reference_date - 20, reference_date - 14]
+    #   [3] J-21..27 → [reference_date - 27, reference_date - 21]
+    # Each value is the total running distance (km) in that 7-day window.
+    # Default: all zeros (backward-compatible).
+    weekly_distance_buckets_28d: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
 
     days_since_last_run: Optional[int]
     last_run_date: Optional[str]  # ISO-8601 date string (YYYY-MM-DD)
@@ -212,6 +297,94 @@ def _valid_duration(value: Any) -> Optional[float]:
 # ---------------------------------------------------------------------------
 
 
+def _build_weekly_distance_buckets_28d(
+    run_activities: List[Dict[str, Any]],
+    reference_date: date,
+) -> "tuple[float, float, float, float]":
+    """Build four consecutive 7-day distance buckets covering the last 28 days.
+
+    Bucket layout (ordered most-recent first):
+        [0] J-0..6   → [reference_date - 6,  reference_date]
+        [1] J-7..13  → [reference_date - 13, reference_date - 7]
+        [2] J-14..20 → [reference_date - 20, reference_date - 14]
+        [3] J-21..27 → [reference_date - 27, reference_date - 21]
+
+    Each value is the total running distance (km) for that 7-day window.
+    """
+    # Boundaries for each bucket (start, end) — both ends inclusive.
+    # bucket i covers [reference_date - (7*(i+1) - 1), reference_date - 7*i]
+    #   i=0: [ref-6, ref]
+    #   i=1: [ref-13, ref-7]
+    #   i=2: [ref-20, ref-14]
+    #   i=3: [ref-27, ref-21]
+    bucket_totals = [0.0, 0.0, 0.0, 0.0]
+
+    for act in run_activities:
+        act_date = act["activity_date"]
+        if act_date is None:
+            continue
+        days_ago = (reference_date - act_date).days
+        if days_ago < 0 or days_ago > 27:
+            continue
+        bucket_index = days_ago // 7  # 0..3
+        dist_m = _valid_distance(act["distance_m"])
+        if dist_m is not None:
+            bucket_totals[bucket_index] += dist_m / 1000.0
+
+    return (
+        round(bucket_totals[0], _ROUND),
+        round(bucket_totals[1], _ROUND),
+        round(bucket_totals[2], _ROUND),
+        round(bucket_totals[3], _ROUND),
+    )
+
+
+def _build_prior_running_window(
+    run_activities: List[Dict[str, Any]],
+    reference_date: date,
+) -> PriorRunningWindow:
+    """Build the pre-stop fitness context window.
+
+    Window convention: days_ago >= 28 AND days_ago < 42
+    Absolute: [reference_date - 41 days, reference_date - 28 days] (both inclusive).
+    """
+    # days_ago = (reference_date - act_date).days
+    # days_ago >= 28  →  act_date <= reference_date - 28
+    # days_ago < 42   →  act_date >  reference_date - 42
+    #                 →  act_date >= reference_date - 41  (integer days)
+    prior_end = reference_date - timedelta(days=28)
+    prior_start = reference_date - timedelta(days=41)
+
+    total_distance_km = 0.0
+    total_duration_hours = 0.0
+    count = 0
+
+    for act in run_activities:
+        act_date = act["activity_date"]
+        if act_date is None:
+            continue
+        if act_date < prior_start or act_date > prior_end:
+            continue
+
+        dist_m = _valid_distance(act["distance_m"])
+        dur_s = _valid_duration(act["duration_s"])
+
+        if dist_m is None and dur_s is None:
+            continue
+
+        count += 1
+        if dist_m is not None:
+            total_distance_km += dist_m / 1000.0
+        if dur_s is not None:
+            total_duration_hours += dur_s / 3600.0
+
+    return PriorRunningWindow(
+        distance_km=round(total_distance_km, _ROUND),
+        duration_hours=round(total_duration_hours, _ROUND),
+        activity_count=count,
+    )
+
+
 def _build_window(
     run_activities: List[Dict[str, Any]],
     days: int,
@@ -313,6 +486,8 @@ def build_training_history(
     window_7d = _build_window(run_activities, 7, reference_date)
     window_30d = _build_window(run_activities, 30, reference_date)
     window_90d = _build_window(run_activities, 90, reference_date)
+    prior_running_window = _build_prior_running_window(run_activities, reference_date)
+    weekly_distance_buckets_28d = _build_weekly_distance_buckets_28d(run_activities, reference_date)
 
     # Step 3 — last run and history depth
     valid_dates = [
@@ -339,6 +514,8 @@ def build_training_history(
         window_7d=window_7d,
         window_30d=window_30d,
         window_90d=window_90d,
+        prior_running_window=prior_running_window,
+        weekly_distance_buckets_28d=weekly_distance_buckets_28d,
         days_since_last_run=days_since,
         last_run_date=last_date.isoformat() if last_date else None,
         available_history_days=available_days,

@@ -156,17 +156,17 @@ export default function Onboarding() {
   const recommendation = useMemo(() => {
     if (!target || !fitnessLevel || !goal || !frequency) return null;
 
-    const fatigueRatio = physioData?.fatigue_ratio ?? 1.0;
+    const runReadiness = physioData?.run_readiness ?? null;
     const sleepHours = physioData?.sleep_hours;
     const intensity =
-      fatigueRatio > 1.5 ? "recovery-focused intensity"
-      : fatigueRatio > 1.2 ? "moderate intensity"
+      runReadiness !== null && runReadiness < 40 ? "recovery-focused intensity"
+      : runReadiness !== null && runReadiness < 65 ? "moderate intensity"
       : "performance intensity";
 
     return {
       title: `${fitnessLevel} plan for ${target}`,
       summary: `Based on your goal (${goal}) and frequency (${frequency}), start with ${intensity}.`,
-      detail: `Physiology signal: fatigue ratio ${fatigueRatio}${sleepHours ? `, sleep ${sleepHours}h` : ""}.`,
+      detail: `Physiology signal: run readiness ${runReadiness !== null ? Math.round(runReadiness) : "N/A"}${sleepHours ? `, sleep ${sleepHours}h` : ""}.`,
     };
   }, [target, fitnessLevel, goal, frequency, physioData]);
 
