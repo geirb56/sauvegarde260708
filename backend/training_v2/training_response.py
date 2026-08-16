@@ -9,14 +9,22 @@ Design rules
 - No pass/fail, no workout score, no verdict, no user text.
 - Deterministic: same inputs + reference_date → identical output.
 
-Window contract (28-day, max 10 activities)
--------------------------------------------
-Selected activities satisfy ALL of the following:
+Window contract (28-day, max 10 for fine analysis)
+--------------------------------------------------
+All qualifying activities satisfy:
   1. activity_type in RUNNING_TYPES
   2. start_time date ≥ reference_date − timedelta(days=27)   (i.e. within 28 days inclusive)
   3. start_time date ≤ reference_date                        (no future activities)
 
-Among all qualifying activities, the 10 most recent are selected.
+Global 28-day facts (observed_runs, observed_runs_per_week,
+observed_distance_km, observed_duration_minutes) use ALL qualifying
+activities in the window.
+
+Fine analysis (cardiac efficiency, average_hr_recent,
+average_pace_recent_s_per_km, intensity trend) is limited to the 10
+most recent activities (selected_running_activities ≤ 10).
+
+The cap of 10 must NEVER reduce global facts.
 
 Response status
 ---------------
@@ -52,19 +60,25 @@ Comparability rule (PRODUCT CALIBRATION V1):
 
 Volume trend V1 (PRODUCT CALIBRATION V1)
 -----------------------------------------
-Activities are sorted oldest → newest.
-Split into first half (F) and second half (S) by index.
-Only activities with distance_m > 0 are included in each half.
+Calendar-based: the 28-day window is split into two equal 14-day halves.
 
-    mean_F = mean distance of F-group (km)
-    mean_S = mean distance of S-group (km)
+    old half   : window_start (J-27) → J-14 inclusive
+    recent half: J-13          → reference_date (J) inclusive
 
-    mean_S > mean_F × 1.10  → "increasing"
-    mean_S < mean_F × 0.90  → "decreasing"
-    otherwise               → "stable"
-    < 4 activities with distance   → "unknown"
+For each half, total_distance_km = sum of distances of ALL running
+activities in that half (not capped at 10).
+
+    recent_total > old_total × 1.10  → "increasing"
+    recent_total < old_total × 0.90  → "decreasing"
+    otherwise                        → "stable"
+
+    If either half has no valid running distance → "unknown"
 
 No coefficient is hidden.  Threshold = ±10 %.
+
+IMPORTANT: uses ALL activities in the 28-day window, not the 10 selected
+for fine analysis.  The cap (MAX_SELECTED = 10) must never distort
+volume totals.
 
 Long-run trend V1
 ------------------
@@ -221,11 +235,16 @@ class RecentTrainingResponse(BaseModel):
 
     # ── Volume & frequency facts ─────────────────────────────────────────
     observed_distance_km: Optional[float]
+    """Total running distance in km across ALL activities in the 28-day window."""
+
     observed_duration_minutes: Optional[float]
+    """Total running duration in minutes across ALL activities in the 28-day window."""
+
     observed_runs: int
+    """Total number of running activities in the 28-day window (not capped at 10)."""
 
     observed_runs_per_week: Optional[float]
-    """Runs per 7-day equivalent across the 28-day window."""
+    """Runs per 7-day equivalent: available_running_activities / 28 × 7."""
 
     # ── Long-run facts ────────────────────────────────────────────────────
     longest_run_km: Optional[float]
@@ -375,15 +394,15 @@ def build_recent_training_response(
     selected_oldest_first = list(reversed(selected_pairs))
     selected_acts = [pair[1] for pair in selected_oldest_first]
 
-    # ── Step 7: basic facts ───────────────────────────────────────────────
+    # ── Step 7: global 28-day facts (ALL activities in window, not capped) ──
+    # Iterate over in_window (all available), not selected_pairs.
     total_dist_m: float = 0.0
     has_dist = False
     total_dur_s: float = 0.0
     has_dur = False
     longest_dist_m: Optional[float] = None
-    longest_dur_s: Optional[float] = None
 
-    for act in selected_acts:
+    for _d, act in in_window:
         if act.distance_m is not None and act.distance_m > 0:
             total_dist_m += act.distance_m
             has_dist = True
@@ -393,10 +412,10 @@ def build_recent_training_response(
             total_dur_s += act.duration_s
             has_dur = True
 
-    # Recompute longest_dur_s cleanly
-    longest_dur_s = None
+    # Recompute longest_dur_s from ALL in-window activities
+    longest_dur_s: Optional[float] = None
     if longest_dist_m is not None:
-        for act in selected_acts:
+        for _d, act in in_window:
             if act.distance_m == longest_dist_m:
                 if act.duration_s is not None and act.duration_s > 0:
                     longest_dur_s = act.duration_s
@@ -409,9 +428,9 @@ def build_recent_training_response(
         longest_dur_s / 60.0 if longest_dur_s is not None else None
     )
 
-    # runs per week across 28-day window
+    # Global runs per week: use ALL in-window activities
     observed_runs_per_week: Optional[float] = (
-        (selected_count / _WINDOW_DAYS) * 7.0 if selected_count > 0 else None
+        (available_count / _WINDOW_DAYS) * 7.0 if available_count > 0 else None
     )
 
     # ── Step 8: HR & pace aggregates ─────────────────────────────────────
@@ -449,13 +468,42 @@ def build_recent_training_response(
     valid_efficiencies = [e for e in efficiency_samples if e is not None]
     cardiac_efficiency_trend: TrendValue = _half_split_trend(valid_efficiencies)
 
-    # ── Step 11: volume trend ─────────────────────────────────────────────
-    dist_series = [
-        act.distance_m / 1000.0
-        for act in selected_acts
-        if act.distance_m is not None and act.distance_m > 0
-    ]
-    volume_trend: TrendValue = _half_split_trend(dist_series)
+    # ── Step 11: volume trend — calendar-based, ALL in-window activities ─────
+    # Split 28-day window into two 14-day halves:
+    #   old half   : window_start (J-27) → freq_boundary - 1 day  (J-14 inclusive)
+    #   recent half: freq_boundary (J-13) → reference_date (J) inclusive
+    # The same freq_boundary is used for frequency_pattern (step 12).
+    # Compares TOTAL distances, not per-run averages.
+    # PRODUCT CALIBRATION V1 — threshold = ±10 %
+    freq_boundary = reference_date - timedelta(days=13)
+    old_half_dist_m: float = sum(
+        act.distance_m
+        for d, act in in_window
+        if d < freq_boundary and act.distance_m is not None and act.distance_m > 0
+    )
+    recent_half_dist_m: float = sum(
+        act.distance_m
+        for d, act in in_window
+        if d >= freq_boundary and act.distance_m is not None and act.distance_m > 0
+    )
+    old_half_has_valid = any(
+        act.distance_m is not None and act.distance_m > 0
+        for d, act in in_window
+        if d < freq_boundary
+    )
+    recent_half_has_valid = any(
+        act.distance_m is not None and act.distance_m > 0
+        for d, act in in_window
+        if d >= freq_boundary
+    )
+    if not old_half_has_valid or not recent_half_has_valid or old_half_dist_m == 0:
+        volume_trend: TrendValue = "unknown"
+    elif recent_half_dist_m > old_half_dist_m * 1.10:
+        volume_trend = "increasing"
+    elif recent_half_dist_m < old_half_dist_m * 0.90:
+        volume_trend = "decreasing"
+    else:
+        volume_trend = "stable"
 
     # ── Step 12: frequency pattern ────────────────────────────────────────
     # Split the 28-day window symmetrically: first 14 days / last 14 days.
@@ -463,7 +511,6 @@ def build_recent_training_response(
     # the older half; >= (reference_date - 13 days) are in the recent half.
     # This yields exactly 14 calendar days in each half (day -27…-14 and day -13…0).
     # PRODUCT CALIBRATION V1 — threshold = 10 %
-    freq_boundary = reference_date - timedelta(days=13)
     first_half_count = sum(1 for d, _ in selected_pairs if d < freq_boundary)
     second_half_count = sum(1 for d, _ in selected_pairs if d >= freq_boundary)
     if selected_count < 4:
@@ -486,7 +533,12 @@ def build_recent_training_response(
 
     lr_first = _longest_km(selected_acts[:mid])
     lr_second = _longest_km(selected_acts[mid:])
-    if lr_first is None or lr_second is None or len(dist_series) < 4:
+    selected_dist_series = [
+        act.distance_m / 1000.0
+        for act in selected_acts
+        if act.distance_m is not None and act.distance_m > 0
+    ]
+    if lr_first is None or lr_second is None or len(selected_dist_series) < 4:
         long_run_trend: TrendValue = "unknown"
     elif lr_second > lr_first * 1.10:
         long_run_trend = "increasing"
@@ -536,7 +588,7 @@ def build_recent_training_response(
         confidence=confidence,
         observed_distance_km=observed_distance_km,
         observed_duration_minutes=observed_duration_minutes,
-        observed_runs=selected_count,
+        observed_runs=available_count,
         observed_runs_per_week=observed_runs_per_week,
         longest_run_km=longest_run_km,
         longest_run_duration_minutes=longest_run_duration_minutes,

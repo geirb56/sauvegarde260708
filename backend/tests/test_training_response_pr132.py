@@ -170,9 +170,9 @@ def test_E_eleven_activities_cap_at_ten():
     assert result.selected_running_activities == 10
     assert result.available_running_activities == 11
     assert "activities_capped_at_10" in result.reason_codes
-    # Most recent 10 selected → oldest (days_ago=20) excluded
-    # Verify total distance: 10 × 8 km
-    assert result.observed_distance_km == pytest.approx(80.0)
+    # Most recent 10 selected → oldest (days_ago=20) excluded from fine analysis
+    # But observed_distance_km uses ALL 11 in-window activities: 11 × 8 km = 88 km
+    assert result.observed_distance_km == pytest.approx(88.0)
 
 
 # ---------------------------------------------------------------------------
@@ -612,3 +612,103 @@ def test_observed_runs_per_week():
     acts = [_run(i * 3) for i in range(7)]
     result = build_recent_training_response(acts, REF)
     assert result.observed_runs_per_week == pytest.approx(7 / 28 * 7)
+
+
+# ---------------------------------------------------------------------------
+# BUG1 — volume_trend is calendar-based (total distance, not mean per run)
+# ---------------------------------------------------------------------------
+
+def test_volume_trend_calendar_counts_total_not_average():
+    """
+    Old half (J-27→J-14): 2 runs × 10 km = 20 km total
+    Recent half (J-13→J): 4 runs × 10 km = 40 km total
+    Average per run = 10 km in both halves → old code returned 'stable'.
+    Calendar-total volume has doubled → correct code returns 'increasing'.
+    """
+    # old half: 2 runs at days_ago 16 and 20 (both < freq_boundary J-13)
+    old_half = [_run(16, distance_m=10_000.0), _run(20, distance_m=10_000.0)]
+    # recent half: 4 runs at days_ago 0, 3, 6, 10 (all >= freq_boundary J-13)
+    recent_half = [
+        _run(0, distance_m=10_000.0),
+        _run(3, distance_m=10_000.0),
+        _run(6, distance_m=10_000.0),
+        _run(10, distance_m=10_000.0),
+    ]
+    acts = old_half + recent_half
+    result = build_recent_training_response(acts, REF)
+    assert result.response_status == "sufficient"
+    assert result.volume_trend == "increasing"
+
+
+def test_volume_trend_stable_when_totals_equal():
+    """Equal total distances in both halves → stable."""
+    # 3 runs in old half, 3 in recent half, same distance
+    acts = [
+        _run(27, distance_m=10_000.0),
+        _run(20, distance_m=10_000.0),
+        _run(16, distance_m=10_000.0),
+        _run(5, distance_m=10_000.0),
+        _run(2, distance_m=10_000.0),
+        _run(1, distance_m=10_000.0),
+    ]
+    result = build_recent_training_response(acts, REF)
+    assert result.response_status == "sufficient"
+    assert result.volume_trend == "stable"
+
+
+def test_volume_trend_decreasing_when_recent_half_lower():
+    """Recent total < old total × 0.90 → decreasing."""
+    # old half: 3 × 10 km = 30 km; recent half: 2 × 10 km = 20 km (< 30×0.90=27)
+    acts = [
+        _run(27, distance_m=10_000.0),
+        _run(20, distance_m=10_000.0),
+        _run(16, distance_m=10_000.0),  # still in old half (< J-13)
+        _run(5, distance_m=10_000.0),   # recent half
+        _run(1, distance_m=10_000.0),   # recent half
+    ]
+    result = build_recent_training_response(acts, REF)
+    assert result.response_status == "sufficient"
+    assert result.volume_trend == "decreasing"
+
+
+# ---------------------------------------------------------------------------
+# BUG2/3 — Global 28d facts are not distorted by the 10-activity cap
+# ---------------------------------------------------------------------------
+
+def test_global_facts_use_all_activities_not_capped_10():
+    """
+    20 runs in window: observed_runs = 20, runs_per_week ≈ 5.0.
+    Selected = 10 (most recent) for fine analysis.
+    """
+    acts = [_run(i) for i in range(20)]  # days_ago 0..19, all within 28d
+    result = build_recent_training_response(acts, REF)
+    assert result.available_running_activities == 20
+    assert result.selected_running_activities == 10
+    # Global facts: ALL 20 activities
+    assert result.observed_runs == 20
+    assert result.observed_runs_per_week == pytest.approx(20 / 28 * 7)
+    # Distance: 20 × 8 km = 160 km
+    assert result.observed_distance_km == pytest.approx(160.0)
+    # Duration: 20 × 2400s / 60 = 800 min
+    assert result.observed_duration_minutes == pytest.approx(800.0)
+    assert "activities_capped_at_10" in result.reason_codes
+
+
+def test_volume_trend_calendar_uses_all_activities_not_cap():
+    """
+    14 runs in old half + 6 in recent half → decreasing.
+    If capped at 10 most recent the old half would be empty → 'unknown' (wrong).
+    Calendar-based logic must use all in-window activities.
+    """
+    # old half (days_ago 14..27): 14 runs × 5 km = 70 km
+    old_half = [_run(14 + i, distance_m=5_000.0) for i in range(14)]
+    # recent half (days_ago 0..13): 6 runs × 5 km = 30 km  (< 70×0.90=63 → decreasing)
+    recent_half = [_run(i, distance_m=5_000.0) for i in range(6)]
+    acts = old_half + recent_half
+    result = build_recent_training_response(acts, REF)
+    assert result.available_running_activities == 20
+    assert result.selected_running_activities == 10
+    assert result.response_status == "sufficient"
+    # Calendar total: old=70km, recent=30km → decreasing (not 'unknown')
+    assert result.volume_trend == "decreasing"
+
