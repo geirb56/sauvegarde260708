@@ -1467,7 +1467,7 @@ HEAD main au départ de #132 : `388bb650c4df5307a53eb488b4b3b6fb336af1c9` (#131 
 - `backend/garmin/domain_adapter.py` — transport des nouveaux champs depuis `GarminActivity`
 - `backend/training_v2/training_response.py` — NEW : `RecentTrainingResponse`, `WorkoutExecutionFacts`, `build_recent_training_response()`, `analyze_workout_execution()`
 - `backend/training_v2/__init__.py` — exports PR132
-- `backend/tests/test_training_response_pr132.py` — 47 tests (A–X), tous PASSED
+- `backend/tests/test_training_response_pr132.py` — 66 tests (A–X + §14D/§15/§16/§17), tous PASSED
 - `RUNINDEX_PR132_REPORT.md`
 - `docs/RUNINDEX_MASTER_ROADMAP_AND_DECISIONS.md`
 
@@ -1527,22 +1527,52 @@ efficiency = speed_mps / average_hr
 Conditions : distance_m > 0, duration_s > 0, average_hr > 0. Sinon None.  
 Terrain indicator only — pas une mesure de LT1/LT2.
 
+**Garde-fou terrain comparabilité (PRODUCT CALIBRATION V1) :**
+```
+elevation_rate = elevation_gain_m / distance_km   [m D+/km]
+Seuil dispersion terrain : _TERRAIN_DISPERSION_THRESHOLD_M_PER_KM = 30 m D+/km
+```
+- Si < 4 samples ont (efficiency valide + elevation_rate connu) → `"unknown"` (conservateur)
+- Si terrain_max − terrain_min > 30 m/km → `"unknown"` (terrain incompatible)
+- AUCUNE correction de vitesse par le D+ n'est calculée (pas de GAP, pas de pace ajustée)
+
 ### Volume trend V1 (PRODUCT CALIBRATION V1)
 
-Split oldest/newest par index. Seuil ±10 %. Requiert ≥ 4 activités avec distance.
+Split calendaire : compare les TOTAUX de distance des deux moitiés 14d vs 14d.
+Utilise TOUTES les activités in-window (pas plafonné à 10).
+Seuil ±10 %. Requiert ≥ 1 distance valide dans chaque moitié ET ≥ 4 au total.
 
 ### Frequency pattern V1
 
-Split calendaire 28 j / 2 = 14 j. Compte de runs par demi-fenêtre. Seuil ±10 %.
+Split calendaire 28 j / 2 = 14 j. Utilise TOUTES les activités in-window (pas plafonné à 10).
+Compte de runs par demi-fenêtre. Seuil ±10 %. Requiert ≥ 4 activités totales.
 
 ### Long-run trend V1
 
-Même méthode half-split sur la série des distances individuelles (oldest→newest). Seuil ±10 %.
+**Calendaire : compare la plus longue sortie de chaque moitié 14d vs 14d.**
+Utilise TOUTES les activités in-window (pas plafonné à 10).
+Seuil ±10 %. Requiert ≥ 1 distance valide dans chaque moitié ET ≥ 4 au total.
+
+### Intensity exposure trend V1
+
+**Calendaire : compare le total (moderate + vigorous) minutes de chaque moitié 14d vs 14d.**
+Utilise TOUTES les activités in-window (pas plafonné à 10).
+moderate + vigorous en somme simple — aucun coefficient de pondération.
+Seuil ±10 %.
 
 ### Traitement moderate/vigorous
 
 Transportés comme faits fournisseur. Exposés pour coverage et intensity_exposure_trend.  
 Aucun TRIMP / TSS / EPOC / LT1/LT2 jamais calculé.
+
+### Séparation GLOBAL 28d FACTS vs RECENT 10 ANALYSIS
+
+| Population | Champs |
+|---|---|
+| GLOBAL 28-day window | `observed_runs`, `observed_runs_per_week`, `observed_distance_km`, `observed_duration_minutes`, `volume_trend`, `frequency_pattern`, `long_run_trend`, `intensity_exposure_trend` |
+| RECENT SAMPLE (≤ 10) | `cardiac_efficiency_samples`, `average_hr_recent`, `average_pace_recent_s_per_km` |
+
+Le cap `MAX_SELECTED = 10` ne doit jamais réduire les faits globaux.
 
 ---
 

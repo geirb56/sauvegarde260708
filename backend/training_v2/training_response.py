@@ -16,13 +16,13 @@ All qualifying activities satisfy:
   2. start_time date ≥ reference_date − timedelta(days=27)   (i.e. within 28 days inclusive)
   3. start_time date ≤ reference_date                        (no future activities)
 
-Global 28-day facts (observed_runs, observed_runs_per_week,
-observed_distance_km, observed_duration_minutes) use ALL qualifying
-activities in the window.
+GLOBAL 28-DAY FACTS use ALL qualifying activities in the window:
+  observed_runs, observed_runs_per_week, observed_distance_km, observed_duration_minutes,
+  volume_trend, frequency_pattern, long_run_trend, intensity_exposure_trend.
 
-Fine analysis (cardiac efficiency, average_hr_recent,
-average_pace_recent_s_per_km, intensity trend) is limited to the 10
-most recent activities (selected_running_activities ≤ 10).
+RECENT SAMPLE (fine analysis) is limited to the 10 most recent activities
+(selected_running_activities ≤ 10):
+  cardiac_efficiency_samples, average_hr_recent, average_pace_recent_s_per_km.
 
 The cap of 10 must NEVER reduce global facts.
 
@@ -37,7 +37,7 @@ Example: 8 runs but only 2 with HR → HR trend = "unknown".
 
 Cardiac efficiency V1 (TERRAIN INDICATOR, not lab metric)
 ----------------------------------------------------------
-Computed per activity when ALL conditions are met:
+Computed per activity (from selected_running_activities, max 10) when ALL met:
     distance_m > 0
     duration_s > 0
     average_hr > 0
@@ -46,44 +46,64 @@ Formula:
     speed_mps         = distance_m / duration_s
     cardiac_efficiency = speed_mps / average_hr     (m·s⁻¹ / bpm)
 
-Elevation context (elevation_gain_m) is preserved but NOT used to adjust the
-ratio in V1.  Activities are not filtered out for high elevation; the trend
-status may fall back to "unknown" when comparability is low.
+Terrain comparability guard (PRODUCT CALIBRATION V1 — RECALIBRABLE):
+    elevation_rate = elevation_gain_m / distance_km   (m D+/km)
 
-Comparability rule (PRODUCT CALIBRATION V1):
-    A run is comparable for trend purposes if:
-        distance_m  is not None AND > 0
-        duration_s  is not None AND > 0
-        average_hr  is not None AND > 0
-    A trend is computed only when ≥ 4 efficiency samples are available across
-    both halves of the window.  Otherwise → "unknown".
+    A trend is calculated only when ≥ 4 samples have BOTH valid efficiency
+    AND known elevation_rate (elevation_gain_m not None, distance_m > 0).
+    → Otherwise: "unknown"  (conservative, None ≠ 0)
+
+    Among those ≥ 4 comparable samples, if:
+        terrain_max − terrain_min > _TERRAIN_DISPERSION_THRESHOLD_M_PER_KM (30 m D+/km)
+    → "unknown"  (incompatible terrain, no invented GAP correction)
+
+    Threshold = 30 m D+/km.  Centralized, documented, recalibrable for V2.
+    NO speed correction / GAP formula / trail bonus ever applied.
 
 Volume trend V1 (PRODUCT CALIBRATION V1)
 -----------------------------------------
 Calendar-based: the 28-day window is split into two equal 14-day halves.
+Uses ALL in-window activities (not capped at 10).
 
     old half   : window_start (J-27) → J-14 inclusive
     recent half: J-13          → reference_date (J) inclusive
 
 For each half, total_distance_km = sum of distances of ALL running
-activities in that half (not capped at 10).
+activities in that half with valid distance.
 
     recent_total > old_total × 1.10  → "increasing"
     recent_total < old_total × 0.90  → "decreasing"
     otherwise                        → "stable"
 
-    If either half has no valid running distance → "unknown"
+    Conditions for computation:
+        - at least 1 activity with valid distance in EACH half
+        - at least 4 activities with valid distance total in the 28-day window
+    Otherwise → "unknown"
 
 No coefficient is hidden.  Threshold = ±10 %.
 
-IMPORTANT: uses ALL activities in the 28-day window, not the 10 selected
-for fine analysis.  The cap (MAX_SELECTED = 10) must never distort
-volume totals.
+Frequency pattern V1 (PRODUCT CALIBRATION V1)
+----------------------------------------------
+Calendar-based: same 14-day half-split.
+Uses ALL in-window activities (not capped at 10).
+Count of runs in old half vs recent half, ±10 % threshold.
+If available_count < 4 → "unknown".
 
-Long-run trend V1
-------------------
-Same half-split method applied to the single longest_run_km within each half.
-Requires ≥ 4 activities with valid distance.  Threshold = ±10 %.
+Long-run trend V1 (PRODUCT CALIBRATION V1)
+-------------------------------------------
+Calendar-based: compare the longest single run in the old 14d half
+vs the longest single run in the recent 14d half.
+Uses ALL in-window activities (not capped at 10).
+Requires at least 1 valid distance in each half AND ≥ 4 valid distances total.
+Threshold = ±10 %.
+
+Intensity exposure trend V1 (PRODUCT CALIBRATION V1)
+------------------------------------------------------
+Calendar-based: compare total (moderate + vigorous) intensity minutes
+in old 14d half vs recent 14d half.
+Uses ALL in-window activities (not capped at 10).
+moderate + vigorous as plain sum (no weighting factor).
+Threshold = ±10 %.
 
 Forbidden computations (V1)
 ----------------------------
@@ -91,6 +111,7 @@ Forbidden computations (V1)
 - LT1 / LT2 / VT1 / VT2
 - TRIMP / TSS / EPOC / Recovery Time
 - workout score / pass-fail / success / failed
+- GAP / grade-adjusted pace / terrain speed correction
 """
 
 from __future__ import annotations
@@ -110,6 +131,13 @@ from .workout_generator import WorkoutPrescription
 
 _WINDOW_DAYS: int = 28
 _MAX_SELECTED: int = 10
+
+# PRODUCT CALIBRATION V1 — RECALIBRABLE — NOT PHYSIOLOGICAL LAW
+# Maximum allowed elevation-rate spread (m D+/km) among comparable cardiac-
+# efficiency samples.  If terrain_max − terrain_min exceeds this threshold,
+# the samples are considered non-comparable and cardiac_efficiency_trend falls
+# back to "unknown".  No speed correction is ever applied.
+_TERRAIN_DISPERSION_THRESHOLD_M_PER_KM: float = 30.0
 
 
 # ---------------------------------------------------------------------------
@@ -462,11 +490,40 @@ def build_recent_training_response(
     )
 
     # ── Step 10: cardiac efficiency ───────────────────────────────────────
+    # Efficiency per selected activity (fine analysis, ≤ 10 most recent).
     efficiency_samples: list[Optional[float]] = [
         _cardiac_efficiency(act) for act in selected_acts
     ]
+
+    # Terrain comparability guard (PRODUCT CALIBRATION V1 — RECALIBRABLE)
+    # elevation_rate = elevation_gain_m / distance_km  (m D+/km)
+    # Condition for trend computation:
+    #   ≥ 4 samples with BOTH valid efficiency AND known elevation_rate
+    #   AND terrain_max − terrain_min ≤ _TERRAIN_DISPERSION_THRESHOLD_M_PER_KM
+    # NO speed correction / GAP formula is ever applied.
+    known_terrain_rates: list[float] = []
+    for act, eff in zip(selected_acts, efficiency_samples):
+        if (
+            eff is not None
+            and act.elevation_gain_m is not None
+            and act.distance_m is not None
+            and act.distance_m > 0
+        ):
+            known_terrain_rates.append(act.elevation_gain_m / (act.distance_m / 1000.0))
+
     valid_efficiencies = [e for e in efficiency_samples if e is not None]
-    cardiac_efficiency_trend: TrendValue = _half_split_trend(valid_efficiencies)
+    if len(known_terrain_rates) < 4:
+        # Fewer than 4 samples have both valid efficiency and known elevation_rate.
+        # Conservative: terrain comparability cannot be verified → unknown.
+        cardiac_efficiency_trend: TrendValue = "unknown"
+    else:
+        terrain_min = min(known_terrain_rates)
+        terrain_max = max(known_terrain_rates)
+        if terrain_max - terrain_min > _TERRAIN_DISPERSION_THRESHOLD_M_PER_KM:
+            # Terrain dispersion exceeds threshold → samples not comparable → unknown.
+            cardiac_efficiency_trend = "unknown"
+        else:
+            cardiac_efficiency_trend = _half_split_trend(valid_efficiencies)
 
     # ── Step 11: volume trend — calendar-based, ALL in-window activities ─────
     # Split 28-day window into two 14-day halves:
@@ -496,7 +553,16 @@ def build_recent_training_response(
         for d, act in in_window
         if d >= freq_boundary
     )
-    if not old_half_has_valid or not recent_half_has_valid or old_half_dist_m == 0:
+    total_valid_dist_count = sum(
+        1 for _d, act in in_window
+        if act.distance_m is not None and act.distance_m > 0
+    )
+    if (
+        not old_half_has_valid
+        or not recent_half_has_valid
+        or old_half_dist_m == 0
+        or total_valid_dist_count < 4
+    ):
         volume_trend: TrendValue = "unknown"
     elif recent_half_dist_m > old_half_dist_m * 1.10:
         volume_trend = "increasing"
@@ -506,14 +572,12 @@ def build_recent_training_response(
         volume_trend = "stable"
 
     # ── Step 12: frequency pattern ────────────────────────────────────────
-    # Split the 28-day window symmetrically: first 14 days / last 14 days.
-    # midpoint boundary: activities with date < (reference_date - 13 days) are in
-    # the older half; >= (reference_date - 13 days) are in the recent half.
-    # This yields exactly 14 calendar days in each half (day -27…-14 and day -13…0).
-    # PRODUCT CALIBRATION V1 — threshold = 10 %
-    first_half_count = sum(1 for d, _ in selected_pairs if d < freq_boundary)
-    second_half_count = sum(1 for d, _ in selected_pairs if d >= freq_boundary)
-    if selected_count < 4:
+    # Uses ALL in-window activities (not capped at 10).
+    # Calendar-based 14d vs 14d split on the same freq_boundary.
+    # PRODUCT CALIBRATION V1 — threshold = ±10 %
+    first_half_count = sum(1 for d, _ in in_window if d < freq_boundary)
+    second_half_count = sum(1 for d, _ in in_window if d >= freq_boundary)
+    if available_count < 4 or first_half_count == 0:
         frequency_pattern: TrendValue = "unknown"
     elif second_half_count > first_half_count * 1.10:
         frequency_pattern = "increasing"
@@ -523,39 +587,66 @@ def build_recent_training_response(
         frequency_pattern = "stable"
 
     # ── Step 13: long-run trend ───────────────────────────────────────────
-    # Compare the longest single run in the first half vs the second half
-    # of the window (oldest → newest split by index).
-    # PRODUCT CALIBRATION V1 — threshold = 10 % — requires ≥ 4 activities.
-    mid = len(selected_acts) // 2
-    def _longest_km(acts: list[DomainActivity]) -> Optional[float]:
-        vals = [a.distance_m / 1000.0 for a in acts if a.distance_m is not None and a.distance_m > 0]
-        return max(vals) if vals else None
-
-    lr_first = _longest_km(selected_acts[:mid])
-    lr_second = _longest_km(selected_acts[mid:])
-    selected_dist_series = [
+    # Calendar-based: compare the longest run in the old 14d half vs the
+    # longest run in the recent 14d half.
+    # Uses ALL in-window activities (not capped at 10).
+    # PRODUCT CALIBRATION V1 — threshold = ±10 %.
+    # Requires ≥ 1 valid distance in each half AND ≥ 4 valid distances total.
+    old_half_run_dists_km = [
         act.distance_m / 1000.0
-        for act in selected_acts
-        if act.distance_m is not None and act.distance_m > 0
+        for d, act in in_window
+        if d < freq_boundary and act.distance_m is not None and act.distance_m > 0
     ]
-    if lr_first is None or lr_second is None or len(selected_dist_series) < 4:
+    recent_half_run_dists_km = [
+        act.distance_m / 1000.0
+        for d, act in in_window
+        if d >= freq_boundary and act.distance_m is not None and act.distance_m > 0
+    ]
+    if (
+        not old_half_run_dists_km
+        or not recent_half_run_dists_km
+        or len(old_half_run_dists_km) + len(recent_half_run_dists_km) < 4
+    ):
         long_run_trend: TrendValue = "unknown"
-    elif lr_second > lr_first * 1.10:
-        long_run_trend = "increasing"
-    elif lr_second < lr_first * 0.90:
-        long_run_trend = "decreasing"
     else:
-        long_run_trend = "stable"
+        lr_old = max(old_half_run_dists_km)
+        lr_recent = max(recent_half_run_dists_km)
+        if lr_recent > lr_old * 1.10:
+            long_run_trend = "increasing"
+        elif lr_recent < lr_old * 0.90:
+            long_run_trend = "decreasing"
+        else:
+            long_run_trend = "stable"
 
     # ── Step 14: intensity exposure trend ────────────────────────────────
-    intensity_series: list[float] = []
-    for act in selected_acts:
+    # Calendar-based: compare total (moderate + vigorous) intensity minutes
+    # in old 14d half vs recent 14d half.
+    # Uses ALL in-window activities (not capped at 10).
+    # moderate + vigorous as plain sum — no weighting factor.
+    # PRODUCT CALIBRATION V1 — threshold = ±10 %
+    old_intensity_total: float = 0.0
+    old_intensity_has_data: bool = False
+    recent_intensity_total: float = 0.0
+    recent_intensity_has_data: bool = False
+    for d, act in in_window:
         mod = act.moderate_intensity_minutes
         vig = act.vigorous_intensity_minutes
         if mod is not None or vig is not None:
-            total = (mod or 0.0) + (vig or 0.0)
-            intensity_series.append(total)
-    intensity_exposure_trend: TrendValue = _half_split_trend(intensity_series)
+            mins = (mod or 0.0) + (vig or 0.0)
+            if d < freq_boundary:
+                old_intensity_total += mins
+                old_intensity_has_data = True
+            else:
+                recent_intensity_total += mins
+                recent_intensity_has_data = True
+    if not old_intensity_has_data or not recent_intensity_has_data or old_intensity_total == 0:
+        intensity_exposure_trend: TrendValue = "unknown"
+    elif recent_intensity_total > old_intensity_total * 1.10:
+        intensity_exposure_trend = "increasing"
+    elif recent_intensity_total < old_intensity_total * 0.90:
+        intensity_exposure_trend = "decreasing"
+    else:
+        intensity_exposure_trend = "stable"
 
     # ── Step 15: if status is not sufficient, suppress structural trends ──
     if status != "sufficient":

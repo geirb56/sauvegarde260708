@@ -694,7 +694,7 @@ def test_global_facts_use_all_activities_not_capped_10():
     assert "activities_capped_at_10" in result.reason_codes
 
 
-def test_volume_trend_calendar_uses_all_activities_not_cap():
+def test_volume_trend_calendar_calendar_uses_all_activities_not_cap():
     """
     14 runs in old half + 6 in recent half → decreasing.
     If capped at 10 most recent the old half would be empty → 'unknown' (wrong).
@@ -712,3 +712,282 @@ def test_volume_trend_calendar_uses_all_activities_not_cap():
     # Calendar total: old=70km, recent=30km → decreasing (not 'unknown')
     assert result.volume_trend == "decreasing"
 
+
+# ---------------------------------------------------------------------------
+# §14-D — volume_trend: unknown when insufficient data in one half
+# ---------------------------------------------------------------------------
+
+def test_volume_trend_unknown_insufficient_coverage():
+    """
+    5 activities but only 1 has a valid distance (in recent half only) → unknown.
+    Requires at least 1 valid distance in EACH half.
+    """
+    # 3 activities without distance in old half + 2 with distance in recent half
+    acts = (
+        [_run(20, distance_m=None), _run(18, distance_m=None), _run(16, distance_m=None)]
+        + [_run(5, distance_m=10_000.0), _run(1, distance_m=10_000.0)]
+    )
+    result = build_recent_training_response(acts, REF)
+    assert result.response_status == "sufficient"
+    assert result.volume_trend == "unknown"
+
+
+def test_volume_trend_unknown_total_below_4():
+    """
+    5 activities but only 2 have valid distances (1 old, 1 recent) → unknown.
+    Requires at least 4 activities with valid distance total.
+    """
+    acts = (
+        [_run(20, distance_m=10_000.0)]   # old half, valid
+        + [_run(18, distance_m=None), _run(16, distance_m=None), _run(14, distance_m=None)]
+        + [_run(5, distance_m=10_000.0)]  # recent half, valid
+    )
+    result = build_recent_training_response(acts, REF)
+    assert result.response_status == "sufficient"
+    assert result.volume_trend == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# §15 — frequency_pattern: >10 activities, not distorted by cap
+# ---------------------------------------------------------------------------
+
+def test_frequency_pattern_not_capped_at_10():
+    """
+    14 activities total: 4 in old half, 10 in recent half.
+    Even though MAX_SELECTED = 10, frequency_pattern must use ALL 14.
+    4 → 10 is clearly increasing (> 4 * 1.10 = 4.4).
+    """
+    # old half: days_ago 14..17 (4 runs)
+    old_half = [_run(14 + i) for i in range(4)]
+    # recent half: days_ago 0..9 (10 runs)
+    recent_half = [_run(i) for i in range(10)]
+    acts = old_half + recent_half
+    result = build_recent_training_response(acts, REF)
+    assert result.available_running_activities == 14
+    assert result.selected_running_activities == 10
+    assert result.response_status == "sufficient"
+    assert result.frequency_pattern == "increasing"
+
+
+def test_frequency_pattern_uses_full_window_decreasing():
+    """
+    Old half: 10 runs, recent half: 4 runs → decreasing.
+    Correctly computed even when >10 total in window.
+    """
+    old_half = [_run(14 + i) for i in range(10)]
+    recent_half = [_run(i) for i in range(4)]
+    acts = old_half + recent_half
+    result = build_recent_training_response(acts, REF)
+    assert result.available_running_activities == 14
+    assert result.frequency_pattern == "decreasing"
+
+
+# ---------------------------------------------------------------------------
+# §16 — long_run_trend: calendar-based (old 14d vs recent 14d)
+# ---------------------------------------------------------------------------
+
+def test_long_run_trend_calendar_increasing():
+    """
+    Old half longest = 10 km; recent half longest = 15 km → increasing.
+    Uses ALL in-window activities, calendar-based split.
+    """
+    acts = [
+        _run(20, distance_m=10_000.0),  # old half
+        _run(18, distance_m=8_000.0),   # old half
+        _run(16, distance_m=9_000.0),   # old half
+        _run(5, distance_m=15_000.0),   # recent half
+        _run(2, distance_m=12_000.0),   # recent half
+        _run(1, distance_m=11_000.0),   # recent half
+    ]
+    result = build_recent_training_response(acts, REF)
+    assert result.response_status == "sufficient"
+    assert result.long_run_trend == "increasing"
+
+
+def test_long_run_trend_calendar_decreasing():
+    """
+    Old half longest = 15 km; recent half longest = 10 km → decreasing.
+    """
+    acts = [
+        _run(20, distance_m=15_000.0),  # old half
+        _run(18, distance_m=14_000.0),  # old half
+        _run(16, distance_m=12_000.0),  # old half
+        _run(5, distance_m=10_000.0),   # recent half
+        _run(2, distance_m=9_000.0),    # recent half
+        _run(1, distance_m=8_000.0),    # recent half
+    ]
+    result = build_recent_training_response(acts, REF)
+    assert result.long_run_trend == "decreasing"
+
+
+def test_long_run_trend_calendar_stable():
+    """
+    Old half longest = 10 km; recent half longest = 10.5 km → stable (< 10 %).
+    """
+    acts = [
+        _run(20, distance_m=10_000.0),   # old half
+        _run(18, distance_m=8_000.0),    # old half
+        _run(16, distance_m=9_000.0),    # old half
+        _run(5, distance_m=10_500.0),    # recent half
+        _run(2, distance_m=9_500.0),     # recent half
+        _run(1, distance_m=8_000.0),     # recent half
+    ]
+    result = build_recent_training_response(acts, REF)
+    assert result.long_run_trend == "stable"
+
+
+def test_long_run_trend_unknown_no_old_half_dist():
+    """
+    All valid distances in recent half only → unknown (old half has none).
+    """
+    acts = [
+        _run(20, distance_m=None),  # old half, no distance
+        _run(18, distance_m=None),  # old half, no distance
+        _run(16, distance_m=None),  # old half, no distance
+        _run(5, distance_m=10_000.0),
+        _run(2, distance_m=10_000.0),
+        _run(1, distance_m=10_000.0),
+    ]
+    result = build_recent_training_response(acts, REF)
+    assert result.long_run_trend == "unknown"
+
+
+def test_long_run_trend_uses_all_activities_not_cap():
+    """
+    20 activities in window — cap would cut old-half distances; calendar must not.
+    Old half: 14 runs × 12 km; recent: 6 runs × 10 km → decreasing.
+    """
+    old_half = [_run(14 + i, distance_m=12_000.0) for i in range(14)]
+    recent_half = [_run(i, distance_m=10_000.0) for i in range(6)]
+    acts = old_half + recent_half
+    result = build_recent_training_response(acts, REF)
+    assert result.available_running_activities == 20
+    assert result.selected_running_activities == 10
+    assert result.long_run_trend == "decreasing"
+
+
+# ---------------------------------------------------------------------------
+# §17-A — cardiac efficiency: comparable flat terrain → trend computable
+# ---------------------------------------------------------------------------
+
+def test_17A_cardiac_efficiency_comparable_flat_terrain():
+    """
+    5 runs, all with valid HR/distance/duration, low similar elevation_rate
+    (≤ 5 m D+/km each).  terrain_max − terrain_min ≤ 30 → trend computable.
+    All identical efficiency values → 'stable'.
+    """
+    # elevation_gain_m = 40 m, distance_km = 10 → rate = 4 m/km (flat)
+    acts = [
+        _run(
+            i * 4,
+            distance_m=10_000.0,
+            duration_s=3600.0,
+            average_hr=150.0,
+            elevation_gain_m=40.0,  # 4 m/km
+        )
+        for i in range(5)
+    ]
+    result = build_recent_training_response(acts, REF)
+    assert result.response_status == "sufficient"
+    assert result.cardiac_efficiency_trend != "unknown", (
+        "Comparable flat terrain: trend must be computable"
+    )
+    assert result.cardiac_efficiency_trend == "stable"
+
+
+# ---------------------------------------------------------------------------
+# §17-B — cardiac efficiency: mixed flat+hilly → dispersion exceeds threshold
+# ---------------------------------------------------------------------------
+
+def test_17B_cardiac_efficiency_mixed_terrain_unknown():
+    """
+    2 flat runs (elevation_rate ≈ 5 m/km) + 3 very hilly runs (≈ 80 m/km).
+    terrain_max − terrain_min ≈ 75 m/km > 30 threshold → unknown.
+    """
+    flat_acts = [
+        _run(
+            i * 5,
+            distance_m=10_000.0,
+            duration_s=3600.0,
+            average_hr=150.0,
+            elevation_gain_m=50.0,   # 5 m/km
+        )
+        for i in range(2)
+    ]
+    hilly_acts = [
+        _run(
+            20 + i * 2,
+            distance_m=10_000.0,
+            duration_s=3600.0,
+            average_hr=150.0,
+            elevation_gain_m=800.0,  # 80 m/km
+        )
+        for i in range(3)
+    ]
+    acts = flat_acts + hilly_acts
+    result = build_recent_training_response(acts, REF)
+    assert result.cardiac_efficiency_trend == "unknown", (
+        "Mixed flat + hilly terrain exceeds threshold: must be unknown"
+    )
+
+
+# ---------------------------------------------------------------------------
+# §17-C — cardiac efficiency: elevation unknown on majority → unknown
+# ---------------------------------------------------------------------------
+
+def test_17C_cardiac_efficiency_majority_elevation_unknown():
+    """
+    5 runs with valid HR/distance/duration, but only 2 have elevation_gain_m.
+    < 4 samples with BOTH valid efficiency AND known elevation_rate → unknown.
+    """
+    acts_with_elev = [
+        _run(i * 4, distance_m=10_000.0, duration_s=3600.0, average_hr=150.0,
+             elevation_gain_m=40.0)
+        for i in range(2)
+    ]
+    acts_no_elev = [
+        _run(10 + i * 4, distance_m=10_000.0, duration_s=3600.0, average_hr=150.0,
+             elevation_gain_m=None)
+        for i in range(3)
+    ]
+    acts = acts_with_elev + acts_no_elev
+    result = build_recent_training_response(acts, REF)
+    assert result.cardiac_efficiency_trend == "unknown", (
+        "Majority elevation unknown: conservative → unknown"
+    )
+
+
+# ---------------------------------------------------------------------------
+# §17-D — no terrain speed correction in source
+# ---------------------------------------------------------------------------
+
+def test_17D_no_terrain_speed_correction_in_source():
+    """
+    Verify no grade-adjusted pace / speed correction formula is implemented in
+    training_response.py.  Structural guard: no forbidden identifier in code.
+    """
+    import training_v2.training_response as mod
+    src = open(mod.__file__).read()
+    # These are code-level identifiers for terrain speed corrections — never allowed.
+    # Comments and docstrings are excluded by checking only assignment/call patterns.
+    forbidden_code = ["grade_adjusted", "trail_factor", "elevation_factor", "speed_adjusted"]
+    for token in forbidden_code:
+        assert token not in src, (
+            f"Forbidden terrain correction identifier '{token}' found in source"
+        )
+
+
+
+# ---------------------------------------------------------------------------
+# §15-extra — frequency_pattern: no old-half baseline → unknown
+# ---------------------------------------------------------------------------
+
+def test_frequency_pattern_unknown_no_old_half_baseline():
+    """
+    All 5 runs in recent half (no runs in old half) → no baseline → unknown.
+    Consistent with volume_trend behaviour when old_half has no data.
+    """
+    acts = [_run(i) for i in range(5)]  # days_ago 0..4, all in recent half
+    result = build_recent_training_response(acts, REF)
+    assert result.response_status == "sufficient"
+    assert result.frequency_pattern == "unknown"

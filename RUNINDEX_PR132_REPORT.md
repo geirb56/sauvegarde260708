@@ -19,7 +19,7 @@
 | `backend/garmin/domain_adapter.py` | Updated: transport des 3 nouveaux champs depuis `GarminActivity` |
 | `backend/training_v2/training_response.py` | NEW: `RecentTrainingResponse`, `WorkoutExecutionFacts`, `build_recent_training_response()`, `analyze_workout_execution()` |
 | `backend/training_v2/__init__.py` | Updated: exports PR132 |
-| `backend/tests/test_training_response_pr132.py` | NEW: 47 tests |
+| `backend/tests/test_training_response_pr132.py` | NEW: 65 tests (52 originaux + 13 nouveaux §14D/§15/§16/§17) |
 | `RUNINDEX_PR132_REPORT.md` | NEW: ce fichier |
 | `docs/RUNINDEX_MASTER_ROADMAP_AND_DECISIONS.md` | Updated: sections 30–34 |
 
@@ -160,11 +160,25 @@ cardiac_efficiency = speed_mps / average_hr     [m·s⁻¹ / bpm]
 
 Conditions requises : `distance_m > 0`, `duration_s > 0`, `average_hr > 0`. Sinon `None`.
 
-`elevation_gain_m` est conservé comme contexte mais ne modifie pas le ratio en V1.
+### Garde-fou terrain comparabilité (PRODUCT CALIBRATION V1 — RECALIBRABLE)
 
-Comparabilité trend (PRODUCT CALIBRATION V1) :
-- Trend calculé seulement si ≥ 4 samples valides.
-- Autrement : `cardiac_efficiency_trend = "unknown"`.
+```
+elevation_rate = elevation_gain_m / distance_km   [m D+/km]
+```
+
+Condition pour calculer le trend :
+- ≥ 4 samples ont à la fois une **efficiency valide** ET un **elevation_rate connu**
+  (`elevation_gain_m is not None` et `distance_m > 0`).
+- ET `terrain_max − terrain_min ≤ 30 m D+/km` parmi ces samples.
+
+Sinon : `cardiac_efficiency_trend = "unknown"`.
+
+**Seuil V1 : 30 m D+/km.**  Centralisé (`_TERRAIN_DISPERSION_THRESHOLD_M_PER_KM`),
+documenté, recalibrable. PAS une loi physiologique.
+
+**AUCUNE correction de vitesse par le D+ n'est appliquée** :
+ni GAP, ni pace corrigée, ni coefficient trail.
+Si terrain incompatible → `"unknown"`.
 
 ---
 
@@ -187,7 +201,11 @@ Seuil = 10 % :
   recent_total > old_total × 1.10 → "increasing"
   recent_total < old_total × 0.90 → "decreasing"
   sinon                           → "stable"
-  Si l'une ou l'autre moitié n'a aucune distance valide → "unknown"
+
+  Conditions pour calculer :
+    - au moins 1 distance valide dans CHAQUE moitié
+    - ET au moins 4 activités running avec distance valide sur les 28 jours
+  Sinon → "unknown"
 ```
 
 Le cap MAX_SELECTED = 10 ne doit jamais distordre les totaux de volume.
@@ -198,15 +216,34 @@ Aucun coefficient caché. Seuil = ±10 %, documenté et testé.
 ## Méthode Frequency Pattern V1
 
 Split calendaire : fenêtre 28 j divisée en deux moitiés de 14 j.
+**Utilise TOUTES les activités in-window (pas plafonné à 10).**
 Nombre de runs dans chaque demi-fenêtre comparé avec seuil ±10 %.
-Requiert ≥ 4 activités. Sinon `"unknown"`.
+Requiert ≥ 4 activités totales. Sinon `"unknown"`.
 
 ---
 
 ## Méthode Long-run Trend V1
 
-Même half-split que volume_trend mais appliqué à la série des distances individuelles
-(oldest → newest). Seuil ±10 %. Requiert ≥ 4 activités avec distance. Sinon `"unknown"`.
+**Calendaire : compare la plus longue sortie de l'ancienne moitié (14 j)
+vs la plus longue sortie de la récente moitié (14 j).**
+**Utilise TOUTES les activités in-window (pas plafonné à 10).**
+Seuil ±10 %. Requiert ≥ 1 distance valide dans chaque moitié ET ≥ 4 au total.
+Sinon `"unknown"`.
+
+```
+old_longest_km    = max des distances dans l'ancienne moitié (J-27 → J-14)
+recent_longest_km = max des distances dans la récente moitié (J-13 → J)
+```
+
+---
+
+## Méthode Intensity Exposure Trend V1
+
+**Calendaire : compare le total de minutes (moderate + vigorous) de l'ancienne
+moitié vs la récente moitié.**
+**Utilise TOUTES les activités in-window (pas plafonné à 10).**
+`moderate + vigorous` en somme simple — aucun coefficient de pondération.
+Seuil ±10 %.  Requiert des données dans chaque moitié. Sinon `"unknown"`.
 
 ---
 
@@ -215,7 +252,7 @@ Même half-split que volume_trend mais appliqué à la série des distances indi
 `moderate_intensity_minutes` et `vigorous_intensity_minutes` sont des **faits fournisseur**.
 Ils alimentent :
 - `intensity_coverage_count`
-- `intensity_exposure_trend` (via half-split de la somme par session)
+- `intensity_exposure_trend` (via totaux calendaires par moitié 14j)
 
 **INTERDIT :**
 - `moderate + 2 × vigorous` (TRIMP)
@@ -286,9 +323,9 @@ Vérifiés par test N.
 
 | Total | Passed | Failed |
 |---|---|---|
-| 47 | 47 | 0 |
+| 66 | 66 | 0 |
 
-Couverture spec §18 : A B C D E F G H I J K L M N O P Q R S T U V W X ✓
+Couverture : A–X (spec §18) + §14D/§15/§16/§17A–D ✓
 
 ---
 
@@ -337,3 +374,56 @@ Adapte structurellement le plan aux comportements/capacités observés, sans cul
 
 Permet à l'utilisateur de déplacer ses séances dans la même semaine.
 Déplacer une séance ≠ adaptation physiologique.
+
+---
+
+## Corrections audit externe (PR #132 V2)
+
+Corrections appliquées suite à l'audit externe sur HEAD `bd550bcec93415a38f0642f49870d4ff22f112e7` :
+
+### 1. Séparation GLOBAL 28d FACTS vs RECENT 10 ANALYSIS
+
+| Population | Champs concernés |
+|---|---|
+| **GLOBAL 28-day window** (toutes activités) | `observed_runs`, `observed_runs_per_week`, `observed_distance_km`, `observed_duration_minutes`, `volume_trend`, `frequency_pattern`, `long_run_trend`, `intensity_exposure_trend` |
+| **RECENT SAMPLE** (≤ 10 dernières) | `cardiac_efficiency_samples`, `average_hr_recent`, `average_pace_recent_s_per_km` |
+
+Le cap `MAX_SELECTED = 10` ne falsifie jamais les faits globaux.
+
+### 2. volume_trend — volumes totaux (était : moyennes)
+
+Corrigé : compare les **totaux** de distance des deux demi-fenêtres calendaires.
+Garde-fou : ≥ 4 distances valides totales dans les 28 jours.
+
+### 3. frequency_pattern — toutes les activités (était : selected_pairs capées)
+
+Corrigé : utilise `in_window` complet, pas `selected_pairs`.
+
+### 4. long_run_trend — calendaire (était : index-based sur 10 selected)
+
+Corrigé : compare la plus longue sortie de chaque moitié calendaire (14d vs 14d)
+sur toutes les activités in-window.
+
+### 5. intensity_exposure_trend — calendaire (était : half-split index sur 10 selected)
+
+Corrigé : compare le total de minutes (mod + vig) de chaque moitié calendaire
+sur toutes les activités in-window.
+
+### 6. cardiac_efficiency_trend — garde-fou terrain V1
+
+Ajouté : `elevation_rate = elevation_gain_m / distance_km` (m D+/km).
+Seuil : `_TERRAIN_DISPERSION_THRESHOLD_M_PER_KM = 30.0` m D+/km.
+Si < 4 samples ont (efficiency valide + elevation_rate connu) → `"unknown"`.
+Si terrain_max − terrain_min > 30 → `"unknown"`.
+Aucune correction de vitesse inventée.
+
+### Tests ajoutés
+
+65 tests total (52 + 13 nouveaux) :
+- §14-D : volume_trend unknown si couverture insuffisante
+- §15 : frequency_pattern correct avec > 10 activités
+- §16 : long_run_trend calendaire (increasing / decreasing / stable / unknown)
+- §17A : terrain plat comparable → trend calculable
+- §17B : terrain mixte plat + vallonné → unknown
+- §17C : D+ majoritairement inconnu → unknown
+- §17D : aucune correction GAP dans le code source
