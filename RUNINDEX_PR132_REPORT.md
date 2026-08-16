@@ -171,17 +171,26 @@ Comparabilité trend (PRODUCT CALIBRATION V1) :
 ## Méthode Volume Trend V1 (PRODUCT CALIBRATION V1)
 
 ```
-1. Trier activités oldest → newest
-2. Séparer en deux moitiés par index
-3. mean_F = moyenne des distances (km) de la 1ère moitié
-4. mean_S = moyenne des distances (km) de la 2ème moitié
-5. Seuil = 10 %
-   mean_S > mean_F × 1.10 → "increasing"
-   mean_S < mean_F × 0.90 → "decreasing"
-   sinon                  → "stable"
-   < 4 activités avec distance → "unknown"
+Split calendaire — même frontière que Frequency Pattern :
+  freq_boundary = reference_date - timedelta(days=13)
+
+  ancienne moitié : window_start (J-27) → J-14 inclus  (date < freq_boundary)
+  récente moitié  : J-13 → reference_date (J) inclus    (date >= freq_boundary)
+
+Pour chaque moitié, utiliser TOUTES les activités running valides de la
+fenêtre 28 jours (pas seulement les 10 sélectionnées) :
+
+  old_total_km    = Σ distance_m / 1000 des activités de l'ancienne moitié
+  recent_total_km = Σ distance_m / 1000 des activités de la récente moitié
+
+Seuil = 10 % :
+  recent_total > old_total × 1.10 → "increasing"
+  recent_total < old_total × 0.90 → "decreasing"
+  sinon                           → "stable"
+  Si l'une ou l'autre moitié n'a aucune distance valide → "unknown"
 ```
 
+Le cap MAX_SELECTED = 10 ne doit jamais distordre les totaux de volume.
 Aucun coefficient caché. Seuil = ±10 %, documenté et testé.
 
 ---
