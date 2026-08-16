@@ -21,6 +21,9 @@ class DomainActivity(BaseModel):
     source_activity_id: Optional[str] = None
     moderate_intensity_minutes: Optional[float] = None
     vigorous_intensity_minutes: Optional[float] = None
+    average_hr: Optional[float] = None
+    max_hr: Optional[float] = None
+    elevation_gain_m: Optional[float] = None
 
 
 def _domain_start_time(value: Any) -> Optional[Union[str, date, datetime]]:
@@ -66,6 +69,9 @@ def to_domain_activity(activity: Any) -> DomainActivity:
         source_activity_id = activity.get('source_activity_id', activity.get('activity_id'))
         moderate = activity.get('moderate_intensity_minutes')
         vigorous = activity.get('vigorous_intensity_minutes')
+        avg_hr = activity.get('average_hr')
+        max_hr = activity.get('max_hr')
+        elev_gain = activity.get('elevation_gain_m')
     else:
         act_type = getattr(activity, 'activity_type', None)
         start = getattr(activity, 'start_time', None)
@@ -79,6 +85,20 @@ def to_domain_activity(activity: Any) -> DomainActivity:
         )
         moderate = getattr(activity, 'moderate_intensity_minutes', None)
         vigorous = getattr(activity, 'vigorous_intensity_minutes', None)
+        avg_hr = getattr(activity, 'average_hr', None)
+        max_hr = getattr(activity, 'max_hr', None)
+        elev_gain = getattr(activity, 'elevation_gain_m', None)
+
+    def _hr(v: Any) -> Optional[float]:
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            return None
+        f = float(v)
+        return f if f > 0 else None
+
+    def _elev(v: Any) -> Optional[float]:
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            return None
+        return float(v)
 
     return DomainActivity(
         activity_type=act_type if isinstance(act_type, str) else None,
@@ -89,4 +109,7 @@ def to_domain_activity(activity: Any) -> DomainActivity:
         source_activity_id=_domain_source_activity_id(source_activity_id),
         moderate_intensity_minutes=_domain_intensity_minutes(moderate),
         vigorous_intensity_minutes=_domain_intensity_minutes(vigorous),
+        average_hr=_hr(avg_hr),
+        max_hr=_hr(max_hr),
+        elevation_gain_m=_elev(elev_gain),
     )

@@ -1457,9 +1457,175 @@ Si les contraintes sont impossibles :
 
 ---
 
-## 30) NEXT = #132 Workout Analysis V2
+## 30) PR #132 — Recent Training Response / Workout Analysis V2 — IMPLEMENTED / PENDING MERGE
 
-Responsabilités :
-- Analyser la semaine réalisée vs planifiée
-- Calculer les métriques de performance observées
-- Préparer les inputs pour DailyAdaptation #133
+HEAD main au départ de #132 : `388bb650c4df5307a53eb488b4b3b6fb336af1c9` (#131 merged)
+
+### Fichiers modifiés/créés
+
+- `backend/training_v2/domain_activity.py` — extension : `average_hr`, `max_hr`, `elevation_gain_m`
+- `backend/garmin/domain_adapter.py` — transport des nouveaux champs depuis `GarminActivity`
+- `backend/training_v2/training_response.py` — NEW : `RecentTrainingResponse`, `WorkoutExecutionFacts`, `build_recent_training_response()`, `analyze_workout_execution()`
+- `backend/training_v2/__init__.py` — exports PR132
+- `backend/tests/test_training_response_pr132.py` — 47 tests (A–X), tous PASSED
+- `RUNINDEX_PR132_REPORT.md`
+- `docs/RUNINDEX_MASTER_ROADMAP_AND_DECISIONS.md`
+
+### Extension DomainActivity exacte
+
+```python
+average_hr: Optional[float] = None      # None si absent/invalide/0
+max_hr: Optional[float] = None          # None si absent/invalide/0
+elevation_gain_m: Optional[float] = None  # contexte terrain, aucun fallback
+```
+
+### Contrat RecentTrainingResponse (immutable, frozen=True)
+
+Champs clés :
+- `reference_date`, `window_days=28`
+- `available_running_activities`, `selected_running_activities` (≤ 10)
+- `response_status` : `"unavailable"` | `"insufficient"` | `"sufficient"`
+- `confidence` : `"none"` | `"low"` | `"moderate"`
+- `observed_distance_km`, `observed_duration_minutes`, `observed_runs`
+- `observed_runs_per_week`
+- `longest_run_km`, `longest_run_duration_minutes`
+- `hr_coverage_count`, `intensity_coverage_count`
+- `average_hr_recent`, `average_pace_recent_s_per_km`
+- `cardiac_efficiency_samples` (tuple, par activité)
+- `cardiac_efficiency_trend`, `volume_trend`, `frequency_pattern`, `long_run_trend`, `intensity_exposure_trend`
+- `reason_codes`
+
+### Contrat WorkoutExecutionFacts (immutable, frozen=True)
+
+- `reference_date`, `planned_type`, `planned_distance_km`, `planned_duration_minutes`
+- `actual_distance_km`, `actual_duration_minutes`, `actual_average_hr`
+- `distance_ratio` = actual/planned ou None
+- `duration_ratio` = actual/planned ou None
+- `reason_codes`
+
+Aucun verdict, aucun score, aucun pass/fail.
+
+### Règle fenêtre 28 jours
+
+```
+window_start = reference_date - timedelta(days=27)   # 28 jours inclusifs
+Condition :  window_start ≤ activity_date ≤ reference_date
+```
+
+### Règle 5–10 activités
+
+- 0 → `unavailable`  (confidence=`"none"`, tous trends=`"unknown"`)
+- 1–4 → `insufficient` (confidence=`"low"`, trends structurels=`"unknown"`)
+- 5–10 → `sufficient` (confidence=`"moderate"`, trends autorisés)
+
+### Cardiac efficiency V1
+
+```
+speed_mps = distance_m / duration_s
+efficiency = speed_mps / average_hr
+```
+Conditions : distance_m > 0, duration_s > 0, average_hr > 0. Sinon None.  
+Terrain indicator only — pas une mesure de LT1/LT2.
+
+### Volume trend V1 (PRODUCT CALIBRATION V1)
+
+Split oldest/newest par index. Seuil ±10 %. Requiert ≥ 4 activités avec distance.
+
+### Frequency pattern V1
+
+Split calendaire 28 j / 2 = 14 j. Compte de runs par demi-fenêtre. Seuil ±10 %.
+
+### Long-run trend V1
+
+Même méthode half-split sur la série des distances individuelles (oldest→newest). Seuil ±10 %.
+
+### Traitement moderate/vigorous
+
+Transportés comme faits fournisseur. Exposés pour coverage et intensity_exposure_trend.  
+Aucun TRIMP / TSS / EPOC / LT1/LT2 jamais calculé.
+
+---
+
+## 31) Décisions PR #132 — permanentes
+
+### Coaching philosophy
+
+RunIndex n'est pas un système de sanctions.  
+`WorkoutExecutionFacts` produit des faits.  
+`RecentTrainingResponse` produit des tendances.  
+`DailyAdaptation` / `Weekly Reconciliation` prennent les décisions.
+
+### Sorties non prévues
+
+Une sortie non prévue est une observation valide du coureur.  
+Elle est incluse dans `RecentTrainingResponse` sans condition.  
+La conformité au plan est une dimension séparée.
+
+### Matching hors scope
+
+#132 n'effectue aucun matching automatique activité ↔ prescription.  
+`analyze_workout_execution()` reçoit un couple déjà apparié par l'appelant.
+
+### None ≠ 0
+
+Valeur absente → None. Jamais 0 inventé.
+
+### Pas de dérive intra-run
+
+Pas de cardiac drift, pas de cardiac decoupling, pas de LT1/LT2/VT1/VT2.  
+Réservé à une future extension avec splits/timeseries.
+
+---
+
+## 32) V3 — Flexible Schedule (roadmap, non implémenté)
+
+**Objectif :** permettre à l'utilisateur de déplacer ses séances dans la même semaine.
+
+Principe :
+- Déplacer une séance ne modifie pas : WeeklyTarget, contenu physiologique, volume, durée, objectif, phase.
+- Scheduling utilisateur ≠ adaptation physiologique.
+
+NE PAS implémenter avant #133.
+
+---
+
+## 33) Weekly Reconciliation V2 (roadmap future)
+
+**Séquence :**
+```
+RecentTrainingResponse → WeeklyTarget semaine suivante
+```
+
+**But :** adapter structurellement le plan aux comportements/capacités observés.
+- fréquence réellement soutenable
+- volume réellement réalisé
+- progression observée
+- réponse récente
+
+Sans culpabilisation.
+
+NE PAS implémenter avant #133.
+
+---
+
+## 34) NEXT = #133 Daily Adaptation V2
+
+### Consommateurs de RecentTrainingResponse
+
+`DailyAdaptation` #133 consommera :
+
+```
+WeeklyPlan
+ReadinessResult
+TrainingLoad V2
+RecentTrainingResponse
+```
+
+Actions V1 envisagées :
+
+- `KEEP`
+- `EASY_DOWNGRADE`
+- `SHORTEN`
+- `REST`
+
+#133 ne recalculera ni Readiness, ni TrainingLoad, ni RecentTrainingResponse, ni WeeklyTarget.
