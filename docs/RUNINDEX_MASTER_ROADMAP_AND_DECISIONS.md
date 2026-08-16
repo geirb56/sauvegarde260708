@@ -1467,7 +1467,7 @@ HEAD main au départ de #132 : `388bb650c4df5307a53eb488b4b3b6fb336af1c9` (#131 
 - `backend/garmin/domain_adapter.py` — transport des nouveaux champs depuis `GarminActivity`
 - `backend/training_v2/training_response.py` — NEW : `RecentTrainingResponse`, `WorkoutExecutionFacts`, `build_recent_training_response()`, `analyze_workout_execution()`
 - `backend/training_v2/__init__.py` — exports PR132
-- `backend/tests/test_training_response_pr132.py` — 66 tests (A–X + §14D/§15/§16/§17), tous PASSED
+- `backend/tests/test_training_response_pr132.py` — 67 tests (A–X + §14D/§15/§16/§17 + §17E + §15-extra), tous PASSED
 - `RUNINDEX_PR132_REPORT.md`
 - `docs/RUNINDEX_MASTER_ROADMAP_AND_DECISIONS.md`
 

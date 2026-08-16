@@ -19,7 +19,7 @@
 | `backend/garmin/domain_adapter.py` | Updated: transport des 3 nouveaux champs depuis `GarminActivity` |
 | `backend/training_v2/training_response.py` | NEW: `RecentTrainingResponse`, `WorkoutExecutionFacts`, `build_recent_training_response()`, `analyze_workout_execution()` |
 | `backend/training_v2/__init__.py` | Updated: exports PR132 |
-| `backend/tests/test_training_response_pr132.py` | NEW: 65 tests (52 originaux + 13 nouveaux §14D/§15/§16/§17) |
+| `backend/tests/test_training_response_pr132.py` | NEW: 67 tests (52 originaux + 13 §14D/§15/§16/§17 + 1 §17E + 1 §15-extra) |
 | `RUNINDEX_PR132_REPORT.md` | NEW: ce fichier |
 | `docs/RUNINDEX_MASTER_ROADMAP_AND_DECISIONS.md` | Updated: sections 30–34 |
 
@@ -438,7 +438,7 @@ Aucune correction de vitesse inventée.
 
 ### Tests ajoutés
 
-67 tests total (66 + 1 nouveau) :
+67 tests total — §17E (BLOQUANT) inclus :
 - §14-D : volume_trend unknown si couverture insuffisante
 - §15 : frequency_pattern correct avec > 10 activités
 - §16 : long_run_trend calendaire (increasing / decreasing / stable / unknown)
