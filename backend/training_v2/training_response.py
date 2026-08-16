@@ -392,9 +392,6 @@ def build_recent_training_response(
         if act.duration_s is not None and act.duration_s > 0:
             total_dur_s += act.duration_s
             has_dur = True
-        # Longest run by distance — track associated duration
-        if longest_dist_m == act.distance_m and act.duration_s is not None and act.duration_s > 0:
-            longest_dur_s = act.duration_s
 
     # Recompute longest_dur_s cleanly
     longest_dur_s = None
@@ -461,11 +458,14 @@ def build_recent_training_response(
     volume_trend: TrendValue = _half_split_trend(dist_series)
 
     # ── Step 12: frequency pattern ────────────────────────────────────────
-    # Split the 28-day window in half (14 days each); count runs per half.
-    half_window = _WINDOW_DAYS // 2  # 14 days
-    midpoint = reference_date - timedelta(days=half_window)
-    first_half_count = sum(1 for d, _ in selected_pairs if d < midpoint)
-    second_half_count = sum(1 for d, _ in selected_pairs if d >= midpoint)
+    # Split the 28-day window symmetrically: first 14 days / last 14 days.
+    # midpoint boundary: activities with date < (reference_date - 13 days) are in
+    # the older half; >= (reference_date - 13 days) are in the recent half.
+    # This yields exactly 14 calendar days in each half (day -27…-14 and day -13…0).
+    # PRODUCT CALIBRATION V1 — threshold = 10 %
+    freq_boundary = reference_date - timedelta(days=13)
+    first_half_count = sum(1 for d, _ in selected_pairs if d < freq_boundary)
+    second_half_count = sum(1 for d, _ in selected_pairs if d >= freq_boundary)
     if selected_count < 4:
         frequency_pattern: TrendValue = "unknown"
     elif second_half_count > first_half_count * 1.10:
@@ -476,9 +476,24 @@ def build_recent_training_response(
         frequency_pattern = "stable"
 
     # ── Step 13: long-run trend ───────────────────────────────────────────
-    # Long run per activity = its own distance (we track the longest per half).
-    # Use the same half-split on individual activity distances.
-    long_run_trend: TrendValue = _half_split_trend(dist_series)
+    # Compare the longest single run in the first half vs the second half
+    # of the window (oldest → newest split by index).
+    # PRODUCT CALIBRATION V1 — threshold = 10 % — requires ≥ 4 activities.
+    mid = len(selected_acts) // 2
+    def _longest_km(acts: list[DomainActivity]) -> Optional[float]:
+        vals = [a.distance_m / 1000.0 for a in acts if a.distance_m is not None and a.distance_m > 0]
+        return max(vals) if vals else None
+
+    lr_first = _longest_km(selected_acts[:mid])
+    lr_second = _longest_km(selected_acts[mid:])
+    if lr_first is None or lr_second is None or len(dist_series) < 4:
+        long_run_trend: TrendValue = "unknown"
+    elif lr_second > lr_first * 1.10:
+        long_run_trend = "increasing"
+    elif lr_second < lr_first * 0.90:
+        long_run_trend = "decreasing"
+    else:
+        long_run_trend = "stable"
 
     # ── Step 14: intensity exposure trend ────────────────────────────────
     intensity_series: list[float] = []
