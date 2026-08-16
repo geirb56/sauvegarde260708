@@ -166,12 +166,25 @@ Conditions requises : `distance_m > 0`, `duration_s > 0`, `average_hr > 0`. Sino
 elevation_rate = elevation_gain_m / distance_km   [m D+/km]
 ```
 
+**Distinction raw sample vs trend-eligible sample :**
+
+- `cardiac_efficiency_samples` = faits bruts : efficiency calculée pour toute activité
+  sélectionnée ayant `distance_m > 0`, `duration_s > 0`, `average_hr > 0`.
+  Le D+ peut être inconnu. C'est un fait brut conservé.
+
+- `cardiac_efficiency_trend` = calculé **UNIQUEMENT** sur les `comparable_samples`, i.e.
+  les activités pour lesquelles efficiency est valide **ET** `elevation_gain_m` est connu.
+  Les activités avec terrain inconnu (`elevation_gain_m = None`) sont **exclues** du trend.
+
 Condition pour calculer le trend :
-- ≥ 4 samples ont à la fois une **efficiency valide** ET un **elevation_rate connu**
+- ≥ 4 `comparable_samples` ont à la fois une **efficiency valide** ET un **elevation_rate connu**
   (`elevation_gain_m is not None` et `distance_m > 0`).
-- ET `terrain_max − terrain_min ≤ 30 m D+/km` parmi ces samples.
+- ET `terrain_max − terrain_min ≤ 30 m D+/km` parmi ces comparable_samples.
 
 Sinon : `cardiac_efficiency_trend = "unknown"`.
+
+Le trend est calculé sur les `comparable_efficiencies` (oldest → newest), **jamais** sur
+`valid_efficiencies` qui inclurait les activités à terrain inconnu.
 
 **Seuil V1 : 30 m D+/km.**  Centralisé (`_TERRAIN_DISPERSION_THRESHOLD_M_PER_KM`),
 documenté, recalibrable. PAS une loi physiologique.
@@ -409,17 +422,23 @@ sur toutes les activités in-window.
 Corrigé : compare le total de minutes (mod + vig) de chaque moitié calendaire
 sur toutes les activités in-window.
 
-### 6. cardiac_efficiency_trend — garde-fou terrain V1
+### 6. cardiac_efficiency_trend — garde-fou terrain V1 (corrigé finale)
 
 Ajouté : `elevation_rate = elevation_gain_m / distance_km` (m D+/km).
 Seuil : `_TERRAIN_DISPERSION_THRESHOLD_M_PER_KM = 30.0` m D+/km.
-Si < 4 samples ont (efficiency valide + elevation_rate connu) → `"unknown"`.
+
+**Distinction raw sample vs trend-eligible sample :**
+- `cardiac_efficiency_samples` = faits bruts (efficiency valide, D+ peut être None).
+- `cardiac_efficiency_trend` = calculé UNIQUEMENT sur les `comparable_samples` (efficiency
+  valide + D+ connu). Les activités terrain inconnu n'entrent PAS dans le trend.
+
+Si < 4 comparable_samples → `"unknown"`.
 Si terrain_max − terrain_min > 30 → `"unknown"`.
 Aucune correction de vitesse inventée.
 
 ### Tests ajoutés
 
-65 tests total (52 + 13 nouveaux) :
+67 tests total (66 + 1 nouveau) :
 - §14-D : volume_trend unknown si couverture insuffisante
 - §15 : frequency_pattern correct avec > 10 activités
 - §16 : long_run_trend calendaire (increasing / decreasing / stable / unknown)
@@ -427,3 +446,4 @@ Aucune correction de vitesse inventée.
 - §17B : terrain mixte plat + vallonné → unknown
 - §17C : D+ majoritairement inconnu → unknown
 - §17D : aucune correction GAP dans le code source
+- §17E **(BLOQUANT)** : 4 comparables stables + 2 terrain inconnu extrêmes → trend = stable

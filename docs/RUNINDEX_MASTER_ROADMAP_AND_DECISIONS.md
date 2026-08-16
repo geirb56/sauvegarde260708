@@ -1491,8 +1491,14 @@ Champs clés :
 - `longest_run_km`, `longest_run_duration_minutes`
 - `hr_coverage_count`, `intensity_coverage_count`
 - `average_hr_recent`, `average_pace_recent_s_per_km`
-- `cardiac_efficiency_samples` (tuple, par activité)
-- `cardiac_efficiency_trend`, `volume_trend`, `frequency_pattern`, `long_run_trend`, `intensity_exposure_trend`
+- `cardiac_efficiency_samples` (tuple, par activité) — faits bruts : efficiency calculée
+  pour toute activité avec distance_m > 0 / duration_s > 0 / average_hr > 0, que le D+
+  soit connu ou non. C'est un fait brut conservé.
+- `cardiac_efficiency_trend` — calculé UNIQUEMENT sur les comparable_samples, i.e. les
+  activités pour lesquelles efficiency est valide ET elevation_gain_m est connu. Les
+  activités terrain inconnu (elevation_gain_m=None) sont exclues du trend.
+  Distinction : raw sample ≠ trend-eligible sample.
+- `volume_trend`, `frequency_pattern`, `long_run_trend`, `intensity_exposure_trend`
 - `reason_codes`
 
 ### Contrat WorkoutExecutionFacts (immutable, frozen=True)

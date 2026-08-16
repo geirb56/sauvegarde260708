@@ -979,6 +979,60 @@ def test_17D_no_terrain_speed_correction_in_source():
 
 
 # ---------------------------------------------------------------------------
+# §17-E — BLOCKING: unknown-terrain samples must NOT influence the trend
+# ---------------------------------------------------------------------------
+
+def test_17E_unknown_terrain_does_not_influence_trend():
+    """
+    4 runs with stable efficiency AND known flat terrain (comparable).
+    2 additional runs with valid but extreme efficiency AND elevation_gain_m=None.
+
+    Expected: cardiac_efficiency_trend is computed ONLY on the 4 comparable
+    samples → "stable".  The 2 unknown-terrain extremes must NOT shift the
+    trend to increasing/decreasing.
+
+    This test would have FAILED with the old code (which used valid_efficiencies
+    including terrain-unknown activities).
+
+    Comparable runs: distance=10 000 m, duration=3 600 s, HR=150 → eff≈0.01852
+    elevation_gain_m=40 → rate=4 m/km (flat).  All 4 identical → stable.
+
+    Unknown-terrain runs: same distance/duration, HR=30 (extremely high eff)
+    elevation_gain_m=None → must be excluded from trend.
+    """
+    # 4 comparable, stable runs — oldest first (days_ago 20,15,10,5)
+    comparable_acts = [
+        _run(
+            days_ago,
+            distance_m=10_000.0,
+            duration_s=3_600.0,
+            average_hr=150.0,
+            elevation_gain_m=40.0,   # 4 m/km — flat
+        )
+        for days_ago in (20, 15, 10, 5)
+    ]
+    # 2 unknown-terrain runs with extreme efficiency (very low HR → very high eff)
+    unknown_terrain_acts = [
+        _run(
+            days_ago,
+            distance_m=10_000.0,
+            duration_s=3_600.0,
+            average_hr=30.0,         # extreme efficiency value
+            elevation_gain_m=None,   # terrain unknown — must NOT enter trend
+        )
+        for days_ago in (25, 3)
+    ]
+    acts = comparable_acts + unknown_terrain_acts
+    result = build_recent_training_response(acts, REF)
+    assert result.response_status == "sufficient"
+    # The 2 extreme unknown-terrain runs must not shift the trend
+    assert result.cardiac_efficiency_trend == "stable", (
+        "Unknown-terrain samples must be excluded from trend; "
+        f"got {result.cardiac_efficiency_trend!r} instead of 'stable'"
+    )
+
+
+# ---------------------------------------------------------------------------
 # §15-extra — frequency_pattern: no old-half baseline → unknown
 # ---------------------------------------------------------------------------
 

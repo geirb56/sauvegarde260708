@@ -497,11 +497,24 @@ def build_recent_training_response(
 
     # Terrain comparability guard (PRODUCT CALIBRATION V1 — RECALIBRABLE)
     # elevation_rate = elevation_gain_m / distance_km  (m D+/km)
+    #
+    # Distinction:
+    #   cardiac_efficiency_samples  = raw facts: efficiency computed for every
+    #       selected activity that has valid HR / distance / duration, regardless
+    #       of whether elevation_gain_m is known.
+    #   cardiac_efficiency_trend    = computed ONLY on comparable_samples, i.e.
+    #       activities where efficiency is valid AND elevation_gain_m is known.
+    #       Activities with unknown terrain are EXCLUDED from the trend so that
+    #       terrain comparability is fully verifiable on every sample used.
+    #
     # Condition for trend computation:
-    #   ≥ 4 samples with BOTH valid efficiency AND known elevation_rate
+    #   ≥ 4 comparable_samples (valid efficiency + known elevation_rate)
     #   AND terrain_max − terrain_min ≤ _TERRAIN_DISPERSION_THRESHOLD_M_PER_KM
     # NO speed correction / GAP formula is ever applied.
-    known_terrain_rates: list[float] = []
+    #
+    # comparable_samples is ordered oldest → newest (same order as selected_acts).
+    comparable_terrain_rates: list[float] = []
+    comparable_efficiencies: list[float] = []
     for act, eff in zip(selected_acts, efficiency_samples):
         if (
             eff is not None
@@ -509,21 +522,23 @@ def build_recent_training_response(
             and act.distance_m is not None
             and act.distance_m > 0
         ):
-            known_terrain_rates.append(act.elevation_gain_m / (act.distance_m / 1000.0))
+            comparable_terrain_rates.append(act.elevation_gain_m / (act.distance_m / 1000.0))
+            comparable_efficiencies.append(eff)
 
-    valid_efficiencies = [e for e in efficiency_samples if e is not None]
-    if len(known_terrain_rates) < 4:
+    if len(comparable_terrain_rates) < 4:
         # Fewer than 4 samples have both valid efficiency and known elevation_rate.
         # Conservative: terrain comparability cannot be verified → unknown.
         cardiac_efficiency_trend: TrendValue = "unknown"
     else:
-        terrain_min = min(known_terrain_rates)
-        terrain_max = max(known_terrain_rates)
+        terrain_min = min(comparable_terrain_rates)
+        terrain_max = max(comparable_terrain_rates)
         if terrain_max - terrain_min > _TERRAIN_DISPERSION_THRESHOLD_M_PER_KM:
             # Terrain dispersion exceeds threshold → samples not comparable → unknown.
             cardiac_efficiency_trend = "unknown"
         else:
-            cardiac_efficiency_trend = _half_split_trend(valid_efficiencies)
+            # Trend is computed exclusively on comparable_efficiencies (oldest → newest).
+            # Activities with unknown terrain do NOT participate in the trend.
+            cardiac_efficiency_trend = _half_split_trend(comparable_efficiencies)
 
     # ── Step 11: volume trend — calendar-based, ALL in-window activities ─────
     # Split 28-day window into two 14-day halves:
