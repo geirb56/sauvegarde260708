@@ -1649,11 +1649,56 @@ HEAD main au départ de #133 : `beee570281920b4681e96d3559e8777121b6ffa9` (#132 
 
 ### Fichiers livrés
 
+- `backend/training_v2/readiness_decision.py`
 - `backend/training_v2/daily_adaptation.py`
 - `backend/training_v2/__init__.py`
+- `backend/tests/test_training_v2_readiness_decision.py`
 - `backend/tests/test_daily_adaptation_pr133.py`
 - `RUNINDEX_PR133_REPORT.md`
 - `docs/RUNINDEX_MASTER_ROADMAP_AND_DECISIONS.md`
+
+### Architecture canonique
+
+```text
+ReadinessResult
+      ↓
+ReadinessDecision
+      ↓
+DailyAdaptation
+```
+
+Décision permanente :
+
+- les consumers ne définissent jamais leurs propres bandes Readiness ;
+- les seuils de bandes Readiness vivent uniquement dans
+  `backend/training_v2/readiness_decision.py`.
+
+### Contrat ReadinessDecision
+
+```python
+class ReadinessBand(str, Enum):
+    UNAVAILABLE = "UNAVAILABLE"
+    FAVORABLE = "FAVORABLE"
+    CAUTION = "CAUTION"
+    LOW = "LOW"
+    VERY_LOW = "VERY_LOW"
+
+class ReadinessDecision(BaseModel):
+    band: ReadinessBand
+    score: Optional[float]
+    confidence: ReadinessConfidence
+    sufficiency_level: SufficiencyLevel
+    reason_codes: tuple[str, ...]
+    readiness_reasons: tuple[ReasonCode, ...]
+```
+
+Fonction canonique :
+
+```python
+build_readiness_decision(
+    readiness: Optional[ReadinessResult]
+) -> ReadinessDecision
+```
 
 ### Contrat DailyAdaptationResult
 
@@ -1676,7 +1721,7 @@ class DailyAdaptationResult(BaseModel):
 `DailyAdaptation` :
 
 - adapte uniquement la séance du jour ;
-- consomme `WorkoutPrescription`, `ReadinessResult`, `TrainingLoadSnapshot`,
+- consomme `WorkoutPrescription`, `ReadinessDecision`, `TrainingLoadSnapshot`,
   `RecentTrainingResponse` ;
 - peut uniquement **garder** ou **réduire** (`KEEP`, `EASY_DOWNGRADE`,
   `SHORTEN`, `REST`) ;
@@ -1687,12 +1732,30 @@ class DailyAdaptationResult(BaseModel):
 ### Décisions V1
 
 - `rest` prévu → `KEEP` systématique.
+- `FAVORABLE` → généralement `KEEP`.
 - `quality|steady` + réduction nécessaire → `EASY_DOWNGRADE` vers `easy`.
 - `easy|recovery` + réduction nécessaire → `SHORTEN` avec facteur unique.
 - `long_easy` + réduction nécessaire → `SHORTEN` avant `REST`, sauf signal
   quotidien explicitement très défavorable.
 - `Readiness unavailable` → pas de `REST` automatique.
 - `RecentTrainingResponse` sert surtout à renforcer les `reason_codes`.
+
+### ReadinessDecision V1
+
+- `readiness is None` → `UNAVAILABLE`
+- `readiness.score is None` → `UNAVAILABLE`
+- `sufficiency_level == INSUFFICIENT` → `UNAVAILABLE`
+- si `sufficiency_level == DEGRADED` et score exploitable :
+  - la bande est calculée ;
+  - `confidence` est préservée ;
+  - `sufficiency_level` est préservé.
+
+Calibration canonique V1, recalibrable, non physiologique :
+
+- `score >= 75` → `FAVORABLE`
+- `55 <= score < 75` → `CAUTION`
+- `40 <= score < 55` → `LOW`
+- `score < 40` → `VERY_LOW`
 
 ### Calibration V1
 
@@ -1701,6 +1764,11 @@ SHORTEN_FACTOR = 0.70
 ```
 
 Produit V1, recalibrable, pas une loi physiologique.
+
+Garde-fou d’architecture :
+
+- `daily_adaptation.py` ne possède aucun seuil numérique Readiness ;
+- `daily_adaptation.py` ne compare jamais directement `readiness.score`.
 
 ## 35) NEXT = #134 Weekly Reconciliation V2
 

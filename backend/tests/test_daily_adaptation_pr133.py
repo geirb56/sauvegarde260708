@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 from datetime import date
 from pathlib import Path
@@ -17,6 +18,10 @@ from training_v2.daily_adaptation import (  # noqa: E402
     build_daily_adaptation,
 )
 from training_v2.readiness import ReadinessConfidence, ReadinessResult  # noqa: E402
+from training_v2.readiness_decision import (  # noqa: E402
+    ReadinessBand,
+    build_readiness_decision,
+)
 from training_v2.readiness_sufficiency import SufficiencyLevel  # noqa: E402
 from training_v2.training_load import TrainingLoadSnapshot  # noqa: E402
 from training_v2.training_response import RecentTrainingResponse  # noqa: E402
@@ -51,19 +56,34 @@ def _workout(
     )
 
 
-def _readiness(score: float | None, *, confidence: ReadinessConfidence = ReadinessConfidence.NORMAL) -> ReadinessResult:
-    if score is None:
-        return ReadinessResult(
-            score=None,
-            confidence=ReadinessConfidence.NONE,
-            sufficiency_level=SufficiencyLevel.INSUFFICIENT,
-            reasons=(),
-        )
+def _readiness_result(
+    score: float | None,
+    *,
+    confidence: ReadinessConfidence = ReadinessConfidence.NORMAL,
+    sufficiency_level: SufficiencyLevel = SufficiencyLevel.SUFFICIENT,
+) -> ReadinessResult:
+    if score is None and sufficiency_level == SufficiencyLevel.INSUFFICIENT:
+        confidence = ReadinessConfidence.NONE
     return ReadinessResult(
         score=score,
         confidence=confidence,
-        sufficiency_level=SufficiencyLevel.SUFFICIENT,
+        sufficiency_level=sufficiency_level,
         reasons=(),
+    )
+
+
+def _decision(
+    score: float | None,
+    *,
+    confidence: ReadinessConfidence = ReadinessConfidence.NORMAL,
+    sufficiency_level: SufficiencyLevel = SufficiencyLevel.SUFFICIENT,
+):
+    return build_readiness_decision(
+        _readiness_result(
+            score,
+            confidence=confidence,
+            sufficiency_level=sufficiency_level,
+        )
     )
 
 
@@ -125,7 +145,7 @@ def _response(
 def test_A_rest_stays_rest():
     result = build_daily_adaptation(
         workout=_workout("rest"),
-        readiness=_readiness(20.0),
+        readiness_decision=_decision(20.0),
         training_load=_load("high", acwr=1.7),
         recent_response=_response(volume_trend="decreasing"),
     )
@@ -135,44 +155,55 @@ def test_A_rest_stays_rest():
     assert result.adapted_workout.duration_minutes is None
 
 
-def test_B_easy_with_normal_signals_kept():
+def test_B_favorable_keeps_easy():
     result = build_daily_adaptation(
         workout=_workout("easy", distance_km=8.0),
-        readiness=_readiness(82.0),
+        readiness_decision=_decision(82.0),
         training_load=_load("balanced", acwr=1.0),
         recent_response=_response(),
     )
     assert result.action == DailyAdaptationAction.KEEP
     assert result.adapted_workout == result.original_workout
+    assert "READINESS_FAVORABLE" in result.reason_codes
 
 
-def test_C_quality_with_normal_signals_kept():
+def test_C_favorable_keeps_quality():
     result = build_daily_adaptation(
         workout=_workout("quality", distance_km=8.0),
-        readiness=_readiness(85.0),
+        readiness_decision=_decision(85.0),
         training_load=_load("balanced", acwr=1.0),
         recent_response=_response(),
     )
     assert result.action == DailyAdaptationAction.KEEP
 
 
-def test_D_quality_with_readiness_defavorable_becomes_easy():
+def test_D_quality_with_caution_becomes_easy():
     result = build_daily_adaptation(
         workout=_workout("quality", distance_km=8.0),
-        readiness=_readiness(50.0),
+        readiness_decision=_decision(74.9),
         training_load=_load("balanced", acwr=1.0),
         recent_response=_response(),
     )
     assert result.action == DailyAdaptationAction.EASY_DOWNGRADE
     assert result.adapted_workout.workout_type == "easy"
     assert result.adapted_workout.distance_km == 8.0
-    assert result.adapted_workout.distance_km <= result.original_workout.distance_km
 
 
-def test_E_steady_with_readiness_defavorable_becomes_easy():
+def test_E_quality_with_low_becomes_easy():
+    result = build_daily_adaptation(
+        workout=_workout("quality", distance_km=8.0),
+        readiness_decision=_decision(50.0),
+        training_load=_load("balanced", acwr=1.0),
+        recent_response=_response(),
+    )
+    assert result.action == DailyAdaptationAction.EASY_DOWNGRADE
+    assert result.adapted_workout.workout_type == "easy"
+
+
+def test_F_steady_with_low_becomes_easy():
     result = build_daily_adaptation(
         workout=_workout("steady", duration_minutes=50),
-        readiness=_readiness(52.0),
+        readiness_decision=_decision(52.0),
         training_load=_load("balanced", acwr=1.0),
         recent_response=_response(),
     )
@@ -181,10 +212,10 @@ def test_E_steady_with_readiness_defavorable_becomes_easy():
     assert result.adapted_workout.duration_minutes == 50
 
 
-def test_F_easy_moderate_adaptation_shortens():
+def test_G_easy_with_caution_shortens():
     result = build_daily_adaptation(
         workout=_workout("easy", distance_km=10.0),
-        readiness=_readiness(65.0),
+        readiness_decision=_decision(65.0),
         training_load=_load("balanced", acwr=1.0),
         recent_response=_response(),
     )
@@ -192,10 +223,10 @@ def test_F_easy_moderate_adaptation_shortens():
     assert result.adapted_workout.distance_km == 7.0
 
 
-def test_G_long_easy_moderate_adaptation_shortens():
+def test_H_long_easy_with_low_shortens():
     result = build_daily_adaptation(
         workout=_workout("long_easy", duration_minutes=60),
-        readiness=_readiness(60.0),
+        readiness_decision=_decision(54.9),
         training_load=_load("balanced", acwr=1.0),
         recent_response=_response(),
     )
@@ -204,10 +235,10 @@ def test_G_long_easy_moderate_adaptation_shortens():
     assert "LONG_EASY_PROTECTED" in result.reason_codes
 
 
-def test_H_very_unfavorable_daily_signal_rests():
+def test_I_very_low_rests():
     result = build_daily_adaptation(
         workout=_workout("easy", distance_km=8.0),
-        readiness=_readiness(35.0),
+        readiness_decision=_decision(35.0),
         training_load=_load("balanced", acwr=1.0),
         recent_response=_response(),
     )
@@ -215,10 +246,10 @@ def test_H_very_unfavorable_daily_signal_rests():
     assert result.adapted_workout.workout_type == "rest"
 
 
-def test_I_readiness_unavailable_does_not_auto_rest():
+def test_J_unavailable_does_not_auto_rest():
     result = build_daily_adaptation(
         workout=_workout("easy", distance_km=8.0),
-        readiness=_readiness(None),
+        readiness_decision=_decision(None, sufficiency_level=SufficiencyLevel.INSUFFICIENT),
         training_load=_load("balanced", acwr=1.0),
         recent_response=_response(),
     )
@@ -226,10 +257,10 @@ def test_I_readiness_unavailable_does_not_auto_rest():
     assert "READINESS_UNAVAILABLE" in result.reason_codes
 
 
-def test_J_recent_response_insufficient_adds_reason_only():
+def test_K_recent_response_insufficient_adds_reason_only():
     result = build_daily_adaptation(
         workout=_workout("easy", distance_km=8.0),
-        readiness=_readiness(80.0),
+        readiness_decision=_decision(80.0),
         training_load=_load("balanced", acwr=1.0),
         recent_response=_response(response_status="insufficient", confidence="low"),
     )
@@ -238,10 +269,10 @@ def test_J_recent_response_insufficient_adds_reason_only():
     assert "RECENT_RESPONSE_CAUTION" not in result.reason_codes
 
 
-def test_K_training_load_unavailable_is_not_zero():
+def test_L_training_load_unavailable_is_not_zero():
     result = build_daily_adaptation(
         workout=_workout("easy", distance_km=8.0),
-        readiness=_readiness(80.0),
+        readiness_decision=_decision(80.0),
         training_load=_load("unavailable", acwr=None),
         recent_response=_response(),
     )
@@ -249,21 +280,21 @@ def test_K_training_load_unavailable_is_not_zero():
     assert "TRAINING_LOAD_UNAVAILABLE" in result.reason_codes
 
 
-def test_L_excellent_readiness_never_increases():
+def test_M_favorable_plus_high_load_never_increases():
     result = build_daily_adaptation(
         workout=_workout("easy", distance_km=8.0),
-        readiness=_readiness(90.0),
-        training_load=_load("balanced", acwr=1.0),
+        readiness_decision=_decision(90.0),
+        training_load=_load("high", acwr=1.7),
         recent_response=_response(),
     )
     assert result.action == DailyAdaptationAction.KEEP
     assert result.adapted_workout.distance_km == 8.0
 
 
-def test_M_favorable_recent_response_never_increases():
+def test_N_recent_response_favorable_never_increases():
     result = build_daily_adaptation(
         workout=_workout("quality", duration_minutes=45),
-        readiness=_readiness(82.0),
+        readiness_decision=_decision(82.0),
         training_load=_load("balanced", acwr=1.0),
         recent_response=_response(
             volume_trend="increasing",
@@ -277,33 +308,32 @@ def test_M_favorable_recent_response_never_increases():
     assert result.adapted_workout.duration_minutes == 45
 
 
-def test_N_favorable_training_load_never_increases():
+def test_O_recent_response_unfavorable_alone_generally_keeps():
     result = build_daily_adaptation(
-        workout=_workout("easy", duration_minutes=50),
-        readiness=_readiness(82.0),
-        training_load=_load("low", acwr=0.7),
-        recent_response=_response(),
+        workout=_workout("easy", distance_km=8.0),
+        readiness_decision=_decision(82.0),
+        training_load=_load("balanced", acwr=1.0),
+        recent_response=_response(volume_trend="decreasing"),
     )
     assert result.action == DailyAdaptationAction.KEEP
-    assert result.adapted_workout.duration_minutes == 50
+    assert "RECENT_RESPONSE_CAUTION" in result.reason_codes
 
 
-def test_O_quality_distance_downgrade_never_exceeds_original():
+def test_P_quality_distance_downgrade_never_exceeds_original():
     result = build_daily_adaptation(
         workout=_workout("quality", distance_km=8.0),
-        readiness=_readiness(65.0),
+        readiness_decision=_decision(65.0),
         training_load=_load("balanced", acwr=1.0),
         recent_response=_response(),
     )
     assert result.action == DailyAdaptationAction.EASY_DOWNGRADE
-    assert result.adapted_workout.workout_type == "easy"
     assert result.adapted_workout.distance_km <= 8.0
 
 
-def test_P_sixty_minutes_shorten_uses_factor_070():
+def test_Q_shorten_factor_kept():
     result = build_daily_adaptation(
         workout=_workout("easy", duration_minutes=60),
-        readiness=_readiness(65.0),
+        readiness_decision=_decision(65.0),
         training_load=_load("balanced", acwr=1.0),
         recent_response=_response(),
     )
@@ -311,21 +341,11 @@ def test_P_sixty_minutes_shorten_uses_factor_070():
     assert result.adapted_workout.duration_minutes == 42
 
 
-def test_Q_ten_km_shorten_uses_factor_070():
-    result = build_daily_adaptation(
-        workout=_workout("easy", distance_km=10.0),
-        readiness=_readiness(65.0),
-        training_load=_load("balanced", acwr=1.0),
-        recent_response=_response(),
-    )
-    assert result.adapted_workout.distance_km == 7.0
-
-
 def test_R_original_workout_is_not_mutated():
     workout = _workout("quality", distance_km=8.0, duration_minutes=50)
     result = build_daily_adaptation(
         workout=workout,
-        readiness=_readiness(50.0),
+        readiness_decision=_decision(50.0),
         training_load=_load("balanced", acwr=1.0),
         recent_response=_response(),
     )
@@ -338,7 +358,7 @@ def test_R_original_workout_is_not_mutated():
 def test_S_same_inputs_same_result():
     kwargs = dict(
         workout=_workout("easy", distance_km=8.0),
-        readiness=_readiness(65.0),
+        readiness_decision=_decision(65.0),
         training_load=_load("balanced", acwr=1.0),
         recent_response=_response(),
     )
@@ -347,7 +367,27 @@ def test_S_same_inputs_same_result():
     assert first == second
 
 
-def test_TUVWXYZ_AB_AC_forbidden_dependencies_and_terms_absent():
+def test_T_architecture_daily_adaptation_has_no_local_readiness_thresholds():
+    source = SOURCE.read_text(encoding="utf-8")
+    assert "_READINESS_FAVORABLE_MIN" not in source
+    assert "_READINESS_CAUTION_MIN" not in source
+    assert "_READINESS_VERY_LOW_MAX" not in source
+    assert "READINESS_FAVORABLE_MIN" not in source
+    assert "READINESS_CAUTION_MIN" not in source
+    assert "READINESS_LOW_MIN" not in source
+    assert "ReadinessResult" not in source
+    assert "75.0" not in source
+    assert "55.0" not in source
+    assert "40.0" not in source
+
+
+def test_U_architecture_daily_adaptation_has_no_direct_readiness_score_comparison():
+    source = SOURCE.read_text(encoding="utf-8")
+    assert re.search(r"readiness\s*\.\s*score\s*(<=|>=|<|>)", source) is None
+    assert re.search(r"readiness_decision\s*\.\s*score\s*(<=|>=|<|>)", source) is None
+
+
+def test_V_forbidden_dependencies_and_terms_absent():
     source = SOURCE.read_text(encoding="utf-8")
     lowered = source.lower()
     forbidden_imports = [
@@ -380,21 +420,10 @@ def test_TUVWXYZ_AB_AC_forbidden_dependencies_and_terms_absent():
         assert item not in source
 
 
-def test_conflict_readiness_good_plus_training_load_high_keeps():
+def test_W_conflict_low_readiness_plus_favorable_response_still_reduces():
     result = build_daily_adaptation(
         workout=_workout("quality", distance_km=8.0),
-        readiness=_readiness(82.0),
-        training_load=_load("high", acwr=1.7),
-        recent_response=_response(),
-    )
-    assert result.action == DailyAdaptationAction.KEEP
-    assert "TRAINING_LOAD_HIGH" in result.reason_codes
-
-
-def test_conflict_readiness_low_plus_recent_response_favorable_still_reduces():
-    result = build_daily_adaptation(
-        workout=_workout("quality", distance_km=8.0),
-        readiness=_readiness(50.0),
+        readiness_decision=_decision(50.0),
         training_load=_load("balanced", acwr=1.0),
         recent_response=_response(
             volume_trend="increasing",
@@ -406,31 +435,21 @@ def test_conflict_readiness_low_plus_recent_response_favorable_still_reduces():
     assert result.action == DailyAdaptationAction.EASY_DOWNGRADE
 
 
-def test_conflict_readiness_unavailable_plus_normal_load_plus_stable_response_keeps():
+def test_X_none_decision_is_treated_as_unavailable():
     result = build_daily_adaptation(
         workout=_workout("easy", distance_km=8.0),
-        readiness=_readiness(None),
+        readiness_decision=None,
         training_load=_load("balanced", acwr=1.0),
         recent_response=_response(),
     )
     assert result.action == DailyAdaptationAction.KEEP
+    assert "READINESS_UNAVAILABLE" in result.reason_codes
 
 
-def test_conflict_readiness_normal_plus_recent_response_unfavorable_generally_keeps():
+def test_Y_result_contract_is_immutable_and_action_enum_is_closed():
     result = build_daily_adaptation(
         workout=_workout("easy", distance_km=8.0),
-        readiness=_readiness(82.0),
-        training_load=_load("balanced", acwr=1.0),
-        recent_response=_response(volume_trend="decreasing"),
-    )
-    assert result.action == DailyAdaptationAction.KEEP
-    assert "RECENT_RESPONSE_CAUTION" in result.reason_codes
-
-
-def test_result_contract_is_immutable_and_action_enum_is_closed():
-    result = build_daily_adaptation(
-        workout=_workout("easy", distance_km=8.0),
-        readiness=_readiness(82.0),
+        readiness_decision=_decision(82.0),
         training_load=_load("balanced", acwr=1.0),
         recent_response=_response(),
     )
@@ -440,4 +459,14 @@ def test_result_contract_is_immutable_and_action_enum_is_closed():
         "EASY_DOWNGRADE",
         "SHORTEN",
         "REST",
+    }
+
+
+def test_Z_readiness_band_contract_is_canonical():
+    assert {item.value for item in ReadinessBand} == {
+        "UNAVAILABLE",
+        "FAVORABLE",
+        "CAUTION",
+        "LOW",
+        "VERY_LOW",
     }

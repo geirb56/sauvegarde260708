@@ -4,25 +4,16 @@ Design rules
 ------------
 - PURE: no DB, no Garmin, no HTTP, no Redis, no LLM, no random, no global
   mutable state, no clock-based calls.
-- Consumes existing V2 contracts only: WorkoutPrescription, ReadinessResult,
+- Consumes existing V2 contracts only: WorkoutPrescription, ReadinessDecision,
   TrainingLoadSnapshot, RecentTrainingResponse.
 - Adapts the planned workout for TODAY only.  It does NOT rebuild the weekly
   plan, recalculate WeeklyTarget, or change structural training volume/frequency.
 - Asymmetric rule: can keep or reduce, never increase.
 - None ≠ 0 throughout: unavailable readiness/load/response never becomes a bad
   score automatically.
+- Readiness interpretation is delegated to the canonical readiness_decision
+  layer.
 - PRODUCT CALIBRATION V1 — SHORTEN_FACTOR is recalibrable, not a physiological law.
-
-Readiness interpretation on current main
-----------------------------------------
-ReadinessResult does not expose a dedicated adaptation recommendation contract.
-PR133 therefore reuses the readiness score bands already present on main:
-
-- score >= 75         -> favorable
-- 55 <= score < 75    -> caution / easy-only reduction
-- 40 <= score < 55    -> low / stronger reduction
-- score < 40          -> very low / REST
-- score is None       -> unavailable
 
 Run from the backend directory
 ------------------------------
@@ -36,18 +27,13 @@ from typing import Optional, Tuple
 
 from pydantic import BaseModel, ConfigDict
 
-from .readiness import ReadinessResult
+from .readiness_decision import ReadinessBand, ReadinessDecision
 from .training_load import TrainingLoadSnapshot
 from .training_response import RecentTrainingResponse
 from .workout_generator import WorkoutPrescription
 
 # PRODUCT CALIBRATION V1 — RECALIBRABLE — NOT PHYSIOLOGICAL LAW
 SHORTEN_FACTOR: float = 0.70
-
-# Existing score bands already used on main for readiness-derived decisions.
-_READINESS_FAVORABLE_MIN = 75.0
-_READINESS_CAUTION_MIN = 55.0
-_READINESS_VERY_LOW_MAX = 40.0
 
 
 class DailyAdaptationAction(str, Enum):
@@ -76,19 +62,6 @@ def _dedupe_codes(codes: list[str]) -> tuple[str, ...]:
             seen.add(code)
             ordered.append(code)
     return tuple(ordered)
-
-
-def _readiness_band(readiness: Optional[ReadinessResult]) -> str:
-    score = readiness.score if readiness is not None else None
-    if score is None:
-        return "unavailable"
-    if score >= _READINESS_FAVORABLE_MIN:
-        return "favorable"
-    if score >= _READINESS_CAUTION_MIN:
-        return "caution"
-    if score >= _READINESS_VERY_LOW_MAX:
-        return "low"
-    return "very_low"
 
 
 def _load_status(training_load: Optional[TrainingLoadSnapshot]) -> str:
@@ -164,24 +137,28 @@ def _rest_workout(workout: WorkoutPrescription) -> WorkoutPrescription:
     )
 
 
-def _should_reduce_for_load(readiness_band: str, load_status: str) -> bool:
+def _should_reduce_for_load(readiness_band: ReadinessBand, load_status: str) -> bool:
     if load_status == "high":
-        return readiness_band != "favorable"
+        return readiness_band != ReadinessBand.FAVORABLE
     if load_status == "elevated":
-        return readiness_band in ("caution", "low")
+        return readiness_band in (ReadinessBand.CAUTION, ReadinessBand.LOW)
     return False
 
 
 def build_daily_adaptation(
     *,
     workout: WorkoutPrescription,
-    readiness: Optional[ReadinessResult],
+    readiness_decision: Optional[ReadinessDecision],
     training_load: Optional[TrainingLoadSnapshot],
     recent_response: Optional[RecentTrainingResponse],
 ) -> DailyAdaptationResult:
     """Decide whether to keep or reduce today's workout without rebuilding the plan."""
 
-    readiness_band = _readiness_band(readiness)
+    readiness_band = (
+        readiness_decision.band
+        if readiness_decision is not None
+        else ReadinessBand.UNAVAILABLE
+    )
     load_status = _load_status(training_load)
 
     reasons: list[str] = []
@@ -194,14 +171,10 @@ def build_daily_adaptation(
             reason_codes=_dedupe_codes(reasons),
         )
 
-    if readiness_band == "unavailable":
+    if readiness_decision is None:
         reasons.append("READINESS_UNAVAILABLE")
-    elif readiness_band == "caution":
-        reasons.append("READINESS_CAUTION")
-    elif readiness_band == "low":
-        reasons.append("READINESS_LOW")
-    elif readiness_band == "very_low":
-        reasons.append("READINESS_VERY_LOW")
+    else:
+        reasons.extend(readiness_decision.reason_codes)
 
     if load_status == "unavailable":
         reasons.append("TRAINING_LOAD_UNAVAILABLE")
@@ -212,7 +185,7 @@ def build_daily_adaptation(
 
     reasons.extend(_recent_response_codes(recent_response))
 
-    if readiness_band == "very_low":
+    if readiness_band == ReadinessBand.VERY_LOW:
         reasons.append("REST_RECOMMENDED")
         return DailyAdaptationResult(
             action=DailyAdaptationAction.REST,
@@ -222,9 +195,10 @@ def build_daily_adaptation(
         )
 
     is_quality_like = workout.workout_type in ("quality", "steady")
-    needs_reduction = readiness_band in ("caution", "low") or _should_reduce_for_load(
-        readiness_band, load_status
-    )
+    needs_reduction = readiness_band in (
+        ReadinessBand.CAUTION,
+        ReadinessBand.LOW,
+    ) or _should_reduce_for_load(readiness_band, load_status)
 
     if is_quality_like and needs_reduction:
         reasons.extend(["QUALITY_DOWNGRADED", "INTENSITY_NOT_INCREASED"])

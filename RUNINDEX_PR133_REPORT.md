@@ -15,102 +15,187 @@
 
 | Fichier | Action |
 |---|---|
-| `backend/training_v2/daily_adaptation.py` | NEW: `DailyAdaptationAction`, `DailyAdaptationResult`, `build_daily_adaptation()` |
-| `backend/training_v2/__init__.py` | Updated: exports PR133 |
-| `backend/tests/test_daily_adaptation_pr133.py` | NEW: tests PR133 + conflits + garde-fous d’architecture |
-| `RUNINDEX_PR133_REPORT.md` | NEW: ce fichier |
-| `docs/RUNINDEX_MASTER_ROADMAP_AND_DECISIONS.md` | Updated: HEAD réel, états #129/#131/#132, PR133, NEXT=#134 |
+| `backend/training_v2/readiness_decision.py` | NEW: couche canonique `ReadinessBand` / `ReadinessDecision` / `build_readiness_decision()` |
+| `backend/training_v2/daily_adaptation.py` | Updated: consomme `ReadinessDecision`, aucun seuil local Readiness |
+| `backend/training_v2/__init__.py` | Updated: exports readiness decision |
+| `backend/tests/test_training_v2_readiness_decision.py` | NEW: tests seuils et métadonnées de la couche canonique |
+| `backend/tests/test_daily_adaptation_pr133.py` | Updated: tests PR133 via la couche canonique + garde-fous d’architecture |
+| `RUNINDEX_PR133_REPORT.md` | Updated: rapport corrigé |
+| `docs/RUNINDEX_MASTER_ROADMAP_AND_DECISIONS.md` | Updated: architecture canonique `ReadinessResult -> ReadinessDecision -> DailyAdaptation` |
 
 ---
 
-## Contrat DailyAdaptationResult
+## Architecture canonique
+
+```text
+ReadinessResult
+      ↓
+ReadinessDecision
+      ↓
+DailyAdaptation
+```
+
+Décision permanente :
+
+> Les consumers ne définissent jamais leurs propres bandes Readiness.
+
+PR #133 introduit une calibration produit V1 canonique de bandes Readiness,
+centralisée dans `ReadinessDecision` afin qu’aucun consumer ne recrée ses
+propres seuils.
+
+---
+
+## Contrat ReadinessBand
 
 ```python
-class DailyAdaptationAction(str, Enum):
-    KEEP = "KEEP"
-    EASY_DOWNGRADE = "EASY_DOWNGRADE"
-    SHORTEN = "SHORTEN"
-    REST = "REST"
+class ReadinessBand(str, Enum):
+    UNAVAILABLE = "UNAVAILABLE"
+    FAVORABLE = "FAVORABLE"
+    CAUTION = "CAUTION"
+    LOW = "LOW"
+    VERY_LOW = "VERY_LOW"
+```
 
-class DailyAdaptationResult(BaseModel):
+## Contrat ReadinessDecision
+
+```python
+class ReadinessDecision(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    action: DailyAdaptationAction
-    original_workout: WorkoutPrescription
-    adapted_workout: WorkoutPrescription
+    band: ReadinessBand
+    score: Optional[float]
+    confidence: ReadinessConfidence
+    sufficiency_level: SufficiencyLevel
     reason_codes: tuple[str, ...]
+    readiness_reasons: tuple[ReasonCode, ...]
+```
+
+## Fonction canonique
+
+```python
+build_readiness_decision(
+    readiness: Optional[ReadinessResult]
+) -> ReadinessDecision
 ```
 
 ---
 
-## Hiérarchie de décision V1
+## Calibration produit V1 canonique
 
-1. `rest` prévu → `KEEP` systématique.
-2. Signal quotidien très défavorable (`ReadinessResult.score < 40`) → `REST`.
-3. Réduction d’intensité si séance `quality|steady` et :
-   - `40 <= readiness_score < 75`, ou
-   - `TrainingLoad.status == "high"` avec readiness non favorable, ou
-   - `TrainingLoad.status == "elevated"` avec readiness déjà prudent.
-4. Protection `long_easy` : si réduction nécessaire → `SHORTEN` avant `REST`.
-5. Séance `easy|recovery` : réduction de quantité uniquement (`SHORTEN`) si réduction nécessaire.
-6. `RecentTrainingResponse` n’annule jamais un signal quotidien défavorable ; il sert surtout à ajouter des `reason_codes`.
-7. Aucun chemin ne peut augmenter distance, durée ou intensité.
+Seuils centralisés uniquement dans :
 
----
+- `backend/training_v2/readiness_decision.py`
 
-## Readiness / Load / Response
+Constantes :
 
-- **Readiness unavailable** (`score=None`) → jamais transformé en `REST` automatiquement ; `reason_code = READINESS_UNAVAILABLE`.
-- **TrainingLoad unavailable** (`status="unavailable"` ou input absent) → jamais traité comme `0` ; `reason_code = TRAINING_LOAD_UNAVAILABLE`.
-- **RecentTrainingResponse insufficient/unavailable** → pas de tendance inventée ; `reason_code = RECENT_RESPONSE_INSUFFICIENT|RECENT_RESPONSE_UNAVAILABLE`.
+- `READINESS_FAVORABLE_MIN = 75.0`
+- `READINESS_CAUTION_MIN = 55.0`
+- `READINESS_LOW_MIN = 40.0`
+
+Statut :
+
+- PRODUCT CALIBRATION V1
+- RECALIBRABLE
+- NOT PHYSIOLOGICAL LAW
 
 ---
 
-## Calibrations / règles
+## Règles canoniques ReadinessDecision
+
+- `readiness is None` → `UNAVAILABLE`
+- `readiness.score is None` → `UNAVAILABLE`
+- `readiness.sufficiency_level == INSUFFICIENT` → `UNAVAILABLE`
+- `score >= 75` → `FAVORABLE`
+- `55 <= score < 75` → `CAUTION`
+- `40 <= score < 55` → `LOW`
+- `score < 40` → `VERY_LOW`
+
+### Règle INSUFFICIENT
+
+`INSUFFICIENT` reste une règle de disponibilité de données, pas un état
+physiologique :
+
+- `INSUFFICIENT` → `UNAVAILABLE`
+- jamais `VERY_LOW`
+
+### Comportement DEGRADED
+
+- si un score exploitable existe, la bande est calculée normalement ;
+- `confidence` est préservée ;
+- `sufficiency_level=DEGRADED` est préservé ;
+- aucun recalcul de sufficiency.
+
+---
+
+## DailyAdaptation final
+
+`DailyAdaptation` :
+
+- consomme `WorkoutPrescription`, `ReadinessDecision`, `TrainingLoadSnapshot`,
+  `RecentTrainingResponse` ;
+- ne connaît aucun seuil numérique Readiness ;
+- ne compare jamais directement `readiness.score` ;
+- peut uniquement **garder** ou **réduire** (`KEEP`, `EASY_DOWNGRADE`,
+  `SHORTEN`, `REST`) ;
+- n’implémente aucun `MOVE` ;
+- n’augmente jamais une séance.
+
+### Matrice finale
+
+- planned rest → `KEEP`
+- `FAVORABLE` → généralement `KEEP`
+- `CAUTION` / `LOW` + `quality|steady` → `EASY_DOWNGRADE`
+- `CAUTION` / `LOW` + `easy|recovery` → `SHORTEN`
+- `CAUTION` / `LOW` + `long_easy` → `SHORTEN`
+- `VERY_LOW` → `REST`
+- `UNAVAILABLE` → jamais `REST` automatique ; comportement conservateur
+- `TrainingLoad` conserve son rôle actuel
+- `RecentTrainingResponse` reste contextuel
+- aucune augmentation
+
+### SHORTEN_FACTOR
 
 - `SHORTEN_FACTOR = 0.70`
-- `quality|steady -> easy` conserve le jour et la quantité prévue
-- `long_easy` réduit d’abord la quantité (`SHORTEN`) ; `REST` seulement si signal quotidien très défavorable
-- `REST` requiert un signal quotidien fort (`readiness_score < 40`), jamais un simple manque de données
 
 ---
 
-## Reason codes V1
+## Garde-fous d’architecture
 
-- `PLANNED_REST_DAY`
-- `PLAN_KEPT`
-- `READINESS_UNAVAILABLE`
-- `READINESS_CAUTION`
-- `READINESS_LOW`
-- `READINESS_VERY_LOW`
-- `TRAINING_LOAD_UNAVAILABLE`
-- `TRAINING_LOAD_ELEVATED`
-- `TRAINING_LOAD_HIGH`
-- `RECENT_RESPONSE_UNAVAILABLE`
-- `RECENT_RESPONSE_INSUFFICIENT`
-- `RECENT_RESPONSE_CAUTION`
-- `QUALITY_DOWNGRADED`
-- `WORKOUT_SHORTENED`
-- `LONG_EASY_PROTECTED`
-- `REST_RECOMMENDED`
-- `INTENSITY_NOT_INCREASED`
+Les tests bloquants vérifient que `backend/training_v2/daily_adaptation.py` :
+
+- ne contient plus `_READINESS_FAVORABLE_MIN`
+- ne contient plus `_READINESS_CAUTION_MIN`
+- ne contient plus `_READINESS_VERY_LOW_MAX`
+- ne contient plus `ReadinessResult`
+- ne contient plus de comparaison directe sur `readiness.score`
 
 ---
 
-## Immutabilité / preuve d’absence d’augmentation
+## Périmètre inchangé
 
-- `WorkoutPrescription` n’est jamais muté : toutes les adaptations créent un nouvel objet.
-- `KEEP` réutilise l’objet source inchangé.
-- `EASY_DOWNGRADE` remplace seulement `workout_type`/`intensity_class` par `easy/low`.
-- `SHORTEN` applique un facteur fixe `< 1.0`.
-- `REST` remplace une séance par un `WorkoutPrescription` de type `rest`.
-- Aucun code ne multiplie distance/durée par une valeur `> 1`, ne rajoute de séance, ni ne transforme `easy` en `quality`.
+Confirmé inchangé :
+
+- agrégation `ReadinessResult`
+- `ReadinessSubscores`
+- `ReadinessSufficiency`
+- `TrainingLoad`
+- `TrainingResponse`
+- `WeeklyTarget`
+- `WorkoutGenerator`
+- `PlanGoal`
+- `Periodization`
+- `TrainingState`
+- `training_engine.py`
+
+Aucun runtime consumer migré dans cette correction.
 
 ---
 
-## Frontière roadmap
+## Roadmap
 
-- **#133 DailyAdaptation** → aujourd’hui, adaptation locale, maintien/réduction uniquement.
-- **NEXT = #134 Weekly Reconciliation V2** → adaptation structurelle future (volume, fréquence, long run).
-- **V3 Flexible Schedule** conservé en roadmap ; aucun `MOVE` implémenté ici.
+- `#133` reste `IMPLEMENTED / PENDING MERGE`
+- `NEXT = #134 Weekly Reconciliation V2`
+- aucun `MOVE`
+- aucun LT1/LT2
+- aucun trail/D+
 
