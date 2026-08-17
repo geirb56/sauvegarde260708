@@ -24,6 +24,7 @@ from .weekly_target import WeeklyTarget
 
 # PRODUCT CALIBRATION V1 — RECALIBRABLE — NOT PHYSIOLOGICAL LAW
 FREQUENCY_REDUCTION_MARGIN: float = 0.75
+MAX_SESSION_REDUCTION_PER_RECONCILIATION: int = 1
 VOLUME_REDUCTION_MARGIN: float = 0.80
 RECONCILED_VOLUME_FLOOR_FACTOR: float = 0.85
 WEEKLY_RESPONSE_WINDOW_WEEKS: float = 4.0
@@ -158,7 +159,12 @@ def build_weekly_reconciliation(
         if observed_runs_per_week < frequency_threshold:
             frequency_candidate = True
             reasons.append("OBSERVED_FREQUENCY_BELOW_TARGET")
-            candidate_sessions = max(1, _round_half_up(observed_runs_per_week))
+            observed_candidate = max(1, _round_half_up(observed_runs_per_week))
+            max_allowed_drop_candidate = max(
+                1,
+                proposed_target.target_sessions - MAX_SESSION_REDUCTION_PER_RECONCILIATION,
+            )
+            candidate_sessions = max(observed_candidate, max_allowed_drop_candidate)
             candidate_sessions = min(candidate_sessions, proposed_target.target_sessions)
             if candidate_sessions < proposed_target.target_sessions:
                 frequency_reduced = True
@@ -166,6 +172,7 @@ def build_weekly_reconciliation(
                     update={"target_sessions": candidate_sessions}
                 )
                 reasons.append("FREQUENCY_REDUCED")
+                reasons.append("SESSION_FREQUENCY_REDUCTION_CAPPED")
 
     volume_candidate = False
     volume_reduced = False
@@ -212,6 +219,42 @@ def build_weekly_reconciliation(
                 )
                 reasons.append("VOLUME_REDUCED")
 
+    if frequency_reduced and reconciled_target.target_sessions < proposed_target.target_sessions:
+        reasons.append("SESSION_LOAD_CONCENTRATION_GUARD")
+        session_ratio = (
+            float(reconciled_target.target_sessions) / float(proposed_target.target_sessions)
+        )
+        if (
+            proposed_target.target_basis == "distance"
+            and proposed_target.target_km is not None
+            and reconciled_target.target_km is not None
+        ):
+            session_safe_max_km = round(proposed_target.target_km * session_ratio, 1)
+            final_target_km = round(min(reconciled_target.target_km, session_safe_max_km), 1)
+            if final_target_km < reconciled_target.target_km:
+                volume_reduced = True
+                reconciled_target = reconciled_target.model_copy(
+                    update={"target_km": final_target_km}
+                )
+                reasons.append("VOLUME_REDUCED_FOR_FREQUENCY_SAFETY")
+        if (
+            proposed_target.target_basis == "duration"
+            and proposed_target.target_duration_minutes is not None
+            and reconciled_target.target_duration_minutes is not None
+        ):
+            session_safe_max_minutes = int(
+                round(float(proposed_target.target_duration_minutes) * session_ratio)
+            )
+            final_target_minutes = int(
+                min(reconciled_target.target_duration_minutes, session_safe_max_minutes)
+            )
+            if final_target_minutes < reconciled_target.target_duration_minutes:
+                volume_reduced = True
+                reconciled_target = reconciled_target.model_copy(
+                    update={"target_duration_minutes": final_target_minutes}
+                )
+                reasons.append("VOLUME_REDUCED_FOR_FREQUENCY_SAFETY")
+
     if volume_candidate and recent_response.long_run_trend == "decreasing":
         reasons.append("LONG_RUN_CAUTION")
 
@@ -244,6 +287,7 @@ def build_weekly_reconciliation(
 
 __all__ = [
     "FREQUENCY_REDUCTION_MARGIN",
+    "MAX_SESSION_REDUCTION_PER_RECONCILIATION",
     "VOLUME_REDUCTION_MARGIN",
     "RECONCILED_VOLUME_FLOOR_FACTOR",
     "WEEKLY_RESPONSE_WINDOW_WEEKS",

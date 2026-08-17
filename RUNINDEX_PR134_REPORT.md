@@ -42,11 +42,15 @@ Model immutable (`frozen=True`).
 ### Fréquence
 
 - `FREQUENCY_REDUCTION_MARGIN = 0.75`
+- `MAX_SESSION_REDUCTION_PER_RECONCILIATION = 1`
 - Candidate réduction si:
   - `observed_runs_per_week < target_sessions * 0.75`
 - Nouvelle cible:
-  - `max(1, round_half_up(observed_runs_per_week))`
-  - plafonnée à `<= target_sessions`
+  - `observed_candidate = max(1, round_half_up(observed_runs_per_week))`
+  - `max_allowed_drop_candidate = max(1, target_sessions - 1)`
+  - `new_sessions = max(observed_candidate, max_allowed_drop_candidate)`
+  - `new_sessions = min(new_sessions, target_sessions)`
+- donc baisse maximale par réconciliation: `-1 séance`
 
 ### Volume distance
 
@@ -57,11 +61,18 @@ Model immutable (`frozen=True`).
 - Cible réconciliée:
   - `reconciled_km = max(weekly_observed_km, proposed_target.target_km * 0.85)`
   - puis `min(reconciled_km, proposed_target.target_km)`
+- si fréquence réduite (`new_sessions < original_sessions`), garde-fou anti-concentration:
+  - `session_safe_max_km = original_target_km * (new_sessions / original_sessions)`
+  - `final_target_km = min(current_reconciled_km, session_safe_max_km)`
+  - cette règle est prioritaire sur le floor `0.85` (exception explicite V1)
 
 ### Volume durée
 
 - `weekly_observed_minutes = observed_duration_minutes / 4`
 - logique identique à la distance, sur les minutes
+- si fréquence réduite:
+  - `session_safe_max_minutes = original_target_duration_minutes * (new_sessions / original_sessions)`
+  - `final_target_duration_minutes = min(current_reconciled_duration, session_safe_max_minutes)`
 - aucune conversion durée ↔ km
 
 ---
@@ -71,10 +82,16 @@ Model immutable (`frozen=True`).
 - `recent_response is None` → `KEEP + RECENT_RESPONSE_UNAVAILABLE`
 - `response_status = unavailable` → `KEEP + RECENT_RESPONSE_UNAVAILABLE`
 - `response_status = insufficient` → `KEEP + RECENT_RESPONSE_INSUFFICIENT`
+- si la fréquence baisse et que le garde-fou baisse aussi le volume/durée:
+  - `action = REDUCE_BOTH` (pas `REDUCE_FREQUENCY`)
 - Aucune augmentation possible:
   - `target_sessions` ne peut jamais augmenter
   - `target_km` ne peut jamais augmenter
   - `target_duration_minutes` ne peut jamais augmenter
+- nouveaux reason codes:
+  - `SESSION_FREQUENCY_REDUCTION_CAPPED`
+  - `SESSION_LOAD_CONCENTRATION_GUARD`
+  - `VOLUME_REDUCED_FOR_FREQUENCY_SAFETY`
 - `allow_intensity` inchangé
 - `continuity_state` inchangé
 - `target_basis` préservé (`duration` reste `duration`, `distance` reste `distance`)

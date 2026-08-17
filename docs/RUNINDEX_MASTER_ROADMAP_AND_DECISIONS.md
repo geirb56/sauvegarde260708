@@ -1790,6 +1790,17 @@ Règles canoniques #134 :
 
 - KEEP / REDUCE_VOLUME / REDUCE_FREQUENCY / REDUCE_BOTH ;
 - aucune augmentation structurelle (volume/séances) ;
+- réduction de fréquence graduelle: `MAX_SESSION_REDUCTION_PER_RECONCILIATION = 1` ;
+- formule fréquence:
+  - trigger: `observed_runs_per_week < target_sessions * 0.75`
+  - `observed_candidate = max(1, round_half_up(observed_runs_per_week))`
+  - `max_allowed_drop_candidate = max(1, target_sessions - 1)`
+  - `new_sessions = min(target_sessions, max(observed_candidate, max_allowed_drop_candidate))`
+- garde-fou anti-concentration si fréquence baisse:
+  - distance: `final_target_km = min(current_reconciled_km, original_target_km * new_sessions / original_sessions)`
+  - durée: `final_target_duration_minutes = min(current_reconciled_duration, original_target_duration_minutes * new_sessions / original_sessions)`
+- exception canonique V1: en baisse de fréquence, ce garde-fou est prioritaire sur le floor volume 85% ;
+- si la fréquence baisse et que ce garde-fou baisse aussi volume/durée: `action = REDUCE_BOTH` ;
 - `allow_intensity` inchangé ;
 - `continuity_state` inchangé ;
 - aucun MOVE ;

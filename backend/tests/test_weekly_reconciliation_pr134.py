@@ -177,8 +177,8 @@ def test_i_volume_and_frequency_under_target_reduce_both():
         recent_response=_response(observed_runs_per_week=2.0, observed_distance_km=88.0),
     )
     assert result.action == WeeklyReconciliationAction.REDUCE_BOTH
-    assert result.reconciled_target.target_sessions == 2
-    assert result.reconciled_target.target_km == 34.0
+    assert result.reconciled_target.target_sessions == 3
+    assert result.reconciled_target.target_km == 30.0
 
 
 def test_j_duration_based_target_reduction_possible():
@@ -393,6 +393,8 @@ def test_real_case_2_target_4_40_observed_2_22_reduce_both():
         recent_response=_response(observed_runs_per_week=2.0, observed_distance_km=88.0),
     )
     assert result.action == WeeklyReconciliationAction.REDUCE_BOTH
+    assert result.reconciled_target.target_sessions == 3
+    assert result.reconciled_target.target_km == 30.0
 
 
 def test_real_case_3_target_3_30_observed_3_23_reduce_volume_only():
@@ -420,3 +422,107 @@ def test_real_case_5_deep_reprise_120_3_observed_100_keep_duration_based():
     assert result.action == WeeklyReconciliationAction.KEEP
     assert result.reconciled_target.target_basis == "duration"
     assert result.reconciled_target.allow_intensity is False
+
+
+def test_b1_target_5_observed_1_5_frequency_reduction_capped_to_4():
+    result = build_weekly_reconciliation(
+        proposed_target=_target_distance(sessions=5, km=50.0),
+        recent_response=_response(observed_runs_per_week=1.5, observed_distance_km=200.0),
+    )
+    assert result.reconciled_target.target_sessions == 4
+    assert "SESSION_FREQUENCY_REDUCTION_CAPPED" in result.reason_codes
+
+
+def test_b2_target_4_observed_2_0_new_sessions_3():
+    result = build_weekly_reconciliation(
+        proposed_target=_target_distance(sessions=4, km=40.0),
+        recent_response=_response(observed_runs_per_week=2.0, observed_distance_km=160.0),
+    )
+    assert result.reconciled_target.target_sessions == 3
+
+
+def test_b3_target_3_observed_1_0_new_sessions_2():
+    result = build_weekly_reconciliation(
+        proposed_target=_target_distance(sessions=3, km=30.0),
+        recent_response=_response(observed_runs_per_week=1.0, observed_distance_km=120.0),
+    )
+    assert result.reconciled_target.target_sessions == 2
+
+
+def test_b4_frequency_reduce_with_compatible_volume_forces_reduce_both_to_session_safe_max():
+    result = build_weekly_reconciliation(
+        proposed_target=_target_distance(sessions=4, km=40.0),
+        recent_response=_response(observed_runs_per_week=2.5, observed_distance_km=160.0),
+    )
+    assert result.reconciled_target.target_sessions == 3
+    assert result.reconciled_target.target_km == 30.0
+    assert result.action == WeeklyReconciliationAction.REDUCE_BOTH
+    assert "SESSION_LOAD_CONCENTRATION_GUARD" in result.reason_codes
+    assert "VOLUME_REDUCED_FOR_FREQUENCY_SAFETY" in result.reason_codes
+
+
+def test_b5_volume_only_reduction_keeps_floor_when_frequency_unchanged():
+    result = build_weekly_reconciliation(
+        proposed_target=_target_distance(sessions=4, km=40.0),
+        recent_response=_response(observed_runs_per_week=4.0, observed_distance_km=88.0),
+    )
+    assert result.reconciled_target.target_sessions == 4
+    assert result.reconciled_target.target_km == 34.0
+    assert result.action == WeeklyReconciliationAction.REDUCE_VOLUME
+    assert "SESSION_LOAD_CONCENTRATION_GUARD" not in result.reason_codes
+
+
+def test_b6_frequency_and_volume_low_final_volume_capped_by_session_safety():
+    result = build_weekly_reconciliation(
+        proposed_target=_target_distance(sessions=4, km=40.0),
+        recent_response=_response(observed_runs_per_week=2.0, observed_distance_km=88.0),
+    )
+    assert result.reconciled_target.target_sessions == 3
+    assert result.reconciled_target.target_km <= 30.0
+    assert result.action == WeeklyReconciliationAction.REDUCE_BOTH
+
+
+def test_b7_deep_reprise_duration_guard_applies_with_frequency_reduction():
+    target = _target_duration(minutes=120, sessions=3, continuity="deep_reprise")
+    result = build_weekly_reconciliation(
+        proposed_target=target,
+        recent_response=_response(observed_runs_per_week=1.5, observed_duration_minutes=560.0),
+    )
+    assert result.reconciled_target.target_sessions == 2
+    assert result.reconciled_target.target_duration_minutes <= 80
+    assert result.reconciled_target.target_basis == "duration"
+    assert result.reconciled_target.allow_intensity is target.allow_intensity
+    assert result.reconciled_target.continuity_state == target.continuity_state
+    assert result.reconciled_target.target_km is None
+
+
+def test_b8_target_sessions_1_never_goes_to_zero():
+    result = build_weekly_reconciliation(
+        proposed_target=_target_distance(sessions=1, km=10.0),
+        recent_response=_response(observed_runs_per_week=0.1, observed_distance_km=40.0),
+    )
+    assert result.reconciled_target.target_sessions == 1
+
+
+def test_b9_distance_average_per_session_never_increases_when_frequency_reduced():
+    target = _target_distance(sessions=4, km=40.0)
+    result = build_weekly_reconciliation(
+        proposed_target=target,
+        recent_response=_response(observed_runs_per_week=2.5, observed_distance_km=160.0),
+    )
+    assert result.reconciled_target.target_sessions < target.target_sessions
+    new_avg = result.reconciled_target.target_km / result.reconciled_target.target_sessions
+    old_avg = target.target_km / target.target_sessions
+    assert new_avg <= old_avg + 1e-9
+
+
+def test_c1_duration_average_per_session_never_increases_when_frequency_reduced():
+    target = _target_duration(minutes=120, sessions=3)
+    result = build_weekly_reconciliation(
+        proposed_target=target,
+        recent_response=_response(observed_runs_per_week=1.5, observed_duration_minutes=560.0),
+    )
+    assert result.reconciled_target.target_sessions < target.target_sessions
+    new_avg = result.reconciled_target.target_duration_minutes / result.reconciled_target.target_sessions
+    old_avg = target.target_duration_minutes / target.target_sessions
+    assert new_avg <= old_avg + 1e-9
