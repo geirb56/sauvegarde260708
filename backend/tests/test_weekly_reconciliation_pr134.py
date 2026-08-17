@@ -142,8 +142,9 @@ def test_e_target_4_observed_low_reduce_frequency():
         proposed_target=_target_distance(sessions=4, km=40.0),
         recent_response=_response(observed_runs_per_week=2.5, observed_distance_km=160.0),
     )
-    assert result.action == WeeklyReconciliationAction.REDUCE_FREQUENCY
+    assert result.action == WeeklyReconciliationAction.REDUCE_BOTH
     assert result.reconciled_target.target_sessions == 3
+    assert result.reconciled_target.target_km == 30.0
 
 
 def test_f_target_3_observed_3_keep():
