@@ -3,6 +3,18 @@
 ## Problem Statement
 Pull https://github.com/geirb56/sauvegarde260629 and set it up so it runs. Replace /app contents.
 
+## 2026-08-17 — Validation runtime globale Training Engine V2 (post-PR #135) — AUDIT LECTURE SEULE — VERDICT: GLOBAL = GO #136
+- Audit read-only, aucun code/PR/injection DB. Compte réel da8505ef (146 act, 41 daily). JWT read-only via auth.jwt_utils.
+- Git: HEAD local 5807c8a, sauvegarde/main 6ef49f8, local +14/-0 (contient tout + hotfix Py3.11). Merges: #132=beee570, #133=b2f1ead, #134=8564060, #135=6ef49f8.
+- Chaîne V2 entièrement branchée & cohérente runtime. ACWR recalculé indépendamment = 2.272 vs endpoints 2.272-2.273 (arrondi seul, acute=138min/chronic_weekly=60.75min). ctl/atl/tsb=null propagés.
+- #132: window 28j, trends présents. #134: REDUCE_VOLUME 13.1→11.1 (floor 85%), target_sessions inchangé, invariants OK. #135: sessions_per_week==reconciled_target.target_sessions=1, estimated_tss/total_tss=null sans casser consumers. AUCUN fallback legacy (training_engine absent du chemin). generate_cycle_week = enrichissement LLM (non structurel).
+- #133 (readiness_decision/daily_adaptation) NON branché runtime = couche pure (attendu avant #136); /training/today utilise encore adapt_session_to_readiness legacy. Validé en mémoire (None→UNAVAILABLE).
+- Tests: PR132-135 + readiness_decision = 172 passed/0 failed. Modules V2 = 530 passed; 5 failed/3 errors tous HORS PÉRIMÈTRE (calibration training_state pré-existante non modifiée par PR132-135; plan_goal flakiness xdist; sse/subscription BASE_URL env). reprise_pr77 7 failed = info compatibilité seulement (fixtures legacy + doctrine reprise_exit), NON critère GO/NO-GO.
+- Rapport complet: /app/TRAINING_V2_GLOBAL_RUNTIME_VALIDATION_POST_PR135.md.
+- Observations non bloquantes: OBS-1 calibration continuity_confidence/NORMAL↔REPRISE_EXIT (doctrine, indépendant #135); OBS-2 hotfix Py3.11 coach_service.py à répercuter upstream dans PR#135; OBS-3 reprise_exit sans intensité imposée = changement comportement V2 (décision produit).
+- NON commencé (interdit par user pendant audit): #136, LT1/LT2, trail/D+, V3 flexible scheduling. training_engine.py non supprimé.
+
+
 ## Changelog — Reprise après arrêt / comeback (PR77, June 2026)
 - Durées de reprise profonde calées sur le niveau antérieur (fenêtre 6 sem, jours 28-42) via reprise_deep_durations: plancher 30/35/40 min (débutant/inconnu) -> 35/45/55 min (ex-coureur ~40km/sem). 3 séances, facile-only, AFFICHÉ EN MINUTES (weekly_minutes), plus en km. prior_weekly_km calculé dans coach_service.
 - Frontend TrainingPlan.jsx: bandeau "Mode reprise" (deep/partial), carte semaine courante en minutes ("~105 min • 3 séances"). i18n FR/EN/ES.
