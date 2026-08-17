@@ -9,9 +9,9 @@ Ce document est :
 - la roadmap d'exécution ;
 - un moyen d'éviter la perte de contexte entre sessions/outils.
 
-Last verified against main: `beee570281920b4681e96d3559e8777121b6ffa9` (Merge PR #132)
+Last verified against main: `8564060b1162d4d56ea2136397e3ae8606a08b3e` (post-merge PR #134)
 
-HEAD PR (#133): see current branch HEAD
+HEAD PR (#135): see current branch HEAD
 
 Date: `2026-08-17`
 
@@ -21,7 +21,7 @@ Date: `2026-08-17`
 
 Source de vérité utilisée pour ce document :
 
-1. HEAD réel de `main` (`f9bada97`) ;
+1. HEAD réel de `main` (`8564060b1162d4d56ea2136397e3ae8606a08b3e`) ;
 2. audit des merges PR sur `main` ;
 3. audit du code réellement présent (`backend/`, `frontend/`, `backend/training_v2/`) ;
 4. croisement avec les rapports versionnés (`*_REPORT.md`).
@@ -1639,11 +1639,11 @@ RecentTrainingResponse → WeeklyTarget semaine suivante
 
 Sans culpabilisation.
 
-NEXT après #133. Toujours hors scope de cette PR.
+Implémenté en #134 (voir section 35).
 
 ---
 
-## 34) PR #133 — Daily Adaptation V2 — IMPLEMENTED / PENDING MERGE
+## 34) PR #133 — Daily Adaptation V2 — MERGED
 
 HEAD main au départ de #133 : `beee570281920b4681e96d3559e8777121b6ffa9` (#132 merged)
 
@@ -1770,16 +1770,76 @@ Garde-fou d’architecture :
 - `daily_adaptation.py` ne possède aucun seuil numérique Readiness ;
 - `daily_adaptation.py` ne compare jamais directement `readiness.score`.
 
-## 35) NEXT = #134 Weekly Reconciliation V2
+## 35) PR #134 — Weekly Reconciliation V2 — MERGED
 
-Après #133 :
+Architecture canonique :
 
-- adaptation structurelle du volume ;
-- fréquence réellement soutenable ;
-- long run ;
-- comportement observé sur plusieurs semaines ;
-- migration des consumers V2 ;
-- suppression finale `training_engine.py` ;
+```text
+RecentTrainingResponse
+        +
+WeeklyTarget (proposé)
+        ↓
+WeeklyReconciliation
+        ↓
+WeeklyTarget (réconcilié)
+        ↓
+WorkoutGenerator
+```
+
+Règles canoniques #134 :
+
+- KEEP / REDUCE_VOLUME / REDUCE_FREQUENCY / REDUCE_BOTH ;
+- aucune augmentation structurelle (volume/séances) ;
+- réduction de fréquence graduelle: `MAX_SESSION_REDUCTION_PER_RECONCILIATION = 1` ;
+- formule fréquence:
+  - trigger: `observed_runs_per_week < target_sessions * 0.75`
+  - `observed_candidate = max(1, round_half_up(observed_runs_per_week))`
+  - `max_allowed_drop_candidate = max(1, target_sessions - 1)`
+  - `new_sessions = min(target_sessions, max(observed_candidate, max_allowed_drop_candidate))`
+- garde-fou anti-concentration si fréquence baisse:
+  - distance: `final_target_km = min(current_reconciled_km, original_target_km * new_sessions / original_sessions)`
+  - durée: `final_target_duration_minutes = min(current_reconciled_duration, original_target_duration_minutes * new_sessions / original_sessions)`
+- exception canonique V1: en baisse de fréquence, ce garde-fou est prioritaire sur le floor volume 85% ;
+- si la fréquence baisse et que ce garde-fou baisse aussi volume/durée: `action = REDUCE_BOTH` ;
+- `allow_intensity` inchangé ;
+- `continuity_state` inchangé ;
+- aucun MOVE ;
+- aucune logique LT1/LT2 ;
+- aucune logique trail/D+ ;
+- `DailyAdaptation` et `ReadinessDecision` inchangés.
+
+## 36) PR #135 — Runtime plan migration to Training V2 — IMPLEMENTED / PENDING MERGE
+
+### État réel de départ #135
+
+- HEAD main: `8564060b1162d4d56ea2136397e3ae8606a08b3e`
+- #133 = MERGED
+- #134 = MERGED
+
+### Portée #135
+
+- migration du runtime `coach_service.generate_dynamic_training_plan()` vers la chaîne V2 :
+  - `TrainingHistory` → `RunnerProfile` → `TrainingState` → `PlanGoal` → `Periodization` →
+    `WeeklyTarget` → `RecentTrainingResponse` → `WeeklyReconciliation` → `WorkoutGenerator`
+- adaptation vers payload runtime compatible via `training_v2/runtime_plan_adapter.py`
+- conservation explicite des champs performance (`vma`, `vo2max`, `vma_method`, `vma_confidence`, `paces`)
+  comme **LEGACY PERFORMANCE COMPATIBILITY** (non décisionnels pour la structure V2)
+- aucune modification des formules métier internes des modules V2
+
+### NEXT (ordre canonique)
+
+1. **#136 — Daily runtime migration**
+2. **#137 — server/full-cycle legacy migration**
+3. **#138 — performance extraction/audit**
+4. **#139 — kill `training_engine.py`**
+5. ensuite seulement : LT1/LT2 multi-évidence
+
+Après #135 :
+
+- audit global des consumers encore branchés legacy ;
+- migration runtime vers les contrats V2 ;
+- extraction `performance.py` si nécessaire ;
+- suppression complète `training_engine.py` ;
 - validation runtime réelle ;
 - puis seulement thresholds LT1/LT2 multi-évidence, RunIndex Score V2,
-  Body Battery nocturne, produit / préparation sortie.
+  Body Battery nocturne, V3 Flexible Schedule, trail/elevation-aware, produit.
