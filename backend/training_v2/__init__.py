@@ -22,6 +22,8 @@ PR130 exposes:           WeeklyTarget, build_weekly_target.
 PR131 exposes:           WorkoutPrescription, WeeklyPlan, build_weekly_plan.
 PR132 exposes:           RecentTrainingResponse, WorkoutExecutionFacts,
                          build_recent_training_response, analyze_workout_execution.
+PR133 exposes:           DailyAdaptationAction, DailyAdaptationResult,
+                         build_daily_adaptation.
 """
 
 from .domain_activity import DomainActivity
@@ -58,6 +60,11 @@ from .readiness import (
     ReadinessResult,
     build_readiness_result,
 )
+from .readiness_decision import (
+    ReadinessBand,
+    ReadinessDecision,
+    build_readiness_decision,
+)
 from .runner_profile import RunnerProfile, build_runner_profile
 from .training_history import (
     PriorRunningWindow,
@@ -75,6 +82,11 @@ from .training_response import (
     WorkoutExecutionFacts,
     build_recent_training_response,
     analyze_workout_execution,
+)
+from .daily_adaptation import (
+    DailyAdaptationAction,
+    DailyAdaptationResult,
+    build_daily_adaptation,
 )
 
 __all__ = [
@@ -106,6 +118,9 @@ __all__ = [
     "ReadinessConfidence",
     "ReadinessResult",
     "build_readiness_result",
+    "ReadinessBand",
+    "ReadinessDecision",
+    "build_readiness_decision",
     "RunnerProfile",
     "build_runner_profile",
     "PriorRunningWindow",
@@ -127,4 +142,7 @@ __all__ = [
     "WorkoutExecutionFacts",
     "build_recent_training_response",
     "analyze_workout_execution",
+    "DailyAdaptationAction",
+    "DailyAdaptationResult",
+    "build_daily_adaptation",
 ]
