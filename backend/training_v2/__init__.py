@@ -61,9 +61,6 @@ from .readiness import (
     build_readiness_result,
 )
 from .readiness_decision import (
-    READINESS_CAUTION_MIN,
-    READINESS_FAVORABLE_MIN,
-    READINESS_LOW_MIN,
     ReadinessBand,
     ReadinessDecision,
     build_readiness_decision,
@@ -121,9 +118,6 @@ __all__ = [
     "ReadinessConfidence",
     "ReadinessResult",
     "build_readiness_result",
-    "READINESS_FAVORABLE_MIN",
-    "READINESS_CAUTION_MIN",
-    "READINESS_LOW_MIN",
     "ReadinessBand",
     "ReadinessDecision",
     "build_readiness_decision",
