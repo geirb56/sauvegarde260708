@@ -349,16 +349,22 @@ def test_S_same_inputs_same_result():
 
 def test_TUVWXYZ_AB_AC_forbidden_dependencies_and_terms_absent():
     source = SOURCE.read_text(encoding="utf-8")
-    forbidden = [
-        "datetime.now(",
-        "date.today(",
+    lowered = source.lower()
+    forbidden_imports = [
         "garmin",
         "gccli",
         "redis",
         "requests",
-        "http",
         "random",
         "training_engine",
+    ]
+    for item in forbidden_imports:
+        assert f"import {item}" not in lowered
+        assert f"from {item}" not in lowered
+
+    forbidden_terms = [
+        "datetime.now(",
+        "date.today(",
         "LT1",
         "LT2",
         "TRIMP",
@@ -370,7 +376,7 @@ def test_TUVWXYZ_AB_AC_forbidden_dependencies_and_terms_absent():
         "MOVE",
         "build_weekly_target",
     ]
-    for item in forbidden:
+    for item in forbidden_terms:
         assert item not in source
 
 

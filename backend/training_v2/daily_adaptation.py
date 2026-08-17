@@ -3,7 +3,7 @@
 Design rules
 ------------
 - PURE: no DB, no Garmin, no HTTP, no Redis, no LLM, no random, no global
-  mutable state, no datetime.now()/date.today().
+  mutable state, no clock-based calls.
 - Consumes existing V2 contracts only: WorkoutPrescription, ReadinessResult,
   TrainingLoadSnapshot, RecentTrainingResponse.
 - Adapts the planned workout for TODAY only.  It does NOT rebuild the weekly
