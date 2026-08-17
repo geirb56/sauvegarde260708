@@ -1808,7 +1808,7 @@ Règles canoniques #134 :
 - aucune logique trail/D+ ;
 - `DailyAdaptation` et `ReadinessDecision` inchangés.
 
-## 36) PR #135 — Runtime plan migration to Training V2 — IMPLEMENTED / PENDING MERGE
+## 36) PR #135 — Runtime plan migration to Training V2 — MERGED
 
 ### État réel de départ #135
 
@@ -1826,18 +1826,41 @@ Règles canoniques #134 :
   comme **LEGACY PERFORMANCE COMPATIBILITY** (non décisionnels pour la structure V2)
 - aucune modification des formules métier internes des modules V2
 
+## 37) PR #136 — Python 3.11 hotfix — MERGED
+
+Hotfix de compatibilité Python 3.11 sur la chaîne V2.
+
+## 38) PR #137 — Daily Runtime Migration V2 — IMPLEMENTED / PENDING MERGE
+
+### État réel de départ #137
+
+- #132 = MERGED
+- #133 = MERGED
+- #134 = MERGED
+- #135 = MERGED
+- #136 = MERGED
+
+### Portée #137
+
+- branchement du moteur DailyAdaptation V2 (#133) au runtime réel `/training/today` ;
+- chemin migré :
+  `plan V2 → WorkoutPrescription → ReadinessResult V2 → ReadinessDecision V2 → DailyAdaptation V2 → payload` ;
+- suppression du proxy legacy `adapt_session_to_readiness` dans le chemin `/training/today` ;
+- aucune modification des formules métier des modules V2 ;
+- aucune modification des seuils ReadinessDecision ;
+- aucune modification des règles DailyAdaptation ;
+- helpers purs dans `training_v2/daily_runtime_helpers.py` ;
+- 42 tests unitaires nouveaux (A–W).
+
 ### NEXT (ordre canonique)
 
-1. **#136 — Daily runtime migration**
-2. **#137 — server/full-cycle legacy migration**
-3. **#138 — performance extraction/audit**
-4. **#139 — kill `training_engine.py`**
-5. ensuite seulement : LT1/LT2 multi-évidence
+1. **#138 — performance extraction/audit**
+2. **#139 — kill `training_engine.py`**
+3. ensuite seulement : LT1/LT2 multi-évidence
 
-Après #135 :
+Après #137 :
 
 - audit global des consumers encore branchés legacy ;
-- migration runtime vers les contrats V2 ;
 - extraction `performance.py` si nécessaire ;
 - suppression complète `training_engine.py` ;
 - validation runtime réelle ;
