@@ -22,6 +22,8 @@ PR130 exposes:           WeeklyTarget, build_weekly_target.
 PR131 exposes:           WorkoutPrescription, WeeklyPlan, build_weekly_plan.
 PR132 exposes:           RecentTrainingResponse, WorkoutExecutionFacts,
                          build_recent_training_response, analyze_workout_execution.
+PR133 exposes:           DailyAdaptationAction, DailyAdaptationResult,
+                         build_daily_adaptation.
 """
 
 from .domain_activity import DomainActivity
@@ -76,6 +78,11 @@ from .training_response import (
     build_recent_training_response,
     analyze_workout_execution,
 )
+from .daily_adaptation import (
+    DailyAdaptationAction,
+    DailyAdaptationResult,
+    build_daily_adaptation,
+)
 
 __all__ = [
     "DomainActivity",
@@ -127,4 +134,7 @@ __all__ = [
     "WorkoutExecutionFacts",
     "build_recent_training_response",
     "analyze_workout_execution",
+    "DailyAdaptationAction",
+    "DailyAdaptationResult",
+    "build_daily_adaptation",
 ]
