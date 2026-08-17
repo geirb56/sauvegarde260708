@@ -24,6 +24,8 @@ PR132 exposes:           RecentTrainingResponse, WorkoutExecutionFacts,
                          build_recent_training_response, analyze_workout_execution.
 PR133 exposes:           DailyAdaptationAction, DailyAdaptationResult,
                          build_daily_adaptation.
+PR134 exposes:           WeeklyReconciliationAction, WeeklyReconciliationResult,
+                         build_weekly_reconciliation.
 """
 
 from .domain_activity import DomainActivity
@@ -88,6 +90,11 @@ from .daily_adaptation import (
     DailyAdaptationResult,
     build_daily_adaptation,
 )
+from .weekly_reconciliation import (
+    WeeklyReconciliationAction,
+    WeeklyReconciliationResult,
+    build_weekly_reconciliation,
+)
 
 __all__ = [
     "DomainActivity",
@@ -145,4 +152,7 @@ __all__ = [
     "DailyAdaptationAction",
     "DailyAdaptationResult",
     "build_daily_adaptation",
+    "WeeklyReconciliationAction",
+    "WeeklyReconciliationResult",
+    "build_weekly_reconciliation",
 ]
