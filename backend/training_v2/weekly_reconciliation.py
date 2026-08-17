@@ -109,7 +109,7 @@ def _keep_result(
         action=WeeklyReconciliationAction.KEEP,
         original_target=proposed_target,
         reconciled_target=proposed_target,
-        reason_codes=("PLAN_STRUCTURE_KEPT", keep_reason),
+        reason_codes=_dedupe_codes(["PLAN_STRUCTURE_KEPT", keep_reason]),
         observed_runs_per_week=observed_runs_per_week,
         observed_distance_km=observed_distance_km,
         observed_duration_minutes=observed_duration_minutes,
@@ -219,8 +219,7 @@ def build_weekly_reconciliation(
                 )
                 reasons.append("VOLUME_REDUCED")
 
-    if frequency_reduced and reconciled_target.target_sessions < proposed_target.target_sessions:
-        reasons.append("SESSION_LOAD_CONCENTRATION_GUARD")
+    if frequency_reduced:
         session_ratio = (
             float(reconciled_target.target_sessions) / float(proposed_target.target_sessions)
         )
@@ -230,12 +229,14 @@ def build_weekly_reconciliation(
             and reconciled_target.target_km is not None
         ):
             session_safe_max_km = round(proposed_target.target_km * session_ratio, 1)
+            # Frequency reduction safety: never increase average per-session load.
             final_target_km = round(min(reconciled_target.target_km, session_safe_max_km), 1)
             if final_target_km < reconciled_target.target_km:
                 volume_reduced = True
                 reconciled_target = reconciled_target.model_copy(
                     update={"target_km": final_target_km}
                 )
+                reasons.append("SESSION_LOAD_CONCENTRATION_GUARD")
                 reasons.append("VOLUME_REDUCED_FOR_FREQUENCY_SAFETY")
         if (
             proposed_target.target_basis == "duration"
@@ -253,6 +254,7 @@ def build_weekly_reconciliation(
                 reconciled_target = reconciled_target.model_copy(
                     update={"target_duration_minutes": final_target_minutes}
                 )
+                reasons.append("SESSION_LOAD_CONCENTRATION_GUARD")
                 reasons.append("VOLUME_REDUCED_FOR_FREQUENCY_SAFETY")
 
     if volume_candidate and recent_response.long_run_trend == "decreasing":
