@@ -20,6 +20,8 @@ R2B exposes:             ReadinessResult, ReadinessConfidence,
 PR130 exposes:           WeeklyTarget, build_weekly_target.
                          PriorRunningWindow (TrainingHistory extension).
 PR131 exposes:           WorkoutPrescription, WeeklyPlan, build_weekly_plan.
+PR132 exposes:           RecentTrainingResponse, WorkoutExecutionFacts,
+                         build_recent_training_response, analyze_workout_execution.
 """
 
 from .domain_activity import DomainActivity
@@ -68,6 +70,12 @@ from .training_load import TrainingLoadSnapshot, build_training_load
 from .training_state import TrainingState, build_training_state
 from .weekly_target import WeeklyTarget, build_weekly_target
 from .workout_generator import WeeklyPlan, WorkoutPrescription, build_weekly_plan
+from .training_response import (
+    RecentTrainingResponse,
+    WorkoutExecutionFacts,
+    build_recent_training_response,
+    analyze_workout_execution,
+)
 
 __all__ = [
     "DomainActivity",
@@ -115,4 +123,8 @@ __all__ = [
     "WeeklyPlan",
     "WorkoutPrescription",
     "build_weekly_plan",
+    "RecentTrainingResponse",
+    "WorkoutExecutionFacts",
+    "build_recent_training_response",
+    "analyze_workout_execution",
 ]
