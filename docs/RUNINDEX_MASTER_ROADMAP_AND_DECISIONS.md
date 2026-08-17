@@ -9,9 +9,9 @@ Ce document est :
 - la roadmap d'exécution ;
 - un moyen d'éviter la perte de contexte entre sessions/outils.
 
-Last verified against main: `b2f1ead055bd601cd0f407cb8a16b9f17adcd0f9` (post-merge PR #133)
+Last verified against main: `8564060b1162d4d56ea2136397e3ae8606a08b3e` (post-merge PR #134)
 
-HEAD PR (#134): see current branch HEAD
+HEAD PR (#135): see current branch HEAD
 
 Date: `2026-08-17`
 
@@ -21,7 +21,7 @@ Date: `2026-08-17`
 
 Source de vérité utilisée pour ce document :
 
-1. HEAD réel de `main` (`b2f1ead055bd601cd0f407cb8a16b9f17adcd0f9`) ;
+1. HEAD réel de `main` (`8564060b1162d4d56ea2136397e3ae8606a08b3e`) ;
 2. audit des merges PR sur `main` ;
 3. audit du code réellement présent (`backend/`, `frontend/`, `backend/training_v2/`) ;
 4. croisement avec les rapports versionnés (`*_REPORT.md`).
@@ -1770,7 +1770,7 @@ Garde-fou d’architecture :
 - `daily_adaptation.py` ne possède aucun seuil numérique Readiness ;
 - `daily_adaptation.py` ne compare jamais directement `readiness.score`.
 
-## 35) PR #134 — Weekly Reconciliation V2 — IMPLEMENTED / PENDING MERGE
+## 35) PR #134 — Weekly Reconciliation V2 — MERGED
 
 Architecture canonique :
 
@@ -1808,9 +1808,33 @@ Règles canoniques #134 :
 - aucune logique trail/D+ ;
 - `DailyAdaptation` et `ReadinessDecision` inchangés.
 
-## 36) NEXT = audit migration consumers V2 / suppression `training_engine.py`
+## 36) PR #135 — Runtime plan migration to Training V2 — IMPLEMENTED / PENDING MERGE
 
-Après #134 :
+### État réel de départ #135
+
+- HEAD main: `8564060b1162d4d56ea2136397e3ae8606a08b3e`
+- #133 = MERGED
+- #134 = MERGED
+
+### Portée #135
+
+- migration du runtime `coach_service.generate_dynamic_training_plan()` vers la chaîne V2 :
+  - `TrainingHistory` → `RunnerProfile` → `TrainingState` → `PlanGoal` → `Periodization` →
+    `WeeklyTarget` → `RecentTrainingResponse` → `WeeklyReconciliation` → `WorkoutGenerator`
+- adaptation vers payload runtime compatible via `training_v2/runtime_plan_adapter.py`
+- conservation explicite des champs performance (`vma`, `vo2max`, `vma_method`, `vma_confidence`, `paces`)
+  comme **LEGACY PERFORMANCE COMPATIBILITY** (non décisionnels pour la structure V2)
+- aucune modification des formules métier internes des modules V2
+
+### NEXT (ordre canonique)
+
+1. **#136 — Daily runtime migration**
+2. **#137 — server/full-cycle legacy migration**
+3. **#138 — performance extraction/audit**
+4. **#139 — kill `training_engine.py`**
+5. ensuite seulement : LT1/LT2 multi-évidence
+
+Après #135 :
 
 - audit global des consumers encore branchés legacy ;
 - migration runtime vers les contrats V2 ;
