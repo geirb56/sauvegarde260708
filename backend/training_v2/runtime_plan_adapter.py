@@ -66,9 +66,7 @@ def adapt_weekly_plan_to_runtime_payload(
                 "duration": duration,
                 "details": details,
                 "intensity": _INTENSITY_MAP.get(session.intensity_class, "easy"),
-                # Compatibility-only placeholder: V2 runtime migration keeps the key
-                # without reintroducing legacy physiological scoring logic.
-                "estimated_tss": 0,
+                "estimated_tss": None,
                 "distance_km": session.distance_km if session.distance_km is not None else 0,
             }
         )
@@ -80,6 +78,6 @@ def adapt_weekly_plan_to_runtime_payload(
         "weekly_minutes": weekly_plan.planned_duration_minutes,
         "reprise": continuity_state in ("deep_reprise", "partial_reprise", "reprise_exit"),
         "sessions": sessions,
-        "total_tss": 0,
+        "total_tss": None,
         "advice": build_runtime_phase_info(phase).get("advice", ""),
     }

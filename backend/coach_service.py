@@ -546,6 +546,16 @@ def _current_week_from_dates(start_date, reference_date, total_weeks: int) -> in
     return min(total_weeks, (delta_days // 7) + 1) if total_weeks > 0 else 1
 
 
+def _apply_sessions_preference_cap(weekly_target, sessions_preference: Optional[int]):
+    """Runtime preference cap only: never increase WeeklyTarget V2 prescription."""
+    if sessions_preference not in (3, 4, 5, 6):
+        return weekly_target
+    effective_sessions = min(weekly_target.target_sessions, sessions_preference)
+    if effective_sessions == weekly_target.target_sessions:
+        return weekly_target
+    return weekly_target.model_copy(update={"target_sessions": effective_sessions})
+
+
 async def generate_dynamic_training_plan(db, user_id: str, sessions_override: int = None) -> dict:
     start = time.time()
     metrics.total_requests += 1
@@ -554,7 +564,9 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
     now = datetime.now(timezone.utc)
     reference_date = now.date()
     prefs = await db.training_prefs.find_one({"user_id": user_id})
-    sessions_per_week = sessions_override or (prefs.get("sessions_per_week") if prefs else None)
+    sessions_per_week = (
+        sessions_override if sessions_override is not None else (prefs.get("sessions_per_week") if prefs else None)
+    )
 
     cycle = await db.training_cycles.find_one({"user_id": user_id})
     if not cycle:
@@ -754,8 +766,10 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
         periodization=periodization,
         reference_date=reference_date,
     )
-    if sessions_per_week in (3, 4, 5, 6):
-        weekly_target = weekly_target.model_copy(update={"target_sessions": sessions_per_week})
+    weekly_target = _apply_sessions_preference_cap(
+        weekly_target=weekly_target,
+        sessions_preference=sessions_per_week,
+    )
 
     recent_response = build_recent_training_response(activities, reference_date)
     reconciliation = build_weekly_reconciliation(
@@ -825,7 +839,7 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
         },
         "context": context,
         "plan": runtime_plan,
-        "sessions_per_week": sessions_per_week or reconciled_target.target_sessions,
+        "sessions_per_week": reconciled_target.target_sessions,
         "vma": performance_vma,
         "vo2max": performance_vo2max,
         "vma_method": vma_method,

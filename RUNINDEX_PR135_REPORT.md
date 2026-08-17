@@ -54,7 +54,7 @@ ULTRA contract:
   - not used as canonical physiological source in V2 plan decisions
 - `estimated_tss`:
   - not used as V2 physiological decision signal
-  - kept as presentation compatibility in runtime session payload
+  - represented as unavailable (`None`) in runtime session payload
 
 ## 7) Cache strategy (PR135)
 
@@ -117,3 +117,23 @@ Search basis: `rg "from training_engine import|import training_engine" backend`
 - In PR135 migrated path, structural source of truth is V2 (`WorkoutGenerator` from reconciled target).
 - No structural decision from `training_engine.py` is supplied as truth to the migrated runtime path.
 
+## 12) Correction ciblée complémentaire (PR #135)
+
+1. `sessions_override` / préférence fréquence côté runtime est maintenant un **cap utilisateur**:
+   - `effective_sessions = min(weekly_target.target_sessions, sessions_preference)` si préférence valide.
+   - La préférence peut réduire, jamais augmenter la prescription V2.
+   - Cette règle reste dans le runtime (`coach_service`), pas dans `WeeklyTarget`.
+
+2. La fréquence exposée dans le payload runtime est désormais canonique:
+   - `sessions_per_week = reconciled_target.target_sessions`.
+   - Le champ reflète toujours la prescription finale réellement planifiée.
+
+3. TSS en runtime V2:
+   - RunIndex V2 ne calcule pas de TSS dans ce chemin.
+   - `estimated_tss = None` (séance) et `total_tss = None` (semaine).
+   - `runtime_plan_adapter.py` reste un adaptateur de sérialisation sans calcul physiologique.
+
+4. Roadmap conservée:
+   - #134 = MERGED
+   - #135 Runtime Plan V2 migration = IMPLEMENTED / PENDING MERGE
+   - NEXT = #136 Daily runtime migration
