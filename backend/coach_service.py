@@ -592,7 +592,7 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
     cycle_start_dt = _parse_optional_datetime(cycle.get("start_date"))
     cycle_start_date = cycle_start_dt.date() if cycle_start_dt else None
     ultra_distance = _extract_ultra_distance_km(cycle or {}, user_goal or {})
-    cache_key = f"plan_v2_{_stable_hash({
+    _cache_payload = {
         'user_id': user_id,
         'reference_date': reference_date.isoformat(),
         'goal': goal_label,
@@ -603,7 +603,8 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
         'sessions_override': sessions_per_week,
         'workouts_fingerprint': _workouts_fingerprint(workouts),
         'profile_fingerprint': _profile_fingerprint(profile_doc),
-    })}"
+    }
+    cache_key = f"plan_v2_{_stable_hash(_cache_payload)}"
     cached = _plan_cache.get(cache_key)
     if cached and _is_cache_valid(cached[1]):
         metrics.cache_hits += 1
