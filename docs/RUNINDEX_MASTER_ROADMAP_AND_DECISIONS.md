@@ -9,13 +9,11 @@ Ce document est :
 - la roadmap d'exécution ;
 - un moyen d'éviter la perte de contexte entre sessions/outils.
 
-Last verified against main: `f9bada97d72d4e159c2e7f6cc86781b110efe82c` (Merge PR #116)
+Last verified against main: `beee570281920b4681e96d3559e8777121b6ffa9` (Merge PR #132)
 
-HEAD PR (R2B): dec045016a7efa4499f4d9155f362bfed6fdf894
+HEAD PR (#133): see current branch HEAD
 
-HEAD PR (R3): see current branch HEAD
-
-Date: `2026-08-13`
+Date: `2026-08-17`
 
 ---
 
@@ -944,7 +942,7 @@ Puis:
 - [x] #126 history[] fatigue legacy cleanup + RHR baseline unification (MERGED — PR #126)
 - [x] #127 Training metrics / TSB legacy cleanup (MERGED — PR #127)
 - [x] #128 Training Load Metrics single source cleanup (MERGED — PR #128 — runtime PASS)
-- [x] #129 Remove legacy fatigue_ratio / fatigue_status / fatigue_physio (IMPLEMENTED / PENDING MERGE — PR #129)
+- [x] #129 Remove legacy fatigue_ratio / fatigue_status / fatigue_physio (MERGED — PR #129)
 
 ### TRAINING ENGINE
 
@@ -954,9 +952,10 @@ Puis:
 - [x] TrainingState
 - [x] PlanGoal
 - [x] Periodization
-- [ ] Weekly Target (couche V2 dédiée)
-- [ ] Workout Generator (couche V2 dédiée)
-- [ ] Workout Analysis (couche V2 dédiée)
+- [x] Weekly Target (couche V2 dédiée)
+- [x] Workout Generator (couche V2 dédiée)
+- [x] Workout Analysis (couche V2 dédiée)
+- [x] Daily Adaptation (couche V2 dédiée)
 - [ ] migration consumers
 - [ ] kill legacy
 
@@ -1011,7 +1010,7 @@ Ce document suit l'état réel de `main` et des PR en cours:
 - #128 Training Load Metrics single source cleanup est **MERGED — PR #128 — runtime PASS**
   (source unique ACWR runtime, `/api/dashboard` migré V2, `coach_service` = V2 ou `None`,
   `CTL/ATL/TSB` non fabriqués, `backend/engine/training_load_engine.py` supprimé).
-- #129 Remove legacy fatigue_ratio / fatigue_status / fatigue_physio est **IMPLEMENTED / PENDING MERGE — PR #129**
+- #129 Remove legacy fatigue_ratio / fatigue_status / fatigue_physio est **MERGED — PR #129**
   (`fatigue_ratio`, `fatigue_status`, `fatigue_physio` supprimés de `metrics` (Garmin et Terra),
   de `history[]`, des `reasons`, et du consumer frontend/coach.
   Aucune métrique fatigue parallèle à Readiness V2 — Readiness V2 et ses sous-scores inchangés.
@@ -1117,7 +1116,7 @@ Principes:
 
 ---
 
-## 24) PR #129 — Remove legacy fatigue_ratio / fatigue_status / fatigue_physio (IMPLEMENTED / PENDING MERGE)
+## 24) PR #129 — Remove legacy fatigue_ratio / fatigue_status / fatigue_physio (MERGED)
 
 ### Objectif
 
@@ -1336,7 +1335,7 @@ Aucun équivalent fictif en V2. La baseline doit être observée ou None.
 
 ---
 
-## 28) PR #131 — WorkoutGenerator V2 — IMPLEMENTED / PENDING MERGE
+## 28) PR #131 — WorkoutGenerator V2 — MERGED
 
 HEAD main au départ de #131 : `658b50ec3733cd40ff9d993c9b8541abe3344af0` (#130 merged)  
 HEAD après correction audit : `e4b1623a…` + corrections contrat (voir §29b)
@@ -1457,7 +1456,7 @@ Si les contraintes sont impossibles :
 
 ---
 
-## 30) PR #132 — Recent Training Response / Workout Analysis V2 — IMPLEMENTED / PENDING MERGE
+## 30) PR #132 — Recent Training Response / Workout Analysis V2 — MERGED
 
 HEAD main au départ de #132 : `388bb650c4df5307a53eb488b4b3b6fb336af1c9` (#131 merged)
 
@@ -1621,7 +1620,7 @@ Principe :
 - Déplacer une séance ne modifie pas : WeeklyTarget, contenu physiologique, volume, durée, objectif, phase.
 - Scheduling utilisateur ≠ adaptation physiologique.
 
-NE PAS implémenter avant #133.
+Conserver en roadmap après #133. Aucun déplacement automatique dans PR #133.
 
 ---
 
@@ -1640,28 +1639,147 @@ RecentTrainingResponse → WeeklyTarget semaine suivante
 
 Sans culpabilisation.
 
-NE PAS implémenter avant #133.
+NEXT après #133. Toujours hors scope de cette PR.
 
 ---
 
-## 34) NEXT = #133 Daily Adaptation V2
+## 34) PR #133 — Daily Adaptation V2 — IMPLEMENTED / PENDING MERGE
 
-### Consommateurs de RecentTrainingResponse
+HEAD main au départ de #133 : `beee570281920b4681e96d3559e8777121b6ffa9` (#132 merged)
 
-`DailyAdaptation` #133 consommera :
+### Fichiers livrés
 
-```
-WeeklyPlan
+- `backend/training_v2/readiness_decision.py`
+- `backend/training_v2/daily_adaptation.py`
+- `backend/training_v2/__init__.py`
+- `backend/tests/test_training_v2_readiness_decision.py`
+- `backend/tests/test_daily_adaptation_pr133.py`
+- `RUNINDEX_PR133_REPORT.md`
+- `docs/RUNINDEX_MASTER_ROADMAP_AND_DECISIONS.md`
+
+### Architecture canonique
+
+```text
 ReadinessResult
-TrainingLoad V2
-RecentTrainingResponse
+      ↓
+ReadinessDecision
+      ↓
+DailyAdaptation
 ```
 
-Actions V1 envisagées :
+Décision permanente :
 
-- `KEEP`
-- `EASY_DOWNGRADE`
-- `SHORTEN`
-- `REST`
+- les consumers ne définissent jamais leurs propres bandes Readiness ;
+- les seuils de bandes Readiness vivent uniquement dans
+  `backend/training_v2/readiness_decision.py`.
 
-#133 ne recalculera ni Readiness, ni TrainingLoad, ni RecentTrainingResponse, ni WeeklyTarget.
+### Contrat ReadinessDecision
+
+```python
+class ReadinessBand(str, Enum):
+    UNAVAILABLE = "UNAVAILABLE"
+    FAVORABLE = "FAVORABLE"
+    CAUTION = "CAUTION"
+    LOW = "LOW"
+    VERY_LOW = "VERY_LOW"
+
+class ReadinessDecision(BaseModel):
+    band: ReadinessBand
+    score: Optional[float]
+    confidence: ReadinessConfidence
+    sufficiency_level: SufficiencyLevel
+    reason_codes: tuple[str, ...]
+    readiness_reasons: tuple[ReasonCode, ...]
+```
+
+Fonction canonique :
+
+```python
+build_readiness_decision(
+    readiness: Optional[ReadinessResult]
+) -> ReadinessDecision
+```
+
+### Contrat DailyAdaptationResult
+
+```python
+class DailyAdaptationAction(str, Enum):
+    KEEP = "KEEP"
+    EASY_DOWNGRADE = "EASY_DOWNGRADE"
+    SHORTEN = "SHORTEN"
+    REST = "REST"
+
+class DailyAdaptationResult(BaseModel):
+    action: DailyAdaptationAction
+    original_workout: WorkoutPrescription
+    adapted_workout: WorkoutPrescription
+    reason_codes: tuple[str, ...]
+```
+
+### Frontière exacte
+
+`DailyAdaptation` :
+
+- adapte uniquement la séance du jour ;
+- consomme `WorkoutPrescription`, `ReadinessDecision`, `TrainingLoadSnapshot`,
+  `RecentTrainingResponse` ;
+- peut uniquement **garder** ou **réduire** (`KEEP`, `EASY_DOWNGRADE`,
+  `SHORTEN`, `REST`) ;
+- ne recalcule jamais `Readiness`, `TrainingLoad`, `RecentTrainingResponse`,
+  `WeeklyTarget`, `WorkoutGenerator` ou le plan hebdomadaire ;
+- n’implémente aucun `MOVE`.
+
+### Décisions V1
+
+- `rest` prévu → `KEEP` systématique.
+- `FAVORABLE` → généralement `KEEP`.
+- `quality|steady` + réduction nécessaire → `EASY_DOWNGRADE` vers `easy`.
+- `easy|recovery` + réduction nécessaire → `SHORTEN` avec facteur unique.
+- `long_easy` + réduction nécessaire → `SHORTEN` avant `REST`, sauf signal
+  quotidien explicitement très défavorable.
+- `Readiness unavailable` → pas de `REST` automatique.
+- `RecentTrainingResponse` sert surtout à renforcer les `reason_codes`.
+
+### ReadinessDecision V1
+
+- `readiness is None` → `UNAVAILABLE`
+- `readiness.score is None` → `UNAVAILABLE`
+- `sufficiency_level == INSUFFICIENT` → `UNAVAILABLE`
+- si `sufficiency_level == DEGRADED` et score exploitable :
+  - la bande est calculée ;
+  - `confidence` est préservée ;
+  - `sufficiency_level` est préservé.
+
+Calibration canonique V1, recalibrable, non physiologique :
+
+- `score >= 75` → `FAVORABLE`
+- `55 <= score < 75` → `CAUTION`
+- `40 <= score < 55` → `LOW`
+- `score < 40` → `VERY_LOW`
+
+### Calibration V1
+
+```python
+SHORTEN_FACTOR = 0.70
+```
+
+Produit V1, recalibrable, pas une loi physiologique.
+
+Garde-fou d’architecture :
+
+- `daily_adaptation.py` ne possède aucun seuil numérique Readiness ;
+- `daily_adaptation.py` ne compare jamais directement `readiness.score`.
+
+## 35) NEXT = #134 Weekly Reconciliation V2
+
+Après #133 :
+
+- adaptation structurelle du volume ;
+- fréquence réellement soutenable ;
+- long run ;
+- comportement observé sur plusieurs semaines ;
+- migration des consumers V2 ;
+- suppression finale `training_engine.py` ;
+- validation runtime réelle ;
+- puis seulement thresholds LT1/LT2 multi-évidence, RunIndex Score V2,
+  Body Battery nocturne, produit / préparation sortie.
