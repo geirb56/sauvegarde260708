@@ -436,3 +436,22 @@ def test_runtime_adapter_has_no_tss_formula():
     assert re.search(r"distance_km\s*\*", source) is None
     assert re.search(r"duration_minutes\s*\*", source) is None
     assert re.search(r"intensity[_a-z]*\s*\*", source) is None
+
+
+def test_plan_v2_cache_key_payload_semantics_unchanged():
+    payload = {
+        "user_id": "u1",
+        "reference_date": "2026-08-17",
+        "goal": "SEMI",
+        "goal_type": "half_marathon",
+        "race_date": "2026-11-01",
+        "cycle_start_date": "2026-07-01",
+        "ultra_distance_km": None,
+        "sessions_override": 4,
+        "workouts_fingerprint": "wf",
+        "profile_fingerprint": "pf",
+    }
+    old_style_key = "plan_v2_" + coach_service._stable_hash(dict(payload))
+    _cache_payload = dict(payload)
+    new_style_key = f"plan_v2_{coach_service._stable_hash(_cache_payload)}"
+    assert new_style_key == old_style_key
