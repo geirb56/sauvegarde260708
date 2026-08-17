@@ -451,7 +451,10 @@ def test_plan_v2_cache_key_payload_semantics_unchanged():
         "workouts_fingerprint": "wf",
         "profile_fingerprint": "pf",
     }
+    expected_key = "plan_v2_466d10baef29057a72395b44b7bd28e0266385437beebda920951e45be0e7b1b"
     old_style_key = "plan_v2_" + coach_service._stable_hash(dict(payload))
     _cache_payload = dict(payload)
     new_style_key = f"plan_v2_{coach_service._stable_hash(_cache_payload)}"
+    assert old_style_key == expected_key
+    assert new_style_key == expected_key
     assert new_style_key == old_style_key
