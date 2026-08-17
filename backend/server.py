@@ -3677,7 +3677,8 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     )
 
     # ── 6. Map adapted prescription back to runtime dict format ──────────────
-    original_runtime = prescription_to_runtime_session(adaptation_result.original_workout)
+    # original_prescription: derived directly from planned_session_runtime to
+    # avoid any implicit divergence via the WorkoutPrescription round-trip.
     adapted_runtime = prescription_to_runtime_session(adaptation_result.adapted_workout)
     adaptation_applied = adaptation_result.action != DailyAdaptationAction.KEEP
     adaptation_reason = ", ".join(adaptation_result.reason_codes)
@@ -3701,7 +3702,7 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
         # Original planned session (runtime dict from plan V2)
         "planned_session": planned_session_runtime,
         # V2 prescription objects (preferred by new consumers)
-        "original_prescription": original_runtime,
+        "original_prescription": planned_session_runtime,
         "adapted_prescription": adapted_runtime,
         # Legacy compat: adaptive_session present when adaptation changed the session
         "adaptive_session": adapted_runtime if adaptation_applied else None,

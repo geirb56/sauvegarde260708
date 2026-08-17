@@ -114,7 +114,13 @@ def runtime_session_to_prescription(session: dict) -> WorkoutPrescription:
 
 
 def prescription_to_runtime_session(prescription: WorkoutPrescription) -> dict:
-    """Convert a WorkoutPrescription to runtime session dict format (frontend compat)."""
+    """Convert a WorkoutPrescription to runtime session dict format (frontend compat).
+
+    None ≡ '0min' contract: duration_minutes=None is emitted as '0min' (canonical
+    runtime sentinel for rest / no-duration sessions), and parse_duration_minutes
+    converts '0min' back to None.  The round-trip None → '0min' → None is
+    intentionally symmetric.  Callers must not infer a meaningful duration from '0min'.
+    """
     runtime_type = WORKOUT_TYPE_TO_RUNTIME_TYPE.get(prescription.workout_type, prescription.workout_type)
     runtime_intensity = INTENSITY_CLASS_TO_RUNTIME.get(prescription.intensity_class, "easy")
     duration_str = (
