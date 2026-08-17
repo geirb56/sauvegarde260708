@@ -26,6 +26,21 @@ def to_domain_activity(activity: GarminActivity) -> DomainActivity:
             if activity.vigorous_intensity_minutes is not None
             else None
         ),
+        average_hr=(
+            float(activity.average_hr)
+            if activity.average_hr is not None and float(activity.average_hr) > 0
+            else None
+        ),
+        max_hr=(
+            float(activity.max_hr)
+            if activity.max_hr is not None and float(activity.max_hr) > 0
+            else None
+        ),
+        elevation_gain_m=(
+            float(activity.elevation_gain)
+            if activity.elevation_gain is not None
+            else None
+        ),
     )
 
 
