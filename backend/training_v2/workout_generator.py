@@ -943,7 +943,7 @@ def build_weekly_plan(
     # proportional split logic, but we enforce it explicitly as a hard cap here
     # to prevent any future regression in either the distance-based normal path
     # or in reprise paths.  Duration-based weeks have no target_km to compare.
-    if target_basis == "distance" and weekly_target.target_km is not None:
+    if weekly_target.target_basis == "distance" and weekly_target.target_km is not None:
         _session_cap = weekly_target.target_km
         capped_sessions: list = []
         for _s in immutable_sessions:

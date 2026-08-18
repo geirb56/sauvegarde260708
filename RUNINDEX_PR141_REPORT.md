@@ -5,6 +5,7 @@
 **Couche responsable :** `training_state.py` → `_classify_continuity()`
 **Couche de défense :** `weekly_target.py` → `_chronic_base_km()`
 **Couche d'invariant :** `workout_generator.py` → `build_weekly_plan()`
+**Couche de réconciliation :** `weekly_reconciliation.py` → `_enforce_monotone_target()`
 
 ### Chemin du bug (avant correction)
 
@@ -243,9 +244,10 @@ Cas de test `TestCaseG_ExactBugPR141` avec :
 |---|---|
 | `backend/training_v2/training_state.py` | Fix 1 : check `no_distance_in_28d` dans `_classify_continuity` |
 | `backend/training_v2/weekly_target.py` | Fix 2 : garde `days_since < 28` dans `_chronic_base_km` |
-| `backend/training_v2/workout_generator.py` | Fix 3 : invariant cap session ≤ target_km dans `build_weekly_plan` |
+| `backend/training_v2/workout_generator.py` | Fix 3 : invariant cap session ≤ target_km dans `build_weekly_plan`; suppression goal-type adjustments |
+| `backend/training_v2/weekly_reconciliation.py` | Fix 4 : `_enforce_monotone_target` — la réconciliation ne peut jamais augmenter les cibles structurelles |
 | `backend/tests/test_pr141_reprise_correction.py` | Nouveau fichier de tests de régression |
-| `backend/tests/test_training_state_pr04.py` | Fix 4 : mise à jour des tests de frontière `available_history_days` (convention inclusive +1) |
+| `backend/tests/test_training_state_pr04.py` | Fix 5 : mise à jour des tests de frontière `available_history_days` (convention inclusive +1) |
 | `RUNINDEX_PR141_REPORT.md` | Ce rapport |
 
 ### Fix 4 — Cohérence `available_history_days` : convention inclusive
@@ -276,7 +278,7 @@ pour respecter la convention inclusive documentée dans `TestAvailableHistoryDay
 - `training_engine.py` — conservé
 - `readiness_engine.py`, `readiness_decision.py`, `daily_adaptation.py`
 - `training_history.py`, `runner_profile.py`, `plan_goal.py`
-- `weekly_reconciliation.py`, `runtime_plan_adapter.py`
+- `runtime_plan_adapter.py`
 - Toute logique LT1/LT2, Body Battery, sleep score, trail/D+, VMA/paces, frontend
 
 ---

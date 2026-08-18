@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import sys
 from datetime import date, timedelta
-from typing import Optional, Sequence
+from typing import NamedTuple, Optional, Sequence
 
 import pytest
 
@@ -50,7 +50,7 @@ from training_v2.runner_profile import RunnerProfile, build_runner_profile
 from training_v2.training_state import TrainingState, build_training_state
 from training_v2.weekly_target import WeeklyTarget, build_weekly_target
 from training_v2.plan_goal import PlanGoal, build_plan_goal
-from training_v2.periodization import build_periodization
+from training_v2.periodization import build_periodization, PeriodizationSnapshot
 from training_v2.training_load import build_training_load
 from training_v2.workout_generator import build_weekly_plan
 
@@ -59,6 +59,19 @@ from training_v2.workout_generator import build_weekly_plan
 # ---------------------------------------------------------------------------
 REF = date(2026, 8, 18)
 CYCLE_ANCHOR = REF - timedelta(weeks=8)
+
+
+# ---------------------------------------------------------------------------
+# Pipeline result (named tuple for readability and no double-rebuild)
+# ---------------------------------------------------------------------------
+
+class _PipelineResult(NamedTuple):
+    hist: TrainingHistory
+    prof: RunnerProfile
+    state: TrainingState
+    goal: PlanGoal
+    period: PeriodizationSnapshot
+    wt: WeeklyTarget
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +117,7 @@ def _build_pipeline(
     race_days_from_ref: int = 180,
     ref: date = REF,
     target_distance_km: Optional[float] = None,
-) -> tuple[TrainingHistory, RunnerProfile, TrainingState, WeeklyTarget]:
+) -> _PipelineResult:
     hist = build_training_history(activities, ref)
     load = build_training_load(activities=[], reference_date=ref)
     prof = build_runner_profile(
@@ -142,23 +155,20 @@ def _build_pipeline(
         periodization=period,
         reference_date=ref,
     )
-    return hist, prof, state, wt
+    return _PipelineResult(hist=hist, prof=prof, state=state, goal=goal, period=period, wt=wt)
 
 
-def _max_session_km(wt: WeeklyTarget, activities: Sequence[dict], goal_type: str, ref: date = REF, target_distance_km: Optional[float] = None) -> Optional[float]:
-    """Generate the weekly plan and return the maximum session distance km."""
-    hist = build_training_history(activities, ref)
-    load = build_training_load(activities=[], reference_date=ref)
-    prof = build_runner_profile(training_history=hist, training_load=load, user_profile={}, reference_date=ref)
-    state = build_training_state(training_history=hist, training_load=load, runner_profile=prof, reference_date=ref)
-    goal = build_plan_goal(goal_type=goal_type, race_date=ref + timedelta(days=180), target_distance_km=target_distance_km)
-    plan_start = ref - timedelta(weeks=4)
-    period = build_periodization(goal, ref, training_state=state, race_plan_start_date=plan_start, cycle_anchor_date=CYCLE_ANCHOR)
+def _max_session_km(p: _PipelineResult, ref: date = REF) -> Optional[float]:
+    """Generate the weekly plan and return the maximum session distance km.
+
+    Accepts a _PipelineResult to reuse the already-built objects and avoid
+    a double pipeline rebuild that could diverge if helpers evolve.
+    """
     plan = build_weekly_plan(
-        weekly_target=wt,
-        runner_profile=prof,
-        plan_goal=goal,
-        periodization=period,
+        weekly_target=p.wt,
+        runner_profile=p.prof,
+        plan_goal=p.goal,
+        periodization=p.period,
         reference_date=ref,
     )
     running_sessions = [s for s in plan.sessions if s.workout_type != "rest" and s.distance_km is not None]
@@ -201,28 +211,26 @@ class TestCaseA_DeepRepriseHalfMarathon:
     def setup(self):
         # Classic deep_reprise path: last run at 35+ days (days_since >= 28).
         activities = _heavy_historical_activities()
-        hist, prof, state, wt = _build_pipeline(activities, "half_marathon")
-        return hist, prof, state, wt
+        return _build_pipeline(activities, "half_marathon")
 
     def test_deep_reprise_state(self, setup):
-        _, _, state, _ = setup
+        state = setup.state
         assert state.continuity_state == "deep_reprise"
 
     def test_duration_basis(self, setup):
-        _, _, _, wt = setup
+        wt = setup.wt
         assert wt.target_basis == "duration"
 
     def test_target_km_none(self, setup):
-        _, _, _, wt = setup
+        wt = setup.wt
         assert wt.target_km is None
 
     def test_no_intensity(self, setup):
-        _, _, _, wt = setup
+        wt = setup.wt
         assert wt.allow_intensity is False
 
     def test_no_km_based_long_run(self, setup):
-        _, _, _, wt = setup
-        max_km = _max_session_km(wt, _heavy_historical_activities(), "half_marathon")
+        max_km = _max_session_km(setup)
         assert max_km is None, f"Expected no km sessions in deep_reprise but got max_km={max_km}"
 
 
@@ -237,24 +245,23 @@ class TestCaseB_DeepRepriseMarathon:
         return _build_pipeline(activities, "marathon")
 
     def test_deep_reprise_state(self, setup):
-        _, _, state, _ = setup
+        state = setup.state
         assert state.continuity_state == "deep_reprise"
 
     def test_duration_basis(self, setup):
-        _, _, _, wt = setup
+        wt = setup.wt
         assert wt.target_basis == "duration"
 
     def test_target_km_none(self, setup):
-        _, _, _, wt = setup
+        wt = setup.wt
         assert wt.target_km is None
 
     def test_no_intensity(self, setup):
-        _, _, _, wt = setup
+        wt = setup.wt
         assert wt.allow_intensity is False
 
     def test_no_km_based_long_run(self, setup):
-        _, _, _, wt = setup
-        max_km = _max_session_km(wt, _heavy_historical_activities(), "marathon")
+        max_km = _max_session_km(setup)
         assert max_km is None, f"Expected no km sessions in deep_reprise but got max_km={max_km}"
 
 
@@ -269,24 +276,23 @@ class TestCaseC_DeepRepriseUltra:
         return _build_pipeline(activities, "ultra", race_days_from_ref=300, target_distance_km=60.0)
 
     def test_deep_reprise_state(self, setup):
-        _, _, state, _ = setup
+        state = setup.state
         assert state.continuity_state == "deep_reprise"
 
     def test_duration_basis(self, setup):
-        _, _, _, wt = setup
+        wt = setup.wt
         assert wt.target_basis == "duration"
 
     def test_target_km_none(self, setup):
-        _, _, _, wt = setup
+        wt = setup.wt
         assert wt.target_km is None
 
     def test_no_intensity(self, setup):
-        _, _, _, wt = setup
+        wt = setup.wt
         assert wt.allow_intensity is False
 
     def test_no_km_based_long_run(self, setup):
-        _, _, _, wt = setup
-        max_km = _max_session_km(wt, _heavy_historical_activities(), "ultra", target_distance_km=60.0)
+        max_km = _max_session_km(setup)
         assert max_km is None, f"Expected no km sessions in deep_reprise but got max_km={max_km}"
 
 
@@ -327,11 +333,11 @@ class TestCaseD_PartialReprise:
         return _build_pipeline(activities, "half_marathon")
 
     def test_partial_reprise_state(self, setup):
-        _, _, state, _ = setup
+        state = setup.state
         assert state.continuity_state == "partial_reprise"
 
     def test_no_intensity(self, setup):
-        _, _, _, wt = setup
+        wt = setup.wt
         assert wt.allow_intensity is False
 
     def test_target_bounded(self, setup):
@@ -340,7 +346,7 @@ class TestCaseD_PartialReprise:
         A partial_reprise runner doing 2 km/run, 4 runs/week ≈ 8 km/week must
         NOT jump to 35+ km because the half_marathon goal has a weekly floor.
         """
-        _, _, _, wt = setup
+        wt = setup.wt
         if wt.target_basis == "distance":
             assert wt.target_km is not None
             # Should be proportional to recent capacity, not to the half_marathon floor
@@ -349,11 +355,11 @@ class TestCaseD_PartialReprise:
                 f"(likely caused by goal floor override)"
             )
 
-    def test_long_run_proportional_to_target(self, setup, activities):
-        _, _, _, wt = setup
+    def test_long_run_proportional_to_target(self, setup):
+        wt = setup.wt
         if wt.target_basis != "distance" or wt.target_km is None:
             return  # duration basis — nothing to check
-        max_km = _max_session_km(wt, activities, "half_marathon")
+        max_km = _max_session_km(setup)
         if max_km is not None:
             assert max_km <= wt.target_km, (
                 f"long run {max_km} > weekly target {wt.target_km}"
@@ -380,41 +386,33 @@ class TestCaseE_RepriseExit:
         return _build_pipeline(activities, "half_marathon")
 
     def test_reprise_exit_state(self, setup):
-        _, _, state, _ = setup
+        state = setup.state
         assert state.continuity_state == "reprise_exit"
 
-    def test_long_run_proportional(self, setup, activities):
-        _, _, _, wt = setup
+    def test_long_run_proportional(self, setup):
+        wt = setup.wt
         if wt.target_basis != "distance" or wt.target_km is None:
             return
-        max_km = _max_session_km(wt, activities, "half_marathon")
+        max_km = _max_session_km(setup)
         if max_km is not None:
             assert max_km <= wt.target_km, (
                 f"reprise_exit: long run {max_km} > weekly target {wt.target_km}"
             )
 
-    def test_intensity_not_mandatory(self, setup, activities):
+    def test_intensity_not_mandatory(self, setup):
         """allow_intensity may be True in reprise_exit, but intensity is NOT forced."""
-        _, _, _, wt = setup
-        hist = build_training_history(activities, REF)
-        load = build_training_load(activities=[], reference_date=REF)
-        prof = build_runner_profile(training_history=hist, training_load=load, user_profile={}, reference_date=REF)
-        state = build_training_state(training_history=hist, training_load=load, runner_profile=prof, reference_date=REF)
-        goal = build_plan_goal(goal_type="half_marathon", race_date=REF + timedelta(days=180))
-        plan_start = REF - timedelta(weeks=4)
-        period = build_periodization(goal, REF, training_state=state, race_plan_start_date=plan_start, cycle_anchor_date=CYCLE_ANCHOR)
         plan = build_weekly_plan(
-            weekly_target=wt,
-            runner_profile=prof,
-            plan_goal=goal,
-            periodization=period,
+            weekly_target=setup.wt,
+            runner_profile=setup.prof,
+            plan_goal=setup.goal,
+            periodization=setup.period,
             reference_date=REF,
         )
         quality_sessions = [
             s for s in plan.sessions
             if s.workout_type in ("quality", "interval", "tempo")
         ]
-        if not wt.allow_intensity:
+        if not setup.wt.allow_intensity:
             assert len(quality_sessions) == 0, (
                 f"allow_intensity=False but quality sessions found: {quality_sessions}"
             )
@@ -445,21 +443,21 @@ class TestCaseF_Normal:
         return _build_pipeline(activities, "half_marathon")
 
     def test_normal_state(self, setup):
-        _, _, state, _ = setup
+        state = setup.state
         assert state.continuity_state == "normal"
 
     def test_distance_basis(self, setup):
-        _, _, _, wt = setup
+        wt = setup.wt
         assert wt.target_basis == "distance"
 
     def test_target_km_not_none(self, setup):
-        _, _, _, wt = setup
+        wt = setup.wt
         assert wt.target_km is not None
 
-    def test_long_run_proportional(self, setup, activities):
-        _, _, _, wt = setup
+    def test_long_run_proportional(self, setup):
+        wt = setup.wt
         assert wt.target_km is not None
-        max_km = _max_session_km(wt, activities, "half_marathon")
+        max_km = _max_session_km(setup)
         if max_km is not None:
             assert max_km <= wt.target_km, (
                 f"normal: long run {max_km} > weekly target {wt.target_km}"
@@ -498,34 +496,34 @@ class TestCaseG_ExactBugPR141:
 
     def test_continuity_state_is_deep_reprise(self, activities):
         """After fix: duration-only recent + zero 28d km → deep_reprise."""
-        _, _, state, _ = _build_pipeline(activities, "half_marathon")
-        assert state.continuity_state == "deep_reprise", (
+        p = _build_pipeline(activities, "half_marathon")
+        assert p.state.continuity_state == "deep_reprise", (
             f"Expected deep_reprise but got {state.continuity_state!r}. "
             f"The bug may have re-appeared: duration-only runs in 28d are "
             f"inflating the continuity classification."
         )
 
     def test_target_basis_is_duration(self, activities):
-        _, _, _, wt = _build_pipeline(activities, "half_marathon")
-        assert wt.target_basis == "duration", (
+        p = _build_pipeline(activities, "half_marathon")
+        assert p.wt.target_basis == "duration", (
             f"Expected duration basis but got {wt.target_basis!r}."
         )
 
     def test_target_km_is_none(self, activities):
-        _, _, _, wt = _build_pipeline(activities, "half_marathon")
-        assert wt.target_km is None, (
+        p = _build_pipeline(activities, "half_marathon")
+        assert p.wt.target_km is None, (
             f"Expected target_km=None for deep_reprise but got {wt.target_km}. "
             f"Goal floor (half_marathon) must NOT inflate reprise target."
         )
 
     def test_allow_intensity_false(self, activities):
-        _, _, _, wt = _build_pipeline(activities, "half_marathon")
-        assert wt.allow_intensity is False
+        p = _build_pipeline(activities, "half_marathon")
+        assert p.wt.allow_intensity is False
 
     def test_no_km_sessions_in_plan(self, activities):
         """Prouver qu'on ne peut plus obtenir long_run ≈ 16 km."""
-        _, _, _, wt = _build_pipeline(activities, "half_marathon")
-        max_km = _max_session_km(wt, activities, "half_marathon")
+        p = _build_pipeline(activities, "half_marathon")
+        max_km = _max_session_km(p)
         assert max_km is None, (
             f"Expected no km-based sessions for deep_reprise (duration basis) "
             f"but got max_session_km={max_km}. "
@@ -558,13 +556,13 @@ class TestCaseG_ExactBugPR141:
         This test is vacuously true for duration basis (no km sessions),
         but serves as a non-regression marker for the WorkoutGenerator fix.
         """
-        _, _, _, wt = _build_pipeline(activities, "half_marathon")
-        if wt.target_basis != "distance" or wt.target_km is None:
+        p = _build_pipeline(activities, "half_marathon")
+        if p.wt.target_basis != "distance" or p.wt.target_km is None:
             return  # invariant doesn't apply to duration-based weeks
-        max_km = _max_session_km(wt, activities, "half_marathon")
+        max_km = _max_session_km(p)
         if max_km is not None:
-            assert max_km <= wt.target_km, (
-                f"Invariant violated: session {max_km} km > weekly target {wt.target_km} km"
+            assert max_km <= p.wt.target_km, (
+                f"Invariant violated: session {max_km} km > weekly target {p.wt.target_km} km"
             )
 
 
@@ -579,11 +577,11 @@ class TestCaseH_ClassicDeepReprise:
     def test_classic_deep_reprise_still_works(self):
         activities = _heavy_historical_activities()
         # Last activity is at 35 days — well above the 28d threshold
-        _, _, state, wt = _build_pipeline(activities, "half_marathon")
-        assert state.continuity_state == "deep_reprise"
-        assert wt.target_basis == "duration"
-        assert wt.target_km is None
-        assert wt.allow_intensity is False
+        p = _build_pipeline(activities, "half_marathon")
+        assert p.state.continuity_state == "deep_reprise"
+        assert p.wt.target_basis == "duration"
+        assert p.wt.target_km is None
+        assert p.wt.allow_intensity is False
 
 
 # ---------------------------------------------------------------------------
@@ -598,19 +596,19 @@ class TestCaseI_GoalFloorCannotOverrideReprise:
     ])
     def test_goal_floor_does_not_override_deep_reprise(self, goal_type: str, target_km: Optional[float]):
         activities = _heavy_historical_activities()
-        _, _, state, wt = _build_pipeline(
+        p = _build_pipeline(
             activities, goal_type,
             race_days_from_ref=300 if goal_type == "ultra" else 180,
             target_distance_km=target_km,
         )
-        assert state.continuity_state == "deep_reprise", (
+        assert p.state.continuity_state == "deep_reprise", (
             f"goal={goal_type}: expected deep_reprise but got {state.continuity_state}"
         )
-        assert wt.target_basis == "duration", (
-            f"goal={goal_type}: expected duration basis but got {wt.target_basis}"
+        assert p.wt.target_basis == "duration", (
+            f"goal={goal_type}: expected duration basis but got {p.wt.target_basis}"
         )
-        assert wt.target_km is None, (
-            f"goal={goal_type}: goal floor produced target_km={wt.target_km} during deep_reprise"
+        assert p.wt.target_km is None, (
+            f"goal={goal_type}: goal floor produced target_km={p.wt.target_km} during deep_reprise"
         )
 
     @pytest.mark.parametrize("goal_type,target_km", [
@@ -624,16 +622,16 @@ class TestCaseI_GoalFloorCannotOverrideReprise:
         ]
         historical = _heavy_historical_activities()
         activities = recent_duration_only + historical
-        _, _, state, wt = _build_pipeline(
+        p = _build_pipeline(
             activities, goal_type,
             race_days_from_ref=300 if goal_type == "ultra" else 180,
             target_distance_km=target_km,
         )
-        assert state.continuity_state == "deep_reprise", (
+        assert p.state.continuity_state == "deep_reprise", (
             f"goal={goal_type}: no_distance_in_28d + goal={goal_type} "
             f"produced state={state.continuity_state} instead of deep_reprise"
         )
-        assert wt.target_km is None, (
-            f"goal={goal_type}: goal floor produced target_km={wt.target_km} "
+        assert p.wt.target_km is None, (
+            f"goal={goal_type}: goal floor produced target_km={p.wt.target_km} "
             f"during deep_reprise (expected None)"
         )

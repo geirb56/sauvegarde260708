@@ -124,27 +124,38 @@ def _enforce_monotone_target(
     reconciled_target: WeeklyTarget,
     reason_codes: list[str],
 ) -> WeeklyTarget:
-    """Guarantee that reconciliation never increases structural targets."""
+    """Guarantee that reconciliation never increases structural targets.
+
+    Only applies the volume guard when both targets share the same basis.
+    If the bases differ the reconciliation may have legitimately changed the
+    basis (e.g. a duration-based reprise was reconciled to a distance-based
+    plan after a response update); in that case we skip the numeric guard to
+    avoid leaving the target in an inconsistent state where the basis field
+    disagrees with the clamped numeric fields.
+    """
     updates: dict[str, object] = {}
 
     if reconciled_target.target_sessions > proposed_target.target_sessions:
         updates["target_sessions"] = proposed_target.target_sessions
 
-    if (
-        proposed_target.target_basis == "distance"
-        and proposed_target.target_km is not None
-        and reconciled_target.target_km is not None
-        and reconciled_target.target_km > proposed_target.target_km
-    ):
-        updates["target_km"] = proposed_target.target_km
+    # Only apply volume guards when the basis is identical — clamping a
+    # numeric field whose basis has changed would produce an inconsistent target.
+    if proposed_target.target_basis == reconciled_target.target_basis:
+        if (
+            proposed_target.target_basis == "distance"
+            and proposed_target.target_km is not None
+            and reconciled_target.target_km is not None
+            and reconciled_target.target_km > proposed_target.target_km
+        ):
+            updates["target_km"] = proposed_target.target_km
 
-    if (
-        proposed_target.target_basis == "duration"
-        and proposed_target.target_duration_minutes is not None
-        and reconciled_target.target_duration_minutes is not None
-        and reconciled_target.target_duration_minutes > proposed_target.target_duration_minutes
-    ):
-        updates["target_duration_minutes"] = proposed_target.target_duration_minutes
+        if (
+            proposed_target.target_basis == "duration"
+            and proposed_target.target_duration_minutes is not None
+            and reconciled_target.target_duration_minutes is not None
+            and reconciled_target.target_duration_minutes > proposed_target.target_duration_minutes
+        ):
+            updates["target_duration_minutes"] = proposed_target.target_duration_minutes
 
     if not updates:
         return reconciled_target
