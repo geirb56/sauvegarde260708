@@ -4579,9 +4579,9 @@ async def get_full_training_cycle(
     reprise_active = reprise_state in ("deep_reprise", "partial_reprise")
 
     # V2 weekly volume summary (display)
-    km_28 = round(_th_fc.window_30d.distance_km, 1)
+    km_28 = round(_th_fc.window_30d.distance_km, 1) if _th_fc.window_30d.distance_km is not None else 0.0
     base_weekly_km = round(_th_fc.window_30d.distance_km / 4.0, 1) if _th_fc.window_30d.distance_km is not None else float(DEFAULT_WEEKLY_KM)
-    km_7 = round(_th_fc.window_7d.distance_km, 1)
+    km_7 = round(_th_fc.window_7d.distance_km, 1) if _th_fc.window_7d.distance_km is not None else 0.0
 
     # V2 chronic base (RunnerProfile.typical_weekly_km when observed, else derived)
     target_base_km = (

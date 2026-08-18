@@ -68,7 +68,11 @@ DomainActivity[] (dont des activités duration-only : distance_m=0, duration_s>0
 ```python
 # AJOUTÉ après le check days_since >= 28 :
 no_distance_in_28d = all(km == 0 for km in training_history.weekly_distance_buckets_28d)
-if no_distance_in_28d:
+has_prior_km_history = (
+    training_history.prior_running_window.distance_km > 0
+    or training_history.window_90d.distance_km > 0
+)
+if no_distance_in_28d and has_prior_km_history:
     codes.append("NO_DISTANCE_RUN_LAST_28D")
     return "deep_reprise", codes
 ```
@@ -77,6 +81,11 @@ if no_distance_in_28d:
 enregistré **aucun kilomètre valide** en 28 jours. Du point de vue du volume de course,
 il est en reprise, indépendamment des activités duration-only qui maintenaient
 `days_since_last_run < 28`.
+
+La condition `has_prior_km_history` est intentionnelle : elle évite de reclassifier un
+coureur qui n'a **jamais** enregistré de km (ex. tapis roulant sans GPS uniquement) — ce
+coureur suit normalement le chemin `reprise_exit` ou `normal` selon la profondeur de
+son historique.
 
 ### Fix 2 — Défensif : `weekly_target.py` `_chronic_base_km()` (ligne ~356)
 
