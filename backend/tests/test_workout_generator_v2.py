@@ -369,45 +369,48 @@ class TestLongRunProportionality:
 
     def test_low_volume_long_run_proportional(self):
         """20 km week → long run is NOT 28 km (marathon)."""
-        lr = _compute_long_run_km(20.0, "marathon")
+        lr = _compute_long_run_km(20.0)
         assert lr <= 20.0
         assert lr >= 20.0 * 0.20  # minimum fraction
 
     def test_marathon_low_volume_no_28km_floor(self):
         """A 20 km weekly target must never produce a 28 km long run."""
-        lr = _compute_long_run_km(20.0, "marathon")
+        lr = _compute_long_run_km(20.0)
         assert lr < 28.0, f"Long run {lr} >= 28 km for a 20 km week!"
 
     def test_semi_low_volume_no_16km_floor(self):
         """A 15 km weekly target must never produce a 16 km long run."""
-        lr = _compute_long_run_km(15.0, "half_marathon")
+        lr = _compute_long_run_km(15.0)
         assert lr <= 15.0
 
     def test_long_run_never_exceeds_weekly_target(self):
         for km in [10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 80.0]:
             for goal in ["5k", "10k", "half_marathon", "marathon", "ultra", "maintenance"]:
-                lr = _compute_long_run_km(km, goal)
+                lr = _compute_long_run_km(km)
                 assert lr <= km, f"long_run {lr} > weekly {km} for {goal}"
 
     def test_long_run_max_fraction_respected(self):
         """Long run never absorbs more than LONG_RUN_MAX_FRACTION of weekly km."""
         for km in [15.0, 25.0, 35.0, 50.0]:
             for goal in ["marathon", "half_marathon", "maintenance"]:
-                lr = _compute_long_run_km(km, goal)
+                lr = _compute_long_run_km(km)
                 assert lr <= km * LONG_RUN_MAX_FRACTION + 0.1, (
                     f"long_run fraction {lr/km:.2f} > {LONG_RUN_MAX_FRACTION} for {km} km / {goal}"
                 )
 
-    def test_five_k_long_run_less_dominant(self):
-        """5K goal → long run should be smaller than marathon goal (same volume)."""
-        lr_5k = _compute_long_run_km(40.0, "5k")
-        lr_marathon = _compute_long_run_km(40.0, "marathon")
-        assert lr_5k <= lr_marathon
+    def test_goal_type_does_not_change_long_run(self):
+        """Long run must depend only on the weekly target, not on PlanGoal."""
+        lr_5k = _compute_long_run_km(40.0)
+        lr_marathon = _compute_long_run_km(40.0)
+        assert lr_5k == lr_marathon
 
-    def test_marathon_long_run_larger_than_5k(self):
-        lr_5k = _compute_long_run_km(40.0, "5k")
-        lr_marathon = _compute_long_run_km(40.0, "marathon")
-        assert lr_marathon >= lr_5k
+    def test_plan_goal_does_not_change_long_run_session(self):
+        wt = _wt_distance(40.0, sessions=4, allow_intensity=True)
+        plan_5k = _plan(wt, goal="5k")
+        plan_marathon = _plan(wt, goal="marathon")
+        long_5k = [s.distance_km for s in plan_5k.sessions if s.workout_type == "long_easy"]
+        long_marathon = [s.distance_km for s in plan_marathon.sessions if s.workout_type == "long_easy"]
+        assert long_5k == long_marathon
 
     def test_plan_long_run_exists_in_normal_week(self):
         """Normal week should include at least one long_easy session."""

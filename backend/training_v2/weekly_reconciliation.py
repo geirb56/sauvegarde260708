@@ -118,6 +118,41 @@ def _keep_result(
     )
 
 
+def _enforce_monotone_target(
+    *,
+    proposed_target: WeeklyTarget,
+    reconciled_target: WeeklyTarget,
+    reason_codes: list[str],
+) -> WeeklyTarget:
+    """Guarantee that reconciliation never increases structural targets."""
+    updates: dict[str, object] = {}
+
+    if reconciled_target.target_sessions > proposed_target.target_sessions:
+        updates["target_sessions"] = proposed_target.target_sessions
+
+    if (
+        proposed_target.target_basis == "distance"
+        and proposed_target.target_km is not None
+        and reconciled_target.target_km is not None
+        and reconciled_target.target_km > proposed_target.target_km
+    ):
+        updates["target_km"] = proposed_target.target_km
+
+    if (
+        proposed_target.target_basis == "duration"
+        and proposed_target.target_duration_minutes is not None
+        and reconciled_target.target_duration_minutes is not None
+        and reconciled_target.target_duration_minutes > proposed_target.target_duration_minutes
+    ):
+        updates["target_duration_minutes"] = proposed_target.target_duration_minutes
+
+    if not updates:
+        return reconciled_target
+
+    reason_codes.append("MONOTONE_RECONCILIATION_GUARD")
+    return reconciled_target.model_copy(update=updates)
+
+
 def build_weekly_reconciliation(
     *,
     proposed_target: WeeklyTarget,
@@ -273,6 +308,12 @@ def build_weekly_reconciliation(
     else:
         action = WeeklyReconciliationAction.KEEP
         reasons.append("PLAN_STRUCTURE_KEPT")
+
+    reconciled_target = _enforce_monotone_target(
+        proposed_target=proposed_target,
+        reconciled_target=reconciled_target,
+        reason_codes=reasons,
+    )
 
     return WeeklyReconciliationResult(
         action=action,

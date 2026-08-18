@@ -309,9 +309,8 @@ async def generate_cycle_week(
         "HALF_MARATHON": "half_marathon", "MARATHON": "marathon",
         "ULTRA": "ultra", "MAINTENANCE": "maintenance",
     }
-    _v2_goal_type_str = _GOAL_MAP_COACH.get((goal or "SEMI").upper(), "half_marathon")
     try:
-        target_long_run = _v2_compute_long_run(float(target_km), _v2_goal_type_str)
+        target_long_run = _v2_compute_long_run(float(target_km))
     except Exception:
         # Isolated fallback: keep function operational without crashing.
         target_long_run = round(float(target_km) * 0.35, 1)

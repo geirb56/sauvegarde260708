@@ -49,25 +49,9 @@ All coefficients are centralised here, clearly labelled "calibration V1, recalib
   LONG_RUN_MIN_FRACTION  = 0.20  (floor: never less than 20 % of weekly km)
   LONG_RUN_MAX_FRACTION  = 0.45  (ceiling: never more than 45 % of weekly km)
 
-  Goal-based fractional adjustments (additive to LONG_RUN_FRACTION):
-    5k / 10k       : −0.05   (long run is less dominant for speed goals)
-    half_marathon  :  0.00   (neutral)
-    marathon       : +0.05   (long run is more important)
-    ultra          : +0.08
-    maintenance    :  0.00
-
-  Absolute cap per goal (km):
-    5k             :  8 km
-    10k            : 12 km
-    half_marathon  : 18 km
-    marathon       : 28 km
-    ultra          : 35 km
-    maintenance    : 15 km
-
-  This cap is applied ONLY when weekly target is high enough to produce a
-  disproportionate long run.  For low weekly volumes the fraction cap
-  (LONG_RUN_MAX_FRACTION) is the binding constraint, preventing artificially
-  large long runs in early / reprise weeks.
+  Long run sizing is derived ONLY from the reconciled weekly target.
+  PlanGoal is intentionally ignored here so reprise protections cannot be
+  bypassed by a goal-specific floor or adjustment.
 
 No-rounding-drift contract
 ---------------------------
@@ -100,7 +84,7 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict
 
 from .periodization import PeriodizationPhase, PeriodizationSnapshot
-from .plan_goal import GoalType, PlanGoal
+from .plan_goal import PlanGoal
 from .runner_profile import RunnerProfile
 from .weekly_target import WeeklyTarget
 
@@ -117,26 +101,6 @@ LONG_RUN_MIN_FRACTION: float = 0.20
 
 LONG_RUN_MAX_FRACTION: float = 0.45
 """Maximum long run as fraction of weekly km (low-volume protection). Calibration V1."""
-
-# Goal-specific adjustments to LONG_RUN_FRACTION (additive).
-_LONG_RUN_GOAL_ADJUST: dict[str, float] = {
-    "5k": -0.05,
-    "10k": -0.05,
-    "half_marathon": 0.00,
-    "marathon": +0.05,
-    "ultra": +0.08,
-    "maintenance": 0.00,
-}
-
-# Absolute long run caps per goal (km) — applies only when volume is large.
-_LONG_RUN_ABS_CAP: dict[str, float] = {
-    "5k": 8.0,
-    "10k": 12.0,
-    "half_marathon": 18.0,
-    "marathon": 28.0,
-    "ultra": 35.0,
-    "maintenance": 15.0,
-}
 
 # Default week skeleton by number of running sessions.
 # Format: list of (day_name, session_type) — rest days are explicit.
@@ -335,31 +299,23 @@ def _intensity_class(workout_type: str) -> str:
 
 def _compute_long_run_km(
     target_km: float,
-    goal_type: str,
 ) -> float:
     """Compute proportional long run distance for a distance-based week.
 
     The long run is a fraction of the weekly target, bounded by:
       - LONG_RUN_MIN_FRACTION (floor)
       - LONG_RUN_MAX_FRACTION (ceiling — low volume protection)
-      - goal-specific absolute cap (only binding at high volumes)
 
-    No hardcoded goal minimum floors (e.g. 16 km for semi, 28 km for marathon).
-    A 20 km weekly target with marathon goal yields ~7 km long run, not 28 km.
+    No PlanGoal-derived floor or adjustment is allowed here.
+    A 20 km weekly target yields a proportional long run regardless of goal.
 
     Calibration V1, recalibrable.
     """
-    adjust = _LONG_RUN_GOAL_ADJUST.get(goal_type, 0.0)
     fraction = max(
         LONG_RUN_MIN_FRACTION,
-        min(LONG_RUN_MAX_FRACTION, LONG_RUN_FRACTION + adjust),
+        min(LONG_RUN_MAX_FRACTION, LONG_RUN_FRACTION),
     )
     long_run = round(target_km * fraction, 1)
-    # Absolute goal cap — only applied when the fraction itself would exceed it,
-    # i.e. only at high weekly volumes.  This prevents marathon runners from
-    # getting 40 km long runs while preserving proportionality at low volumes.
-    abs_cap = _LONG_RUN_ABS_CAP.get(goal_type, 18.0)
-    long_run = min(long_run, abs_cap)
     # Ensure long run never exceeds total weekly target.
     long_run = min(long_run, target_km)
     return round(long_run, 1)
@@ -367,13 +323,11 @@ def _compute_long_run_km(
 
 def _compute_long_run_duration(
     total_minutes: int,
-    goal_type: str,
 ) -> int:
     """Compute long_easy session duration (minutes) for a duration-based week."""
-    adjust = _LONG_RUN_GOAL_ADJUST.get(goal_type, 0.0)
     fraction = max(
         LONG_RUN_DURATION_MIN_FRACTION,
-        min(LONG_RUN_DURATION_MAX_FRACTION, LONG_RUN_DURATION_FRACTION + adjust),
+        min(LONG_RUN_DURATION_MAX_FRACTION, LONG_RUN_DURATION_FRACTION),
     )
     raw = total_minutes * fraction
     return max(1, int(round(raw)))
@@ -702,12 +656,11 @@ def _apply_intensity_rule(workout_type: str, allow_intensity: bool, quality_used
 def _build_distance_sessions(
     skeleton: list[tuple[str, str]],
     target_km: float,
-    goal_type: str,
     allow_intensity: bool,
     base_reason_codes: tuple[str, ...],
 ) -> list[WorkoutPrescription]:
     """Build sessions for a distance-based week from a skeleton."""
-    long_run_km = _compute_long_run_km(target_km, goal_type)
+    long_run_km = _compute_long_run_km(target_km)
     running_slots = [(d, t) for d, t in skeleton if t != "rest"]
     has_long = any(t == "long_easy" for _, t in running_slots)
     long_km = long_run_km if has_long else 0.0
@@ -748,12 +701,11 @@ def _build_distance_sessions(
 def _build_duration_sessions(
     skeleton: list[tuple[str, str]],
     total_minutes: int,
-    goal_type: str,
     allow_intensity: bool,
     base_reason_codes: tuple[str, ...],
 ) -> list[WorkoutPrescription]:
     """Build sessions for a duration-based week from a skeleton."""
-    long_run_minutes = _compute_long_run_duration(total_minutes, goal_type)
+    long_run_minutes = _compute_long_run_duration(total_minutes)
     running_slots = [(d, t) for d, t in skeleton if t != "rest"]
     has_long = any(t == "long_easy" for _, t in running_slots)
     long_min = long_run_minutes if has_long else 0
@@ -956,7 +908,6 @@ def build_weekly_plan(
     allow_intensity = weekly_target.allow_intensity
     n_sessions = weekly_target.target_sessions
     continuity = weekly_target.continuity_state
-    goal_type = plan_goal.goal_type.value if hasattr(plan_goal.goal_type, "value") else str(plan_goal.goal_type)
     phase = periodization.phase
 
     reason_codes: list[str] = list(weekly_target.reason_codes)
@@ -964,12 +915,12 @@ def build_weekly_plan(
     # --- route by continuity state -----------------------------------------
     if continuity in ("no_history", "deep_reprise"):
         sessions, reason_codes = _route_reprise_deep(
-            weekly_target, n_sessions, allow_intensity, goal_type, reason_codes, runner_profile
+            weekly_target, n_sessions, allow_intensity, reason_codes, runner_profile
         )
 
     elif continuity == "partial_reprise":
         sessions, reason_codes = _route_partial_reprise(
-            weekly_target, n_sessions, goal_type, reason_codes, runner_profile
+            weekly_target, n_sessions, reason_codes, runner_profile
         )
 
     else:
@@ -981,7 +932,7 @@ def build_weekly_plan(
         skeleton, constraint_codes = _assign_days(session_types, runner_profile)
         reason_codes = list(reason_codes) + constraint_codes
         sessions, reason_codes = _route_normal(
-            weekly_target, skeleton, goal_type, allow_intensity, reason_codes, phase
+            weekly_target, skeleton, allow_intensity, reason_codes, phase
         )
 
     # --- ensure immutability of session list --------------------------------
@@ -1022,7 +973,6 @@ def _route_reprise_deep(
     weekly_target: WeeklyTarget,
     n_sessions: int,
     allow_intensity: bool,
-    goal_type: str,
     reason_codes: list[str],
     runner_profile: RunnerProfile,
 ) -> tuple[list[WorkoutPrescription], list[str]]:
@@ -1059,7 +1009,6 @@ def _route_reprise_deep(
 def _route_partial_reprise(
     weekly_target: WeeklyTarget,
     n_sessions: int,
-    goal_type: str,
     reason_codes: list[str],
     runner_profile: RunnerProfile,
 ) -> tuple[list[WorkoutPrescription], list[str]]:
@@ -1095,7 +1044,6 @@ def _route_partial_reprise(
 def _route_normal(
     weekly_target: WeeklyTarget,
     skeleton: list[tuple[str, str]],
-    goal_type: str,
     allow_intensity: bool,
     reason_codes: list[str],
     phase: PeriodizationPhase,
@@ -1112,7 +1060,6 @@ def _route_normal(
         sessions = _build_distance_sessions(
             skeleton=skeleton,
             target_km=target_km,
-            goal_type=goal_type,
             allow_intensity=allow_intensity,
             base_reason_codes=(),
         )
@@ -1123,7 +1070,6 @@ def _route_normal(
         sessions = _build_duration_sessions(
             skeleton=skeleton,
             total_minutes=total_minutes,
-            goal_type=goal_type,
             allow_intensity=allow_intensity,
             base_reason_codes=(),
         )
