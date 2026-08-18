@@ -59,14 +59,22 @@ def vma_pace_range(vma_kmh: float, pct_low: float, pct_high: float) -> str:
 
 def build_legacy_pace_zones(estimated_vma: float) -> dict:
     """Return the legacy runtime/display pace zones derived from VMA."""
+
+    def _legacy_compat_pace(vma_pct: float) -> str:
+        speed = max(0.1, estimated_vma * vma_pct)
+        pace = 60.0 / speed
+        minutes = int(pace)
+        seconds = int((pace % 1) * 60)
+        return f"{minutes}:{seconds:02d}"
+
     return {
-        "z1": vma_pace_range(estimated_vma, 0.65, 0.70),
-        "z2": vma_pace_range(estimated_vma, 0.75, 0.80),
-        "z3": vma_pace_range(estimated_vma, 0.82, 0.87),
-        "z4": vma_pace_range(estimated_vma, 0.88, 0.93),
-        "z5": vma_pace_range(estimated_vma, 0.95, 1.00),
-        "marathon": vma_pace_range(estimated_vma, 0.78, 0.82),
-        "semi": vma_pace_range(estimated_vma, 0.82, 0.85),
+        "z1": f"{_legacy_compat_pace(0.65)}-{_legacy_compat_pace(0.70)}",
+        "z2": f"{_legacy_compat_pace(0.75)}-{_legacy_compat_pace(0.80)}",
+        "z3": f"{_legacy_compat_pace(0.82)}-{_legacy_compat_pace(0.87)}",
+        "z4": f"{_legacy_compat_pace(0.88)}-{_legacy_compat_pace(0.93)}",
+        "z5": f"{_legacy_compat_pace(0.95)}-{_legacy_compat_pace(1.00)}",
+        "marathon": f"{_legacy_compat_pace(0.78)}-{_legacy_compat_pace(0.82)}",
+        "semi": f"{_legacy_compat_pace(0.82)}-{_legacy_compat_pace(0.85)}",
     }
 
 
