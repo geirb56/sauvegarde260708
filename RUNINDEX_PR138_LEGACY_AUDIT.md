@@ -2,7 +2,8 @@
 
 ## Source de vérité
 
-- HEAD `main` réel : `a94adc400934f9d4ac60cb34b7ae1410ec8b73c2`
+- HEAD `main` de départ (après merge #137) : `a94adc400934f9d4ac60cb34b7ae1410ec8b73c2`
+- HEAD PR #138 : `9d11656` (merge `copilot/audit-consumers-legacy`)
 - Merge PR #136 : `9c0adcc`
 - Merge PR #137 : `a94adc400934f9d4ac60cb34b7ae1410ec8b73c2`
 - Document canonique relu : `docs/RUNINDEX_MASTER_ROADMAP_AND_DECISIONS.md`
@@ -170,6 +171,79 @@
 | `build_training_context` | test-only | `test_coach_load_context_pr128.py` |
 | `vma_pace`, `vma_pace_range` | **performance extraite** ; re-export legacy | appelés via import depuis `training_v2.performance` |
 
+## Audit frontières Mongo → Training V2
+
+### Frontière canonique attendue
+
+```
+db.garmin_activities  →  mongo_garmin_activities_to_domain()  →  DomainActivity  →  Training V2
+```
+
+Règle : aucun module Training V2 ne doit recevoir de document Mongo brut.
+
+### Violations identifiées
+
+| Fichier | Ligne | Caller | Données potentiellement perdues | Correction #139 ? |
+|---|---|---|---|---|
+| `backend/server.py` | ~3787 | `/training/metrics` → `get_training_metrics()` | `build_training_load(garmin_activities, today_date)` reçoit des documents Mongo bruts. `to_domain_activity()` dans `domain_activity.py` lit les champs top-level `"distance"` et `"duration"` (alias) mais pas le sous-document `garmin_activity`. Les champs `average_hr`, `max_hr`, `moderate_intensity_minutes`, `vigorous_intensity_minutes`, `elevation_gain_m` sont perdus. Pour ACWR uniquement `duration_s` compte — alias `"duration"` est présent au top-level → ACWR fonctionne en pratique mais par duck-typing, pas via la frontière canonique. | **OUI** — remplacer par `mongo_garmin_activities_to_domain(garmin_activities)` avant appel à `build_training_load`. |
+
+### Violations non trouvées
+
+- `backend/server.py` lignes 3659 et 3661 : **CONFORME** — `mongo_garmin_activities_to_domain(garmin_activities)` est utilisé correctement avant `build_training_load(domain_activities, today)`.
+- `backend/garmin/readiness_adapter.py` : reçoit volontairement des documents Garmin bruts (c'est son rôle d'adaptateur) et les passe à `build_training_load`. Acceptable car c'est la couche d'adaptation intentionnelle.
+- `backend/garmin/backfill.py` : lit `garmin_activities` pour reconstruction, pas pour Training V2 direct.
+- `backend/coach_service.py` : aucun appel direct à `garmin_activities`.
+- `backend/llm_coach.py` : aucun accès Mongo direct.
+- `backend/training_v2/*` : aucun import Mongo.
+
+### Champs à risque pour la violation server.py:3787
+
+| Champ DomainActivity | Présent top-level garmin_activities ? | Alias top-level lu par to_domain_activity ? | Perte effective ACWR ? |
+|---|---|---|---|
+| `activity_type` | oui (`"activity_type"`) | oui | non |
+| `start_time` | oui (`"start_time"`) | oui | non |
+| `distance_m` | non (top-level = `"distance"`) | oui via `activity.get('distance')` | non |
+| `duration_s` | non (top-level = `"duration"`) | oui via `activity.get('duration')` | **non (ACWR ok en pratique)** |
+| `average_hr` | non (top-level = `"avg_hr"`, non mappé par `to_domain_activity`) | non | oui (mais pas utilisé par ACWR) |
+| `max_hr` | non | non | oui (mais pas utilisé par ACWR) |
+| `moderate_intensity_minutes` | non (sous-document uniquement) | non | oui (mais pas utilisé par ACWR) |
+| `vigorous_intensity_minutes` | non (sous-document uniquement) | non | oui (mais pas utilisé par ACWR) |
+| `elevation_gain_m` | non | non | oui (mais pas utilisé par ACWR) |
+
+**Conclusion** : la violation est réelle mais son impact sur ACWR est nul en pratique (les champs `duration` et `activity_type` sont présents au top-level). La correction reste nécessaire pour garantir la robustesse à long terme et le respect de la frontière canonique.
+
+---
+
+## Audit intégrité des champs Garmin
+
+### Champs clés audités dans mongo_garmin_to_domain (domain_adapter.py)
+
+| Champ DomainActivity | Source sous-document | Alias top-level fallback | Règle None/0 | Statut |
+|---|---|---|---|---|
+| `distance_m` | `garmin_activity.distance_m` | `doc.distance_m` ou `doc.distance` | `_opt_float_positive` (zéro → None) | ✅ correct |
+| `duration_s` | `garmin_activity.duration_s` | `doc.duration_s` ou `doc.duration` | `_opt_float_positive` (zéro → None) | ✅ correct |
+| `average_hr` | `garmin_activity.average_hr` | `doc.average_hr` ou `doc.avg_hr` | `_opt_float_positive` (zéro → None) | ✅ correct |
+| `max_hr` | `garmin_activity.max_hr` | `doc.max_hr` | `_opt_float_positive` (zéro → None) | ✅ correct |
+| `moderate_intensity_minutes` | `garmin_activity.moderate_intensity_minutes` | `doc.moderate_intensity_minutes` | `_domain_intensity_minutes` (négatif → None) | ✅ correct |
+| `vigorous_intensity_minutes` | `garmin_activity.vigorous_intensity_minutes` | `doc.vigorous_intensity_minutes` | `_domain_intensity_minutes` (négatif → None) | ✅ correct |
+| `elevation_gain_m` | `garmin_activity.elevation_gain` | `doc.elevation_gain_m` ou `doc.elevation_gain` | `_opt_float_any` (zéro valide) | ✅ correct — renommage explicite `elevation_gain` → `elevation_gain_m` |
+
+### Règles None / 0
+
+- `None != 0` : aucun champ absent n'est converti en `0`. ✅
+- Champs avec valeur `0` physiologiquement invalide (distance, durée, FC) → `None`. ✅
+- `elevation_gain = 0` est valide (plat) → `0.0` conservé via `_opt_float_any`. ✅
+- Données réellement absentes du document → `None` dans `DomainActivity`. ✅
+
+### Intégrité VO2max
+
+- VO2max Garmin natif : extrait de `garmin_daily_metrics` via `insights.py` si disponible.
+- VO2max dérivé : calculé par `training_v2.performance.compute_vo2max_from_vma(vma)` → `VMA * 3.5`.
+- **Les deux provenance ne sont jamais confondues.** La présence de l'un ne masque pas l'autre.
+- `None` Garmin VO2max ≠ `0`. La formule dérivée n'est jamais utilisée pour remplacer une valeur Garmin absente.
+
+---
+
 ## Migrations exactes prévues pour #139
 
 1. Migrer `/training/full-cycle` hors `training_engine`.
@@ -178,7 +252,22 @@
 4. Décider le sort de `determine_target_load()` sur `/training/week-plan`.
 5. Reclasser ou supprimer les helpers legacy purement test-only une fois les consumers runtime éliminés.
 
-## Candidats suppression #140
+## Checklist obligatoire #140 — kill training_engine.py
+
+| Critère | Description | Statut actuel |
+|---|---|---|
+| Zéro import runtime | Aucun module runtime n'importe `training_engine` | ❌ `server.py`, `llm_coach.py` importent encore au runtime |
+| Zéro caller runtime | Aucun chemin d'exécution runtime n'appelle une fonction de `training_engine` | ❌ `/training/full-cycle`, `/training/metrics`, `/training/plan`, `/training/refresh`, `/training/week-plan` dépendent encore du legacy |
+| Zéro endpoint dépendant | Tous les endpoints sont servis par Training V2 ou couches extraites | ❌ Non — voir liste ci-dessus |
+| Performance extraite | VMA / VO2max / paces dans un module dédié sans dépendance inverse | ✅ `training_v2/performance.py` — FAIT en #138 |
+| Tests nécessaires migrés | Les tests contractuels ont un équivalent V2 ou sont rebranché sur le module final | ❌ Tests legacy encore accrochés à `training_engine` directement |
+| Frontend consumers compatibles | Aucun contrat API cassé par le retrait du legacy | ⚠️ Non vérifié — dépend des migrations #139 |
+| Smoke runtime passé | Tests d'intégration bout-en-bout sur les endpoints impactés | ❌ À valider après #139 |
+| Frontière Mongo corrigée | Violation `server.py:3787` corrigée (`mongo_garmin_activities_to_domain` appliqué) | ❌ Correction prévue #139 |
+
+**Condition obligatoire #140 : TOUS les critères ci-dessus doivent être vrais avant de commencer #140.**
+
+### Candidats suppression lors de #140
 
 - `adapt_session_to_readiness`
 - `adjust_load_by_fatigue`
@@ -186,6 +275,4 @@
 - `compute_week_number`
 - `compute_monotony`
 - `compute_strain`
-- tests legacy associés
-
-**Condition obligatoire #140 : zéro consumer runtime prouvé avant suppression de `training_engine.py`.**
+- Tests legacy associés uniquement si aucun consumer runtime ne leur correspond encore
