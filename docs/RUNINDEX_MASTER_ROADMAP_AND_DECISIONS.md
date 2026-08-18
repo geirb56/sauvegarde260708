@@ -1906,3 +1906,58 @@ Hotfix de compatibilité Python 3.11 sur la chaîne V2.
    - LT1/LT2 multi-évidence ;
    - Body Battery nocturne ;
    - V3 Flexible Schedule.
+
+
+## 40) PR #139 — Migration des derniers consumers runtime legacy — IMPLEMENTED / PENDING MERGE
+
+### État réel de départ #139
+
+- HEAD main : `9d11656`
+- #138 = MERGED
+
+### Portée #139
+
+- migration de `/training/metrics` : `classify_training_state` → `TrainingState` V2 (`build_training_state`) ;
+- migration de `/training/full-cycle` (semaine courante) : `resolve_reprise_plan`, `resolve_chronic_base`,
+  `compute_current_weekly_km`, `is_running`, `normalized_distance_km` → pipeline V2 complet ;
+- dépréciation de `/training/week-plan` : `determine_target_load` retiré, endpoint redirigé vers
+  `generate_dynamic_training_plan` V2 ;
+- migration de `llm_coach.generate_cycle_week()` : `compute_target_km`, `apply_resume_guard`,
+  `compute_long_run_km`, `reprise_durations`, `reprise_deep_durations`, `build_reprise_week_structure`,
+  `REPRISE_DEEP_SESSION_MINUTES` retirés ;
+- `generate_cycle_week()` est désormais dead code runtime (aucun endpoint ne l'appelle) ;
+- frontière Mongo → Domain via `mongo_garmin_activities_to_domain()` utilisée dans les nouveaux chemins ;
+- 24 tests statiques de non-régression ajoutés (`test_legacy_runtime_migration_pr139.py`, matrice A–L).
+
+### Décisions
+
+- `training_engine.py` conservé — pas de suppression ;
+- formules V2 non modifiées (TrainingState, WeeklyTarget, WeeklyReconciliation, WorkoutGenerator,
+  ReadinessDecision, DailyAdaptation) ;
+- projections futures display (`compute_target_km`, `apply_resume_guard`) conservées en
+  **compatibility projection** pour le calendrier multi-semaines (/training/full-cycle) —
+  pas d'équivalent V2 multi-week forecast ;
+- `compute_cycle_dates`, `determine_phase`, `get_phase_description`, `GOAL_CONFIG` conservés
+  comme display text/calendrier ;
+- VMA fallback 12.0 confirmé isolé des décisions V2 par tests statiques ;
+- `performance.py` n'est pas importé par training_state, weekly_target, weekly_reconciliation,
+  workout_generator, readiness_decision, daily_adaptation.
+
+### Verdict
+
+NOT READY FOR LEGACY KILL — consumers display/compatibility restants (non-décision training).
+Prêt pour #140 après V2 multi-week projection engine.
+
+### NEXT (ordre canonique)
+
+1. **#140 — Kill final `training_engine.py`**
+   - pré-requis : V2 multi-week forecast engine (Periodization weekly schedule) ;
+   - pré-requis : extraction `compute_cycle_dates` en module utilitaire ;
+   - pré-requis : remplacement `determine_phase` + `get_phase_description` par V2 phase schedule ;
+   - suppression du module après preuve exhaustive de zéro consumer runtime réel ;
+   - tests/régression/runtime validation après suppression.
+
+2. **Ensuite seulement :**
+   - LT1/LT2 multi-évidence ;
+   - Body Battery nocturne ;
+   - V3 Flexible Schedule.

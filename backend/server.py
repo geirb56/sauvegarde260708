@@ -26,7 +26,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 from typing import List, Optional, Dict
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 from config.secrets import MissingSecretError
 import localization
 
@@ -38,7 +38,8 @@ from analysis_engine import (
 )
 
 # Import LLM coach module (GPT-4o-mini)
-from llm_coach import LLM_MODEL, generate_cycle_week
+# generate_cycle_week removed from runtime — /training/week-plan deprecated PR#139
+from llm_coach import LLM_MODEL
 
 # Import coach service (cascade strategy)
 from coach_service import (
@@ -61,6 +62,11 @@ from rag_engine import (
 
 # Import training engine for periodization
 from training_v2.training_load import build_training_load
+from training_v2.training_history import build_training_history
+from training_v2.runner_profile import build_runner_profile
+from training_v2.training_state import build_training_state
+from training_v2.weekly_target import build_weekly_target
+from training_v2.plan_goal import build_plan_goal, GoalType as V2GoalType
 from training_v2.readiness_decision import (
     ReadinessBand,
     ReadinessDecision,
@@ -72,7 +78,7 @@ from training_v2.daily_adaptation import (
     build_daily_adaptation,
 )
 from training_v2.training_response import build_recent_training_response
-from training_v2.workout_generator import WorkoutPrescription
+from training_v2.periodization import build_periodization as _build_periodization_fc
 from training_v2.daily_runtime_helpers import (
     BAND_TO_RECOMMENDATION,
     runtime_session_to_prescription,
@@ -83,19 +89,27 @@ from garmin.domain_adapter import mongo_garmin_activities_to_domain
 from training_engine import (
     DEFAULT_WEEKLY_KM,
     GOAL_CONFIG,
-    compute_current_weekly_km,
+    # compute_cycle_dates: calendar-only, no V2 equivalent for multi-week display
     compute_cycle_dates,
+    # compute_target_km / apply_resume_guard: retained ONLY for future-week
+    # display projections in /training/full-cycle (compatibility projection,
+    # not runtime decision). Current-week decisions use V2 WeeklyTarget.
     compute_target_km,
     apply_resume_guard,
-    resolve_chronic_base,
-    resolve_reprise_plan,
-    classify_training_state,
-    REPRISE_STABLE_WEEKS,
-    compute_week_number,
+    # determine_phase / get_phase_description: calendar math + display text
+    # kept for all-week calendar rendering; V2 Periodization covers only current
+    # phase, not the full multi-week projected schedule needed for the overview UI.
     determine_phase,
     get_phase_description,
-    is_running,
-    normalized_distance_km,
+    # --- REMOVED runtime decision symbols (migrated to V2) ---
+    # classify_training_state  → build_training_state V2
+    # resolve_reprise_plan     → TrainingState + WeeklyTarget V2
+    # resolve_chronic_base     → RunnerProfile.typical_weekly_km V2
+    # compute_current_weekly_km → TrainingHistory V2
+    # is_running               → mongo_garmin_activities_to_domain V2 filter
+    # normalized_distance_km   → DomainActivity V2
+    # REPRISE_STABLE_WEEKS     → derived from TrainingHistory V2
+    # compute_week_number      → unused runtime dead symbol
 )
 
 # Import subscription manager
@@ -3822,13 +3836,29 @@ async def get_training_metrics(user: dict = Depends(auth_user)):
 
     strain = round(load_7 * monotony, 0) if monotony > 0 else 0
 
-    # --- ACWR reliability: based on training state (reprise detection) ---
-    # has_sufficient_history captures ONLY the depth of available history and
-    # must NOT be used here.  An athlete with ≥ 28 days of Garmin data may
-    # still be resuming after a break (deep_reprise / partial_reprise), making
-    # the ACWR unreliable regardless of history depth.
-    reprise_state = classify_training_state(activities_28)
-    acwr_reliable = reprise_state not in ("deep_reprise", "partial_reprise")
+    # --- ACWR reliability: based on TrainingState V2 (single source of truth) ---
+    # classify_training_state() legacy removed (PR #139).
+    # V2 pipeline: mongo_garmin_activities_to_domain → build_training_history
+    #              → build_runner_profile → build_training_state
+    # Garmin domain activities (same source as build_training_load above) are
+    # the canonical input; db.workouts is NOT used for this decision.
+    _domain_acts_metrics = mongo_garmin_activities_to_domain(garmin_activities)
+    _th_metrics = build_training_history(_domain_acts_metrics, today_date)
+    _rp_metrics = build_runner_profile(
+        training_history=_th_metrics,
+        training_load=load_snapshot,
+        user_profile=None,
+        capabilities=None,
+        physiological_metrics=None,
+        reference_date=today_date,
+    )
+    _ts_metrics = build_training_state(
+        training_history=_th_metrics,
+        training_load=load_snapshot,
+        runner_profile=_rp_metrics,
+        reference_date=today_date,
+    )
+    acwr_reliable = _ts_metrics.continuity_state not in ("deep_reprise", "partial_reprise")
 
     # --- Interpréter ACWR ---
     if acwr is None:
@@ -4432,36 +4462,151 @@ async def get_full_training_cycle(
     current_week = cycle_dates["current_week"]
     cycle_status = cycle_dates["status"]
 
-    # Retrieve athlete's current volume (based on last 28 days)
+    # Retrieve athlete's current volume — V2 pipeline (PR #139).
+    # Source: Garmin domain activities → TrainingHistory → RunnerProfile → TrainingState → WeeklyTarget.
+    # Legacy: resolve_reprise_plan / resolve_chronic_base / compute_current_weekly_km removed.
     today = datetime.now(timezone.utc)
-    twenty_eight_days_ago = today - timedelta(days=28)
-    
-    workouts_28 = await db.workouts.find({
-        "user_id": user["id"],
-        "date": {"$gte": twenty_eight_days_ago.isoformat()}
-    }).to_list(300)
-    
-    km_28 = sum(normalized_distance_km(w) for w in workouts_28 if is_running(w))
-    base_weekly_km = compute_current_weekly_km(workouts_28)
-    # PR76b: use an active-weeks base so a comeback (sparse data) is not
-    # diluted by the fixed /4 divisor, and a genuine 0 km resolves to a
-    # conservative reprise base instead of the 20 km default.
-    target_base_km = resolve_chronic_base(workouts_28)
 
-    # PR76 resume guard: also look at last 7 days to detect resuming athletes
-    seven_days_ago = today - timedelta(days=7)
-    workouts_7 = [w for w in workouts_28 if (w.get("date") or "") >= seven_days_ago.isoformat()]
-    km_7 = sum(normalized_distance_km(w) for w in workouts_7 if is_running(w))
+    garmin_acts_fc = await (
+        db.garmin_activities.find({"user_id": user["id"]}, {"_id": 0})
+        .sort("start_time", -1)
+        .limit(200)
+        .to_list(length=200)
+    )
+    _domain_acts_fc = mongo_garmin_activities_to_domain(garmin_acts_fc)
+    _th_fc = build_training_history(_domain_acts_fc, today_date)
+    _tl_fc = build_training_load(_domain_acts_fc, today_date)
+    _rp_fc = build_runner_profile(
+        training_history=_th_fc,
+        training_load=_tl_fc,
+        user_profile=None,
+        capabilities=None,
+        physiological_metrics=None,
+        reference_date=today_date,
+    )
+    _ts_fc = build_training_state(
+        training_history=_th_fc,
+        training_load=_tl_fc,
+        runner_profile=_rp_fc,
+        reference_date=today_date,
+    )
 
-    # Reprise-aware target/state for the CURRENT week (single source of truth).
-    current_phase = determine_phase(current_week, total_weeks)
-    reprise = resolve_reprise_plan(workouts_28, goal, current_phase, km_7=km_7)
-    reprise_state = reprise["state"]
+    # V2 WeeklyTarget — requires PlanGoal + PeriodizationSnapshot.
+    # Goal type mapping: legacy string → V2GoalType
+    _GOAL_MAP_FC = {
+        "5K": "5k", "10K": "10k", "SEMI": "half_marathon",
+        "HALF_MARATHON": "half_marathon", "MARATHON": "marathon",
+        "ULTRA": "ultra", "MAINTENANCE": "maintenance",
+    }
+    _v2_goal_str = _GOAL_MAP_FC.get((goal or "SEMI").upper(), "half_marathon")
+    try:
+        _v2_goal_type = V2GoalType(_v2_goal_str)
+    except ValueError:
+        _v2_goal_type = V2GoalType.half_marathon
+
+    _plan_goal_fc = build_plan_goal(
+        goal_type=_v2_goal_type,
+        race_date=event_date_obj,
+        target_time_seconds=None,
+        target_distance_km=None,
+    )
+
+    # Cycle start date for Periodization
+    _cycle_start_raw = cycle.get("start_date")
+    _cycle_start_dt = None
+    if _cycle_start_raw:
+        try:
+            if isinstance(_cycle_start_raw, datetime):
+                _cycle_start_dt = _cycle_start_raw.date()
+            elif isinstance(_cycle_start_raw, date):
+                _cycle_start_dt = _cycle_start_raw
+            elif isinstance(_cycle_start_raw, str):
+                _cycle_start_dt = date.fromisoformat(_cycle_start_raw.split("T")[0])
+        except Exception:
+            _cycle_start_dt = None
+
+    try:
+        if event_date_obj and event_date_obj > today_date and _cycle_start_dt and _cycle_start_dt <= today_date:
+            _periodization_fc = _build_periodization_fc(
+                _plan_goal_fc,
+                today_date,
+                training_state=_ts_fc,
+                race_plan_start_date=_cycle_start_dt,
+            )
+        elif event_date_obj:
+            _periodization_fc = _build_periodization_fc(
+                _plan_goal_fc,
+                today_date,
+                training_state=_ts_fc,
+            )
+        else:
+            _anchor = _cycle_start_dt or today_date
+            _periodization_fc = _build_periodization_fc(
+                _plan_goal_fc,
+                today_date,
+                training_state=_ts_fc,
+                cycle_anchor_date=_anchor,
+            )
+    except Exception:
+        # Fallback: use continuous mode anchored to today
+        try:
+            _periodization_fc = _build_periodization_fc(
+                _plan_goal_fc,
+                today_date,
+                training_state=_ts_fc,
+                cycle_anchor_date=today_date,
+            )
+        except Exception:
+            _periodization_fc = None
+
+    # Build WeeklyTarget V2 for current week
+    _weekly_target_fc = None
+    if _periodization_fc is not None:
+        try:
+            _weekly_target_fc = build_weekly_target(
+                runner_profile=_rp_fc,
+                training_history=_th_fc,
+                training_state=_ts_fc,
+                plan_goal=_plan_goal_fc,
+                periodization=_periodization_fc,
+                reference_date=today_date,
+            )
+        except Exception:
+            _weekly_target_fc = None
+
+    # V2 state and volume for current week
+    reprise_state = _ts_fc.continuity_state
     reprise_active = reprise_state in ("deep_reprise", "partial_reprise")
-    # Projected calendar week where intensity is re-introduced (reprise_exit):
-    # once REPRISE_STABLE_WEEKS active weeks are completed.
+
+    # V2 weekly volume summary (display)
+    km_28 = round(_th_fc.window_30d.distance_km, 1)
+    base_weekly_km = round(_th_fc.window_30d.distance_km / 4.0, 1) if _th_fc.window_30d.distance_km is not None else float(DEFAULT_WEEKLY_KM)
+    km_7 = round(_th_fc.window_7d.distance_km, 1)
+
+    # V2 chronic base (RunnerProfile.typical_weekly_km when observed, else derived)
+    target_base_km = (
+        _rp_fc.typical_weekly_km
+        if (_rp_fc.typical_weekly_km_is_observed and _rp_fc.typical_weekly_km)
+        else base_weekly_km
+    )
+
+    # V2 target for current week: WeeklyTarget if available, else compatibility projection
+    if _weekly_target_fc is not None and _weekly_target_fc.target_km is not None:
+        current_target_km_v2 = _weekly_target_fc.target_km
+    else:
+        # Compatibility fallback: duration-based reprise (no km target from V2)
+        # or plain projection when periodization failed.
+        # Use the compatibility function (display projection, not decision).
+        current_target_km_v2 = compute_target_km(target_base_km, goal, determine_phase(current_week, total_weeks))
+        current_target_km_v2 = apply_resume_guard(current_target_km_v2, km_7, target_base_km)
+
+    # Active weeks for reprise transition display — derived from V2 TrainingHistory
+    _active_weeks_v2 = sum(1 for km in _th_fc.weekly_distance_buckets_28d if km > 0)
+    # V2 uses REPRISE_EXIT_STABLE_WEEKS = 4 (training_state.py); transition
+    # week is when the athlete accumulates 4 consistent active weeks.
+    _V2_REPRISE_EXIT_STABLE_WEEKS = 4
     reprise_transition_week = (
-        current_week + max(0, REPRISE_STABLE_WEEKS - reprise["active_weeks"])
+        current_week + max(0, _V2_REPRISE_EXIT_STABLE_WEEKS - _active_weeks_v2)
         if reprise_active else None
     )
 
@@ -4472,11 +4617,11 @@ async def get_full_training_cycle(
         phase = determine_phase(week_num, total_weeks)
         phase_info = get_phase_description(phase, lang)
         
-        # Target volume — SAME engine as the detailed week plan so cards match sessions.
-        # The current week uses the reprise-aware target; future weeks project normally.
+        # Target volume — current week from V2 WeeklyTarget; future weeks from
+        # compatibility projection (no V2 multi-week forecast equivalent).
         is_current_week = cycle_status == "active" and week_num == current_week
         if is_current_week:
-            target_km = reprise["target_km"]
+            target_km = current_target_km_v2
         else:
             target_km = compute_target_km(target_base_km, goal, phase)
             target_km = apply_resume_guard(target_km, km_7, target_base_km)
@@ -4522,7 +4667,7 @@ async def get_full_training_cycle(
             "intensity_pct": phase_info.get("intensity_pct", 15)
         })
     
-    current_target_km = reprise["target_km"]
+    current_target_km = current_target_km_v2
 
     return {
         "goal": goal,
@@ -4541,7 +4686,7 @@ async def get_full_training_cycle(
             "km_28": round(km_28, 1),
             "current_weekly_km": round(base_weekly_km, 1),
             "target_km": current_target_km,
-            "phase": current_phase,
+            "phase": determine_phase(current_week, total_weeks),
         },
         "weeks": weeks_overview
     }
@@ -4550,118 +4695,28 @@ async def get_full_training_cycle(
 @api_router.get("/training/week-plan")
 async def get_week_plan(user: dict = Depends(auth_user)):
     """
-    Génère un plan d'entraînement détaillé pour la semaine via LLM.
-    Utilise le contexte d'entraînement et l'objectif défini.
+    [DEPRECATED — PR #139] Endpoint superseded by /training/plan (V2 pipeline).
+
+    Legacy path used db.training_goals + determine_target_load() + resolve_reprise_plan()
+    + generate_cycle_week() — all removed in PR #139.
+
+    This endpoint now delegates directly to generate_dynamic_training_plan() so the
+    V2 pipeline (TrainingState → WeeklyTarget → WorkoutGenerator) remains the single
+    source of truth.  determine_target_load() has no V2 equivalent; target load is now
+    expressed via WeeklyTarget.target_km / target_duration_minutes.
+
+    Audit: no frontend caller found → deprecation chosen over removal for safety.
     """
-    user_id = user["id"]
-    # Récupérer l'objectif
-    goal = await db.training_goals.find_one({"user_id": user_id}, {"_id": 0})
-    
-    if not goal:
-        raise HTTPException(status_code=400, detail="No goal defined. Use /api/training/set-goal first.")
-
-    # Retrieve recent data for context
-    today = datetime.now(timezone.utc)
-    seven_days_ago = today - timedelta(days=7)
-    twenty_eight_days_ago = today - timedelta(days=28)
-    
-    workouts_7 = await db.workouts.find({
-        "user_id": user_id,
-        "date": {"$gte": seven_days_ago.isoformat()}
-    }).to_list(100)
-    
-    workouts_28 = await db.workouts.find({
-        "user_id": user_id,
-        "date": {"$gte": twenty_eight_days_ago.isoformat()}
-    }).to_list(100)
-    
-    # Calculer les métriques
-    km_7 = sum(w.get("distance_km", 0) or 0 for w in workouts_7)
-    km_28 = sum(w.get("distance_km", 0) or 0 for w in workouts_28)
-    km_7_running = sum(normalized_distance_km(w) for w in workouts_7 if is_running(w))
-    km_28_running = sum(normalized_distance_km(w) for w in workouts_28 if is_running(w))
-    load_7 = km_7 * 10
-    load_28 = km_28 * 10
-    
-    # Construire le contexte
-    # ctl/atl/tsb km-based aliases removed (PR #127 — faux physiological metrics).
-    # load_7/load_28 kept as volume inputs for determine_target_load().
-    # acwr=None — km_7/(km_28/4) must NOT be exposed as ACWR (#127 pre-merge corrections).
-    # TrainingLoad V2 not available in this context (no garmin_activities).
-    context = {
-        "ctl": None,
-        "atl": None,
-        "tsb": None,
-        "acwr": None,
-        "weekly_km": compute_current_weekly_km(workouts_28),
-        "load_7": load_7,
-        "load_28": load_28,
-    }
-    
-    # Calculer la phase
-    start_date = goal["start_date"]
-    cycle_weeks = goal["cycle_weeks"]
-    
-    if isinstance(start_date, datetime) and start_date.tzinfo is None:
-        start_date = start_date.replace(tzinfo=timezone.utc)
-    
-    if today < start_date:
-        current_week = 0
-    else:
-        delta_days = (today - start_date).days
-        current_week = min(delta_days // 7 + 1, cycle_weeks + 1)
-    
-    phase = determine_phase(current_week, cycle_weeks)
-    
-    # Calculer la charge cible
-    from training_engine import determine_target_load
-    target_load = determine_target_load(context, phase)
-
-    # PR76: compute the protected target BEFORE generation so both LLM and
-    # fallback paths use the same capped value.
-    # PR76b/reprise: single source of truth (active-weeks base + state + guard).
-    reprise = resolve_reprise_plan(workouts_28, goal["goal_type"], phase, km_7=km_7_running)
-    _target_base_km = reprise["base_km"]
-    target_km_protected = reprise["target_km"]
-    context["target_km_protected"] = target_km_protected
-    context["km_7"] = round(km_7_running, 1)
-    context["training_state"] = reprise["state"]
-
-    # Générer le plan via LLM
-    plan, success, metadata = await generate_cycle_week(
-        context=context,
-        phase=phase,
-        target_load=target_load,
-        goal=goal["goal_type"],
-        user_id=user_id
-    )
-
-    if not success or not plan:
-        # Fallback: plan générique basé sur la phase, respectant target_km_protected
-        plan = _generate_fallback_week_plan(context, phase, target_load, goal["goal_type"], target_km_protected)
-
-    target_km_debug = target_km_protected
-
+    v2_plan = await generate_dynamic_training_plan(db, user["id"])
+    # Wrap in a thin compatibility envelope so existing callers (if any) still get
+    # recognisable top-level keys while receiving the V2 plan.
     return {
-        "goal": {
-            "type": goal["goal_type"],
-            "name": goal["event_name"],
-            "event_date": goal["event_date"].isoformat() if isinstance(goal["event_date"], datetime) else goal["event_date"]
-        },
-        "current_week": current_week,
-        "total_weeks": cycle_weeks,
-        "phase": phase,
-        "context": context,
-        "debug_volume": {
-            "km_7": round(km_7_running, 1),
-            "km_28": round(km_28_running, 1),
-            "current_weekly_km": round(context.get("weekly_km", DEFAULT_WEEKLY_KM), 1),
-            "target_km": target_km_debug,
-            "phase": phase,
-        },
-        "plan": plan,
-        "generated_by": "llm" if success else "fallback",
-        "metadata": metadata
+        **v2_plan,
+        "deprecated": True,
+        "deprecation_note": (
+            "Use /api/training/plan. This endpoint is deprecated as of PR #139 "
+            "and will be removed in a future PR."
+        ),
     }
 
 

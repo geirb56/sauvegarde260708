@@ -19,15 +19,15 @@ import logging
 from typing import Dict, List, Optional, Tuple
 from dotenv import load_dotenv
 from training_engine import (
-    DEFAULT_WEEKLY_KM,
-    compute_target_km,
-    apply_resume_guard,
-    compute_long_run_km,
-    build_reprise_week_structure,
-    REPRISE_DEEP_SESSION_MINUTES,
-    reprise_deep_durations,
-    reprise_durations,
-    VOLUME_GOAL_CONFIG,
+    # PR #139: only non-decision compatibility re-exports remain.
+    # All volume/reprise/structure decision symbols removed from runtime path.
+    # generate_cycle_week() is now dead code at runtime (see PR #139 migration report).
+    DEFAULT_WEEKLY_KM,  # kept as inline fallback sentinel (20 km)
+    VOLUME_GOAL_CONFIG,  # kept for session-count config only (not training decision)
+)
+from training_v2.workout_generator import (
+    _compute_long_run_km as _v2_compute_long_run,
+    _split_durations as _v2_split_dur,
 )
 
 load_dotenv()
@@ -286,14 +286,35 @@ async def generate_cycle_week(
     # Number of sessions
     target_sessions = sessions_per_week if sessions_per_week in [3, 4, 5, 6] else config["sessions"]
 
-    # Target weekly volume — single source of truth shared with cycle overview.
-    # PR76: honour target_km_protected if the resume guard was triggered upstream.
-    target_km = context.get("target_km_protected") or compute_target_km(current_weekly_km, goal, phase)
-    target_km = apply_resume_guard(target_km, context.get("km_7", current_weekly_km), current_weekly_km)
+    # Target weekly volume — V2 source (PR #139).
+    # Priority 1: weekly_target_v2.target_km (V2 WeeklyTarget, reconciled).
+    # Priority 2: target_km_protected (already guarded upstream by V2 or legacy).
+    # Priority 3: compatibility fallback from current volume (+10 % progression cap).
+    # compute_target_km() and apply_resume_guard() removed — V2 handles these upstream.
+    _wt_v2 = context.get("weekly_target_v2") or {}
+    target_km = (
+        _wt_v2.get("target_km")
+        or context.get("target_km_protected")
+        or round(max(1.0, float(current_weekly_km or DEFAULT_WEEKLY_KM)) * 1.1, 1)
+    )
+    # apply_resume_guard() removed: V2 WeeklyTarget already applies the resume guard
+    # via _apply_resume_guard() in weekly_target.py. Double-applying is prohibited.
 
-    # Long run distance — compute_long_run_km in training_engine is the single
-    # source of truth. Do not re-cap here.
-    target_long_run = compute_long_run_km(target_km, goal)
+    # Long run distance — V2 WorkoutGenerator is the source (PR #139).
+    # _compute_long_run_km() is imported from training_v2.workout_generator to avoid
+    # copying the legacy formula (see architectural constraint in problem statement §9).
+    # Goal type mapping: legacy string → V2 goal_type string used by WorkoutGenerator.
+    _GOAL_MAP_COACH = {
+        "5K": "5k", "10K": "10k", "SEMI": "half_marathon",
+        "HALF_MARATHON": "half_marathon", "MARATHON": "marathon",
+        "ULTRA": "ultra", "MAINTENANCE": "maintenance",
+    }
+    _v2_goal_type_str = _GOAL_MAP_COACH.get((goal or "SEMI").upper(), "half_marathon")
+    try:
+        target_long_run = _v2_compute_long_run(float(target_km), _v2_goal_type_str)
+    except Exception:
+        # Isolated fallback: keep function operational without crashing.
+        target_long_run = round(float(target_km) * 0.35, 1)
 
     # Use personalized paces or defaults
     paces = personalized_paces or context.get('paces', {})
@@ -448,15 +469,29 @@ async def generate_cycle_week(
         week_structure = [(d, "recovery" if t == "endurance" else t) for d, t in week_structure]
 
     # Reprise handling (comeback after a break). Both deep (0 km/28d) and partial
-    # reprise are prescribed by DURATION (easy minutes, run/walk), scaled to prior
-    # fitness and growing per completed active week — never a tiny mileage split.
+    # reprise are prescribed by DURATION (easy minutes, run/walk) from V2 WeeklyTarget.
     # `reprise_exit`/`normal` keep the standard structure (intensity re-introduced).
+    # reprise_durations() legacy removed (PR #139); V2 source: WeeklyTarget.target_duration_minutes
+    # split by training_v2.workout_generator._split_durations().
     training_state = context.get("training_state", "normal")
     if training_state in ("deep_reprise", "partial_reprise"):
         easy_pace = pace_z1 or 7.0
-        prior = context.get("prior_weekly_km", 0)
-        active_weeks = context.get("reprise_active_weeks", 0)
-        durations = reprise_durations(prior, active_weeks)  # sorted ascending [a,b,c]
+        # V2 duration source: weekly_target_v2.target_duration_minutes
+        _wt_dur = (_wt_v2.get("target_duration_minutes") if _wt_v2 else None)
+        if _wt_dur and _wt_dur > 0:
+            # V2 split: ascending [short, mid, long]
+            try:
+                durations = _v2_split_dur(int(_wt_dur), n=3)
+            except Exception:
+                # Isolated fallback: simple 30/35/35 split
+                _base = max(30, int(_wt_dur) // 3)
+                durations = [_base, _base + 5, int(_wt_dur) - _base - (_base + 5)]
+        else:
+            # No V2 duration available: use conservative fixed durations for
+            # duration-based reprise (30/35/40 min, floor profile).
+            # This is NOT the legacy formula — it uses a fixed floor, not
+            # prior_weekly_km-scaled values.
+            durations = sorted([30, 35, 40])
         # thursday = recovery (shortest), tuesday = mid, sunday = long easy (max)
         day_dur = {"tuesday": ("endurance", durations[1]),
                    "thursday": ("recovery", durations[0]),
