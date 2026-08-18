@@ -40,7 +40,8 @@ def compute_vo2max_from_vma(vma_kmh: Optional[float]) -> Optional[float]:
 
 def vma_pace(vma_kmh: float, pct: float) -> str:
     """Target pace 'MM:SS' per km at a given fraction of VMA."""
-    speed = (vma_kmh or 0) * pct
+    vma = _to_positive_float(vma_kmh)
+    speed = (vma or 0) * pct
     if speed <= 0:
         return "--:--"
     pace_min = 60.0 / speed
