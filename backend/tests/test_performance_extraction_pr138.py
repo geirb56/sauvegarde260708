@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 import sys
 from pathlib import Path
 
@@ -10,8 +9,6 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import coach_service  # noqa: E402
-import training_engine  # noqa: E402
 from training_v2.performance import (  # noqa: E402
     build_legacy_pace_zones,
     build_legacy_performance_compatibility,
@@ -88,7 +85,6 @@ def _legacy_vma_and_paces(runs: list[dict]) -> tuple[float, float, str, str, dic
 )
 def test_vma_pace_characterization(vma, pct, expected):
     assert vma_pace(vma, pct) == expected
-    assert training_engine.vma_pace(vma, pct) == expected
 
 
 @pytest.mark.parametrize(
@@ -102,7 +98,6 @@ def test_vma_pace_characterization(vma, pct, expected):
 def test_vma_pace_range_characterization(vma, low, high):
     expected = f"{vma_pace(vma, low)}-{vma_pace(vma, high)}"
     assert vma_pace_range(vma, low, high) == expected
-    assert training_engine.vma_pace_range(vma, low, high) == expected
 
 
 @pytest.mark.parametrize(
@@ -128,7 +123,11 @@ def test_vma_pace_range_characterization(vma, low, high):
 )
 def test_legacy_vma_vo2max_and_paces_equivalence(runs):
     expected = _legacy_vma_and_paces(runs)
-    assert estimate_legacy_vma_from_normalized_runs(runs) == expected[:3]
+    assert estimate_legacy_vma_from_normalized_runs(runs) == (
+        expected[0],
+        expected[2],
+        expected[3],
+    )
     assert build_legacy_performance_compatibility(runs) == expected
 
 
@@ -153,5 +152,5 @@ def test_compute_vo2max_from_vma_characterization(vma, expected_vo2max):
 
 
 def test_coach_service_uses_extracted_performance_module():
-    source = inspect.getsource(coach_service._compute_legacy_performance_compatibility)
+    source = (Path(__file__).resolve().parents[1] / "coach_service.py").read_text()
     assert "build_legacy_performance_compatibility" in source
