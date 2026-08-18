@@ -16,7 +16,6 @@ from training_v2.weekly_reconciliation import build_weekly_reconciliation
 from training_v2.weekly_target import WeeklyTarget, build_weekly_target
 from training_v2.workout_generator import (
     WeeklyPlan,
-    _compute_long_run_km,
     build_weekly_plan,
 )
 
@@ -133,8 +132,7 @@ def test_multi_goal_reprise_state_never_overridden():
 
 
 def test_long_run_invariants_use_weekly_target_only():
-    assert _compute_long_run_km(5.0) <= 5.0
-
+    # Verify via public API that long_run <= target_km for a distance-based target of 5 km
     weekly_target = WeeklyTarget(
         reference_date=REF,
         target_basis="distance",

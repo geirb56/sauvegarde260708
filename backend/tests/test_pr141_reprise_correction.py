@@ -199,15 +199,8 @@ class TestCaseA_DeepRepriseHalfMarathon:
 
     @pytest.fixture
     def setup(self):
-        # No run in 29 days (duration-only runs do NOT reset days_since when
-        # distance_m=0; here we simply have no recent activity at all).
-        activities = (
-            [_act(days_ago, 0.1, ref=REF) for days_ago in (29, 31, 33)]  # just outside 28d, tiny distance
-            + _heavy_historical_activities()
-        )
-        # Actually put the "last run" at 29+ days so no_distance_in_28d is not needed to trigger it.
-        # But for safety we test the classic deep_reprise path (days_since >= 28).
-        activities = _heavy_historical_activities()  # last run at 35+ days
+        # Classic deep_reprise path: last run at 35+ days (days_since >= 28).
+        activities = _heavy_historical_activities()
         hist, prof, state, wt = _build_pipeline(activities, "half_marathon")
         return hist, prof, state, wt
 
