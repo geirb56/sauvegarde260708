@@ -36,6 +36,14 @@ from .periodization import (
     PeriodizationSnapshot,
     build_periodization,
 )
+from .performance import (
+    build_legacy_pace_zones,
+    build_legacy_performance_compatibility,
+    compute_vo2max_from_vma,
+    estimate_legacy_vma_from_normalized_runs,
+    vma_pace,
+    vma_pace_range,
+)
 from .plan_goal import GoalType, PlanGoal, build_plan_goal
 from .readiness_sufficiency import (
     PhysioBaseline,
@@ -106,6 +114,10 @@ __all__ = [
     "PeriodizationPhase",
     "PeriodizationSnapshot",
     "build_periodization",
+    "build_legacy_pace_zones",
+    "build_legacy_performance_compatibility",
+    "compute_vo2max_from_vma",
+    "estimate_legacy_vma_from_normalized_runs",
     "PhysioBaseline",
     "PhysioSignal",
     "ReasonCode",
@@ -155,4 +167,6 @@ __all__ = [
     "WeeklyReconciliationAction",
     "WeeklyReconciliationResult",
     "build_weekly_reconciliation",
+    "vma_pace",
+    "vma_pace_range",
 ]

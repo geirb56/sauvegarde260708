@@ -9,11 +9,11 @@ Ce document est :
 - la roadmap d'exécution ;
 - un moyen d'éviter la perte de contexte entre sessions/outils.
 
-Last verified against main: `8564060b1162d4d56ea2136397e3ae8606a08b3e` (post-merge PR #134)
+Last verified against main: `a94adc400934f9d4ac60cb34b7ae1410ec8b73c2` (post-merge PR #137)
 
 HEAD PR (#135): see current branch HEAD
 
-Date: `2026-08-17`
+Date: `2026-08-18`
 
 ---
 
@@ -1830,7 +1830,7 @@ Règles canoniques #134 :
 
 Hotfix de compatibilité Python 3.11 sur la chaîne V2.
 
-## 38) PR #137 — Daily Runtime Migration V2 — IMPLEMENTED / PENDING MERGE
+## 38) PR #137 — Daily Runtime Migration V2 — MERGED
 
 ### État réel de départ #137
 
@@ -1873,7 +1873,36 @@ Hotfix de compatibilité Python 3.11 sur la chaîne V2.
    - suppression du module et du code réellement mort ;
    - tests/régression/runtime validation après suppression.
 
-4. **Ensuite seulement :**
+## 39) PR #138 — Legacy consumers audit + performance extraction — IMPLEMENTED / PENDING MERGE
+
+### Objectif
+
+- inventorier exhaustivement les consumers runtime/test de `backend/training_engine.py` ;
+- extraire la compatibilité performance encore légitime (VMA / VO2max / paces) vers une couche pure dédiée ;
+- ne pas supprimer `training_engine.py` ;
+- préparer #139 avec une liste exacte des migrations runtime restantes.
+
+### Décisions
+
+- `backend/training_v2/performance.py` porte uniquement l'estimation performance pure et déterministe ;
+- aucune formule Training V2 n'est modifiée ;
+- aucun LT1/LT2 n'est introduit ;
+- `/training/today` reste confirmé migré V2 depuis #137 ;
+- `/training/metrics` garde sa dépendance legacy résiduelle tant que le consumer n'est pas migré explicitement.
+
+### NEXT (ordre canonique)
+
+1. **#139 — Migration/suppression des derniers consumers legacy identifiés**
+   - migrer les callers nécessaires vers les contrats V2 / couches extraites ;
+   - prouver que les chemins runtime réels ne dépendent plus du legacy ;
+   - ne pas supprimer `training_engine.py` tant que zéro caller runtime réel n'est pas démontré.
+
+2. **#140 — Kill final `training_engine.py`**
+   - uniquement après preuve exhaustive de zéro consumer runtime réel ;
+   - suppression du module et du code réellement mort ;
+   - tests/régression/runtime validation après suppression.
+
+3. **Ensuite seulement :**
    - LT1/LT2 multi-évidence ;
    - Body Battery nocturne ;
    - V3 Flexible Schedule.

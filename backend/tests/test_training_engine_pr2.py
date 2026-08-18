@@ -179,7 +179,8 @@ class TestVMAAbove14NotCapped:
         import coach_service
         import llm_coach
         import training_engine
-        for mod in (coach_service, llm_coach, training_engine):
+        from training_v2 import performance
+        for mod in (coach_service, llm_coach, training_engine, performance):
             src = inspect.getsource(mod)
             # Explicit patterns from the PR2 audit
             forbidden = [
@@ -208,17 +209,17 @@ class TestVMAFallbackConfidence:
 
     def test_fallback_still_exists(self):
         # We deliberately keep the fallback to avoid a wider refactor in PR2.
-        import coach_service
-        src = inspect.getsource(coach_service)
-        assert "avg_speed / 0.70" in src, (
+        from training_v2 import performance
+        src = inspect.getsource(performance)
+        assert "avg_speed / 0.70" in src or "(60.0 / avg_pace) / 0.70" in src, (
             "PR2 should preserve the /0.70 fallback (no refactor) — pattern missing."
         )
 
     def test_fallback_confidence_is_low(self):
         # Read the confidence map straight from the source to make sure the
         # 'average' branch (i.e., the /0.70 fallback) is flagged 'low'.
-        import coach_service
-        src = inspect.getsource(coach_service)
+        from training_v2 import performance
+        src = inspect.getsource(performance)
         # The exact assignment we expect after PR2.
         assert '"average": "low"' in src, (
             "PR2 #3: /0.70 fallback must be marked as low-confidence VMA."
