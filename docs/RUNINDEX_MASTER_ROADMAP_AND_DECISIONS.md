@@ -1873,7 +1873,7 @@ Hotfix de compatibilité Python 3.11 sur la chaîne V2.
    - suppression du module et du code réellement mort ;
    - tests/régression/runtime validation après suppression.
 
-## 39) PR #138 — Legacy consumers audit + performance extraction — IMPLEMENTED / PENDING MERGE
+## 39) PR #138 — Legacy consumers audit + performance extraction — MERGED
 
 ### Objectif
 
@@ -1906,3 +1906,27 @@ Hotfix de compatibilité Python 3.11 sur la chaîne V2.
    - LT1/LT2 multi-évidence ;
    - Body Battery nocturne ;
    - V3 Flexible Schedule.
+
+## 40) PR #140 — Legacy consumers audit + performance extraction — NOUVEAU PR
+
+### Vérifié
+
+- HEAD courant relu : `9d1165627d991014b122d1ad51c6fd2e63c33117` ;
+- `backend/training_engine.py` relu intégralement (929 lignes) ;
+- consumers directs relus : `backend/server.py`, `backend/llm_coach.py`, 8 tests directs ;
+- couche extraite relue : `backend/training_v2/performance.py` ;
+- rapport existant relu : `RUNINDEX_PR138_LEGACY_AUDIT.md` ;
+- parité relue/exécutée via `test_performance_extraction_pr138.py` et `test_performance_architecture_pr138.py`.
+
+### État actuel
+
+- PR #138 est bien mergée sur `main` ; la branche de travail repart d'un état propre sans diff applicative préalable ;
+- l'extraction performance legacy existe déjà et reste correcte : `training_v2.performance` porte VMA / VO2max / paces de compatibilité ;
+- `training_engine.py` n'est pas supprimable à ce stade : des consumers runtime directs subsistent encore dans `server.py` (`/training/metrics`, `/training/full-cycle`, `/training/week-plan`, goal metadata) et `llm_coach.py` (génération hebdo déterministe) ;
+- les garde-fous architecture V2 restent verts ; le test HTTP `test_training_plan_vma.py` dépend toujours d'un backend live (`REACT_APP_BACKEND_URL`) et ne constitue pas une preuve locale autonome.
+
+### Next steps
+
+1. migrer les derniers helpers runtime hors `training_engine.py` sans toucher à la couche performance déjà extraite ;
+2. isoler explicitement la logique restante de `/training/full-cycle`, `/training/metrics` et `llm_coach.generate_cycle_week()` dans des modules V2 dédiés ;
+3. rebrancher ensuite les tests legacy encore importeurs avant toute suppression finale de `training_engine.py`.
