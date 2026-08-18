@@ -1854,15 +1854,26 @@ Hotfix de compatibilité Python 3.11 sur la chaîne V2.
 
 ### NEXT (ordre canonique)
 
-1. **#138 — performance extraction/audit**
-2. **#139 — kill `training_engine.py`**
-3. ensuite seulement : LT1/LT2 multi-évidence
+1. **#138 — Audit exhaustif des consumers legacy restants**
+   - auditer notamment `server.py` (`/training/metrics`), `insights.py`,
+     `llm_coach.py`, `training_engine.py` et les autres callers réels ;
+   - inclure l'audit/extraction performance VMA/paces ;
+   - identifier toutes les frontières Mongo → Training V2 encore incorrectes ;
+   - appliquer `mongo_garmin_activities_to_domain` là où nécessaire ;
+   - NE PAS supprimer `training_engine.py`.
 
-Après #137 :
+2. **#139 — Migration/suppression des derniers consumers legacy identifiés**
+   - migrer les callers nécessaires vers les contrats V2 / couches extraites ;
+   - prouver que les chemins runtime réels ne dépendent plus du legacy ;
+   - NE PAS encore supprimer `training_engine.py` tant que zéro caller réel
+     n'est pas démontré.
 
-- audit global des consumers encore branchés legacy ;
-- extraction `performance.py` si nécessaire ;
-- suppression complète `training_engine.py` ;
-- validation runtime réelle ;
-- puis seulement thresholds LT1/LT2 multi-évidence, RunIndex Score V2,
-  Body Battery nocturne, V3 Flexible Schedule, trail/elevation-aware, produit.
+3. **#140 — Kill final `training_engine.py`**
+   - uniquement après preuve exhaustive de zéro consumer runtime réel ;
+   - suppression du module et du code réellement mort ;
+   - tests/régression/runtime validation après suppression.
+
+4. **Ensuite seulement :**
+   - LT1/LT2 multi-évidence ;
+   - Body Battery nocturne ;
+   - V3 Flexible Schedule.
