@@ -34,7 +34,12 @@ from typing import Any, Dict, List, Optional
 
 from .data_layer import GarminActivity, GarminCapabilities
 from training_v2.domain_capabilities import DomainCapabilities
-from training_v2.domain_activity import DomainActivity
+from training_v2.domain_activity import (
+    DomainActivity,
+    _domain_intensity_minutes,
+    _domain_source_activity_id,
+    _domain_start_time,
+)
 
 
 def to_domain_activity(activity: GarminActivity) -> DomainActivity:
@@ -86,16 +91,8 @@ def _opt_float_positive(value: Any) -> Optional[float]:
     return f if f > 0 else None
 
 
-def _opt_float_nonneg(value: Any) -> Optional[float]:
-    """Return float(value) when value is a non-negative real number, else None."""
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    f = float(value)
-    return f if f >= 0 else None
-
-
 def _opt_float_any(value: Any) -> Optional[float]:
-    """Return float(value) for any real number (including negative), else None."""
+    """Return float(value) for any real number (including negative and zero), else None."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return float(value)
@@ -124,16 +121,17 @@ def mongo_garmin_to_domain(doc: Dict[str, Any]) -> DomainActivity:
 
     # start_time — same name at both levels
     start_raw = sub.get("start_time") or doc.get("start_time")
-    from training_v2.domain_activity import _domain_start_time
     start_time = _domain_start_time(start_raw)
 
     # distance_m — subdoc canonical name; top-level alias is "distance"
+    # A zero distance is physiologically meaningless; use _opt_float_positive.
     dist_raw = sub.get("distance_m") if "distance_m" in sub else doc.get("distance_m", doc.get("distance"))
-    distance_m = _opt_float_nonneg(dist_raw) if dist_raw is not None else None
+    distance_m = _opt_float_positive(dist_raw) if dist_raw is not None else None
 
     # duration_s — subdoc canonical name; top-level alias is "duration"
+    # A zero duration contributes no load; use _opt_float_positive.
     dur_raw = sub.get("duration_s") if "duration_s" in sub else doc.get("duration_s", doc.get("duration"))
-    duration_s = _opt_float_nonneg(dur_raw) if dur_raw is not None else None
+    duration_s = _opt_float_positive(dur_raw) if dur_raw is not None else None
 
     # average_hr — subdoc canonical name; top-level alias is "avg_hr"
     avg_hr_raw = sub.get("average_hr") if "average_hr" in sub else doc.get("average_hr", doc.get("avg_hr"))
@@ -145,7 +143,6 @@ def mongo_garmin_to_domain(doc: Dict[str, Any]) -> DomainActivity:
 
     # moderate_intensity_minutes — only in subdoc for modern documents
     mod_raw = sub.get("moderate_intensity_minutes") if "moderate_intensity_minutes" in sub else doc.get("moderate_intensity_minutes")
-    from training_v2.domain_activity import _domain_intensity_minutes
     moderate_intensity_minutes = _domain_intensity_minutes(mod_raw) if mod_raw is not None else None
 
     # vigorous_intensity_minutes — only in subdoc for modern documents
@@ -154,13 +151,13 @@ def mongo_garmin_to_domain(doc: Dict[str, Any]) -> DomainActivity:
 
     # elevation_gain_m — subdoc field is "elevation_gain" (no _m suffix);
     # top-level also uses "elevation_gain".  Explicit rename → elevation_gain_m.
+    # Zero elevation gain is valid (flat run); use _opt_float_any.
     elev_raw = sub.get("elevation_gain") if "elevation_gain" in sub else doc.get("elevation_gain_m", doc.get("elevation_gain"))
     elevation_gain_m = _opt_float_any(elev_raw) if elev_raw is not None else None
 
     # source / source_activity_id — top-level only
     source_raw = doc.get("source")
     source: Optional[str] = source_raw if isinstance(source_raw, str) else None
-    from training_v2.domain_activity import _domain_source_activity_id
     source_activity_id = _domain_source_activity_id(doc.get("activity_id") or doc.get("source_activity_id"))
 
     return DomainActivity(

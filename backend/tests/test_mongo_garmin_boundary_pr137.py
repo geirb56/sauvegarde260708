@@ -182,6 +182,13 @@ class TestC_AbsentFields:
         act = mongo_garmin_to_domain(doc)
         assert act.duration_s is None
 
+    def test_zero_distance_returns_none(self):
+        """Zero distance is meaningless and must return None (None ≠ 0 contract)."""
+        doc = {"activity_type": "running", "start_time": _START, "garmin_activity": {"distance_m": 0, "duration_s": 0}}
+        act = mongo_garmin_to_domain(doc)
+        assert act.distance_m is None
+        assert act.duration_s is None
+
     def test_subdoc_missing_field_is_none(self):
         """If garmin_activity sub-doc is present but a field is absent → None."""
         doc = {
