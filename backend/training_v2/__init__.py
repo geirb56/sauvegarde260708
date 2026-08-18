@@ -26,6 +26,10 @@ PR133 exposes:           DailyAdaptationAction, DailyAdaptationResult,
                          build_daily_adaptation.
 PR134 exposes:           WeeklyReconciliationAction, WeeklyReconciliationResult,
                          build_weekly_reconciliation.
+
+Legacy performance compatibility helpers live in ``training_v2.performance``
+and must be imported explicitly from that module. They are intentionally not
+part of the canonical public ``training_v2`` namespace.
 """
 
 from .domain_activity import DomainActivity

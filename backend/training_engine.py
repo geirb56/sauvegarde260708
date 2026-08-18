@@ -14,6 +14,8 @@ Usage:
 import datetime
 from typing import Any, Dict, Optional, List
 
+from training_v2.performance import vma_pace, vma_pace_range
+
 
 # ============================================================
 # CONFIGURATION BY GOAL
@@ -387,34 +389,6 @@ def compute_long_run_km(target_km: float, goal: str) -> int:
     # PR76b: below the goal's recommended weekly floor (reprise / beginner)
     # the long-run floor must not dominate the week — cap at 40 % of target.
     return int(cap_long_run_for_low_volume(long_run, target_km, goal))
-
-
-# ============================================================
-# PACE FROM VMA — SINGLE SOURCE OF TRUTH
-# All displayed target paces are derived from the estimated VMA:
-#   speed (km/h) = VMA * pct   ·   pace (min/km) = 60 / speed
-# %VMA reference: 60 recovery(Z1) · 65 active recovery · 70 very easy ·
-#   75 base endurance · 80 hard endurance (top Z2) · 85-90 threshold/tempo ·
-#   95-100 long intervals · 100-105 short intervals.
-# ============================================================
-
-def vma_pace(vma_kmh: float, pct: float) -> str:
-    """Target pace 'MM:SS' per km at a given fraction of VMA."""
-    speed = (vma_kmh or 0) * pct
-    if speed <= 0:
-        return "--:--"
-    pace_min = 60.0 / speed
-    m = int(pace_min)
-    s = int(round((pace_min - m) * 60))
-    if s >= 60:
-        m += 1
-        s -= 60
-    return f"{m}:{s:02d}"
-
-
-def vma_pace_range(vma_kmh: float, pct_low: float, pct_high: float) -> str:
-    """Pace range 'slow-fast' between two %VMA (pct_low < pct_high => slower shown first)."""
-    return f"{vma_pace(vma_kmh, pct_low)}-{vma_pace(vma_kmh, pct_high)}"
 
 
 def adapt_session_to_readiness(planned_session: Dict, recommendation: str,
