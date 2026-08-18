@@ -28,3 +28,9 @@ def test_decision_modules_do_not_import_performance(module_path: Path):
     assert "from training_v2 import vma_pace" not in source
     assert "from training_v2 import vma_pace_range" not in source
 
+
+def test_training_v2_public_namespace_does_not_expose_legacy_performance_api():
+    import training_v2
+
+    assert not hasattr(training_v2, "DEFAULT_COMPATIBILITY_VMA_KMH")
+    assert not hasattr(training_v2, "build_legacy_performance_compatibility")

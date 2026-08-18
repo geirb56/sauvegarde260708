@@ -1,12 +1,15 @@
-"""Pure performance compatibility helpers.
+"""LEGACY PERFORMANCE COMPATIBILITY helpers only.
 
 This module intentionally contains PERFORMANCE ESTIMATION ONLY:
 - VMA estimation
 - VO2max derivation from VMA
 - pace / pace-zone formatting
 
-It does NOT decide training structure, readiness, periodization, or adaptation.
-Inputs are normalized primitive facts only; no Mongo/Garmin access occurs here.
+This module exists only to preserve legacy runtime compatibility behavior.
+It is NOT the canonical V2 physiological source of truth.
+It does NOT decide training structure, readiness, periodization, adaptation,
+or canonical physiology. Inputs are normalized primitive facts only; no
+Mongo/Garmin access occurs here.
 """
 
 from __future__ import annotations
