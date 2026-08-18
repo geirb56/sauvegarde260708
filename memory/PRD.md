@@ -3,6 +3,15 @@
 ## Problem Statement
 Pull https://github.com/geirb56/sauvegarde260629 and set it up so it runs. Replace /app contents.
 
+## 2026-08-18 — Pull sauvegarde260708/main (PR #136 + PR #137) — MERGÉ & VALIDÉ RUNTIME
+- Fetch sauvegarde/main 6ef49f8→a94adc4 (+9 commits). Merge local (HEAD 9ee8304). 1 seul conflit sur coach_service.py (guillemets simples local vs doubles upstream = cosmétique) → résolu en gardant la version upstream canonique. .env backend/frontend INTACTS, fichiers protégés préservés.
+- PR #136 = hotfix Python 3.11 cache-key (version canonique upstream de mon hotfix local → OBS-2 précédent RÉSOLU en amont).
+- PR #137 = migration /training/today vers DailyAdaptation V2 (#133 désormais BRANCHÉ au runtime): plan V2 → WorkoutPrescription → ReadinessResult V2 → build_readiness_decision → build_daily_adaptation → payload. Proxy legacy adapt_session_to_readiness retiré du chemin /training/today. Nouveaux: training_v2/daily_runtime_helpers.py + domain_adapter boundary Mongo→DomainActivity.
+- Runtime validé (compte réel da8505ef): backend+worker redémarrés, /run-index /training/metrics /training/today /training/plan /dashboard = 200. /training/today renvoie reason codes DailyAdaptation V2 (PLANNED_REST_DAY, PLAN_KEPT = KEEP sur jour repos, conforme #133 V1). estimated_tss=null.
+- Tests ciblés PR132+133+134+135+137 + readiness_decision + mongo_boundary = **249 passed / 0 failed**.
+- NEXT roadmap réordonné après #137: #138 (audit exhaustif consumers legacy + extraction VMA/paces + frontières Mongo→V2), #139 (migration/suppression callers legacy), #140 (kill training_engine.py après preuve zéro consumer runtime), puis LT1/LT2. training_engine.py NON supprimé.
+
+
 ## 2026-08-17 — Validation runtime globale Training Engine V2 (post-PR #135) — AUDIT LECTURE SEULE — VERDICT: GLOBAL = GO #136
 - Audit read-only, aucun code/PR/injection DB. Compte réel da8505ef (146 act, 41 daily). JWT read-only via auth.jwt_utils.
 - Git: HEAD local 5807c8a, sauvegarde/main 6ef49f8, local +14/-0 (contient tout + hotfix Py3.11). Merges: #132=beee570, #133=b2f1ead, #134=8564060, #135=6ef49f8.
