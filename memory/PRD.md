@@ -3,6 +3,15 @@
 ## Problem Statement
 Pull https://github.com/geirb56/sauvegarde260629 and set it up so it runs. Replace /app contents.
 
+## 2026-08-18 — Micro-validation runtime PR#137 (/training/today V2) — AUDIT LECTURE SEULE — VERDICT: #137 runtime=PARTIAL, GLOBAL=NO-GO #138
+- HEAD 6241020 (#136+#137 mergés). Backend+worker redémarrés. Smoke 5/5 = 200. Compte réel da8505ef.
+- Chaîne /training/today CONFORME: Plan V2 → séance prévue → Mongo garmin_activities → mongo_garmin_activities_to_domain → DomainActivity → TrainingLoad V2 → ReadinessResult V2 → ReadinessDecision V2 → DailyAdaptation V2 → payload. Aucun adapt_session_to_readiness/training_engine/fatigue_ratio/status/physio.
+- Jour de repos (mardi): action=KEEP, reason_codes=[PLANNED_REST_DAY, PLAN_KEPT]. readiness=FAVORABLE/80.5/NORMAL/SUFFICIENT. Mapping BAND→reco OK (FAVORABLE→RUN HARD/green mais KEEP → séance non durcie). estimated_tss/total_tss/ctl/atl/tsb=null. ACWR interne=2.538=/training/metrics (arrondi seul). Frontière Mongo→DomainActivity: HR/intensité/D+ préservés (avg_hr 138, mod/vig min, elev 35m).
+- 🔴 BUG-137-01 (HIGH): RecentTrainingResponse #132 SILENCIEUSEMENT INOPÉRANT dans /training/today. Via garmin_activities → available_running=0, status=unavailable, trends=unknown, avg_hr=None (alors que 125 running dans domain, champs préservés). Cause racine: training_response._activity_date ne parse PAS le format Mongo Garmin espace-séparé "YYYY-MM-DD HH:MM:SS" (n'essaie que ISO-T/date), alors que training_history._activity_date le gère. mongo_garmin_activities_to_domain passe la chaîne telle quelle. Chemin #135 marche car _to_domain_activity_from_workout reformate en ISO-T. Contredit l'objectif #137 de préservation à la frontière Mongo. Tests 202/202 passent mais masquent le bug (fixtures datetime/ISO-T).
+- Correction recommandée (NON appliquée): aligner training_response._activity_date sur training_history (ajouter fromisoformat + formats espace) OU normaliser start_time en datetime dans le domain_adapter; + fixture format Mongo espacé.
+- Rapport complet: /app/TRAINING_V2_MICRO_VALIDATION_RUNTIME_PR137.md. AUCUNE modif code, aucune PR.
+
+
 ## 2026-08-18 — Pull sauvegarde260708/main (PR #136 + PR #137) — MERGÉ & VALIDÉ RUNTIME
 - Fetch sauvegarde/main 6ef49f8→a94adc4 (+9 commits). Merge local (HEAD 9ee8304). 1 seul conflit sur coach_service.py (guillemets simples local vs doubles upstream = cosmétique) → résolu en gardant la version upstream canonique. .env backend/frontend INTACTS, fichiers protégés préservés.
 - PR #136 = hotfix Python 3.11 cache-key (version canonique upstream de mon hotfix local → OBS-2 précédent RÉSOLU en amont).
