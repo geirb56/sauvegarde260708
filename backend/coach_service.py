@@ -29,6 +29,7 @@ from llm_coach import (
 )
 from training_v2.plan_goal import GoalType, ULTRA_MIN_DISTANCE_KM, build_plan_goal
 from training_v2.periodization import build_periodization
+from training_v2.performance import build_legacy_performance_compatibility
 from training_v2.runner_profile import build_runner_profile
 from training_v2.training_history import build_training_history
 from training_v2.training_load import build_training_load
@@ -433,59 +434,17 @@ def _to_domain_activity_from_workout(workout: dict) -> dict:
 
 
 def _compute_legacy_performance_compatibility(workouts_6w: List[dict]) -> tuple[float, float, str, str, dict]:
-    running = [w for w in workouts_6w if _is_running_workout(w)]
-    paces = []
-    vma_efforts = []
-    for workout in running:
-        dist = _workout_distance_km(workout)
-        duration_min = _workout_duration_seconds(workout) / 60.0
-        if dist <= 0 or duration_min <= 0:
+    running = []
+    for workout in workouts_6w:
+        if not _is_running_workout(workout):
             continue
-        pace = duration_min / dist
-        if 3 < pace < 10:
-            paces.append(pace)
-            if duration_min >= 6 and pace < 5.5:
-                vma_efforts.append({"speed_kmh": 60.0 / pace, "duration": duration_min})
-
-    if paces:
-        avg_pace = sum(paces) / len(paces)
-        if vma_efforts:
-            best_effort = max(vma_efforts, key=lambda x: x["speed_kmh"])
-            if best_effort["duration"] >= 20:
-                estimated_vma = best_effort["speed_kmh"] / 0.85
-            elif best_effort["duration"] >= 12:
-                estimated_vma = best_effort["speed_kmh"] / 0.90
-            else:
-                estimated_vma = best_effort["speed_kmh"] / 0.95
-            vma_method = "effort"
-        else:
-            estimated_vma = (60.0 / avg_pace) / 0.70
-            vma_method = "average"
-    else:
-        estimated_vma = 12.0
-        vma_method = "default"
-
-    estimated_vma = round(estimated_vma, 1)
-    vo2max = round(estimated_vma * 3.5, 1)
-    vma_confidence = {"effort": "high", "average": "low", "default": "low"}.get(vma_method, "low")
-
-    def _pace(vma_pct: float) -> str:
-        speed = max(0.1, estimated_vma * vma_pct)
-        pace = 60.0 / speed
-        mins = int(pace)
-        secs = int((pace % 1) * 60)
-        return f"{mins}:{secs:02d}"
-
-    personalized_paces = {
-        "z1": f"{_pace(0.65)}-{_pace(0.70)}",
-        "z2": f"{_pace(0.75)}-{_pace(0.80)}",
-        "z3": f"{_pace(0.82)}-{_pace(0.87)}",
-        "z4": f"{_pace(0.88)}-{_pace(0.93)}",
-        "z5": f"{_pace(0.95)}-{_pace(1.00)}",
-        "marathon": f"{_pace(0.78)}-{_pace(0.82)}",
-        "semi": f"{_pace(0.82)}-{_pace(0.85)}",
-    }
-    return estimated_vma, vo2max, vma_method, vma_confidence, personalized_paces
+        running.append(
+            {
+                "distance_km": _workout_distance_km(workout),
+                "duration_minutes": _workout_duration_seconds(workout) / 60.0,
+            }
+        )
+    return build_legacy_performance_compatibility(running)
 
 
 def _readiness_compatibility_score(goal_label: str, weekly_km: float, vo2max: float) -> tuple[float, str, int]:
