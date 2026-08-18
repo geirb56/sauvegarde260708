@@ -253,6 +253,30 @@ def _classify_continuity(
         codes.append("NO_RUN_LAST_28D")
         return "deep_reprise", codes
 
+    # Deep-reprise guard: no valid km distance recorded in the last 28 days
+    # AND prior km-based running history exists.
+    #
+    # A runner whose 28-day distance buckets are all zero has accumulated
+    # zero running kilometres in that period regardless of whether duration-only
+    # activities (e.g. treadmill sessions without GPS, indoor workouts, manual
+    # entries) kept days_since_last_run below the 28-day threshold.
+    # From a running-volume standpoint such a runner is in a reprise situation
+    # and MUST NOT inherit an inflated chronic baseline from their 90-day history.
+    # This guard is the primary fix for PR#141 (disproportionate long run).
+    #
+    # The `has_prior_km_history` condition ensures runners who have NEVER
+    # recorded valid km (e.g. duration-only-forever, indoor-only) are not
+    # misclassified: they correctly fall through to reprise_exit or normal
+    # based on the standard depth/stability criteria below.
+    no_distance_in_28d = all(km == 0 for km in training_history.weekly_distance_buckets_28d)
+    has_prior_km_history = (
+        training_history.prior_running_window.distance_km > 0
+        or training_history.window_90d.distance_km > 0
+    )
+    if no_distance_in_28d and has_prior_km_history:
+        codes.append("NO_DISTANCE_RUN_LAST_28D")
+        return "deep_reprise", codes
+
     # ── compute recent weekly equivalent and observable baseline ──────────
     recent_weekly_km = _recent_weekly_equivalent_km(training_history)
     baseline_km = _observable_baseline_km(runner_profile)

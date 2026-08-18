@@ -359,8 +359,9 @@ def _chronic_base_km(runner_profile: RunnerProfile, training_history: TrainingHi
     Priority:
     1. Mean of truly active weeks from ``weekly_distance_buckets_28d``
        (non-zero buckets only — the exact PR77 principle without approximation).
-    2. runner_profile.typical_weekly_km when is_observed=True (for the case
-       where 28d is empty but RunnerProfile has a derived value from 90d fallback).
+    2. runner_profile.typical_weekly_km when is_observed=True AND days_since >= 28
+       (the case where RunnerProfile has a derived value from 90d fallback for a
+       deep_reprise runner whose 28d window is genuinely empty of all activity).
     3. None.
 
     Why active_weeks instead of calendar weeks:
@@ -370,13 +371,31 @@ def _chronic_base_km(runner_profile: RunnerProfile, training_history: TrainingHi
 
     active_weeks: count of non-zero distance buckets in weekly_distance_buckets_28d
     (exact, no approximation).  Bounded below at 1 when distance is present.
+
+    PR#141 safety guard:
+    When the 28d buckets are all zero AND days_since_last_run < 28, it means the
+    runner had a recent activity (possibly duration-only, indoor, or GPS-less) but
+    recorded NO valid distance in 28 days.  Using the 90d historical baseline in
+    this case would produce an artificially inflated weekly target.  The guard
+    returns None, causing callers to fall back to their safe duration-based path.
+    (The primary fix for this scenario is in _classify_continuity in training_state.py,
+    which classifies such runners as deep_reprise. This guard is a defensive invariant
+    to ensure correctness even if the classification path evolves.)
     """
     buckets = training_history.weekly_distance_buckets_28d
     active_buckets = [km for km in buckets if km > 0]
     if active_buckets:
         return sum(active_buckets) / float(len(active_buckets))
 
-    # 28d window empty: fall back to RunnerProfile (may be from 90d window).
+    # 28d distance window is empty.
+    # PR#141 guard: only use the RunnerProfile fallback when the runner has
+    # truly not run in 28+ days (days_since >= 28).  When days_since < 28,
+    # the runner had a recent activity but no valid distance — the inflated
+    # 90d historical baseline must NOT be used as the chronic base.
+    days_since = training_history.days_since_last_run
+    if days_since is not None and days_since < 28:
+        return None
+
     if runner_profile.typical_weekly_km_is_observed and runner_profile.typical_weekly_km is not None:
         return runner_profile.typical_weekly_km
 

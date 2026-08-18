@@ -938,6 +938,20 @@ def build_weekly_plan(
     # --- ensure immutability of session list --------------------------------
     immutable_sessions = tuple(sessions)
 
+    # --- PR#141 safety invariant: no individual session distance > weekly target
+    # The invariant is guaranteed structurally by _compute_long_run_km and
+    # proportional split logic, but we enforce it explicitly as a hard cap here
+    # to prevent any future regression in either the distance-based normal path
+    # or in reprise paths.  Duration-based weeks have no target_km to compare.
+    if target_basis == "distance" and weekly_target.target_km is not None:
+        _session_cap = weekly_target.target_km
+        capped_sessions: list = []
+        for _s in immutable_sessions:
+            if _s.distance_km is not None and _s.distance_km > _session_cap:
+                _s = _s.model_copy(update={"distance_km": round(_session_cap, 1)})
+            capped_sessions.append(_s)
+        immutable_sessions = tuple(capped_sessions)
+
     # --- compute plan totals ------------------------------------------------
     running_sessions = [s for s in immutable_sessions if s.workout_type != "rest"]
     session_count = len(running_sessions)
