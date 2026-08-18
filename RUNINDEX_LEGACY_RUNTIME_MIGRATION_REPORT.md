@@ -110,7 +110,7 @@
 |---|---|
 | `compute_target_km(...)` | `context["weekly_target_v2"]["target_km"]` ou `target_km_protected` |
 | `apply_resume_guard(...)` | **Supprimé** — V2 `WeeklyTarget` applique la garde en amont |
-| `compute_long_run_km(target_km, goal)` | `training_v2.workout_generator._compute_long_run_km(target_km, v2_goal_type)` |
+| `compute_long_run_km(target_km, goal)` | `training_v2.workout_generator._compute_long_run_km(target_km)` |
 | `reprise_durations(prior, active_weeks)` | `weekly_target_v2["target_duration_minutes"]` + `_split_durations()` |
 | `reprise_deep_durations`, `REPRISE_DEEP_SESSION_MINUTES` | **Supprimés** (transitifs via reprise_durations) |
 | `build_reprise_week_structure` | **Supprimé** (import mort) |

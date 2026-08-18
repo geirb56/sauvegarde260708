@@ -301,14 +301,9 @@ async def generate_cycle_week(
     # via _apply_resume_guard() in weekly_target.py. Double-applying is prohibited.
 
     # Long run distance — V2 WorkoutGenerator is the source (PR #139).
-    # _compute_long_run_km() is imported from training_v2.workout_generator to avoid
-    # copying the legacy formula (see architectural constraint in problem statement §9).
-    # Goal type mapping: legacy string → V2 goal_type string used by WorkoutGenerator.
-    _GOAL_MAP_COACH = {
-        "5K": "5k", "10K": "10k", "SEMI": "half_marathon",
-        "HALF_MARATHON": "half_marathon", "MARATHON": "marathon",
-        "ULTRA": "ultra", "MAINTENANCE": "maintenance",
-    }
+    # _compute_long_run_km(target_km) is imported from training_v2.workout_generator to avoid
+    # copying the legacy formula.  Goal type is intentionally NOT passed here so that
+    # goal-based floors cannot bypass the reprise target (PR #141 invariant).
     try:
         target_long_run = _v2_compute_long_run(float(target_km))
     except Exception:
