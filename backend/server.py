@@ -79,6 +79,7 @@ from training_v2.daily_runtime_helpers import (
     prescription_to_runtime_session,
 )
 from garmin.readiness_adapter import build_readiness_v2_from_garmin_data
+from garmin.domain_adapter import mongo_garmin_activities_to_domain
 from training_engine import (
     DEFAULT_WEEKLY_KM,
     GOAL_CONFIG,
@@ -3653,14 +3654,20 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
                 .limit(200)
                 .to_list(length=200)
             )
+            # ── Mongo → DomainActivity boundary (PR137) ──────────────────────
+            # Raw MongoDB documents are never passed directly to Training V2
+            # modules.  The explicit adapter resolves the garmin_activity
+            # sub-document (normalized field names) with fallback to top-level
+            # aliases for legacy documents.
+            domain_activities = mongo_garmin_activities_to_domain(garmin_activities)
             # TrainingLoadSnapshot — single computation shared with ReadinessResult V2
-            training_load = build_training_load(garmin_activities, today)
+            training_load = build_training_load(domain_activities, today)
             # ReadinessResult V2 (reuses pre-built load_snapshot, no duplicate computation)
             readiness_result = build_readiness_v2_from_garmin_data(
-                metrics_docs, garmin_activities, today, load_snapshot=training_load
+                metrics_docs, domain_activities, today, load_snapshot=training_load
             )
             # RecentTrainingResponse V2 (#132)
-            recent_response = build_recent_training_response(garmin_activities, today)
+            recent_response = build_recent_training_response(domain_activities, today)
             readiness_data_source = "garmin"
         except Exception as exc:
             logger.warning(f"[TrainingToday] Garmin V2 readiness build failed: {exc}")

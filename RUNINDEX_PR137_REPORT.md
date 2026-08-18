@@ -302,3 +302,111 @@ Architecture :
 1. **#138 — performance extraction/audit** : extraction de `performance.py`, audit des consumers VMA/paces
 2. **#139 — kill `training_engine.py`** : suppression complète après audit consumers
 3. Ensuite seulement : LT1/LT2 multi-évidence, Body Battery nocturne, V3 Flexible Schedule
+
+---
+
+## 19. Correction frontière Mongo → DomainActivity (correction ciblée PR137)
+
+### Problème identifié à l'audit
+
+Dans `/training/today`, les documents bruts de `garmin_activities` (MongoDB) étaient transmis directement à :
+
+- `build_training_load(garmin_activities, today)`
+- `build_readiness_v2_from_garmin_data(metrics_docs, garmin_activities, today, ...)`
+- `build_recent_training_response(garmin_activities, today)`
+
+La shape MongoDB réelle comporte un sous-document normalisé `garmin_activity` avec les champs canoniques (`average_hr`, `max_hr`, `moderate_intensity_minutes`, `vigorous_intensity_minutes`, `elevation_gain`), tandis que le niveau racine utilise des alias hérités (`avg_hr`, `distance`, `duration`).
+
+La conversion `to_domain_activity()` de `training_v2/domain_activity.py` ne consultait pas ce sous-document. Conséquence : `average_hr`, `max_hr`, `moderate_intensity_minutes`, `vigorous_intensity_minutes`, `elevation_gain_m` étaient perdus pour `RecentTrainingResponse` (cardiac efficiency, intensity exposure, elevation comparability guard).
+
+`build_training_load` n'était pas impacté car il n'utilise que `activity_type`, `start_time`, `distance_m`/`duration_s` (déjà couverts par les alias existants).
+
+### Correction réalisée
+
+**Fichier modifié :** `backend/garmin/domain_adapter.py`
+
+Ajout de deux fonctions constituant la frontière explicite Mongo → Training V2 :
+
+- `mongo_garmin_to_domain(doc: dict) -> DomainActivity`
+- `mongo_garmin_activities_to_domain(docs: list) -> list[DomainActivity]`
+
+**Fichier modifié :** `backend/server.py`
+
+Dans `/training/today`, conversion explicite avant tout appel aux modules V2 :
+
+```
+garmin_activities (Mongo bruts)
+    ↓
+mongo_garmin_activities_to_domain(garmin_activities)
+    ↓
+domain_activities : list[DomainActivity]
+    ↓
+build_training_load(domain_activities, today)
+build_readiness_v2_from_garmin_data(metrics_docs, domain_activities, today, load_snapshot=training_load)
+build_recent_training_response(domain_activities, today)
+```
+
+### Mapping exact des champs (Mongo → DomainActivity)
+
+| Source (subdoc `garmin_activity`) | Alias racine fallback | DomainActivity |
+|---|---|---|
+| `activity_type` | `activity_type` | `activity_type` |
+| `start_time` | `start_time` | `start_time` |
+| `distance_m` | `distance` | `distance_m` |
+| `duration_s` | `duration` | `duration_s` |
+| `average_hr` | `avg_hr` | `average_hr` |
+| `max_hr` | `max_hr` | `max_hr` |
+| `moderate_intensity_minutes` | `moderate_intensity_minutes` | `moderate_intensity_minutes` |
+| `vigorous_intensity_minutes` | `vigorous_intensity_minutes` | `vigorous_intensity_minutes` |
+| `elevation_gain` | `elevation_gain` | `elevation_gain_m` ← **renommage explicite** |
+
+Priorité : sous-document `garmin_activity` > champ racine. None ≠ 0 respecté.
+
+### Tests ajoutés
+
+Fichier : `backend/tests/test_mongo_garmin_boundary_pr137.py` — 33 tests
+
+| Cas | Description | Résultat |
+|---|---|---|
+| A | Document avec `garmin_activity` complet | 10 tests ✅ |
+| B | Document legacy sans `garmin_activity` | 7 tests ✅ |
+| C | Champ absent → None, jamais valeur inventée | 9 tests ✅ |
+| D | `average_hr` de `garmin_activity` préservé | 1 test ✅ |
+| E | Intensity minutes préservées | 1 test ✅ |
+| F | Régression TrainingLoad (résultats identiques) | 1 test ✅ |
+| G | `/training/today` utilise `mongo_garmin_activities_to_domain` | 1 test ✅ |
+| Extra | List converter (vide, None, multiple) | 3 tests ✅ |
+
+**Total nouveaux tests : 33 — 33 passed, 0 failed**
+
+### Suite tests existants après correction
+
+- `test_daily_runtime_pr137.py` : 50 passed ✅
+- `test_training_metrics_pr127.py` : 33 passed ✅
+- `test_mongo_garmin_boundary_pr137.py` : 33 passed ✅
+- **Total combiné : 116 passed, 0 failed**
+
+### Limitations restantes
+
+- Smoke test runtime non exécuté (pas de base MongoDB Garmin disponible en sandbox).
+- `insights.py` (`compute_run_index`) passe encore des Mongo bruts à `build_training_load` et `build_readiness_v2_from_garmin_data` : impact limité car `build_training_load` est robuste aux alias top-level et `build_readiness_v2_from_garmin_data` n'utilise `activities` que comme fallback load (ignoré quand `load_snapshot` fourni). Correction `insights.py` prévue en #138.
+
+### Roadmap corrigée
+
+1. **#138 — audit exhaustif des consumers legacy restants** : `server.py` (`/training/metrics`), `insights.py`, `llm_coach.py`, `training_engine.py` — appliquer la même frontière `mongo_garmin_activities_to_domain` partout
+2. **#139 — migration/suppression des derniers consumers legacy identifiés**
+3. **#140 — kill `training_engine.py` UNIQUEMENT après preuve zéro consumer runtime réel**
+4. Ensuite : LT1/LT2 multi-évidence, Body Battery nocturne, V3 Flexible Schedule
+
+### Confirmation
+
+- ✅ Aucune formule métier V2 modifiée
+- ✅ Aucun seuil ReadinessDecision modifié (75 / 55 / 40 inchangés)
+- ✅ Aucune règle DailyAdaptation modifiée (SHORTEN_FACTOR = 0.70 inchangé)
+- ✅ `training_engine.py` non supprimé dans #137
+- ✅ `adapt_session_to_readiness` non réintroduit
+- ✅ Pas de fabrication de données Garmin absentes
+- ✅ None ≠ 0 respecté
+- ✅ Frontend non modifié
+- ✅ Architecture #137 conservée
+
