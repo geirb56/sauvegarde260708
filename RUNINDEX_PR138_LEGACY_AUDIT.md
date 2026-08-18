@@ -9,7 +9,7 @@
 
 ## Résumé
 
-- Fichiers important directement `training_engine` trouvés : **10**
+- Fichiers qui importent directement `training_engine` trouvés : **10**
   - runtime : **2** (`backend/server.py`, `backend/llm_coach.py`)
   - test-only : **8**
 - Aucun import direct trouvé dans `backend/workers/`, `backend/services/` ou `backend/jobs/`.
