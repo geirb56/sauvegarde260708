@@ -9,7 +9,8 @@ This module exists only to preserve legacy runtime compatibility behavior.
 It is NOT the canonical V2 physiological source of truth.
 It does NOT decide training structure, readiness, periodization, adaptation,
 or canonical physiology. Inputs are normalized primitive facts only; no
-Mongo/Garmin access occurs here.
+Mongo/Garmin access occurs here. Invalid or non-positive compatibility inputs
+are treated as unusable facts and ignored.
 """
 
 from __future__ import annotations
