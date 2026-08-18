@@ -31,15 +31,15 @@ def _legacy_vma_and_paces(runs: list[dict]) -> tuple[float, float, str, str, dic
         if 3 < pace < 10:
             paces.append(pace)
             if duration_min >= 6 and pace < 5.5:
-                vma_efforts.append({"speed_kmh": 60.0 / pace, "duration": duration_min})
+                vma_efforts.append({"speed_kmh": 60.0 / pace, "duration_minutes": duration_min})
 
     if paces:
         avg_pace = sum(paces) / len(paces)
         if vma_efforts:
             best_effort = max(vma_efforts, key=lambda item: item["speed_kmh"])
-            if best_effort["duration"] >= 20:
+            if best_effort["duration_minutes"] >= 20:
                 estimated_vma = best_effort["speed_kmh"] / 0.85
-            elif best_effort["duration"] >= 12:
+            elif best_effort["duration_minutes"] >= 12:
                 estimated_vma = best_effort["speed_kmh"] / 0.90
             else:
                 estimated_vma = best_effort["speed_kmh"] / 0.95
