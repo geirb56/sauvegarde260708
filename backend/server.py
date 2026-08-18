@@ -61,6 +61,25 @@ from rag_engine import (
 
 # Import training engine for periodization
 from training_v2.training_load import build_training_load
+from training_v2.readiness_decision import (
+    ReadinessBand,
+    ReadinessDecision,
+    build_readiness_decision,
+)
+from training_v2.daily_adaptation import (
+    DailyAdaptationAction,
+    DailyAdaptationResult,
+    build_daily_adaptation,
+)
+from training_v2.training_response import build_recent_training_response
+from training_v2.workout_generator import WorkoutPrescription
+from training_v2.daily_runtime_helpers import (
+    BAND_TO_RECOMMENDATION,
+    runtime_session_to_prescription,
+    prescription_to_runtime_session,
+)
+from garmin.readiness_adapter import build_readiness_v2_from_garmin_data
+from garmin.domain_adapter import mongo_garmin_activities_to_domain
 from training_engine import (
     DEFAULT_WEEKLY_KM,
     GOAL_CONFIG,
@@ -3551,31 +3570,42 @@ async def submit_training_feedback(
     }
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# PR137 — Daily Runtime Migration V2
+# Helper functions are in training_v2/daily_runtime_helpers.py (pure, testable).
+# ──────────────────────────────────────────────────────────────────────────────
+
+
 @api_router.get("/training/today")
 async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     """
     Returns today's adaptive training session.
 
-    Combines:
-    - Planned session from LLM-generated plan
-    - Current fatigue level from /api/run-index
-    - Historical feedback
+    Runtime path (PR137 — Daily Runtime Migration V2):
+        plan V2 (#135)
+          ↓
+        séance prévue aujourd'hui (WorkoutPrescription)
+          ↓
+        ReadinessResult V2
+          ↓
+        ReadinessDecision V2 (#133)
+          ↓
+        DailyAdaptation V2 (#133)
+          ↓
+        séance du jour adaptée → payload /training/today
 
-    Adaptation logic (based on Run Readiness V2 recommendation):
-    - Green (RUN HARD): Keep session as planned
-    - Orange (EASY RUN): Reduce intensity/duration -20%, convert intervals to easy
-    - Red (REST): Convert to recovery/Z1, reduce duration -40 to -50%
+    ReadinessDecision is the single readiness translation layer.
+    DailyAdaptation only adapts (keep or reduce), never increases.
+    None ≠ 0: absent data is never treated as bad readiness.
     """
-    from datetime import date as date_class
-
-    # Get today's date
+    # Anchor date determined here at the runtime boundary, then passed explicitly
+    # to all V2 pure layers (no hidden now()/today() inside business functions).
     today = datetime.now(timezone.utc).date()
     today_iso = today.isoformat()
     day_name = today.strftime("%A")
 
-    # 1. Get the planned session for this week
+    # ── 1. Plan V2 — source of the planned session ────────────────────────────
     plan = await generate_dynamic_training_plan(db, user["id"])
-    # Guard: if no active goal/plan exists, return a graceful 200 instead of crashing
     if plan is None:
         return {
             "has_plan": False,
@@ -3583,81 +3613,129 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
             "suggestion": "Créez un objectif pour générer votre plan personnalisé.",
         }
     sessions = (plan.get("plan") or {}).get("sessions", [])
-    # VMA is the single source of truth for all target paces.
     vma = plan.get("vma") or (plan.get("context", {}) or {}).get("vma")
 
-    # Find today's session by day name
-    planned_session = None
+    # Find today's planned session by day name
+    planned_session_runtime: Optional[dict] = None
     for session in sessions:
         if session.get("day", "").lower() == day_name.lower():
-            planned_session = session
+            planned_session_runtime = session
             break
 
-    if not planned_session:
+    if not planned_session_runtime:
         return {
             "status": "no_session",
             "message": "No session planned for today",
             "date": today_iso,
-            "day": day_name
+            "day": day_name,
         }
 
-    # 2. Get current fatigue level from run-index
-    # Use a direct call without auth to avoid circular dependency
-    # Falls back to neutral defaults if run-index is unavailable
-    fatigue_data_source = "garmin"
-    try:
-        run_index_data = await get_run_index(user=user)
-        _cc_metrics = run_index_data.get("metrics", {}) or {}
-        run_readiness = _cc_metrics.get("run_readiness")
-        recommendation = run_index_data.get("recommendation")
-        recommendation_color = run_index_data.get("recommendation_color")
+    # ── 2. Convert runtime dict → WorkoutPrescription (V2 contract) ───────────
+    planned_prescription = runtime_session_to_prescription(planned_session_runtime)
 
-        # Check if recommendation is missing (would cause issues downstream)
-        if recommendation is None:
-            raise ValueError("Missing recommendation from run-index")
-            
-    except Exception as e:
-        # Readiness unavailable — do NOT invent a physiological state.
-        # None/UNAVAILABLE/gray expresses "unknown", NOT "athlete is perfectly ready".
-        logger.warning(f"[TrainingToday] run-index unavailable: {e}")
-        fatigue_data_source = "unavailable"
-        run_readiness = None
-        recommendation = "UNAVAILABLE"
-        recommendation_color = "gray"
+    # ── 3. ReadinessResult V2 — from Garmin data (no legacy proxy) ───────────
+    readiness_result = None
+    training_load = None
+    recent_response = None
+    readiness_data_source = "unavailable"
 
-    # 3. Get historical feedback for this user
+    garmin_conn = await db.garmin_connections.find_one({"user_id": user["id"]}, {"_id": 0})
+    if garmin_conn and garmin_conn.get("connected"):
+        try:
+            metrics_docs = await (
+                db.garmin_daily_metrics.find({"user_id": user["id"]}, {"_id": 0})
+                .sort("date", -1)
+                .limit(30)
+                .to_list(length=30)
+            )
+            garmin_activities = await (
+                db.garmin_activities.find({"user_id": user["id"]}, {"_id": 0})
+                .sort("start_time", -1)
+                .limit(200)
+                .to_list(length=200)
+            )
+            # ── Mongo → DomainActivity boundary (PR137) ──────────────────────
+            # Raw MongoDB documents are never passed directly to Training V2
+            # modules.  The explicit adapter resolves the garmin_activity
+            # sub-document (normalized field names) with fallback to top-level
+            # aliases for legacy documents.
+            domain_activities = mongo_garmin_activities_to_domain(garmin_activities)
+            # TrainingLoadSnapshot — single computation shared with ReadinessResult V2
+            training_load = build_training_load(domain_activities, today)
+            # ReadinessResult V2 (reuses pre-built load_snapshot, no duplicate computation)
+            readiness_result = build_readiness_v2_from_garmin_data(
+                metrics_docs, domain_activities, today, load_snapshot=training_load
+            )
+            # RecentTrainingResponse V2 (#132)
+            recent_response = build_recent_training_response(domain_activities, today)
+            readiness_data_source = "garmin"
+        except Exception as exc:
+            logger.warning(f"[TrainingToday] Garmin V2 readiness build failed: {exc}")
+
+    # ── 4. ReadinessDecision V2 — canonical translation (no thresholds in endpoint) ─
+    readiness_decision: ReadinessDecision = build_readiness_decision(readiness_result)
+
+    # ── 5. DailyAdaptation V2 — engine #133 (keep or reduce, never increase) ──
+    adaptation_result: DailyAdaptationResult = build_daily_adaptation(
+        workout=planned_prescription,
+        readiness_decision=readiness_decision,
+        training_load=training_load,
+        recent_response=recent_response,
+    )
+
+    # ── 6. Map adapted prescription back to runtime dict format ──────────────
+    # original_prescription: derived directly from planned_session_runtime to
+    # avoid any implicit divergence via the WorkoutPrescription round-trip.
+    adapted_runtime = prescription_to_runtime_session(adaptation_result.adapted_workout)
+    adaptation_applied = adaptation_result.action != DailyAdaptationAction.KEEP
+    adaptation_reason = ", ".join(adaptation_result.reason_codes)
+
+    # ── 7. Legacy compat: recommendation / recommendation_color derived from V2 ─
+    # These fields remain temporarily because the frontend may still consume them.
+    # Direction: V2 ReadinessDecision → compatibility adapter. Never legacy → V2.
+    recommendation, recommendation_color = BAND_TO_RECOMMENDATION[readiness_decision.band]
+
+    # ── 8. Historical feedback (unchanged) ────────────────────────────────────
     feedback_cursor = db.training_feedback.find(
         {"user_id": user["id"]},
         {"_id": 0}
     ).sort("date", -1).limit(10)
     recent_feedback = await feedback_cursor.to_list(10)
 
-    # 4. Apply adaptation logic — the Run Readiness RECOMMENDATION is the SOURCE
-    # OF TRUTH. An EASY RUN / REST recommendation can NEVER leave the session
-    # unchanged. All target paces are recomputed from the estimated VMA.
-    adaptive_session, adaptation_applied, adaptation_reason = adapt_session_to_readiness(
-        planned_session, recommendation, recommendation_color, run_readiness, vma
-    )
-
-
-    # 5. Return both original and adaptive sessions
     return {
         "status": "success",
         "date": today_iso,
         "day": day_name,
-        "planned_session": planned_session,
-        "adaptive_session": adaptive_session if adaptation_applied else None,
+        # Original planned session (runtime dict from plan V2)
+        "planned_session": planned_session_runtime,
+        # V2 prescription objects (preferred by new consumers)
+        "original_prescription": planned_session_runtime,
+        "adapted_prescription": adapted_runtime,
+        # Legacy compat: adaptive_session present when adaptation changed the session
+        "adaptive_session": adapted_runtime if adaptation_applied else None,
         "adaptation_applied": adaptation_applied,
         "adaptation_reason": adaptation_reason,
+        "adaptation_action": adaptation_result.action.value,
+        "reason_codes": list(adaptation_result.reason_codes),
+        # ReadinessDecision V2 block
+        "readiness": {
+            "band": readiness_decision.band.value,
+            "score": readiness_decision.score,
+            "confidence": readiness_decision.confidence.value,
+            "sufficiency_level": readiness_decision.sufficiency_level.value,
+            "available": readiness_decision.band != ReadinessBand.UNAVAILABLE,
+            "data_source": readiness_data_source,
+        },
+        # Legacy compat: fatigue block derived from V2 (no fatigue_ratio/fatigue_status/fatigue_physio)
         "fatigue": {
-            "run_readiness": run_readiness,
+            "run_readiness": readiness_decision.score,
             "recommendation": recommendation,
             "recommendation_color": recommendation_color,
-            "data_source": fatigue_data_source
+            "data_source": readiness_data_source,
         },
         "vma": vma,
         "vma_confidence": plan.get("vma_confidence"),
-        "recent_feedback": recent_feedback
+        "recent_feedback": recent_feedback,
     }
 
 
