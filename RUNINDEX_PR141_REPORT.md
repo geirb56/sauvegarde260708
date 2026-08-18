@@ -245,7 +245,31 @@ Cas de test `TestCaseG_ExactBugPR141` avec :
 | `backend/training_v2/weekly_target.py` | Fix 2 : garde `days_since < 28` dans `_chronic_base_km` |
 | `backend/training_v2/workout_generator.py` | Fix 3 : invariant cap session ≤ target_km dans `build_weekly_plan` |
 | `backend/tests/test_pr141_reprise_correction.py` | Nouveau fichier de tests de régression |
+| `backend/tests/test_training_state_pr04.py` | Fix 4 : mise à jour des tests de frontière `available_history_days` (convention inclusive +1) |
 | `RUNINDEX_PR141_REPORT.md` | Ce rapport |
+
+### Fix 4 — Cohérence `available_history_days` : convention inclusive
+
+La PR#141 a introduit dans `training_history.py` la convention inclusive :
+
+```python
+available_days = (reference_date - first_date).days + 1
+```
+
+Trois tests dans `test_training_state_pr04.py` testaient les valeurs de frontière
+avec l'ancienne convention (sans `+1`) et échouaient :
+
+| Test | Ancienne valeur | Valeur inclusive | Comportement attendu |
+|---|---|---|---|
+| `test_continuity_confidence_29_days` | `days_ago=29` → available=29 | → available=30 → "medium" ✗ | "low" |
+| `test_continuity_confidence_89_days` | `days_ago=89` → available=89 | → available=90 → "high" ✗ | "medium" |
+| `test_pr94_cas2_history_27d_last_run_27d` | `days_ago=27` → available=27 | → available=28 → "normal" ✗ | "reprise_exit" |
+
+**Correction appliquée :** ajustement des activités de test pour utiliser `days_ago - 1`
+de sorte que `available_history_days` reste dans la plage souhaitée avec la convention +1.
+
+La logique est inchangée — seule la valeur concrète de l'input fixture est corrigée
+pour respecter la convention inclusive documentée dans `TestAvailableHistoryDaysInclusiveConvention`.
 
 ### Fichiers non modifiés (hors scope)
 
@@ -254,6 +278,26 @@ Cas de test `TestCaseG_ExactBugPR141` avec :
 - `training_history.py`, `runner_profile.py`, `plan_goal.py`
 - `weekly_reconciliation.py`, `runtime_plan_adapter.py`
 - Toute logique LT1/LT2, Body Battery, sleep score, trail/D+, VMA/paces, frontend
+
+---
+
+## Résultats des tests de régression (état final)
+
+| Suite | Passés | Échoués | Ignorés |
+|---|---|---|---|
+| `test_pr141_reprise_correction.py` | 45 | 0 | 0 |
+| `test_weekly_target_v2.py` | — | 0 | — |
+| `test_workout_generator_v2.py` | — | 0 | — |
+| `test_training_state_pr04.py` | — | 0 | — |
+| `test_weekly_reconciliation_pr134.py` | — | 0 | — |
+| `test_training_history_pr05.py` | — | 0 | — |
+| `test_training_response_pr132.py` | — | 0 | — |
+| `test_runner_profile_pr07.py` | — | 0 | — |
+| `test_plan_goal_pr05.py` | — | 0 | — |
+| `test_periodization_pr06.py` | — | 0 | — |
+| `test_training_v2_training_load.py` | — | 0 | — |
+| `test_daily_runtime_pr137.py` | 42 | 0 | 0 |
+| **Total consolidé (suites V2)** | **663** | **0** | **0** |
 
 ---
 
@@ -266,6 +310,7 @@ Cas de test `TestCaseG_ExactBugPR141` avec :
 - ✅ `no_history` non touché
 - ✅ `training_engine.py` non supprimé
 - ✅ Aucune logique legacy réintroduite
+- ✅ Convention `available_history_days` cohérente entre `TrainingHistory` et `TrainingLoad`
 
 ---
 

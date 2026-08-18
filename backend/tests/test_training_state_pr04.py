@@ -416,7 +416,8 @@ def test_continuity_confidence_1_day():
 
 
 def test_continuity_confidence_29_days():
-    acts = [_act(days_ago=0), _act(days_ago=29)]
+    # With inclusive convention (+1), days_ago=28 → available_history_days=29 → "low"
+    acts = [_act(days_ago=0), _act(days_ago=28)]
     state = _build(acts)
     # available_history_days = 29 → "low"
     assert state.continuity_confidence == "low"
@@ -430,7 +431,8 @@ def test_continuity_confidence_30_days():
 
 
 def test_continuity_confidence_89_days():
-    acts = [_act(days_ago=0), _act(days_ago=89)]
+    # With inclusive convention (+1), days_ago=88 → available_history_days=89 → "medium"
+    acts = [_act(days_ago=0), _act(days_ago=88)]
     state = _build(acts)
     # available_history_days = 89 → "medium"
     assert state.continuity_confidence == "medium"
@@ -658,16 +660,18 @@ def test_pr94_cas1_short_history_last_run_10d():
 
 
 def test_pr94_cas2_history_27d_last_run_27d():
-    """Cas 2 — available_history_days=27, days_since_last_run=27 → reprise_exit.
+    """Cas 2 — available_history_days=27, days_since_last_run=26 → reprise_exit.
 
-    Scenario: single run exactly 27 days ago.
+    Scenario: single run exactly 26 days ago.
+      With the inclusive convention available_history_days = days_ago + 1, so
+      days_ago=26 → available_history_days=27 < 28.
       - has_any_running_history = True
-      - days_since_last_run = 27 < 28 → NOT deep_reprise
-      - available_history_days = 0 (single-run span) < 28
-      - w7.activity_count = 0 (last run was 27 days ago)
+      - days_since_last_run = 26 < 28 → NOT deep_reprise
+      - available_history_days = 27 < 28 → reprise_exit path
+      - w7.activity_count = 0 (last run was 26 days ago)
       → reprise_exit
     """
-    acts = [_act(days_ago=27)]
+    acts = [_act(days_ago=26)]
     state = _build(acts)
     assert state.continuity_state == "reprise_exit"
     assert "RECENT_VOLUME_RECOVERING" in state.reason_codes
