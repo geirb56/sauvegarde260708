@@ -217,6 +217,36 @@ async def client_bad_goal():
             p.stop()
 
 
+@pytest_asyncio.fixture
+async def client_no_start_date():
+    """Cycle exists with valid goal but no start_date."""
+    fake_db = _FakeDB(
+        cycle_docs=[{
+            "user_id": _USER_ID,
+            "goal": "MARATHON",
+            "updated_at": _START_DATE,
+            # start_date intentionally missing
+        }],
+    )
+    patches = [
+        patch.object(server, "db", fake_db),
+        patch("server.get_user_access", AsyncMock(side_effect=_mock_get_user_access)),
+    ]
+    started = []
+    try:
+        for p in patches:
+            p.start()
+            started.append(p)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=server.app),
+            base_url="http://test",
+        ) as ac:
+            yield ac
+    finally:
+        for p in started:
+            p.stop()
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -247,3 +277,8 @@ class TestWeekPlanPR155:
         db = client._fake_db
         assert len(db.training_goals.calls) == 0, \
             "Legacy db.training_goals should never be accessed"
+
+    async def test_no_start_date_returns_400(self, client_no_start_date):
+        resp = await client_no_start_date.get("/api/training/week-plan", headers=_bearer())
+        assert resp.status_code == 400
+        assert "start_date" in resp.json()["detail"].lower()
