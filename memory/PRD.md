@@ -3,6 +3,13 @@
 ## Problem Statement
 Pull https://github.com/geirb56/sauvegarde260629 and set it up so it runs. Replace /app contents.
 
+## 2026-08-19 — Pull copilot/dev (PR #145) — GOAL_CONFIG extrait vers config/training_goals.py — MERGÉ & VALIDÉ
+- Fetch copilot/dev (09a256f→5c22ac4). Merge ORT propre, 0 conflit. .env intacts, protégés préservés. Backend+worker redémarrés.
+- PR #145 = migration GOAL_CONFIG vers backend/config/training_goals.py (source unique de vérité) + suppression de l'import mort GOAL_CONFIG depuis training_engine. Fichiers: config/training_goals.py (nouveau), server.py (L102 import + usages L3486/3527/4411), test_goal_config_pr145.py.
+- Validation: smoke 5/5=200. GOAL_CONFIG servi depuis config/training_goals.py. Tests PR145+régression PR135/137/143/144 = 97 passed.
+- NOTE factuelle: training_engine reste importé dans server.py (L86: 13 symboles dont compute_current_weekly_km, compute_target_km, determine_phase, resolve_reprise_plan, apply_resume_guard, etc. + L4632 determine_target_load). PR#145 n'a extrait que GOAL_CONFIG; la suppression complète de training_engine reste une étape future. compute_current_weekly_km NON modifié (protégé).
+
+
 ## 2026-08-19 — Micro-validation RÉELLE CAUTION/LOW sur données historiques post-PR#144 — VERDICT: CAUTION REAL=PASS, LOW REAL=NOT FOUND
 - Audit LECTURE SEULE. HEAD 97d6f1f (#143+#144). Scan 43 jours réels (daily metrics 2026-07-05→08-17) avec filtrage strict metrics/activités ≤ J (aucune fuite temporelle).
 - Distribution réelle bandes: FAVORABLE=37, CAUTION=6 (07-19,08-03,08-04,08-09,08-15,08-16), LOW=0, VERY_LOW=0, UNAVAILABLE=0.
