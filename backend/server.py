@@ -85,7 +85,6 @@ from garmin.readiness_adapter import build_readiness_v2_from_garmin_data
 from garmin.domain_adapter import mongo_garmin_activities_to_domain
 from training_engine import (
     DEFAULT_WEEKLY_KM,
-    GOAL_CONFIG,
     compute_current_weekly_km,
     compute_cycle_dates,
     compute_target_km,
@@ -93,15 +92,46 @@ from training_engine import (
     resolve_chronic_base,
     resolve_reprise_plan,
     REPRISE_STABLE_WEEKS,
-    vma_pace,
-    vma_pace_range,
-    adapt_session_to_readiness,
     compute_week_number,
     determine_phase,
     get_phase_description,
     is_running,
     normalized_distance_km,
 )
+
+# PR145: GOAL_CONFIG migrated from training_engine — pure display constant.
+GOAL_CONFIG = {
+    "5K": {
+        "cycle_weeks": 6,
+        "long_run_ratio": 0.25,
+        "intensity_pct": 20,
+        "description": "5 kilometers"
+    },
+    "10K": {
+        "cycle_weeks": 8,
+        "long_run_ratio": 0.30,
+        "intensity_pct": 18,
+        "description": "10 kilometers"
+    },
+    "SEMI": {
+        "cycle_weeks": 12,
+        "long_run_ratio": 0.35,
+        "intensity_pct": 15,
+        "description": "Half-marathon"
+    },
+    "MARATHON": {
+        "cycle_weeks": 16,
+        "long_run_ratio": 0.40,
+        "intensity_pct": 12,
+        "description": "Marathon"
+    },
+    "ULTRA": {
+        "cycle_weeks": 20,
+        "long_run_ratio": 0.45,
+        "intensity_pct": 10,
+        "description": "Ultra-trail"
+    }
+}
 
 # Import subscription manager
 from subscription_manager import (
