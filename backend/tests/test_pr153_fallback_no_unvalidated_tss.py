@@ -1,4 +1,5 @@
-"""PR #153 — Verify that _generate_fallback_week_plan produces no fake TSS values.
+"""PR #153 — Verify that _generate_fallback_week_plan produces no estimated TSS
+values not derived from a validated calculation.
 
 Strategy: extract the function from server.py source via AST to avoid importing
 the full server module (which has heavy dependencies).
@@ -51,7 +52,7 @@ def _make_context(**overrides):
     return base
 
 
-class TestDistanceBasedFallbackNoFakeTSS:
+class TestDistanceBasedFallbackNoUnvalidatedTSS:
     """Distance-based (km/pace) fallback must have estimated_tss=None and total_tss=None."""
 
     @pytest.mark.parametrize("phase", ["build", "deload", "taper", "intensification"])
@@ -85,7 +86,7 @@ class TestDurationBasedFallbackUnchanged:
 
 
 class TestNoNumericTSSHardcodesInSource:
-    """Source code audit: no numeric estimated_tss in the fallback function."""
+    """Source code audit: no estimated_tss not derived from a validated calculation."""
 
     def test_no_numeric_estimated_tss_in_function(self):
         func_src = _get_function_source("_generate_fallback_week_plan")
