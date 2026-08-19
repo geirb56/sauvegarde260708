@@ -3,6 +3,16 @@
 ## Problem Statement
 Pull https://github.com/geirb56/sauvegarde260629 and set it up so it runs. Replace /app contents.
 
+## 2026-08-19 — Validation runtime post-PR#145 + inventaire legacy pré-#146 — VERDICTS: PR145_RUNTIME=PASS, PRE146_LEGACY_AUDIT=COMPLETE
+- Audit LECTURE SEULE. HEAD d985a66 (#145). Smoke 5/5=200. /training/goals=200 (valeurs = config.training_goals.GOAL_CONFIG exactement). /training/full-cycle=200 (total_weeks=16, no NaN, aucun contrat cassé). set-goal DESTRUCTIF → non appelé, validé par inspection (utilise GOAL_CONFIG de config).
+- Parité: config.training_goals.GOAL_CONFIG == training_engine.GOAL_CONFIG (True). MAIS training_engine.py:22 garde une COPIE ORPHELINE de GOAL_CONFIG (aucun import runtime). Daily V2 non régressé (build_recent_training_response/build_readiness_decision/build_daily_adaptation; aucun adapt_session_to_readiness/training_engine/fatigue_*).
+- Inventaire legacy (HEAD actuel): consumers runtime training_engine = server.py (L86: 13 symboles + L4632 determine_target_load) et llm_coach.py (L21: 10 symboles), TOUS dans le chemin full-cycle/cycle-week legacy. training_v2/* = commentaires seulement (aucun import). Tests: test_goal_config_pr145.
+- determine_target_load = prescriptif (charge cible hebdo) ≠ TrainingLoad V2 (descriptif/observé) → NO; équivalent V2 = WeeklyTarget V2. compute_current_weekly_km (protégé): 2 consumers legacy (server L4460/L4611), équiv V2 = TrainingHistory window_7d, risque moyen-élevé. Dette long-run: NOT OBSERVED en V2 (WorkoutGenerator borne long run 20-45% du weekly target).
+- Tests: 224 passed / 0 failed.
+- RECOMMANDATION #146 (scope unique, risque FAIBLE): supprimer la copie orpheline GOAL_CONFIG de training_engine.py + adapter le test de parité (finalisation single-source-of-truth, zéro impact runtime). NE PAS inclure determine_target_load/compute_current_weekly_km/compute_long_run_km (migration sémantique risquée, PRs dédiées).
+- Rapport: /app/TRAINING_V2_RUNTIME_POST145_PRE146.md.
+
+
 ## 2026-08-19 — Pull copilot/dev (PR #145) — GOAL_CONFIG extrait vers config/training_goals.py — MERGÉ & VALIDÉ
 - Fetch copilot/dev (09a256f→5c22ac4). Merge ORT propre, 0 conflit. .env intacts, protégés préservés. Backend+worker redémarrés.
 - PR #145 = migration GOAL_CONFIG vers backend/config/training_goals.py (source unique de vérité) + suppression de l'import mort GOAL_CONFIG depuis training_engine. Fichiers: config/training_goals.py (nouveau), server.py (L102 import + usages L3486/3527/4411), test_goal_config_pr145.py.
