@@ -213,7 +213,7 @@ Alternative: migrate `compute_week_number` and `determine_phase` first as they a
 **READY FOR MERGE INTO copilot/dev**
 
 - HEAD copilot/dev: `09a256f`
-- HEAD PR#145: `a00a798`
+- HEAD PR#145: `8e5792a`
 - Consumer: GOAL_CONFIG extraction to neutral source + dead imports removal
 - Files modified: `backend/config/training_goals.py`, `backend/server.py`, `backend/tests/test_goal_config_pr145.py`, `RUNINDEX_PR145_REPORT.md`
 - Source unique runtime GOAL_CONFIG: `backend/config/training_goals.py`
