@@ -26,7 +26,7 @@ if _BACKEND not in sys.path:
 import pytest
 
 import coach_service
-from training_engine import GOAL_CONFIG
+from config.training_goals import GOAL_CONFIG
 
 
 # ---------------------------------------------------------------------------
