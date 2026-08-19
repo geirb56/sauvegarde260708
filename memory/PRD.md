@@ -3,6 +3,14 @@
 ## Problem Statement
 Pull https://github.com/geirb56/sauvegarde260629 and set it up so it runs. Replace /app contents.
 
+## 2026-08-19 — Pull copilot/dev (PR #157) — determine_target_load retiré du chemin week-plan — MERGÉ & VALIDÉ RUNTIME (2 tests PR155 cassés par test-drift)
+- Fetch copilot/dev (de22c78→51cc287). Merge ORT propre, 0 conflit. .env intacts. Backend+worker redémarrés.
+- PR #157 (renommé de #158) = suppression de determine_target_load du chemin /training/week-plan (contexte d'affichage uniquement). server.py L4710 n'appelle plus generate_cycle_week avec target_load; llm_coach generate_cycle_week garde target_load: int = None (kwarg optionnel, affichage).
+- Validation RUNTIME: aucun import/appel réel determine_target_load restant. Smoke 7/7=200 (incl. week-plan + full-cycle). 
+- ⚠️ RÉGRESSION DE TEST introduite par PR157 (NON runtime): test_pr155_week_plan_no_legacy.py::test_happy_path et ::test_no_legacy_training_goals_access ÉCHOUENT. Cause: le MOCK _inner(context, phase, target_load, goal, user_id) (L129) exige target_load en positionnel requis, mais l'appel réel (PR157) ne le passe plus → TypeError. Test-drift: PR157 aurait dû mettre à jour ce mock. Runtime OK (week-plan=200). Correctif recommandé (PR future): rendre target_load optionnel dans le mock (_inner(context, phase, goal, user_id, target_load=None)). NON corrigé (workflow: fixes via PRs utilisateur).
+- Autres suites: 133 passed. État: migration full-cycle legacy en cours (determine_target_load retiré du week-plan #157; compute_current_weekly_km/compute_long_run_km restent).
+
+
 ## 2026-08-19 — Pull copilot/dev (PR #156) — TSS/km non validés retirés de generate_cycle_week — MERGÉ & VALIDÉ
 - Fetch copilot/dev (2438985→de22c78). Merge ORT propre, 0 conflit. .env intacts. Backend+worker redémarrés.
 - PR #156 = suppression des coefficients TSS/km non validés du générateur déterministe generate_cycle_week (llm_coach.py) → estimated_tss=None sur séances actives, total_tss=None. + tests.
