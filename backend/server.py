@@ -4573,7 +4573,7 @@ async def get_week_plan(user: dict = Depends(auth_user)):
     """
     user_id = user["id"]
     # Récupérer l'objectif
-    goal = await db.training_cycles.find_one({"user_id": user_id}, {"_id": 0})
+    goal = await db.training_goals.find_one({"user_id": user_id}, {"_id": 0})
 
     if not goal:
         raise HTTPException(status_code=400, detail="No goal defined. Use /api/training/set-goal first.")
