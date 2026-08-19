@@ -154,20 +154,46 @@ Confidence = str      # "none" | "low" | "moderate"
 # ---------------------------------------------------------------------------
 
 def _activity_date(act: DomainActivity) -> Optional[date]:
-    """Return the calendar date of the activity start_time, or None."""
+    """Return the calendar date of the activity start_time, or None.
+
+    Accepted string formats:
+      - "2026-08-18"
+      - "2026-08-18T05:11:14"
+      - "2026-08-18T05:11:14Z"
+      - "2026-08-18T05:11:14.123"
+      - "2026-08-18T05:11:14+02:00"
+      - "2026-08-18 05:11:14"        (Garmin/Mongo space-separated)
+      - "2026-08-18 05:11:14.123"
+    """
     st = act.start_time
     if st is None:
         return None
     if isinstance(st, datetime):
         return st.date()
-    if isinstance(st, date):
+    if isinstance(st, date) and not isinstance(st, datetime):
         return st
-    if isinstance(st, str):
-        for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%d"):
-            try:
-                return datetime.strptime(st, fmt).date()
-            except ValueError:
-                continue
+    if not isinstance(st, str) or st.strip() == "":
+        return None
+
+    s = st.strip()
+
+    # Normalise Z suffix so fromisoformat can handle it (Python < 3.11)
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+
+    # Try datetime.fromisoformat first (handles T-separated, tz-aware, and space-separated)
+    try:
+        return datetime.fromisoformat(s).date()
+    except (ValueError, TypeError):
+        pass
+
+    # Fallback: explicit strptime patterns
+    for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except (ValueError, TypeError):
+            continue
+
     return None
 
 
