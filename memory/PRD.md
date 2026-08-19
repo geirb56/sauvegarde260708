@@ -3,6 +3,13 @@
 ## Problem Statement
 Pull https://github.com/geirb56/sauvegarde260629 and set it up so it runs. Replace /app contents.
 
+## 2026-08-18 — Pull sauvegarde260708/copilot/dev (PR #143) — MERGÉ & VALIDÉ
+- Fetch branche copilot/dev (cfa2d14→0b6b6a0). Merge ORT propre, 0 conflit. .env intacts, fichiers protégés préservés. Backend+worker redémarrés.
+- PR #143 = migration /training/metrics acwr_reliable vers la chaîne TrainingState V2 (+ renforcement tests: fixtures continuity_state exactes, preuve AST no-legacy-import). Fichiers: backend/server.py (+30 lignes /training/metrics), test_training_metrics_pr143.py.
+- Validation: smoke 5/5=200. /training/metrics: acwr=2.538, acwr_reliable=true (via TrainingState V2), tsb/ctl/atl=null. Tests PR143=14 passed. Non-régression suites clés PR132-143 = 203 passed.
+- ⚠️ BUG-137-01 (RecentTrainingResponse #132 mort dans /training/today à cause du format date espacé) TOUJOURS PRÉSENT sur copilot/dev — non adressé par PR#143. training_response._activity_date inchangé (ne parse pas "YYYY-MM-DD HH:MM:SS"). Reste à corriger avant GO #138.
+
+
 ## 2026-08-18 — Micro-validation runtime PR#137 (/training/today V2) — AUDIT LECTURE SEULE — VERDICT: #137 runtime=PARTIAL, GLOBAL=NO-GO #138
 - HEAD 6241020 (#136+#137 mergés). Backend+worker redémarrés. Smoke 5/5 = 200. Compte réel da8505ef.
 - Chaîne /training/today CONFORME: Plan V2 → séance prévue → Mongo garmin_activities → mongo_garmin_activities_to_domain → DomainActivity → TrainingLoad V2 → ReadinessResult V2 → ReadinessDecision V2 → DailyAdaptation V2 → payload. Aucun adapt_session_to_readiness/training_engine/fatigue_ratio/status/physio.
