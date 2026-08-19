@@ -132,3 +132,46 @@ Endpoints NOT modified:
 - `determine_target_load` -> derive from TrainingLoad V2 + WeeklyTarget V2
 - Remove last inline `from training_engine import determine_target_load`
 - Scope: single endpoint, well-contained
+
+---
+
+## 14. Corrections audit pre-merge
+
+### Tautological assertions removed
+- `assert snapshot.acwr is not None or snapshot.acwr is None` — always true, deleted
+- `assert state in (...)` with 4+ alternatives — replaced by exact state assertions
+
+### Deterministic fixtures for each continuity_state
+- **no_history**: empty activities list -> `continuity_state == "no_history"`, `acwr is None`, `acwr_reliable is True`
+- **deep_reprise**: runs from day 30-60 only (last run 30 days ago) -> `continuity_state == "deep_reprise"`, `acwr_reliable is False`
+- **partial_reprise**: strong baseline (days 28-90, 10km every 2 days) + single 1km recent run -> `continuity_state == "partial_reprise"`, `acwr_reliable is False`
+- **reprise_exit**: runs from day 0-13 only (available_days=14 < 28) -> `continuity_state == "reprise_exit"`, `acwr_reliable is True`
+- **normal**: daily 8km runs for 35 days -> `continuity_state == "normal"`, `acwr_reliable is True`
+
+### Legacy classify_training_state removal proof
+- AST-based verification: `classify_training_state` not in server.py imports (ast.ImportFrom/ast.Import)
+- AST-based verification: no `classify_training_state(...)` call in server.py AST
+
+### DomainActivity boundary proof
+- `assert all(isinstance(a, DomainActivity) for a in domain_activities)`
+- `build_training_load` tested with DomainActivity list, positive acute_load verified
+- ACWR=None for empty activities confirmed
+
+### training_v2 independence proof
+- AST-based parametrized check on 4 modules: training_state, training_history, runner_profile, training_load
+- No `from training_engine import` or `import training_engine` in any V2 module
+
+### Test results
+- `test_training_metrics_pr143.py`: **14/14 passed**
+- `test_training_metrics_pr127.py`: **41/41 passed**
+- `test_training_state_pr04.py` + `test_training_history_pr05.py` + `test_runner_profile_pr07.py`: **154 passed, 3 pre-existing failures**
+
+### Pre-existing failures (NOT caused by PR #143)
+1. `test_continuity_confidence_29_days` — test expects "low" but code returns "medium" (threshold boundary off-by-one in test fixture, not in PR #143 diff)
+2. `test_continuity_confidence_89_days` — test expects "medium" but code returns "high" (same category)
+3. `test_pr94_cas2_history_27d_last_run_27d` — test expects "reprise_exit" but code returns "normal" (test fixture produces available_days=28 which is exactly at the boundary)
+
+These failures exist on the base branch (copilot/dev HEAD 7ebfe16) and are unrelated to PR #143 changes.
+
+### Runtime validation
+Runtime validation: PENDING — to be performed on Emergent after merge into copilot/dev.
