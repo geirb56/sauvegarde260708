@@ -85,7 +85,6 @@ from garmin.readiness_adapter import build_readiness_v2_from_garmin_data
 from garmin.domain_adapter import mongo_garmin_activities_to_domain
 from training_engine import (
     DEFAULT_WEEKLY_KM,
-    GOAL_CONFIG,
     compute_current_weekly_km,
     compute_cycle_dates,
     compute_target_km,
@@ -93,15 +92,14 @@ from training_engine import (
     resolve_chronic_base,
     resolve_reprise_plan,
     REPRISE_STABLE_WEEKS,
-    vma_pace,
-    vma_pace_range,
-    adapt_session_to_readiness,
     compute_week_number,
     determine_phase,
     get_phase_description,
     is_running,
     normalized_distance_km,
 )
+
+from config.training_goals import GOAL_CONFIG  # noqa: E402  # PR145: single source
 
 # Import subscription manager
 from subscription_manager import (
