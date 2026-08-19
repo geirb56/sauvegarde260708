@@ -3,6 +3,15 @@
 ## Problem Statement
 Pull https://github.com/geirb56/sauvegarde260629 and set it up so it runs. Replace /app contents.
 
+## 2026-08-19 — Smoke runtime final post-PR#146 (pré-#147) — VERDICTS: POST146_RUNTIME=PASS, TEST_FRAGILE_CONFIRMED=YES, PR147_REQUIRED=YES
+- Audit LECTURE SEULE. HEAD 93e6501 (#145+#146). Services RUNNING. Imports: config.training_goals.GOAL_CONFIG OK, training_engine.GOAL_CONFIG→ImportError ✓, import training_engine OK ✓.
+- Smoke 7/7=200 (today/plan/metrics/run-index/dashboard/goals/full-cycle). /training/goals runtime == config.training_goals.GOAL_CONFIG (5 goals, égalité exacte). Daily V2 non régressé (build_recent_training_response/build_readiness_decision/build_daily_adaptation; aucun adapt_session_to_readiness/training_engine/fatigue_*).
+- Tests PR132→146 = 327 passed, 1 failed (uniquement test_plan_duration_decoupled.py::test_adjusted_weeks_is_base_weeks). Invariants comportementaux du découplage tous verts.
+- TEST_FRAGILE_CONFIRMED=YES: L73 attend l'assignation "adjusted_weeks = base_weeks", code utilise forme dict "adjusted_weeks": base_weeks (L678) / "adjusted_weeks": total_weeks (L851 chemin principal) — sémantique identique. Mismatch syntaxique, pas régression.
+- PR147_REQUIRED=YES pour assouplir cette assertion (accepter forme dict ou check AST/comportemental). Aucune correction applicative requise.
+- Rapport: /app/TRAINING_V2_RUNTIME_POST146_PRE147.md.
+
+
 ## 2026-08-19 — Pull copilot/dev (PR #146) — GOAL_CONFIG orphelin supprimé — MERGÉ & VALIDÉ (1 test fragile non bloquant)
 - Fetch copilot/dev (5c22ac4→936c966). Merge ORT propre, 0 conflit. .env intacts, protégés préservés. Backend+worker redémarrés.
 - PR #146 = suppression de la copie orpheline GOAL_CONFIG de training_engine.py (-39 lignes) + mise à jour tests (test_goal_config_pr145.py, import test_plan_duration_decoupled.py training_engine→config). Finalise le single-source-of-truth de #145.
