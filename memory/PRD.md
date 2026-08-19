@@ -3,6 +3,13 @@
 ## Problem Statement
 Pull https://github.com/geirb56/sauvegarde260629 and set it up so it runs. Replace /app contents.
 
+## 2026-08-19 — Pull copilot/dev (PR #153) — Fake TSS supprimé du fallback km/pace-based — MERGÉ & VALIDÉ
+- Fetch copilot/dev (c583d44→041de63). Merge ORT propre, 0 conflit. .env intacts. Backend+worker redémarrés.
+- PR #153 = suppression des estimated_tss hardcodés (0/25/…) du 2e fallback km/pace-based (_generate_fallback_week_plan) → tous estimated_tss=None (terminologie: "estimated TSS not from validated calculation"). distance_km/paces réels conservés (prescription légitime). + tests ciblés test_pr153_fallback_no_unvalidated_tss.py.
+- Validation: fallback km/pace-based confirmé estimated_tss=None partout ✓ (distance_km réels 5/6/7 conservés). Smoke 6/6=200. Régression PR132→153 = 311 passed, 0 failed.
+- État: sémantique None finalisée sur TOUS les fallbacks week-plan (duration-based #149 + km/pace-based #153). Chaîne Training Engine V2 validée #132→#153, suite verte.
+
+
 ## 2026-08-19 — Pull copilot/dev (PR #152) — Test non-portable réparé — MERGÉ & VALIDÉ
 - Fetch copilot/dev (43ee9ec→c583d44). Merge ORT propre, 0 conflit. .env intacts. Aucun code applicatif modifié (uniquement le test + docs).
 - PR #152 = correction de test_pr149_week_plan_v2.py::test_fallback_code_path_exists_in_server: chemin CI absolu codé en dur → pathlib.Path(__file__).resolve().parent.parent/"server.py" (portable).
