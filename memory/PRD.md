@@ -3,6 +3,13 @@
 ## Problem Statement
 Pull https://github.com/geirb56/sauvegarde260629 and set it up so it runs. Replace /app contents.
 
+## 2026-08-19 — Pull copilot/dev (PR #154) — Suppression accès runtime legacy db.training_goals — MERGÉ & VALIDÉ
+- Fetch copilot/dev (041de63→761281f). Merge ORT propre, 0 conflit. .env intacts. Backend+worker redémarrés.
+- PR #154 = suppression des accès runtime à la collection legacy db.training_goals (delete-training-goal path) + tests. REVERT documenté: le reader db.training_goals du week-plan (server.py L4576) est INTENTIONNELLEMENT conservé pour scope #155.
+- Validation: server.py L102=import config module (OK), L4576=reader week-plan conservé (#155). Autres accès runtime db.training_goals supprimés. Smoke 7/7=200. Régression PR132→154 = 238 passed, 0 failed.
+- État: nettoyage legacy training_goals en cours (#154 partiel, week-plan reader → #155). Chaîne Training Engine V2 stable.
+
+
 ## 2026-08-19 — Pull copilot/dev (PR #153) — Fake TSS supprimé du fallback km/pace-based — MERGÉ & VALIDÉ
 - Fetch copilot/dev (c583d44→041de63). Merge ORT propre, 0 conflit. .env intacts. Backend+worker redémarrés.
 - PR #153 = suppression des estimated_tss hardcodés (0/25/…) du 2e fallback km/pace-based (_generate_fallback_week_plan) → tous estimated_tss=None (terminologie: "estimated TSS not from validated calculation"). distance_km/paces réels conservés (prescription légitime). + tests ciblés test_pr153_fallback_no_unvalidated_tss.py.
