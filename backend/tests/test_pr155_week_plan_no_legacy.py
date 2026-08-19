@@ -126,7 +126,14 @@ async def _mock_get_user_access(db, user_id):
 
 def _mock_generate_cycle_week(**kwargs):
     """Mock that returns a simple plan without calling LLM."""
-    async def _inner(context, phase, target_load, goal, user_id):
+    async def _inner(
+        context,
+        phase,
+        goal,
+        user_id="unknown",
+        target_load=None,
+        **kwargs,
+    ):
         return {"sessions": []}, True, {"source": "mock"}
     return _inner
 
