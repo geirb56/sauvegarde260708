@@ -358,7 +358,7 @@ class TestBlocker1DurationFallbackNoKm:
     def test_fallback_code_path_exists_in_server(self):
         """Verify the duration-based branch exists in server.py source code."""
         import pathlib
-        server_path = pathlib.Path("/home/runner/work/sauvegarde260708/sauvegarde260708/backend/server.py")
+        server_path = pathlib.Path(__file__).resolve().parent.parent / "server.py"
         source = server_path.read_text()
         # The duration-based fallback must check target_duration_minutes
         assert "target_km_protected is None and target_duration_minutes is not None" in source

@@ -177,7 +177,7 @@ function SessionCard({ session, isGrayed = false, fatigueColor = null }) {
         className="px-2 py-1 rounded-full text-xs font-bold shrink-0"
         style={{ background: style.badge, color: style.badgeText }}
       >
-        {session.estimated_tss || 0} TSS
+        {session.estimated_tss != null ? `${session.estimated_tss} TSS` : '—'}
       </span>
     </div>
   );

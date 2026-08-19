@@ -104,6 +104,11 @@ class _Collection:
                 return _DeleteResult(1)
         return _DeleteResult(0)
 
+    async def delete_many(self, query):
+        removed = [d for d in self._docs if _matches(d, query)]
+        self._docs = [d for d in self._docs if not _matches(d, query)]
+        return _DeleteResult(len(removed))
+
     async def insert_one(self, doc):
         self._docs.append(dict(doc))
 
@@ -307,6 +312,9 @@ def _delete_goal_app():
         training_cycles = _Collection([
             {"user_id": "user-a"}, {"user_id": "user-b"}
         ])
+        user_goals = _Collection([
+            {"user_id": "user-a", "event_name": "A"}, {"user_id": "user-b", "event_name": "B"}
+        ])
         users = _Collection([
             {"id": "user-a", "email": "a@test.com", "is_active": True, "is_email_verified": True},
             {"id": "user-b", "email": "b@test.com", "is_active": True, "is_email_verified": True},
@@ -318,9 +326,9 @@ def _delete_goal_app():
     @app.delete("/training/goal")
     async def delete_training_goal(user: dict = Depends(get_current_user)):
         user_id = user["id"]
-        result = await db_instance.training_goals.delete_one({"user_id": user_id})
+        result = await db_instance.training_cycles.delete_one({"user_id": user_id})
         await db_instance.training_context.delete_one({"user_id": user_id})
-        await db_instance.training_cycles.delete_one({"user_id": user_id})
+        await db_instance.user_goals.delete_many({"user_id": user_id})
         return {
             "success": result.deleted_count > 0,
             "message": "Goal deleted" if result.deleted_count > 0 else "No goal found",
@@ -359,8 +367,8 @@ class TestDeleteTrainingGoalIsolation:
         assert r.status_code == 200
         data = r.json()
         assert data["success"] is True
-        # user-b's goal must still exist
-        remaining = await db_instance.training_goals.count_documents({"user_id": "user-b"})
+        # user-b's cycle must still exist
+        remaining = await db_instance.training_cycles.count_documents({"user_id": "user-b"})
         assert remaining == 1
 
     @pytest.mark.asyncio
@@ -368,7 +376,7 @@ class TestDeleteTrainingGoalIsolation:
         """Deleting user-a's goal must NOT touch user-b's goal."""
         client, db_instance, goal_a, goal_b = delete_goal_client
         await client.delete("/training/goal", headers=_bearer("user-a", "a@test.com"))
-        remaining = await db_instance.training_goals.count_documents({"user_id": "user-b"})
+        remaining = await db_instance.training_cycles.count_documents({"user_id": "user-b"})
         assert remaining == 1
 
 
