@@ -4738,13 +4738,13 @@ def _generate_fallback_week_plan(context: dict, phase: str, target_load: int, go
         per_session = target_duration_minutes // sessions_count
         remainder = target_duration_minutes - per_session * sessions_count
         sessions = [
-            {"day": "monday", "type": "rest", "duration": "0min", "details": "Récupération complète", "intensity": "rest", "estimated_tss": 0, "distance_km": None},
-            {"day": "tuesday", "type": "endurance", "duration": f"{per_session}min", "details": f"{per_session}min endurance facile", "intensity": "easy", "estimated_tss": 0, "distance_km": None},
-            {"day": "wednesday", "type": "rest", "duration": "0min", "details": "Récupération", "intensity": "rest", "estimated_tss": 0, "distance_km": None},
-            {"day": "thursday", "type": "endurance", "duration": f"{per_session}min", "details": f"{per_session}min endurance facile", "intensity": "easy", "estimated_tss": 0, "distance_km": None},
-            {"day": "friday", "type": "rest", "duration": "0min", "details": "Récupération", "intensity": "rest", "estimated_tss": 0, "distance_km": None},
-            {"day": "saturday", "type": "endurance", "duration": f"{per_session + remainder}min", "details": f"{per_session + remainder}min endurance facile", "intensity": "easy", "estimated_tss": 0, "distance_km": None},
-            {"day": "sunday", "type": "rest", "duration": "0min", "details": "Récupération", "intensity": "rest", "estimated_tss": 0, "distance_km": None},
+            {"day": "monday", "type": "rest", "duration": "0min", "details": "Récupération complète", "intensity": "rest", "estimated_tss": None, "distance_km": None},
+            {"day": "tuesday", "type": "endurance", "duration": f"{per_session}min", "details": f"{per_session}min endurance facile", "intensity": "easy", "estimated_tss": None, "distance_km": None},
+            {"day": "wednesday", "type": "rest", "duration": "0min", "details": "Récupération", "intensity": "rest", "estimated_tss": None, "distance_km": None},
+            {"day": "thursday", "type": "endurance", "duration": f"{per_session}min", "details": f"{per_session}min endurance facile", "intensity": "easy", "estimated_tss": None, "distance_km": None},
+            {"day": "friday", "type": "rest", "duration": "0min", "details": "Récupération", "intensity": "rest", "estimated_tss": None, "distance_km": None},
+            {"day": "saturday", "type": "endurance", "duration": f"{per_session + remainder}min", "details": f"{per_session + remainder}min endurance facile", "intensity": "easy", "estimated_tss": None, "distance_km": None},
+            {"day": "sunday", "type": "rest", "duration": "0min", "details": "Récupération", "intensity": "rest", "estimated_tss": None, "distance_km": None},
         ]
         return {
             "focus": phase,
@@ -4753,7 +4753,7 @@ def _generate_fallback_week_plan(context: dict, phase: str, target_load: int, go
             "target_duration_minutes": target_duration_minutes,
             "target_basis": "duration",
             "sessions": sessions,
-            "total_tss": 0,
+            "total_tss": None,
             "advice": get_phase_description(phase).get("advice", "Keep it up!")
         }
 

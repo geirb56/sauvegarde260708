@@ -148,7 +148,7 @@ Recommended scope for PR #150:
 
 | Blocker | Status | Resolution |
 |---------|--------|------------|
-| BLOCKER_1_DURATION_FALLBACK | **RESOLVED** | `_generate_fallback_week_plan` now has a duration-based branch: when `target_km_protected=None` and `target_duration_minutes` is set, produces sessions with `distance_km: None`, `weekly_km: None`, `target_basis: "duration"`. No km invented. |
+| BLOCKER_1_DURATION_FALLBACK | **RESOLVED** | `_generate_fallback_week_plan` now has a duration-based branch: when `target_km_protected=None` and `target_duration_minutes` is set, produces sessions with `distance_km: None`, `estimated_tss: None`, `weekly_km: None`, `total_tss: None`, `target_basis: "duration"`. No km invented. No fictitious TSS (None != 0). |
 | BLOCKER_2_REFERENCE_DATE | **RESOLVED** | `reference_date` is now a mandatory keyword argument (no default). Omitting it raises `TypeError`. No implicit `datetime.now()` in the bridge. |
 | BLOCKER_3_UNKNOWN_GOAL | **RESOLVED** | Unknown goal strings raise `UnknownGoalTypeError` explicitly. No silent fallback to `half_marathon`. Closed mapping with explicit error message listing valid values. |
 | BLOCKER_4_DOMAIN_BOUNDARY | **RESOLVED** | Bridge now uses canonical `to_domain_activity()` from `domain_activity.py`, producing typed `DomainActivity` instances. A `_normalize_workout_to_domain_fields()` adapter maps provider-specific field names (distance_km→distance_m, duration_minutes→duration_s) before the canonical adapter. |
@@ -156,7 +156,7 @@ Recommended scope for PR #150:
 ### Fallback behaviour after fix
 
 - **Distance-based** (target_km_protected set): legacy path unchanged — km templates scaled by `target_km_protected` cap.
-- **Duration-based** (target_km_protected=None, target_duration_minutes set): new branch produces 3 easy sessions totalling `target_duration_minutes`, all with `distance_km: None`. No DEFAULT_WEEKLY_KM used.
+- **Duration-based** (target_km_protected=None, target_duration_minutes set): new branch produces 3 easy sessions totalling `target_duration_minutes`, all with `distance_km: None`, `estimated_tss: None`, `total_tss: None`. No DEFAULT_WEEKLY_KM used. None != 0 enforced.
 
 ### DomainActivity boundary
 

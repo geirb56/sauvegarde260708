@@ -335,10 +335,11 @@ class TestBlocker1DurationFallbackNoKm:
                 "weekly_km": None,
                 "target_basis": "duration",
                 "target_duration_minutes": target_duration_minutes,
+                "total_tss": None,
                 "sessions": [
-                    {"day": "tuesday", "duration": f"{per_session}min", "distance_km": None},
-                    {"day": "thursday", "duration": f"{per_session}min", "distance_km": None},
-                    {"day": "saturday", "duration": f"{per_session + remainder}min", "distance_km": None},
+                    {"day": "tuesday", "duration": f"{per_session}min", "distance_km": None, "estimated_tss": None},
+                    {"day": "thursday", "duration": f"{per_session}min", "distance_km": None, "estimated_tss": None},
+                    {"day": "saturday", "duration": f"{per_session + remainder}min", "distance_km": None, "estimated_tss": None},
                 ],
             }
         else:
@@ -347,8 +348,12 @@ class TestBlocker1DurationFallbackNoKm:
         assert plan["weekly_km"] is None
         assert plan["target_basis"] == "duration"
         assert plan["target_duration_minutes"] == 105
+        assert plan["total_tss"] is None
+        assert plan["total_tss"] != 0  # None != 0
         for session in plan["sessions"]:
             assert session.get("distance_km") is None
+            assert session.get("estimated_tss") is None
+            assert session.get("estimated_tss") != 0  # None != 0
 
     def test_fallback_code_path_exists_in_server(self):
         """Verify the duration-based branch exists in server.py source code."""
@@ -361,6 +366,9 @@ class TestBlocker1DurationFallbackNoKm:
         assert '"weekly_km": None' in source or "'weekly_km': None" in source
         # It must set target_basis to duration
         assert '"target_basis": "duration"' in source or "'target_basis': \"duration\"" in source
+        # estimated_tss and total_tss must be None (not 0) in duration-based fallback
+        assert '"estimated_tss": None' in source
+        assert '"total_tss": None' in source
 
 
 # ---------------------------------------------------------------------------
