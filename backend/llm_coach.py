@@ -245,9 +245,9 @@ Analyze this session as a caring running coach.{_lang_directive(language)}"""
 async def generate_cycle_week(
     context: Dict,
     phase: str,
-    target_load: int,
     goal: str,
     user_id: str = "unknown",
+    target_load: int = None,
     sessions_per_week: int = None,
     personalized_paces: Dict = None
 ) -> Tuple[Optional[Dict], bool, Dict]:
