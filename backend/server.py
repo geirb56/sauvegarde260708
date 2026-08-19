@@ -61,6 +61,9 @@ from rag_engine import (
 
 # Import training engine for periodization
 from training_v2.training_load import build_training_load
+from training_v2.training_history import build_training_history
+from training_v2.runner_profile import build_runner_profile
+from training_v2.training_state import build_training_state
 from training_v2.readiness_decision import (
     ReadinessBand,
     ReadinessDecision,
@@ -89,7 +92,6 @@ from training_engine import (
     apply_resume_guard,
     resolve_chronic_base,
     resolve_reprise_plan,
-    classify_training_state,
     REPRISE_STABLE_WEEKS,
     vma_pace,
     vma_pace_range,
@@ -3787,7 +3789,9 @@ async def get_training_metrics(user: dict = Depends(auth_user)):
         .limit(200)
         .to_list(length=200)
     )
-    load_snapshot = build_training_load(garmin_activities, today_date)
+    # PR #143: convert to DomainActivity before passing to V2 layers.
+    domain_activities = mongo_garmin_activities_to_domain(garmin_activities)
+    load_snapshot = build_training_load(domain_activities, today_date)
 
     # ACWR — None when no chronic load (no fallback to 1.0)
     acwr: Optional[float] = load_snapshot.acwr
@@ -3825,12 +3829,22 @@ async def get_training_metrics(user: dict = Depends(auth_user)):
 
     strain = round(load_7 * monotony, 0) if monotony > 0 else 0
 
-    # --- ACWR reliability: based on training state (reprise detection) ---
-    # has_sufficient_history captures ONLY the depth of available history and
-    # must NOT be used here.  An athlete with ≥ 28 days of Garmin data may
-    # still be resuming after a break (deep_reprise / partial_reprise), making
-    # the ACWR unreliable regardless of history depth.
-    reprise_state = classify_training_state(activities_28)
+    # --- ACWR reliability: based on TrainingState V2 (reprise detection) ---
+    # PR #143: migrate from legacy classify_training_state to V2 chain.
+    # Reuses domain_activities already converted above.
+    training_history = build_training_history(domain_activities, today_date)
+    runner_profile = build_runner_profile(
+        training_history=training_history,
+        training_load=load_snapshot,
+        reference_date=today_date,
+    )
+    training_state = build_training_state(
+        training_history=training_history,
+        training_load=load_snapshot,
+        runner_profile=runner_profile,
+        reference_date=today_date,
+    )
+    reprise_state = training_state.continuity_state
     acwr_reliable = reprise_state not in ("deep_reprise", "partial_reprise")
 
     # --- Interpréter ACWR ---
