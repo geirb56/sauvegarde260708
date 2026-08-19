@@ -4572,11 +4572,33 @@ async def get_week_plan(user: dict = Depends(auth_user)):
     Legacy determine_target_load + generate_cycle_week remain for LLM rendering (compat).
     """
     user_id = user["id"]
-    # Récupérer l'objectif
-    goal = await db.training_goals.find_one({"user_id": user_id}, {"_id": 0})
+    # PR155: Read from canonical sources instead of legacy db.training_goals
+    cycle = await db.training_cycles.find_one({"user_id": user_id}, {"_id": 0})
 
-    if not goal:
+    if not cycle:
         raise HTTPException(status_code=400, detail="No goal defined. Use /api/training/set-goal first.")
+
+    goal_type = cycle.get("goal")
+    if not goal_type or goal_type not in GOAL_CONFIG:
+        raise HTTPException(status_code=400, detail=f"Unknown or missing goal type: {goal_type}")
+
+    start_date_raw = cycle.get("start_date")
+    if not start_date_raw:
+        raise HTTPException(status_code=400, detail="No start_date in training cycle.")
+
+    # Optional race metadata from user_goals
+    user_goal = await db.user_goals.find_one({"user_id": user_id}, {"_id": 0})
+    event_name = user_goal.get("event_name") if user_goal else None
+    event_date = user_goal.get("event_date") if user_goal else None
+
+    # Build normalized goal dict matching legacy shape consumed downstream
+    goal = {
+        "goal_type": goal_type,
+        "start_date": start_date_raw,
+        "cycle_weeks": GOAL_CONFIG[goal_type]["cycle_weeks"],
+        "event_name": event_name,
+        "event_date": event_date,
+    }
 
     # Retrieve recent data for context
     today = datetime.now(timezone.utc)
