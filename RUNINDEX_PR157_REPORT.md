@@ -1,4 +1,4 @@
-# RUNINDEX_PR158_REPORT.md
+# RUNINDEX_PR157_REPORT.md
 
 ## Objectif
 
@@ -11,13 +11,6 @@ Retirer le consumer legacy `determine_target_load(...)` du chemin `GET /training
 ```
 de22c78  Merge pull request #156 from geirb56/claude/copilotdev
 ```
-
----
-
-## Confirmation #157 non reprise
-
-**YES — aucun commit de #157 repris.**
-Branche repart exclusivement de `de22c78` (post-#156 merge).
 
 ---
 
@@ -59,7 +52,7 @@ phase = "build" | "deload" | "intensification" | "taper" | "race"
 
 ## Consumer de target_load
 
-Avant PR158 :
+Avant PR157 :
 ```python
 plan["planned_load"] = target_load   # dans generate_cycle_week et _generate_fallback_week_plan
 ```
@@ -82,7 +75,7 @@ Conditions remplies :
 
 ## Occurrences avant / après
 
-### Avant PR158
+### Avant PR157
 
 | Occurrence | Fichier | Type |
 |---|---|---|
@@ -96,13 +89,13 @@ Conditions remplies :
 
 **RUNTIME_WEEK_PLAN avant = 2 (import + appel)**
 
-### Après PR158
+### Après PR157
 
 | Occurrence | Fichier | Type |
 |---|---|---|
 | `def determine_target_load(...)` | `training_engine.py:783` | DEFINITION |
 | `"determine_target_load"` | `training_engine.py:914` | DEFINITION (exports list) |
-| commentaires PR158 | `server.py` | DOC/COMMENT |
+| commentaires PR157 | `server.py` | DOC/COMMENT |
 | tests (inchangés) | `test_training_metrics_pr127.py` etc. | TEST |
 
 **RUNTIME_WEEK_PLAN après = 0 ✅**
@@ -123,7 +116,7 @@ Conditions remplies :
 - `context["training_state"]` → depuis WeeklyTarget V2
 - `context["weekly_km"]` → depuis `compute_current_weekly_km`
 
-Aucun de ces inputs n'est modifié par PR158.
+Aucun de ces inputs n'est modifié par PR157.
 
 ---
 
@@ -143,8 +136,8 @@ Identique à baseline post-#156.
 |---|---|
 | `backend/server.py` | Retrait de l'appel `determine_target_load`, mise à jour signatures |
 | `backend/llm_coach.py` | `target_load: int` → `target_load: int = None` (paramètre optionnel) |
-| `backend/tests/test_pr158_remove_determine_target_load.py` | **NEW** — tests ciblés PR158 |
-| `RUNINDEX_PR158_REPORT.md` | **NEW** — ce rapport |
+| `backend/tests/test_pr157_remove_determine_target_load.py` | **NEW** — tests ciblés PR157 |
+| `RUNINDEX_PR157_REPORT.md` | **NEW** — ce rapport |
 
 ---
 
@@ -181,7 +174,7 @@ def _generate_fallback_week_plan(context, phase, goal, target_km_protected=None)
 
 ## Tests
 
-### PR158 (nouveaux)
+### PR157 (nouveaux)
 
 ```
 13 passed
@@ -191,14 +184,14 @@ def _generate_fallback_week_plan(context, phase, goal, target_km_protected=None)
 
 | Suite | Résultat |
 |---|---|
-| `test_pr158_remove_determine_target_load.py` | 13 passed ✅ |
+| `test_pr157_remove_determine_target_load.py` | 13 passed ✅ |
 | `test_pr156_no_unvalidated_tss_generate_cycle_week.py` | 11 passed ✅ |
 | `test_pr149_week_plan_v2.py` | 18 passed ✅ |
 | `test_pr155_week_plan_no_legacy.py` | **1 error (env)** — `motor` non installé |
 | `test_training_metrics_pr127.py` | inclus dans 83 passed ✅ |
 | **Total** | **83 passed, 1 error environnemental préexistant** |
 
-**Erreurs environnementales préexistantes (hors scope PR158) :**
+**Erreurs environnementales préexistantes (hors scope PR157) :**
 - `motor` (MongoDB driver) absent → `test_pr155` ne peut pas importer `server.py`
 - Ce n'est pas masqué : reporté ici séparément
 
@@ -216,13 +209,13 @@ def _generate_fallback_week_plan(context, phase, goal, target_km_protected=None)
 - Aucune modification de prescription
 - WeeklyTarget V2 reste autorité
 - TSS conforme à #156
-- 13 tests PR158 = 0 failed
+- 13 tests PR157 = 0 failed
 - 83 tests régression = 0 failed (1 error env préexistant)
 - `mergeable = true`
 
 ---
 
-## Dettes restantes hors scope #158
+## Dettes restantes hors scope #157
 
 | Dette | Scope |
 |---|---|

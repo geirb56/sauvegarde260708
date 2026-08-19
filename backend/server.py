@@ -4569,7 +4569,7 @@ async def get_week_plan(user: dict = Depends(auth_user)):
     Utilise le contexte d'entraînement et l'objectif défini.
 
     PR149: Weekly prescription is now sourced from WeeklyTarget V2.
-    PR158: determine_target_load removed from this path (display context only).
+    PR157: determine_target_load removed from this path (display context only).
     """
     user_id = user["id"]
     # PR155: Read from canonical sources instead of legacy db.training_goals
@@ -4667,7 +4667,7 @@ async def get_week_plan(user: dict = Depends(auth_user)):
     # ── Legacy compat context (LLM) ─────────────────────────────────────────
     # ctl/atl/tsb km-based aliases removed (PR #127 — faux physiological metrics).
     # load_7/load_28 kept for context transparency; no longer consumed by
-    # determine_target_load (PR #158 — removed from this path).
+    # determine_target_load (PR #157 — removed from this path).
     # acwr=None — km_7/(km_28/4) must NOT be exposed as ACWR (#127 pre-merge corrections).
     context = {
         "ctl": None,
@@ -4694,7 +4694,7 @@ async def get_week_plan(user: dict = Depends(auth_user)):
 
     phase = determine_phase(current_week, cycle_weeks)
 
-    # PR158: determine_target_load removed — target_load is display context only,
+    # PR157: determine_target_load removed — target_load is display context only,
     # never drives distances / durations / intensity.  planned_load → None.
 
     # PR149: V2 decides the prescription; legacy compat projects from V2.

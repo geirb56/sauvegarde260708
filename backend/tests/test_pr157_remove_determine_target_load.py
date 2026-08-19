@@ -1,5 +1,5 @@
 """
-PR158 — Tests: retrait de determine_target_load du chemin /training/week-plan.
+PR157 — Tests: retrait de determine_target_load du chemin /training/week-plan.
 
 Objectifs couverts :
 1. generate_cycle_week fonctionne sans target_load (default=None).
@@ -51,7 +51,7 @@ CONTEXT_NORMAL = {
 # ---------------------------------------------------------------------------
 
 class TestGenerateCycleWeekNoTargetLoad(unittest.TestCase):
-    """PR158: generate_cycle_week must work with target_load omitted (default None)."""
+    """PR157: generate_cycle_week must work with target_load omitted (default None)."""
 
     def test_call_without_target_load_returns_plan(self):
         """Calling generate_cycle_week without target_load must succeed."""
@@ -62,7 +62,7 @@ class TestGenerateCycleWeekNoTargetLoad(unittest.TestCase):
                 context=CONTEXT_NORMAL,
                 phase="build",
                 goal="SEMI",
-                user_id="test_pr158",
+                user_id="test_pr157",
             )
         )
         self.assertTrue(success, "generate_cycle_week must succeed without target_load")
@@ -78,7 +78,7 @@ class TestGenerateCycleWeekNoTargetLoad(unittest.TestCase):
                 context=CONTEXT_NORMAL,
                 phase="build",
                 goal="SEMI",
-                user_id="test_pr158",
+                user_id="test_pr157",
             )
         )
         self.assertTrue(success)
@@ -90,7 +90,7 @@ class TestGenerateCycleWeekNoTargetLoad(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestDetermineTargetLoadNotInWeekPlan(unittest.TestCase):
-    """PR158: prove via AST that get_week_plan no longer calls determine_target_load."""
+    """PR157: prove via AST that get_week_plan no longer calls determine_target_load."""
 
     def _get_week_plan_source(self) -> str:
         import pathlib
@@ -122,12 +122,12 @@ class TestDetermineTargetLoadNotInWeekPlan(unittest.TestCase):
         return []
 
     def test_no_determine_target_load_call(self):
-        """determine_target_load must not be called (AST) in get_week_plan after PR158."""
+        """determine_target_load must not be called (AST) in get_week_plan after PR157."""
         call_names = self._get_week_plan_call_names()
         self.assertNotIn(
             "determine_target_load",
             call_names,
-            "determine_target_load must NOT be called in get_week_plan after PR158"
+            "determine_target_load must NOT be called in get_week_plan after PR157"
         )
 
     def test_no_determine_target_load_import_in_week_plan(self):
@@ -155,7 +155,7 @@ class TestDetermineTargetLoadNotInWeekPlan(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestWeeklyTargetV2Authority(unittest.TestCase):
-    """PR158: WeeklyTarget V2 remains the prescriptive authority."""
+    """PR157: WeeklyTarget V2 remains the prescriptive authority."""
 
     def test_weekly_target_v2_used_in_week_plan_source(self):
         """build_weekly_target_from_workouts must still be called in get_week_plan."""
@@ -207,8 +207,8 @@ class TestWeeklyTargetV2Authority(unittest.TestCase):
 # 4. TSS unchanged (active=None, rest=0, total=None)
 # ---------------------------------------------------------------------------
 
-class TestTSSUnchangedPR158(unittest.TestCase):
-    """PR158: TSS contract must remain identical to post-#156 baseline."""
+class TestTSSUnchangedPR157(unittest.TestCase):
+    """PR157: TSS contract must remain identical to post-#156 baseline."""
 
     def test_active_sessions_estimated_tss_none(self):
         """Active sessions must have estimated_tss=None (no TSS coefficients)."""
@@ -219,7 +219,7 @@ class TestTSSUnchangedPR158(unittest.TestCase):
                 context=CONTEXT_NORMAL,
                 phase="build",
                 goal="SEMI",
-                user_id="test_pr158_tss",
+                user_id="test_pr157_tss",
             )
         )
         self.assertTrue(success)
@@ -239,7 +239,7 @@ class TestTSSUnchangedPR158(unittest.TestCase):
                 context=CONTEXT_NORMAL,
                 phase="build",
                 goal="SEMI",
-                user_id="test_pr158_tss",
+                user_id="test_pr157_tss",
             )
         )
         self.assertTrue(success)
@@ -251,12 +251,12 @@ class TestTSSUnchangedPR158(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestPrescriptionUnchanged(unittest.TestCase):
-    """PR158: removing determine_target_load must not change prescription outputs."""
+    """PR157: removing determine_target_load must not change prescription outputs."""
 
     def _get_plan(self, context, phase="build", goal="SEMI"):
         from llm_coach import generate_cycle_week
         plan, success, _ = run(
-            generate_cycle_week(context=context, phase=phase, goal=goal, user_id="test_pr158_reg")
+            generate_cycle_week(context=context, phase=phase, goal=goal, user_id="test_pr157_reg")
         )
         self.assertTrue(success)
         return plan
@@ -307,8 +307,8 @@ class TestPrescriptionUnchanged(unittest.TestCase):
 # 6. Scan: RUNTIME_WEEK_PLAN occurrences of determine_target_load = 0
 # ---------------------------------------------------------------------------
 
-class TestScanAfterPR158(unittest.TestCase):
-    """PR158 SCAN APRÈS: determine_target_load must have 0 RUNTIME_WEEK_PLAN occurrences."""
+class TestScanAfterPR157(unittest.TestCase):
+    """PR157 SCAN APRÈS: determine_target_load must have 0 RUNTIME_WEEK_PLAN occurrences."""
 
     def test_server_get_week_plan_no_determine_target_load(self):
         """AST: determine_target_load must not be *called* inside get_week_plan."""
