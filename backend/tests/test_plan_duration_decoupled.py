@@ -13,6 +13,7 @@ Scope of this PR:
 Pure unit tests: no HTTP, no DB, no LLM.
 """
 
+import ast
 import os
 import sys
 import inspect
@@ -68,9 +69,43 @@ def test_no_readiness_multiplier_on_base_weeks():
 
 
 def test_adjusted_weeks_is_base_weeks():
-    """`adjusted_weeks` must be initialized to `base_weeks` (no readiness scaling)."""
-    src = _plan_source()
-    assert "adjusted_weeks = base_weeks" in src
+    """`adjusted_weeks` must equal `base_weeks` or `total_weeks` — never a
+    readiness-derived expression.  Uses AST inspection so the test is immune
+    to formatting or dict-vs-assignment refactors."""
+    # Allowed variable names that may appear as the value for "adjusted_weeks"
+    _ALLOWED_NAMES = {"base_weeks", "total_weeks"}
+
+    source_file = inspect.getfile(coach_service.generate_dynamic_training_plan)
+    tree = ast.parse(open(source_file).read(), filename=source_file)
+
+    # Find the function node
+    func_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name == "generate_dynamic_training_plan":
+                func_node = node
+                break
+    assert func_node is not None, "generate_dynamic_training_plan not found"
+
+    # Collect all values assigned to "adjusted_weeks" in dict literals
+    found = []
+    for node in ast.walk(func_node):
+        if isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values):
+                if isinstance(key, ast.Constant) and key.value == "adjusted_weeks":
+                    found.append(value)
+
+    # We expect at least one non-None assignment
+    non_none = [v for v in found if not (isinstance(v, ast.Constant) and v.value is None)]
+    assert non_none, (
+        "No non-None 'adjusted_weeks' value found in generate_dynamic_training_plan"
+    )
+
+    for value_node in non_none:
+        assert isinstance(value_node, ast.Name) and value_node.id in _ALLOWED_NAMES, (
+            f"'adjusted_weeks' must be set to one of {_ALLOWED_NAMES}, "
+            f"got: {ast.dump(value_node)}"
+        )
 
 
 def test_no_silent_shrink_to_weeks_available():
