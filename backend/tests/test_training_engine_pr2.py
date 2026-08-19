@@ -208,10 +208,38 @@ class TestVMAFallbackConfidence:
 
     def test_fallback_still_exists(self):
         # We deliberately keep the fallback to avoid a wider refactor in PR2.
+        # The fallback divides by 0.70 to estimate VMA from average speed/pace.
+        # Instead of searching for a fragile string pattern, we use AST to prove
+        # that a division by 0.70 exists and the "average" method branch is present.
+        import ast
         import coach_service
         src = inspect.getsource(coach_service)
-        assert "avg_speed / 0.70" in src, (
-            "PR2 should preserve the /0.70 fallback (no refactor) — pattern missing."
+        tree = ast.parse(src)
+
+        # 1. Prove division by 0.70 exists somewhere in coach_service
+        found_div_070 = False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+                if isinstance(node.right, ast.Constant) and node.right.value in (0.70, 0.7):
+                    found_div_070 = True
+                    break
+        assert found_div_070, (
+            "VMA fallback: no division by 0.70 found in coach_service AST — "
+            "the /0.70 fallback has been removed."
+        )
+
+        # 2. Prove vma_method = "average" assignment exists (the low-confidence branch)
+        found_average_method = False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id == "vma_method":
+                        if isinstance(node.value, ast.Constant) and node.value.value == "average":
+                            found_average_method = True
+                            break
+        assert found_average_method, (
+            "VMA fallback: vma_method = 'average' assignment not found — "
+            "the fallback branch may have been removed."
         )
 
     def test_fallback_confidence_is_low(self):
