@@ -3,6 +3,13 @@
 ## Problem Statement
 Pull https://github.com/geirb56/sauvegarde260629 and set it up so it runs. Replace /app contents.
 
+## 2026-08-19 — Micro-validation déterministe LOW/CAUTION/VERY_LOW (DailyAdaptation V2) post-PR#144 — VERDICT: PASS (11/11)
+- Audit LECTURE SEULE. HEAD 857f583 (#143+#144). Séance réf (ref 2026-08-23): long_easy 13.3km low. ReadinessDecision par bande construits DÉTERMINISTES en mémoire (pas de falsification Garmin). TrainingLoad (acwr=0.612, status=low, conf=high) et RecentTrainingResponse (sufficient, 6 runs, avg_hr=135) RÉELS et IDENTIQUES dans les 3 scénarios.
+- Résultats: FAVORABLE→KEEP (13.3km); CAUTION→SHORTEN (9.3km, LONG_EASY_PROTECTED); LOW→SHORTEN (9.3km); VERY_LOW→REST. SHORTEN_FACTOR=0.70 (13.3×0.70=9.31→9.3). Séance distance-only: SHORTEN via distance, durée None conservée. REST sans compensation.
+- Monotonicité physiologique VERY_LOW≤LOW≤CAUTION≤FAVORABLE respectée (intensité jamais augmentée). #132 identique/consommé dans les 3 (n'impose pas action différente). daily_adaptation.py pure V2 (aucun legacy). None≠0 (aucun TSS=0/ACWR=1/durée/distance inventés).
+- 11/11 PASS. Rapport: /app/TRAINING_V2_RUNTIME_LOW_CAUTION_VERYLOW_POST144.md.
+
+
 ## 2026-08-19 — Micro-validation runtime SÉANCE ACTIVE post-PR#144 — VERDICT: PASS
 - Audit LECTURE SEULE. HEAD 857f583 (#143+#144). Aujourd'hui=repos → reproduction déterministe de la chaîne /training/today avec reference_date=2026-08-23 (dimanche, seule séance active du plan V2: long_run 13.3km easy). Aucune modif code/plan/Mongo/planning.
 - Chaîne (fonctions identiques à l'endpoint): plan V2 → runtime_session_to_prescription (long_easy, 13.3km, intensity_class=low) → build_training_load (acute7d=44.02, chronic_wk=71.87, ACWR=0.612, conf=high) → readiness_adapter (score=100, NORMAL, SUFFICIENT) → build_readiness_decision (FAVORABLE, READINESS_FAVORABLE) → build_recent_training_response (#132: sufficient, available=6, hr_cov=6, avg_hr=135, trends increasing/stable — SIGNAL VIVANT ET CONSOMMÉ) → build_daily_adaptation (KEEP, reasons READINESS_FAVORABLE/PLAN_KEPT/INTENSITY_NOT_INCREASED).
