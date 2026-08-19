@@ -3,6 +3,15 @@
 ## Problem Statement
 Pull https://github.com/geirb56/sauvegarde260629 and set it up so it runs. Replace /app contents.
 
+## 2026-08-19 — Micro-validation runtime SÉANCE ACTIVE post-PR#144 — VERDICT: PASS
+- Audit LECTURE SEULE. HEAD 857f583 (#143+#144). Aujourd'hui=repos → reproduction déterministe de la chaîne /training/today avec reference_date=2026-08-23 (dimanche, seule séance active du plan V2: long_run 13.3km easy). Aucune modif code/plan/Mongo/planning.
+- Chaîne (fonctions identiques à l'endpoint): plan V2 → runtime_session_to_prescription (long_easy, 13.3km, intensity_class=low) → build_training_load (acute7d=44.02, chronic_wk=71.87, ACWR=0.612, conf=high) → readiness_adapter (score=100, NORMAL, SUFFICIENT) → build_readiness_decision (FAVORABLE, READINESS_FAVORABLE) → build_recent_training_response (#132: sufficient, available=6, hr_cov=6, avg_hr=135, trends increasing/stable — SIGNAL VIVANT ET CONSOMMÉ) → build_daily_adaptation (KEEP, reasons READINESS_FAVORABLE/PLAN_KEPT/INTENSITY_NOT_INCREASED).
+- Monotonicité KEEP: séance identique (13.3→13.3, low→low), aucune augmentation. #132 disponible+consommé (≠ action forcément différente, readiness favorable → KEEP légitime).
+- Non-régression: aucun adapt_session_to_readiness/training_engine dans le chemin daily; daily_adaptation.py sans import legacy; fatigue block sans fatigue_ratio/status/physio; aucun TSS=0/ACWR=1 inventé; None≠0 (ctl/atl/tsb null).
+- 8/8 critères PASS. Rapport: /app/TRAINING_V2_RUNTIME_ACTIVE_DAY_POST144.md.
+- NOTE: #138 déjà mergée avant #143/#144 (ne PAS relancer/recréer). Suite = migration des consumers legacy restants dans une PR ultérieure.
+
+
 ## 2026-08-19 — Pull copilot/dev (PR #144) — FIX BUG-137-01 MERGÉ & VALIDÉ RUNTIME
 - Fetch copilot/dev (0b6b6a0→09a256f). Merge ORT propre, 0 conflit. .env intacts, protégés préservés. Backend+worker redémarrés.
 - PR #144 (8255c6f) = fix BUG-137-01: training_response._activity_date utilise désormais datetime.fromisoformat (gère T-séparé, tz-aware ET espace-séparé "YYYY-MM-DD HH:MM:SS") + normalise suffixe Z. Nouveau test test_bug_137_01_date_parsing.py (16 cas).
