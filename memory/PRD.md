@@ -3,6 +3,14 @@
 ## Problem Statement
 Pull https://github.com/geirb56/sauvegarde260629 and set it up so it runs. Replace /app contents.
 
+## 2026-08-19 — Pull copilot/dev (PR #155) — week-plan lit sources canoniques (fin legacy db.training_goals) — MERGÉ & VALIDÉ
+- Fetch copilot/dev (761281f→2438985). Merge ORT propre, 0 conflit. .env intacts. Backend+worker redémarrés.
+- PR #155 = remplacement du reader legacy db.training_goals du week-plan (conservé en #154) par les sources canoniques (training_cycles). Plus AUCUN reader db.training_goals collection dans server.py (seule une mention en commentaire L4575).
+- Validation: /training/week-plan passe désormais à 200 pour le user réel (était 400 pré-#155), goal.type=MARATHON depuis training_cycles. Smoke 8/8=200. Régression PR132→155 = 194 passed, 0 failed.
+- OBSERVATION (non bloquante, non régression): le chemin PRIMAIRE de week-plan est le générateur déterministe generate_cycle_week (generated_by=llm, model=deterministic, context_type=cycle_week). Il émet des estimated_tss calculés sur les séances actives (14/16/15/30, total_tss=75) et estimated_tss=0 sur les jours de REPOS (légitime: rest→0 TSS). Ce n'est PAS le chemin fallback ciblé par #149/#153 (qui restent None). Cohérent avec la migration full-cycle/cycle-week V2 encore à venir (determine_target_load/compute_long_run_km).
+- État: nettoyage legacy db.training_goals TERMINÉ côté week-plan (#154+#155). Chaîne Training Engine V2 stable.
+
+
 ## 2026-08-19 — Pull copilot/dev (PR #154) — Suppression accès runtime legacy db.training_goals — MERGÉ & VALIDÉ
 - Fetch copilot/dev (041de63→761281f). Merge ORT propre, 0 conflit. .env intacts. Backend+worker redémarrés.
 - PR #154 = suppression des accès runtime à la collection legacy db.training_goals (delete-training-goal path) + tests. REVERT documenté: le reader db.training_goals du week-plan (server.py L4576) est INTENTIONNELLEMENT conservé pour scope #155.
