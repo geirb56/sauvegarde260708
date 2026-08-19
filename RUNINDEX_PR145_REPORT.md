@@ -63,7 +63,7 @@ No `training_engine` imports — clean.
 - `adapt_session_to_readiness` — imported in server.py, never called
 
 ### Display-only (migrated in PR145)
-- `GOAL_CONFIG` — pure static constant used for display; migrated to local definition in server.py
+- `GOAL_CONFIG` — pure static constant used for display; extracted to `backend/config/training_goals.py` as single source of truth
 
 ### Runtime active (NOT migrated)
 - All other symbols in server.py and llm_coach.py
@@ -85,14 +85,14 @@ No `training_engine` imports — clean.
 | # | Consumer | Scope | V2 equiv? | Risque | Autonome? |
 |---|----------|-------|-----------|--------|-----------|
 | 1 | Dead imports (vma_pace, vma_pace_range, adapt_session_to_readiness) | 0 endpoints | N/A | zero | ✅ |
-| 2 | GOAL_CONFIG (display) | 3 endpoints | Pure data | zero | ✅ |
+| 2 | GOAL_CONFIG (display) | 3 endpoints | Pure data | low | ✅ |
 | 3 | `/training/week-plan` | 1 endpoint, 8+ symbols | Partial | medium | ❌ complex |
 | 4 | `/training/full-cycle` | 1 endpoint, 12+ symbols | Partial | high | ❌ very complex |
 | 5 | `llm_coach.generate_cycle_week()` | LLM path, 9 symbols | No | high | ❌ high risk |
 
 ## 6. Consumer choisi
 
-**GOAL_CONFIG display migration + dead import removal**
+**GOAL_CONFIG extraction to neutral source + dead import removal**
 
 ## 7. Justification
 
@@ -105,34 +105,55 @@ No `training_engine` imports — clean.
 
 ## 8. Migration effectuée
 
+### Architecture
+
+```
+AVANT:
+  server.py → training_engine.GOAL_CONFIG
+
+APRÈS:
+  backend/config/training_goals.py   ← single source of truth
+      ↓
+  server.py → from config.training_goals import GOAL_CONFIG
+
+TEMPORAIREMENT:
+  training_engine.GOAL_CONFIG → conservé pour legacy/tests
+  → suppression future avec kill legacy
+```
+
+### Actions
+
 1. Removed dead imports: `vma_pace`, `vma_pace_range`, `adapt_session_to_readiness`
-2. Removed `GOAL_CONFIG` from `training_engine` import
-3. Defined `GOAL_CONFIG` as a local constant in `server.py` (identical values)
-4. All existing endpoint behavior preserved (same data, same structure)
+2. Removed `GOAL_CONFIG` from `training_engine` import in server.py
+3. Created `backend/config/training_goals.py` as single neutral source for `GOAL_CONFIG`
+4. server.py imports from `config.training_goals` (not local copy, not training_engine)
+5. All existing endpoint behavior preserved (same data, same structure)
 
 ## 9. Fichiers modifiés
 
-- `backend/server.py` — import block + local GOAL_CONFIG definition
-- `backend/tests/test_goal_config_pr145.py` — new characterization tests
+- `backend/config/training_goals.py` — NEW: single source of truth for GOAL_CONFIG
+- `backend/server.py` — import block cleaned + imports GOAL_CONFIG from config.training_goals
+- `backend/tests/test_goal_config_pr145.py` — new characterization tests importing real constant
+- `RUNINDEX_PR145_REPORT.md` — this report
 
 ## 10. Contrat avant/après
 
 | Aspect | Before | After |
 |--------|--------|-------|
-| `/training/goals` response | `{goals: [...]}` from GOAL_CONFIG | identical |
-| `/training-plan/set-goal` response | `{cycle_weeks, description}` from GOAL_CONFIG | identical |
-| `/training/full-cycle` cycle_weeks | from GOAL_CONFIG | identical |
+| `/training/goals` response | `{goals: [...]}` from training_engine.GOAL_CONFIG | `{goals: [...]}` from config.training_goals.GOAL_CONFIG |
+| `/training-plan/set-goal` response | `{cycle_weeks, description}` from training_engine.GOAL_CONFIG | identical values from config.training_goals.GOAL_CONFIG |
+| `/training/full-cycle` cycle_weeks | from training_engine.GOAL_CONFIG | from config.training_goals.GOAL_CONFIG |
 | HTTP contract | unchanged | unchanged |
-| `training_engine.py` | still exports GOAL_CONFIG | unchanged (not deleted) |
+| `training_engine.py` | still exports GOAL_CONFIG | unchanged (not deleted, kept for legacy/tests) |
 
 ## 11. Tests
 
 - `test_goal_config_pr145.py` — 5 tests all passing:
-  - `test_migrated_goal_config_matches_legacy` — values match training_engine
+  - `test_goal_config_matches_legacy` — config.training_goals.GOAL_CONFIG == training_engine.GOAL_CONFIG
   - `test_goal_config_keys` — all goal types present
   - `test_goal_config_fields` — all display fields present
-  - `test_no_training_engine_goal_config_in_server_imports` — import removed
-  - `test_dead_imports_removed` — dead symbols removed
+  - `test_server_imports_from_config_training_goals` — server.py uses config.training_goals
+  - `test_dead_imports_removed` — dead symbols removed from training_engine import
 
 ## 12. Consumers legacy restant après PR145
 
@@ -148,7 +169,7 @@ No `training_engine` imports — clean.
 
 | File | Symbol | Future |
 |------|--------|--------|
-| `test_plan_duration_decoupled.py` | `GOAL_CONFIG` | migrate to local or remove when training_engine deleted |
+| `test_plan_duration_decoupled.py` | `GOAL_CONFIG` | migrate to config.training_goals or remove when training_engine deleted |
 | `test_resume_guard_pr76.py` | `apply_resume_guard`, `compute_target_km` | migrate with endpoint |
 | `test_current_weekly_km_unification.py` | multiple | migrate with endpoint |
 | `test_training_metrics_pr127.py` | `determine_target_load` | migrate with `/week-plan` |
@@ -159,9 +180,11 @@ No `training_engine` imports — clean.
 
 ## 13. Risques
 
-- **Zero** — GOAL_CONFIG is pure data, values are identical byte-for-byte
+- **Low** — GOAL_CONFIG is pure data, values are identical byte-for-byte
 - Dead imports had no runtime effect
 - `training_engine.py` is NOT modified or deleted
+- Real modification of a runtime import dependency (server.py now imports from config.training_goals instead of training_engine)
+- Parity test guarantees values remain synchronized with legacy
 
 ## 14. Dette long-run/reprise
 
@@ -189,9 +212,11 @@ Alternative: migrate `compute_week_number` and `determine_phase` first as they a
 
 **READY FOR MERGE INTO copilot/dev**
 
-- HEAD: `09a256f`
-- Consumer: GOAL_CONFIG display + dead imports
-- Files: `backend/server.py`, `backend/tests/test_goal_config_pr145.py`
-- Symbols removed from import: `GOAL_CONFIG`, `vma_pace`, `vma_pace_range`, `adapt_session_to_readiness`
+- HEAD copilot/dev: `09a256f`
+- HEAD PR#145: `a00a798`
+- Consumer: GOAL_CONFIG extraction to neutral source + dead imports removal
+- Files modified: `backend/config/training_goals.py`, `backend/server.py`, `backend/tests/test_goal_config_pr145.py`, `RUNINDEX_PR145_REPORT.md`
+- Source unique runtime GOAL_CONFIG: `backend/config/training_goals.py`
+- Symbols removed from training_engine import: `GOAL_CONFIG`, `vma_pace`, `vma_pace_range`, `adapt_session_to_readiness`
 - Tests: 5/5 passing
-- No regression possible (pure data + dead code removal)
+- Risk: Low (pure data extraction, parity test, no behavior change)
