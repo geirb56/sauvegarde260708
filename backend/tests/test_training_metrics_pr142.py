@@ -307,13 +307,23 @@ def test_e_partial_reprise_acwr_reliable_false():
 
 
 def test_f_reprise_exit_acwr_reliable_true():
-    """F. reprise_exit is NOT in deep/partial → acwr_reliable is True."""
-    acwr_reliable = True  # reprise_exit not in deep/partial set
-    # Verify the guard directly
-    for state in ("deep_reprise", "partial_reprise"):
-        assert state not in ("reprise_exit",), "reprise_exit must not equal deep/partial"
-    assert "reprise_exit" not in ("deep_reprise", "partial_reprise")
-    assert acwr_reliable is True
+    """F. reprise_exit is NOT in deep/partial → acwr_reliable is True.
+
+    reprise_exit path (a): available_history_days < REPRISE_EXIT_STABLE_WEEKS * 7 (28d)
+    and days_since_last_run < 28.  Short history cannot be considered stable.
+    """
+    # 20 days of activity — below the 28-day stability threshold → reprise_exit
+    mongo_docs = [
+        _mongo_garmin_doc(_USER_A, days_ago=d, duration_s=1800.0, distance_m=8_000.0)
+        for d in range(20)
+    ]
+    _, _, _, training_state = _build_v2_pipeline(mongo_docs, _REF)
+    assert training_state.continuity_state == "reprise_exit", (
+        f"Expected reprise_exit for 20d history, got {training_state.continuity_state!r}"
+    )
+    result = _simulate_metrics_endpoint(mongo_docs)
+    assert result["acwr_reliable"] is True
+    assert result["acwr_status"] != "building"
 
 
 def test_f_reprise_exit_state_not_suppressed():
