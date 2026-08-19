@@ -37,11 +37,26 @@ vma_method = "average"
 Le comportement (division par 0.70, méthode "average") est intact. Seule la variable a changé de `avg_speed` à `(60.0 / avg_pace)` — refactor syntaxique, pas sémantique. Le test cherchait un string littéral qui ne correspond plus.
 
 ## 9. Stratégie de correction
-Remplacement de la recherche textuelle par une preuve AST en deux parties :
-1. Vérifier qu'une division par 0.70 (ou 0.7) existe dans le source de coach_service
-2. Vérifier que l'assignation `vma_method = "average"` existe (branche fallback)
 
-Le test échouera si la division par 0.70 est supprimée ou si la branche "average" disparaît.
+### V1 (commit initial — insuffisant)
+Remplacement de la recherche textuelle par une preuve AST en deux parties indépendantes :
+1. Vérifier qu'une division par 0.70 existe *quelque part* dans coach_service
+2. Vérifier que l'assignation `vma_method = "average"` existe *quelque part*
+
+**Problème** : ces deux vérifications n'étaient pas liées. Le test resterait vert si le vrai fallback était cassé mais qu'un autre `/0.70` existait ailleurs dans le fichier.
+
+### V2 (commit final — ciblé)
+Le test vérifie désormais que dans **le même bloc AST** (siblings) :
+- `estimated_vma` reçoit une expression `(X / avg_pace) / 0.70` (division par 0.70 avec `avg_pace` dans le numérateur)
+- `vma_method = "average"` est assigné
+
+Le test échouera si :
+- le diviseur 0.70 est changé (ex: 0.80)
+- `avg_pace` est retiré du calcul
+- `estimated_vma` reçoit une constante (ex: 12.0)
+- `vma_method = "average"` est déplacé hors de cette branche
+
+Le test reste flexible sur le formatting (accepte 0.7 ou 0.70, 60 ou 60.0).
 
 ## 10. Diff
 ```
