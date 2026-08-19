@@ -1,0 +1,53 @@
+HEAD départ : e631d0c
+
+- cause : PR157 a retiré `target_load` de la signature runtime de `_generate_fallback_week_plan`, mais 4 appels directs de tests PR153 utilisaient encore l'ancienne API positionnelle à 5 arguments.
+- signature runtime actuelle :
+  - `_generate_fallback_week_plan(context, phase, goal, target_km_protected=None)`
+  - `generate_cycle_week(context, phase, goal, user_id="unknown", target_load=None, sessions_per_week=None, personalized_paces=None)`
+- appels obsolètes trouvés :
+  - `backend/tests/test_pr153_fallback_no_unvalidated_tss.py:60`
+  - `backend/tests/test_pr153_fallback_no_unvalidated_tss.py:71`
+  - `backend/tests/test_pr153_fallback_no_unvalidated_tss.py:80`
+  - `backend/tests/test_pr153_fallback_no_unvalidated_tss.py:96`
+- fichiers tests concernés :
+  - `backend/tests/test_pr153_fallback_no_unvalidated_tss.py`
+  - `backend/tests/test_pr155_week_plan_no_legacy.py`
+  - `backend/tests/test_pr156_no_unvalidated_tss_generate_cycle_week.py`
+  - `backend/tests/test_pr157_remove_determine_target_load.py`
+  - `backend/tests/test_pr149_week_plan_v2.py`
+  - `backend/tests/test_weekly_target_v2.py`
+- nombre d'occurrences scannées :
+  - `_generate_fallback_week_plan` : 5 (4 appels + 1 définition de test)
+  - `generate_cycle_week` : 14 (12 appels + 2 occurrences mock)
+  - total : 19
+- classification du scan :
+  - CURRENT_SIGNATURE : 16
+  - OBSOLETE_SIGNATURE : 4
+  - MOCK : 2
+  - DEFINITION : 1
+- nombre OBSOLETE_SIGNATURE : 4
+- nombre corrigé : 4
+- occurrences obsolètes restantes après correction : 0
+- tests passed : 116
+- failed : 0
+- skipped : 0
+- errors environnementales :
+  - première tentative de validation interrompue par une dépendance d'environnement manquante (`redis`) lors de l'import de `server` dans `test_pr155_week_plan_no_legacy.py`
+  - après installation de la dépendance manquante, aucune erreur environnementale restante sur la validation finale
+- code applicatif modifié : NO
+- signature runtime modifiée : NO
+- comportement runtime modifié : NO
+- assertions métier PR153 modifiées : NO
+- doctrine TSS inchangée :
+  - active = None
+  - rest = 0
+  - total = None
+- mergeability : true
+
+Suites validées :
+- `backend/tests/test_pr153_fallback_no_unvalidated_tss.py`
+- `backend/tests/test_pr155_week_plan_no_legacy.py`
+- `backend/tests/test_pr156_no_unvalidated_tss_generate_cycle_week.py`
+- `backend/tests/test_pr157_remove_determine_target_load.py`
+- `backend/tests/test_pr149_week_plan_v2.py`
+- `backend/tests/test_weekly_target_v2.py`
