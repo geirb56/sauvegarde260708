@@ -3,6 +3,15 @@
 ## Problem Statement
 Pull https://github.com/geirb56/sauvegarde260629 and set it up so it runs. Replace /app contents.
 
+## 2026-08-19 — Micro-validation RÉELLE CAUTION/LOW sur données historiques post-PR#144 — VERDICT: CAUTION REAL=PASS, LOW REAL=NOT FOUND
+- Audit LECTURE SEULE. HEAD 97d6f1f (#143+#144). Scan 43 jours réels (daily metrics 2026-07-05→08-17) avec filtrage strict metrics/activités ≤ J (aucune fuite temporelle).
+- Distribution réelle bandes: FAVORABLE=37, CAUTION=6 (07-19,08-03,08-04,08-09,08-15,08-16), LOW=0, VERY_LOW=0, UNAVAILABLE=0.
+- CAS CAUTION RÉEL J=2026-08-16 (dimanche): inputs réels RHR=53, HRV=None, sleep_hours=9.1, sleep_score=None (non inventés). TrainingLoad ACWR=2.727/status=high. ReadinessResult=62.5/NORMAL/SUFFICIENT/missing_hrv → ReadinessDecision=CAUTION (vrai calcul). Séance long_easy 13.3km low. RecentTrainingResponse ≤J=sufficient/5 runs/avg_hr=134.4. DailyAdaptation=SHORTEN→9.3km (13.3×0.70), reasons [READINESS_CAUTION, TRAINING_LOAD_HIGH, LONG_EASY_PROTECTED, WORKOUT_SHORTENED, INTENSITY_NOT_INCREASED]. Monotonicité OK (13.3→9.3, low→low). Preuve fuite: metrics ≤J=42/43, activités ≤J=146/147.
+- CAS LOW RÉEL: NOT FOUND (0 occurrence sur 43 jours). Non fabriqué. LOW déjà validé déterministe en mémoire, non reproductible sur données réelles disponibles.
+- Absence legacy confirmée (chemin V2 pur). None≠0 respecté.
+- Rapport: /app/TRAINING_V2_RUNTIME_REAL_LOW_CAUTION_POST144.md.
+
+
 ## 2026-08-19 — Micro-validation déterministe LOW/CAUTION/VERY_LOW (DailyAdaptation V2) post-PR#144 — VERDICT: PASS (11/11)
 - Audit LECTURE SEULE. HEAD 857f583 (#143+#144). Séance réf (ref 2026-08-23): long_easy 13.3km low. ReadinessDecision par bande construits DÉTERMINISTES en mémoire (pas de falsification Garmin). TrainingLoad (acwr=0.612, status=low, conf=high) et RecentTrainingResponse (sufficient, 6 runs, avg_hr=135) RÉELS et IDENTIQUES dans les 3 scénarios.
 - Résultats: FAVORABLE→KEEP (13.3km); CAUTION→SHORTEN (9.3km, LONG_EASY_PROTECTED); LOW→SHORTEN (9.3km); VERY_LOW→REST. SHORTEN_FACTOR=0.70 (13.3×0.70=9.31→9.3). Séance distance-only: SHORTEN via distance, durée None conservée. REST sans compensation.
