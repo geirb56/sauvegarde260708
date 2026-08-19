@@ -207,11 +207,69 @@ class TestVMAFallbackConfidence:
     """
 
     def test_fallback_still_exists(self):
-        # We deliberately keep the fallback to avoid a wider refactor in PR2.
+        """Prove the VMA fallback branch assigns estimated_vma = (60.0/avg_pace)/0.70
+        AND vma_method = "average" in the SAME block (siblings in the AST).
+
+        This is stricter than checking two independent properties: both statements
+        must coexist in one contiguous block, ensuring the /0.70 division is truly
+        the fallback that produces the "average" method tag.
+        """
+        import ast
         import coach_service
         src = inspect.getsource(coach_service)
-        assert "avg_speed / 0.70" in src, (
-            "PR2 should preserve the /0.70 fallback (no refactor) — pattern missing."
+        tree = ast.parse(src)
+
+        def _is_div_by_070(node):
+            """Check node is BinOp: <something> / 0.70 (or 0.7)."""
+            return (isinstance(node, ast.BinOp)
+                    and isinstance(node.op, ast.Div)
+                    and isinstance(node.right, ast.Constant)
+                    and node.right.value in (0.70, 0.7))
+
+        def _numerator_uses_avg_pace(node):
+            """Check that the numerator involves avg_pace (60.0/avg_pace or equivalent)."""
+            # Direct case: (60.0 / avg_pace) / 0.70 → node.left is BinOp with avg_pace
+            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+                left = node.left
+                if isinstance(left, ast.BinOp) and isinstance(left.op, ast.Div):
+                    # Check right operand of inner division is avg_pace
+                    if isinstance(left.right, ast.Name) and left.right.id == "avg_pace":
+                        return True
+            return False
+
+        def _block_has_fallback(stmts):
+            """Return True if a list of statements contains BOTH:
+            - estimated_vma = <expr>/0.70 where <expr> uses avg_pace
+            - vma_method = "average"
+            """
+            has_vma_calc = False
+            has_method_average = False
+            for stmt in stmts:
+                if isinstance(stmt, ast.Assign):
+                    targets = [t for t in stmt.targets if isinstance(t, ast.Name)]
+                    for t in targets:
+                        if t.id == "estimated_vma" and _is_div_by_070(stmt.value):
+                            if _numerator_uses_avg_pace(stmt.value):
+                                has_vma_calc = True
+                        if t.id == "vma_method":
+                            if isinstance(stmt.value, ast.Constant) and stmt.value.value == "average":
+                                has_method_average = True
+            return has_vma_calc and has_method_average
+
+        # Walk all statement blocks (body, orelse, handlers, finalbody)
+        found = False
+        for node in ast.walk(tree):
+            for attr in ("body", "orelse", "handlers", "finalbody"):
+                block = getattr(node, attr, None)
+                if isinstance(block, list) and _block_has_fallback(block):
+                    found = True
+                    break
+            if found:
+                break
+
+        assert found, (
+            "VMA fallback not found: expected estimated_vma = (60.0/avg_pace)/0.70 "
+            "AND vma_method = 'average' as siblings in the same AST block in coach_service."
         )
 
     def test_fallback_confidence_is_low(self):
