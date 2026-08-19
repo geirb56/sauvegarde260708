@@ -3,6 +3,13 @@
 ## Problem Statement
 Pull https://github.com/geirb56/sauvegarde260629 and set it up so it runs. Replace /app contents.
 
+## 2026-08-19 — Pull copilot/dev (PR #147) — Test fragile réparé (AST-based) — MERGÉ & VALIDÉ
+- Fetch copilot/dev (936c966→e1a222c). Merge ORT propre, 0 conflit. .env intacts. Aucun code applicatif modifié (uniquement le test + docs).
+- PR #147 = remplacement de l'assertion d'inspection de source fragile test_plan_duration_decoupled.py::test_adjusted_weeks_is_base_weeks par une preuve AST-based (robuste à la forme dict vs assignation).
+- Validation: suite complète PR132→147 = 328 passed, 0 failed (le test précédemment échouant passe désormais). Smoke 4/4=200. Aucune régression.
+- État TrainingEngine V2: chaîne runtime complète validée (#132→#146), single-source-of-truth GOAL_CONFIG finalisé (#145/#146), test suite verte (#147).
+
+
 ## 2026-08-19 — Smoke runtime final post-PR#146 (pré-#147) — VERDICTS: POST146_RUNTIME=PASS, TEST_FRAGILE_CONFIRMED=YES, PR147_REQUIRED=YES
 - Audit LECTURE SEULE. HEAD 93e6501 (#145+#146). Services RUNNING. Imports: config.training_goals.GOAL_CONFIG OK, training_engine.GOAL_CONFIG→ImportError ✓, import training_engine OK ✓.
 - Smoke 7/7=200 (today/plan/metrics/run-index/dashboard/goals/full-cycle). /training/goals runtime == config.training_goals.GOAL_CONFIG (5 goals, égalité exacte). Daily V2 non régressé (build_recent_training_response/build_readiness_decision/build_daily_adaptation; aucun adapt_session_to_readiness/training_engine/fatigue_*).
