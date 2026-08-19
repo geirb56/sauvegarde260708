@@ -3,6 +3,13 @@
 ## Problem Statement
 Pull https://github.com/geirb56/sauvegarde260629 and set it up so it runs. Replace /app contents.
 
+## 2026-08-19 — Pull copilot/dev (PR #156) — TSS/km non validés retirés de generate_cycle_week — MERGÉ & VALIDÉ
+- Fetch copilot/dev (2438985→de22c78). Merge ORT propre, 0 conflit. .env intacts. Backend+worker redémarrés.
+- PR #156 = suppression des coefficients TSS/km non validés du générateur déterministe generate_cycle_week (llm_coach.py) → estimated_tss=None sur séances actives, total_tss=None. + tests.
+- Validation: week-plan primaire séances actives est_tss=None (avant 14/16/15/30), total_tss=None (avant 75); jours de repos est_tss=0 (structurel rest→0, distances réelles conservées). Smoke 6/6=200. Régression = 134 passed, 0 failed.
+- État: sémantique None désormais UNIFORME sur TOUS les chemins week-plan (primaire generate_cycle_week #156 + fallback duration #149 + fallback km/pace #153). Observation résiduelle sur le chemin primaire (signalée post-#155) LEVÉE.
+
+
 ## 2026-08-19 — Pull copilot/dev (PR #155) — week-plan lit sources canoniques (fin legacy db.training_goals) — MERGÉ & VALIDÉ
 - Fetch copilot/dev (761281f→2438985). Merge ORT propre, 0 conflit. .env intacts. Backend+worker redémarrés.
 - PR #155 = remplacement du reader legacy db.training_goals du week-plan (conservé en #154) par les sources canoniques (training_cycles). Plus AUCUN reader db.training_goals collection dans server.py (seule une mention en commentaire L4575).
