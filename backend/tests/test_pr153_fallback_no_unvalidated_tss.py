@@ -57,17 +57,32 @@ class TestDistanceBasedFallbackNoUnvalidatedTSS:
 
     @pytest.mark.parametrize("phase", ["build", "deload", "taper", "intensification"])
     def test_all_estimated_tss_none(self, phase):
-        plan = _generate_fallback_week_plan(_make_context(), phase, 100, "10k", 40.0)
+        plan = _generate_fallback_week_plan(
+            context=_make_context(),
+            phase=phase,
+            goal="10k",
+            target_km_protected=40.0,
+        )
         for s in plan["sessions"]:
             assert s["estimated_tss"] is None, f"{s['day']}: estimated_tss should be None, got {s['estimated_tss']}"
 
     @pytest.mark.parametrize("phase", ["build", "deload", "taper", "intensification"])
     def test_total_tss_none(self, phase):
-        plan = _generate_fallback_week_plan(_make_context(), phase, 100, "10k", 40.0)
+        plan = _generate_fallback_week_plan(
+            context=_make_context(),
+            phase=phase,
+            goal="10k",
+            target_km_protected=40.0,
+        )
         assert plan["total_tss"] is None
 
     def test_none_is_not_zero(self):
-        plan = _generate_fallback_week_plan(_make_context(), "build", 100, "10k", 40.0)
+        plan = _generate_fallback_week_plan(
+            context=_make_context(),
+            phase="build",
+            goal="10k",
+            target_km_protected=40.0,
+        )
         assert plan["total_tss"] is not 0  # noqa: E711
         for s in plan["sessions"]:
             assert s["estimated_tss"] is not 0  # noqa: E711
@@ -78,7 +93,12 @@ class TestDurationBasedFallbackUnchanged:
 
     def test_duration_based_tss_none(self):
         ctx = {"target_duration_minutes": 120}
-        plan = _generate_fallback_week_plan(ctx, "build", 100, "10k", None)
+        plan = _generate_fallback_week_plan(
+            context=ctx,
+            phase="build",
+            goal="10k",
+            target_km_protected=None,
+        )
         assert plan["total_tss"] is None
         for s in plan["sessions"]:
             assert s["estimated_tss"] is None
