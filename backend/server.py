@@ -3455,13 +3455,13 @@ async def refresh_training_plan(sessions: int = None, user: dict = Depends(auth_
 async def delete_training_goal(user: dict = Depends(auth_user)):
     """Delete the training goal"""
     user_id = user["id"]
-    result = await db.training_goals.delete_one({"user_id": user_id})
-    await db.training_context.delete_one({"user_id": user_id})
-    await db.training_cycles.delete_one({"user_id": user_id})
+    result_context = await db.training_context.delete_one({"user_id": user_id})
+    result_cycles = await db.training_cycles.delete_one({"user_id": user_id})
 
+    deleted = result_context.deleted_count + result_cycles.deleted_count
     return {
-        "success": result.deleted_count > 0,
-        "message": "Goal deleted" if result.deleted_count > 0 else "No goal found"
+        "success": deleted > 0,
+        "message": "Goal deleted" if deleted > 0 else "No goal found"
     }
 
 
@@ -4573,7 +4573,7 @@ async def get_week_plan(user: dict = Depends(auth_user)):
     """
     user_id = user["id"]
     # Récupérer l'objectif
-    goal = await db.training_goals.find_one({"user_id": user_id}, {"_id": 0})
+    goal = await db.training_cycles.find_one({"user_id": user_id}, {"_id": 0})
 
     if not goal:
         raise HTTPException(status_code=400, detail="No goal defined. Use /api/training/set-goal first.")
