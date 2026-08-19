@@ -3,6 +3,13 @@
 ## Problem Statement
 Pull https://github.com/geirb56/sauvegarde260629 and set it up so it runs. Replace /app contents.
 
+## 2026-08-19 — Pull copilot/dev (PR #159) — Fix test-drift PR153 (appels _generate_fallback_week_plan) — MERGÉ & VALIDÉ
+- Fetch copilot/dev (e631d0c→b5de908). Merge ORT propre, 0 conflit. .env intacts. Aucun code applicatif (uniquement test_pr153 + rapport drift scan).
+- PR #159 = mise à jour des appels _generate_fallback_week_plan dans test_pr153 (retrait de l'arg target_load obsolète, 5 args → 4) pour aligner sur la signature post-PR157. + PR159 drift scan report.
+- Validation: régression complète 16 suites (PR132→159) = 387 passed, 0 failed. Le test-drift PR157 (test_pr155 via #158 + test_pr153 via #159) est ENTIÈREMENT RÉSOLU. Smoke 4/4=200.
+- État: chaîne Training Engine V2 stable, suite ENTIÈREMENT VERTE, sémantique None uniforme sur tous les chemins week-plan, determine_target_load retiré du week-plan. Reste (migration future): compute_current_weekly_km, compute_long_run_km (cycle-week legacy).
+
+
 ## 2026-08-19 — Pull copilot/dev (PR #158) — Fix mock test_pr155 — MERGÉ, mais test-drift PR157 INCOMPLET (10 tests PR153 rouges)
 - Fetch copilot/dev (51cc287→e631d0c). Merge ORT propre, 0 conflit. .env intacts. Aucun code applicatif (uniquement test_pr155).
 - PR #158 = alignement du mock generate_cycle_week de test_pr155_week_plan_no_legacy.py sur la signature post-PR157. Les 2 tests PR155 précédemment rouges PASSENT désormais ✓.
