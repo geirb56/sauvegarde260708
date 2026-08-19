@@ -3,6 +3,15 @@
 ## Problem Statement
 Pull https://github.com/geirb56/sauvegarde260629 and set it up so it runs. Replace /app contents.
 
+## 2026-08-19 — Pull copilot/dev (PR #158) — Fix mock test_pr155 — MERGÉ, mais test-drift PR157 INCOMPLET (10 tests PR153 rouges)
+- Fetch copilot/dev (51cc287→e631d0c). Merge ORT propre, 0 conflit. .env intacts. Aucun code applicatif (uniquement test_pr155).
+- PR #158 = alignement du mock generate_cycle_week de test_pr155_week_plan_no_legacy.py sur la signature post-PR157. Les 2 tests PR155 précédemment rouges PASSENT désormais ✓.
+- ⚠️ MAIS: 10 tests de test_pr153_fallback_no_unvalidated_tss.py ÉCHOUENT (TypeError: _generate_fallback_week_plan() takes from 3 to 4 positional arguments but 5 were given). Cause: PR157 a AUSSI retiré target_load de la signature de _generate_fallback_week_plan (nouvelle: (context, phase, goal, target_km_protected=None)), mais test_pr153 appelle encore avec 5 args incluant l'ancien target_load (ex: _generate_fallback_week_plan(ctx, phase, 100, "10k", 40.0)). PR157 a cassé test_pr155 ET test_pr153; PR158 n'a corrigé QUE test_pr155.
+- Runtime INTACT: smoke today/week-plan/dashboard = 200. Fallback interne cohérent (endpoint appelle avec la bonne signature). Régression uniquement dans les tests (test-drift).
+- Correctif recommandé (PR future): mettre à jour les appels de test_pr153 pour retirer l'arg target_load → _generate_fallback_week_plan(ctx, phase, "10k", 40.0). NON corrigé (workflow: fixes via PRs utilisateur).
+- NOTE: ma validation PR157 précédente n'incluait pas test_pr153 dans le set exécuté, d'où la détection tardive.
+
+
 ## 2026-08-19 — Pull copilot/dev (PR #157) — determine_target_load retiré du chemin week-plan — MERGÉ & VALIDÉ RUNTIME (2 tests PR155 cassés par test-drift)
 - Fetch copilot/dev (de22c78→51cc287). Merge ORT propre, 0 conflit. .env intacts. Backend+worker redémarrés.
 - PR #157 (renommé de #158) = suppression de determine_target_load du chemin /training/week-plan (contexte d'affichage uniquement). server.py L4710 n'appelle plus generate_cycle_week avec target_load; llm_coach generate_cycle_week garde target_load: int = None (kwarg optionnel, affichage).
