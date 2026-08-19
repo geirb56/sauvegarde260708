@@ -144,6 +144,40 @@ Recommended scope for PR #150:
 
 ---
 
+## BLOCKER RESOLUTIONS
+
+| Blocker | Status | Resolution |
+|---------|--------|------------|
+| BLOCKER_1_DURATION_FALLBACK | **RESOLVED** | `_generate_fallback_week_plan` now has a duration-based branch: when `target_km_protected=None` and `target_duration_minutes` is set, produces sessions with `distance_km: None`, `weekly_km: None`, `target_basis: "duration"`. No km invented. |
+| BLOCKER_2_REFERENCE_DATE | **RESOLVED** | `reference_date` is now a mandatory keyword argument (no default). Omitting it raises `TypeError`. No implicit `datetime.now()` in the bridge. |
+| BLOCKER_3_UNKNOWN_GOAL | **RESOLVED** | Unknown goal strings raise `UnknownGoalTypeError` explicitly. No silent fallback to `half_marathon`. Closed mapping with explicit error message listing valid values. |
+| BLOCKER_4_DOMAIN_BOUNDARY | **RESOLVED** | Bridge now uses canonical `to_domain_activity()` from `domain_activity.py`, producing typed `DomainActivity` instances. A `_normalize_workout_to_domain_fields()` adapter maps provider-specific field names (distance_km→distance_m, duration_minutes→duration_s) before the canonical adapter. |
+
+### Fallback behaviour after fix
+
+- **Distance-based** (target_km_protected set): legacy path unchanged — km templates scaled by `target_km_protected` cap.
+- **Duration-based** (target_km_protected=None, target_duration_minutes set): new branch produces 3 easy sessions totalling `target_duration_minutes`, all with `distance_km: None`. No DEFAULT_WEEKLY_KM used.
+
+### DomainActivity boundary
+
+The bridge uses:
+```
+Mongo db.workouts → _normalize_workout_to_domain_fields() → to_domain_activity() → DomainActivity → V2 chain
+```
+`to_domain_activity` is the canonical adapter from `training_v2/domain_activity.py`. The normalizer only maps field names/units — no domain logic.
+
+### Legacy remaining after #149
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| determine_phase | Legacy compat | Enum ≠ V2; LLM/fallback consumer |
+| determine_target_load | Legacy compat | LLM rendering only, NOT prescription |
+| generate_cycle_week | Legacy | LLM generation — future PR |
+| _generate_fallback_week_plan (distance branch) | Legacy | Template-based, capped by V2 |
+| compute_current_weekly_km | Legacy compat | Display metric |
+
+---
+
 ## Verdict
 
 **READY FOR MERGE INTO copilot/dev**
@@ -151,4 +185,7 @@ Recommended scope for PR #150:
 Formulation exacte:
 
 > /training/week-plan weekly prescription migrated to WeeklyTarget V2;
-> legacy rendering/LLM compatibility remains (generate_cycle_week, fallback templates, determine_phase).
+> duration-based fallback enforced (no invented km);
+> reference_date explicit; unknown goal → error;
+> DomainActivity boundary canonical;
+> legacy rendering/LLM compatibility remains (generate_cycle_week, fallback distance templates, determine_phase).

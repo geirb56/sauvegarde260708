@@ -4725,7 +4725,39 @@ async def get_week_plan(user: dict = Depends(auth_user)):
 
 
 def _generate_fallback_week_plan(context: dict, phase: str, target_load: int, goal: str, target_km_protected: float = None) -> dict:
-    """Génère un plan de secours basé sur des templates."""
+    """Génère un plan de secours basé sur des templates.
+
+    PR149 BLOCKER 1: When WeeklyTarget V2 prescribes duration-based (target_km_protected=None),
+    this fallback MUST NOT invent km. It produces duration-only sessions instead.
+    """
+    # PR149: duration-based path — no km invention.
+    target_duration_minutes = context.get("target_duration_minutes")
+    if target_km_protected is None and target_duration_minutes is not None:
+        # Duration-based fallback: simple easy sessions, no km.
+        sessions_count = 3
+        per_session = target_duration_minutes // sessions_count
+        remainder = target_duration_minutes - per_session * sessions_count
+        sessions = [
+            {"day": "monday", "type": "rest", "duration": "0min", "details": "Récupération complète", "intensity": "rest", "estimated_tss": 0, "distance_km": None},
+            {"day": "tuesday", "type": "endurance", "duration": f"{per_session}min", "details": f"{per_session}min endurance facile", "intensity": "easy", "estimated_tss": 0, "distance_km": None},
+            {"day": "wednesday", "type": "rest", "duration": "0min", "details": "Récupération", "intensity": "rest", "estimated_tss": 0, "distance_km": None},
+            {"day": "thursday", "type": "endurance", "duration": f"{per_session}min", "details": f"{per_session}min endurance facile", "intensity": "easy", "estimated_tss": 0, "distance_km": None},
+            {"day": "friday", "type": "rest", "duration": "0min", "details": "Récupération", "intensity": "rest", "estimated_tss": 0, "distance_km": None},
+            {"day": "saturday", "type": "endurance", "duration": f"{per_session + remainder}min", "details": f"{per_session + remainder}min endurance facile", "intensity": "easy", "estimated_tss": 0, "distance_km": None},
+            {"day": "sunday", "type": "rest", "duration": "0min", "details": "Récupération", "intensity": "rest", "estimated_tss": 0, "distance_km": None},
+        ]
+        return {
+            "focus": phase,
+            "planned_load": target_load,
+            "weekly_km": None,
+            "target_duration_minutes": target_duration_minutes,
+            "target_basis": "duration",
+            "sessions": sessions,
+            "total_tss": 0,
+            "advice": get_phase_description(phase).get("advice", "Keep it up!")
+        }
+
+    # Distance-based fallback (legacy path — target_km_protected is set).
     weekly_km = context.get("weekly_km", DEFAULT_WEEKLY_KM)
     
     # Ajuster selon la phase

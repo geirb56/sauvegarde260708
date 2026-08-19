@@ -6,15 +6,17 @@ need a V2 WeeklyTarget without owning the full V2 rendering pipeline.
 Design rules:
 - PURE orchestration: no MongoDB, no HTTP, no LLM.
 - Delegates all domain logic to existing V2 modules.
-- Reuses _to_domain_activity_from_workout pattern from coach_service.
+- Uses the canonical DomainActivity adapter (to_domain_activity) from domain_activity.py.
 - Does NOT duplicate formulas — only wires existing builders.
+- reference_date is MANDATORY — no implicit datetime.now().
 """
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date
 from typing import List, Optional
 
+from .domain_activity import to_domain_activity
 from .plan_goal import GoalType, build_plan_goal
 from .periodization import build_periodization
 from .runner_profile import build_runner_profile
@@ -24,60 +26,69 @@ from .training_state import build_training_state
 from .weekly_target import WeeklyTarget, build_weekly_target
 
 
-def _to_domain_activity(workout: dict) -> dict:
-    """Convert a raw db.workouts document to a DomainActivity-compatible dict.
+# Closed mapping: legacy goal strings → GoalType V2.
+# Unknown goals are NOT silently mapped to a default.
+_GOAL_MAP: dict[str, GoalType] = {
+    "10K": GoalType.ten_k,
+    "SEMI": GoalType.half_marathon,
+    "HALF_MARATHON": GoalType.half_marathon,
+    "MARATHON": GoalType.marathon,
+    "5K": GoalType.five_k,
+    "ULTRA": GoalType.ultra,
+    "MAINTENANCE": GoalType.maintenance,
+}
 
-    Mirrors coach_service._to_domain_activity_from_workout exactly.
+
+class UnknownGoalTypeError(ValueError):
+    """Raised when a goal string cannot be mapped to a known GoalType."""
+    pass
+
+
+def _normalize_workout_to_domain_fields(workout: dict) -> dict:
+    """Normalize a raw db.workouts document to DomainActivity-compatible field names.
+
+    This is the provider adapter layer: Mongo/Garmin → DomainActivity field contract.
+    It does NOT duplicate domain logic — only maps field names/units.
+
+    Mapping:
+      distance_km → distance_m (km * 1000)
+      duration_minutes → duration_s (min * 60)
+      duration_seconds / elapsed_time → duration_s
+      avg_heart_rate → average_hr
+      max_heart_rate → max_hr
+      start_date_local / date → start_time (if start_time absent)
     """
-    # Distance
-    dist_km = 0.0
-    for key in ("distance_km", "distance"):
-        v = workout.get(key)
-        if isinstance(v, (int, float)) and v > 0:
-            dist_km = float(v)
-            break
+    out = dict(workout)  # shallow copy
 
-    # Duration
-    duration_s = 0.0
-    for key in ("duration_seconds", "duration_s", "elapsed_time"):
-        v = workout.get(key)
-        if isinstance(v, (int, float)) and v > 0:
-            duration_s = float(v)
-            break
-    if duration_s == 0:
-        dur_min = workout.get("duration_minutes")
-        if isinstance(dur_min, (int, float)) and dur_min > 0:
-            duration_s = float(dur_min) * 60.0
+    # Distance: distance_km → distance_m
+    if "distance_m" not in out:
+        dist_km = out.get("distance_km")
+        if isinstance(dist_km, (int, float)) and not isinstance(dist_km, bool) and dist_km > 0:
+            out["distance_m"] = float(dist_km) * 1000.0
 
-    # Start time
-    raw_start = workout.get("start_time") or workout.get("start_date_local") or workout.get("date")
-    if isinstance(raw_start, datetime):
-        start_time = raw_start.strftime("%Y-%m-%dT%H:%M:%S")
-    elif isinstance(raw_start, str):
-        start_time = raw_start.split(".")[0]
-    else:
-        start_time = raw_start
+    # Duration: duration_minutes → duration_s
+    if "duration_s" not in out:
+        for key in ("duration_seconds", "elapsed_time"):
+            v = out.get(key)
+            if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
+                out["duration_s"] = float(v)
+                break
+        if "duration_s" not in out:
+            dur_min = out.get("duration_minutes")
+            if isinstance(dur_min, (int, float)) and not isinstance(dur_min, bool) and dur_min > 0:
+                out["duration_s"] = float(dur_min) * 60.0
 
-    # Activity type
-    activity_type_raw = (workout.get("activity_type") or workout.get("type") or "").lower()
-    is_running = activity_type_raw in ("running", "run", "trail_running", "treadmill_running")
+    # Heart rate aliases
+    if "average_hr" not in out and "avg_heart_rate" in out:
+        out["average_hr"] = out["avg_heart_rate"]
+    if "max_hr" not in out and "max_heart_rate" in out:
+        out["max_hr"] = out["max_heart_rate"]
 
-    def _pos_float(v):
-        if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
-            return float(v)
-        return None
+    # Start time: ensure start_time is present
+    if "start_time" not in out or out["start_time"] is None:
+        out["start_time"] = out.get("start_date_local") or out.get("date")
 
-    return {
-        "activity_type": "running" if is_running else "other",
-        "start_time": start_time,
-        "distance_m": dist_km * 1000.0 if dist_km > 0 else None,
-        "duration_s": duration_s if duration_s > 0 else None,
-        "moderate_intensity_minutes": _pos_float(workout.get("moderate_intensity_minutes")),
-        "vigorous_intensity_minutes": _pos_float(workout.get("vigorous_intensity_minutes")),
-        "average_hr": _pos_float(workout.get("average_hr") or workout.get("avg_heart_rate")),
-        "max_hr": _pos_float(workout.get("max_hr") or workout.get("max_heart_rate")),
-        "elevation_gain_m": _pos_float(workout.get("elevation_gain_m")),
-    }
+    return out
 
 
 def build_weekly_target_from_workouts(
@@ -86,7 +97,7 @@ def build_weekly_target_from_workouts(
     goal_type: str,
     race_date: Optional[date] = None,
     cycle_start_date: Optional[date] = None,
-    reference_date: Optional[date] = None,
+    reference_date: date,
     user_profile: Optional[dict] = None,
 ) -> WeeklyTarget:
     """Build a WeeklyTarget V2 from raw workout documents and goal info.
@@ -97,14 +108,26 @@ def build_weekly_target_from_workouts(
     goal_type : legacy goal string (e.g. "SEMI", "MARATHON", "10K").
     race_date : target race date, if known.
     cycle_start_date : start of the training cycle.
-    reference_date : anchor date (defaults to today UTC).
+    reference_date : anchor date — MANDATORY, no implicit today.
     user_profile : optional user_profiles document for RunnerProfile enrichment.
-    """
-    if reference_date is None:
-        reference_date = datetime.now(timezone.utc).date()
 
-    # Convert to domain activities
-    activities = [_to_domain_activity(w) for w in workouts]
+    Raises
+    ------
+    UnknownGoalTypeError
+        If goal_type does not map to a known GoalType.
+    """
+    # BLOCKER 3: Unknown goal → explicit error, never silent half_marathon.
+    mapped_goal = _GOAL_MAP.get(goal_type.upper() if goal_type else "")
+    if mapped_goal is None:
+        raise UnknownGoalTypeError(
+            f"Unknown goal_type '{goal_type}' — cannot map to V2 GoalType. "
+            f"Valid values: {sorted(_GOAL_MAP.keys())}"
+        )
+
+    # BLOCKER 4: Use canonical DomainActivity adapter (to_domain_activity).
+    # Pre-normalize db.workouts fields to match DomainActivity's expected keys.
+    # This is the provider-neutral adapter layer: Mongo/Garmin → DomainActivity.
+    activities = [to_domain_activity(_normalize_workout_to_domain_fields(w)) for w in workouts]
 
     # Build V2 chain
     training_history = build_training_history(activities, reference_date)
@@ -123,18 +146,6 @@ def build_weekly_target_from_workouts(
         runner_profile=runner_profile,
         reference_date=reference_date,
     )
-
-    # Map legacy goal string to GoalType
-    goal_map = {
-        "10K": GoalType.ten_k,
-        "SEMI": GoalType.half_marathon,
-        "HALF_MARATHON": GoalType.half_marathon,
-        "MARATHON": GoalType.marathon,
-        "5K": GoalType.five_k,
-        "ULTRA": GoalType.ultra,
-        "MAINTENANCE": GoalType.maintenance,
-    }
-    mapped_goal = goal_map.get(goal_type.upper(), GoalType.half_marathon)
 
     plan_goal = build_plan_goal(
         goal_type=mapped_goal,
