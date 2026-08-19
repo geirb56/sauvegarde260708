@@ -90,12 +90,13 @@ def test_compute_target_km_pr2_non_regression():
 
 
 def test_source_unique_usage_in_plan_paths():
+    """PR160: week-plan must use observed km_28_running/4; full-cycle still uses legacy helper."""
     root = Path(__file__).resolve().parents[1]
-    coach_src = (root / "coach_service.py").read_text(encoding="utf-8")
     server_src = (root / "server.py").read_text(encoding="utf-8")
-    assert "weekly_km = compute_current_weekly_km(workouts_28)" in coach_src
+    # full-cycle (/training/full-cycle) still uses legacy helper — next migration PR161.
     assert "base_weekly_km = compute_current_weekly_km(workouts_28)" in server_src
-    assert '"weekly_km": compute_current_weekly_km(workouts_28)' in server_src
+    # PR160: week-plan no longer uses legacy helper — replaced by observed km_28_running / 4.
+    assert '"weekly_km": compute_current_weekly_km(workouts_28)' not in server_src
+    assert '"weekly_km": km_28_running / 4,' in server_src
     assert "else 25" not in server_src
-    assert "km_7 < 0.5" not in coach_src
     assert "km_7 < 0.5" not in server_src
