@@ -3,6 +3,14 @@
 ## Problem Statement
 Pull https://github.com/geirb56/sauvegarde260629 and set it up so it runs. Replace /app contents.
 
+## 2026-08-19 — Pull copilot/dev (PR #146) — GOAL_CONFIG orphelin supprimé — MERGÉ & VALIDÉ (1 test fragile non bloquant)
+- Fetch copilot/dev (5c22ac4→936c966). Merge ORT propre, 0 conflit. .env intacts, protégés préservés. Backend+worker redémarrés.
+- PR #146 = suppression de la copie orpheline GOAL_CONFIG de training_engine.py (-39 lignes) + mise à jour tests (test_goal_config_pr145.py, import test_plan_duration_decoupled.py training_engine→config). Finalise le single-source-of-truth de #145.
+- Validation: `from training_engine import GOAL_CONFIG` → ImportError (orphelin supprimé ✓). config/training_goals.py reste canonique. Smoke 7/7=200 (today/plan/metrics/run-index/dashboard/goals/full-cycle). env intact.
+- Tests régression PR132-146 = 233 passed, 1 FAILED.
+- ⚠️ ÉCHEC NON BLOQUANT: test_plan_duration_decoupled.py::test_adjusted_weeks_is_base_weeks. Cause: assertion d'inspection de SOURCE fragile qui cherche le littéral "adjusted_weeks = base_weeks" alors que coach_service.py L678 utilise la forme dict "adjusted_weeks": base_weeks (sémantique identique). 40/41 tests du fichier passent, TOUS les invariants comportementaux du découplage OK (durée indépendante readiness, prep_insufficient, no silent shrink, base_weeks inchangé). PAS une régression fonctionnelle; non causé par le changement réel de #146 (qui n'a touché que la ligne d'import). Correctif recommandé (PR future): assouplir l'assertion (accepter la forme dict) ou passer à un check AST/comportemental. NON corrigé (workflow: fixes via PRs utilisateur).
+
+
 ## 2026-08-19 — Validation runtime post-PR#145 + inventaire legacy pré-#146 — VERDICTS: PR145_RUNTIME=PASS, PRE146_LEGACY_AUDIT=COMPLETE
 - Audit LECTURE SEULE. HEAD d985a66 (#145). Smoke 5/5=200. /training/goals=200 (valeurs = config.training_goals.GOAL_CONFIG exactement). /training/full-cycle=200 (total_weeks=16, no NaN, aucun contrat cassé). set-goal DESTRUCTIF → non appelé, validé par inspection (utilise GOAL_CONFIG de config).
 - Parité: config.training_goals.GOAL_CONFIG == training_engine.GOAL_CONFIG (True). MAIS training_engine.py:22 garde une COPIE ORPHELINE de GOAL_CONFIG (aucun import runtime). Daily V2 non régressé (build_recent_training_response/build_readiness_decision/build_daily_adaptation; aucun adapt_session_to_readiness/training_engine/fatigue_*).
