@@ -3,6 +3,15 @@
 ## Problem Statement
 Pull https://github.com/geirb56/sauvegarde260629 and set it up so it runs. Replace /app contents.
 
+## 2026-08-19 — Pull copilot/dev (PR #144) — FIX BUG-137-01 MERGÉ & VALIDÉ RUNTIME
+- Fetch copilot/dev (0b6b6a0→09a256f). Merge ORT propre, 0 conflit. .env intacts, protégés préservés. Backend+worker redémarrés.
+- PR #144 (8255c6f) = fix BUG-137-01: training_response._activity_date utilise désormais datetime.fromisoformat (gère T-séparé, tz-aware ET espace-séparé "YYYY-MM-DD HH:MM:SS") + normalise suffixe Z. Nouveau test test_bug_137_01_date_parsing.py (16 cas).
+- RE-VALIDATION runtime (compte réel da8505ef, ref 2026-08-19): _activity_date exploite 147/147 (avant 0). RecentTrainingResponse #132 REVIVE dans /training/today: status=sufficient, available_running=6, selected=6, observed_runs=6, hr_coverage=6, average_hr_recent=135, trends peuplés (vol/freq/long=increasing, cardiac=stable, intensity=increasing). BUG-137-01 RÉSOLU.
+- Smoke 5/5=200. Tests PR144+régression PR132-144 = 219 passed. Signal #132 opérationnel côté /training/today.
+- Rapport bug (pré-fix): /app/TRAINING_V2_RUNTIME_BUG13701_PRE144.md · rapport PR144 upstream: RUNINDEX_PR144_REPORT.md.
+- Chemin dégagé pour re-valider #137 puis GO #138.
+
+
 ## 2026-08-18 — Pull sauvegarde260708/copilot/dev (PR #143) — MERGÉ & VALIDÉ
 - Fetch branche copilot/dev (cfa2d14→0b6b6a0). Merge ORT propre, 0 conflit. .env intacts, fichiers protégés préservés. Backend+worker redémarrés.
 - PR #143 = migration /training/metrics acwr_reliable vers la chaîne TrainingState V2 (+ renforcement tests: fixtures continuity_state exactes, preuve AST no-legacy-import). Fichiers: backend/server.py (+30 lignes /training/metrics), test_training_metrics_pr143.py.
