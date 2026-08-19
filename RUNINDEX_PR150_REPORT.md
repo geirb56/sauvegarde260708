@@ -8,6 +8,14 @@
 ## 2. Confirmation #148/#149
 Both PRs merged and present in history.
 
+## BLOCKER RESOLUTION STATUS
+
+```
+BLOCKER_CYCLE_WEEKS = RESOLVED
+BLOCKER_START_DATE = RESOLVED
+WRITER_READER_CONTRACT = CONSISTENT
+```
+
 ## 3. Test portability avant/après
 
 **Avant:** `test_fallback_code_path_exists_in_server` used hardcoded `/home/runner/work/sauvegarde260708/sauvegarde260708/backend/server.py`.
@@ -104,9 +112,41 @@ After: `{session.estimated_tss != null ? \`${session.estimated_tss} TSS\` : '—
 Files modified:
 - `backend/server.py` — goal source fix + TSS None
 - `backend/tests/test_pr149_week_plan_v2.py` — portable path
-- `backend/tests/test_pr150_nettoyage.py` — NEW (10 tests)
+- `backend/tests/test_pr150_nettoyage.py` — NEW (21 tests)
 - `frontend/src/pages/Dashboard.jsx` — null TSS display
 - `frontend/src/pages/TrainingPlan.jsx` — null TSS display
+
+## Writer/Reader Contract
+
+| field | writer endpoint | stored field | reader (week-plan) | status |
+|---|---|---|---|---|
+| goal_type | `/training/set-goal` | `goal` | `cycle["goal"]` → `goal_type` | CONSISTENT |
+| start_date | `/training/set-goal` | `start_date` | `cycle.get("start_date")` — error if None | CONSISTENT |
+| cycle_weeks | NOT stored | — | `cycle.get("adjusted_weeks") or GOAL_CONFIG[goal]["cycle_weeks"]` | CONSISTENT |
+| event_date | `/user/goal` | `user_goals.event_date` | fallback from cycle then user_goals | CONSISTENT |
+| user_id | all writers | `user_id` | filter key | CONSISTENT |
+
+## Behavior when data is missing
+
+| condition | behavior |
+|---|---|
+| No training_cycles doc | HTTP 400 "No goal defined" |
+| Unknown goal_type | HTTP 400 "Unknown goal type: X" |
+| start_date absent | HTTP 400 "Cycle start_date missing" |
+| event_date absent | None (MAINTENANCE mode, no race anchoring) |
+
+## Shape réelle training_cycles (as written by /training/set-goal)
+
+```json
+{
+  "user_id": "string",
+  "goal": "5K|10K|SEMI|MARATHON|ULTRA",
+  "start_date": "datetime (UTC)",
+  "updated_at": "datetime (UTC)"
+}
+```
+
+Optional fields (set by plan engine): `adjusted_weeks`, `event_date`.
 
 ## 14. Legacy restant
 

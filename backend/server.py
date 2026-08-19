@@ -4582,10 +4582,25 @@ async def get_week_plan(user: dict = Depends(auth_user)):
     # Adapt training_cycles shape to the goal dict expected below
     # event_date may live in user_goals (set by /user/goal) — check both sources.
     user_goal = await db.user_goals.find_one({"user_id": user_id}, {"_id": 0})
+
+    goal_type = cycle["goal"]
+    if goal_type not in GOAL_CONFIG:
+        raise HTTPException(status_code=400, detail=f"Unknown goal type: {goal_type}")
+
+    # PR150: start_date — None != today. If absent, data is insufficient.
+    raw_start = cycle.get("start_date")
+    if not raw_start:
+        raise HTTPException(status_code=400, detail="Cycle start_date missing. Use /api/training/set-goal to initialize.")
+
+    # PR150: cycle_weeks — derived from adjusted_weeks (if set by plan engine) or GOAL_CONFIG.
+    config = GOAL_CONFIG[goal_type]
+    cycle_weeks = cycle.get("adjusted_weeks") or config["cycle_weeks"]
+
     goal = {
-        "goal_type": cycle["goal"],
-        "start_date": cycle.get("start_date", datetime.now(timezone.utc)),
+        "goal_type": goal_type,
+        "start_date": raw_start,
         "event_date": cycle.get("event_date") or (user_goal.get("event_date") if user_goal else None),
+        "cycle_weeks": cycle_weeks,
     }
 
     # Retrieve recent data for context
