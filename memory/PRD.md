@@ -3,6 +3,13 @@
 ## Problem Statement
 Pull https://github.com/geirb56/sauvegarde260629 and set it up so it runs. Replace /app contents.
 
+## 2026-08-19 — Pull copilot/dev (PR #152) — Test non-portable réparé — MERGÉ & VALIDÉ
+- Fetch copilot/dev (43ee9ec→c583d44). Merge ORT propre, 0 conflit. .env intacts. Aucun code applicatif modifié (uniquement le test + docs).
+- PR #152 = correction de test_pr149_week_plan_v2.py::test_fallback_code_path_exists_in_server: chemin CI absolu codé en dur → pathlib.Path(__file__).resolve().parent.parent/"server.py" (portable).
+- Validation: suite PR132→152 = 351 passed, 0 failed (le test précédemment non-portable passe désormais dans notre env). Smoke 3/3=200. Aucune régression.
+- État: chaîne Training Engine V2 validée (#132→#149), week-plan migré WeeklyTarget V2 (#149), suite de tests entièrement verte (#152). Obs. résiduelle non bloquante: 2e fallback km/pace-based de _generate_fallback_week_plan garde des estimated_tss hardcodés (legacy, hors scope).
+
+
 ## 2026-08-19 — Pull copilot/dev (PR #148 + PR #149) — MERGÉ & VALIDÉ (1 test non-portable non bloquant)
 - Fetch copilot/dev (e1a222c→43ee9ec). Merge ORT propre, 0 conflit. .env intacts, protégés préservés. Backend+worker redémarrés.
 - PR #148 = durcissement test (test_fallback_still_exists → preuve AST-based, vérifie fallback avg_pace/0.70 + vma_method=average dans la même branche).
