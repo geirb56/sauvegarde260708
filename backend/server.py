@@ -4569,7 +4569,7 @@ async def get_week_plan(user: dict = Depends(auth_user)):
     Utilise le contexte d'entraînement et l'objectif défini.
 
     PR149: Weekly prescription is now sourced from WeeklyTarget V2.
-    Legacy determine_target_load + generate_cycle_week remain for LLM rendering (compat).
+    PR157: determine_target_load removed from this path (display context only).
     """
     user_id = user["id"]
     # PR155: Read from canonical sources instead of legacy db.training_goals
@@ -4664,9 +4664,10 @@ async def get_week_plan(user: dict = Depends(auth_user)):
     else:
         target_km_protected = None
 
-    # ── Legacy compat context (for determine_target_load + LLM) ─────────────
+    # ── Legacy compat context (LLM) ─────────────────────────────────────────
     # ctl/atl/tsb km-based aliases removed (PR #127 — faux physiological metrics).
-    # load_7/load_28 kept as volume inputs for determine_target_load().
+    # load_7/load_28 kept for context transparency; no longer consumed by
+    # determine_target_load (PR #157 — removed from this path).
     # acwr=None — km_7/(km_28/4) must NOT be exposed as ACWR (#127 pre-merge corrections).
     context = {
         "ctl": None,
@@ -4693,9 +4694,8 @@ async def get_week_plan(user: dict = Depends(auth_user)):
 
     phase = determine_phase(current_week, cycle_weeks)
 
-    # Legacy target_load for LLM rendering (NOT the prescription source).
-    from training_engine import determine_target_load
-    target_load = determine_target_load(context, phase)
+    # PR157: determine_target_load removed — target_load is display context only,
+    # never drives distances / durations / intensity.  planned_load → None.
 
     # PR149: V2 decides the prescription; legacy compat projects from V2.
     # target_km_protected is from WeeklyTarget V2 (or None for duration-based).
@@ -4710,14 +4710,13 @@ async def get_week_plan(user: dict = Depends(auth_user)):
     plan, success, metadata = await generate_cycle_week(
         context=context,
         phase=phase,
-        target_load=target_load,
         goal=goal["goal_type"],
         user_id=user_id
     )
 
     if not success or not plan:
         # Fallback: plan générique basé sur la phase, respectant target_km_protected
-        plan = _generate_fallback_week_plan(context, phase, target_load, goal["goal_type"], target_km_protected)
+        plan = _generate_fallback_week_plan(context, phase, goal["goal_type"], target_km_protected)
 
     return {
         "goal": {
@@ -4746,7 +4745,7 @@ async def get_week_plan(user: dict = Depends(auth_user)):
     }
 
 
-def _generate_fallback_week_plan(context: dict, phase: str, target_load: int, goal: str, target_km_protected: float = None) -> dict:
+def _generate_fallback_week_plan(context: dict, phase: str, goal: str, target_km_protected: float = None) -> dict:
     """Génère un plan de secours basé sur des templates.
 
     PR149 BLOCKER 1: When WeeklyTarget V2 prescribes duration-based (target_km_protected=None),
@@ -4770,7 +4769,7 @@ def _generate_fallback_week_plan(context: dict, phase: str, target_load: int, go
         ]
         return {
             "focus": phase,
-            "planned_load": target_load,
+            "planned_load": None,
             "weekly_km": None,
             "target_duration_minutes": target_duration_minutes,
             "target_basis": "duration",
@@ -4864,7 +4863,7 @@ def _generate_fallback_week_plan(context: dict, phase: str, target_load: int, go
 
     return {
         "focus": phase,
-        "planned_load": target_load,
+        "planned_load": None,
         "weekly_km": round(total_km, 1),
         "sessions": sessions,
         "total_tss": total_tss,
