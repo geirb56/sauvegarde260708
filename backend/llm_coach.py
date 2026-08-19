@@ -321,14 +321,14 @@ async def generate_cycle_week(
     pace_z3 = parse_pace(paces.get('z3', '5:30-5:45'))
     pace_z4 = parse_pace(paces.get('z4', '5:00-5:15'))
     
-    # Session templates: (type_key, duration_min, pace_zone, intensity, tss_per_km)
+    # Session templates: (duration_min, pace_zone, intensity)
     session_templates = {
-        "rest": (0, None, "rest", 0),
-        "recovery": (30, pace_z1, "easy", 4),
-        "endurance": (50, pace_z2, "easy", 5),
-        "tempo": (45, pace_z3, "moderate", 7),
-        "threshold": (40, pace_z4, "hard", 8),
-        "fartlek": (45, pace_z3, "moderate", 7),
+        "rest": (0, None, "rest"),
+        "recovery": (30, pace_z1, "easy"),
+        "endurance": (50, pace_z2, "easy"),
+        "tempo": (45, pace_z3, "moderate"),
+        "threshold": (40, pace_z4, "hard"),
+        "fartlek": (45, pace_z3, "moderate"),
     }
     
     # Build sessions based on number of sessions per week
@@ -356,7 +356,7 @@ async def generate_cycle_week(
                 "duration": f"{duration}min",
                 "details": f"{distance} km • {format_pace(pace)} • FC 135-150 bpm • Progressive",
                 "intensity": "moderate",
-                "estimated_tss": round(distance * 6),
+                "estimated_tss": None,
                 "distance_km": distance
             }
         
@@ -365,7 +365,6 @@ async def generate_cycle_week(
         template = session_templates.get(session_type, session_templates["endurance"])
         pace = template[1]
         intensity = template[2]
-        tss_per_km = template[3]
 
         if custom_distance is not None:
             distance = round(custom_distance, 1)
@@ -373,7 +372,6 @@ async def generate_cycle_week(
         else:
             duration = custom_duration or template[0]
             distance = round(duration / pace, 1)
-        tss = round(distance * tss_per_km)
         
         # Build details string (in French)
         if session_type == "threshold":
@@ -393,7 +391,7 @@ async def generate_cycle_week(
             "duration": f"{duration}min",
             "details": details,
             "intensity": intensity,
-            "estimated_tss": tss,
+            "estimated_tss": None,
             "distance_km": distance
         }
     
@@ -472,13 +470,13 @@ async def generate_cycle_week(
                     "duration": f"{dur}min",
                     "details": f"{dur} min en aisance • {format_pace(easy_pace)} • marche/course possible • effort très facile",
                     "intensity": "easy",
-                    "estimated_tss": round(dist * 4),
+                    "estimated_tss": None,
                     "distance_km": dist,
                 })
             else:
                 reprise_sessions.append(build_session(day, "rest"))
         total_km = round(sum(s["distance_km"] for s in reprise_sessions), 1)
-        total_tss = sum(s["estimated_tss"] for s in reprise_sessions)
+        total_tss = None
         weekly_minutes = sum(durations)
         deep = training_state == "deep_reprise"
         plan = {
@@ -539,7 +537,7 @@ async def generate_cycle_week(
 
     # Calculate totals
     total_km = round(sum(s["distance_km"] for s in sessions), 1)
-    total_tss = sum(s["estimated_tss"] for s in sessions)
+    total_tss = None
 
     # Generate focus text based on phase
     focus_texts = {
@@ -566,7 +564,7 @@ async def generate_cycle_week(
     metadata["duration_sec"] = round(elapsed, 2)
     metadata["success"] = True
     
-    logger.info(f"[Coach] ✅ Plan generated deterministically in {elapsed:.3f}s (TSS: {total_tss}, KM: {total_km})")
+    logger.info(f"[Coach] ✅ Plan generated deterministically in {elapsed:.3f}s (KM: {total_km})")
     
     return plan, True, metadata
 
