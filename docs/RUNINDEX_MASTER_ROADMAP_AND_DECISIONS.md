@@ -1906,3 +1906,64 @@ Hotfix de compatibilité Python 3.11 sur la chaîne V2.
    - LT1/LT2 multi-évidence ;
    - Body Battery nocturne ;
    - V3 Flexible Schedule.
+
+## 40) PR #142 — Migration `/training/metrics` vers Training V2 + correction frontière Mongo → DomainActivity — IMPLEMENTED
+
+### Statut canonique des PRs historiques
+
+| PR   | Statut            |
+|------|-------------------|
+| #138 | MERGED (canonique) |
+| #139 | non engagée       |
+| #140 | non engagée       |
+| #141 | ABANDONNÉE / NON CANONIQUE — ne pas reprendre |
+| #142 | EN COURS (cette PR) |
+
+### Objectif
+
+Migrer `/training/metrics` vers les contrats Training V2 existants :
+
+- **A.** Corriger la frontière Mongo → DomainActivity : les documents
+  `garmin_activities` passent désormais par `mongo_garmin_activities_to_domain`
+  avant d'entrer dans n'importe quelle couche V2.
+- **B.** Supprimer la dépendance runtime de `/training/metrics` à
+  `training_engine.classify_training_state()`.
+
+### Décisions
+
+- `mongo_garmin_activities_to_domain` est le seul point de conversion Mongo → DomainActivity
+  pour cet endpoint. Aucun deuxième adapter créé.
+- Pipeline V2 complet :
+  `DomainActivity[] → build_training_history → build_training_load →
+  build_runner_profile → build_training_state`
+- `acwr_reliable` dérivé de `training_state.continuity_state` :
+  `acwr_reliable = continuity_state not in ("deep_reprise", "partial_reprise")`
+- `training_engine.py` conservé (consumers restants : `server.py` autres endpoints,
+  `llm_coach.py`).
+- Aucune formule TrainingLoad V2 modifiée.
+- Aucun changement #141 repris (doctrine `no_distance_in_28d`, long-run, etc.).
+- Contrat HTTP `/training/metrics` inchangé (mêmes champs, mêmes valeurs).
+
+### Consumers `training_engine.py` runtime restants après #142
+
+- `server.py` : multiples endpoints autres que `/training/metrics`
+  (ex. `/training/full-cycle`, `/training/week-plan`, `/training/plan`,
+  `/training/refresh`).
+- `llm_coach.py` : `generate_cycle_week()`.
+
+### NEXT (ordre canonique)
+
+1. **#143 — Migration des autres consumers runtime legacy**
+   - `/training/full-cycle`
+   - `/training/week-plan`
+   - `llm_coach.generate_cycle_week()`
+   - autres callers réellement confirmés
+
+2. **#144 — Kill final `training_engine.py`**
+   - uniquement après : AUDIT → MIGRATION → VALIDATION RUNTIME →
+     PREUVE ZÉRO CONSUMER → KILL LEGACY
+
+3. **Ensuite seulement :**
+   - LT1/LT2 multi-évidence ;
+   - Body Battery nocturne ;
+   - V3 Flexible Schedule.
