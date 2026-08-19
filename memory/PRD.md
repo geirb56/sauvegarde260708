@@ -3,6 +3,18 @@
 ## Problem Statement
 Pull https://github.com/geirb56/sauvegarde260629 and set it up so it runs. Replace /app contents.
 
+## 2026-08-19 — Pull copilot/dev (PR #148 + PR #149) — MERGÉ & VALIDÉ (1 test non-portable non bloquant)
+- Fetch copilot/dev (e1a222c→43ee9ec). Merge ORT propre, 0 conflit. .env intacts, protégés préservés. Backend+worker redémarrés.
+- PR #148 = durcissement test (test_fallback_still_exists → preuve AST-based, vérifie fallback avg_pace/0.70 + vma_method=average dans la même branche).
+- PR #149 = migration prescription /training/week-plan vers WeeklyTarget V2 (nouveau training_v2/week_plan_bridge.py::build_weekly_target_from_workouts) + fix estimated_tss:0/total_tss:0 → None dans le fallback DURATION-based. Legacy determine_target_load + generate_cycle_week conservés pour rendu LLM (compat).
+- Validation: fallback duration-based confirmé estimated_tss=None/total_tss=None/distance_km=None ✓. Smoke endpoints principaux 5/5=200. Régression PR132→149 = 350 passed (hors 1 test non-portable).
+- ⚠️ 2 observations non bloquantes:
+  1. test_pr149_week_plan_v2.py::test_fallback_code_path_exists_in_server ÉCHOUE sur chemin absolu CI codé en dur (L361 /home/runner/work/sauvegarde260708/.../server.py inexistant ici) → problème de PORTABILITÉ de test, pas une régression (intention satisfaite, confirmée par grep). Correctif recommandé: Path(__file__).resolve().parents[1]/"server.py".
+  2. /training/week-plan renvoie 400 "No goal defined" pour le user réel car le goal vit dans training_cycles, pas dans la collection training_goals lue par cet endpoint (L4576) — comportement PRÉ-EXISTANT inchangé par #149; non smoke-able sans écriture destructive (set-goal). Validé via tests unitaires PR149 à la place.
+  - Note: le second fallback km/pace-based (_generate_fallback_week_plan) garde des estimated_tss hardcodés (0/25/...) — hors scope PR#149 (fix limité au duration-based), legacy.
+- Rapports upstream: RUNINDEX_PR148_REPORT.md, RUNINDEX_PR149_REPORT.md.
+
+
 ## 2026-08-19 — Pull copilot/dev (PR #147) — Test fragile réparé (AST-based) — MERGÉ & VALIDÉ
 - Fetch copilot/dev (936c966→e1a222c). Merge ORT propre, 0 conflit. .env intacts. Aucun code applicatif modifié (uniquement le test + docs).
 - PR #147 = remplacement de l'assertion d'inspection de source fragile test_plan_duration_decoupled.py::test_adjusted_weeks_is_base_weeks par une preuve AST-based (robuste à la forme dict vs assignation).
