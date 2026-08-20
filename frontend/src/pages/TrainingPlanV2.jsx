@@ -34,6 +34,7 @@ const COPY = {
     retry: "Réessayer",
     goal: "Objectif",
     state: "État",
+    continuityState: "État de continuité",
     weeklyTarget: "Cible hebdo",
     plannedWeek: "Planifié cette semaine",
     basisDistance: "Base distance",
@@ -58,6 +59,7 @@ const COPY = {
     retry: "Reintentar",
     goal: "Objetivo",
     state: "Estado",
+    continuityState: "Estado de continuidad",
     weeklyTarget: "Objetivo semanal",
     plannedWeek: "Planificado esta semana",
     basisDistance: "Base distancia",
@@ -82,6 +84,7 @@ const COPY = {
     retry: "Retry",
     goal: "Goal",
     state: "State",
+    continuityState: "Continuity state",
     weeklyTarget: "Weekly target",
     plannedWeek: "Planned this week",
     basisDistance: "Distance basis",
@@ -134,7 +137,12 @@ const formatReferenceDate = (dateString, locale) => {
   if (!dateString) return "";
   const date = new Date(dateString);
   if (Number.isNaN(date.getTime())) return dateString;
-  return new Intl.DateTimeFormat(locale, { weekday: "short", day: "2-digit", month: "short" }).format(date);
+  return new Intl.DateTimeFormat(locale, {
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+    timeZone: "UTC",
+  }).format(date);
 };
 
 export default function TrainingPlanV2() {
@@ -162,7 +170,7 @@ export default function TrainingPlanV2() {
         toast.error(copy.loadingError);
       }
     } finally {
-      if (!silent) setLoading(false);
+      setLoading(false);
       setRefreshing(false);
     }
   }, [copy.loadingError]);
@@ -271,7 +279,7 @@ export default function TrainingPlanV2() {
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
             <div className="flex items-center justify-between gap-3">
-              <span className="text-muted-foreground">continuity_state</span>
+              <span className="text-muted-foreground">{copy.continuityState}</span>
               <Badge variant="outline">{state.continuity_state || copy.none}</Badge>
             </div>
             <div className="flex items-center justify-between gap-3">
@@ -300,7 +308,9 @@ export default function TrainingPlanV2() {
               </span>
               <span>
                 {weeklyTarget.target_basis === "duration"
-                  ? `${weeklyTarget.target_duration_minutes ?? copy.none} ${copy.minutes}`
+                  ? weeklyTarget.target_duration_minutes != null
+                    ? `${weeklyTarget.target_duration_minutes} ${copy.minutes}`
+                    : copy.none
                   : weeklyTarget.target_km != null
                     ? formatDistance(weeklyTarget.target_km, { unitSystem })
                     : copy.none}
@@ -353,7 +363,15 @@ export default function TrainingPlanV2() {
 
             return (
               <div
-                key={`${session.day}-${session.workout_type}-${index}`}
+                key={[
+                  session.day,
+                  session.workout_type,
+                  session.intensity_class,
+                  session.distance_km ?? "na",
+                  session.duration_minutes ?? "na",
+                  session.reason_codes?.join("|") ?? "na",
+                  index,
+                ].join("-")}
                 className={`rounded-lg border p-3 ${colorClass}`}
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
