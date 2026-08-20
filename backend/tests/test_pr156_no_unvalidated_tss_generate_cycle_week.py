@@ -215,10 +215,117 @@ def test_ast_no_legacy_tss_coefficients():
 # ---------------------------------------------------------------------------
 
 def test_distances_and_types_preserved():
+    """
+    After PR#163: distance_km > 0 is only a valid universal contract for distance-based
+    prescriptions where WorkoutGenerator V2 provides long_run_km_v2.
+    - Non-long_run active sessions are volume-driven: both distance_km > 0 and duration > 0.
+    - long_run: positive only when long_run_km_v2 (V2 authority) is present in context.
+    - duration-based with no long_run_km_v2: long_run is a 0/0 placeholder (no run prescribed).
+    """
     plan = _get_plan_6()
+    long_run_km_v2 = CONTEXT.get("long_run_km_v2")
+
+    for s in plan["sessions"]:
+        assert s["type"] in ACTIVE_TYPES | {"rest"}
+        assert "duration" in s
+        assert "distance_km" in s
+        if s["type"] == "rest":
+            continue
+        if s["type"] == "long_run":
+            if long_run_km_v2 is not None:
+                # Distance-based: V2 prescribes the long run → both fields positive.
+                assert s["distance_km"] > 0, (
+                    f"Distance-based long_run must have distance_km > 0, got {s['distance_km']}"
+                )
+                dur_val = int(s["duration"].replace("min", ""))
+                assert dur_val > 0, (
+                    f"Distance-based long_run must have duration > 0, got {s['duration']}"
+                )
+            # else: duration-based — no long_run_km_v2 → long_run may be 0/0 placeholder.
+        else:
+            # Non-long_run sessions are volume-driven → both fields must be positive.
+            dur_val = int(s["duration"].replace("min", ""))
+            assert dur_val > 0, (
+                f"Volume-driven session {s['type']} must have duration > 0, got {s['duration']}"
+            )
+            assert s["distance_km"] > 0, (
+                f"Volume-driven session {s['type']} must have distance_km > 0, "
+                f"got {s['distance_km']}"
+            )
+
+
+def test_distances_and_types_preserved_distance_based():
+    """
+    Explicit distance-based path: when long_run_km_v2 and target_km_protected are
+    provided, ALL active sessions (including long_run) must have distance_km > 0 and
+    duration > 0.
+    """
+    ctx = {**CONTEXT, "target_km_protected": 42.0, "long_run_km_v2": 24.0}
+    loop = asyncio.new_event_loop()
+    try:
+        plan, success, _ = loop.run_until_complete(
+            generate_cycle_week(
+                context=ctx,
+                phase="build",
+                target_load=80,
+                goal="MARATHON",
+                user_id="test_pr156_dist",
+                sessions_per_week=6,
+            )
+        )
+    finally:
+        loop.close()
+    assert success
     for s in plan["sessions"]:
         assert s["type"] in ACTIVE_TYPES | {"rest"}
         assert "duration" in s
         assert "distance_km" in s
         if s["type"] != "rest":
-            assert s["distance_km"] > 0
+            assert s["distance_km"] > 0, (
+                f"Distance-based session {s['type']} must have distance_km > 0, "
+                f"got {s['distance_km']}"
+            )
+            dur_val = int(s["duration"].replace("min", ""))
+            assert dur_val > 0, (
+                f"Distance-based session {s['type']} must have duration > 0, got {s['duration']}"
+            )
+
+
+def test_distances_and_types_preserved_duration_based():
+    """
+    Explicit duration-based path: no long_run_km_v2 provided.
+    - Non-long_run sessions: duration > 0 (volume-driven via compute_target_km fallback).
+    - long_run: may be a 0/0 placeholder — no artificial km invented.
+    - distance_km must not be negative for any session.
+    """
+    ctx = {k: v for k, v in CONTEXT.items() if k not in ("target_km_protected", "long_run_km_v2")}
+    loop = asyncio.new_event_loop()
+    try:
+        plan, success, _ = loop.run_until_complete(
+            generate_cycle_week(
+                context=ctx,
+                phase="build",
+                target_load=80,
+                goal="MARATHON",
+                user_id="test_pr156_dur",
+                sessions_per_week=6,
+            )
+        )
+    finally:
+        loop.close()
+    assert success
+    for s in plan["sessions"]:
+        assert s["type"] in ACTIVE_TYPES | {"rest"}
+        assert "duration" in s
+        assert "distance_km" in s
+        if s["type"] == "rest":
+            continue
+        assert s["distance_km"] >= 0, (
+            f"Session {s['type']} must not have negative distance_km, got {s['distance_km']}"
+        )
+        if s["type"] != "long_run":
+            # Non-long_run: volume-driven → duration and distance must be positive.
+            dur_val = int(s["duration"].replace("min", ""))
+            assert dur_val > 0, (
+                f"Duration-based session {s['type']} must have duration > 0, got {s['duration']}"
+            )

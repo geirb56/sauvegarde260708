@@ -158,7 +158,12 @@ class TestWeeklyTargetV2Authority(unittest.TestCase):
     """PR157: WeeklyTarget V2 remains the prescriptive authority."""
 
     def test_weekly_target_v2_used_in_week_plan_source(self):
-        """build_weekly_target_from_workouts must still be called in get_week_plan."""
+        """
+        After PR#163 the canonical entry point is build_weekly_plan_from_workouts
+        (returns WeeklyTarget V2 + WeeklyPlan V2).  WeeklyTarget remains the authority:
+        weekly_target.target_basis and weekly_target.target_km must still be consumed
+        in get_week_plan to build target_km_protected.
+        """
         import pathlib
         server_path = pathlib.Path(__file__).parent.parent / "server.py"
         source = server_path.read_text()
@@ -168,10 +173,22 @@ class TestWeeklyTargetV2Authority(unittest.TestCase):
             if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)) and node.name == "get_week_plan":
                 fn_src = ast.get_source_segment(source, node) or ""
                 break
+        # PR#163 canonical bridge — replaces build_weekly_target_from_workouts.
         self.assertIn(
-            "build_weekly_target_from_workouts",
+            "build_weekly_plan_from_workouts",
             fn_src,
-            "WeeklyTarget V2 bridge must still be called in get_week_plan"
+            "PR#163 canonical bridge build_weekly_plan_from_workouts must be called in get_week_plan"
+        )
+        # WeeklyTarget authority must still be exercised via the returned weekly_target.
+        self.assertIn(
+            "weekly_target.target_basis",
+            fn_src,
+            "weekly_target.target_basis must still be used in get_week_plan"
+        )
+        self.assertIn(
+            "weekly_target.target_km",
+            fn_src,
+            "weekly_target.target_km must still be used in get_week_plan"
         )
 
     def test_target_km_protected_from_v2(self):
