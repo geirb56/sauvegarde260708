@@ -22,7 +22,6 @@ from training_engine import (
     DEFAULT_WEEKLY_KM,
     compute_target_km,
     apply_resume_guard,
-    compute_long_run_km,
     build_reprise_week_structure,
     REPRISE_DEEP_SESSION_MINUTES,
     reprise_deep_durations,
@@ -297,9 +296,10 @@ async def generate_cycle_week(
         target_km = compute_target_km(current_weekly_km, goal, phase)
         target_km = apply_resume_guard(target_km, context.get("km_7", current_weekly_km), current_weekly_km)
 
-    # Long run distance — compute_long_run_km in training_engine is the single
-    # source of truth. Do not re-cap here.
-    target_long_run = compute_long_run_km(target_km, goal)
+    # Long run distance — sourced from WorkoutGenerator V2 (PR163).
+    # context["long_run_km_v2"] is set by the server layer from WeeklyPlan V2.
+    # compute_long_run_km (legacy) is no longer called in this path.
+    target_long_run = context.get("long_run_km_v2") or 0
 
     # Use personalized paces or defaults
     paces = personalized_paces or context.get('paces', {})

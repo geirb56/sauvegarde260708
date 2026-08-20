@@ -24,6 +24,7 @@ from .training_history import build_training_history
 from .training_load import build_training_load
 from .training_state import build_training_state
 from .weekly_target import WeeklyTarget, build_weekly_target
+from .workout_generator import WeeklyPlan, build_weekly_plan
 
 
 # Closed mapping: legacy goal strings → GoalType V2.
@@ -178,3 +179,88 @@ def build_weekly_target_from_workouts(
     )
 
     return weekly_target
+
+
+def build_weekly_plan_from_workouts(
+    *,
+    workouts: List[dict],
+    goal_type: str,
+    race_date: Optional[date] = None,
+    cycle_start_date: Optional[date] = None,
+    reference_date: date,
+    user_profile: Optional[dict] = None,
+) -> tuple[WeeklyTarget, WeeklyPlan]:
+    """Build WeeklyTarget V2 + WeeklyPlan V2 from raw workout documents.
+
+    PR163: extends build_weekly_target_from_workouts to also produce the
+    WeeklyPlan so that WorkoutGenerator V2 is the authority on session
+    distribution (including long_easy distance).  llm_coach must NOT
+    re-compute the long run itself.
+
+    Returns
+    -------
+    (WeeklyTarget, WeeklyPlan)
+        Both immutable V2 objects built from the same chain.
+    """
+    mapped_goal = _GOAL_MAP.get(goal_type.upper() if goal_type else "")
+    if mapped_goal is None:
+        raise UnknownGoalTypeError(
+            f"Unknown goal_type '{goal_type}' — cannot map to V2 GoalType. "
+            f"Valid values: {sorted(_GOAL_MAP.keys())}"
+        )
+
+    activities = [to_domain_activity(_normalize_workout_to_domain_fields(w)) for w in workouts]
+
+    training_history = build_training_history(activities, reference_date)
+    training_load = build_training_load(activities, reference_date)
+    runner_profile = build_runner_profile(
+        training_history=training_history,
+        training_load=training_load,
+        user_profile=user_profile,
+        capabilities=None,
+        physiological_metrics=None,
+        reference_date=reference_date,
+    )
+    training_state = build_training_state(
+        training_history=training_history,
+        training_load=training_load,
+        runner_profile=runner_profile,
+        reference_date=reference_date,
+    )
+    plan_goal = build_plan_goal(
+        goal_type=mapped_goal,
+        race_date=race_date,
+        created_from="user",
+    )
+
+    if race_date and race_date > reference_date:
+        periodization = build_periodization(
+            plan_goal=plan_goal,
+            reference_date=reference_date,
+            race_plan_start_date=cycle_start_date,
+        )
+    else:
+        periodization = build_periodization(
+            plan_goal=plan_goal,
+            reference_date=reference_date,
+            cycle_anchor_date=cycle_start_date or reference_date,
+        )
+
+    weekly_target = build_weekly_target(
+        runner_profile=runner_profile,
+        training_history=training_history,
+        training_state=training_state,
+        plan_goal=plan_goal,
+        periodization=periodization,
+        reference_date=reference_date,
+    )
+
+    weekly_plan = build_weekly_plan(
+        weekly_target=weekly_target,
+        runner_profile=runner_profile,
+        plan_goal=plan_goal,
+        periodization=periodization,
+        reference_date=reference_date,
+    )
+
+    return weekly_target, weekly_plan
