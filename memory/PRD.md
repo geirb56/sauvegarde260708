@@ -510,3 +510,12 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
 - Validation RUNTIME (agent-tested) : smoke 7/7=200 (today, plan, metrics, run-index, dashboard, week-plan, full-cycle). Suites cœur Training V2 = 493 passed. Suites PR (test_pr*.py) = 158 passed. Les 3 tests corrigés = 23 passed.
 - Suite globale : échecs env/legacy historiques persistants (Redis/SSE/checks env REACT_APP_BACKEND_URL) NON liés à #166 — cf. règle « pytest global ≠ preuve release ».
 - Aucun redémarrage requis (PR166 = tests uniquement). Statut : agent-tested, non user-confirmed. Frontend inchangé depuis #165.
+
+## 2026-06 — Pull copilot/dev — PR #167 (endpoint natif V2 GET /training/v2/week)
+- Fetch + merge `sauvegarde/copilot/dev` (dcd3e77→af33c9f). Merge ORT propre, 0 conflit. `.env` intacts, rapports locaux + PRD préservés.
+- PR #167 = nouvel endpoint natif V2 `GET /api/training/v2/week` :
+  - Nouveau `backend/training_v2/training_week_response.py` (response models) + `backend/server.py` (+152, route + response_model), `access_control.py` (+1).
+  - Sémantique V2 stricte : `target_km`/`distance_km`/`estimated_tss` = null quand basis=duration (UNKNOWN ≠ ZERO) ; `target_time_minutes→seconds`, horloge unique `now_utc`.
+  - Aucun changement frontend/worker.
+- Validation RUNTIME (agent-tested) : backend redémarré. Smoke **8/8 = 200** (dont nouveau `/training/v2/week` renvoyant goal/state/weekly_target/week+sessions avec null corrects). Tests PR167 = **54 passed**. Régression suites PR (test_pr*.py) = **212 passed**.
+- Statut : agent-tested, non user-confirmed.
