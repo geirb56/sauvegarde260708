@@ -343,7 +343,7 @@ function SessionCard({ session, t, unitSystem }) {
 
 export default function TrainingPlanV2() {
   const { t } = useLanguage();
-  const { subscription } = useSubscription();
+  const { isFree, isTrial, isPremium, loading: subLoading } = useSubscription();
   const { unitSystem } = useUnitSystem();
 
   const [data, setData] = useState(null);
@@ -368,8 +368,20 @@ export default function TrainingPlanV2() {
     fetchWeek();
   }, [fetchWeek]);
 
-  // Paywall guard — same pattern as TrainingPlan
-  if (subscription && subscription.status === "inactive") {
+  // Subscription guard — mirrors TrainingPlan pattern
+  if (subLoading) {
+    return (
+      <div style={{ maxWidth: "640px", margin: "0 auto", padding: "20px 16px" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+          <Skeleton style={{ height: "120px", borderRadius: "12px" }} />
+          <Skeleton style={{ height: "160px", borderRadius: "12px" }} />
+          <Skeleton style={{ height: "200px", borderRadius: "12px" }} />
+        </div>
+      </div>
+    );
+  }
+
+  if (isFree) {
     return <Paywall />;
   }
 

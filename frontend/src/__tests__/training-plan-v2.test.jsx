@@ -206,8 +206,9 @@ const trainingWeekV2RestTssZeroFixture = {
 // ---------------------------------------------------------------------------
 // Mocks
 // ---------------------------------------------------------------------------
-const axiosMock = { get: jest.fn() };
-jest.mock("axios", () => axiosMock);
+jest.mock("axios", () => ({
+  get: jest.fn(),
+}));
 
 jest.mock("sonner", () => ({
   toast: { success: jest.fn(), error: jest.fn(), info: jest.fn() },
@@ -223,11 +224,19 @@ jest.mock("@/hooks/useAutoSync", () => ({
 
 jest.mock("@/components/ChatCoach", () => () => null);
 
-// Subscription: active by default
+jest.mock("@/components/Paywall", () => () =>
+  require("react").createElement("div", { "data-testid": "paywall" }, "PAYWALL")
+);
+
+// Subscription mock — matches real SubscriptionContext contract (free/trial/premium)
+const mockSubscription = {
+  isFree: false,
+  isTrial: false,
+  isPremium: true,
+  loading: false,
+};
 jest.mock("@/context/SubscriptionContext", () => ({
-  useSubscription: jest.fn(() => ({
-    subscription: { status: "active" },
-  })),
+  useSubscription: jest.fn(() => mockSubscription),
   SubscriptionProvider: ({ children }) => children,
 }));
 
@@ -267,10 +276,23 @@ function renderPage(PageComponent, path = "/training-v2") {
 // ---------------------------------------------------------------------------
 
 describe("TrainingPlanV2 — PR170", () => {
+  let axiosGetMock;
+
   beforeEach(() => {
     jest.clearAllMocks();
+    axiosGetMock = require("axios").get;
+    // Restore unit mock (clearAllMocks can wipe mockReturnValue set by prior test)
+    const { useUnitSystem } = require("@/context/UnitContext");
     mockUnitSystem.unitSystem = "metric";
-    axiosMock.get.mockResolvedValue({ data: trainingWeekV2ApiFixture });
+    useUnitSystem.mockReturnValue(mockUnitSystem);
+    // Reset subscription to premium (default accessible state)
+    mockSubscription.isFree = false;
+    mockSubscription.isTrial = false;
+    mockSubscription.isPremium = true;
+    mockSubscription.loading = false;
+    const { useSubscription } = require("@/context/SubscriptionContext");
+    useSubscription.mockReturnValue({ ...mockSubscription });
+    axiosGetMock.mockResolvedValue({ data: trainingWeekV2ApiFixture });
   });
 
   // A — True contract: reads data.state, data.weekly_target, data.week.sessions
@@ -304,7 +326,7 @@ describe("TrainingPlanV2 — PR170", () => {
 
   // B — Route: /training-v2 → TrainingPlanV2, /training → TrainingPlan
   test("B — /training-v2 renders TrainingPlanV2", async () => {
-    axiosMock.get.mockResolvedValue({ data: trainingWeekV2ApiFixture });
+    axiosGetMock.mockResolvedValue({ data: trainingWeekV2ApiFixture });
     const { container, root } = renderPage(TrainingPlanV2, "/training-v2");
     await act(async () => {});
     // TrainingPlanV2 title should be present
@@ -314,7 +336,7 @@ describe("TrainingPlanV2 — PR170", () => {
   });
 
   test("B — /training renders TrainingPlan (legacy intact)", async () => {
-    axiosMock.get.mockResolvedValue({ data: {} });
+    axiosGetMock.mockResolvedValue({ data: {} });
     const container = document.createElement("div");
     document.body.appendChild(container);
     const root = createRoot(container);
@@ -340,7 +362,7 @@ describe("TrainingPlanV2 — PR170", () => {
   test("C — calls only GET /training/v2/week", async () => {
     const { root } = renderPage(TrainingPlanV2);
     await act(async () => {});
-    const calls = axiosMock.get.mock.calls;
+    const calls = axiosGetMock.mock.calls;
     // Every call must target v2/week
     calls.forEach(([url]) => {
       expect(url).toMatch(/training\/v2\/week/);
@@ -359,7 +381,7 @@ describe("TrainingPlanV2 — PR170", () => {
   // D — distance basis: weekly_target.target_km displayed via UnitContext
   test("D — target_km displayed via UnitContext (metric)", async () => {
     mockUnitSystem.unitSystem = "metric";
-    axiosMock.get.mockResolvedValue({ data: trainingWeekV2ApiFixture });
+    axiosGetMock.mockResolvedValue({ data: trainingWeekV2ApiFixture });
     const { container, root } = renderPage(TrainingPlanV2);
     await act(async () => {});
     // 50km in metric → "50.00 km"
@@ -370,7 +392,7 @@ describe("TrainingPlanV2 — PR170", () => {
 
   // E — duration basis: target_duration displayed, target_km null not displayed
   test("E — duration basis: target_duration_minutes shown, target_km null not shown", async () => {
-    axiosMock.get.mockResolvedValue({ data: trainingWeekV2DurationFixture });
+    axiosGetMock.mockResolvedValue({ data: trainingWeekV2DurationFixture });
     const { container, root } = renderPage(TrainingPlanV2);
     await act(async () => {});
     // 180 minutes should appear
@@ -382,29 +404,29 @@ describe("TrainingPlanV2 — PR170", () => {
   });
 
   // F — active session with estimated_tss null → no TSS text
-  test("F — estimated_tss null → no TSS display", async () => {
-    axiosMock.get.mockResolvedValue({ data: trainingWeekV2ActiveTssNullFixture });
+  test("F — estimated_tss null → no TSS display (null/0/—/N/A all absent)", async () => {
+    axiosGetMock.mockResolvedValue({ data: trainingWeekV2ActiveTssNullFixture });
     const { container, root } = renderPage(TrainingPlanV2);
     await act(async () => {});
-    // The word "TSS" should not appear because estimated_tss is null
-    // (Session has distance_km=10, so it renders, but no TSS row)
+    // Session rendered at all (distance_km=10 is present)
+    expect(container.textContent).toContain("Monday");
+    // estimated_tss null → absolutely no TSS-suffixed value in this card
     const text = container.textContent;
-    // estimated_tss null → no "TSS" label in session card
-    // We check the session rendered at all
-    expect(text).toContain("Monday");
-    // But TSS value "null TSS" should not appear
     expect(text).not.toContain("null TSS");
+    expect(text).not.toContain("0 TSS");
+    expect(text).not.toContain("— TSS");
+    expect(text).not.toContain("N/A TSS");
     act(() => root.unmount());
     document.body.removeChild(container);
   });
 
-  // G — rest session with estimated_tss = 0 → "0 TSS" displayed
-  test("G — estimated_tss 0 → 0 TSS displayed", async () => {
-    axiosMock.get.mockResolvedValue({ data: trainingWeekV2RestTssZeroFixture });
+  // G — rest session with estimated_tss = 0 → "0 TSS" displayed (null ≠ 0)
+  test("G — estimated_tss 0 → '0 TSS' explicitly displayed on rest card", async () => {
+    axiosGetMock.mockResolvedValue({ data: trainingWeekV2RestTssZeroFixture });
     const { container, root } = renderPage(TrainingPlanV2);
     await act(async () => {});
-    // TSS = 0 is a real value → should render
-    expect(container.textContent).toContain("0");
+    // TSS = 0 is a real value → must render as "0 TSS", proving null ≠ 0
+    expect(container.textContent).toContain("0 TSS");
     act(() => root.unmount());
     document.body.removeChild(container);
   });
@@ -412,7 +434,7 @@ describe("TrainingPlanV2 — PR170", () => {
   // H — units: metric vs imperial
   test("H — metric: distance in km", async () => {
     mockUnitSystem.unitSystem = "metric";
-    axiosMock.get.mockResolvedValue({ data: trainingWeekV2ApiFixture });
+    axiosGetMock.mockResolvedValue({ data: trainingWeekV2ApiFixture });
     const { container, root } = renderPage(TrainingPlanV2);
     await act(async () => {});
     expect(container.textContent).toContain("km");
@@ -424,7 +446,7 @@ describe("TrainingPlanV2 — PR170", () => {
     mockUnitSystem.unitSystem = "imperial";
     const { useUnitSystem } = require("@/context/UnitContext");
     useUnitSystem.mockReturnValue({ unitSystem: "imperial" });
-    axiosMock.get.mockResolvedValue({ data: trainingWeekV2ApiFixture });
+    axiosGetMock.mockResolvedValue({ data: trainingWeekV2ApiFixture });
     const { container, root } = renderPage(TrainingPlanV2);
     await act(async () => {});
     expect(container.textContent).toContain("mi");
@@ -436,7 +458,7 @@ describe("TrainingPlanV2 — PR170", () => {
 
   // I — i18n: no raw trainingV2.* keys visible in output
   test("I — no raw trainingV2.* key visible in rendered output", async () => {
-    axiosMock.get.mockResolvedValue({ data: trainingWeekV2ApiFixture });
+    axiosGetMock.mockResolvedValue({ data: trainingWeekV2ApiFixture });
     const { container, root } = renderPage(TrainingPlanV2);
     await act(async () => {});
     expect(container.textContent).not.toMatch(/trainingV2\./);
@@ -446,8 +468,8 @@ describe("TrainingPlanV2 — PR170", () => {
 
   // J — error + retry uses only /training/v2/week
   test("J — error state renders retry, retry calls only /training/v2/week", async () => {
-    axiosMock.get.mockRejectedValueOnce({ response: { data: { detail: "Server error" } } });
-    axiosMock.get.mockResolvedValue({ data: trainingWeekV2ApiFixture });
+    axiosGetMock.mockRejectedValueOnce({ response: { data: { detail: "Server error" } } });
+    axiosGetMock.mockResolvedValue({ data: trainingWeekV2ApiFixture });
     const { container, root } = renderPage(TrainingPlanV2);
     await act(async () => {});
     // Error state shown
@@ -457,9 +479,80 @@ describe("TrainingPlanV2 — PR170", () => {
       await act(async () => { retryBtn.click(); });
     }
     // After retry, still only v2/week called
-    axiosMock.get.mock.calls.forEach(([url]) => {
+    axiosGetMock.mock.calls.forEach(([url]) => {
       expect(url).toMatch(/training\/v2\/week/);
     });
+    act(() => root.unmount());
+    document.body.removeChild(container);
+  });
+
+  // --- SUBSCRIPTION TESTS ---
+
+  // K — FREE: Paywall shown, no Training V2 data
+  test("K — FREE subscription → Paywall shown, no V2 data rendered", async () => {
+    const { useSubscription } = require("@/context/SubscriptionContext");
+    useSubscription.mockReturnValue({
+      isFree: true,
+      isTrial: false,
+      isPremium: false,
+      loading: false,
+    });
+    const { container, root } = renderPage(TrainingPlanV2);
+    await act(async () => {});
+    expect(container.querySelector("[data-testid='paywall']")).not.toBeNull();
+    expect(container.textContent).not.toContain("Training Plan V2");
+    act(() => root.unmount());
+    document.body.removeChild(container);
+  });
+
+  // L — TRIAL: TrainingPlanV2 accessible
+  test("L — TRIAL subscription → TrainingPlanV2 accessible, no Paywall", async () => {
+    const { useSubscription } = require("@/context/SubscriptionContext");
+    useSubscription.mockReturnValue({
+      isFree: false,
+      isTrial: true,
+      isPremium: false,
+      loading: false,
+    });
+    axiosGetMock.mockResolvedValue({ data: trainingWeekV2ApiFixture });
+    const { container, root } = renderPage(TrainingPlanV2);
+    await act(async () => {});
+    expect(container.querySelector("[data-testid='paywall']")).toBeNull();
+    expect(container.textContent).toContain("V2");
+    act(() => root.unmount());
+    document.body.removeChild(container);
+  });
+
+  // M — PREMIUM: TrainingPlanV2 accessible
+  test("M — PREMIUM subscription → TrainingPlanV2 accessible, no Paywall", async () => {
+    const { useSubscription } = require("@/context/SubscriptionContext");
+    useSubscription.mockReturnValue({
+      isFree: false,
+      isTrial: false,
+      isPremium: true,
+      loading: false,
+    });
+    axiosGetMock.mockResolvedValue({ data: trainingWeekV2ApiFixture });
+    const { container, root } = renderPage(TrainingPlanV2);
+    await act(async () => {});
+    expect(container.querySelector("[data-testid='paywall']")).toBeNull();
+    expect(container.textContent).toContain("V2");
+    act(() => root.unmount());
+    document.body.removeChild(container);
+  });
+
+  // N — LOADING: subscription loading state → skeleton shown, no Paywall
+  test("N — subscription loading=true → loading skeleton shown, no Paywall", async () => {
+    const { useSubscription } = require("@/context/SubscriptionContext");
+    useSubscription.mockReturnValue({
+      isFree: false,
+      isTrial: false,
+      isPremium: false,
+      loading: true,
+    });
+    const { container, root } = renderPage(TrainingPlanV2);
+    await act(async () => {});
+    expect(container.querySelector("[data-testid='paywall']")).toBeNull();
     act(() => root.unmount());
     document.body.removeChild(container);
   });
