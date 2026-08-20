@@ -2,9 +2,9 @@
 const path = require("path");
 require("dotenv").config();
 
-// Check if we're in development/preview mode (not production build)
-// Craco sets NODE_ENV=development for start, NODE_ENV=production for build
-const isDevServer = process.env.NODE_ENV !== "production";
+// Check if we're in development/preview mode (not production build and not test)
+// Craco sets NODE_ENV=development for start, NODE_ENV=production for build, NODE_ENV=test for jest
+const isDevServer = process.env.NODE_ENV === "development";
 
 // Environment variable overrides
 const config = {
