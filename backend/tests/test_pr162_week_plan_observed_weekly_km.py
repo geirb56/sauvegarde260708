@@ -4,7 +4,7 @@ PR #162 — week-plan stops using compute_current_weekly_km runtime consumer.
 Scope:
 - A/B/C: /api/training/week-plan sets context["weekly_km"] from observed
   running volume (km_28_running / 4.0), including zero-history semantics.
-- D/E/F: WeeklyTarget V2 prescription guard and reprise/TSS behavior stay valid.
+- D/E/F: LEGACY_UNIT_TEST — generate_cycle_week contracts kept as legacy unit checks.
 """
 
 from __future__ import annotations
@@ -137,13 +137,6 @@ async def _mock_get_user_access(db, user_id):
     return UserAccess(user_id=user_id, tier=Tier.PREMIUM)
 
 
-def _mock_generate_cycle_week():
-    async def _inner(context, phase, goal, user_id="unknown", target_load=None, **kwargs):
-        return {"sessions": [], "weekly_km": context.get("weekly_km"), "total_tss": None}, True, {"source": "mock"}
-
-    return _inner
-
-
 def _fixed_weekly_target(*, basis="distance", target_km=42.0, target_duration_minutes=None, continuity_state="normal"):
     return SimpleNamespace(
         target_basis=basis,
@@ -151,6 +144,19 @@ def _fixed_weekly_target(*, basis="distance", target_km=42.0, target_duration_mi
         target_duration_minutes=target_duration_minutes,
         continuity_state=continuity_state,
     )
+
+
+def _fixed_weekly_plan(*, basis="distance", planned_km=42.0, planned_duration_minutes=None):
+    return SimpleNamespace(
+        sessions=[],
+        planned_km=planned_km,
+        planned_duration_minutes=planned_duration_minutes,
+        target_basis=basis,
+    )
+
+
+def _mock_adapt_weekly_plan_to_legacy(*args, **kwargs):
+    return {"sessions": [], "weekly_km": 42.0, "total_tss": None}
 
 
 def _run(coro):
@@ -172,13 +178,21 @@ async def client_factory():
 
     async def _make(workouts, *, weekly_target=None):
         fake_db = _FakeDB(workouts)
+        target = weekly_target or _fixed_weekly_target()
         active = [
             patch.object(server, "db", fake_db),
             patch("server.get_user_access", AsyncMock(side_effect=_mock_get_user_access)),
-            patch("server.generate_cycle_week", _mock_generate_cycle_week()),
             patch(
-                "training_v2.week_plan_bridge.build_weekly_target_from_workouts",
-                return_value=weekly_target or _fixed_weekly_target(),
+                "training_v2.week_plan_bridge.build_weekly_plan_from_workouts",
+                return_value=(target, _fixed_weekly_plan(
+                    basis=target.target_basis,
+                    planned_km=target.target_km,
+                    planned_duration_minutes=target.target_duration_minutes,
+                )),
+            ),
+            patch(
+                "training_v2.week_plan_adapter.adapt_weekly_plan_to_legacy",
+                side_effect=_mock_adapt_weekly_plan_to_legacy,
             ),
         ]
         for p in active:
@@ -253,7 +267,14 @@ async def test_c_non_running_only_observed_weekly_km_is_zero(client_factory):
     assert resp.json()["context"]["weekly_km"] == 0.0
 
 
+def test_runtime_source_get_week_plan_does_not_call_generate_cycle_week():
+    source = getattr(server.get_week_plan, "__code__", None)
+    assert source is not None
+    assert "generate_cycle_week" not in source.co_names
+
+
 def test_d_distance_v2_target_protected_with_weekly_km_zero_no_legacy_calls():
+    """LEGACY_UNIT_TEST: direct generate_cycle_week unit contract."""
     compute_calls = []
     guard_calls = []
 
@@ -297,6 +318,7 @@ def test_d_distance_v2_target_protected_with_weekly_km_zero_no_legacy_calls():
 
 
 def test_e_duration_reprise_valid_with_weekly_km_zero_no_fictive_baseline():
+    """LEGACY_UNIT_TEST: direct generate_cycle_week unit contract."""
     ctx = {
         "weekly_km": 0.0,
         "km_7": 0.0,
@@ -325,6 +347,7 @@ def test_e_duration_reprise_valid_with_weekly_km_zero_no_fictive_baseline():
 
 
 def test_f_tss_doctrine_unchanged_active_none_rest_zero_total_none():
+    """LEGACY_UNIT_TEST: direct generate_cycle_week unit contract."""
     ctx = {
         "weekly_km": 0.0,
         "km_7": 0.0,
