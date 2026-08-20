@@ -11,7 +11,6 @@ import { Calendar, RefreshCw, ShieldCheck, Target, TrendingUp } from "lucide-rea
 import { API_BASE_URL } from "@/config";
 import { formatDistance } from "@/utils/units";
 
-const API = API_BASE_URL;
 
 const SESSION_STYLES = {
   rest: { bg: "#12142a", border: "#4f46e5", text: "#a5b4fc", badge: "#4f46e5", badgeText: "#ffffff" },
@@ -60,7 +59,7 @@ export default function TrainingPlanV2() {
       setApiError(null);
     }
     try {
-      const res = await axios.get(`${API}/training/v2/week`);
+      const res = await axios.get(`${API_BASE_URL}/training/v2/week`);
       if (!isMountedRef.current) return;
       setWeekPayload(res.data);
       setApiError(null);
@@ -68,6 +67,7 @@ export default function TrainingPlanV2() {
       if (!isMountedRef.current) return;
       if (err.response?.status === 403 && err.response?.data?.error === "subscription_required") {
         setApiError("subscription_required");
+        setWeekPayload(null);
         return;
       }
       setApiError(err.response?.data?.detail || t("trainingPlanExtended.loadingError"));
@@ -213,7 +213,7 @@ export default function TrainingPlanV2() {
         </div>
 
         <div className="space-y-2">
-          {sessions.map((session) => {
+          {sessions.map((session, idx) => {
             const style = SESSION_STYLES[session.workout_type] || SESSION_STYLES.easy;
             const workoutTranslationKey = `trainingPlanSessionType.${typeTranslationKey(session.workout_type)}`;
             const dayTranslationKey = `trainingPlanDays.${session.day}`;
@@ -225,7 +225,7 @@ export default function TrainingPlanV2() {
             const safeDayLabel = isMissingTranslation(dayLabel, dayTranslationKey)
               ? fallbackLabel(session.day)
               : dayLabel;
-            const sessionKey = `${session.day}-${session.workout_type}-${session.intensity_class}-${session.distance_km ?? "na"}-${session.duration_minutes ?? "na"}-${(session.reason_codes || []).join("-")}`;
+            const sessionKey = `${session.day}-${session.workout_type}-${session.intensity_class}-${session.distance_km ?? "na"}-${session.duration_minutes ?? "na"}-${(session.reason_codes || []).join("-")}-${idx}`;
 
             return (
               <div key={sessionKey} className="flex items-center gap-2 p-3 rounded-lg" style={{ background: style.bg, border: `1px solid ${style.border}` }}>
