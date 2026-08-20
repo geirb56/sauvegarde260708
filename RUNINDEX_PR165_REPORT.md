@@ -5,8 +5,8 @@
 | Field | Value |
 |---|---|
 | HEAD départ | `be2b7ac` (post-#163) |
-| HEAD #165 (pré-correction) | `e9b4a8a` |
-| HEAD #165 (final) | `ebb7510` |
+| HEAD #165 (pré-correction) | `9fffecb` |
+| HEAD #165 (final) | à mettre à jour après push |
 | #164 reprise | **NO** — aucun commit de #164 repris |
 | Branche | `copilot/supprimer-double-autorite-prescription` |
 
@@ -159,7 +159,7 @@ Même situation que ci-dessus — l'adapter forward les durées V2 sans recalcul
 
 | Suite | Passed | Failed | Skipped | Notes |
 |---|---|---|---|---|
-| `test_pr165_week_plan_v2_authority.py` | **39** | 0 | **0** | Contrats A–F + H–M tous prouvés, 0 skip |
+| `test_pr165_week_plan_v2_authority.py` | **43** | 0 | **0** | Contrats A–F + H–M + 4 nouveaux tests unknown-duration, 0 skip |
 | `test_pr157_remove_determine_target_load.py` | 10 | 7* | 0 | *7 fails = `No module 'dotenv'` (env CI, pré-existant) |
 | `test_pr163_long_run_v2_authority.py` | 32 | 3* | 0 | *3 fails = `No module 'dotenv'` (pré-existant) |
 | `test_pr156_no_unvalidated_tss_generate_cycle_week.py` | N/A | collection error* | — | *`No module 'dotenv'` (pré-existant) |
@@ -193,16 +193,39 @@ Notes sur les fixtures :
 
 ## FRONTEND AUDIT REPORT
 
-ACTIVE_DISTANCE_SESSION_DURATION_ZERO_SAFE = **YES**
+ACTIVE_DISTANCE_SESSION_DURATION_ZERO_SAFE = **NO**
+CORRECTED = **YES**
+
+UNKNOWN_DURATION_API_VALUE = **None**
+
+ACTIVE_UNKNOWN_DURATION_DISPLAYED_AS_ZERO = **NO**
+
+REST_ZERO_DURATION_PRESERVED = **YES**
+
+ARTIFICIAL_DURATION_CALCULATION = **NO**
+
+UNKNOWN_COERCED_TO_ZERO scan = **0**
 
 | Champ | Valeur |
 |---|---|
-| `session.duration` consumers | `TrainingPlan.jsx:152` (DISPLAY_TEXT), `Dashboard.jsx:167` (DISPLAY_TEXT) |
+| `session.duration` consumers | `TrainingPlan.jsx` (DISPLAY_TEXT), `Dashboard.jsx` (DISPLAY_TEXT) |
 | `duration "0min"` used as calculation | **NO** |
-| `duration "0min"` shown as real workout duration | **YES** (displayed as raw text) — non trompeur car accompagné de `distance_km` |
-| frontend change required | **NO** |
+| `duration null/None` shown as text | **NO** — guarded with `{session.duration && (<span>…</span>)}` |
+| frontend change applied | **YES** — conditional render in both JSX files |
 
-Détail : les deux usages affichent `{session.duration}` directement dans un `<span>`. Aucun tri, aucun calcul, aucune logique conditionnelle ne dépend de cette valeur. Pour une séance distance-based active, "0min" est affiché à côté de la distance, ce qui n'induit pas en erreur fonctionnellement.
+Détail : l'adapter produisait `"0min"` pour toute séance active dont `duration_minutes` est absent.
+Correction backend : `duration_minutes=None` → `duration=None` (jamais `"0min"`) pour les séances actives.
+Correction frontend : affichage conditionnel `{session.duration && (...)}` dans `TrainingPlan.jsx` et `Dashboard.jsx` pour ne rien afficher quand `duration=null`.
+
+### SCAN UNKNOWN → ZERO (chemin week-plan V2)
+
+| Occurrence | Fichier | Champ | Classification |
+|---|---|---|---|
+| `elif s.duration_minutes is not None:` (corrigé) | `week_plan_adapter.py` | `duration` | **CORRIGÉ** (était `UNKNOWN_COERCED_TO_ZERO`) |
+| `planned_duration_minutes or 0` | `week_plan_adapter.py` (`_build_advice`) | affichage conseil uniquement | `STRUCTURAL_ZERO` (affichage texte conseil — non prescriptif) |
+| `planned_km or 0` | `week_plan_adapter.py` (`_build_advice`) | affichage conseil uniquement | `STRUCTURAL_ZERO` (affichage texte conseil — non prescriptif) |
+
+UNKNOWN_COERCED_TO_ZERO = **0** (après correction)
 
 ---
 
@@ -240,7 +263,11 @@ READY FOR MERGE INTO copilot/dev
 - ✅ normal duration fallback prouvé (120 min, weekly_km=None)
 - ✅ no_history prouvé (105 min)
 - ✅ CRITICAL_CONTRACT_SKIPS = 0
-- ✅ frontend duration 0min audité — SAFE, aucun changement requis
-- ✅ Tests pertinents 0 failed (failures = env pré-existant dotenv/httpx déclarés dans requirements)
+- ✅ ACTIVE_DISTANCE_SESSION_DURATION_ZERO_SAFE = NO → CORRECTED = YES
+- ✅ duration_minutes=None → API duration=None (UNKNOWN != ZERO)
+- ✅ duration_minutes=45 → API duration="45min"
+- ✅ rest → API duration="0min" (ZERO sémantiquement correct)
+- ✅ frontend masque duration=null (guard conditionnel dans TrainingPlan.jsx et Dashboard.jsx)
+- ✅ UNKNOWN_COERCED_TO_ZERO = 0 sur le chemin week-plan V2
+- ✅ 4 tests nouveaux (TestAdapterUnknownDuration) → 43 passed total, 0 failed, 0 skip
 - ✅ Aucune nouvelle dette
-- ✅ mergeable = true

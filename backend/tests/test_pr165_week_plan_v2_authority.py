@@ -893,3 +893,213 @@ class TestAdapterLegacyKeys:
         assert "weekly_plan_v2" in fn_source, (
             "generated_by must be 'weekly_plan_v2' — prescription source changed"
         )
+
+
+# ---------------------------------------------------------------------------
+# Adapter unknown-duration doctrine tests (PR165 correction)
+# DOCTRINE: UNKNOWN != ZERO — never coerce None duration to "0min" for active sessions.
+# ---------------------------------------------------------------------------
+
+def _make_minimal_weekly_target(
+    ref: date,
+    basis: str = "distance",
+    target_km: float = 10.0,
+    target_duration_minutes: Optional[int] = None,
+    continuity_state: str = "normal",
+) -> "WeeklyTarget":
+    from training_v2.weekly_target import WeeklyTarget
+    return WeeklyTarget(
+        reference_date=ref,
+        target_basis=basis,
+        target_km=target_km if basis == "distance" else None,
+        target_duration_minutes=target_duration_minutes if basis == "duration" else None,
+        target_sessions=3,
+        allow_intensity=False,
+        confidence="medium",
+        continuity_state=continuity_state,
+        reason_codes=("TEST",),
+    )
+
+
+def _make_minimal_weekly_plan(
+    ref: date,
+    sessions: tuple,
+    basis: str = "distance",
+    planned_km: Optional[float] = None,
+    planned_duration_minutes: Optional[int] = None,
+) -> "WeeklyPlan":
+    from training_v2.workout_generator import WeeklyPlan
+    return WeeklyPlan(
+        reference_date=ref,
+        target_basis=basis,
+        planned_km=planned_km,
+        planned_duration_minutes=planned_duration_minutes,
+        session_count=sum(1 for s in sessions if s.workout_type != "rest"),
+        sessions=sessions,
+        allow_intensity=False,
+        reason_codes=("TEST",),
+    )
+
+
+def _make_prescription(
+    day: str,
+    workout_type: str,
+    intensity_class: str,
+    distance_km: Optional[float],
+    duration_minutes: Optional[int],
+) -> "WorkoutPrescription":
+    from training_v2.workout_generator import WorkoutPrescription
+    return WorkoutPrescription(
+        day=day,
+        workout_type=workout_type,
+        intensity_class=intensity_class,
+        distance_km=distance_km,
+        duration_minutes=duration_minutes,
+        reason_codes=("TEST",),
+    )
+
+
+class TestAdapterUnknownDuration:
+    """Verify the UNKNOWN != ZERO doctrine in adapt_weekly_plan_to_legacy.
+
+    TEST 1 — ACTIVE DISTANCE-BASED:    duration_minutes=None → duration=None
+    TEST 2 — ACTIVE DURATION-BASED:    duration_minutes=40   → duration="40min"
+    TEST 3 — REST:                     workout_type=rest      → duration="0min"
+    TEST 4 — LONG EASY DISTANCE-BASED: duration_minutes=None → type="long_run", duration=None
+    """
+
+    def test_active_distance_based_duration_is_none(self):
+        """TEST 1 — ACTIVE DISTANCE-BASED.
+
+        V2: workout_type=easy, distance_km=5.0, duration_minutes=None
+        Attendu API: distance_km=5.0, duration=None, estimated_tss=None
+        """
+        from training_v2.week_plan_adapter import adapt_weekly_plan_to_legacy
+
+        ref = _REF_DATE
+        sessions = tuple([
+            _make_prescription("monday", "easy", "low", distance_km=5.0, duration_minutes=None),
+            _make_prescription("tuesday", "rest", "rest", distance_km=None, duration_minutes=None),
+            _make_prescription("wednesday", "rest", "rest", distance_km=None, duration_minutes=None),
+            _make_prescription("thursday", "rest", "rest", distance_km=None, duration_minutes=None),
+            _make_prescription("friday", "easy", "low", distance_km=5.0, duration_minutes=None),
+            _make_prescription("saturday", "rest", "rest", distance_km=None, duration_minutes=None),
+            _make_prescription("sunday", "rest", "rest", distance_km=None, duration_minutes=None),
+        ])
+        wt = _make_minimal_weekly_target(ref, basis="distance", target_km=10.0)
+        wp = _make_minimal_weekly_plan(ref, sessions, basis="distance", planned_km=10.0)
+        plan = adapt_weekly_plan_to_legacy(wp, wt, "build")
+
+        active = [s for s in plan["sessions"] if s["type"] != "rest"]
+        for s in active:
+            assert s["duration"] is None, (
+                f"ACTIVE DISTANCE-BASED session {s['day']}: expected duration=None, "
+                f"got duration={s['duration']!r} — UNKNOWN must not be coerced to '0min'"
+            )
+            assert s["distance_km"] is not None and s["distance_km"] > 0, (
+                f"Session {s['day']}: distance_km should be preserved"
+            )
+            assert s["estimated_tss"] is None, (
+                f"Session {s['day']}: active session estimated_tss must be None"
+            )
+
+    def test_active_duration_based_duration_is_formatted(self):
+        """TEST 2 — ACTIVE DURATION-BASED.
+
+        V2: workout_type=easy, duration_minutes=40, distance_km=None
+        Attendu API: duration="40min", distance_km=None, estimated_tss=None
+        """
+        from training_v2.week_plan_adapter import adapt_weekly_plan_to_legacy
+
+        ref = _REF_DATE
+        sessions = tuple([
+            _make_prescription("monday", "easy", "low", distance_km=None, duration_minutes=40),
+            _make_prescription("tuesday", "rest", "rest", distance_km=None, duration_minutes=None),
+            _make_prescription("wednesday", "rest", "rest", distance_km=None, duration_minutes=None),
+            _make_prescription("thursday", "easy", "low", distance_km=None, duration_minutes=30),
+            _make_prescription("friday", "rest", "rest", distance_km=None, duration_minutes=None),
+            _make_prescription("saturday", "rest", "rest", distance_km=None, duration_minutes=None),
+            _make_prescription("sunday", "rest", "rest", distance_km=None, duration_minutes=None),
+        ])
+        wt = _make_minimal_weekly_target(ref, basis="duration", target_duration_minutes=70)
+        wp = _make_minimal_weekly_plan(ref, sessions, basis="duration", planned_duration_minutes=70)
+        plan = adapt_weekly_plan_to_legacy(wp, wt, "build")
+
+        monday_session = next(s for s in plan["sessions"] if s["day"] == "monday")
+        assert monday_session["duration"] == "40min", (
+            f"ACTIVE DURATION-BASED session: expected '40min', got {monday_session['duration']!r}"
+        )
+        assert monday_session["distance_km"] is None, (
+            f"duration-based session should have distance_km=None"
+        )
+        assert monday_session["estimated_tss"] is None, (
+            f"active session estimated_tss must be None"
+        )
+
+    def test_rest_duration_is_zero_min(self):
+        """TEST 3 — REST.
+
+        V2: workout_type=rest
+        Attendu API: duration="0min", estimated_tss=0
+        Zero is semantically correct for rest — not a coercion.
+        """
+        from training_v2.week_plan_adapter import adapt_weekly_plan_to_legacy
+
+        ref = _REF_DATE
+        sessions = tuple([
+            _make_prescription("monday", "easy", "low", distance_km=5.0, duration_minutes=None),
+            _make_prescription("tuesday", "rest", "rest", distance_km=None, duration_minutes=None),
+            _make_prescription("wednesday", "rest", "rest", distance_km=None, duration_minutes=None),
+            _make_prescription("thursday", "rest", "rest", distance_km=None, duration_minutes=None),
+            _make_prescription("friday", "rest", "rest", distance_km=None, duration_minutes=None),
+            _make_prescription("saturday", "rest", "rest", distance_km=None, duration_minutes=None),
+            _make_prescription("sunday", "easy", "low", distance_km=5.0, duration_minutes=None),
+        ])
+        wt = _make_minimal_weekly_target(ref, basis="distance", target_km=10.0)
+        wp = _make_minimal_weekly_plan(ref, sessions, basis="distance", planned_km=10.0)
+        plan = adapt_weekly_plan_to_legacy(wp, wt, "build")
+
+        rest_sessions = [s for s in plan["sessions"] if s["type"] == "rest"]
+        assert rest_sessions, "Expected at least one rest session"
+        for s in rest_sessions:
+            assert s["duration"] == "0min", (
+                f"REST session {s['day']}: expected '0min', got {s['duration']!r}"
+            )
+            assert s["estimated_tss"] == 0, (
+                f"REST session {s['day']}: estimated_tss must be 0"
+            )
+
+    def test_long_easy_distance_based_duration_is_none(self):
+        """TEST 4 — LONG EASY DISTANCE-BASED.
+
+        V2: workout_type=long_easy, distance_km=6.0, duration_minutes=None
+        Attendu API: type="long_run", distance_km=6.0 conserved, duration=None
+        """
+        from training_v2.week_plan_adapter import adapt_weekly_plan_to_legacy
+
+        ref = _REF_DATE
+        sessions = tuple([
+            _make_prescription("monday", "easy", "low", distance_km=4.0, duration_minutes=None),
+            _make_prescription("tuesday", "rest", "rest", distance_km=None, duration_minutes=None),
+            _make_prescription("wednesday", "rest", "rest", distance_km=None, duration_minutes=None),
+            _make_prescription("thursday", "rest", "rest", distance_km=None, duration_minutes=None),
+            _make_prescription("friday", "rest", "rest", distance_km=None, duration_minutes=None),
+            _make_prescription("saturday", "rest", "rest", distance_km=None, duration_minutes=None),
+            _make_prescription("sunday", "long_easy", "low", distance_km=6.0, duration_minutes=None),
+        ])
+        wt = _make_minimal_weekly_target(ref, basis="distance", target_km=10.0)
+        wp = _make_minimal_weekly_plan(ref, sessions, basis="distance", planned_km=10.0)
+        plan = adapt_weekly_plan_to_legacy(wp, wt, "build")
+
+        long_run = next((s for s in plan["sessions"] if s["day"] == "sunday"), None)
+        assert long_run is not None, "Expected sunday session"
+        assert long_run["type"] == "long_run", (
+            f"long_easy must map to 'long_run', got {long_run['type']!r}"
+        )
+        assert long_run["distance_km"] == 6.0, (
+            f"distance_km must be conserved exactly: expected 6.0, got {long_run['distance_km']}"
+        )
+        assert long_run["duration"] is None, (
+            f"LONG_EASY DISTANCE-BASED: expected duration=None, "
+            f"got {long_run['duration']!r} — UNKNOWN must not become '0min'"
+        )
