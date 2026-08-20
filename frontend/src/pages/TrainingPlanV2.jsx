@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import { useLanguage } from "@/context/LanguageContext";
 import { useSubscription } from "@/context/SubscriptionContext";
@@ -50,13 +50,16 @@ export default function TrainingPlanV2() {
   const [refreshing, setRefreshing] = useState(false);
   const [apiError, setApiError] = useState(null);
   const [weekPayload, setWeekPayload] = useState(null);
+  const isMountedRef = useRef(true);
 
   const fetchWeek = useCallback(async () => {
     try {
       const res = await axios.get(`${API}/training/v2/week`);
+      if (!isMountedRef.current) return;
       setWeekPayload(res.data);
       setApiError(null);
     } catch (err) {
+      if (!isMountedRef.current) return;
       if (err.response?.status === 403 && err.response?.data?.error === "subscription_required") {
         setApiError("subscription_required");
         return;
@@ -64,13 +67,18 @@ export default function TrainingPlanV2() {
       setApiError(err.response?.data?.detail || t("trainingPlanExtended.loadingError"));
       toast.error(t("trainingPlanExtended.loadingError"));
     } finally {
+      if (!isMountedRef.current) return;
       setLoading(false);
       setRefreshing(false);
     }
   }, [t]);
 
   useEffect(() => {
+    isMountedRef.current = true;
     fetchWeek();
+    return () => {
+      isMountedRef.current = false;
+    };
   }, [fetchWeek]);
 
   const sessions = weekPayload?.week?.sessions || [];
@@ -199,13 +207,13 @@ export default function TrainingPlanV2() {
         </div>
 
         <div className="space-y-2">
-          {sessions.map((session) => {
+          {sessions.map((session, idx) => {
             const style = SESSION_STYLES[session.workout_type] || SESSION_STYLES.easy;
             const translatedType = t(`trainingPlanSessionType.${typeTranslationKey(session.workout_type)}`);
             const workoutLabel = translatedType.startsWith("[[") ? fallbackLabel(session.workout_type) : translatedType;
             const dayLabel = t(`trainingPlanDays.${session.day}`);
             const safeDayLabel = dayLabel.startsWith("[[") ? fallbackLabel(session.day) : dayLabel;
-            const sessionKey = `${session.day}-${session.workout_type}-${session.intensity_class}-${(session.reason_codes || []).join("-")}`;
+            const sessionKey = `${session.day}-${session.workout_type}-${session.intensity_class}-${(session.reason_codes || []).join("-")}-${idx}`;
 
             return (
               <div key={sessionKey} className="flex items-center gap-2 p-3 rounded-lg" style={{ background: style.bg, border: `1px solid ${style.border}` }}>
