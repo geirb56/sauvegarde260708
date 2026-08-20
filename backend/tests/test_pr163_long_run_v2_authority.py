@@ -345,3 +345,231 @@ class TestContextTransport:
             assert lr["distance_km"] == 0, (
                 f"Without long_run_km_v2, long_run distance should be 0, got {lr['distance_km']}"
             )
+
+
+# ---------------------------------------------------------------------------
+# PR163 deduplication tests (A–F pipeline invariant suite)
+# ---------------------------------------------------------------------------
+
+
+class TestPipelineUnique:
+    """A — Prove that the runtime bridge has exactly ONE construction site for
+    each core builder.  AST scan on the source of week_plan_bridge, excluding
+    helper / test code outside the module.
+    """
+
+    def _bridge_source(self) -> str:
+        return (_BACKEND / "training_v2" / "week_plan_bridge.py").read_text()
+
+    def _runtime_call_count(self, source: str, func_name: str) -> int:
+        """Count Call nodes whose function is ``func_name`` in the AST."""
+        tree = ast.parse(source)
+        count = 0
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                func = node.func
+                name = func.id if isinstance(func, ast.Name) else (
+                    func.attr if isinstance(func, ast.Attribute) else None
+                )
+                if name == func_name:
+                    count += 1
+        return count
+
+    def test_single_build_training_history(self):
+        src = self._bridge_source()
+        assert self._runtime_call_count(src, "build_training_history") == 1
+
+    def test_single_build_training_load(self):
+        src = self._bridge_source()
+        assert self._runtime_call_count(src, "build_training_load") == 1
+
+    def test_single_build_runner_profile(self):
+        src = self._bridge_source()
+        assert self._runtime_call_count(src, "build_runner_profile") == 1
+
+    def test_single_build_training_state(self):
+        src = self._bridge_source()
+        assert self._runtime_call_count(src, "build_training_state") == 1
+
+    def test_single_build_plan_goal(self):
+        src = self._bridge_source()
+        assert self._runtime_call_count(src, "build_plan_goal") == 1
+
+    def test_single_build_periodization(self):
+        src = self._bridge_source()
+        assert self._runtime_call_count(src, "build_periodization") == 2, (
+            "build_periodization is called inside a single if/else — 2 calls expected (one branch each)"
+        )
+
+    def test_single_build_weekly_target(self):
+        src = self._bridge_source()
+        assert self._runtime_call_count(src, "build_weekly_target") == 1
+
+
+class TestWeeklyTargetIdentical:
+    """B — build_weekly_target_from_workouts and build_weekly_plan_from_workouts[0]
+    must return the SAME WeeklyTarget for identical inputs.
+    """
+
+    def _call_both(self, **kwargs):
+        from training_v2.week_plan_bridge import (
+            build_weekly_plan_from_workouts,
+            build_weekly_target_from_workouts,
+        )
+        target_only = build_weekly_target_from_workouts(**kwargs)
+        target_from_plan, _ = build_weekly_plan_from_workouts(**kwargs)
+        return target_only, target_from_plan
+
+    def test_identity_marathon_normal(self):
+        a, b = self._call_both(
+            workouts=_make_workouts(km_per_week=50, ref=REF_DATE),
+            goal_type="MARATHON",
+            reference_date=REF_DATE,
+        )
+        assert a == b
+
+    def test_identity_semi_low_volume(self):
+        a, b = self._call_both(
+            workouts=_make_workouts(km_per_week=20, ref=REF_DATE),
+            goal_type="SEMI",
+            reference_date=REF_DATE,
+        )
+        assert a == b
+
+    def test_identity_duration_based(self):
+        """Duration-based path (empty workouts) must still be identical."""
+        a, b = self._call_both(
+            workouts=[],
+            goal_type="MARATHON",
+            reference_date=REF_DATE,
+        )
+        assert a == b
+
+
+class TestReferenceDateDeterminism:
+    """C — Same inputs + same reference_date → same target + same plan."""
+
+    def test_deterministic_same_ref(self):
+        from training_v2.week_plan_bridge import build_weekly_plan_from_workouts
+        kwargs = dict(
+            workouts=_make_workouts(km_per_week=40, ref=REF_DATE),
+            goal_type="MARATHON",
+            reference_date=REF_DATE,
+        )
+        wt1, wp1 = build_weekly_plan_from_workouts(**kwargs)
+        wt2, wp2 = build_weekly_plan_from_workouts(**kwargs)
+        assert wt1 == wt2
+        # Plans should also be equal (same sessions list)
+        assert len(wp1.sessions) == len(wp2.sessions)
+        for s1, s2 in zip(wp1.sessions, wp2.sessions):
+            assert s1.workout_type == s2.workout_type
+            assert s1.distance_km == s2.distance_km
+
+    def test_different_ref_may_differ(self):
+        """Different reference_date with same workouts: targets are allowed to differ
+        (just ensuring no crash and that the pipeline runs cleanly)."""
+        from training_v2.week_plan_bridge import build_weekly_target_from_workouts
+        other_ref = date(2025, 6, 16)
+        wts = []
+        for ref in (REF_DATE, other_ref):
+            wts.append(build_weekly_target_from_workouts(
+                workouts=_make_workouts(km_per_week=40, ref=ref),
+                goal_type="MARATHON",
+                reference_date=ref,
+            ))
+        # Both must be valid WeeklyTarget objects (no exception)
+        from training_v2.weekly_target import WeeklyTarget
+        for wt in wts:
+            assert isinstance(wt, WeeklyTarget)
+
+
+class TestRaceGoalBothAPIs:
+    """D — Race goal with future race_date: both APIs produce the SAME WeeklyTarget."""
+
+    def test_race_goal_targets_equal(self):
+        from training_v2.week_plan_bridge import (
+            build_weekly_plan_from_workouts,
+            build_weekly_target_from_workouts,
+        )
+        race = date(2025, 11, 2)
+        cycle_start = date(2025, 6, 2)
+        kwargs = dict(
+            workouts=_make_workouts(km_per_week=50, ref=REF_DATE),
+            goal_type="MARATHON",
+            race_date=race,
+            cycle_start_date=cycle_start,
+            reference_date=REF_DATE,
+        )
+        a = build_weekly_target_from_workouts(**kwargs)
+        b, _ = build_weekly_plan_from_workouts(**kwargs)
+        assert a == b
+
+
+class TestMaintenanceGoalBothAPIs:
+    """E — Maintenance/no-race goal: both APIs produce the SAME WeeklyTarget."""
+
+    def test_maintenance_targets_equal(self):
+        from training_v2.week_plan_bridge import (
+            build_weekly_plan_from_workouts,
+            build_weekly_target_from_workouts,
+        )
+        kwargs = dict(
+            workouts=_make_workouts(km_per_week=30, ref=REF_DATE),
+            goal_type="MAINTENANCE",
+            reference_date=REF_DATE,
+        )
+        a = build_weekly_target_from_workouts(**kwargs)
+        b, _ = build_weekly_plan_from_workouts(**kwargs)
+        assert a == b
+
+
+class TestUnknownGoalBothAPIs:
+    """F — Both APIs must raise the SAME UnknownGoalTypeError for an unknown goal."""
+
+    def test_target_raises_unknown_goal(self):
+        from training_v2.week_plan_bridge import (
+            UnknownGoalTypeError,
+            build_weekly_target_from_workouts,
+        )
+        with pytest.raises(UnknownGoalTypeError):
+            build_weekly_target_from_workouts(
+                workouts=[],
+                goal_type="TRIATHLON",
+                reference_date=REF_DATE,
+            )
+
+    def test_plan_raises_unknown_goal(self):
+        from training_v2.week_plan_bridge import (
+            UnknownGoalTypeError,
+            build_weekly_plan_from_workouts,
+        )
+        with pytest.raises(UnknownGoalTypeError):
+            build_weekly_plan_from_workouts(
+                workouts=[],
+                goal_type="TRIATHLON",
+                reference_date=REF_DATE,
+            )
+
+    def test_same_error_type(self):
+        """Both APIs must raise exactly UnknownGoalTypeError — not two different types."""
+        from training_v2.week_plan_bridge import (
+            UnknownGoalTypeError,
+            build_weekly_plan_from_workouts,
+            build_weekly_target_from_workouts,
+        )
+        exc_target = exc_plan = None
+        try:
+            build_weekly_target_from_workouts(
+                workouts=[], goal_type="BAD_GOAL", reference_date=REF_DATE
+            )
+        except UnknownGoalTypeError as e:
+            exc_target = e
+        try:
+            build_weekly_plan_from_workouts(
+                workouts=[], goal_type="BAD_GOAL", reference_date=REF_DATE
+            )
+        except UnknownGoalTypeError as e:
+            exc_plan = e
+        assert exc_target is not None, "build_weekly_target_from_workouts did not raise"
+        assert exc_plan is not None, "build_weekly_plan_from_workouts did not raise"
+        assert type(exc_target) is type(exc_plan)

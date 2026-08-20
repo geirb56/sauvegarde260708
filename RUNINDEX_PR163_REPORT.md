@@ -178,3 +178,88 @@ Aucun consumer RUNTIME restant dans `generate_cycle_week` ou `generate_full_cycl
 |---|---|
 | Supprimer la définition legacy `compute_long_run_km` dans `training_engine.py` si plus aucun test/doc ne s'y réfère | PR164 (nettoyage) |
 | Migrer `/training/full-cycle` pour utiliser WorkoutGenerator V2 (utilise encore `compute_target_km` legacy) | Hors scope PR163 |
+
+---
+
+## DUPLICATION_AUDIT
+
+### PIPELINE_DUPLICATED_BEFORE_FIX = YES
+
+Avant la correction, `build_weekly_target_from_workouts` et `build_weekly_plan_from_workouts`
+dupliquaient chacun la chaîne complète :
+
+```
+goal mapping → activities → training_history → training_load
+→ runner_profile → training_state → plan_goal
+→ periodization (if/else race_date) → weekly_target
+```
+
+Deux pipelines indépendants, susceptibles de diverger sur reference_date, PlanGoal, Periodization,
+RunnerProfile, WeeklyTarget.
+
+### PIPELINE_DUPLICATED_AFTER_FIX = NO
+
+Après correction, un seul helper interne canonique contient l'intégralité de la chaîne.
+
+### COMMON_INTERNAL_BUILDER = `_build_weekly_context_from_workouts`
+
+Retourne un `_WeeklyBuildContext(frozen=True)` contenant :
+
+| Champ | Type |
+|---|---|
+| `weekly_target` | `WeeklyTarget` |
+| `runner_profile` | `RunnerProfile` |
+| `plan_goal` | `PlanGoal` |
+| `periodization` | `PeriodizationSnapshot` |
+
+Les deux API publiques deviennent :
+
+```python
+# build_weekly_target_from_workouts
+ctx = _build_weekly_context_from_workouts(...)
+return ctx.weekly_target
+
+# build_weekly_plan_from_workouts
+ctx = _build_weekly_context_from_workouts(...)
+weekly_plan = build_weekly_plan(weekly_target=ctx.weekly_target, ...)
+return ctx.weekly_target, weekly_plan
+```
+
+### Scan post-correction (week_plan_bridge.py runtime calls)
+
+| Builder | Appels runtime | Attendu |
+|---|---|---|
+| `build_training_history` | 1 | 1 ✅ |
+| `build_training_load` | 1 | 1 ✅ |
+| `build_runner_profile` | 1 | 1 ✅ |
+| `build_training_state` | 1 | 1 ✅ |
+| `build_plan_goal` | 1 | 1 ✅ |
+| `build_periodization` | 2 (if/else) | 2 ✅ |
+| `build_weekly_target` | 1 | 1 ✅ |
+
+### Invariant testé
+
+`build_weekly_target_from_workouts(...)` == `build_weekly_plan_from_workouts(...)[0]`
+pour les mêmes inputs : **vérifié par TestWeeklyTargetIdentical (3 cas)**.
+
+### Tests ajoutés
+
+| Classe | Tests | Objectif |
+|---|---|---|
+| `TestPipelineUnique` | 7 | Scan AST — un seul site de construction par builder |
+| `TestWeeklyTargetIdentical` | 3 | Les deux APIs retournent le même WeeklyTarget |
+| `TestReferenceDateDeterminism` | 2 | Même reference_date → même résultat |
+| `TestRaceGoalBothAPIs` | 1 | race_date future : targets identiques |
+| `TestMaintenanceGoalBothAPIs` | 1 | Maintenance/no-race : targets identiques |
+| `TestUnknownGoalBothAPIs` | 3 | Les deux APIs lèvent UnknownGoalTypeError |
+
+Total nouveaux tests : **17** (portant le total à 33).
+
+### Résultat final
+
+```
+tests/test_pr163_long_run_v2_authority.py   33 passed
+tests/test_workout_generator_v2.py         119 passed
+tests/test_pr149_week_plan_v2.py            12 passed
+Total relevant                             164 passed, 0 failed
+```
