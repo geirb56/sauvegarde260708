@@ -3,6 +3,17 @@
 ## Problem Statement
 Pull https://github.com/geirb56/sauvegarde260629 and set it up so it runs. Replace /app contents.
 
+## 2026-08-19 — Pull copilot/dev (PR #165) — WeeklyPlan V2 = autorité UNIQUE du week-plan — MERGÉ, runtime OK, test-drift résiduel
+- Fetch copilot/dev (be2b7ac→81eaa2d). Merge ORT propre, 0 conflit. .env intacts. Backend+worker+FRONTEND redémarrés.
+- PR #165 = suppression de la double autorité de prescription: WeeklyPlan V2 (nouveau training_v2/week_plan_adapter.py) devient la SOURCE UNIQUE de /training/week-plan (generate_cycle_week retiré du chemin week-plan) + "durée inconnue → None (pas 0min)" (UNKNOWN != ZERO) + fix test_pr157 + changements frontend (Dashboard.jsx, TrainingPlan.jsx).
+- Validation RUNTIME: smoke 7/7=200 (incl. week-plan + full-cycle). test_pr157 désormais VERT (corrigé par #165). 208 tests passed.
+- ⚠️ TEST-DRIFT résiduel (NON runtime) introduit/laissé par PR165:
+  1. test_pr155::test_happy_path + test_no_legacy_training_goals_access → ERROR setup: patch('server.generate_cycle_week') échoue car PR165 a retiré generate_cycle_week du chemin week-plan (AttributeError). Tests obsolètes (le week-plan est désormais V2-only, plus de generate_cycle_week).
+  2. test_pr156::test_distances_and_types_preserved → assert distance_km>0 obsolète (inspecte l'ancien chemin generate_cycle_week).
+  Runtime OK (smoke 7/7=200). Correctifs recommandés (PR future): réécrire/retirer test_pr155 (plus de generate_cycle_week dans week-plan) et assouplir test_pr156. NON corrigés (workflow: fixes via PRs utilisateur).
+- État: migration full-cycle/cycle-week V2 aboutie côté week-plan (autorité unique WeeklyPlan V2). Frontend Dashboard/TrainingPlan mis à jour (à valider visuellement).
+
+
 ## 2026-08-19 — Pull copilot/dev (PR #163) — compute_long_run_km retiré (WorkoutGenerator V2 autorité long_easy) — MERGÉ, runtime OK, 2 test-drifts
 - Fetch copilot/dev (068454f→be2b7ac). Merge ORT propre, 0 conflit. .env intacts. Backend+worker redémarrés.
 - PR #163 = suppression de compute_long_run_km de generate_cycle_week (WorkoutGenerator V2 = autorité long_easy, long_run_km_v2 passé via context; None si duration-based, aucun km inventé) + déduplication pipeline week_plan_bridge (_build_weekly_context_from_workouts, appel renommé build_weekly_plan_from_workouts). Dernier gros helper legacy du cycle-week migré.
