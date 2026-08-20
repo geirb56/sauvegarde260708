@@ -145,12 +145,39 @@ Pas de `distance_km` injectée pour les semaines duration-based.
 
 ### Tests passed/failed/skipped/errors
 
+> **INTERMEDIATE / SUPERSEDED** — run obtenu lors d'une étape de développement antérieure.
+> À titre informatif uniquement. Ne pas utiliser comme référence finale.
+
 ```
-tests/test_pr163_long_run_v2_authority.py   16 passed
+tests/test_pr163_long_run_v2_authority.py   16 passed  (avant ajout tests déduplication)
 tests/test_workout_generator_v2.py         119 passed
 tests/test_training_engine_pr2.py           12 passed
 tests/test_dynamic_plan_v2_pr135.py         20 passed
-Total (relevant)                           167 passed, 0 failed
+Total (intermédiaire)                      167 passed, 0 failed
+```
+
+---
+
+### FINAL_TEST_RESULT
+
+Commande exécutée sur HEAD `6e35583` :
+
+```
+PYTHONPATH=backend pytest \
+  tests/test_pr163_long_run_v2_authority.py \
+  tests/test_workout_generator_v2.py \
+  tests/test_pr149_week_plan_v2.py
+```
+
+```
+tests/test_pr163_long_run_v2_authority.py   33 passed
+tests/test_workout_generator_v2.py         119 passed
+tests/test_pr149_week_plan_v2.py            12 passed
+─────────────────────────────────────────────────────
+FINAL                                      164 passed
+                                             0 failed
+                                             0 skipped
+                                             0 errors
 ```
 
 ---
@@ -263,3 +290,21 @@ tests/test_workout_generator_v2.py         119 passed
 tests/test_pr149_week_plan_v2.py            12 passed
 Total relevant                             164 passed, 0 failed
 ```
+
+---
+
+## RECHECK FINAL (HEAD 6e35583)
+
+| Contrôle | Résultat |
+|---|---|
+| `compute_long_run_km` runtime dans `generate_cycle_week` | **0** ✅ |
+| import `_compute_long_run_km` hors `workout_generator.py` | **0** ✅ |
+| pipeline dupliqué dans `week_plan_bridge.py` | **NO** ✅ |
+| builder commun | `_build_weekly_context_from_workouts` ✅ |
+| `WeeklyTarget` égalité entre les 2 APIs | **PASS** ✅ |
+| `reference_date` source unique | **YES** ✅ |
+| TSS doctrine (active=None, rest=0, total=None) | **INCHANGÉE** — `estimated_tss` non migré, cohérent avec doctrine V2 ✅ |
+
+## VERDICT
+
+**READY FOR MERGE INTO copilot/dev**
