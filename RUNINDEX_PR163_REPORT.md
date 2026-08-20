@@ -72,7 +72,7 @@ instanciés à l'intérieur de `build_weekly_target_from_workouts` — il suffis
       → WeeklyTarget V2 + WeeklyPlan V2
       → WeeklyPlan.sessions[long_easy].distance_km → context["long_run_km_v2"]
   → generate_cycle_week(context)
-      → target_long_run = context.get("long_run_km_v2") or 0   ← V2
+      → _v2 = context.get("long_run_km_v2"); target_long_run = _v2 if _v2 is not None else 0   ← V2
       → build long_run session with V2 distance
 ```
 
@@ -124,7 +124,7 @@ _Proportionnel, aucun minimum 16 km._
 
 Pas de `distance_km` injectée pour les semaines duration-based.  
 `long_easy.distance_km` est `None` dans ce cas.  
-`generate_cycle_week` utilise `context.get("long_run_km_v2") or 0` — aucun calcul legacy.
+`generate_cycle_week` utilise `_v2 = context.get("long_run_km_v2"); target_long_run = _v2 if _v2 is not None else 0` — aucun calcul legacy.
 
 ### TSS inchangé = YES ✅
 
@@ -136,10 +136,10 @@ Pas de `distance_km` injectée pour les semaines duration-based.
 
 | Fichier | Nature de la modification |
 |---|---|
-| `backend/training_v2/week_plan_bridge.py` | Ajout `build_weekly_plan_from_workouts` (retourne `WeeklyTarget + WeeklyPlan`) |
+| `backend/training_v2/week_plan_bridge.py` | Ajout `build_weekly_plan_from_workouts` (retourne `WeeklyTarget + WeeklyPlan`) ; factorisation en `_build_weekly_context_from_workouts` + `_WeeklyBuildContext` (PR163 correction duplication) |
 | `backend/server.py` | Remplacement de `build_weekly_target_from_workouts` par `build_weekly_plan_from_workouts` ; extraction `long_run_km_v2` ; injection dans context |
-| `backend/llm_coach.py` | Suppression import `compute_long_run_km` ; `target_long_run = context.get("long_run_km_v2") or 0` |
-| `backend/tests/test_pr163_long_run_v2_authority.py` | 16 tests métier + non-duplication + transport context |
+| `backend/llm_coach.py` | Suppression import `compute_long_run_km` ; `_v2 = context.get("long_run_km_v2"); target_long_run = _v2 if _v2 is not None else 0` |
+| `backend/tests/test_pr163_long_run_v2_authority.py` | 16 tests métier + non-duplication + transport context + 17 tests déduplication (pipeline unique, identité, determinisme, race/maintenance/unknown) = 33 tests total |
 
 ---
 
