@@ -47,9 +47,12 @@ if _BACKEND_DIR not in sys.path:
 # Helpers
 # ---------------------------------------------------------------------------
 
+_REF_DATE = date(2024, 6, 10)
+
+
 def _make_workouts(n: int = 0, km_per_session: float = 8.0) -> list[dict]:
     """Generate synthetic workout documents for the last n*7 days."""
-    ref = date(2024, 6, 10)
+    ref = _REF_DATE
     workouts = []
     for i in range(n):
         d = ref - timedelta(days=i * 7 + 3)
@@ -62,13 +65,111 @@ def _make_workouts(n: int = 0, km_per_session: float = 8.0) -> list[dict]:
     return workouts
 
 
+def _make_workouts_deep_reprise_trained() -> list[dict]:
+    """Fixture for deep_reprise with a former trained runner (Option A).
+
+    All activities fall in the prior window (days_ago in [28, 41]) so
+    days_since_last_run == 29 >= 28 → deep_reprise.
+
+    5 runs × 16 km = 80 km in 2 weeks → prior_km = 40 km/week (= TRAINED cap).
+    _interpolate_deep_reprise_minutes(40) → DEEP_REPRISE_WEEKLY_MINUTES_TRAINED = 135.
+    active_weeks = 0 (no activity in last 28 days) → no progression multiplier.
+    Deterministic result: target_duration_minutes = 135.
+    """
+    ref = _REF_DATE
+    # days_ago 29-41 all fall in [28, 41] inclusive — the prior_running_window.
+    prior_dates = [ref - timedelta(days=d) for d in [41, 38, 35, 32, 29]]
+    return [
+        {
+            "distance_km": 16.0,
+            "duration_minutes": 80,
+            "date": d.isoformat(),
+            "activity_type": "running",
+        }
+        for d in prior_dates
+    ]
+
+
+def _make_workouts_partial_reprise_distance() -> list[dict]:
+    """Fixture for partial_reprise + distance-based target (Option A).
+
+    History:
+      5 runs × 10 km at days_ago 21, 17, 14, 11, 8 (inside 28d, outside 7d).
+      1 run  ×  4 km at days_ago  3             (inside 7d).
+
+    30d total = 54 km → typical_weekly_km = 54 * 7 / 30 ≈ 12.6 km (observed).
+    7d total  =  4 km → recent_weekly_km  =  4 km.
+    4 < 50 % × 12.6 = 6.3 → continuity_state = "partial_reprise".
+
+    28d buckets: [4, 20, 20, 10] → chronic = 13.5 km.
+    _target_partial_reprise: base = min(4, 13.5) = 4 km.
+    proposed = 4 × 1.10 = 4.4 km → target_km = 4.4 (build phase multiplier = 1.0).
+    """
+    ref = _REF_DATE
+    bigger = [
+        {
+            "distance_km": 10.0,
+            "duration_minutes": 60,
+            "date": (ref - timedelta(days=d)).isoformat(),
+            "activity_type": "running",
+        }
+        for d in [21, 17, 14, 11, 8]
+    ]
+    small = [
+        {
+            "distance_km": 4.0,
+            "duration_minutes": 25,
+            "date": (ref - timedelta(days=3)).isoformat(),
+            "activity_type": "running",
+        }
+    ]
+    return bigger + small
+
+
+def _build_v2_context():
+    """Build minimal V2 objects for Option B tests (direct WeeklyTarget construction).
+
+    Returns (runner_profile, plan_goal, periodization, reference_date) built from
+    an empty history — the only valid way to wire build_weekly_plan without
+    depending on a particular continuity state.
+    """
+    from training_v2.runner_profile import build_runner_profile
+    from training_v2.training_history import build_training_history
+    from training_v2.training_load import build_training_load
+    from training_v2.plan_goal import build_plan_goal, GoalType
+    from training_v2.periodization import build_periodization
+
+    ref = _REF_DATE
+    training_history = build_training_history([], ref)
+    training_load = build_training_load([], ref)
+    runner_profile = build_runner_profile(
+        training_history=training_history,
+        training_load=training_load,
+        user_profile=None,
+        capabilities=None,
+        physiological_metrics=None,
+        reference_date=ref,
+    )
+    plan_goal = build_plan_goal(
+        goal_type=GoalType.half_marathon,
+        race_date=None,
+        created_from="user",
+    )
+    periodization = build_periodization(
+        plan_goal=plan_goal,
+        reference_date=ref,
+        cycle_anchor_date=ref - timedelta(weeks=4),
+    )
+    return runner_profile, plan_goal, periodization, ref
+
+
 def _run_bridge(
     workouts: list[dict],
     goal_type: str = "SEMI",
     reference_date: Optional[date] = None,
 ) -> tuple:
     from training_v2.week_plan_bridge import build_weekly_plan_from_workouts
-    ref = reference_date or date(2024, 6, 10)
+    ref = reference_date or _REF_DATE
     return build_weekly_plan_from_workouts(
         workouts=workouts,
         goal_type=goal_type,
@@ -219,35 +320,62 @@ class TestContractA:
 # ---------------------------------------------------------------------------
 
 class TestContractB:
-    """B: deep_reprise duration — sum(duration_minutes) == target_duration_minutes."""
+    """B: deep_reprise duration — trained runner — sum(duration_minutes) == target_duration_minutes.
 
-    def test_deep_reprise_duration_conserved(self):
-        # No history → deep_reprise
-        workouts = _make_workouts(0)
+    Fixture: _make_workouts_deep_reprise_trained → 5 × 16 km in prior window (days 29-41 ago).
+    prior_km = 40 km/week → TRAINED level → target_duration_minutes = 135.
+    No active weeks in last 28d → no progression → result is deterministic.
+    """
+
+    def test_deep_reprise_trained_state(self):
+        """Pipeline must classify the trained-runner fixture as deep_reprise."""
+        workouts = _make_workouts_deep_reprise_trained()
+        wt, _ = _run_bridge(workouts)
+        assert wt.continuity_state == "deep_reprise", (
+            f"Expected deep_reprise, got continuity_state={wt.continuity_state}"
+        )
+
+    def test_deep_reprise_trained_basis_is_duration(self):
+        """deep_reprise target_basis must be 'duration'."""
+        workouts = _make_workouts_deep_reprise_trained()
         wt, wp = _run_bridge(workouts)
-        if wt.continuity_state != "deep_reprise":
-            pytest.skip(f"continuity_state={wt.continuity_state}, not deep_reprise")
-        if wp.target_basis != "duration":
-            pytest.skip("not duration-based for deep_reprise fixture")
+        assert wt.target_basis == "duration", (
+            f"Expected target_basis=duration, got {wt.target_basis}"
+        )
+        assert wp.target_basis == "duration", (
+            f"WeeklyPlan target_basis mismatch: {wp.target_basis}"
+        )
+
+    def test_deep_reprise_trained_duration_conserved(self):
+        """sum(active session durations) == target_duration_minutes == 135."""
+        workouts = _make_workouts_deep_reprise_trained()
+        wt, wp = _run_bridge(workouts)
+        assert wt.continuity_state == "deep_reprise"
+        assert wt.target_basis == "duration"
 
         plan = _adapt(workouts)
         active = _active_sessions(plan)
-        # duration field is "Xmin" string — parse it
         total_min = sum(int(s["duration"].replace("min", "") or "0") for s in active)
+
+        assert wt.target_duration_minutes == 135, (
+            f"Expected target_duration_minutes=135 (TRAINED level), got {wt.target_duration_minutes}"
+        )
+        assert wp.planned_duration_minutes == wt.target_duration_minutes, (
+            f"WeeklyPlan planned_duration_minutes={wp.planned_duration_minutes} "
+            f"!= WeeklyTarget {wt.target_duration_minutes}"
+        )
         assert total_min == wt.target_duration_minutes, (
-            f"sum(duration)={total_min} != target_duration_minutes={wt.target_duration_minutes}"
+            f"API sum(duration)={total_min} != target_duration_minutes={wt.target_duration_minutes}"
         )
 
     def test_deep_reprise_no_artificial_km(self):
-        """Duration-based deep_reprise must not invent km (weekly_km may be None)."""
-        workouts = _make_workouts(0)
+        """Duration-based deep_reprise must not produce weekly_km in the adapter output."""
+        workouts = _make_workouts_deep_reprise_trained()
         wt, wp = _run_bridge(workouts)
-        if wt.continuity_state != "deep_reprise":
-            pytest.skip(f"continuity_state={wt.continuity_state}, not deep_reprise")
+        assert wt.continuity_state == "deep_reprise"
         plan = _adapt(workouts)
-        # planned_km should be None for duration-based
-        assert plan["weekly_km"] is None or plan["target_basis"] == "duration", (
-            "duration-based deep_reprise must not set weekly_km"
+        assert plan["weekly_km"] is None, (
+            f"duration-based deep_reprise must not set weekly_km, got {plan['weekly_km']}"
         )
 
 
@@ -256,21 +384,57 @@ class TestContractB:
 # ---------------------------------------------------------------------------
 
 class TestContractC:
-    """C: partial_reprise distance — sum(distance_km) ≈ target_km."""
+    """C: partial_reprise distance — sum(distance_km) ≈ target_km.
+
+    Fixture: _make_workouts_partial_reprise_distance.
+    continuity_state = partial_reprise, target_basis = distance, target_km = 4.4 km.
+    """
+
+    def test_partial_reprise_distance_state(self):
+        """Pipeline must classify the fixture as partial_reprise."""
+        workouts = _make_workouts_partial_reprise_distance()
+        wt, _ = _run_bridge(workouts)
+        assert wt.continuity_state == "partial_reprise", (
+            f"Expected partial_reprise, got {wt.continuity_state}"
+        )
+
+    def test_partial_reprise_distance_basis(self):
+        """Target basis must be 'distance' for this fixture."""
+        workouts = _make_workouts_partial_reprise_distance()
+        wt, wp = _run_bridge(workouts)
+        assert wt.target_basis == "distance", (
+            f"Expected target_basis=distance, got {wt.target_basis}"
+        )
+        assert wp.target_basis == "distance", (
+            f"WeeklyPlan target_basis={wp.target_basis}"
+        )
 
     def test_partial_reprise_distance_conserved(self):
-        # Sparse history → may produce partial_reprise
-        workouts = _make_workouts(2, km_per_session=15.0)
+        """sum(active session distance_km) == planned_km == target_km."""
+        workouts = _make_workouts_partial_reprise_distance()
         wt, wp = _run_bridge(workouts)
-        if wt.continuity_state != "partial_reprise" or wp.target_basis != "distance":
-            pytest.skip(
-                f"continuity_state={wt.continuity_state}, basis={wp.target_basis} — need partial_reprise+distance"
-            )
+        assert wt.continuity_state == "partial_reprise"
+        assert wt.target_basis == "distance"
+
         plan = _adapt(workouts)
         active = _active_sessions(plan)
         total_km = round(sum(s["distance_km"] or 0 for s in active), 1)
+
         assert abs(total_km - (wp.planned_km or 0)) <= 0.15, (
             f"sum(distance_km)={total_km} != planned_km={wp.planned_km}"
+        )
+        assert abs(total_km - (wt.target_km or 0)) <= 0.15, (
+            f"API sum={total_km} != target_km={wt.target_km}"
+        )
+
+    def test_partial_reprise_distance_no_invented_minutes(self):
+        """Distance-based partial_reprise: weekly_minutes must be None in adapter output."""
+        workouts = _make_workouts_partial_reprise_distance()
+        wt, _ = _run_bridge(workouts)
+        assert wt.target_basis == "distance"
+        plan = _adapt(workouts)
+        assert plan["weekly_minutes"] is None or plan.get("weekly_km") is not None, (
+            "distance-based partial_reprise must not produce weekly_minutes"
         )
 
 
@@ -279,20 +443,87 @@ class TestContractC:
 # ---------------------------------------------------------------------------
 
 class TestContractD:
-    """D: partial_reprise duration — sum(duration_minutes) == target_duration_minutes."""
+    """D: partial_reprise duration — sum(duration_minutes) == target_duration_minutes.
+
+    Option B: WeeklyTarget is constructed directly with the required continuity_state
+    and target_basis. This is necessary because the pipeline cannot produce
+    partial_reprise + duration through a workout fixture: whenever days_since < 28
+    (required to avoid deep_reprise), the 28d buckets contain activity, so
+    _target_partial_reprise always returns a distance-based target.
+
+    The contract under test is the *adapter + plan* layer, not the heuristic that
+    selects partial_reprise duration — that heuristic is covered by weekly_target tests.
+    """
 
     def test_partial_reprise_duration_conserved(self):
-        workouts = _make_workouts(1, km_per_session=5.0)
-        wt, wp = _run_bridge(workouts)
-        if wt.continuity_state != "partial_reprise" or wp.target_basis != "duration":
-            pytest.skip(
-                f"continuity_state={wt.continuity_state}, basis={wp.target_basis} — need partial_reprise+duration"
-            )
-        plan = _adapt(workouts)
+        """sum(active session durations) == planned_duration_minutes == target (120 min)."""
+        from training_v2.weekly_target import WeeklyTarget
+        from training_v2.workout_generator import build_weekly_plan
+        from training_v2.week_plan_adapter import adapt_weekly_plan_to_legacy
+
+        runner_profile, plan_goal, periodization, ref = _build_v2_context()
+
+        wt = WeeklyTarget(
+            reference_date=ref,
+            target_basis="duration",
+            target_km=None,
+            target_duration_minutes=120,
+            target_sessions=3,
+            allow_intensity=False,
+            confidence="low",
+            continuity_state="partial_reprise",
+            reason_codes=("PARTIAL_REPRISE_DURATION_FALLBACK", "LOAD_UNAVAILABLE"),
+        )
+        wp = build_weekly_plan(
+            weekly_target=wt,
+            runner_profile=runner_profile,
+            plan_goal=plan_goal,
+            periodization=periodization,
+            reference_date=ref,
+        )
+        plan = adapt_weekly_plan_to_legacy(wp, wt, "build")
         active = _active_sessions(plan)
         total_min = sum(int(s["duration"].replace("min", "") or "0") for s in active)
+
+        assert wt.continuity_state == "partial_reprise"
+        assert wt.target_basis == "duration"
+        assert wp.planned_duration_minutes == wt.target_duration_minutes, (
+            f"WeeklyPlan planned_duration_minutes={wp.planned_duration_minutes} "
+            f"!= {wt.target_duration_minutes}"
+        )
         assert total_min == wt.target_duration_minutes, (
-            f"sum(duration)={total_min} != target_duration_minutes={wt.target_duration_minutes}"
+            f"API sum(duration)={total_min} != target_duration_minutes={wt.target_duration_minutes}"
+        )
+
+    def test_partial_reprise_duration_no_invented_km(self):
+        """Duration-based partial_reprise: weekly_km must be None (no invented distance)."""
+        from training_v2.weekly_target import WeeklyTarget
+        from training_v2.workout_generator import build_weekly_plan
+        from training_v2.week_plan_adapter import adapt_weekly_plan_to_legacy
+
+        runner_profile, plan_goal, periodization, ref = _build_v2_context()
+
+        wt = WeeklyTarget(
+            reference_date=ref,
+            target_basis="duration",
+            target_km=None,
+            target_duration_minutes=120,
+            target_sessions=3,
+            allow_intensity=False,
+            confidence="low",
+            continuity_state="partial_reprise",
+            reason_codes=("PARTIAL_REPRISE_DURATION_FALLBACK", "LOAD_UNAVAILABLE"),
+        )
+        wp = build_weekly_plan(
+            weekly_target=wt,
+            runner_profile=runner_profile,
+            plan_goal=plan_goal,
+            periodization=periodization,
+            reference_date=ref,
+        )
+        plan = adapt_weekly_plan_to_legacy(wp, wt, "build")
+        assert plan["weekly_km"] is None, (
+            f"duration-based partial_reprise must not set weekly_km, got {plan['weekly_km']}"
         )
 
 
@@ -321,6 +552,128 @@ class TestContractE:
         # weekly_km must be None for duration-based weeks
         assert plan["weekly_km"] is None, (
             f"duration-based plan must not set weekly_km, got {plan['weekly_km']}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Contract F — normal duration fallback
+# ---------------------------------------------------------------------------
+
+class TestContractF:
+    """F: normal continuity state with duration-based target fallback.
+
+    Option B: WeeklyTarget constructed directly with continuity_state="normal"
+    and target_basis="duration". This proves that the adapter / plan routing
+    depends on target_basis, not on a proxy derived from training_state.
+
+    The NORMAL_NO_BASELINE_DURATION_FALLBACK path in _target_normal is
+    exercised by WeeklyTarget tests; here we test the contract that flows
+    downstream from it.
+    """
+
+    def test_normal_duration_fallback_basis(self):
+        """WeeklyPlan.target_basis must mirror WeeklyTarget.target_basis = 'duration'."""
+        from training_v2.weekly_target import WeeklyTarget
+        from training_v2.workout_generator import build_weekly_plan
+
+        runner_profile, plan_goal, periodization, ref = _build_v2_context()
+
+        wt = WeeklyTarget(
+            reference_date=ref,
+            target_basis="duration",
+            target_km=None,
+            target_duration_minutes=120,
+            target_sessions=3,
+            allow_intensity=True,
+            confidence="low",
+            continuity_state="normal",
+            reason_codes=("NORMAL_NO_BASELINE_DURATION_FALLBACK", "LOAD_UNAVAILABLE"),
+        )
+        wp = build_weekly_plan(
+            weekly_target=wt,
+            runner_profile=runner_profile,
+            plan_goal=plan_goal,
+            periodization=periodization,
+            reference_date=ref,
+        )
+
+        assert wt.continuity_state == "normal"
+        assert wt.target_basis == "duration"
+        assert wp.target_basis == "duration", (
+            f"WeeklyPlan.target_basis={wp.target_basis}, expected duration"
+        )
+
+    def test_normal_duration_fallback_conserved(self):
+        """sum(active session durations) == planned_duration_minutes == target (120 min)."""
+        from training_v2.weekly_target import WeeklyTarget
+        from training_v2.workout_generator import build_weekly_plan
+        from training_v2.week_plan_adapter import adapt_weekly_plan_to_legacy
+
+        runner_profile, plan_goal, periodization, ref = _build_v2_context()
+
+        wt = WeeklyTarget(
+            reference_date=ref,
+            target_basis="duration",
+            target_km=None,
+            target_duration_minutes=120,
+            target_sessions=3,
+            allow_intensity=True,
+            confidence="low",
+            continuity_state="normal",
+            reason_codes=("NORMAL_NO_BASELINE_DURATION_FALLBACK", "LOAD_UNAVAILABLE"),
+        )
+        wp = build_weekly_plan(
+            weekly_target=wt,
+            runner_profile=runner_profile,
+            plan_goal=plan_goal,
+            periodization=periodization,
+            reference_date=ref,
+        )
+        plan = adapt_weekly_plan_to_legacy(wp, wt, "build")
+        active = _active_sessions(plan)
+        total_min = sum(int(s["duration"].replace("min", "") or "0") for s in active)
+
+        assert wp.planned_duration_minutes == wt.target_duration_minutes, (
+            f"WeeklyPlan planned_duration_minutes={wp.planned_duration_minutes} "
+            f"!= {wt.target_duration_minutes}"
+        )
+        assert total_min == wt.target_duration_minutes, (
+            f"API sum(duration)={total_min} != target_duration_minutes={wt.target_duration_minutes}"
+        )
+
+    def test_normal_duration_fallback_adapter_fields(self):
+        """Adapter must set weekly_minutes and must NOT invent weekly_km."""
+        from training_v2.weekly_target import WeeklyTarget
+        from training_v2.workout_generator import build_weekly_plan
+        from training_v2.week_plan_adapter import adapt_weekly_plan_to_legacy
+
+        runner_profile, plan_goal, periodization, ref = _build_v2_context()
+
+        wt = WeeklyTarget(
+            reference_date=ref,
+            target_basis="duration",
+            target_km=None,
+            target_duration_minutes=120,
+            target_sessions=3,
+            allow_intensity=True,
+            confidence="low",
+            continuity_state="normal",
+            reason_codes=("NORMAL_NO_BASELINE_DURATION_FALLBACK", "LOAD_UNAVAILABLE"),
+        )
+        wp = build_weekly_plan(
+            weekly_target=wt,
+            runner_profile=runner_profile,
+            plan_goal=plan_goal,
+            periodization=periodization,
+            reference_date=ref,
+        )
+        plan = adapt_weekly_plan_to_legacy(wp, wt, "build")
+
+        assert plan.get("target_basis") == "duration", (
+            f"adapter plan['target_basis']={plan.get('target_basis')}, expected 'duration'"
+        )
+        assert plan["weekly_km"] is None, (
+            f"duration-based normal must not set weekly_km, got {plan['weekly_km']}"
         )
 
 

@@ -5,7 +5,8 @@
 | Field | Value |
 |---|---|
 | HEAD départ | `be2b7ac` (post-#163) |
-| HEAD #165 | `ecf0630` |
+| HEAD #165 (pré-correction) | `e9b4a8a` |
+| HEAD #165 (final) | *mis à jour après push* |
 | #164 reprise | **NO** — aucun commit de #164 repris |
 | Branche | `copilot/supprimer-double-autorite-prescription` |
 
@@ -158,16 +159,50 @@ Même situation que ci-dessus — l'adapter forward les durées V2 sans recalcul
 
 | Suite | Passed | Failed | Skipped | Notes |
 |---|---|---|---|---|
-| `test_pr165_week_plan_v2_authority.py` | **26** | 0 | 4 | Skips B/C/D : fixtures ne produisent pas partial_reprise pour ce profil — contrat prouvé par AST |
+| `test_pr165_week_plan_v2_authority.py` | **39** | 0 | **0** | Contrats A–F + H–M tous prouvés, 0 skip |
 | `test_pr157_remove_determine_target_load.py` | 10 | 7* | 0 | *7 fails = `No module 'dotenv'` (env CI, pré-existant) |
 | `test_pr163_long_run_v2_authority.py` | 32 | 3* | 0 | *3 fails = `No module 'dotenv'` (pré-existant) |
 | `test_pr156_no_unvalidated_tss_generate_cycle_week.py` | N/A | collection error* | — | *`No module 'dotenv'` (pré-existant) |
 | `test_pr161_no_double_guard.py` | N/A | collection error* | — | *`No module 'dotenv'` (pré-existant) |
+| `test_workout_generator_v2.py` + `test_weekly_target_v2.py` + `test_pr149_week_plan_v2.py` | **227** | 0 | 0 | V2 pur, 0 skip |
 
 **Tous les échecs sont dus à `No module named 'dotenv'` — dépendance d'environnement pré-existante, non causée par PR165.**
+`python-dotenv==1.2.2` et `httpx==0.28.1` sont bien déclarés dans requirements.txt — pas de nouvelle dette.
 
-Mise à jour test PR157 effectuée :
-- `test_weekly_target_v2_used_in_week_plan_source` : mis à jour pour chercher `build_weekly_plan_from_workouts` (superset de `build_weekly_target_from_workouts`, directement causé par PR165).
+---
+
+## CRITICAL_CONTRACT_FIXTURES
+
+| Contrat | continuity_state | target_basis | target / plan | API | PASS/FAIL |
+|---|---|---|---|---|---|
+| **DEEP_REPRISE_TRAINED** | `deep_reprise` | `duration` | target_duration_minutes = **135** / planned_duration_minutes = **135** | API_minutes = **135** | **PASS** |
+| **PARTIAL_REPRISE_DISTANCE** | `partial_reprise` | `distance` | target_km = **4.4** / planned_km = **4.4** | API_km = **4.4** | **PASS** |
+| **PARTIAL_REPRISE_DURATION** | `partial_reprise` | `duration` | target_duration_minutes = **120** / planned_duration_minutes = **120** | API_minutes = **120** / weekly_km = None | **PASS** |
+| **NORMAL_DURATION_FALLBACK** | `normal` | `duration` | target_duration_minutes = **120** / planned_duration_minutes = **120** | API_minutes = **120** / weekly_km = None | **PASS** |
+| **NO_HISTORY** | `no_history` | `duration` | target_duration_minutes = **105** / planned_duration_minutes = **105** | API_minutes = **105** | **PASS** |
+
+CRITICAL_CONTRACT_SKIPS = **0**
+
+Notes sur les fixtures :
+- **DEEP_REPRISE_TRAINED** (Option A) : 5 × 16 km dans la fenêtre prior (days_ago 29–41) → prior_km = 40 km/sem → TRAINED level → 135 min. Aucune activité dans les 28 derniers jours.
+- **PARTIAL_REPRISE_DISTANCE** (Option A) : 5 runs × 10 km aux jours 8–21 + 1 run 4 km au jour 3. 7d = 4 km < 50 % × 12.6 km (baseline 30d) → partial_reprise. Target distance 4.4 km.
+- **PARTIAL_REPRISE_DURATION** (Option B) : WeeklyTarget construit directement. Le pipeline complet ne peut pas produire partial_reprise + duration : si days_since < 28 (condition partielle), les 28d buckets contiennent toujours une activité → _target_partial_reprise produit toujours distance. Le contrat testé ici est l'adapter/plan, pas l'heuristique.
+- **NORMAL_DURATION_FALLBACK** (Option B) : même raison — contrat adapter prouvé directement.
+
+---
+
+## FRONTEND AUDIT REPORT
+
+ACTIVE_DISTANCE_SESSION_DURATION_ZERO_SAFE = **YES**
+
+| Champ | Valeur |
+|---|---|
+| `session.duration` consumers | `TrainingPlan.jsx:152` (DISPLAY_TEXT), `Dashboard.jsx:167` (DISPLAY_TEXT) |
+| `duration "0min"` used as calculation | **NO** |
+| `duration "0min"` shown as real workout duration | **YES** (displayed as raw text) — non trompeur car accompagné de `distance_km` |
+| frontend change required | **NO** |
+
+Détail : les deux usages affichent `{session.duration}` directement dans un `<span>`. Aucun tri, aucun calcul, aucune logique conditionnelle ne dépend de cette valeur. Pour une séance distance-based active, "0min" est affiché à côté de la distance, ce qui n'induit pas en erreur fonctionnellement.
 
 ---
 
@@ -175,10 +210,11 @@ Mise à jour test PR157 effectuée :
 
 | Dette | PR cible |
 |---|---|
-| Tests B/C/D (`partial_reprise`) nécessitent des fixtures plus fines pour déclencher le bon `continuity_state` | future |
 | `_generate_fallback_week_plan` reste dans `server.py` mais n'est plus appelé par `get_week_plan` — peut être retiré | #166+ |
 | `generate_cycle_week` import retiré de `server.py` ; `coach_service.py` importe toujours la fonction (non appelée) — nettoyage optionnel | #166+ |
 | `context["training_state"]` et transport legacy encore construits dans `get_week_plan` pour compat display — pourrait être simplifié | #166+ |
+
+dette nouvelle = **NO**
 
 ---
 
@@ -191,13 +227,20 @@ READY FOR MERGE INTO copilot/dev
 - ✅ #164 non reprise
 - ✅ WeeklyPlan V2 = source réelle des séances
 - ✅ Aucune reconstruction prescriptive legacy dans week-plan
-- ✅ generate_cycle_week absent du chemin week-plan
-- ✅ compute_target_km absent
-- ✅ reprise_durations absent
-- ✅ compute_long_run_km absent
-- ✅ apply_resume_guard absent
+- ✅ generate_cycle_week absent du chemin week-plan (0 calls)
+- ✅ compute_target_km absent (0 calls)
+- ✅ reprise_durations absent (0 calls)
+- ✅ compute_long_run_km absent (0 calls)
+- ✅ apply_resume_guard absent (0 calls)
 - ✅ API frontend compatible
 - ✅ TSS doctrine inchangée
-- ✅ Tests pertinents 0 failed (failures = env pré-existant)
-- ✅ Aucune nouvelle dette connue
+- ✅ deep_reprise entraîné prouvé réellement (135 min)
+- ✅ partial_reprise distance prouvé (4.4 km)
+- ✅ partial_reprise duration prouvé (120 min, weekly_km=None)
+- ✅ normal duration fallback prouvé (120 min, weekly_km=None)
+- ✅ no_history prouvé (105 min)
+- ✅ CRITICAL_CONTRACT_SKIPS = 0
+- ✅ frontend duration 0min audité — SAFE, aucun changement requis
+- ✅ Tests pertinents 0 failed (failures = env pré-existant dotenv/httpx déclarés dans requirements)
+- ✅ Aucune nouvelle dette
 - ✅ mergeable = true
