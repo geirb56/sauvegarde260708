@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import { useLanguage } from "@/context/LanguageContext";
 import { useSubscription } from "@/context/SubscriptionContext";
@@ -51,7 +51,7 @@ export default function TrainingPlanV2() {
   const [apiError, setApiError] = useState(null);
   const [weekPayload, setWeekPayload] = useState(null);
 
-  const fetchWeek = async () => {
+  const fetchWeek = useCallback(async () => {
     try {
       const res = await axios.get(`${API}/training/v2/week`);
       setWeekPayload(res.data);
@@ -67,12 +67,11 @@ export default function TrainingPlanV2() {
       setLoading(false);
       setRefreshing(false);
     }
-  };
+  }, [t]);
 
   useEffect(() => {
     fetchWeek();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [fetchWeek]);
 
   const sessions = weekPayload?.week?.sessions || [];
   const weeklyTarget = weekPayload?.weekly_target || {};
@@ -206,9 +205,10 @@ export default function TrainingPlanV2() {
             const workoutLabel = translatedType.startsWith("[[") ? fallbackLabel(session.workout_type) : translatedType;
             const dayLabel = t(`trainingPlanDays.${session.day}`);
             const safeDayLabel = dayLabel.startsWith("[[") ? fallbackLabel(session.day) : dayLabel;
+            const sessionKey = `${session.day}-${session.workout_type}-${session.distance_km ?? "na"}-${session.duration_minutes ?? "na"}-${idx}`;
 
             return (
-              <div key={`${session.day}-${idx}`} className="flex items-center gap-2 p-3 rounded-lg" style={{ background: style.bg, border: `1px solid ${style.border}` }}>
+              <div key={sessionKey} className="flex items-center gap-2 p-3 rounded-lg" style={{ background: style.bg, border: `1px solid ${style.border}` }}>
                 <div className="w-1 h-10 rounded-full shrink-0" style={{ background: style.border }} />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
