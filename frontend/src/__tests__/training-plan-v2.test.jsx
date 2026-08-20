@@ -391,7 +391,7 @@ describe("TrainingPlanV2 — PR170", () => {
     const text = container.textContent;
     // estimated_tss null → no "TSS" label in session card
     // We check the session rendered at all
-    expect(text).toContain("monday");
+    expect(text).toContain("Monday");
     // But TSS value "null TSS" should not appear
     expect(text).not.toContain("null TSS");
     act(() => root.unmount());
