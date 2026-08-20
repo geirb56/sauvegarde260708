@@ -12,7 +12,6 @@ import { API_BASE_URL } from "@/config";
 import { formatDistance } from "@/utils/units";
 
 const API = API_BASE_URL;
-const MISSING_TRANSLATION_PREFIX = "[[";
 
 const SESSION_STYLES = {
   rest: { bg: "#12142a", border: "#4f46e5", text: "#a5b4fc", badge: "#4f46e5", badgeText: "#ffffff" },
@@ -43,6 +42,9 @@ const typeTranslationKey = (workoutType) => {
   }
 };
 
+const isMissingTranslation = (value, key) =>
+  !value || value === key || value === `[[${key}]]`;
+
 export default function TrainingPlanV2() {
   const { t, lang } = useLanguage();
   const { unitSystem } = useUnitSystem();
@@ -54,6 +56,9 @@ export default function TrainingPlanV2() {
   const isMountedRef = useRef(true);
 
   const fetchWeek = useCallback(async () => {
+    if (isMountedRef.current) {
+      setApiError(null);
+    }
     try {
       const res = await axios.get(`${API}/training/v2/week`);
       if (!isMountedRef.current) return;
@@ -208,13 +213,19 @@ export default function TrainingPlanV2() {
         </div>
 
         <div className="space-y-2">
-          {sessions.map((session, idx) => {
+          {sessions.map((session) => {
             const style = SESSION_STYLES[session.workout_type] || SESSION_STYLES.easy;
-            const translatedType = t(`trainingPlanSessionType.${typeTranslationKey(session.workout_type)}`);
-            const workoutLabel = translatedType.startsWith(MISSING_TRANSLATION_PREFIX) ? fallbackLabel(session.workout_type) : translatedType;
-            const dayLabel = t(`trainingPlanDays.${session.day}`);
-            const safeDayLabel = dayLabel.startsWith(MISSING_TRANSLATION_PREFIX) ? fallbackLabel(session.day) : dayLabel;
-            const sessionKey = `${session.day}-${session.workout_type}-${session.intensity_class}-${(session.reason_codes || []).join("-")}-${idx}`;
+            const workoutTranslationKey = `trainingPlanSessionType.${typeTranslationKey(session.workout_type)}`;
+            const dayTranslationKey = `trainingPlanDays.${session.day}`;
+            const translatedType = t(workoutTranslationKey);
+            const dayLabel = t(dayTranslationKey);
+            const workoutLabel = isMissingTranslation(translatedType, workoutTranslationKey)
+              ? fallbackLabel(session.workout_type)
+              : translatedType;
+            const safeDayLabel = isMissingTranslation(dayLabel, dayTranslationKey)
+              ? fallbackLabel(session.day)
+              : dayLabel;
+            const sessionKey = `${session.day}-${session.workout_type}-${session.intensity_class}-${session.distance_km ?? "na"}-${session.duration_minutes ?? "na"}-${(session.reason_codes || []).join("-")}`;
 
             return (
               <div key={sessionKey} className="flex items-center gap-2 p-3 rounded-lg" style={{ background: style.bg, border: `1px solid ${style.border}` }}>
