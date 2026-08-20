@@ -1,4 +1,4 @@
-"""PR149 — Bridge: build WeeklyTarget V2 from raw workout documents.
+"""PR149/PR163 — Bridge: build WeeklyTarget V2 from raw workout documents.
 
 This module provides a thin orchestration entry-point for endpoints that
 need a V2 WeeklyTarget without owning the full V2 rendering pipeline.
@@ -9,21 +9,25 @@ Design rules:
 - Uses the canonical DomainActivity adapter (to_domain_activity) from domain_activity.py.
 - Does NOT duplicate formulas — only wires existing builders.
 - reference_date is MANDATORY — no implicit datetime.now().
+- ONE canonical internal pipeline (_build_weekly_context_from_workouts) shared by
+  both public APIs — no divergence possible.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date
 from typing import List, Optional
 
 from .domain_activity import to_domain_activity
-from .plan_goal import GoalType, build_plan_goal
-from .periodization import build_periodization
-from .runner_profile import build_runner_profile
+from .periodization import PeriodizationSnapshot, build_periodization
+from .plan_goal import GoalType, PlanGoal, build_plan_goal
+from .runner_profile import RunnerProfile, build_runner_profile
 from .training_history import build_training_history
 from .training_load import build_training_load
 from .training_state import build_training_state
 from .weekly_target import WeeklyTarget, build_weekly_target
+from .workout_generator import WeeklyPlan, build_weekly_plan
 
 
 # Closed mapping: legacy goal strings → GoalType V2.
@@ -42,6 +46,21 @@ _GOAL_MAP: dict[str, GoalType] = {
 class UnknownGoalTypeError(ValueError):
     """Raised when a goal string cannot be mapped to a known GoalType."""
     pass
+
+
+@dataclass(frozen=True)
+class _WeeklyBuildContext:
+    """Internal result of the canonical V2 build pipeline.
+
+    Holds every intermediate object produced by
+    _build_weekly_context_from_workouts so that both public APIs can share
+    the exact same construction without any duplication.
+    """
+
+    weekly_target: WeeklyTarget
+    runner_profile: RunnerProfile
+    plan_goal: PlanGoal
+    periodization: PeriodizationSnapshot
 
 
 def _normalize_workout_to_domain_fields(workout: dict) -> dict:
@@ -91,6 +110,93 @@ def _normalize_workout_to_domain_fields(workout: dict) -> dict:
     return out
 
 
+def _build_weekly_context_from_workouts(
+    *,
+    workouts: List[dict],
+    goal_type: str,
+    race_date: Optional[date],
+    cycle_start_date: Optional[date],
+    reference_date: date,
+    user_profile: Optional[dict],
+) -> _WeeklyBuildContext:
+    """Canonical internal V2 build pipeline — single construction site.
+
+    Builds every shared V2 object exactly once.  Both public APIs
+    (build_weekly_target_from_workouts and build_weekly_plan_from_workouts)
+    delegate to this function so that goal mapping, periodization choice,
+    and WeeklyTarget computation can never diverge.
+
+    Raises
+    ------
+    UnknownGoalTypeError
+        If goal_type does not map to a known GoalType.
+    """
+    # Closed mapping — unknown goal → explicit error, never silent default.
+    mapped_goal = _GOAL_MAP.get(goal_type.upper() if goal_type else "")
+    if mapped_goal is None:
+        raise UnknownGoalTypeError(
+            f"Unknown goal_type '{goal_type}' — cannot map to V2 GoalType. "
+            f"Valid values: {sorted(_GOAL_MAP.keys())}"
+        )
+
+    # Provider adapter: Mongo/Garmin field names → DomainActivity contract.
+    activities = [to_domain_activity(_normalize_workout_to_domain_fields(w)) for w in workouts]
+
+    # V2 chain — each builder called exactly once.
+    training_history = build_training_history(activities, reference_date)
+    training_load = build_training_load(activities, reference_date)
+    runner_profile = build_runner_profile(
+        training_history=training_history,
+        training_load=training_load,
+        user_profile=user_profile,
+        capabilities=None,
+        physiological_metrics=None,
+        reference_date=reference_date,
+    )
+    training_state = build_training_state(
+        training_history=training_history,
+        training_load=training_load,
+        runner_profile=runner_profile,
+        reference_date=reference_date,
+    )
+
+    plan_goal = build_plan_goal(
+        goal_type=mapped_goal,
+        race_date=race_date,
+        created_from="user",
+    )
+
+    # Periodization: single branching point — race future vs. maintenance/cycle.
+    if race_date and race_date > reference_date:
+        periodization = build_periodization(
+            plan_goal=plan_goal,
+            reference_date=reference_date,
+            race_plan_start_date=cycle_start_date,
+        )
+    else:
+        periodization = build_periodization(
+            plan_goal=plan_goal,
+            reference_date=reference_date,
+            cycle_anchor_date=cycle_start_date or reference_date,
+        )
+
+    weekly_target = build_weekly_target(
+        runner_profile=runner_profile,
+        training_history=training_history,
+        training_state=training_state,
+        plan_goal=plan_goal,
+        periodization=periodization,
+        reference_date=reference_date,
+    )
+
+    return _WeeklyBuildContext(
+        weekly_target=weekly_target,
+        runner_profile=runner_profile,
+        plan_goal=plan_goal,
+        periodization=periodization,
+    )
+
+
 def build_weekly_target_from_workouts(
     *,
     workouts: List[dict],
@@ -116,65 +222,57 @@ def build_weekly_target_from_workouts(
     UnknownGoalTypeError
         If goal_type does not map to a known GoalType.
     """
-    # BLOCKER 3: Unknown goal → explicit error, never silent half_marathon.
-    mapped_goal = _GOAL_MAP.get(goal_type.upper() if goal_type else "")
-    if mapped_goal is None:
-        raise UnknownGoalTypeError(
-            f"Unknown goal_type '{goal_type}' — cannot map to V2 GoalType. "
-            f"Valid values: {sorted(_GOAL_MAP.keys())}"
-        )
-
-    # BLOCKER 4: Use canonical DomainActivity adapter (to_domain_activity).
-    # Pre-normalize db.workouts fields to match DomainActivity's expected keys.
-    # This is the provider-neutral adapter layer: Mongo/Garmin → DomainActivity.
-    activities = [to_domain_activity(_normalize_workout_to_domain_fields(w)) for w in workouts]
-
-    # Build V2 chain
-    training_history = build_training_history(activities, reference_date)
-    training_load = build_training_load(activities, reference_date)
-    runner_profile = build_runner_profile(
-        training_history=training_history,
-        training_load=training_load,
-        user_profile=user_profile,
-        capabilities=None,
-        physiological_metrics=None,
-        reference_date=reference_date,
-    )
-    training_state = build_training_state(
-        training_history=training_history,
-        training_load=training_load,
-        runner_profile=runner_profile,
-        reference_date=reference_date,
-    )
-
-    plan_goal = build_plan_goal(
-        goal_type=mapped_goal,
+    ctx = _build_weekly_context_from_workouts(
+        workouts=workouts,
+        goal_type=goal_type,
         race_date=race_date,
-        created_from="user",
+        cycle_start_date=cycle_start_date,
+        reference_date=reference_date,
+        user_profile=user_profile,
+    )
+    return ctx.weekly_target
+
+
+def build_weekly_plan_from_workouts(
+    *,
+    workouts: List[dict],
+    goal_type: str,
+    race_date: Optional[date] = None,
+    cycle_start_date: Optional[date] = None,
+    reference_date: date,
+    user_profile: Optional[dict] = None,
+) -> tuple[WeeklyTarget, WeeklyPlan]:
+    """Build WeeklyTarget V2 + WeeklyPlan V2 from raw workout documents.
+
+    PR163: extends build_weekly_target_from_workouts to also produce the
+    WeeklyPlan so that WorkoutGenerator V2 is the authority on session
+    distribution (including long_easy distance).  llm_coach must NOT
+    re-compute the long run itself.
+
+    The WeeklyTarget returned here is the SAME object that
+    build_weekly_target_from_workouts would return for identical inputs —
+    both APIs share the same internal pipeline (_build_weekly_context_from_workouts).
+
+    Returns
+    -------
+    (WeeklyTarget, WeeklyPlan)
+        Both immutable V2 objects built from the same chain.
+    """
+    ctx = _build_weekly_context_from_workouts(
+        workouts=workouts,
+        goal_type=goal_type,
+        race_date=race_date,
+        cycle_start_date=cycle_start_date,
+        reference_date=reference_date,
+        user_profile=user_profile,
     )
 
-    # Periodization
-    if race_date and race_date > reference_date:
-        periodization = build_periodization(
-            plan_goal=plan_goal,
-            reference_date=reference_date,
-            race_plan_start_date=cycle_start_date,
-        )
-    else:
-        periodization = build_periodization(
-            plan_goal=plan_goal,
-            reference_date=reference_date,
-            cycle_anchor_date=cycle_start_date or reference_date,
-        )
-
-    # Build target
-    weekly_target = build_weekly_target(
-        runner_profile=runner_profile,
-        training_history=training_history,
-        training_state=training_state,
-        plan_goal=plan_goal,
-        periodization=periodization,
+    weekly_plan = build_weekly_plan(
+        weekly_target=ctx.weekly_target,
+        runner_profile=ctx.runner_profile,
+        plan_goal=ctx.plan_goal,
+        periodization=ctx.periodization,
         reference_date=reference_date,
     )
 
-    return weekly_target
+    return ctx.weekly_target, weekly_plan
