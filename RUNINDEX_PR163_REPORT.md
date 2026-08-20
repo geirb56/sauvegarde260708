@@ -1,0 +1,310 @@
+# RUNINDEX PR163 — Suppression du consumer legacy compute_long_run_km dans generate_cycle_week
+
+## Rapport
+
+---
+
+### HEAD départ
+```
+068454f Merge pull request #162 from geirb56/copilot/copilotdev
+```
+
+### HEAD #163
+Commit pushed via this PR.
+
+---
+
+### compute_long_run_km occurrences avant
+
+| Localisation | Classification |
+|---|---|
+| `training_engine.py:341` — `def compute_long_run_km(...)` | DEFINITION |
+| `llm_coach.py:25` — `from training_engine import compute_long_run_km` | RUNTIME_GENERATE_CYCLE_WEEK |
+| `llm_coach.py:302` — `target_long_run = compute_long_run_km(target_km, goal)` | RUNTIME_GENERATE_CYCLE_WEEK |
+| `training_v2/workout_generator.py:86-87` — migration matrix doc | DOC |
+| `training_v2/weekly_target.py:92` — migration matrix doc | DOC |
+| `tests/test_training_engine_pr2.py` | TEST |
+| `tests/test_dynamic_plan_v2_pr135.py:231` (forbidden list for coach_service) | TEST |
+| `tests/test_workout_generator_v2.py` | TEST |
+
+### compute_long_run_km occurrences après
+
+| Localisation | Classification |
+|---|---|
+| `training_engine.py:341` — `def compute_long_run_km(...)` | DEFINITION (inchangée) |
+| `training_v2/workout_generator.py:86-87` | DOC |
+| `training_v2/weekly_target.py:92` | DOC |
+| `tests/test_training_engine_pr2.py` | TEST |
+| `tests/test_dynamic_plan_v2_pr135.py:231` | TEST |
+| `tests/test_workout_generator_v2.py` | TEST |
+
+**RUNTIME_GENERATE_CYCLE_WEEK = 0** ✅  
+La définition legacy reste en place (d'autres tests/docs l'utilisent) — suppression possible en PR suivante.
+
+---
+
+### WORKOUT_GENERATOR_ALREADY_AVAILABLE = YES
+
+WorkoutGenerator V2 (`build_weekly_plan`) était déjà utilisé dans `coach_service.py`.  
+Dans le chemin `/training/week-plan`, seul `WeeklyTarget V2` était construit.  
+Tous les objets V2 intermédiaires (`runner_profile`, `plan_goal`, `periodization`) étaient déjà
+instanciés à l'intérieur de `build_weekly_target_from_workouts` — il suffisait d'exposer
+`build_weekly_plan` depuis le même point d'entrée.
+
+---
+
+### Architecture avant
+
+```
+/training/week-plan
+  → build_weekly_target_from_workouts (V2)
+      → WeeklyTarget.target_km → context["target_km_protected"]
+  → generate_cycle_week(context)
+      → compute_long_run_km(target_km, goal)   ← LEGACY
+      → build long_run session with legacy distance
+```
+
+### Architecture après
+
+```
+/training/week-plan
+  → build_weekly_plan_from_workouts (V2 bridge, PR163)
+      → WeeklyTarget V2 + WeeklyPlan V2
+      → WeeklyPlan.sessions[long_easy].distance_km → context["long_run_km_v2"]
+  → generate_cycle_week(context)
+      → _v2 = context.get("long_run_km_v2"); target_long_run = _v2 if _v2 is not None else 0   ← V2
+      → build long_run session with V2 distance
+```
+
+---
+
+### Source finale long_run = WorkoutGenerator V2 ✅
+
+### import privé _compute_long_run_km ajouté = NO ✅
+
+### coefficients V2 dupliqués = NO ✅
+
+---
+
+### Cas faible volume marathon
+
+| Métrique | Valeur |
+|---|---|
+| target hebdo (V2) | 22.0 km |
+| long run legacy | 8 km |
+| long run V2 | 8.8 km |
+
+_Proportionnel, pas de minimum artificiel._
+
+### Cas faible volume semi
+
+| Métrique | Valeur |
+|---|---|
+| target hebdo (V2) | 22.0 km |
+| long run legacy | 8 km |
+| long run V2 | 7.6 km |
+
+_Proportionnel, aucun minimum 16 km._
+
+### Cas volume élevé marathon
+
+| Métrique | Valeur |
+|---|---|
+| target hebdo (V2) | 66.0 km |
+| long run V2 | 26.4 km (< cap 28 km) |
+| legacy | 29 km (dépassait le cap !) |
+
+---
+
+### Conservation somme hebdomadaire = YES ✅
+
+`sum(session.distance_km) ≈ weekly_target.target_km` (tolérance ±0.2 km), vérifiée par test F.
+
+### Duration-based = PASS ✅
+
+Pas de `distance_km` injectée pour les semaines duration-based.  
+`long_easy.distance_km` est `None` dans ce cas.  
+`generate_cycle_week` utilise `_v2 = context.get("long_run_km_v2"); target_long_run = _v2 if _v2 is not None else 0` — aucun calcul legacy.
+
+### TSS inchangé = YES ✅
+
+`estimated_tss = None` / `total_tss = None` — doctrine inchangée.
+
+---
+
+### Fichiers modifiés
+
+| Fichier | Nature de la modification |
+|---|---|
+| `backend/training_v2/week_plan_bridge.py` | Ajout `build_weekly_plan_from_workouts` (retourne `WeeklyTarget + WeeklyPlan`) ; factorisation en `_build_weekly_context_from_workouts` + `_WeeklyBuildContext` (PR163 correction duplication) |
+| `backend/server.py` | Remplacement de `build_weekly_target_from_workouts` par `build_weekly_plan_from_workouts` ; extraction `long_run_km_v2` ; injection dans context |
+| `backend/llm_coach.py` | Suppression import `compute_long_run_km` ; `_v2 = context.get("long_run_km_v2"); target_long_run = _v2 if _v2 is not None else 0` |
+| `backend/tests/test_pr163_long_run_v2_authority.py` | 16 tests métier + non-duplication + transport context + 17 tests déduplication (pipeline unique, identité, determinisme, race/maintenance/unknown) = 33 tests total |
+
+---
+
+### Tests passed/failed/skipped/errors
+
+> **INTERMEDIATE / SUPERSEDED** — run obtenu lors d'une étape de développement antérieure.
+> À titre informatif uniquement. Ne pas utiliser comme référence finale.
+
+```
+tests/test_pr163_long_run_v2_authority.py   16 passed  (avant ajout tests déduplication)
+tests/test_workout_generator_v2.py         119 passed
+tests/test_training_engine_pr2.py           12 passed
+tests/test_dynamic_plan_v2_pr135.py         20 passed
+Total (intermédiaire)                      167 passed, 0 failed
+```
+
+---
+
+### FINAL_TEST_RESULT
+
+Commande exécutée sur HEAD `6e35583` :
+
+```
+PYTHONPATH=backend pytest \
+  tests/test_pr163_long_run_v2_authority.py \
+  tests/test_workout_generator_v2.py \
+  tests/test_pr149_week_plan_v2.py
+```
+
+```
+tests/test_pr163_long_run_v2_authority.py   33 passed
+tests/test_workout_generator_v2.py         119 passed
+tests/test_pr149_week_plan_v2.py            12 passed
+─────────────────────────────────────────────────────
+FINAL                                      164 passed
+                                             0 failed
+                                             0 skipped
+                                             0 errors
+```
+
+---
+
+### Mergeability = true ✅
+
+---
+
+### Consumers legacy restants
+
+| Consumer | Classification | Statut |
+|---|---|---|
+| `training_engine.def compute_long_run_km` | DEFINITION | Reste en place — utilisée par tests legacy et docs |
+| `tests/test_training_engine_pr2.py` | TEST | Inchangé |
+| `tests/test_workout_generator_v2.py` | TEST | Inchangé |
+| `tests/test_dynamic_plan_v2_pr135.py` | TEST (liste forbidden pour coach_service) | Inchangé |
+
+Aucun consumer RUNTIME restant dans `generate_cycle_week` ou `generate_full_cycle`.
+
+---
+
+### Dette suivante exacte
+
+| Item | PR suggérée |
+|---|---|
+| Supprimer la définition legacy `compute_long_run_km` dans `training_engine.py` si plus aucun test/doc ne s'y réfère | PR164 (nettoyage) |
+| Migrer `/training/full-cycle` pour utiliser WorkoutGenerator V2 (utilise encore `compute_target_km` legacy) | Hors scope PR163 |
+
+---
+
+## DUPLICATION_AUDIT
+
+### PIPELINE_DUPLICATED_BEFORE_FIX = YES
+
+Avant la correction, `build_weekly_target_from_workouts` et `build_weekly_plan_from_workouts`
+dupliquaient chacun la chaîne complète :
+
+```
+goal mapping → activities → training_history → training_load
+→ runner_profile → training_state → plan_goal
+→ periodization (if/else race_date) → weekly_target
+```
+
+Deux pipelines indépendants, susceptibles de diverger sur reference_date, PlanGoal, Periodization,
+RunnerProfile, WeeklyTarget.
+
+### PIPELINE_DUPLICATED_AFTER_FIX = NO
+
+Après correction, un seul helper interne canonique contient l'intégralité de la chaîne.
+
+### COMMON_INTERNAL_BUILDER = `_build_weekly_context_from_workouts`
+
+Retourne un `_WeeklyBuildContext(frozen=True)` contenant :
+
+| Champ | Type |
+|---|---|
+| `weekly_target` | `WeeklyTarget` |
+| `runner_profile` | `RunnerProfile` |
+| `plan_goal` | `PlanGoal` |
+| `periodization` | `PeriodizationSnapshot` |
+
+Les deux API publiques deviennent :
+
+```python
+# build_weekly_target_from_workouts
+ctx = _build_weekly_context_from_workouts(...)
+return ctx.weekly_target
+
+# build_weekly_plan_from_workouts
+ctx = _build_weekly_context_from_workouts(...)
+weekly_plan = build_weekly_plan(weekly_target=ctx.weekly_target, ...)
+return ctx.weekly_target, weekly_plan
+```
+
+### Scan post-correction (week_plan_bridge.py runtime calls)
+
+| Builder | Appels runtime | Attendu |
+|---|---|---|
+| `build_training_history` | 1 | 1 ✅ |
+| `build_training_load` | 1 | 1 ✅ |
+| `build_runner_profile` | 1 | 1 ✅ |
+| `build_training_state` | 1 | 1 ✅ |
+| `build_plan_goal` | 1 | 1 ✅ |
+| `build_periodization` | 2 (if/else) | 2 ✅ |
+| `build_weekly_target` | 1 | 1 ✅ |
+
+### Invariant testé
+
+`build_weekly_target_from_workouts(...)` == `build_weekly_plan_from_workouts(...)[0]`
+pour les mêmes inputs : **vérifié par TestWeeklyTargetIdentical (3 cas)**.
+
+### Tests ajoutés
+
+| Classe | Tests | Objectif |
+|---|---|---|
+| `TestPipelineUnique` | 7 | Scan AST — un seul site de construction par builder |
+| `TestWeeklyTargetIdentical` | 3 | Les deux APIs retournent le même WeeklyTarget |
+| `TestReferenceDateDeterminism` | 2 | Même reference_date → même résultat |
+| `TestRaceGoalBothAPIs` | 1 | race_date future : targets identiques |
+| `TestMaintenanceGoalBothAPIs` | 1 | Maintenance/no-race : targets identiques |
+| `TestUnknownGoalBothAPIs` | 3 | Les deux APIs lèvent UnknownGoalTypeError |
+
+Total nouveaux tests : **17** (portant le total à 33).
+
+### Résultat final
+
+```
+tests/test_pr163_long_run_v2_authority.py   33 passed
+tests/test_workout_generator_v2.py         119 passed
+tests/test_pr149_week_plan_v2.py            12 passed
+Total relevant                             164 passed, 0 failed
+```
+
+---
+
+## RECHECK FINAL (HEAD 6e35583)
+
+| Contrôle | Résultat |
+|---|---|
+| `compute_long_run_km` runtime dans `generate_cycle_week` | **0** ✅ |
+| import `_compute_long_run_km` hors `workout_generator.py` | **0** ✅ |
+| pipeline dupliqué dans `week_plan_bridge.py` | **NO** ✅ |
+| builder commun | `_build_weekly_context_from_workouts` ✅ |
+| `WeeklyTarget` égalité entre les 2 APIs | **PASS** ✅ |
+| `reference_date` source unique | **YES** ✅ |
+| TSS doctrine (active=None, rest=0, total=None) | **INCHANGÉE** — `estimated_tss` non migré, cohérent avec doctrine V2 ✅ |
+
+## VERDICT
+
+**READY FOR MERGE INTO copilot/dev**

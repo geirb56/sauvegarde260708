@@ -4630,8 +4630,10 @@ async def get_week_plan(user: dict = Depends(auth_user)):
     load_7 = km_7 * 10
     load_28 = km_28 * 10
 
-    # ── PR149: WeeklyTarget V2 — canonical weekly prescription ──────────────
-    from training_v2.week_plan_bridge import build_weekly_target_from_workouts
+    # ── PR149/PR163: WeeklyTarget V2 + WorkoutGenerator V2 ──────────────────
+    # PR163: use build_weekly_plan_from_workouts so WorkoutGenerator V2 is the
+    # authority on session distribution (long_easy distance in particular).
+    from training_v2.week_plan_bridge import build_weekly_plan_from_workouts
 
     goal_start_date = goal["start_date"]
     if isinstance(goal_start_date, datetime) and goal_start_date.tzinfo is None:
@@ -4649,7 +4651,7 @@ async def get_week_plan(user: dict = Depends(auth_user)):
 
     cycle_start_v2 = goal_start_date.date() if isinstance(goal_start_date, datetime) else goal_start_date
 
-    weekly_target = build_weekly_target_from_workouts(
+    weekly_target, weekly_plan_v2 = build_weekly_plan_from_workouts(
         workouts=workouts_90,
         goal_type=goal["goal_type"],
         race_date=race_date_v2,
@@ -4663,6 +4665,13 @@ async def get_week_plan(user: dict = Depends(auth_user)):
         target_km_protected = weekly_target.target_km
     else:
         target_km_protected = None
+
+    # PR163: extract long_easy distance from WorkoutGenerator V2 — single authority.
+    # None for duration-based weeks (no artificial km injected).
+    long_run_km_v2 = next(
+        (s.distance_km for s in weekly_plan_v2.sessions if s.workout_type == "long_easy"),
+        None,
+    )
 
     # ── Legacy compat context (LLM) ─────────────────────────────────────────
     # ctl/atl/tsb km-based aliases removed (PR #127 — faux physiological metrics).
@@ -4705,6 +4714,10 @@ async def get_week_plan(user: dict = Depends(auth_user)):
     # PR149: transport V2 duration target for duration-based states.
     if weekly_target.target_basis == "duration":
         context["target_duration_minutes"] = weekly_target.target_duration_minutes
+    # PR163: pass WorkoutGenerator V2 long_easy distance — generate_cycle_week
+    # must NOT recompute it via the legacy compute_long_run_km.
+    if long_run_km_v2 is not None:
+        context["long_run_km_v2"] = long_run_km_v2
 
     # Générer le plan via LLM (legacy rendering — compat)
     plan, success, metadata = await generate_cycle_week(
