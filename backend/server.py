@@ -4674,7 +4674,7 @@ async def get_week_plan(user: dict = Depends(auth_user)):
         "atl": None,
         "tsb": None,
         "acwr": None,
-        "weekly_km": compute_current_weekly_km(workouts_28),
+        "weekly_km": km_28_running / 4.0,
         "load_7": load_7,
         "load_28": load_28,
     }
