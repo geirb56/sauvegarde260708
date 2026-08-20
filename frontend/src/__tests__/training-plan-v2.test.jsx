@@ -330,7 +330,7 @@ describe("TrainingPlanV2 — PR170", () => {
     const { container, root } = renderPage(TrainingPlanV2, "/training-v2");
     await act(async () => {});
     // TrainingPlanV2 title should be present
-    expect(container.textContent).toContain("V2");
+    expect(container.textContent).toContain("Training Plan V2");
     act(() => root.unmount());
     document.body.removeChild(container);
   });
@@ -518,7 +518,7 @@ describe("TrainingPlanV2 — PR170", () => {
     const { container, root } = renderPage(TrainingPlanV2);
     await act(async () => {});
     expect(container.querySelector("[data-testid='paywall']")).toBeNull();
-    expect(container.textContent).toContain("V2");
+    expect(container.textContent).toContain("Training Plan V2");
     act(() => root.unmount());
     document.body.removeChild(container);
   });
@@ -536,7 +536,7 @@ describe("TrainingPlanV2 — PR170", () => {
     const { container, root } = renderPage(TrainingPlanV2);
     await act(async () => {});
     expect(container.querySelector("[data-testid='paywall']")).toBeNull();
-    expect(container.textContent).toContain("V2");
+    expect(container.textContent).toContain("Training Plan V2");
     act(() => root.unmount());
     document.body.removeChild(container);
   });
