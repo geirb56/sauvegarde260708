@@ -267,7 +267,8 @@ export default function TrainingPlanV2() {
   const [refreshing, setRefreshing] = useState(false);
   const [apiError, setApiError] = useState(null);
 
-  const fetchData = async () => {
+  const fetchData = async ({ silent = false } = {}) => {
+    if (!silent) setLoading(true);
     try {
       const res = await axios.get(`${API}/training/v2/week`);
       setData(res.data);
@@ -276,10 +277,10 @@ export default function TrainingPlanV2() {
       if (err.response?.status === 403 && err.response?.data?.error === "subscription_required") {
         setApiError("subscription_required");
       } else {
-        toast.error("Impossible de charger le plan d'entraînement");
+        toast.error(t("trainingPlanExtended.loadingError"));
       }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -290,8 +291,8 @@ export default function TrainingPlanV2() {
   const handleRefresh = async () => {
     setRefreshing(true);
     try {
-      await fetchData();
-      toast.success("Plan mis à jour");
+      await fetchData({ silent: true });
+      toast.success(t("trainingPlanExtended.planUpdated"));
     } finally {
       setRefreshing(false);
     }
@@ -576,8 +577,8 @@ export default function TrainingPlanV2() {
       {/* V2 footnote */}
       <div className="flex items-center gap-2 px-1">
         <CheckCircle2 className="w-3 h-3" style={{ color: "var(--text-tertiary)" }} />
-        <span className="text-[10px] font-mono" style={{ color: "var(--text-tertiary)" }}>
-          Moteur V2 — UNKNOWN ≠ ZERO — TSS actif null, repos 0
+        <span className="text-[10px] font-mono" style={{ color: "var(--text-tertiary)" }} data-testid="v2-engine-footnote">
+          Engine V2 — UNKNOWN ≠ ZERO — active TSS null, rest TSS 0
         </span>
       </div>
     </div>
