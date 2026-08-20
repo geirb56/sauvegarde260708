@@ -144,10 +144,17 @@ def adapt_weekly_plan_to_legacy(
     sessions = []
     for s in weekly_plan.sessions:
         is_rest = s.workout_type == "rest"
+        # duration: rest days always "0min"; active sessions use V2 value or "0min" if absent.
+        if is_rest:
+            dur_str = "0min"
+        elif s.duration_minutes is not None and s.duration_minutes > 0:
+            dur_str = f"{s.duration_minutes}min"
+        else:
+            dur_str = "0min"
         session = {
             "day": s.day,
             "type": _display_type(s.workout_type),
-            "duration": f"{s.duration_minutes}min" if s.duration_minutes is not None else "0min",
+            "duration": dur_str,
             "details": _build_details(
                 s.workout_type,
                 s.duration_minutes,

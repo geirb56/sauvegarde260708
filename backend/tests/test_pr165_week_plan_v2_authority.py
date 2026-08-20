@@ -233,7 +233,7 @@ class TestContractB:
         plan = _adapt(workouts)
         active = _active_sessions(plan)
         # duration field is "Xmin" string — parse it
-        total_min = sum(int(s["duration"].replace("min", "") or 0) for s in active)
+        total_min = sum(int(s["duration"].replace("min", "") or "0") for s in active)
         assert total_min == wt.target_duration_minutes, (
             f"sum(duration)={total_min} != target_duration_minutes={wt.target_duration_minutes}"
         )
@@ -290,7 +290,7 @@ class TestContractD:
             )
         plan = _adapt(workouts)
         active = _active_sessions(plan)
-        total_min = sum(int(s["duration"].replace("min", "") or 0) for s in active)
+        total_min = sum(int(s["duration"].replace("min", "") or "0") for s in active)
         assert total_min == wt.target_duration_minutes, (
             f"sum(duration)={total_min} != target_duration_minutes={wt.target_duration_minutes}"
         )
@@ -360,7 +360,7 @@ class TestContractI:
             pytest.skip("planned_duration_minutes is None")
         plan = _adapt(workouts)
         active = _active_sessions(plan)
-        api_min = sum(int(s["duration"].replace("min", "") or 0) for s in active)
+        api_min = sum(int(s["duration"].replace("min", "") or "0") for s in active)
         assert api_min == wp.planned_duration_minutes, (
             f"adapter changed duration: api={api_min}, v2={wp.planned_duration_minutes}"
         )
