@@ -355,7 +355,7 @@ class TestContractB:
 
         plan = _adapt(workouts)
         active = _active_sessions(plan)
-        total_min = sum(int(s["duration"].replace("min", "") or "0") for s in active)
+        total_min = sum(int(s["duration"].replace("min", "")) for s in active if s["duration"] is not None)
 
         assert wt.target_duration_minutes == 135, (
             f"Expected target_duration_minutes=135 (TRAINED level), got {wt.target_duration_minutes}"
@@ -483,7 +483,7 @@ class TestContractD:
         )
         plan = adapt_weekly_plan_to_legacy(wp, wt, "build")
         active = _active_sessions(plan)
-        total_min = sum(int(s["duration"].replace("min", "") or "0") for s in active)
+        total_min = sum(int(s["duration"].replace("min", "")) for s in active if s["duration"] is not None)
 
         assert wt.continuity_state == "partial_reprise"
         assert wt.target_basis == "duration"
@@ -631,7 +631,7 @@ class TestContractF:
         )
         plan = adapt_weekly_plan_to_legacy(wp, wt, "build")
         active = _active_sessions(plan)
-        total_min = sum(int(s["duration"].replace("min", "") or "0") for s in active)
+        total_min = sum(int(s["duration"].replace("min", "")) for s in active if s["duration"] is not None)
 
         assert wp.planned_duration_minutes == wt.target_duration_minutes, (
             f"WeeklyPlan planned_duration_minutes={wp.planned_duration_minutes} "
@@ -713,7 +713,7 @@ class TestContractI:
             pytest.skip("planned_duration_minutes is None")
         plan = _adapt(workouts)
         active = _active_sessions(plan)
-        api_min = sum(int(s["duration"].replace("min", "") or "0") for s in active)
+        api_min = sum(int(s["duration"].replace("min", "")) for s in active if s["duration"] is not None)
         assert api_min == wp.planned_duration_minutes, (
             f"adapter changed duration: api={api_min}, v2={wp.planned_duration_minutes}"
         )
