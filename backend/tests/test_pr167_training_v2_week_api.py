@@ -121,27 +121,37 @@ def _make_workouts_partial_reprise_distance() -> list[dict]:
     return bigger + small
 
 
-def _make_workouts_partial_reprise_duration() -> list[dict]:
-    """partial_reprise + duration target: very short recent run."""
+def _build_v2_context_minimal():
+    """Build minimal V2 context for direct WeeklyTarget construction tests.
+
+    Returns (runner_profile, plan_goal, periodization, reference_date).
+    Uses empty history — the only way to avoid depending on a particular
+    continuity state from the pipeline.
+    """
+    from training_v2.runner_profile import build_runner_profile
+    from training_v2.training_history import build_training_history
+    from training_v2.training_load import build_training_load
+    from training_v2.plan_goal import build_plan_goal, GoalType
+    from training_v2.periodization import build_periodization
+
     ref = _REF_DATE
-    history = [
-        {
-            "distance_km": 12.0,
-            "duration_minutes": 70,
-            "date": (ref - timedelta(days=d)).isoformat(),
-            "activity_type": "running",
-        }
-        for d in [25, 20, 15, 10]
-    ]
-    recent = [
-        {
-            "distance_km": 2.0,
-            "duration_minutes": 15,
-            "date": (ref - timedelta(days=4)).isoformat(),
-            "activity_type": "running",
-        }
-    ]
-    return history + recent
+    training_history = build_training_history([], ref)
+    training_load = build_training_load([], ref)
+    runner_profile = build_runner_profile(
+        training_history=training_history,
+        training_load=training_load,
+        user_profile=None,
+        capabilities=None,
+        physiological_metrics=None,
+        reference_date=ref,
+    )
+    plan_goal = build_plan_goal(goal_type=GoalType.marathon, race_date=None, created_from="user")
+    periodization = build_periodization(
+        plan_goal=plan_goal,
+        reference_date=ref,
+        cycle_anchor_date=ref - timedelta(weeks=4),
+    )
+    return runner_profile, plan_goal, periodization, ref
 
 
 def _call_builder(
@@ -321,16 +331,81 @@ class TestContractC_PartialRepriseDistance:
 # ===========================================================================
 
 class TestContractD_PartialRepriseDuration:
-    """Partial reprise with duration-based target (very low recent load)."""
+    """Partial reprise with duration-based target.
+
+    Because the pipeline cannot produce partial_reprise + duration through a
+    workout fixture (whenever days_since < 28 the 28d buckets always contain
+    enough activity to produce a distance-based target), we construct
+    WeeklyTarget directly — same technique as test_pr165 Contract D.
+
+    The contract under test is the response assembly layer, not the heuristic
+    that selects partial_reprise duration (that is covered by weekly_target tests).
+    """
 
     def _build(self):
-        workouts = _make_workouts_partial_reprise_duration()
-        resp, wt, wp = _assemble_response(workouts, goal_type="MARATHON", reference_date=_REF_DATE)
-        if wt.continuity_state != "partial_reprise" or wt.target_basis != "duration":
-            pytest.skip(
-                f"Fixture: continuity={wt.continuity_state}, basis={wt.target_basis}"
+        from training_v2.weekly_target import WeeklyTarget
+        from training_v2.workout_generator import build_weekly_plan
+
+        runner_profile, plan_goal, periodization, ref = _build_v2_context_minimal()
+
+        wt = WeeklyTarget(
+            reference_date=ref,
+            target_basis="duration",
+            target_km=None,
+            target_duration_minutes=120,
+            target_sessions=3,
+            allow_intensity=False,
+            confidence="low",
+            continuity_state="partial_reprise",
+            reason_codes=("partial_reprise",),
+        )
+        wp = build_weekly_plan(
+            weekly_target=wt,
+            runner_profile=runner_profile,
+            plan_goal=plan_goal,
+            periodization=periodization,
+            reference_date=ref,
+        )
+
+        sessions = [
+            WeekV2SessionResponse(
+                day=s.day,
+                workout_type=s.workout_type,
+                intensity_class=s.intensity_class,
+                distance_km=s.distance_km,
+                duration_minutes=s.duration_minutes,
+                estimated_tss=0 if s.workout_type == "rest" else None,
+                reason_codes=list(s.reason_codes),
             )
-        return resp, wt, wp
+            for s in wp.sessions
+        ]
+
+        resp = TrainingWeekV2Response(
+            reference_date=ref.isoformat(),
+            goal=WeekV2GoalResponse(goal_type="MARATHON"),
+            state=WeekV2StateResponse(
+                continuity_state=wt.continuity_state,
+                allow_intensity=wt.allow_intensity,
+            ),
+            weekly_target=WeekV2TargetResponse(
+                target_basis=wt.target_basis,
+                target_km=wt.target_km,
+                target_duration_minutes=wt.target_duration_minutes,
+                session_count=wt.target_sessions,
+                confidence=wt.confidence,
+            ),
+            week=WeekV2PlanResponse(
+                planned_km=wp.planned_km,
+                planned_duration_minutes=wp.planned_duration_minutes,
+                session_count=wp.session_count,
+                sessions=sessions,
+            ),
+        )
+        return resp.model_dump(mode="json"), wt, wp
+
+    def test_continuity_is_partial_reprise(self):
+        resp, wt, _ = self._build()
+        assert resp["state"]["continuity_state"] == "partial_reprise"
 
     def test_target_basis_is_duration(self):
         resp, wt, _ = self._build()
@@ -340,10 +415,18 @@ class TestContractD_PartialRepriseDuration:
         resp, wt, wp = self._build()
         assert resp["week"]["planned_duration_minutes"] == wp.planned_duration_minutes
 
+    def test_planned_duration_matches_target(self):
+        resp, wt, wp = self._build()
+        assert resp["week"]["planned_duration_minutes"] == wt.target_duration_minutes
+
     def test_no_km_invented(self):
         resp, wt, _ = self._build()
-        assert resp["weekly_target"]["target_km"] is None
-        assert resp["week"]["planned_km"] is None
+        assert resp["weekly_target"]["target_km"] is None, (
+            "NONE != ZERO: duration-based → target_km must be None"
+        )
+        assert resp["week"]["planned_km"] is None, (
+            "NONE != ZERO: duration-based → planned_km must be None"
+        )
 
 
 # ===========================================================================
