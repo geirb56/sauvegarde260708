@@ -3,6 +3,13 @@
 ## Problem Statement
 Pull https://github.com/geirb56/sauvegarde260629 and set it up so it runs. Replace /app contents.
 
+## 2026-08-19 — Pull copilot/dev (PR #161) — WeeklyTarget V2 découplé de apply_resume_guard dans generate_cycle_week — MERGÉ & VALIDÉ
+- Fetch copilot/dev (b5de908→aaaa914). Merge ORT propre, 0 conflit. .env intacts. Backend+worker redémarrés.
+- PR #161 = découplage de WeeklyTarget V2 du legacy apply_resume_guard dans generate_cycle_week (llm_coach.py, évite un double resume-guard). + test_pr161_no_double_guard.py (469 lignes).
+- Validation: smoke 7/7=200 (today/plan/metrics/run-index/dashboard/week-plan/full-cycle). Tests PR161 + régression = 226 passed, 0 failed.
+- État: chaîne Training Engine V2 stable, suite verte. Migration full-cycle/cycle-week en cours (double-guard résolu #161). Reste: compute_current_weekly_km, compute_long_run_km.
+
+
 ## 2026-08-19 — Pull copilot/dev (PR #159) — Fix test-drift PR153 (appels _generate_fallback_week_plan) — MERGÉ & VALIDÉ
 - Fetch copilot/dev (e631d0c→b5de908). Merge ORT propre, 0 conflit. .env intacts. Aucun code applicatif (uniquement test_pr153 + rapport drift scan).
 - PR #159 = mise à jour des appels _generate_fallback_week_plan dans test_pr153 (retrait de l'arg target_load obsolète, 5 args → 4) pour aligner sur la signature post-PR157. + PR159 drift scan report.
