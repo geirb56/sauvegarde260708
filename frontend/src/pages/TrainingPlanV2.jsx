@@ -12,6 +12,7 @@ import { API_BASE_URL } from "@/config";
 import { formatDistance } from "@/utils/units";
 
 const API = API_BASE_URL;
+const MISSING_TRANSLATION_PREFIX = "[[";
 
 const SESSION_STYLES = {
   rest: { bg: "#12142a", border: "#4f46e5", text: "#a5b4fc", badge: "#4f46e5", badgeText: "#ffffff" },
@@ -210,9 +211,9 @@ export default function TrainingPlanV2() {
           {sessions.map((session, idx) => {
             const style = SESSION_STYLES[session.workout_type] || SESSION_STYLES.easy;
             const translatedType = t(`trainingPlanSessionType.${typeTranslationKey(session.workout_type)}`);
-            const workoutLabel = translatedType.startsWith("[[") ? fallbackLabel(session.workout_type) : translatedType;
+            const workoutLabel = translatedType.startsWith(MISSING_TRANSLATION_PREFIX) ? fallbackLabel(session.workout_type) : translatedType;
             const dayLabel = t(`trainingPlanDays.${session.day}`);
-            const safeDayLabel = dayLabel.startsWith("[[") ? fallbackLabel(session.day) : dayLabel;
+            const safeDayLabel = dayLabel.startsWith(MISSING_TRANSLATION_PREFIX) ? fallbackLabel(session.day) : dayLabel;
             const sessionKey = `${session.day}-${session.workout_type}-${session.intensity_class}-${(session.reason_codes || []).join("-")}-${idx}`;
 
             return (
@@ -233,7 +234,7 @@ export default function TrainingPlanV2() {
                   </div>
                 </div>
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0" style={{ background: style.badge, color: style.badgeText }}>
-                  {session.estimated_tss == null ? "—" : session.estimated_tss} TSS
+                  {session.estimated_tss == null ? "—" : `${session.estimated_tss} TSS`}
                 </span>
               </div>
             );
