@@ -83,9 +83,9 @@ class TestNoDuplication:
     def test_no_import_private_compute_long_run_km(self):
         """llm_coach must never import _compute_long_run_km from training_v2."""
         src = self._llm_coach_source()
-        # Specifically the private V2 function from training_v2.workout_generator
-        assert "from training_v2" not in src or "_compute_long_run_km" not in src, (
-            "llm_coach.py must not import _compute_long_run_km from training_v2"
+        # The private V2 function must never be imported from training_v2
+        assert "_compute_long_run_km" not in src, (
+            "llm_coach.py must not reference _compute_long_run_km"
         )
 
     def test_no_long_run_fraction_constant(self):

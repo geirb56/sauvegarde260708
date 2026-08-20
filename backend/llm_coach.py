@@ -298,8 +298,11 @@ async def generate_cycle_week(
 
     # Long run distance — sourced from WorkoutGenerator V2 (PR163).
     # context["long_run_km_v2"] is set by the server layer from WeeklyPlan V2.
-    # compute_long_run_km (legacy) is no longer called in this path.
-    target_long_run = context.get("long_run_km_v2") or 0
+    # For duration-based weeks the key is absent; target_long_run defaults to 0
+    # so the long_run slot contributes no distance and the full volume goes to
+    # other sessions.  compute_long_run_km (legacy) is no longer called here.
+    _long_run_km_v2 = context.get("long_run_km_v2")
+    target_long_run = _long_run_km_v2 if _long_run_km_v2 is not None else 0
 
     # Use personalized paces or defaults
     paces = personalized_paces or context.get('paces', {})
