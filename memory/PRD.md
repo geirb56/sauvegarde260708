@@ -500,3 +500,13 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
 - Mesures (session WARM): session 11ms · activités fetch 161–588ms (143, ~3 pages) · **daily metrics days=30 = 12.3s / 90 appels gccli (3/jour) = GOULOT ~95%** · persist 54+19ms · compute RunIndex+Readiness 4.7ms · enqueue Redis 3ms.
 - Total deep sync ≈ 13s (dominé par daily metrics). Incrémental < 1s. HRV absente (device). VFC/HRV ❌, sommeil ✅ RHR ✅.
 - Cold onboarding NON TESTÉ (login à froid non mesurable sans mot de passe). Rapport: /app/GARMIN_ONBOARDING_BENCHMARK.md · JSON brut: /tmp/garmin_benchmark_result.json.
+
+## 2026-06 — Pull copilot/dev — PR #166 (fermeture des test-drifts PR165)
+- Fetch + merge `sauvegarde/copilot/dev` (81eaa2d→dcd3e77). Merge ORT propre, 0 conflit. `.env` intacts, rapports locaux + PRD préservés.
+- PR #166 = ferme les 3 test-drifts introduits par PR#165 (aucun code runtime/frontend touché) :
+  - `test_pr155_week_plan_no_legacy.py` : ne patche plus `server.generate_cycle_week` (symbole retiré du chemin par #165).
+  - `test_pr156_no_unvalidated_tss_generate_cycle_week.py::test_distances_and_types_preserved` : assouplit l'assertion (accepte sémantique V2 duration-based, None/pas de km inventés).
+  - `test_pr162_week_plan_observed_weekly_km.py` : réaligné sur WeeklyPlan V2.
+- Validation RUNTIME (agent-tested) : smoke 7/7=200 (today, plan, metrics, run-index, dashboard, week-plan, full-cycle). Suites cœur Training V2 = 493 passed. Suites PR (test_pr*.py) = 158 passed. Les 3 tests corrigés = 23 passed.
+- Suite globale : échecs env/legacy historiques persistants (Redis/SSE/checks env REACT_APP_BACKEND_URL) NON liés à #166 — cf. règle « pytest global ≠ preuve release ».
+- Aucun redémarrage requis (PR166 = tests uniquement). Statut : agent-tested, non user-confirmed. Frontend inchangé depuis #165.
