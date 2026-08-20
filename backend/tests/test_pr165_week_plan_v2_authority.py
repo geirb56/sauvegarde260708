@@ -433,8 +433,8 @@ class TestContractC:
         wt, _ = _run_bridge(workouts)
         assert wt.target_basis == "distance"
         plan = _adapt(workouts)
-        assert plan["weekly_minutes"] is None or plan.get("weekly_km") is not None, (
-            "distance-based partial_reprise must not produce weekly_minutes"
+        assert plan["weekly_minutes"] is None, (
+            f"distance-based partial_reprise must not produce weekly_minutes, got {plan['weekly_minutes']}"
         )
 
 
