@@ -76,6 +76,7 @@ from training_v2.daily_adaptation import (
 )
 from training_v2.training_response import build_recent_training_response
 from training_v2.workout_generator import WorkoutPrescription
+from training_v2.training_week_response import TrainingWeekV2Response  # PR167
 from training_v2.daily_runtime_helpers import (
     BAND_TO_RECOMMENDATION,
     runtime_session_to_prescription,
@@ -4765,7 +4766,7 @@ async def get_week_plan(user: dict = Depends(auth_user)):
 # WeeklyTarget and WeeklyPlan are computed exactly once and never duplicated.
 # ---------------------------------------------------------------------------
 
-@api_router.get("/training/v2/week")
+@api_router.get("/training/v2/week", response_model=TrainingWeekV2Response)
 async def get_training_v2_week(user: dict = Depends(auth_user)):
     """Return the current week's V2 native prescription.
 
@@ -4777,7 +4778,6 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
     """
     from training_v2.week_plan_bridge import build_weekly_plan_from_workouts
     from training_v2.training_week_response import (
-        TrainingWeekV2Response,
         WeekV2GoalResponse,
         WeekV2PlanResponse,
         WeekV2SessionResponse,
@@ -4880,7 +4880,7 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
         goal=WeekV2GoalResponse(
             goal_type=goal_type,
             race_date=race_date_v2.isoformat() if race_date_v2 else None,
-            target_time_seconds=target_time_seconds_raw if isinstance(target_time_seconds_raw, int) else None,
+            target_time_seconds=int(target_time_seconds_raw) if isinstance(target_time_seconds_raw, (int, float)) and not isinstance(target_time_seconds_raw, bool) else None,
         ),
         state=WeekV2StateResponse(
             continuity_state=weekly_target.continuity_state,

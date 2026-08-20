@@ -172,6 +172,7 @@ def _call_builder(
 
 def _assemble_response(workouts, **kwargs) -> dict:
     """Full response assembly identical to the server handler logic."""
+    ref = kwargs.get("reference_date", _REF_DATE)
     wt, wp = _call_builder(workouts, **kwargs)
 
     sessions = [
@@ -188,7 +189,7 @@ def _assemble_response(workouts, **kwargs) -> dict:
     ]
 
     response = TrainingWeekV2Response(
-        reference_date=_REF_DATE.isoformat(),
+        reference_date=ref.isoformat(),
         goal=WeekV2GoalResponse(goal_type="MARATHON"),
         state=WeekV2StateResponse(
             continuity_state=wt.continuity_state,
