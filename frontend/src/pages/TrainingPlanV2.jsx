@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import Paywall from "@/components/Paywall";
 import { toast } from "sonner";
-import { Calendar, Clock3, RefreshCw, ShieldCheck, Target } from "lucide-react";
+import { Calendar, RefreshCw, ShieldCheck, Target, TrendingUp } from "lucide-react";
 import { API_BASE_URL } from "@/config";
 import { formatDistance } from "@/utils/units";
 
@@ -182,7 +182,7 @@ export default function TrainingPlanV2() {
         </div>
         <div className="p-4 rounded-2xl" style={{ background: "var(--bg-card)", border: "1px solid var(--border-color)" }}>
           <div className="flex items-center gap-2 mb-2">
-            <Clock3 className="w-4 h-4" style={{ color: "#fbbf24" }} />
+            <TrendingUp className="w-4 h-4" style={{ color: "#fbbf24" }} />
             <span className="text-xs uppercase tracking-wider" style={{ color: "var(--text-tertiary)" }}>{t("trainingPlanV2.confidence")}</span>
           </div>
           <div className="text-sm font-semibold text-white">{weeklyTarget.confidence || "—"}</div>
