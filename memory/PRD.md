@@ -3,6 +3,13 @@
 ## Problem Statement
 Pull https://github.com/geirb56/sauvegarde260629 and set it up so it runs. Replace /app contents.
 
+## 2026-08-19 — Pull copilot/dev (PR #162) — week-plan utilise le weekly_km OBSERVÉ — MERGÉ & VALIDÉ
+- Fetch copilot/dev (aaaa914→068454f). Merge ORT propre, 0 conflit. .env intacts. Backend+worker redémarrés.
+- PR #162 = utilisation du weekly_km observé (volume réel) dans le chemin week-plan (server.py 2 lignes) + tests focalisés (test_pr162_week_plan_observed_weekly_km.py, test_current_weekly_km_unification.py). Avance la migration/unification de compute_current_weekly_km.
+- Validation: smoke 7/7=200. Tests PR162 + régression = 178 passed, 0 failed.
+- État: chaîne Training Engine V2 stable, suite verte. Migration full-cycle/cycle-week: double-guard résolu (#161), weekly_km observé unifié (#162). Reste: compute_long_run_km.
+
+
 ## 2026-08-19 — Pull copilot/dev (PR #161) — WeeklyTarget V2 découplé de apply_resume_guard dans generate_cycle_week — MERGÉ & VALIDÉ
 - Fetch copilot/dev (b5de908→aaaa914). Merge ORT propre, 0 conflit. .env intacts. Backend+worker redémarrés.
 - PR #161 = découplage de WeeklyTarget V2 du legacy apply_resume_guard dans generate_cycle_week (llm_coach.py, évite un double resume-guard). + test_pr161_no_double_guard.py (469 lignes).
