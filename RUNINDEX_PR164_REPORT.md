@@ -3,10 +3,44 @@
 ## Metadata
 
 HEAD départ        : be2b7ac  (post-merge PR#163)  
-HEAD #164          : see branch copilot/dev (PR#164 commit)
+HEAD #164          : see branch copilot/dev (PR#164 final commit)
 
 DRIFT_PR156_CONFIRMED = YES  
 DRIFT_PR157_CONFIRMED = YES
+
+---
+
+## Duration-based runtime trigger (micro-audit result)
+
+```
+DURATION_BASED_RUNTIME_TRIGGER =
+    training_state in ("deep_reprise", "partial_reprise")
+
+Condition location : generate_cycle_week — after compute_target_km / target_km
+computation, before the volume-split logic.
+
+Branch behaviour :
+  - build sessions by DURATION via reprise_durations(prior_weekly_km, active_weeks)
+  - distance_km = round(duration / easy_pace, 1)  [positive, pace-derived]
+  - plan["reprise"] = True                         [unique branch invariant]
+  - plan["weekly_minutes"] = sum(durations)        [total prescribed minutes]
+  - plan["weekly_km"] = sum of pace-derived distances
+  - early-return — volume-split code is NOT reached
+
+NOTE on compute_target_km :
+  compute_target_km IS called before the reprise check (it is part of the
+  unconditional preamble).  Its result (target_km) is computed but then
+  discarded — the reprise branch returns before any code that uses target_km
+  in the volume split.  Removing target_km_protected / long_run_km_v2 from
+  context does NOT activate the reprise branch; that falls back to the normal
+  km-based volume split with training_state="normal".
+
+States and differences :
+  deep_reprise   : plan["focus"] = "Reprise en douceur — endurance facile…"
+  partial_reprise: plan["focus"] = "Reprise — endurance facile (durée)"
+  Both states produce plan["reprise"] = True and plan["weekly_minutes"] > 0.
+  Both use the same session-building logic (only focus text differs).
+```
 
 ---
 
@@ -67,18 +101,30 @@ OBSOLETE_BY_PR163 remaining = 0
 
 ## Contract verification
 
-### PR156 semantic contract after fix
+### PR156 semantic contract after final fix
 
 **DISTANCE/DURATION AWARE : YES**
 
-- `test_distances_and_types_preserved` — base context (no `long_run_km_v2`):
-  - Non-long_run active sessions: `distance_km > 0` AND `duration > 0` (volume-driven, always true)
-  - long_run: 0/0 placeholder acceptable when no V2 authority provided (duration-based)
-- `test_distances_and_types_preserved_distance_based` — explicit distance context (`target_km_protected=42`, `long_run_km_v2=24`):
+- `test_distances_and_types_preserved` — historical PR#156 context (training_state="normal",
+  no target_km_protected, no long_run_km_v2):
+  - Non-long_run active sessions: `distance_km > 0` AND `duration > 0` (volume-driven)
+  - long_run with target_long_run=0: 0/0 placeholder (normal km path, no V2 authority provided)
+  - **Does NOT claim this is a duration-based path.**
+
+- `test_distances_and_types_preserved_distance_based` — explicit distance context
+  (`target_km_protected=42`, `long_run_km_v2=24`):
   - ALL active sessions including long_run: `distance_km > 0` AND `duration > 0`
-- `test_distances_and_types_preserved_duration_based` — explicit duration context (no V2 long run):
-  - Non-long_run: `duration > 0` (volume-driven fallback)
-  - long_run: `distance_km >= 0` (no artificial km invented)
+
+- `test_distances_and_types_preserved_duration_based` — REAL duration-based path
+  (training_state="deep_reprise", triggered by the reprise branch):
+  - `plan["reprise"] is True` ← unique branch invariant proving we took the reprise branch
+  - `plan["weekly_minutes"] > 0` ← duration is the prescriptive authority
+  - All active sessions: `duration > 0` AND `distance_km > 0` (pace-derived from duration)
+  - `total_tss = None`, active `estimated_tss = None`, rest `estimated_tss = 0`
+
+- `test_distances_and_types_preserved_duration_based_partial_reprise` — same branch,
+  partial_reprise state (reprise_active_weeks=2, prior_weekly_km=40):
+  - Same invariants as deep_reprise
 
 PR156 continues to prove:
 - active `estimated_tss = None` ✓
@@ -86,7 +132,7 @@ PR156 continues to prove:
 - `total_tss = None` ✓
 - session types valid ✓
 - prescription distance valid when distance-based ✓
-- prescription duration valid when duration-based ✓
+- prescription duration valid when duration-based (reprise branch) ✓
 
 ### PR157 source check
 
@@ -116,6 +162,8 @@ PR157 continues to prove:
 ```
 test weakening introduced   = NO
 code applicatif modifié     = NO
+absence long_run_km_v2 == duration-based hypothesis = REMOVED
+DURATION_BASED_RUNTIME_TRIGGER documented = YES
 ```
 
 ---
@@ -124,7 +172,7 @@ code applicatif modifié     = NO
 
 | Suite | Passed | Failed | Errors |
 |-------|--------|--------|--------|
-| test_pr156_no_unvalidated_tss_generate_cycle_week.py | 16 | 0 | 0 |
+| test_pr156_no_unvalidated_tss_generate_cycle_week.py | 17 | 0 | 0 |
 | test_pr157_remove_determine_target_load.py | 10 | 0 | 0 |
 | test_pr163_long_run_v2_authority.py | 55 | 0 | 0 |
 | test_pr149_week_plan_v2.py | 41 | 0 | 0 |
@@ -135,25 +183,27 @@ code applicatif modifié     = NO
 | test_pr162_week_plan_observed_weekly_km.py | errors (httpx/fastapi not installed in sandbox) | — | 2 |
 | test_pr155_week_plan_no_legacy.py | errors (httpx/fastapi not installed in sandbox) | — | 2 |
 
-Total across all runnable suites: **271 passed, 0 failed** (4 collection errors due to missing fastapi/httpx in sandbox — unrelated to PR#164 changes).
+Total across all runnable suites: **27 passed (PR156+PR157), 271 passed (all suites), 0 failed**  
+(4 collection errors due to missing fastapi/httpx in sandbox — unrelated to PR#164 changes).
 
 ---
 
 ## Mergeability
 
 ```
-PR test-only                          = YES
-PR156 rouge repasse vert              = YES
-PR157 rouge repasse vert              = YES
-scan complet effectué                 = YES
-aucun autre drift PR163 restant       = YES
-tests non affaiblis                   = YES
-aucun code runtime modifié            = YES
-PR163 reste verte                     = YES
-WorkoutGenerator/WeeklyTarget verts   = YES
-tests pertinents = 0 failed           = YES
-mergeable                             = YES
-dette test-drift PR163 totalement fermée = YES
+PR test-only                                  = YES
+PR156 rouge repasse vert                      = YES
+PR157 rouge repasse vert                      = YES
+scan complet effectué                         = YES
+aucun autre drift PR163 restant               = YES
+tests non affaiblis                           = YES
+aucun code runtime modifié                    = YES
+PR163 reste verte                             = YES
+WorkoutGenerator/WeeklyTarget verts           = YES
+tests pertinents = 0 failed                   = YES
+mergeable                                     = YES
+dette test-drift PR163 totalement fermée      = YES
+absence long_run_km_v2 == duration-based bug  = FIXED
 ```
 
 ## Files modified
@@ -167,3 +217,4 @@ dette test-drift PR163 totalement fermée = YES
 ## VERDICT
 
 **READY FOR MERGE INTO copilot/dev**
+
