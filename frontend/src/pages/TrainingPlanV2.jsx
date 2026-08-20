@@ -122,9 +122,9 @@ export default function TrainingPlanV2() {
     <div className="p-4 pb-24 space-y-4" style={{ background: "var(--bg-primary)" }} data-testid="training-plan-v2-page">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold uppercase tracking-tight text-white">{t("trainingPlanExtended.planTitle")} V2</h1>
+          <h1 className="text-xl font-bold uppercase tracking-tight text-white">{t("trainingPlanV2.title")}</h1>
           <p className="text-sm font-mono" style={{ color: "var(--text-tertiary)" }}>
-            {t("trainingPlanExtended.weekLabel")} • /api/training/v2/week
+            {t("trainingPlanV2.currentWeekOnly")} • /api/training/v2/week
           </p>
         </div>
         <Button
@@ -153,7 +153,7 @@ export default function TrainingPlanV2() {
         <div className="p-4 rounded-2xl" style={{ background: "var(--bg-card)", border: "1px solid var(--border-color)" }}>
           <div className="flex items-center gap-2 mb-2">
             <Target className="w-4 h-4" style={{ color: "var(--accent-green)" }} />
-            <span className="text-xs uppercase tracking-wider" style={{ color: "var(--text-tertiary)" }}>Target</span>
+            <span className="text-xs uppercase tracking-wider" style={{ color: "var(--text-tertiary)" }}>{t("trainingPlanV2.target")}</span>
           </div>
           <div className="text-2xl font-bold text-white">{targetSummary}</div>
           <p className="text-xs mt-1" style={{ color: "var(--text-tertiary)" }}>{weeklyTarget.target_basis || "—"}</p>
@@ -161,10 +161,12 @@ export default function TrainingPlanV2() {
         <div className="p-4 rounded-2xl" style={{ background: "var(--bg-card)", border: "1px solid var(--border-color)" }}>
           <div className="flex items-center gap-2 mb-2">
             <Calendar className="w-4 h-4" style={{ color: "#60a5fa" }} />
-            <span className="text-xs uppercase tracking-wider" style={{ color: "var(--text-tertiary)" }}>Planned</span>
+            <span className="text-xs uppercase tracking-wider" style={{ color: "var(--text-tertiary)" }}>{t("trainingPlanV2.planned")}</span>
           </div>
           <div className="text-2xl font-bold text-white">{plannedSummary}</div>
-          <p className="text-xs mt-1" style={{ color: "var(--text-tertiary)" }}>{week.session_count ?? 0} sessions</p>
+          <p className="text-xs mt-1" style={{ color: "var(--text-tertiary)" }}>
+            {(week.session_count ?? 0)} {t("trainingPlanV2.sessions")}
+          </p>
         </div>
       </div>
 
@@ -172,20 +174,22 @@ export default function TrainingPlanV2() {
         <div className="p-4 rounded-2xl" style={{ background: "var(--bg-card)", border: "1px solid var(--border-color)" }}>
           <div className="flex items-center gap-2 mb-2">
             <ShieldCheck className="w-4 h-4" style={{ color: "#34d399" }} />
-            <span className="text-xs uppercase tracking-wider" style={{ color: "var(--text-tertiary)" }}>State</span>
+            <span className="text-xs uppercase tracking-wider" style={{ color: "var(--text-tertiary)" }}>{t("trainingPlanV2.state")}</span>
           </div>
           <div className="text-sm font-semibold text-white">{state.continuity_state || "—"}</div>
           <p className="text-xs mt-1" style={{ color: "var(--text-tertiary)" }}>
-            intensity: {state.allow_intensity ? "on" : "off"}
+            {t("trainingPlanV2.intensity")}: {state.allow_intensity ? t("trainingPlanV2.on") : t("trainingPlanV2.off")}
           </p>
         </div>
         <div className="p-4 rounded-2xl" style={{ background: "var(--bg-card)", border: "1px solid var(--border-color)" }}>
           <div className="flex items-center gap-2 mb-2">
             <Clock3 className="w-4 h-4" style={{ color: "#fbbf24" }} />
-            <span className="text-xs uppercase tracking-wider" style={{ color: "var(--text-tertiary)" }}>Confidence</span>
+            <span className="text-xs uppercase tracking-wider" style={{ color: "var(--text-tertiary)" }}>{t("trainingPlanV2.confidence")}</span>
           </div>
           <div className="text-sm font-semibold text-white">{weeklyTarget.confidence || "—"}</div>
-          <p className="text-xs mt-1" style={{ color: "var(--text-tertiary)" }}>{weeklyTarget.session_count ?? 0} recommended</p>
+          <p className="text-xs mt-1" style={{ color: "var(--text-tertiary)" }}>
+            {(weeklyTarget.session_count ?? 0)} {t("trainingPlanV2.recommended")}
+          </p>
         </div>
       </div>
 
