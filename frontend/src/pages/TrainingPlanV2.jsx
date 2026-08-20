@@ -29,7 +29,6 @@ const API = API_BASE_URL;
 function workoutIcon(type) {
   switch (type) {
     case "rest":
-      return <Heart className="w-4 h-4" />;
     case "recovery":
       return <Heart className="w-4 h-4" />;
     case "easy":
