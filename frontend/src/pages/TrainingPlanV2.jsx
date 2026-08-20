@@ -123,7 +123,7 @@ export default function TrainingPlanV2() {
         <div>
           <h1 className="text-xl font-bold uppercase tracking-tight text-white">{t("trainingPlanV2.title")}</h1>
           <p className="text-sm font-mono" style={{ color: "var(--text-tertiary)" }}>
-            {t("trainingPlanV2.currentWeekOnly")} • /api/training/v2/week
+            {t("trainingPlanV2.currentWeekOnly")}
           </p>
         </div>
         <Button
@@ -199,13 +199,13 @@ export default function TrainingPlanV2() {
         </div>
 
         <div className="space-y-2">
-          {sessions.map((session, idx) => {
+          {sessions.map((session) => {
             const style = SESSION_STYLES[session.workout_type] || SESSION_STYLES.easy;
             const translatedType = t(`trainingPlanSessionType.${typeTranslationKey(session.workout_type)}`);
             const workoutLabel = translatedType.startsWith("[[") ? fallbackLabel(session.workout_type) : translatedType;
             const dayLabel = t(`trainingPlanDays.${session.day}`);
             const safeDayLabel = dayLabel.startsWith("[[") ? fallbackLabel(session.day) : dayLabel;
-            const sessionKey = `${session.day}-${session.workout_type}-${session.distance_km ?? "na"}-${session.duration_minutes ?? "na"}-${idx}`;
+            const sessionKey = `${session.day}-${session.workout_type}-${session.intensity_class}-${(session.reason_codes || []).join("-")}`;
 
             return (
               <div key={sessionKey} className="flex items-center gap-2 p-3 rounded-lg" style={{ background: style.bg, border: `1px solid ${style.border}` }}>
