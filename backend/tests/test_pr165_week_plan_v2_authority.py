@@ -97,9 +97,18 @@ class TestAST:
     to legacy prescription functions after PR165."""
 
     def _server_get_week_plan_source(self) -> str:
-        import server
-        import inspect
-        return inspect.getsource(server.get_week_plan)
+        """Read get_week_plan source from server.py without importing the module."""
+        from pathlib import Path
+        server_path = Path(_BACKEND_DIR) / "server.py"
+        source = server_path.read_text()
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "get_week_plan":
+                lines = source.splitlines()
+                start = node.lineno - 1
+                end = node.end_lineno
+                return "\n".join(lines[start:end])
+        raise RuntimeError("get_week_plan not found in server.py")
 
     def test_generate_cycle_week_not_called_in_get_week_plan(self):
         """PR165: generate_cycle_week must NOT be called inside get_week_plan."""
@@ -161,21 +170,28 @@ class TestAST:
         )
 
     def test_adapter_does_not_call_prescription_functions(self):
-        """PR165: adapter module must not call any prescription function."""
+        """PR165: adapter module must not CALL any prescription function (AST — ignores docstrings)."""
         from pathlib import Path
         adapter_path = Path(_BACKEND_DIR) / "training_v2" / "week_plan_adapter.py"
         source = adapter_path.read_text()
-        forbidden = [
+        tree = ast.parse(source)
+        forbidden = {
             "compute_target_km",
             "reprise_durations",
             "compute_long_run_km",
             "apply_resume_guard",
             "generate_cycle_week",
-        ]
-        for name in forbidden:
-            assert name not in source, (
-                f"Adapter must not call {name} — found in week_plan_adapter.py"
-            )
+        }
+        calls_found = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name) and node.func.id in forbidden:
+                    calls_found.append(node.func.id)
+                elif isinstance(node.func, ast.Attribute) and node.func.attr in forbidden:
+                    calls_found.append(node.func.attr)
+        assert calls_found == [], (
+            f"Adapter must not call prescription functions, found: {calls_found}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -509,10 +525,18 @@ class TestAdapterLegacyKeys:
         )
 
     def test_generated_by_is_weekly_plan_v2(self):
-        """server.get_week_plan must set generated_by='weekly_plan_v2'."""
-        import inspect
-        import server
-        source = inspect.getsource(server.get_week_plan)
-        assert "weekly_plan_v2" in source, (
+        """server.get_week_plan must set generated_by='weekly_plan_v2' (file-based check)."""
+        from pathlib import Path
+        server_path = Path(_BACKEND_DIR) / "server.py"
+        source = server_path.read_text()
+        tree = ast.parse(source)
+        fn_source = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "get_week_plan":
+                lines = source.splitlines()
+                fn_source = "\n".join(lines[node.lineno - 1:node.end_lineno])
+                break
+        assert fn_source is not None, "get_week_plan not found in server.py"
+        assert "weekly_plan_v2" in fn_source, (
             "generated_by must be 'weekly_plan_v2' — prescription source changed"
         )
