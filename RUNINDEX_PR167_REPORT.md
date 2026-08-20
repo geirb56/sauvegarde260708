@@ -136,7 +136,6 @@ Aucun second `datetime.now()` dans l'endpoint.
 | active session → `estimated_tss` | `null` |
 | rest session → `estimated_tss` | `0` |
 | target_time absent → `target_time_seconds` | `null` (jamais 0) |
-| UNKNOWN_COERCED_TO_ZERO | **0** |
 
 ---
 
