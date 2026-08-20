@@ -47,13 +47,20 @@ CONTEXT = {
     },
 }
 
+DISTANCE_CONTEXT = {
+    **CONTEXT,
+    "target_km_protected": 40.0,
+    "long_run_km_v2": 12.0,
+}
 
-def _get_plan_6():
+
+def _get_plan_6(context=None):
+    ctx = context or CONTEXT
     loop = asyncio.new_event_loop()
     try:
         plan, success, _ = loop.run_until_complete(
             generate_cycle_week(
-                context=CONTEXT,
+                context=ctx,
                 phase="build",
                 target_load=80,
                 goal="MARATHON",
@@ -215,7 +222,7 @@ def test_ast_no_legacy_tss_coefficients():
 # ---------------------------------------------------------------------------
 
 def test_distances_and_types_preserved():
-    plan = _get_plan_6()
+    plan = _get_plan_6(DISTANCE_CONTEXT)
     for s in plan["sessions"]:
         assert s["type"] in ACTIVE_TYPES | {"rest"}
         assert "duration" in s

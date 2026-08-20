@@ -16,6 +16,7 @@ import sys
 from typing import Any, List, Optional
 from unittest.mock import AsyncMock, patch
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -124,18 +125,26 @@ async def _mock_get_user_access(db, user_id):
     return UserAccess(user_id=user_id, tier=Tier.PREMIUM)
 
 
-def _mock_generate_cycle_week(**kwargs):
-    """Mock that returns a simple plan without calling LLM."""
-    async def _inner(
-        context,
-        phase,
-        goal,
-        user_id="unknown",
-        target_load=None,
-        **kwargs,
-    ):
-        return {"sessions": []}, True, {"source": "mock"}
-    return _inner
+def _fixed_weekly_target():
+    return SimpleNamespace(
+        target_basis="distance",
+        target_km=42.0,
+        target_duration_minutes=None,
+        continuity_state="normal",
+    )
+
+
+def _fixed_weekly_plan():
+    return SimpleNamespace(
+        sessions=[],
+        planned_km=42.0,
+        planned_duration_minutes=None,
+        target_basis="distance",
+    )
+
+
+def _mock_adapt_weekly_plan_to_legacy(*args, **kwargs):
+    return {"sessions": [], "weekly_km": 42.0, "total_tss": None}
 
 
 @pytest_asyncio.fixture
@@ -156,7 +165,14 @@ async def client():
     patches = [
         patch.object(server, "db", fake_db),
         patch("server.get_user_access", AsyncMock(side_effect=_mock_get_user_access)),
-        patch("server.generate_cycle_week", _mock_generate_cycle_week()),
+        patch(
+            "training_v2.week_plan_bridge.build_weekly_plan_from_workouts",
+            return_value=(_fixed_weekly_target(), _fixed_weekly_plan()),
+        ),
+        patch(
+            "training_v2.week_plan_adapter.adapt_weekly_plan_to_legacy",
+            side_effect=_mock_adapt_weekly_plan_to_legacy,
+        ),
     ]
     started = []
     try:
