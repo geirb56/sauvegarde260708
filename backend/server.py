@@ -76,6 +76,7 @@ from training_v2.daily_adaptation import (
 )
 from training_v2.training_response import build_recent_training_response
 from training_v2.workout_generator import WorkoutPrescription
+from training_v2.training_week_response import TrainingWeekV2Response  # PR167
 from training_v2.daily_runtime_helpers import (
     BAND_TO_RECOMMENDATION,
     runtime_session_to_prescription,
@@ -4756,6 +4757,157 @@ async def get_week_plan(user: dict = Depends(auth_user)):
         "generated_by": "weekly_plan_v2",
         "metadata": metadata
     }
+
+
+# ---------------------------------------------------------------------------
+# PR167 — GET /training/v2/week
+# Native V2 endpoint: returns WeeklyTarget + WeeklyPlan without any legacy
+# adapter. Uses the same canonical builder as /training/week-plan so that
+# WeeklyTarget and WeeklyPlan are computed exactly once and never duplicated.
+# ---------------------------------------------------------------------------
+
+@api_router.get("/training/v2/week", response_model=TrainingWeekV2Response)
+async def get_training_v2_week(user: dict = Depends(auth_user)):
+    """Return the current week's V2 native prescription.
+
+    Pipeline (reuses the canonical builder from week_plan_bridge):
+      TrainingHistory → TrainingState → PlanGoal → Periodization
+      → WeeklyTarget → WorkoutGenerator → WeeklyPlan
+
+    No legacy adapter applied. None stays None (None != 0 doctrine).
+    """
+    from training_v2.week_plan_bridge import build_weekly_plan_from_workouts
+    from training_v2.training_week_response import (
+        WeekV2GoalResponse,
+        WeekV2PlanResponse,
+        WeekV2SessionResponse,
+        WeekV2StateResponse,
+        WeekV2TargetResponse,
+    )
+
+    user_id = user["id"]
+
+    # ── Single clock: resolve now_utc ONCE to avoid midnight-boundary skew ─
+    now_utc = datetime.now(timezone.utc)
+    reference_date = now_utc.date()
+
+    # ── Goal & cycle from canonical sources (same as /training/week-plan) ─
+    cycle = await db.training_cycles.find_one({"user_id": user_id}, {"_id": 0})
+    if not cycle:
+        raise HTTPException(
+            status_code=400,
+            detail="No training goal defined. Use /api/training/set-goal first.",
+        )
+
+    goal_type = cycle.get("goal")
+    if not goal_type or goal_type not in GOAL_CONFIG:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown or missing goal type: {goal_type}",
+        )
+
+    start_date_raw = cycle.get("start_date")
+    if not start_date_raw:
+        raise HTTPException(status_code=400, detail="No start_date in training cycle.")
+
+    # ── Optional race metadata from user_goals ────────────────────────────
+    user_goal = await db.user_goals.find_one({"user_id": user_id}, {"_id": 0})
+
+    race_date_raw = user_goal.get("event_date") if user_goal else None
+    race_date_v2 = None
+    if isinstance(race_date_raw, datetime):
+        race_date_v2 = (
+            race_date_raw.date()
+            if race_date_raw.tzinfo
+            else race_date_raw.replace(tzinfo=timezone.utc).date()
+        )
+    elif isinstance(race_date_raw, str):
+        try:
+            race_date_v2 = datetime.fromisoformat(
+                race_date_raw.replace("Z", "+00:00")
+            ).date()
+        except (ValueError, TypeError):
+            pass
+
+    target_time_minutes_raw = user_goal.get("target_time_minutes") if user_goal else None
+    # Convert minutes→seconds at the API boundary (canonical DB field is target_time_minutes)
+    if isinstance(target_time_minutes_raw, (int, float)) and not isinstance(target_time_minutes_raw, bool) and target_time_minutes_raw > 0:
+        target_time_seconds = int(target_time_minutes_raw * 60)
+    else:
+        target_time_seconds = None
+
+    cycle_start_v2: Optional[date] = None
+    if isinstance(start_date_raw, datetime):
+        cycle_start_v2 = (
+            start_date_raw.date()
+            if start_date_raw.tzinfo
+            else start_date_raw.replace(tzinfo=timezone.utc).date()
+        )
+    elif isinstance(start_date_raw, str):
+        try:
+            cycle_start_v2 = datetime.fromisoformat(
+                start_date_raw.replace("Z", "+00:00")
+            ).date()
+        except (ValueError, TypeError):
+            pass
+
+    # ── Workouts — 90-day window (same as /training/week-plan) ───────────
+    ninety_days_ago = now_utc - timedelta(days=90)
+    workouts_90 = await db.workouts.find(
+        {"user_id": user_id, "date": {"$gte": ninety_days_ago.isoformat()}}
+    ).to_list(1000)
+
+    # ── Canonical builder — single call, no duplication ──────────────────
+    weekly_target, weekly_plan = build_weekly_plan_from_workouts(
+        workouts=workouts_90,
+        goal_type=goal_type,
+        race_date=race_date_v2,
+        cycle_start_date=cycle_start_v2,
+        reference_date=reference_date,
+    )
+
+    # ── Assemble native V2 response — no adapter, no coercion ────────────
+    sessions = [
+        WeekV2SessionResponse(
+            day=s.day,
+            workout_type=s.workout_type,
+            intensity_class=s.intensity_class,
+            distance_km=s.distance_km,
+            duration_minutes=s.duration_minutes,
+            # TSS doctrine: active sessions → None, rest sessions → 0.
+            estimated_tss=0 if s.workout_type == "rest" else None,
+            reason_codes=list(s.reason_codes),
+        )
+        for s in weekly_plan.sessions
+    ]
+
+    response = TrainingWeekV2Response(
+        reference_date=reference_date.isoformat(),
+        goal=WeekV2GoalResponse(
+            goal_type=goal_type,
+            race_date=race_date_v2.isoformat() if race_date_v2 else None,
+            target_time_seconds=target_time_seconds,
+        ),
+        state=WeekV2StateResponse(
+            continuity_state=weekly_target.continuity_state,
+            allow_intensity=weekly_target.allow_intensity,
+        ),
+        weekly_target=WeekV2TargetResponse(
+            target_basis=weekly_target.target_basis,
+            target_km=weekly_target.target_km,
+            target_duration_minutes=weekly_target.target_duration_minutes,
+            session_count=weekly_target.target_sessions,
+            confidence=weekly_target.confidence,
+        ),
+        week=WeekV2PlanResponse(
+            planned_km=weekly_plan.planned_km,
+            planned_duration_minutes=weekly_plan.planned_duration_minutes,
+            session_count=weekly_plan.session_count,
+            sessions=sessions,
+        ),
+    )
+
+    return response.model_dump(mode="json")
 
 
 def _generate_fallback_week_plan(context: dict, phase: str, goal: str, target_km_protected: float = None) -> dict:
