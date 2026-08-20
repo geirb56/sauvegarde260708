@@ -287,9 +287,15 @@ async def generate_cycle_week(
     target_sessions = sessions_per_week if sessions_per_week in [3, 4, 5, 6] else config["sessions"]
 
     # Target weekly volume — single source of truth shared with cycle overview.
-    # PR76: honour target_km_protected if the resume guard was triggered upstream.
-    target_km = context.get("target_km_protected") or compute_target_km(current_weekly_km, goal, phase)
-    target_km = apply_resume_guard(target_km, context.get("km_7", current_weekly_km), current_weekly_km)
+    # PR161: if WeeklyTarget V2 has already computed and protected a target, use it
+    # as-is — do NOT reprocess through the legacy apply_resume_guard (double guard).
+    # Only the legacy fallback path goes through compute_target_km + apply_resume_guard.
+    protected_target = context.get("target_km_protected")
+    if protected_target is not None:
+        target_km = protected_target
+    else:
+        target_km = compute_target_km(current_weekly_km, goal, phase)
+        target_km = apply_resume_guard(target_km, context.get("km_7", current_weekly_km), current_weekly_km)
 
     # Long run distance — compute_long_run_km in training_engine is the single
     # source of truth. Do not re-cap here.
