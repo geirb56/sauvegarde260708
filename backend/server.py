@@ -38,7 +38,7 @@ from analysis_engine import (
 )
 
 # Import LLM coach module (GPT-4o-mini)
-from llm_coach import LLM_MODEL, generate_cycle_week
+from llm_coach import LLM_MODEL
 
 # Import coach service (cascade strategy)
 from coach_service import (
@@ -4714,22 +4714,22 @@ async def get_week_plan(user: dict = Depends(auth_user)):
     # PR149: transport V2 duration target for duration-based states.
     if weekly_target.target_basis == "duration":
         context["target_duration_minutes"] = weekly_target.target_duration_minutes
-    # PR163: pass WorkoutGenerator V2 long_easy distance — generate_cycle_week
-    # must NOT recompute it via the legacy compute_long_run_km.
+    # PR163: pass WorkoutGenerator V2 long_easy distance — display context only.
     if long_run_km_v2 is not None:
         context["long_run_km_v2"] = long_run_km_v2
 
-    # Générer le plan via LLM (legacy rendering — compat)
-    plan, success, metadata = await generate_cycle_week(
-        context=context,
-        phase=phase,
-        goal=goal["goal_type"],
-        user_id=user_id
-    )
-
-    if not success or not plan:
-        # Fallback: plan générique basé sur la phase, respectant target_km_protected
-        plan = _generate_fallback_week_plan(context, phase, goal["goal_type"], target_km_protected)
+    # PR165: WeeklyPlan V2 is the single prescription authority.
+    # The adapter converts V2 sessions to the legacy JSON contract.
+    # generate_cycle_week is NO LONGER called in this path.
+    from training_v2.week_plan_adapter import adapt_weekly_plan_to_legacy
+    plan = adapt_weekly_plan_to_legacy(weekly_plan_v2, weekly_target, phase)
+    metadata = {
+        "model": "deterministic_v2",
+        "provider": "WeeklyPlan_V2",
+        "context_type": "cycle_week",
+        "duration_sec": 0,
+        "success": True,
+    }
 
     return {
         "goal": {
@@ -4750,10 +4750,10 @@ async def get_week_plan(user: dict = Depends(auth_user)):
             "target_duration_minutes": weekly_target.target_duration_minutes,
             "continuity_state": weekly_target.continuity_state,
             "phase": phase,
-            "prescription_source": "WeeklyTarget_V2",
+            "prescription_source": "WeeklyPlan_V2",
         },
         "plan": plan,
-        "generated_by": "llm" if success else "fallback",
+        "generated_by": "weekly_plan_v2",
         "metadata": metadata
     }
 

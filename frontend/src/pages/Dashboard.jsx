@@ -163,9 +163,11 @@ function SessionCard({ session, isGrayed = false, fatigueColor = null }) {
           <span className="text-sm font-bold" style={{ color: style.text }}>
             {t(`trainingPlanSessionType.${session.type}`) || session.type}
           </span>
-          <span className="text-xs" style={{ color: style.text, opacity: 0.8 }}>
-            {session.duration}
-          </span>
+          {session.duration && (
+            <span className="text-xs" style={{ color: style.text, opacity: 0.8 }}>
+              {session.duration}
+            </span>
+          )}
         </div>
         {!isRest && session.details && (
           <span className="text-xs block" style={{ color: style.text, opacity: 0.7 }}>

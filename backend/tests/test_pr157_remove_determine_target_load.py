@@ -158,7 +158,13 @@ class TestWeeklyTargetV2Authority(unittest.TestCase):
     """PR157: WeeklyTarget V2 remains the prescriptive authority."""
 
     def test_weekly_target_v2_used_in_week_plan_source(self):
-        """build_weekly_target_from_workouts must still be called in get_week_plan."""
+        """WeeklyTarget V2 must still be produced in get_week_plan.
+
+        PR165 update: the entry-point is now build_weekly_plan_from_workouts
+        (superset of build_weekly_target_from_workouts — returns both WeeklyTarget
+        and WeeklyPlan).  The invariant is that WeeklyTarget V2 is still in the
+        pipeline, just accessed via the combined builder.
+        """
         import pathlib
         server_path = pathlib.Path(__file__).parent.parent / "server.py"
         source = server_path.read_text()
@@ -168,10 +174,12 @@ class TestWeeklyTargetV2Authority(unittest.TestCase):
             if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)) and node.name == "get_week_plan":
                 fn_src = ast.get_source_segment(source, node) or ""
                 break
+        # PR165: build_weekly_plan_from_workouts replaces the standalone
+        # build_weekly_target_from_workouts call — it includes WeeklyTarget V2.
         self.assertIn(
-            "build_weekly_target_from_workouts",
+            "build_weekly_plan_from_workouts",
             fn_src,
-            "WeeklyTarget V2 bridge must still be called in get_week_plan"
+            "WeeklyTarget+WeeklyPlan V2 bridge must still be called in get_week_plan"
         )
 
     def test_target_km_protected_from_v2(self):
