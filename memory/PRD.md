@@ -3,6 +3,17 @@
 ## Problem Statement
 Pull https://github.com/geirb56/sauvegarde260629 and set it up so it runs. Replace /app contents.
 
+## 2026-08-19 — Pull copilot/dev (PR #163) — compute_long_run_km retiré (WorkoutGenerator V2 autorité long_easy) — MERGÉ, runtime OK, 2 test-drifts
+- Fetch copilot/dev (068454f→be2b7ac). Merge ORT propre, 0 conflit. .env intacts. Backend+worker redémarrés.
+- PR #163 = suppression de compute_long_run_km de generate_cycle_week (WorkoutGenerator V2 = autorité long_easy, long_run_km_v2 passé via context; None si duration-based, aucun km inventé) + déduplication pipeline week_plan_bridge (_build_weekly_context_from_workouts, appel renommé build_weekly_plan_from_workouts). Dernier gros helper legacy du cycle-week migré.
+- Validation RUNTIME: compute_long_run_km plus appelé dans generate_cycle_week (commentaire seulement). Smoke 7/7=200.
+- ⚠️ 2 TEST-DRIFTS introduits par PR163 (NON runtime): 
+  1. test_pr156::test_distances_and_types_preserved: assert distance_km>0 sur séances actives, mais PR163 met distance=0/None (long_run_km_v2=None) sur semaines duration-based (pas de km inventé) → assert 0>0 échoue. Assertion obsolète.
+  2. test_pr157::test_weekly_target_v2_used_in_week_plan_source: cherche littéral 'build_weekly_target_from_workouts', or PR163 a renommé l'appel en 'build_weekly_plan_from_workouts'. Inspection source obsolète.
+  Runtime OK. Correctifs recommandés (PR future): (1) autoriser distance_km>=0/None sur actives duration-based; (2) mettre à jour le nom recherché → build_weekly_plan_from_workouts (ou check AST). NON corrigés (workflow: fixes via PRs utilisateur).
+- Autres suites: 196 passed. Migration full-cycle/cycle-week V2 quasi complète (#157/#161/#162/#163). training_engine garde encore des helpers phase/reprise/cycle-dates.
+
+
 ## 2026-08-19 — Pull copilot/dev (PR #162) — week-plan utilise le weekly_km OBSERVÉ — MERGÉ & VALIDÉ
 - Fetch copilot/dev (aaaa914→068454f). Merge ORT propre, 0 conflit. .env intacts. Backend+worker redémarrés.
 - PR #162 = utilisation du weekly_km observé (volume réel) dans le chemin week-plan (server.py 2 lignes) + tests focalisés (test_pr162_week_plan_observed_weekly_km.py, test_current_weekly_km_unification.py). Avance la migration/unification de compute_current_weekly_km.
