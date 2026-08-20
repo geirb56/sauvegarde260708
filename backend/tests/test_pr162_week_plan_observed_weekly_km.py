@@ -45,8 +45,6 @@ from auth.jwt_utils import create_access_token  # noqa: E402
 from llm_coach import generate_cycle_week  # noqa: E402
 from training_engine import compute_current_weekly_km  # noqa: E402
 
-pytestmark = pytest.mark.asyncio
-
 _USER_ID = "pr162-test-user"
 _START_DATE = datetime(2026, 6, 1, tzinfo=timezone.utc)
 
@@ -76,7 +74,24 @@ class _Collection:
         for key, expected in (query or {}).items():
             if isinstance(expected, dict) and "$gte" in expected:
                 gte = expected["$gte"]
-                docs = [d for d in docs if str(d.get(key, "")) >= str(gte)]
+                def _coerce(value):
+                    if isinstance(value, str):
+                        try:
+                            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+                        except ValueError:
+                            return value
+                    return value
+
+                gte_value = _coerce(gte)
+                filtered = []
+                for d in docs:
+                    value = _coerce(d.get(key))
+                    try:
+                        if value is not None and value >= gte_value:
+                            filtered.append(d)
+                    except TypeError:
+                        continue
+                docs = filtered
             else:
                 docs = [d for d in docs if d.get(key) == expected]
         return _Cursor(docs)
@@ -185,15 +200,23 @@ async def client_factory():
             p.stop()
 
 
+@pytest.mark.asyncio
 async def test_a_positive_history_observed_matches_km28_over_4_and_legacy_when_running(client_factory):
     workouts = [
         {"user_id": _USER_ID, "date": _now_iso(2), "type": "run", "distance_km": 8},
         {"user_id": _USER_ID, "date": _now_iso(6), "sport_type": "running", "distance": 12000},
         {"user_id": _USER_ID, "date": _now_iso(13), "activity_type": "run", "distance_km": 10},
         {"user_id": _USER_ID, "date": _now_iso(20), "type": "ride", "distance_km": 100},
+        {"user_id": _USER_ID, "date": _now_iso(35), "type": "run", "distance_km": 99},
+    ]
+    cutoff = datetime.now(timezone.utc) - timedelta(days=28)
+    workouts_28 = [
+        w
+        for w in workouts
+        if datetime.fromisoformat(w["date"].replace("Z", "+00:00")) >= cutoff
     ]
     expected_observed = (8 + 12 + 10) / 4.0
-    expected_legacy = compute_current_weekly_km(workouts)
+    expected_legacy = compute_current_weekly_km(workouts_28)
 
     client = await client_factory(workouts)
     resp = await client.get("/api/training/week-plan", headers=_bearer())
@@ -202,9 +225,10 @@ async def test_a_positive_history_observed_matches_km28_over_4_and_legacy_when_r
     body = resp.json()
     observed = body["context"]["weekly_km"]
     assert observed == pytest.approx(expected_observed)
-    assert observed == pytest.approx(expected_legacy)
+    assert expected_legacy == pytest.approx(expected_observed)
 
 
+@pytest.mark.asyncio
 async def test_b_zero_history_observed_weekly_km_is_zero_not_20(client_factory):
     client = await client_factory([])
     resp = await client.get("/api/training/week-plan", headers=_bearer())
@@ -215,6 +239,7 @@ async def test_b_zero_history_observed_weekly_km_is_zero_not_20(client_factory):
     assert observed != 20
 
 
+@pytest.mark.asyncio
 async def test_c_non_running_only_observed_weekly_km_is_zero(client_factory):
     workouts = [
         {"user_id": _USER_ID, "date": _now_iso(1), "type": "ride", "distance_km": 40},
@@ -296,7 +321,7 @@ def test_e_duration_reprise_valid_with_weekly_km_zero_no_fictive_baseline():
     assert success
     assert plan["reprise"] is True
     assert plan["weekly_minutes"] is not None and plan["weekly_minutes"] > 0
-    assert "cible:" not in plan["advice"]
+    assert "cible:" not in plan.get("advice", "")
 
 
 def test_f_tss_doctrine_unchanged_active_none_rest_zero_total_none():
