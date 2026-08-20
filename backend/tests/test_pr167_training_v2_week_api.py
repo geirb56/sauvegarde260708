@@ -693,3 +693,122 @@ class TestResponseModel:
             assert "workout_type" in s
             assert "intensity_class" in s
             assert "reason_codes" in s
+
+
+# ===========================================================================
+# TARGET_TIME — conversion minutes→seconds (BLOCKER 1)
+# ===========================================================================
+
+def _target_time_seconds_from_minutes(target_time_minutes):
+    """Mirror the conversion logic at the API boundary in server.py."""
+    if (
+        isinstance(target_time_minutes, (int, float))
+        and not isinstance(target_time_minutes, bool)
+        and target_time_minutes > 0
+    ):
+        return int(target_time_minutes * 60)
+    return None
+
+
+class TestTargetTimeConversion:
+    """TARGET_TIME_MINUTES_TO_SECONDS — DB canonical field is target_time_minutes."""
+
+    def test_TARGET_TIME_MINUTES_TO_SECONDS(self):
+        """120 min → 7200 sec."""
+        assert _target_time_seconds_from_minutes(120) == 7200
+
+    def test_TARGET_TIME_MINUTES_TO_SECONDS_float(self):
+        """180.0 min → 10800 sec."""
+        assert _target_time_seconds_from_minutes(180.0) == 10800
+
+    def test_TARGET_TIME_ABSENT(self):
+        """Absent field (None) → None, not 0."""
+        assert _target_time_seconds_from_minutes(None) is None
+
+    def test_TARGET_TIME_INVALID_zero(self):
+        """Zero is invalid → None."""
+        assert _target_time_seconds_from_minutes(0) is None
+
+    def test_TARGET_TIME_INVALID_negative(self):
+        """Negative value → None."""
+        assert _target_time_seconds_from_minutes(-30) is None
+
+    def test_TARGET_TIME_INVALID_string(self):
+        """Non-numeric string → None."""
+        assert _target_time_seconds_from_minutes("120") is None
+
+    def test_TARGET_TIME_INVALID_bool(self):
+        """Bool (True = 1 in Python) → None — bools rejected explicitly."""
+        assert _target_time_seconds_from_minutes(True) is None
+
+    def test_no_none_coerced_to_zero(self):
+        """None must never become 0."""
+        result = _target_time_seconds_from_minutes(None)
+        assert result is None
+        assert result != 0
+
+    def test_response_model_accepts_converted_seconds(self):
+        """WeekV2GoalResponse accepts the converted int correctly."""
+        goal = WeekV2GoalResponse(
+            goal_type="MARATHON",
+            race_date=None,
+            target_time_seconds=7200,
+        )
+        d = goal.model_dump(mode="json")
+        assert d["target_time_seconds"] == 7200
+
+    def test_response_model_null_when_absent(self):
+        """WeekV2GoalResponse serialises None as null."""
+        goal = WeekV2GoalResponse(
+            goal_type="MARATHON",
+            race_date=None,
+            target_time_seconds=None,
+        )
+        d = goal.model_dump(mode="json")
+        assert d["target_time_seconds"] is None
+
+
+# ===========================================================================
+# SINGLE_NOW_BOUNDARY — single datetime.now call in endpoint (BLOCKER 2)
+# ===========================================================================
+
+class TestSingleNowBoundary:
+    """SINGLE_NOW_BOUNDARY — GET /training/v2/week must resolve clock once."""
+
+    def test_SINGLE_NOW_BOUNDARY(self):
+        """server.py: get_training_v2_week must resolve now_utc exactly once.
+
+        Rule: reference_date and ninety_days_ago must both derive from the
+        same now_utc variable — no second datetime.now() call.
+        """
+        import ast as _ast
+        import os as _os
+
+        server_path = _os.path.join(
+            _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+            "server.py",
+        )
+        source = open(server_path).read()
+        tree = _ast.parse(source)
+
+        # Find the get_training_v2_week function
+        func = next(
+            (
+                n
+                for n in _ast.walk(tree)
+                if isinstance(n, _ast.AsyncFunctionDef)
+                and n.name == "get_training_v2_week"
+            ),
+            None,
+        )
+        assert func is not None, "get_training_v2_week not found in server.py"
+
+        # Count datetime.now( calls inside the function body
+        func_source_lines = source.splitlines()[func.lineno - 1: func.end_lineno]
+        func_source = "\n".join(func_source_lines)
+        now_calls = func_source.count("datetime.now(")
+        assert now_calls == 1, (
+            f"get_training_v2_week must call datetime.now() exactly once "
+            f"(found {now_calls}). Use now_utc = datetime.now(timezone.utc) "
+            "and derive reference_date and ninety_days_ago from it."
+        )

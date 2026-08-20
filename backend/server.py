@@ -4787,8 +4787,9 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
 
     user_id = user["id"]
 
-    # ── Resolve reference_date ONCE at the API boundary ──────────────────
-    reference_date = datetime.now(timezone.utc).date()
+    # ── Single clock: resolve now_utc ONCE to avoid midnight-boundary skew ─
+    now_utc = datetime.now(timezone.utc)
+    reference_date = now_utc.date()
 
     # ── Goal & cycle from canonical sources (same as /training/week-plan) ─
     cycle = await db.training_cycles.find_one({"user_id": user_id}, {"_id": 0})
@@ -4828,7 +4829,12 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
         except (ValueError, TypeError):
             pass
 
-    target_time_seconds_raw = user_goal.get("target_time_seconds") if user_goal else None
+    target_time_minutes_raw = user_goal.get("target_time_minutes") if user_goal else None
+    # Convert minutes→seconds at the API boundary (canonical DB field is target_time_minutes)
+    if isinstance(target_time_minutes_raw, (int, float)) and not isinstance(target_time_minutes_raw, bool) and target_time_minutes_raw > 0:
+        target_time_seconds = int(target_time_minutes_raw * 60)
+    else:
+        target_time_seconds = None
 
     cycle_start_v2: Optional[date] = None
     if isinstance(start_date_raw, datetime):
@@ -4846,7 +4852,7 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
             pass
 
     # ── Workouts — 90-day window (same as /training/week-plan) ───────────
-    ninety_days_ago = datetime.now(timezone.utc) - timedelta(days=90)
+    ninety_days_ago = now_utc - timedelta(days=90)
     workouts_90 = await db.workouts.find(
         {"user_id": user_id, "date": {"$gte": ninety_days_ago.isoformat()}}
     ).to_list(1000)
@@ -4880,7 +4886,7 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
         goal=WeekV2GoalResponse(
             goal_type=goal_type,
             race_date=race_date_v2.isoformat() if race_date_v2 else None,
-            target_time_seconds=int(target_time_seconds_raw) if isinstance(target_time_seconds_raw, (int, float)) and not isinstance(target_time_seconds_raw, bool) else None,
+            target_time_seconds=target_time_seconds,
         ),
         state=WeekV2StateResponse(
             continuity_state=weekly_target.continuity_state,
