@@ -86,8 +86,8 @@ function App() {
                     <Route path="coach" element={<Coach />} />
                     <Route path="guidance" element={<Guidance />} />
                     <Route path="digest" element={<Digest />} />
-                    <Route path="training" element={<TrainingPlan />} />
-                    <Route path="training-v2" element={<TrainingPlanV2 />} />
+                    <Route path="training" element={<TrainingPlanV2 />} />
+                    <Route path="training-v2" element={<Navigate to="/training" replace />} />
                     <Route path="onboarding" element={<Onboarding />} />
                     <Route path="settings" element={<Settings />} />
                     <Route path="subscription" element={<Subscription />} />

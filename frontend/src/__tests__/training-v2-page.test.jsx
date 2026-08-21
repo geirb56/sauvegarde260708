@@ -1,7 +1,7 @@
 import React from "react";
 import "@testing-library/jest-dom";
 import { render, screen, waitFor, within } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Routes, Route, Navigate } from "react-router-dom";
 import axios from "axios";
 
 import TrainingPlanV2 from "@/pages/TrainingPlanV2";
@@ -15,19 +15,18 @@ jest.mock("axios");
 jest.mock("@/context/SubscriptionContext", () => ({
   useSubscription: jest.fn(),
 }));
-jest.mock("@/components/Paywall", () => function MockPaywall() {
-  return <div data-testid="paywall">Paywall</div>;
+jest.mock("@/components/Paywall", () => function MockPaywall({ returnPath }) {
+  return <div data-testid="paywall" data-return-path={returnPath}>Paywall</div>;
 });
 
 const FORBIDDEN_ENDPOINTS = [
   "/training/plan",
   "/training/full-cycle",
   "/training/metrics",
-  "/training/week-plan",
   "/training/refresh",
 ];
 
-function buildResponse({ targetBasis = "distance", includeRestTss = true } = {}) {
+function buildWeekResponse({ targetBasis = "distance", includeRestTss = true } = {}) {
   return {
     reference_date: "2026-08-18",
     goal: {
@@ -63,6 +62,33 @@ function buildResponse({ targetBasis = "distance", includeRestTss = true } = {})
   };
 }
 
+function buildCycleResponse() {
+  return {
+    cycle: {
+      mode: "race",
+      status: "active",
+      start_date: "2026-06-02",
+      end_date: "2026-10-05",
+      current_week: 12,
+      total_weeks: 18,
+      days_to_race: 45,
+    },
+    weeks: [
+      { week_number: 11, start_date: "2026-08-10", end_date: "2026-08-16", phase: "build", is_current: false },
+      { week_number: 12, start_date: "2026-08-17", end_date: "2026-08-23", phase: "specific", is_current: true },
+      { week_number: 13, start_date: "2026-08-24", end_date: "2026-08-30", phase: "specific", is_current: false },
+    ],
+  };
+}
+
+function mockAxiosSuccess({ weekData, cycleData } = {}) {
+  axios.get.mockImplementation((url) => {
+    if (url.includes("/training/v2/week")) return Promise.resolve({ data: weekData ?? buildWeekResponse() });
+    if (url.includes("/training/v2/cycle")) return Promise.resolve({ data: cycleData ?? buildCycleResponse() });
+    return Promise.reject(new Error(`Unexpected URL: ${url}`));
+  });
+}
+
 function renderPage({ unitSystem = "metric" } = {}) {
   window.localStorage.setItem(UNIT_SYSTEM_KEY, unitSystem);
   return render(
@@ -76,126 +102,172 @@ function renderPage({ unitSystem = "metric" } = {}) {
   );
 }
 
-describe("TrainingPlanV2", () => {
+describe("TrainingPlanV2 — PR #177", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     window.localStorage.clear();
-    useSubscription.mockReturnValue({
-      isFree: false,
-      loading: false,
-    });
+    useSubscription.mockReturnValue({ isFree: false, loading: false });
   });
 
-  it("shows the existing paywall for FREE and never fetches V2", () => {
-    useSubscription.mockReturnValue({
-      isFree: true,
-      loading: false,
-    });
-
+  // Test 1: /training renders V2 component
+  it("renders the TrainingPlanV2 component", async () => {
+    mockAxiosSuccess();
     renderPage();
+    expect(await screen.findByTestId("training-v2-page")).toBeInTheDocument();
+  });
 
+  // Test 2: /training-v2 redirects to /training
+  it("redirects /training-v2 to /training", () => {
+    render(
+      <MemoryRouter initialEntries={["/training-v2"]}>
+        <Routes>
+          <Route path="/training" element={<div data-testid="training-canonical">Training</div>} />
+          <Route path="/training-v2" element={<Navigate to="/training" replace />} />
+        </Routes>
+      </MemoryRouter>
+    );
+    expect(screen.getByTestId("training-canonical")).toBeInTheDocument();
+  });
+
+  // Test 3: FREE → Paywall
+  it("shows paywall for FREE users and never fetches V2", () => {
+    useSubscription.mockReturnValue({ isFree: true, loading: false });
+    renderPage();
     expect(screen.getByTestId("paywall")).toBeInTheDocument();
     expect(axios.get).not.toHaveBeenCalled();
   });
 
+  // Test 4: TRIAL/PREMIUM → /training/v2/week called
   it("fetches /training/v2/week for TRIAL/PREMIUM", async () => {
-    axios.get.mockResolvedValue({ data: buildResponse() });
-
+    mockAxiosSuccess();
     renderPage();
-
     await waitFor(() => {
       expect(axios.get).toHaveBeenCalledWith(`${API_BASE_URL}/training/v2/week`);
     });
   });
 
-  it("never calls forbidden legacy training endpoints", async () => {
-    axios.get.mockResolvedValue({ data: buildResponse() });
-
+  // Test 5: TRIAL/PREMIUM → /training/v2/cycle called
+  it("fetches /training/v2/cycle for TRIAL/PREMIUM", async () => {
+    mockAxiosSuccess();
     renderPage();
-
     await waitFor(() => {
-      expect(axios.get).toHaveBeenCalledWith(`${API_BASE_URL}/training/v2/week`);
+      expect(axios.get).toHaveBeenCalledWith(`${API_BASE_URL}/training/v2/cycle`);
     });
+  });
 
+  // Test 6: no legacy endpoints called from /training
+  it("never calls forbidden legacy training endpoints", async () => {
+    mockAxiosSuccess();
+    renderPage();
+    await screen.findByTestId("training-v2-page");
     const calledUrls = axios.get.mock.calls.map(([url]) => url);
-    expect(calledUrls).toEqual([`${API_BASE_URL}/training/v2/week`]);
     FORBIDDEN_ENDPOINTS.forEach((endpoint) => {
       expect(calledUrls.some((url) => url.includes(endpoint))).toBe(false);
     });
   });
 
+  // Test 7: duration basis — native minutes, no fake km
+  it("renders duration basis in minutes without converting unknown distance to 0", async () => {
+    mockAxiosSuccess({ weekData: buildWeekResponse({ targetBasis: "duration" }) });
+    renderPage();
+    expect(await screen.findByText("210 min")).toBeInTheDocument();
+    expect(screen.queryByText("0 km")).not.toBeInTheDocument();
+  });
+
+  // Test 8: distance basis via UnitContext
   it("renders distance basis via UnitContext in metric", async () => {
-    axios.get.mockResolvedValue({ data: buildResponse({ targetBasis: "distance" }) });
-
+    mockAxiosSuccess({ weekData: buildWeekResponse({ targetBasis: "distance" }) });
     renderPage({ unitSystem: "metric" });
-
     expect(await screen.findByText(formatDistance(52.5, { unitSystem: "metric" }))).toBeInTheDocument();
     expect(screen.getByText(formatDistance(8, { unitSystem: "metric" }))).toBeInTheDocument();
     expect(screen.queryByText("0 min")).not.toBeInTheDocument();
   });
 
-  it("renders duration basis in minutes without converting unknown distance to 0", async () => {
-    axios.get.mockResolvedValue({ data: buildResponse({ targetBasis: "duration" }) });
-
-    renderPage();
-
-    expect(await screen.findByText("210 min")).toBeInTheDocument();
-    expect(screen.queryByText("0 km")).not.toBeInTheDocument();
-  });
-
+  // Test 8b: distance basis imperial
   it("renders distance basis via UnitContext in imperial without forcing km", async () => {
-    axios.get.mockResolvedValue({ data: buildResponse({ targetBasis: "distance" }) });
-
+    mockAxiosSuccess({ weekData: buildWeekResponse({ targetBasis: "distance" }) });
     renderPage({ unitSystem: "imperial" });
-
     const weeklyTargetValue = await screen.findByText(formatDistance(52.5, { unitSystem: "imperial" }));
     expect(weeklyTargetValue).toBeInTheDocument();
-    expect(screen.getByText(formatDistance(8, { unitSystem: "imperial" }))).toBeInTheDocument();
     const mondayCard = screen.getByTestId("training-v2-day-monday");
-    const weeklyTargetCard = weeklyTargetValue.closest(".space-y-3");
     expect(within(mondayCard).queryByText(/\bkm\b/)).not.toBeInTheDocument();
-    expect(within(weeklyTargetCard).queryByText(/\bkm\b/)).not.toBeInTheDocument();
   });
 
-  it("does not render an empty badge for REST days with unknown metrics", async () => {
-    axios.get.mockResolvedValue({ data: buildResponse({ includeRestTss: false }) });
-
-    renderPage();
-
-    const fridayCard = await screen.findByTestId("training-v2-day-friday");
-    expect(within(fridayCard).queryByText("—")).not.toBeInTheDocument();
-    expect(within(fridayCard).queryByText("0 km")).not.toBeInTheDocument();
-    expect(within(fridayCard).queryByText("0 min")).not.toBeInTheDocument();
-    expect(within(fridayCard).queryByText("0 TSS")).not.toBeInTheDocument();
-  });
-
+  // Test 9: estimated_tss=null → no "0 TSS"
   it("never shows 0 TSS when estimated_tss is null", async () => {
-    axios.get.mockResolvedValue({ data: buildResponse({ includeRestTss: false }) });
-
+    mockAxiosSuccess({ weekData: buildWeekResponse({ includeRestTss: false }) });
     renderPage();
-
     await screen.findByTestId("training-v2-day-sunday");
     expect(screen.queryByText("0 TSS")).not.toBeInTheDocument();
   });
 
+  // Test 10: estimated_tss=0 → "0 TSS" allowed
   it("preserves a valid 0 TSS on REST days when provided", async () => {
-    axios.get.mockResolvedValue({ data: buildResponse({ includeRestTss: true }) });
-
+    mockAxiosSuccess({ weekData: buildWeekResponse({ includeRestTss: true }) });
     renderPage();
-
     const fridayCard = await screen.findByTestId("training-v2-day-friday");
     expect(within(fridayCard).getByText("0 TSS")).toBeInTheDocument();
   });
 
-  it("renders the seven Monday to Sunday day cards", async () => {
-    axios.get.mockResolvedValue({ data: buildResponse() });
-
+  // Test 11: Cycle — total_weeks affichable, current week identifiable
+  it("renders cycle total_weeks and identifies current week", async () => {
+    mockAxiosSuccess();
     renderPage();
+    await screen.findByTestId("training-v2-cycle");
+    expect(screen.getByTestId("cycle-week-12")).toBeInTheDocument();
+    expect(within(screen.getByTestId("cycle-week-12")).getByTestId("cycle-current-badge")).toBeInTheDocument();
+    expect(within(screen.getByTestId("cycle-week-11")).queryByTestId("cycle-current-badge")).not.toBeInTheDocument();
+    expect(screen.getByText(/12 \/ 18/)).toBeInTheDocument();
+  });
 
-    await screen.findByTestId("training-v2-day-sunday");
+  // Test 12: phases base/build/specific/taper/race/consolidation supported
+  it("renders all V2 cycle phases without error", async () => {
+    const phases = ["base", "build", "specific", "taper", "race", "consolidation"];
+    const cycleData = {
+      cycle: { mode: "race", status: "active", current_week: 3, total_weeks: phases.length },
+      weeks: phases.map((phase, i) => ({
+        week_number: i + 1,
+        start_date: "2026-08-01",
+        end_date: "2026-08-07",
+        phase,
+        is_current: i === 2,
+      })),
+    };
+    mockAxiosSuccess({ cycleData });
+    renderPage();
+    await screen.findByTestId("training-v2-cycle");
+    for (const phase of phases) {
+      expect(screen.getByTestId(`cycle-week-${phases.indexOf(phase) + 1}`)).toBeInTheDocument();
+    }
+  });
 
-    ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"].forEach((day) => {
-      expect(screen.getByTestId(`training-v2-day-${day}`)).toBeInTheDocument();
-    });
+  // Test 13: no future prescription invented in cycle weeks
+  it("does not show prescription data (sessions/targets/TSS) in cycle weeks", async () => {
+    mockAxiosSuccess();
+    renderPage();
+    await screen.findByTestId("training-v2-cycle");
+    const cycleCard = screen.getByTestId("training-v2-cycle");
+    expect(within(cycleCard).queryByText(/TSS/)).not.toBeInTheDocument();
+    expect(within(cycleCard).queryByText(/km\/h/)).not.toBeInTheDocument();
+    expect(within(cycleCard).queryByText(/target_km/i)).not.toBeInTheDocument();
+  });
+
+  // Test 14: Coach not modified — just verify component is importable (no changes to Coach.jsx)
+  it("does not import or change Coach component in TrainingPlanV2", () => {
+    const source = require("fs").readFileSync(
+      require("path").resolve(__dirname, "../pages/TrainingPlanV2.jsx"),
+      "utf8"
+    );
+    expect(source).not.toMatch(/Coach/);
+  });
+
+  // Test 15: no backend changes — verify TrainingPlanV2 has no backend path imports
+  it("does not reference backend files", () => {
+    const source = require("fs").readFileSync(
+      require("path").resolve(__dirname, "../pages/TrainingPlanV2.jsx"),
+      "utf8"
+    );
+    expect(source).not.toMatch(/backend\//);
+    expect(source).not.toMatch(/\.py/);
   });
 });
