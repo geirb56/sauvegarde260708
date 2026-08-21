@@ -547,3 +547,15 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
   - **#175 MAINTENANCE** : retrait de MAINTENANCE du `_GOAL_MAP` du cycle endpoint (aligné sur gate GOAL_CONFIG) + fix du mock `test_20b`.
 - Validation (agent-tested) : backend + frontend redémarrés. Smoke **6/6 = 200** (today, v2/week, v2/cycle, week-plan, run-index, dashboard). Régression suites PR = **255 passed, 0 failed**.
 - ✅ Les 2 bugs ouverts sont RÉSOLUS upstream. Statut : agent-tested + smoke visuel vérifié ; non user-confirmed.
+
+## 2026-06 — Pull copilot/dev — PR #177 (route canonique /training → Training V2 + Cycle V2)
+- Fetch + merge `sauvegarde/copilot/dev` (7047ca2→72d9bc4). Merge ORT propre, 0 conflit. `.env` intacts, PRD/rapports préservés. Frontend redémarré.
+- PR #177 = `/training` pointe désormais vers TrainingPlanV2 (Week V2 + section Cycle V2), `/training-v2` → Navigate("/training") (redirect), import legacy TrainingPlan retiré. TrainingPlanV2 consomme /training/v2/week ET /training/v2/cycle. Nouvelles clés i18n cycle (cycleModes, phases).
+- SMOKE FRONTEND (agent-tested) :
+  - /training : écran Training V2 visible, Week V2 (Objectif/État/Cible), Cycle V2 (Mode/Statut/Début/Fin/Semaine 4/12 + liste 12 semaines avec phases Base/Build). Semaine courante = 1 seule (Week 4 CURRENT) == current_week=4.
+  - Aucune prescription future dans le calendrier cycle (pas de km/durée/TSS/allure/zones/intensité/séances).
+  - Mode label EN "Continuous training" / FR "Entraînement continu" — pas de "Non disponible" ni clé brute.
+  - /training-v2 → redirige vers /training. JS errors = 0.
+  - Réseau depuis /training : uniquement /api/training/v2/week (200) + /api/training/v2/cycle (200). AUCUN appel legacy (plan/full-cycle/metrics/refresh).
+  - FREE paywall : couvert par test jest (pas de compte FREE runtime ; mock runtime interdit). Jest training-v2-page = 17 passed.
+- Statut : agent-tested + smoke visuel EN/FR vérifié ; non user-confirmed.
