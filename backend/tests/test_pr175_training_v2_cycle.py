@@ -34,6 +34,7 @@ from typing import Optional
 import pytest
 
 os.environ.setdefault("JWT_SECRET", "test-secret-pr175")
+os.environ.setdefault("JWT_SECRET_KEY", "test-secret-pr175")
 os.environ.setdefault("JWT_ALGORITHM", "HS256")
 os.environ.setdefault("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "60")
 os.environ.setdefault("ENVIRONMENT", "test")
@@ -520,9 +521,6 @@ def test_server_cycle_datetime_once():
 # BLOCKER 4 — Real endpoint tests (TestClient + mocked DB/auth)
 # ===========================================================================
 
-import os as _os
-_os.environ.setdefault("JWT_SECRET_KEY", "test-secret-pr175")
-
 from unittest.mock import AsyncMock, MagicMock, patch as _patch
 
 # Attempt to import server once at module level; skip endpoint tests if deps missing.
@@ -756,7 +754,7 @@ def test_22b_ultra_missing_distance_raises():
     from training_v2.plan_goal import GoalType, PlanGoal
     import pytest
 
-    with pytest.raises((ValueError, Exception)) as exc_info:
+    with pytest.raises(ValueError) as exc_info:
         # build_plan_goal without target_distance_km for ultra must fail
         from training_v2.plan_goal import build_plan_goal as _bpg
         _bpg(goal_type=GoalType.ultra, race_date=date(2025, 9, 1), created_from="user")

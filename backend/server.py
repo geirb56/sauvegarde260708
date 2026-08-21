@@ -4868,11 +4868,13 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
 
     # ── Assemble native V2 response — no adapter, no coercion ────────────
     # Normalize goal_type to V2 enum value for contract coherence with /v2/cycle.
-    from training_v2.week_plan_bridge import _GOAL_MAP as _WK_GOAL_MAP
-    _goal_type_v2_str: str = (
-        _WK_GOAL_MAP[goal_type.upper()].value
-        if goal_type and goal_type.upper() in _WK_GOAL_MAP
-        else goal_type
+    _WEEK_GOAL_NORM: dict[str, str] = {
+        "5K": "5k", "10K": "10k", "SEMI": "half_marathon",
+        "HALF_MARATHON": "half_marathon", "MARATHON": "marathon",
+        "ULTRA": "ultra", "MAINTENANCE": "maintenance",
+    }
+    _goal_type_v2_str: str = _WEEK_GOAL_NORM.get(
+        goal_type.upper() if goal_type else "", goal_type
     )
     sessions = [
         WeekV2SessionResponse(
