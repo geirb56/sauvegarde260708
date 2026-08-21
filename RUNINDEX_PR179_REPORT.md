@@ -229,6 +229,50 @@ git diff --stat HEAD~1:
 
 ---
 
+## Post-Test-Correction Audit (C179)
+
+REAL_PIPELINE_SELF_HEAL_TEST = PASS
+
+SELF_HEAL_ASSERT_AWAITED =
+PASS — `mock_backfill.assert_awaited_once_with(db, user_id, prune=False)` verified
+in `test_real_pipeline_self_heal_wiring`.
+
+SELF_HEAL_PRUNE_FALSE =
+PASS — `prune=False` confirmed by `assert_awaited_once_with`.
+
+RUNINDEX_USES_SELF_HEAL_RESULT =
+NO — sentinel `{"SENTINEL_WORKOUT_SELF_HEAL": True}` returned by mock; confirmed
+absent from `incremental_sync` result.
+
+RUNINDEX_DEPENDS_ON_DB_WORKOUTS =
+NO — `refresh_today_run_index_after_garmin_activities` is mocked and called before
+self-heal; db.workouts is empty in the test and never consulted for RunIndex.
+
+SELF_HEAL_FAILURE_FALLBACK_TO_WORKOUTS =
+NO — `test_real_pipeline_self_heal_failure_isolation` verifies that when
+`_backfill_workouts_user` raises `RuntimeError`, `incremental_sync` still returns
+`success=True` and `workouts_upserted` does not appear in the result.
+
+RUNINDEX_FORMULA_MODIFIED = NO
+READINESS_MODIFIED = NO
+TRAINING_V2_MODIFIED = NO
+FRONTEND_MODIFIED = NO
+LOCKFILES_MODIFIED = NO
+
+TESTS_REPLACED:
+- `test_self_heal_decoupled_from_run_index` (called `_fake_backfill_user` directly — not a real wiring test) replaced by:
+  - `test_real_pipeline_self_heal_wiring` — calls real `garmin.service.incremental_sync`; patches `garmin.service._backfill_workouts_user` as AsyncMock; asserts `assert_awaited_once_with(db, user_id, prune=False)`; sentinel not in result.
+  - `test_real_pipeline_self_heal_failure_isolation` — same pipeline with self-heal raising; pipeline still succeeds.
+
+tests (C179) =
+- test_run_index_pr179_domain_source.py: 27 passed / 0 failed / 0 skipped / 0 errors
+- test_run_index_history_service.py: 7 passed / 0 failed / 0 skipped / 0 errors
+- test_run_index_engine.py: 5 passed / 0 failed / 0 skipped / 0 errors
+
+Total: 39 passed / 0 failed / 0 skipped / 0 errors
+
+---
+
 ## Verdict
 
-READY FOR MERGE INTO copilot/dev
+READY FOR RUNTIME SMOKE

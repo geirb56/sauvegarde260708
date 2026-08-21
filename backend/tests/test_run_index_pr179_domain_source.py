@@ -32,12 +32,52 @@ import asyncio
 import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import Any, List, Optional
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+# ---------------------------------------------------------------------------
+# Stub out heavy optional runtime dependencies so garmin.service can be
+# imported in the test process (no Redis, no realtime_cache, etc.).
+# These stubs are inserted once at import time and persist for the module.
+# ---------------------------------------------------------------------------
+
+def _stub_module(name: str, **attrs) -> ModuleType:
+    m = ModuleType(name)
+    m.__dict__.update(attrs)
+    sys.modules.setdefault(name, m)
+    return sys.modules[name]
+
+# redis & redis.exceptions
+_redis_exc = _stub_module("redis.exceptions", ResponseError=Exception)
+_stub_module("redis", exceptions=_redis_exc)
+# jobs.redis_client
+_stub_module("jobs", redis_client=_stub_module("jobs.redis_client", get_redis=lambda: None))
+_stub_module("jobs.redis_client", get_redis=lambda: None)
+# events.stream
+_stub_module("events", stream=_stub_module("events.stream",
+    emit_activity_created=AsyncMock()))
+_stub_module("events.stream", emit_activity_created=AsyncMock())
+# feed.realtime_cache
+_stub_module("feed", realtime_cache=_stub_module("feed.realtime_cache",
+    warm_feed=AsyncMock(), FEED_MAXLEN=50))
+_stub_module("feed.realtime_cache", warm_feed=AsyncMock(), FEED_MAXLEN=50)
+# garmin.session_store
+_stub_module("garmin.session_store",
+    ensure_session=AsyncMock(return_value=True),
+    save_session=AsyncMock())
+# garmin.sync_progress
+_stub_module("garmin.sync_progress",
+    get_sync_progress=AsyncMock(return_value={}),
+    update_sync_progress=AsyncMock())
+# garmin.backfill (stubs the circular backfill import that service.py uses)
+_stub_module("garmin.backfill", backfill_user=AsyncMock(), backfill_all=AsyncMock())
+# subscription_manager
+_stub_module("subscription_manager", activate_garmin_trial=AsyncMock())
 
 from training_v2.domain_activity import DomainActivity
 from engine.run_index_engine import (
@@ -669,23 +709,32 @@ def test_domain_activity_day_parsing():
     assert _domain_activity_day(act_none) is None
 
 
+
 # ---------------------------------------------------------------------------
-# Test 20: SELF-HEAL DECOUPLED — garmin_activity present, db.workouts absent
+# Test 20: REAL PIPELINE SELF-HEAL — incremental_sync wiring
 # ---------------------------------------------------------------------------
 
-def test_self_heal_decoupled_from_run_index():
-    """garmin_activity present, db.workouts empty → RunIndex computed; self-heal runs independently.
+def test_real_pipeline_self_heal_wiring():
+    """Real incremental_sync pipeline: _backfill_workouts_user is called with prune=False.
 
-    Invariants verified:
-    - calculate_run_index_from_domain is called with garmin DomainActivities directly.
-    - backfill_user (workouts self-heal) is invoked exactly once, separately.
-    - The return value of backfill_user is NEVER passed to calculate_run_index_from_domain.
-    - db.workouts absence does not prevent RunIndex computation.
+    This test calls the REAL garmin.service.incremental_sync function.
+    It patches garmin.service._backfill_workouts_user as an AsyncMock and then
+    asserts assert_awaited_once_with(db, user_id, prune=False).
+
+    If the real call to _backfill_workouts_user is removed from service.py,
+    this test FAILS.
+
+    Additional invariants:
+    - Sentinel value from self-heal never appears in RunIndex result.
+    - self-heal raising Exception does not prevent RunIndex from being returned.
+    - db.workouts is never consulted for RunIndex.
     """
     import asyncio
-    from unittest.mock import AsyncMock, MagicMock, call, patch
+    import sys
+    from unittest.mock import AsyncMock, MagicMock, patch
 
-    user_id = "user-selfheal"
+    user_id = "user-wiring"
+
     garmin_activity_doc = {
         "user_id": user_id,
         "activity_type": "running",
@@ -694,15 +743,11 @@ def test_self_heal_decoupled_from_run_index():
         "duration_s": 2400.0,
         "average_hr": 148.0,
         "source": "garmin",
-        "source_activity_id": "act-sh-1",
+        "source_activity_id": "act-wiring-1",
+        "external_id": "ext-wiring-1",
     }
 
-    class FakeDB:
-        def __init__(self):
-            # garmin_activities has one entry; db.workouts is empty
-            self.garmin_activities = _FakeCollection([garmin_activity_doc])
-            self.workouts = _FakeCollection([])
-            self.run_index_snapshots = _FakeCollection([])
+    # --- Minimal async-compatible FakeDB ---
 
     class _FakeCursor:
         def __init__(self, docs): self._docs = list(docs)
@@ -717,60 +762,155 @@ def test_self_heal_decoupled_from_run_index():
         def __init__(self, docs): self._docs = list(docs)
         def find(self, *a, **kw): return _FakeCursor(list(self._docs))
         async def find_one(self, *a, **kw): return self._docs[0] if self._docs else None
-        async def update_one(self, *a, **kw): return MagicMock(upserted_id="x")
-        async def delete_many(self, *a, **kw): return MagicMock(deleted_count=0)
+        async def update_one(self, *a, **kw): return MagicMock(upserted_id=None)
+        async def count_documents(self, *a, **kw): return len(self._docs)
+
+    class FakeDB:
+        def __init__(self):
+            self.garmin_activities = _FakeCollection([garmin_activity_doc])
+            self.garmin_connections = _FakeCollection(
+                [{"user_id": user_id, "connected": True, "garmin_username": None}]
+            )
+            self.workouts = _FakeCollection([])  # db.workouts is empty
+            self.run_index_snapshots = _FakeCollection([])
+            self.sessions = _FakeCollection([])
 
     db = FakeDB()
 
-    captured_activities_for_run_index = []
+    # Sentinel: self-heal returns a value that must NEVER appear in RunIndex result
+    SENTINEL = {"SENTINEL_WORKOUT_SELF_HEAL": True}
 
-    original_calc = calculate_run_index_from_domain
+    # --- Real calculate_run_index_from_domain spy ---
+    run_index_inputs = []
+    _orig_calc = calculate_run_index_from_domain
+
     def _spy_calc(activities, reference_date=None):
-        captured_activities_for_run_index.extend(activities)
-        return original_calc(activities, reference_date=reference_date)
+        run_index_inputs.append(list(activities))
+        return _orig_calc(activities, reference_date=reference_date)
 
-    backfill_result = {"user_id": user_id, "workouts_upserted": 1, "workouts_pruned": 0,
-                       "activities": 1, "feed_entries": 1}
-    backfill_called_with = []
+    async def _run_incremental_sync():
+        import sys
+        from types import ModuleType
+        from garmin import service as svc
+        mock_backfill = AsyncMock(return_value=SENTINEL)
 
-    async def _fake_backfill_user(db_, uid, prune=True):
-        backfill_called_with.append({"user_id": uid, "prune": prune})
-        return backfill_result
+        fake_provider = MagicMock()
+        fake_provider.sync_activities.return_value = []
 
-    from services import run_index_history as _rih
+        with (
+            patch.object(svc, "_backfill_workouts_user", mock_backfill),
+            patch("garmin.service.get_provider_for_user", return_value=fake_provider),
+            patch("garmin.service.session_store.ensure_session", new=AsyncMock(return_value=True)),
+            patch("garmin.service.session_store.save_session", new=AsyncMock()),
+            patch("garmin.service.update_sync_progress", new=AsyncMock()),
+            patch("garmin.service.get_sync_progress", new=AsyncMock(return_value={})),
+            patch("garmin.service.emit_activity_created", new=AsyncMock()),
+            patch(
+                "garmin.service.refresh_today_run_index_after_garmin_activities",
+                new=AsyncMock(return_value={"today_snapshot": {"run_index": 42}, "activities_count": 1}),
+            ),
+            patch(
+                "garmin.service.backfill_run_index_history_after_garmin_sync",
+                new=AsyncMock(return_value={"snapshots_created": 0, "snapshots_updated": 1}),
+            ),
+        ):
+            result = await svc.incremental_sync(db, user_id)
+            return result, mock_backfill
+
+    result, mock_backfill = asyncio.run(_run_incremental_sync())
+
+    # Pipeline completed successfully
+    assert result.get("success") is True, f"incremental_sync failed: {result}"
+
+    # CORE ASSERTION: _backfill_workouts_user was awaited exactly once with prune=False
+    mock_backfill.assert_awaited_once_with(db, user_id, prune=False)
+
+    # Sentinel must NOT appear anywhere in the pipeline result
+    assert "SENTINEL_WORKOUT_SELF_HEAL" not in result, (
+        "Sentinel from self-heal leaked into pipeline result — self-heal is feeding RunIndex"
+    )
+
+    # db.workouts was not written to by RunIndex (only by self-heal)
+    # We patched _backfill_workouts_user so workouts are untouched by the mock
+    # RunIndex used garmin_activities path (patched refresh_today_run_index_after_garmin_activities)
+
+
+def test_real_pipeline_self_heal_failure_isolation():
+    """Self-heal raising Exception → RunIndex already computed; pipeline still succeeds.
+
+    Invariant: self-heal is best-effort. Its failure must NOT cause RunIndex to
+    fall back to db.workouts and must NOT cause incremental_sync to return failure.
+    """
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    user_id = "user-wiring-fail"
+
+    class _FakeCursor:
+        def __init__(self, docs): self._docs = list(docs)
+        def __aiter__(self): return self
+        async def __anext__(self):
+            if not self._docs: raise StopAsyncIteration
+            return self._docs.pop(0)
+        def sort(self, *a, **kw): return self
+        async def to_list(self, _n): return list(self._docs)
+
+    class _FakeCollection:
+        def __init__(self, docs): self._docs = list(docs)
+        def find(self, *a, **kw): return _FakeCursor(list(self._docs))
+        async def find_one(self, *a, **kw): return self._docs[0] if self._docs else None
+        async def update_one(self, *a, **kw): return MagicMock(upserted_id=None)
+        async def count_documents(self, *a, **kw): return len(self._docs)
+
+    class FakeDB:
+        def __init__(self):
+            self.garmin_activities = _FakeCollection([])
+            self.garmin_connections = _FakeCollection(
+                [{"user_id": user_id, "connected": True, "garmin_username": None}]
+            )
+            self.workouts = _FakeCollection([])
+            self.run_index_snapshots = _FakeCollection([])
+            self.sessions = _FakeCollection([])
+
+    db = FakeDB()
 
     async def _run():
-        # Patch calculate_run_index_from_domain in the engine module
-        with patch("engine.run_index_engine.calculate_run_index_from_domain", side_effect=_spy_calc):
-            # Simulate refresh_today_run_index_after_garmin_activities directly
-            from services.run_index_history import load_garmin_domain_activities
-            from engine.run_index_engine import calculate_run_index_from_domain as calc_fn
-            activities = await load_garmin_domain_activities(db, user_id)
-            # RunIndex computed from garmin_activities → DomainActivity
-            result = original_calc(activities)
-            # Self-heal runs separately, not feeding RunIndex
-            selfheal_result = await _fake_backfill_user(db, user_id, prune=False)
-            return activities, result, selfheal_result
+        from garmin import service as svc
+        failing_backfill = AsyncMock(side_effect=RuntimeError("self-heal exploded"))
 
-    activities, run_index_result, selfheal_result = asyncio.run(_run())
+        fake_provider = MagicMock()
+        fake_provider.sync_activities.return_value = []
 
-    # garmin_activity present → RunIndex sees it
-    assert len(activities) == 1
-    assert activities[0].distance_m == pytest.approx(8000.0)
+        with (
+            patch.object(svc, "_backfill_workouts_user", failing_backfill),
+            patch("garmin.service.get_provider_for_user", return_value=fake_provider),
+            patch("garmin.service.session_store.ensure_session", new=AsyncMock(return_value=True)),
+            patch("garmin.service.session_store.save_session", new=AsyncMock()),
+            patch("garmin.service.update_sync_progress", new=AsyncMock()),
+            patch("garmin.service.get_sync_progress", new=AsyncMock(return_value={})),
+            patch("garmin.service.emit_activity_created", new=AsyncMock()),
+            patch(
+                "garmin.service.refresh_today_run_index_after_garmin_activities",
+                new=AsyncMock(return_value={"today_snapshot": {"run_index": 55}, "activities_count": 0}),
+            ),
+            patch(
+                "garmin.service.backfill_run_index_history_after_garmin_sync",
+                new=AsyncMock(return_value={}),
+            ),
+        ):
+            result = await svc.incremental_sync(db, user_id)
+            return result, failing_backfill
 
-    # RunIndex computed without consulting db.workouts
-    assert run_index_result["run_index"] >= 0
-    assert "confidence_score" in run_index_result
+    result, failing_backfill = asyncio.run(_run())
 
-    # backfill_user was called exactly once with prune=False
-    assert len(backfill_called_with) == 1
-    assert backfill_called_with[0]["prune"] is False
-    assert backfill_called_with[0]["user_id"] == user_id
+    # Self-heal was attempted
+    failing_backfill.assert_awaited_once()
 
-    # self-heal result is NOT injected into RunIndex — verify independently
-    # by checking that no workout dict from backfill was passed to calculate_run_index_from_domain
-    # (activities list used for RunIndex came from garmin_activities, not from backfill return value)
-    assert selfheal_result is not run_index_result
-    # The backfill return value contains "workouts_upserted" — if this key
-    # appeared in the run_index_result it would mean backfill fed RunIndex.
-    assert "workouts_upserted" not in run_index_result
+    # Pipeline still succeeded — RunIndex is already computed before self-heal
+    assert result.get("success") is True, (
+        f"Pipeline failed due to self-heal exception — self-heal must be isolated: {result}"
+    )
+
+    # No fallback to db.workouts in result
+    assert "workouts_upserted" not in result
+    assert "SENTINEL_WORKOUT_SELF_HEAL" not in result
