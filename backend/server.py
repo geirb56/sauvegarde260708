@@ -4910,7 +4910,151 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
     return response.model_dump(mode="json")
 
 
-def _generate_fallback_week_plan(context: dict, phase: str, goal: str, target_km_protected: float = None) -> dict:
+# PR175 — GET /training/v2/cycle
+# Native V2 endpoint: returns cycle calendar structure without any session
+# prescription or future volume targets.  Uses PlanGoal V2 + Periodization V2
+# as the sole calendar authority.  Resolves goal / anchors from the same
+# canonical DB sources as /training/v2/week.
+# ---------------------------------------------------------------------------
+
+@api_router.get("/training/v2/cycle")
+async def get_training_v2_cycle(user: dict = Depends(auth_user)):
+    """Return the training cycle calendar structure (V2 native).
+
+    Calendar only — no session prescription, no future WeeklyTarget.
+    Uses the same canonical goal / cycle sources as /training/v2/week.
+    """
+    from training_v2.plan_goal import GoalType, build_plan_goal
+    from training_v2.training_cycle_response import build_cycle_calendar_response
+
+    # Closed mapping: legacy goal strings → GoalType V2
+    _GOAL_MAP: dict[str, GoalType] = {
+        "10K": GoalType.ten_k,
+        "SEMI": GoalType.half_marathon,
+        "HALF_MARATHON": GoalType.half_marathon,
+        "MARATHON": GoalType.marathon,
+        "5K": GoalType.five_k,
+        "ULTRA": GoalType.ultra,
+        "MAINTENANCE": GoalType.maintenance,
+    }
+
+    user_id = user["id"]
+
+    # ── Single clock (same doctrine as /training/v2/week) ─────────────────
+    now_utc = datetime.now(timezone.utc)
+    reference_date = now_utc.date()
+
+    # ── Goal & cycle — same canonical sources as /training/v2/week ────────
+    cycle = await db.training_cycles.find_one({"user_id": user_id}, {"_id": 0})
+    if not cycle:
+        raise HTTPException(
+            status_code=400,
+            detail="No training goal defined. Use /api/training/set-goal first.",
+        )
+
+    goal_type_raw = cycle.get("goal")
+    if not goal_type_raw or goal_type_raw not in GOAL_CONFIG:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown or missing goal type: {goal_type_raw}",
+        )
+
+    start_date_raw = cycle.get("start_date")
+    if not start_date_raw:
+        raise HTTPException(status_code=400, detail="No start_date in training cycle.")
+
+    # Resolve cycle_start_date (same logic as /training/v2/week)
+    cycle_start_v2: Optional[date] = None
+    if isinstance(start_date_raw, datetime):
+        cycle_start_v2 = (
+            start_date_raw.date()
+            if start_date_raw.tzinfo
+            else start_date_raw.replace(tzinfo=timezone.utc).date()
+        )
+    elif isinstance(start_date_raw, str):
+        try:
+            cycle_start_v2 = datetime.fromisoformat(
+                start_date_raw.replace("Z", "+00:00")
+            ).date()
+        except (ValueError, TypeError):
+            pass
+
+    # ── Optional race metadata — same sources as /training/v2/week ────────
+    user_goal = await db.user_goals.find_one({"user_id": user_id}, {"_id": 0})
+
+    race_date_raw = user_goal.get("event_date") if user_goal else None
+    race_date_v2: Optional[date] = None
+    if isinstance(race_date_raw, datetime):
+        race_date_v2 = (
+            race_date_raw.date()
+            if race_date_raw.tzinfo
+            else race_date_raw.replace(tzinfo=timezone.utc).date()
+        )
+    elif isinstance(race_date_raw, str):
+        try:
+            race_date_v2 = datetime.fromisoformat(
+                race_date_raw.replace("Z", "+00:00")
+            ).date()
+        except (ValueError, TypeError):
+            pass
+
+    target_time_minutes_raw = user_goal.get("target_time_minutes") if user_goal else None
+    target_time_seconds: Optional[int] = None
+    if (
+        isinstance(target_time_minutes_raw, (int, float))
+        and not isinstance(target_time_minutes_raw, bool)
+        and target_time_minutes_raw > 0
+    ):
+        target_time_seconds = int(target_time_minutes_raw * 60)
+
+    # ── Build PlanGoal V2 ─────────────────────────────────────────────────
+    mapped_goal_type = _GOAL_MAP.get(goal_type_raw.upper() if goal_type_raw else "")
+    if mapped_goal_type is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot map goal_type '{goal_type_raw}' to V2 GoalType.",
+        )
+
+    plan_goal = build_plan_goal(
+        goal_type=mapped_goal_type,
+        race_date=race_date_v2,
+        created_from="user",
+    )
+
+    # ── Determine mode and pass appropriate anchor ────────────────────────
+    # PlanGoal invariant: maintenance can't have race_date, so
+    # plan_goal.race_date is not None ↔ race_calendar mode.
+    is_race_calendar = plan_goal.race_date is not None
+
+    if is_race_calendar:
+        if cycle_start_v2 is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Could not parse start_date in training cycle (required for race_calendar mode).",
+            )
+        response = build_cycle_calendar_response(
+            plan_goal,
+            reference_date,
+            race_plan_start_date=cycle_start_v2,
+            target_time_seconds=target_time_seconds,
+        )
+    else:
+        if cycle_start_v2 is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Could not parse start_date in training cycle.",
+            )
+        response = build_cycle_calendar_response(
+            plan_goal,
+            reference_date,
+            cycle_anchor_date=cycle_start_v2,
+            target_time_seconds=target_time_seconds,
+        )
+
+    return response.model_dump(mode="json")
+
+
+
     """Génère un plan de secours basé sur des templates.
 
     PR149 BLOCKER 1: When WeeklyTarget V2 prescribes duration-based (target_km_protected=None),
