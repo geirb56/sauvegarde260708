@@ -424,6 +424,7 @@ ROUTE_ACCESS_MAP: Dict[str, RouteAccess] = {
     "/api/training/today":            RouteAccess.PREMIUM,
     "/api/training/week-plan":        RouteAccess.PREMIUM,
     "/api/training/v2/week":          RouteAccess.PREMIUM,  # PR167 — native V2 week endpoint
+    "/api/training/v2/cycle":         RouteAccess.PREMIUM,  # PR175 — native V2 cycle calendar endpoint
     "/api/training/metrics":          RouteAccess.PREMIUM,
     "/api/training/vma-history":      RouteAccess.PREMIUM,
     "/api/training/set-goal":         RouteAccess.PREMIUM,
