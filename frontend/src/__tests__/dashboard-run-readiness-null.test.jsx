@@ -22,7 +22,10 @@ jest.mock("sonner", () => ({
   toast: { success: jest.fn(), error: jest.fn() },
 }));
 jest.mock("@/context/UnitContext", () => ({
-  useUnitSystem: jest.fn(() => ({ unitSystem: "metric", t: (k) => k })),
+  useUnitSystem: () => ({ unitSystem: "metric", t: (k) => k }),
+}));
+jest.mock("@/context/SubscriptionContext", () => ({
+  useSubscription: () => ({ isFree: true, loading: false }),
 }));
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
