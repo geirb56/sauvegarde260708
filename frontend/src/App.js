@@ -16,7 +16,6 @@ import Guidance from "@/pages/Guidance";
 import Digest from "@/pages/Digest";
 import Settings from "@/pages/Settings";
 import Subscription from "@/pages/Subscription";
-import TrainingPlan from "@/pages/TrainingPlan";
 import TrainingPlanV2 from "@/pages/TrainingPlanV2";
 import Coach from "@/pages/Coach";
 import Onboarding from "@/pages/Onboarding";
@@ -86,8 +85,8 @@ function App() {
                     <Route path="coach" element={<Coach />} />
                     <Route path="guidance" element={<Guidance />} />
                     <Route path="digest" element={<Digest />} />
-                    <Route path="training" element={<TrainingPlan />} />
-                    <Route path="training-v2" element={<TrainingPlanV2 />} />
+                    <Route path="training" element={<TrainingPlanV2 />} />
+                    <Route path="training-v2" element={<Navigate to="/training" replace />} />
                     <Route path="onboarding" element={<Onboarding />} />
                     <Route path="settings" element={<Settings />} />
                     <Route path="subscription" element={<Subscription />} />

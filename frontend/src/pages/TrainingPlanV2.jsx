@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import axios from "axios";
-import { CalendarDays, Flag, Gauge, Info, Sparkles } from "lucide-react";
+import { CalendarDays, Flag, Gauge, Info, MapPin, Sparkles } from "lucide-react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -61,6 +61,93 @@ const normalizeGoalType = (goalType) => {
   return normalized;
 };
 
+function CycleWeekRow({ week, t, locale }) {
+  const phaseLabel = week.phase
+    ? (() => {
+        const translated = t(`trainingV2.cyclePhases.${week.phase}`);
+        return translated === `trainingV2.cyclePhases.${week.phase}` ? t("trainingV2.notAvailable") : translated;
+      })()
+    : t("trainingV2.notAvailable");
+  return (
+    <div
+      data-testid={`cycle-week-${week.week_number}`}
+      className={`rounded-lg border p-3 ${week.is_current ? "border-primary bg-primary/10" : "border-border bg-card"}`}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+        <span className="font-medium">
+          {t("trainingV2.cycleWeekLabel")} {week.week_number}
+          {week.is_current && (
+            <span className="ml-2 rounded-full bg-primary px-2 py-0.5 text-xs font-semibold text-primary-foreground" data-testid="cycle-current-badge">
+              {t("trainingV2.cycleCurrentBadge")}
+            </span>
+          )}
+        </span>
+        <span className="text-muted-foreground">{phaseLabel}</span>
+        {week.start_date && week.end_date && (
+          <span className="text-xs text-muted-foreground">
+            {formatDate(week.start_date, locale)} – {formatDate(week.end_date, locale)}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CycleSection({ cycleData, t, locale }) {
+  const getTranslated = (key) => {
+    const translated = t(key);
+    return translated === key ? t("trainingV2.notAvailable") : translated;
+  };
+  const cycle = cycleData?.cycle;
+  const weeks = Array.isArray(cycleData?.weeks) ? cycleData.weeks : [];
+  return (
+    <Card data-testid="training-v2-cycle">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <MapPin className="h-4 w-4" />
+          {t("trainingV2.cycleTitle")}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {cycle?.mode && (
+            <DetailRow label={t("trainingV2.cycleMode")} value={getTranslated(`trainingV2.cycleModes.${cycle.mode}`)} />
+          )}
+          {cycle?.status && (
+            <DetailRow label={t("trainingV2.cycleStatus")} value={getTranslated(`trainingV2.cycleStatuses.${cycle.status}`)} />
+          )}
+          {cycle?.start_date && (
+            <DetailRow label={t("trainingV2.cycleStart")} value={formatDate(cycle.start_date, locale) ?? cycle.start_date} />
+          )}
+          {cycle?.end_date && (
+            <DetailRow label={t("trainingV2.cycleEnd")} value={formatDate(cycle.end_date, locale) ?? cycle.end_date} />
+          )}
+          {isKnownNumber(cycle?.current_week) && isKnownNumber(cycle?.total_weeks) && (
+            <DetailRow
+              label={t("trainingV2.cycleWeekProgress")}
+              value={`${cycle.current_week} / ${cycle.total_weeks}`}
+            />
+          )}
+          {isKnownNumber(cycle?.days_to_race) && (
+            <DetailRow label={t("trainingV2.cycleDaysToRace")} value={String(cycle.days_to_race)} />
+          )}
+        </div>
+        {weeks.length > 0 && (
+          <div className="space-y-2 pt-2">
+            <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">
+              {t("trainingV2.cycleWeeks")}
+            </p>
+            {weeks.map((week) => (
+              <CycleWeekRow key={week.week_number} week={week} t={t} locale={locale} />
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+
 function LoadingState() {
   return (
     <div className="p-4 md:p-6 space-y-4" data-testid="training-v2-loading">
@@ -88,6 +175,7 @@ export default function TrainingPlanV2() {
   const { isFree, loading: subLoading } = useSubscription();
   const { unitSystem } = useUnitSystem();
   const [weekData, setWeekData] = useState(null);
+  const [cycleData, setCycleData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [hasError, setHasError] = useState(false);
 
@@ -96,13 +184,17 @@ export default function TrainingPlanV2() {
 
     let ignore = false;
 
-    const loadWeek = async () => {
+    const loadData = async () => {
       setLoading(true);
       setHasError(false);
       try {
-        const response = await axios.get(`${API}/training/v2/week`);
+        const [weekRes, cycleRes] = await Promise.all([
+          axios.get(`${API}/training/v2/week`),
+          axios.get(`${API}/training/v2/cycle`).catch(() => ({ data: null })),
+        ]);
         if (!ignore) {
-          setWeekData(response.data);
+          setWeekData(weekRes.data);
+          setCycleData(cycleRes.data);
         }
       } catch (error) {
         if (!ignore) {
@@ -115,7 +207,7 @@ export default function TrainingPlanV2() {
       }
     };
 
-    loadWeek();
+    loadData();
 
     return () => {
       ignore = true;
@@ -133,7 +225,7 @@ export default function TrainingPlanV2() {
   }
 
   if (isFree) {
-    return <Paywall returnPath="/training-v2" />;
+    return <Paywall returnPath="/training" />;
   }
 
   if (hasError || !weekData) {
@@ -292,6 +384,10 @@ export default function TrainingPlanV2() {
           })}
         </CardContent>
       </Card>
+
+      {cycleData && (
+        <CycleSection cycleData={cycleData} t={t} locale={locale} />
+      )}
     </div>
   );
 }
