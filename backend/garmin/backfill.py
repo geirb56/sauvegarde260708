@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import logging
 
-from .service import activity_to_workout
 from feed import realtime_cache
 
 logger = logging.getLogger(__name__)
@@ -23,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 async def backfill_user(db, user_id: str, prune: bool = True) -> dict:
     """Re-derive `workouts` + feed cache for one user from garmin_activities."""
+    from .service import activity_to_workout  # lazy import breaks service↔backfill cycle
     acts = await db.garmin_activities.find({"user_id": user_id}, {"_id": 0}).to_list(None)
 
     valid_ids = []
