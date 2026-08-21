@@ -382,4 +382,43 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     }
     unmount();
   });
+
+  // 13. i18n keys: weeklyTarget, weeklyDone, minutes exist in EN
+  it("13. i18n dashboard keys exist in EN", () => {
+    const { translations } = require("@/lib/i18n");
+    expect(translations.en.dashboard.weeklyTarget).toBeDefined();
+    expect(translations.en.dashboard.weeklyDone).toBeDefined();
+    expect(translations.en.dashboard.minutes).toBeDefined();
+  });
+
+  // 14. i18n keys: weeklyTarget, weeklyDone, minutes exist in FR
+  it("14. i18n dashboard keys exist in FR", () => {
+    const { translations } = require("@/lib/i18n");
+    expect(translations.fr.dashboard.weeklyTarget).toBeDefined();
+    expect(translations.fr.dashboard.weeklyDone).toBeDefined();
+    expect(translations.fr.dashboard.minutes).toBeDefined();
+  });
+
+  // 15. i18n keys: weeklyTarget, weeklyDone, minutes exist in ES
+  it("15. i18n dashboard keys exist in ES", () => {
+    const { translations } = require("@/lib/i18n");
+    expect(translations.es.dashboard.weeklyTarget).toBeDefined();
+    expect(translations.es.dashboard.weeklyDone).toBeDefined();
+    expect(translations.es.dashboard.minutes).toBeDefined();
+  });
+
+  // 16. no raw i18n keys visible in rendered output (duration basis)
+  it("16. no raw dashboard i18n keys rendered (duration basis)", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(buildDefaultMocks({ weekV2: WEEK_V2_DURATION }));
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const html = container.innerHTML;
+    expect(html).not.toContain("dashboard.weeklyTarget");
+    expect(html).not.toContain("dashboard.weeklyDone");
+    expect(html).not.toContain("dashboard.minutes");
+    unmount();
+  });
 });

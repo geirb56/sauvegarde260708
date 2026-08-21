@@ -935,7 +935,7 @@ export default function Dashboard() {
             <div className="flex items-center gap-2">
               <Target className="w-4 h-4" style={{ color: "#6EEB5A" }} />
               <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#6EEB5A" }}>
-                {t("dashboard.weeklyTarget", "Cible hebdo")}
+                {t("dashboard.weeklyTarget")}
               </span>
             </div>
 
@@ -946,7 +946,7 @@ export default function Dashboard() {
                     {formatDistance(wt.target_km, { unitSystem })}
                   </span>
                   <span className="text-sm" style={{ color: "var(--text-tertiary)" }}>
-                    {t("dashboard.weeklyDone", "réalisé")}:{" "}
+                    {t("dashboard.weeklyDone")}:{" "}
                     <span style={{ color: "#ffffff" }} data-testid="weekly-volume-done">
                       {formatDistance(weekStats.volume_km, { unitSystem })}
                     </span>
@@ -968,7 +968,7 @@ export default function Dashboard() {
             ) : basis === "duration" ? (
               <div data-testid="weekly-target-duration">
                 <span className="text-2xl font-black" style={{ color: "#ffffff" }} data-testid="weekly-target-value">
-                  {wt.target_duration_minutes} {t("dashboard.minutes", "min")}
+                  {wt.target_duration_minutes} {t("dashboard.minutes")}
                 </span>
               </div>
             ) : null}

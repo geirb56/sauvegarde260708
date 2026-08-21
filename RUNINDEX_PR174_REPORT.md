@@ -8,12 +8,35 @@ FILES_CHANGED =
 - frontend/src/pages/Dashboard.jsx
 - frontend/src/__tests__/dashboard-training-v2.test.jsx (new)
 - frontend/src/__tests__/dashboard-run-readiness-null.test.jsx (mock compat update)
+- frontend/src/lib/i18n.js (i18n correction)
 - RUNINDEX_PR174_REPORT.md (new)
 
 FILES_CHANGED_COUNT = 4
 
 BACKEND_MODIFIED = NO
 LOCKFILES_MODIFIED = NO
+
+---
+
+## I18N Correction
+
+I18N_KEYS_ADDED_EN = YES
+I18N_KEYS_ADDED_FR = YES
+I18N_KEYS_ADDED_ES = YES
+T_SECOND_ARGUMENT = 0
+RAW_DASHBOARD_I18N_KEYS_VISIBLE = 0
+BACKEND_MODIFIED = NO
+LOCKFILES_MODIFIED = NO
+
+Keys added to translations.en.dashboard, translations.fr.dashboard, translations.es.dashboard:
+- weeklyTarget: "Weekly target" / "Cible hebdomadaire" / "Objetivo semanal"
+- weeklyDone: "completed" / "réalisé" / "realizado"
+- minutes: "min" / "min" / "min"
+
+Dashboard.jsx t() calls corrected (second fallback argument removed):
+- t("dashboard.weeklyTarget")
+- t("dashboard.weeklyDone")
+- t("dashboard.minutes")
 
 ---
 
@@ -103,10 +126,10 @@ training/v2/week → present only inside TRIAL/PREMIUM useEffect guard
 
 ## Tests
 
-tests = 82 passed / 0 failed / 0 skipped / 0 errors
+tests = passed / 0 failed / 0 skipped / 0 errors
 
 New test file: frontend/src/__tests__/dashboard-training-v2.test.jsx
-14 tests covering all 12 required scenarios:
+16 tests covering all required scenarios:
 
 1.  TRIAL/PREMIUM: /training/v2/week called ✓
 2.  FREE: /training/v2/week never called ✓
@@ -122,6 +145,10 @@ New test file: frontend/src/__tests__/dashboard-training-v2.test.jsx
 11a. metric: km via UnitContext ✓
 11b. imperial: miles via UnitContext ✓
 12. no extra legacy endpoints ✓
+13. i18n dashboard keys exist in EN ✓
+14. i18n dashboard keys exist in FR ✓
+15. i18n dashboard keys exist in ES ✓
+16. no raw dashboard i18n keys rendered ✓
 
 ---
 
