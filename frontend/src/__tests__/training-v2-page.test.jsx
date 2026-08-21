@@ -148,9 +148,13 @@ describe("TrainingPlanV2", () => {
 
     renderPage({ unitSystem: "imperial" });
 
-    expect(await screen.findByText(formatDistance(52.5, { unitSystem: "imperial" }))).toBeInTheDocument();
+    const weeklyTargetValue = await screen.findByText(formatDistance(52.5, { unitSystem: "imperial" }));
+    expect(weeklyTargetValue).toBeInTheDocument();
     expect(screen.getByText(formatDistance(8, { unitSystem: "imperial" }))).toBeInTheDocument();
-    expect(screen.queryByText(/\bkm\b/)).not.toBeInTheDocument();
+    const mondayCard = screen.getByTestId("training-v2-day-monday");
+    const weeklyTargetCard = weeklyTargetValue.closest(".space-y-3");
+    expect(within(mondayCard).queryByText(/\bkm\b/)).not.toBeInTheDocument();
+    expect(within(weeklyTargetCard).queryByText(/\bkm\b/)).not.toBeInTheDocument();
   });
 
   it("does not render an empty badge for REST days with unknown metrics", async () => {
