@@ -539,3 +539,11 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
 ## Bugs ouverts (à router upstream)
 - **PR#174 i18n** : clés `weeklyTarget/weeklyDone/minutes` placées dans `onboarding` au lieu de `dashboard` pour EN et FR (ES OK) → Dashboard EN/FR affiche `DASHBOARD.WEEKLYTARGET` / `105 dashboard.minutes`. Reproduit en screenshot authentifié. Décision utilisateur (fix local vs PR upstream) en attente.
 - **PR#175** : incohérence GOAL_CONFIG vs _GOAL_MAP sur MAINTENANCE (voir ci-dessus). Non bloquant runtime.
+
+## 2026-06 — Pull copilot/dev — PR #176 (hotfix post-175 : i18n dashboard + MAINTENANCE)
+- Fetch + merge `sauvegarde/copilot/dev` (67b028d→7047ca2). Merge ORT propre, 0 conflit. `.env` intacts, PRD/rapports locaux préservés.
+- PR #176 corrige les 2 items ouverts que j'avais reportés :
+  - **i18n #174** : clés `weeklyTarget/weeklyDone/minutes` déplacées de `onboarding` vers `dashboard` en EN et FR. Vérifié (node) : en/fr/es.dashboard.weeklyTarget/minutes/weeklyDone tous résolus. Screenshot authentifié : Dashboard affiche « WEEKLY TARGET » + « 105 min » (plus de clés brutes).
+  - **#175 MAINTENANCE** : retrait de MAINTENANCE du `_GOAL_MAP` du cycle endpoint (aligné sur gate GOAL_CONFIG) + fix du mock `test_20b`.
+- Validation (agent-tested) : backend + frontend redémarrés. Smoke **6/6 = 200** (today, v2/week, v2/cycle, week-plan, run-index, dashboard). Régression suites PR = **255 passed, 0 failed**.
+- ✅ Les 2 bugs ouverts sont RÉSOLUS upstream. Statut : agent-tested + smoke visuel vérifié ; non user-confirmed.
