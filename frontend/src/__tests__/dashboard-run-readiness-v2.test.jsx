@@ -498,3 +498,165 @@ describe("Test 15: Training V2 components untouched", () => {
     expect(src).toContain("TrainingPlanV2");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Test 16 — hrv_status="purple" → gray tile, never green
+// ---------------------------------------------------------------------------
+describe("Test 16: hrv_status='purple' → gray tile, never green", () => {
+  afterEach(() => jest.clearAllMocks());
+
+  it("HRV tile is gray (not green) when hrv_status is 'purple'", async () => {
+    const cardio = buildCardio({ hrv_status: "purple" });
+    cardio.metrics.hrv_status = "purple";
+    setupAxios(cardio);
+    const { container, unmount } = render();
+    await wait();
+
+    const tile = container.querySelector('[data-testid="readiness-tile-hrv"]');
+    expect(tile).not.toBeNull();
+    const style = tile.getAttribute("style") || "";
+    expect(style).not.toContain("#22c55e");
+    expect(style).not.toContain("rgb(34, 197, 94)");
+
+    unmount();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test 17 — sleep_status="unknown" → gray tile
+// ---------------------------------------------------------------------------
+describe("Test 17: sleep_status='unknown' → gray tile", () => {
+  afterEach(() => jest.clearAllMocks());
+
+  it("Sleep tile is gray when sleep_status is 'unknown'", async () => {
+    const cardio = buildCardio({ sleep_status: "unknown" });
+    cardio.metrics.sleep_status = "unknown";
+    setupAxios(cardio);
+    const { container, unmount } = render();
+    await wait();
+
+    const tile = container.querySelector('[data-testid="readiness-tile-sleep"]');
+    expect(tile).not.toBeNull();
+    const style = tile.getAttribute("style") || "";
+    expect(style).not.toContain("#22c55e");
+    expect(style).not.toContain("rgb(34, 197, 94)");
+
+    unmount();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test 18 — training_load_status="unexpected" → gray tile
+// ---------------------------------------------------------------------------
+describe("Test 18: training_load_status='unexpected' → gray tile", () => {
+  afterEach(() => jest.clearAllMocks());
+
+  it("Load tile is gray when training_load_status is 'unexpected'", async () => {
+    const cardio = buildCardio({ training_load_status: "unexpected" });
+    cardio.metrics.training_load_status = "unexpected";
+    setupAxios(cardio);
+    const { container, unmount } = render();
+    await wait();
+
+    const tile = container.querySelector('[data-testid="readiness-tile-load"]');
+    expect(tile).not.toBeNull();
+    const style = tile.getAttribute("style") || "";
+    expect(style).not.toContain("#22c55e");
+    expect(style).not.toContain("rgb(34, 197, 94)");
+
+    unmount();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test 19 — rhr_status unknown value → gray tile
+// ---------------------------------------------------------------------------
+describe("Test 19: rhr_status unknown value → gray tile", () => {
+  afterEach(() => jest.clearAllMocks());
+
+  it("RHR tile is gray when rhr_status is an unknown non-empty value", async () => {
+    const cardio = buildCardio({ rhr_status: "unavailable" });
+    cardio.metrics.rhr_status = "unavailable";
+    setupAxios(cardio);
+    const { container, unmount } = render();
+    await wait();
+
+    const tile = container.querySelector('[data-testid="readiness-tile-rhr"]');
+    expect(tile).not.toBeNull();
+    const style = tile.getAttribute("style") || "";
+    expect(style).not.toContain("#22c55e");
+    expect(style).not.toContain("rgb(34, 197, 94)");
+
+    unmount();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test 20 — status="gray" → no red icon in tile
+// ---------------------------------------------------------------------------
+describe("Test 20: status='gray' → no red icon (#ef4444) in tile", () => {
+  afterEach(() => jest.clearAllMocks());
+
+  it("HRV tile with status gray does not contain any red color", async () => {
+    const cardio = buildCardio({ hrv_status: "gray" });
+    cardio.metrics.hrv_status = "gray";
+    setupAxios(cardio);
+    const { container, unmount } = render();
+    await wait();
+
+    const tile = container.querySelector('[data-testid="readiness-tile-hrv"]');
+    expect(tile).not.toBeNull();
+    // No element inside the tile should use the red error color
+    expect(tile.innerHTML).not.toContain("#ef4444");
+
+    unmount();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test 21 — status="red" → red color preserved in tile
+// ---------------------------------------------------------------------------
+describe("Test 21: status='red' → red color preserved in tile", () => {
+  afterEach(() => jest.clearAllMocks());
+
+  it("HRV tile with status red contains red color #ef4444", async () => {
+    const cardio = buildCardio({ hrv_status: "red" });
+    cardio.metrics.hrv_status = "red";
+    setupAxios(cardio);
+    const { container, unmount } = render();
+    await wait();
+
+    const tile = container.querySelector('[data-testid="readiness-tile-hrv"]');
+    expect(tile).not.toBeNull();
+    const style = tile.getAttribute("style") || "";
+    expect(style).toContain("#ef4444");
+
+    unmount();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test 22 — green/yellow/red → correct tile colors preserved
+// ---------------------------------------------------------------------------
+describe("Test 22: green/yellow/red → correct tile colors preserved", () => {
+  afterEach(() => jest.clearAllMocks());
+
+  it.each([
+    ["green", "#22c55e"],
+    ["yellow", "#f59e0b"],
+    ["red", "#ef4444"],
+  ])("hrv_status=%s → tile style contains %s", async (status, expectedHex) => {
+    const cardio = buildCardio({ hrv_status: status });
+    cardio.metrics.hrv_status = status;
+    setupAxios(cardio);
+    const { container, unmount } = render();
+    await wait();
+
+    const tile = container.querySelector('[data-testid="readiness-tile-hrv"]');
+    expect(tile).not.toBeNull();
+    const style = tile.getAttribute("style") || "";
+    expect(style).toContain(expectedHex);
+
+    unmount();
+  });
+});

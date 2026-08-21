@@ -186,7 +186,8 @@ function SessionCard({ session, isGrayed = false, fatigueColor = null }) {
 function StatusIcon({ status, size = 16 }) {
   if (status === "green") return <CheckCircle size={size} color="#22c55e" />;
   if (status === "yellow") return <AlertTriangle size={size} color="#f59e0b" />;
-  return <XCircle size={size} color="#ef4444" />;
+  if (status === "red") return <XCircle size={size} color="#ef4444" />;
+  return null;
 }
 
 function MetricWidget({ icon: Icon, label, value, unit, status, detail }) {
@@ -285,7 +286,7 @@ function RunIndexPillar({ icon: Icon, label, value, color }) {
 
 // Readiness tile — compact stat card: icon + status dot + label + value (status-colored), tappable for info
 function ReadinessTile({ icon: Icon, label, value, status, testId, onClick }) {
-  const color = status === "yellow" ? "#f59e0b" : status === "red" ? "#ef4444" : status === "gray" ? "#6b7280" : "#22c55e";
+  const color = status === "green" ? "#22c55e" : status === "yellow" ? "#f59e0b" : status === "red" ? "#ef4444" : "#6b7280";
   return (
     <button
       type="button"
