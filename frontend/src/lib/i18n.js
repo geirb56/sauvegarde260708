@@ -122,6 +122,9 @@ export const translations = {
       demoDataNotice: "Demo data — connect Terra wearable in Settings for live metrics",
       hrLabel: "HR",
       targetLabel: "Target",
+      weeklyTarget: "Weekly target",
+      weeklyDone: "completed",
+      minutes: "min",
     },
     workoutTypes: {
       run: "Run",
@@ -669,9 +672,6 @@ export const translations = {
       garminAdjustGoal: "Adjust my goal →",
       garminNoData: "Not enough data to compute your score. Sync more activities.",
       garminSyncFailed: "Sync failed. Your Garmin connection is still active.",
-      weeklyTarget: "Weekly target",
-      weeklyDone: "completed",
-      minutes: "min",
     },
   },
 
@@ -796,6 +796,9 @@ export const translations = {
       demoDataNotice: "Données démo — connectez Terra dans Paramètres pour les métriques en direct",
       hrLabel: "FC",
       targetLabel: "Cible",
+      weeklyTarget: "Cible hebdomadaire",
+      weeklyDone: "réalisé",
+      minutes: "min",
     },
     workoutTypes: {
       run: "Course",
@@ -1341,9 +1344,6 @@ export const translations = {
       garminAdjustGoal: "Ajuster mon objectif →",
       garminNoData: "Pas assez de données pour calculer votre score. Synchronisez plus d'activités.",
       garminSyncFailed: "Échec de la synchronisation. Votre connexion Garmin est toujours active.",
-      weeklyTarget: "Cible hebdomadaire",
-      weeklyDone: "réalisé",
-      minutes: "min",
     },
   },
   

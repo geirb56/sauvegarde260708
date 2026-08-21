@@ -4944,7 +4944,6 @@ async def get_training_v2_cycle(user: dict = Depends(auth_user)):
         "MARATHON": GoalType.marathon,
         "5K": GoalType.five_k,
         "ULTRA": GoalType.ultra,
-        "MAINTENANCE": GoalType.maintenance,
     }
 
     user_id = user["id"]
