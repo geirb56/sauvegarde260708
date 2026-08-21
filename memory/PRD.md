@@ -559,3 +559,12 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
   - Réseau depuis /training : uniquement /api/training/v2/week (200) + /api/training/v2/cycle (200). AUCUN appel legacy (plan/full-cycle/metrics/refresh).
   - FREE paywall : couvert par test jest (pas de compte FREE runtime ; mock runtime interdit). Jest training-v2-page = 17 passed.
 - Statut : agent-tested + smoke visuel EN/FR vérifié ; non user-confirmed.
+
+## 2026-06 — Pull copilot/dev — PR #178 + #179 + #180 (Run/Readiness V2 dashboard, RunIndex→DomainActivity, hotfix circular import)
+- Fetch + merge en 2 temps : #178+#179 (56412ed), puis #180 hotfix (4c134bc). Merges ORT propres, 0 conflit. `.env` intacts, PRD/rapports préservés.
+- **PR #179** = migration source RunIndex vers `garmin_activities → DomainActivity` (engine/run_index_engine.py, garmin/service.py, services/run_index_history.py, server.py). 
+- **PR #178** = consolidation Dashboard Run Readiness V2 : statut inconnu → "gray" par défaut (unknown≠green), gray → pas d'icône rouge, retrait code legacy mort (Dashboard.jsx).
+- 🔴 **BLOCKER post-#179 (résolu par #180)** : import circulaire déterministe. `garmin/service.py:26 from .backfill import backfill_user` + `garmin/backfill.py:18 from .service import activity_to_workout` (défini ligne 182) → backend + garmin-sync/event workers KO (app down). PR #180 = import paresseux de `activity_to_workout` dans `backfill_user` (backfill.py:25) → cycle cassé. `import garmin.service` = OK.
+- Validation (agent-tested) : backend + frontend + 4 workers redémarrés, tous RUNNING. Smoke **7/7 = 200** (run-index, dashboard, today, v2/week, v2/cycle, week-plan, full-cycle). sync-worker tourne normalement. Tests PR179 domain source = **34 passed**. Régression suites PR = **255 passed**. Dashboard rend, **0 erreur JS**, tous appels API 200.
+- ⚠️ Limitation connue : `dashboard-run-readiness-v2.test.jsx` (tests 16-22 de #178) ne s'exécute pas en jest local (résolution radix `.tsx` — problème env pré-existant depuis #174, tout test important Dashboard.jsx échoue). NON-régression : le runtime Dashboard est validé par screenshot + endpoints. Les couleurs de statut exactes (gray/red) pour un compte avec données n'ont pas pu être vérifiées visuellement (le compte test JWT n'a pas de données Garmin).
+- Statut : agent-tested ; non user-confirmed.
