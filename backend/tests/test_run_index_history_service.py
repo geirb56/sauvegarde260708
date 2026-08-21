@@ -138,9 +138,37 @@ class FakeCollection:
         return True
 
 
+def _workout_to_garmin_activity_doc(workout: dict) -> dict:
+    """Convert a test workout dict to a garmin_activities-compatible document.
+
+    Used to migrate FakeDB to the PR179 canonical source (garmin_activities).
+    """
+    user_id = workout.get("user_id", "runner-1")
+    # Use date as start_time (append T00:00:00+00:00 so it parses as a datetime)
+    raw_date = workout.get("date") or workout.get("start_time") or ""
+    start_time = raw_date if "T" in raw_date else f"{raw_date}T00:00:00+00:00"
+    distance_m = (workout.get("distance_km") or 0.0) * 1000.0
+    duration_s = (workout.get("duration_minutes") or 0.0) * 60.0
+    avg_hr = workout.get("avg_heart_rate") or workout.get("average_hr")
+    return {
+        "user_id": user_id,
+        "activity_type": "running",
+        "start_time": start_time,
+        "distance_m": distance_m,
+        "duration_s": duration_s,
+        "average_hr": float(avg_hr) if avg_hr is not None else None,
+        "source": "garmin",
+    }
+
+
 class FakeDB:
     def __init__(self, workouts: list[dict] | None = None):
-        self.workouts = FakeCollection(workouts)
+        raw_workouts = list(workouts or [])
+        self.workouts = FakeCollection(raw_workouts)
+        # PR179: garmin_activities is the canonical RunIndex source.
+        # Convert test workout dicts so that load_garmin_domain_activities works.
+        garmin_docs = [_workout_to_garmin_activity_doc(w) for w in raw_workouts]
+        self.garmin_activities = FakeCollection(garmin_docs)
         self.run_index_scores = FakeCollection()
 
 

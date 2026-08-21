@@ -1,4 +1,4 @@
-from services.run_index_history import get_run_index_history_payload, upsert_run_index_snapshot
+from services.run_index_history import get_run_index_history_payload, upsert_run_index_snapshot, load_garmin_domain_activities
 from fastapi import FastAPI, APIRouter, HTTPException, Query, Request, Depends, Header
 from fastapi.responses import RedirectResponse, JSONResponse
 from middleware import SSEAwareGZipMiddleware
@@ -134,7 +134,7 @@ from services.paddle_webhook_security import verify_and_parse_paddle_event, Padd
 
 # Import physiological engine dashboard router
 from api.dashboard import dashboard_router
-from engine.run_index_engine import calculate_run_index
+from engine.run_index_engine import calculate_run_index, calculate_run_index_from_domain
 
 # Import Terra integration module
 from terra_integration import (
@@ -1392,9 +1392,13 @@ async def get_dashboard_insight(language: str = "en", user: dict = Depends(auth_
     
     # Calculate recovery score
     recovery_score = calculate_recovery_score(all_workouts, language)
-    run_index = calculate_run_index(all_workouts)
 
-    await upsert_run_index_snapshot(db, user_id, all_workouts)
+    # RunIndex: canonical source is garmin_activities → DomainActivity (PR179).
+    # db.workouts is NOT used for RunIndex score.
+    garmin_domain_activities = await load_garmin_domain_activities(db, user_id)
+    run_index = calculate_run_index_from_domain(garmin_domain_activities)
+
+    await upsert_run_index_snapshot(db, user_id, activities=garmin_domain_activities)
     
     # Generate insight using local engine (NO LLM)
     coach_insight = generate_dashboard_insight(

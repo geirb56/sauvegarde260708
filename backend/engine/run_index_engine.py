@@ -4,7 +4,10 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from math import sqrt
 from statistics import mean, median
-from typing import Iterable, Optional
+from typing import TYPE_CHECKING, Iterable, List, Optional
+
+if TYPE_CHECKING:
+    from training_v2.domain_activity import DomainActivity
 
 
 def _clamp(value: float, minimum: float, maximum: float) -> float:
@@ -502,3 +505,99 @@ def calculate_run_index(
             "efficiency": efficiency,
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# DomainActivity → engine boundary (PR179 canonical path)
+# ---------------------------------------------------------------------------
+_RUNNING_ACTIVITY_TYPES = frozenset({
+    "run", "running", "trail_running", "treadmill_running",
+})
+
+
+def _domain_activity_to_workout_dict(activity: "DomainActivity") -> Optional[dict]:
+    """Convert a DomainActivity to the internal workout dict understood by the engine.
+
+    Rules (PR179):
+    - Only running activity types are accepted; others return None.
+    - distance_m → distance_km at the engine boundary only.
+    - duration_s → duration_minutes at the engine boundary only.
+    - None remains None; 0 is never fabricated.
+    - average_hr is preserved as-is (None when absent).
+    """
+    act_type = (activity.activity_type or "").lower()
+    if act_type not in _RUNNING_ACTIVITY_TYPES:
+        return None
+
+    if activity.distance_m is None or activity.duration_s is None:
+        return None
+    if activity.distance_m <= 0 or activity.duration_s <= 0:
+        return None
+
+    distance_km = activity.distance_m / 1000.0
+    duration_minutes = activity.duration_s / 60.0
+    avg_pace = duration_minutes / distance_km
+    speed_kmh = 60.0 / avg_pace
+
+    start = activity.start_time
+    if start is None:
+        return None
+    if isinstance(start, str):
+        start_str = start
+    elif hasattr(start, "isoformat"):
+        start_str = start.isoformat()
+    else:
+        return None
+
+    avg_hr: Optional[float] = activity.average_hr  # None when absent — never 0
+
+    return {
+        "type": "run",
+        "activity_type": "run",
+        "start_time": start_str,
+        "date": start_str,
+        "distance_km": distance_km,
+        "duration_minutes": duration_minutes,
+        "avg_pace_min_km": avg_pace,
+        "avg_speed_kmh": speed_kmh,
+        "avg_heart_rate": avg_hr,
+        # source fields — informational, not used by scoring
+        "source": activity.source,
+        "source_activity_id": activity.source_activity_id,
+    }
+
+
+def prepare_workout_dicts_from_domain(
+    activities: "List[DomainActivity]",
+) -> list[dict]:
+    """Convert a list of DomainActivities to engine workout dicts.
+
+    Non-running or incomplete activities produce no entry (filtered out).
+    Pure function — no I/O, deterministic.
+    """
+    result = []
+    for act in activities:
+        item = _domain_activity_to_workout_dict(act)
+        if item is not None:
+            result.append(item)
+    return result
+
+
+def calculate_run_index_from_domain(
+    activities: "List[DomainActivity]",
+    reference_date: Optional[date] = None,
+) -> dict:
+    """Canonical RunIndex entry point: list[DomainActivity] → RunIndex score.
+
+    This is the PR179 canonical runtime path:
+        garmin_activities → mongo_garmin_activities_to_domain → DomainActivity
+        → calculate_run_index_from_domain
+
+    The formula, weights, and thresholds are identical to calculate_run_index().
+    The only difference is the data source: DomainActivity fields are converted
+    to internal workout dicts at the engine boundary; no db.workouts involved.
+
+    Pure, deterministic, no I/O.
+    """
+    workout_dicts = prepare_workout_dicts_from_domain(activities)
+    return calculate_run_index(workout_dicts, reference_date)
