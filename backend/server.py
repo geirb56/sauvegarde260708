@@ -4867,6 +4867,13 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
     )
 
     # ── Assemble native V2 response — no adapter, no coercion ────────────
+    # Normalize goal_type to V2 enum value for contract coherence with /v2/cycle.
+    from training_v2.week_plan_bridge import _GOAL_MAP as _WK_GOAL_MAP
+    _goal_type_v2_str: str = (
+        _WK_GOAL_MAP[goal_type.upper()].value
+        if goal_type and goal_type.upper() in _WK_GOAL_MAP
+        else goal_type
+    )
     sessions = [
         WeekV2SessionResponse(
             day=s.day,
@@ -4884,7 +4891,7 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
     response = TrainingWeekV2Response(
         reference_date=reference_date.isoformat(),
         goal=WeekV2GoalResponse(
-            goal_type=goal_type,
+            goal_type=_goal_type_v2_str,
             race_date=race_date_v2.isoformat() if race_date_v2 else None,
             target_time_seconds=target_time_seconds,
         ),
@@ -5015,9 +5022,31 @@ async def get_training_v2_cycle(user: dict = Depends(auth_user)):
             detail=f"Cannot map goal_type '{goal_type_raw}' to V2 GoalType.",
         )
 
+    # ── Ultra: resolve target_distance_km from canonical DB source ────────
+    # Same source as /user/goal stores it: user_goals.distance_km.
+    # No hardcoded fallback — absent data → 400, not invented distance.
+    from training_v2.plan_goal import GoalType as _GoalType, ULTRA_MIN_DISTANCE_KM
+    target_distance_km_v2: Optional[float] = None
+    if mapped_goal_type == _GoalType.ultra:
+        raw_dist = user_goal.get("distance_km") if user_goal else None
+        if (
+            not isinstance(raw_dist, (int, float))
+            or isinstance(raw_dist, bool)
+            or raw_dist <= ULTRA_MIN_DISTANCE_KM
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "ULTRA goal requires target_distance_km > 42.195 km. "
+                    "Set your goal distance via /api/user/goal first."
+                ),
+            )
+        target_distance_km_v2 = float(raw_dist)
+
     plan_goal = build_plan_goal(
         goal_type=mapped_goal_type,
         race_date=race_date_v2,
+        target_distance_km=target_distance_km_v2,
         created_from="user",
     )
 
@@ -5054,7 +5083,7 @@ async def get_training_v2_cycle(user: dict = Depends(auth_user)):
     return response.model_dump(mode="json")
 
 
-
+def _generate_fallback_week_plan(context: dict, phase: str, goal: str, target_km_protected: float = None) -> dict:
     """Génère un plan de secours basé sur des templates.
 
     PR149 BLOCKER 1: When WeeklyTarget V2 prescribes duration-based (target_km_protected=None),

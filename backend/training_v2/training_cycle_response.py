@@ -53,6 +53,7 @@ from .periodization import (
     TAPER_WEEKS,
     PeriodizationPhase,
     _build_race_phase_schedule,
+    build_periodization,
 )
 from .plan_goal import GoalType, PlanGoal
 
@@ -360,6 +361,24 @@ def build_cycle_calendar_response(
                 )
                 for w in weeks
             ]
+        else:
+            # BLOCKER 3: for is_current week, phase must equal Periodization V2
+            # at reference_date — Periodization V2 is the sole phase authority.
+            snap = build_periodization(
+                plan_goal,
+                reference_date,
+                race_plan_start_date=plan_start,
+            )
+            weeks = [
+                WeekCalendarEntry(
+                    week_number=w.week_number,
+                    start_date=w.start_date,
+                    end_date=w.end_date,
+                    phase=snap.phase.value if w.is_current else w.phase,
+                    is_current=w.is_current,
+                )
+                for w in weeks
+            ]
 
         cycle_meta = CycleMetaResponse(
             mode="race_calendar",
@@ -395,6 +414,24 @@ def build_cycle_calendar_response(
     weeks_cont, current_week_number_cont = _build_continuous_weeks(
         cycle_start_cont, reference_date
     )
+
+    # BLOCKER 3: for is_current week, phase must equal Periodization V2
+    # at reference_date — Periodization V2 is the sole phase authority.
+    snap_cont = build_periodization(
+        plan_goal,
+        reference_date,
+        cycle_anchor_date=cycle_anchor_date,
+    )
+    weeks_cont = [
+        WeekCalendarEntry(
+            week_number=w.week_number,
+            start_date=w.start_date,
+            end_date=w.end_date,
+            phase=snap_cont.phase.value if w.is_current else w.phase,
+            is_current=w.is_current,
+        )
+        for w in weeks_cont
+    ]
 
     # Continuous is always active for reference_date within the computed cycle.
     current_week_cont: Optional[int] = (

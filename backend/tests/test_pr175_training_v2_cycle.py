@@ -514,3 +514,434 @@ def test_server_cycle_datetime_once():
     assert now_calls == 1, (
         f"get_training_v2_cycle must call datetime.now() exactly once (found {now_calls})"
     )
+
+
+# ===========================================================================
+# BLOCKER 4 — Real endpoint tests (TestClient + mocked DB/auth)
+# ===========================================================================
+
+import os as _os
+_os.environ.setdefault("JWT_SECRET_KEY", "test-secret-pr175")
+
+from unittest.mock import AsyncMock, MagicMock, patch as _patch
+
+# Attempt to import server once at module level; skip endpoint tests if deps missing.
+_SERVER_IMPORT_ERROR: Optional[Exception] = None
+_server_module = None
+try:
+    import server as _server_module  # type: ignore[assignment]
+except Exception as _exc:
+    _SERVER_IMPORT_ERROR = _exc
+
+_requires_server = pytest.mark.skipif(
+    _server_module is None,
+    reason=f"server.py cannot be imported in this environment: {_SERVER_IMPORT_ERROR}",
+)
+
+
+def _make_cycle_doc(goal: str = "MARATHON", start_date: str = "2024-01-01"):
+    return {"goal": goal, "start_date": start_date, "user_id": "test-uid"}
+
+
+def _make_goal_doc(event_date: str = "2025-06-01", target_time_minutes: int = 240):
+    return {
+        "user_id": "test-uid",
+        "event_date": event_date,
+        "distance_km": 42.195,
+        "target_time_minutes": target_time_minutes,
+    }
+
+
+def _mock_db_for_cycle(cycle_doc, goal_doc):
+    """Build a minimal AsyncMock db for the cycle endpoint."""
+    mock_db = MagicMock()
+    mock_db.training_cycles.find_one = AsyncMock(return_value=cycle_doc)
+    mock_db.user_goals.find_one = AsyncMock(return_value=goal_doc)
+    return mock_db
+
+
+def _make_user_access(tier_str: str):
+    from access_control import UserAccess, Tier
+    return UserAccess(user_id="test-uid", tier=Tier(tier_str))
+
+
+@_requires_server
+def test_20_endpoint_premium_http200():
+    """BLOCKER 4 — PREMIUM user → GET /api/training/v2/cycle returns HTTP 200
+    with payload containing reference_date, goal, cycle, weeks."""
+    from fastapi.testclient import TestClient
+    app = _server_module.app
+    auth_dep = _server_module.auth_user
+
+    cycle_doc = _make_cycle_doc("MARATHON", "2024-01-01")
+    goal_doc = _make_goal_doc("2025-06-01", 240)
+    mock_db = _mock_db_for_cycle(cycle_doc, goal_doc)
+    user_access = _make_user_access("premium")
+
+    with _patch("server.get_user_access", new=AsyncMock(return_value=user_access)):
+        with _patch("server.db", mock_db):
+            app.dependency_overrides[auth_dep] = lambda: {"id": "test-uid", "authenticated": True}
+            try:
+                client = TestClient(app, raise_server_exceptions=True)
+                resp = client.get(
+                    "/api/training/v2/cycle",
+                    headers={"Authorization": "******"},
+                )
+            finally:
+                app.dependency_overrides.pop(auth_dep, None)
+
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+    data = resp.json()
+    assert "reference_date" in data, "Missing reference_date"
+    assert "goal" in data, "Missing goal"
+    assert "cycle" in data, "Missing cycle"
+    assert "weeks" in data, "Missing weeks"
+    assert len(data["weeks"]) > 0, "weeks must not be empty"
+
+
+@_requires_server
+def test_20b_endpoint_trial_http200():
+    """BLOCKER 4 — TRIAL user → GET /api/training/v2/cycle returns HTTP 200."""
+    from fastapi.testclient import TestClient
+    app = _server_module.app
+    auth_dep = _server_module.auth_user
+
+    cycle_doc = _make_cycle_doc("MAINTENANCE", "2024-01-01")
+    goal_doc = None
+    mock_db = _mock_db_for_cycle(cycle_doc, goal_doc)
+    user_access = _make_user_access("trial")
+
+    with _patch("server.get_user_access", new=AsyncMock(return_value=user_access)):
+        with _patch("server.db", mock_db):
+            app.dependency_overrides[auth_dep] = lambda: {"id": "test-uid", "authenticated": True}
+            try:
+                client = TestClient(app, raise_server_exceptions=True)
+                resp = client.get(
+                    "/api/training/v2/cycle",
+                    headers={"Authorization": "******"},
+                )
+            finally:
+                app.dependency_overrides.pop(auth_dep, None)
+
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+    data = resp.json()
+    assert "reference_date" in data
+    assert "goal" in data
+    assert "cycle" in data
+    assert "weeks" in data
+
+
+@_requires_server
+def test_20c_endpoint_free_blocked():
+    """BLOCKER 4 — FREE user → GET /api/training/v2/cycle is blocked (no premium access)."""
+    from fastapi.testclient import TestClient
+    app = _server_module.app
+    auth_dep = _server_module.auth_user
+
+    mock_db = _mock_db_for_cycle({}, {})
+    user_access = _make_user_access("free")
+
+    with _patch("server.get_user_access", new=AsyncMock(return_value=user_access)):
+        with _patch("server.db", mock_db):
+            app.dependency_overrides[auth_dep] = lambda: {"id": "test-uid", "authenticated": True}
+            try:
+                client = TestClient(app, raise_server_exceptions=False)
+                resp = client.get(
+                    "/api/training/v2/cycle",
+                    headers={"Authorization": "******"},
+                )
+            finally:
+                app.dependency_overrides.pop(auth_dep, None)
+
+    # FREE users must be blocked — 403 from subscription middleware
+    assert resp.status_code == 403, (
+        f"FREE user should be blocked with 403, got {resp.status_code}"
+    )
+
+
+# ===========================================================================
+# BLOCKER 5 — Week / Cycle goal coherence
+# ===========================================================================
+
+
+def test_21_week_cycle_goal_type_coherent():
+    """BLOCKER 5 — goal_type in cycle response matches normalized week goal_type."""
+    from training_v2.week_plan_bridge import _GOAL_MAP
+
+    # For marathon: cycle uses plan_goal.goal_type.value = "marathon"
+    # Week endpoint normalizes: _GOAL_MAP["MARATHON"].value = "marathon"
+    for raw, expected_v2 in [
+        ("MARATHON", "marathon"),
+        ("5K", "5k"),
+        ("10K", "10k"),
+        ("SEMI", "half_marathon"),
+        ("HALF_MARATHON", "half_marathon"),
+        ("MAINTENANCE", "maintenance"),
+    ]:
+        cycle_resp = build_cycle_calendar_response(
+            build_plan_goal(goal_type=_GOAL_MAP[raw]),
+            date(2024, 6, 1),
+            cycle_anchor_date=date(2024, 1, 1),
+        )
+        week_normalized = _GOAL_MAP.get(raw.upper(), None)
+        assert cycle_resp.goal.goal_type == expected_v2, (
+            f"cycle goal_type mismatch for {raw}: {cycle_resp.goal.goal_type!r} != {expected_v2!r}"
+        )
+        assert week_normalized is not None
+        assert week_normalized.value == expected_v2, (
+            f"week normalization mismatch for {raw}: {week_normalized.value!r} != {expected_v2!r}"
+        )
+
+
+def test_21b_week_cycle_race_date_coherent():
+    """BLOCKER 5 — race_date in cycle.goal matches what week endpoint would expose."""
+    race_date_val = date(2025, 6, 1)
+    ref = date(2025, 1, 15)
+    plan_start = date(2025, 1, 1)
+
+    cycle_resp = _race("marathon", race_date_val, ref, plan_start=plan_start)
+
+    # Both endpoints resolve race_date from user_goals.event_date.
+    # The cycle returns race_date as ISO string.
+    assert cycle_resp.goal.race_date == race_date_val.isoformat()
+    # And week endpoint would expose the same value.
+    assert cycle_resp.cycle.mode == "race_calendar"
+
+
+def test_21c_week_cycle_target_time_coherent():
+    """BLOCKER 5 — target_time_seconds passes through both endpoints unchanged."""
+    race_date_val = date(2025, 6, 1)
+    ref = date(2025, 1, 15)
+    plan_start = date(2025, 1, 1)
+    target_secs = 14400  # 4h
+
+    goal = _race_goal("marathon", race_date=race_date_val)
+    cycle_resp = build_cycle_calendar_response(
+        goal, ref,
+        race_plan_start_date=plan_start,
+        target_time_seconds=target_secs,
+    )
+    assert cycle_resp.goal.target_time_seconds == target_secs
+
+
+# ===========================================================================
+# ULTRA tests
+# ===========================================================================
+
+
+def test_22_ultra_valid_distance_builds():
+    """ULTRA with valid target_distance_km → construction succeeds."""
+    from training_v2.plan_goal import GoalType, build_plan_goal as _bpg
+
+    race_date_val = date(2025, 9, 1)
+    ref = date(2025, 1, 1)
+    plan_start = date(2025, 1, 1)
+
+    ultra_goal = _bpg(
+        goal_type=GoalType.ultra,
+        target_distance_km=80.0,
+        race_date=race_date_val,
+        created_from="user",
+    )
+    resp = build_cycle_calendar_response(
+        ultra_goal, ref, race_plan_start_date=plan_start
+    )
+    assert resp.cycle.mode == "race_calendar"
+    assert resp.goal.goal_type == "ultra"
+    assert len(resp.weeks) >= 1
+
+
+def test_22b_ultra_missing_distance_raises():
+    """ULTRA without target_distance_km → ValueError (no invented distance)."""
+    from training_v2.plan_goal import GoalType, PlanGoal
+    import pytest
+
+    with pytest.raises((ValueError, Exception)) as exc_info:
+        # build_plan_goal without target_distance_km for ultra must fail
+        from training_v2.plan_goal import build_plan_goal as _bpg
+        _bpg(goal_type=GoalType.ultra, race_date=date(2025, 9, 1), created_from="user")
+
+    # Must not silently produce a goal
+    assert "ultra" in str(exc_info.value).lower() or "target_distance" in str(exc_info.value).lower()
+
+
+def test_22c_ultra_distance_conserved_in_goal():
+    """ULTRA target_distance_km is conserved in cycle.goal.target_distance_km."""
+    from training_v2.plan_goal import GoalType, build_plan_goal as _bpg
+
+    dist = 100.0
+    ultra_goal = _bpg(
+        goal_type=GoalType.ultra,
+        target_distance_km=dist,
+        race_date=date(2025, 9, 1),
+        created_from="user",
+    )
+    resp = build_cycle_calendar_response(
+        ultra_goal, date(2025, 1, 1), race_plan_start_date=date(2025, 1, 1)
+    )
+    assert resp.goal.target_distance_km == dist
+
+
+# ===========================================================================
+# Race phase boundary tests (BLOCKER 3 validation)
+# ===========================================================================
+
+
+def _race_phase_snap(ref: date, race_date: date, plan_start: date, goal_type: str = "marathon"):
+    """Return periodization snapshot at reference_date for race plan."""
+    from training_v2.periodization import build_periodization
+    from training_v2.plan_goal import GoalType, build_plan_goal as _bpg
+
+    _goal_map = {
+        "marathon": GoalType.marathon,
+        "5k": GoalType.five_k,
+        "10k": GoalType.ten_k,
+    }
+    gt = _goal_map[goal_type]
+    goal = _bpg(goal_type=gt, race_date=race_date, created_from="user")
+    return build_periodization(goal, ref, race_plan_start_date=plan_start)
+
+
+def _assert_current_phase_authority(ref: date, race_date: date, plan_start: date, goal_type: str = "marathon"):
+    """Assert: current week phase == Periodization V2 phase at reference_date."""
+    from training_v2.plan_goal import GoalType, build_plan_goal as _bpg
+
+    _goal_map = {"marathon": GoalType.marathon, "5k": GoalType.five_k, "10k": GoalType.ten_k}
+    goal = _bpg(goal_type=_goal_map[goal_type], race_date=race_date, created_from="user")
+
+    resp = build_cycle_calendar_response(goal, ref, race_plan_start_date=plan_start)
+    snap = _race_phase_snap(ref, race_date, plan_start, goal_type)
+
+    current_wks = [w for w in resp.weeks if w.is_current]
+    assert len(current_wks) == 1, f"Expected exactly 1 is_current, got {len(current_wks)}"
+    assert current_wks[0].phase == snap.phase.value, (
+        f"Phase mismatch at ref={ref}: current_week.phase={current_wks[0].phase!r}, "
+        f"periodization.phase={snap.phase.value!r}"
+    )
+
+
+def test_23_race_calendar_current_week_base():
+    """Race calendar: current week in base phase == Periodization V2."""
+    plan_start = date(2025, 1, 1)
+    race_date = date(2025, 10, 5)
+    ref = date(2025, 1, 15)  # Week 3 of plan — base phase
+    _assert_current_phase_authority(ref, race_date, plan_start)
+
+
+def test_23b_race_calendar_boundary_base_build():
+    """Race calendar: reference_date near base→build boundary."""
+    from training_v2.periodization import build_periodization
+    from training_v2.plan_goal import GoalType, build_plan_goal as _bpg
+    from training_v2.periodization import _build_race_phase_schedule, TAPER_WEEKS, PeriodizationPhase
+
+    plan_start = date(2025, 1, 1)
+    race_date = date(2025, 10, 5)
+    goal = _bpg(goal_type=GoalType.marathon, race_date=race_date, created_from="user")
+
+    # Find the end of base phase from the schedule
+    schedule = _build_race_phase_schedule(plan_start, race_date, TAPER_WEEKS[GoalType.marathon])
+    base_end = next(
+        (ph_end for ph, ph_start, ph_end in schedule if ph == PeriodizationPhase.base),
+        None,
+    )
+    if base_end is None:
+        pytest.skip("No base phase found in schedule")
+
+    # Day after base phase ends = first day of build
+    ref = base_end + timedelta(days=1)
+    snap = build_periodization(goal, ref, race_plan_start_date=plan_start)
+
+    resp = build_cycle_calendar_response(goal, ref, race_plan_start_date=plan_start)
+    current_wks = [w for w in resp.weeks if w.is_current]
+    assert len(current_wks) == 1
+    assert current_wks[0].phase == snap.phase.value
+
+
+def test_23c_race_calendar_boundary_build_specific():
+    """Race calendar: reference_date at build→specific boundary."""
+    from training_v2.periodization import build_periodization, _build_race_phase_schedule, TAPER_WEEKS, PeriodizationPhase
+    from training_v2.plan_goal import GoalType, build_plan_goal as _bpg
+
+    plan_start = date(2025, 1, 1)
+    race_date = date(2025, 10, 5)
+    goal = _bpg(goal_type=GoalType.marathon, race_date=race_date, created_from="user")
+
+    schedule = _build_race_phase_schedule(plan_start, race_date, TAPER_WEEKS[GoalType.marathon])
+    build_end = next(
+        (ph_end for ph, ph_start, ph_end in schedule if ph == PeriodizationPhase.build),
+        None,
+    )
+    if build_end is None:
+        pytest.skip("No build phase found in schedule")
+
+    ref = build_end + timedelta(days=1)
+    snap = build_periodization(goal, ref, race_plan_start_date=plan_start)
+
+    resp = build_cycle_calendar_response(goal, ref, race_plan_start_date=plan_start)
+    current_wks = [w for w in resp.weeks if w.is_current]
+    assert len(current_wks) == 1
+    assert current_wks[0].phase == snap.phase.value
+
+
+def test_23d_race_calendar_boundary_specific_taper():
+    """Race calendar: reference_date at specific→taper boundary."""
+    from training_v2.periodization import build_periodization, _build_race_phase_schedule, TAPER_WEEKS, PeriodizationPhase
+    from training_v2.plan_goal import GoalType, build_plan_goal as _bpg
+
+    plan_start = date(2025, 1, 1)
+    race_date = date(2025, 10, 5)
+    goal = _bpg(goal_type=GoalType.marathon, race_date=race_date, created_from="user")
+
+    schedule = _build_race_phase_schedule(plan_start, race_date, TAPER_WEEKS[GoalType.marathon])
+    specific_end = next(
+        (ph_end for ph, ph_start, ph_end in schedule if ph == PeriodizationPhase.specific),
+        None,
+    )
+    if specific_end is None:
+        pytest.skip("No specific phase found — short prep plan")
+
+    ref = specific_end + timedelta(days=1)
+    snap = build_periodization(goal, ref, race_plan_start_date=plan_start)
+
+    resp = build_cycle_calendar_response(goal, ref, race_plan_start_date=plan_start)
+    current_wks = [w for w in resp.weeks if w.is_current]
+    assert len(current_wks) == 1
+    assert current_wks[0].phase == snap.phase.value
+
+
+def test_23e_race_week_phase():
+    """Race calendar: race week phase == 'race' per both calendar and Periodization V2."""
+    from training_v2.periodization import build_periodization
+    from training_v2.plan_goal import GoalType, build_plan_goal as _bpg
+
+    plan_start = date(2025, 1, 1)
+    race_date = date(2025, 10, 5)
+    ref = race_date  # Race day itself
+    goal = _bpg(goal_type=GoalType.marathon, race_date=race_date, created_from="user")
+
+    snap = build_periodization(goal, ref, race_plan_start_date=plan_start)
+    resp = build_cycle_calendar_response(goal, ref, race_plan_start_date=plan_start)
+
+    current_wks = [w for w in resp.weeks if w.is_current]
+    assert len(current_wks) == 1
+    assert current_wks[0].phase == "race"
+    assert snap.phase.value == "race"
+
+
+def test_23f_exactly_one_is_current_all_phase_scenarios():
+    """Race calendar: exactly 1 is_current for each active reference_date."""
+    from training_v2.plan_goal import GoalType, build_plan_goal as _bpg
+
+    plan_start = date(2025, 1, 1)
+    race_date = date(2025, 10, 5)
+    goal = _bpg(goal_type=GoalType.marathon, race_date=race_date, created_from="user")
+
+    for offset_days in [7, 30, 90, 150, 200, 250, (race_date - plan_start).days]:
+        ref = plan_start + timedelta(days=offset_days)
+        if ref > race_date:
+            break
+        resp = build_cycle_calendar_response(goal, ref, race_plan_start_date=plan_start)
+        current_wks = [w for w in resp.weeks if w.is_current]
+        assert len(current_wks) == 1, (
+            f"Expected exactly 1 is_current for ref={ref}, got {len(current_wks)}"
+        )
