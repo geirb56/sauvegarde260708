@@ -1362,9 +1362,10 @@ def calculate_month_stats(workouts: list) -> dict:
     }
 
 
-# Dashboard insight cache (5 minutes TTL)
-_dashboard_cache = {}
-DASHBOARD_CACHE_TTL = 300  # 5 minutes in seconds
+# Dashboard insight cache (5 minutes TTL) — uses shared module so Garmin sync
+# can invalidate after a RunIndex refresh without circular imports.
+import dashboard_insight_cache as _dic
+DASHBOARD_CACHE_TTL = _dic.TTL_SECONDS
 
 
 @api_router.get("/dashboard/insight")
@@ -1372,14 +1373,13 @@ async def get_dashboard_insight(language: str = "en", user: dict = Depends(auth_
     """Get dashboard coach insight with week and month summaries and recovery score - NO LLM"""
     
     user_id = user["id"]
-    # Check cache first
-    cache_key = f"{user_id}_{language}"
     now = datetime.now(timezone.utc).timestamp()
     
-    if cache_key in _dashboard_cache:
-        cached_data, cached_time = _dashboard_cache[cache_key]
+    cached = _dic.get(user_id, language)
+    if cached is not None:
+        cached_data, cached_time = cached
         if now - cached_time < DASHBOARD_CACHE_TTL:
-            logger.info(f"Dashboard insight cache hit for {cache_key}")
+            logger.info(f"Dashboard insight cache hit for {user_id}_{language}")
             return cached_data
     
     # Get workouts (user-scoped)
@@ -1416,9 +1416,9 @@ async def get_dashboard_insight(language: str = "en", user: dict = Depends(auth_
         run_index=run_index,
     )
     
-    # Store in cache
-    _dashboard_cache[cache_key] = (result, now)
-    logger.info(f"Dashboard insight cached for {cache_key}")
+    # Store in shared cache
+    _dic.set(user_id, language, result, now)
+    logger.info(f"Dashboard insight cached for {user_id}_{language}")
     
     return result
 
