@@ -6,7 +6,7 @@
 |-------|-------|
 | BASE_BRANCH | copilot/dev |
 | HEAD_START | 7047ca2cef5026b62e0025de531427fd9d72edd0 |
-| HEAD_FINAL | (set after push) |
+| HEAD_FINAL | see git log HEAD |
 
 ## Routes canoniques
 
