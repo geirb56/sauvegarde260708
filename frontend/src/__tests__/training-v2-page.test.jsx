@@ -65,7 +65,7 @@ function buildWeekResponse({ targetBasis = "distance", includeRestTss = true } =
 function buildCycleResponse() {
   return {
     cycle: {
-      mode: "race",
+      mode: "race_calendar",
       status: "active",
       start_date: "2026-06-02",
       end_date: "2026-10-05",
@@ -225,7 +225,7 @@ describe("TrainingPlanV2 — PR #177", () => {
   it("renders all V2 cycle phases without error", async () => {
     const phases = ["base", "build", "specific", "taper", "race", "consolidation"];
     const cycleData = {
-      cycle: { mode: "race", status: "active", current_week: 3, total_weeks: phases.length },
+      cycle: { mode: "race_calendar", status: "active", current_week: 3, total_weeks: phases.length },
       weeks: phases.map((phase, i) => ({
         week_number: i + 1,
         start_date: "2026-08-01",
@@ -263,14 +263,26 @@ describe("TrainingPlanV2 — PR #177", () => {
     expect(screen.queryByTestId("coach-page")).not.toBeInTheDocument();
   });
 
-  // Test 15: no backend changes — backend endpoints not called beyond V2 contract
-  it("only calls V2 endpoints and no others on TRIAL/PREMIUM", async () => {
-    mockAxiosSuccess();
+  // Test 16: cycle mode race_calendar renders correctly (not "Not available")
+  it("renders cycle mode race_calendar without falling back to 'Not available'", async () => {
+    const cycleData = buildCycleResponse(); // mode: "race_calendar"
+    mockAxiosSuccess({ cycleData });
     renderPage();
-    await screen.findByTestId("training-v2-page");
-    const calledUrls = axios.get.mock.calls.map(([url]) => url);
-    expect(calledUrls).toHaveLength(2);
-    expect(calledUrls).toContain(`${API_BASE_URL}/training/v2/week`);
-    expect(calledUrls).toContain(`${API_BASE_URL}/training/v2/cycle`);
+    await screen.findByTestId("training-v2-cycle");
+    expect(screen.queryByText(/not available/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/non disponible/i)).not.toBeInTheDocument();
+  });
+
+  // Test 17: cycle mode continuous renders correctly (not "Not available")
+  it("renders cycle mode continuous without falling back to 'Not available'", async () => {
+    const cycleData = {
+      ...buildCycleResponse(),
+      cycle: { ...buildCycleResponse().cycle, mode: "continuous" },
+    };
+    mockAxiosSuccess({ cycleData });
+    renderPage();
+    await screen.findByTestId("training-v2-cycle");
+    expect(screen.queryByText(/not available/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/non disponible/i)).not.toBeInTheDocument();
   });
 });

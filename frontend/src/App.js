@@ -16,7 +16,6 @@ import Guidance from "@/pages/Guidance";
 import Digest from "@/pages/Digest";
 import Settings from "@/pages/Settings";
 import Subscription from "@/pages/Subscription";
-import TrainingPlan from "@/pages/TrainingPlan";
 import TrainingPlanV2 from "@/pages/TrainingPlanV2";
 import Coach from "@/pages/Coach";
 import Onboarding from "@/pages/Onboarding";

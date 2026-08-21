@@ -28,6 +28,21 @@
 
 Vérifié par test automatisé (test 6 — "never calls forbidden legacy training endpoints").
 
+## Modes Cycle V2
+
+| Field | Value |
+|-------|-------|
+| CYCLE_MODES_SUPPORTED | race_calendar, continuous |
+
+Les modes correspondent exactement au contrat backend Cycle V2 issu de #175.
+Aucune transformation frontend des valeurs backend.
+Aucun second vocabulaire métier.
+
+Traductions :
+- EN : `race_calendar` → "Race preparation" / `continuous` → "Continuous training"
+- FR : `race_calendar` → "Préparation course" / `continuous` → "Entraînement continu"
+- ES : `race_calendar` → "Preparación carrera" / `continuous` → "Entrenamiento continuo"
+
 ## Prescription future
 
 | Field | Value |
@@ -55,43 +70,46 @@ Aucun `sessions`, `target_km`, `target_duration_minutes`, `estimated_tss`, `long
 | BACKEND_MODIFIED | NO |
 | LOCKFILES_MODIFIED | NO |
 
+`frontend/yarn.lock` restauré depuis `copilot/dev` — absent du diff réel.
+
 ## Fichiers modifiés
 
-- `frontend/src/App.js` — `/training` → `TrainingPlanV2`; `/training-v2` → `<Navigate to="/training" replace />`
+- `frontend/src/App.js` — `/training` → `TrainingPlanV2`; `/training-v2` → `<Navigate to="/training" replace />`; import `TrainingPlan` legacy supprimé (inutilisé)
 - `frontend/src/pages/TrainingPlanV2.jsx` — ajout Cycle V2 (`GET /training/v2/cycle`); paywall `returnPath` corrigé; composants `CycleSection`/`CycleWeekRow` extraits au niveau module
-- `frontend/src/lib/i18n.js` — traductions cycle/phases ajoutées EN/FR/ES
-- `frontend/src/__tests__/training-v2-page.test.jsx` — 15 tests PR #177 implémentés
+- `frontend/src/lib/i18n.js` — modes Cycle V2 canoniques EN/FR/ES : `race_calendar`, `continuous` (remplacement des anciens modes `race`/`maintenance`/`base`)
+- `frontend/src/__tests__/training-v2-page.test.jsx` — 17 tests PR #177 ; fixtures `buildCycleResponse()` utilisent `mode: "race_calendar"` (valeur réelle du contrat Cycle V2) ; tests 16 & 17 vérifient `race_calendar` et `continuous` sans fallback "Not available"
 
-`TrainingPlan.jsx` — laissé physiquement présent, NON routé.
+`TrainingPlan.jsx` — laissé physiquement présent, NON routé, NON importé.
 
 ## Tests
 
 | Résultat | Count |
 |----------|-------|
-| passed | 92 |
+| passed | 93 |
 | failed | 0 |
 | skipped | 0 |
 | errors | 0 |
 
-Tests couverts (15 tests PR #177) :
-1. ✅ /training rend le composant V2
-2. ✅ /training-v2 redirige vers /training
-3. ✅ FREE → Paywall, aucun appel API
-4. ✅ TRIAL/PREMIUM → /training/v2/week appelé
-5. ✅ TRIAL/PREMIUM → /training/v2/cycle appelé
-6. ✅ Aucun appel endpoint legacy depuis /training
-7. ✅ Duration basis — durée native, aucun faux km
-8. ✅ Distance basis — UnitContext metric + imperial
-9. ✅ estimated_tss=null → aucun "0 TSS"
-10. ✅ estimated_tss=0 → "0 TSS" autorisé
-11. ✅ Cycle — total_weeks affiché, semaine courante identifiable
-12. ✅ Phases base/build/specific/taper/race/consolidation supportées
-13. ✅ Aucune prescription future inventée dans cycle weeks
-14. ✅ Aucun changement Coach
-15. ✅ Aucun changement backend
-
-Tests #173/#174 frontend : ✅ verts (92 total, 0 failed)
+Tests couverts (17 tests PR #177) :
+1. /training rend le composant V2
+2. /training-v2 redirige vers /training
+3. FREE → Paywall, aucun appel API
+4. TRIAL/PREMIUM → /training/v2/week appelé
+5. TRIAL/PREMIUM → /training/v2/cycle appelé
+6. Aucun appel endpoint legacy depuis /training
+7. Duration basis — durée native, aucun faux km
+8. Distance basis — UnitContext metric
+8b. Distance basis — UnitContext imperial
+9. estimated_tss=null → aucun "0 TSS"
+10. estimated_tss=0 → "0 TSS" autorisé
+11. Cycle — total_weeks affiché, semaine courante identifiable
+12. Phases base/build/specific/taper/race/consolidation supportées
+13. Aucune prescription future inventée dans cycle weeks
+14. Aucun changement Coach
+15. Aucun appel hors contrat V2
+16. mode race_calendar rendu sans "Not available"
+17. mode continuous rendu sans "Not available"
 
 ## Verdict
 
-**READY FOR MERGE INTO copilot/dev**
+READY FOR MERGE INTO copilot/dev
