@@ -58,4 +58,15 @@ No other file modified.
 
 ## Verdict
 
-READY FOR MERGE INTO copilot/dev — pending runtime smoke PASS on live environment.
+NOT READY (automated) — awaiting runtime smoke PASS on live environment.
+
+Once smoke tests confirm:
+- backend boot PASS
+- garmin-sync worker boot PASS
+- event worker boot PASS
+- health 200
+- login functional
+- RunIndex endpoint 200
+- Training V2 week 200
+
+→ Update RUNTIME_SMOKE = PASS and mark READY FOR MERGE INTO copilot/dev.
