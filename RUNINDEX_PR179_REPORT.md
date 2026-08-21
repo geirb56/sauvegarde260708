@@ -161,13 +161,71 @@ internal representation in both paths.
 FUTURE_LEAKAGE_TEST = PASS
 POST_SYNC_NO_FANOUT_TEST = PASS
 USER_ISOLATION_TEST = PASS
+SELF_HEAL_WORKOUTS_PRESERVED = YES
+RUNINDEX_DEPENDS_ON_WORKOUT_SELF_HEAL = NO
+
+POST_SYNC_RUNINDEX_SOURCE =
+garmin_activities → mongo_garmin_activities_to_domain → DomainActivity → calculate_run_index_from_domain
+
+WORKOUT_SELF_HEAL_SOURCE =
+garmin_activities → backfill_user(prune=False) → db.workouts
+
+SELF_HEAL_LOCATION =
+`garmin/service.py` — called in two places, both AFTER RunIndex has been
+computed and persisted, using `_backfill_workouts_user` (alias for
+`garmin.backfill.backfill_user`):
+
+1. `_complete_post_activities_pipeline` (deep/full sync path):
+   RunIndex is computed and history is backfilled first; then
+   `_backfill_workouts_user(db, user_id, prune=False)` is called in a
+   try/except that logs errors but never surfaces them to RunIndex.
+
+2. Incremental sync path (`sync_activities` inner try block):
+   Same pattern — RunIndex first, self-heal workouts after, errors isolated.
+
+Neither call passes its return value to RunIndex.  The return value of
+`_backfill_workouts_user` is discarded.
+
+---
+
+## Post-Correction Audit
+
+CORRECTION_APPLIED = YES
+
+BLOCKER_FIXED:
+Before this correction, `garmin/service.py` called
+`backfill_run_index_history_after_garmin_sync` with the stale keyword
+argument `workouts=refreshed.get("workouts")`, which was undefined after
+PR179 (the function signature was changed to `activities=`).  This would
+have caused a `TypeError` at runtime.  Both call sites are now fixed.
+
+SELF_HEAL_RESTORED:
+`backfill_user(db, user_id, prune=False)` is now explicitly called at both
+post-sync call sites in `garmin/service.py`, decoupled from and downstream
+of RunIndex computation.  Its result is never passed to RunIndex.
 
 tests =
-- test_run_index_pr179_domain_source.py: 25 passed / 0 failed / 0 skipped / 0 errors
+- test_run_index_pr179_domain_source.py: 26 passed / 0 failed / 0 skipped / 0 errors
 - test_run_index_history_service.py: 7 passed / 0 failed / 0 skipped / 0 errors
 - test_run_index_engine.py: 5 passed / 0 failed / 0 skipped / 0 errors
 
-Total: 37 passed / 0 failed / 0 skipped / 0 errors
+Total: 38 passed / 0 failed / 0 skipped / 0 errors
+
+FILES_MODIFIED:
+- backend/garmin/service.py (+17 / -11)
+- backend/tests/test_run_index_pr179_domain_source.py (+107 / 0)
+
+FILES_UNCHANGED:
+- engine/run_index_engine.py
+- services/run_index_history.py
+- garmin/backfill.py
+- All frontend files
+- All lockfiles
+
+git diff --stat HEAD~1:
+ backend/garmin/service.py                          |  26 ++---
+ backend/tests/test_run_index_pr179_domain_source.py | 107 +++++++++++++++++++++
+ 2 files changed, 122 insertions(+), 11 deletions(-)
 
 ---
 

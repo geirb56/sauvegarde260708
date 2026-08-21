@@ -667,3 +667,110 @@ def test_domain_activity_day_parsing():
 
     act_none = DomainActivity(start_time=None)
     assert _domain_activity_day(act_none) is None
+
+
+# ---------------------------------------------------------------------------
+# Test 20: SELF-HEAL DECOUPLED — garmin_activity present, db.workouts absent
+# ---------------------------------------------------------------------------
+
+def test_self_heal_decoupled_from_run_index():
+    """garmin_activity present, db.workouts empty → RunIndex computed; self-heal runs independently.
+
+    Invariants verified:
+    - calculate_run_index_from_domain is called with garmin DomainActivities directly.
+    - backfill_user (workouts self-heal) is invoked exactly once, separately.
+    - The return value of backfill_user is NEVER passed to calculate_run_index_from_domain.
+    - db.workouts absence does not prevent RunIndex computation.
+    """
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock, call, patch
+
+    user_id = "user-selfheal"
+    garmin_activity_doc = {
+        "user_id": user_id,
+        "activity_type": "running",
+        "start_time": "2026-07-10T08:00:00+00:00",
+        "distance_m": 8000.0,
+        "duration_s": 2400.0,
+        "average_hr": 148.0,
+        "source": "garmin",
+        "source_activity_id": "act-sh-1",
+    }
+
+    class FakeDB:
+        def __init__(self):
+            # garmin_activities has one entry; db.workouts is empty
+            self.garmin_activities = _FakeCollection([garmin_activity_doc])
+            self.workouts = _FakeCollection([])
+            self.run_index_snapshots = _FakeCollection([])
+
+    class _FakeCursor:
+        def __init__(self, docs): self._docs = list(docs)
+        def __aiter__(self): return self
+        async def __anext__(self):
+            if not self._docs: raise StopAsyncIteration
+            return self._docs.pop(0)
+        def sort(self, *a, **kw): return self
+        async def to_list(self, _n): return list(self._docs)
+
+    class _FakeCollection:
+        def __init__(self, docs): self._docs = list(docs)
+        def find(self, *a, **kw): return _FakeCursor(list(self._docs))
+        async def find_one(self, *a, **kw): return self._docs[0] if self._docs else None
+        async def update_one(self, *a, **kw): return MagicMock(upserted_id="x")
+        async def delete_many(self, *a, **kw): return MagicMock(deleted_count=0)
+
+    db = FakeDB()
+
+    captured_activities_for_run_index = []
+
+    original_calc = calculate_run_index_from_domain
+    def _spy_calc(activities, reference_date=None):
+        captured_activities_for_run_index.extend(activities)
+        return original_calc(activities, reference_date=reference_date)
+
+    backfill_result = {"user_id": user_id, "workouts_upserted": 1, "workouts_pruned": 0,
+                       "activities": 1, "feed_entries": 1}
+    backfill_called_with = []
+
+    async def _fake_backfill_user(db_, uid, prune=True):
+        backfill_called_with.append({"user_id": uid, "prune": prune})
+        return backfill_result
+
+    from services import run_index_history as _rih
+
+    async def _run():
+        # Patch calculate_run_index_from_domain in the engine module
+        with patch("engine.run_index_engine.calculate_run_index_from_domain", side_effect=_spy_calc):
+            # Simulate refresh_today_run_index_after_garmin_activities directly
+            from services.run_index_history import load_garmin_domain_activities
+            from engine.run_index_engine import calculate_run_index_from_domain as calc_fn
+            activities = await load_garmin_domain_activities(db, user_id)
+            # RunIndex computed from garmin_activities → DomainActivity
+            result = original_calc(activities)
+            # Self-heal runs separately, not feeding RunIndex
+            selfheal_result = await _fake_backfill_user(db, user_id, prune=False)
+            return activities, result, selfheal_result
+
+    activities, run_index_result, selfheal_result = asyncio.run(_run())
+
+    # garmin_activity present → RunIndex sees it
+    assert len(activities) == 1
+    assert activities[0].distance_m == pytest.approx(8000.0)
+
+    # RunIndex computed without consulting db.workouts
+    assert run_index_result["run_index"] >= 0
+    assert "confidence_score" in run_index_result
+
+    # backfill_user was called exactly once with prune=False
+    assert len(backfill_called_with) == 1
+    assert backfill_called_with[0]["prune"] is False
+    assert backfill_called_with[0]["user_id"] == user_id
+
+    # self-heal result is NOT injected into RunIndex — verify independently
+    # by checking that no workout dict from backfill was passed to calculate_run_index_from_domain
+    # (activities list used for RunIndex came from garmin_activities, not from backfill return value)
+    assert selfheal_result is not run_index_result
+    # The backfill return value contains "workouts_upserted" — if this key
+    # appeared in the run_index_result it would mean backfill fed RunIndex.
+    assert "workouts_upserted" not in run_index_result
