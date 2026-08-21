@@ -134,7 +134,7 @@ from services.paddle_webhook_security import verify_and_parse_paddle_event, Padd
 
 # Import physiological engine dashboard router
 from api.dashboard import dashboard_router
-from engine.run_index_engine import calculate_run_index
+from engine.run_index_engine import calculate_run_index, calculate_run_index_from_domain
 
 # Import Terra integration module
 from terra_integration import (
@@ -1392,9 +1392,18 @@ async def get_dashboard_insight(language: str = "en", user: dict = Depends(auth_
     
     # Calculate recovery score
     recovery_score = calculate_recovery_score(all_workouts, language)
-    run_index = calculate_run_index(all_workouts)
 
-    await upsert_run_index_snapshot(db, user_id, all_workouts)
+    # RunIndex: canonical source is garmin_activities → DomainActivity (PR179).
+    # db.workouts is NOT used for RunIndex score.
+    garmin_domain_activities = await (
+        db.garmin_activities.find({"user_id": user_id}, {"_id": 0})
+        .sort("start_time", -1)
+        .to_list(200)
+    )
+    garmin_domain_activities = mongo_garmin_activities_to_domain(garmin_domain_activities)
+    run_index = calculate_run_index_from_domain(garmin_domain_activities)
+
+    await upsert_run_index_snapshot(db, user_id, activities=garmin_domain_activities)
     
     # Generate insight using local engine (NO LLM)
     coach_insight = generate_dashboard_insight(
