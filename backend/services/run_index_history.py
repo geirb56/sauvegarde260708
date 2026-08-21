@@ -15,7 +15,8 @@ except ImportError:  # pragma: no cover - lightweight fallback for unit tests
             self._doc = update_doc
             self._upsert = upsert
 
-from engine.run_index_engine import calculate_run_index
+from engine.run_index_engine import calculate_run_index, calculate_run_index_from_domain
+from training_v2.domain_activity import DomainActivity
 
 logger = logging.getLogger(__name__)
 
@@ -238,8 +239,104 @@ def build_snapshot_document(
 
 
 async def load_user_workouts(db, user_id: str) -> list[dict]:
+    # LEGACY: reads db.workouts. Not used for RunIndex Garmin after PR179.
     cursor = db.workouts.find({"user_id": user_id}, {"_id": 0}).sort("date", 1)
     return await cursor.to_list(None)
+
+
+async def load_garmin_domain_activities(db, user_id: str) -> list[DomainActivity]:
+    """Load garmin_activities for a user and convert to DomainActivity.
+
+    PR179 canonical source for RunIndex Garmin. Does NOT touch db.workouts.
+    Activities are returned newest-first so callers can filter by reference_date
+    without needing a re-sort.
+    """
+    from garmin.domain_adapter import mongo_garmin_activities_to_domain
+
+    docs = await (
+        db.garmin_activities.find({"user_id": user_id}, {"_id": 0})
+        .sort("start_time", -1)
+        .to_list(None)
+    )
+    return mongo_garmin_activities_to_domain(docs)
+
+
+def _domain_activity_day(activity: DomainActivity) -> Optional[date]:
+    """Extract the calendar date from a DomainActivity's start_time field."""
+    start = activity.start_time
+    if start is None:
+        return None
+    if isinstance(start, datetime):
+        return start.date()
+    if isinstance(start, date) and not isinstance(start, datetime):
+        return start
+    if isinstance(start, str):
+        try:
+            return datetime.fromisoformat(start.replace("Z", "+00:00")).date()
+        except ValueError:
+            try:
+                return datetime.fromisoformat(start.split("T")[0]).date()
+            except ValueError:
+                return None
+    return None
+
+
+def _first_domain_activity_day(
+    activities: list[DomainActivity], reference_date: Optional[date] = None
+) -> Optional[date]:
+    today = _reference_day(reference_date)
+    days = [
+        d
+        for d in (_domain_activity_day(a) for a in activities)
+        if d is not None and d <= today
+    ]
+    return min(days) if days else None
+
+
+def select_snapshot_dates_from_domain(
+    activities: list[DomainActivity],
+    reference_date: Optional[date] = None,
+) -> list[date]:
+    """Compute snapshot date grid from DomainActivity list (PR179 canonical)."""
+    today = _reference_day(reference_date)
+    first_day = _first_domain_activity_day(activities, today)
+    if first_day is None:
+        return []
+
+    oldest_supported_day = today - timedelta(days=HISTORY_WINDOW_DAYS)
+    first_day = max(first_day, oldest_supported_day)
+
+    monthly_dates = [_subtract_months(today, months_ago) for months_ago in range(12, 6, -1)]
+    weekly_points = list(range(WEEKLY_WINDOW_DAYS // 7, -1, -1))
+    weekly_dates = [today - timedelta(days=7 * weeks_ago) for weeks_ago in weekly_points]
+
+    return sorted(
+        {
+            candidate
+            for candidate in monthly_dates + weekly_dates
+            if first_day <= candidate <= today
+        }
+    )
+
+
+def build_snapshot_document_from_domain(
+    user_id: str,
+    activities: list[DomainActivity],
+    snapshot_date: date,
+    computed_at: Optional[str] = None,
+) -> dict:
+    """Build a run_index_scores document from DomainActivity (PR179 canonical).
+
+    reference_date=snapshot_date ensures no future activity influences the score:
+    activities with start_time > snapshot_date are filtered by the engine.
+    """
+    snapshot = calculate_run_index_from_domain(activities, reference_date=snapshot_date)
+    return {
+        "user_id": user_id,
+        "date": snapshot_date.isoformat(),
+        "computed_at": computed_at or datetime.now(timezone.utc).isoformat(),
+        **snapshot,
+    }
 
 
 async def get_run_index_history_payload(
@@ -265,11 +362,18 @@ async def get_run_index_history_payload(
 async def upsert_run_index_snapshot(
     db,
     user_id: str,
-    workouts: list[dict],
+    activities: Optional[list[DomainActivity]] = None,
     snapshot_date: Optional[date] = None,
 ) -> dict:
+    """Upsert today's RunIndex snapshot from DomainActivity (PR179 canonical).
+
+    Source: garmin_activities → DomainActivity (loaded when activities is None).
+    Does NOT use db.workouts.
+    """
     target_day = _reference_day(snapshot_date)
-    doc = build_snapshot_document(user_id, workouts, target_day)
+    if activities is None:
+        activities = await load_garmin_domain_activities(db, user_id)
+    doc = build_snapshot_document_from_domain(user_id, activities, target_day)
     await db.run_index_scores.update_one(
         {"user_id": user_id, "date": doc["date"]},
         {"$set": doc},
@@ -303,12 +407,19 @@ class BackfillSummary:
 async def backfill_run_index_history(
     db,
     user_id: str,
-    workouts: Optional[list[dict]] = None,
+    activities: Optional[list[DomainActivity]] = None,
     reference_date: Optional[date] = None,
 ) -> dict:
+    """Backfill RunIndex snapshots from DomainActivity (PR179 canonical).
+
+    Source: garmin_activities → DomainActivity (loaded when activities is None).
+    Does NOT use db.workouts. reference_date is propagated to every snapshot
+    so no future activity leaks into historical scores.
+    """
     today = _reference_day(reference_date)
-    workouts = workouts if workouts is not None else await load_user_workouts(db, user_id)
-    snapshot_dates = select_snapshot_dates(workouts, today)
+    if activities is None:
+        activities = await load_garmin_domain_activities(db, user_id)
+    snapshot_dates = select_snapshot_dates_from_domain(activities, today)
 
     if not snapshot_dates:
         summary = BackfillSummary(
@@ -327,7 +438,7 @@ async def backfill_run_index_history(
     operations = [
         UpdateOne(
             {"user_id": user_id, "date": snapshot_day.isoformat()},
-            {"$set": build_snapshot_document(user_id, workouts, snapshot_day, computed_at)},
+            {"$set": build_snapshot_document_from_domain(user_id, activities, snapshot_day, computed_at)},
             upsert=True,
         )
         for snapshot_day in snapshot_dates
@@ -353,22 +464,38 @@ async def backfill_run_index_history(
     return summary.as_dict()
 
 
-async def refresh_today_run_index_after_garmin_activities(db, user_id: str) -> dict:
-    from garmin.backfill import backfill_user as backfill_garmin_workouts
+async def refresh_today_run_index_after_garmin_activities(
+    db,
+    user_id: str,
+    activities: Optional[list[DomainActivity]] = None,
+) -> dict:
+    """Refresh today's RunIndex directly from garmin_activities (PR179).
 
-    await backfill_garmin_workouts(db, user_id, prune=False)
-    workouts = await load_user_workouts(db, user_id)
-    today_snapshot = await upsert_run_index_snapshot(db, user_id, workouts)
-    return {"today_snapshot": today_snapshot, "workouts": workouts}
+    No longer waits for the workouts fan-out. Reads garmin_activities →
+    DomainActivity immediately after Garmin sync writes, then upserts the
+    snapshot. db.workouts is NOT consulted.
+
+    Pass ``activities`` to reuse an already-loaded list and avoid a second
+    database round-trip (e.g. when called from refresh_run_index_after_garmin_sync).
+    """
+    if activities is None:
+        activities = await load_garmin_domain_activities(db, user_id)
+    today_snapshot = await upsert_run_index_snapshot(db, user_id, activities=activities)
+    return {"today_snapshot": today_snapshot, "activities_count": len(activities)}
 
 
 async def backfill_run_index_history_after_garmin_sync(
     db,
     user_id: str,
-    workouts: Optional[list[dict]] = None,
+    activities: Optional[list[DomainActivity]] = None,
 ) -> dict:
-    workouts = workouts if workouts is not None else await load_user_workouts(db, user_id)
-    history = await backfill_run_index_history(db, user_id, workouts=workouts)
+    """Backfill RunIndex history after a Garmin sync (PR179 canonical).
+
+    Source: garmin_activities → DomainActivity. db.workouts NOT used.
+    """
+    if activities is None:
+        activities = await load_garmin_domain_activities(db, user_id)
+    history = await backfill_run_index_history(db, user_id, activities=activities)
 
     conn = await db.garmin_connections.find_one({"user_id": user_id}, {"_id": 0})
     if conn:
@@ -381,18 +508,18 @@ async def backfill_run_index_history_after_garmin_sync(
 
 
 async def refresh_run_index_after_garmin_sync(db, user_id: str) -> dict:
-    refreshed = await refresh_today_run_index_after_garmin_activities(db, user_id)
+    # Load activities once; share across today-snapshot and history backfill.
+    activities = await load_garmin_domain_activities(db, user_id)
+    refreshed = await refresh_today_run_index_after_garmin_activities(db, user_id, activities=activities)
     history = await backfill_run_index_history_after_garmin_sync(
         db,
         user_id,
-        workouts=refreshed["workouts"],
+        activities=activities,
     )
     return {"today_snapshot": refreshed["today_snapshot"], "history_backfill": history}
 
 
 async def backfill_connected_users_run_index_history(db) -> dict:
-    from garmin.backfill import backfill_user as backfill_garmin_workouts
-
     cursor = db.garmin_connections.find({"connected": True}, {"_id": 0, "user_id": 1})
     users = 0
     snapshots_created = 0
@@ -404,9 +531,8 @@ async def backfill_connected_users_run_index_history(db) -> dict:
         if not user_id:
             continue
         try:
-            await backfill_garmin_workouts(db, user_id, prune=False)
-            workouts = await load_user_workouts(db, user_id)
-            summary = await backfill_run_index_history(db, user_id, workouts=workouts)
+            activities = await load_garmin_domain_activities(db, user_id)
+            summary = await backfill_run_index_history(db, user_id, activities=activities)
             await db.garmin_connections.update_one(
                 {"user_id": user_id},
                 {"$set": {"run_index_history_backfilled_at": datetime.now(timezone.utc).isoformat()}},

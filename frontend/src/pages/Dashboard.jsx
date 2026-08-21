@@ -37,12 +37,6 @@ import {
 import { API_BASE_URL } from "@/config";
 const API = API_BASE_URL;
 
-// ─── Run Recommendation thresholds ──────────────────────────────────────────
-const FATIGUE_REST_THRESHOLD = 1.5;
-const FATIGUE_EASY_THRESHOLD = 1.2;
-const LOAD_OPTIMAL_MIN = 0.8;
-const LOAD_OPTIMAL_MAX = 1.3;
-
 const STATUS_COLORS = {
   green: { bg: "#22c55e20", text: "#22c55e", border: "#22c55e40" },
   yellow: { bg: "#f59e0b20", text: "#f59e0b", border: "#f59e0b40" },
@@ -192,7 +186,8 @@ function SessionCard({ session, isGrayed = false, fatigueColor = null }) {
 function StatusIcon({ status, size = 16 }) {
   if (status === "green") return <CheckCircle size={size} color="#22c55e" />;
   if (status === "yellow") return <AlertTriangle size={size} color="#f59e0b" />;
-  return <XCircle size={size} color="#ef4444" />;
+  if (status === "red") return <XCircle size={size} color="#ef4444" />;
+  return null;
 }
 
 function MetricWidget({ icon: Icon, label, value, unit, status, detail }) {
@@ -291,7 +286,7 @@ function RunIndexPillar({ icon: Icon, label, value, color }) {
 
 // Readiness tile — compact stat card: icon + status dot + label + value (status-colored), tappable for info
 function ReadinessTile({ icon: Icon, label, value, status, testId, onClick }) {
-  const color = status === "yellow" ? "#f59e0b" : status === "red" ? "#ef4444" : status === "gray" ? "#6b7280" : "#22c55e";
+  const color = status === "green" ? "#22c55e" : status === "yellow" ? "#f59e0b" : status === "red" ? "#ef4444" : "#6b7280";
   return (
     <button
       type="button"
@@ -520,28 +515,6 @@ export default function Dashboard() {
       .catch(() => {});
   }, [lang, isFree, subLoading]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ACWR color helper
-  const getAcwrColor = (status) => {
-    switch(status) {
-      case "optimal": return "#22c55e";
-      case "low": return "#3b82f6";
-      case "warning": return "#f59e0b";
-      case "danger": return "#ef4444";
-      default: return "#22c55e";
-    }
-  };
-
-  // TSB color helper
-  const getTsbColor = (status) => {
-    switch(status) {
-      case "fresh": return "#22c55e";
-      case "ready": return "#3b82f6";
-      case "training": return "#f59e0b";
-      case "fatigued": return "#ef4444";
-      default: return "#3b82f6";
-    }
-  };
-
   if (loading) {
     return <BrandSplash text={t("common.loading")} />;
   }
@@ -661,7 +634,7 @@ export default function Dashboard() {
               );
             }
             const m = cardioData?.metrics || {};
-            const recStyle = REC_STYLES[cardioData?.recommendation_color] || REC_STYLES.green;
+            const recStyle = REC_STYLES[cardioData?.recommendation_color] || REC_STYLES.gray;
             const history = cardioData?.history || [];
             
             // Run Readiness Score — single source of truth from backend (Garmin insights)
@@ -746,7 +719,7 @@ export default function Dashboard() {
                       icon={Heart}
                       label={t("dashboard.readinessPillars.hrv")}
                       value={(m.hrv_delta === undefined || m.hrv_delta === null) ? "—" : `${m.hrv_delta >= 0 ? "+" : ""}${m.hrv_delta} ms`}
-                      status={m.hrv_status || "green"}
+                      status={m.hrv_status || "gray"}
                       testId="hrv"
                       onClick={() => setInfoMetric("hrv")}
                     />
@@ -762,7 +735,7 @@ export default function Dashboard() {
                       icon={Moon}
                       label={t("dashboard.readinessPillars.sleep")}
                       value={(m.sleep_hours === undefined || m.sleep_hours === null) ? "—" : `${m.sleep_hours} h`}
-                      status={m.sleep_status || "green"}
+                      status={m.sleep_status || "gray"}
                       testId="sleep"
                       onClick={() => setInfoMetric("sleep")}
                     />
@@ -770,7 +743,7 @@ export default function Dashboard() {
                       icon={BarChart2}
                       label={t("dashboard.readinessPillars.load")}
                       value={(m.training_load === undefined || m.training_load === null) ? "—" : `${m.training_load}`}
-                      status={m.training_load_status || "green"}
+                      status={m.training_load_status || "gray"}
                       testId="load"
                       onClick={() => setInfoMetric("load")}
                     />
