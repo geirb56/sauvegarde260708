@@ -21,6 +21,8 @@ import {
   Info,
 } from "lucide-react";
 import { useUnitSystem } from "@/context/UnitContext";
+import { useSubscription } from "@/context/SubscriptionContext";
+import { formatDistance } from "@/utils/units";
 import { Button } from "@/components/ui/button";
 import { BrandSplash } from "@/components/LoadingSpinner";
 import { toast } from "sonner";
@@ -175,12 +177,14 @@ function SessionCard({ session, isGrayed = false, fatigueColor = null }) {
           </span>
         )}
       </div>
-      <span
-        className="px-2 py-1 rounded-full text-xs font-bold shrink-0"
-        style={{ background: style.badge, color: style.badgeText }}
-      >
-        {session.estimated_tss || 0} TSS
-      </span>
+      {session.estimated_tss != null && (
+        <span
+          className="px-2 py-1 rounded-full text-xs font-bold shrink-0"
+          style={{ background: style.badge, color: style.badgeText }}
+        >
+          {session.estimated_tss} TSS
+        </span>
+      )}
     </div>
   );
 }
@@ -414,7 +418,7 @@ function ReadinessChart({ data = [], height = 150 }) {
 export default function Dashboard() {
   const [insight, setInsight] = useState(null);
   const [todaySession, setTodaySession] = useState(null);
-  const [trainingMetrics, setTrainingMetrics] = useState(null);
+  const [trainingWeekV2, setTrainingWeekV2] = useState(null);
   const [cardioData, setCardioData] = useState(null);
   const [cardioLoading, setCardioLoading] = useState(true);
   const [cardioError, setCardioError] = useState(null);
@@ -424,6 +428,7 @@ export default function Dashboard() {
   const [infoMetric, setInfoMetric] = useState(null);
   const { t, lang } = useLanguage();
   const { unitSystem } = useUnitSystem();
+  const { isFree, loading: subLoading } = useSubscription();
   const fetchedRef = useRef(false);
   const lastLangRef = useRef(lang);
 
@@ -439,18 +444,14 @@ export default function Dashboard() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [insightRes, ragRes, todayRes, metricsRes] = await Promise.all([
+      const [insightRes, ragRes, todayRes] = await Promise.all([
         axios.get(`${API}/dashboard/insight?language=${lang}`),
         axios.get(`${API}/rag/dashboard`).catch(() => ({ data: null })),
         axios.get(`${API}/training/today`).catch(() => ({ data: null })),
-        axios.get(`${API}/training/metrics`).catch(() => ({ data: null }))
       ]);
       setInsight(insightRes.data);
       if (ragRes.data) {
         setInsight(prev => ({ ...prev, rag: ragRes.data }));
-      }
-      if (metricsRes.data) {
-        setTrainingMetrics(metricsRes.data);
       }
       
       // Utiliser la réponse de /api/training/today (avec adaptation)
@@ -508,6 +509,17 @@ export default function Dashboard() {
     fetchCardioData();
   }, [fetchCardioData]);
 
+  // Fetch weekly V2 target — TRIAL / PREMIUM only, never FREE
+  useEffect(() => {
+    if (subLoading || isFree) return;
+    axios
+      .get(`${API}/training/v2/week?language=${lang}`)
+      .then((res) => {
+        if (res.data) setTrainingWeekV2(res.data);
+      })
+      .catch(() => {});
+  }, [lang, isFree, subLoading]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ACWR color helper
   const getAcwrColor = (status) => {
     switch(status) {
@@ -536,10 +548,6 @@ export default function Dashboard() {
 
   const weekStats = insight?.week || { sessions: 0, volume_km: 0 };
   const monthStats = insight?.month || { volume_km: 0 };
-  
-  // Calculate weekly progress
-  const weeklyKmTarget = trainingMetrics?.load_28 ? Math.round(trainingMetrics.load_28 / 4 * 1.1) : 80;
-  const weeklyProgress = Math.min(100, Math.round((weekStats.volume_km / weeklyKmTarget) * 100));
   const runIndexData = insight?.run_index;
   const runIndexScore = runIndexData?.run_index ?? 0;
   const runIndexConfidence = runIndexData?.confidence_score ?? 0;
@@ -910,6 +918,63 @@ export default function Dashboard() {
           </>
         )}
       </div>
+
+      {/* WEEKLY TARGET — V2 authority (TRIAL/PREMIUM only) */}
+      {trainingWeekV2?.weekly_target && (() => {
+        const wt = trainingWeekV2.weekly_target;
+        const basis = wt.target_basis;
+        return (
+          <div
+            className="rounded-2xl p-4 space-y-3 animate-in"
+            style={{
+              background: "var(--bg-elevated, #1a1a1f)",
+              border: "1px solid var(--border, #2a2a30)",
+            }}
+            data-testid="weekly-target-card"
+          >
+            <div className="flex items-center gap-2">
+              <Target className="w-4 h-4" style={{ color: "#6EEB5A" }} />
+              <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#6EEB5A" }}>
+                {t("dashboard.weeklyTarget")}
+              </span>
+            </div>
+
+            {basis === "distance" ? (
+              <div className="space-y-2" data-testid="weekly-target-distance">
+                <div className="flex items-baseline justify-between">
+                  <span className="text-2xl font-black" style={{ color: "#ffffff" }} data-testid="weekly-target-value">
+                    {formatDistance(wt.target_km, { unitSystem })}
+                  </span>
+                  <span className="text-sm" style={{ color: "var(--text-tertiary)" }}>
+                    {t("dashboard.weeklyDone")}:{" "}
+                    <span style={{ color: "#ffffff" }} data-testid="weekly-volume-done">
+                      {formatDistance(weekStats.volume_km, { unitSystem })}
+                    </span>
+                  </span>
+                </div>
+                {wt.target_km > 0 && (
+                  <div className="h-2 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.08)" }}>
+                    <div
+                      className="h-full rounded-full transition-all duration-700"
+                      style={{
+                        width: `${Math.min(100, Math.round((weekStats.volume_km / wt.target_km) * 100))}%`,
+                        background: "#6EEB5A",
+                      }}
+                      data-testid="weekly-progress-bar"
+                    />
+                  </div>
+                )}
+              </div>
+            ) : basis === "duration" ? (
+              <div data-testid="weekly-target-duration">
+                <span className="text-2xl font-black" style={{ color: "#ffffff" }} data-testid="weekly-target-value">
+                  {wt.target_duration_minutes} {t("dashboard.minutes")}
+                </span>
+              </div>
+            ) : null}
+          </div>
+        );
+      })()}
 
       {/* Metric explanation dialog */}
       <Dialog open={!!infoMetric} onOpenChange={(o) => !o && setInfoMetric(null)}>
