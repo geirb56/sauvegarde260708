@@ -527,3 +527,15 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
   - Auth via interceptor axios global (`index.js`, localStorage `access_token`). Paywall FREE. UnitContext (km/miles). Sémantique V2 : distance/TSS/duration null masqués ; rest = 0 TSS structurel préservé ; pas de conversion UNKNOWN→0.
 - Validation (agent-tested) : frontend redémarré, compile OK. **Screenshot authentifié PASS** (page rend Objective/State/Weekly target + grille 7 jours). Jest **10 passed**. Smoke backend V2 200. Régression suites PR = **212 passed**.
 - Statut : agent-tested, non user-confirmed.
+
+## 2026-06 — Pull copilot/dev — PR #175 (endpoint natif V2 GET /training/v2/cycle)
+- Fetch + merge `sauvegarde/copilot/dev` (09a6eec→67b028d). Merge ORT propre, 0 conflit. `.env` intacts, PRD/rapports locaux préservés.
+- PR #175 = nouvel endpoint natif V2 `GET /api/training/v2/cycle` (calendrier de cycle) :
+  - Nouveau `backend/training_v2/training_cycle_response.py` (+465), route `server.py` (+177), `access_control.py` (+1). Mêmes sources canoniques que /training/v2/week.
+- Validation RUNTIME (agent-tested) : backend redémarré. Smoke **6/6 = 200** (dont /training/v2/cycle → 12 semaines, phase base, current_week=4 is_current, days_to_race null, mode continuous). Régression suites PR = **254 passed, 1 failed**.
+  - ⚠️ FAIL = `test_pr175::test_20b_endpoint_trial_http200` : attend 200 pour un cycle mocké goal=`MAINTENANCE`, endpoint renvoie 400 (gate `GOAL_CONFIG` sans MAINTENANCE). MAINTENANCE n'est JAMAIS écrit dans training_cycles.goal en runtime → état non atteignable. Incohérence interne (le `_GOAL_MAP` inline liste MAINTENANCE mais le gate GOAL_CONFIG le rejette). **Runtime intact** ; correctif à router upstream.
+- Statut : agent-tested, non user-confirmed.
+
+## Bugs ouverts (à router upstream)
+- **PR#174 i18n** : clés `weeklyTarget/weeklyDone/minutes` placées dans `onboarding` au lieu de `dashboard` pour EN et FR (ES OK) → Dashboard EN/FR affiche `DASHBOARD.WEEKLYTARGET` / `105 dashboard.minutes`. Reproduit en screenshot authentifié. Décision utilisateur (fix local vs PR upstream) en attente.
+- **PR#175** : incohérence GOAL_CONFIG vs _GOAL_MAP sur MAINTENANCE (voir ci-dessus). Non bloquant runtime.
