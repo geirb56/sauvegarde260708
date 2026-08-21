@@ -189,6 +189,7 @@ describe("TrainingPlanV2 — PR #177", () => {
     renderPage({ unitSystem: "imperial" });
     const weeklyTargetValue = await screen.findByText(formatDistance(52.5, { unitSystem: "imperial" }));
     expect(weeklyTargetValue).toBeInTheDocument();
+    expect(screen.getByText(formatDistance(8, { unitSystem: "imperial" }))).toBeInTheDocument();
     const mondayCard = screen.getByTestId("training-v2-day-monday");
     expect(within(mondayCard).queryByText(/\bkm\b/)).not.toBeInTheDocument();
   });
@@ -252,22 +253,24 @@ describe("TrainingPlanV2 — PR #177", () => {
     expect(within(cycleCard).queryByText(/target_km/i)).not.toBeInTheDocument();
   });
 
-  // Test 14: Coach not modified — just verify component is importable (no changes to Coach.jsx)
-  it("does not import or change Coach component in TrainingPlanV2", () => {
-    const source = require("fs").readFileSync(
-      require("path").resolve(__dirname, "../pages/TrainingPlanV2.jsx"),
-      "utf8"
-    );
-    expect(source).not.toMatch(/Coach/);
+  // Test 14: Coach not modified — TrainingPlanV2 renders without Coach component
+  it("does not render Coach component inside TrainingPlanV2", async () => {
+    mockAxiosSuccess();
+    renderPage();
+    await screen.findByTestId("training-v2-page");
+    // No coach-specific testid should appear in the training page
+    expect(screen.queryByTestId("chat-coach")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("coach-page")).not.toBeInTheDocument();
   });
 
-  // Test 15: no backend changes — verify TrainingPlanV2 has no backend path imports
-  it("does not reference backend files", () => {
-    const source = require("fs").readFileSync(
-      require("path").resolve(__dirname, "../pages/TrainingPlanV2.jsx"),
-      "utf8"
-    );
-    expect(source).not.toMatch(/backend\//);
-    expect(source).not.toMatch(/\.py/);
+  // Test 15: no backend changes — backend endpoints not called beyond V2 contract
+  it("only calls V2 endpoints and no others on TRIAL/PREMIUM", async () => {
+    mockAxiosSuccess();
+    renderPage();
+    await screen.findByTestId("training-v2-page");
+    const calledUrls = axios.get.mock.calls.map(([url]) => url);
+    expect(calledUrls).toHaveLength(2);
+    expect(calledUrls).toContain(`${API_BASE_URL}/training/v2/week`);
+    expect(calledUrls).toContain(`${API_BASE_URL}/training/v2/cycle`);
   });
 });
