@@ -669,6 +669,9 @@ export const translations = {
       garminAdjustGoal: "Adjust my goal →",
       garminNoData: "Not enough data to compute your score. Sync more activities.",
       garminSyncFailed: "Sync failed. Your Garmin connection is still active.",
+      weeklyTarget: "Weekly target",
+      weeklyDone: "completed",
+      minutes: "min",
     },
   },
 
@@ -1338,6 +1341,9 @@ export const translations = {
       garminAdjustGoal: "Ajuster mon objectif →",
       garminNoData: "Pas assez de données pour calculer votre score. Synchronisez plus d'activités.",
       garminSyncFailed: "Échec de la synchronisation. Votre connexion Garmin est toujours active.",
+      weeklyTarget: "Cible hebdomadaire",
+      weeklyDone: "réalisé",
+      minutes: "min",
     },
   },
   
@@ -1450,6 +1456,9 @@ export const translations = {
       demoDataNotice: "Datos demo — conecta Terra en Ajustes para métricas en vivo",
       hrLabel: "FC",
       targetLabel: "Objetivo",
+      weeklyTarget: "Objetivo semanal",
+      weeklyDone: "realizado",
+      minutes: "min",
     },
     workoutTypes: {
       run: "Carrera",
