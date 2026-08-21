@@ -1,13 +1,15 @@
 import React from "react";
 import "@testing-library/jest-dom";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import axios from "axios";
 
 import TrainingPlanV2 from "@/pages/TrainingPlanV2";
 import { LanguageProvider } from "@/context/LanguageContext";
 import { useSubscription } from "@/context/SubscriptionContext";
+import { UnitProvider } from "@/context/UnitContext";
 import { API_BASE_URL } from "@/config";
+import { UNIT_SYSTEM_KEY, formatDistance } from "@/utils/units";
 
 jest.mock("axios");
 jest.mock("@/context/SubscriptionContext", () => ({
@@ -61,13 +63,16 @@ function buildResponse({ targetBasis = "distance", includeRestTss = true } = {})
   };
 }
 
-function renderPage() {
+function renderPage({ unitSystem = "metric" } = {}) {
+  window.localStorage.setItem(UNIT_SYSTEM_KEY, unitSystem);
   return render(
-    <LanguageProvider>
-      <MemoryRouter>
-        <TrainingPlanV2 />
-      </MemoryRouter>
-    </LanguageProvider>
+    <UnitProvider>
+      <LanguageProvider>
+        <MemoryRouter>
+          <TrainingPlanV2 />
+        </MemoryRouter>
+      </LanguageProvider>
+    </UnitProvider>
   );
 }
 
@@ -119,12 +124,13 @@ describe("TrainingPlanV2", () => {
     });
   });
 
-  it("renders distance basis in km without converting unknown duration to 0", async () => {
+  it("renders distance basis via UnitContext in metric", async () => {
     axios.get.mockResolvedValue({ data: buildResponse({ targetBasis: "distance" }) });
 
-    renderPage();
+    renderPage({ unitSystem: "metric" });
 
-    expect(await screen.findByText("52.5 km")).toBeInTheDocument();
+    expect(await screen.findByText(formatDistance(52.5, { unitSystem: "metric" }))).toBeInTheDocument();
+    expect(screen.getByText(formatDistance(8, { unitSystem: "metric" }))).toBeInTheDocument();
     expect(screen.queryByText("0 min")).not.toBeInTheDocument();
   });
 
@@ -137,6 +143,28 @@ describe("TrainingPlanV2", () => {
     expect(screen.queryByText("0 km")).not.toBeInTheDocument();
   });
 
+  it("renders distance basis via UnitContext in imperial without forcing km", async () => {
+    axios.get.mockResolvedValue({ data: buildResponse({ targetBasis: "distance" }) });
+
+    renderPage({ unitSystem: "imperial" });
+
+    expect(await screen.findByText(formatDistance(52.5, { unitSystem: "imperial" }))).toBeInTheDocument();
+    expect(screen.getByText(formatDistance(8, { unitSystem: "imperial" }))).toBeInTheDocument();
+    expect(screen.queryByText(/\bkm\b/)).not.toBeInTheDocument();
+  });
+
+  it("does not render an empty badge for REST days with unknown metrics", async () => {
+    axios.get.mockResolvedValue({ data: buildResponse({ includeRestTss: false }) });
+
+    renderPage();
+
+    const fridayCard = await screen.findByTestId("training-v2-day-friday");
+    expect(within(fridayCard).queryByText("—")).not.toBeInTheDocument();
+    expect(within(fridayCard).queryByText("0 km")).not.toBeInTheDocument();
+    expect(within(fridayCard).queryByText("0 min")).not.toBeInTheDocument();
+    expect(within(fridayCard).queryByText("0 TSS")).not.toBeInTheDocument();
+  });
+
   it("never shows 0 TSS when estimated_tss is null", async () => {
     axios.get.mockResolvedValue({ data: buildResponse({ includeRestTss: false }) });
 
@@ -144,6 +172,15 @@ describe("TrainingPlanV2", () => {
 
     await screen.findByTestId("training-v2-day-sunday");
     expect(screen.queryByText("0 TSS")).not.toBeInTheDocument();
+  });
+
+  it("preserves a valid 0 TSS on REST days when provided", async () => {
+    axios.get.mockResolvedValue({ data: buildResponse({ includeRestTss: true }) });
+
+    renderPage();
+
+    const fridayCard = await screen.findByTestId("training-v2-day-friday");
+    expect(within(fridayCard).getByText("0 TSS")).toBeInTheDocument();
   });
 
   it("renders the seven Monday to Sunday day cards", async () => {

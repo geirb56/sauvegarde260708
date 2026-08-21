@@ -7,7 +7,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import Paywall from "@/components/Paywall";
 import { useLanguage } from "@/context/LanguageContext";
 import { useSubscription } from "@/context/SubscriptionContext";
+import { useUnitSystem } from "@/context/UnitContext";
 import { API_BASE_URL } from "@/config";
+import { formatDistance } from "@/utils/units";
 
 const API = API_BASE_URL;
 const DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
@@ -84,6 +86,7 @@ function DetailRow({ label, value }) {
 export default function TrainingPlanV2() {
   const { t, lang } = useLanguage();
   const { isFree, loading: subLoading } = useSubscription();
+  const { unitSystem } = useUnitSystem();
   const [weekData, setWeekData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [hasError, setHasError] = useState(false);
@@ -159,7 +162,7 @@ export default function TrainingPlanV2() {
     : (weekData.state.allow_intensity ? t("trainingV2.allowIntensityValues.yes") : t("trainingV2.allowIntensityValues.no"));
   const targetBasis = weekData.weekly_target?.target_basis;
   const weeklyTargetValue = targetBasis === "distance"
-    ? (isKnownNumber(weekData.weekly_target?.target_km) ? `${weekData.weekly_target.target_km} km` : t("trainingV2.notAvailable"))
+    ? (isKnownNumber(weekData.weekly_target?.target_km) ? formatDistance(weekData.weekly_target.target_km, { unitSystem }) : t("trainingV2.notAvailable"))
     : (isKnownNumber(weekData.weekly_target?.target_duration_minutes) ? `${weekData.weekly_target.target_duration_minutes} min` : t("trainingV2.notAvailable"));
 
   return (
@@ -244,7 +247,7 @@ export default function TrainingPlanV2() {
             const metricParts = [];
 
             if (session && isKnownNumber(session.distance_km)) {
-              metricParts.push(`${session.distance_km} km`);
+              metricParts.push(formatDistance(session.distance_km, { unitSystem }));
             }
             if (session && isKnownNumber(session.duration_minutes)) {
               metricParts.push(`${session.duration_minutes} min`);
@@ -271,11 +274,11 @@ export default function TrainingPlanV2() {
                       <span key={part} className="rounded-full border border-current/20 px-2.5 py-1">
                         {part}
                       </span>
-                    )) : (
+                    )) : !session ? (
                       <span className="rounded-full border border-current/20 px-2.5 py-1">
                         {t("trainingV2.notAvailable")}
                       </span>
-                    )}
+                    ) : null}
                   </div>
                 </div>
                 {session?.reason_codes?.length > 0 && (
