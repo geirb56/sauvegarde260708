@@ -519,3 +519,11 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
   - Aucun changement frontend/worker.
 - Validation RUNTIME (agent-tested) : backend redémarré. Smoke **8/8 = 200** (dont nouveau `/training/v2/week` renvoyant goal/state/weekly_target/week+sessions avec null corrects). Tests PR167 = **54 passed**. Régression suites PR (test_pr*.py) = **212 passed**.
 - Statut : agent-tested, non user-confirmed.
+
+## 2026-06 — Pull copilot/dev — PR #173 (écran frontend Training V2)
+- Fetch + merge `sauvegarde/copilot/dev` (af33c9f→3c1e605). Merge ORT propre, 0 conflit. `.env` intacts, PRD/rapports locaux préservés.
+- PR #173 = nouvel écran frontend natif V2, consomme `GET /training/v2/week` (#167) :
+  - Nouveau `frontend/src/pages/TrainingPlanV2.jsx` (+297), route `/training-v2` dans `App.js` (protégée), i18n `lib/i18n.js` (+81 clés trainingV2), test `__tests__/training-v2-page.test.jsx`.
+  - Auth via interceptor axios global (`index.js`, localStorage `access_token`). Paywall FREE. UnitContext (km/miles). Sémantique V2 : distance/TSS/duration null masqués ; rest = 0 TSS structurel préservé ; pas de conversion UNKNOWN→0.
+- Validation (agent-tested) : frontend redémarré, compile OK. **Screenshot authentifié PASS** (page rend Objective/State/Weekly target + grille 7 jours). Jest **10 passed**. Smoke backend V2 200. Régression suites PR = **212 passed**.
+- Statut : agent-tested, non user-confirmed.
