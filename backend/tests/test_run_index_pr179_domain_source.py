@@ -474,7 +474,7 @@ def test_backfill_async_uses_garmin_activities():
 
     from services.run_index_history import backfill_run_index_history
 
-    result = asyncio.get_event_loop().run_until_complete(
+    result = asyncio.run(
         backfill_run_index_history(db, user_id, reference_date=REF_DATE)
     )
     assert result["snapshots_targeted"] > 0
@@ -498,7 +498,7 @@ def test_post_sync_no_fanout_required():
 
     from services.run_index_history import load_garmin_domain_activities
 
-    activities = asyncio.get_event_loop().run_until_complete(
+    activities = asyncio.run(
         load_garmin_domain_activities(db, user_id)
     )
     assert len(activities) == 1, "garmin_activities activity must be visible immediately"
@@ -524,10 +524,10 @@ def test_user_isolation():
 
     from services.run_index_history import load_garmin_domain_activities
 
-    activities_a = asyncio.get_event_loop().run_until_complete(
+    activities_a = asyncio.run(
         load_garmin_domain_activities(db, target_user)
     )
-    activities_b = asyncio.get_event_loop().run_until_complete(
+    activities_b = asyncio.run(
         load_garmin_domain_activities(db, other_user)
     )
 

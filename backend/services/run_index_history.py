@@ -464,14 +464,22 @@ async def backfill_run_index_history(
     return summary.as_dict()
 
 
-async def refresh_today_run_index_after_garmin_activities(db, user_id: str) -> dict:
+async def refresh_today_run_index_after_garmin_activities(
+    db,
+    user_id: str,
+    activities: Optional[list[DomainActivity]] = None,
+) -> dict:
     """Refresh today's RunIndex directly from garmin_activities (PR179).
 
     No longer waits for the workouts fan-out. Reads garmin_activities →
     DomainActivity immediately after Garmin sync writes, then upserts the
     snapshot. db.workouts is NOT consulted.
+
+    Pass ``activities`` to reuse an already-loaded list and avoid a second
+    database round-trip (e.g. when called from refresh_run_index_after_garmin_sync).
     """
-    activities = await load_garmin_domain_activities(db, user_id)
+    if activities is None:
+        activities = await load_garmin_domain_activities(db, user_id)
     today_snapshot = await upsert_run_index_snapshot(db, user_id, activities=activities)
     return {"today_snapshot": today_snapshot, "activities_count": len(activities)}
 
@@ -500,8 +508,9 @@ async def backfill_run_index_history_after_garmin_sync(
 
 
 async def refresh_run_index_after_garmin_sync(db, user_id: str) -> dict:
+    # Load activities once; share across today-snapshot and history backfill.
     activities = await load_garmin_domain_activities(db, user_id)
-    refreshed = await refresh_today_run_index_after_garmin_activities(db, user_id)
+    refreshed = await refresh_today_run_index_after_garmin_activities(db, user_id, activities=activities)
     history = await backfill_run_index_history_after_garmin_sync(
         db,
         user_id,

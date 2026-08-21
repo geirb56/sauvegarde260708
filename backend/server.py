@@ -1,4 +1,4 @@
-from services.run_index_history import get_run_index_history_payload, upsert_run_index_snapshot
+from services.run_index_history import get_run_index_history_payload, upsert_run_index_snapshot, load_garmin_domain_activities
 from fastapi import FastAPI, APIRouter, HTTPException, Query, Request, Depends, Header
 from fastapi.responses import RedirectResponse, JSONResponse
 from middleware import SSEAwareGZipMiddleware
@@ -1395,12 +1395,7 @@ async def get_dashboard_insight(language: str = "en", user: dict = Depends(auth_
 
     # RunIndex: canonical source is garmin_activities → DomainActivity (PR179).
     # db.workouts is NOT used for RunIndex score.
-    garmin_domain_activities = await (
-        db.garmin_activities.find({"user_id": user_id}, {"_id": 0})
-        .sort("start_time", -1)
-        .to_list(200)
-    )
-    garmin_domain_activities = mongo_garmin_activities_to_domain(garmin_domain_activities)
+    garmin_domain_activities = await load_garmin_domain_activities(db, user_id)
     run_index = calculate_run_index_from_domain(garmin_domain_activities)
 
     await upsert_run_index_snapshot(db, user_id, activities=garmin_domain_activities)
