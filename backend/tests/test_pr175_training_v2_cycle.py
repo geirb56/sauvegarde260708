@@ -604,8 +604,8 @@ def test_20b_endpoint_trial_http200():
     app = _server_module.app
     auth_dep = _server_module.auth_user
 
-    cycle_doc = _make_cycle_doc("MAINTENANCE", "2024-01-01")
-    goal_doc = None
+    cycle_doc = _make_cycle_doc("MARATHON", "2024-01-01")
+    goal_doc = _make_goal_doc("2025-06-01", 240)
     mock_db = _mock_db_for_cycle(cycle_doc, goal_doc)
     user_access = _make_user_access("trial")
 
