@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import axios from "axios";
-import { CalendarDays, Flag, Gauge, Sparkles, Timer } from "lucide-react";
+import { CalendarDays, Flag, Gauge, Info, Sparkles } from "lucide-react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -40,7 +40,7 @@ const formatTargetTime = (totalSeconds) => {
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
-  if (hours > 0) return `${hours}h${minutes.toString().padStart(2, "0")}`;
+  if (hours > 0) return `${hours}h${minutes.toString().padStart(2, "0")}m`;
   if (minutes > 0) return `${minutes}m${seconds.toString().padStart(2, "0")}s`;
   return `${seconds}s`;
 };
@@ -154,6 +154,9 @@ export default function TrainingPlanV2() {
     : t("trainingV2.unknownGoal");
   const continuityLabel = getTranslatedValue(t, `trainingV2.continuityStates.${weekData.state?.continuity_state}`);
   const confidenceLabel = getTranslatedValue(t, `trainingV2.confidenceValues.${weekData.weekly_target?.confidence}`);
+  const allowIntensityLabel = weekData.state?.allow_intensity == null
+    ? t("trainingV2.notAvailable")
+    : (weekData.state.allow_intensity ? t("trainingV2.allowIntensityValues.yes") : t("trainingV2.allowIntensityValues.no"));
   const targetBasis = weekData.weekly_target?.target_basis;
   const weeklyTargetValue = targetBasis === "distance"
     ? (isKnownNumber(weekData.weekly_target?.target_km) ? `${weekData.weekly_target.target_km} km` : t("trainingV2.notAvailable"))
@@ -205,10 +208,7 @@ export default function TrainingPlanV2() {
           </CardHeader>
           <CardContent className="space-y-3">
             <DetailRow label={t("trainingV2.continuity")} value={continuityLabel} />
-            <DetailRow
-              label={t("trainingV2.allowIntensity")}
-              value={weekData.state?.allow_intensity ? t("trainingV2.allowIntensityValues.yes") : t("trainingV2.allowIntensityValues.no")}
-            />
+            <DetailRow label={t("trainingV2.allowIntensity")} value={allowIntensityLabel} />
             <DetailRow label={t("trainingV2.confidence")} value={confidenceLabel} />
           </CardContent>
         </Card>
@@ -280,7 +280,7 @@ export default function TrainingPlanV2() {
                 </div>
                 {session?.reason_codes?.length > 0 && (
                   <p className="mt-3 text-xs text-muted-foreground">
-                    <Timer className="mr-1 inline h-3 w-3" />
+                    <Info className="mr-1 inline h-3 w-3" />
                     {t("trainingV2.reasonCodesHidden")}
                   </p>
                 )}
