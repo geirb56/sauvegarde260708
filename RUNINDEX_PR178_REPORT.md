@@ -159,8 +159,11 @@ BACKEND_MODIFIED        = NO
 
 LOCKFILES_MODIFIED      = NO
   package.json not modified
-  package-lock.json not modified
-  yarn.lock not modified
+  package-lock.json restored from origin/copilot/dev (zero diff)
+  yarn.lock restored from origin/copilot/dev (zero diff)
+
+UNKNOWN_NONEMPTY_STATUS_DEFAULT = gray
+GRAY_STATUS_RED_ICON            = NO
 ```
 
 ---
