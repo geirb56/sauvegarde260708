@@ -3968,6 +3968,7 @@ async def get_race_predictions(user: dict = Depends(auth_user)):
     No db.workouts. No avg_speed/0.70 fallback. Riegel extrapolation.
     Frontend contract preserved (has_data, predictions[], athlete_profile).
     """
+    from training_v2.performance_model import _RUNNING_TYPES, _seconds_to_str
     user_id = user["id"]
     reference_date = datetime.now(timezone.utc).date()
 
@@ -3990,6 +3991,14 @@ async def get_race_predictions(user: dict = Depends(auth_user)):
     # Map RacePrediction dataclasses to the dict contract expected by the frontend.
     predictions_out = []
     for pred in result.predictions:
+        # Build a ±5% range string for display (frontend legacy field)
+        if pred.predicted_time_s is not None:
+            lo = _seconds_to_str(pred.predicted_time_s * 0.97)
+            hi = _seconds_to_str(pred.predicted_time_s * 1.03)
+            predicted_range = f"{lo} - {hi}"
+        else:
+            predicted_range = None
+
         entry = {
             "distance": pred.distance_label,
             "distance_km": pred.distance_km,
@@ -4000,7 +4009,7 @@ async def get_race_predictions(user: dict = Depends(auth_user)):
                 "Marathon": "Marathon",
             }.get(pred.distance_label, pred.distance_label),
             "predicted_time": pred.predicted_time_str,
-            "predicted_range": None,
+            "predicted_range": predicted_range,
             "predicted_pace": pred.predicted_pace_str,
             "readiness": pred.readiness,
             "readiness_label": pred.readiness_label,
@@ -4011,9 +4020,6 @@ async def get_race_predictions(user: dict = Depends(auth_user)):
             "confidence": pred.confidence,
             "model_version": "v2",
         }
-        if pred.predicted_time_str:
-            # Build a simple ±range for display
-            entry["predicted_range"] = pred.predicted_time_str
         predictions_out.append(entry)
 
     ap = result.athlete_profile
@@ -4034,17 +4040,17 @@ async def get_race_predictions(user: dict = Depends(auth_user)):
             "vma_efforts_count": 1 if result.vma.has_data else 0,
             "total_sessions_6w": len([
                 a for a in domain_activities
-                if a.activity_type and a.activity_type.strip().lower().replace(" ", "_")
-                in {"running", "run", "trail_running", "treadmill_running"}
+                if a.activity_type
+                and a.activity_type.strip().lower().replace(" ", "_") in _RUNNING_TYPES
             ]),
             "calculation_window": "garmin_activities",
             "model_version": "v2",
         },
         "predictions": predictions_out,
         "methodology": {
-            "vma_calculation": "Best informative running effort (≥5 min). Duration determines fraction of VMA: 5-12min=95%, 12-20min=90%, 20-60min=85%, 60+min=78%. No avg_speed/0.70 fallback.",
-            "prediction_model": "Riegel T2 = T1 × (D2/D1)^1.06 with endurance support adjustment.",
-            "vo2max_formula": "VO2MAX (ml/kg/min) ≈ VMA (km/h) × 3.5 — derived estimate only, not a lab measurement.",
+            "vma_calculation": "Best informative running effort (>=5 min). Duration determines fraction of VMA: 5-12min=95%, 12-20min=90%, 20-60min=85%, 60+min=78%. No avg_speed/0.70 fallback.",
+            "prediction_model": "Riegel T2 = T1 x (D2/D1)^1.06 with endurance support adjustment.",
+            "vo2max_formula": "VO2MAX (ml/kg/min) approx VMA (km/h) x 3.5 — derived estimate only, not a lab measurement.",
             "model_version": "v2",
         },
     }
@@ -4058,7 +4064,9 @@ async def get_vma_history(user: dict = Depends(auth_user)):
     No db.workouts. No avg_speed/0.70 fallback.
     Frontend contract preserved (has_data, current_vma, current_vo2max, history[]).
     """
+    import calendar as _cal
     from datetime import date as _date
+    from training_v2.performance_model import _validate_activity  # noqa: F401 (used below)
     user_id = user["id"]
     today = datetime.now(timezone.utc).date()
 
@@ -4095,13 +4103,8 @@ async def get_vma_history(user: dict = Depends(auth_user)):
             except ValueError:
                 snapshot_date = _date(year, month, 14)
         else:
-            if month == 12:
-                snapshot_date = _date(year + 1, 1, 1)
-                snapshot_date = _date(year + 1, 1, 1).__class__(year + 1, 1, 1)
-            else:
-                import calendar as _cal
-                last_day = _cal.monthrange(year, month)[1]
-                snapshot_date = _date(year, month, last_day)
+            last_day = _cal.monthrange(year, month)[1]
+            snapshot_date = _date(year, month, last_day)
 
         # Cap future snapshots at today — no look-ahead
         if snapshot_date > today:
@@ -4113,7 +4116,6 @@ async def get_vma_history(user: dict = Depends(auth_user)):
         vo2max_val = round(vma_val * 3.5, 1) if vma_val is not None else None
 
         # Count running activities visible at this snapshot
-        from training_v2.performance_model import _validate_activity, _activity_date
         visible = [
             a for a in domain_activities
             if _validate_activity(a, snapshot_date)
