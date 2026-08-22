@@ -107,6 +107,7 @@ async def _get_insight(fake_db: _FakeDB, user_id: str, run_index_payload: Option
     try:
         with (
             patch.object(server.app.state, "db", fake_db, create=True),
+            patch("server.db", fake_db),
             patch("server.calculate_run_index_from_domain", return_value=payload),
             patch("server.upsert_run_index_snapshot", new=AsyncMock(return_value=None)),
         ):

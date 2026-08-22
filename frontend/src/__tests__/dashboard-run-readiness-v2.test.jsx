@@ -33,6 +33,13 @@ jest.mock("axios");
 jest.mock("sonner", () => ({
   toast: { success: jest.fn(), error: jest.fn() },
 }));
+jest.mock("@/components/ui/dialog", () => ({
+  Dialog: ({ children }) => <div>{children}</div>,
+  DialogContent: ({ children }) => <div>{children}</div>,
+  DialogHeader: ({ children }) => <div>{children}</div>,
+  DialogTitle: ({ children }) => <div>{children}</div>,
+  DialogDescription: ({ children }) => <div>{children}</div>,
+}));
 jest.mock("@/context/UnitContext", () => ({
   useUnitSystem: () => ({ unitSystem: "metric", t: (k) => k }),
 }));
