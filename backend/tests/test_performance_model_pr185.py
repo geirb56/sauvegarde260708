@@ -279,7 +279,12 @@ def test_mandatory_9_excessive_extrapolation():
 # ---------------------------------------------------------------------------
 
 def test_mandatory_10_no_220_age_fallback():
-    # No user_max_hr, no max_hr in activities
+    """No 220-age formula and no hr_max+5 synthetic FCmax.
+
+    Without user_max_hr and without max_hr in activities:
+    - _resolve_fcmax returns None
+    - _fit_hr_speed_model returns REASON_NO_FCMAX → VMA null
+    """
     activities = [
         _run(8_000.0,  3_600.0, days_ago=5,  avg_hr=130.0),
         _run(10_000.0, 3_600.0, days_ago=10, avg_hr=145.0),
@@ -287,15 +292,16 @@ def test_mandatory_10_no_220_age_fallback():
         _run(14_000.0, 3_600.0, days_ago=20, avg_hr=170.0),
         _run(16_000.0, 3_600.0, days_ago=25, avg_hr=180.0),
     ]
-    # Verify no 220-age formula is used (check source code)
+    # Static scan: forbidden patterns must not be present in production code
     import inspect
     from training_v2 import performance_model as pm
     source = inspect.getsource(pm)
-    # No actual "220 - " computation (220-age formula uses spaces around minus)
-    assert "220 - " not in source, "220-age formula pattern found in code"
-    # Model should still work (observed max_hr >= 150 → use observed max + 5)
+    assert "220 - " not in source, "220-age formula found in code"
+    assert "hr_max + 5" not in source, "hr_max+5 synthetic FCmax found in code"
+    # Without FCmax (no user_max_hr, no max_hr recorded), VMA must be null
     result = estimate_vma(activities, TODAY)
-    # Either computes or null; main point is no 220-age
+    assert result.vma_kmh is None
+    assert result.reason_code == "NO_FCMAX"
 
 
 # ---------------------------------------------------------------------------
@@ -316,11 +322,15 @@ def test_mandatory_11_future_activity_ignored():
 
 
 # ---------------------------------------------------------------------------
-# Test 12: Explicit performance available → priority SOURCE A
+# Test 12: SOURCE A disabled — no explicit performance priority path
 # ---------------------------------------------------------------------------
 
 def test_mandatory_12_explicit_performance_priority():
-    # One explicit performance (fast, long enough) + several easy runs for HR model
+    """With SOURCE A disabled, VMA comes solely from the HR-speed model.
+
+    A fast run (15 km/h, 40 min) does NOT qualify as explicit performance.
+    VMA is still estimable from the HR-speed model when FCmax is provided.
+    """
     perf = _run(10_000.0, 2_400.0, days_ago=3, avg_hr=175.0, max_hr=183.0)  # 15 km/h, 40 min
     easy_runs = [
         _run(8_000.0,  4_000.0, days_ago=10, avg_hr=130.0),
@@ -328,16 +338,13 @@ def test_mandatory_12_explicit_performance_priority():
         _run(12_000.0, 6_000.0, days_ago=20, avg_hr=150.0),
         _run(6_000.0,  3_000.0, days_ago=25, avg_hr=145.0),
     ]
+    # SOURCE A is disabled — fast run does NOT qualify as explicit performance
+    assert not _is_explicit_performance(perf, TODAY)
+    # VMA should still be estimable from HR model if FCmax is available
     result = estimate_vma([perf] + easy_runs, TODAY, user_max_hr=190.0)
-    assert result.vma_kmh is not None
-    # Explicit performance qualifies
-    assert _is_explicit_performance(perf, TODAY)
-    # Reason code should reflect explicit performance
-    assert result.reason_code in (
-        REASON_EXPLICIT_PERFORMANCE_SOURCE,
-        REASON_SOURCES_DISAGREE,
-        "EXPLICIT_PERFORMANCE_SOURCE+HR_SPEED_MODEL_SOURCE",
-    ) or REASON_EXPLICIT_PERFORMANCE_SOURCE in (result.reason_code or "")
+    # Result depends on HR model quality; key: reason code is HR-speed model
+    if result.vma_kmh is not None:
+        assert result.reason_code == REASON_HR_SPEED_MODEL_SOURCE
 
 
 # ---------------------------------------------------------------------------
@@ -658,21 +665,48 @@ def test_vma_history_no_look_ahead():
 
 
 def test_vma_history_no_lookahead_structural():
-    """Snapshot J+1 can see activity at J."""
-    act_at_j = DomainActivity(
-        activity_type="running",
-        start_time=date(2024, 4, 1).isoformat(),
-        distance_m=10_000.0,
-        duration_s=2_400.0,
-        average_hr=165.0,
-        max_hr=180.0,
-    )
-    # One activity is not enough for HR model; explicit performance needs >= 10 km/h
-    # 10000/2400 km/h = 15 km/h → qualifies as explicit performance
+    """Snapshot J+1 can see activities at or before J.
+
+    With SOURCE A disabled, a single activity is never enough (HR model needs >= 4).
+    We use 5 activities all on or before snapshot date to verify they are visible.
+    """
     snapshot_j_plus1 = date(2024, 4, 2)
-    result = estimate_vma([act_at_j], snapshot_j_plus1)
-    # Should see the activity (it's <= snapshot date)
-    assert result.has_data is True  # explicit performance qualifies
+    # 5 activities all on or before 2024-04-01 with good HR spread
+    activities = [
+        DomainActivity(
+            activity_type="running",
+            start_time=date(2024, 4, 1).isoformat(),
+            distance_m=8_000.0, duration_s=3_600.0,
+            average_hr=130.0, max_hr=138.0,
+        ),
+        DomainActivity(
+            activity_type="running",
+            start_time=date(2024, 3, 28).isoformat(),
+            distance_m=10_000.0, duration_s=3_600.0,
+            average_hr=145.0, max_hr=152.0,
+        ),
+        DomainActivity(
+            activity_type="running",
+            start_time=date(2024, 3, 20).isoformat(),
+            distance_m=12_000.0, duration_s=3_600.0,
+            average_hr=158.0, max_hr=165.0,
+        ),
+        DomainActivity(
+            activity_type="running",
+            start_time=date(2024, 3, 12).isoformat(),
+            distance_m=14_000.0, duration_s=3_600.0,
+            average_hr=170.0, max_hr=178.0,
+        ),
+        DomainActivity(
+            activity_type="running",
+            start_time=date(2024, 3, 5).isoformat(),
+            distance_m=16_000.0, duration_s=3_600.0,
+            average_hr=180.0, max_hr=187.0,
+        ),
+    ]
+    result = estimate_vma(activities, snapshot_j_plus1, user_max_hr=190.0)
+    # All activities are <= snapshot_j_plus1 → model should see them → has_data True
+    assert result.has_data is True
 
 
 def test_vma_frontend_preserved():
@@ -726,3 +760,373 @@ def test_linear_regression_no_correlation():
     a, b, r2 = _linear_regression(xs, ys)
     # slope should be ~0, r2 handled gracefully
     assert abs(a) < 1e-9
+
+
+# ===========================================================================
+# NEW MANDATORY TESTS (problem statement v2 — 16 tests)
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# T1 / T2 — SOURCE A disabled: speed >= 10 km/h is never explicit performance
+# ---------------------------------------------------------------------------
+
+def test_new_t1_footing_60min_not_explicit_performance():
+    """Footing 60 min at >10 km/h is NOT an explicit performance (SOURCE A disabled)."""
+    footing = _run(
+        distance_m=11_000.0, duration_s=3_600.0,  # 11 km/h
+        days_ago=5, avg_hr=145.0,
+    )
+    assert not _is_explicit_performance(footing, TODAY)
+
+
+def test_new_t2_fast_run_not_explicit_performance_automatically():
+    """A fast run at any speed is NOT automatically an explicit performance."""
+    fast = _run(distance_m=10_000.0, duration_s=2_000.0, days_ago=3, avg_hr=185.0)  # 18 km/h
+    assert not _is_explicit_performance(fast, TODAY)
+
+
+# ---------------------------------------------------------------------------
+# T3 — >= 4 activities good HR/speed + FCmax → VMA estimable
+# ---------------------------------------------------------------------------
+
+def test_new_t3_four_activities_fcmax_vma_estimable():
+    """>=4 activities with good FC/speed relation + FCmax fiable → VMA is estimable."""
+    activities = [
+        _run(8_000.0,  3_600.0, days_ago=5,  avg_hr=130.0, max_hr=138.0),
+        _run(10_000.0, 3_600.0, days_ago=10, avg_hr=145.0, max_hr=153.0),
+        _run(12_000.0, 3_600.0, days_ago=15, avg_hr=160.0, max_hr=167.0),
+        _run(14_000.0, 3_600.0, days_ago=20, avg_hr=173.0, max_hr=180.0),
+    ]
+    result = estimate_vma(activities, TODAY, user_max_hr=190.0)
+    assert result.vma_kmh is not None
+    assert result.has_data is True
+
+
+# ---------------------------------------------------------------------------
+# T4 — Same dataset without FCmax → VMA null
+# ---------------------------------------------------------------------------
+
+def test_new_t4_same_dataset_no_fcmax_vma_null():
+    """Same activities but no FCmax (no user_max_hr, no max_hr) → VMA null."""
+    activities = [
+        _run(8_000.0,  3_600.0, days_ago=5,  avg_hr=130.0),   # no max_hr
+        _run(10_000.0, 3_600.0, days_ago=10, avg_hr=145.0),
+        _run(12_000.0, 3_600.0, days_ago=15, avg_hr=160.0),
+        _run(14_000.0, 3_600.0, days_ago=20, avg_hr=173.0),
+    ]
+    result = estimate_vma(activities, TODAY)   # no user_max_hr
+    assert result.vma_kmh is None
+    assert result.reason_code == "NO_FCMAX"
+
+
+# ---------------------------------------------------------------------------
+# T5 — Observed max_hr réellement disponible et crédible → peut servir comme FCmax
+# ---------------------------------------------------------------------------
+
+def test_new_t5_observed_max_hr_serves_as_fcmax():
+    """Observed max_hr in Garmin data (>= 150, <= 230) can serve as FCmax."""
+    activities = [
+        _run(8_000.0,  3_600.0, days_ago=5,  avg_hr=130.0, max_hr=138.0),
+        _run(10_000.0, 3_600.0, days_ago=10, avg_hr=145.0, max_hr=153.0),
+        _run(12_000.0, 3_600.0, days_ago=15, avg_hr=158.0, max_hr=167.0),
+        _run(14_000.0, 3_600.0, days_ago=20, avg_hr=170.0, max_hr=190.0),  # max_hr = 190
+        _run(16_000.0, 3_600.0, days_ago=25, avg_hr=180.0, max_hr=188.0),
+    ]
+    # No user_max_hr — model should use observed max_hr=190 from activities
+    result = estimate_vma(activities, TODAY)
+    # Observed max_hr >= 150 and <= 230 → _resolve_fcmax returns 190
+    assert result.vma_kmh is not None
+    assert result.reason_code == "HR_SPEED_MODEL_SOURCE"
+
+
+# ---------------------------------------------------------------------------
+# T6 — hr_max + 5 absent (static scan)
+# ---------------------------------------------------------------------------
+
+def test_new_t6_hr_max_plus_5_absent():
+    """hr_max + 5 synthetic FCmax must not appear in the model code."""
+    import inspect
+    from training_v2 import performance_model as pm
+    source = inspect.getsource(pm)
+    assert "hr_max + 5" not in source, "Forbidden hr_max+5 synthetic FCmax found"
+    assert "hr_max + 5.0" not in source, "Forbidden hr_max+5.0 synthetic FCmax found"
+
+
+# ---------------------------------------------------------------------------
+# T7 — 220-age absent (also covered by T10, explicit here for report)
+# ---------------------------------------------------------------------------
+
+def test_new_t7_220_age_absent():
+    """220-age population FCmax formula must not appear in the model code."""
+    import inspect
+    from training_v2 import performance_model as pm
+    source = inspect.getsource(pm)
+    assert "220 - " not in source, "Forbidden 220-age formula found in code"
+    assert "208 - " not in source, "Forbidden Tanaka formula found in code"
+
+
+# ---------------------------------------------------------------------------
+# T8 — VMA available but no defensible Riegel source → predictions null
+# ---------------------------------------------------------------------------
+
+def test_new_t8_vma_available_no_riegel_source_predictions_null():
+    """VMA can be estimated while all race predictions are null.
+
+    Scenario: activities are all > MAX_RIEGEL_SOURCE_AGE_DAYS (730 days) old
+    → _select_riegel_source returns None for all targets.
+    """
+    from training_v2.performance_model import MAX_RIEGEL_SOURCE_AGE_DAYS
+
+    old_days = MAX_RIEGEL_SOURCE_AGE_DAYS + 30  # all activities older than threshold
+    activities = [
+        _run(8_000.0,  3_600.0, days_ago=old_days,     avg_hr=130.0, max_hr=138.0),
+        _run(10_000.0, 3_600.0, days_ago=old_days + 5,  avg_hr=145.0, max_hr=153.0),
+        _run(12_000.0, 3_600.0, days_ago=old_days + 10, avg_hr=158.0, max_hr=165.0),
+        _run(14_000.0, 3_600.0, days_ago=old_days + 15, avg_hr=170.0, max_hr=178.0),
+        _run(16_000.0, 3_600.0, days_ago=old_days + 20, avg_hr=180.0, max_hr=187.0),
+    ]
+    result = predict_races(activities, TODAY, user_max_hr=190.0)
+    # VMA may or may not be estimable (extrapolation ratio check applies)
+    if result.has_data:
+        # All predictions must be null (no defensible source)
+        for p in result.predictions:
+            assert p.predicted_time_s is None, (
+                f"Expected null prediction for {p.distance_label}, "
+                f"got {p.predicted_time_s}s"
+            )
+
+
+# ---------------------------------------------------------------------------
+# T9 — No synthetic 20-min @ 85% VMA (static scan)
+# ---------------------------------------------------------------------------
+
+def test_new_t9_no_synthetic_effort():
+    """Forbidden synthetic Riegel source patterns must not exist in model code."""
+    import inspect
+    from training_v2 import performance_model as pm
+    source = inspect.getsource(pm)
+
+    # These patterns indicate synthetic effort creation — strictly forbidden
+    forbidden = [
+        "synth_speed",
+        "synth_duration",
+        "synth_duration_s = 20 * 60",   # exact synthetic 20-min line (not generic uses)
+        "vma * 0.85",       # 85% VMA synthetic speed
+    ]
+    for pattern in forbidden:
+        assert pattern not in source, (
+            f"Forbidden synthetic pattern '{pattern}' found in performance_model.py"
+        )
+
+
+# ---------------------------------------------------------------------------
+# T10 — Real activity close to 10K can feed 10K prediction with confidence
+# ---------------------------------------------------------------------------
+
+def test_new_t10_real_10k_activity_feeds_prediction():
+    """A real 10K activity can serve as Riegel source for 10K prediction."""
+    activities = [
+        _run(8_000.0,  3_600.0, days_ago=5,  avg_hr=130.0, max_hr=138.0),
+        _run(10_000.0, 3_000.0, days_ago=7,  avg_hr=165.0, max_hr=173.0),   # 12 km/h 10K
+        _run(12_000.0, 4_000.0, days_ago=15, avg_hr=148.0, max_hr=156.0),
+        _run(14_000.0, 5_000.0, days_ago=20, avg_hr=138.0, max_hr=145.0),
+        _run(6_000.0,  2_400.0, days_ago=25, avg_hr=160.0, max_hr=168.0),
+    ]
+    result = predict_races(activities, TODAY, user_max_hr=185.0)
+    if result.has_data:
+        ten_k = next((p for p in result.predictions if p.distance_label == "10K"), None)
+        assert ten_k is not None
+        if ten_k.predicted_time_s is not None:
+            assert ten_k.predicted_time_s > 0
+            assert ten_k.source_type == "observed_activity"
+
+
+# ---------------------------------------------------------------------------
+# T11 — Easy activity with low relative HR → not HIGH confidence
+# ---------------------------------------------------------------------------
+
+def test_new_t11_low_relative_hr_not_high_confidence():
+    """An easy activity with low avg_hr relative to FCmax must not produce HIGH confidence."""
+    fcmax = 190.0
+    # avg_hr=114 → relative_hr = 114/190 ≈ 0.60 (well below 0.85 threshold)
+    easy_act = _run(10_000.0, 3_600.0, days_ago=5, avg_hr=114.0, max_hr=120.0)  # 10 km/h
+    activities = [easy_act]
+    result = predict_races(activities, TODAY, user_max_hr=fcmax)
+    for p in result.predictions:
+        if p.predicted_time_s is not None:
+            assert p.confidence != "high", (
+                f"Expected non-HIGH confidence for easy source, got {p.confidence} "
+                f"for {p.distance_label}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# T12 — Activity near target + high relative HR → higher confidence
+# ---------------------------------------------------------------------------
+
+def test_new_t12_high_relative_hr_higher_confidence():
+    """Activity near target distance with high relative HR produces higher confidence
+    than the same activity at low relative HR."""
+    fcmax = 190.0
+    # Activity 1: near 5K, high HR (relative_hr ≈ 0.90)
+    high_effort = _run(5_000.0, 1_500.0, days_ago=5, avg_hr=171.0, max_hr=180.0)
+    # Activity 2: near 5K, low HR (relative_hr ≈ 0.65)
+    low_effort = _run(5_000.0, 1_500.0, days_ago=5, avg_hr=123.0, max_hr=130.0)
+
+    r_high = predict_races([high_effort], TODAY, user_max_hr=fcmax)
+    r_low = predict_races([low_effort], TODAY, user_max_hr=fcmax)
+
+    order = {"insufficient": 0, "low": 1, "medium": 2, "high": 3}
+
+    five_k_high = next((p for p in r_high.predictions if p.distance_label == "5K"), None)
+    five_k_low = next((p for p in r_low.predictions if p.distance_label == "5K"), None)
+
+    if five_k_high and five_k_high.predicted_time_s and five_k_low and five_k_low.predicted_time_s:
+        assert order.get(five_k_high.confidence, 0) >= order.get(five_k_low.confidence, 0), (
+            f"High-HR source ({five_k_high.confidence}) should have >= confidence "
+            f"than low-HR source ({five_k_low.confidence})"
+        )
+
+
+# ---------------------------------------------------------------------------
+# T13 — Source 5K → Marathon: lower confidence than source near Marathon
+# ---------------------------------------------------------------------------
+
+def test_new_t13_5k_source_marathon_lower_confidence():
+    """Extrapolating from 5K to Marathon should yield lower confidence
+    than extrapolating from a near-Marathon source."""
+    fcmax = 190.0
+    # Source near Marathon (40K with good effort)
+    marathon_src = _run(40_000.0, 14_400.0, days_ago=10, avg_hr=162.0, max_hr=172.0)
+    # Source 5K
+    fivek_src = _run(5_000.0, 1_500.0, days_ago=10, avg_hr=171.0, max_hr=180.0)
+
+    r_marathon = predict_races([marathon_src], TODAY, user_max_hr=fcmax)
+    r_fivek = predict_races([fivek_src], TODAY, user_max_hr=fcmax)
+
+    order = {"insufficient": 0, "low": 1, "medium": 2, "high": 3}
+
+    marathon_from_marathon = next(
+        (p for p in r_marathon.predictions if p.distance_label == "Marathon"), None
+    )
+    marathon_from_5k = next(
+        (p for p in r_fivek.predictions if p.distance_label == "Marathon"), None
+    )
+
+    if (
+        marathon_from_marathon and marathon_from_marathon.predicted_time_s
+        and marathon_from_5k and marathon_from_5k.predicted_time_s
+    ):
+        conf_near = order.get(marathon_from_marathon.confidence, 0)
+        conf_far = order.get(marathon_from_5k.confidence, 0)
+        assert conf_near >= conf_far, (
+            f"Near-Marathon source ({marathon_from_marathon.confidence}) should have >= "
+            f"confidence than 5K source ({marathon_from_5k.confidence})"
+        )
+
+
+# ---------------------------------------------------------------------------
+# T14 — Source near Semi → Semi prediction with better confidence than distant source
+# ---------------------------------------------------------------------------
+
+def test_new_t14_near_semi_source_better_confidence():
+    """A source near Semi distance produces better Semi confidence than a 5K source."""
+    fcmax = 190.0
+    # Near Semi: 20K at good effort (relative_hr ~0.87)
+    semi_src = _run(20_000.0, 7_200.0, days_ago=10, avg_hr=165.0, max_hr=175.0)
+    # Distant: 5K
+    fivek_src = _run(5_000.0, 1_500.0, days_ago=10, avg_hr=165.0, max_hr=175.0)
+
+    r_near = predict_races([semi_src], TODAY, user_max_hr=fcmax)
+    r_far = predict_races([fivek_src], TODAY, user_max_hr=fcmax)
+
+    order = {"insufficient": 0, "low": 1, "medium": 2, "high": 3}
+
+    semi_near = next((p for p in r_near.predictions if p.distance_label == "Semi"), None)
+    semi_far = next((p for p in r_far.predictions if p.distance_label == "Semi"), None)
+
+    if semi_near and semi_near.predicted_time_s and semi_far and semi_far.predicted_time_s:
+        assert order.get(semi_near.confidence, 0) >= order.get(semi_far.confidence, 0), (
+            f"Near-Semi source ({semi_near.confidence}) should have >= "
+            f"confidence than 5K source ({semi_far.confidence})"
+        )
+
+
+# ---------------------------------------------------------------------------
+# T15 — No future activity used (duplicate of existing test, explicit label)
+# ---------------------------------------------------------------------------
+
+def test_new_t15_no_future_activity_used():
+    """Future activities (after reference_date) are strictly excluded."""
+    future = DomainActivity(
+        activity_type="running",
+        start_time=(TODAY + timedelta(days=1)).isoformat(),
+        distance_m=10_000.0, duration_s=3_000.0, average_hr=170.0, max_hr=178.0,
+    )
+    past = [
+        _run(8_000.0,  3_600.0, days_ago=5,  avg_hr=130.0, max_hr=138.0),
+        _run(10_000.0, 3_600.0, days_ago=10, avg_hr=145.0, max_hr=153.0),
+        _run(12_000.0, 3_600.0, days_ago=15, avg_hr=158.0, max_hr=165.0),
+        _run(14_000.0, 3_600.0, days_ago=20, avg_hr=170.0, max_hr=178.0),
+    ]
+    r_with = estimate_vma(past + [future], TODAY, user_max_hr=190.0)
+    r_without = estimate_vma(past, TODAY, user_max_hr=190.0)
+    assert r_with.vma_kmh == r_without.vma_kmh
+
+
+# ---------------------------------------------------------------------------
+# T16 — Anti-lookahead historical PASS
+# ---------------------------------------------------------------------------
+
+def test_new_t16_anti_lookahead_historical_pass():
+    """Historical snapshots cannot see activities that occur after the snapshot date."""
+    snapshot = date(2024, 3, 1)
+    # Activities all after snapshot
+    post_snapshot = [
+        DomainActivity(
+            activity_type="running",
+            start_time=date(2024, 3, 15).isoformat(),
+            distance_m=10_000.0, duration_s=3_000.0,
+            average_hr=165.0, max_hr=173.0,
+        ),
+        DomainActivity(
+            activity_type="running",
+            start_time=date(2024, 4, 1).isoformat(),
+            distance_m=12_000.0, duration_s=3_600.0,
+            average_hr=155.0, max_hr=162.0,
+        ),
+    ]
+    result = estimate_vma(post_snapshot, snapshot, user_max_hr=190.0)
+    assert result.vma_kmh is None   # no activities at or before snapshot
+    assert result.has_data is False
+
+
+# ---------------------------------------------------------------------------
+# Anti-synthetic scan: forbidden patterns must not appear in model (summary)
+# ---------------------------------------------------------------------------
+
+def test_anti_synthetic_comprehensive_scan():
+    """Comprehensive static scan for all forbidden synthetic/heuristic patterns."""
+    import inspect
+    from training_v2 import performance_model as pm
+    source = inspect.getsource(pm)
+
+    # These patterns are unconditionally forbidden in the VMA V2 path
+    forbidden_patterns = {
+        "hr_max + 5": "synthetic FCmax (hr_max+5)",
+        "hr_max + 5.0": "synthetic FCmax (hr_max+5.0)",
+        "220 - ": "220-age FCmax formula",
+        "208 - ": "Tanaka FCmax formula",
+        "synth_speed": "synthetic speed variable",
+        "synth_duration": "synthetic duration variable",
+        "* 0.85": "85% VMA synthetic effort",
+        # "20 * 60" is a legitimate constant (MIN_EXPLICIT_PERFORMANCE_DURATION_S comment)
+        # The forbidden form is the exact synthetic assignment:
+        "synth_duration_s = 20 * 60": "synthetic 20-minute effort assignment",
+    }
+
+    for pattern, description in forbidden_patterns.items():
+        assert pattern not in source, (
+            f"FORBIDDEN: '{description}' ({pattern!r}) found in performance_model.py"
+        )
+

@@ -91,6 +91,15 @@ CONFIDENCE_LOW_DAYS = 120
 # Maximum source disagreement ratio before penalising confidence
 MAX_SOURCE_AGREEMENT_RATIO: float = 0.15     # 15% difference → SOURCES_DISAGREE
 
+# Source A (explicit performance): DISABLED — no Garmin field identifies races/tests.
+# Speed+duration heuristic is not acceptable as explicit performance qualification.
+SOURCE_A_DISABLED: bool = True
+
+# Riegel source selection constraints
+MAX_RIEGEL_SOURCE_AGE_DAYS: int = 730        # Activities older than 2 years not defensible
+MIN_RIEGEL_SOURCE_RATIO: float = 0.12        # Source must be >= 12% of target distance
+MIN_RIEGEL_SCORE: float = 0.25               # Minimum score for a defensible source
+
 # Target race distances (m)
 RACE_DISTANCES_M = {
     "5K": 5_000.0,
@@ -374,26 +383,22 @@ def _fit_hr_speed_model(
             extrapolation_ratio=0.0, reason_code=REASON_HR_MODEL_POOR_FIT,
         )
 
-    # FCmax resolution
+    # FCmax resolution — no hr_max+5 or 220-age fallback
     fcmax = _resolve_fcmax(activities, user_max_hr, reference_date)
 
+    # FCmax is mandatory for extrapolation; no synthetic fallback allowed
+    if fcmax is None:
+        return _HRModelResult(
+            vma_kmh=None, slope=round(a, 5), intercept=round(b, 4),
+            r_squared=round(r2, 4),
+            n_activities=len(usable), hr_range_bpm=round(hr_range, 1),
+            max_observed_hr=round(hr_max, 1), target_hr=None,
+            extrapolation_ratio=0.0, reason_code=REASON_NO_FCMAX,
+        )
+
     # Extrapolation target: 95% of FCmax (aerobic ceiling, conservative)
-    if fcmax is not None:
+    if True:
         target_hr = fcmax * 0.95
-    else:
-        # Use observed max + small increment (5 bpm) if no FCmax available
-        # Only if observed max is already high enough (>= 150 bpm)
-        if hr_max >= 150:
-            target_hr = hr_max + 5.0
-            fcmax = hr_max + 5.0
-        else:
-            return _HRModelResult(
-                vma_kmh=None, slope=round(a, 5), intercept=round(b, 4),
-                r_squared=round(r2, 4),
-                n_activities=len(usable), hr_range_bpm=round(hr_range, 1),
-                max_observed_hr=round(hr_max, 1), target_hr=None,
-                extrapolation_ratio=0.0, reason_code=REASON_NO_FCMAX,
-            )
 
     extrapolation_ratio = target_hr / hr_max if hr_max > 0 else 999.0
 
@@ -439,29 +444,15 @@ def _fit_hr_speed_model(
 
 
 def _is_explicit_performance(a: DomainActivity, reference_date: date) -> bool:
-    """Identify an activity that qualifies as an explicit performance.
+    """Source A (explicit performance) is DISABLED.
 
-    Criteria:
-    - Valid running activity
-    - Duration >= MIN_EXPLICIT_PERFORMANCE_DURATION_S
-    - High average speed (>= 10 km/h — effort, not recovery jog)
-    - Low elevation gain (if available)
-    - Not a future activity
+    No Garmin field currently identifies an activity as a race, test, or competition.
+    The speed+duration heuristic (speed >= 10 km/h, duration >= 10 min) is not an
+    acceptable proxy for explicit performance qualification.
 
-    NOTE: We do NOT automatically qualify the single fastest run.
-    Multiple criteria must be met.
+    SOURCE_A_DISABLED = True.  Returns False always.
     """
-    if not _validate_activity(a, reference_date):
-        return False
-    dur = a.duration_s or 0.0
-    if dur < MIN_EXPLICIT_PERFORMANCE_DURATION_S:
-        return False
-    speed = _speed_kmh(a)
-    if speed is None or speed < 10.0:
-        return False
-    if a.elevation_gain_m is not None and a.elevation_gain_m > MAX_ELEVATION_GAIN_M:
-        return False
-    return True
+    return False
 
 
 def _select_explicit_performance(
@@ -624,6 +615,7 @@ class RacePrediction:
     endurance_factor: int
     volume_factor: int
     source_distance_m: Optional[float]
+    source_type: Optional[str] = None   # "observed_activity" when from real data
     model_version: str = "v2"
 
 
@@ -647,33 +639,22 @@ def estimate_vma(
     reference_date: Union[date, datetime],
     user_max_hr: Optional[float] = None,
 ) -> VMAEstimate:
-    """Estimate VMA from DomainActivity objects using a dual-path model.
+    """Estimate VMA from DomainActivity objects using the HR-speed model.
 
-    SOURCE A — Explicit performance (priority).
-    SOURCE B — Individual HR-speed linear model (fallback).
+    SOURCE A (explicit performance) is DISABLED — no Garmin field currently
+    identifies a race/test/competition.  Only SOURCE B (HR-speed linear model)
+    is used.
 
-    When both are available:
-    - If agreement < 15%: confidence increases.
-    - If divergence >= 15%: confidence decreases, reason_code = SOURCES_DISAGREE.
+    Returns VMAEstimate(vma_kmh=None) when the model yields insufficient data.
 
-    Returns VMAEstimate(vma_kmh=None) when neither path yields sufficient data.
-
-    FCmax: from user profile or observed Garmin max only. 220-age forbidden.
+    FCmax: from user profile or observed Garmin max_hr only.
+    220-age and hr_max+5 are forbidden.
     """
     if isinstance(reference_date, datetime):
         reference_date = reference_date.date()
 
-    # --- Source A: Explicit performance ---
-    best_explicit = _select_explicit_performance(activities, reference_date)
-    vma_a: Optional[float] = None
-    conf_a: Optional[str] = None
-    method_a: Optional[str] = None
-
-    if best_explicit is not None:
-        vma_a = _vma_from_explicit_performance(best_explicit)
-        conf_a = _explicit_confidence(best_explicit, reference_date)
-        dur_min = int((best_explicit.duration_s or 0) / 60)
-        method_a = f"explicit_performance_{int(best_explicit.distance_m or 0)}m_{dur_min}min"
+    # --- Source A: DISABLED ---
+    # SOURCE_A_DISABLED = True: no Garmin field identifies explicit performances.
 
     # --- Source B: HR-speed model ---
     hr_model = _fit_hr_speed_model(activities, reference_date, user_max_hr)
@@ -687,10 +668,7 @@ def estimate_vma(
         if vma_b is not None and hr_model.r_squared is not None else None
     )
 
-    # --- Decision ---
-
-    if vma_a is None and vma_b is None:
-        # Neither path available
+    if vma_b is None:
         reason = hr_model.reason_code if hr_model.reason_code else REASON_NO_DATA
         return VMAEstimate(
             vma_kmh=None,
@@ -704,62 +682,14 @@ def estimate_vma(
             hr_model_hr_range_bpm=hr_model.hr_range_bpm,
         )
 
-    if vma_a is not None and vma_b is None:
-        # Only explicit performance
-        act_date = _activity_date(best_explicit)
-        return VMAEstimate(
-            vma_kmh=vma_a,
-            confidence=conf_a or "low",
-            method=method_a,
-            source_activity_date=act_date,
-            source_distance_m=best_explicit.distance_m,
-            source_duration_s=best_explicit.duration_s,
-            reason_code=REASON_EXPLICIT_PERFORMANCE_SOURCE,
-            hr_model_n_activities=hr_model.n_activities,
-            hr_model_hr_range_bpm=hr_model.hr_range_bpm,
-        )
-
-    if vma_a is None and vma_b is not None:
-        # Only HR-speed model
-        return VMAEstimate(
-            vma_kmh=vma_b,
-            confidence=conf_b or "low",
-            method=method_b,
-            source_activity_date=None,
-            source_distance_m=None,
-            source_duration_s=None,
-            reason_code=REASON_HR_SPEED_MODEL_SOURCE,
-            hr_model_r_squared=hr_model.r_squared,
-            hr_model_n_activities=hr_model.n_activities,
-            hr_model_hr_range_bpm=hr_model.hr_range_bpm,
-            hr_model_extrapolation_ratio=hr_model.extrapolation_ratio,
-        )
-
-    # Both available — check agreement
-    assert vma_a is not None and vma_b is not None
-    agreement_ratio = abs(vma_a - vma_b) / max(vma_a, vma_b)
-    sources_agree = agreement_ratio < MAX_SOURCE_AGREEMENT_RATIO
-
-    reason = (
-        REASON_EXPLICIT_PERFORMANCE_SOURCE
-        if sources_agree
-        else REASON_SOURCES_DISAGREE
-    )
-
-    # Fuse: explicit performance takes priority as the point estimate
-    fused_vma = vma_a
-    fused_conf = _merge_confidence(conf_a or "low", conf_b or "low", sources_agree)
-    fused_method = f"{method_a}+{method_b}" if method_a and method_b else method_a or method_b
-
-    act_date = _activity_date(best_explicit)
     return VMAEstimate(
-        vma_kmh=fused_vma,
-        confidence=fused_conf,
-        method=fused_method,
-        source_activity_date=act_date,
-        source_distance_m=best_explicit.distance_m,
-        source_duration_s=best_explicit.duration_s,
-        reason_code=reason,
+        vma_kmh=vma_b,
+        confidence=conf_b or "low",
+        method=method_b,
+        source_activity_date=None,
+        source_distance_m=None,
+        source_duration_s=None,
+        reason_code=REASON_HR_SPEED_MODEL_SOURCE,
         hr_model_r_squared=hr_model.r_squared,
         hr_model_n_activities=hr_model.n_activities,
         hr_model_hr_range_bpm=hr_model.hr_range_bpm,
@@ -794,7 +724,7 @@ def _endurance_support(
     ]
 
     if not recent:
-        return 0.5
+        return 0.55   # lower bound of the [0.55, 1.0] contract
 
     cutoff_28 = date.fromordinal(reference_date.toordinal() - 28)
     recent_28 = [a for a in recent if (_activity_date(a) or date.min) >= cutoff_28]
@@ -830,13 +760,22 @@ def _riegel_confidence(
     target_distance_m: float,
     days_since_source: int,
     endurance_factor: float,
+    relative_hr: Optional[float] = None,
 ) -> str:
+    """Confidence for a Riegel prediction.
+
+    HIGH requires relative_hr >= 0.85 in addition to a close, recent source with good
+    endurance support.  Without confirmed high effort the best achievable is MEDIUM.
+    """
     ratio = target_distance_m / source_distance_m
     if ratio > 4.0 or days_since_source > CONFIDENCE_LOW_DAYS or endurance_factor < 0.65:
         return "low"
     if ratio > 2.0 or days_since_source > CONFIDENCE_MEDIUM_DAYS or endurance_factor < 0.80:
         return "medium"
-    return "high"
+    # Close source, recent, good endurance: require confirmed high effort for HIGH
+    if relative_hr is not None and relative_hr >= 0.85:
+        return "high"
+    return "medium"  # No relative_hr data or effort was easy → cap at medium
 
 
 def _seconds_to_str(total_s: float) -> str:
@@ -867,6 +806,108 @@ def _readiness(score: float) -> tuple:
 
 
 # ---------------------------------------------------------------------------
+# Per-target Riegel source selection
+# ---------------------------------------------------------------------------
+
+
+def _score_riegel_candidate(
+    a: DomainActivity,
+    target_distance_m: float,
+    reference_date: date,
+    fcmax: Optional[float],
+) -> float:
+    """Score an activity as a Riegel source for a given target distance.
+
+    Returns a score in [0, 1].  Higher = more informative for this target.
+    Returns 0.0 when the activity is not a defensible source.
+
+    Weights:
+      proximity  0.50  — how close source distance is to target
+      recency    0.30  — how recent the activity is
+      rel_hr     0.20  — effort level relative to FCmax (neutral 0.5 when unknown)
+
+    Minimum defensible conditions:
+      - activity distance >= MIN_RIEGEL_SOURCE_RATIO * target_distance
+      - activity date within MAX_RIEGEL_SOURCE_AGE_DAYS
+    """
+    src_dist = a.distance_m or 0.0
+    if src_dist < max(MIN_DISTANCE_M, target_distance_m * MIN_RIEGEL_SOURCE_RATIO):
+        return 0.0
+
+    d = _activity_date(a)
+    if d is None:
+        return 0.0
+    days = _days_ago(d, reference_date)
+    if days > MAX_RIEGEL_SOURCE_AGE_DAYS:
+        return 0.0
+
+    # Proximity: prefer source ≈ target (ratio approaching 1.0 from below is ideal)
+    ratio = src_dist / target_distance_m
+    if ratio >= 1.2:
+        proximity = 0.50   # source longer than target — acceptable but not ideal
+    elif ratio >= 0.50:
+        proximity = 0.70 + 0.30 * min((ratio - 0.50) / 0.50, 1.0)
+    elif ratio >= 0.20:
+        proximity = 0.30 + 0.40 * (ratio - 0.20) / 0.30
+    else:
+        proximity = 0.10 + 0.20 * ratio / 0.20   # very short relative to target
+
+    # Recency
+    if days <= CONFIDENCE_HIGH_DAYS:
+        recency = 1.0
+    elif days <= CONFIDENCE_MEDIUM_DAYS:
+        recency = 0.70
+    elif days <= CONFIDENCE_LOW_DAYS:
+        recency = 0.40
+    else:
+        recency = 0.15   # old but within MAX_RIEGEL_SOURCE_AGE_DAYS
+
+    # Relative HR (effort level); neutral 0.5 when HR data unavailable
+    if fcmax is not None and fcmax > 0 and a.average_hr is not None:
+        rel_hr_score = min(a.average_hr / fcmax, 1.0)
+    else:
+        rel_hr_score = 0.50
+
+    score = proximity * 0.50 + recency * 0.30 + rel_hr_score * 0.20
+    return round(score, 4)
+
+
+def _select_riegel_source(
+    activities: List[DomainActivity],
+    reference_date: date,
+    target_distance_m: float,
+    fcmax: Optional[float],
+) -> Optional[Tuple[DomainActivity, float, Optional[float]]]:
+    """Select the best observed activity as Riegel source for a given target.
+
+    Returns (activity, score, relative_hr) or None when no defensible source exists.
+
+    relative_hr = avg_hr / fcmax when both are available, else None.
+    source_type for all results from this function is "observed_activity".
+    """
+    candidates = [a for a in activities if _validate_activity(a, reference_date)]
+    if not candidates:
+        return None
+
+    best_score = 0.0
+    best_act: Optional[DomainActivity] = None
+    for a in candidates:
+        s = _score_riegel_candidate(a, target_distance_m, reference_date, fcmax)
+        if s > best_score:
+            best_score = s
+            best_act = a
+
+    if best_act is None or best_score < MIN_RIEGEL_SCORE:
+        return None
+
+    rel_hr: Optional[float] = None
+    if fcmax is not None and fcmax > 0 and best_act.average_hr is not None:
+        rel_hr = round(best_act.average_hr / fcmax, 4)
+
+    return best_act, best_score, rel_hr
+
+
+# ---------------------------------------------------------------------------
 # Race predictions V2
 # ---------------------------------------------------------------------------
 
@@ -878,10 +919,16 @@ def predict_races(
 ) -> PerformanceEstimate:
     """Compute VMA V2 estimate and race predictions V2.
 
-    Uses observed best performance as source when available, otherwise the
-    HR-speed model VMA with a synthetic effort duration for Riegel.
+    VMA is estimated via the HR-speed model (SOURCE A is disabled).
 
-    Never invents predictions when data is insufficient.
+    Race predictions use only real observed activities as Riegel source.
+    A separate best source is selected per target distance.
+    No synthetic effort (20 min @ 85% VMA) is ever created.
+
+    If no defensible observed source exists for a target distance, the
+    prediction for that distance is null (predicted_time_s = None).
+    VMA and race predictions are independent: VMA can be available while
+    some or all predictions are null.
     """
     if isinstance(reference_date, datetime):
         reference_date = reference_date.date()
@@ -891,30 +938,10 @@ def predict_races(
     if not vma_est.has_data:
         return PerformanceEstimate(has_data=False, vma=vma_est, predictions=[])
 
-    # Source performance for Riegel: prefer explicit performance activity
-    # When only HR-speed model available, synthesise a 20-min effort at VMA×0.85
-    source_duration_s: float
-    source_distance_m: float
-    source_date: Optional[date]
-    days_since_source: int
+    # Resolve FCmax for relative_hr computation in source scoring
+    fcmax = _resolve_fcmax(activities, user_max_hr, reference_date)
 
-    if vma_est.source_distance_m is not None and vma_est.source_duration_s is not None:
-        source_duration_s = vma_est.source_duration_s
-        source_distance_m = vma_est.source_distance_m
-        source_date = vma_est.source_activity_date
-        days_since_source = _days_ago(source_date, reference_date) if source_date else 999
-    else:
-        # HR-speed model only — synthesise from VMA
-        # Use 20 min at 85% VMA as a representative effort
-        vma = vma_est.vma_kmh or 0.0
-        synth_speed = vma * 0.85
-        synth_duration_s = 20 * 60
-        source_duration_s = synth_duration_s
-        source_distance_m = synth_speed * (synth_duration_s / 3600.0) * 1000.0
-        source_date = None
-        days_since_source = 0  # model is current
-
-    # Weekly volume & long run for profile
+    # Weekly volume & long run for athlete profile
     cutoff_28 = date.fromordinal(reference_date.toordinal() - 28)
     recent_28 = [
         a for a in activities
@@ -929,13 +956,17 @@ def predict_races(
 
     for label, dist_m in RACE_DISTANCES_M.items():
         endurance = _endurance_support(activities, reference_date, dist_m)
+        target_km = dist_m / 1000.0
+        vol_factor = min(weekly_km / max(target_km * 0.5, 1.0), 1.0)
 
-        try:
-            raw_time_s = _riegel(source_duration_s, source_distance_m, dist_m)
-        except (ValueError, ZeroDivisionError):
+        # Select per-target observed source — no synthetic effort
+        riegel_src = _select_riegel_source(activities, reference_date, dist_m, fcmax)
+
+        if riegel_src is None:
+            # No defensible observed source for this target → null prediction
             predictions.append(RacePrediction(
                 distance_label=label,
-                distance_km=dist_m / 1000.0,
+                distance_km=target_km,
                 predicted_time_s=None,
                 predicted_time_str=None,
                 predicted_pace_str=None,
@@ -944,22 +975,50 @@ def predict_races(
                 readiness_label="Pas prêt",
                 readiness_color="#ef4444",
                 readiness_score=0,
-                endurance_factor=0,
-                volume_factor=0,
+                endurance_factor=round(endurance * 100),
+                volume_factor=round(vol_factor * 100),
+                source_distance_m=None,
+                source_type=None,
+            ))
+            continue
+
+        src_act, _src_score, relative_hr = riegel_src
+        source_distance_m = src_act.distance_m or 0.0
+        source_duration_s = src_act.duration_s or 0.0
+        source_date = _activity_date(src_act)
+        days_since_source = _days_ago(source_date, reference_date) if source_date else 999
+
+        try:
+            raw_time_s = _riegel(source_duration_s, source_distance_m, dist_m)
+        except (ValueError, ZeroDivisionError):
+            predictions.append(RacePrediction(
+                distance_label=label,
+                distance_km=target_km,
+                predicted_time_s=None,
+                predicted_time_str=None,
+                predicted_pace_str=None,
+                confidence="insufficient",
+                readiness="not_ready",
+                readiness_label="Pas prêt",
+                readiness_color="#ef4444",
+                readiness_score=0,
+                endurance_factor=round(endurance * 100),
+                volume_factor=round(vol_factor * 100),
                 source_distance_m=source_distance_m,
+                source_type="observed_activity",
             ))
             continue
 
         endurance_penalty = 1.0 + (1.0 - endurance) * 0.4
         adjusted_time_s = raw_time_s * endurance_penalty
 
-        target_km = dist_m / 1000.0
-        vol_factor = min(weekly_km / max(target_km * 0.5, 1.0), 1.0)
-
         readiness_score_raw = endurance * 0.6 + vol_factor * 0.4
         r_key, r_label, r_color = _readiness(readiness_score_raw)
 
-        conf = _riegel_confidence(source_distance_m, dist_m, days_since_source, endurance)
+        conf = _riegel_confidence(
+            source_distance_m, dist_m, days_since_source, endurance,
+            relative_hr=relative_hr,
+        )
 
         # Downgrade prediction confidence if VMA model itself is low/insufficient
         if vma_est.confidence in ("low", "insufficient") and conf == "high":
@@ -967,7 +1026,7 @@ def predict_races(
 
         predictions.append(RacePrediction(
             distance_label=label,
-            distance_km=dist_m / 1000.0,
+            distance_km=target_km,
             predicted_time_s=round(adjusted_time_s, 1),
             predicted_time_str=_seconds_to_str(adjusted_time_s),
             predicted_pace_str=_pace_str(adjusted_time_s, dist_m),
@@ -979,6 +1038,7 @@ def predict_races(
             endurance_factor=round(endurance * 100),
             volume_factor=round(vol_factor * 100),
             source_distance_m=source_distance_m,
+            source_type="observed_activity",
         ))
 
     vo2max_estimated: Optional[float] = None
@@ -994,8 +1054,6 @@ def predict_races(
         "vma_method": vma_est.method,
         "vma_confidence": vma_est.confidence,
         "vma_reason_code": vma_est.reason_code,
-        "source_date": source_date.isoformat() if source_date else None,
-        "source_distance_km": round(source_distance_m / 1000.0, 2) if source_distance_m else None,
         "calculation_window": "garmin_activities (all available)",
         "model_version": "v2",
     }
