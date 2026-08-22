@@ -97,7 +97,6 @@ class TestNormalSyncCacheInvalidation:
         fake_collection.update_one = AsyncMock(return_value=MagicMock(matched_count=1, upserted_id=None))
         fake_collection.find_one = AsyncMock(return_value=None)
         fake_collection.update = AsyncMock(return_value=MagicMock())
-        fake_collection.update_one = AsyncMock(return_value=MagicMock())
 
         fake_db = MagicMock()
         fake_db.garmin_activities = fake_collection

@@ -219,8 +219,8 @@ POST /api/garmin/sync  (or scheduler_loop / enqueue_sync)
           → dashboard_insight_cache.invalidate_user(user_id)              ← cache wiped ✓
 ```
 
-**Point commun le plus bas et le plus sûr**: fin de `backfill_run_index_history_after_garmin_sync`, dans les deux branches de service, avant `update_sync_progress(phase="complete")`.  
-À ce point: nouvelles activités déjà persistées ✓, RunIndex CURRENT + history rafraîchis ✓, sync considérée réussie ✓.
+**Lowest and safest common point**: end of `backfill_run_index_history_after_garmin_sync`, in both service branches, before `update_sync_progress(phase="complete")`.  
+At this point: new activities already persisted ✓, RunIndex CURRENT + history refreshed ✓, sync considered successful ✓.
 
 ## NO_CIRCULAR_IMPORT = PASS
 
