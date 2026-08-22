@@ -1503,101 +1503,68 @@ async def get_dashboard_insight(language: str = "en", user: dict = Depends(auth_
 
 @api_router.get("/stats")
 async def get_stats(user: dict = Depends(auth_user)):
-    """Get training statistics with proper 7-day and 30-day calculations"""
-    from datetime import datetime, timedelta
+    """Get training statistics — running metrics from garmin_activities (DomainActivity).
+
+    PR184: authority changed from db.workouts to garmin_activities → DomainActivity.
+    Reuses the same DomainActivity helpers as /dashboard/insight (#182) to avoid
+    a third divergent window implementation.  No synthetic fallback data.
+    Response contract preserved (same keys).
+    """
     from collections import defaultdict
     user_id = user["id"]
-    
-    # Get all workouts
-    workouts = await db.workouts.find({"user_id": user_id}, {"_id": 0}).to_list(500)
-    
-    # Build activities list
-    all_activities = []
-    
-    for w in workouts:
-        date_str = w.get("date", "")[:10]
-        if date_str:
-            all_activities.append({
-                "date": date_str,
-                "distance_km": w.get("distance_km", 0),
-                "duration_minutes": w.get("duration_minutes", 0),
-                "avg_heart_rate": w.get("avg_heart_rate"),
-                "type": w.get("type", "run")
-            })
-    
-    if not all_activities:
-        all_activities = [{
-            "date": (datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d"),
-            "distance_km": 8 + (i % 5),
-            "duration_minutes": 45 + (i % 20),
-            "avg_heart_rate": 140,
-            "type": "run"
-        } for i in range(10)]
-    
-    # Calculate date boundaries
-    today = datetime.now().date()
-    seven_days_ago = today - timedelta(days=7)
-    thirty_days_ago = today - timedelta(days=30)
-    
-    # Filter activities by period
-    last_7_days = []
-    last_30_days = []
-    
-    for a in all_activities:
-        try:
-            activity_date = datetime.strptime(a["date"], "%Y-%m-%d").date()
-            if activity_date >= seven_days_ago:
-                last_7_days.append(a)
-            if activity_date >= thirty_days_ago:
-                last_30_days.append(a)
-        except:
-            continue
-    
-    # Calculate 7-day stats
-    km_7_days = sum(a.get("distance_km", 0) for a in last_7_days)
-    sessions_7_days = len(last_7_days)
-    
-    # Calculate 30-day stats
-    km_30_days = sum(a.get("distance_km", 0) for a in last_30_days)
-    sessions_30_days = len(last_30_days)
-    
-    # Total stats
-    total_distance = sum(a.get("distance_km", 0) for a in all_activities)
-    total_duration = sum(a.get("duration_minutes", 0) for a in all_activities)
-    
-    hr_values = [a.get("avg_heart_rate") for a in all_activities if a.get("avg_heart_rate")]
-    avg_hr = sum(hr_values) / len(hr_values) if hr_values else None
-    
-    # Count by type
-    by_type = {}
-    for a in all_activities:
-        t = a.get("type", "other")
-        by_type[t] = by_type.get(t, 0) + 1
-    
-    # Daily breakdown for last 7 days
-    daily_data = defaultdict(lambda: {"distance": 0, "duration": 0, "count": 0})
-    for a in last_7_days:
-        date_str = a.get("date", "")
-        daily_data[date_str]["distance"] += a.get("distance_km", 0)
-        daily_data[date_str]["duration"] += a.get("duration_minutes", 0)
+
+    # Canonical source: garmin_activities → DomainActivity (running only)
+    garmin_domain_activities = await load_garmin_domain_activities(db, user_id)
+
+    week_stats = calculate_week_stats_from_domain(garmin_domain_activities)
+    month_stats = calculate_month_stats_from_domain(garmin_domain_activities)
+
+    sessions_7_days: int = week_stats["sessions"]
+    km_7_days: float = week_stats["volume_km"]
+
+    # Derive sessions_30_days from the 30-day window used by calculate_month_stats_from_domain
+    month_activities = _iter_recent_running_domain_activities(garmin_domain_activities, max_days=30)
+    sessions_30_days: int = len(month_activities)
+    km_30_days: float = month_stats["volume_km"]
+
+    # Build weekly_summary from the 7-day window (DomainActivity, running only)
+    daily_data: dict = defaultdict(lambda: {"distance": 0.0, "duration": 0, "count": 0})
+    for activity, activity_date in _iter_recent_running_domain_activities(garmin_domain_activities, max_days=7):
+        date_str = activity_date.isoformat()
+        daily_data[date_str]["distance"] += round(
+            (getattr(activity, "distance_m", None) or 0.0) / 1000.0, 3
+        )
+        daily_data[date_str]["duration"] += int(
+            round((getattr(activity, "duration_s", None) or 0.0) / 60.0)
+        )
         daily_data[date_str]["count"] += 1
-    
-    weekly_summary = []
-    for date, data in sorted(daily_data.items()):
-        weekly_summary.append({"date": date, **data})
-    
+
+    weekly_summary = [{"date": d, **data} for d, data in sorted(daily_data.items())]
+
+    # Compute aggregate totals from the 30-day window for legacy response fields
+    all_30d = _iter_recent_running_domain_activities(garmin_domain_activities, max_days=30)
+    total_duration_minutes = int(round(
+        sum((getattr(a, "duration_s", None) or 0.0) / 60.0 for a, _ in all_30d)
+    ))
+    hr_values = [
+        getattr(a, "avg_heart_rate_bpm", None)
+        for a, _ in all_30d
+        if isinstance(getattr(a, "avg_heart_rate_bpm", None), (int, float))
+    ]
+    avg_heart_rate = round(sum(hr_values) / len(hr_values), 1) if hr_values else None
+
     return {
-        "total_workouts": len(all_activities),
-        "total_distance_km": round(total_distance, 1),
-        "total_duration_minutes": int(total_duration),
-        "avg_heart_rate": round(avg_hr, 1) if avg_hr else None,
-        "workouts_by_type": by_type,
+        "total_workouts": sessions_30_days,
+        "total_distance_km": km_30_days,
+        "total_duration_minutes": total_duration_minutes,
+        "avg_heart_rate": avg_heart_rate,
+        "workouts_by_type": {"run": sessions_30_days} if sessions_30_days > 0 else {},
         "weekly_summary": weekly_summary,
-        # New fields for precise calculations
+        # Fields consumed by Progress page
         "sessions_7_days": sessions_7_days,
-        "km_7_days": round(km_7_days, 1),
+        "km_7_days": km_7_days,
         "sessions_30_days": sessions_30_days,
-        "km_30_days": round(km_30_days, 1)
+        "km_30_days": km_30_days,
     }
 
 
