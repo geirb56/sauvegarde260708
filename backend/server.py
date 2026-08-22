@@ -84,6 +84,7 @@ from training_v2.daily_runtime_helpers import (
 )
 from garmin.readiness_adapter import build_readiness_v2_from_garmin_data
 from garmin.domain_adapter import mongo_garmin_activities_to_domain
+from training_v2.performance_model import estimate_vma, predict_races  # PR185
 from training_engine import (
     DEFAULT_WEEKLY_KM,
     compute_current_weekly_km,
@@ -3962,474 +3963,205 @@ async def get_training_metrics(user: dict = Depends(auth_user)):
 @api_router.get("/training/race-predictions")
 async def get_race_predictions(user: dict = Depends(auth_user)):
     """
-    Prédit les temps de course pour 5K, 10K, Semi, Marathon, Ultra
-    basé sur le profil d'entraînement de l'athlète.
-    Utilise une fenêtre de 6 semaines (42 jours) pour la VMA.
+    PR185 — VMA V2 + Race Predictions V2.
+    Source: garmin_activities → DomainActivity (running only).
+    No db.workouts. No avg_speed/0.70 fallback. Riegel extrapolation.
+    Frontend contract preserved (has_data, predictions[], athlete_profile).
     """
-    today = datetime.now(timezone.utc)
-    six_weeks_ago = today - timedelta(days=42)  # 6 semaines comme pour VO2MAX
-    
     user_id = user["id"]
-    # Récupérer les activités des 6 dernières semaines (scoped to authenticated user)
-    activities = await db.workouts.find({
-        "user_id": user_id,
-        "date": {"$gte": six_weeks_ago.isoformat()}
-    }).to_list(500)
-    
-    if not activities:
+    reference_date = datetime.now(timezone.utc).date()
+
+    # Canonical source: garmin_activities → DomainActivity (PR185)
+    raw_activities = await db.garmin_activities.find(
+        {"user_id": user_id}, {"_id": 0}
+    ).to_list(2000)
+    domain_activities = mongo_garmin_activities_to_domain(raw_activities)
+
+    result = predict_races(domain_activities, reference_date)
+
+    if not result.has_data:
         return {
             "has_data": False,
             "message": "Not enough data to predict. Keep training!",
-            "predictions": []
+            "predictions": [],
+            "model_version": "v2",
         }
 
-    # Extract key metrics
-    def get_distance(a):
-        dist = a.get("distance", 0)
-        if dist > 1000:
-            return dist / 1000
-        return a.get("distance_km", dist)
-    
-    def get_duration_minutes(a):
-        """Retourne la durée en minutes"""
-        moving_time = a.get("moving_time", 0)
-        if moving_time > 0:
-            return moving_time / 60
-        elapsed = a.get("elapsed_time", 0)
-        if elapsed > 0:
-            return elapsed / 60
-        return a.get("duration_minutes", 0)
-    
-    def get_pace(a):
-        # Pace en min/km
-        pace = a.get("avg_pace_min_km")
-        if pace:
-            return pace
-        # Calculer depuis vitesse moyenne (m/s)
-        speed = a.get("average_speed", 0)
-        if speed > 0:
-            return (1000 / speed) / 60
-        # Calculer depuis distance/durée
-        dist = get_distance(a)
-        duration_min = get_duration_minutes(a)
-        if dist > 0 and duration_min > 0:
-            return duration_min / dist
-        return None
-    
-    # Collecter les données
-    total_km = 0
-    total_sessions = 0
-    paces = []
-    long_runs = []  # Sorties > 15km
-    vma_efforts = []  # Efforts >= 6 min pour calcul VMA
-    distances = []
-    
-    MIN_VMA_DURATION = 6  # Minutes minimum pour calcul VMA
-    
-    for a in activities:
-        dist = get_distance(a)
-        pace = get_pace(a)
-        duration_min = get_duration_minutes(a)
-        
-        if dist > 0:
-            total_km += dist
-            total_sessions += 1
-            distances.append(dist)
-            
-            if pace and 3 < pace < 10:  # Pace réaliste
-                paces.append(pace)
-                
-                # Pour la VMA : effort >= 6 minutes ET allure rapide (< 5:30/km)
-                if duration_min >= MIN_VMA_DURATION and pace < 5.5:
-                    vma_efforts.append({
-                        "distance": dist, 
-                        "pace": pace, 
-                        "duration": duration_min,
-                        "speed_kmh": 60 / pace
-                    })
-                
-                if dist >= 15:  # Sortie longue
-                    long_runs.append({"distance": dist, "pace": pace})
-    
-    if not paces:
-        return {
-            "has_data": False,
-            "message": "Not enough pace data. Make sure your sessions have GPS data.",
-            "predictions": []
+    # Map RacePrediction dataclasses to the dict contract expected by the frontend.
+    predictions_out = []
+    for pred in result.predictions:
+        entry = {
+            "distance": pred.distance_label,
+            "distance_km": pred.distance_km,
+            "description": {
+                "5K": "5 kilomètres",
+                "10K": "10 kilomètres",
+                "Semi": "Semi-marathon",
+                "Marathon": "Marathon",
+            }.get(pred.distance_label, pred.distance_label),
+            "predicted_time": pred.predicted_time_str,
+            "predicted_range": None,
+            "predicted_pace": pred.predicted_pace_str,
+            "readiness": pred.readiness,
+            "readiness_label": pred.readiness_label,
+            "readiness_color": pred.readiness_color,
+            "readiness_score": pred.readiness_score,
+            "volume_factor": pred.volume_factor,
+            "endurance_factor": pred.endurance_factor,
+            "confidence": pred.confidence,
+            "model_version": "v2",
         }
+        if pred.predicted_time_str:
+            # Build a simple ±range for display
+            entry["predicted_range"] = pred.predicted_time_str
+        predictions_out.append(entry)
 
-    # Calculate basic metrics
-    weekly_km = total_km / 6  # 6 semaines
-    avg_pace = sum(paces) / len(paces)
-    best_pace = min(paces) if paces else avg_pace
-    max_long_run = max(distances) if distances else 0
-    
-    # Estimer la VMA (Vitesse Maximale Aérobie)
-    # Basé sur les efforts >= 6 minutes (physiologiquement représentatif)
-    vma_method = "estimated"
-    
-    if vma_efforts:
-        # Prendre le meilleur effort de >= 6 minutes
-        best_vma_effort = max(vma_efforts, key=lambda x: x["speed_kmh"])
-        best_sustained_speed = best_vma_effort["speed_kmh"]
-        
-        # La VMA est environ 5-10% au-dessus de l'allure soutenue sur 6+ min
-        # Plus l'effort est long, plus on est proche de la VMA
-        duration = best_vma_effort["duration"]
-        if duration >= 20:
-            # Effort long (20+ min) = environ 85% VMA → VMA = vitesse / 0.85
-            estimated_vma = best_sustained_speed / 0.85
-        elif duration >= 12:
-            # Effort moyen (12-20 min) = environ 90% VMA
-            estimated_vma = best_sustained_speed / 0.90
-        else:
-            # Effort court (6-12 min) = environ 95% VMA
-            estimated_vma = best_sustained_speed / 0.95
-        
-        vma_method = f"effort_{int(duration)}min"
-    else:
-        # Pas d'effort rapide >= 6 min, estimation depuis allure moyenne
-        # L'allure moyenne d'endurance est environ 70% VMA
-        avg_speed_kmh = 60 / avg_pace
-        estimated_vma = avg_speed_kmh / 0.70
-        vma_method = "from_avg_pace"
-    
-    # Prédictions basées sur VMA et volume
-    predictions = []
-    
-    # Facteurs de prédiction par distance
-    race_configs = [
-        {
-            "distance": "5K",
-            "km": 5,
-            "vma_pct": 0.95,  # 5K = ~95% VMA
-            "min_weekly_km": 15,
-            "min_long_run": 8,
-            "description": "5 kilomètres"
-        },
-        {
-            "distance": "10K",
-            "km": 10,
-            "vma_pct": 0.90,  # 10K = ~90% VMA
-            "min_weekly_km": 25,
-            "min_long_run": 12,
-            "description": "10 kilomètres"
-        },
-        {
-            "distance": "Semi",
-            "km": 21.1,
-            "vma_pct": 0.82,  # Semi = ~82% VMA
-            "min_weekly_km": 35,
-            "min_long_run": 18,
-            "description": "Semi-marathon"
-        },
-        {
-            "distance": "Marathon",
-            "km": 42.195,
-            "vma_pct": 0.75,  # Marathon = ~75% VMA
-            "min_weekly_km": 50,
-            "min_long_run": 30,
-            "description": "Marathon"
-        },
-        {
-            "distance": "Ultra",
-            "km": 50,
-            "vma_pct": 0.65,  # Ultra = ~65% VMA
-            "min_weekly_km": 70,
-            "min_long_run": 35,
-            "description": "Ultra-trail (50km)"
-        }
-    ]
-    
-    for config in race_configs:
-        # Vitesse de course prédite
-        race_speed = estimated_vma * config["vma_pct"]
-        race_pace = 60 / race_speed  # min/km
-        
-        # Temps prédit
-        predicted_minutes = config["km"] * race_pace
-        
-        # Ajuster selon le volume d'entraînement
-        volume_factor = min(1.0, weekly_km / config["min_weekly_km"])
-        if volume_factor < 0.7:
-            # Volume insuffisant = temps plus lent
-            predicted_minutes *= (1 + (1 - volume_factor) * 0.15)
-        
-        # Ajuster selon sortie longue max
-        endurance_factor = min(1.0, max_long_run / config["min_long_run"])
-        if endurance_factor < 0.8 and config["km"] > 10:
-            predicted_minutes *= (1 + (1 - endurance_factor) * 0.10)
-        
-        # Formater le temps
-        hours = int(predicted_minutes // 60)
-        mins = int(predicted_minutes % 60)
-        secs = int((predicted_minutes % 1) * 60)
-        
-        if hours > 0:
-            time_str = f"{hours}h{mins:02d}"
-            time_range = f"{hours}h{max(0,mins-3):02d} - {hours}h{mins+5:02d}"
-        else:
-            time_str = f"{mins}:{secs:02d}"
-            time_range = f"{max(0,mins-2)}:{secs:02d} - {mins+3}:{secs:02d}"
-        
-        # Évaluer la capacité
-        readiness_score = (volume_factor * 0.5 + endurance_factor * 0.5) * 100
-        
-        if readiness_score >= 80:
-            readiness = "ready"
-            readiness_label = "Prêt"
-            readiness_color = "#22c55e"
-        elif readiness_score >= 60:
-            readiness = "possible"
-            readiness_label = "Possible"
-            readiness_color = "#f59e0b"
-        elif readiness_score >= 40:
-            readiness = "challenging"
-            readiness_label = "Ambitieux"
-            readiness_color = "#f97316"
-        else:
-            readiness = "not_ready"
-            readiness_label = "Pas prêt"
-            readiness_color = "#ef4444"
-        
-        # Allure prédite formatée
-        pace_mins = int(race_pace)
-        pace_secs = int((race_pace % 1) * 60)
-        pace_str = f"{pace_mins}:{pace_secs:02d}/km"
-        
-        predictions.append({
-            "distance": config["distance"],
-            "distance_km": config["km"],
-            "description": config["description"],
-            "predicted_time": time_str,
-            "predicted_range": time_range,
-            "predicted_pace": pace_str,
-            "readiness": readiness,
-            "readiness_label": readiness_label,
-            "readiness_color": readiness_color,
-            "readiness_score": round(readiness_score),
-            "volume_factor": round(volume_factor * 100),
-            "endurance_factor": round(endurance_factor * 100)
-        })
-    
+    ap = result.athlete_profile
     return {
         "has_data": True,
         "athlete_profile": {
-            "weekly_km": round(weekly_km, 1),
-            "avg_pace": f"{int(avg_pace)}:{int((avg_pace % 1) * 60):02d}/km",
-            "best_pace": f"{int(best_pace)}:{int((best_pace % 1) * 60):02d}/km",
-            "max_long_run": round(max_long_run, 1),
-            "estimated_vma": round(estimated_vma, 1),
-            "estimated_vo2max": round(estimated_vma * 3.5, 1),
-            "vma_method": vma_method,
-            "vma_efforts_count": len(vma_efforts),
-            "total_sessions_6w": total_sessions,
-            "calculation_window": "6 weeks"
+            "weekly_km": ap.get("weekly_km"),
+            "avg_pace": None,
+            "best_pace": None,
+            "max_long_run": ap.get("max_long_run_km"),
+            "estimated_vma": ap.get("estimated_vma"),
+            "estimated_vo2max": ap.get("estimated_vo2max"),
+            "vo2max_note": ap.get("vo2max_note"),
+            "vma_method": ap.get("vma_method"),
+            "vma_confidence": ap.get("vma_confidence"),
+            "source_date": ap.get("source_date"),
+            "source_distance_km": ap.get("source_distance_km"),
+            "vma_efforts_count": 1 if result.vma.has_data else 0,
+            "total_sessions_6w": len([
+                a for a in domain_activities
+                if a.activity_type and a.activity_type.strip().lower().replace(" ", "_")
+                in {"running", "run", "trail_running", "treadmill_running"}
+            ]),
+            "calculation_window": "garmin_activities",
+            "model_version": "v2",
         },
-        "predictions": predictions,
+        "predictions": predictions_out,
         "methodology": {
-            "vma_min_duration": f"{MIN_VMA_DURATION} min",
-            "vma_calculation": "Basé sur le meilleur effort ≥ 6 min. Effort 6-12min = ~95% VMA, 12-20min = ~90% VMA, 20+min = ~85% VMA.",
-            "vo2max_formula": "VO2MAX (ml/kg/min) = VMA (km/h) × 3.5",
-            "note": "Les prédictions sont des estimations. Un test VMA réel ou des temps de course donnent des prédictions plus précises."
-        }
+            "vma_calculation": "Best informative running effort (≥5 min). Duration determines fraction of VMA: 5-12min=95%, 12-20min=90%, 20-60min=85%, 60+min=78%. No avg_speed/0.70 fallback.",
+            "prediction_model": "Riegel T2 = T1 × (D2/D1)^1.06 with endurance support adjustment.",
+            "vo2max_formula": "VO2MAX (ml/kg/min) ≈ VMA (km/h) × 3.5 — derived estimate only, not a lab measurement.",
+            "model_version": "v2",
+        },
     }
-
-
+    
 @api_router.get("/training/vma-history")
 async def get_vma_history(user: dict = Depends(auth_user)):
     """
-    Retourne l'historique du VO2MAX sur les 12 derniers mois.
-    2 points par mois (1ère et 2ème quinzaine).
-    VO2MAX (ml/kg/min) = VMA (km/h) × 3.5
+    PR185 — VMA history V2.
+    Source: garmin_activities → DomainActivity (running only).
+    Historical snapshots computed with no look-ahead (reference_date = snapshot date).
+    No db.workouts. No avg_speed/0.70 fallback.
+    Frontend contract preserved (has_data, current_vma, current_vo2max, history[]).
     """
-    today = datetime.now(timezone.utc)
-    twelve_months_ago = today - timedelta(days=365)
+    from datetime import date as _date
     user_id = user["id"]
-    # Récupérer toutes les activités des 12 derniers mois (scoped to authenticated user)
-    activities = await db.workouts.find({
-        "user_id": user_id,
-        "date": {"$gte": twelve_months_ago.isoformat()}
-    }).to_list(2000)
-    
-    if not activities:
-        return {"has_data": False, "history": []}
-    
-    # Helper functions
-    def get_distance(a):
-        return a.get("distance_km", 0)
-    
-    def get_duration(a):
-        moving_time = a.get("moving_time", 0)
-        if moving_time > 0:
-            return moving_time / 60
-        elapsed = a.get("elapsed_time", 0)
-        if elapsed > 0:
-            return elapsed / 60
-        return a.get("duration_minutes", 0)
-    
-    def get_pace(a):
-        pace = a.get("avg_pace_min_km")
-        if pace:
-            return pace
-        speed = a.get("average_speed", 0)
-        if speed > 0:
-            return (1000 / speed) / 60
-        dist = get_distance(a)
-        duration_min = get_duration(a)
-        if dist > 0 and duration_min > 0:
-            return duration_min / dist
-        return None
-    
-    def get_activity_date(a):
-        date_str = a.get("start_date_local", a.get("date", ""))
-        if date_str:
-            try:
-                return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-            except:
-                try:
-                    return datetime.strptime(date_str[:10], "%Y-%m-%d")
-                except:
-                    return None
-        return None
-    
-    # Helper function to calculate VO2MAX for a given set of activities
-    def calculate_vo2max_for_activities(acts):
-        MIN_VMA_DURATION = 6
-        vma_efforts = []
-        paces = []
-        
-        for a in acts:
-            dist = get_distance(a)
-            pace = get_pace(a)
-            duration_min = get_duration(a)
-            
-            if dist > 0 and pace and 3 < pace < 10:
-                paces.append(pace)
-                # Efforts >= 6 min avec allure rapide
-                if duration_min >= MIN_VMA_DURATION and pace < 5.5:
-                    vma_efforts.append({
-                        "pace": pace,
-                        "duration": duration_min,
-                        "speed_kmh": 60 / pace
-                    })
-        
-        if not paces:
-            return None, None
-        
-        avg_pace = sum(paces) / len(paces)
-        
-        if vma_efforts:
-            best_effort = max(vma_efforts, key=lambda x: x["speed_kmh"])
-            best_speed = best_effort["speed_kmh"]
-            duration = best_effort["duration"]
-            
-            if duration >= 20:
-                estimated_vma = best_speed / 0.85
-            elif duration >= 12:
-                estimated_vma = best_speed / 0.90
-            else:
-                estimated_vma = best_speed / 0.95
-        else:
-            avg_speed = 60 / avg_pace
-            estimated_vma = avg_speed / 0.70
-        
-        vo2max = round(estimated_vma * 3.5, 1)
-        
-        # Exclude unrealistic values
-        if vo2max > 70:
-            return None, None
-        
-        return round(estimated_vma, 1), vo2max
-    
-    # Generate data points for 12 months (24 half-month periods)
-    # Each point uses a ROLLING 6-WEEK WINDOW ending at that date
-    month_names_fr = ["Jan", "Fév", "Mar", "Avr", "Mai", "Juin", "Juil", "Août", "Sep", "Oct", "Nov", "Déc"]
+    today = datetime.now(timezone.utc).date()
+
+    # Canonical source: garmin_activities → DomainActivity (PR185)
+    raw_activities = await db.garmin_activities.find(
+        {"user_id": user_id}, {"_id": 0}
+    ).to_list(2000)
+    domain_activities = mongo_garmin_activities_to_domain(raw_activities)
+
+    if not domain_activities:
+        return {"has_data": False, "history": [], "model_version": "v2"}
+
+    # Generate 24 half-month snapshot points over 12 months — no look-ahead
+    month_names_fr = ["Jan", "Fév", "Mar", "Avr", "Mai", "Juin",
+                      "Juil", "Août", "Sep", "Oct", "Nov", "Déc"]
     vo2max_history = []
-    
-    for i in range(24):  # 24 half-month periods over 12 months
-        # Calculate the end date for this period
+
+    for i in range(24):
         months_back = 11 - (i // 2)
         half = 1 if (i % 2 == 0) else 2
-        
-        # Target date for this data point
-        target_month_date = today - timedelta(days=30 * months_back)
-        year = target_month_date.year
-        month = target_month_date.month
-        
-        # End of period: 15th or end of month
-        if half == 1:
-            period_end = datetime(year, month, 15, tzinfo=timezone.utc)
-        else:
-            # Last day of month
-            if month == 12:
-                period_end = datetime(year + 1, 1, 1, tzinfo=timezone.utc) - timedelta(days=1)
+
+        # Compute snapshot date (reference_date for this historical point)
+        approx = today.replace(day=1)
+        for _ in range(months_back):
+            if approx.month == 1:
+                approx = approx.replace(year=approx.year - 1, month=12)
             else:
-                period_end = datetime(year, month + 1, 1, tzinfo=timezone.utc) - timedelta(days=1)
-        
-        # 6-week window ending at period_end
-        period_start = period_end - timedelta(days=42)
-        
-        # Filter activities within this 6-week window
-        def is_in_window(a):
-            activity_date = get_activity_date(a)
-            if activity_date is None:
-                return False
-            if activity_date.tzinfo is None:
-                activity_date = activity_date.replace(tzinfo=timezone.utc)
-            return period_start <= activity_date <= period_end
-        
-        window_activities = [a for a in activities if is_in_window(a)]
-        
-        # Calculate VO2MAX for this window
-        vma, vo2max = calculate_vo2max_for_activities(window_activities)
-        
+                approx = approx.replace(month=approx.month - 1)
+        year, month = approx.year, approx.month
+
+        if half == 1:
+            try:
+                snapshot_date = _date(year, month, 15)
+            except ValueError:
+                snapshot_date = _date(year, month, 14)
+        else:
+            if month == 12:
+                snapshot_date = _date(year + 1, 1, 1)
+                snapshot_date = _date(year + 1, 1, 1).__class__(year + 1, 1, 1)
+            else:
+                import calendar as _cal
+                last_day = _cal.monthrange(year, month)[1]
+                snapshot_date = _date(year, month, last_day)
+
+        # Cap future snapshots at today — no look-ahead
+        if snapshot_date > today:
+            snapshot_date = today
+
+        # Estimate VMA using only activities BEFORE snapshot_date (strict no look-ahead)
+        vma_est = estimate_vma(domain_activities, snapshot_date)
+        vma_val = vma_est.vma_kmh
+        vo2max_val = round(vma_val * 3.5, 1) if vma_val is not None else None
+
+        # Count running activities visible at this snapshot
+        from training_v2.performance_model import _validate_activity, _activity_date
+        visible = [
+            a for a in domain_activities
+            if _validate_activity(a, snapshot_date)
+        ]
+
         month_name = month_names_fr[month - 1]
-        period_label = f"{month_name} {half}"
         period_key = f"{year}-{month:02d}-{half}"
-        
+
         vo2max_history.append({
             "period": period_key,
-            "period_label": period_label,
+            "period_label": f"{month_name} {half}",
             "month": f"{year}-{month:02d}",
             "month_label": month_name,
             "half": half,
-            "vma": vma,
-            "vo2max": vo2max,
-            "sessions": len(window_activities),
-            "window_days": 42
+            "vma": vma_val,
+            "vo2max": vo2max_val,
+            "sessions": len(visible),
+            "window_days": "all_before_snapshot",
+            "model_version": "v2",
         })
-    
-    result_history = vo2max_history
-    
-    # Current VO2MAX = last non-null value from the graph (already based on 6 weeks)
+
+    # Current values = most recent non-null snapshot (not a copy-paste of current VMA)
     current_vma = None
     current_vo2max = None
-    for h in reversed(result_history):
+    for h in reversed(vo2max_history):
         if h["vma"] is not None:
             current_vma = h["vma"]
             current_vo2max = h["vo2max"]
             break
-    
-    # Calculate trend (based on VO2MAX over 12 months)
-    valid_vo2max = [h["vo2max"] for h in result_history if h["vo2max"] is not None]
+
+    valid_vo2max = [h["vo2max"] for h in vo2max_history if h["vo2max"] is not None]
+    trend = 0.0
+    trend_pct = 0.0
     if len(valid_vo2max) >= 2:
-        trend = valid_vo2max[-1] - valid_vo2max[0]
-        trend_pct = (trend / valid_vo2max[0]) * 100 if valid_vo2max[0] > 0 else 0
-    else:
-        trend = 0
-        trend_pct = 0
-    
+        trend = round(valid_vo2max[-1] - valid_vo2max[0], 1)
+        trend_pct = round((trend / valid_vo2max[0]) * 100, 1) if valid_vo2max[0] > 0 else 0.0
+
     return {
-        "has_data": len(valid_vo2max) > 0 or current_vo2max is not None,
+        "has_data": len(valid_vo2max) > 0,
         "current_vma": current_vma,
         "current_vo2max": current_vo2max,
-        "calculation_window": "6 weeks",
-        "trend": round(trend, 1),
-        "trend_pct": round(trend_pct, 1),
+        "calculation_window": "garmin_activities (no look-ahead)",
+        "trend": trend,
+        "trend_pct": trend_pct,
         "period_count": 24,
         "months": 12,
-        "history": result_history
+        "history": vo2max_history,
+        "model_version": "v2",
     }
 
 
