@@ -1541,11 +1541,23 @@ async def get_stats(user: dict = Depends(auth_user)):
 
     weekly_summary = [{"date": d, **data} for d, data in sorted(daily_data.items())]
 
+    # Compute aggregate totals from the 30-day window for legacy response fields
+    all_30d = _iter_recent_running_domain_activities(garmin_domain_activities, max_days=30)
+    total_duration_minutes = int(round(
+        sum((getattr(a, "duration_s", None) or 0.0) / 60.0 for a, _ in all_30d)
+    ))
+    hr_values = [
+        getattr(a, "avg_heart_rate_bpm", None)
+        for a, _ in all_30d
+        if isinstance(getattr(a, "avg_heart_rate_bpm", None), (int, float))
+    ]
+    avg_heart_rate = round(sum(hr_values) / len(hr_values), 1) if hr_values else None
+
     return {
         "total_workouts": sessions_30_days,
         "total_distance_km": km_30_days,
-        "total_duration_minutes": 0,
-        "avg_heart_rate": None,
+        "total_duration_minutes": total_duration_minutes,
+        "avg_heart_rate": avg_heart_rate,
         "workouts_by_type": {"run": sessions_30_days} if sessions_30_days > 0 else {},
         "weekly_summary": weekly_summary,
         # Fields consumed by Progress page

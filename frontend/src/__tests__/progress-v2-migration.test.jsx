@@ -69,8 +69,8 @@ describe("PR184 — Training Cycle V2 (H)", () => {
     expect(code).not.toContain("fullCycle");
   });
 
-  test("H — _V2_GOAL_TO_PRED_DISTANCE map present", () => {
-    expect(readProgress()).toContain("_V2_GOAL_TO_PRED_DISTANCE");
+  test("H — V2_GOAL_TO_PRED_DISTANCE map present", () => {
+    expect(readProgress()).toContain("V2_GOAL_TO_PRED_DISTANCE");
   });
 });
 

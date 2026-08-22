@@ -60,6 +60,15 @@ const langToLocale = (lang) => {
   return map[lang] || "fr-FR";
 };
 
+// PR184 — map V2 goal_type (TrainingCycleV2Response) to race prediction distance label
+const V2_GOAL_TO_PRED_DISTANCE = {
+  five_k: "5K",
+  ten_k: "10K",
+  half_marathon: "Semi",
+  marathon: "Marathon",
+  ultra: "Ultra",
+};
+
 export default function Progress() {
   const [stats, setStats] = useState(null);
   const [predictions, setPredictions] = useState(null);
@@ -75,15 +84,6 @@ export default function Progress() {
   const { t, lang } = useLanguage();
   const { isFree, loading: subLoading } = useSubscription();
   const { unitSystem } = useUnitSystem();
-
-  // PR184: map V2 goal_type to race prediction distance label
-  const _V2_GOAL_TO_PRED_DISTANCE = {
-    five_k: "5K",
-    ten_k: "10K",
-    half_marathon: "Semi",
-    marathon: "Marathon",
-    ultra: "Ultra",
-  };
 
   useEffect(() => {
     const fetchData = async () => {
@@ -647,7 +647,7 @@ export default function Progress() {
                    {predictions.predictions?.map((pred) => {
                       // PR184: derive goal label from V2 cycle goal_type
                       const cycleGoalDist = cycleV2?.goal?.goal_type
-                        ? _V2_GOAL_TO_PRED_DISTANCE[cycleV2.goal.goal_type] ?? null
+                        ? V2_GOAL_TO_PRED_DISTANCE[cycleV2.goal.goal_type] ?? null
                         : null;
                       const isGoal = cycleGoalDist !== null && pred.distance === cycleGoalDist;
                       return (
