@@ -106,8 +106,10 @@ RACE_DISTANCES_M = {
 REASON_EXPLICIT_PERFORMANCE_SOURCE = "EXPLICIT_PERFORMANCE_SOURCE"
 REASON_HR_SPEED_MODEL_SOURCE = "HR_SPEED_MODEL_SOURCE"
 REASON_HR_RANGE_INSUFFICIENT = "HR_RANGE_INSUFFICIENT"
+REASON_HR_LEVELS_INSUFFICIENT = "HR_LEVELS_INSUFFICIENT"
 REASON_HR_MODEL_POOR_FIT = "HR_MODEL_POOR_FIT"
 REASON_EXTRAPOLATION_TOO_LARGE = "EXTRAPOLATION_TOO_LARGE"
+REASON_NO_FCMAX = "NO_FCMAX"
 REASON_SOURCES_DISAGREE = "SOURCES_DISAGREE"
 REASON_NO_DATA = "NO_DATA"
 REASON_INSUFFICIENT_ACTIVITIES = "INSUFFICIENT_ACTIVITIES"
@@ -347,7 +349,7 @@ def _fit_hr_speed_model(
             vma_kmh=None, slope=None, intercept=None, r_squared=None,
             n_activities=len(usable), hr_range_bpm=round(hr_range, 1),
             max_observed_hr=round(hr_max, 1), target_hr=None,
-            extrapolation_ratio=0.0, reason_code=REASON_HR_RANGE_INSUFFICIENT,
+            extrapolation_ratio=0.0, reason_code=REASON_HR_LEVELS_INSUFFICIENT,
         )
 
     # Linear regression
@@ -390,7 +392,7 @@ def _fit_hr_speed_model(
                 r_squared=round(r2, 4),
                 n_activities=len(usable), hr_range_bpm=round(hr_range, 1),
                 max_observed_hr=round(hr_max, 1), target_hr=None,
-                extrapolation_ratio=0.0, reason_code=REASON_EXTRAPOLATION_TOO_LARGE,
+                extrapolation_ratio=0.0, reason_code=REASON_NO_FCMAX,
             )
 
     extrapolation_ratio = target_hr / hr_max if hr_max > 0 else 999.0
@@ -1004,3 +1006,11 @@ def predict_races(
         predictions=predictions,
         athlete_profile=athlete_profile,
     )
+
+# ---------------------------------------------------------------------------
+# Public aliases — for callers that need these utilities
+# ---------------------------------------------------------------------------
+
+RUNNING_TYPES = _RUNNING_TYPES
+seconds_to_str = _seconds_to_str
+validate_activity = _validate_activity

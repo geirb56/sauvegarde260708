@@ -3968,7 +3968,7 @@ async def get_race_predictions(user: dict = Depends(auth_user)):
     No db.workouts. No avg_speed/0.70 fallback. Riegel extrapolation.
     Frontend contract preserved (has_data, predictions[], athlete_profile).
     """
-    from training_v2.performance_model import _RUNNING_TYPES, _seconds_to_str
+    from training_v2.performance_model import _RUNNING_TYPES, _seconds_to_str, RUNNING_TYPES, seconds_to_str
     user_id = user["id"]
     reference_date = datetime.now(timezone.utc).date()
 
@@ -3993,8 +3993,8 @@ async def get_race_predictions(user: dict = Depends(auth_user)):
     for pred in result.predictions:
         # Build a ±5% range string for display (frontend legacy field)
         if pred.predicted_time_s is not None:
-            lo = _seconds_to_str(pred.predicted_time_s * 0.97)
-            hi = _seconds_to_str(pred.predicted_time_s * 1.03)
+            lo = seconds_to_str(pred.predicted_time_s * 0.97)
+            hi = seconds_to_str(pred.predicted_time_s * 1.03)
             predicted_range = f"{lo} - {hi}"
         else:
             predicted_range = None
@@ -4037,11 +4037,15 @@ async def get_race_predictions(user: dict = Depends(auth_user)):
             "vma_confidence": ap.get("vma_confidence"),
             "source_date": ap.get("source_date"),
             "source_distance_km": ap.get("source_distance_km"),
-            "vma_efforts_count": 1 if result.vma.has_data else 0,
+            "vma_efforts_count": (
+                result.vma.hr_model_n_activities
+                if result.vma.hr_model_n_activities > 1
+                else (1 if result.vma.has_data else 0)
+            ),
             "total_sessions_6w": len([
                 a for a in domain_activities
                 if a.activity_type
-                and a.activity_type.strip().lower().replace(" ", "_") in _RUNNING_TYPES
+                and a.activity_type.strip().lower().replace(" ", "_") in RUNNING_TYPES
             ]),
             "calculation_window": "garmin_activities",
             "model_version": "v2",
@@ -4066,7 +4070,7 @@ async def get_vma_history(user: dict = Depends(auth_user)):
     """
     import calendar as _cal
     from datetime import date as _date
-    from training_v2.performance_model import _validate_activity  # noqa: F401 (used below)
+    from training_v2.performance_model import validate_activity  # noqa: F401 (used below)
     user_id = user["id"]
     today = datetime.now(timezone.utc).date()
 
@@ -4118,7 +4122,7 @@ async def get_vma_history(user: dict = Depends(auth_user)):
         # Count running activities visible at this snapshot
         visible = [
             a for a in domain_activities
-            if _validate_activity(a, snapshot_date)
+            if validate_activity(a, snapshot_date)
         ]
 
         month_name = month_names_fr[month - 1]
