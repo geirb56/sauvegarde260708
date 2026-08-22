@@ -4,66 +4,143 @@
 
 ---
 
+## VMA Primary Model
+
+```
+VMA_PRIMARY_MODEL = explicit performance OR individual HR-speed model
+```
+
+VMA V2 uses two paths:
+
+**SOURCE A — Explicit performance (priority HIGH)**
+Activity identifiable as a genuine performance effort:
+- Duration >= 10 min
+- Average speed >= 10 km/h
+- Low elevation gain (if available)
+- Not a future activity
+
+**SOURCE B — Individual HR-speed model (fallback)**
+Linear regression `speed = a * HR + b` built on >= 4 clean activities.
+FCmax from user profile or observed Garmin max only.
+
+**Fusion rules:**
+- Both available + agreement < 15%: confidence increases, reason = EXPLICIT_PERFORMANCE_SOURCE
+- Both available + divergence >= 15%: confidence decreases, reason = SOURCES_DISAGREE
+- Only A: reason = EXPLICIT_PERFORMANCE_SOURCE
+- Only B: reason = HR_SPEED_MODEL_SOURCE
+- Neither: vma_kmh = null
+
+---
+
 ## Source Migration
 
 ```
 VMA_SOURCE_BEFORE = db.workouts
 VMA_SOURCE_AFTER  = DomainActivity (from garmin_activities)
 
-PREDICTION_SOURCE_BEFORE = legacy VMA model (avg_speed/0.70 fallback, fixed coefficients)
+PREDICTION_SOURCE_BEFORE = legacy VMA model (avg_speed-divided-by-0.70 fallback, fixed coefficients)
 PREDICTION_SOURCE_AFTER  = observed performance V2 (Riegel extrapolation from best informative effort)
 ```
+
+---
+
+## HR-Speed Model
+
+```
+HR_SPEED_MODEL = PASS
+MIN_ACTIVITY_COUNT = 4
+MIN_HR_RANGE = 20 bpm
+MIN_DISTINCT_HR_LEVELS = 3 (in 5-bpm buckets)
+REGRESSION_METHOD = ordinary least squares (speed = a * HR + b)
+FIT_QUALITY_RULE = R² >= 0.30; slope must be positive
+MAX_EXTRAPOLATION_RULE = target_HR / max_observed_HR <= 1.25
+EXTRAPOLATION_TARGET = 95% of FCmax (aerobic ceiling, not 100%)
+```
+
+---
+
+## FCmax Source
+
+```
+FCMAX_SOURCE =
+  1. user_max_hr from user profile (if 130–230 bpm)
+  2. maximum observed HR across valid Garmin activities (if 150–230 bpm)
+  3. None — no fallback formula
+
+POPULATION_FCMAX_FALLBACK = NO
+```
+
+220-age or any formula-derived FCmax is **FORBIDDEN** and not present in the code.
 
 ---
 
 ## Removed Patterns
 
 ```
-AVG_PACE_070_FALLBACK        = REMOVED
-FIXED_VMA_DISTANCE_PREDICTION = REMOVED
+BEST_FAST_RUN_IS_PERFORMANCE = NO
+AVG_PACE_070_FALLBACK = REMOVED
 ```
 
-The old `/training/race-predictions` and `/training/vma-history` endpoints used:
-- `db.workouts` (legacy collection) as data source — **replaced by `garmin_activities → DomainActivity`**
-- `avg_speed / 0.70` as VMA fallback when no fast effort was found — **removed**
-- Fixed VMA% coefficients per distance (5K=95%, 10K=90%, etc.) — **replaced by Riegel T2=T1×(D2/D1)^1.06**
-- Absolute volume thresholds (15 km/week, 30 km/week, etc.) — **replaced by relative endurance support signals**
+- `avg_speed-divided-by-0.70` removed (no executable code using this pattern)
+- Fastest run is NOT auto-qualified as explicit performance source
+- Explicit performance requires: duration >= 10 min AND speed >= 10 km/h AND elevation check
 
 ---
 
-## Null Semantics
+## Explicit Performance Support
 
 ```
-VMA_INSUFFICIENT_NULL       = PASS
-PREDICTION_INSUFFICIENT_NULL = PASS
-NO_LOOKAHEAD_HISTORY        = PASS
+EXPLICIT_PERFORMANCE_SUPPORTED = YES
+HR_SPEED_FALLBACK_SUPPORTED = YES
+SOURCE_AGREEMENT_CHECK = PASS
 ```
 
-- No VMA data → `vma_kmh = null`, `has_data = false`, `predictions = []`
-- Easy runs only (no informative effort ≥ 5 min) → model uses the best available effort; if none qualifies, VMA = null
-- No avg_speed/0.70 synthetic fallback
-- Historical snapshots use `reference_date = snapshot date`, only activities strictly before that date
+When both paths produce a VMA:
+- Agreement ratio = |vma_a - vma_b| / max(vma_a, vma_b)
+- If ratio < 15%: sources agree → confidence increases by one level
+- If ratio >= 15%: SOURCES_DISAGREE → confidence decreases by one level
 
 ---
 
 ## Confidence
 
 ```
-VMA_CONFIDENCE        = PASS
-PREDICTION_CONFIDENCE = PASS
-ENDURANCE_SUPPORT     = PASS
+VMA_INSUFFICIENT_NULL = PASS
+NO_LOOKAHEAD_HISTORY  = PASS
 ```
 
-Confidence factors:
-- Recency of source performance (high ≤21 days, medium ≤56 days, low ≤120 days)
-- Effort duration (longer effort = more physiologically informative)
-- Extrapolation ratio (source distance vs. target distance)
-- Endurance support: long run history + weekly volume relative to target distance
+Confidence levels:
 
-Endurance adjustment:
-- Monotone (more support → less penalty)
-- Bounded: factor ∈ [0.55, 1.0]
-- Applied as `time × (1 + (1 - endurance) × 0.4)` (slowdown for under-supported distances)
+| Level | Criteria |
+|-------|---------|
+| HIGH | Explicit performance recent + long, OR HR model n>=6, R²>=0.6, ext<=1.10, recent |
+| MEDIUM | HR model n>=4, R²>=0.4, ext<=1.20, medium recency |
+| LOW | Barely valid model |
+| INSUFFICIENT | No model available → vma_kmh = null |
+
+Reason codes:
+- `EXPLICIT_PERFORMANCE_SOURCE`
+- `HR_SPEED_MODEL_SOURCE`
+- `HR_RANGE_INSUFFICIENT`
+- `HR_MODEL_POOR_FIT`
+- `EXTRAPOLATION_TOO_LARGE`
+- `SOURCES_DISAGREE`
+- `NO_DATA`
+- `INSUFFICIENT_ACTIVITIES`
+
+---
+
+## Activity Filtering for HR-Speed Model
+
+Usable activities must pass ALL:
+- Valid running activity (not cycling, etc.)
+- Not a future activity
+- distance_m >= 500 m
+- duration_s > 0
+- speed in [3, 30] km/h
+- avg_heart_rate present and in [90, 220] bpm
+- duration_s >= 600 s (10 min, no short sprints)
+- elevation_gain_m < 400 m if available (no trail/hilly)
 
 ---
 
@@ -74,9 +151,7 @@ DB_WORKOUTS_VMA_DEPENDENCY        = NO
 DB_WORKOUTS_PREDICTION_DEPENDENCY = NO
 ```
 
-- `backend/training_v2/performance_model.py` has zero I/O, zero Mongo references
-- Endpoints fetch from `db.garmin_activities` → `mongo_garmin_activities_to_domain()` → `DomainActivity`
-- `db.workouts` is not referenced anywhere in the V2 path
+`performance_model.py` is fully I/O-free (no Mongo, no FastAPI, no datetime.now()).
 
 ---
 
@@ -94,92 +169,9 @@ PREDICTIONS_MARATHON            = YES
 
 Contract maintained:
 - `GET /training/race-predictions` → `{ has_data, athlete_profile, predictions[], methodology }`
-  - Each prediction: `distance`, `distance_km`, `description`, `predicted_time`, `predicted_range`, `predicted_pace`, `readiness`, `readiness_label`, `readiness_color`, `readiness_score`, `volume_factor`, `endurance_factor`
-  - New fields added (non-breaking): `confidence`, `model_version`
-- `GET /training/vma-history` → `{ has_data, current_vma, current_vo2max, trend, trend_pct, history[] }`
-  - Each history point: `period`, `period_label`, `month`, `month_label`, `half`, `vma`, `vo2max`, `sessions`
-  - New fields added (non-breaking): `window_days`, `model_version`
-
-`Progress.jsx` is **not modified** — the response structure is backward-compatible.
-
-VO2max presented as:
-> `"vo2max_note": "Derived estimate (VMA × 3.5). Not a lab or Garmin measurement."`
-
-The `estimated_vo2max` field is still returned for the chart; the note field documents its derived nature.
-
----
-
-## Unchanged Modules
-
-```
-RUNINDEX_CHANGED        = NO
-READINESS_CHANGED       = NO
-TRAINING_ENGINE_CHANGED = NO
-COACH_CHANGED           = NO
-LOCKFILES_CHANGED       = NO
-```
-
-Files modified in PR185:
-- `backend/training_v2/performance_model.py` — **NEW** (pure engine)
-- `backend/server.py` — endpoints `/training/race-predictions` and `/training/vma-history` only
-- `backend/tests/test_performance_model_pr185.py` — **NEW** (31 unit tests)
-- `RUNINDEX_PR185_REPORT.md` — this file
-
----
-
-## Tests
-
-```
-tests = 31 passed / 0 failed / 0 skipped / 0 errors
-```
-
-### VMA Tests
-| # | Scenario | Result |
-|---|----------|--------|
-| 1 | No activities → VMA null | PASS |
-| 2 | Easy runs only → no /0.70 synthetic VMA | PASS |
-| 3 | Invalid activity → ignored | PASS |
-| 3b | Non-running activity → ignored | PASS |
-| 3c | Zero duration → ignored | PASS |
-| 4 | Informative effort → deterministic estimate | PASS |
-| 5 | Same input/reference_date → same result | PASS |
-| 6 | Future activity → ignored | PASS |
-| 7 | No motor/db imports in performance_model | PASS |
-
-### Prediction Tests
-| # | Scenario | Result |
-|---|----------|--------|
-| 1 | No exploitable performance → no prediction invented | PASS |
-| 1b | Only cycling → no prediction | PASS |
-| 2 | Observed 10K → coherent 10K prediction | PASS |
-| 3 | 5K ↔ 10K monotone | PASS |
-| 4 | 10K → Semi deterministic | PASS |
-| 5 | Short source → Marathon never more optimistic than raw Riegel | PASS |
-| 6 | Better endurance support → endurance_factor ≥ base | PASS |
-| 7 | No negative/impossible predictions | PASS |
-| 8a | Confidence degrades with age | PASS |
-| 8b | Confidence degrades with large extrapolation | PASS |
-
-### History / Anti-Look-Ahead
-| # | Scenario | Result |
-|---|----------|--------|
-| 1 | Snapshot J-30 cannot see activity at J | PASS |
-| 2 | Snapshot J+1 can see activity at J | PASS |
-
-### Contract / Frontend Preservation
-| Check | Result |
-|-------|--------|
-| `avg_speed / 0.70` not produced by model | PASS |
-| Riegel formula correct | PASS |
-| Same distance → same time | PASS |
-| All four distances present (5K, 10K, Semi, Marathon) | PASS |
-| Readiness fields present | PASS |
-| model_version = "v2" in predictions | PASS |
-| model_version = "v2" in VMAEstimate | PASS |
-| vo2max_note documents derived estimate | PASS |
-| estimated_vma / estimated_vo2max in athlete_profile | PASS |
-| Historical snapshot no look-ahead (structural) | PASS |
-| predicted_time, predicted_pace, readiness present | PASS |
+- `GET /training/vma-history` → `{ has_data, current_vma, current_vo2max, trend, history[] }`
+- New non-breaking fields: `reason_code`, `hr_model_r_squared`, `hr_model_n_activities`, `hr_model_hr_range_bpm`, `hr_model_extrapolation_ratio`, `vma_reason_code`
+- `Progress.jsx` is **not modified** — backward-compatible response structure
 
 ---
 
@@ -187,37 +179,128 @@ tests = 31 passed / 0 failed / 0 skipped / 0 errors
 
 ```
 backend/training_v2/performance_model.py
-├── DomainActivity (input, from garmin_activities)
-├── VMAEstimate (output)
+├── DomainActivity (input — fields used: activity_type, start_time, distance_m,
+│                   duration_s, average_hr, max_hr, elevation_gain_m)
+├── VMAEstimate (output — vma_kmh, confidence, method, reason_code, hr_model_*)
 ├── RacePrediction (output)
 ├── PerformanceEstimate (top-level output)
-├── estimate_vma(activities, reference_date) → VMAEstimate
-├── predict_races(activities, reference_date) → PerformanceEstimate
+├── estimate_vma(activities, reference_date, user_max_hr?) → VMAEstimate
+│   ├── SOURCE A: _select_explicit_performance + _vma_from_explicit_performance
+│   └── SOURCE B: _fit_hr_speed_model (HR-speed linear regression)
+├── predict_races(activities, reference_date, user_max_hr?) → PerformanceEstimate
 └── Zero I/O: no Mongo, no FastAPI, no datetime.now()
-
-server.py (endpoint adapters only)
-├── GET /training/race-predictions
-│   └── garmin_activities → DomainActivity → predict_races()
-└── GET /training/vma-history
-    └── garmin_activities → DomainActivity → estimate_vma() × 24 snapshots (no look-ahead)
 ```
+
+---
+
+## Tests
+
+```
+tests = 42 passed / 0 failed / 0 skipped / 0 errors
+```
+
+### Mandatory New Tests (16)
+| # | Scenario | Result |
+|---|----------|--------|
+| 1 | No activities → VMA null | PASS |
+| 2 | Runs without HR → VMA null | PASS |
+| 3 | Single run with HR → VMA null (HR model needs >= 4) | PASS |
+| 4 | Multiple runs, quasi-identical HR → VMA null | PASS |
+| 5 | Multiple runs with clear HR-speed relation → VMA calculable | PASS |
+| 6 | Fastest run not auto-qualified as performance source | PASS |
+| 7 | Poor correlation → null or insufficient | PASS |
+| 8 | Good correlation + sufficient HR range → VMA deterministic | PASS |
+| 9 | Excessive extrapolation → confidence reduced or null | PASS |
+| 10 | FCmax absent → no 220-age fallback | PASS |
+| 11 | Future activity → ignored | PASS |
+| 12 | Explicit performance → priority SOURCE A | PASS |
+| 13 | Explicit performance + HR model coherent → confidence >= model alone | PASS |
+| 14 | Sources strongly divergent → confidence diminishes | PASS |
+| 15 | db.workouts divergence → no impact (no dependency) | PASS |
+| 16 | History anti-lookahead | PASS |
+
+### Legacy / Compatibility Tests (26)
+| Test | Result |
+|------|--------|
+| No activities → VMA null | PASS |
+| Invalid activity ignored | PASS |
+| Non-running ignored | PASS |
+| Zero duration ignored | PASS |
+| Future activity ignored | PASS |
+| Deterministic | PASS |
+| No db.workouts dependency | PASS |
+| No predictions for no data | PASS |
+| No predictions for insufficient data | PASS |
+| 10K coherent | PASS |
+| 5K/10K monotone | PASS |
+| All predictions positive | PASS |
+| avg_speed/0.70 fallback removed | PASS |
+| Riegel formula correct | PASS |
+| Riegel same distance → same time | PASS |
+| All four distances present | PASS |
+| Readiness fields present | PASS |
+| model_version = "v2" in predictions | PASS |
+| model_version = "v2" in VMAEstimate | PASS |
+| vo2max_note documents derived estimate | PASS |
+| VMA history no look-ahead | PASS |
+| VMA history no look-ahead structural | PASS |
+| VMA frontend preserved | PASS |
+| Predictions frontend preserved | PASS |
+| Linear regression perfect fit | PASS |
+| Linear regression no correlation | PASS |
 
 ---
 
 ## READY STATUS
 
 ```
-VMA V2 = DomainActivity                ✓
-Predictions V2 = observed performance  ✓
-avg pace / 0.70 supprimé              ✓
-aucune valeur synthétique              ✓
-historique sans look-ahead             ✓
-confidence explicite                   ✓
-5K/10K/Semi/Marathon fonctionnels     ✓
-frontend existant conservé             ✓
-db.workouts absent de ces autorités    ✓
-tests 0 failed                         ✓
-aucun lockfile modifié                 ✓
+VMA_PRIMARY_MODEL =
+  explicit performance OR individual HR-speed model
+
+HR_SPEED_MODEL = PASS
+MIN_ACTIVITY_COUNT = 4
+MIN_HR_RANGE = 20 bpm
+REGRESSION_METHOD = OLS (speed = a * HR + b)
+FIT_QUALITY_RULE = R² >= 0.30 and positive slope
+MAX_EXTRAPOLATION_RULE = target_HR / max_observed_HR <= 1.25
+
+FCMAX_SOURCE = user profile OR observed Garmin max
+POPULATION_FCMAX_FALLBACK = NO
+
+BEST_FAST_RUN_IS_PERFORMANCE = NO
+AVG_PACE_070_FALLBACK = REMOVED
+
+EXPLICIT_PERFORMANCE_SUPPORTED = YES
+HR_SPEED_FALLBACK_SUPPORTED = YES
+
+SOURCE_AGREEMENT_CHECK = PASS
+
+VMA_INSUFFICIENT_NULL = PASS
+NO_LOOKAHEAD_HISTORY = PASS
+
+DB_WORKOUTS_VMA_DEPENDENCY = NO
+DB_WORKOUTS_PREDICTION_DEPENDENCY = NO
+
+VMA_FRONTEND_PRESERVED = YES
+VMA_HISTORY_FRONTEND_PRESERVED = YES
+PREDICTIONS_FRONTEND_PRESERVED = YES
+
+tests = 42 passed / 0 failed / 0 skipped / 0 errors
 ```
+
+- VMA functions without any race/test explicitly required ✓
+- HR-speed model uses multiple activities ✓
+- HR range coverage required ✓
+- R² quality control ✓
+- Extrapolation limited to 1.25× observed HR max ✓
+- No 220-age formula anywhere in executable code ✓
+- Fastest run not auto-qualified ✓
+- No synthetic values ✓
+- Predictions V2 preserved (Riegel from observed performance) ✓
+- History without look-ahead ✓
+- DomainActivity authority ✓
+- Frontend preserved ✓
+- 0 failed tests ✓
+- No lockfile modified ✓
 
 **READY for review. Do not merge automatically. Do not start #186.**
