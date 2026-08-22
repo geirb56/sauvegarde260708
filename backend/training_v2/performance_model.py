@@ -397,8 +397,7 @@ def _fit_hr_speed_model(
         )
 
     # Extrapolation target: 95% of FCmax (aerobic ceiling, conservative)
-    if True:
-        target_hr = fcmax * 0.95
+    target_hr = fcmax * 0.95
 
     extrapolation_ratio = target_hr / hr_max if hr_max > 0 else 999.0
 

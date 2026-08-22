@@ -3968,7 +3968,7 @@ async def get_race_predictions(user: dict = Depends(auth_user)):
     No db.workouts. No avg_speed/0.70 fallback. Riegel extrapolation.
     Frontend contract preserved (has_data, predictions[], athlete_profile).
     """
-    from training_v2.performance_model import _RUNNING_TYPES, _seconds_to_str, RUNNING_TYPES, seconds_to_str
+    from training_v2.performance_model import RUNNING_TYPES, seconds_to_str
     user_id = user["id"]
     reference_date = datetime.now(timezone.utc).date()
 
