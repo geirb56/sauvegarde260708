@@ -568,3 +568,9 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
 - Validation (agent-tested) : backend + frontend + 4 workers redémarrés, tous RUNNING. Smoke **7/7 = 200** (run-index, dashboard, today, v2/week, v2/cycle, week-plan, full-cycle). sync-worker tourne normalement. Tests PR179 domain source = **34 passed**. Régression suites PR = **255 passed**. Dashboard rend, **0 erreur JS**, tous appels API 200.
 - ⚠️ Limitation connue : `dashboard-run-readiness-v2.test.jsx` (tests 16-22 de #178) ne s'exécute pas en jest local (résolution radix `.tsx` — problème env pré-existant depuis #174, tout test important Dashboard.jsx échoue). NON-régression : le runtime Dashboard est validé par screenshot + endpoints. Les couleurs de statut exactes (gray/red) pour un compte avec données n'ont pas pu être vérifiées visuellement (le compte test JWT n'a pas de données Garmin).
 - Statut : agent-tested ; non user-confirmed.
+
+## 2026-06 — Pull copilot/dev — PR #181 (RunIndex V2 Final)
+- Fetch + merge `sauvegarde/copilot/dev` (4c134bc→f732269). Merge ORT propre, 0 conflit. `.env` intacts, PRD/rapports préservés.
+- PR #181 = RunIndex V2 Final : gestion INSUFFICIENT/null (plus de valeurs synthétiques), rename composants, nouveau `dashboard_insight_cache.py` + invalidation cache dashboard sur sync Garmin normale, gestion null frontend (Dashboard.jsx + Progress.jsx). engine/run_index_engine.py fortement remanié (+473).
+- Validation (agent-tested) : imports OK, backend + frontend + 4 workers redémarrés (tous RUNNING), boot propre. Smoke **7/7 = 200**. run-index (compte sans Garmin) → `no_data:true, metrics:null, recommendation:null, recommendation_color:"gray"` (pas de synthétiques). Tests PR181 (cache + engine) = **34 passed**. Régression suites PR = **255 passed**. Dashboard + Progress rendent avec **0 erreur JS** ; RunIndex/piliers null affichés en `—` + messages « Not enough data yet ».
+- Statut : agent-tested ; non user-confirmed.
