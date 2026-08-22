@@ -1402,17 +1402,10 @@ def calculate_week_stats_from_domain(activities: list) -> dict:
     total_duration_minutes = sum(((getattr(a, "duration_s", None) or 0.0) / 60.0) for a, _ in week_activities)
     sessions = len(week_activities)
 
-    if total_km > 80:
-        load_signal = "high"
-    elif total_km > 40:
-        load_signal = "balanced"
-    else:
-        load_signal = "low"
-
     return {
         "sessions": sessions,
         "volume_km": round(total_km, 1),
-        "load_signal": load_signal,
+        "load_signal": None,
         "actual_duration_minutes": int(round(total_duration_minutes)) if total_duration_minutes > 0 else 0,
     }
 

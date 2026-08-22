@@ -142,7 +142,8 @@ async def test_pr182_week_stats_use_domain_activity_only():
     assert payload["week"]["sessions"] == 2
     assert payload["week"]["volume_km"] == 16.0
     assert payload["week"]["actual_duration_minutes"] == 82
-    assert payload["week"]["load_signal"] == "low"
+    assert "load_signal" in payload["week"]
+    assert payload["week"]["load_signal"] is None
     assert payload["recovery_score"] is None
 
 
@@ -225,3 +226,16 @@ def test_pr182_static_audit_dashboard_insight_no_visible_db_workouts_dependency(
     segment = source[start:end]
     assert "db.workouts.find" not in segment
     assert "load_garmin_domain_activities" in segment
+
+
+def test_pr182_static_audit_week_helper_has_no_legacy_load_signal_thresholds():
+    source = open(os.path.join(_BACKEND_DIR, "server.py"), "r", encoding="utf-8").read()
+    start = source.index("def calculate_week_stats_from_domain")
+    end = source.index("\ndef calculate_month_stats_from_domain", start)
+    segment = source[start:end]
+    assert 'load_signal": None' in segment
+    assert "> 40" not in segment
+    assert "> 80" not in segment
+    assert '"balanced"' not in segment
+    assert '"high"' not in segment
+    assert '"low"' not in segment

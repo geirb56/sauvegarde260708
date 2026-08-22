@@ -4,6 +4,11 @@ WEEK_SOURCE_AFTER = DomainActivity
 MONTH_SOURCE_BEFORE = db.workouts
 MONTH_SOURCE_AFTER = DomainActivity
 
+LEGACY_LOAD_SIGNAL_BEFORE = absolute weekly distance thresholds 40/80 km
+LEGACY_LOAD_SIGNAL_AFTER = null / removed
+DASHBOARD_LEGACY_LOAD_SIGNAL = NO
+TRAINING_LOAD_AUTHORITY = TrainingLoad V2
+
 RECOVERY_LEGACY_VISIBLE = NO
 
 READINESS_AUTHORITY = V2
@@ -30,7 +35,7 @@ LOCKFILES_CHANGED = NO
 
 tests =
 passed:
-- backend: `python -m pytest -q tests/test_dashboard_insight_pr182.py tests/test_cache_stale_runindex_pr181.py` → 8 passed
+- backend: `python -m pytest -q tests/test_dashboard_insight_pr182.py tests/test_cache_stale_runindex_pr181.py` → 9 passed
 - frontend: `CI=true npm test -- --runInBand --watch=false src/__tests__/dashboard-training-v2.test.jsx src/__tests__/dashboard-run-readiness-v2.test.jsx src/__tests__/dashboard-run-readiness-null.test.jsx` → 57 passed
 - runtime smoke: `/api/dashboard/insight`, `/api/run-index`, `/api/training/today`, `/api/training/v2/week` → 200
 failed: 0
