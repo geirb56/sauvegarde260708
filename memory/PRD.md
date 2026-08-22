@@ -589,3 +589,9 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
 - PR #183 corrige le bug ouvert que j'avais reporté : ajoute `dashboard.runIndexInsufficient` en EN ("Insufficient data") / FR ("Données insuffisantes") / ES ("Datos insuficientes") dans le bon sous-objet `dashboard`.
 - Validation (agent-tested) : node → clé résolue dans dashboard pour les 3 langues. Frontend redémarré. Jest dashboard = **54 passed**. Screenshot authentifié : le dashboard affiche « Insufficient data » (plus de clé brute), 0 erreur JS.
 - ✅ Bug ouvert #181 i18n RÉSOLU upstream. Statut : agent-tested + smoke visuel vérifié ; non user-confirmed.
+
+## 2026-06 — Pull copilot/dev — PR #184 (migration Progress → V2/DomainActivity)
+- Fetch + merge `sauvegarde/copilot/dev` (c2cc451→e3256e8). Merge ORT propre, 0 conflit. `.env` intacts, PRD/rapports locaux préservés.
+- PR #184 = sources de la page Progress migrées vers V2/DomainActivity : `/stats` calcule total_duration_minutes/sessions/km depuis DomainActivity (server.py +143/-106), rename `V2_GOAL_TO_PRED_DISTANCE`, Progress.jsx + i18n (traductions). Nouveaux tests backend + jest.
+- Validation (agent-tested) : imports OK, backend + frontend + 4 workers RUNNING, boot propre. Endpoints Progress tous 200 (/stats, /training/race-predictions, /training/vma-history, /run-index/history, /garmin/daily-metrics). /stats V2 : total_duration_minutes calculé, avg_heart_rate=null (sémantique null). Tests PR184 backend = **20 passed**. jest progress-v2-migration = **30 passed**. Régression suites PR = **275 passed**. Screenshot Progress FR : tous libellés traduits, 0 clé brute, 0 erreur JS, RunIndex/piliers null=`—`, INSUFFICIENT géré.
+- Statut : agent-tested + smoke visuel FR vérifié ; non user-confirmed.
