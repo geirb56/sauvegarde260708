@@ -186,13 +186,58 @@ Test 15 (`test_domain_activity_path_no_workouts_dependency`) confirms the contra
 
 ## CACHE_STALE_RUNINDEX = PASS
 
-`/dashboard/insight` cache moved to shared module `dashboard_insight_cache.py`.  
-`api/garmin.py` backfill route calls `_dic.invalidate_user(user_id)` after `backfill_run_index_history`.  
-Next `/dashboard/insight` request after a Garmin sync will compute fresh RunIndex.
+`dashboard_insight_cache.invalidate_user(user_id)` is now called in **two** places in `garmin/service.py`:
 
----
+1. **`_complete_post_activities_pipeline`** — immediately after `backfill_run_index_history_after_garmin_sync`.  
+   This covers the **normal sync** path used by `sync_worker` (via `garmin_service.sync`).
 
-## READINESS_MODIFIED = NO
+2. **`incremental_sync`** — immediately after `backfill_run_index_history_after_garmin_sync`.  
+   This covers the **incremental sync** path used by `sync_worker` (via `garmin_service.incremental_sync`).
+
+3. **`api/garmin.py` `garmin_backfill_endpoint`** — unchanged from PR #181 initial patch.  
+   Covers the explicit backfill endpoint.
+
+`dashboard_insight_cache` has **zero external imports** — no circular-import risk.
+
+## NORMAL_SYNC_PATH
+
+```
+POST /api/garmin/sync  (or scheduler_loop / enqueue_sync)
+  → workers/sync_worker.py : process_job()
+    → garmin_service.sync(db, user_id)           [JOB_SYNC_USER / JOB_SYNC_ACTIVITY]
+    OR garmin_service.incremental_sync(db, user_id)  [JOB_INCREMENTAL_SYNC]
+      → garmin.providers.*.sync_activities()
+      → _ingest_activities(db, user_id, activities)   ← garmin_activities persisted
+      → _complete_post_activities_pipeline(...)
+          → refresh_today_run_index_after_garmin_activities(db, user_id)   ← RunIndex CURRENT refreshed
+          → backfill_run_index_history_after_garmin_sync(db, user_id)      ← RunIndex history refreshed
+          → dashboard_insight_cache.invalidate_user(user_id)              ← cache wiped ✓
+          → update_sync_progress(phase="complete")
+      OR (incremental path):
+          → refresh_today_run_index_after_garmin_activities(db, user_id)
+          → backfill_run_index_history_after_garmin_sync(db, user_id)
+          → dashboard_insight_cache.invalidate_user(user_id)              ← cache wiped ✓
+```
+
+**Point commun le plus bas et le plus sûr**: fin de `backfill_run_index_history_after_garmin_sync`, dans les deux branches de service, avant `update_sync_progress(phase="complete")`.  
+À ce point: nouvelles activités déjà persistées ✓, RunIndex CURRENT + history rafraîchis ✓, sync considérée réussie ✓.
+
+## NO_CIRCULAR_IMPORT = PASS
+
+`dashboard_insight_cache.py` — imports: `from __future__ import annotations` uniquement.  
+Aucune dépendance vers `server`, `garmin`, `api`, ou tout autre module applicatif.  
+Chaîne d'import: `garmin.service → dashboard_insight_cache` (sens unique, pas de cycle).
+
+### Cache invalidation tests (`tests/test_cache_stale_runindex_pr181.py`)
+
+| Test | Description | Result |
+|------|-------------|--------|
+| test_normal_sync_invalidates_user_x_not_user_y | `_complete_post_activities_pipeline` wipes X, preserves Y | PASS |
+| test_incremental_sync_invalidates_user_x_not_user_y | `incremental_sync` wipes X, preserves Y | PASS |
+
+**Total new tests: 2 passed / 0 failed**
+
+
 ## TRAINING_V2_MODIFIED = NO
 ## COACH_MODIFIED = NO
 ## LOCKFILES_MODIFIED = NO
