@@ -583,3 +583,9 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
 
 ## Bug ouvert (à router upstream)
 - **PR#181 i18n** : clé `dashboard.runIndexInsufficient` référencée dans `Dashboard.jsx:589` mais ABSENTE de `i18n.js` (0 occurrence, 3 langues). Le fallback `|| "Insufficient data"` ne marche pas car `t()` retourne la clé (truthy). → Tout compte en état RunIndex INSUFFICIENT voit la clé brute « dashboard.runIndexInsufficient » sur le dashboard. Reproduit en screenshot. Décision utilisateur (fix local vs PR upstream) en attente.
+
+## 2026-06 — Pull copilot/dev — PR #183 (hotfix i18n runIndexInsufficient)
+- Fetch + merge `sauvegarde/copilot/dev` (cb7ade0→c2cc451). Merge ORT propre, 0 conflit. `.env` intacts, rapports/PRD locaux préservés (les deletions au diff = fichiers locaux absents du remote, non supprimés par le merge).
+- PR #183 corrige le bug ouvert que j'avais reporté : ajoute `dashboard.runIndexInsufficient` en EN ("Insufficient data") / FR ("Données insuffisantes") / ES ("Datos insuficientes") dans le bon sous-objet `dashboard`.
+- Validation (agent-tested) : node → clé résolue dans dashboard pour les 3 langues. Frontend redémarré. Jest dashboard = **54 passed**. Screenshot authentifié : le dashboard affiche « Insufficient data » (plus de clé brute), 0 erreur JS.
+- ✅ Bug ouvert #181 i18n RÉSOLU upstream. Statut : agent-tested + smoke visuel vérifié ; non user-confirmed.
