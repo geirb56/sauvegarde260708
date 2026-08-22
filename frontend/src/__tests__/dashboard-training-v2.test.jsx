@@ -46,7 +46,7 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 // ─── Fixtures ──────────────────────────────────────────────────────────────────
 
 const INSIGHT_PAYLOAD = {
-  week: { sessions: 3, volume_km: 25 },
+  week: { sessions: 3, volume_km: 25, actual_duration_minutes: 135 },
   month: { volume_km: 90 },
   run_index: null,
 };
@@ -57,6 +57,14 @@ const TODAY_PAYLOAD = {
   status: "success",
   day: "monday",
   adaptation_applied: false,
+  readiness: {
+    band: "FAVORABLE",
+    score: 82,
+    confidence: "high",
+    sufficiency_level: "sufficient",
+    available: true,
+    data_source: "garmin",
+  },
   planned_session: {
     type: "endurance",
     duration: "45 min",
@@ -248,16 +256,21 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     unmount();
   });
 
-  // 7b. duration basis: no progress bar when done-duration is unavailable
-  it("7b. duration basis: no fake percentage bar", async () => {
+  // 7b. duration basis: actual duration comes from DomainActivity-backed insight week stats
+  it("7b. duration basis: shows actual minutes and progress", async () => {
     mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
     setupAxiosMocks(buildDefaultMocks({ weekV2: WEEK_V2_DURATION }));
 
     const { container, unmount } = renderDashboard();
     await waitForRender();
 
+    const actual = container.querySelector('[data-testid="weekly-duration-done"]');
+    expect(actual).not.toBeNull();
+    expect(actual.textContent).toContain("135");
+
     const progressBar = container.querySelector('[data-testid="weekly-progress-bar"]');
-    expect(progressBar).toBeNull();
+    expect(progressBar).not.toBeNull();
+    expect(progressBar.getAttribute("style")).toContain("75%");
     unmount();
   });
 
@@ -317,6 +330,61 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     const todayCard = container.querySelector('[data-testid="today-workout-card"]');
     expect(todayCard).not.toBeNull();
     expect(todayCard.textContent).toMatch(/0\s*TSS/);
+    unmount();
+  });
+
+  // 10b. today recommendation absent: never fabricated as RUN HARD
+  it("10b. today recommendation absent: never shows fabricated RUN HARD", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: true, loading: false });
+    setupAxiosMocks(
+      buildDefaultMocks({
+        today: {
+          ...TODAY_PAYLOAD,
+          fatigue: null,
+          readiness: {
+            ...TODAY_PAYLOAD.readiness,
+            band: "UNAVAILABLE",
+            available: false,
+            score: null,
+          },
+        },
+      })
+    );
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const badge = container.querySelector('[data-testid="today-readiness-badge"]');
+    expect(badge).not.toBeNull();
+    expect(badge.textContent).not.toContain("RUN HARD");
+    unmount();
+  });
+
+  // 10c. today unknown readiness uses gray badge, never red by default
+  it("10c. today unknown readiness uses neutral gray", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: true, loading: false });
+    setupAxiosMocks(
+      buildDefaultMocks({
+        today: {
+          ...TODAY_PAYLOAD,
+          readiness: {
+            ...TODAY_PAYLOAD.readiness,
+            band: "UNAVAILABLE",
+            available: false,
+            score: null,
+          },
+        },
+      })
+    );
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const badge = container.querySelector('[data-testid="today-readiness-badge"]');
+    expect(badge).not.toBeNull();
+    const style = badge.getAttribute("style") || "";
+    expect(style).toContain("rgb(107, 114, 128)");
+    expect(style).not.toContain("rgb(239, 68, 68)");
     unmount();
   });
 
@@ -381,6 +449,48 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
       expect(isAllowed).toBe(true);
     }
     unmount();
+  });
+
+  // 12b. RunIndex insufficient remains visible as insufficient
+  it("12b. run index insufficient remains unchanged", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: true, loading: false });
+    setupAxiosMocks(
+      buildDefaultMocks({
+        insight: {
+          ...INSIGHT_PAYLOAD,
+          run_index: { status: "insufficient", run_index: null, confidence_score: 0 },
+        },
+      })
+    );
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    expect(container.textContent).toContain("Insufficient");
+    expect(container.textContent).not.toContain("/ 1000");
+    unmount();
+  });
+
+  // 12c. dashboard visible today consumer no longer depends on legacy fatigue block
+  it("12c. source check: no todaySession.fatigue consumer remains", () => {
+    const fs = require("fs");
+    const path = require("path");
+    const src = fs.readFileSync(
+      path.resolve(__dirname, "../pages/Dashboard.jsx"),
+      "utf-8"
+    );
+    expect(src).not.toMatch(/todaySession\?*\.fatigue/);
+  });
+
+  // 12d. source check: no RUN HARD fallback remains
+  it('12d. source check: no "RUN HARD" fallback remains', () => {
+    const fs = require("fs");
+    const path = require("path");
+    const src = fs.readFileSync(
+      path.resolve(__dirname, "../pages/Dashboard.jsx"),
+      "utf-8"
+    );
+    expect(src).not.toContain('|| "RUN HARD"');
   });
 
   // 13. i18n keys: weeklyTarget, weeklyDone, minutes exist in EN
