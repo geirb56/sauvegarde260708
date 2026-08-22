@@ -41,6 +41,7 @@ const STATUS_COLORS = {
   green: { bg: "#22c55e20", text: "#22c55e", border: "#22c55e40" },
   yellow: { bg: "#f59e0b20", text: "#f59e0b", border: "#f59e0b40" },
   red: { bg: "#ef444420", text: "#ef4444", border: "#ef444440" },
+  gray: { bg: "#6b728020", text: "#6b7280", border: "#6b728040" },
 };
 
 const REC_STYLES = {
@@ -139,7 +140,7 @@ function SessionCard({ session, isGrayed = false, fatigueColor = null }) {
   const isRest = styleKey === "repos";
 
   const borderColor = fatigueColor
-    ? (fatigueColor === "green" ? "#10b981" : fatigueColor === "yellow" ? "#f59e0b" : "#ef4444")
+    ? (fatigueColor === "green" ? "#10b981" : fatigueColor === "yellow" ? "#f59e0b" : fatigueColor === "red" ? "#ef4444" : "#6b7280")
     : style.border;
 
   return (
@@ -188,6 +189,26 @@ function StatusIcon({ status, size = 16 }) {
   if (status === "yellow") return <AlertTriangle size={size} color="#f59e0b" />;
   if (status === "red") return <XCircle size={size} color="#ef4444" />;
   return null;
+}
+
+function clampProgress(value) {
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function getTodayReadinessColor(session) {
+  const band = session?.readiness?.band;
+  if (band === "FAVORABLE") return "green";
+  if (band === "CAUTION") return "yellow";
+  if (band === "LOW" || band === "VERY_LOW") return "red";
+  return "gray";
+}
+
+function getTodayReadinessLabel(session, t) {
+  const band = session?.readiness?.band;
+  if (band === "FAVORABLE") return t("trainingPlanExtended.fatigueGreen");
+  if (band === "CAUTION") return t("trainingPlanExtended.fatigueOrange");
+  if (band === "LOW" || band === "VERY_LOW") return t("trainingPlanExtended.fatigueRed");
+  return t("dashboard.runReadinessUnavailable");
 }
 
 function MetricWidget({ icon: Icon, label, value, unit, status, detail }) {
@@ -528,6 +549,9 @@ export default function Dashboard() {
   const runIndexNull = !runIndexData || runIndexData?.run_index === null || runIndexData?.status === "insufficient";
   const runIndexScore = runIndexData?.run_index ?? null;
   const runIndexConfidence = runIndexData?.confidence_score ?? 0;
+  const todayReadinessColor = getTodayReadinessColor(todaySession);
+  const todayReadinessLabel = getTodayReadinessLabel(todaySession, t);
+  const todayReadinessStyle = REC_STYLES[todayReadinessColor] || REC_STYLES.gray;
 
   return (
     <div className="p-4 pb-24 space-y-4" style={{ background: "var(--bg-primary)" }}>
@@ -794,26 +818,22 @@ export default function Dashboard() {
         className="today-workout-card animate-in" 
         style={{ 
           animationDelay: "200ms",
-          border: todaySession?.fatigue ? `2px solid ${
-            todaySession.fatigue.recommendation_color === "green" ? "#10b981" :
-            todaySession.fatigue.recommendation_color === "yellow" ? "#f59e0b" : "#ef4444"
-          }` : undefined
+          border: todaySession?.status === "success" ? `2px solid ${todayReadinessStyle.accent}` : undefined
         }} 
         data-testid="today-workout-card"
       >
         <div className="flex items-center justify-between mb-3">
           <p className="today-label">{t("dashboard.todayLabel")}</p>
-          {todaySession?.fatigue && (
+          {todaySession?.status === "success" && (
             <span
               className="px-3 py-1 rounded-full text-xs font-bold"
               style={{
-                background: todaySession.fatigue.recommendation_color === "green" ? "#10b98120" :
-                           todaySession.fatigue.recommendation_color === "yellow" ? "#f59e0b20" : "#ef444420",
-                color: todaySession.fatigue.recommendation_color === "green" ? "#10b981" :
-                       todaySession.fatigue.recommendation_color === "yellow" ? "#f59e0b" : "#ef4444"
+                background: `${todayReadinessStyle.accent}20`,
+                color: todayReadinessStyle.accent
               }}
+              data-testid="today-readiness-badge"
             >
-              {todaySession.fatigue.recommendation || "RUN HARD"}
+              {todayReadinessLabel}
             </span>
           )}
         </div>
@@ -852,7 +872,7 @@ export default function Dashboard() {
                   </div>
                   <SessionCard
                     session={todaySession.adaptive_session}
-                    fatigueColor={todaySession.fatigue?.recommendation_color}
+                    fatigueColor={todayReadinessColor}
                   />
                 </div>
               </div>
@@ -940,7 +960,7 @@ export default function Dashboard() {
                     <div
                       className="h-full rounded-full transition-all duration-700"
                       style={{
-                        width: `${Math.min(100, Math.round((weekStats.volume_km / wt.target_km) * 100))}%`,
+                        width: `${clampProgress((weekStats.volume_km / wt.target_km) * 100)}%`,
                         background: "#6EEB5A",
                       }}
                       data-testid="weekly-progress-bar"
@@ -949,10 +969,30 @@ export default function Dashboard() {
                 )}
               </div>
             ) : basis === "duration" ? (
-              <div data-testid="weekly-target-duration">
-                <span className="text-2xl font-black" style={{ color: "#ffffff" }} data-testid="weekly-target-value">
-                  {wt.target_duration_minutes} {t("dashboard.minutes")}
-                </span>
+              <div className="space-y-2" data-testid="weekly-target-duration">
+                <div className="flex items-baseline justify-between">
+                  <span className="text-2xl font-black" style={{ color: "#ffffff" }} data-testid="weekly-target-value">
+                   {wt.target_duration_minutes} {t("dashboard.minutes")}
+                  </span>
+                  <span className="text-sm" style={{ color: "var(--text-tertiary)" }}>
+                   {t("dashboard.weeklyDone")}:{" "}
+                   <span style={{ color: "#ffffff" }} data-testid="weekly-duration-done">
+                     {weekStats.actual_duration_minutes ?? 0} {t("dashboard.minutes")}
+                   </span>
+                  </span>
+                </div>
+                {wt.target_duration_minutes > 0 && (
+                  <div className="h-2 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.08)" }}>
+                   <div
+                     className="h-full rounded-full transition-all duration-700"
+                     style={{
+                       width: `${clampProgress(((weekStats.actual_duration_minutes ?? 0) / wt.target_duration_minutes) * 100)}%`,
+                       background: "#6EEB5A",
+                     }}
+                     data-testid="weekly-progress-bar"
+                   />
+                  </div>
+                )}
               </div>
             ) : null}
           </div>

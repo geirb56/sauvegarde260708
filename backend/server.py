@@ -26,7 +26,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 from typing import List, Optional, Dict
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 from config.secrets import MissingSecretError
 import localization
 
@@ -61,7 +61,7 @@ from rag_engine import (
 
 # Import training engine for periodization
 from training_v2.training_load import build_training_load
-from training_v2.training_history import build_training_history
+from training_v2.training_history import RUNNING_TYPES, build_training_history
 from training_v2.runner_profile import build_runner_profile
 from training_v2.training_state import build_training_state
 from training_v2.readiness_decision import (
@@ -1362,6 +1362,95 @@ def calculate_month_stats(workouts: list) -> dict:
     }
 
 
+def _domain_activity_date(activity) -> Optional[date]:
+    start_time = getattr(activity, "start_time", None)
+    if isinstance(start_time, datetime):
+        return start_time.date()
+    if isinstance(start_time, date):
+        return start_time
+    if isinstance(start_time, str):
+        try:
+            return datetime.fromisoformat(start_time.replace("Z", "+00:00")).date()
+        except ValueError:
+            try:
+                return datetime.fromisoformat(start_time.split("T")[0]).date()
+            except ValueError:
+                return None
+    return None
+
+
+def _iter_recent_running_domain_activities(activities: list, *, max_days: int) -> list:
+    today = datetime.now(timezone.utc).date()
+    selected = []
+    for activity in activities:
+        activity_type = (getattr(activity, "activity_type", None) or "").strip().lower()
+        if activity_type not in RUNNING_TYPES:
+            continue
+        activity_date = _domain_activity_date(activity)
+        if activity_date is None:
+            continue
+        days_ago = (today - activity_date).days
+        if 0 <= days_ago < max_days:
+            selected.append((activity, activity_date))
+    return selected
+
+
+def calculate_week_stats_from_domain(activities: list) -> dict:
+    """Calculate rolling 7-day dashboard stats from DomainActivity only."""
+    week_activities = _iter_recent_running_domain_activities(activities, max_days=7)
+    total_km = sum(((getattr(a, "distance_m", None) or 0.0) / 1000.0) for a, _ in week_activities)
+    total_duration_minutes = sum(((getattr(a, "duration_s", None) or 0.0) / 60.0) for a, _ in week_activities)
+    sessions = len(week_activities)
+
+    return {
+        "sessions": sessions,
+        "volume_km": round(total_km, 1),
+        "load_signal": None,
+        "actual_duration_minutes": int(round(total_duration_minutes)) if total_duration_minutes > 0 else 0,
+    }
+
+
+def calculate_month_stats_from_domain(activities: list) -> dict:
+    """Calculate rolling 30-day dashboard stats from DomainActivity only."""
+    today = datetime.now(timezone.utc).date()
+    current_month = []
+    prev_month = []
+
+    for activity in activities:
+        activity_type = (getattr(activity, "activity_type", None) or "").strip().lower()
+        if activity_type not in RUNNING_TYPES:
+            continue
+        activity_date = _domain_activity_date(activity)
+        if activity_date is None:
+            continue
+        days_ago = (today - activity_date).days
+        if 0 <= days_ago < 30:
+            current_month.append((activity, activity_date))
+        elif 30 <= days_ago < 60:
+            prev_month.append((activity, activity_date))
+
+    current_km = sum(((getattr(a, "distance_m", None) or 0.0) / 1000.0) for a, _ in current_month)
+    prev_km = sum(((getattr(a, "distance_m", None) or 0.0) / 1000.0) for a, _ in prev_month)
+    active_weeks = len({(d.isocalendar()[0], d.isocalendar()[1]) for _, d in current_month})
+
+    if prev_km > 0:
+        change = (current_km - prev_km) / prev_km * 100
+        if change > 15:
+            trend = "up"
+        elif change < -15:
+            trend = "down"
+        else:
+            trend = "stable"
+    else:
+        trend = "up" if current_km > 0 else "stable"
+
+    return {
+        "volume_km": round(current_km, 1),
+        "active_weeks": active_weeks,
+        "trend": trend,
+    }
+
+
 # Dashboard insight cache (5 minutes TTL) — uses shared module so Garmin sync
 # can invalidate after a RunIndex refresh without circular imports.
 import dashboard_insight_cache as _dic
@@ -1382,29 +1471,18 @@ async def get_dashboard_insight(language: str = "en", user: dict = Depends(auth_
             logger.info(f"Dashboard insight cache hit for {user_id}_{language}")
             return cached_data
     
-    # Get workouts (user-scoped)
-    all_workouts = await db.workouts.find({
-        "user_id": user_id
-    }, {"_id": 0}).sort("date", -1).to_list(200)
-    # Calculate stats
-    week_stats = calculate_week_stats(all_workouts)
-    month_stats = calculate_month_stats(all_workouts)
-    
-    # Calculate recovery score
-    recovery_score = calculate_recovery_score(all_workouts, language)
-
-    # RunIndex: canonical source is garmin_activities → DomainActivity (PR179).
-    # db.workouts is NOT used for RunIndex score.
+    # Canonical dashboard source: garmin_activities → DomainActivity.
     garmin_domain_activities = await load_garmin_domain_activities(db, user_id)
+    week_stats = calculate_week_stats_from_domain(garmin_domain_activities)
+    month_stats = calculate_month_stats_from_domain(garmin_domain_activities)
     run_index = calculate_run_index_from_domain(garmin_domain_activities)
-
     await upsert_run_index_snapshot(db, user_id, activities=garmin_domain_activities)
     
     # Generate insight using local engine (NO LLM)
     coach_insight = generate_dashboard_insight(
         week_stats=week_stats,
         month_stats=month_stats,
-        recovery_score=recovery_score.get("score") if recovery_score else None,
+        recovery_score=None,
         language=language
     )
     
@@ -1412,7 +1490,7 @@ async def get_dashboard_insight(language: str = "en", user: dict = Depends(auth_
         coach_insight=coach_insight,
         week=week_stats,
         month=month_stats,
-        recovery_score=recovery_score,
+        recovery_score=None,
         run_index=run_index,
     )
     

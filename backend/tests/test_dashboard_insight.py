@@ -68,7 +68,7 @@ class TestDashboardInsightAPI:
         # Validate types
         assert isinstance(week["sessions"], int), "week.sessions should be int"
         assert isinstance(week["volume_km"], (int, float)), "week.volume_km should be numeric"
-        assert isinstance(week["load_signal"], str), "week.load_signal should be string"
+        assert week["load_signal"] is None, "week.load_signal should be null"
         
         print(f"✓ Week stats: sessions={week['sessions']}, volume_km={week['volume_km']}, load_signal={week['load_signal']}")
     
@@ -95,15 +95,14 @@ class TestDashboardInsightAPI:
         print(f"✓ week.volume_km = {volume_km} km (total km this week)")
     
     def test_week_load_signal_is_valid(self):
-        """week.load_signal is low/balanced/high"""
+        """week.load_signal remains present but carries no legacy semantic value"""
         response = requests.get(f"{BASE_URL}/api/dashboard/insight")
         data = response.json()
         
         load_signal = data["week"]["load_signal"]
-        valid_signals = ["low", "balanced", "high"]
-        assert load_signal in valid_signals, f"load_signal '{load_signal}' not in {valid_signals}"
+        assert load_signal is None, f"load_signal should be null, got {load_signal!r}"
         
-        print(f"✓ week.load_signal = '{load_signal}' (valid signal)")
+        print("✓ week.load_signal = null (legacy semantic value removed)")
     
     def test_dashboard_insight_has_month_stats(self):
         """Response contains month stats with volume_km, active_weeks, trend"""
