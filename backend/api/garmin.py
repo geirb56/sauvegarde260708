@@ -19,6 +19,7 @@ from auth.dependencies import get_current_user
 from garmin import service as garmin_service
 from garmin import backfill as garmin_backfill
 from services.run_index_history import backfill_connected_users_run_index_history, backfill_run_index_history
+import dashboard_insight_cache as _dic
 from jobs.queue import enqueue_sync
 from jobs.health import queue_health
 from jobs.redis_client import get_redis
@@ -154,6 +155,9 @@ async def garmin_backfill_endpoint(
         return {"status": "started", "scope": "all"}
     result = await garmin_backfill.backfill_user(db, user_id)
     history = await backfill_run_index_history(db, user_id)
+    # Invalidate dashboard insight cache so the next request reflects the
+    # refreshed RunIndex (PR181: cache must not serve stale run_index post-sync).
+    _dic.invalidate_user(user_id)
     return {"status": "ok", **result, "run_index_history": history}
 
 

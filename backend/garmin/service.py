@@ -25,6 +25,7 @@ from services.run_index_history import (
 )
 from .backfill import backfill_user as _backfill_workouts_user
 from subscription_manager import activate_garmin_trial
+import dashboard_insight_cache as _dic
 
 logger = logging.getLogger(__name__)
 INITIAL_DAILY_METRICS_DAYS = 7
@@ -412,6 +413,9 @@ async def _complete_post_activities_pipeline(
         metrics_count += await _persist_daily_metrics(db, user_id, metrics_30d)
         await _build_and_persist_capabilities(db, user_id)
         history_backfill = await backfill_run_index_history_after_garmin_sync(db, user_id)
+        # Invalidate the dashboard insight cache so the next GET /dashboard/insight
+        # recomputes RunIndex from the freshly persisted data (PR181: CACHE_STALE_RUNINDEX).
+        _dic.invalidate_user(user_id)
         # Self-heal db.workouts for legacy consumers — decoupled from RunIndex.
         # RunIndex is already computed from garmin_activities above; this call
         # only rebuilds the derived workouts layer and never feeds RunIndex.
@@ -747,6 +751,9 @@ async def incremental_sync(db, user_id: str) -> dict:
     try:
         refreshed = await refresh_today_run_index_after_garmin_activities(db, user_id)
         await backfill_run_index_history_after_garmin_sync(db, user_id)
+        # Invalidate the dashboard insight cache so the next GET /dashboard/insight
+        # recomputes RunIndex from the freshly persisted data (PR181: CACHE_STALE_RUNINDEX).
+        _dic.invalidate_user(user_id)
         # Self-heal db.workouts for legacy consumers — decoupled from RunIndex.
         try:
             await _backfill_workouts_user(db, user_id, prune=False)

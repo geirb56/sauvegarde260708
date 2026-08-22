@@ -27,9 +27,26 @@ def _normalize_inverse(value: float, best: float, worst: float) -> float:
 
 
 def _weighted_average(parts: list[tuple[float, float]]) -> float:
+    """Weighted average over (score, weight) pairs.
+
+    Zero-weight pairs are excluded. Returns 0.0 when no usable pair.
+    """
     usable = [(score, weight) for score, weight in parts if weight > 0]
     if not usable:
         return 0.0
+    total_weight = sum(weight for _, weight in usable)
+    return sum(score * weight for score, weight in usable) / total_weight
+
+
+def _weighted_average_nullable(parts: list[tuple[Optional[float], float]]) -> Optional[float]:
+    """Weighted average over (score | None, weight) pairs.
+
+    None scores are excluded from computation (renormalised weights).
+    Returns None when no non-None score exists.
+    """
+    usable = [(score, weight) for score, weight in parts if score is not None and weight > 0]
+    if not usable:
+        return None
     total_weight = sum(weight for _, weight in usable)
     return sum(score * weight for score, weight in usable) / total_weight
 
@@ -138,10 +155,27 @@ def _freshness_confidence(days_ago: Optional[int], full_confidence_days: int, ze
     return _clamp(((zero_confidence_days - days_ago) / span) * 100.0, 0.0, 100.0)
 
 
+# ---------------------------------------------------------------------------
+# Speed
+# ---------------------------------------------------------------------------
+
 def calculate_speed_score(
     workouts: list[dict],
     reference_date: Optional[date] = None,
 ) -> dict:
+    """Speed pillar.
+
+    Components:
+    - race_performance_score (60 %): best predicted time for 5K/10K/half
+      within ±20 % of target distance in last 180 days.
+    - speed_proxy_score (25 %): proxy based on estimated sustainable speed
+      (NOT a measured VO2max). Named explicitly to avoid false physiological
+      claims.
+    - sustained_speed_score (15 %): best pace over a 20–75 min effort.
+      NOT a lactate threshold. Renamed from threshold_score to avoid LT claims.
+
+    Missing component → None → excluded from weighted average.
+    """
     runs = _prepare_running_workouts(workouts, reference_date)
     recent_runs = [run for run in runs if run["days_ago"] <= 180]
 
@@ -151,7 +185,7 @@ def calculate_speed_score(
         ("half_marathon", 21.1, 66.0, 180.0),
     ]
 
-    race_score = None
+    race_score: Optional[float] = None
     race_confidence = 0.0
     race_source = None
     race_date_gap = None
@@ -179,122 +213,149 @@ def calculate_speed_score(
             race_source = race_name
             break
 
-    vo2_candidates = []
+    # speed_proxy_score: proxy for sustainable speed based on effort duration.
+    # This is NOT a physiological VO2max measurement — it is an internal proxy only.
+    speed_proxy_candidates = []
     for run in recent_runs:
         speed = run["avg_speed_kmh"]
         duration = run["duration_minutes"]
         if speed is None or duration < 6:
             continue
         if duration >= 20:
-            estimated_vma = speed / 0.85
+            estimated_vma_proxy = speed / 0.85
         elif duration >= 12:
-            estimated_vma = speed / 0.90
+            estimated_vma_proxy = speed / 0.90
         else:
-            estimated_vma = speed / 0.95
-        vo2_candidates.append((estimated_vma * 3.5, run))
+            estimated_vma_proxy = speed / 0.95
+        speed_proxy_candidates.append((estimated_vma_proxy * 3.5, run))
 
-    vo2_score = None
-    vo2_confidence = 0.0
-    if vo2_candidates:
-        best_vo2, best_vo2_run = max(vo2_candidates, key=lambda item: item[0])
-        vo2_score = _normalize(best_vo2, 32.0, 75.0)
-        vo2_confidence = _weighted_average(
+    speed_proxy_score: Optional[float] = None
+    speed_proxy_confidence = 0.0
+    if speed_proxy_candidates:
+        best_proxy, best_proxy_run = max(speed_proxy_candidates, key=lambda item: item[0])
+        speed_proxy_score = _normalize(best_proxy, 32.0, 75.0)
+        speed_proxy_confidence = _weighted_average(
             [
-                (_confidence_from_count(len(vo2_candidates), 4), 0.5),
-                (_freshness_confidence(best_vo2_run["days_ago"], 30, 180), 0.5),
+                (_confidence_from_count(len(speed_proxy_candidates), 4), 0.5),
+                (_freshness_confidence(best_proxy_run["days_ago"], 30, 180), 0.5),
             ]
         )
 
-    threshold_candidates = [
+    # sustained_speed_score: best pace over 20–75 min effort.
+    # NOT a lactate threshold measurement. Renamed to avoid LT1/LT2 claims.
+    sustained_candidates = [
         run for run in recent_runs if 20 <= run["duration_minutes"] <= 75 and run["avg_speed_kmh"] is not None
     ]
-    threshold_score = None
-    threshold_confidence = 0.0
-    if threshold_candidates:
-        best_threshold_run = max(threshold_candidates, key=lambda run: run["avg_speed_kmh"])
-        threshold_score = _normalize(best_threshold_run["avg_speed_kmh"], 8.5, 18.0)
-        threshold_confidence = _weighted_average(
+    sustained_speed_score: Optional[float] = None
+    sustained_confidence = 0.0
+    if sustained_candidates:
+        best_run = max(sustained_candidates, key=lambda run: run["avg_speed_kmh"])
+        sustained_speed_score = _normalize(best_run["avg_speed_kmh"], 8.5, 18.0)
+        sustained_confidence = _weighted_average(
             [
-                (_confidence_from_count(len(threshold_candidates), 4), 0.6),
-                (_freshness_confidence(best_threshold_run["days_ago"], 30, 180), 0.4),
+                (_confidence_from_count(len(sustained_candidates), 4), 0.6),
+                (_freshness_confidence(best_run["days_ago"], 30, 180), 0.4),
             ]
         )
 
-    score = _weighted_average(
+    score = _weighted_average_nullable(
         [
-            (race_score or 0.0, 0.60 if race_score is not None else 0.0),
-            (vo2_score or 0.0, 0.25 if vo2_score is not None else 0.0),
-            (threshold_score or 0.0, 0.15 if threshold_score is not None else 0.0),
+            (race_score, 0.60),
+            (speed_proxy_score, 0.25),
+            (sustained_speed_score, 0.15),
         ]
     )
-    confidence = _weighted_average(
+    # Confidence: only components that contributed are included.
+    confidence = _weighted_average_nullable(
         [
-            (race_confidence, 0.60),
-            (vo2_confidence, 0.25),
-            (threshold_confidence, 0.15),
+            (race_confidence if race_score is not None else None, 0.60),
+            (speed_proxy_confidence if speed_proxy_score is not None else None, 0.25),
+            (sustained_confidence if sustained_speed_score is not None else None, 0.15),
         ]
     )
+    if confidence is None:
+        confidence = 0.0
 
     return {
-        "score": int(round(score)),
+        "score": None if score is None else int(round(score)),
         "confidence": int(round(confidence)),
         "components": {
             "race_performance_score": None if race_score is None else int(round(race_score)),
-            "vo2max_score": None if vo2_score is None else int(round(vo2_score)),
-            "threshold_score": None if threshold_score is None else int(round(threshold_score)),
+            "speed_proxy_score": None if speed_proxy_score is None else int(round(speed_proxy_score)),
+            "sustained_speed_score": None if sustained_speed_score is None else int(round(sustained_speed_score)),
             "race_source": race_source,
             "days_since_race_performance": race_date_gap,
         },
     }
 
 
+# ---------------------------------------------------------------------------
+# Endurance
+# ---------------------------------------------------------------------------
+
 def calculate_endurance_score(
     workouts: list[dict],
     reference_date: Optional[date] = None,
 ) -> dict:
+    """Endurance pillar.
+
+    Components (renormalised when unavailable):
+    - long_run_score     45 %: longest run in last 30 days
+    - volume_score       35 %: weekly km average
+    - long_run_frequency 20 %: number of long runs in last 30 days
+
+    NOTE: pace variability between long runs is NOT used as a durability
+    proxy — it was unreliable and has been removed.
+
+    Missing component → None → excluded from weighted average.
+    """
     runs = _prepare_running_workouts(workouts, reference_date)
     recent_runs = [run for run in runs if run["days_ago"] <= 30]
 
     if not recent_runs:
         return {
-            "score": 0,
+            "score": None,
             "confidence": 0,
-            "components": {"long_run_score": None, "volume_score": None, "durability_score": None},
+            "components": {
+                "long_run_score": None,
+                "volume_score": None,
+                "long_run_frequency_score": None,
+                "longest_run_km": None,
+                "weekly_km": None,
+                "long_run_count_30d": 0,
+            },
         }
 
     distances = [run["distance_km"] for run in recent_runs]
     longest_run = max(distances)
     weekly_km = sum(distances) * 7.0 / 30.0
-    long_run_score = _normalize(longest_run, 6.0, 32.0)
-    volume_score = _normalize(weekly_km, 15.0, 110.0)
+    long_run_score: Optional[float] = _normalize(longest_run, 6.0, 32.0)
+    volume_score: Optional[float] = _normalize(weekly_km, 15.0, 110.0)
 
     long_runs = [run for run in recent_runs if run["distance_km"] >= max(12.0, longest_run * 0.7)]
-    long_run_frequency_score = _normalize(len(long_runs), 0.0, 4.0)
-    long_run_paces = [run["avg_pace_min_km"] for run in long_runs if run["avg_pace_min_km"]]
-    long_run_cv = None
-    if len(long_run_paces) >= 2:
-        long_run_mean_pace = mean(long_run_paces)
-        stdev = _safe_stdev(long_run_paces)
-        long_run_cv = (stdev / long_run_mean_pace) if stdev is not None and long_run_mean_pace else None
-    pace_stability_score = 60.0 if long_run_cv is None else _normalize_inverse(long_run_cv, 0.02, 0.18)
-    durability_score = 0.65 * long_run_frequency_score + 0.35 * pace_stability_score
+    long_run_frequency_score: Optional[float] = _normalize(len(long_runs), 0.0, 4.0)
 
-    confidence = _weighted_average(
+    score = _weighted_average_nullable(
         [
-            (_confidence_from_count(len(recent_runs), 8), 0.4),
-            (_confidence_from_count(len(long_runs), 3), 0.3),
-            (100.0 if long_run_cv is not None else 55.0, 0.3),
+            (long_run_score, 0.45),
+            (volume_score, 0.35),
+            (long_run_frequency_score, 0.20),
         ]
     )
-    score = 0.40 * long_run_score + 0.30 * volume_score + 0.30 * durability_score
+    confidence = _weighted_average(
+        [
+            (_confidence_from_count(len(recent_runs), 8), 0.5),
+            (_confidence_from_count(len(long_runs), 3), 0.5),
+        ]
+    )
 
     return {
-        "score": int(round(score)),
+        "score": None if score is None else int(round(score)),
         "confidence": int(round(confidence)),
         "components": {
-            "long_run_score": int(round(long_run_score)),
-            "volume_score": int(round(volume_score)),
-            "durability_score": int(round(durability_score)),
+            "long_run_score": None if long_run_score is None else int(round(long_run_score)),
+            "volume_score": None if volume_score is None else int(round(volume_score)),
+            "long_run_frequency_score": None if long_run_frequency_score is None else int(round(long_run_frequency_score)),
             "longest_run_km": round(longest_run, 1),
             "weekly_km": round(weekly_km, 1),
             "long_run_count_30d": len(long_runs),
@@ -302,18 +363,40 @@ def calculate_endurance_score(
     }
 
 
+# ---------------------------------------------------------------------------
+# Consistency
+# ---------------------------------------------------------------------------
+
 def calculate_consistency_score(
     workouts: list[dict],
     reference_date: Optional[date] = None,
 ) -> dict:
+    """Consistency pillar — 8-week window (56 days).
+
+    Components (renormalised when unavailable):
+    - frequency_score  40 %: active weeks + avg runs/week
+    - stability_score  40 %: weekly volume CV — None when not computable
+    - habit_score      20 %: avg and max gap between sessions — None when
+                              fewer than 2 sessions (no gaps exist)
+
+    RULE: unknown gap → None, never 14 or 21.
+    RULE: unknown stability → None, never 35.
+    """
     runs = _prepare_running_workouts(workouts, reference_date)
     recent_runs = [run for run in runs if run["days_ago"] <= 56]
 
     if not recent_runs:
         return {
-            "score": 0,
+            "score": None,
             "confidence": 0,
-            "components": {"frequency_score": None, "stability_score": None, "habit_score": None},
+            "components": {
+                "frequency_score": None,
+                "stability_score": None,
+                "habit_score": None,
+                "active_weeks_8w": 0,
+                "avg_runs_per_week": 0.0,
+                "max_gap_days": None,
+            },
         }
 
     today = reference_date or datetime.now(timezone.utc).date()
@@ -332,41 +415,59 @@ def calculate_consistency_score(
     weekly_distances = [sum(run["distance_km"] for run in bucket) for bucket in week_buckets]
 
     avg_runs_per_week = sum(runs_per_week) / 8.0
-    frequency_score = 0.5 * _normalize(active_weeks, 2.0, 8.0) + 0.5 * _normalize(avg_runs_per_week, 1.0, 6.0)
+    frequency_score: Optional[float] = (
+        0.5 * _normalize(active_weeks, 2.0, 8.0) + 0.5 * _normalize(avg_runs_per_week, 1.0, 6.0)
+    )
 
+    # Stability: None when weekly volume variation cannot be computed.
+    stability_score: Optional[float] = None
     distance_mean = _safe_mean(weekly_distances) or 0.0
-    distance_cv = None
     if distance_mean > 0:
         weekly_stdev = _safe_stdev(weekly_distances)
         if weekly_stdev is not None:
             distance_cv = weekly_stdev / distance_mean
-    stability_score = 35.0 if distance_cv is None else _normalize_inverse(distance_cv, 0.10, 1.10)
+            stability_score = _normalize_inverse(distance_cv, 0.10, 1.10)
 
-    sorted_dates = sorted(run["date"] for run in recent_runs)
-    gaps = [
-        (sorted_dates[index + 1] - sorted_dates[index]).days
-        for index in range(len(sorted_dates) - 1)
-    ]
-    avg_gap = _safe_mean(gaps) or 14.0
-    max_gap = max(gaps) if gaps else 21
-    habit_score = 0.6 * _normalize_inverse(avg_gap, 1.5, 8.5) + 0.4 * _normalize_inverse(max_gap, 3.0, 18.0)
+    # Habit score: gaps between sessions. None when fewer than 2 sessions.
+    habit_score: Optional[float] = None
+    max_gap: Optional[int] = None
+    avg_gap: Optional[float] = None
+    if len(recent_runs) >= 2:
+        sorted_dates = sorted(run["date"] for run in recent_runs)
+        gaps = [
+            (sorted_dates[index + 1] - sorted_dates[index]).days
+            for index in range(len(sorted_dates) - 1)
+        ]
+        if gaps:
+            avg_gap = _safe_mean(gaps)
+            max_gap = max(gaps)
+            habit_score = (
+                0.6 * _normalize_inverse(avg_gap, 1.5, 8.5)
+                + 0.4 * _normalize_inverse(float(max_gap), 3.0, 18.0)
+            )
 
     confidence = _weighted_average(
         [
             (_confidence_from_count(len(recent_runs), 16), 0.5),
-            (_confidence_from_count(active_weeks, 6), 0.3),
-            (100.0 if len(gaps) >= 3 else 55.0, 0.2),
+            (_confidence_from_count(active_weeks, 6), 0.5),
         ]
     )
-    score = 0.40 * frequency_score + 0.40 * stability_score + 0.20 * habit_score
+
+    score = _weighted_average_nullable(
+        [
+            (frequency_score, 0.40),
+            (stability_score, 0.40),
+            (habit_score, 0.20),
+        ]
+    )
 
     return {
-        "score": int(round(score)),
+        "score": None if score is None else int(round(score)),
         "confidence": int(round(confidence)),
         "components": {
-            "frequency_score": int(round(frequency_score)),
-            "stability_score": int(round(stability_score)),
-            "habit_score": int(round(habit_score)),
+            "frequency_score": None if frequency_score is None else int(round(frequency_score)),
+            "stability_score": None if stability_score is None else int(round(stability_score)),
+            "habit_score": None if habit_score is None else int(round(habit_score)),
             "active_weeks_8w": active_weeks,
             "avg_runs_per_week": round(avg_runs_per_week, 2),
             "max_gap_days": max_gap,
@@ -374,10 +475,28 @@ def calculate_consistency_score(
     }
 
 
+# ---------------------------------------------------------------------------
+# Efficiency
+# ---------------------------------------------------------------------------
+
 def calculate_efficiency_score(
     workouts: list[dict],
     reference_date: Optional[date] = None,
 ) -> dict:
+    """Efficiency pillar — 56-day window.
+
+    Components:
+    - pace_heart_rate_score                 (score): median speed/HR ratio across HR-tagged runs.
+    - inter_run_efficiency_variability_score (informational only): dispersion of speed/HR
+      proxy across long runs (≥40 min). NOT used in score aggregation — provided
+      for observability only.
+      NOTE: This is NOT cardiac drift. It measures dispersion of the speed/HR
+      proxy BETWEEN sessions, not within a single session. A true intra-session
+      cardiac drift measure requires time-series or split data not available in
+      DomainActivity.
+
+    RULE: absence of HR data → efficiency_score = None, never 0.
+    """
     runs = _prepare_running_workouts(workouts, reference_date)
     recent_runs = [run for run in runs if run["days_ago"] <= 56]
 
@@ -386,86 +505,153 @@ def calculate_efficiency_score(
         for run in recent_runs
         if run["avg_speed_kmh"] is not None and run["avg_heart_rate"] not in (None, 0)
     ]
+
+    if not efficiency_runs:
+        # No HR data at all → entire pillar is None.
+        return {
+            "score": None,
+            "confidence": 0,
+            "components": {
+                "pace_heart_rate_score": None,
+                "inter_run_efficiency_variability_score": None,
+                "heart_rate_sample_count": 0,
+            },
+        }
+
     efficiency_indexes = [
         (run["avg_speed_kmh"] * 1000.0) / float(run["avg_heart_rate"])
         for run in efficiency_runs
     ]
 
-    pace_hr_score = None
-    if efficiency_indexes:
-        pace_hr_score = _normalize(median(efficiency_indexes), 55.0, 90.0)
+    pace_hr_score: Optional[float] = _normalize(median(efficiency_indexes), 55.0, 90.0)
 
-    drift_candidates = [
+    # inter_run_efficiency_variability: dispersion of speed/HR proxy across long runs.
+    # NOT cardiac drift (which requires intra-session time series or splits).
+    # Informational only — included in components but NOT in score aggregation,
+    # because high variability from adding better runs would penalise improvement.
+    inter_run_variability_candidates = [
         (run["avg_speed_kmh"] * 1000.0) / float(run["avg_heart_rate"])
         for run in efficiency_runs
         if run["duration_minutes"] >= 40
     ]
-    drift_score = None
-    drift_cv = None
-    if len(drift_candidates) >= 2:
-        drift_stdev = _safe_stdev(drift_candidates)
-        drift_cv = (drift_stdev / mean(drift_candidates)) if drift_stdev is not None and mean(drift_candidates) else None
-    if drift_cv is not None:
-        drift_score = _normalize_inverse(drift_cv, 0.02, 0.18)
+    inter_run_variability_score: Optional[float] = None
+    inter_run_cv = None
+    if len(inter_run_variability_candidates) >= 2:
+        variability_stdev = _safe_stdev(inter_run_variability_candidates)
+        variability_mean = mean(inter_run_variability_candidates)
+        if variability_stdev is not None and variability_mean:
+            inter_run_cv = variability_stdev / variability_mean
+        if inter_run_cv is not None:
+            inter_run_variability_score = _normalize_inverse(inter_run_cv, 0.02, 0.18)
 
-    stability_candidates = [
-        run["avg_pace_min_km"]
-        for run in recent_runs
-        if run["avg_pace_min_km"] is not None and run["distance_km"] >= 5.0
-    ]
-    pace_stability_score = None
-    pace_cv = None
-    if len(stability_candidates) >= 2:
-        pace_stdev = _safe_stdev(stability_candidates)
-        pace_cv = (pace_stdev / mean(stability_candidates)) if pace_stdev is not None and mean(stability_candidates) else None
-    if pace_cv is not None:
-        pace_stability_score = _normalize_inverse(pace_cv, 0.03, 0.22)
+    # Score: based on median speed/HR only (monotonic: better ratio → better score).
+    score: Optional[float] = pace_hr_score
 
-    score = _weighted_average(
-        [
-            (pace_hr_score or 0.0, 0.50 if pace_hr_score is not None else 0.0),
-            (drift_score or 0.0, 0.30 if drift_score is not None else 0.0),
-            (pace_stability_score or 0.0, 0.20 if pace_stability_score is not None else 0.0),
-        ]
-    )
-    confidence = _weighted_average(
-        [
-            (_confidence_from_count(len(efficiency_runs), 8), 0.5),
-            (100.0 if drift_score is not None else 35.0, 0.3),
-            (100.0 if pace_stability_score is not None else 45.0, 0.2),
-        ]
-    )
+    # Confidence: based only on real data availability.
+    confidence = _confidence_from_count(len(efficiency_runs), 8)
 
     return {
-        "score": int(round(score)),
+        "score": None if score is None else int(round(score)),
         "confidence": int(round(confidence)),
         "components": {
             "pace_heart_rate_score": None if pace_hr_score is None else int(round(pace_hr_score)),
-            "cardiac_drift_score": None if drift_score is None else int(round(drift_score)),
-            "pace_stability_score": None if pace_stability_score is None else int(round(pace_stability_score)),
+            "inter_run_efficiency_variability_score": None if inter_run_variability_score is None else int(round(inter_run_variability_score)),
             "heart_rate_sample_count": len(efficiency_runs),
         },
     }
 
 
+# ---------------------------------------------------------------------------
+# INSUFFICIENT gate
+# ---------------------------------------------------------------------------
+
+_MIN_ACTIVITIES = 3
+_MIN_PILLARS = 2
+
+STATUS_SUFFICIENT = "sufficient"
+STATUS_INSUFFICIENT = "insufficient"
+
+
+def _is_sufficient(run_count: int, pillar_scores: list[Optional[int]]) -> bool:
+    """Return True when the INSUFFICIENT gate is satisfied.
+
+    Gate:
+    - At least _MIN_ACTIVITIES valid running activities in scope
+    - At least _MIN_PILLARS pillars with a non-None score
+    """
+    if run_count < _MIN_ACTIVITIES:
+        return False
+    calculable = sum(1 for s in pillar_scores if s is not None)
+    return calculable >= _MIN_PILLARS
+
+
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
+
 def calculate_run_index(
     workouts: list[dict],
     reference_date: Optional[date] = None,
 ) -> dict:
+    """Compute RunIndex from a list of workout dicts.
+
+    Output contract:
+    {
+        "status": "sufficient" | "insufficient",
+        "run_index": int (0–1000) | null,
+        "speed_score": int (0–100) | null,
+        "endurance_score": int (0–100) | null,
+        "consistency_score": int (0–100) | null,
+        "efficiency_score": int (0–100) | null,
+        "confidence_score": int (0–100),
+        "pillar_details": {...}
+    }
+
+    Rules:
+    - INSUFFICIENT gate not met → run_index = null, status = "insufficient".
+    - Missing pillar → excluded from weighted average (renormalised).
+    - Missing pillar → never replaced with 0.
+    - Confidence based only on real data quality and quantity.
+    """
     speed = calculate_speed_score(workouts, reference_date)
     endurance = calculate_endurance_score(workouts, reference_date)
     consistency = calculate_consistency_score(workouts, reference_date)
     efficiency = calculate_efficiency_score(workouts, reference_date)
 
     run_count = len(_prepare_running_workouts(workouts, reference_date))
-    if run_count == 0:
+
+    pillar_scores = [
+        speed["score"],
+        endurance["score"],
+        consistency["score"],
+        efficiency["score"],
+    ]
+
+    sufficient = _is_sufficient(run_count, pillar_scores)
+
+    # Global confidence: weighted over contributing pillars only.
+    confidence_raw = _weighted_average_nullable(
+        [
+            (speed["confidence"] if speed["score"] is not None else None, 0.40),
+            (endurance["confidence"] if endurance["score"] is not None else None, 0.25),
+            (consistency["confidence"] if consistency["score"] is not None else None, 0.20),
+            (efficiency["confidence"] if efficiency["score"] is not None else None, 0.15),
+        ]
+    )
+    if confidence_raw is None:
+        confidence_raw = 0.0
+    if run_count < 6:
+        confidence_raw *= 0.75
+
+    if not sufficient:
         return {
-            "run_index": 0,
-            "speed_score": 0,
-            "endurance_score": 0,
-            "consistency_score": 0,
-            "efficiency_score": 0,
-            "confidence_score": 0,
+            "status": STATUS_INSUFFICIENT,
+            "run_index": None,
+            "speed_score": speed["score"],
+            "endurance_score": endurance["score"],
+            "consistency_score": consistency["score"],
+            "efficiency_score": efficiency["score"],
+            "confidence_score": int(round(_clamp(confidence_raw, 0.0, 100.0))),
             "pillar_details": {
                 "speed": speed,
                 "endurance": endurance,
@@ -474,30 +660,27 @@ def calculate_run_index(
             },
         }
 
-    raw_index = (
-        0.40 * speed["score"]
-        + 0.25 * endurance["score"]
-        + 0.20 * consistency["score"]
-        + 0.15 * efficiency["score"]
-    ) * 10.0
-    confidence = _weighted_average(
+    # Global RunIndex: weighted average of non-None pillar scores × 10.
+    raw_index = _weighted_average_nullable(
         [
-            (speed["confidence"], 0.40),
-            (endurance["confidence"], 0.25),
-            (consistency["confidence"], 0.20),
-            (efficiency["confidence"], 0.15),
+            (speed["score"], 0.40),
+            (endurance["score"], 0.25),
+            (consistency["score"], 0.20),
+            (efficiency["score"], 0.15),
         ]
     )
-    if run_count < 6:
-        confidence *= 0.75
+    if raw_index is None:
+        # Theoretically impossible when sufficient (≥2 pillars), but be safe.
+        raw_index = 0.0
 
     return {
-        "run_index": int(round(_clamp(raw_index, 0.0, 1000.0))),
-        "speed_score": int(round(_clamp(speed["score"], 0.0, 100.0))),
-        "endurance_score": int(round(_clamp(endurance["score"], 0.0, 100.0))),
-        "consistency_score": int(round(_clamp(consistency["score"], 0.0, 100.0))),
-        "efficiency_score": int(round(_clamp(efficiency["score"], 0.0, 100.0))),
-        "confidence_score": int(round(_clamp(confidence, 0.0, 100.0))),
+        "status": STATUS_SUFFICIENT,
+        "run_index": int(round(_clamp(raw_index * 10.0, 0.0, 1000.0))),
+        "speed_score": speed["score"],
+        "endurance_score": endurance["score"],
+        "consistency_score": consistency["score"],
+        "efficiency_score": efficiency["score"],
+        "confidence_score": int(round(_clamp(confidence_raw, 0.0, 100.0))),
         "pillar_details": {
             "speed": speed,
             "endurance": endurance,

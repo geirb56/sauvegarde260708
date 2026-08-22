@@ -341,9 +341,13 @@ export default function Progress() {
                             {pillarLabels[pillar]}
                           </p>
                           <div className="flex items-baseline gap-1.5">
-                            <span className="font-heading text-lg font-bold text-white">
-                              {data.current ?? "--"}%
-                            </span>
+                            {data.current === null || data.current === undefined ? (
+                              <span className="font-heading text-lg font-bold text-muted-foreground">—</span>
+                            ) : (
+                              <span className="font-heading text-lg font-bold text-white">
+                                {data.current}%
+                              </span>
+                            )}
                           </div>
                           {evo !== null && evo !== undefined && (
                             <p className={`font-mono text-[10px] uppercase tracking-wider ${evoColor}`}>

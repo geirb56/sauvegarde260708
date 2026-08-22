@@ -259,7 +259,8 @@ function CircularGauge({ value, max = 100, size = 64 }) {
 }
 
 function RunIndexPillar({ icon: Icon, label, value, color }) {
-  const safeValue = Number.isFinite(value) ? value : 0;
+  const isNull = value === null || value === undefined;
+  const safeValue = isNull ? 0 : (Number.isFinite(value) ? value : 0);
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between gap-3">
@@ -267,18 +268,20 @@ function RunIndexPillar({ icon: Icon, label, value, color }) {
           {Icon && <Icon className="w-4 h-4 shrink-0" style={{ color }} />}
           <span>{label}</span>
         </div>
-        <span className="text-sm font-bold" style={{ color }}>
-          {safeValue}%
+        <span className="text-sm font-bold" style={{ color: isNull ? "rgba(255,255,255,0.35)" : color }}>
+          {isNull ? "—" : `${safeValue}%`}
         </span>
       </div>
       <div
         className="h-2 rounded-full overflow-hidden"
         style={{ background: "rgba(255,255,255,0.08)" }}
       >
-        <div
-          className="h-full rounded-full transition-all duration-700"
-          style={{ width: `${Math.max(0, Math.min(100, safeValue))}%`, background: color }}
-        />
+        {!isNull && (
+          <div
+            className="h-full rounded-full transition-all duration-700"
+            style={{ width: `${Math.max(0, Math.min(100, safeValue))}%`, background: color }}
+          />
+        )}
       </div>
     </div>
   );
@@ -522,7 +525,8 @@ export default function Dashboard() {
   const weekStats = insight?.week || { sessions: 0, volume_km: 0 };
   const monthStats = insight?.month || { volume_km: 0 };
   const runIndexData = insight?.run_index;
-  const runIndexScore = runIndexData?.run_index ?? 0;
+  const runIndexNull = !runIndexData || runIndexData?.run_index === null || runIndexData?.status === "insufficient";
+  const runIndexScore = runIndexData?.run_index ?? null;
   const runIndexConfidence = runIndexData?.confidence_score ?? 0;
 
   return (
@@ -556,14 +560,20 @@ export default function Dashboard() {
 
           <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
             <div>
-              <div className="flex items-end gap-2">
-                <span className="text-6xl font-black leading-none" style={{ color: "#ffffff" }}>
-                  {runIndexScore}
-                </span>
-                <span className="text-xl font-semibold pb-1" style={{ color: "#6EEB5A" }}>
-                  / 1000
-                </span>
-              </div>
+              {runIndexNull ? (
+                <p className="text-base font-semibold" style={{ color: "rgba(255,255,255,0.55)" }}>
+                  {t("dashboard.runIndexInsufficient") || "Insufficient data"}
+                </p>
+              ) : (
+                <div className="flex items-end gap-2">
+                  <span className="text-6xl font-black leading-none" style={{ color: "#ffffff" }}>
+                    {runIndexScore}
+                  </span>
+                  <span className="text-xl font-semibold pb-1" style={{ color: "#6EEB5A" }}>
+                    / 1000
+                  </span>
+                </div>
+              )}
               <p className="text-sm mt-2" style={{ color: "rgba(255,255,255,0.72)" }}>
                 {t("dashboard.runIndexLevel")}
               </p>
