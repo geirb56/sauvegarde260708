@@ -23,6 +23,7 @@ import axios from "axios";
 
 import Dashboard from "@/pages/Dashboard";
 import { LanguageProvider } from "@/context/LanguageContext";
+import { LANGUAGE_STORAGE_KEY } from "@/lib/i18n";
 
 jest.mock("axios");
 jest.mock("sonner", () => ({
@@ -459,7 +460,12 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
   });
 
   // 12b. RunIndex insufficient remains visible as insufficient
-  it("12b. run index insufficient remains unchanged", async () => {
+  it.each([
+    ["en", "Insufficient data"],
+    ["fr", "Données insuffisantes"],
+    ["es", "Datos insuficientes"],
+  ])("12b. run index insufficient uses translated copy in %s", async (lang, expectedLabel) => {
+    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, lang);
     mockUseSubscription.mockReturnValue({ isFree: true, loading: false });
     setupAxiosMocks(
       buildDefaultMocks({
@@ -473,7 +479,8 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     const { container, unmount } = renderDashboard();
     await waitForRender();
 
-    expect(container.textContent).toContain("Insufficient");
+    expect(container.textContent).toContain(expectedLabel);
+    expect(container.textContent).not.toContain("dashboard.runIndexInsufficient");
     expect(container.textContent).not.toContain("/ 1000");
     unmount();
   });
