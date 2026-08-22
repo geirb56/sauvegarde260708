@@ -63,7 +63,9 @@ const langToLocale = (lang) => {
 export default function Progress() {
   const [stats, setStats] = useState(null);
   const [predictions, setPredictions] = useState(null);
-  const [fullCycle, setFullCycle] = useState(null);
+  // PR184: migrated training cycle from legacy full-cycle endpoint to /training/v2/cycle
+  // VMA_FRONTEND_PRESERVED = YES / PREDICTIONS_FRONTEND_PRESERVED = YES
+  const [cycleV2, setCycleV2] = useState(null);
   const [vmaHistory, setVmaHistory] = useState(null);
   const [garminHealth, setGarminHealth] = useState(null);
   const [runIndexHistory, setRunIndexHistory] = useState(null);
@@ -74,13 +76,23 @@ export default function Progress() {
   const { isFree, loading: subLoading } = useSubscription();
   const { unitSystem } = useUnitSystem();
 
+  // PR184: map V2 goal_type to race prediction distance label
+  const _V2_GOAL_TO_PRED_DISTANCE = {
+    five_k: "5K",
+    ten_k: "10K",
+    half_marathon: "Semi",
+    marathon: "Marathon",
+    ultra: "Ultra",
+  };
+
   useEffect(() => {
     const fetchData = async () => {
       try {
         const [statsRes, predictionsRes, cycleRes, vmaHistoryRes] = await Promise.all([
           axios.get(`${API}/stats`),
           axios.get(`${API}/training/race-predictions`).catch(() => ({ data: null })),
-          axios.get(`${API}/training/full-cycle`).catch(() => ({ data: null })),
+          // PR184: V2/cycle is the authority for cycle calendar (no session prescription)
+          axios.get(`${API}/training/v2/cycle`).catch(() => ({ data: null })),
           axios.get(`${API}/training/vma-history`).catch(() => ({ data: null }))
         ]);
         setStats(statsRes.data);
@@ -99,7 +111,7 @@ export default function Progress() {
         let predData = predictionsRes.data;
         if (predData) setPredictions(predData);
 
-        if (cycleRes.data) setFullCycle(cycleRes.data);
+        if (cycleRes.data) setCycleV2(cycleRes.data);
       } catch (error) {
         console.error("Failed to fetch data:", error);
       } finally {
@@ -258,7 +270,7 @@ export default function Progress() {
               <div className="h-40 mb-4">
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart
-                    data={runIndexHistory.history.filter(h => h.run_index !== null)}
+                    data={runIndexHistory.history}
                     margin={{ top: 5, right: 10, left: -20, bottom: 5 }}
                   >
                     <XAxis
@@ -306,7 +318,7 @@ export default function Progress() {
                       strokeWidth={2}
                       dot={{ fill: "#6EEB5A", strokeWidth: 0, r: 3 }}
                       activeDot={{ fill: "#6EEB5A", strokeWidth: 2, stroke: "white", r: 5 }}
-                      connectNulls
+                      connectNulls={false}
                     />
                   </LineChart>
                 </ResponsiveContainer>
@@ -437,7 +449,7 @@ export default function Progress() {
           <div className="flex items-center gap-2 mb-3">
             <Heart className="w-4 h-4 text-rose-500" />
             <h2 className="font-mono text-xs uppercase tracking-widest text-muted-foreground">
-              Garmin Health · 7 days
+              {t("progressExtended.garminHealthTitle")}
             </h2>
           </div>
           <div className="grid grid-cols-3 gap-2 sm:gap-3">
@@ -461,7 +473,7 @@ export default function Progress() {
                 <div className="flex items-center gap-2 mb-2">
                   <Heart className="w-4 h-4 text-rose-500" />
                   <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-                    Resting HR
+                    {t("progressExtended.garminRestingHr")}
                   </span>
                 </div>
                 <p className="font-heading text-xl sm:text-3xl font-bold text-white break-words">
@@ -476,7 +488,7 @@ export default function Progress() {
                 <div className="flex items-center gap-2 mb-2">
                   <Moon className="w-4 h-4 text-blue-400" />
                   <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-                    Sleep
+                    {t("progressExtended.garminSleep")}
                   </span>
                 </div>
                 <p className="font-heading text-xl sm:text-3xl font-bold text-white break-words">
@@ -632,13 +644,19 @@ export default function Progress() {
                 <div className="p-4 space-y-4">
                   {/* Predictions by distance */}
                   <div className="space-y-2">
-                    {predictions.predictions?.map((pred) => (
+                   {predictions.predictions?.map((pred) => {
+                      // PR184: derive goal label from V2 cycle goal_type
+                      const cycleGoalDist = cycleV2?.goal?.goal_type
+                        ? _V2_GOAL_TO_PRED_DISTANCE[cycleV2.goal.goal_type] ?? null
+                        : null;
+                      const isGoal = cycleGoalDist !== null && pred.distance === cycleGoalDist;
+                      return (
                       <div 
                         key={pred.distance}
                         className="flex items-center gap-3 p-3 rounded-xl transition-all"
                         style={{ 
-                          background: pred.distance === fullCycle?.goal ? `${pred.readiness_color}15` : "rgba(255,255,255,0.03)",
-                          border: pred.distance === fullCycle?.goal ? `2px solid ${pred.readiness_color}` : "1px solid rgba(255,255,255,0.05)"
+                          background: isGoal ? `${pred.readiness_color}15` : "rgba(255,255,255,0.03)",
+                          border: isGoal ? `2px solid ${pred.readiness_color}` : "1px solid rgba(255,255,255,0.05)"
                         }}
                       >
                         {/* Distance badge */}
@@ -655,9 +673,9 @@ export default function Progress() {
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
                             <span className="text-xl font-bold text-white">{pred.predicted_time}</span>
-                            {pred.distance === fullCycle?.goal && (
+                            {isGoal && (
                               <span className="px-2 py-0.5 rounded-full text-[9px] font-bold" style={{ background: "var(--accent-green)", color: "#0a0e1a" }}>
-                                OBJECTIF
+                                {t("progressExtended.goalLabel")}
                               </span>
                             )}
                           </div>
@@ -675,11 +693,12 @@ export default function Progress() {
                             {pred.readiness_label}
                           </div>
                           <p className="text-[10px] text-muted-foreground">
-                            {pred.readiness_score}% prêt
+                            {pred.readiness_score}% {t("progressExtended.readinessPct")}
                           </p>
                         </div>
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}
