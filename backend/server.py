@@ -3984,8 +3984,13 @@ async def get_race_predictions(user: dict = Depends(auth_user)):
         
         if dist > 0:
             total_km += dist
-            total_sessions += 1
             distances.append(dist)
+
+            # total_sessions_6w counts only running activities (excludes cycling, swimming, etc.)
+            activity_type_raw = a.get("type", a.get("activity_type", "run"))
+            _RUNNING_TYPES = {"run", "running", "trail_run", "trail_running", "indoor_running", "treadmill_running", "street_running"}
+            if str(activity_type_raw).lower() in _RUNNING_TYPES:
+                total_sessions += 1
             
             if pace and 3 < pace < 10:  # Pace réaliste
                 paces.append(pace)

@@ -21,6 +21,7 @@ Two conversion paths are exposed:
         start_time                 → start_time
         distance_m                 → distance_m     (top-level alias: distance)
         duration_s                 → duration_s     (top-level alias: duration)
+        moving_duration_s          → moving_duration_s
         average_hr                 → average_hr     (top-level alias: avg_hr)
         max_hr                     → max_hr
         moderate_intensity_minutes → moderate_intensity_minutes
@@ -44,11 +45,24 @@ from training_v2.domain_activity import (
 
 def to_domain_activity(activity: GarminActivity) -> DomainActivity:
     """Convert a normalized Garmin activity into the Training V2 domain model."""
+    moving_dur_raw = activity.moving_duration_s
+    duration_raw = activity.duration_s
+    moving_dur: Optional[float] = None
+    if (
+        moving_dur_raw is not None
+        and isinstance(moving_dur_raw, (int, float))
+        and float(moving_dur_raw) > 0
+    ):
+        val = float(moving_dur_raw)
+        if duration_raw is None or not isinstance(duration_raw, (int, float)) or val <= float(duration_raw):
+            moving_dur = val
+
     return DomainActivity(
         activity_type=activity.activity_type,
         start_time=activity.start_time,
         distance_m=activity.distance_m,
         duration_s=activity.duration_s,
+        moving_duration_s=moving_dur,
         source=activity.source,
         source_activity_id=activity.activity_id,
         moderate_intensity_minutes=(
@@ -133,6 +147,15 @@ def mongo_garmin_to_domain(doc: Dict[str, Any]) -> DomainActivity:
     dur_raw = sub.get("duration_s") if "duration_s" in sub else doc.get("duration_s", doc.get("duration"))
     duration_s = _opt_float_positive(dur_raw) if dur_raw is not None else None
 
+    # moving_duration_s — subdoc canonical name; validated against duration_s.
+    mov_raw = sub.get("moving_duration_s") if "moving_duration_s" in sub else doc.get("moving_duration_s")
+    moving_duration_s: Optional[float] = None
+    if mov_raw is not None:
+        mov_val = _opt_float_positive(mov_raw)
+        if mov_val is not None:
+            if duration_s is None or mov_val <= duration_s:
+                moving_duration_s = mov_val
+
     # average_hr — subdoc canonical name; top-level alias is "avg_hr"
     avg_hr_raw = sub.get("average_hr") if "average_hr" in sub else doc.get("average_hr", doc.get("avg_hr"))
     average_hr = _opt_float_positive(avg_hr_raw) if avg_hr_raw is not None else None
@@ -165,6 +188,7 @@ def mongo_garmin_to_domain(doc: Dict[str, Any]) -> DomainActivity:
         start_time=start_time,
         distance_m=distance_m,
         duration_s=duration_s,
+        moving_duration_s=moving_duration_s,
         source=source,
         source_activity_id=source_activity_id,
         moderate_intensity_minutes=moderate_intensity_minutes,

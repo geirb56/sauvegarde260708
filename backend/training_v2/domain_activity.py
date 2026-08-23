@@ -17,6 +17,7 @@ class DomainActivity(BaseModel):
     start_time: Optional[Union[str, date, datetime]] = None
     distance_m: Optional[float] = None
     duration_s: Optional[float] = None
+    moving_duration_s: Optional[float] = None
     source: Optional[str] = None
     source_activity_id: Optional[str] = None
     moderate_intensity_minutes: Optional[float] = None
@@ -65,6 +66,7 @@ def to_domain_activity(activity: Any) -> DomainActivity:
         start = activity.get('start_time')
         dist = activity.get('distance_m', activity.get('distance'))
         dur = activity.get('duration_s', activity.get('duration'))
+        moving_dur = activity.get('moving_duration_s')
         source = activity.get('source')
         source_activity_id = activity.get('source_activity_id', activity.get('activity_id'))
         moderate = activity.get('moderate_intensity_minutes')
@@ -77,6 +79,7 @@ def to_domain_activity(activity: Any) -> DomainActivity:
         start = getattr(activity, 'start_time', None)
         dist = getattr(activity, 'distance_m', getattr(activity, 'distance', None))
         dur = getattr(activity, 'duration_s', getattr(activity, 'duration', None))
+        moving_dur = getattr(activity, 'moving_duration_s', None)
         source = getattr(activity, 'source', None)
         source_activity_id = getattr(
             activity,
@@ -100,11 +103,18 @@ def to_domain_activity(activity: Any) -> DomainActivity:
             return None
         return float(v)
 
+    def _moving_dur(v: Any) -> Optional[float]:
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            return None
+        f = float(v)
+        return f if f > 0 else None
+
     return DomainActivity(
         activity_type=act_type if isinstance(act_type, str) else None,
         start_time=_domain_start_time(start),
         distance_m=dist if isinstance(dist, (int, float)) and not isinstance(dist, bool) else None,
         duration_s=dur if isinstance(dur, (int, float)) and not isinstance(dur, bool) else None,
+        moving_duration_s=_moving_dur(moving_dur),
         source=_domain_source(source),
         source_activity_id=_domain_source_activity_id(source_activity_id),
         moderate_intensity_minutes=_domain_intensity_minutes(moderate),
