@@ -253,7 +253,7 @@ def _linear_regression(
     slope = ss_xy / ss_xx
     intercept = mean_y - slope * mean_x
     if ss_yy == 0:
-        r2 = 1.0 if ss_xx == 0 else 0.0
+        r2 = 1.0
     else:
         r2 = (ss_xy ** 2) / (ss_xx * ss_yy)
     return slope, intercept, r2
@@ -352,34 +352,36 @@ def estimate_vma(
     hrs = [float(a.average_hr) for a in eligible]  # type: ignore[arg-type]
     speeds = [_speed_kmh(a) for a in eligible]
 
-    # Type check — all speeds should be non-None since _is_vma_eligible passed
-    speeds_clean: List[float] = [s for s in speeds if s is not None]
-    if len(speeds_clean) < MIN_ACTIVITIES_HR_MODEL:
+    # Keep only pairs where both HR and speed are valid
+    pairs = [(h, s) for h, s in zip(hrs, speeds) if s is not None]
+    if len(pairs) < MIN_ACTIVITIES_HR_MODEL:
         return _make_insufficient("insufficient_activities")
+    hrs_clean = [p[0] for p in pairs]
+    speeds_clean = [p[1] for p in pairs]
 
     # HR range check
-    hr_range = max(hrs) - min(hrs)
+    hr_range = max(hrs_clean) - min(hrs_clean)
     if hr_range < MIN_HR_RANGE_BPM:
         return VmaEstimate(
             vma_kmh=None,
             confidence="insufficient",
             reason_code="insufficient_hr_range",
             fcmax=fcmax,
-            n_activities=len(eligible),
+            n_activities=len(pairs),
         )
 
     # Distinct HR levels
-    distinct_hr = len({round(h) for h in hrs})
+    distinct_hr = len({round(h) for h in hrs_clean})
     if distinct_hr < MIN_DISTINCT_HR_LEVELS:
         return VmaEstimate(
             vma_kmh=None,
             confidence="insufficient",
             reason_code="insufficient_hr_levels",
             fcmax=fcmax,
-            n_activities=len(eligible),
+            n_activities=len(pairs),
         )
 
-    slope, intercept, r2 = _linear_regression(hrs, speeds_clean)
+    slope, intercept, r2 = _linear_regression(hrs_clean, speeds_clean)
 
     if r2 < MIN_R2:
         return VmaEstimate(
@@ -387,7 +389,7 @@ def estimate_vma(
             confidence="insufficient",
             reason_code="low_r_squared",
             fcmax=fcmax,
-            n_activities=len(eligible),
+            n_activities=len(pairs),
             hr_model_r_squared=round(r2, 3),
         )
 
@@ -398,7 +400,7 @@ def estimate_vma(
             confidence="insufficient",
             reason_code="negative_extrapolation",
             fcmax=fcmax,
-            n_activities=len(eligible),
+            n_activities=len(pairs),
             hr_model_r_squared=round(r2, 3),
         )
 
@@ -408,7 +410,7 @@ def estimate_vma(
         vma_kmh=round(vma, 1),
         confidence=confidence,
         fcmax=fcmax,
-        n_activities=len(eligible),
+        n_activities=len(pairs),
         hr_model_r_squared=round(r2, 3),
     )
 

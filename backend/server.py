@@ -3974,22 +3974,27 @@ async def get_race_predictions(user: dict = Depends(auth_user)):
     long_runs = []  # Sorties > 15km
     vma_efforts = []  # Efforts >= 6 min pour calcul VMA
     distances = []
-    
+
     MIN_VMA_DURATION = 6  # Minutes minimum pour calcul VMA
-    
+    # Running types for total_sessions_6w (aligned with performance_model._VMA_ROAD_TYPES)
+    _RUNNING_TYPES_6W = {
+        "run", "running", "trail_run", "trail_running",
+        "indoor_running", "treadmill_running", "street_running",
+        "track_running", "road_running",
+    }
+
     for a in activities:
         dist = get_distance(a)
         pace = get_pace(a)
         duration_min = get_duration_minutes(a)
-        
+
         if dist > 0:
             total_km += dist
             distances.append(dist)
 
             # total_sessions_6w counts only running activities (excludes cycling, swimming, etc.)
             activity_type_raw = a.get("type", a.get("activity_type", "run"))
-            _RUNNING_TYPES = {"run", "running", "trail_run", "trail_running", "indoor_running", "treadmill_running", "street_running"}
-            if str(activity_type_raw).lower() in _RUNNING_TYPES:
+            if str(activity_type_raw).lower() in _RUNNING_TYPES_6W:
                 total_sessions += 1
             
             if pace and 3 < pace < 10:  # Pace réaliste
