@@ -6,28 +6,38 @@ This module is intentionally I/O-free:
   - No datetime.now() (reference_date is always an explicit parameter)
   - No references to the workouts collection
 
-VMA V2 — TWO PATHS:
-
-  SOURCE A — Explicit performance (performance fiable identifiable):
-    Activity that can be identified as a genuine performance effort.
-    Priority: HIGH.
+VMA V2 — ACTIVE PATH:
 
   SOURCE B — Individual HR-speed model (modèle individuel vitesse–FC):
-    Linear regression speed = a * HR + b on multiple clean activities.
-    Used when SOURCE A is unavailable.
+    Linear regression speed = a * HR + b on multiple clean running activities.
+    Requires >= 4 activities with average HR spanning >= 20 bpm.
+    FCmax from the highest credible observed Garmin max HR (150–230 bpm).
+    Extrapolation target: 95% of FCmax (aerobic ceiling, conservative).
+    If R² < 0.30 or slope <= 0: vma_kmh = null.
 
-  If neither path yields sufficient confidence: vma_kmh = null.
+  SOURCE A — Explicit performance (DISABLED):
+    No Garmin field currently identifies an activity as a race or test.
+    The speed+duration heuristic is explicitly rejected.
+    The _vma_from_explicit_performance() helper is retained but never called.
+
+  If SOURCE B yields insufficient data or quality: vma_kmh = null.
+
+FCmax policy:
+  Runtime FCmax = highest credible observed Garmin max HR across valid activities.
+  No user-declared FCmax is available at runtime (USER_MAX_HR_RUNTIME_WIRED = NOT_AVAILABLE).
+  No 220-age formula, no population fallback, no hr_max+5.
 
 FORBIDDEN:
   - avg_speed-divided-by-0.70 fallback (removed)
   - Single fastest run auto-qualified as performance source
   - 220-age or any population FCmax formula
+  - hr_max+5 adjustment
   - Invented predictions when model is unreliable
 
 Inputs:
     List[DomainActivity]   — running activities already filtered to the user
     reference_date         — the "now" snapshot date (date or datetime)
-    user_max_hr            — optional known FCmax from user profile
+    user_max_hr            — optional known FCmax from user profile (wired to None at runtime)
 
 Outputs (dataclasses, not Pydantic):
     VMAEstimate

@@ -1347,3 +1347,67 @@ def test_g_no_look_ahead_history():
     assert r_pre.vma_kmh == r_all.vma_kmh, (
         "Look-ahead violation: future activity changed snapshot VMA"
     )
+
+
+def test_h_fcmax_no_lookahead():
+    """FCmax used for historical VMA must come only from activities <= snapshot_date.
+
+    A future activity with a higher max_hr must not raise the FCmax available
+    at the snapshot date.  The VMA computed at snapshot_date must be identical
+    whether or not the future high-HR activity is included in the input list.
+
+    FCMAX_NO_LOOKAHEAD = PASS
+    """
+    snapshot = date(2024, 3, 1)
+
+    # Five activities before the snapshot — sufficient for the HR-speed model.
+    # max_hr peaks at 185 bpm within this window.
+    pre_activities = [
+        DomainActivity(
+            activity_type="running",
+            start_time=date(2024, 2, 1).isoformat(),
+            distance_m=8_000.0, duration_s=3_600.0,
+            average_hr=130.0, max_hr=138.0,
+        ),
+        DomainActivity(
+            activity_type="running",
+            start_time=date(2024, 2, 8).isoformat(),
+            distance_m=10_000.0, duration_s=3_600.0,
+            average_hr=145.0, max_hr=153.0,
+        ),
+        DomainActivity(
+            activity_type="running",
+            start_time=date(2024, 2, 15).isoformat(),
+            distance_m=12_000.0, duration_s=3_600.0,
+            average_hr=158.0, max_hr=165.0,
+        ),
+        DomainActivity(
+            activity_type="running",
+            start_time=date(2024, 2, 22).isoformat(),
+            distance_m=14_000.0, duration_s=3_600.0,
+            average_hr=170.0, max_hr=178.0,
+        ),
+        DomainActivity(
+            activity_type="running",
+            start_time=date(2024, 2, 28).isoformat(),
+            distance_m=16_000.0, duration_s=3_600.0,
+            average_hr=178.0, max_hr=185.0,
+        ),
+    ]
+
+    # Future activity — starts AFTER snapshot_date — with a higher max_hr (220 bpm).
+    # If the engine uses this value as FCmax, the VMA extrapolation target changes.
+    future_high_hr = DomainActivity(
+        activity_type="running",
+        start_time=date(2024, 4, 15).isoformat(),
+        distance_m=10_000.0, duration_s=2_400.0,
+        average_hr=190.0, max_hr=220.0,
+    )
+
+    r_without_future = estimate_vma(pre_activities, snapshot)
+    r_with_future = estimate_vma(pre_activities + [future_high_hr], snapshot)
+
+    # The future activity must not influence the FCmax or VMA at snapshot_date
+    assert r_without_future.vma_kmh == r_with_future.vma_kmh, (
+        "FCmax look-ahead violation: future activity raised FCmax and changed snapshot VMA"
+    )

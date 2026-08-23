@@ -32,6 +32,9 @@ PER_TARGET_SOURCE_SELECTION          = YES
   (_select_riegel_source called once per target distance)
 
 NO_LOOKAHEAD_HISTORY                 = PASS
+FCMAX_NO_LOOKAHEAD                   = PASS
+  (FCmax at snapshot J = max of observed max_hr in activities <= J only;
+   a future activity with higher max_hr cannot raise FCmax retroactively)
 
 DB_WORKOUTS_VMA_DEPENDENCY           = NO
 DB_WORKOUTS_PREDICTION_DEPENDENCY    = NO
@@ -45,7 +48,7 @@ PREDICTIONS_FRONTEND_PRESERVED       = YES
 SEMI  = YES
 MARATHON = YES
 
-tests = 59 passed / 0 failed / 0 skipped / 0 errors
+tests = 68 passed / 0 failed / 0 skipped / 0 errors
 ```
 
 ---
