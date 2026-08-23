@@ -50,22 +50,52 @@ tests = 59 passed / 0 failed / 0 skipped / 0 errors
 
 ---
 
+## FCmax Runtime Audit
+
+```
+USER_MAX_HR_FIELD    = max_hr in RunnerProfile (runner_profile.py)
+USER_MAX_HR_STORAGE  = user_profile / physiological_metrics dict in build_runner_profile()
+                       — no Mongo collection stores a user-declared max_hr;
+                         build_runner_profile() is called without these params
+                         in the race-predictions and vma-history endpoints
+USER_MAX_HR_EXISTS   = NO
+
+USER_MAX_HR_RUNTIME_WIRED = NOT_AVAILABLE
+FCMAX_RUNTIME_SOURCE      = OBSERVED_GARMIN_MAX_HR
+```
+
+No user-declared max_hr is available at runtime.
+No new field, form, Mongo migration, or age-based fallback has been added.
+The engine's `user_max_hr` parameter exists but is never wired from server.py.
+
+Applicable policy (path 2B): documentation aligned; no code change required.
+
+---
+
 ## VMA Primary Model
 
 ```
-VMA_PRIMARY_MODEL = individual HR-speed model only (SOURCE A disabled)
+VMA_PRIMARY_MODEL = INDIVIDUAL_HR_SPEED_REGRESSION
 ```
 
-VMA V2 now uses a single path:
+VMA V2 uses a single path:
+
+multiple observed running activities
+→ average HR + average speed per activity
+→ individual HR-speed linear regression (speed = a * HR + b)
+→ quality gates (R² ≥ 0.30, positive slope, HR range ≥ 20 bpm)
+→ highest credible observed Garmin max HR (no user profile HR, no formula)
+→ extrapolation to 95% FCmax → estimated VMA or null
 
 **SOURCE A — DISABLED**
 No Garmin field currently identifies an activity as a race, test, or competition.
 The speed+duration heuristic (`speed >= 10 km/h AND duration >= 10 min`) is explicitly
 rejected as explicit performance qualification.
 
-**SOURCE B — Individual HR-speed model**
-Linear regression `speed = a * HR + b` built on >= 4 clean activities.
-FCmax from user profile or observed Garmin max_hr only (no synthetic fallback).
+**SOURCE B — Individual HR-speed regression**
+Linear regression `speed = a * HR + b` built on >= 4 clean running activities.
+FCmax from highest credible observed Garmin max HR only (150–230 bpm validation).
+No user profile FCmax, no population fallback, no formula derivation.
 
 ---
 
@@ -99,16 +129,21 @@ EXTRAPOLATION_TARGET = 95% of FCmax (aerobic ceiling, not 100%)
 ## FCmax Source
 
 ```
-FCMAX_SOURCE =
-  1. user_max_hr from user profile (if 130–230 bpm)
-  2. maximum observed max_hr across valid Garmin activities (if 150–230 bpm)
-  3. None — VMA is null when FCmax is unavailable
+FCMAX_RUNTIME_SOURCE      = OBSERVED_GARMIN_MAX_HR
+USER_MAX_HR_RUNTIME_WIRED = NOT_AVAILABLE
 
-FCMAX_PLUS_5   = REMOVED
-POPULATION_FCMAX = NO
+Runtime FCmax =
+  highest credible observed Garmin max HR across valid activities (150–230 bpm)
+  → None when no credible observed HR available
+  (VMA = null if FCmax = null)
+
+FCMAX_PLUS_5         = NO
+POPULATION_FCMAX     = NO
+AGE_FORMULA_FCMAX    = NO
 ```
 
 220-age, hr_max+5, and any formula-derived FCmax are **FORBIDDEN** and not present in the code.
+The observed Garmin max HR is a "highest credible observed value" — not a guaranteed physiological HRmax.
 
 ---
 
@@ -285,7 +320,7 @@ No-lookahead: PASS
 ## READY STATUS
 
 ```
-VMA_PRIMARY_MODEL = individual HR-speed model (SOURCE A DISABLED)
+VMA_PRIMARY_MODEL = INDIVIDUAL_HR_SPEED_REGRESSION
 
 SOURCE_A_EXPLICIT_PERFORMANCE = DISABLED
 EXPLICIT_PERFORMANCE_SUPPORTED = NO
@@ -298,7 +333,10 @@ REGRESSION_METHOD = OLS (speed = a * HR + b)
 FIT_QUALITY_RULE = R² >= 0.30 and positive slope
 MAX_EXTRAPOLATION_RULE = target_HR / max_observed_HR <= 1.25
 
-FCMAX_SOURCE = user profile OR observed Garmin max
+FCMAX_RUNTIME_SOURCE      = OBSERVED_GARMIN_MAX_HR
+USER_MAX_HR_EXISTS        = NO
+USER_MAX_HR_RUNTIME_WIRED = NOT_AVAILABLE
+FCMAX_PLUS_5              = NO
 POPULATION_FCMAX_FALLBACK = NO
 
 BEST_FAST_RUN_IS_PERFORMANCE = NO
