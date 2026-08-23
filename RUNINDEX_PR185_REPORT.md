@@ -4,6 +4,25 @@
 
 ---
 
+## Sync Status
+
+```
+BASE_BRANCH            = copilot/dev
+COPILOT_DEV_HEAD       = e3256e83f04a90ee97dab1150d914a3b7bb4a6cf
+PR185_HEAD             = 26c84ca (after sync)
+MERGE_BASE             = e3256e83f04a90ee97dab1150d914a3b7bb4a6cf
+MERGEABLE_FALSE_CAUSE  = stale GitHub API state; branch was already up-to-date with
+                         copilot/dev (merge-base == copilot/dev HEAD, no conflicts)
+CONFLICTS              = NONE
+REBASE_OR_MERGE        = NOT_NEEDED (already based on latest copilot/dev)
+
+PR185_BASE_SYNC        = PASS
+PR185_MERGEABLE        = YES
+SCOPE_CLEAN            = YES
+```
+
+---
+
 ## Architecture finale
 
 ```
@@ -240,6 +259,25 @@ VMA_HISTORY_FRONTEND_PRESERVED = YES
 PREDICTIONS_FRONTEND_PRESERVED = YES
 
 tests = 88 passed / 0 failed / 0 skipped / 0 errors
+```
+
+---
+
+## Final Checklist
+
+```
+PR185_BASE_SYNC                = PASS
+PR185_MERGEABLE                = YES
+SCOPE_CLEAN                    = YES
+DB_WORKOUTS_DEPENDENCY         = NO
+SYNTHETIC_PERFORMANCE          = NO
+FCMAX_NO_LOOKAHEAD             = PASS
+VMA_NO_LOOKAHEAD               = PASS
+RIEGEL_OBSERVED_SOURCE_ONLY    = PASS
+VMA_HISTORY_WINDOW_DAYS        = 42
+FRONTEND_CONTRACT_PRESERVED    = YES
+TESTS                          = 88 passed / 0 failed
+READY_FOR_REVIEW               = YES
 ```
 
 **Do not merge automatically. Do not start #186.**
