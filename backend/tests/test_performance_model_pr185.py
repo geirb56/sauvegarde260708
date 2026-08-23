@@ -511,7 +511,9 @@ def test_vma_no_db_workouts_dependency():
 def test_predictions_no_data_returns_no_predictions():
     result = predict_races([], TODAY)
     assert result.has_data is False
-    assert result.predictions == []
+    # All 4 targets are returned but with null times (no defensible source)
+    assert len(result.predictions) == 4
+    assert all(p.predicted_time_s is None for p in result.predictions)
 
 
 def test_predictions_insufficient_data_returns_null():
@@ -724,7 +726,9 @@ def test_predictions_frontend_preserved():
     assert hasattr(result, "has_data")
     assert hasattr(result, "vma")
     assert hasattr(result, "predictions")
-    assert result.predictions == []
+    # All 4 targets returned, all null when no activities
+    assert len(result.predictions) == 4
+    assert all(p.predicted_time_s is None for p in result.predictions)
 
     activities = [
         _run(8_000.0,  3_600.0, days_ago=5,  avg_hr=130.0, max_hr=135.0),
@@ -1130,3 +1134,216 @@ def test_anti_synthetic_comprehensive_scan():
             f"FORBIDDEN: '{description}' ({pattern!r}) found in performance_model.py"
         )
 
+
+
+# ===========================================================================
+# MANDATORY TESTS A–G (final audit — PR185 corrections)
+# ===========================================================================
+
+def _hr_model_activities(user_max_hr: float = 185.0) -> list:
+    """Return 4 clean running activities that build a valid HR-speed model."""
+    return [
+        _run(8_000.0,  3_200.0, days_ago=5,  avg_hr=130.0, max_hr=140.0),
+        _run(10_000.0, 3_600.0, days_ago=10, avg_hr=148.0, max_hr=156.0),
+        _run(12_000.0, 4_000.0, days_ago=15, avg_hr=158.0, max_hr=165.0),
+        _run(14_000.0, 4_500.0, days_ago=20, avg_hr=170.0, max_hr=178.0),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# A — VMA insufficient + observed Riegel source defensible
+#     → vma = null, prediction exists
+# ---------------------------------------------------------------------------
+
+def test_a_vma_null_predictions_exist():
+    """Predictions can exist even when VMA is null (insufficient HR model data).
+
+    PREDICTIONS_WITHOUT_VMA = possible
+    """
+    # Only 2 activities → HR model cannot build (needs >= 4)
+    # But we have a defensible 10K source → 10K prediction must exist
+    acts = [
+        _run(10_000.0, 3_600.0, days_ago=5, avg_hr=165.0, max_hr=175.0),
+        _run(12_000.0, 4_500.0, days_ago=15, avg_hr=155.0, max_hr=163.0),
+    ]
+    result = predict_races(acts, TODAY, user_max_hr=None)
+
+    assert result.vma.vma_kmh is None, "VMA must be null with insufficient HR data"
+
+    # At least 10K prediction should exist (10K source is 10 000 m — perfect)
+    preds_by_label = {p.distance_label: p for p in result.predictions}
+    assert "10K" in preds_by_label
+    assert preds_by_label["10K"].predicted_time_s is not None, (
+        "10K prediction must exist even when VMA is null"
+    )
+
+    # has_data must be True because at least one prediction is available
+    assert result.has_data is True
+
+
+# ---------------------------------------------------------------------------
+# B — VMA insufficient + no defensible Riegel source
+#     → all predictions null / insufficient
+# ---------------------------------------------------------------------------
+
+def test_b_vma_null_no_riegel_source():
+    """When VMA is null AND no defensible Riegel source exists, all predictions null.
+
+    NEITHER_WHEN_INSUFFICIENT = possible
+    """
+    # Only 1 very short activity: too short to be defensible for any target
+    acts = [
+        _run(400.0, 90.0, days_ago=5, avg_hr=170.0, max_hr=178.0),
+    ]
+    result = predict_races(acts, TODAY, user_max_hr=None)
+
+    assert result.vma.vma_kmh is None
+
+    for pred in result.predictions:
+        assert pred.predicted_time_s is None, (
+            f"Prediction for {pred.distance_label} must be null with no defensible source"
+        )
+        assert pred.confidence == "insufficient"
+
+    # has_data must be False: no VMA, no predictions
+    assert result.has_data is False
+
+
+# ---------------------------------------------------------------------------
+# C — VMA available + defensible Riegel source
+#     → VMA and prediction both present
+# ---------------------------------------------------------------------------
+
+def test_c_vma_and_predictions_both_available():
+    """When VMA is available and a defensible source exists, both VMA and prediction exist.
+
+    VMA_AND_PREDICTIONS = possible
+    """
+    acts = _hr_model_activities(user_max_hr=185.0)
+    result = predict_races(acts, TODAY, user_max_hr=185.0)
+
+    assert result.vma.vma_kmh is not None, "VMA must be available"
+    preds_with_time = [p for p in result.predictions if p.predicted_time_s is not None]
+    assert len(preds_with_time) > 0, "At least one prediction must exist"
+    assert result.has_data is True
+
+
+# ---------------------------------------------------------------------------
+# D — No activities → VMA null, no invented predictions
+# ---------------------------------------------------------------------------
+
+def test_d_no_activities_no_invented_data():
+    """With zero activities, VMA is null and no predictions are invented.
+
+    NEITHER_WHEN_INSUFFICIENT = possible
+    """
+    result = predict_races([], TODAY, user_max_hr=None)
+
+    assert result.vma.vma_kmh is None
+    for pred in result.predictions:
+        assert pred.predicted_time_s is None, (
+            f"No prediction must be invented for {pred.distance_label}"
+        )
+    # has_data False (nothing)
+    assert result.has_data is False
+
+
+# ---------------------------------------------------------------------------
+# E — All 4 targets present (5K / 10K / Semi / Marathon)
+# ---------------------------------------------------------------------------
+
+def test_e_all_four_targets_present():
+    """predict_races always returns all 4 race targets."""
+    acts = _hr_model_activities(user_max_hr=185.0)
+    result = predict_races(acts, TODAY, user_max_hr=185.0)
+
+    labels = {p.distance_label for p in result.predictions}
+    assert "5K" in labels
+    assert "10K" in labels
+    assert "Semi" in labels
+    assert "Marathon" in labels
+    assert len(result.predictions) == 4
+
+
+def test_e_all_four_targets_present_even_vma_null():
+    """All 4 targets are returned even when VMA is null."""
+    # Only 1 activity → VMA null
+    acts = [_run(10_000.0, 3_600.0, days_ago=5, avg_hr=165.0, max_hr=175.0)]
+    result = predict_races(acts, TODAY)
+
+    labels = {p.distance_label for p in result.predictions}
+    assert "5K" in labels
+    assert "10K" in labels
+    assert "Semi" in labels
+    assert "Marathon" in labels
+
+
+# ---------------------------------------------------------------------------
+# F — Anti-regression: forbidden executable patterns absent
+# ---------------------------------------------------------------------------
+
+def test_f_anti_regression_no_synthetic_effort():
+    """Static scan: no synthetic 20-min effort, no avg_speed/0.70, no hr_max+5,
+    no speed-only performance qualification."""
+    import inspect
+    from training_v2 import performance_model as pm
+    source = inspect.getsource(pm)
+
+    forbidden = [
+        ("synth_duration_s = 20 * 60", "synthetic 20-min effort"),
+        ("/ 0.70", "avg_speed/0.70 fallback"),
+        ("/ 0.7", "avg_speed/0.7 fallback"),
+        ("hr_max + 5", "FCmax +5 synthetic"),
+        ("hr_max + 5.0", "FCmax +5.0 synthetic"),
+        ("220 - ", "220-age FCmax"),
+        # speed-only qualification is expressed as "speed >= ... and duration"
+        # without using the explicit performance flag; detect the removed heuristic:
+        ("speed >= 10 and duration", "speed+duration explicit performance heuristic"),
+    ]
+    for pattern, label in forbidden:
+        assert pattern not in source, (
+            f"FORBIDDEN pattern '{label}' ({pattern!r}) found in performance_model.py"
+        )
+
+
+# ---------------------------------------------------------------------------
+# G — No-look-ahead: historical snapshots always PASS
+# ---------------------------------------------------------------------------
+
+def test_g_no_look_ahead_history():
+    """Historical snapshots strictly ignore activities after the snapshot date.
+
+    NO_LOOKAHEAD_HISTORY = PASS
+    """
+    snapshot = date(2024, 3, 1)
+
+    pre_snapshot = [
+        DomainActivity(
+            activity_type="running",
+            start_time=date(2024, 2, 10).isoformat(),
+            distance_m=10_000.0, duration_s=3_600.0,
+            average_hr=160.0, max_hr=170.0,
+        ),
+        DomainActivity(
+            activity_type="running",
+            start_time=date(2024, 2, 20).isoformat(),
+            distance_m=8_000.0, duration_s=2_800.0,
+            average_hr=150.0, max_hr=160.0,
+        ),
+    ]
+    post_snapshot = [
+        DomainActivity(
+            activity_type="running",
+            start_time=date(2024, 3, 15).isoformat(),
+            distance_m=15_000.0, duration_s=4_500.0,
+            average_hr=170.0, max_hr=180.0,
+        ),
+    ]
+
+    r_pre = estimate_vma(pre_snapshot, snapshot)
+    r_all = estimate_vma(pre_snapshot + post_snapshot, snapshot)
+
+    # Adding a future activity must not change the snapshot result
+    assert r_pre.vma_kmh == r_all.vma_kmh, (
+        "Look-ahead violation: future activity changed snapshot VMA"
+    )

@@ -934,8 +934,9 @@ def predict_races(
 
     vma_est = estimate_vma(activities, reference_date, user_max_hr)
 
-    if not vma_est.has_data:
-        return PerformanceEstimate(has_data=False, vma=vma_est, predictions=[])
+    # VMA and predictions are INDEPENDENT.
+    # Do NOT return early when VMA is null — predictions may still exist from
+    # observed Riegel sources.
 
     # Resolve FCmax for relative_hr computation in source scoring
     fcmax = _resolve_fcmax(activities, user_max_hr, reference_date)
@@ -1057,8 +1058,12 @@ def predict_races(
         "model_version": "v2",
     }
 
+    # has_data = True when VMA is available OR at least one prediction has a time
+    has_any_prediction = any(p.predicted_time_s is not None for p in predictions)
+    result_has_data = vma_est.has_data or has_any_prediction
+
     return PerformanceEstimate(
-        has_data=True,
+        has_data=result_has_data,
         vma=vma_est,
         predictions=predictions,
         athlete_profile=athlete_profile,

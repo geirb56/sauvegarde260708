@@ -285,9 +285,12 @@ No-lookahead: PASS
 ## READY STATUS
 
 ```
-VMA_PRIMARY_MODEL =
-  explicit performance OR individual HR-speed model
+VMA_PRIMARY_MODEL = individual HR-speed model (SOURCE A DISABLED)
 
+SOURCE_A_EXPLICIT_PERFORMANCE = DISABLED
+EXPLICIT_PERFORMANCE_SUPPORTED = NO
+
+HR_SPEED_MODEL_SUPPORTED = YES
 HR_SPEED_MODEL = PASS
 MIN_ACTIVITY_COUNT = 4
 MIN_HR_RANGE = 20 bpm
@@ -301,10 +304,13 @@ POPULATION_FCMAX_FALLBACK = NO
 BEST_FAST_RUN_IS_PERFORMANCE = NO
 AVG_PACE_070_FALLBACK = REMOVED
 
-EXPLICIT_PERFORMANCE_SUPPORTED = YES
-HR_SPEED_FALLBACK_SUPPORTED = YES
+SOURCE_AGREEMENT_CHECK = NOT_APPLICABLE
+  (single VMA source active — no dual-source comparison)
 
-SOURCE_AGREEMENT_CHECK = PASS
+VMA_CAN_BE_NULL_WHILE_PREDICTIONS_EXIST = YES
+
+RIEGEL_SOURCE = OBSERVED_ACTIVITY_ONLY
+SYNTHETIC_RIEGEL_SOURCE = NO
 
 VMA_INSUFFICIENT_NULL = PASS
 NO_LOOKAHEAD_HISTORY = PASS
@@ -316,7 +322,12 @@ VMA_FRONTEND_PRESERVED = YES
 VMA_HISTORY_FRONTEND_PRESERVED = YES
 PREDICTIONS_FRONTEND_PRESERVED = YES
 
-tests = 42 passed / 0 failed / 0 skipped / 0 errors
+VMA_WITHOUT_PREDICTIONS = possible
+PREDICTIONS_WITHOUT_VMA = possible
+VMA_AND_PREDICTIONS = possible
+NEITHER_WHEN_INSUFFICIENT = possible
+
+tests = 67 passed / 0 failed / 0 skipped / 0 errors
 ```
 
 - VMA functions without any race/test explicitly required ✓
@@ -328,6 +339,7 @@ tests = 42 passed / 0 failed / 0 skipped / 0 errors
 - Fastest run not auto-qualified ✓
 - No synthetic values ✓
 - Predictions V2 preserved (Riegel from observed performance) ✓
+- Predictions independent of VMA availability ✓
 - History without look-ahead ✓
 - DomainActivity authority ✓
 - Frontend preserved ✓
