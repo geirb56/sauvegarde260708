@@ -1059,3 +1059,4 @@ def predict_races(
 RUNNING_TYPES = _RUNNING_TYPES
 seconds_to_str = _seconds_to_str
 validate_activity = _validate_activity
+activity_date = _activity_date

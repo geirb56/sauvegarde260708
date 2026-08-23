@@ -1647,13 +1647,15 @@ def test_d3_window_is_non_cumulative():
     vma_windowed = estimate_vma(window_activities, snapshot)
     vma_cumulative = estimate_vma(all_activities, snapshot)
 
-    # The windowed VMA must exclude the old outlier max_hr
-    # (cumulative would have included 220 bpm; windowed would not)
-    # The values may differ if the old activity contains outlier max_hr
-    assert vma_windowed.vma_kmh != vma_cumulative.vma_kmh or True  # may be equal if model fails both
-    # Key invariant: old activity is outside window
+    # Key invariant: old activity (max_hr=220, an outlier) is outside the 42-day window
     old_date = _activity_date(old)
-    assert old_date is not None and old_date < window_start
+    assert old_date is not None and old_date < window_start, (
+        "Old activity should be outside the 42-day window"
+    )
+    # The windowed calculation must not see the outlier — verify old not in window
+    assert old not in window_activities, (
+        "Old activity with outlier max_hr must not be included in the 42-day window"
+    )
 
 
 def test_d4_sessions_counted_in_window_only():

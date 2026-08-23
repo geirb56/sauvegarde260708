@@ -84,7 +84,7 @@ from training_v2.daily_runtime_helpers import (
 )
 from garmin.readiness_adapter import build_readiness_v2_from_garmin_data
 from garmin.domain_adapter import mongo_garmin_activities_to_domain
-from training_v2.performance_model import estimate_vma, predict_races, _activity_date  # PR185
+from training_v2.performance_model import estimate_vma, predict_races, activity_date  # PR185
 from training_engine import (
     DEFAULT_WEEKLY_KM,
     compute_current_weekly_km,
@@ -4122,7 +4122,7 @@ async def get_vma_history(user: dict = Depends(auth_user)):
         activities_in_window = [
             a for a in domain_activities
             if validate_activity(a, snapshot_date)
-            and (_activity_date(a) or _date.min) >= window_start
+            and (activity_date(a) or _date.min) >= window_start
         ]
 
         # Estimate VMA using only activities in the 42-day window (strict no look-ahead)
