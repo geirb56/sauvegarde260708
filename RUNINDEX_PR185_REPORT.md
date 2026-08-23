@@ -244,7 +244,7 @@ No-lookahead: PASS
 | 9 | Excessive extrapolation → confidence reduced or null | PASS |
 | 10 | FCmax absent → no 220-age fallback | PASS |
 | 11 | Future activity → ignored | PASS |
-| 12 | Explicit performance → priority SOURCE A | PASS |
+| 12 | SOURCE A disabled — no activity auto-qualified as explicit performance | PASS |
 | 13 | Explicit performance + HR model coherent → confidence >= model alone | PASS |
 | 14 | Sources strongly divergent → confidence diminishes | PASS |
 | 15 | db.workouts divergence → no impact (no dependency) | PASS |
