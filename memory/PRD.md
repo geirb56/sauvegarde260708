@@ -595,3 +595,9 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
 - PR #184 = sources de la page Progress migrées vers V2/DomainActivity : `/stats` calcule total_duration_minutes/sessions/km depuis DomainActivity (server.py +143/-106), rename `V2_GOAL_TO_PRED_DISTANCE`, Progress.jsx + i18n (traductions). Nouveaux tests backend + jest.
 - Validation (agent-tested) : imports OK, backend + frontend + 4 workers RUNNING, boot propre. Endpoints Progress tous 200 (/stats, /training/race-predictions, /training/vma-history, /run-index/history, /garmin/daily-metrics). /stats V2 : total_duration_minutes calculé, avg_heart_rate=null (sémantique null). Tests PR184 backend = **20 passed**. jest progress-v2-migration = **30 passed**. Régression suites PR = **275 passed**. Screenshot Progress FR : tous libellés traduits, 0 clé brute, 0 erreur JS, RunIndex/piliers null=`—`, INSUFFICIENT géré.
 - Statut : agent-tested + smoke visuel FR vérifié ; non user-confirmed.
+
+## 2026-06 — Pull copilot/dev — PR #185 (performance model V2 : VMA / race-predictions)
+- Fetch + merge `sauvegarde/copilot/dev` (e3256e8→c965ac5). Merge ORT propre, 0 conflit. `.env` intacts, PRD/rapports préservés.
+- PR #185 = nouveau `backend/training_v2/performance_model.py` (+1062) : modèle de performance V2 (Riegel gate, FCmax robuste = OBSERVED_GARMIN_MAX_HR, prédictions indépendantes, historique 42 jours, Source A retirée). server.py migré vers ce modèle pour `/training/race-predictions` et `/training/vma-history`. Gros test suite (+1691).
+- Validation (agent-tested) : imports OK, backend + 4 workers RUNNING, boot propre. Smoke **6/6 = 200** (race-predictions, vma-history, stats, run-index, dashboard, today). race-predictions (compte sans data) → `has_data:false, predictions:[], model_version:"v2"` (pas de synthétiques). Tests PR185 = **88 passed**. Régression suites PR = **275 passed**. Frontend inchangé.
+- Statut : agent-tested ; non user-confirmed.
