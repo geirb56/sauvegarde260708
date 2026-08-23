@@ -11,28 +11,56 @@ VMA V2 — ACTIVE PATH:
   SOURCE B — Individual HR-speed model (modèle individuel vitesse–FC):
     Linear regression speed = a * HR + b on multiple clean running activities.
     Requires >= 4 activities with average HR spanning >= 20 bpm.
-    FCmax from the highest credible observed Garmin max HR (150–230 bpm).
+    FCmax from the robust observed Garmin max HR (see _resolve_fcmax_robust).
     Extrapolation target: 95% of FCmax (aerobic ceiling, conservative).
     If R² < 0.30 or slope <= 0: vma_kmh = null.
 
-  SOURCE A — Explicit performance (DISABLED):
-    No Garmin field currently identifies an activity as a race or test.
-    The speed+duration heuristic is explicitly rejected.
-    The _vma_from_explicit_performance() helper is retained but never called.
+  SOURCE A — Explicit performance: REMOVED.
+    No Garmin field identifies an activity as a race or test.
+    All related code has been deleted.
 
   If SOURCE B yields insufficient data or quality: vma_kmh = null.
 
 FCmax policy:
-  Runtime FCmax = highest credible observed Garmin max HR across valid activities.
-  No user-declared FCmax is available at runtime (USER_MAX_HR_RUNTIME_WIRED = NOT_AVAILABLE).
+  FCMAX_RUNTIME_SOURCE = ROBUST_OBSERVED_GARMIN_MAX_HR
+  FCMAX_OUTLIER_PROTECTION = YES (active when n >= 3 observations)
+  USER_MAX_HR_RUNTIME_WIRED = NOT_AVAILABLE
   No 220-age formula, no population fallback, no hr_max+5.
+
+  Robust estimator: for n >= 3, if the highest observed max_hr is > 10% above
+  the second-highest, it is treated as a Garmin artefact and discarded.
+  For n < 3: raw max (no outlier protection, documented).
+
+Race predictions — ROAD ONLY:
+  RIEGEL_SOURCE = QUALIFIED_OBSERVED_ACTIVITY_ONLY
+  trail_running activities are never used as road prediction sources.
+  Activities with elevation_gain_per_km > MAX_ROAD_ELEVATION_GAIN_PER_KM are excluded.
+  When FCmax and average_hr are available: relative_hr < MIN_RIEGEL_RELATIVE_HR → rejected.
+  Without HR: prediction still possible; confidence capped at MEDIUM.
+
+VMA / Predictions independence:
+  RIEGEL_VMA_CONFIDENCE_DEPENDENCY = NO
+  Prediction confidence is determined solely by source proximity, recency,
+  relative HR, and endurance support.  VMA confidence never downgrade predictions.
+
+VMA history:
+  VMA_HISTORY_WINDOW_DAYS = 42 (rolling window, non-cumulative)
+  Each snapshot uses only activities within the 42-day window ending at snapshot_date.
+  NO look-ahead.
+
+duration_s semantics:
+  GARMIN_DURATION_SOURCE = summaryDTO.duration (Garmin Connect elapsed timer)
+  GARMIN_DURATION_SEMANTICS = elapsed timer duration (includes pauses)
+  moving_duration_s is stored in GarminActivity but not used in this module.
+  No correction is applied in performance_model.py.
 
 FORBIDDEN:
   - avg_speed-divided-by-0.70 fallback (removed)
-  - Single fastest run auto-qualified as performance source
+  - Single fastest run auto-qualified as source
   - 220-age or any population FCmax formula
   - hr_max+5 adjustment
-  - Invented predictions when model is unreliable
+  - Synthetic/invented predictions
+  - VMA confidence affecting prediction confidence
 
 Inputs:
     List[DomainActivity]   — running activities already filtered to the user
@@ -63,6 +91,9 @@ _RUNNING_TYPES = {
     "indoor_running", "track_running",
 }
 
+# Road-eligible types for Riegel source selection (trail excluded)
+_ROAD_TYPES = _RUNNING_TYPES - {"trail_running"}
+
 RIEGEL_K: float = 1.06
 
 # Speed bounds (km/h) for a plausible running activity
@@ -79,7 +110,7 @@ MIN_INFORMATIVE_DURATION_S: float = 5 * 60   # 5 min
 MIN_DURATION_HR_MODEL_S: float = 10 * 60     # 10 min — short sprints not representative
 MIN_AVG_HR: float = 90.0                      # bpm floor — below this is likely invalid
 MAX_AVG_HR: float = 220.0                     # bpm ceiling — above this is aberrant
-MAX_ELEVATION_GAIN_M: float = 400.0           # elevation filter (if available)
+MAX_ELEVATION_GAIN_M: float = 400.0           # elevation filter for HR model (if available)
 
 # HR-speed model: coverage requirements
 MIN_ACTIVITIES_HR_MODEL: int = 4
@@ -90,25 +121,17 @@ MIN_HR_RANGE_BPM: float = 20.0               # min spread across observed HR val
 MIN_R2: float = 0.30                          # minimum R² — weak correlation → null
 MAX_EXTRAPOLATION_RATIO: float = 1.25         # max HR extrapolation beyond observed max
 
-# Explicit performance: minimum duration for qualification
-MIN_EXPLICIT_PERFORMANCE_DURATION_S: float = 10 * 60   # 10 min
-
 # Staleness thresholds (days) for confidence
 CONFIDENCE_HIGH_DAYS = 21
 CONFIDENCE_MEDIUM_DAYS = 56
 CONFIDENCE_LOW_DAYS = 120
 
-# Maximum source disagreement ratio before penalising confidence
-MAX_SOURCE_AGREEMENT_RATIO: float = 0.15     # 15% difference → SOURCES_DISAGREE
-
-# Source A (explicit performance): DISABLED — no Garmin field identifies races/tests.
-# Speed+duration heuristic is not acceptable as explicit performance qualification.
-SOURCE_A_DISABLED: bool = True
-
 # Riegel source selection constraints
 MAX_RIEGEL_SOURCE_AGE_DAYS: int = 730        # Activities older than 2 years not defensible
 MIN_RIEGEL_SOURCE_RATIO: float = 0.12        # Source must be >= 12% of target distance
 MIN_RIEGEL_SCORE: float = 0.25               # Minimum score for a defensible source
+MIN_RIEGEL_RELATIVE_HR: float = 0.75         # Minimum relative effort when HR available
+MAX_ROAD_ELEVATION_GAIN_PER_KM: float = 30.0  # m/km — above this, not road-equivalent
 
 # Target race distances (m)
 RACE_DISTANCES_M = {
@@ -122,14 +145,12 @@ RACE_DISTANCES_M = {
 # Reason codes
 # ---------------------------------------------------------------------------
 
-REASON_EXPLICIT_PERFORMANCE_SOURCE = "EXPLICIT_PERFORMANCE_SOURCE"
 REASON_HR_SPEED_MODEL_SOURCE = "HR_SPEED_MODEL_SOURCE"
 REASON_HR_RANGE_INSUFFICIENT = "HR_RANGE_INSUFFICIENT"
 REASON_HR_LEVELS_INSUFFICIENT = "HR_LEVELS_INSUFFICIENT"
 REASON_HR_MODEL_POOR_FIT = "HR_MODEL_POOR_FIT"
 REASON_EXTRAPOLATION_TOO_LARGE = "EXTRAPOLATION_TOO_LARGE"
 REASON_NO_FCMAX = "NO_FCMAX"
-REASON_SOURCES_DISAGREE = "SOURCES_DISAGREE"
 REASON_NO_DATA = "NO_DATA"
 REASON_INSUFFICIENT_ACTIVITIES = "INSUFFICIENT_ACTIVITIES"
 
@@ -258,8 +279,37 @@ def _linear_regression(
 
 
 # ---------------------------------------------------------------------------
-# FCmax resolution — NO 220-age formula
+# FCmax resolution — robust observed Garmin max HR
 # ---------------------------------------------------------------------------
+
+
+def _resolve_fcmax_robust(observed: List[float]) -> Optional[float]:
+    """Return a robust FCmax from a list of valid observed max_hr values.
+
+    Rules:
+      n = 0  → None
+      n = 1  → raw value (no outlier protection, single observation)
+      n = 2  → raw max (no outlier protection, two observations)
+      n >= 3 → outlier protection: if the highest value exceeds the
+               second-highest by more than 10%, it is treated as a
+               Garmin artefact and discarded; second-highest is used instead.
+
+    Examples:
+      [178, 180, 182, 181, 218] → 218 > 182 * 1.10 → 182  (artefact rejected)
+      [178, 182, 185, 188, 190] → 190 ≤ 188 * 1.10 → 190  (credible)
+    """
+    n = len(observed)
+    if n == 0:
+        return None
+    if n < 3:
+        # Single or pair — no outlier protection; return raw max
+        return float(max(observed))
+    sorted_hr = sorted(observed)
+    high = sorted_hr[-1]
+    second = sorted_hr[-2]
+    if high > second * 1.10:
+        return float(second)
+    return float(high)
 
 
 def _resolve_fcmax(
@@ -269,18 +319,17 @@ def _resolve_fcmax(
 ) -> Optional[float]:
     """Resolve FCmax from reliable sources only.
 
-    Order:
-    1. user_max_hr (from user profile/configuration)
-    2. Maximum HR observed in Garmin activities (if credible: >= 150 bpm, <= 230 bpm)
+    Priority:
+    1. user_max_hr (from user profile/configuration, validated 130–230 bpm)
+    2. Robust observed max HR from Garmin activities (credible: 150–230 bpm)
+       with outlier protection when n >= 3 observations.
     3. None — no fallback formula
 
-    220-age is FORBIDDEN.
+    220-age, hr_max+5, and any formula-derived FCmax are FORBIDDEN.
     """
-    # 1. User-configured FCmax
     if user_max_hr is not None and 130 <= user_max_hr <= 230:
         return float(user_max_hr)
 
-    # 2. Observed maximum from activities
     if activities and reference_date is not None:
         observed = [
             a.max_hr
@@ -289,8 +338,7 @@ def _resolve_fcmax(
             and a.max_hr is not None
             and 150 <= a.max_hr <= 230
         ]
-        if observed:
-            return float(max(observed))
+        return _resolve_fcmax_robust(observed)
 
     return None
 
@@ -448,64 +496,6 @@ def _fit_hr_speed_model(
 
 
 # ---------------------------------------------------------------------------
-# Explicit performance (Source A)
-# ---------------------------------------------------------------------------
-
-
-def _is_explicit_performance(a: DomainActivity, reference_date: date) -> bool:
-    """Source A (explicit performance) is DISABLED.
-
-    No Garmin field currently identifies an activity as a race, test, or competition.
-    The speed+duration heuristic (speed >= 10 km/h, duration >= 10 min) is not an
-    acceptable proxy for explicit performance qualification.
-
-    SOURCE_A_DISABLED = True.  Returns False always.
-    """
-    return False
-
-
-def _select_explicit_performance(
-    activities: List[DomainActivity],
-    reference_date: date,
-) -> Optional[DomainActivity]:
-    """Select the best explicit performance candidate.
-
-    Among qualifying performances, prefer:
-    1. Longest effort (most informative)
-    2. Then fastest
-    3. Then most recent
-    """
-    candidates = [a for a in activities if _is_explicit_performance(a, reference_date)]
-    if not candidates:
-        return None
-
-    def sort_key(a: DomainActivity):
-        dur = a.duration_s or 0.0
-        spd = _speed_kmh(a) or 0.0
-        d = _activity_date(a) or date.min
-        return (dur, spd, d.toordinal())
-
-    return max(candidates, key=sort_key)
-
-
-def _vma_from_explicit_performance(a: DomainActivity) -> float:
-    """Convert explicit performance to VMA using duration-based fraction."""
-    speed = _speed_kmh(a) or 0.0
-    duration_min = (a.duration_s or 0.0) / 60.0
-
-    if duration_min >= 60:
-        fraction = 0.78
-    elif duration_min >= 20:
-        fraction = 0.85
-    elif duration_min >= 12:
-        fraction = 0.90
-    else:
-        fraction = 0.95
-
-    return round(speed / fraction, 2)
-
-
-# ---------------------------------------------------------------------------
 # Confidence
 # ---------------------------------------------------------------------------
 
@@ -540,42 +530,6 @@ def _hr_model_confidence(
     if n >= 4 and r2 >= 0.40 and ext <= 1.20 and most_recent_days <= CONFIDENCE_MEDIUM_DAYS:
         return "medium"
     return "low"
-
-
-def _explicit_confidence(a: DomainActivity, reference_date: date) -> str:
-    """Confidence for an explicit performance source."""
-    d = _activity_date(a)
-    days = _days_ago(d, reference_date) if d else 999
-    dur = a.duration_s or 0.0
-
-    if days <= CONFIDENCE_HIGH_DAYS and dur >= 20 * 60:
-        return "high"
-    if days <= CONFIDENCE_MEDIUM_DAYS and dur >= 10 * 60:
-        return "medium"
-    if days <= CONFIDENCE_LOW_DAYS:
-        return "low"
-    return "insufficient"
-
-
-def _merge_confidence(ca: str, cb: str, agree: bool) -> str:
-    """Merge two confidence levels.
-
-    If sources agree, take the better one (or bump up).
-    If sources disagree, downgrade by one level.
-    """
-    order = {"insufficient": 0, "low": 1, "medium": 2, "high": 3}
-    rev = {0: "insufficient", 1: "low", 2: "medium", 3: "high"}
-
-    va = order.get(ca, 0)
-    vb = order.get(cb, 0)
-    combined = max(va, vb)
-
-    if agree:
-        combined = min(combined + 1, 3)
-    else:
-        combined = max(combined - 1, 0)
-
-    return rev[combined]
 
 
 # ---------------------------------------------------------------------------
@@ -825,20 +779,37 @@ def _score_riegel_candidate(
     reference_date: date,
     fcmax: Optional[float],
 ) -> float:
-    """Score an activity as a Riegel source for a given target distance.
+    """Score an activity as a Riegel road-prediction source for a given target.
 
     Returns a score in [0, 1].  Higher = more informative for this target.
     Returns 0.0 when the activity is not a defensible source.
 
-    Weights:
+    Hard exclusions (return 0.0):
+      - trail_running type: road predictions only
+      - elevation_gain_per_km > MAX_ROAD_ELEVATION_GAIN_PER_KM: not road-equivalent
+      - distance < MIN_RIEGEL_SOURCE_RATIO * target_distance
+      - activity older than MAX_RIEGEL_SOURCE_AGE_DAYS
+      - relative_hr < MIN_RIEGEL_RELATIVE_HR when FCmax and avg_hr are both available
+        (easy runs are not informative sources; without HR data no gate is applied)
+
+    Weights (for eligible activities):
       proximity  0.50  — how close source distance is to target
       recency    0.30  — how recent the activity is
       rel_hr     0.20  — effort level relative to FCmax (neutral 0.5 when unknown)
 
-    Minimum defensible conditions:
-      - activity distance >= MIN_RIEGEL_SOURCE_RATIO * target_distance
-      - activity date within MAX_RIEGEL_SOURCE_AGE_DAYS
+    Without HR: prediction still possible; confidence will be capped at MEDIUM.
     """
+    # Road-only: trail excluded by type
+    act_type = (a.activity_type or "").strip().lower().replace(" ", "_")
+    if act_type == "trail_running":
+        return 0.0
+
+    # Elevation gate: relative to distance (not an absolute threshold)
+    if a.elevation_gain_m is not None and a.distance_m and a.distance_m > 0:
+        elev_per_km = a.elevation_gain_m / (a.distance_m / 1000.0)
+        if elev_per_km > MAX_ROAD_ELEVATION_GAIN_PER_KM:
+            return 0.0
+
     src_dist = a.distance_m or 0.0
     if src_dist < max(MIN_DISTANCE_M, target_distance_m * MIN_RIEGEL_SOURCE_RATIO):
         return 0.0
@@ -849,6 +820,12 @@ def _score_riegel_candidate(
     days = _days_ago(d, reference_date)
     if days > MAX_RIEGEL_SOURCE_AGE_DAYS:
         return 0.0
+
+    # Relative HR gate: reject easy runs when HR data is available
+    if fcmax is not None and fcmax > 0 and a.average_hr is not None:
+        relative_hr = a.average_hr / fcmax
+        if relative_hr < MIN_RIEGEL_RELATIVE_HR:
+            return 0.0   # too easy — not an informative performance source
 
     # Proximity: prefer source ≈ target (ratio approaching 1.0 from below is ideal)
     ratio = src_dist / target_distance_m
@@ -871,7 +848,7 @@ def _score_riegel_candidate(
     else:
         recency = 0.15   # old but within MAX_RIEGEL_SOURCE_AGE_DAYS
 
-    # Relative HR (effort level); neutral 0.5 when HR data unavailable
+    # Relative HR score: neutral 0.5 when HR data unavailable
     if fcmax is not None and fcmax > 0 and a.average_hr is not None:
         rel_hr_score = min(a.average_hr / fcmax, 1.0)
     else:
@@ -1029,10 +1006,6 @@ def predict_races(
             source_distance_m, dist_m, days_since_source, endurance,
             relative_hr=relative_hr,
         )
-
-        # Downgrade prediction confidence if VMA model itself is low/insufficient
-        if vma_est.confidence in ("low", "insufficient") and conf == "high":
-            conf = "medium"
 
         predictions.append(RacePrediction(
             distance_label=label,

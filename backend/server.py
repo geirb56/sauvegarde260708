@@ -84,7 +84,7 @@ from training_v2.daily_runtime_helpers import (
 )
 from garmin.readiness_adapter import build_readiness_v2_from_garmin_data
 from garmin.domain_adapter import mongo_garmin_activities_to_domain
-from training_v2.performance_model import estimate_vma, predict_races  # PR185
+from training_v2.performance_model import estimate_vma, predict_races, _activity_date  # PR185
 from training_engine import (
     DEFAULT_WEEKLY_KM,
     compute_current_weekly_km,
@@ -4065,12 +4065,15 @@ async def get_vma_history(user: dict = Depends(auth_user)):
     PR185 — VMA history V2.
     Source: garmin_activities → DomainActivity (running only).
     Historical snapshots computed with no look-ahead (reference_date = snapshot date).
+    Each snapshot uses a 42-day rolling window (VMA_HISTORY_WINDOW_DAYS = 42).
+    Non-cumulative: only activities within [snapshot-41, snapshot] are considered.
     No db.workouts. No avg_speed/0.70 fallback.
     Frontend contract preserved (has_data, current_vma, current_vo2max, history[]).
     """
     import calendar as _cal
-    from datetime import date as _date
+    from datetime import date as _date, timedelta as _timedelta
     from training_v2.performance_model import validate_activity  # noqa: F401 (used below)
+    VMA_HISTORY_WINDOW_DAYS = 42
     user_id = user["id"]
     today = datetime.now(timezone.utc).date()
 
@@ -4114,16 +4117,18 @@ async def get_vma_history(user: dict = Depends(auth_user)):
         if snapshot_date > today:
             snapshot_date = today
 
-        # Estimate VMA using only activities BEFORE snapshot_date (strict no look-ahead)
-        vma_est = estimate_vma(domain_activities, snapshot_date)
-        vma_val = vma_est.vma_kmh
-        vo2max_val = round(vma_val * 3.5, 1) if vma_val is not None else None
-
-        # Count running activities visible at this snapshot
-        visible = [
+        # Rolling 42-day window: [snapshot - 41 days, snapshot]
+        window_start = snapshot_date - _timedelta(days=VMA_HISTORY_WINDOW_DAYS - 1)
+        activities_in_window = [
             a for a in domain_activities
             if validate_activity(a, snapshot_date)
+            and (_activity_date(a) or _date.min) >= window_start
         ]
+
+        # Estimate VMA using only activities in the 42-day window (strict no look-ahead)
+        vma_est = estimate_vma(activities_in_window, snapshot_date)
+        vma_val = vma_est.vma_kmh
+        vo2max_val = round(vma_val * 3.5, 1) if vma_val is not None else None
 
         month_name = month_names_fr[month - 1]
         period_key = f"{year}-{month:02d}-{half}"
@@ -4136,8 +4141,8 @@ async def get_vma_history(user: dict = Depends(auth_user)):
             "half": half,
             "vma": vma_val,
             "vo2max": vo2max_val,
-            "sessions": len(visible),
-            "window_days": "all_before_snapshot",
+            "sessions": len(activities_in_window),
+            "window_days": VMA_HISTORY_WINDOW_DAYS,
             "model_version": "v2",
         })
 

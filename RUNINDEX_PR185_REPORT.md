@@ -1,104 +1,124 @@
 # RUNINDEX PR185 REPORT
 
-## VMA V2 + Race Predictions V2 — Correction finale (blocker removal)
+## VMA V2 + Race Predictions V2 — Patch final consolidé
 
 ---
 
-## Corrections apportées (post-PR185 initial)
-
-```
-FALSE_EXPLICIT_PERFORMANCE_HEURISTIC = REMOVED
-EXPLICIT_PERFORMANCE_SOURCE          = DISABLED
-  (no Garmin field identifies race/test/competition;
-   speed+duration heuristic is not acceptable)
-
-HR_SPEED_MODEL                       = PRESERVED
-
-SYNTHETIC_20MIN_85_VMA               = REMOVED
-SYNTHETIC_RIEGEL_SOURCE              = NO
-
-FCMAX_PLUS_5                         = REMOVED
-POPULATION_FCMAX                     = NO
-
-VMA_CAN_EXIST_WITHOUT_RACE_PREDICTION = YES
-
-RIEGEL_SOURCE                        = OBSERVED_ACTIVITY_ONLY
-
-RELATIVE_HR_USED_FOR_CONFIDENCE      = YES
-  (avg_hr / fcmax → score in _score_riegel_candidate;
-   relative_hr >= 0.85 required for HIGH confidence)
-
-PER_TARGET_SOURCE_SELECTION          = YES
-  (_select_riegel_source called once per target distance)
-
-NO_LOOKAHEAD_HISTORY                 = PASS
-FCMAX_NO_LOOKAHEAD                   = PASS
-  (FCmax at snapshot J = max of observed max_hr in activities <= J only;
-   a future activity with higher max_hr cannot raise FCmax retroactively)
-
-DB_WORKOUTS_VMA_DEPENDENCY           = NO
-DB_WORKOUTS_PREDICTION_DEPENDENCY    = NO
-
-VMA_FRONTEND_PRESERVED               = YES
-VMA_HISTORY_FRONTEND_PRESERVED       = YES
-PREDICTIONS_FRONTEND_PRESERVED       = YES
-
-5K    = YES
-10K   = YES
-SEMI  = YES
-MARATHON = YES
-
-tests = 68 passed / 0 failed / 0 skipped / 0 errors
-```
-
----
-
-## FCmax Runtime Audit
-
-```
-USER_MAX_HR_FIELD    = max_hr in RunnerProfile (runner_profile.py)
-USER_MAX_HR_STORAGE  = user_profile / physiological_metrics dict in build_runner_profile()
-                       — no Mongo collection stores a user-declared max_hr;
-                         build_runner_profile() is called without these params
-                         in the race-predictions and vma-history endpoints
-USER_MAX_HR_EXISTS   = NO
-
-USER_MAX_HR_RUNTIME_WIRED = NOT_AVAILABLE
-FCMAX_RUNTIME_SOURCE      = OBSERVED_GARMIN_MAX_HR
-```
-
-No user-declared max_hr is available at runtime.
-No new field, form, Mongo migration, or age-based fallback has been added.
-The engine's `user_max_hr` parameter exists but is never wired from server.py.
-
-Applicable policy (path 2B): documentation aligned; no code change required.
-
----
-
-## VMA Primary Model
+## Architecture finale
 
 ```
 VMA_PRIMARY_MODEL = INDIVIDUAL_HR_SPEED_REGRESSION
+
+SOURCE_A_EXPLICIT_PERFORMANCE = REMOVED
+  (all _is_explicit_performance, _select_explicit_performance,
+   _vma_from_explicit_performance, _explicit_confidence, _merge_confidence
+   code deleted; 78/85/90/95% duration-based fractions deleted)
+
+AVG_PACE_070_FALLBACK = REMOVED
+SYNTHETIC_RIEGEL_SOURCE = NO
+FCMAX_PLUS_5 = NO
+POPULATION_FCMAX_FALLBACK = NO
+220_AGE_FORMULA = NO
+
+HR_SPEED_MODEL = ACTIVE
+MIN_ACTIVITY_COUNT = 4
+MIN_HR_RANGE = 20 bpm
+MIN_DISTINCT_HR_LEVELS = 3
+REGRESSION_METHOD = OLS (speed = a * HR + b)
+FIT_QUALITY_RULE = R² >= 0.30 and positive slope
+MAX_EXTRAPOLATION_RULE = target_HR / max_observed_HR <= 1.25
+EXTRAPOLATION_TARGET = 95% of FCmax (aerobic ceiling)
 ```
 
-VMA V2 uses a single path:
+---
 
-multiple observed running activities
-→ average HR + average speed per activity
-→ individual HR-speed linear regression (speed = a * HR + b)
-→ quality gates (R² ≥ 0.30, positive slope, HR range ≥ 20 bpm)
-→ highest credible observed Garmin max HR (no user profile HR, no formula)
-→ extrapolation to 95% FCmax → estimated VMA or null
+## FCmax Runtime
 
-**SOURCE A — DISABLED**
-No Garmin field currently identifies an activity as a race, test, or competition.
-The speed+duration heuristic (`speed >= 10 km/h AND duration >= 10 min`) is explicitly
-rejected as explicit performance qualification.
+```
+FCMAX_RUNTIME_SOURCE = ROBUST_OBSERVED_GARMIN_MAX_HR
+FCMAX_OUTLIER_PROTECTION = YES
+  Rule: if max(observed) > second_highest * 1.10 → discard max, use second_highest
+  n = 0         → None
+  n = 1 or 2   → raw max (no outlier protection, documented)
+  n >= 3        → outlier protection active
+  Examples:
+    [178, 180, 182, 181, 218] → 218 > 182*1.10 → FCmax = 182
+    [178, 182, 185, 188, 190] → 190 ≤ 188*1.10 → FCmax = 190
 
-**SOURCE B — Individual HR-speed regression**
-Linear regression `speed = a * HR + b` built on >= 4 clean running activities.
-FCmax from highest credible observed Garmin max HR only (150–230 bpm validation).
-No user profile FCmax, no population fallback, no formula derivation.
+FCMAX_NO_LOOKAHEAD = PASS
+  FCmax at snapshot J = max of observed max_hr in activities <= J only.
+  A future activity with higher max_hr cannot raise FCmax retroactively.
+
+USER_MAX_HR_EXISTS = NO
+USER_MAX_HR_RUNTIME_WIRED = NOT_AVAILABLE
+  No Mongo collection stores a user-declared max_hr.
+  No new field, form, migration, or age-based fallback added.
+```
+
+---
+
+## Riegel Source Qualification
+
+```
+RIEGEL_SOURCE = QUALIFIED_OBSERVED_ACTIVITY_ONLY
+
+TRAIL_CAN_BE_ROAD_RIEGEL_SOURCE = NO
+  trail_running type: excluded from all road prediction sources.
+
+ELEVATION_FILTER = RELATIVE_PER_KM
+  elevation_gain_per_km > MAX_ROAD_ELEVATION_GAIN_PER_KM (30 m/km) → excluded.
+
+MIN_RIEGEL_RELATIVE_HR = 0.75
+EASY_RUN_CAN_BE_RIEGEL_SOURCE = NO_WHEN_HR_AVAILABLE
+  When both FCmax and average_hr are available:
+    if average_hr / fcmax < 0.75 → activity not eligible (easy run, not informative).
+  When HR data is unavailable: prediction still possible, confidence capped at MEDIUM.
+
+NOTE: relative_hr >= 0.75 ≠ "maximum performance".
+  It means "sufficiently intense to be informative".
+  No chrono correction based on HR is applied. FORBIDDEN.
+```
+
+---
+
+## VMA / Predictions Independence
+
+```
+RIEGEL_VMA_CONFIDENCE_DEPENDENCY = NO
+  Prediction confidence is determined solely by:
+    - Riegel source proximity
+    - Recency
+    - Relative HR (effort level)
+    - Endurance support factor
+  VMA confidence and VMA value are never used to modify prediction confidence.
+
+PREDICTIONS_WITHOUT_VMA = PASS
+VMA_WITHOUT_PREDICTIONS = PASS
+```
+
+---
+
+## VMA History
+
+```
+VMA_HISTORY_WINDOW_DAYS = 42
+VMA_HISTORY_CUMULATIVE = NO
+
+Each snapshot uses only activities in [snapshot - 41 days, snapshot].
+Sessions count = activities in the 42-day window only.
+No look-ahead: each snapshot is limited to activities <= snapshot_date.
+```
+
+---
+
+## duration_s Semantics
+
+```
+GARMIN_DURATION_SOURCE = summaryDTO.duration (Garmin Connect elapsed timer)
+GARMIN_DURATION_SEMANTICS = elapsed timer duration (includes pauses)
+  moving_duration_s is stored in GarminActivity but not used in performance_model.py.
+  No correction is applied in #185.
+```
 
 ---
 
@@ -108,111 +128,8 @@ No user profile FCmax, no population fallback, no formula derivation.
 VMA_SOURCE_BEFORE = db.workouts
 VMA_SOURCE_AFTER  = DomainActivity (from garmin_activities)
 
-PREDICTION_SOURCE_BEFORE = legacy VMA model (avg_speed-divided-by-0.70 fallback, synthetic effort)
-PREDICTION_SOURCE_AFTER  = observed_activity (per-target Riegel from best real activity)
-```
-
----
-
-## HR-Speed Model
-
-```
-HR_SPEED_MODEL = PRESERVED
-MIN_ACTIVITY_COUNT = 4
-MIN_HR_RANGE = 20 bpm
-MIN_DISTINCT_HR_LEVELS = 3 (in 5-bpm buckets)
-REGRESSION_METHOD = ordinary least squares (speed = a * HR + b)
-FIT_QUALITY_RULE = R² >= 0.30; slope must be positive
-MAX_EXTRAPOLATION_RULE = target_HR / max_observed_HR <= 1.25
-EXTRAPOLATION_TARGET = 95% of FCmax (aerobic ceiling, not 100%)
-```
-
----
-
-## FCmax Source
-
-```
-FCMAX_RUNTIME_SOURCE      = OBSERVED_GARMIN_MAX_HR
-USER_MAX_HR_RUNTIME_WIRED = NOT_AVAILABLE
-
-Runtime FCmax =
-  highest credible observed Garmin max HR across valid activities (150–230 bpm)
-  → None when no credible observed HR available
-  (VMA = null if FCmax = null)
-
-FCMAX_PLUS_5         = NO
-POPULATION_FCMAX     = NO
-AGE_FORMULA_FCMAX    = NO
-```
-
-220-age, hr_max+5, and any formula-derived FCmax are **FORBIDDEN** and not present in the code.
-The observed Garmin max HR is a "highest credible observed value" — not a guaranteed physiological HRmax.
-
----
-
-## Riegel Source — Observed Activity Only
-
-```
-RIEGEL_SOURCE = OBSERVED_ACTIVITY_ONLY
-SYNTHETIC_20MIN_85_VMA = REMOVED
-SYNTHETIC_RIEGEL_SOURCE = NO
-```
-
-For each target distance (5K, 10K, Semi, Marathon), a best observed activity is
-selected independently via `_select_riegel_source()`.
-
-**Scoring (per target):**
-```
-proximity  0.50  — source_dist / target_dist ratio (ideal ≈ 1.0)
-recency    0.30  — decays from 1.0 (≤21 days) to 0.15 (within 730 days)
-rel_hr     0.20  — avg_hr / fcmax (neutral 0.5 when HR unavailable)
-```
-
-**Minimum defensible source:**
-- source distance >= 12% of target distance
-- activity date within 730 days
-- combined score >= 0.25
-
-If no defensible source: `predicted_time_s = None` for that target.
-VMA is independent: VMA may exist while some predictions are null.
-
----
-
-## Confidence — Riegel Predictions
-
-```
-RELATIVE_HR_USED_FOR_CONFIDENCE = YES
-PER_TARGET_SOURCE_SELECTION     = YES
-```
-
-HIGH confidence requires all of:
-- target/source ratio ≤ 4.0
-- days_since_source ≤ 120
-- endurance_factor ≥ 0.65
-- ratio ≤ 2.0
-- days_since_source ≤ 56
-- endurance_factor ≥ 0.80
-- **relative_hr >= 0.85** (confirmed high effort — no HR → max confidence = MEDIUM)
-
----
-
-## Endurance Support
-
-```
-ENDURANCE_CONTRACT = [0.55, 1.0]
-ENDURANCE_EMPTY_RETURN = 0.55  (was 0.5 — contract violation fixed)
-```
-
----
-
-## Removed Patterns
-
-```
-BEST_FAST_RUN_IS_PERFORMANCE  = NO
-AVG_PACE_070_FALLBACK         = REMOVED
-SPEED_GE_10_IS_PERFORMANCE    = REMOVED
-HR_MAX_PLUS_5                 = REMOVED
-SYNTHETIC_20MIN_85_VMA        = REMOVED
+PREDICTION_SOURCE_BEFORE = legacy VMA model (avg_speed/0.70 fallback, synthetic effort)
+PREDICTION_SOURCE_AFTER  = observed_activity (per-target Riegel from qualified activity)
 ```
 
 ---
@@ -223,8 +140,6 @@ SYNTHETIC_20MIN_85_VMA        = REMOVED
 DB_WORKOUTS_VMA_DEPENDENCY        = NO
 DB_WORKOUTS_PREDICTION_DEPENDENCY = NO
 ```
-
-`performance_model.py` is fully I/O-free (no Mongo, no FastAPI, no datetime.now()).
 
 ---
 
@@ -242,81 +157,43 @@ PREDICTIONS_MARATHON            = YES
 
 Contract maintained:
 - `GET /training/race-predictions` → `{ has_data, athlete_profile, predictions[], methodology }`
-- `GET /training/vma-history` → `{ has_data, current_vma, current_vo2max, trend, history[] }`
-- New non-breaking fields: `source_type`, `reason_code`, `hr_model_*`, `vma_reason_code`
-- `Progress.jsx` is **not modified** — backward-compatible response structure
-- null prediction (`predicted_time_s = None`) handled by frontend gracefully
-
----
-
-## Architecture
-
-```
-backend/training_v2/performance_model.py
-├── DomainActivity (input — fields used: activity_type, start_time, distance_m,
-│                   duration_s, average_hr, max_hr, elevation_gain_m)
-├── VMAEstimate (output — vma_kmh, confidence, method, reason_code, hr_model_*)
-├── RacePrediction (output — source_type = "observed_activity" or None)
-├── PerformanceEstimate (top-level output)
-├── estimate_vma(activities, reference_date, user_max_hr?) → VMAEstimate
-│   └── SOURCE B only: _fit_hr_speed_model (HR-speed linear regression)
-├── predict_races(activities, reference_date, user_max_hr?) → PerformanceEstimate
-│   └── per-target: _select_riegel_source → observed activity or null
-└── Zero I/O: no Mongo, no FastAPI, no datetime.now()
-```
+- `GET /training/vma-history` → `{ has_data, current_vma, current_vo2max, trend, history[], window_days=42 }`
+- `Progress.jsx` is **not modified**
 
 ---
 
 ## Tests
 
 ```
-tests = 59 passed / 0 failed / 0 skipped / 0 errors
+tests = 88 passed / 0 failed / 0 skipped / 0 errors
 ```
 
-All 16 mandatory new tests from problem statement: PASS
-Anti-synthetic static scan: PASS
-No-lookahead: PASS
+**New tests added (patch final)**
 
-| 7 | Poor correlation → null or insufficient | PASS |
-| 8 | Good correlation + sufficient HR range → VMA deterministic | PASS |
-| 9 | Excessive extrapolation → confidence reduced or null | PASS |
-| 10 | FCmax absent → no 220-age fallback | PASS |
-| 11 | Future activity → ignored | PASS |
-| 12 | SOURCE A disabled — no activity auto-qualified as explicit performance | PASS |
-| 13 | Explicit performance + HR model coherent → confidence >= model alone | PASS |
-| 14 | Sources strongly divergent → confidence diminishes | PASS |
-| 15 | db.workouts divergence → no impact (no dependency) | PASS |
-| 16 | History anti-lookahead | PASS |
-
-### Legacy / Compatibility Tests (26)
-| Test | Result |
-|------|--------|
-| No activities → VMA null | PASS |
-| Invalid activity ignored | PASS |
-| Non-running ignored | PASS |
-| Zero duration ignored | PASS |
-| Future activity ignored | PASS |
-| Deterministic | PASS |
-| No db.workouts dependency | PASS |
-| No predictions for no data | PASS |
-| No predictions for insufficient data | PASS |
-| 10K coherent | PASS |
-| 5K/10K monotone | PASS |
-| All predictions positive | PASS |
-| avg_speed/0.70 fallback removed | PASS |
-| Riegel formula correct | PASS |
-| Riegel same distance → same time | PASS |
-| All four distances present | PASS |
-| Readiness fields present | PASS |
-| model_version = "v2" in predictions | PASS |
-| model_version = "v2" in VMAEstimate | PASS |
-| vo2max_note documents derived estimate | PASS |
-| VMA history no look-ahead | PASS |
-| VMA history no look-ahead structural | PASS |
-| VMA frontend preserved | PASS |
-| Predictions frontend preserved | PASS |
-| Linear regression perfect fit | PASS |
-| Linear regression no correlation | PASS |
+| Group | Test | Purpose |
+|-------|------|---------|
+| A1 | test_a1_easy_run_not_riegel_source | rel_hr < 0.75 → score 0 |
+| A2 | test_a2_sustained_run_is_eligible | rel_hr >= 0.75 → eligible |
+| A3 | test_a3_easy_run_exact_target_rejected | proximity no override for effort gate |
+| A4 | test_a4_less_close_but_sustained_can_beat_easy | intensity > proximity when HR available |
+| A5 | test_a5_trail_not_road_riegel_source | trail excluded |
+| A6 | test_a6_high_elevation_per_km_not_road_source | 40 m/km excluded |
+| A7 | test_a7_no_hr_data_prediction_still_possible | no HR → prediction possible, capped |
+| A8 | test_a8_no_defensible_source_prediction_null | no source → null |
+| B1 | test_b1_outlier_high_fcmax_rejected | [178,180,182,181,218] → 182 |
+| B2 | test_b2_credible_high_value_kept | [178,182,185,188,190] → 190 |
+| B3 | test_b3_no_observations_returns_none | n=0 → None |
+| B4 | test_b4_single_observation_no_outlier_protection | n=1 → raw value |
+| B5 | test_b5_two_observations_no_outlier_protection | n=2 → max |
+| B6 | test_b6_future_high_hr_no_effect_on_snapshot_fcmax | FCmax no-lookahead |
+| C1 | test_c1_same_riegel_source_regardless_of_vma | VMA null → predictions unchanged |
+| C2 | test_c2_vma_null_good_riegel_source_high_confidence_possible | predictions independent |
+| C3 | test_c3_vma_confidence_not_in_prediction_confidence | no cross-dependency |
+| D1 | test_d1_old_activity_not_in_snapshot_window | 180-day-old → outside window |
+| D2 | test_d2_recent_activity_in_window | 30-day-old → inside window |
+| D3 | test_d3_window_is_non_cumulative | window excludes old outlier |
+| D4 | test_d4_sessions_counted_in_window_only | sessions = window only |
+| D5 | test_d5_future_activity_not_in_any_window | future excluded |
 
 ---
 
@@ -325,36 +202,35 @@ No-lookahead: PASS
 ```
 VMA_PRIMARY_MODEL = INDIVIDUAL_HR_SPEED_REGRESSION
 
-SOURCE_A_EXPLICIT_PERFORMANCE = DISABLED
-EXPLICIT_PERFORMANCE_SUPPORTED = NO
+SOURCE_A_EXPLICIT_PERFORMANCE = REMOVED
 
-HR_SPEED_MODEL_SUPPORTED = YES
-HR_SPEED_MODEL = PASS
-MIN_ACTIVITY_COUNT = 4
-MIN_HR_RANGE = 20 bpm
-REGRESSION_METHOD = OLS (speed = a * HR + b)
-FIT_QUALITY_RULE = R² >= 0.30 and positive slope
-MAX_EXTRAPOLATION_RULE = target_HR / max_observed_HR <= 1.25
+FCMAX_RUNTIME_SOURCE = ROBUST_OBSERVED_GARMIN_MAX_HR
+FCMAX_OUTLIER_PROTECTION = YES
+FCMAX_NO_LOOKAHEAD = PASS
 
-FCMAX_RUNTIME_SOURCE      = OBSERVED_GARMIN_MAX_HR
-USER_MAX_HR_EXISTS        = NO
-USER_MAX_HR_RUNTIME_WIRED = NOT_AVAILABLE
-FCMAX_PLUS_5              = NO
-POPULATION_FCMAX_FALLBACK = NO
+RIEGEL_SOURCE = QUALIFIED_OBSERVED_ACTIVITY_ONLY
+MIN_RIEGEL_RELATIVE_HR = 0.75
+EASY_RUN_CAN_BE_RIEGEL_SOURCE = NO_WHEN_HR_AVAILABLE
+TRAIL_CAN_BE_ROAD_RIEGEL_SOURCE = NO
+RIEGEL_VMA_CONFIDENCE_DEPENDENCY = NO
 
-BEST_FAST_RUN_IS_PERFORMANCE = NO
-AVG_PACE_070_FALLBACK = REMOVED
+VMA_HISTORY_WINDOW_DAYS = 42
+VMA_HISTORY_CUMULATIVE = NO
 
-SOURCE_AGREEMENT_CHECK = NOT_APPLICABLE
-  (single VMA source active — no dual-source comparison)
-
-VMA_CAN_BE_NULL_WHILE_PREDICTIONS_EXIST = YES
-
-RIEGEL_SOURCE = OBSERVED_ACTIVITY_ONLY
+PREDICTIONS_WITHOUT_VMA = PASS
+VMA_WITHOUT_PREDICTIONS = PASS
 SYNTHETIC_RIEGEL_SOURCE = NO
 
-VMA_INSUFFICIENT_NULL = PASS
-NO_LOOKAHEAD_HISTORY = PASS
+GARMIN_DURATION_SOURCE = summaryDTO.duration
+GARMIN_DURATION_SEMANTICS = elapsed timer duration (includes pauses)
+
+USER_MAX_HR_EXISTS = NO
+USER_MAX_HR_RUNTIME_WIRED = NOT_AVAILABLE
+
+AVG_PACE_070_FALLBACK = REMOVED
+POPULATION_FCMAX_FALLBACK = NO
+FCMAX_PLUS_5 = NO
+220_AGE_FORMULA = NO
 
 DB_WORKOUTS_VMA_DEPENDENCY = NO
 DB_WORKOUTS_PREDICTION_DEPENDENCY = NO
@@ -363,28 +239,7 @@ VMA_FRONTEND_PRESERVED = YES
 VMA_HISTORY_FRONTEND_PRESERVED = YES
 PREDICTIONS_FRONTEND_PRESERVED = YES
 
-VMA_WITHOUT_PREDICTIONS = possible
-PREDICTIONS_WITHOUT_VMA = possible
-VMA_AND_PREDICTIONS = possible
-NEITHER_WHEN_INSUFFICIENT = possible
-
-tests = 67 passed / 0 failed / 0 skipped / 0 errors
+tests = 88 passed / 0 failed / 0 skipped / 0 errors
 ```
 
-- VMA functions without any race/test explicitly required ✓
-- HR-speed model uses multiple activities ✓
-- HR range coverage required ✓
-- R² quality control ✓
-- Extrapolation limited to 1.25× observed HR max ✓
-- No 220-age formula anywhere in executable code ✓
-- Fastest run not auto-qualified ✓
-- No synthetic values ✓
-- Predictions V2 preserved (Riegel from observed performance) ✓
-- Predictions independent of VMA availability ✓
-- History without look-ahead ✓
-- DomainActivity authority ✓
-- Frontend preserved ✓
-- 0 failed tests ✓
-- No lockfile modified ✓
-
-**READY for review. Do not merge automatically. Do not start #186.**
+**Do not merge automatically. Do not start #186.**
