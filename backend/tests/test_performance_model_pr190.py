@@ -513,3 +513,112 @@ def test_8_vma_independence():
         tg = preds_good[label].predicted_time_s
         tp = preds_poor[label].predicted_time_s
         assert tg == tp, f"VMA change affected {label} prediction: {tg} → {tp}"
+
+
+# ---------------------------------------------------------------------------
+# TEST 9 — k_conflict has priority over low-identifiability (C190 invariant)
+# ---------------------------------------------------------------------------
+
+def test_9_k_conflict_has_priority_over_low_identifiability():
+    """N>=3 dataset where k_raw is out of [1.0, 1.25] AND k_identifiable is False.
+
+    The fit produces a steep k > 1.25 from a narrow distance cluster (9–11 km).
+    Both conditions are simultaneously true, but k_conflict must take priority.
+
+    Expected:
+      k_conflict == True
+      k_fallback_applied == True
+      curve_method == "prior_k_conflict_fallback"
+      curve_k == 1.06
+      k_raw preserved out of range (> 1.25)
+    """
+    bench = _benchmark_pool(n=7, with_hr=True)
+
+    # 3 high-quality performances in a narrow 9–11 km cluster with steeply
+    # increasing times → robust fit yields k_raw > 1.25.
+    # Narrow distance spread keeps k_identifiability_score < K_IDENTIFIABILITY_MIN_WX_VAR.
+    steep_perfs: List[DomainActivity] = [
+        _run(days_ago=30, distance_m=9_000.0, duration_s=3_600.0, avg_hr=158.0, max_hr=178.0),
+        _run(days_ago=20, distance_m=10_000.0, duration_s=4_200.0, avg_hr=160.0, max_hr=180.0),
+        _run(days_ago=10, distance_m=11_000.0, duration_s=4_860.0, avg_hr=162.0, max_hr=182.0),
+    ]
+
+    activities = bench + steep_perfs
+    result = predict_races(activities, TODAY)
+    diag = result.race_curve_diagnostics
+
+    # k_raw must be preserved (out of range)
+    k_raw = diag.get("curve_k_raw")
+    assert k_raw is not None, "k_raw must be present"
+    assert k_raw > pm.CURVE_K_MAX or k_raw < pm.CURVE_K_MIN, (
+        f"Expected k_raw outside [{pm.CURVE_K_MIN}, {pm.CURVE_K_MAX}], got {k_raw:.4f}"
+    )
+
+    # Conflict must be detected (from k_raw, not from any replaced slope)
+    assert diag.get("k_conflict") is True, (
+        f"Expected k_conflict=True, got {diag.get('k_conflict')}. "
+        f"k_raw={k_raw:.4f}, curve_method={diag.get('curve_method')}"
+    )
+
+    # Conflict takes priority; method must be prior_k_conflict_fallback
+    assert diag.get("curve_method") == "prior_k_conflict_fallback", (
+        f"Expected prior_k_conflict_fallback, got {diag.get('curve_method')}"
+    )
+    assert diag.get("curve_k") == pytest.approx(pm.RIEGEL_K, rel=1e-6)
+    assert diag.get("k_fallback_applied") is True
+
+    # k_identifiable may be False (observable) but must not mask the conflict
+    assert diag.get("k_identifiable") is False, (
+        "Expected k_identifiable=False for this narrow cluster"
+    )
+
+
+# ---------------------------------------------------------------------------
+# TEST 10 — k_raw in range + low identifiability → identifiability fallback
+# ---------------------------------------------------------------------------
+
+def test_10_k_raw_in_range_low_identifiability_fallback():
+    """N>=3 dataset where k_raw is within [1.0, 1.25] but k_identifiable is False.
+
+    Narrow distance cluster but Riegel-consistent times keep k_raw ≈ 1.06.
+    No conflict; identifiability fallback should apply.
+
+    Expected:
+      k_conflict == False
+      curve_method == "prior_k_low_identifiability_fallback"
+      curve_k == 1.06
+    """
+    bench = _benchmark_pool(n=7, with_hr=True)
+
+    # 3 high-quality performances in a narrow 9–11 km cluster with times
+    # consistent with k≈1.06 (Riegel-like ratio) → k_raw within [1.0, 1.25].
+    # log-linear slope ≈ 1.06 when T ∝ D^1.06.
+    import math as _math
+    k_target = pm.RIEGEL_K  # 1.06
+    a_anchor = 3360.0 / (9_000.0 ** k_target)
+    consistent_perfs: List[DomainActivity] = []
+    for dist_m, days in [(9_000.0, 30), (10_000.0, 20), (11_000.0, 10)]:
+        dur_s = a_anchor * (dist_m ** k_target)
+        consistent_perfs.append(
+            _run(days_ago=days, distance_m=dist_m, duration_s=dur_s,
+                 avg_hr=158.0, max_hr=178.0)
+        )
+
+    activities = bench + consistent_perfs
+    result = predict_races(activities, TODAY)
+    diag = result.race_curve_diagnostics
+
+    # No conflict expected
+    assert diag.get("k_conflict") is False, (
+        f"Expected k_conflict=False, got {diag.get('k_conflict')}. "
+        f"k_raw={diag.get('curve_k_raw')}, curve_method={diag.get('curve_method')}"
+    )
+
+    # Identifiability fallback must apply (narrow distance spread)
+    assert diag.get("k_identifiable") is False, (
+        f"Expected k_identifiable=False for narrow cluster, got {diag.get('k_identifiable')}"
+    )
+    assert diag.get("curve_method") == "prior_k_low_identifiability_fallback", (
+        f"Expected prior_k_low_identifiability_fallback, got {diag.get('curve_method')}"
+    )
+    assert diag.get("curve_k") == pytest.approx(pm.RIEGEL_K, rel=1e-6)

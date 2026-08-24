@@ -1617,27 +1617,19 @@ def _build_performance_curve(
     k_identifiable = False
     k_identifiability_score = 0.0
     k_identifiability_reason = "not_applicable"
-    _ident_fallback_applied = False
     if len(observations) >= 3:
         k_identifiable, k_identifiability_score, k_identifiability_reason = (
             _compute_k_identifiability(observations, robust_ws)
         )
-        if not k_identifiable:
-            # Insufficient quality-weighted distance spread to trust data-driven k.
-            # Fall back to prior k and recompute intercept from final robust weights.
-            log_a_ident = _fixed_slope_log_intercept(xs, ys, robust_ws, RIEGEL_K)
-            if log_a_ident is not None:
-                intercept = log_a_ident
-                slope = RIEGEL_K
-                method = "prior_k_low_identifiability_fallback"
-                _ident_fallback_applied = True
-                # k_raw retains the data-driven slope from the robust fit (diagnostic)
-            # If log_a_ident is None (degenerate weights), retain the data-driven k.
-            # k_identifiable remains False (honest: evidence is weak), but
-            # k_fallback_applied will be False since the slope was not actually replaced.
 
+    # k_conflict is evaluated from k_raw (the data-driven slope) BEFORE any fallback.
+    # For N>=3, k_raw is the robust fit slope; evaluating it before applying any
+    # identifiability fallback ensures the conflict diagnosis reflects the actual fit.
+    # For N=2, slope is already shrunk toward the prior; k_raw holds the pre-shrinkage
+    # OLS value but the shrunk slope is the N=2 data-driven result, so we use slope there.
     k_fallback_applied = False
-    k_conflict = not (CURVE_K_MIN <= slope <= CURVE_K_MAX)
+    _k_for_conflict = (k_raw if (len(observations) >= 3 and k_raw is not None) else slope)
+    k_conflict = not (CURVE_K_MIN <= _k_for_conflict <= CURVE_K_MAX)
     if k_conflict:
         # Contradictory observations: keep a coherent prior curve and lower trust.
         robust_ws = [w * CURVE_K_CONFLICT_WEIGHT_PENALTY for w in robust_ws]
@@ -1648,8 +1640,19 @@ def _build_performance_curve(
         slope = RIEGEL_K
         method = "prior_k_conflict_fallback"
         k_fallback_applied = True
-    elif _ident_fallback_applied:
-        k_fallback_applied = True
+    elif len(observations) >= 3 and not k_identifiable:
+        # Insufficient quality-weighted distance spread to trust data-driven k.
+        # Fall back to prior k and recompute intercept from final robust weights.
+        log_a_ident = _fixed_slope_log_intercept(xs, ys, robust_ws, RIEGEL_K)
+        if log_a_ident is not None:
+            intercept = log_a_ident
+            slope = RIEGEL_K
+            method = "prior_k_low_identifiability_fallback"
+            k_fallback_applied = True
+            # k_raw retains the data-driven slope from the robust fit (diagnostic)
+        # If log_a_ident is None (degenerate weights), retain the data-driven k.
+        # k_identifiable remains False (honest: evidence is weak), but
+        # k_fallback_applied will be False since the slope was not actually replaced.
 
     fit_quality = _weighted_r2(xs, ys, robust_ws, intercept, slope)
     max_w = max(robust_ws) if robust_ws else 0.0
