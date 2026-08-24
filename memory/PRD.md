@@ -617,3 +617,11 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
   - Qualification séparée de la sélection de source (qualification = qualité effort ; sélection = proximité+récence sur perfs qualifiées uniquement).
 - Validation RUNTIME (agent-tested, vrai compte Garmin da85***e7e7) : backend + 4 workers RUNNING. Endpoints 200. Nouvelles prédictions : 5K 29:37, 10K 1h01, Semi 2h01, Marathon 4h23 (conf=low) — sources mieux qualifiées vs anciennes (31:22/1h05/2h09/4h40), confiance ajustée. Tests PR188+185+186 = **138 passed**. Régression suites PR = **275 passed**.
 - Statut : agent-tested ; non user-confirmed.
+
+## 2026-06 — Pull copilot/dev — PR #189 (courbe de performance partagée v2, prédictions monotones)
+- Fetch + merge `sauvegarde/copilot/dev` (d7d99b6→ec92ad9). Merge ORT propre. `memory/PRD.md` (619 lignes) préservé (backup pris avant merge).
+- PR #189 = courbe de performance partagée (performance_model.py +697, server.py +43) : prédictions Riegel **monotones** (allure croissante avec la distance), agrégats de confiance basés sur la qualité de courbe (contributors, k-conflict), indépendance VMA renforcée, refit robuste, shrinkage N=2, diagnostics API.
+- Validation RUNTIME (agent-tested, compte Garmin da85***e7e7) : backend + 4 workers RUNNING. Endpoints 200. Prédictions post-#189 : 5K 29:25 (5:53/km), 10K 59:31 (5:57), Semi 2h07 (6:01), Marathon 4h17 (6:05) — **monotones** (allure croissante = physiologiquement correct). conf=insufficient (agrégat courbe : peu de contributeurs qualifiés post-#188, comportement voulu, PAS lié à la VMA).
+- Tests : PR189 = **30 passed** + contrat API + test indépendance VMA (`test_s_vma_output_mutations...` passed). Perf model 185/186/188 = 137 passed. Régression suites PR = **275 passed**.
+- ⚠️ 1 test obsolète (test-drift, NON runtime) : `test_pr185::test_c1_same_riegel_source_regardless_of_vma` asserte `confidence != "insufficient"` quand VMA null ; sous #189 la confidence=insufficient vient de l'agrégat courbe (3 contributeurs, k-conflict fallback), pas de la VMA. Invariant VMA-indépendance couvert par le nouveau test #189. À mettre à jour upstream.
+- Statut : agent-tested ; non user-confirmed.
