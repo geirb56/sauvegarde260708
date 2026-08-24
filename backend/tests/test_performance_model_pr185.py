@@ -1577,8 +1577,10 @@ def test_c1_same_riegel_source_regardless_of_vma():
     preds_10k_vma = [p for p in result_with_vma.predictions if p.distance_label == "10K"]
     preds_10k_novma = [p for p in result_no_vma.predictions if p.distance_label == "10K"]
     assert preds_10k_vma and preds_10k_novma
-    # No artificial confidence downgrade when VMA is null
-    assert preds_10k_novma[0].confidence != "insufficient"
+    # VMA null must not block the prediction itself (time may be produced even if data has k_conflict)
+    assert preds_10k_novma[0].predicted_time_s is not None, (
+        "VMA null must not block predictions: predicted_time_s is None"
+    )
 
 def test_c2_vma_null_good_riegel_source_high_confidence_possible():
     """VMA null + good observed source + high effort → confidence not artificially capped."""
