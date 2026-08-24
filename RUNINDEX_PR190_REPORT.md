@@ -130,7 +130,7 @@ Les performances speed-only `quality_confidence="low"` (fallback #188) :
 | `k_identifiability_score` | float | Variance pondérée qualité de log(D) pour high/medium |
 | `k_identifiability_reason` | str | `"sufficient_hm_distance_spread"` / `"insufficient_hm_distance_spread"` / `"no_hm_quality_observations"` / `"not_applicable"` (N<3) |
 | `high_medium_quality_weight_share` | float | Part des base_weights portés par high+medium |
-| `speed_only_low_weight_share` | float | Part des base_weights portés par low (speed-only) |
+| `low_confidence_weight_share` | float | Part des base_weights portés par les observations confidence="low" (speed-only #188) |
 
 ### Dans `_CurveModel` (interne)
 

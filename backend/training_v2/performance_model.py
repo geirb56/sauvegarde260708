@@ -1298,8 +1298,11 @@ class _CurveModel:
     contributors: Tuple[_CurveObservation, ...]
     observed_distance_min: float
     observed_distance_max: float
-    # PR #190 — k identifiability diagnostics (default "not_applicable" for N<3)
-    k_identifiable: bool = True
+    # PR #190 — k identifiability diagnostics
+    # For N<3 (single_performance_riegel, two_point_prior_shrinkage_fit,
+    # same_distance_prior_k_fallback) k was never learned from data, so
+    # k_identifiable defaults to False and reason to "not_applicable".
+    k_identifiable: bool = False
     k_identifiability_score: float = 0.0
     k_identifiability_reason: str = "not_applicable"
 
@@ -1610,10 +1613,11 @@ def _build_performance_curve(
 
     # PR #190 — identifiability check for N≥3 (robust_weighted_log_fit).
     # For N=1 and N=2, k is already prior or prior-shrunk, so identifiability
-    # is not applicable.
-    k_identifiable = True
+    # is not applicable (k_identifiable defaults to False via _CurveModel defaults).
+    k_identifiable = False
     k_identifiability_score = 0.0
     k_identifiability_reason = "not_applicable"
+    _ident_fallback_applied = False
     if len(observations) >= 3:
         k_identifiable, k_identifiability_score, k_identifiability_reason = (
             _compute_k_identifiability(observations, robust_ws)
@@ -1626,7 +1630,11 @@ def _build_performance_curve(
                 intercept = log_a_ident
                 slope = RIEGEL_K
                 method = "prior_k_low_identifiability_fallback"
-                # k_raw already retains the data-driven slope from the robust fit
+                _ident_fallback_applied = True
+                # k_raw retains the data-driven slope from the robust fit (diagnostic)
+            # If log_a_ident is None (degenerate weights), retain the data-driven k.
+            # k_identifiable remains False (honest: evidence is weak), but
+            # k_fallback_applied will be False since the slope was not actually replaced.
 
     k_fallback_applied = False
     k_conflict = not (CURVE_K_MIN <= slope <= CURVE_K_MAX)
@@ -1640,7 +1648,7 @@ def _build_performance_curve(
         slope = RIEGEL_K
         method = "prior_k_conflict_fallback"
         k_fallback_applied = True
-    elif not k_identifiable:
+    elif _ident_fallback_applied:
         k_fallback_applied = True
 
     fit_quality = _weighted_r2(xs, ys, robust_ws, intercept, slope)
@@ -2038,7 +2046,10 @@ def predict_races(
         if c.quality.confidence == "low"
     )
     high_medium_quality_weight_share = round(_hm_bw / _sum_bw, 6) if _sum_bw > 0 else 0.0
-    speed_only_low_weight_share = round(_sol_bw / _sum_bw, 6) if _sum_bw > 0 else 0.0
+    # "low" confidence is the exact predicate for speed-only (#188 fallback) observations.
+    # Renamed from speed_only_low_weight_share to clarify that this is the confidence tier,
+    # not a separate classification.
+    low_confidence_weight_share = round(_sol_bw / _sum_bw, 6) if _sum_bw > 0 else 0.0
 
     return PerformanceEstimate(
         has_data=result_has_data,
@@ -2064,7 +2075,7 @@ def predict_races(
             ),
             "k_identifiability_reason": curve.k_identifiability_reason if curve else None,
             "high_medium_quality_weight_share": high_medium_quality_weight_share if curve else None,
-            "speed_only_low_weight_share": speed_only_low_weight_share if curve else None,
+            "low_confidence_weight_share": low_confidence_weight_share if curve else None,
             # --- existing fields ---
             "qualified_performance_count": curve.qualified_performance_count if curve else 0,
             "contributors_count": len(sorted_contributors),
