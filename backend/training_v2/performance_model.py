@@ -1347,7 +1347,6 @@ def _fit_performance_curve_v2(
         if ss_xx_s < 1e-12:
             # All strong obs at same distance — cannot fit k
             k = K_PRIOR
-            k_clamped = True
             k_fallback_applied = True
             k_identifiable = False
         else:
