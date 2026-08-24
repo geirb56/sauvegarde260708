@@ -44,8 +44,9 @@ the resulting prediction confidence is capped at MEDIUM.
 
 VMA / Predictions independence:
   RIEGEL_VMA_CONFIDENCE_DEPENDENCY = NO
-  Prediction confidence is determined solely by source proximity, recency,
-  relative HR, and endurance support.  VMA confidence never downgrade predictions.
+  Race predictions are computed from #188-qualified performances and the
+  performance curve only. Qualification can depend on FCmax through relative HR.
+  VMA output and derived VO2max never directly alter race times.
 
 VMA history:
   VMA_WINDOW_DAYS = 42 (rolling window, non-cumulative)
@@ -1566,6 +1567,51 @@ def _degrade_confidence(confidence: str, steps: int = 1) -> str:
     return order[max(0, idx - steps)]
 
 
+def _curve_confidence_aggregates(
+    contributors: Tuple[_CurveObservation, ...],
+) -> Dict[str, float]:
+    if not contributors:
+        return {
+            "weighted_recency": 0.0,
+            "weighted_quality_confidence": 0.0,
+            "weighted_quality_score": 0.0,
+            "effective_contributors": 0.0,
+        }
+
+    weights = [max(c.robust_weight, 0.0) for c in contributors]
+    sum_w = sum(weights)
+    if sum_w <= 0:
+        return {
+            "weighted_recency": 0.0,
+            "weighted_quality_confidence": 0.0,
+            "weighted_quality_score": 0.0,
+            "effective_contributors": 0.0,
+        }
+
+    probs = [w / sum_w for w in weights]
+    weighted_recency = sum(
+        p * _recency_weight(c.days_ago)
+        for p, c in zip(probs, contributors)
+    )
+    weighted_quality_confidence = sum(
+        p * _quality_confidence_weight(c.quality.confidence)
+        for p, c in zip(probs, contributors)
+    )
+    weighted_quality_score = sum(
+        p * _clamp(c.quality.score or 0.0, 0.0, 1.0)
+        for p, c in zip(probs, contributors)
+    )
+    sum_w_sq = sum(w * w for w in weights)
+    effective_contributors = ((sum_w * sum_w) / sum_w_sq) if sum_w_sq > 0 else 0.0
+
+    return {
+        "weighted_recency": weighted_recency,
+        "weighted_quality_confidence": weighted_quality_confidence,
+        "weighted_quality_score": weighted_quality_score,
+        "effective_contributors": effective_contributors,
+    }
+
+
 def _curve_prediction_confidence(
     curve: _CurveModel,
     extrapolation_ratio: Optional[float],
@@ -1581,26 +1627,47 @@ def _curve_prediction_confidence(
     else:
         base = "high"
 
+    aggregates = _curve_confidence_aggregates(curve.contributors)
+    penalty_steps = 0
+
     if curve.k_conflict:
-        base = _degrade_confidence(base, 1)
+        penalty_steps += 1
 
-    if curve.fit_quality is not None and curve.fit_quality < 0.4:
-        base = _degrade_confidence(base, 2)
-    elif curve.fit_quality is not None and curve.fit_quality < 0.7:
-        base = _degrade_confidence(base, 1)
+    fit_q = curve.fit_quality
+    if fit_q is None or fit_q < 0.40:
+        penalty_steps += 2
+    elif fit_q < 0.70:
+        penalty_steps += 1
 
-    if curve.contributors:
-        if len(curve.contributors) == 1 and base == "high":
-            base = "medium"
-        days = min(c.days_ago for c in curve.contributors)
-        if days > CONFIDENCE_LOW_DAYS:
-            base = _degrade_confidence(base, 1)
-        best_quality_conf = max(
-            (_quality_confidence_weight(c.quality.confidence) for c in curve.contributors),
-            default=0.0,
-        )
-        if best_quality_conf < _quality_confidence_weight("medium"):
-            base = _degrade_confidence(base, 1)
+    weighted_recency = aggregates["weighted_recency"]
+    if weighted_recency < 0.60:
+        penalty_steps += 2
+    elif weighted_recency < 0.80:
+        penalty_steps += 1
+
+    weighted_quality_confidence = aggregates["weighted_quality_confidence"]
+    if weighted_quality_confidence < 0.80:
+        penalty_steps += 2
+    elif weighted_quality_confidence < 0.92:
+        penalty_steps += 1
+
+    weighted_quality_score = aggregates["weighted_quality_score"]
+    if weighted_quality_score < 0.60:
+        penalty_steps += 2
+    elif weighted_quality_score < 0.80:
+        penalty_steps += 1
+
+    effective_contributors = aggregates["effective_contributors"]
+    if effective_contributors < 1.15:
+        penalty_steps += 2
+    elif effective_contributors < 1.60:
+        penalty_steps += 1
+
+    if penalty_steps > 0:
+        base = _degrade_confidence(base, penalty_steps)
+
+    if len(curve.contributors) == 1 and base == "high":
+        base = "medium"
 
     return base
 
@@ -1662,17 +1729,18 @@ def predict_races(
 
     If no defensible observed source exists for a target distance, the
     prediction for that distance is null (predicted_time_s = None).
-    VMA and race predictions are independent: VMA can be available while
-    some or all predictions are null.
+    Race times are independent of VMA output: VMA can be available while
+    some or all predictions are null, and VMA/VO2max outputs never directly
+    alter race times. #188 qualification may still depend on FCmax-relative HR.
     """
     if isinstance(reference_date, datetime):
         reference_date = reference_date.date()
 
     vma_est = estimate_vma(activities, reference_date, user_max_hr)
 
-    # VMA and predictions are INDEPENDENT.
+    # Race times are independent of VMA output.
     # Do NOT return early when VMA is null — predictions may still exist from
-    # observed Riegel sources.
+    # observed qualified performances.
 
     # Weekly volume & long run for athlete profile
     cutoff_28 = date.fromordinal(reference_date.toordinal() - 28)
@@ -1810,6 +1878,8 @@ def predict_races(
     has_any_prediction = any(p.predicted_time_s is not None for p in predictions)
     result_has_data = vma_est.has_data or has_any_prediction
 
+    confidence_aggregates = _curve_confidence_aggregates(tuple(sorted_contributors))
+
     return PerformanceEstimate(
         has_data=result_has_data,
         vma=vma_est,
@@ -1839,6 +1909,16 @@ def predict_races(
             ),
             "fit_quality": curve.fit_quality if curve else None,
             "k_conflict": curve.k_conflict if curve else None,
+            "weighted_recency": round(confidence_aggregates["weighted_recency"], 6) if curve else None,
+            "weighted_quality_confidence": (
+                round(confidence_aggregates["weighted_quality_confidence"], 6) if curve else None
+            ),
+            "weighted_quality_score": (
+                round(confidence_aggregates["weighted_quality_score"], 6) if curve else None
+            ),
+            "effective_contributors": (
+                round(confidence_aggregates["effective_contributors"], 6) if curve else None
+            ),
             "contributors": [
                 {
                     "distance_m": c.distance_m,

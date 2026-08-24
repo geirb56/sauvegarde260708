@@ -58,6 +58,10 @@ def _pred_by_label(result):
     return {p.distance_label: p for p in result.predictions}
 
 
+def _confidence_rank(level: str) -> int:
+    return {"insufficient": 0, "low": 1, "medium": 2, "high": 3}[level]
+
+
 def _assert_monotonic(preds):
     labels = ["5K", "10K", "Semi", "Marathon"]
     paces = []
@@ -425,24 +429,60 @@ def test_r_conflict_fallback_reestimates_a_with_forced_k():
     assert curve.a == pytest.approx(math.exp(expected_log_a), rel=1e-10, abs=1e-10)
 
 
-def test_s_vma_related_signal_changes_do_not_change_race_predictions():
-    base = _benchmark_runs() + [
+def test_s_vma_output_mutations_do_not_change_race_predictions_architecture(monkeypatch):
+    activities = _benchmark_runs() + [
         _run(days_ago=8, distance_m=5_000.0, duration_s=1_490.0, avg_hr=159.0, max_hr=176.0),
         _run(days_ago=5, distance_m=10_000.0, duration_s=3_080.0, avg_hr=160.0, max_hr=178.0),
+        _run(days_ago=4, distance_m=15_000.0, duration_s=4_880.0, avg_hr=160.0, max_hr=178.0),
     ]
-    with_noise = base + [
-        _run(days_ago=3, distance_m=8_000.0, duration_s=2_700.0, avg_hr=95.0, max_hr=110.0, activity_type="cycling"),
-        _run(days_ago=2, distance_m=4_000.0, duration_s=800.0, avg_hr=80.0, max_hr=100.0),
+    fixed_fcmax = 182.0
+    baseline = predict_races(activities, TODAY, user_max_hr=fixed_fcmax)
+    base_preds = _pred_by_label(baseline)
+
+    variants = [
+        pm.VMAEstimate(
+            vma_kmh=None,
+            confidence="insufficient",
+            method="hr_speed_model",
+            source_activity_date=None,
+            source_distance_m=None,
+            source_duration_s=None,
+        ),
+        pm.VMAEstimate(
+            vma_kmh=11.0,
+            confidence="low",
+            method="hr_speed_model",
+            source_activity_date=TODAY,
+            source_distance_m=5_000.0,
+            source_duration_s=1_700.0,
+        ),
+        pm.VMAEstimate(
+            vma_kmh=20.5,
+            confidence="high",
+            method="hr_speed_model",
+            source_activity_date=TODAY,
+            source_distance_m=10_000.0,
+            source_duration_s=2_700.0,
+        ),
     ]
-    baseline = predict_races(base, TODAY)
-    noisy = predict_races(with_noise, TODAY)
-    b = _pred_by_label(baseline)
-    n = _pred_by_label(noisy)
-    for label in ["5K", "10K", "Semi", "Marathon"]:
-        assert b[label].predicted_time_s == n[label].predicted_time_s
-        assert b[label].confidence == n[label].confidence
-        assert b[label].curve_method == n[label].curve_method
-        assert b[label].curve_k == n[label].curve_k
+
+    for variant in variants:
+        monkeypatch.setattr(
+            pm,
+            "estimate_vma",
+            lambda acts, ref, user_max_hr=None, _v=variant: _v,
+        )
+        mutated = predict_races(activities, TODAY, user_max_hr=fixed_fcmax)
+        mutated_preds = _pred_by_label(mutated)
+        for label in ["5K", "10K", "Semi", "Marathon"]:
+            assert mutated_preds[label].predicted_time_s == base_preds[label].predicted_time_s
+            assert mutated_preds[label].curve_k == base_preds[label].curve_k
+            assert mutated_preds[label].curve_method == base_preds[label].curve_method
+        assert mutated.race_curve_diagnostics["curve_k"] == baseline.race_curve_diagnostics["curve_k"]
+        assert (
+            mutated.race_curve_diagnostics["curve_method"]
+            == baseline.race_curve_diagnostics["curve_method"]
+        )
 
 
 def test_t_pr188_qualification_semantics_unchanged():
@@ -492,3 +532,120 @@ def test_v_outlier_weight_is_reduced_and_fit_beats_plain_ols_on_core_points():
     ols_err = sum(abs(y - (ols_i + ols_k * x)) for x, y in zip(core_xs, core_ys)) / len(core)
     robust_err = sum(abs(y - (robust_i + robust_k * x)) for x, y in zip(core_xs, core_ys)) / len(core)
     assert robust_err < ols_err
+
+
+def test_w_confidence_uses_weighted_contributor_ensemble_not_best_only():
+    qualified_pool = [
+        _qualified_obs(days_ago=3, distance_m=10_000.0, duration_s=3_000.0, score=1.0, confidence="high"),
+        _qualified_obs(days_ago=220, distance_m=5_000.0, duration_s=1_720.0, score=0.45, confidence="low"),
+        _qualified_obs(days_ago=230, distance_m=15_000.0, duration_s=5_300.0, score=0.45, confidence="low"),
+        _qualified_obs(days_ago=240, distance_m=21_097.5, duration_s=7_600.0, score=0.45, confidence="low"),
+    ]
+    curve = pm._build_performance_curve(qualified_pool, TODAY)
+    assert curve is not None
+
+    agg = pm._curve_confidence_aggregates(curve.contributors)
+    assert agg["weighted_recency"] < 0.90
+    assert agg["weighted_quality_confidence"] < 0.95
+    assert agg["weighted_quality_score"] < 0.90
+
+    confidence = pm._curve_prediction_confidence(curve, extrapolation_ratio=1.0)
+    assert confidence in {"medium", "low", "insufficient"}
+
+
+def test_x_same_curve_geometry_with_stronger_evidence_has_higher_confidence():
+    a = 0.16
+    k = 1.06
+    distances = [5_000.0, 10_000.0, 21_097.5]
+
+    strong_pool = [
+        _qualified_obs(
+            days_ago=5 + idx * 3,
+            distance_m=dist,
+            duration_s=round(a * (dist ** k), 1),
+            score=0.96,
+            confidence="high",
+        )
+        for idx, dist in enumerate(distances)
+    ]
+    weak_pool = [
+        _qualified_obs(
+            days_ago=210 + idx * 3,
+            distance_m=dist,
+            duration_s=round(a * (dist ** k), 1),
+            score=0.45,
+            confidence="low",
+        )
+        for idx, dist in enumerate(distances)
+    ]
+
+    strong_curve = pm._build_performance_curve(strong_pool, TODAY)
+    weak_curve = pm._build_performance_curve(weak_pool, TODAY)
+    assert strong_curve is not None and weak_curve is not None
+    assert strong_curve.k == pytest.approx(weak_curve.k, rel=1e-9)
+    assert strong_curve.a == pytest.approx(weak_curve.a, rel=1e-9)
+
+    strong_conf = pm._curve_prediction_confidence(strong_curve, extrapolation_ratio=1.0)
+    weak_conf = pm._curve_prediction_confidence(weak_curve, extrapolation_ratio=1.0)
+    assert _confidence_rank(strong_conf) > _confidence_rank(weak_conf)
+
+
+def test_y_effective_contributors_balanced_vs_dominated_weights():
+    balanced_pool = [
+        _qualified_obs(days_ago=7, distance_m=5_000.0, duration_s=1_500.0, score=1.0, confidence="high"),
+        _qualified_obs(days_ago=8, distance_m=10_000.0, duration_s=3_120.0, score=1.0, confidence="high"),
+        _qualified_obs(days_ago=9, distance_m=15_000.0, duration_s=4_900.0, score=1.0, confidence="high"),
+    ]
+    dominated_pool = [
+        _qualified_obs(days_ago=7, distance_m=5_000.0, duration_s=1_500.0, score=1.0, confidence="high"),
+        _qualified_obs(days_ago=180, distance_m=10_000.0, duration_s=3_120.0, score=0.30, confidence="low"),
+        _qualified_obs(days_ago=180, distance_m=15_000.0, duration_s=4_900.0, score=0.30, confidence="low"),
+    ]
+    balanced_curve = pm._build_performance_curve(balanced_pool, TODAY)
+    dominated_curve = pm._build_performance_curve(dominated_pool, TODAY)
+    assert balanced_curve is not None and dominated_curve is not None
+
+    balanced_eff = pm._curve_confidence_aggregates(balanced_curve.contributors)["effective_contributors"]
+    dominated_eff = pm._curve_confidence_aggregates(dominated_curve.contributors)["effective_contributors"]
+    assert balanced_eff > dominated_eff
+
+
+def test_z_single_contributor_confidence_never_high():
+    pool = [_qualified_obs(days_ago=5, distance_m=10_000.0, duration_s=3_000.0, score=1.0, confidence="high")]
+    curve = pm._build_performance_curve(pool, TODAY)
+    assert curve is not None
+    confidence = pm._curve_prediction_confidence(curve, extrapolation_ratio=1.0)
+    assert confidence != "high"
+
+
+def test_aa_k_conflict_degrades_confidence_at_same_extrapolation():
+    coherent_pool = [
+        _qualified_obs(days_ago=4, distance_m=5_000.0, duration_s=1_470.0, score=1.0, confidence="high"),
+        _qualified_obs(days_ago=4, distance_m=10_000.0, duration_s=3_050.0, score=1.0, confidence="high"),
+    ]
+    conflict_pool = [
+        _qualified_obs(days_ago=4, distance_m=5_000.0, duration_s=1_300.0, score=1.0, confidence="high"),
+        _qualified_obs(days_ago=4, distance_m=10_000.0, duration_s=5_200.0, score=1.0, confidence="high"),
+    ]
+    coherent_curve = pm._build_performance_curve(coherent_pool, TODAY)
+    conflict_curve = pm._build_performance_curve(conflict_pool, TODAY)
+    assert coherent_curve is not None and conflict_curve is not None
+    assert conflict_curve.k_conflict is True
+
+    coherent_conf = pm._curve_prediction_confidence(coherent_curve, extrapolation_ratio=1.0)
+    conflict_conf = pm._curve_prediction_confidence(conflict_curve, extrapolation_ratio=1.0)
+    assert _confidence_rank(conflict_conf) < _confidence_rank(coherent_conf)
+
+
+def test_ab_same_curve_near_target_has_higher_confidence_than_far_extrapolation():
+    pool = [
+        _qualified_obs(days_ago=6, distance_m=5_000.0, duration_s=1_480.0, score=0.95, confidence="high"),
+        _qualified_obs(days_ago=7, distance_m=10_000.0, duration_s=3_080.0, score=0.95, confidence="high"),
+        _qualified_obs(days_ago=8, distance_m=21_097.5, duration_s=6_950.0, score=0.95, confidence="high"),
+    ]
+    curve = pm._build_performance_curve(pool, TODAY)
+    assert curve is not None
+
+    near_conf = pm._curve_prediction_confidence(curve, extrapolation_ratio=1.05)
+    far_conf = pm._curve_prediction_confidence(curve, extrapolation_ratio=4.0)
+    assert _confidence_rank(near_conf) > _confidence_rank(far_conf)

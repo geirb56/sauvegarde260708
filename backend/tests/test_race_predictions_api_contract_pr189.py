@@ -30,5 +30,9 @@ def test_pr189_server_route_contains_curve_level_diagnostics_contract_fields():
         '"fit_quality": curve_diag.get("fit_quality")',
         '"k_conflict": curve_diag.get("k_conflict")',
         '"k_fallback_applied": curve_diag.get("k_fallback_applied")',
+        '"weighted_recency": curve_diag.get("weighted_recency")',
+        '"weighted_quality_confidence": curve_diag.get("weighted_quality_confidence")',
+        '"weighted_quality_score": curve_diag.get("weighted_quality_score")',
+        '"effective_contributors": curve_diag.get("effective_contributors")',
     ]:
         assert key in code
