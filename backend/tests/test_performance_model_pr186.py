@@ -71,6 +71,7 @@ from training_v2.performance_model import (
     _is_usable_for_hr_model,
     _resolve_fcmax,
     _validate_activity,
+    evaluate_performance_quality,
     validate_activity,
     estimate_vma,
     predict_races,
@@ -113,6 +114,17 @@ def _make_vma_activities(fcmax: float = 190.0, days_offset: int = 0) -> List[Dom
         _run(10_000.0, 3_600.0, days_ago=10 + days_offset, avg_hr=155.0, max_hr=fcmax),
         _run(12_000.0, 4_000.0, days_ago=15 + days_offset, avg_hr=168.0, max_hr=fcmax),
         _run(14_000.0, 4_500.0, days_ago=20 + days_offset, avg_hr=178.0, max_hr=fcmax),
+    ]
+
+
+def _qualification_benchmark() -> List[DomainActivity]:
+    return [
+        _run(8_000.0, 3_600.0, days_ago=80, avg_hr=120.0, max_hr=180.0),
+        _run(9_000.0, 4_000.0, days_ago=70, avg_hr=124.0, max_hr=182.0),
+        _run(10_000.0, 4_500.0, days_ago=60, avg_hr=128.0, max_hr=184.0),
+        _run(11_000.0, 4_950.0, days_ago=50, avg_hr=132.0, max_hr=186.0),
+        _run(12_000.0, 5_400.0, days_ago=40, avg_hr=136.0, max_hr=188.0),
+        _run(13_000.0, 5_850.0, days_ago=30, avg_hr=140.0, max_hr=190.0),
     ]
 
 
@@ -343,53 +355,64 @@ def test_15_no_elevation_data_accepted():
 # ---------------------------------------------------------------------------
 
 def test_16_relative_hr_079_rejected():
-    """Test 16: relative_hr 0.79 → activity rejected as Riegel source."""
-    fcmax = 190.0
-    # avg_hr = 0.79 * 190 = 150.1
-    a = _run(10_000.0, 3_600.0, days_ago=5, avg_hr=150.0, max_hr=fcmax)
-    score = _score_riegel_candidate(a, 10_000.0, TODAY, fcmax)
-    assert score == 0.0, f"relative_hr 0.79 must produce score 0.0, got {score}"
+    """Test 16: relative_hr 0.79 with a full benchmark still fails qualification."""
+    a = _run(10_000.0, 2_800.0, days_ago=5, avg_hr=150.0, max_hr=190.0)
+    quality = evaluate_performance_quality(a, _qualification_benchmark() + [a], TODAY)
+    score = _score_riegel_candidate(a, 10_000.0, TODAY, quality=quality)
+    assert quality.qualified is False
+    assert score == 0.0
 
 
 def test_17_relative_hr_080_eligible():
-    """Test 17: relative_hr 0.80 → activity is eligible as Riegel source."""
-    fcmax = 190.0
-    # avg_hr = 0.80 * 190 = 152.0
-    a = _run(10_000.0, 3_600.0, days_ago=5, avg_hr=152.0, max_hr=fcmax)
-    score = _score_riegel_candidate(a, 10_000.0, TODAY, fcmax)
-    assert score > 0.0, f"relative_hr 0.80 must produce score > 0.0, got {score}"
+    """Test 17: relative_hr 0.80 alone is not enough without enough score support."""
+    a = _run(10_000.0, 2_800.0, days_ago=5, avg_hr=152.0, max_hr=190.0)
+    quality = evaluate_performance_quality(a, _qualification_benchmark() + [a], TODAY)
+    score = _score_riegel_candidate(a, 10_000.0, TODAY, quality=quality)
+    assert quality.qualified is False
+    assert score == 0.0
 
 
 def test_18_no_avg_hr_rejected():
-    """Test 18: Activity without avg_hr is rejected as Riegel source."""
-    fcmax = 190.0
-    a = _run(10_000.0, 3_600.0, days_ago=5, avg_hr=None, max_hr=fcmax)
-    score = _score_riegel_candidate(a, 10_000.0, TODAY, fcmax)
-    assert score == 0.0, f"No avg_hr must produce score 0.0, got {score}"
+    """Test 18: Without avg_hr, only the strict speed-only fallback can qualify."""
+    a = _run(10_000.0, 4_800.0, days_ago=5, avg_hr=None, max_hr=190.0)
+    quality = evaluate_performance_quality(a, _qualification_benchmark() + [a], TODAY)
+    score = _score_riegel_candidate(a, 10_000.0, TODAY, quality=quality)
+    assert quality.qualified is False
+    assert score == 0.0
 
 
 def test_19_no_fcmax_rejected():
-    """Test 19: Without FCmax (fcmax=None), activity is rejected as Riegel source."""
-    a = _run(10_000.0, 3_600.0, days_ago=5, avg_hr=160.0, max_hr=190.0)
-    score = _score_riegel_candidate(a, 10_000.0, TODAY, fcmax=None)
-    assert score == 0.0, f"No FCmax must produce score 0.0, got {score}"
+    """Test 19: Without historical FCmax, an ordinary run does not qualify."""
+    benchmark = [
+        _run(8_000.0, 3_600.0, days_ago=80),
+        _run(9_000.0, 4_000.0, days_ago=70),
+        _run(10_000.0, 4_500.0, days_ago=60),
+        _run(11_000.0, 4_950.0, days_ago=50),
+        _run(12_000.0, 5_400.0, days_ago=40),
+        _run(13_000.0, 5_850.0, days_ago=30),
+    ]
+    a = _run(10_000.0, 4_800.0, days_ago=5, avg_hr=160.0, max_hr=None)
+    quality = evaluate_performance_quality(a, benchmark + [a], TODAY)
+    score = _score_riegel_candidate(a, 10_000.0, TODAY, quality=quality)
+    assert quality.qualified is False
+    assert score == 0.0
 
 
 def test_20_trail_riegel_rejected():
     """Test 20: trail_running activity is rejected as Riegel source."""
-    fcmax = 190.0
-    a = _run(10_000.0, 3_600.0, days_ago=5, avg_hr=160.0, max_hr=fcmax,
+    a = _run(10_000.0, 3_600.0, days_ago=5, avg_hr=160.0, max_hr=190.0,
              activity_type="trail_running")
-    score = _score_riegel_candidate(a, 10_000.0, TODAY, fcmax)
+    quality = evaluate_performance_quality(a, _qualification_benchmark() + [a], TODAY)
+    score = _score_riegel_candidate(a, 10_000.0, TODAY, quality=quality)
     assert score == 0.0, "trail_running must be rejected as Riegel source"
 
 
 def test_21_high_elevation_riegel_rejected():
     """Test 21: Activity with D+/km > 30 is rejected as Riegel source."""
-    fcmax = 190.0
     # 10km + 400m → 40 m/km > 30
-    a = _run(10_000.0, 3_600.0, days_ago=5, avg_hr=160.0, max_hr=fcmax, elevation_gain_m=400.0)
-    score = _score_riegel_candidate(a, 10_000.0, TODAY, fcmax)
+    a = _run(10_000.0, 3_600.0, days_ago=5, avg_hr=160.0, max_hr=190.0, elevation_gain_m=400.0)
+    quality = evaluate_performance_quality(a, _qualification_benchmark() + [a], TODAY)
+    score = _score_riegel_candidate(a, 10_000.0, TODAY, quality=quality)
     assert score == 0.0, "D+/km > 30 must produce score 0.0 for Riegel source"
 
 
