@@ -4018,6 +4018,10 @@ async def get_race_predictions(user: dict = Depends(auth_user)):
             "volume_factor": pred.volume_factor,
             "endurance_factor": pred.endurance_factor,
             "confidence": pred.confidence,
+            "source_quality_score": pred.source_quality_score,
+            "source_quality_confidence": pred.source_quality_confidence,
+            "source_speed_percentile": pred.source_speed_percentile,
+            "source_relative_hr": pred.source_relative_hr,
             "model_version": "v2",
         }
         predictions_out.append(entry)

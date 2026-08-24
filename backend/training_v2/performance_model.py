@@ -35,8 +35,12 @@ Race predictions — ROAD ONLY:
   RIEGEL_SOURCE = QUALIFIED_OBSERVED_ACTIVITY_ONLY
   trail_running activities are never used as road prediction sources.
   Activities with elevation_gain_per_km > MAX_ROAD_ELEVATION_GAIN_PER_KM are excluded.
-  When FCmax and average_hr are available: relative_hr < MIN_RIEGEL_RELATIVE_HR → rejected.
-  Without HR: prediction still possible; confidence capped at MEDIUM.
+Performance qualification is separate from per-target source selection:
+  - qualification uses only effort quality signals (personal speed percentile, relative HR)
+  - source selection uses only qualified performances, then target proximity + recency + quality
+Personal speed percentile uses a 90-day strictly-prior benchmark (no look-ahead, never self-inclusive).
+Without HR: qualification is still possible, but only via a stricter speed-only fallback and
+the resulting prediction confidence is capped at MEDIUM.
 
 VMA / Predictions independence:
   RIEGEL_VMA_CONFIDENCE_DEPENDENCY = NO
@@ -130,8 +134,23 @@ CONFIDENCE_LOW_DAYS = 120
 MAX_RIEGEL_SOURCE_AGE_DAYS: int = 730        # Activities older than 2 years not defensible
 MIN_RIEGEL_SOURCE_RATIO: float = 0.12        # Source must be >= 12% of target distance
 MIN_RIEGEL_SCORE: float = 0.25               # Minimum score for a defensible source
-MIN_RIEGEL_RELATIVE_HR: float = 0.80         # Minimum relative effort; avg_hr + FCmax required
 MAX_ROAD_ELEVATION_GAIN_PER_KM: float = 30.0  # m/km — above this, not road-equivalent
+
+# Performance qualification business constants
+PERSONAL_SPEED_WINDOW_DAYS: int = 90
+MIN_SPEED_BENCHMARK_RUNS: int = 5
+PERFORMANCE_HR_WEIGHT: float = 0.55
+PERFORMANCE_SPEED_WEIGHT: float = 0.45
+PERFORMANCE_SCORE_THRESHOLD: float = 0.65
+PERFORMANCE_HR_COMPONENT_FLOOR: float = 0.75
+PERFORMANCE_HR_COMPONENT_CEILING: float = 0.90
+PERFORMANCE_MIN_RELATIVE_HR: float = 0.80
+PERFORMANCE_MIN_SPEED_PERCENTILE_WITH_HR: float = 70.0
+PERFORMANCE_NO_HR_MIN_SPEED_PERCENTILE: float = 90.0
+PERFORMANCE_HIGH_CONFIDENCE_SCORE: float = 0.80
+PERFORMANCE_HIGH_CONFIDENCE_RELATIVE_HR: float = 0.85
+PERFORMANCE_HIGH_CONFIDENCE_SPEED_PERCENTILE: float = 90.0
+MIN_RIEGEL_RELATIVE_HR: float = PERFORMANCE_MIN_RELATIVE_HR
 
 # VMA rolling window (used for both CURRENT and HISTORY)
 VMA_WINDOW_DAYS: int = 42
@@ -156,6 +175,15 @@ REASON_EXTRAPOLATION_TOO_LARGE = "EXTRAPOLATION_TOO_LARGE"
 REASON_NO_FCMAX = "NO_FCMAX"
 REASON_NO_DATA = "NO_DATA"
 REASON_INSUFFICIENT_ACTIVITIES = "INSUFFICIENT_ACTIVITIES"
+
+REASON_PERF_QUALIFIED_HR_SPEED = "PERF_QUALIFIED_HR_SPEED"
+REASON_PERF_QUALIFIED_SPEED_ONLY = "PERF_QUALIFIED_SPEED_ONLY"
+REASON_PERF_NO_SPEED_BENCHMARK = "PERF_NO_SPEED_BENCHMARK"
+REASON_PERF_SPEED_TOO_LOW = "PERF_SPEED_TOO_LOW"
+REASON_PERF_RELATIVE_HR_TOO_LOW = "PERF_RELATIVE_HR_TOO_LOW"
+REASON_PERF_SCORE_TOO_LOW = "PERF_SCORE_TOO_LOW"
+REASON_PERF_MISSING_DATA = "PERF_MISSING_DATA"
+REASON_PERF_TERRAIN_REJECTED = "PERF_TERRAIN_REJECTED"
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -224,6 +252,25 @@ def _days_ago(activity_date: date, reference_date: date) -> int:
     return (reference_date - activity_date).days
 
 
+def _clamp(value: float, lower: float, upper: float) -> float:
+    return max(lower, min(value, upper))
+
+
+def _strictly_prior_activities(
+    activity: DomainActivity,
+    activities: List[DomainActivity],
+) -> List[DomainActivity]:
+    """Return only activities dated strictly before the evaluated activity."""
+    activity_dt = _activity_date(activity)
+    if activity_dt is None:
+        return []
+    return [
+        other
+        for other in activities
+        if (other_dt := _activity_date(other)) is not None and other_dt < activity_dt
+    ]
+
+
 def _validate_activity(a: DomainActivity, reference_date: date) -> bool:
     """Return True if the activity is a valid running candidate (basic validation)."""
     if not _is_running(a):
@@ -239,6 +286,20 @@ def _validate_activity(a: DomainActivity, reference_date: date) -> bool:
     speed = _speed_kmh(a)
     if speed is None or speed < MIN_SPEED_KMH or speed > MAX_SPEED_KMH:
         return False
+    return True
+
+
+def _is_road_comparable(a: DomainActivity, reference_date: date) -> bool:
+    """Return True when the activity is road-comparable for speed/performance purposes."""
+    if not _validate_activity(a, reference_date):
+        return False
+    act_type = (a.activity_type or "").strip().lower().replace(" ", "_")
+    if act_type == "trail_running":
+        return False
+    if a.elevation_gain_m is not None and a.distance_m and a.distance_m > 0:
+        elev_per_km = a.elevation_gain_m / (a.distance_m / 1000.0)
+        if elev_per_km > MAX_ROAD_ELEVATION_GAIN_PER_KM:
+            return False
     return True
 
 
@@ -571,6 +632,186 @@ def _hr_model_confidence(
 
 
 # ---------------------------------------------------------------------------
+# Performance qualification
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PerformanceQuality:
+    qualified: bool
+    score: Optional[float]
+    confidence: str
+    personal_speed_percentile: Optional[float]
+    benchmark_count: int
+    relative_avg_hr: Optional[float]
+    historical_fcmax: Optional[float]
+    reason_code: str
+
+
+def _personal_speed_percentile_90d(
+    activity: DomainActivity,
+    activities: List[DomainActivity],
+    reference_date: date,
+) -> Tuple[Optional[float], int]:
+    """Return the strictly-prior personal speed percentile and benchmark count."""
+    activity_dt = _activity_date(activity)
+    current_speed = _speed_kmh(activity)
+    if activity_dt is None or current_speed is None or activity_dt > reference_date:
+        return None, 0
+
+    cutoff = date.fromordinal(activity_dt.toordinal() - PERSONAL_SPEED_WINDOW_DAYS)
+    benchmark_speeds = [
+        speed
+        for other in _strictly_prior_activities(activity, activities)
+        if (other_dt := _activity_date(other)) is not None
+        and cutoff <= other_dt
+        and _is_road_comparable(other, activity_dt)
+        and (speed := _speed_kmh(other)) is not None
+    ]
+    benchmark_count = len(benchmark_speeds)
+    if benchmark_count < MIN_SPEED_BENCHMARK_RUNS:
+        return None, benchmark_count
+
+    percentile = (sum(1 for speed in benchmark_speeds if speed <= current_speed) / benchmark_count) * 100.0
+    return round(_clamp(percentile, 0.0, 100.0), 4), benchmark_count
+
+
+def evaluate_performance_quality(
+    activity: DomainActivity,
+    prior_activities: List[DomainActivity],
+    reference_date: date,
+    user_max_hr: Optional[float] = None,
+) -> PerformanceQuality:
+    """Evaluate whether an observed activity is a qualified performance."""
+    if not _validate_activity(activity, reference_date):
+        return PerformanceQuality(
+            qualified=False,
+            score=None,
+            confidence="insufficient",
+            personal_speed_percentile=None,
+            benchmark_count=0,
+            relative_avg_hr=None,
+            historical_fcmax=None,
+            reason_code=REASON_PERF_MISSING_DATA,
+        )
+
+    if not _is_road_comparable(activity, reference_date):
+        return PerformanceQuality(
+            qualified=False,
+            score=None,
+            confidence="insufficient",
+            personal_speed_percentile=None,
+            benchmark_count=0,
+            relative_avg_hr=None,
+            historical_fcmax=None,
+            reason_code=REASON_PERF_TERRAIN_REJECTED,
+        )
+
+    activity_dt = _activity_date(activity)
+    if activity_dt is None:
+        return PerformanceQuality(
+            qualified=False,
+            score=None,
+            confidence="insufficient",
+            personal_speed_percentile=None,
+            benchmark_count=0,
+            relative_avg_hr=None,
+            historical_fcmax=None,
+            reason_code=REASON_PERF_MISSING_DATA,
+        )
+
+    speed_percentile, benchmark_count = _personal_speed_percentile_90d(
+        activity, prior_activities, reference_date
+    )
+    strictly_prior_activities = _strictly_prior_activities(activity, prior_activities)
+    historical_fcmax = _resolve_fcmax(strictly_prior_activities, user_max_hr, activity_dt)
+    relative_avg_hr: Optional[float] = None
+    if activity.average_hr is not None and historical_fcmax is not None and historical_fcmax > 0:
+        relative_avg_hr = round(activity.average_hr / historical_fcmax, 4)
+
+    if speed_percentile is None:
+        return PerformanceQuality(
+            qualified=False,
+            score=None,
+            confidence="insufficient",
+            personal_speed_percentile=None,
+            benchmark_count=benchmark_count,
+            relative_avg_hr=relative_avg_hr,
+            historical_fcmax=historical_fcmax,
+            reason_code=REASON_PERF_NO_SPEED_BENCHMARK,
+        )
+
+    speed_component = _clamp(speed_percentile / 100.0, 0.0, 1.0)
+
+    if relative_avg_hr is None:
+        score = round(speed_component, 4)
+        qualified = (
+            benchmark_count >= MIN_SPEED_BENCHMARK_RUNS
+            and speed_percentile >= PERFORMANCE_NO_HR_MIN_SPEED_PERCENTILE
+        )
+        return PerformanceQuality(
+            qualified=qualified,
+            score=score,
+            confidence="low" if qualified else "insufficient",
+            personal_speed_percentile=speed_percentile,
+            benchmark_count=benchmark_count,
+            relative_avg_hr=None,
+            historical_fcmax=historical_fcmax,
+            reason_code=(
+                REASON_PERF_QUALIFIED_SPEED_ONLY if qualified else REASON_PERF_SPEED_TOO_LOW
+            ),
+        )
+
+    hr_component = _clamp(
+        (relative_avg_hr - PERFORMANCE_HR_COMPONENT_FLOOR)
+        / (PERFORMANCE_HR_COMPONENT_CEILING - PERFORMANCE_HR_COMPONENT_FLOOR),
+        0.0,
+        1.0,
+    )
+    score = round(
+        PERFORMANCE_HR_WEIGHT * hr_component
+        + PERFORMANCE_SPEED_WEIGHT * speed_component,
+        4,
+    )
+
+    if speed_percentile < PERFORMANCE_MIN_SPEED_PERCENTILE_WITH_HR:
+        reason_code = REASON_PERF_SPEED_TOO_LOW
+        qualified = False
+    elif relative_avg_hr < PERFORMANCE_MIN_RELATIVE_HR:
+        reason_code = REASON_PERF_RELATIVE_HR_TOO_LOW
+        qualified = False
+    elif score < PERFORMANCE_SCORE_THRESHOLD:
+        reason_code = REASON_PERF_SCORE_TOO_LOW
+        qualified = False
+    else:
+        reason_code = REASON_PERF_QUALIFIED_HR_SPEED
+        qualified = True
+
+    confidence = "insufficient"
+    if qualified:
+        confidence = (
+            "high"
+            if (
+                score >= PERFORMANCE_HIGH_CONFIDENCE_SCORE
+                and relative_avg_hr >= PERFORMANCE_HIGH_CONFIDENCE_RELATIVE_HR
+                and speed_percentile >= PERFORMANCE_HIGH_CONFIDENCE_SPEED_PERCENTILE
+            )
+            else "medium"
+        )
+
+    return PerformanceQuality(
+        qualified=qualified,
+        score=score,
+        confidence=confidence,
+        personal_speed_percentile=speed_percentile,
+        benchmark_count=benchmark_count,
+        relative_avg_hr=relative_avg_hr,
+        historical_fcmax=historical_fcmax,
+        reason_code=reason_code,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Output dataclasses
 # ---------------------------------------------------------------------------
 
@@ -617,6 +858,10 @@ class RacePrediction:
     volume_factor: int
     source_distance_m: Optional[float]
     source_type: Optional[str] = None   # "observed_activity" when from real data
+    source_quality_score: Optional[float] = None
+    source_quality_confidence: Optional[str] = None
+    source_speed_percentile: Optional[float] = None
+    source_relative_hr: Optional[float] = None
     model_version: str = "v2"
 
 
@@ -800,22 +1045,45 @@ def _riegel_confidence(
     target_distance_m: float,
     days_since_source: int,
     endurance_factor: float,
-    relative_hr: Optional[float] = None,
+    performance_quality_score: Optional[float] = None,
+    performance_quality_confidence: str = "insufficient",
 ) -> str:
     """Confidence for a Riegel prediction.
 
-    HIGH requires relative_hr >= 0.85 in addition to a close, recent source with good
-    endurance support.  Without confirmed high effort the best achievable is MEDIUM.
+    Confidence depends on:
+      - source proximity to target
+      - source recency
+      - endurance support
+      - qualified performance quality
+
+    A speed-only source (no HR) is capped at MEDIUM.
     """
     ratio = target_distance_m / source_distance_m
     if ratio > 4.0 or days_since_source > CONFIDENCE_LOW_DAYS or endurance_factor < 0.65:
+        base_confidence = "low"
+    elif ratio > 2.0 or days_since_source > CONFIDENCE_MEDIUM_DAYS or endurance_factor < 0.80:
+        base_confidence = "medium"
+    else:
+        base_confidence = "high"
+
+    if performance_quality_score is None or performance_quality_confidence == "insufficient":
         return "low"
-    if ratio > 2.0 or days_since_source > CONFIDENCE_MEDIUM_DAYS or endurance_factor < 0.80:
+
+    if performance_quality_confidence == "low":
+        if base_confidence == "low":
+            return "low"
         return "medium"
-    # Close source, recent, good endurance: require confirmed high effort for HIGH
-    if relative_hr is not None and relative_hr >= 0.85:
+
+    if (
+        base_confidence == "high"
+        and performance_quality_confidence == "high"
+        and performance_quality_score >= PERFORMANCE_HIGH_CONFIDENCE_SCORE
+    ):
         return "high"
-    return "medium"  # No relative_hr data or effort was easy → cap at medium
+
+    if base_confidence == "high":
+        return "medium"
+    return base_confidence
 
 
 def _seconds_to_str(total_s: float) -> str:
@@ -854,7 +1122,7 @@ def _score_riegel_candidate(
     a: DomainActivity,
     target_distance_m: float,
     reference_date: date,
-    fcmax: Optional[float],
+    quality: PerformanceQuality,
 ) -> float:
     """Score an activity as a Riegel road-prediction source for a given target.
 
@@ -862,36 +1130,18 @@ def _score_riegel_candidate(
     Returns 0.0 when the activity is not a defensible source.
 
     Hard exclusions (return 0.0):
-      - trail_running type: road predictions only
-      - elevation_gain_per_km > MAX_ROAD_ELEVATION_GAIN_PER_KM: not road-equivalent
-      - avg_hr absent: HR data required for qualification
-      - FCmax absent: relative HR cannot be computed
+      - activity is not a qualified performance
       - distance < MIN_RIEGEL_SOURCE_RATIO * target_distance
       - activity older than MAX_RIEGEL_SOURCE_AGE_DAYS
-      - relative_hr < MIN_RIEGEL_RELATIVE_HR: easy runs not informative
 
     Weights (for eligible activities):
       proximity  0.50  — how close source distance is to target
-      recency    0.30  — how recent the activity is
-      rel_hr     0.20  — effort level relative to FCmax
+      recency    0.20  — how recent the activity is
+      quality    0.30  — how strong the qualified effort is
     """
-    # Road-only: trail excluded by type
-    act_type = (a.activity_type or "").strip().lower().replace(" ", "_")
-    if act_type == "trail_running":
+    if not quality.qualified or quality.score is None:
         return 0.0
-
-    # Elevation gate: relative to distance (not an absolute threshold)
-    if a.elevation_gain_m is not None and a.distance_m and a.distance_m > 0:
-        elev_per_km = a.elevation_gain_m / (a.distance_m / 1000.0)
-        if elev_per_km > MAX_ROAD_ELEVATION_GAIN_PER_KM:
-            return 0.0
-
-    # avg_hr required: activities without HR data are not qualified Riegel sources
-    if a.average_hr is None:
-        return 0.0
-
-    # FCmax required: relative HR cannot be computed without FCmax
-    if fcmax is None or fcmax <= 0:
+    if not _is_road_comparable(a, reference_date):
         return 0.0
 
     src_dist = a.distance_m or 0.0
@@ -904,11 +1154,6 @@ def _score_riegel_candidate(
     days = _days_ago(d, reference_date)
     if days > MAX_RIEGEL_SOURCE_AGE_DAYS:
         return 0.0
-
-    # Relative HR gate: avg_hr and FCmax are both guaranteed at this point
-    relative_hr = a.average_hr / fcmax
-    if relative_hr < MIN_RIEGEL_RELATIVE_HR:
-        return 0.0   # too easy — not an informative performance source
 
     # Proximity: prefer source ≈ target (ratio approaching 1.0 from below is ideal)
     ratio = src_dist / target_distance_m
@@ -931,46 +1176,55 @@ def _score_riegel_candidate(
     else:
         recency = 0.15   # old but within MAX_RIEGEL_SOURCE_AGE_DAYS
 
-    # Relative HR score
-    rel_hr_score = min(a.average_hr / fcmax, 1.0)
-
-    score = proximity * 0.50 + recency * 0.30 + rel_hr_score * 0.20
+    score = proximity * 0.50 + recency * 0.20 + quality.score * 0.30
     return round(score, 4)
 
 
-def _select_riegel_source(
+def _build_qualified_performance_pool(
     activities: List[DomainActivity],
     reference_date: date,
+    user_max_hr: Optional[float] = None,
+) -> List[Tuple[DomainActivity, PerformanceQuality]]:
+    return [
+        (activity, quality)
+        for activity in activities
+        if _validate_activity(activity, reference_date)
+        for quality in [evaluate_performance_quality(activity, activities, reference_date, user_max_hr)]
+        if quality.qualified
+    ]
+
+
+def _select_riegel_source(
+    qualified_pool: List[Tuple[DomainActivity, PerformanceQuality]],
+    reference_date: date,
     target_distance_m: float,
-    fcmax: Optional[float],
-) -> Optional[Tuple[DomainActivity, float, Optional[float]]]:
+) -> Optional[Tuple[DomainActivity, float, PerformanceQuality]]:
     """Select the best observed activity as Riegel source for a given target.
 
-    Returns (activity, score, relative_hr) or None when no defensible source exists.
-
-    relative_hr = avg_hr / fcmax when both are available, else None.
-    source_type for all results from this function is "observed_activity".
+    Returns (activity, source_score, quality) or None when no defensible source exists.
     """
-    candidates = [a for a in activities if _validate_activity(a, reference_date)]
-    if not candidates:
+    if not qualified_pool:
         return None
 
     best_score = 0.0
     best_act: Optional[DomainActivity] = None
-    for a in candidates:
-        s = _score_riegel_candidate(a, target_distance_m, reference_date, fcmax)
+    best_quality: Optional[PerformanceQuality] = None
+    for a, quality in qualified_pool:
+        s = _score_riegel_candidate(
+            a,
+            target_distance_m,
+            reference_date,
+            quality=quality,
+        )
         if s > best_score:
             best_score = s
             best_act = a
+            best_quality = quality
 
     if best_act is None or best_score < MIN_RIEGEL_SCORE:
         return None
 
-    rel_hr: Optional[float] = None
-    if fcmax is not None and fcmax > 0 and best_act.average_hr is not None:
-        rel_hr = round(best_act.average_hr / fcmax, 4)
-
-    return best_act, best_score, rel_hr
+    return best_act, best_score, best_quality
 
 
 # ---------------------------------------------------------------------------
@@ -1005,9 +1259,6 @@ def predict_races(
     # Do NOT return early when VMA is null — predictions may still exist from
     # observed Riegel sources.
 
-    # Resolve FCmax for relative_hr computation in source scoring
-    fcmax = _resolve_fcmax(activities, user_max_hr, reference_date)
-
     # Weekly volume & long run for athlete profile
     cutoff_28 = date.fromordinal(reference_date.toordinal() - 28)
     recent_28 = [
@@ -1020,6 +1271,7 @@ def predict_races(
     max_long_run_m = max((a.distance_m or 0) for a in all_valid) if all_valid else 0.0
 
     predictions: List[RacePrediction] = []
+    qualified_pool = _build_qualified_performance_pool(activities, reference_date, user_max_hr)
 
     for label, dist_m in RACE_DISTANCES_M.items():
         endurance = _endurance_support(activities, reference_date, dist_m)
@@ -1027,7 +1279,7 @@ def predict_races(
         vol_factor = min(weekly_km / max(target_km * 0.5, 1.0), 1.0)
 
         # Select per-target observed source — no synthetic effort
-        riegel_src = _select_riegel_source(activities, reference_date, dist_m, fcmax)
+        riegel_src = _select_riegel_source(qualified_pool, reference_date, dist_m)
 
         if riegel_src is None:
             # No defensible observed source for this target → null prediction
@@ -1046,10 +1298,14 @@ def predict_races(
                 volume_factor=round(vol_factor * 100),
                 source_distance_m=None,
                 source_type=None,
+                source_quality_score=None,
+                source_quality_confidence=None,
+                source_speed_percentile=None,
+                source_relative_hr=None,
             ))
             continue
 
-        src_act, _src_score, relative_hr = riegel_src
+        src_act, _src_score, src_quality = riegel_src
         source_distance_m = src_act.distance_m or 0.0
         source_duration_s = _performance_duration_s(src_act) or 0.0
         source_date = _activity_date(src_act)
@@ -1073,6 +1329,10 @@ def predict_races(
                 volume_factor=round(vol_factor * 100),
                 source_distance_m=source_distance_m,
                 source_type="observed_activity",
+                source_quality_score=src_quality.score,
+                source_quality_confidence=src_quality.confidence,
+                source_speed_percentile=src_quality.personal_speed_percentile,
+                source_relative_hr=src_quality.relative_avg_hr,
             ))
             continue
 
@@ -1084,7 +1344,8 @@ def predict_races(
 
         conf = _riegel_confidence(
             source_distance_m, dist_m, days_since_source, endurance,
-            relative_hr=relative_hr,
+            performance_quality_score=src_quality.score,
+            performance_quality_confidence=src_quality.confidence,
         )
 
         predictions.append(RacePrediction(
@@ -1102,6 +1363,10 @@ def predict_races(
             volume_factor=round(vol_factor * 100),
             source_distance_m=source_distance_m,
             source_type="observed_activity",
+            source_quality_score=src_quality.score,
+            source_quality_confidence=src_quality.confidence,
+            source_speed_percentile=src_quality.personal_speed_percentile,
+            source_relative_hr=src_quality.relative_avg_hr,
         ))
 
     vo2max_estimated: Optional[float] = None
@@ -1142,3 +1407,5 @@ validate_activity = _validate_activity
 activity_date = _activity_date
 performance_duration_s = _performance_duration_s
 activities_in_vma_window = _activities_in_vma_window
+is_road_comparable = _is_road_comparable
+personal_speed_percentile_90d = _personal_speed_percentile_90d
