@@ -220,7 +220,13 @@ class TestB_TwoCoherentPerformances:
         pool = build_qualified_performance_pool(self._activities(), REF)
         curve = fit_performance_curve_v2(pool, REF)
         assert curve is not None
-        assert curve.method == "weighted_logspace_fit"
+        # PR #191: method depends on slope evidence quality.
+        # Both obs contribute to A; k is fitted from strong (high-conf) evidence only.
+        assert curve.method in (
+            "strong_slope_evidence_fit",
+            "strong_slope_evidence_fit_clamped",
+            "prior_k_low_slope_evidence_fallback",
+        ), f"Unexpected curve method: {curve.method}"
         assert curve.contributors_count >= 2
 
     def test_k_within_bounds(self):

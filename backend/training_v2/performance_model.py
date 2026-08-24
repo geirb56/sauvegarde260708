@@ -159,6 +159,21 @@ K_MAX: float = 1.20       # physiological upper bound; k > 1.20 would be extreme
 K_PRIOR: float = RIEGEL_K  # = 1.06, standard Riegel fallback when fit is degenerate or single performance
 CURVE_RECENCY_DECAY_DAYS: float = 180.0  # exponential decay half-life for recency weighting
 
+# Slope evidence — controls which observations are eligible to learn k
+# Only "high"-confidence qualified performances constitute strong slope evidence.
+# A "medium"-confidence performance is a qualified observation for A, but not for k.
+# "speed-only" (no HR) observations are never slope evidence.
+SLOPE_EVIDENCE_MIN_STRONG_COUNT: int = 2           # need >= 2 strong (high-confidence) obs to fit k
+SLOPE_EVIDENCE_MIN_DISTANCE_RATIO: float = 1.5     # d_max / d_min of strong obs must be >= this
+SLOPE_EVIDENCE_N2_SHRINKAGE: float = 0.5           # shrinkage weight toward K_PRIOR when exactly 2 strong obs
+# Reference spread for identifiability score normalisation (5K–Marathon log-space span)
+_SLOPE_EVIDENCE_MAX_LOG_SPREAD: float = math.log(42_195.0 / 5_000.0)
+
+# Confidence penalty thresholds when k fallback is applied (k_fallback_applied = True)
+# Penalty grows with extrapolation distance from observed range.
+SLOPE_FALLBACK_PENALTY_LOW_RATIO: float = 2.0     # ratio >= this: cap confidence at "low"
+SLOPE_FALLBACK_PENALTY_MEDIUM_RATIO: float = 1.5  # ratio in [1.5, 2): cap confidence at "medium"
+
 # Extrapolation thresholds (symmetric ratio = max(target/nearest_obs, nearest_obs/target))
 CURVE_NULL_EXTRAPOLATION_RATIO: float = 6.0    # ratio >= this: prefer null to false precision
 CURVE_LOW_EXTRAPOLATION_RATIO: float = 3.0     # ratio [3, 6): low confidence
@@ -860,17 +875,33 @@ class PerformanceCurveV2:
     A single curve is shared by all four race distance predictions.
     k is bounded in [K_MIN, K_MAX] to guarantee pace monotonicity.
     When contributors_count == 1: k = K_PRIOR (1.06) by definition.
-    When contributors_count >= 2: k comes from weighted log-space OLS.
+    When k_identifiable: k comes from weighted OLS on strong slope evidence only.
+    When not k_identifiable: k = K_PRIOR (k_fallback_applied = True).
+    A is always fitted from ALL qualified observations using the chosen k.
     k_clamped = True when the raw OLS result was outside [K_MIN, K_MAX].
+
+    PR #191 separation invariant:
+        qualified_performance_count — observations used to estimate A (level)
+        slope_evidence_count        — strong observations used to learn k (slope)
     """
     curve_a: float                      # scale factor A in T(D) = A * D^k
     curve_k: float                      # endurance exponent k
-    method: str                         # "single_riegel_fallback" | "weighted_logspace_fit"
-    contributors_count: int             # qualified performances used
-    observed_distance_min_m: float      # shortest observed source distance
-    observed_distance_max_m: float      # longest observed source distance
-    fit_quality: Optional[float]        # R² of log-space fit; None when single performance
+    method: str                         # see _fit_performance_curve_v2 for values
+    contributors_count: int             # qualified performances contributing to A
+    observed_distance_min_m: float      # shortest qualified distance
+    observed_distance_max_m: float      # longest qualified distance
+    fit_quality: Optional[float]        # weighted R² of the curve over all qualified obs
     k_clamped: bool                     # True if k was outside [K_MIN, K_MAX] and was clamped
+    # PR #191 — slope evidence diagnostics
+    k_fallback_applied: bool = False           # True: k = K_PRIOR (insufficient strong slope evidence)
+    qualified_performance_count: int = 0       # = contributors_count; alias for diagnostics
+    slope_evidence_count: int = 0              # strong (high-confidence) observations used for k
+    slope_evidence_distance_min_m: Optional[float] = None
+    slope_evidence_distance_max_m: Optional[float] = None
+    k_raw: Optional[float] = None             # raw OLS k from strong evidence (before shrinkage/clamping)
+    k_identifiable: bool = False
+    k_identifiability_score: Optional[float] = None
+    k_identifiability_reason: Optional[str] = None
     # Single-contributor metadata (None when contributors_count > 1)
     single_source_quality_score: Optional[float] = None
     single_source_quality_confidence: Optional[str] = None
@@ -910,6 +941,13 @@ class RacePrediction:
     observed_distance_min_m: Optional[float] = None
     observed_distance_max_m: Optional[float] = None
     curve_fit_quality: Optional[float] = None
+    # PR #191 — slope evidence diagnostics
+    k_fallback_applied: Optional[bool] = None
+    slope_evidence_count: Optional[int] = None
+    k_identifiable: Optional[bool] = None
+    qualified_performance_count: Optional[int] = None
+    k_identifiability_score: Optional[float] = None
+    k_identifiability_reason: Optional[str] = None
 
 
 @dataclass
@@ -1171,23 +1209,28 @@ def _fit_performance_curve_v2(
 ) -> Optional["PerformanceCurveV2"]:
     """Fit a common performance curve T(D) = A * D^k to the qualified pool.
 
-    All four race distance predictions are derived from this single curve.
-    This guarantees pace monotonicity because:
-        pace(D) = T(D)/D = A * D^(k-1)
-    and k >= K_MIN = 1.0 ensures pace is non-decreasing with distance.
+    PR #191 — QUALIFIED vs SLOPE-EVIDENCE separation
+    ─────────────────────────────────────────────────
+    A is fitted from ALL qualified observations (level estimation).
+    k is fitted only from STRONG slope evidence (high-confidence qualified
+    observations), when at least SLOPE_EVIDENCE_MIN_STRONG_COUNT such
+    observations exist and their distances span at least
+    SLOPE_EVIDENCE_MIN_DISTANCE_RATIO.
+
+    If k is not identifiable from strong evidence:
+        k = K_PRIOR = 1.06  (k_fallback_applied = True)
+    A is then refitted with the prior k over all qualified observations.
+
+    N=2 shrinkage:
+        When exactly 2 strong slope-evidence observations are available, the
+        raw OLS k is pulled halfway toward K_PRIOR to reduce variance.
 
     Weighting:
-        w_i = quality_score_i * recency_weight_i
+        w_i = quality_score_i × recency_weight_i
         recency_weight_i = exp(-days_ago_i / CURVE_RECENCY_DECAY_DAYS)
 
-    Single performance (n=1): k = K_PRIOR = 1.06 (Riegel standard)
-    Multiple performances (n>=2): weighted OLS in log-space
-
     k safety bounds: [K_MIN, K_MAX]
-        If raw OLS gives k < K_MIN (physiologically impossible; would mean pace
-        improves with distance), k is clamped to K_MIN and k_clamped=True.
-        If raw OLS gives k > K_MAX (extreme outlier), clamped to K_MAX.
-        Clamping is documented but does NOT suppress the confidence signal.
+        Out-of-bounds k is clamped; k_clamped = True.
 
     Returns None only if the pool is empty or all observations are invalid.
     """
@@ -1212,7 +1255,35 @@ def _fit_performance_curve_v2(
     d_min = float(min(dists))
     d_max = float(max(dists))
     n = len(observations)
+    qualified_count = n
 
+    # --- Slope evidence: only "high"-confidence qualified observations ---
+    strong_obs = [o for o in observations if o[3].confidence == "high"]
+    n_strong = len(strong_obs)
+    strong_dists = [o[0] for o in strong_obs]
+    d_min_strong: Optional[float] = float(min(strong_dists)) if strong_dists else None
+    d_max_strong: Optional[float] = float(max(strong_dists)) if strong_dists else None
+
+    # --- k identifiability from strong evidence ---
+    k_identifiable = False
+    k_identifiability_score: Optional[float] = 0.0
+    k_identifiability_reason: str
+
+    if n_strong < SLOPE_EVIDENCE_MIN_STRONG_COUNT:
+        k_identifiability_reason = "strong_slope_evidence_insufficient"
+        k_identifiability_score = 0.0
+    else:
+        assert d_min_strong is not None and d_max_strong is not None
+        spread_ratio = d_max_strong / d_min_strong if d_min_strong > 0 else 0.0
+        log_spread = math.log(max(spread_ratio, 1.0 + 1e-9))
+        k_identifiability_score = round(log_spread / _SLOPE_EVIDENCE_MAX_LOG_SPREAD, 4)
+        if spread_ratio < SLOPE_EVIDENCE_MIN_DISTANCE_RATIO:
+            k_identifiability_reason = "strong_slope_evidence_no_distance_spread"
+        else:
+            k_identifiable = True
+            k_identifiability_reason = "strong_slope_evidence_identified"
+
+    # --- Single qualified performance: k = prior, A fitted from that one obs ---
     if n == 1:
         dist_m, dur_s, _, quality, days = observations[0]
         k = K_PRIOR
@@ -1226,6 +1297,15 @@ def _fit_performance_curve_v2(
             observed_distance_max_m=d_max,
             fit_quality=None,
             k_clamped=False,
+            k_fallback_applied=True,
+            qualified_performance_count=1,
+            slope_evidence_count=n_strong,
+            slope_evidence_distance_min_m=d_min_strong,
+            slope_evidence_distance_max_m=d_max_strong,
+            k_raw=None,
+            k_identifiable=False,
+            k_identifiability_score=k_identifiability_score,
+            k_identifiability_reason=k_identifiability_reason,
             single_source_quality_score=quality.score,
             single_source_quality_confidence=quality.confidence,
             single_source_speed_percentile=quality.personal_speed_percentile,
@@ -1233,62 +1313,101 @@ def _fit_performance_curve_v2(
             single_source_days_ago=days,
         )
 
-    # Multiple observations: weighted least squares in log-space
-    # y_i = log(T_i), x_i = log(D_i); fit y = b0 + k * x
+    # --- Multiple qualified observations ---
     xs = [math.log(o[0]) for o in observations]
     ys = [math.log(o[1]) for o in observations]
     ws = [o[2] for o in observations]
 
     sum_w = sum(ws)
     if sum_w < 1e-15:
-        # Degenerate weights: fall back to equal weights
         ws = [1.0] * n
         sum_w = float(n)
 
+    k_raw_value: Optional[float] = None
+    k_clamped = False
+    k_fallback_applied = False
+
+    if k_identifiable:
+        # Fit k using only strong slope evidence observations
+        assert strong_obs  # k_identifiable guarantees n_strong >= 2
+        xs_s = [math.log(o[0]) for o in strong_obs]
+        ys_s = [math.log(o[1]) for o in strong_obs]
+        ws_s = [o[2] for o in strong_obs]
+
+        sum_w_s = sum(ws_s)
+        if sum_w_s < 1e-15:
+            ws_s = [1.0] * n_strong
+            sum_w_s = float(n_strong)
+
+        mean_x_s = sum(ws_s[i] * xs_s[i] for i in range(n_strong)) / sum_w_s
+        mean_y_s = sum(ws_s[i] * ys_s[i] for i in range(n_strong)) / sum_w_s
+        ss_xy_s = sum(ws_s[i] * (xs_s[i] - mean_x_s) * (ys_s[i] - mean_y_s) for i in range(n_strong))
+        ss_xx_s = sum(ws_s[i] * (xs_s[i] - mean_x_s) ** 2 for i in range(n_strong))
+
+        if ss_xx_s < 1e-12:
+            # All strong obs at same distance — cannot fit k
+            k = K_PRIOR
+            k_clamped = True
+            k_fallback_applied = True
+            k_identifiable = False
+        else:
+            raw_k = ss_xy_s / ss_xx_s
+            k_raw_value = raw_k
+            # N=2 shrinkage: pull raw k halfway toward prior to reduce variance
+            if n_strong == 2:
+                raw_k = SLOPE_EVIDENCE_N2_SHRINKAGE * raw_k + (1.0 - SLOPE_EVIDENCE_N2_SHRINKAGE) * K_PRIOR
+            if raw_k < K_MIN or raw_k > K_MAX:
+                k = _clamp(raw_k, K_MIN, K_MAX)
+                k_clamped = True
+            else:
+                k = raw_k
+    else:
+        # Insufficient strong evidence: fall back to prior k
+        k = K_PRIOR
+        k_fallback_applied = True
+
+    # --- Fit A from ALL qualified observations with the chosen k ---
     mean_x = sum(ws[i] * xs[i] for i in range(n)) / sum_w
     mean_y = sum(ws[i] * ys[i] for i in range(n)) / sum_w
-
-    ss_xy = sum(ws[i] * (xs[i] - mean_x) * (ys[i] - mean_y) for i in range(n))
-    ss_xx = sum(ws[i] * (xs[i] - mean_x) ** 2 for i in range(n))
-    ss_yy = sum(ws[i] * (ys[i] - mean_y) ** 2 for i in range(n))
-
-    k_clamped = False
-
-    if ss_xx < 1e-12:
-        # All distances identical: cannot fit k from distances alone → use prior
-        k = K_PRIOR
-        k_clamped = True
-    else:
-        raw_k = ss_xy / ss_xx
-        if raw_k < K_MIN or raw_k > K_MAX:
-            k = _clamp(raw_k, K_MIN, K_MAX)
-            k_clamped = True
-        else:
-            k = raw_k
-
-    # Intercept: b0 = mean_y - k * mean_x
     b0 = mean_y - k * mean_x
     a = math.exp(b0)
 
-    # Weighted R² of the final (possibly clamped) fit
+    # Weighted R² of the final fit over all qualified observations
+    ss_yy = sum(ws[i] * (ys[i] - mean_y) ** 2 for i in range(n))
     if ss_yy < 1e-12:
-        fit_quality = 1.0
+        fit_quality: Optional[float] = 1.0
     else:
         ss_res = sum(ws[i] * (ys[i] - (b0 + k * xs[i])) ** 2 for i in range(n))
-        ss_tot = ss_yy  # already computed above
-        r2 = 1.0 - ss_res / ss_tot if ss_tot > 1e-12 else 1.0
+        r2 = 1.0 - ss_res / ss_yy if ss_yy > 1e-12 else 1.0
         fit_quality = round(float(r2), 4)
+
+    if k_fallback_applied:
+        method = "prior_k_low_slope_evidence_fallback"
+    elif k_clamped:
+        method = "strong_slope_evidence_fit_clamped"
+    else:
+        method = "strong_slope_evidence_fit"
 
     return PerformanceCurveV2(
         curve_a=a,
         curve_k=k,
-        method="weighted_logspace_fit",
+        method=method,
         contributors_count=n,
         observed_distance_min_m=d_min,
         observed_distance_max_m=d_max,
         fit_quality=fit_quality,
         k_clamped=k_clamped,
+        k_fallback_applied=k_fallback_applied,
+        qualified_performance_count=qualified_count,
+        slope_evidence_count=n_strong,
+        slope_evidence_distance_min_m=d_min_strong,
+        slope_evidence_distance_max_m=d_max_strong,
+        k_raw=round(k_raw_value, 6) if k_raw_value is not None else None,
+        k_identifiable=k_identifiable,
+        k_identifiability_score=k_identifiability_score,
+        k_identifiability_reason=k_identifiability_reason,
     )
+
 
 
 def _curve_extrapolation_ratio(
@@ -1324,6 +1443,7 @@ def _curve_confidence(
     single_quality_confidence: str,
     single_days_ago: Optional[int],
     has_hr: bool,
+    k_fallback_applied: bool = False,
 ) -> str:
     """Confidence for a Performance Curve V2 prediction.
 
@@ -1336,6 +1456,16 @@ def _curve_confidence(
     Secondary (when ratio < CURVE_MEDIUM_EXTRAPOLATION_RATIO):
         Same factors as _riegel_confidence: recency, endurance, quality.
         A speed-only single source is capped at medium.
+
+    PR #191 — k fallback penalty (k_fallback_applied = True):
+        When k = K_PRIOR (no strong slope evidence), uncertainty in k grows
+        with extrapolation distance.  The penalty is graduated:
+        - ratio >= SLOPE_FALLBACK_PENALTY_LOW_RATIO: cap at "low"
+        - ratio in [SLOPE_FALLBACK_PENALTY_MEDIUM_RATIO, LOW): cap at "medium"
+        - ratio < SLOPE_FALLBACK_PENALTY_MEDIUM_RATIO: no penalty (A is the
+          dominant factor; k uncertainty is small over a short range)
+        This avoids penalising predictions near the observed distances while
+        correctly penalising long extrapolations that depend strongly on k.
     """
     # Extrapolation dominates
     if extrapolation_ratio >= CURVE_NULL_EXTRAPOLATION_RATIO:
@@ -1349,33 +1479,47 @@ def _curve_confidence(
     if n_contributors >= 2:
         # Multi-contributor curve
         if fit_quality is not None and fit_quality >= 0.80 and not k_clamped and endurance_factor >= 0.80:
-            return "high"
-        if fit_quality is not None and fit_quality >= 0.50 and endurance_factor >= 0.65:
-            return "medium"
-        return "low"
+            base = "high"
+        elif fit_quality is not None and fit_quality >= 0.50 and endurance_factor >= 0.65:
+            base = "medium"
+        else:
+            base = "low"
     else:
         # Single contributor: reuse existing quality logic
         if single_quality_score is None or single_quality_confidence == "insufficient":
-            return "low"
-        days = single_days_ago if single_days_ago is not None else 999
-        if days > CONFIDENCE_LOW_DAYS or endurance_factor < 0.65:
             base = "low"
-        elif days > CONFIDENCE_MEDIUM_DAYS or endurance_factor < 0.80:
-            base = "medium"
         else:
-            base = "high"
-        # Speed-only cap
-        if not has_hr:
+            days = single_days_ago if single_days_ago is not None else 999
+            if days > CONFIDENCE_LOW_DAYS or endurance_factor < 0.65:
+                base = "low"
+            elif days > CONFIDENCE_MEDIUM_DAYS or endurance_factor < 0.80:
+                base = "medium"
+            else:
+                base = "high"
+            # Speed-only cap
+            if not has_hr:
+                if base == "high":
+                    base = "medium"
+            # Combine with quality confidence
+            if single_quality_confidence == "low":
+                base = "low" if base == "low" else "medium"
+            elif base == "high" and single_quality_confidence == "high" and (single_quality_score or 0.0) >= PERFORMANCE_HIGH_CONFIDENCE_SCORE:
+                pass  # retain "high"
+            elif base == "high":
+                base = "medium"
+
+    # PR #191: graduated k-fallback penalty — grows with extrapolation
+    if k_fallback_applied:
+        if extrapolation_ratio >= SLOPE_FALLBACK_PENALTY_LOW_RATIO:
+            if base in ("high", "medium"):
+                base = "low"
+        elif extrapolation_ratio >= SLOPE_FALLBACK_PENALTY_MEDIUM_RATIO:
             if base == "high":
                 base = "medium"
-        # Combine with quality confidence
-        if single_quality_confidence == "low":
-            return "low" if base == "low" else "medium"
-        if base == "high" and single_quality_confidence == "high" and (single_quality_score or 0.0) >= PERFORMANCE_HIGH_CONFIDENCE_SCORE:
-            return "high"
-        if base == "high":
-            return "medium"
-        return base
+        # ratio < SLOPE_FALLBACK_PENALTY_MEDIUM_RATIO: no penalty
+
+    return base
+
 
 
 # ---------------------------------------------------------------------------
@@ -1572,6 +1716,10 @@ def predict_races(
                 source_speed_percentile=None,
                 source_relative_hr=None,
                 contributors_count=0,
+                k_fallback_applied=None,
+                slope_evidence_count=None,
+                k_identifiable=None,
+                qualified_performance_count=None,
             ))
             continue
 
@@ -1591,6 +1739,7 @@ def predict_races(
             single_quality_confidence=curve.single_source_quality_confidence or "insufficient",
             single_days_ago=curve.single_source_days_ago,
             has_hr=has_hr_in_pool,
+            k_fallback_applied=curve.k_fallback_applied,
         )
 
         if conf == "null":
@@ -1622,6 +1771,12 @@ def predict_races(
                 observed_distance_min_m=curve.observed_distance_min_m,
                 observed_distance_max_m=curve.observed_distance_max_m,
                 curve_fit_quality=curve.fit_quality,
+                k_fallback_applied=curve.k_fallback_applied,
+                slope_evidence_count=curve.slope_evidence_count,
+                k_identifiable=curve.k_identifiable,
+                qualified_performance_count=curve.qualified_performance_count,
+                k_identifiability_score=curve.k_identifiability_score,
+                k_identifiability_reason=curve.k_identifiability_reason,
             ))
             continue
 
@@ -1673,6 +1828,12 @@ def predict_races(
             observed_distance_min_m=curve.observed_distance_min_m,
             observed_distance_max_m=curve.observed_distance_max_m,
             curve_fit_quality=curve.fit_quality,
+            k_fallback_applied=curve.k_fallback_applied,
+            slope_evidence_count=curve.slope_evidence_count,
+            k_identifiable=curve.k_identifiable,
+            qualified_performance_count=curve.qualified_performance_count,
+            k_identifiability_score=curve.k_identifiability_score,
+            k_identifiability_reason=curve.k_identifiability_reason,
         ))
 
     vo2max_estimated: Optional[float] = None
