@@ -601,3 +601,9 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
 - PR #185 = nouveau `backend/training_v2/performance_model.py` (+1062) : modèle de performance V2 (Riegel gate, FCmax robuste = OBSERVED_GARMIN_MAX_HR, prédictions indépendantes, historique 42 jours, Source A retirée). server.py migré vers ce modèle pour `/training/race-predictions` et `/training/vma-history`. Gros test suite (+1691).
 - Validation (agent-tested) : imports OK, backend + 4 workers RUNNING, boot propre. Smoke **6/6 = 200** (race-predictions, vma-history, stats, run-index, dashboard, today). race-predictions (compte sans data) → `has_data:false, predictions:[], model_version:"v2"` (pas de synthétiques). Tests PR185 = **88 passed**. Régression suites PR = **275 passed**. Frontend inchangé.
 - Statut : agent-tested ; non user-confirmed.
+
+## 2026-06 — Pull copilot/dev — PR #186 + #187 (performance model V2 — qualité données)
+- Fetch + merge `sauvegarde/copilot/dev` (c965ac5→f293c31). Merge ORT propre, 0 conflit. `.env` intacts, PRD/rapports préservés.
+- PR #186/#187 = qualité données du performance model V2 : `moving_duration_s` (domain_adapter/domain_activity), fenêtre VMA 42 jours, Riegel exige HR, fix `total_sessions_6w`, fenêtre FCmax VMA, validation sessions. server.py léger (+6), performance_model.py (+160).
+- Validation (agent-tested) : imports OK, backend + 4 workers RUNNING, boot propre. Smoke **6/6 = 200** (race-predictions, vma-history, stats, run-index, dashboard, today). Tests performance model (PR185+186) = **122 passed**. Régression suites PR = **275 passed**. Frontend inchangé.
+- Statut : agent-tested ; non user-confirmed.
