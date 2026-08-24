@@ -607,3 +607,13 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
 - PR #186/#187 = qualité données du performance model V2 : `moving_duration_s` (domain_adapter/domain_activity), fenêtre VMA 42 jours, Riegel exige HR, fix `total_sessions_6w`, fenêtre FCmax VMA, validation sessions. server.py léger (+6), performance_model.py (+160).
 - Validation (agent-tested) : imports OK, backend + 4 workers RUNNING, boot propre. Smoke **6/6 = 200** (race-predictions, vma-history, stats, run-index, dashboard, today). Tests performance model (PR185+186) = **122 passed**. Régression suites PR = **275 passed**. Frontend inchangé.
 - Statut : agent-tested ; non user-confirmed.
+
+## 2026-06 — Pull copilot/dev — PR #188 (qualification de performance observée)
+- Fetch + merge `sauvegarde/copilot/dev` (f293c31→d7d99b6). Merge ORT propre. `.env` + `memory/PRD.md` (609 lignes) préservés (backup memory/ effectué avant merge par précaution).
+- PR #188 = nouveau modèle de qualification de performance dans `performance_model.py` (+397) + server.py (+4), aligné sur l'Option C de l'audit pré-#188 :
+  - Score continu : PERFORMANCE_HR_WEIGHT=0.55, PERFORMANCE_SPEED_WEIGHT=0.45, PERFORMANCE_SCORE_THRESHOLD=0.65.
+  - Percentile de vitesse personnel 90j **strictement antérieur** (no look-ahead, jamais self-inclusive).
+  - HR-optionnel : qualification possible sans HR via repli vitesse-seule stricte (P90). Avec HR : rel_hr≥0.80 & speed_pctl≥70.
+  - Qualification séparée de la sélection de source (qualification = qualité effort ; sélection = proximité+récence sur perfs qualifiées uniquement).
+- Validation RUNTIME (agent-tested, vrai compte Garmin da85***e7e7) : backend + 4 workers RUNNING. Endpoints 200. Nouvelles prédictions : 5K 29:37, 10K 1h01, Semi 2h01, Marathon 4h23 (conf=low) — sources mieux qualifiées vs anciennes (31:22/1h05/2h09/4h40), confiance ajustée. Tests PR188+185+186 = **138 passed**. Régression suites PR = **275 passed**.
+- Statut : agent-tested ; non user-confirmed.
