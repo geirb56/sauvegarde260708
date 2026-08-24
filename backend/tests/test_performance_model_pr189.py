@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import math
 import random
 from datetime import date, timedelta
 from typing import Optional
 
 import pytest
 
+import training_v2.performance_model as pm
 from training_v2.domain_activity import DomainActivity
 from training_v2.performance_model import RACE_DISTANCES_M, evaluate_performance_quality, predict_races
 
@@ -307,3 +309,173 @@ def test_m_stability_with_coherent_added_performance():
         assert p0[label].predicted_time_s is not None and p1[label].predicted_time_s is not None
         rel = abs(p1[label].predicted_time_s - p0[label].predicted_time_s) / p0[label].predicted_time_s
         assert rel < 0.15
+
+
+def _qualified_obs(*, days_ago: int, distance_m: float, duration_s: float, score: float, confidence: str = "high"):
+    activity = _run(
+        days_ago=days_ago,
+        distance_m=distance_m,
+        duration_s=duration_s,
+        avg_hr=160.0,
+        max_hr=178.0,
+    )
+    quality = pm.PerformanceQuality(
+        qualified=True,
+        score=score,
+        confidence=confidence,
+        personal_speed_percentile=95.0,
+        benchmark_count=8,
+        relative_avg_hr=0.9,
+        historical_fcmax=178.0,
+        reason_code=pm.REASON_PERF_QUALIFIED_HR_SPEED,
+    )
+    return activity, quality
+
+
+def test_n_huber_final_refit_matches_final_weights():
+    qualified_pool = [
+        _qualified_obs(days_ago=6, distance_m=5_000.0, duration_s=1_520.0, score=1.0),
+        _qualified_obs(days_ago=8, distance_m=10_000.0, duration_s=3_160.0, score=1.0),
+        _qualified_obs(days_ago=10, distance_m=15_000.0, duration_s=4_900.0, score=1.0),
+        _qualified_obs(days_ago=12, distance_m=21_097.5, duration_s=8_300.0, score=1.0),
+    ]
+    curve = pm._build_performance_curve(qualified_pool, TODAY)
+    assert curve is not None
+    assert curve.method == "robust_weighted_log_fit"
+    assert any(abs(c.base_weight - c.robust_weight) > 1e-6 for c in curve.contributors)
+
+    xs = [math.log(c.distance_m) for c in curve.contributors]
+    ys = [math.log(c.duration_s) for c in curve.contributors]
+    ws = [c.robust_weight for c in curve.contributors]
+    fit = pm._weighted_linear_fit(xs, ys, ws)
+    assert fit is not None
+    intercept, slope = fit
+    assert curve.k == pytest.approx(slope, rel=1e-10, abs=1e-10)
+    assert curve.a == pytest.approx(math.exp(intercept), rel=1e-10, abs=1e-10)
+    assert curve.fit_quality == pm._weighted_r2(xs, ys, ws, intercept, slope)
+
+
+def test_o_two_point_shrinkage_varies_with_evidence_strength():
+    raw_pool = [
+        _qualified_obs(days_ago=5, distance_m=5_000.0, duration_s=1_500.0, score=1.0, confidence="high"),
+        _qualified_obs(days_ago=5, distance_m=10_000.0, duration_s=3_300.0, score=1.0, confidence="high"),
+    ]
+    weak_pool = [
+        _qualified_obs(days_ago=200, distance_m=5_000.0, duration_s=1_500.0, score=0.3, confidence="low"),
+        _qualified_obs(days_ago=200, distance_m=10_000.0, duration_s=3_300.0, score=0.3, confidence="low"),
+    ]
+
+    strong_curve = pm._build_performance_curve(raw_pool, TODAY)
+    weak_curve = pm._build_performance_curve(weak_pool, TODAY)
+    assert strong_curve is not None and weak_curve is not None
+    assert strong_curve.method == "two_point_prior_shrinkage_fit"
+    assert weak_curve.method == "two_point_prior_shrinkage_fit"
+
+    k_raw = math.log(3300.0 / 1500.0) / math.log(10_000.0 / 5_000.0)
+    assert strong_curve.two_point_evidence_strength is not None
+    assert weak_curve.two_point_evidence_strength is not None
+    assert strong_curve.two_point_evidence_strength > weak_curve.two_point_evidence_strength
+    assert strong_curve.k != weak_curve.k
+    assert abs(strong_curve.k - k_raw) < abs(weak_curve.k - k_raw)
+    assert abs(weak_curve.k - pm.RIEGEL_K) < abs(strong_curve.k - pm.RIEGEL_K)
+
+
+def test_p_two_point_policy_is_deterministic_and_monotonic():
+    qualified_pool = [
+        _qualified_obs(days_ago=9, distance_m=5_000.0, duration_s=1_470.0, score=0.92, confidence="high"),
+        _qualified_obs(days_ago=7, distance_m=10_000.0, duration_s=3_050.0, score=0.88, confidence="medium"),
+    ]
+    c1 = pm._build_performance_curve(qualified_pool, TODAY)
+    c2 = pm._build_performance_curve(list(reversed(qualified_pool)), TODAY)
+    assert c1 is not None and c2 is not None
+    assert c1 == c2
+    t5 = pm._curve_time_s(c1, 5_000.0)
+    t10 = pm._curve_time_s(c1, 10_000.0)
+    t21 = pm._curve_time_s(c1, 21_097.5)
+    t42 = pm._curve_time_s(c1, 42_195.0)
+    assert t5 < t10 < t21 < t42
+
+
+def test_q_extrapolation_ratio_is_symmetric_mirror():
+    observed = [5_000.0]
+    long_ratio = pm._symmetric_extrapolation_ratio(42_195.0, observed)
+    short_ratio = pm._symmetric_extrapolation_ratio(5_000.0, [42_195.0])
+    assert long_ratio == pytest.approx(short_ratio, rel=1e-12)
+    assert long_ratio == pytest.approx(8.439, rel=1e-3)
+
+
+def test_r_conflict_fallback_reestimates_a_with_forced_k():
+    qualified_pool = [
+        _qualified_obs(days_ago=4, distance_m=5_000.0, duration_s=1_300.0, score=1.0, confidence="high"),
+        _qualified_obs(days_ago=4, distance_m=10_000.0, duration_s=5_200.0, score=1.0, confidence="high"),
+    ]
+    curve = pm._build_performance_curve(qualified_pool, TODAY)
+    assert curve is not None
+    assert curve.method == "prior_k_conflict_fallback"
+    assert curve.k == pytest.approx(pm.RIEGEL_K, rel=1e-12)
+    assert curve.k_fallback_applied is True
+    assert curve.k_conflict is True
+
+    xs = [math.log(c.distance_m) for c in curve.contributors]
+    ys = [math.log(c.duration_s) for c in curve.contributors]
+    ws = [c.robust_weight for c in curve.contributors]
+    expected_log_a = sum(w * (y - pm.RIEGEL_K * x) for x, y, w in zip(xs, ys, ws)) / sum(ws)
+    assert curve.a == pytest.approx(math.exp(expected_log_a), rel=1e-10, abs=1e-10)
+
+
+def test_s_vma_changes_do_not_change_race_predictions():
+    acts = _benchmark_runs() + [
+        _run(days_ago=8, distance_m=5_000.0, duration_s=1_490.0, avg_hr=159.0, max_hr=176.0),
+        _run(days_ago=5, distance_m=10_000.0, duration_s=3_080.0, avg_hr=160.0, max_hr=178.0),
+    ]
+    baseline = predict_races(acts, TODAY, user_max_hr=178.0)
+    no_vma = predict_races(acts, TODAY, user_max_hr=None)
+    extreme_vma = predict_races(acts, TODAY, user_max_hr=230.0)
+    assert baseline.predictions == no_vma.predictions == extreme_vma.predictions
+
+
+def test_t_pr188_qualification_semantics_unchanged():
+    candidate = _run(days_ago=7, distance_m=10_000.0, duration_s=2_980.0, avg_hr=120.0, max_hr=170.0)
+    quality = evaluate_performance_quality(candidate, _benchmark_runs() + [candidate], TODAY)
+    assert quality.qualified is False
+    assert quality.reason_code == pm.REASON_PERF_SCORE_TOO_LOW
+
+
+def test_u_single_performance_confidence_is_capped():
+    acts = _benchmark_runs() + [
+        _run(days_ago=5, distance_m=10_000.0, duration_s=3_000.0, avg_hr=156.0, max_hr=175.0)
+    ]
+    result = predict_races(acts, TODAY)
+    preds = _pred_by_label(result)
+    assert preds["10K"].confidence in {"medium", "low", "insufficient"}
+
+
+def test_v_outlier_weight_is_reduced_and_fit_beats_plain_ols_on_core_points():
+    core = [
+        _qualified_obs(days_ago=6, distance_m=5_000.0, duration_s=1_500.0, score=1.0),
+        _qualified_obs(days_ago=7, distance_m=10_000.0, duration_s=3_120.0, score=1.0),
+        _qualified_obs(days_ago=8, distance_m=21_097.5, duration_s=6_900.0, score=1.0),
+    ]
+    outlier = _qualified_obs(days_ago=9, distance_m=5_000.0, duration_s=1_120.0, score=1.0)
+    pool = core + [outlier]
+    curve = pm._build_performance_curve(pool, TODAY)
+    assert curve is not None
+    assert curve.method == "robust_weighted_log_fit"
+
+    by_dist_dur = {(c.distance_m, c.duration_s): c for c in curve.contributors}
+    out = by_dist_dur[(5_000.0, 1_120.0)]
+    assert out.robust_weight < out.base_weight
+
+    xs = [math.log(a.distance_m) for a, _ in pool]
+    ys = [math.log(a.duration_s) for a, _ in pool]
+    ws = [1.0] * len(pool)
+    ols = pm._weighted_linear_fit(xs, ys, ws)
+    assert ols is not None
+    ols_i, ols_k = ols
+
+    robust_i, robust_k = math.log(curve.a), curve.k
+    core_xs = [math.log((a.distance_m or 0.0)) for a, _ in core]
+    core_ys = [math.log((a.duration_s or 0.0)) for a, _ in core]
+    ols_err = sum(abs(y - (ols_i + ols_k * x)) for x, y in zip(core_xs, core_ys)) / len(core)
+    robust_err = sum(abs(y - (robust_i + robust_k * x)) for x, y in zip(core_xs, core_ys)) / len(core)
+    assert robust_err < ols_err

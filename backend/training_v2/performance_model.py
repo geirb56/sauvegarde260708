@@ -100,8 +100,12 @@ _RUNNING_TYPES = {
 _ROAD_TYPES = _RUNNING_TYPES - {"trail_running"}
 
 RIEGEL_K: float = 1.06
+# Conservative RunIndex business guardrails for plausibility/conflict handling.
+# They are not universal physiological truths.
 CURVE_K_MIN: float = 1.0
 CURVE_K_MAX: float = 1.25
+# Symmetric extrapolation policy guardrails for RunIndex runtime behavior.
+# They are operational thresholds, not universal physiological constants.
 CURVE_MAX_EXTRAPOLATION_RATIO: float = 6.0
 CURVE_NULL_CONFIDENCE_EXTRAPOLATION_RATIO: float = 4.5
 CURVE_K_CONFLICT_WEIGHT_PENALTY: float = 0.60
@@ -1260,6 +1264,9 @@ class _CurveModel:
     k: float
     fit_quality: Optional[float]
     k_conflict: bool
+    k_fallback_applied: bool
+    k_raw: Optional[float]
+    two_point_evidence_strength: Optional[float]
     qualified_performance_count: int
     contributors: Tuple[_CurveObservation, ...]
     observed_distance_min: float
@@ -1327,6 +1334,30 @@ def _weighted_r2(
     return round(_clamp(1.0 - ss_res / ss_tot, 0.0, 1.0), 4)
 
 
+def _fixed_slope_log_intercept(
+    xs: List[float],
+    ys: List[float],
+    ws: List[float],
+    slope: float,
+) -> Optional[float]:
+    sum_w = sum(ws)
+    if sum_w <= 0:
+        return None
+    intercept = sum(w * (y - slope * x) for x, y, w in zip(xs, ys, ws)) / sum_w
+    if not math.isfinite(intercept):
+        return None
+    return intercept
+
+
+def _two_point_evidence_strength(ws: List[float]) -> float:
+    """Return deterministic evidence strength in [0, 1] for N==2 shrinkage."""
+    if len(ws) != 2:
+        return 0.0
+    w1 = _clamp(ws[0], 0.0, 1.0)
+    w2 = _clamp(ws[1], 0.0, 1.0)
+    return round(_clamp(math.sqrt(w1 * w2), 0.0, 1.0), 6)
+
+
 def _build_performance_curve(
     qualified_pool: List[Tuple[DomainActivity, PerformanceQuality]],
     reference_date: date,
@@ -1377,6 +1408,9 @@ def _build_performance_curve(
             k=RIEGEL_K,
             fit_quality=1.0,
             k_conflict=False,
+            k_fallback_applied=False,
+            k_raw=RIEGEL_K,
+            two_point_evidence_strength=None,
             qualified_performance_count=len(qualified_pool),
             contributors=(obs,),
             observed_distance_min=min(obs_distances),
@@ -1402,6 +1436,9 @@ def _build_performance_curve(
             k=RIEGEL_K,
             fit_quality=None,
             k_conflict=False,
+            k_fallback_applied=False,
+            k_raw=None,
+            two_point_evidence_strength=None,
             qualified_performance_count=len(qualified_pool),
             contributors=tuple(observations),
             observed_distance_min=min(obs_distances),
@@ -1409,8 +1446,20 @@ def _build_performance_curve(
         )
     intercept, slope = fit
 
+    method = "weighted_log_fit"
     robust_ws = list(base_ws)
-    if len(observations) >= 3:
+    two_point_evidence_strength: Optional[float] = None
+    k_raw: Optional[float] = slope
+    if len(observations) == 2:
+        method = "two_point_prior_shrinkage_fit"
+        two_point_evidence_strength = _two_point_evidence_strength(base_ws)
+        slope = RIEGEL_K + two_point_evidence_strength * (slope - RIEGEL_K)
+        fixed_intercept = _fixed_slope_log_intercept(xs, ys, robust_ws, slope)
+        if fixed_intercept is None:
+            return None
+        intercept = fixed_intercept
+    elif len(observations) >= 3:
+        method = "robust_weighted_log_fit"
         for _ in range(2):
             robust_fit = _weighted_linear_fit(xs, ys, robust_ws)
             if robust_fit is None:
@@ -1429,23 +1478,23 @@ def _build_performance_curve(
                 huber_mult = 1.0 if abs_r <= delta else (delta / abs_r)
                 updated_ws.append(base_w * huber_mult)
             robust_ws = updated_ws
-            intercept, slope = r_intercept, r_slope
+        final_robust_fit = _weighted_linear_fit(xs, ys, robust_ws)
+        if final_robust_fit is not None:
+            intercept, slope = final_robust_fit
+            k_raw = slope
 
+    k_fallback_applied = False
     k_conflict = not (CURVE_K_MIN <= slope <= CURVE_K_MAX)
-    method = "weighted_log_fit"
-    if len(observations) >= 3:
-        method = "robust_weighted_log_fit"
-
     if k_conflict:
         # Contradictory observations: keep a coherent prior curve and lower trust.
-        sum_w = sum(base_ws)
-        if sum_w <= 0:
+        log_a = _fixed_slope_log_intercept(xs, ys, robust_ws, RIEGEL_K)
+        if log_a is None:
             return None
-        log_a = sum(w * (y - RIEGEL_K * x) for x, y, w in zip(xs, ys, base_ws)) / sum_w
         intercept = log_a
         slope = RIEGEL_K
         method = "prior_k_conflict_fallback"
-        robust_ws = [w * CURVE_K_CONFLICT_WEIGHT_PENALTY for w in base_ws]
+        robust_ws = [w * CURVE_K_CONFLICT_WEIGHT_PENALTY for w in robust_ws]
+        k_fallback_applied = True
 
     fit_quality = _weighted_r2(xs, ys, robust_ws, intercept, slope)
     max_w = max(robust_ws) if robust_ws else 0.0
@@ -1479,9 +1528,12 @@ def _build_performance_curve(
     return _CurveModel(
         method=method,
         a=math.exp(intercept),
-        k=max(slope, CURVE_K_MIN),
+        k=slope,
         fit_quality=fit_quality,
         k_conflict=k_conflict,
+        k_fallback_applied=k_fallback_applied,
+        k_raw=k_raw,
+        two_point_evidence_strength=two_point_evidence_strength,
         qualified_performance_count=len(qualified_pool),
         contributors=contributors,
         observed_distance_min=min(obs_distances),
@@ -1532,8 +1584,12 @@ def _curve_prediction_confidence(
 
     if curve.fit_quality is not None and curve.fit_quality < 0.4:
         base = _degrade_confidence(base, 1)
+    elif curve.fit_quality is not None and curve.fit_quality < 0.7:
+        base = _degrade_confidence(base, 1)
 
     if curve.contributors:
+        if len(curve.contributors) == 1 and base == "high":
+            base = "medium"
         days = min(c.days_ago for c in curve.contributors)
         if days > CONFIDENCE_LOW_DAYS:
             base = _degrade_confidence(base, 1)
@@ -1761,10 +1817,24 @@ def predict_races(
             "curve_method": curve.method if curve else None,
             "curve_a": round(curve.a, 8) if curve else None,
             "curve_k": round(curve.k, 6) if curve else None,
+            "curve_k_raw": round(curve.k_raw, 6) if (curve and curve.k_raw is not None) else None,
+            "curve_k_prior": RIEGEL_K if curve else None,
+            "curve_k_min": CURVE_K_MIN if curve else None,
+            "curve_k_max": CURVE_K_MAX if curve else None,
+            "k_fallback_applied": curve.k_fallback_applied if curve else None,
+            "two_point_evidence_strength": (
+                curve.two_point_evidence_strength if curve else None
+            ),
             "qualified_performance_count": curve.qualified_performance_count if curve else 0,
             "contributors_count": len(sorted_contributors),
             "observed_distance_min": curve.observed_distance_min if curve else None,
             "observed_distance_max": curve.observed_distance_max if curve else None,
+            "observed_distance_min_km": (
+                round(curve.observed_distance_min / 1000.0, 4) if curve else None
+            ),
+            "observed_distance_max_km": (
+                round(curve.observed_distance_max / 1000.0, 4) if curve else None
+            ),
             "fit_quality": curve.fit_quality if curve else None,
             "k_conflict": curve.k_conflict if curve else None,
             "contributors": [
