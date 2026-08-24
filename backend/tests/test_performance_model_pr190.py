@@ -534,13 +534,14 @@ def test_9_k_conflict_has_priority_over_low_identifiability():
     """
     bench = _benchmark_pool(n=7, with_hr=True)
 
-    # 3 high-quality performances in a narrow 9–11 km cluster with steeply
-    # increasing times → robust fit yields k_raw > 1.25.
+    # 3 performances in a narrow 9–11 km cluster with steeply increasing times
+    # (pace degrades rapidly with distance) → robust fit yields k_raw >> 1.25.
+    # All are faster than the benchmark pool so they qualify as performances.
     # Narrow distance spread keeps k_identifiability_score < K_IDENTIFIABILITY_MIN_WX_VAR.
     steep_perfs: List[DomainActivity] = [
-        _run(days_ago=30, distance_m=9_000.0, duration_s=3_600.0, avg_hr=158.0, max_hr=178.0),
-        _run(days_ago=20, distance_m=10_000.0, duration_s=4_200.0, avg_hr=160.0, max_hr=180.0),
-        _run(days_ago=10, distance_m=11_000.0, duration_s=4_860.0, avg_hr=162.0, max_hr=182.0),
+        _run(days_ago=30, distance_m=9_000.0, duration_s=2_700.0, avg_hr=158.0, max_hr=178.0),
+        _run(days_ago=20, distance_m=10_000.0, duration_s=3_300.0, avg_hr=160.0, max_hr=180.0),
+        _run(days_ago=10, distance_m=11_000.0, duration_s=4_000.0, avg_hr=162.0, max_hr=182.0),
     ]
 
     activities = bench + steep_perfs
@@ -590,12 +591,11 @@ def test_10_k_raw_in_range_low_identifiability_fallback():
     """
     bench = _benchmark_pool(n=7, with_hr=True)
 
-    # 3 high-quality performances in a narrow 9–11 km cluster with times
-    # consistent with k≈1.06 (Riegel-like ratio) → k_raw within [1.0, 1.25].
-    # log-linear slope ≈ 1.06 when T ∝ D^1.06.
-    import math as _math
-    k_target = pm.RIEGEL_K  # 1.06
-    a_anchor = 3360.0 / (9_000.0 ** k_target)
+    # 3 performances in a narrow 9–11 km cluster with Riegel-consistent times
+    # (k≈1.06) → k_raw remains within [1.0, 1.25]. All faster than benchmark pool.
+    # Narrow distance spread keeps k_identifiability_score < K_IDENTIFIABILITY_MIN_WX_VAR.
+    k_target = pm.RIEGEL_K
+    a_anchor = 2700.0 / (9_000.0 ** k_target)
     consistent_perfs: List[DomainActivity] = []
     for dist_m, days in [(9_000.0, 30), (10_000.0, 20), (11_000.0, 10)]:
         dur_s = a_anchor * (dist_m ** k_target)

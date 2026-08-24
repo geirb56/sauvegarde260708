@@ -57,21 +57,39 @@ Un compteur de contributeurs (`contributors=15` dans le cas runtime) ne capte pa
 
 ---
 
-## 4. Politique de fallback
+## 4. Politique de fallback (C190 — ordre corrigé)
 
-Quand `k_identifiable == False` (uniquement pour N≥3, méthode `robust_weighted_log_fit`) :
+**Invariant** : `k_conflict` décrit le résultat du fit data-driven. Il est donc évalué depuis `k_raw` **avant** tout remplacement par un prior.
+
+### Ordre d'évaluation pour N≥3
 
 ```
-curve_method = "prior_k_low_identifiability_fallback"
-k = RIEGEL_K = 1.06
-log(A) = Σ robust_weight_i × (log(Ti) − 1.06 × log(Di)) / Σ robust_weight_i
+1. robust weighted fit  →  k_raw (slope data-driven)
+2. conflict detection   →  k_conflict = not (CURVE_K_MIN ≤ k_raw ≤ CURVE_K_MAX)
+3. identifiability      →  k_identifiable, k_identifiability_score
+4. sélection du fallback :
 ```
 
-L'intercept est recalculé sur les poids robustes finaux avec la pente imposée à 1.06. L'intercept du fit libre n'est PAS conservé (il serait cohérent avec k≈1.0, pas avec k=1.06).
+```python
+if k_conflict:          # k_raw hors [1.0, 1.25]
+    method = "prior_k_conflict_fallback"
+    k = 1.06
+    A = recalculer à pente fixe 1.06 (avec pénalité weights)
+elif not k_identifiable:
+    method = "prior_k_low_identifiability_fallback"
+    k = 1.06
+    A = recalculer à pente fixe 1.06
+else:
+    conserver k data-driven
+```
 
-Le champ `k_raw` conserve la valeur data-driven apprise avant le fallback (diagnostic observable).
+### Pourquoi cette priorité
 
-Le fallback s'applique *avant* la vérification `k_conflict`, qui reste active et prend le dessus si la pente hors `[1.0, 1.25]` est détectée.
+Un `k_raw` hors domaine indique des observations contradictoires : les garder sans correction produirait une courbe physiologiquement incohérente. Ce conflit doit être signalé même si le dataset est simultanément non identifiable (score d'identifiabilité faible). `k_identifiable` peut valoir `False` dans ce cas — le diagnostic reste visible — mais il ne masque pas le conflit.
+
+### Champ `k_raw`
+
+`k_raw` conserve la valeur data-driven apprise par le fit robuste **avant** tout fallback (diagnostic observable). Pour N=2 (two_point_shrinkage), `k_conflict` est évalué sur la pente shrunkée (comportement inchangé).
 
 ---
 
@@ -159,6 +177,8 @@ Avec les correctifs en place :
 | TEST 6 | Run futur (marathon 2h) | Aucune modification de k / A / prédictions |
 | TEST 7 | Mêmes données, ordre shufflé | Résultats identiques |
 | TEST 8 | Mêmes perfs, VMA-acts avec/sans HR (max_hr<benchmark) | curve_k / curve_a / prédictions identiques |
+| TEST 9 (C190) | 3 high/medium (9–11 km cluster, k_raw≈1.96 > 1.25) + bench | k_conflict=True, k_identifiable=False, method=prior_k_conflict_fallback, k_raw>1.25 conservé |
+| TEST 10 (C190) | 3 high/medium (9–11 km cluster, k_raw≈1.06) + bench | k_conflict=False, k_identifiable=False, method=prior_k_low_identifiability_fallback |
 
 ---
 
@@ -173,11 +193,11 @@ tests/test_performance_model_pr190.py::test_5_speedonly_pool_still_predicts_via_
 tests/test_performance_model_pr190.py::test_6_no_lookahead                                            PASSED
 tests/test_performance_model_pr190.py::test_7_input_order_invariant                                   PASSED
 tests/test_performance_model_pr190.py::test_8_vma_independence                                        PASSED
+tests/test_performance_model_pr190.py::test_9_k_conflict_has_priority_over_low_identifiability        PASSED
+tests/test_performance_model_pr190.py::test_10_k_raw_in_range_low_identifiability_fallback            PASSED
 
-8 passed in 0.53s
+176 passed in 0.69s (PR#185 + PR#186 + PR#187 + PR#188 + PR#189 + PR#190)
 ```
-
-Tests PR #189, #188, #186, #185 : tous passent.
 
 ---
 
@@ -222,3 +242,17 @@ Le test 8 vérifie cela en ajoutant des activités qui modifient la sortie VMA s
 3. **N=2 non concerné** : le two_point_prior_shrinkage reste inchangé. Deux observations proches pourraient produire un k shrunk vers 1.06 sans identifiabilité explicite. Acceptable car la shrinkage force déjà k vers 1.06 proportionnellement à l'evidence.
 
 4. **La métrique d'identifiabilité est pré-Huber dans le sens des distances** : les distances sont fixes, seuls les poids changent. Une observation high au centre exact de la plage de distances aura ident_score=0 même si d'autres observations high sont aux extrêmes (mais avec poids nuls après Huber). Ce cas serait couvert par le floor quality-aware.
+
+---
+
+## C190 — Bilan final
+
+```
+C190_CONFLICT_CHECKS_RAW_K                  = YES
+CONFLICT_HAS_PRIORITY_OVER_LOW_IDENTIFIABILITY = YES
+K_RAW_PRESERVED                             = YES
+A_RECOMPUTED_AFTER_FALLBACK                 = YES
+PR190_TESTS                                 = PASS
+PR189_REGRESSION                            = PASS
+PR188_REGRESSION                            = PASS
+```
