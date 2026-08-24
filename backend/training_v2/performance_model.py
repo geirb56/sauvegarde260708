@@ -1460,6 +1460,7 @@ def _build_performance_curve(
         intercept = fixed_intercept
     elif len(observations) >= 3:
         method = "robust_weighted_log_fit"
+        final_robust_fit: Optional[Tuple[float, float]] = None
         for _ in range(2):
             robust_fit = _weighted_linear_fit(xs, ys, robust_ws)
             if robust_fit is None:
@@ -1469,7 +1470,7 @@ def _build_performance_curve(
             abs_res = sorted(abs(r) for r in residuals)
             median_abs = abs_res[len(abs_res) // 2]
             if median_abs <= 1e-9:
-                intercept, slope = r_intercept, r_slope
+                final_robust_fit = (r_intercept, r_slope)
                 break
             delta = 1.5 * median_abs
             updated_ws = []
@@ -1478,7 +1479,8 @@ def _build_performance_curve(
                 huber_mult = 1.0 if abs_r <= delta else (delta / abs_r)
                 updated_ws.append(base_w * huber_mult)
             robust_ws = updated_ws
-        final_robust_fit = _weighted_linear_fit(xs, ys, robust_ws)
+        if final_robust_fit is None:
+            final_robust_fit = _weighted_linear_fit(xs, ys, robust_ws)
         if final_robust_fit is not None:
             intercept, slope = final_robust_fit
             k_raw = slope
@@ -1487,13 +1489,13 @@ def _build_performance_curve(
     k_conflict = not (CURVE_K_MIN <= slope <= CURVE_K_MAX)
     if k_conflict:
         # Contradictory observations: keep a coherent prior curve and lower trust.
+        robust_ws = [w * CURVE_K_CONFLICT_WEIGHT_PENALTY for w in robust_ws]
         log_a = _fixed_slope_log_intercept(xs, ys, robust_ws, RIEGEL_K)
         if log_a is None:
             return None
         intercept = log_a
         slope = RIEGEL_K
         method = "prior_k_conflict_fallback"
-        robust_ws = [w * CURVE_K_CONFLICT_WEIGHT_PENALTY for w in robust_ws]
         k_fallback_applied = True
 
     fit_quality = _weighted_r2(xs, ys, robust_ws, intercept, slope)
@@ -1583,7 +1585,7 @@ def _curve_prediction_confidence(
         base = _degrade_confidence(base, 1)
 
     if curve.fit_quality is not None and curve.fit_quality < 0.4:
-        base = _degrade_confidence(base, 1)
+        base = _degrade_confidence(base, 2)
     elif curve.fit_quality is not None and curve.fit_quality < 0.7:
         base = _degrade_confidence(base, 1)
 

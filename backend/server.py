@@ -3968,7 +3968,12 @@ async def get_race_predictions(user: dict = Depends(auth_user)):
     No db.workouts. No avg_speed/0.70 fallback. Riegel extrapolation.
     Frontend contract preserved (has_data, predictions[], athlete_profile).
     """
-    from training_v2.performance_model import RUNNING_TYPES, seconds_to_str, validate_activity
+    from training_v2.performance_model import (
+        CURVE_NULL_CONFIDENCE_EXTRAPOLATION_RATIO,
+        RUNNING_TYPES,
+        seconds_to_str,
+        validate_activity,
+    )
     user_id = user["id"]
     reference_date = datetime.now(timezone.utc).date()
 
@@ -4025,7 +4030,8 @@ async def get_race_predictions(user: dict = Depends(auth_user)):
             "predicted_time_s": pred.predicted_time_s,
             "extrapolation_ratio": pred.extrapolation_ratio,
             "is_strong_extrapolation": (
-                pred.extrapolation_ratio is not None and pred.extrapolation_ratio > 4.5
+                pred.extrapolation_ratio is not None
+                and pred.extrapolation_ratio > CURVE_NULL_CONFIDENCE_EXTRAPOLATION_RATIO
             ),
             "curve_method": pred.curve_method,
             "curve_k": pred.curve_k,
