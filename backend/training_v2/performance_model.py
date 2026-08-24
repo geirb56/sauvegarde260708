@@ -44,15 +44,16 @@ VMA / Predictions independence:
   relative HR, and endurance support.  VMA confidence never downgrade predictions.
 
 VMA history:
-  VMA_HISTORY_WINDOW_DAYS = 42 (rolling window, non-cumulative)
+  VMA_WINDOW_DAYS = 42 (rolling window, non-cumulative)
   Each snapshot uses only activities within the 42-day window ending at snapshot_date.
+  estimate_vma() applies this window internally.
   NO look-ahead.
 
 duration_s semantics:
-  GARMIN_DURATION_SOURCE = summaryDTO.duration (Garmin Connect elapsed timer)
-  GARMIN_DURATION_SEMANTICS = elapsed timer duration (includes pauses)
-  moving_duration_s is stored in GarminActivity but not used in this module.
-  No correction is applied in performance_model.py.
+  GARMIN_DURATION_SOURCE = summaryDTO.movingDuration (preferred) → summaryDTO.duration (fallback)
+  Performance duration authority: _performance_duration_s() prefers moving_duration_s when
+  moving_duration_s > 0 and moving_duration_s <= duration_s (or duration_s absent).
+  This is the single authority for speed, VMA, and Riegel calculations.
 
 FORBIDDEN:
   - avg_speed-divided-by-0.70 fallback (removed)
@@ -110,7 +111,6 @@ MIN_INFORMATIVE_DURATION_S: float = 5 * 60   # 5 min
 MIN_DURATION_HR_MODEL_S: float = 10 * 60     # 10 min — short sprints not representative
 MIN_AVG_HR: float = 90.0                      # bpm floor — below this is likely invalid
 MAX_AVG_HR: float = 220.0                     # bpm ceiling — above this is aberrant
-MAX_ELEVATION_GAIN_M: float = 400.0           # elevation filter for HR model (if available)
 
 # HR-speed model: coverage requirements
 MIN_ACTIVITIES_HR_MODEL: int = 4
@@ -130,8 +130,11 @@ CONFIDENCE_LOW_DAYS = 120
 MAX_RIEGEL_SOURCE_AGE_DAYS: int = 730        # Activities older than 2 years not defensible
 MIN_RIEGEL_SOURCE_RATIO: float = 0.12        # Source must be >= 12% of target distance
 MIN_RIEGEL_SCORE: float = 0.25               # Minimum score for a defensible source
-MIN_RIEGEL_RELATIVE_HR: float = 0.75         # Minimum relative effort when HR available
+MIN_RIEGEL_RELATIVE_HR: float = 0.80         # Minimum relative effort; avg_hr + FCmax required
 MAX_ROAD_ELEVATION_GAIN_PER_KM: float = 30.0  # m/km — above this, not road-equivalent
+
+# VMA rolling window (used for both CURRENT and HISTORY)
+VMA_WINDOW_DAYS: int = 42
 
 # Target race distances (m)
 RACE_DISTANCES_M = {
@@ -184,12 +187,37 @@ def _is_running(a: DomainActivity) -> bool:
     return a.activity_type.strip().lower().replace(" ", "_") in _RUNNING_TYPES
 
 
+def _performance_duration_s(a: DomainActivity) -> Optional[float]:
+    """Select the authoritative performance duration for speed and Riegel calculations.
+
+    Priority:
+      1. moving_duration_s when > 0 AND (duration_s absent OR moving_duration_s <= duration_s)
+      2. duration_s when > 0
+      3. None
+
+    This function is the single authority for duration used in:
+    - _speed_kmh()
+    - _validate_activity() duration check
+    - _is_usable_for_hr_model() duration check
+    - Riegel source duration in predict_races()
+    """
+    moving = a.moving_duration_s
+    elapsed = a.duration_s
+    if moving is not None and moving > 0:
+        if elapsed is None or moving <= elapsed:
+            return moving
+    if elapsed is not None and elapsed > 0:
+        return elapsed
+    return None
+
+
 def _speed_kmh(a: DomainActivity) -> Optional[float]:
-    if not a.distance_m or not a.duration_s:
+    dur = _performance_duration_s(a)
+    if not a.distance_m or not dur:
         return None
-    if a.distance_m <= 0 or a.duration_s <= 0:
+    if a.distance_m <= 0 or dur <= 0:
         return None
-    return (a.distance_m / 1000.0) / (a.duration_s / 3600.0)
+    return (a.distance_m / 1000.0) / (dur / 3600.0)
 
 
 def _days_ago(activity_date: date, reference_date: date) -> int:
@@ -205,7 +233,8 @@ def _validate_activity(a: DomainActivity, reference_date: date) -> bool:
         return False
     if not a.distance_m or a.distance_m < MIN_DISTANCE_M:
         return False
-    if not a.duration_s or a.duration_s <= 0:
+    dur = _performance_duration_s(a)
+    if not dur or dur <= 0:
         return False
     speed = _speed_kmh(a)
     if speed is None or speed < MIN_SPEED_KMH or speed > MAX_SPEED_KMH:
@@ -222,21 +251,29 @@ def _is_usable_for_hr_model(a: DomainActivity, reference_date: date) -> bool:
     """Additional filters for HR-speed model activities.
 
     On top of _validate_activity, also requires:
+    - Not trail_running (road/track only for HR-speed model)
     - HR present and plausible
     - Duration >= MIN_DURATION_HR_MODEL_S (no short sprints)
-    - Low elevation gain (trail/hilly → not comparable)
+    - Elevation gain per km <= MAX_ROAD_ELEVATION_GAIN_PER_KM (trail/hilly → not comparable)
     - Not a future activity
     """
     if not _validate_activity(a, reference_date):
         return False
+    # trail_running excluded from road HR-speed model
+    act_type = (a.activity_type or "").strip().lower().replace(" ", "_")
+    if act_type == "trail_running":
+        return False
     hr = a.average_hr
     if hr is None or hr < MIN_AVG_HR or hr > MAX_AVG_HR:
         return False
-    if (a.duration_s or 0) < MIN_DURATION_HR_MODEL_S:
+    dur = _performance_duration_s(a)
+    if (dur or 0) < MIN_DURATION_HR_MODEL_S:
         return False
-    # Elevation: reject if data exists and exceeds threshold
-    if a.elevation_gain_m is not None and a.elevation_gain_m > MAX_ELEVATION_GAIN_M:
-        return False
+    # Elevation: reject if data exists and per-km exceeds road threshold
+    if a.elevation_gain_m is not None and a.distance_m and a.distance_m > 0:
+        elev_per_km = a.elevation_gain_m / (a.distance_m / 1000.0)
+        if elev_per_km > MAX_ROAD_ELEVATION_GAIN_PER_KM:
+            return False
     return True
 
 
@@ -367,6 +404,7 @@ def _fit_hr_speed_model(
     activities: List[DomainActivity],
     reference_date: date,
     user_max_hr: Optional[float] = None,
+    resolved_fcmax: Optional[float] = None,
 ) -> _HRModelResult:
     """Fit a personal HR-speed linear model and extrapolate to aerobic VMA.
 
@@ -377,7 +415,7 @@ def _fit_hr_speed_model(
     - R² >= MIN_R2
     - Extrapolation ratio <= MAX_EXTRAPOLATION_RATIO
 
-    FCmax from user profile or observed max only (no 220-age).
+    FCmax: resolved_fcmax when provided, else from user profile or observed max only (no 220-age).
     Extrapolation target: 95% of FCmax (aerobic ceiling, not 100%).
     """
     usable = [a for a in activities if _is_usable_for_hr_model(a, reference_date)]
@@ -441,8 +479,8 @@ def _fit_hr_speed_model(
             extrapolation_ratio=0.0, reason_code=REASON_HR_MODEL_POOR_FIT,
         )
 
-    # FCmax resolution — no hr_max+5 or 220-age fallback
-    fcmax = _resolve_fcmax(activities, user_max_hr, reference_date)
+    # FCmax resolution — use pre-resolved value when provided; else from all valid activities
+    fcmax = resolved_fcmax if resolved_fcmax is not None else _resolve_fcmax(activities, user_max_hr, reference_date)
 
     # FCmax is mandatory for extrapolation; no synthetic fallback allowed
     if fcmax is None:
@@ -593,6 +631,29 @@ class PerformanceEstimate:
 
 
 # ---------------------------------------------------------------------------
+# VMA window helper
+# ---------------------------------------------------------------------------
+
+
+def _activities_in_vma_window(
+    activities: List[DomainActivity],
+    reference_date: date,
+    window_days: int = VMA_WINDOW_DAYS,
+) -> List[DomainActivity]:
+    """Return activities within [reference_date - (window_days-1), reference_date].
+
+    Window is inclusive on both ends.  A window_days of 42 covers days 0..41,
+    i.e. [reference_date - 41 days, reference_date].
+    """
+    window_start = date.fromordinal(reference_date.toordinal() - (window_days - 1))
+    return [
+        a for a in activities
+        if (_activity_date(a) or date.min) >= window_start
+        and (_activity_date(a) or date.max) <= reference_date
+    ]
+
+
+# ---------------------------------------------------------------------------
 # VMA estimation — dual-path
 # ---------------------------------------------------------------------------
 
@@ -608,22 +669,38 @@ def estimate_vma(
     identifies a race/test/competition.  Only SOURCE B (HR-speed linear model)
     is used.
 
+    The model is fitted on activities within the VMA_WINDOW_DAYS (42-day) rolling
+    window ending at reference_date.  No look-ahead; no fallback to older data.
+
+    FCmax is resolved from the same 42-day window as the model activities.
+    This ensures that estimate_vma(all_activities, ref) ==
+    estimate_vma(_activities_in_vma_window(all_activities, ref), ref),
+    making CURRENT and HISTORY snapshots strictly identical.
+
     Returns VMAEstimate(vma_kmh=None) when the model yields insufficient data.
 
-    FCmax: from user profile or observed Garmin max_hr only.
     220-age and hr_max+5 are forbidden.
     """
     if isinstance(reference_date, datetime):
         reference_date = reference_date.date()
 
+    # Apply 42-day VMA window for model fitting
+    windowed = _activities_in_vma_window(activities, reference_date)
+
+    # FCmax resolved from the same 42-day window used for the model.
+    # Using the identical window for both ensures CURRENT == HISTORY snapshots
+    # are strictly deterministic: an activity outside the window cannot influence
+    # the FCmax used by the extrapolation step.
+    fcmax = _resolve_fcmax(windowed, user_max_hr, reference_date)
+
     # --- Source A: DISABLED ---
     # SOURCE_A_DISABLED = True: no Garmin field identifies explicit performances.
 
-    # --- Source B: HR-speed model ---
-    hr_model = _fit_hr_speed_model(activities, reference_date, user_max_hr)
+    # --- Source B: HR-speed model (windowed activities, pre-resolved FCmax) ---
+    hr_model = _fit_hr_speed_model(windowed, reference_date, user_max_hr, resolved_fcmax=fcmax)
     vma_b: Optional[float] = hr_model.vma_kmh
     conf_b: Optional[str] = (
-        _hr_model_confidence(hr_model, reference_date, activities)
+        _hr_model_confidence(hr_model, reference_date, windowed)
         if vma_b is not None else None
     )
     method_b: Optional[str] = (
@@ -787,17 +864,16 @@ def _score_riegel_candidate(
     Hard exclusions (return 0.0):
       - trail_running type: road predictions only
       - elevation_gain_per_km > MAX_ROAD_ELEVATION_GAIN_PER_KM: not road-equivalent
+      - avg_hr absent: HR data required for qualification
+      - FCmax absent: relative HR cannot be computed
       - distance < MIN_RIEGEL_SOURCE_RATIO * target_distance
       - activity older than MAX_RIEGEL_SOURCE_AGE_DAYS
-      - relative_hr < MIN_RIEGEL_RELATIVE_HR when FCmax and avg_hr are both available
-        (easy runs are not informative sources; without HR data no gate is applied)
+      - relative_hr < MIN_RIEGEL_RELATIVE_HR: easy runs not informative
 
     Weights (for eligible activities):
       proximity  0.50  — how close source distance is to target
       recency    0.30  — how recent the activity is
-      rel_hr     0.20  — effort level relative to FCmax (neutral 0.5 when unknown)
-
-    Without HR: prediction still possible; confidence will be capped at MEDIUM.
+      rel_hr     0.20  — effort level relative to FCmax
     """
     # Road-only: trail excluded by type
     act_type = (a.activity_type or "").strip().lower().replace(" ", "_")
@@ -810,6 +886,14 @@ def _score_riegel_candidate(
         if elev_per_km > MAX_ROAD_ELEVATION_GAIN_PER_KM:
             return 0.0
 
+    # avg_hr required: activities without HR data are not qualified Riegel sources
+    if a.average_hr is None:
+        return 0.0
+
+    # FCmax required: relative HR cannot be computed without FCmax
+    if fcmax is None or fcmax <= 0:
+        return 0.0
+
     src_dist = a.distance_m or 0.0
     if src_dist < max(MIN_DISTANCE_M, target_distance_m * MIN_RIEGEL_SOURCE_RATIO):
         return 0.0
@@ -821,11 +905,10 @@ def _score_riegel_candidate(
     if days > MAX_RIEGEL_SOURCE_AGE_DAYS:
         return 0.0
 
-    # Relative HR gate: reject easy runs when HR data is available
-    if fcmax is not None and fcmax > 0 and a.average_hr is not None:
-        relative_hr = a.average_hr / fcmax
-        if relative_hr < MIN_RIEGEL_RELATIVE_HR:
-            return 0.0   # too easy — not an informative performance source
+    # Relative HR gate: avg_hr and FCmax are both guaranteed at this point
+    relative_hr = a.average_hr / fcmax
+    if relative_hr < MIN_RIEGEL_RELATIVE_HR:
+        return 0.0   # too easy — not an informative performance source
 
     # Proximity: prefer source ≈ target (ratio approaching 1.0 from below is ideal)
     ratio = src_dist / target_distance_m
@@ -848,11 +931,8 @@ def _score_riegel_candidate(
     else:
         recency = 0.15   # old but within MAX_RIEGEL_SOURCE_AGE_DAYS
 
-    # Relative HR score: neutral 0.5 when HR data unavailable
-    if fcmax is not None and fcmax > 0 and a.average_hr is not None:
-        rel_hr_score = min(a.average_hr / fcmax, 1.0)
-    else:
-        rel_hr_score = 0.50
+    # Relative HR score
+    rel_hr_score = min(a.average_hr / fcmax, 1.0)
 
     score = proximity * 0.50 + recency * 0.30 + rel_hr_score * 0.20
     return round(score, 4)
@@ -971,7 +1051,7 @@ def predict_races(
 
         src_act, _src_score, relative_hr = riegel_src
         source_distance_m = src_act.distance_m or 0.0
-        source_duration_s = src_act.duration_s or 0.0
+        source_duration_s = _performance_duration_s(src_act) or 0.0
         source_date = _activity_date(src_act)
         days_since_source = _days_ago(source_date, reference_date) if source_date else 999
 
@@ -1060,3 +1140,5 @@ RUNNING_TYPES = _RUNNING_TYPES
 seconds_to_str = _seconds_to_str
 validate_activity = _validate_activity
 activity_date = _activity_date
+performance_duration_s = _performance_duration_s
+activities_in_vma_window = _activities_in_vma_window

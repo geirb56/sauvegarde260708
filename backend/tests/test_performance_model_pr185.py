@@ -1513,17 +1513,16 @@ def test_c1_same_riegel_source_regardless_of_vma():
     # With VMA available (user_max_hr allows model to converge)
     result_with_vma = predict_races(activities, TODAY, user_max_hr=190.0)
 
-    # Without VMA (no FCmax → VMA null, but same activities as Riegel source)
-    # Use activities with no max_hr so FCmax is None → VMA null
-    no_hr_activities = [
-        _run(8_000.0,  3_600.0, days_ago=5,  avg_hr=130.0),
-        _run(10_000.0, 3_600.0, days_ago=10, avg_hr=145.0),
-        _run(12_000.0, 3_600.0, days_ago=15, avg_hr=160.0),
-        _run(14_000.0, 3_600.0, days_ago=20, avg_hr=172.0),
-        _run(16_000.0, 3_600.0, days_ago=25, avg_hr=182.0),
+    # Without VMA — only 3 activities (< MIN_ACTIVITIES_HR_MODEL=4) → VMA null.
+    # Activities include max_hr so FCmax resolves (required for Riegel since PR187).
+    # All activities have relative_hr >= 0.80 * FCmax so Riegel qualification passes.
+    few_activities = [
+        _run(8_000.0,  2_880.0, days_ago=5,  avg_hr=155.0, max_hr=190.0),
+        _run(10_000.0, 3_200.0, days_ago=10, avg_hr=165.0, max_hr=190.0),
+        _run(12_000.0, 3_600.0, days_ago=15, avg_hr=175.0, max_hr=190.0),
     ]
-    result_no_vma = predict_races(no_hr_activities, TODAY)
-    assert result_no_vma.vma.vma_kmh is None, "VMA should be null (no FCmax)"
+    result_no_vma = predict_races(few_activities, TODAY)
+    assert result_no_vma.vma.vma_kmh is None, "VMA should be null (< 4 activities for HR model)"
 
     # VMA being null must not block predictions
     preds_10k_vma = [p for p in result_with_vma.predictions if p.distance_label == "10K"]
@@ -1531,7 +1530,6 @@ def test_c1_same_riegel_source_regardless_of_vma():
     assert preds_10k_vma and preds_10k_novma
     # No artificial confidence downgrade when VMA is null
     assert preds_10k_novma[0].confidence != "insufficient"
-
 
 def test_c2_vma_null_good_riegel_source_high_confidence_possible():
     """VMA null + good observed source + high effort → confidence not artificially capped."""

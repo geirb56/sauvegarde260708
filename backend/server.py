@@ -3968,7 +3968,7 @@ async def get_race_predictions(user: dict = Depends(auth_user)):
     No db.workouts. No avg_speed/0.70 fallback. Riegel extrapolation.
     Frontend contract preserved (has_data, predictions[], athlete_profile).
     """
-    from training_v2.performance_model import RUNNING_TYPES, seconds_to_str
+    from training_v2.performance_model import RUNNING_TYPES, seconds_to_str, validate_activity
     user_id = user["id"]
     reference_date = datetime.now(timezone.utc).date()
 
@@ -4044,8 +4044,8 @@ async def get_race_predictions(user: dict = Depends(auth_user)):
             ),
             "total_sessions_6w": len([
                 a for a in domain_activities
-                if a.activity_type
-                and a.activity_type.strip().lower().replace(" ", "_") in RUNNING_TYPES
+                if validate_activity(a, reference_date)
+                and (activity_date(a) or date.min) >= (reference_date - timedelta(days=41))
             ]),
             "calculation_window": "garmin_activities",
             "model_version": "v2",
