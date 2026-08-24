@@ -76,6 +76,11 @@ def to_domain_activity(activity: GarminActivity) -> DomainActivity:
             if activity.elevation_gain is not None
             else None
         ),
+        moving_duration_s=(
+            float(activity.moving_duration_s)
+            if activity.moving_duration_s is not None and float(activity.moving_duration_s) > 0
+            else None
+        ),
     )
 
 
@@ -160,6 +165,10 @@ def mongo_garmin_to_domain(doc: Dict[str, Any]) -> DomainActivity:
     source: Optional[str] = source_raw if isinstance(source_raw, str) else None
     source_activity_id = _domain_source_activity_id(doc.get("activity_id") or doc.get("source_activity_id"))
 
+    # moving_duration_s — subdoc field (persisted via model_dump in gccli_provider)
+    moving_dur_raw = sub.get("moving_duration_s") if "moving_duration_s" in sub else doc.get("moving_duration_s")
+    moving_duration_s = _opt_float_positive(moving_dur_raw) if moving_dur_raw is not None else None
+
     return DomainActivity(
         activity_type=act_type,
         start_time=start_time,
@@ -172,6 +181,7 @@ def mongo_garmin_to_domain(doc: Dict[str, Any]) -> DomainActivity:
         average_hr=average_hr,
         max_hr=max_hr,
         elevation_gain_m=elevation_gain_m,
+        moving_duration_s=moving_duration_s,
     )
 
 
