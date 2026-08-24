@@ -625,3 +625,10 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
 - Tests : PR189 = **30 passed** + contrat API + test indépendance VMA (`test_s_vma_output_mutations...` passed). Perf model 185/186/188 = 137 passed. Régression suites PR = **275 passed**.
 - ⚠️ 1 test obsolète (test-drift, NON runtime) : `test_pr185::test_c1_same_riegel_source_regardless_of_vma` asserte `confidence != "insufficient"` quand VMA null ; sous #189 la confidence=insufficient vient de l'agrégat courbe (3 contributeurs, k-conflict fallback), pas de la VMA. Invariant VMA-indépendance couvert par le nouveau test #189. À mettre à jour upstream.
 - Statut : agent-tested ; non user-confirmed.
+
+## 2026-06 — Pull copilot/dev — PR #190 (identifiabilité de k + Huber quality-aware)
+- Fetch + merge `sauvegarde/copilot/dev` (ec92ad9→ec7b76b). Merge ORT propre. `memory/PRD.md` (627) préservé (backup pris).
+- PR #190 = invariants recommandés dans mon audit runtime post-#189 : garde d'identifiabilité de k + re-pondération Huber sensible à la qualité (protège les observations haute-qualité porteuses de pente), évaluation de k_conflict depuis k_raw avant fallback identifiabilité. performance_model.py +189 ; corrige aussi les tests drift PR185 (test_c1_same_riegel_source_regardless_of_vma) et PR189.
+- Validation RUNTIME (agent-tested, compte da85***e7e7) : backend + 4 workers RUNNING. Endpoints 200. Prédictions post-#190 : 5K 29:19, 10K 59:21, Semi 2h06, Marathon 4h16 (curve_k=1.0174, k_raw=1.0174, method=robust_weighted_log_fit, k_conflict=false, fit_q=0.985) — stables/cohérentes vs #189. conf=insufficient (agrégat : données anciennes + faible confiance qualité, inchangé).
+- Tests : perf model (185/186/188/189/190 + contrat API) = **178 passed** (le test PR185 précédemment obsolète est corrigé par #190). Régression suites PR = **275 passed**.
+- Statut : agent-tested ; non user-confirmed.
