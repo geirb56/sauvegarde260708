@@ -4,7 +4,7 @@ Tests:
   1. Runtime pathology reproduction — flat speed-only pool + 1 high-confidence
      short performance: k must not be accepted as ~1.0 via robust_weighted_log_fit.
   2. Narrow distance cluster — many good observations all at 8–12 km:
-     k_identifiable == False, method == prior_k_low_identifiability_fallback.
+     k_identifiable == False, method == prior_k_low_slope_evidence_fallback.
   3. Identifiable true curve — high-quality spread 5K / 10K / semi:
      k_identifiable == True, motor learns a reasonable k.
   4. True outlier protection — real aberrant point still under-weighted;
@@ -17,7 +17,7 @@ Tests:
   9. C190 conflict priority — k_raw out of [1.0, 1.25] AND k_identifiable False:
      k_conflict must be True and method must be prior_k_conflict_fallback.
   10. C190 identifiability fallback — k_raw in [1.0, 1.25] AND k_identifiable False:
-      k_conflict must be False and method must be prior_k_low_identifiability_fallback.
+      k_conflict must be False and method must be prior_k_low_slope_evidence_fallback.
 """
 from __future__ import annotations
 
@@ -103,7 +103,7 @@ def test_1_runtime_pathology_flat_speedonly_plus_one_high_quality():
 
     Expected: either the high-confidence point's Huber weight is not crushed
     (quality-aware floor), or k_identifiable == False and the motor returns
-    prior_k_low_identifiability_fallback.
+    prior_k_low_slope_evidence_fallback.
     """
     # Benchmark pool for personal-speed-percentile computation
     bench = _benchmark_pool(n=10, with_hr=False)
@@ -154,7 +154,7 @@ def test_1_runtime_pathology_flat_speedonly_plus_one_high_quality():
     else:
         # Identifiability fallback or single/two-point method
         allowed_fallback_methods = {
-            "prior_k_low_identifiability_fallback",
+            "prior_k_low_slope_evidence_fallback",
             "two_point_prior_shrinkage_fit",
             "single_performance_riegel",
         }
@@ -175,7 +175,7 @@ def test_2_narrow_distance_cluster_k_not_identifiable():
     """Many high-quality performances all at 8–12 km.
 
     Even though there are many contributors, the distance spread is too narrow
-    to identify k.  Motor must fall back to prior_k_low_identifiability_fallback.
+    to identify k.  Motor must fall back to prior_k_low_slope_evidence_fallback.
     """
     bench = _benchmark_pool(n=10, with_hr=True)
 
@@ -201,8 +201,8 @@ def test_2_narrow_distance_cluster_k_not_identifiable():
         f"Expected k_identifiable=False for 8–12 km cluster, got {diag.get('k_identifiable')}. "
         f"k_identifiability_score={diag.get('k_identifiability_score'):.4f}"
     )
-    assert diag.get("curve_method") == "prior_k_low_identifiability_fallback", (
-        f"Expected prior_k_low_identifiability_fallback, got {diag.get('curve_method')}"
+    assert diag.get("curve_method") == "prior_k_low_slope_evidence_fallback", (
+        f"Expected prior_k_low_slope_evidence_fallback, got {diag.get('curve_method')}"
     )
     assert diag.get("curve_k") == pytest.approx(pm.RIEGEL_K, rel=1e-6)
 
@@ -247,7 +247,7 @@ def test_3_identifiable_true_curve_k_learned():
         f"score={diag.get('k_identifiability_score')}"
     )
     # Motor should NOT force prior k when data is identifiable
-    assert diag.get("curve_method") != "prior_k_low_identifiability_fallback", (
+    assert diag.get("curve_method") != "prior_k_low_slope_evidence_fallback", (
         "Motor incorrectly fell back to prior k for an identifiable dataset."
     )
     # Learned k should be in a reasonable range around 1.08
@@ -590,7 +590,7 @@ def test_10_k_raw_in_range_low_identifiability_fallback():
 
     Expected:
       k_conflict == False
-      curve_method == "prior_k_low_identifiability_fallback"
+      curve_method == "prior_k_low_slope_evidence_fallback"
       curve_k == 1.06
     """
     bench = _benchmark_pool(n=7, with_hr=True)
@@ -622,7 +622,7 @@ def test_10_k_raw_in_range_low_identifiability_fallback():
     assert diag.get("k_identifiable") is False, (
         f"Expected k_identifiable=False for narrow cluster, got {diag.get('k_identifiable')}"
     )
-    assert diag.get("curve_method") == "prior_k_low_identifiability_fallback", (
-        f"Expected prior_k_low_identifiability_fallback, got {diag.get('curve_method')}"
+    assert diag.get("curve_method") == "prior_k_low_slope_evidence_fallback", (
+        f"Expected prior_k_low_slope_evidence_fallback, got {diag.get('curve_method')}"
     )
     assert diag.get("curve_k") == pytest.approx(pm.RIEGEL_K, rel=1e-6)

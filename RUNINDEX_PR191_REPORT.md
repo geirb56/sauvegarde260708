@@ -1,66 +1,86 @@
-# RUNINDEX — PR #191 (AUDIT PHASE) — Performance Comparability / Slope Evidence
+# RUNINDEX — PR #191 — Performance Comparability / Slope Evidence (IMPLÉMENTÉ — Option 1)
 
-**Statut : AUDIT LECTURE SEULE TERMINÉ — implémentation NON réalisée (barrière STOP de la tâche atteinte).**
-Aucun code moteur, aucune donnée, aucune constante modifiés. Compte réel : `da85***e7e7`. HEAD `0c17a2d` (PR #189/#190 mergées).
+**Statut : IMPLÉMENTÉ (Option 1).** Distinction QUALIFIED (niveau A) vs SLOPE-EVIDENCE (apprentissage de k).
+Compte réel : `da85***e7e7`. Backend redémarré, endpoints 200, tests verts. `PerformanceQuality.qualified` inchangé.
 
----
+## 1. Audit des 5 observations high/medium (rappel)
+| date | dist | pace | avgHR/maxHR | speed reserve | rel_hr | tier |
+|---|---|---|---|---|---|---|
+| 2025-12-14 | 10.02 | 5:01 | **0.937** | **11.8 %** | 0.916 | **high** |
+| 2026-01-09 | 7.07 | 5:54 | 0.883 | 39.9 % | 0.888 | medium |
+| 2026-02-28 | 20.63 | 6:08 | 0.879 | 28.7 % | 0.894 | medium |
+| 2025-11-06 | 10.83 | 5:55 | 0.847 | 35.5 % | 0.842 | medium |
+| 2026-04-20 | 10.44 | 6:21 | 0.890 | 15.3 % | 0.841 | medium |
+Seul le 2025-12-14 ressemble à un effort maximal (près de la FCmax, allure régulière). Les 4 medium sont des sorties soutenues.
 
-## 1. Audit des 5 observations high/medium (runtime réel, no-lookahead)
+## 2. Pourquoi #190 croyait k identifiable
+Identifiabilité calculée sur high+medium (spread 7–20.6 km, score 0.147 ≥ 0.05). Or les medium sont des sorties non maximales à relation distance→temps quasi plate ⇒ k plat (1.0174). Défaut résiduel corrigé ici.
 
-| date | dist | pace | avgHR | maxHR | **avgHR/maxHR** | **speed reserve (max/avg−1)** | vigMin/dur | elev/km | rel_hr(FCmax hist) | pctl90 | quality | tier |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 2025-12-14 | 10.02 | 5:01 | 163 | 174 | **0.937** | **11.8 %** | 47/50 | 6.0 | 0.916 | 100 | 1.00 | **high** |
-| 2026-01-09 | 7.07 | 5:54 | 158 | 179 | 0.883 | 39.9 % | 33/42 | 2.5 | 0.888 | 85 | 0.887 | medium |
-| 2026-02-28 | 20.63 | 6:08 | 160 | 182 | 0.879 | 28.7 % | 123/127 | 6.5 | 0.894 | 75 | 0.865 | medium |
-| 2025-11-06 | 10.83 | 5:55 | 149 | 176 | 0.847 | 35.5 % | 41/65 | 3.0 | 0.842 | 87 | 0.728 | medium |
-| 2026-04-20 | 10.44 | 6:21 | 153 | 172 | 0.890 | 15.3 % | 56/67 | 5.2 | 0.841 | 72.7 | 0.660 | medium |
+## 3. Signaux Garmin disponibles
+**Aucun signal natif de maximalité/course** (`activity_type`=running seul ; pas d'`event_type`/`is_race`/`workout_type` ; `lap_count`/`has_splits`/`details_available`=null partout). Décision : ne PAS inventer de classificateur, réutiliser le tier `high` de #188 comme preuve de pente.
 
-**Lecture** : la seule observation ressemblant à un contre-la-montre maximal (2025-12-14) se distingue par `avgHR/maxHR ≈ 0.94` (couru près du max, faible réserve HR) **et** une allure très régulière (`speed reserve ≈ 12 %`). Les 4 medium sont des sorties soutenues à allure variable (`avgHR/maxHR 0.85–0.89`, `speed reserve 29–40 %`).
+## 4. Définition retenue (slope evidence)
+`slope_evidence = (PerformanceQuality.confidence == "high")`. Le tier `high` de #188 exige déjà un appui FC + score combiné élevé (proche d'un effort représentatif). Medium/low/speed-only **contribuent toujours à A** mais ne sont jamais, seuls, une preuve de pente. **Aucun nouveau seuil arbitraire** (réutilise la hiérarchie #188).
 
-## 2. Pourquoi #190 juge k identifiable aujourd'hui
-`_compute_k_identifiability` = variance pondérée de `log(distance)` sur le sous-ensemble **high+medium**. Ici ce sous-ensemble couvre 7.07 → 20.63 km ⇒ score 0.147 ≥ seuil 0.05 ⇒ `k_identifiable=true`. Mais 4 des 5 points sont des **sorties soutenues non maximales** dont la relation distance→temps est presque plate (20.63 km @ 6:08 ≈ 7.07 km @ 5:54). Le spread de distance est réel, mais la **comparabilité de performance** ne l'est pas. C'est le défaut résiduel visé par #191.
+## 5. Politique d'apprentissage de k (générale)
+Chemin N≥3 (`robust_weighted_log_fit`) :
+1. Sous-ensemble slope-evidence = observations `high`.
+2. `k_identifiable = (slope_evidence_count ≥ K_SLOPE_EVIDENCE_MIN_COUNT=2) ET (variance pondérée de log(distance) sur les high ≥ 0.05)`.
+3. Si non identifiable ⇒ `method = prior_k_low_slope_evidence_fallback`, `k = RIEGEL_K (1.06)`, **A recalculé** à pente fixe sur les poids robustes de **toutes** les observations qualifiées. `k_raw` conserve la pente apprise (diagnostic).
+4. Priorité inchangée : `k_conflict fallback` (#190) reste évalué en premier depuis `k_raw`.
+5. N=1 (Riegel prior) et N=2 (shrinkage) inchangés.
 
-## 3. Signaux Garmin réellement disponibles (CONSTAT CENTRAL)
-Champs présents sur `garmin_activity` : `activity_type, distance_m, duration_s, moving_duration_s, average_speed_mps, average_moving_speed_mps, max_speed_mps, average_hr, max_hr, min_hr, average/max_run_cadence, elevation_gain/loss, calories, moderate/vigorous_intensity_minutes, lap_count, has_splits, details_available`.
+Raisons possibles : `insufficient_slope_evidence_count`, `insufficient_slope_evidence_spread`, `sufficient_slope_evidence_spread`, `no_slope_evidence_observations`, `not_applicable`.
 
-**Aucun signal fiable de maximalité / course n'existe :**
-- `activity_type` = uniquement running/walking/cycling/indoor_cardio/breathwork — **pas de sous-type « race »**.
-- **Absents** : `event_type`, `is_race`, `workout_type`, `trainingEffectLabel`, race predictor natif.
-- `lap_count`, `has_splits`, `details_available` = **null sur 100 % des documents** ⇒ pas de laps structurés exploitables (impossible de détecter un test/intervalles).
+## 6. Séparation A / k (invariant central)
+- **A** (niveau) = intercept estimé sur **toutes** les qualifiées (18 sur le compte réel).
+- **k** (fatigabilité distance→temps) = appris **uniquement** depuis les slope-evidence high ; sinon prior 1.06.
+- Les 18 observations ne sont jamais jetées.
 
-Signaux **dérivés** discriminants observés (non natifs) : `avgHR/maxHR` (réserve HR intra-activité) et régularité d'allure (`max/avg speed`). Ils séparent bien le CLM du reste **sur ce compte**, mais il n'y a **qu'UN seul exemple maximal positif** ⇒ en faire un seuil général = calibration spécifique au compte, **explicitement interdite** par la tâche.
+## 7. Confidence — correctif du gap #190 (local)
+Ajout dans `_curve_prediction_confidence` d'une pénalité liée au fallback slope **croissante avec l'extrapolation** :
+- `extrapolation_ratio ≤ 1.2` (proche des observations) ⇒ +0 (une bonne prédiction 10K reste bonne).
+- `1.2 < ratio ≤ 1.8` ⇒ +1 ; `ratio > 1.8` ⇒ +2 (marathon davantage pénalisé car il dépend fortement du prior k).
+Distinction A / k / extrapolation respectée ; pas de pénalité uniforme aveugle.
 
-## 4. DÉCISION : STOP après audit (conforme à la RÈGLE ABSOLUE)
-> « Si les données disponibles ne permettent PAS de distinguer proprement une performance maximale d'une sortie soutenue : NE PAS inventer un classificateur. STOP après l'audit et proposer les options architecturales les plus simples avec leurs limites. »
+## 8. Runtime réel post-#191 (compte da85***e7e7)
+```
+slope_evidence_count = 1 (10.018 km)  → < 2  → insufficient_slope_evidence_count
+method = prior_k_low_slope_evidence_fallback   k = 1.06   k_raw = 1.017409 (conservé)
+qualified_performance_count = 18 (A inchangé)
+Prédictions : 5K 28:26 (5:41) · 10K 59:18 (5:55) · Semi 2h10 (6:12) · Marathon 4h32 (6:27)
+Spread 5K→Marathon = 46 s/km (physiologique), vs 13 s/km pré-#191.
+```
+La pathologie de courbe plate est corrigée : faute de preuve multi-distance, k retombe honnêtement sur le prior 1.06 et le niveau A reste calibré sur les 18 observations.
 
-Les données Garmin **ne fournissent aucun marqueur natif de maximalité**, et les proxies dérivés ne peuvent pas être transformés en règle générale sans calibration mono-compte. On **ne code pas de classificateur**. On propose ci-dessous les options les plus simples, générales, sans seuils arbitraires.
+## 9. Tests synthétiques (`tests/test_pr191_slope_evidence.py`, 7 passed)
+- A : 1 high + medium/low étalés ⇒ pas d'apprentissage auto de k (fallback 1.06).
+- B : 3 vraies perfs 5/10/21 km suivant k=1.11 ⇒ k appris ≈1.11 (pas Riegel permanent).
+- C : cluster ~10 km high ⇒ A estimé, k reste prior (spread insuffisant).
+- D : speed-only ⇒ contribue à A, ne définit pas k.
+- E : outlier high absurde ⇒ Huber protège, k reste proche du vrai.
+- F : no-lookahead (futur exclu). G : input-order invariance.
+(#189 VMA-independence conservé dans sa suite.)
 
-## 5. Options architecturales (les plus simples, générales, sans calibration compte)
+## 10. Invariants conservés
+`T(D)=A·D^k` · single→prior 1.06 · N=2 shrinkage · k_conflict fallback #190 · Huber quality-aware #190 · refit robuste final · extrapolation symétrique · no-lookahead · input-order invariance · VMA independence · aucune correction monotone post-hoc · aucun k-floor arbitraire · aucune calibration spécifique au compte.
 
-### OPTION 1 — slope_evidence = tier HIGH de #188 (RECOMMANDÉE)
-- **Politique** : `slope_evidence = (quality.confidence == "high")`. L'identifiabilité #190 est recalculée **uniquement** sur le sous-ensemble slope-evidence. Si < seuil de spread (ou < 2 points) ⇒ `method = prior_k_low_slope_evidence_fallback`, `k = 1.06`, A recalculé à pente fixe sur **les 18 observations qualifiées**.
-- **Général** : réutilise le tier HIGH existant de #188 (HR-appuyé + score combiné élevé) — **aucun nouveau seuil**. HIGH est déjà le plus proche d'un effort représentatif.
-- **A vs k** : les 18 qualifiées informent A ; seules les HIGH informent k. Invariant central respecté.
-- **Effet sur ce compte** : 1 seule HIGH ⇒ preuve de pente insuffisante ⇒ k=1.06 ⇒ courbe plus physiologique (5K plus rapide, marathon plus lent), et A conservé sur 18 obs.
-- **Limite** : dépend de la couverture HR (le tier HIGH exige la FC) ; un athlète sans max_hr fiable n'aura jamais de slope-evidence ⇒ prior 1.06 permanent (acceptable et honnête).
+## 11. Limites connues
+- Slope-evidence = proxy de qualité (tier high #188), pas une preuve certaine de maximalité (aucun signal natif Garmin).
+- Dépend de la couverture FC : sans max_hr fiable, un athlète n'aura jamais de slope-evidence ⇒ prior 1.06 permanent (honnête).
+- Sur ce compte, faute de perf multi-distance HR-appuyée, k reste au prior : c'est le comportement voulu, pas un bug.
 
-### OPTION 2 — slope_evidence = HIGH + gate de représentativité intra-activité
-- Ajoute un critère `avgHR/maxHR ≥ seuil` et régularité d'allure.
-- **Rejetée pour l'instant** : introduit ≥2 nouveaux seuils calibrés sur 1 exemple ⇒ risque de sur-ajustement au compte, non démontrable comme général. À reconsidérer seulement avec un dataset multi-athlètes.
-
-### OPTION 3 — poids de slope-evidence continu (élégante, sans cutoff dur)
-- `slope_evidence_weight = map(confidence)` : high=1.0, medium=0.3, low/speed-only=0.0 (réutilise la hiérarchie #188, pas de nouveau seuil). L'identifiabilité et le fit de k sont pondérés par ce poids ; A garde ses poids actuels.
-- **Général**, pas de booléen brutal, dégradé propre. Sur ce compte : la masse de slope-evidence (≈1.0 + 4×0.3 mais medium non maximaux) reste faible ⇒ identifiabilité faible ⇒ prior 1.06.
-- **Limite** : le mapping high/medium/low reste un choix de conception (mais aligné sur #188, non spécifique au compte).
-
-**Recommandation** : **Option 1** (la plus simple et la plus défendable), avec Option 3 en variante si l'on préfère un dégradé continu.
-
-## 6. Correctif du gap de confidence (local, si implémenté)
-`_curve_prediction_confidence()` doit ajouter une pénalité liée au **fallback de pente qui CROÎT avec l'extrapolation** : aucune pénalité pour une cible proche des observations (10K si obs autour de 10 km), pénalité croissante pour semi/marathon. Distinguer confiance(A) vs confiance(k) vs extrapolation. Ne PAS rendre « insufficient » une prédiction proche uniquement parce que k est en fallback.
-
-## 7. Invariants à préserver lors d'une future implémentation
-`T(D)=A·D^k` · single→prior 1.06 · N=2 shrinkage · k-conflict fallback #190 · Huber quality-aware #190 · refit robuste final · extrapolation symétrique · no-lookahead · input-order invariance · VMA independence · aucune correction monotone post-hoc · **aucun k-floor arbitraire** · **aucune calibration spécifique au compte**.
-
-## 8. Limites connues
-- Impossible de certifier « performance maximale » sans signal natif Garmin ⇒ toute slope-evidence reste un **proxy de qualité comparative**, pas une preuve de maximalité.
-- Avec peu d'efforts HR-appuyés multi-distances, le modèle retombera souvent sur le prior 1.06 (comportement voulu et honnête).
+## Critères d'acceptation
+```
+QUALIFIED_AND_SLOPE_EVIDENCE_SEPARATED = YES
+SPEED_ONLY_STILL_SUPPORTED = YES
+NON_MAXIMAL_SUPPORTED_RUN_CANNOT_AUTOMATICALLY_DEFINE_K = YES
+TRUE_MULTI_DISTANCE_PERFORMANCES_CAN_LEARN_K = YES
+A_CAN_USE_MORE_DATA_THAN_K = YES
+NO_ARBITRARY_K_FLOOR = YES
+NO_ACCOUNT_SPECIFIC_CALIBRATION = YES
+NO_LOOKAHEAD = YES
+INPUT_ORDER_INVARIANT = YES
+VMA_INDEPENDENCE = YES
+CONFIDENCE_ACCOUNTS_FOR_SLOPE_UNCERTAINTY_WHEN_EXTRAPOLATING = YES
+```

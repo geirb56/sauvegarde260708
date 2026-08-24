@@ -632,3 +632,13 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
 - Validation RUNTIME (agent-tested, compte da85***e7e7) : backend + 4 workers RUNNING. Endpoints 200. Prédictions post-#190 : 5K 29:19, 10K 59:21, Semi 2h06, Marathon 4h16 (curve_k=1.0174, k_raw=1.0174, method=robust_weighted_log_fit, k_conflict=false, fit_q=0.985) — stables/cohérentes vs #189. conf=insufficient (agrégat : données anciennes + faible confiance qualité, inchangé).
 - Tests : perf model (185/186/188/189/190 + contrat API) = **178 passed** (le test PR185 précédemment obsolète est corrigé par #190). Régression suites PR = **275 passed**.
 - Statut : agent-tested ; non user-confirmed.
+
+## 2026-06 — PR #191 IMPLÉMENTÉE localement (Option 1) — slope evidence
+- Sur demande utilisateur (réponse "1" à l'audit pré-#191), implémentation de l'Option 1 : séparation QUALIFIED (niveau A) vs SLOPE-EVIDENCE (apprentissage de k). NON poussée upstream (dev local, à confirmer par l'utilisateur).
+- Changements (backend, aucun frontend) :
+  - performance_model.py : constante K_SLOPE_EVIDENCE_MIN_COUNT=2 ; slope_evidence = tier "high" #188 ; identifiabilité recalculée sur les high uniquement ; fallback `prior_k_low_slope_evidence_fallback` (k=RIEGEL_K 1.06, A recalculé sur toutes les qualifiées, k_raw conservé) ; nouveaux champs _CurveModel slope_evidence_count/min/max ; pénalité confidence liée au slope-fallback croissante avec l'extrapolation.
+  - server.py : exposition diagnostics k_identifiable/score/reason + slope_evidence_count/min/max_km.
+  - tests/test_pr191_slope_evidence.py (7 passed) ; tests/test_performance_model_pr190.py mis à jour (rename fallback method).
+- Runtime réel (da85***e7e7) : slope_evidence_count=1 → fallback k=1.06 ; prédictions physiologiques 5K 28:26 → Marathon 4h32 (spread 46 s/km vs 13 pré-#191) ; A inchangé (18 obs) ; VMA 10.04 indépendante.
+- Tests : perf model + PR191 = 185 passed ; suites PR (test_pr*.py) = 282 passed. Endpoints 200.
+- Rapport : /app/RUNINDEX_PR191_REPORT.md. Statut : agent-tested ; non user-confirmed ; non mergé upstream.
