@@ -4093,6 +4093,11 @@ async def get_race_predictions(user: dict = Depends(auth_user)):
             "effective_contributors": curve_diag.get("effective_contributors"),
             "two_point_evidence_strength": curve_diag.get("two_point_evidence_strength"),
             "contributors": curve_diag.get("contributors", []),
+            "slope_evidence_count": curve_diag.get("slope_evidence_count"),
+            "slope_evidence_distance_min": curve_diag.get("slope_evidence_distance_min"),
+            "slope_evidence_distance_max": curve_diag.get("slope_evidence_distance_max"),
+            "slope_evidence_distance_min_km": curve_diag.get("slope_evidence_distance_min_km"),
+            "slope_evidence_distance_max_km": curve_diag.get("slope_evidence_distance_max_km"),
         },
         "methodology": {
             "vma_calculation": "Individual HR-speed model (speed = a * HR + b). Built from >= 4 clean running activities with sufficient HR range (>= 20 bpm, >= 3 distinct HR levels). R\u00b2 >= 0.30 required. FCmax from highest credible observed Garmin max HR only (150\u2013230 bpm; no user profile, no population fallback, no formula). Extrapolation to 95% FCmax. No avg_speed/0.70 fallback.",

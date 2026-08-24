@@ -133,9 +133,11 @@ def test_d_recency_affects_common_curve_without_per_target_splitting():
     assert r10 != b10
     assert with_recent.race_curve_diagnostics["curve_method"] in {
         "two_point_prior_shrinkage_fit",
+        "two_point_prior_k_low_slope_evidence_fallback",
         "weighted_log_fit",
         "robust_weighted_log_fit",
         "prior_k_conflict_fallback",
+        "prior_k_low_slope_evidence_fallback",
     }
 
 
@@ -366,6 +368,7 @@ def test_o_two_point_shrinkage_varies_with_evidence_strength():
         _qualified_obs(days_ago=5, distance_m=5_000.0, duration_s=1_500.0, score=1.0, confidence="high"),
         _qualified_obs(days_ago=5, distance_m=10_000.0, duration_s=3_300.0, score=1.0, confidence="high"),
     ]
+    # PR #191: weak_pool uses LOW confidence → cannot learn k → fallback to RIEGEL_K.
     weak_pool = [
         _qualified_obs(days_ago=200, distance_m=5_000.0, duration_s=1_500.0, score=0.3, confidence="low"),
         _qualified_obs(days_ago=200, distance_m=10_000.0, duration_s=3_300.0, score=0.3, confidence="low"),
@@ -374,16 +377,19 @@ def test_o_two_point_shrinkage_varies_with_evidence_strength():
     strong_curve = pm._build_performance_curve(raw_pool, TODAY)
     weak_curve = pm._build_performance_curve(weak_pool, TODAY)
     assert strong_curve is not None and weak_curve is not None
+
+    # PR #191: strong (two HIGH) → shrinkage preserved; weak (two LOW) → prior k fallback.
     assert strong_curve.method == "two_point_prior_shrinkage_fit"
-    assert weak_curve.method == "two_point_prior_shrinkage_fit"
+    assert weak_curve.method == "two_point_prior_k_low_slope_evidence_fallback"
 
     k_raw = math.log(3300.0 / 1500.0) / math.log(10_000.0 / 5_000.0)
     assert strong_curve.two_point_evidence_strength is not None
     assert weak_curve.two_point_evidence_strength is not None
-    assert strong_curve.two_point_evidence_strength > weak_curve.two_point_evidence_strength
-    assert strong_curve.k != weak_curve.k
+    # strong_curve was shrunk toward prior; weak_curve k == RIEGEL_K exactly.
+    assert strong_curve.k != pm.RIEGEL_K
+    assert abs(weak_curve.k - pm.RIEGEL_K) < 1e-9
+    # strong k is between raw and prior
     assert abs(strong_curve.k - k_raw) < abs(weak_curve.k - k_raw)
-    assert abs(weak_curve.k - pm.RIEGEL_K) < abs(strong_curve.k - pm.RIEGEL_K)
 
 
 def test_p_two_point_policy_is_deterministic_and_monotonic():

@@ -111,17 +111,17 @@ CURVE_MAX_EXTRAPOLATION_RATIO: float = 6.0
 CURVE_NULL_CONFIDENCE_EXTRAPOLATION_RATIO: float = 4.5
 CURVE_K_CONFLICT_WEIGHT_PENALTY: float = 0.60
 
-# PR #190 — k identifiability
+# PR #190/#191 — k identifiability / slope-evidence
 # Minimum quality-weighted variance of log(distance) required to trust a
 # data-driven k learned from N≥3 qualified performances.
-# Identifiability is measured exclusively on high- and medium-confidence
-# observations; speed-only/low-confidence points are excluded from this
-# calculation even if they span a wide distance range.
+# PR #191: identifiability is measured exclusively on HIGH-confidence
+# (slope-evidence) observations.  Medium/low observations are excluded
+# even if they span a wide distance range.
 # Threshold justification:
 #   - Two observations at 5 km and 21 km with equal weight → score ≈ 0.52 (identifiable)
 #   - Many observations all within 8–12 km → score ≈ 0.013 (not identifiable)
 #   - 0.05 corresponds roughly to needing meaningful spread like 5–15 km
-#     in the high/medium-confidence observation set.
+#     in the slope-evidence (high-confidence) observation set.
 K_IDENTIFIABILITY_MIN_WX_VAR: float = 0.05
 
 # PR #190 — Huber quality-aware floors
@@ -1299,9 +1299,16 @@ class _CurveModel:
     observed_distance_min: float
     observed_distance_max: float
     # PR #190 — k identifiability diagnostics
+    # PR #191 — slope-evidence diagnostics
+    # slope_evidence = qualified observations with confidence == "high"
+    # Only these can authorise a data-driven k.
+    slope_evidence_count: int = 0
+    slope_evidence_distance_min: float = 0.0
+    slope_evidence_distance_max: float = 0.0
     # For N<3 (single_performance_riegel, two_point_prior_shrinkage_fit,
-    # same_distance_prior_k_fallback) k was never learned from data, so
-    # k_identifiable defaults to False and reason to "not_applicable".
+    # same_distance_prior_k_fallback, two_point_prior_k_low_slope_evidence_fallback)
+    # k was never learned from data, so k_identifiable defaults to False
+    # and reason to "not_applicable".
     k_identifiable: bool = False
     k_identifiability_score: float = 0.0
     k_identifiability_reason: str = "not_applicable"
@@ -1424,32 +1431,31 @@ def _compute_k_identifiability(
     observations: List["_CurveObservation"],
     robust_ws: List[float],
 ) -> Tuple[bool, float, str]:
-    """Measure whether the k slope is identifiable from the qualified observations.
+    """Measure whether the k slope is identifiable from slope-evidence observations.
 
-    PR #190 — identifiability diagnostic.
+    PR #191 — slope-evidence identifiability.
 
     Returns (k_identifiable, k_identifiability_score, k_identifiability_reason).
 
     The score is the quality-weighted variance of log(distance), computed using
-    ONLY high- and medium-confidence observations.  Speed-only/low-confidence
+    ONLY high-confidence (slope-evidence) observations.  Medium and low-confidence
     observations are excluded from this calculation even when they span a wide
     distance range.
 
-    Rationale: many low-quality points spread over 6–21 km can produce a large
-    naive distance variance, yet they carry little information about the true
-    slope because their time-vs-distance relationship reflects noise, not
-    genuine fatigue-distance physics.  Restricting the variance to high/medium
-    quality observations ensures the metric answers:
+    Rationale (PR #191): slope_evidence = confidence == "high".  Medium observations
+    may be sustained efforts rather than true multi-distance comparable performances,
+    so they do not carry enough information to personalise k.  Restricting the
+    variance to HIGH-quality observations ensures the metric answers:
 
-        "Can k be learned from defensible observations?"
+        "Can k be learned from defensible, genuinely comparable observations?"
 
     and not:
 
-        "Are there many points in total?"
+        "Are there many high/medium points in total?"
 
     The threshold K_IDENTIFIABILITY_MIN_WX_VAR (0.05) corresponds to needing
     observations with meaningful distance spread (roughly 5–15 km range) among
-    the high/medium-quality subset.  A tight 8–12 km cluster scores ≈ 0.013
+    the slope-evidence subset.  A tight 8–12 km cluster scores ≈ 0.013
     (not identifiable); a 5 km + semi spread scores ≈ 0.35 (identifiable).
 
     This is NOT a physiological prior on k — it measures available evidence,
@@ -1457,12 +1463,12 @@ def _compute_k_identifiability(
     """
     xs = [math.log(o.distance_m) for o in observations]
     ident_ws = [
-        rw if o.quality.confidence in ("high", "medium") else 0.0
+        rw if o.quality.confidence == "high" else 0.0
         for o, rw in zip(observations, robust_ws)
     ]
     sum_ident_w = sum(ident_ws)
     if sum_ident_w <= 0:
-        return False, 0.0, "no_hm_quality_observations"
+        return False, 0.0, "no_slope_evidence_high_observations"
 
     x_bar = sum(iw * x for iw, x in zip(ident_ws, xs)) / sum_ident_w
     score = sum(
@@ -1471,9 +1477,9 @@ def _compute_k_identifiability(
     score = round(score, 8)
     identifiable = score >= K_IDENTIFIABILITY_MIN_WX_VAR
     reason = (
-        "sufficient_hm_distance_spread"
+        "sufficient_slope_evidence_spread"
         if identifiable
-        else "insufficient_hm_distance_spread"
+        else "insufficient_slope_evidence_spread"
     )
     return identifiable, score, reason
 
@@ -1519,6 +1525,13 @@ def _build_performance_curve(
     )
     obs_distances = [o.distance_m for o in observations]
 
+    # PR #191 — slope-evidence: only HIGH-confidence observations can authorise k.
+    slope_evidence_obs = [o for o in observations if o.quality.confidence == "high"]
+    slope_evidence_count = len(slope_evidence_obs)
+    _se_dists = [o.distance_m for o in slope_evidence_obs]
+    slope_evidence_distance_min = min(_se_dists) if _se_dists else 0.0
+    slope_evidence_distance_max = max(_se_dists) if _se_dists else 0.0
+
     if len(observations) == 1:
         obs = observations[0]
         a = obs.duration_s / (obs.distance_m ** RIEGEL_K)
@@ -1535,6 +1548,9 @@ def _build_performance_curve(
             contributors=(obs,),
             observed_distance_min=min(obs_distances),
             observed_distance_max=max(obs_distances),
+            slope_evidence_count=slope_evidence_count,
+            slope_evidence_distance_min=slope_evidence_distance_min,
+            slope_evidence_distance_max=slope_evidence_distance_max,
         )
 
     xs = [math.log(o.distance_m) for o in observations]
@@ -1563,6 +1579,9 @@ def _build_performance_curve(
             contributors=tuple(observations),
             observed_distance_min=min(obs_distances),
             observed_distance_max=max(obs_distances),
+            slope_evidence_count=slope_evidence_count,
+            slope_evidence_distance_min=slope_evidence_distance_min,
+            slope_evidence_distance_max=slope_evidence_distance_max,
         )
     intercept, slope = fit
 
@@ -1570,14 +1589,30 @@ def _build_performance_curve(
     robust_ws = list(base_ws)
     two_point_evidence_strength: Optional[float] = None
     k_raw: Optional[float] = slope
+    k_fallback_applied = False
     if len(observations) == 2:
-        method = "two_point_prior_shrinkage_fit"
-        two_point_evidence_strength = _two_point_evidence_strength(base_ws)
-        slope = RIEGEL_K + two_point_evidence_strength * (slope - RIEGEL_K)
-        fixed_intercept = _fixed_slope_log_intercept(xs, ys, robust_ws, slope)
-        if fixed_intercept is None:
-            return None
-        intercept = fixed_intercept
+        # PR #191 — N==2 slope-evidence gate.
+        # k is only personalised via shrinkage when BOTH observations are
+        # slope-evidence (confidence == "high").  A HIGH + MEDIUM, two MEDIUM,
+        # or any LOW pair cannot learn k.
+        if slope_evidence_count == 2:
+            method = "two_point_prior_shrinkage_fit"
+            two_point_evidence_strength = _two_point_evidence_strength(base_ws)
+            slope = RIEGEL_K + two_point_evidence_strength * (slope - RIEGEL_K)
+            fixed_intercept = _fixed_slope_log_intercept(xs, ys, robust_ws, slope)
+            if fixed_intercept is None:
+                return None
+            intercept = fixed_intercept
+        else:
+            # Fallback: recompute A at k=prior using all qualified observations.
+            method = "two_point_prior_k_low_slope_evidence_fallback"
+            two_point_evidence_strength = _two_point_evidence_strength(base_ws)
+            log_a_se = _fixed_slope_log_intercept(xs, ys, robust_ws, RIEGEL_K)
+            if log_a_se is None:
+                return None
+            intercept = log_a_se
+            slope = RIEGEL_K
+            k_fallback_applied = True
     elif len(observations) >= 3:
         method = "robust_weighted_log_fit"
         final_robust_fit: Optional[Tuple[float, float]] = None
@@ -1612,7 +1647,8 @@ def _build_performance_curve(
             k_raw = slope
 
     # PR #190 — identifiability check for N≥3 (robust_weighted_log_fit).
-    # For N=1 and N=2, k is already prior or prior-shrunk, so identifiability
+    # PR #191 — slope-evidence check: identifiability now uses HIGH-only observations.
+    # For N=1 and N=2, k is already prior or prior-shrunk/fallback, so identifiability
     # is not applicable (k_identifiable defaults to False via _CurveModel defaults).
     k_identifiable = False
     k_identifiability_score = 0.0
@@ -1625,9 +1661,10 @@ def _build_performance_curve(
     # k_conflict is evaluated from k_raw (the data-driven slope) BEFORE any fallback.
     # For N>=3, k_raw is the robust fit slope; evaluating it before applying any
     # identifiability fallback ensures the conflict diagnosis reflects the actual fit.
-    # For N=2, slope is already shrunk toward the prior; k_raw holds the pre-shrinkage
-    # OLS value but the shrunk slope is the N=2 data-driven result, so we use slope there.
-    k_fallback_applied = False
+    # For N=2, slope is already shrunk toward the prior (or set to RIEGEL_K for fallback);
+    # k_raw holds the pre-shrinkage OLS value but the shrunk slope is the N=2
+    # data-driven result, so we use slope there.
+    # k_fallback_applied may already be True from the N==2 low-slope-evidence branch.
     _k_for_conflict = (k_raw if (len(observations) >= 3 and k_raw is not None) else slope)
     k_conflict = not (CURVE_K_MIN <= _k_for_conflict <= CURVE_K_MAX)
     if k_conflict:
@@ -1641,13 +1678,14 @@ def _build_performance_curve(
         method = "prior_k_conflict_fallback"
         k_fallback_applied = True
     elif len(observations) >= 3 and not k_identifiable:
-        # Insufficient quality-weighted distance spread to trust data-driven k.
+        # Insufficient slope-evidence spread to trust data-driven k.
         # Fall back to prior k and recompute intercept from final robust weights.
+        # A uses ALL qualified observations via the final robust weights.
         log_a_ident = _fixed_slope_log_intercept(xs, ys, robust_ws, RIEGEL_K)
         if log_a_ident is not None:
             intercept = log_a_ident
             slope = RIEGEL_K
-            method = "prior_k_low_identifiability_fallback"
+            method = "prior_k_low_slope_evidence_fallback"
             k_fallback_applied = True
             # k_raw retains the data-driven slope from the robust fit (diagnostic)
         # If log_a_ident is None (degenerate weights), retain the data-driven k.
@@ -1699,6 +1737,9 @@ def _build_performance_curve(
         k_identifiable=k_identifiable,
         k_identifiability_score=k_identifiability_score,
         k_identifiability_reason=k_identifiability_reason,
+        slope_evidence_count=slope_evidence_count,
+        slope_evidence_distance_min=slope_evidence_distance_min,
+        slope_evidence_distance_max=slope_evidence_distance_max,
     )
 
 
@@ -1820,6 +1861,21 @@ def _curve_prediction_confidence(
         penalty_steps += 2
     elif effective_contributors < 1.60:
         penalty_steps += 1
+
+    # PR #191 — k-prior fallback: uncertainty grows with extrapolation distance.
+    # When k is fixed at RIEGEL_K (not data-driven), the curve is anchored at A
+    # but the slope is uncertain.  Close predictions remain reliable; distant
+    # extrapolations accumulate k-uncertainty.
+    # Reuse existing extrapolation thresholds (1.8, 3.0) to avoid a parallel system.
+    _slope_evidence_fallback_methods = {
+        "prior_k_low_slope_evidence_fallback",
+        "two_point_prior_k_low_slope_evidence_fallback",
+    }
+    if curve.k_fallback_applied and curve.method in _slope_evidence_fallback_methods:
+        if extrapolation_ratio > 3.0:
+            penalty_steps += 2
+        elif extrapolation_ratio > 1.8:
+            penalty_steps += 1
 
     if penalty_steps > 0:
         base = _degrade_confidence(base, penalty_steps)
@@ -2071,12 +2127,30 @@ def predict_races(
             "two_point_evidence_strength": (
                 curve.two_point_evidence_strength if curve else None
             ),
-            # PR #190 — k identifiability diagnostics
+            # PR #190/#191 — k identifiability diagnostics (slope-evidence)
             "k_identifiable": curve.k_identifiable if curve else None,
             "k_identifiability_score": (
                 round(curve.k_identifiability_score, 8) if curve else None
             ),
             "k_identifiability_reason": curve.k_identifiability_reason if curve else None,
+            # PR #191 — slope-evidence diagnostics
+            "slope_evidence_count": curve.slope_evidence_count if curve else 0,
+            "slope_evidence_distance_min": (
+                curve.slope_evidence_distance_min if (curve and curve.slope_evidence_count > 0) else None
+            ),
+            "slope_evidence_distance_max": (
+                curve.slope_evidence_distance_max if (curve and curve.slope_evidence_count > 0) else None
+            ),
+            "slope_evidence_distance_min_km": (
+                round(curve.slope_evidence_distance_min / 1000.0, 4)
+                if (curve and curve.slope_evidence_count > 0)
+                else None
+            ),
+            "slope_evidence_distance_max_km": (
+                round(curve.slope_evidence_distance_max / 1000.0, 4)
+                if (curve and curve.slope_evidence_count > 0)
+                else None
+            ),
             "high_medium_quality_weight_share": high_medium_quality_weight_share if curve else None,
             "low_confidence_weight_share": low_confidence_weight_share if curve else None,
             # --- existing fields ---
