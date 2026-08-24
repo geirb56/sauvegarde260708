@@ -111,6 +111,32 @@ CURVE_MAX_EXTRAPOLATION_RATIO: float = 6.0
 CURVE_NULL_CONFIDENCE_EXTRAPOLATION_RATIO: float = 4.5
 CURVE_K_CONFLICT_WEIGHT_PENALTY: float = 0.60
 
+# PR #190 — k identifiability
+# Minimum quality-weighted variance of log(distance) required to trust a
+# data-driven k learned from N≥3 qualified performances.
+# Identifiability is measured exclusively on high- and medium-confidence
+# observations; speed-only/low-confidence points are excluded from this
+# calculation even if they span a wide distance range.
+# Threshold justification:
+#   - Two observations at 5 km and 21 km with equal weight → score ≈ 0.52 (identifiable)
+#   - Many observations all within 8–12 km → score ≈ 0.013 (not identifiable)
+#   - 0.05 corresponds roughly to needing meaningful spread like 5–15 km
+#     in the high/medium-confidence observation set.
+K_IDENTIFIABILITY_MIN_WX_VAR: float = 0.05
+
+# PR #190 — Huber quality-aware floors
+# Minimum Huber multiplier as a fraction of base_weight for high/medium
+# confidence observations.  This prevents the majority of low-quality
+# speed-only observations from systematically zeroing the slope signal
+# carried by a minority of high-quality HR-supported performances.
+# Constraints:
+#   - high observations can still be reduced to 50% of base_weight
+#   - medium observations can still be reduced to 25%
+#   - a truly aberrant high-confidence point will still be down-weighted
+#   - low/speed-only observations retain full Huber protection (floor=0)
+HUBER_QUALITY_FLOOR_HIGH: float = 0.50
+HUBER_QUALITY_FLOOR_MEDIUM: float = 0.25
+
 # Speed bounds (km/h) for a plausible running activity
 MIN_SPEED_KMH: float = 3.0
 MAX_SPEED_KMH: float = 30.0
@@ -1272,6 +1298,10 @@ class _CurveModel:
     contributors: Tuple[_CurveObservation, ...]
     observed_distance_min: float
     observed_distance_max: float
+    # PR #190 — k identifiability diagnostics (default "not_applicable" for N<3)
+    k_identifiable: bool = True
+    k_identifiability_score: float = 0.0
+    k_identifiability_reason: str = "not_applicable"
 
 
 def _recency_weight(days_ago: int) -> float:
@@ -1357,6 +1387,92 @@ def _two_point_evidence_strength(ws: List[float]) -> float:
     w1 = _clamp(ws[0], 0.0, 1.0)
     w2 = _clamp(ws[1], 0.0, 1.0)
     return round(_clamp(math.sqrt(w1 * w2), 0.0, 1.0), 6)
+
+
+def _huber_quality_floor(confidence: str) -> float:
+    """Return the minimum Huber multiplier for an observation's quality confidence.
+
+    PR #190 — quality-aware Huber.
+
+    The Huber M-estimator can reduce an observation's effective weight when its
+    residual is large relative to the median.  This function enforces a floor on
+    that multiplier based on the observation's quality confidence level.
+
+    Rationale: when 14 speed-only/low-confidence observations span a wide distance
+    range and one HR-supported high-confidence observation is more intense, the
+    Huber iteration may label the high-confidence point as an outlier and reduce
+    its weight by 3×.  That single point carries most of the slope information, so
+    silencing it destroys k identifiability.
+
+    The floor is NOT a bypass:
+      - A high-confidence point can still be reduced to 50% of its base weight.
+      - A truly aberrant high-confidence artefact (e.g. GPS glitch logged as high)
+        will still receive a meaningful weight penalty.
+      - Low and speed-only observations retain full Huber protection (floor = 0).
+    """
+    if confidence == "high":
+        return HUBER_QUALITY_FLOOR_HIGH
+    if confidence == "medium":
+        return HUBER_QUALITY_FLOOR_MEDIUM
+    return 0.0
+
+
+def _compute_k_identifiability(
+    observations: List["_CurveObservation"],
+    robust_ws: List[float],
+) -> Tuple[bool, float, str]:
+    """Measure whether the k slope is identifiable from the qualified observations.
+
+    PR #190 — identifiability diagnostic.
+
+    Returns (k_identifiable, k_identifiability_score, k_identifiability_reason).
+
+    The score is the quality-weighted variance of log(distance), computed using
+    ONLY high- and medium-confidence observations.  Speed-only/low-confidence
+    observations are excluded from this calculation even when they span a wide
+    distance range.
+
+    Rationale: many low-quality points spread over 6–21 km can produce a large
+    naive distance variance, yet they carry little information about the true
+    slope because their time-vs-distance relationship reflects noise, not
+    genuine fatigue-distance physics.  Restricting the variance to high/medium
+    quality observations ensures the metric answers:
+
+        "Can k be learned from defensible observations?"
+
+    and not:
+
+        "Are there many points in total?"
+
+    The threshold K_IDENTIFIABILITY_MIN_WX_VAR (0.05) corresponds to needing
+    observations with meaningful distance spread (roughly 5–15 km range) among
+    the high/medium-quality subset.  A tight 8–12 km cluster scores ≈ 0.013
+    (not identifiable); a 5 km + semi spread scores ≈ 0.35 (identifiable).
+
+    This is NOT a physiological prior on k — it measures available evidence,
+    not whether k resembles 1.06.
+    """
+    xs = [math.log(o.distance_m) for o in observations]
+    ident_ws = [
+        rw if o.quality.confidence in ("high", "medium") else 0.0
+        for o, rw in zip(observations, robust_ws)
+    ]
+    sum_ident_w = sum(ident_ws)
+    if sum_ident_w <= 0:
+        return False, 0.0, "no_hm_quality_observations"
+
+    x_bar = sum(iw * x for iw, x in zip(ident_ws, xs)) / sum_ident_w
+    score = sum(
+        iw * (x - x_bar) ** 2 for iw, x in zip(ident_ws, xs)
+    ) / sum_ident_w
+    score = round(score, 8)
+    identifiable = score >= K_IDENTIFIABILITY_MIN_WX_VAR
+    reason = (
+        "sufficient_hm_distance_spread"
+        if identifiable
+        else "insufficient_hm_distance_spread"
+    )
+    return identifiable, score, reason
 
 
 def _build_performance_curve(
@@ -1475,16 +1591,42 @@ def _build_performance_curve(
                 break
             delta = 1.5 * median_abs
             updated_ws = []
-            for base_w, residual in zip(base_ws, residuals):
+            # PR #190 — quality-aware Huber: apply floor per observation confidence.
+            # Prevents the Huber M-estimator from zeroing out slope signal carried
+            # by a minority of high-confidence HR-supported performances when a
+            # majority of low-quality speed-only observations dominate the residual
+            # distribution.
+            for obs, base_w, residual in zip(observations, base_ws, residuals):
                 abs_r = abs(residual)
                 huber_mult = 1.0 if abs_r <= delta else (delta / abs_r)
-                updated_ws.append(base_w * huber_mult)
+                floor_mult = _huber_quality_floor(obs.quality.confidence)
+                updated_ws.append(base_w * max(huber_mult, floor_mult))
             robust_ws = updated_ws
         if final_robust_fit is None:
             final_robust_fit = _weighted_linear_fit(xs, ys, robust_ws)
         if final_robust_fit is not None:
             intercept, slope = final_robust_fit
             k_raw = slope
+
+    # PR #190 — identifiability check for N≥3 (robust_weighted_log_fit).
+    # For N=1 and N=2, k is already prior or prior-shrunk, so identifiability
+    # is not applicable.
+    k_identifiable = True
+    k_identifiability_score = 0.0
+    k_identifiability_reason = "not_applicable"
+    if len(observations) >= 3:
+        k_identifiable, k_identifiability_score, k_identifiability_reason = (
+            _compute_k_identifiability(observations, robust_ws)
+        )
+        if not k_identifiable:
+            # Insufficient quality-weighted distance spread to trust data-driven k.
+            # Fall back to prior k and recompute intercept from final robust weights.
+            log_a_ident = _fixed_slope_log_intercept(xs, ys, robust_ws, RIEGEL_K)
+            if log_a_ident is not None:
+                intercept = log_a_ident
+                slope = RIEGEL_K
+                method = "prior_k_low_identifiability_fallback"
+                # k_raw already retains the data-driven slope from the robust fit
 
     k_fallback_applied = False
     k_conflict = not (CURVE_K_MIN <= slope <= CURVE_K_MAX)
@@ -1497,6 +1639,8 @@ def _build_performance_curve(
         intercept = log_a
         slope = RIEGEL_K
         method = "prior_k_conflict_fallback"
+        k_fallback_applied = True
+    elif not k_identifiable:
         k_fallback_applied = True
 
     fit_quality = _weighted_r2(xs, ys, robust_ws, intercept, slope)
@@ -1541,6 +1685,9 @@ def _build_performance_curve(
         contributors=contributors,
         observed_distance_min=min(obs_distances),
         observed_distance_max=max(obs_distances),
+        k_identifiable=k_identifiable,
+        k_identifiability_score=k_identifiability_score,
+        k_identifiability_reason=k_identifiability_reason,
     )
 
 
@@ -1880,6 +2027,19 @@ def predict_races(
 
     confidence_aggregates = _curve_confidence_aggregates(tuple(sorted_contributors))
 
+    # PR #190 — compute quality weight shares for diagnostics
+    _sum_bw = sum(c.base_weight for c in sorted_contributors)
+    _hm_bw = sum(
+        c.base_weight for c in sorted_contributors
+        if c.quality.confidence in ("high", "medium")
+    )
+    _sol_bw = sum(
+        c.base_weight for c in sorted_contributors
+        if c.quality.confidence == "low"
+    )
+    high_medium_quality_weight_share = round(_hm_bw / _sum_bw, 6) if _sum_bw > 0 else 0.0
+    speed_only_low_weight_share = round(_sol_bw / _sum_bw, 6) if _sum_bw > 0 else 0.0
+
     return PerformanceEstimate(
         has_data=result_has_data,
         vma=vma_est,
@@ -1897,6 +2057,15 @@ def predict_races(
             "two_point_evidence_strength": (
                 curve.two_point_evidence_strength if curve else None
             ),
+            # PR #190 — k identifiability diagnostics
+            "k_identifiable": curve.k_identifiable if curve else None,
+            "k_identifiability_score": (
+                round(curve.k_identifiability_score, 8) if curve else None
+            ),
+            "k_identifiability_reason": curve.k_identifiability_reason if curve else None,
+            "high_medium_quality_weight_share": high_medium_quality_weight_share if curve else None,
+            "speed_only_low_weight_share": speed_only_low_weight_share if curve else None,
+            # --- existing fields ---
             "qualified_performance_count": curve.qualified_performance_count if curve else 0,
             "contributors_count": len(sorted_contributors),
             "observed_distance_min": curve.observed_distance_min if curve else None,
