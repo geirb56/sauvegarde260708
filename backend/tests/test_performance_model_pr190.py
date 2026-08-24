@@ -14,6 +14,10 @@ Tests:
   6. No look-ahead — future activity must not affect any output.
   7. Input-order invariance — shuffled order gives identical result.
   8. VMA independence — changing VMA output does not affect predictions/curve.
+  9. C190 conflict priority — k_raw out of [1.0, 1.25] AND k_identifiable False:
+     k_conflict must be True and method must be prior_k_conflict_fallback.
+  10. C190 identifiability fallback — k_raw in [1.0, 1.25] AND k_identifiable False:
+      k_conflict must be False and method must be prior_k_low_identifiability_fallback.
 """
 from __future__ import annotations
 
