@@ -90,6 +90,18 @@ def _fast_run(days_ago: int = 3, avg_hr: Optional[float] = None) -> DomainActivi
     return _run(10_000.0, 2_571.0, days_ago=days_ago, avg_hr=avg_hr)
 
 
+def _speed_benchmark_runs() -> List[DomainActivity]:
+    """Six strictly-prior road-comparable runs for PR188 personal speed benchmarks."""
+    return [
+        _run(8_000.0, 3_200.0, days_ago=80, avg_hr=130.0, max_hr=160.0),
+        _run(9_000.0, 3_500.0, days_ago=70, avg_hr=135.0, max_hr=165.0),
+        _run(10_000.0, 3_900.0, days_ago=60, avg_hr=140.0, max_hr=170.0),
+        _run(11_000.0, 4_300.0, days_ago=50, avg_hr=145.0, max_hr=175.0),
+        _run(12_000.0, 4_700.0, days_ago=40, avg_hr=150.0, max_hr=178.0),
+        _run(10_000.0, 3_000.0, days_ago=30, avg_hr=155.0, max_hr=182.0),
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Test 1: No activities → VMA null
 # ---------------------------------------------------------------------------
@@ -675,12 +687,8 @@ def test_predictions_frontend_preserved():
     assert len(result.predictions) == 4
     assert all(p.predicted_time_s is None for p in result.predictions)
 
-    activities = [
-        _run(8_000.0,  3_600.0, days_ago=5,  avg_hr=130.0, max_hr=135.0),
-        _run(10_000.0, 3_600.0, days_ago=10, avg_hr=145.0, max_hr=150.0),
-        _run(12_000.0, 3_600.0, days_ago=15, avg_hr=158.0, max_hr=165.0),
-        _run(14_000.0, 3_600.0, days_ago=20, avg_hr=170.0, max_hr=178.0),
-        _run(16_000.0, 3_600.0, days_ago=25, avg_hr=180.0, max_hr=187.0),
+    activities = _speed_benchmark_runs() + [
+        _run(10_000.0, 2_800.0, days_ago=5, avg_hr=170.0, max_hr=185.0),
     ]
     result2 = predict_races(activities, TODAY, user_max_hr=190.0)
     if result2.has_data:
@@ -1114,7 +1122,16 @@ def test_a_vma_null_predictions_exist():
     """
     # Only 2 activities → HR model cannot build (needs >= 4)
     # But we have a defensible 10K source → 10K prediction must exist
-    acts = [
+    benchmark = [
+        DomainActivity(
+            activity_type=a.activity_type,
+            start_time=a.start_time,
+            distance_m=a.distance_m,
+            duration_s=a.duration_s,
+        )
+        for a in _speed_benchmark_runs()
+    ]
+    acts = benchmark + [
         _run(10_000.0, 3_600.0, days_ago=5, avg_hr=165.0, max_hr=175.0),
         _run(12_000.0, 4_500.0, days_ago=15, avg_hr=155.0, max_hr=163.0),
     ]
@@ -1171,7 +1188,9 @@ def test_c_vma_and_predictions_both_available():
 
     VMA_AND_PREDICTIONS = possible
     """
-    acts = _hr_model_activities(user_max_hr=185.0)
+    acts = _speed_benchmark_runs() + _hr_model_activities(user_max_hr=185.0) + [
+        _run(10_000.0, 2_800.0, days_ago=5, avg_hr=170.0, max_hr=185.0),
+    ]
     result = predict_races(acts, TODAY, user_max_hr=185.0)
 
     assert result.vma.vma_kmh is not None, "VMA must be available"
@@ -1508,7 +1527,8 @@ def _make_good_riegel_activities(fcmax: float = 190.0) -> list:
 
 def test_c1_same_riegel_source_regardless_of_vma():
     """Predictions from the same observed source must be identical whether VMA exists or not."""
-    activities = _make_good_riegel_activities(190.0)
+    benchmark = _speed_benchmark_runs()
+    activities = benchmark + _make_good_riegel_activities(190.0)
 
     # With VMA available (user_max_hr allows model to converge)
     result_with_vma = predict_races(activities, TODAY, user_max_hr=190.0)
@@ -1517,6 +1537,14 @@ def test_c1_same_riegel_source_regardless_of_vma():
     # Activities include max_hr so FCmax resolves (required for Riegel since PR187).
     # All activities have relative_hr >= 0.80 * FCmax so Riegel qualification passes.
     few_activities = [
+        DomainActivity(
+            activity_type=a.activity_type,
+            start_time=a.start_time,
+            distance_m=a.distance_m,
+            duration_s=a.duration_s,
+        )
+        for a in benchmark
+    ] + [
         _run(8_000.0,  2_880.0, days_ago=5,  avg_hr=155.0, max_hr=190.0),
         _run(10_000.0, 3_200.0, days_ago=10, avg_hr=165.0, max_hr=190.0),
         _run(12_000.0, 3_600.0, days_ago=15, avg_hr=175.0, max_hr=190.0),
@@ -1535,6 +1563,14 @@ def test_c2_vma_null_good_riegel_source_high_confidence_possible():
     """VMA null + good observed source + high effort → confidence not artificially capped."""
     # Activities with max_hr only in one (to get FCmax for Riegel but no HR model)
     activities = [
+        DomainActivity(
+            activity_type=a.activity_type,
+            start_time=a.start_time,
+            distance_m=a.distance_m,
+            duration_s=a.duration_s,
+        )
+        for a in _speed_benchmark_runs()
+    ] + [
         _run(10_000.0, 3_000.0, days_ago=5, avg_hr=175.0, max_hr=188.0),  # strong 10K
     ]
     # Only 1 activity → VMA null (HR model needs >= 4)
