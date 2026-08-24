@@ -152,6 +152,18 @@ PERFORMANCE_HIGH_CONFIDENCE_RELATIVE_HR: float = 0.85
 PERFORMANCE_HIGH_CONFIDENCE_SPEED_PERCENTILE: float = 90.0
 MIN_RIEGEL_RELATIVE_HR: float = PERFORMANCE_MIN_RELATIVE_HR
 
+# Performance Curve V2 — common curve T(D) = A * D^k
+# k safety bounds: k >= 1.0 ensures pace is monotonically non-decreasing with distance
+K_MIN: float = 1.0        # physiological lower bound; k < 1 means pace improves with distance — physically impossible
+K_MAX: float = 1.20       # physiological upper bound; k > 1.20 would be extreme even for ultras
+K_PRIOR: float = RIEGEL_K  # = 1.06, standard Riegel fallback when fit is degenerate or single performance
+CURVE_RECENCY_DECAY_DAYS: float = 180.0  # exponential decay half-life for recency weighting
+
+# Extrapolation thresholds (symmetric ratio = max(target/nearest_obs, nearest_obs/target))
+CURVE_NULL_EXTRAPOLATION_RATIO: float = 6.0    # ratio >= this: prefer null to false precision
+CURVE_LOW_EXTRAPOLATION_RATIO: float = 3.0     # ratio [3, 6): low confidence
+CURVE_MEDIUM_EXTRAPOLATION_RATIO: float = 2.0  # ratio [2, 3): medium; < 2: quality-based
+
 # VMA rolling window (used for both CURRENT and HISTORY)
 VMA_WINDOW_DAYS: int = 42
 
@@ -842,6 +854,32 @@ class VMAEstimate:
 
 
 @dataclass(frozen=True)
+class PerformanceCurveV2:
+    """Result of fitting T(D) = A * D^k to the qualified performance pool.
+
+    A single curve is shared by all four race distance predictions.
+    k is bounded in [K_MIN, K_MAX] to guarantee pace monotonicity.
+    When contributors_count == 1: k = K_PRIOR (1.06) by definition.
+    When contributors_count >= 2: k comes from weighted log-space OLS.
+    k_clamped = True when the raw OLS result was outside [K_MIN, K_MAX].
+    """
+    curve_a: float                      # scale factor A in T(D) = A * D^k
+    curve_k: float                      # endurance exponent k
+    method: str                         # "single_riegel_fallback" | "weighted_logspace_fit"
+    contributors_count: int             # qualified performances used
+    observed_distance_min_m: float      # shortest observed source distance
+    observed_distance_max_m: float      # longest observed source distance
+    fit_quality: Optional[float]        # R² of log-space fit; None when single performance
+    k_clamped: bool                     # True if k was outside [K_MIN, K_MAX] and was clamped
+    # Single-contributor metadata (None when contributors_count > 1)
+    single_source_quality_score: Optional[float] = None
+    single_source_quality_confidence: Optional[str] = None
+    single_source_speed_percentile: Optional[float] = None
+    single_source_relative_hr: Optional[float] = None
+    single_source_days_ago: Optional[int] = None
+
+
+@dataclass(frozen=True)
 class RacePrediction:
     """Predicted race time for a single distance."""
     distance_label: str
@@ -857,12 +895,21 @@ class RacePrediction:
     endurance_factor: int
     volume_factor: int
     source_distance_m: Optional[float]
-    source_type: Optional[str] = None   # "observed_activity" when from real data
+    source_type: Optional[str] = None   # "observed_activity" (single) or "performance_curve_v2"
     source_quality_score: Optional[float] = None
     source_quality_confidence: Optional[str] = None
     source_speed_percentile: Optional[float] = None
     source_relative_hr: Optional[float] = None
     model_version: str = "v2"
+    # Performance Curve V2 diagnostics (always populated when curve exists)
+    curve_k: Optional[float] = None
+    curve_a: Optional[float] = None
+    curve_method: Optional[str] = None
+    curve_extrapolation_ratio: Optional[float] = None
+    contributors_count: int = 0
+    observed_distance_min_m: Optional[float] = None
+    observed_distance_max_m: Optional[float] = None
+    curve_fit_quality: Optional[float] = None
 
 
 @dataclass
@@ -1114,7 +1161,225 @@ def _readiness(score: float) -> tuple:
 
 
 # ---------------------------------------------------------------------------
-# Per-target Riegel source selection
+# Performance Curve V2 — T(D) = A * D^k common-curve fit
+# ---------------------------------------------------------------------------
+
+
+def _fit_performance_curve_v2(
+    qualified_pool: List[Tuple[DomainActivity, "PerformanceQuality"]],
+    reference_date: date,
+) -> Optional["PerformanceCurveV2"]:
+    """Fit a common performance curve T(D) = A * D^k to the qualified pool.
+
+    All four race distance predictions are derived from this single curve.
+    This guarantees pace monotonicity because:
+        pace(D) = T(D)/D = A * D^(k-1)
+    and k >= K_MIN = 1.0 ensures pace is non-decreasing with distance.
+
+    Weighting:
+        w_i = quality_score_i * recency_weight_i
+        recency_weight_i = exp(-days_ago_i / CURVE_RECENCY_DECAY_DAYS)
+
+    Single performance (n=1): k = K_PRIOR = 1.06 (Riegel standard)
+    Multiple performances (n>=2): weighted OLS in log-space
+
+    k safety bounds: [K_MIN, K_MAX]
+        If raw OLS gives k < K_MIN (physiologically impossible; would mean pace
+        improves with distance), k is clamped to K_MIN and k_clamped=True.
+        If raw OLS gives k > K_MAX (extreme outlier), clamped to K_MAX.
+        Clamping is documented but does NOT suppress the confidence signal.
+
+    Returns None only if the pool is empty or all observations are invalid.
+    """
+    observations: list = []
+    for a, quality in qualified_pool:
+        dist_m = a.distance_m or 0.0
+        dur_s = _performance_duration_s(a) or 0.0
+        if dist_m <= 0 or dur_s <= 0:
+            continue
+        d = _activity_date(a)
+        if d is None:
+            continue
+        days = _days_ago(d, reference_date)
+        recency_w = math.exp(-days / CURVE_RECENCY_DECAY_DAYS)
+        w = (quality.score or 0.5) * recency_w
+        observations.append((dist_m, dur_s, w, quality, days))
+
+    if not observations:
+        return None
+
+    dists = [o[0] for o in observations]
+    d_min = float(min(dists))
+    d_max = float(max(dists))
+    n = len(observations)
+
+    if n == 1:
+        dist_m, dur_s, _, quality, days = observations[0]
+        k = K_PRIOR
+        a = dur_s / (dist_m ** k)
+        return PerformanceCurveV2(
+            curve_a=a,
+            curve_k=k,
+            method="single_riegel_fallback",
+            contributors_count=1,
+            observed_distance_min_m=d_min,
+            observed_distance_max_m=d_max,
+            fit_quality=None,
+            k_clamped=False,
+            single_source_quality_score=quality.score,
+            single_source_quality_confidence=quality.confidence,
+            single_source_speed_percentile=quality.personal_speed_percentile,
+            single_source_relative_hr=quality.relative_avg_hr,
+            single_source_days_ago=days,
+        )
+
+    # Multiple observations: weighted least squares in log-space
+    # y_i = log(T_i), x_i = log(D_i); fit y = b0 + k * x
+    xs = [math.log(o[0]) for o in observations]
+    ys = [math.log(o[1]) for o in observations]
+    ws = [o[2] for o in observations]
+
+    sum_w = sum(ws)
+    if sum_w < 1e-15:
+        # Degenerate weights: fall back to equal weights
+        ws = [1.0] * n
+        sum_w = float(n)
+
+    mean_x = sum(ws[i] * xs[i] for i in range(n)) / sum_w
+    mean_y = sum(ws[i] * ys[i] for i in range(n)) / sum_w
+
+    ss_xy = sum(ws[i] * (xs[i] - mean_x) * (ys[i] - mean_y) for i in range(n))
+    ss_xx = sum(ws[i] * (xs[i] - mean_x) ** 2 for i in range(n))
+    ss_yy = sum(ws[i] * (ys[i] - mean_y) ** 2 for i in range(n))
+
+    k_clamped = False
+
+    if ss_xx < 1e-12:
+        # All distances identical: cannot fit k from distances alone → use prior
+        k = K_PRIOR
+        k_clamped = True
+    else:
+        raw_k = ss_xy / ss_xx
+        if raw_k < K_MIN or raw_k > K_MAX:
+            k = _clamp(raw_k, K_MIN, K_MAX)
+            k_clamped = True
+        else:
+            k = raw_k
+
+    # Intercept: b0 = mean_y - k * mean_x
+    b0 = mean_y - k * mean_x
+    a = math.exp(b0)
+
+    # Weighted R² of the final (possibly clamped) fit
+    if ss_yy < 1e-12:
+        fit_quality = 1.0
+    else:
+        ss_res = sum(ws[i] * (ys[i] - (b0 + k * xs[i])) ** 2 for i in range(n))
+        ss_tot = ss_yy  # already computed above
+        r2 = 1.0 - ss_res / ss_tot if ss_tot > 1e-12 else 1.0
+        fit_quality = round(float(r2), 4)
+
+    return PerformanceCurveV2(
+        curve_a=a,
+        curve_k=k,
+        method="weighted_logspace_fit",
+        contributors_count=n,
+        observed_distance_min_m=d_min,
+        observed_distance_max_m=d_max,
+        fit_quality=fit_quality,
+        k_clamped=k_clamped,
+    )
+
+
+def _curve_extrapolation_ratio(
+    target_m: float,
+    obs_min_m: float,
+    obs_max_m: float,
+) -> float:
+    """Symmetric extrapolation ratio: how far is target from the observed range?
+
+    Returns a value >= 1.0.
+    - target within [obs_min, obs_max]: returns 1.0 (interpolation, no penalty)
+    - target outside: max(target/nearest_bound, nearest_bound/target) > 1.0
+
+    This is symmetric: a 5K predicting marathon and a marathon predicting 5K
+    receive the same ratio (both are symmetric extrapolations from the same bound).
+    """
+    if obs_max_m <= 0:
+        return 999.0
+    if target_m < obs_min_m:
+        return obs_min_m / target_m
+    if target_m > obs_max_m:
+        return target_m / obs_max_m
+    return 1.0
+
+
+def _curve_confidence(
+    extrapolation_ratio: float,
+    n_contributors: int,
+    fit_quality: Optional[float],
+    k_clamped: bool,
+    endurance_factor: float,
+    single_quality_score: Optional[float],
+    single_quality_confidence: str,
+    single_days_ago: Optional[int],
+    has_hr: bool,
+) -> str:
+    """Confidence for a Performance Curve V2 prediction.
+
+    Primary determinant: symmetric extrapolation ratio.
+        ratio >= CURVE_NULL_EXTRAPOLATION_RATIO: null (caller should suppress)
+        ratio in [CURVE_LOW_EXTRAPOLATION_RATIO, CURVE_NULL): low
+        ratio in [CURVE_MEDIUM_EXTRAPOLATION_RATIO, CURVE_LOW): medium
+        ratio < CURVE_MEDIUM_EXTRAPOLATION_RATIO: quality-based (see below)
+
+    Secondary (when ratio < CURVE_MEDIUM_EXTRAPOLATION_RATIO):
+        Same factors as _riegel_confidence: recency, endurance, quality.
+        A speed-only single source is capped at medium.
+    """
+    # Extrapolation dominates
+    if extrapolation_ratio >= CURVE_NULL_EXTRAPOLATION_RATIO:
+        return "null"  # caller will set predicted_time_s = None
+    if extrapolation_ratio >= CURVE_LOW_EXTRAPOLATION_RATIO:
+        return "low"
+    if extrapolation_ratio >= CURVE_MEDIUM_EXTRAPOLATION_RATIO:
+        return "medium"
+
+    # Close to observed range: quality-based confidence
+    if n_contributors >= 2:
+        # Multi-contributor curve
+        if fit_quality is not None and fit_quality >= 0.80 and not k_clamped and endurance_factor >= 0.80:
+            return "high"
+        if fit_quality is not None and fit_quality >= 0.50 and endurance_factor >= 0.65:
+            return "medium"
+        return "low"
+    else:
+        # Single contributor: reuse existing quality logic
+        if single_quality_score is None or single_quality_confidence == "insufficient":
+            return "low"
+        days = single_days_ago if single_days_ago is not None else 999
+        if days > CONFIDENCE_LOW_DAYS or endurance_factor < 0.65:
+            base = "low"
+        elif days > CONFIDENCE_MEDIUM_DAYS or endurance_factor < 0.80:
+            base = "medium"
+        else:
+            base = "high"
+        # Speed-only cap
+        if not has_hr:
+            if base == "high":
+                base = "medium"
+        # Combine with quality confidence
+        if single_quality_confidence == "low":
+            return "low" if base == "low" else "medium"
+        if base == "high" and single_quality_confidence == "high" and (single_quality_score or 0.0) >= PERFORMANCE_HIGH_CONFIDENCE_SCORE:
+            return "high"
+        if base == "high":
+            return "medium"
+        return base
+
+
+# ---------------------------------------------------------------------------
+# Per-target Riegel source selection (kept for internal diagnostics / backwards compat)
 # ---------------------------------------------------------------------------
 
 
@@ -1237,27 +1502,27 @@ def predict_races(
     reference_date: Union[date, datetime],
     user_max_hr: Optional[float] = None,
 ) -> PerformanceEstimate:
-    """Compute VMA V2 estimate and race predictions V2.
+    """Compute VMA V2 estimate and race predictions V2 with Performance Curve V2.
 
     VMA is estimated via the HR-speed model (SOURCE A is disabled).
 
-    Race predictions use only real observed activities as Riegel source.
-    A separate best source is selected per target distance.
-    No synthetic effort (20 min @ 85% VMA) is ever created.
+    Race predictions are derived from a SINGLE common performance curve
+    T(D) = A * D^k fitted to the qualified performance pool.  All four
+    distance predictions (5K / 10K / Semi / Marathon) share the same
+    A and k, guaranteeing pace monotonicity by construction:
 
-    If no defensible observed source exists for a target distance, the
-    prediction for that distance is null (predicted_time_s = None).
-    VMA and race predictions are independent: VMA can be available while
-    some or all predictions are null.
+        pace(D) = T(D)/D = A * D^(k-1)
+
+    Since k >= K_MIN = 1.0 is enforced, pace is monotonically non-decreasing
+    with distance. There is no post-hoc monotonicity patch.
+
+    If the qualified pool is empty: all predictions are null.
+    VMA and race predictions are independent.
     """
     if isinstance(reference_date, datetime):
         reference_date = reference_date.date()
 
     vma_est = estimate_vma(activities, reference_date, user_max_hr)
-
-    # VMA and predictions are INDEPENDENT.
-    # Do NOT return early when VMA is null — predictions may still exist from
-    # observed Riegel sources.
 
     # Weekly volume & long run for athlete profile
     cutoff_28 = date.fromordinal(reference_date.toordinal() - 28)
@@ -1270,19 +1535,23 @@ def predict_races(
     all_valid = [a for a in activities if _validate_activity(a, reference_date)]
     max_long_run_m = max((a.distance_m or 0) for a in all_valid) if all_valid else 0.0
 
-    predictions: List[RacePrediction] = []
     qualified_pool = _build_qualified_performance_pool(activities, reference_date, user_max_hr)
+
+    # Fit ONE common curve for all four distance predictions
+    curve = _fit_performance_curve_v2(qualified_pool, reference_date)
+
+    # Determine whether any source has HR (for speed-only cap)
+    has_hr_in_pool = any(a.average_hr is not None for a, _ in qualified_pool)
+
+    predictions: List[RacePrediction] = []
 
     for label, dist_m in RACE_DISTANCES_M.items():
         endurance = _endurance_support(activities, reference_date, dist_m)
         target_km = dist_m / 1000.0
         vol_factor = min(weekly_km / max(target_km * 0.5, 1.0), 1.0)
 
-        # Select per-target observed source — no synthetic effort
-        riegel_src = _select_riegel_source(qualified_pool, reference_date, dist_m)
-
-        if riegel_src is None:
-            # No defensible observed source for this target → null prediction
+        if curve is None:
+            # No qualified performance → null prediction
             predictions.append(RacePrediction(
                 distance_label=label,
                 distance_km=target_km,
@@ -1302,18 +1571,30 @@ def predict_races(
                 source_quality_confidence=None,
                 source_speed_percentile=None,
                 source_relative_hr=None,
+                contributors_count=0,
             ))
             continue
 
-        src_act, _src_score, src_quality = riegel_src
-        source_distance_m = src_act.distance_m or 0.0
-        source_duration_s = _performance_duration_s(src_act) or 0.0
-        source_date = _activity_date(src_act)
-        days_since_source = _days_ago(source_date, reference_date) if source_date else 999
+        # Symmetric extrapolation ratio for this target
+        ext_ratio = _curve_extrapolation_ratio(
+            dist_m, curve.observed_distance_min_m, curve.observed_distance_max_m
+        )
 
-        try:
-            raw_time_s = _riegel(source_duration_s, source_distance_m, dist_m)
-        except (ValueError, ZeroDivisionError):
+        # Confidence (may return "null" → suppress prediction)
+        conf = _curve_confidence(
+            extrapolation_ratio=ext_ratio,
+            n_contributors=curve.contributors_count,
+            fit_quality=curve.fit_quality,
+            k_clamped=curve.k_clamped,
+            endurance_factor=endurance,
+            single_quality_score=curve.single_source_quality_score,
+            single_quality_confidence=curve.single_source_quality_confidence or "insufficient",
+            single_days_ago=curve.single_source_days_ago,
+            has_hr=has_hr_in_pool,
+        )
+
+        if conf == "null":
+            # Excessive extrapolation: prefer null to false precision
             predictions.append(RacePrediction(
                 distance_label=label,
                 distance_km=target_km,
@@ -1327,31 +1608,48 @@ def predict_races(
                 readiness_score=0,
                 endurance_factor=round(endurance * 100),
                 volume_factor=round(vol_factor * 100),
-                source_distance_m=source_distance_m,
-                source_type="observed_activity",
-                source_quality_score=src_quality.score,
-                source_quality_confidence=src_quality.confidence,
-                source_speed_percentile=src_quality.personal_speed_percentile,
-                source_relative_hr=src_quality.relative_avg_hr,
+                source_distance_m=None,
+                source_type="performance_curve_v2",
+                source_quality_score=curve.single_source_quality_score,
+                source_quality_confidence=curve.single_source_quality_confidence,
+                source_speed_percentile=curve.single_source_speed_percentile,
+                source_relative_hr=curve.single_source_relative_hr,
+                curve_k=round(curve.curve_k, 6),
+                curve_a=curve.curve_a,
+                curve_method=curve.method,
+                curve_extrapolation_ratio=round(ext_ratio, 4),
+                contributors_count=curve.contributors_count,
+                observed_distance_min_m=curve.observed_distance_min_m,
+                observed_distance_max_m=curve.observed_distance_max_m,
+                curve_fit_quality=curve.fit_quality,
             ))
             continue
 
+        # Raw prediction from the common curve: T(D) = A * D^k
+        raw_time_s = curve.curve_a * (dist_m ** curve.curve_k)
+
+        # Endurance penalty (current training state readiness for distance > 10km)
+        # _endurance_support returns 1.0 for D <= 10km so no penalty there.
+        # For longer distances this reflects whether the runner's training state
+        # supports that distance today. This is separate from k in the curve.
         endurance_penalty = 1.0 + (1.0 - endurance) * 0.4
         adjusted_time_s = raw_time_s * endurance_penalty
 
         readiness_score_raw = endurance * 0.6 + vol_factor * 0.4
         r_key, r_label, r_color = _readiness(readiness_score_raw)
 
-        conf = _riegel_confidence(
-            source_distance_m, dist_m, days_since_source, endurance,
-            performance_quality_score=src_quality.score,
-            performance_quality_confidence=src_quality.confidence,
-        )
+        # Backwards-compatible source fields: expose single contributor info when available
+        if curve.contributors_count == 1:
+            src_dist = curve.observed_distance_min_m  # == max for n=1
+            src_type = "observed_activity"
+        else:
+            src_dist = None
+            src_type = "performance_curve_v2"
 
         predictions.append(RacePrediction(
             distance_label=label,
             distance_km=target_km,
-            predicted_time_s=round(adjusted_time_s, 1),
+            predicted_time_s=adjusted_time_s,   # raw float — rounding only in display strings
             predicted_time_str=_seconds_to_str(adjusted_time_s),
             predicted_pace_str=_pace_str(adjusted_time_s, dist_m),
             confidence=conf,
@@ -1361,12 +1659,20 @@ def predict_races(
             readiness_score=round(readiness_score_raw * 100),
             endurance_factor=round(endurance * 100),
             volume_factor=round(vol_factor * 100),
-            source_distance_m=source_distance_m,
-            source_type="observed_activity",
-            source_quality_score=src_quality.score,
-            source_quality_confidence=src_quality.confidence,
-            source_speed_percentile=src_quality.personal_speed_percentile,
-            source_relative_hr=src_quality.relative_avg_hr,
+            source_distance_m=src_dist,
+            source_type=src_type,
+            source_quality_score=curve.single_source_quality_score,
+            source_quality_confidence=curve.single_source_quality_confidence,
+            source_speed_percentile=curve.single_source_speed_percentile,
+            source_relative_hr=curve.single_source_relative_hr,
+            curve_k=round(curve.curve_k, 6),
+            curve_a=curve.curve_a,
+            curve_method=curve.method,
+            curve_extrapolation_ratio=round(ext_ratio, 4),
+            contributors_count=curve.contributors_count,
+            observed_distance_min_m=curve.observed_distance_min_m,
+            observed_distance_max_m=curve.observed_distance_max_m,
+            curve_fit_quality=curve.fit_quality,
         ))
 
     vo2max_estimated: Optional[float] = None
@@ -1409,3 +1715,6 @@ performance_duration_s = _performance_duration_s
 activities_in_vma_window = _activities_in_vma_window
 is_road_comparable = _is_road_comparable
 personal_speed_percentile_90d = _personal_speed_percentile_90d
+fit_performance_curve_v2 = _fit_performance_curve_v2
+curve_extrapolation_ratio = _curve_extrapolation_ratio
+build_qualified_performance_pool = _build_qualified_performance_pool
