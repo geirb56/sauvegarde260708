@@ -582,8 +582,12 @@ def test_x_same_curve_geometry_with_stronger_evidence_has_higher_confidence():
     strong_curve = pm._build_performance_curve(strong_pool, TODAY)
     weak_curve = pm._build_performance_curve(weak_pool, TODAY)
     assert strong_curve is not None and weak_curve is not None
-    assert strong_curve.k == pytest.approx(weak_curve.k, rel=1e-9)
-    assert strong_curve.a == pytest.approx(weak_curve.a, rel=1e-9)
+    # PR #190: weak_pool (all low-confidence) triggers prior_k_low_identifiability_fallback
+    # → weak_curve.k = 1.06 exactly.  strong_pool is identifiable → k learned from data ≈ 1.06.
+    # Both must be approximately equal to 1.06; tight exact equality is no longer expected.
+    assert strong_curve.k == pytest.approx(1.06, abs=0.005)
+    assert weak_curve.k == pytest.approx(1.06, abs=1e-9)     # prior k, exact
+    assert strong_curve.a == pytest.approx(weak_curve.a, rel=1e-3)
 
     strong_conf = pm._curve_prediction_confidence(strong_curve, extrapolation_ratio=1.0)
     weak_conf = pm._curve_prediction_confidence(weak_curve, extrapolation_ratio=1.0)
