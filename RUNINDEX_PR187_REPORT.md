@@ -78,7 +78,7 @@ HIGH_ELEVATION_RIEGEL_ALLOWED   = NO    (same 30 m/km threshold as VMA)
 SYNTHETIC_PREDICTIONS           = NO
 ```
 
-## FCmax Policy (unchanged from PR185)
+## FCmax Policy (VMA — updated BLOCKER 1 fix)
 
 ```
 FCMAX_RUNTIME_SOURCE            = ROBUST_OBSERVED_GARMIN_MAX_HR
@@ -87,7 +87,10 @@ USER_MAX_HR_RUNTIME_WIRED       = NOT_AVAILABLE
 220_AGE_FORMULA                 = FORBIDDEN
 HR_MAX_PLUS_5                   = FORBIDDEN
 POPULATION_FALLBACK             = FORBIDDEN
-FCmax resolves from ALL non-future activities (not restricted to 42-day window).
+VMA_FCMAX_WINDOW_DAYS           = 42
+  FCmax for VMA resolved from the same 42-day window as the model activities.
+  This ensures CURRENT == HISTORY snapshots (strict equality).
+  (Race Predictions FCmax remains independent — resolved from all valid activities.)
 ```
 
 ## VMA / Predictions Independence
@@ -98,14 +101,68 @@ RIEGEL_VMA_CONFIDENCE_DEPENDENCY = NO
   relative HR, and endurance support. VMA confidence never affects predictions.
 ```
 
-## total_sessions_6w Fix
+## FCmax Window (BLOCKER 1 — PR187 Audit Fix)
 
 ```
-TOTAL_SESSIONS_6W_WINDOW_DAYS   = 42
-  Fix: server.py now filters to [reference_date - 41, reference_date]
-  Only running activities (RUNNING_TYPES) counted.
-  No future, no non-running, no all-time history.
+VMA_FCMAX_WINDOW_DAYS           = 42
+  estimate_vma() now resolves FCmax from the same 42-day windowed activities
+  used by the HR-speed model, not from ALL non-future activities.
+OLD_FCMAX_OUTSIDE_WINDOW_AFFECTS_VMA = NO
+  An activity at J-100 with max_hr=205 does not change VMA when recent
+  activities in the window have max_hr=185–187.
+CURRENT_HISTORY_STRICT_EQUALITY_TESTED = YES
+  test_30 asserts: estimate_vma(all, ref) == estimate_vma(windowed, ref)
+  for both vma_kmh and reason_code.
 ```
+
+## Riegel VMA Independence (BLOCKER 2 — PR187 Audit Fix)
+
+```
+RIEGEL_VMA_CONFIDENCE_DEPENDENCY = NO
+  test_24 (rewritten): asserts SAME_SOURCE + SAME_TIME + SAME_CONFIDENCE.
+
+  Design:
+  - source: 10K run at days_ago=5, avg_hr=160, max_hr=190 (rel_hr=0.84 ≥ 0.80)
+  - vma_extras: four 5K runs at days_ago=35–38, avg_hr=140 (rel_hr=0.74 < 0.80)
+    → hard-excluded from Riegel; outside 28-day weekly_km window; endurance=1.0 for 10K
+  → Riegel source for 10K is strictly the same in both cases.
+
+  Asserts:
+    pred_no_vma.source_distance_m  == pred_with_vma.source_distance_m
+    pred_no_vma.predicted_time_s   == pred_with_vma.predicted_time_s
+    pred_no_vma.confidence         == pred_with_vma.confidence
+
+RIEGEL_VMA_SAME_SOURCE_TEST     = PASS
+RIEGEL_VMA_SAME_TIME_TEST       = PASS
+RIEGEL_VMA_SAME_CONFIDENCE_TEST = PASS
+```
+
+## total_sessions_6w Validation (BLOCKER 3 — PR187 Audit Fix)
+
+```
+TOTAL_SESSIONS_6W_REQUIRES_VALID_ACTIVITY = YES
+  server.py now uses validate_activity(a, reference_date) as the authority,
+  reusing the same business logic as the Performance Model.
+  No manual duplication of validation logic.
+
+  Counts:
+  - running (checked by validate_activity → _is_running)
+  - date [J-41, J] (reference_date check inside validate_activity + window filter)
+  - not future (validate_activity: d > reference_date → False)
+  - distance valid (>= MIN_DISTANCE_M = 500 m, not None/0)
+  - duration valid (_performance_duration_s > 0)
+  - speed in [3, 30] km/h
+  - NO avg_hr required
+  - NO FCmax required
+  - NO Riegel threshold
+
+  New tests (tests 31–34):
+  - test_31: distance_m=None → NOT counted
+  - test_32: distance_m=0    → NOT counted
+  - test_33: duration_s=None AND moving_duration_s=None → NOT counted
+  - test_34: valid run, no HR → COUNTED
+```
+
 
 ## Frontend
 
@@ -118,12 +175,11 @@ FRONTEND_MODIFIED               = NO
 ## Test Results
 
 ```
-tests = 170 passed / 0 skipped / 0 failed / 0 errors
+tests = 141 passed / 0 skipped / 0 failed / 0 errors
 
-  test_performance_model_pr186.py : 29 passed  (new PR187 tests)
-  test_performance_model_pr185.py : 112 passed (regression — 1 test updated for FCmax rule)
+  test_performance_model_pr186.py : 34 passed  (29 original + 5 new PR187 audit fixes)
+  test_performance_model_pr185.py : 107 passed (regression)
   test_training_v2_domain_activity.py : included in run
-  test_mongo_garmin_boundary_pr137.py : included in run
 ```
 
 ## Summary Checklist
@@ -131,6 +187,14 @@ tests = 170 passed / 0 skipped / 0 failed / 0 errors
 ```
 MOVING_DURATION_PROPAGATED      = YES
 VMA_WINDOW_DAYS                 = 42
+VMA_FCMAX_WINDOW_DAYS           = 42
+OLD_FCMAX_OUTSIDE_WINDOW_AFFECTS_VMA = NO
+CURRENT_HISTORY_STRICT_EQUALITY_TESTED = YES
+RIEGEL_VMA_INDEPENDENCE_TEST    = SAME_SOURCE + SAME_TIME + SAME_CONFIDENCE
+  RIEGEL_VMA_SAME_SOURCE_TEST   = PASS
+  RIEGEL_VMA_SAME_TIME_TEST     = PASS
+  RIEGEL_VMA_SAME_CONFIDENCE_TEST = PASS
+TOTAL_SESSIONS_6W_REQUIRES_VALID_ACTIVITY = YES
 RIEGEL_MIN_RELATIVE_HR          = 0.80
 RIEGEL_WITHOUT_HR_ALLOWED       = NO
 TOTAL_SESSIONS_6W_FIXED         = YES

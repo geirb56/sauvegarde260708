@@ -672,8 +672,10 @@ def estimate_vma(
     The model is fitted on activities within the VMA_WINDOW_DAYS (42-day) rolling
     window ending at reference_date.  No look-ahead; no fallback to older data.
 
-    FCmax is resolved from ALL non-future activities (not restricted to the window)
-    to maximise outlier protection.
+    FCmax is resolved from the same 42-day window as the model activities.
+    This ensures that estimate_vma(all_activities, ref) ==
+    estimate_vma(_activities_in_vma_window(all_activities, ref), ref),
+    making CURRENT and HISTORY snapshots strictly identical.
 
     Returns VMAEstimate(vma_kmh=None) when the model yields insufficient data.
 
@@ -685,8 +687,11 @@ def estimate_vma(
     # Apply 42-day VMA window for model fitting
     windowed = _activities_in_vma_window(activities, reference_date)
 
-    # FCmax from ALL non-future activities (no window restriction)
-    fcmax = _resolve_fcmax(activities, user_max_hr, reference_date)
+    # FCmax resolved from the same 42-day window used for the model.
+    # Using the identical window for both ensures CURRENT == HISTORY snapshots
+    # are strictly deterministic: an activity outside the window cannot influence
+    # the FCmax used by the extrapolation step.
+    fcmax = _resolve_fcmax(windowed, user_max_hr, reference_date)
 
     # --- Source A: DISABLED ---
     # SOURCE_A_DISABLED = True: no Garmin field identifies explicit performances.
