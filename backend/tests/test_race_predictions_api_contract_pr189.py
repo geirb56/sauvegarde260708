@@ -36,3 +36,16 @@ def test_pr189_server_route_contains_curve_level_diagnostics_contract_fields():
         '"effective_contributors": curve_diag.get("effective_contributors")',
     ]:
         assert key in code
+
+
+def test_pr192_server_route_contains_slope_evidence_diagnostics_fields():
+    """PR #192 — slope_evidence fields must be propagated in race_curve_diagnostics."""
+    code = SERVER_PATH.read_text(encoding="utf-8")
+    for key in [
+        '"slope_evidence_count": curve_diag.get("slope_evidence_count")',
+        '"slope_evidence_distance_min": curve_diag.get("slope_evidence_distance_min")',
+        '"slope_evidence_distance_max": curve_diag.get("slope_evidence_distance_max")',
+        '"slope_evidence_distance_min_km": curve_diag.get("slope_evidence_distance_min_km")',
+        '"slope_evidence_distance_max_km": curve_diag.get("slope_evidence_distance_max_km")',
+    ]:
+        assert key in code, f"Missing slope_evidence propagation in server.py: {key}"
