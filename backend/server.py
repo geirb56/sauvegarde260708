@@ -4057,7 +4057,7 @@ async def get_race_predictions(user: dict = Depends(auth_user)):
         "predictions": predictions_out,
         "methodology": {
             "vma_calculation": "Individual HR-speed model (speed = a * HR + b). Built from >= 4 clean running activities with sufficient HR range (>= 20 bpm, >= 3 distinct HR levels). R\u00b2 >= 0.30 required. FCmax from highest credible observed Garmin max HR only (150\u2013230 bpm; no user profile, no population fallback, no formula). Extrapolation to 95% FCmax. No avg_speed/0.70 fallback.",
-            "prediction_model": "Riegel T2 = T1 x (D2/D1)^1.06 from observed activity only (no synthetic source). Best defensible observed activity selected independently per target distance (5K, 10K, Semi, Marathon). Endurance support adjustment applied. No VMA required for predictions.",
+            "prediction_model": "Performance Curve V2 from qualified observed performances only (no synthetic source): log(T)=log(A)+k·log(D), with single-performance fallback to Riegel k=1.06. The same curve serves 5K/10K/Semi/Marathon; confidence reflects symmetric extrapolation and fit quality. No VMA required for predictions.",
             "vo2max_formula": "VO2MAX (ml/kg/min) approx VMA (km/h) x 3.5 — derived estimate only, not a lab measurement.",
             "model_version": "v2",
         },
