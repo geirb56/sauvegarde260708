@@ -4046,6 +4046,8 @@ async def get_race_predictions(user: dict = Depends(auth_user)):
                 a for a in domain_activities
                 if a.activity_type
                 and a.activity_type.strip().lower().replace(" ", "_") in RUNNING_TYPES
+                and (activity_date(a) or date.min) >= (reference_date - timedelta(days=41))
+                and (activity_date(a) or date.max) <= reference_date
             ]),
             "calculation_window": "garmin_activities",
             "model_version": "v2",

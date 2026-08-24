@@ -24,6 +24,7 @@ class DomainActivity(BaseModel):
     average_hr: Optional[float] = None
     max_hr: Optional[float] = None
     elevation_gain_m: Optional[float] = None
+    moving_duration_s: Optional[float] = None
 
 
 def _domain_start_time(value: Any) -> Optional[Union[str, date, datetime]]:
@@ -72,6 +73,7 @@ def to_domain_activity(activity: Any) -> DomainActivity:
         avg_hr = activity.get('average_hr')
         max_hr = activity.get('max_hr')
         elev_gain = activity.get('elevation_gain_m')
+        moving_dur = activity.get('moving_duration_s')
     else:
         act_type = getattr(activity, 'activity_type', None)
         start = getattr(activity, 'start_time', None)
@@ -88,6 +90,7 @@ def to_domain_activity(activity: Any) -> DomainActivity:
         avg_hr = getattr(activity, 'average_hr', None)
         max_hr = getattr(activity, 'max_hr', None)
         elev_gain = getattr(activity, 'elevation_gain_m', None)
+        moving_dur = getattr(activity, 'moving_duration_s', None)
 
     def _hr(v: Any) -> Optional[float]:
         if isinstance(v, bool) or not isinstance(v, (int, float)):
@@ -112,4 +115,5 @@ def to_domain_activity(activity: Any) -> DomainActivity:
         average_hr=_hr(avg_hr),
         max_hr=_hr(max_hr),
         elevation_gain_m=_elev(elev_gain),
+        moving_duration_s=moving_dur if isinstance(moving_dur, (int, float)) and not isinstance(moving_dur, bool) and moving_dur > 0 else None,
     )
