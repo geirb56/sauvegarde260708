@@ -3968,7 +3968,12 @@ async def get_race_predictions(user: dict = Depends(auth_user)):
     No db.workouts. No avg_speed/0.70 fallback. Riegel extrapolation.
     Frontend contract preserved (has_data, predictions[], athlete_profile).
     """
-    from training_v2.performance_model import RUNNING_TYPES, seconds_to_str, validate_activity
+    from training_v2.performance_model import (
+        CURVE_NULL_CONFIDENCE_EXTRAPOLATION_RATIO,
+        RUNNING_TYPES,
+        seconds_to_str,
+        validate_activity,
+    )
     user_id = user["id"]
     reference_date = datetime.now(timezone.utc).date()
 
@@ -4022,11 +4027,21 @@ async def get_race_predictions(user: dict = Depends(auth_user)):
             "source_quality_confidence": pred.source_quality_confidence,
             "source_speed_percentile": pred.source_speed_percentile,
             "source_relative_hr": pred.source_relative_hr,
+            "predicted_time_s": pred.predicted_time_s,
+            "extrapolation_ratio": pred.extrapolation_ratio,
+            "is_strong_extrapolation": (
+                pred.extrapolation_ratio is not None
+                and pred.extrapolation_ratio > CURVE_NULL_CONFIDENCE_EXTRAPOLATION_RATIO
+            ),
+            "curve_method": pred.curve_method,
+            "curve_k": pred.curve_k,
+            "contributors_count": pred.contributors_count,
             "model_version": "v2",
         }
         predictions_out.append(entry)
 
     ap = result.athlete_profile
+    curve_diag = result.race_curve_diagnostics or {}
     return {
         "has_data": True,
         "athlete_profile": {
@@ -4055,9 +4070,33 @@ async def get_race_predictions(user: dict = Depends(auth_user)):
             "model_version": "v2",
         },
         "predictions": predictions_out,
+        "race_curve_diagnostics": {
+            "curve_method": curve_diag.get("curve_method"),
+            "curve_a": curve_diag.get("curve_a"),
+            "curve_k": curve_diag.get("curve_k"),
+            "curve_k_raw": curve_diag.get("curve_k_raw"),
+            "curve_k_prior": curve_diag.get("curve_k_prior"),
+            "curve_k_min": curve_diag.get("curve_k_min"),
+            "curve_k_max": curve_diag.get("curve_k_max"),
+            "contributors_count": curve_diag.get("contributors_count"),
+            "qualified_performance_count": curve_diag.get("qualified_performance_count"),
+            "observed_distance_min": curve_diag.get("observed_distance_min"),
+            "observed_distance_max": curve_diag.get("observed_distance_max"),
+            "observed_distance_min_km": curve_diag.get("observed_distance_min_km"),
+            "observed_distance_max_km": curve_diag.get("observed_distance_max_km"),
+            "fit_quality": curve_diag.get("fit_quality"),
+            "k_conflict": curve_diag.get("k_conflict"),
+            "k_fallback_applied": curve_diag.get("k_fallback_applied"),
+            "weighted_recency": curve_diag.get("weighted_recency"),
+            "weighted_quality_confidence": curve_diag.get("weighted_quality_confidence"),
+            "weighted_quality_score": curve_diag.get("weighted_quality_score"),
+            "effective_contributors": curve_diag.get("effective_contributors"),
+            "two_point_evidence_strength": curve_diag.get("two_point_evidence_strength"),
+            "contributors": curve_diag.get("contributors", []),
+        },
         "methodology": {
             "vma_calculation": "Individual HR-speed model (speed = a * HR + b). Built from >= 4 clean running activities with sufficient HR range (>= 20 bpm, >= 3 distinct HR levels). R\u00b2 >= 0.30 required. FCmax from highest credible observed Garmin max HR only (150\u2013230 bpm; no user profile, no population fallback, no formula). Extrapolation to 95% FCmax. No avg_speed/0.70 fallback.",
-            "prediction_model": "Riegel T2 = T1 x (D2/D1)^1.06 from observed activity only (no synthetic source). Best defensible observed activity selected independently per target distance (5K, 10K, Semi, Marathon). Endurance support adjustment applied. No VMA required for predictions.",
+            "prediction_model": "Race predictions use Performance Curve V2 from #188-qualified observed performances only (no synthetic source): log(T)=log(A)+k·log(D), with single-performance fallback to Riegel k=1.06. Exactly two observations use deterministic shrinkage toward k=1.06 based on evidence strength. For >=3 observations, robust Huber reweighting is followed by a final refit on final weights. If k is outside RunIndex guardrails [1.0, 1.25], fallback k=1.06 is applied and A is re-estimated with fixed slope and weighted intercept. Extrapolation uses symmetric ratio max(target/obs, obs/target) with RunIndex policy thresholds 4.5 (very uncertain) and 6.0 (null prediction). VMA output and estimated VO2max are not used to compute race times; #188 qualification may depend on FCmax through relative HR.",
             "vo2max_formula": "VO2MAX (ml/kg/min) approx VMA (km/h) x 3.5 — derived estimate only, not a lab measurement.",
             "model_version": "v2",
         },
