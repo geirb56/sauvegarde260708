@@ -142,6 +142,8 @@ MIN_SPEED_BENCHMARK_RUNS: int = 5
 PERFORMANCE_HR_WEIGHT: float = 0.55
 PERFORMANCE_SPEED_WEIGHT: float = 0.45
 PERFORMANCE_SCORE_THRESHOLD: float = 0.65
+PERFORMANCE_HR_COMPONENT_FLOOR: float = 0.75
+PERFORMANCE_HR_COMPONENT_CEILING: float = 0.90
 PERFORMANCE_MIN_RELATIVE_HR: float = 0.80
 PERFORMANCE_MIN_SPEED_PERCENTILE_WITH_HR: float = 70.0
 PERFORMANCE_NO_HR_MIN_SPEED_PERCENTILE: float = 90.0
@@ -745,7 +747,8 @@ def evaluate_performance_quality(
         )
 
     hr_component = _clamp(
-        (relative_avg_hr - 0.75) / (0.90 - 0.75),
+        (relative_avg_hr - PERFORMANCE_HR_COMPONENT_FLOOR)
+        / (PERFORMANCE_HR_COMPONENT_CEILING - PERFORMANCE_HR_COMPONENT_FLOOR),
         0.0,
         1.0,
     )
@@ -1099,7 +1102,12 @@ def _readiness(score: float) -> tuple:
 # ---------------------------------------------------------------------------
 
 
-def _score_riegel_candidate(a: DomainActivity, *args, **kwargs) -> float:
+def _score_riegel_candidate(
+    a: DomainActivity,
+    target_distance_m: float,
+    reference_date: date,
+    quality: PerformanceQuality,
+) -> float:
     """Score an activity as a Riegel road-prediction source for a given target.
 
     Returns a score in [0, 1].  Higher = more informative for this target.
@@ -1115,48 +1123,7 @@ def _score_riegel_candidate(a: DomainActivity, *args, **kwargs) -> float:
       recency    0.20  — how recent the activity is
       quality    0.30  — how strong the qualified effort is
     """
-    quality: Optional[PerformanceQuality] = None
-    target_distance_m: Optional[float] = None
-    reference_date: Optional[date] = None
-    fcmax: Optional[float] = kwargs.get("fcmax")
-
-    if args and isinstance(args[0], PerformanceQuality):
-        quality = args[0]
-        target_distance_m = args[1] if len(args) > 1 else kwargs.get("target_distance_m")
-        reference_date = args[2] if len(args) > 2 else kwargs.get("reference_date")
-    else:
-        target_distance_m = args[0] if len(args) > 0 else kwargs.get("target_distance_m")
-        reference_date = args[1] if len(args) > 1 else kwargs.get("reference_date")
-        if len(args) > 2:
-            fcmax = args[2]
-
-    if quality is not None:
-        if target_distance_m is None or reference_date is None:
-            return 0.0
-    else:
-        if target_distance_m is None or reference_date is None:
-            return 0.0
-        if not _is_road_comparable(a, reference_date):
-            return 0.0
-        if a.average_hr is None or fcmax is None or fcmax <= 0:
-            return 0.0
-        relative_avg_hr = round(a.average_hr / fcmax, 4)
-        if relative_avg_hr < PERFORMANCE_MIN_RELATIVE_HR:
-            return 0.0
-        quality = PerformanceQuality(
-            qualified=True,
-            score=round(_clamp(relative_avg_hr, 0.0, 1.0), 4),
-            confidence="high" if relative_avg_hr >= PERFORMANCE_HIGH_CONFIDENCE_RELATIVE_HR else "medium",
-            personal_speed_percentile=None,
-            benchmark_count=0,
-            relative_avg_hr=relative_avg_hr,
-            historical_fcmax=fcmax,
-            reason_code=REASON_PERF_QUALIFIED_HR_SPEED,
-        )
-
     if not quality.qualified or quality.score is None:
-        return 0.0
-    if reference_date is None or target_distance_m is None:
         return 0.0
     if not _is_road_comparable(a, reference_date):
         return 0.0
@@ -1227,7 +1194,12 @@ def _select_riegel_source(
     best_act: Optional[DomainActivity] = None
     best_quality: Optional[PerformanceQuality] = None
     for a, quality in qualified_pool:
-        s = _score_riegel_candidate(a, quality, target_distance_m, reference_date)
+        s = _score_riegel_candidate(
+            a,
+            target_distance_m,
+            reference_date,
+            quality=quality,
+        )
         if s > best_score:
             best_score = s
             best_act = a

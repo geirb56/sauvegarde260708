@@ -43,6 +43,7 @@ from training_v2.performance_model import (
     _resolve_fcmax_robust,
     _riegel,
     _score_riegel_candidate,
+    evaluate_performance_quality,
     estimate_vma,
     predict_races,
 )
@@ -99,6 +100,17 @@ def _speed_benchmark_runs() -> List[DomainActivity]:
         _run(11_000.0, 4_300.0, days_ago=50, avg_hr=145.0, max_hr=175.0),
         _run(12_000.0, 4_700.0, days_ago=40, avg_hr=150.0, max_hr=178.0),
         _run(10_000.0, 3_000.0, days_ago=30, avg_hr=155.0, max_hr=182.0),
+    ]
+
+
+def _slow_qualification_benchmark_runs() -> List[DomainActivity]:
+    return [
+        _run(8_000.0, 3_600.0, days_ago=80, avg_hr=120.0, max_hr=180.0),
+        _run(9_000.0, 4_000.0, days_ago=70, avg_hr=125.0, max_hr=182.0),
+        _run(10_000.0, 4_500.0, days_ago=60, avg_hr=130.0, max_hr=184.0),
+        _run(11_000.0, 4_900.0, days_ago=50, avg_hr=135.0, max_hr=186.0),
+        _run(12_000.0, 5_400.0, days_ago=40, avg_hr=140.0, max_hr=188.0),
+        _run(13_000.0, 5_800.0, days_ago=30, avg_hr=145.0, max_hr=190.0),
     ]
 
 
@@ -728,25 +740,27 @@ def test_linear_regression_no_correlation():
 # ---------------------------------------------------------------------------
 
 def test_new_t1_easy_run_not_riegel_source_when_hr_available():
-    """An easy run (relative_hr = 0.65 < 0.75) is not a valid Riegel source when HR available."""
-    from training_v2.performance_model import _score_riegel_candidate
+    """An easy run is not a valid Riegel source under PR188 qualification."""
     easy = _run(
         distance_m=10_000.0, duration_s=3_600.0,  # ~10 km/h
         days_ago=5, avg_hr=130.0,  # avg_hr / fcmax = 130/200 = 0.65
     )
-    score = _score_riegel_candidate(easy, 10_000.0, TODAY, fcmax=200.0)
-    assert score == 0.0, "Easy run (rel_hr < 0.75) must not be a Riegel source"
+    activities = _slow_qualification_benchmark_runs() + [easy]
+    quality = evaluate_performance_quality(easy, activities, TODAY)
+    score = _score_riegel_candidate(easy, 10_000.0, TODAY, quality=quality)
+    assert score == 0.0, "Easy run must not be a Riegel source"
 
 
 def test_new_t2_sustained_run_is_riegel_source_candidate():
-    """A sustained run (relative_hr = 0.88 >= 0.75) is eligible as Riegel source."""
-    from training_v2.performance_model import _score_riegel_candidate
+    """A strong qualified run remains eligible as a Riegel source."""
     hard = _run(
-        distance_m=10_000.0, duration_s=3_600.0,  # ~10 km/h
+        distance_m=10_000.0, duration_s=2_800.0,
         days_ago=5, avg_hr=176.0,  # avg_hr / fcmax = 176/200 = 0.88
     )
-    score = _score_riegel_candidate(hard, 10_000.0, TODAY, fcmax=200.0)
-    assert score > 0.0, "Sustained run (rel_hr >= 0.75) should be eligible as Riegel source"
+    activities = _slow_qualification_benchmark_runs() + [hard]
+    quality = evaluate_performance_quality(hard, activities, TODAY)
+    score = _score_riegel_candidate(hard, 10_000.0, TODAY, quality=quality)
+    assert score > 0.0, "Strong qualified run should be eligible as a Riegel source"
 
 
 # ---------------------------------------------------------------------------
@@ -1391,30 +1405,35 @@ def test_h_fcmax_no_lookahead():
 def test_a1_easy_run_not_riegel_source():
     """Easy run (relative_hr < 0.75 when FCmax known) must score 0 — not a Riegel source."""
     easy = _run(10_000.0, 3_600.0, days_ago=5, avg_hr=130.0)  # rel_hr = 130/200 = 0.65
-    s = _score_riegel_candidate(easy, 10_000.0, TODAY, fcmax=200.0)
+    quality = evaluate_performance_quality(easy, _slow_qualification_benchmark_runs() + [easy], TODAY)
+    s = _score_riegel_candidate(easy, 10_000.0, TODAY, quality=quality)
     assert s == 0.0, "Easy run (rel_hr=0.65 < 0.75) must not score as Riegel source"
 
 
 def test_a2_sustained_run_is_eligible():
     """Sustained run (relative_hr >= 0.75) is eligible as Riegel source."""
-    hard = _run(10_000.0, 3_600.0, days_ago=5, avg_hr=170.0)  # rel_hr = 170/200 = 0.85
-    s = _score_riegel_candidate(hard, 10_000.0, TODAY, fcmax=200.0)
+    hard = _run(10_000.0, 2_800.0, days_ago=5, avg_hr=170.0)  # rel_hr = 170/200 = 0.85
+    quality = evaluate_performance_quality(hard, _slow_qualification_benchmark_runs() + [hard], TODAY)
+    s = _score_riegel_candidate(hard, 10_000.0, TODAY, quality=quality)
     assert s > 0.0, "Sustained run should score > 0 as Riegel source"
 
 
 def test_a3_easy_run_exact_target_distance_rejected():
     """An easy run exactly at target distance (relative_hr=0.65) must not become source."""
     easy = _run(10_000.0, 4_320.0, days_ago=3, avg_hr=130.0)  # rel_hr = 130/200 = 0.65
-    s = _score_riegel_candidate(easy, 10_000.0, TODAY, fcmax=200.0)
+    quality = evaluate_performance_quality(easy, _slow_qualification_benchmark_runs() + [easy], TODAY)
+    s = _score_riegel_candidate(easy, 10_000.0, TODAY, quality=quality)
     assert s == 0.0
 
 
 def test_a4_less_close_but_sustained_can_beat_easy_exact_distance():
     """A sustained run slightly off-distance beats easy run exactly at target."""
     easy_exact = _run(10_000.0, 3_600.0, days_ago=5, avg_hr=130.0)  # rel_hr = 0.65
-    hard_semi = _run(12_000.0, 3_600.0, days_ago=5, avg_hr=175.0)   # rel_hr = 0.875
-    s_easy = _score_riegel_candidate(easy_exact, 10_000.0, TODAY, fcmax=200.0)
-    s_hard = _score_riegel_candidate(hard_semi, 10_000.0, TODAY, fcmax=200.0)
+    hard_semi = _run(12_000.0, 3_200.0, days_ago=5, avg_hr=175.0)   # rel_hr = 0.875
+    easy_quality = evaluate_performance_quality(easy_exact, _slow_qualification_benchmark_runs() + [easy_exact], TODAY)
+    hard_quality = evaluate_performance_quality(hard_semi, _slow_qualification_benchmark_runs() + [hard_semi], TODAY)
+    s_easy = _score_riegel_candidate(easy_exact, 10_000.0, TODAY, quality=easy_quality)
+    s_hard = _score_riegel_candidate(hard_semi, 10_000.0, TODAY, quality=hard_quality)
     assert s_easy == 0.0
     assert s_hard > 0.0
 
@@ -1422,7 +1441,8 @@ def test_a4_less_close_but_sustained_can_beat_easy_exact_distance():
 def test_a5_trail_not_road_riegel_source():
     """trail_running activity must never score as a road prediction source."""
     trail = _run(10_000.0, 3_600.0, days_ago=5, avg_hr=175.0, activity_type="trail_running")
-    s = _score_riegel_candidate(trail, 10_000.0, TODAY, fcmax=200.0)
+    quality = evaluate_performance_quality(trail, _slow_qualification_benchmark_runs() + [trail], TODAY)
+    s = _score_riegel_candidate(trail, 10_000.0, TODAY, quality=quality)
     assert s == 0.0, "trail_running must not be eligible as road Riegel source"
 
 
@@ -1431,7 +1451,8 @@ def test_a6_high_elevation_per_km_not_road_source():
     from training_v2.performance_model import MAX_ROAD_ELEVATION_GAIN_PER_KM
     # 400 m gain over 10 km = 40 m/km > 30 threshold
     hilly = _run(10_000.0, 3_600.0, days_ago=5, avg_hr=175.0, elevation_gain_m=400.0)
-    s = _score_riegel_candidate(hilly, 10_000.0, TODAY, fcmax=200.0)
+    quality = evaluate_performance_quality(hilly, _slow_qualification_benchmark_runs() + [hilly], TODAY)
+    s = _score_riegel_candidate(hilly, 10_000.0, TODAY, quality=quality)
     assert s == 0.0, "Heavily hilly run (40 m/km) must not be road Riegel source"
 
 
@@ -1515,7 +1536,7 @@ def test_b6_future_high_hr_no_effect_on_snapshot_fcmax():
 # ===========================================================================
 
 def _make_good_riegel_activities(fcmax: float = 190.0) -> list:
-    """5 activities giving a good HR model + a strong Riegel source."""
+    """Five HR-rich runs for the model; PR188 benchmark history is supplied separately."""
     return [
         _run(8_000.0,  3_600.0, days_ago=5,  avg_hr=130.0, max_hr=138.0),
         _run(10_000.0, 3_600.0, days_ago=10, avg_hr=145.0, max_hr=153.0),
