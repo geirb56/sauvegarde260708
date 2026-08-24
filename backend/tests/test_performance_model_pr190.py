@@ -219,9 +219,9 @@ def test_3_identifiable_true_curve_k_learned():
     """
     bench = _benchmark_pool(n=10, with_hr=True)
 
-    # True synthetic k = 1.08
+    # True synthetic k = 1.08, anchored at 5 km = 20:00 (1200s)
     k_true = 1.08
-    a_true = 300.0  # A constant: T(D) = 300 × D^1.08 (D in metres)
+    a_true = 1200.0 / (5_000.0 ** k_true)   # ≈ 0.1216
     distances = [5_000.0, 10_000.0, 21_097.5]
     perfs: List[DomainActivity] = []
     for i, dist_m in enumerate(distances):
@@ -453,6 +453,11 @@ def test_8_vma_independence():
 
     Race predictions depend on qualified performances and the performance curve,
     NOT on VMA.
+
+    VMA activities are deliberately at lower speed than the benchmark pool so
+    that they cannot qualify as performance observations.  The only difference
+    between the two runs is the presence or absence of HR on those slow VMA
+    activities, which affects estimate_vma() but not the performance curve.
     """
     bench = _benchmark_pool(n=10, with_hr=True)
     core_perfs = [
@@ -461,16 +466,22 @@ def test_8_vma_independence():
         _run(days_ago=6, distance_m=21_097.5, duration_s=6_900.0, avg_hr=160.0, max_hr=178.0),
     ]
 
-    # A pool of VMA-relevant activities with good HR-speed coverage (within 42-day window)
+    # VMA activities: slow enough (8.2 km/h → 0th percentile vs benchmark pool)
+    # so they CANNOT qualify as performances; they contribute only to VMA.
+    # Benchmark pool speed ≈ 8.73–8.78 km/h → 8.2 km/h is below all benchmarks.
+    _vma_dur_s = round(10_000.0 / (8.2 / 3.6))   # ≈ 4390s at 8.2 km/h
+
+    # Good HR: wide HR spread → VMA model succeeds
+    # max_hr=162 kept ≤ benchmark pool max (167) so FCmax for core perfs is unchanged
     vma_acts_good = [
-        _run(days_ago=d, distance_m=10_000.0, duration_s=3_600.0 - d * 5.0,
-             avg_hr=130.0 + d, max_hr=170.0 + d // 2)
-        for d in range(5, 45, 6)
+        _run(days_ago=d, distance_m=10_000.0, duration_s=_vma_dur_s,
+             avg_hr=125.0 + d * 1.5, max_hr=162)
+        for d in range(3, 40, 6)
     ]
-    # A pool with degraded HR (VMA estimation may differ or be null)
+    # No HR: VMA model will fail or give different estimate
     vma_acts_degraded = [
-        _run(days_ago=d, distance_m=10_000.0, duration_s=3_600.0 - d * 5.0)
-        for d in range(5, 45, 6)
+        _run(days_ago=d, distance_m=10_000.0, duration_s=_vma_dur_s)
+        for d in range(3, 40, 6)
     ]
 
     acts_good_vma = bench + core_perfs + vma_acts_good
@@ -479,10 +490,9 @@ def test_8_vma_independence():
     result_good = predict_races(acts_good_vma, TODAY)
     result_poor = predict_races(acts_poor_vma, TODAY)
 
-    # VMA may differ
+    # VMA may legitimately differ
     vma_good = result_good.athlete_profile.get("estimated_vma")
     vma_poor = result_poor.athlete_profile.get("estimated_vma")
-    # We don't assert VMA equality — they may legitimately differ
 
     diag_good = result_good.race_curve_diagnostics
     diag_poor = result_poor.race_curve_diagnostics
