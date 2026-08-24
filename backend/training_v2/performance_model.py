@@ -256,6 +256,21 @@ def _clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(value, upper))
 
 
+def _strictly_prior_activities(
+    activity: DomainActivity,
+    activities: List[DomainActivity],
+) -> List[DomainActivity]:
+    """Return only activities dated strictly before the evaluated activity."""
+    activity_dt = _activity_date(activity)
+    if activity_dt is None:
+        return []
+    return [
+        other
+        for other in activities
+        if (other_dt := _activity_date(other)) is not None and other_dt < activity_dt
+    ]
+
+
 def _validate_activity(a: DomainActivity, reference_date: date) -> bool:
     """Return True if the activity is a valid running candidate (basic validation)."""
     if not _is_running(a):
@@ -647,9 +662,9 @@ def _personal_speed_percentile_90d(
     cutoff = date.fromordinal(activity_dt.toordinal() - PERSONAL_SPEED_WINDOW_DAYS)
     benchmark_speeds = [
         speed
-        for other in activities
+        for other in _strictly_prior_activities(activity, activities)
         if (other_dt := _activity_date(other)) is not None
-        and cutoff <= other_dt < activity_dt
+        and cutoff <= other_dt
         and _is_road_comparable(other, activity_dt)
         and (speed := _speed_kmh(other)) is not None
     ]
@@ -708,7 +723,8 @@ def evaluate_performance_quality(
     speed_percentile, benchmark_count = _personal_speed_percentile_90d(
         activity, prior_activities, reference_date
     )
-    historical_fcmax = _resolve_fcmax(prior_activities, user_max_hr, activity_dt)
+    strictly_prior_activities = _strictly_prior_activities(activity, prior_activities)
+    historical_fcmax = _resolve_fcmax(strictly_prior_activities, user_max_hr, activity_dt)
     relative_avg_hr: Optional[float] = None
     if activity.average_hr is not None and historical_fcmax is not None and historical_fcmax > 0:
         relative_avg_hr = round(activity.average_hr / historical_fcmax, 4)

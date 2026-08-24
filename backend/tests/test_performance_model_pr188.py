@@ -30,6 +30,7 @@ def _run(
     max_hr: Optional[float] = None,
     elevation_gain_m: Optional[float] = None,
     activity_type: str = "running",
+    moving_duration_s: Optional[float] = None,
 ) -> DomainActivity:
     return DomainActivity(
         activity_type=activity_type,
@@ -39,6 +40,7 @@ def _run(
         average_hr=avg_hr,
         max_hr=max_hr,
         elevation_gain_m=elevation_gain_m,
+        moving_duration_s=moving_duration_s,
     )
 
 
@@ -62,6 +64,17 @@ def _benchmark_2026(with_hr: bool = True) -> list[DomainActivity]:
         _run(date(2026, 7, 10), 11_000.0, 3920.0, avg_hr=avg[3], max_hr=166.0 if with_hr else None),
         _run(date(2026, 7, 24), 12_000.0, 4050.0, avg_hr=avg[4], max_hr=168.0 if with_hr else None),
         _run(date(2026, 8, 8), 13_000.0, 4200.0, avg_hr=avg[5], max_hr=170.0 if with_hr else None),
+    ]
+
+
+def _strict_prior_hr_benchmark_2026() -> list[DomainActivity]:
+    return [
+        _run(date(2026, 5, 30), 8_000.0, 3200.0, avg_hr=118.0, max_hr=160.0),
+        _run(date(2026, 6, 12), 9_000.0, 3350.0, avg_hr=122.0, max_hr=165.0),
+        _run(date(2026, 6, 28), 10_000.0, 3600.0, avg_hr=126.0, max_hr=170.0),
+        _run(date(2026, 7, 10), 11_000.0, 3920.0, avg_hr=130.0, max_hr=174.0),
+        _run(date(2026, 7, 24), 12_000.0, 4050.0, avg_hr=133.0, max_hr=178.0),
+        _run(date(2026, 8, 8), 13_000.0, 4200.0, avg_hr=135.0, max_hr=180.0),
     ]
 
 
@@ -183,6 +196,104 @@ def test_no_lookahead_future_fcmax_not_used_for_past_relative_hr():
     assert without_future.relative_avg_hr == with_future.relative_avg_hr
 
 
+def test_strict_prior_fcmax_excludes_current_activity_max_hr():
+    candidate = _run(
+        date(2026, 8, 20),
+        10_000.0,
+        3000.0,
+        avg_hr=160.0,
+        max_hr=220.0,
+        moving_duration_s=3000.0,
+    )
+    quality = evaluate_performance_quality(candidate, _strict_prior_hr_benchmark_2026() + [candidate], REF)
+
+    assert quality.historical_fcmax == 180.0
+    assert quality.relative_avg_hr == pytest.approx(round(160.0 / 180.0, 4), rel=1e-4)
+
+
+def test_current_activity_max_hr_self_influence_is_disabled():
+    prior = _strict_prior_hr_benchmark_2026()
+    activity_a = _run(
+        date(2026, 8, 20),
+        10_000.0,
+        3000.0,
+        avg_hr=160.0,
+        max_hr=180.0,
+        moving_duration_s=3000.0,
+    )
+    activity_b = _run(
+        date(2026, 8, 20),
+        10_000.0,
+        3000.0,
+        avg_hr=160.0,
+        max_hr=220.0,
+        moving_duration_s=3000.0,
+    )
+    activities = prior + [activity_a, activity_b]
+
+    quality_a = evaluate_performance_quality(activity_a, activities, REF)
+    quality_b = evaluate_performance_quality(activity_b, activities, REF)
+
+    assert quality_a.historical_fcmax == quality_b.historical_fcmax == 180.0
+    assert quality_a.relative_avg_hr == quality_b.relative_avg_hr == pytest.approx(round(160.0 / 180.0, 4), rel=1e-4)
+    assert quality_a.score == quality_b.score
+    assert quality_a.qualified == quality_b.qualified
+    assert quality_a.confidence == quality_b.confidence
+
+
+def test_same_day_fcmax_cross_influence_is_disabled():
+    candidate = _run(
+        date(2026, 8, 20),
+        10_000.0,
+        3000.0,
+        avg_hr=160.0,
+        max_hr=180.0,
+        moving_duration_s=3000.0,
+    )
+    same_day_other = _run(
+        date(2026, 8, 20),
+        8_000.0,
+        2400.0,
+        avg_hr=172.0,
+        max_hr=220.0,
+        moving_duration_s=2400.0,
+    )
+    quality = evaluate_performance_quality(candidate, _strict_prior_hr_benchmark_2026() + [same_day_other, candidate], REF)
+
+    assert quality.historical_fcmax == 180.0
+    assert quality.relative_avg_hr == pytest.approx(round(160.0 / 180.0, 4), rel=1e-4)
+
+
+def test_future_fcmax_lookahead_is_disabled():
+    candidate = _run(
+        date(2026, 8, 20),
+        10_000.0,
+        3000.0,
+        avg_hr=160.0,
+        max_hr=180.0,
+        moving_duration_s=3000.0,
+    )
+    future = _run(
+        date(2026, 8, 21),
+        9_000.0,
+        2500.0,
+        avg_hr=170.0,
+        max_hr=220.0,
+        moving_duration_s=2500.0,
+    )
+    base = _strict_prior_hr_benchmark_2026() + [candidate]
+
+    without_future = evaluate_performance_quality(candidate, base, REF)
+    with_future = evaluate_performance_quality(candidate, base + [future], REF)
+
+    assert without_future.historical_fcmax == with_future.historical_fcmax == 180.0
+    assert without_future.relative_avg_hr == with_future.relative_avg_hr
+    assert without_future.personal_speed_percentile == with_future.personal_speed_percentile
+    assert without_future.score == with_future.score
+    assert without_future.qualified == with_future.qualified
+    assert without_future.confidence == with_future.confidence
+
+
 def test_benchmark_uses_only_strictly_prior_runs():
     candidate = _run(date(2026, 8, 20), 10_000.0, 3000.0, avg_hr=165.0, max_hr=170.0)
     same_day_fast = _run(date(2026, 8, 20), 10_000.0, 2400.0, avg_hr=170.0, max_hr=170.0)
@@ -235,3 +346,20 @@ def test_predictions_are_deterministic_with_quality_fields():
     assert predictions["5K"].source_relative_hr == pytest.approx(0.9157, rel=1e-4)
     assert predictions["Semi"].predicted_time_s is not None
     assert predictions["Marathon"].predicted_time_s is not None
+
+
+def test_input_order_does_not_change_quality_or_predictions():
+    activities = _benchmark_2025() + _benchmark_2026() + [
+        _known_10k_performance(),
+        _ordinary_recent_7k(),
+        _fast_18k_moderate_hr(),
+    ]
+    reversed_activities = list(reversed(activities))
+
+    quality_forward = evaluate_performance_quality(_known_10k_performance(), activities, REF)
+    quality_reversed = evaluate_performance_quality(_known_10k_performance(), reversed_activities, REF)
+    prediction_forward = predict_races(activities, REF)
+    prediction_reversed = predict_races(reversed_activities, REF)
+
+    assert quality_forward == quality_reversed
+    assert prediction_forward == prediction_reversed
