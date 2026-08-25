@@ -1,86 +1,270 @@
-# RUNINDEX — PR #191 — Performance Comparability / Slope Evidence (IMPLÉMENTÉ — Option 1)
+# RUNINDEX_PR191_REPORT.md
+## Performance Curve V2 — QUALIFIED vs SLOPE-EVIDENCE
 
-**Statut : IMPLÉMENTÉ (Option 1).** Distinction QUALIFIED (niveau A) vs SLOPE-EVIDENCE (apprentissage de k).
-Compte réel : `da85***e7e7`. Backend redémarré, endpoints 200, tests verts. `PerformanceQuality.qualified` inchangé.
+---
 
-## 1. Audit des 5 observations high/medium (rappel)
-| date | dist | pace | avgHR/maxHR | speed reserve | rel_hr | tier |
-|---|---|---|---|---|---|---|
-| 2025-12-14 | 10.02 | 5:01 | **0.937** | **11.8 %** | 0.916 | **high** |
-| 2026-01-09 | 7.07 | 5:54 | 0.883 | 39.9 % | 0.888 | medium |
-| 2026-02-28 | 20.63 | 6:08 | 0.879 | 28.7 % | 0.894 | medium |
-| 2025-11-06 | 10.83 | 5:55 | 0.847 | 35.5 % | 0.842 | medium |
-| 2026-04-20 | 10.44 | 6:21 | 0.890 | 15.3 % | 0.841 | medium |
-Seul le 2025-12-14 ressemble à un effort maximal (près de la FCmax, allure régulière). Les 4 medium sont des sorties soutenues.
+## 1. Base exacte
 
-## 2. Pourquoi #190 croyait k identifiable
-Identifiabilité calculée sur high+medium (spread 7–20.6 km, score 0.147 ≥ 0.05). Or les medium sont des sorties non maximales à relation distance→temps quasi plate ⇒ k plat (1.0174). Défaut résiduel corrigé ici.
+Base : `copilot/dev`  
+HEAD de base : post-PR #190 (`ec7b76b`)  
+Branche : `copilot/pr191-slope-evidence-clean`  
+Cible PR : `copilot/dev`
 
-## 3. Signaux Garmin disponibles
-**Aucun signal natif de maximalité/course** (`activity_type`=running seul ; pas d'`event_type`/`is_race`/`workout_type` ; `lap_count`/`has_splits`/`details_available`=null partout). Décision : ne PAS inventer de classificateur, réutiliser le tier `high` de #188 comme preuve de pente.
+---
 
-## 4. Définition retenue (slope evidence)
-`slope_evidence = (PerformanceQuality.confidence == "high")`. Le tier `high` de #188 exige déjà un appui FC + score combiné élevé (proche d'un effort représentatif). Medium/low/speed-only **contribuent toujours à A** mais ne sont jamais, seuls, une preuve de pente. **Aucun nouveau seuil arbitraire** (réutilise la hiérarchie #188).
+## 2. Séparation QUALIFIED / SLOPE-EVIDENCE
 
-## 5. Politique d'apprentissage de k (générale)
-Chemin N≥3 (`robust_weighted_log_fit`) :
-1. Sous-ensemble slope-evidence = observations `high`.
-2. `k_identifiable = (slope_evidence_count ≥ K_SLOPE_EVIDENCE_MIN_COUNT=2) ET (variance pondérée de log(distance) sur les high ≥ 0.05)`.
-3. Si non identifiable ⇒ `method = prior_k_low_slope_evidence_fallback`, `k = RIEGEL_K (1.06)`, **A recalculé** à pente fixe sur les poids robustes de **toutes** les observations qualifiées. `k_raw` conserve la pente apprise (diagnostic).
-4. Priorité inchangée : `k_conflict fallback` (#190) reste évalué en premier depuis `k_raw`.
-5. N=1 (Riegel prior) et N=2 (shrinkage) inchangés.
+PR #191 introduit une distinction explicite entre deux concepts :
 
-Raisons possibles : `insufficient_slope_evidence_count`, `insufficient_slope_evidence_spread`, `sufficient_slope_evidence_spread`, `no_slope_evidence_observations`, `not_applicable`.
+**QUALIFIED PERFORMANCE**  
+> Toute performance évaluée comme `quality.qualified == True` par `evaluate_performance_quality()`.  
+> Contribue à l'estimation de A (intercept de la courbe).  
+> Inclut les niveaux de confiance : `high`, `medium`, `low`.
 
-## 6. Séparation A / k (invariant central)
-- **A** (niveau) = intercept estimé sur **toutes** les qualifiées (18 sur le compte réel).
-- **k** (fatigabilité distance→temps) = appris **uniquement** depuis les slope-evidence high ; sinon prior 1.06.
-- Les 18 observations ne sont jamais jetées.
+**SLOPE-EVIDENCE PERFORMANCE**  
+> Sous-ensemble des performances qualifiées dont `quality.confidence == "high"`.  
+> Seules celles-ci peuvent autoriser la personnalisation de k.
 
-## 7. Confidence — correctif du gap #190 (local)
-Ajout dans `_curve_prediction_confidence` d'une pénalité liée au fallback slope **croissante avec l'extrapolation** :
-- `extrapolation_ratio ≤ 1.2` (proche des observations) ⇒ +0 (une bonne prédiction 10K reste bonne).
-- `1.2 < ratio ≤ 1.8` ⇒ +1 ; `ratio > 1.8` ⇒ +2 (marathon davantage pénalisé car il dépend fortement du prior k).
-Distinction A / k / extrapolation respectée ; pas de pénalité uniforme aveugle.
+Invariant central :  
+**A peut utiliser PLUS de données que k.**
 
-## 8. Runtime réel post-#191 (compte da85***e7e7)
+---
+
+## 3. Pourquoi `confidence == "high"` est utilisé
+
+En PR #190, le critère d'identifiabilité de k utilisait `confidence in ("high", "medium")`.
+
+Problème observé au runtime post-#190 :
+
 ```
-slope_evidence_count = 1 (10.018 km)  → < 2  → insufficient_slope_evidence_count
-method = prior_k_low_slope_evidence_fallback   k = 1.06   k_raw = 1.017409 (conservé)
-qualified_performance_count = 18 (A inchangé)
-Prédictions : 5K 28:26 (5:41) · 10K 59:18 (5:55) · Semi 2h10 (6:12) · Marathon 4h32 (6:27)
-Spread 5K→Marathon = 46 s/km (physiologique), vs 13 s/km pré-#191.
+qualified_performance_count = 18
+high = 1
+medium = 4
+low = 13
+
+k_raw = 1.017409
+curve_method = robust_weighted_log_fit
 ```
-La pathologie de courbe plate est corrigée : faute de preuve multi-distance, k retombe honnêtement sur le prior 1.06 et le niveau A reste calibré sur les 18 observations.
 
-## 9. Tests synthétiques (`tests/test_pr191_slope_evidence.py`, 7 passed)
-- A : 1 high + medium/low étalés ⇒ pas d'apprentissage auto de k (fallback 1.06).
-- B : 3 vraies perfs 5/10/21 km suivant k=1.11 ⇒ k appris ≈1.11 (pas Riegel permanent).
-- C : cluster ~10 km high ⇒ A estimé, k reste prior (spread insuffisant).
-- D : speed-only ⇒ contribue à A, ne définit pas k.
-- E : outlier high absurde ⇒ Huber protège, k reste proche du vrai.
-- F : no-lookahead (futur exclu). G : input-order invariance.
-(#189 VMA-independence conservé dans sa suite.)
+Les 4/5 observations high/medium couvraient des distances de 7–21 km, avec un spread réel.  
+Mais ces 4 `medium` étaient des **sorties soutenues**, pas des performances maximales comparables entre distances.
 
-## 10. Invariants conservés
-`T(D)=A·D^k` · single→prior 1.06 · N=2 shrinkage · k_conflict fallback #190 · Huber quality-aware #190 · refit robuste final · extrapolation symétrique · no-lookahead · input-order invariance · VMA independence · aucune correction monotone post-hoc · aucun k-floor arbitraire · aucune calibration spécifique au compte.
+Le spread de distance ne suffisait pas à identifier k, car les observations medium ne reflètent pas une performance maximale comparative.
 
-## 11. Limites connues
-- Slope-evidence = proxy de qualité (tier high #188), pas une preuve certaine de maximalité (aucun signal natif Garmin).
-- Dépend de la couverture FC : sans max_hr fiable, un athlète n'aura jamais de slope-evidence ⇒ prior 1.06 permanent (honnête).
-- Sur ce compte, faute de perf multi-distance HR-appuyée, k reste au prior : c'est le comportement voulu, pas un bug.
+PR #191 corrige cela : seules les observations `HIGH` constituent une slope-evidence défendable.
+
+---
+
+## 4. Absence de signal Garmin natif de maximalité
+
+Aucun champ Garmin ne permet d'identifier fiablement une activité comme étant :
+- une course ou compétition
+- un test de performance maximal
+- une séance au seuil vs une sortie au tempo
+
+Par conséquent, aucun classificateur de maximalité n'est inventé.  
+La classification s'appuie uniquement sur les signaux de qualité existants :
+- score de performance composite (HR + speed percentile)
+- seuils de confiance déjà établis en PR #188/#189
+
+---
+
+## 5. Comportement N=1
+
+**Méthode** : `single_performance_riegel`  
+**k** : `RIEGEL_K = 1.06` (prior fixe)  
+**Inchangé par rapport à #190.**
+
+---
+
+## 6. Comportement N=2
+
+### CAS A — deux observations slope-evidence HIGH
+
+```
+method = "two_point_prior_shrinkage_fit"
+k = shrinkage(k_raw, RIEGEL_K, evidence_strength)
+```
+
+Le shrinkage de PR #189 est conservé intégralement.
+
+### CAS B — moins de 2 HIGH (HIGH+MEDIUM, deux MEDIUM, deux LOW, etc.)
+
+```
+method = "two_point_prior_k_low_slope_evidence_fallback"
+k = RIEGEL_K = 1.06
+A = intercept recalculé à pente fixe avec les DEUX observations qualifiées
+k_raw = valeur OLS pré-fallback (disponible en diagnostic)
+k_fallback_applied = True
+```
+
+> Deux medium ne doivent pas apprendre k.  
+> Deux low speed-only ne doivent pas apprendre k.  
+> Un high + un medium ne doivent pas apprendre k.
+
+---
+
+## 7. Comportement N≥3
+
+1. Calcul du fit robuste (Huber quality-aware #190) sur **toutes** les observations qualifiées.
+2. Calcul de `slope_evidence_count` = nombre d'observations HIGH.
+3. Calcul du score d'identifiabilité **uniquement sur les HIGH** (variance pondérée de log(distance)).
+4. Si identifiabilité suffisante (`score >= 0.05`) ET `slope_evidence_count >= 2` :
+   ```
+   k = k_raw (data-driven)
+   method = "robust_weighted_log_fit"
+   k_identifiable = True
+   ```
+5. Sinon :
+   ```
+   k = RIEGEL_K = 1.06
+   method = "prior_k_low_slope_evidence_fallback"
+   A = recalculé à pente fixe avec les poids robustes de TOUTES les qualifiées
+   k_fallback_applied = True
+   k_identifiable = False
+   k_raw = diagnostic (slope fit initial)
+   ```
+
+**Priorité k_conflict conservée** : si k_raw est hors `[1.0, 1.25]`, la détection de conflit s'applique en premier, avant le test slope-evidence.
+
+---
+
+## 8. Séparation A/k
+
+| Chemin | k | A |
+|--------|---|---|
+| `single_performance_riegel` | 1.06 (prior) | 1 observation |
+| `two_point_prior_shrinkage_fit` | shrinkage(k_raw, 1.06) | 2 HIGH |
+| `two_point_prior_k_low_slope_evidence_fallback` | 1.06 | 2 observations qualifiées |
+| `robust_weighted_log_fit` (identifiable) | k_raw | toutes qualifiées |
+| `prior_k_low_slope_evidence_fallback` | 1.06 | toutes qualifiées |
+| `prior_k_conflict_fallback` | 1.06 | toutes qualifiées (pénalisées) |
+
+**Invariant** : dans les méthodes fallback, A utilise **toutes** les observations qualifiées, pas seulement les HIGH.
+
+---
+
+## 9. Confidence extrapolation-aware
+
+Lorsque k est un prior fixe via `prior_k_low_slope_evidence_fallback` ou `two_point_prior_k_low_slope_evidence_fallback`, une pénalité est appliquée selon l'extrapolation :
+
+| Extrapolation ratio | Pénalité |
+|--------------------|----------|
+| ≤ 1.8 (cible proche) | 0 étapes supplémentaires |
+| 1.8 – 3.0 | +1 étape |
+| > 3.0 | +2 étapes |
+
+Seuils réutilisés depuis le système existant (`_curve_prediction_confidence`).  
+Aucun système parallèle créé.
+
+**Principe** : bonne information sur A + k prior → fiable près des données, moins fiable loin.
+
+---
+
+## 10. Diagnostics
+
+Ajoutés / exposés dans `race_curve_diagnostics` :
+
+```
+slope_evidence_count            # nombre d'observations HIGH
+slope_evidence_distance_min     # distance min (m) des observations HIGH
+slope_evidence_distance_max     # distance max (m) des observations HIGH
+slope_evidence_distance_min_km  # idem en km
+slope_evidence_distance_max_km  # idem en km
+
+k_identifiable                  # bool — k data-driven est-il défendable ?
+k_identifiability_score         # score de variance pondérée (HIGH uniquement)
+k_identifiability_reason        # "sufficient_slope_evidence_spread" | "insufficient_slope_evidence_spread" | ...
+
+curve_k_raw                     # slope fit initial (diagnostic)
+curve_k                         # k final utilisé
+curve_method                    # méthode de fit
+k_fallback_applied              # bool — fallback appliqué ?
+```
+
+Lecture runtime immédiate :
+
+```
+qualified_performance_count = 18
+slope_evidence_count = 1
+→ A utilise 18 observations, k ne peut pas être individualisé.
+```
+
+---
+
+## 11. Tests
+
+| # | Scénario | Attendu |
+|---|----------|---------|
+| 1 | N≥3 : 1 HIGH + MEDIUM + LOW, large spread | `slope_evidence_count=1`, k=1.06, fallback |
+| 2 | N≥3 : 3 HIGH multi-distance k synthétique ≠ 1.06 | `k_identifiable=True`, k ≈ k_synthétique |
+| 3 | N≥3 : cluster HIGH 8–12 km | spread insuffisant, k=1.06 |
+| 4 | Speed-only LOW | `slope_evidence_count=0`, k=1.06 |
+| 5 | N==2 deux HIGH distinctes | `two_point_prior_shrinkage_fit` conservé |
+| 6 | N==2 HIGH + MEDIUM | k=1.06, fallback slope-evidence |
+| 7 | N==2 deux MEDIUM | k=1.06 |
+| 8 | N==2 deux LOW speed-only | k=1.06 |
+| 9 | Huber outlier | Robustesse #190 préservée |
+| 10 | No look-ahead | Activité future sans effet |
+| 11 | Input-order invariance | Ordre shuffled → résultat identique |
+| 12 | VMA independence | Changement VMA n'affecte pas les prédictions |
+
+---
+
+## 12. Runtime réel attendu (validation post-implémentation)
+
+Ces valeurs ne sont PAS codées en dur. Elles servent uniquement de repère.
+
+Le prototype #191 avait produit :
+
+```
+slope_evidence_count = 1
+method = prior_k_low_slope_evidence_fallback
+k_raw ≈ 1.0174
+k_final = 1.06
+
+Prédictions approximatives :
+5K  → 28:26
+10K → 59:18
+Semi → 2h10
+Marathon → 4h32
+```
+
+---
+
+## 13. Limites
+
+1. **Aucun signal Garmin de maximalité** : la classification HIGH dépend des seuils `PERFORMANCE_HIGH_CONFIDENCE_*`. Si un utilisateur ne court jamais au seuil de performance, `slope_evidence_count` reste à 0.
+
+2. **slope_evidence_count = 1** : avec un seul HIGH, k reste au prior. La confiance dans l'extrapolation est renforcée par la pénalité d'extrapolation.
+
+3. **Cluster HIGH** : si tous les HIGH sont à des distances similaires (8–12 km), l'identifiabilité échoue même si `slope_evidence_count >= 2`.
+
+4. **Huber floor** : les floors HIGH (0.50) et MEDIUM (0.25) de PR #190 sont conservés sans modification dans cette PR. Ils s'appliquent toujours, indépendamment du chemin slope-evidence.
+
+5. **k_conflict priority** : le conflit (k_raw hors [1.0, 1.25]) est détecté avant le test slope-evidence pour N>=3. Cette priorité est documentée et conservée.
+
+---
 
 ## Critères d'acceptation
-```
-QUALIFIED_AND_SLOPE_EVIDENCE_SEPARATED = YES
-SPEED_ONLY_STILL_SUPPORTED = YES
-NON_MAXIMAL_SUPPORTED_RUN_CANNOT_AUTOMATICALLY_DEFINE_K = YES
-TRUE_MULTI_DISTANCE_PERFORMANCES_CAN_LEARN_K = YES
-A_CAN_USE_MORE_DATA_THAN_K = YES
-NO_ARBITRARY_K_FLOOR = YES
-NO_ACCOUNT_SPECIFIC_CALIBRATION = YES
-NO_LOOKAHEAD = YES
-INPUT_ORDER_INVARIANT = YES
-VMA_INDEPENDENCE = YES
-CONFIDENCE_ACCOUNTS_FOR_SLOPE_UNCERTAINTY_WHEN_EXTRAPOLATING = YES
-```
+
+| Critère | Statut |
+|---------|--------|
+| QUALIFIED_AND_SLOPE_EVIDENCE_SEPARATED | ✅ YES |
+| A_USES_ALL_QUALIFIED | ✅ YES |
+| K_USES_ONLY_DEFENSIBLE_SLOPE_EVIDENCE | ✅ YES |
+| N2_TWO_HIGH_CAN_SHRINK | ✅ YES |
+| N2_HIGH_PLUS_MEDIUM_CANNOT_LEARN_K | ✅ YES |
+| N2_TWO_MEDIUM_CANNOT_LEARN_K | ✅ YES |
+| N2_SPEED_ONLY_CANNOT_LEARN_K | ✅ YES |
+| N3_MEDIUM_SPREAD_CANNOT_ALONE_DEFINE_K | ✅ YES |
+| TRUE_HIGH_MULTIDISTANCE_CAN_LEARN_K | ✅ YES |
+| NO_NEW_MAXIMALITY_CLASSIFIER | ✅ YES |
+| NO_ACCOUNT_SPECIFIC_CALIBRATION | ✅ YES |
+| NO_ARBITRARY_K_FLOOR | ✅ YES |
+| HUBER_PR190_PRESERVED | ✅ YES |
+| K_CONFLICT_PRIORITY_PRESERVED | ✅ YES |
+| CONFIDENCE_EXTRAPOLATION_AWARE | ✅ YES |
+| NO_LOOKAHEAD | ✅ YES |
+| INPUT_ORDER_INVARIANT | ✅ YES |
+| VMA_INDEPENDENCE | ✅ YES |
