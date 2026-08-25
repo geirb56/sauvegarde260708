@@ -344,7 +344,7 @@ def vdot_from_performance(distance_m: float, duration_s: float) -> Optional[floa
     return float(max(VDOT_MIN, min(VDOT_MAX, vdot)))
 
 
-def daniels_paces(vdot: float, reference_date: Optional[date] = None) -> TrainingPaces:
+def daniels_paces(vdot: float, reference_date: date) -> TrainingPaces:
     """Compute all five Daniels training zones from a VDOT value.
 
     Parameters
@@ -352,10 +352,9 @@ def daniels_paces(vdot: float, reference_date: Optional[date] = None) -> Trainin
     vdot:
         VDOT value. Clamped to [VDOT_MIN, VDOT_MAX].
     reference_date:
-        Snapshot date written into the returned TrainingPaces.  When None,
-        falls back to ``date.today()`` (acceptable for ad-hoc utilities and
-        tests; the main pipeline always passes an explicit date via
-        ``compute_training_paces``).
+        Snapshot date written into the returned TrainingPaces.
+        Must be supplied explicitly — no date.today() fallback allowed
+        (determinism requirement: no system date in the business layer).
 
     This is a pure mathematical function: no activities, no lookahead.
     Use compute_training_paces() for the full pipeline.
@@ -363,8 +362,6 @@ def daniels_paces(vdot: float, reference_date: Optional[date] = None) -> Trainin
     Returns a TrainingPaces with a synthetic VdotResult (no evidence).
     """
     vdot = float(max(VDOT_MIN, min(VDOT_MAX, vdot)))
-    if reference_date is None:
-        reference_date = date.today()
     vdot_result = VdotResult(
         reference_vdot=vdot,
         paces_confidence="high",

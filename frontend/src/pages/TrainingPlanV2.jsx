@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import axios from "axios";
-import { CalendarDays, Flag, Gauge, Info, MapPin, Sparkles, Timer, Zap } from "lucide-react";
+import { CalendarDays, Flag, Gauge, Info, MapPin, Sparkles } from "lucide-react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -21,13 +21,6 @@ const WORKOUT_STYLES = {
   steady: "border-amber-500/40 bg-amber-500/10 text-amber-100",
   quality: "border-orange-500/40 bg-orange-500/10 text-orange-100",
   long_easy: "border-blue-500/40 bg-blue-500/10 text-blue-100",
-};
-
-const CONFIDENCE_STYLES = {
-  HIGH: "text-emerald-400 bg-emerald-400/10 border border-emerald-400/30",
-  MEDIUM: "text-amber-400 bg-amber-400/10 border border-amber-400/30",
-  LOW: "text-orange-400 bg-orange-400/10 border border-orange-400/30",
-  INSUFFICIENT: "text-red-400 bg-red-400/10 border border-red-400/30",
 };
 
 const isKnownNumber = (value) => typeof value === "number" && Number.isFinite(value);
@@ -54,13 +47,6 @@ const formatTargetTime = (totalSeconds) => {
   return `${seconds}s`;
 };
 
-const formatPace = (paceMinPerKm) => {
-  if (!isKnownNumber(paceMinPerKm) || paceMinPerKm <= 0) return null;
-  const mins = Math.floor(paceMinPerKm);
-  const secs = Math.round((paceMinPerKm - mins) * 60);
-  return `${mins}:${secs.toString().padStart(2, "0")}`;
-};
-
 const getTranslatedValue = (t, path, fallbackKey = "trainingV2.notAvailable") => {
   const translated = t(path);
   return translated === path ? t(fallbackKey) : translated;
@@ -74,220 +60,6 @@ const normalizeGoalType = (goalType) => {
   if (normalized === "semi_marathon") return "semi";
   return normalized;
 };
-
-// ─── H1: Today's session ────────────────────────────────────────────────────
-
-function TodaySection({ todayData, todayError, t }) {
-  const readinessBand = todayData?.readiness?.band;
-  const readinessKey = readinessBand
-    ? `trainingV2.todayReadiness${readinessBand.charAt(0).toUpperCase() + readinessBand.slice(1).toLowerCase()}`
-    : null;
-  const readinessLabel = readinessKey ? t(readinessKey) : t("trainingV2.todayNoReadiness");
-
-  // adaptation_applied is the authoritative flag from the backend (DailyAdaptation V2)
-  const isAdapted = todayData?.adaptation_applied === true;
-
-  // Canonical session fields from /training/today (PR137 contract)
-  const sessionToShow = isAdapted
-    ? (todayData?.adapted_prescription ?? todayData?.planned_session)
-    : (todayData?.original_prescription ?? todayData?.planned_session);
-  const workoutTypeLabel = sessionToShow?.workout_type
-    ? getTranslatedValue(t, `trainingV2.workoutTypes.${sessionToShow.workout_type}`)
-    : null;
-
-  return (
-    <Card data-testid="training-v2-today">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
-          <Timer className="h-4 w-4" />
-          {t("trainingV2.todayTitle")}
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {todayError ? (
-          <p className="text-sm text-muted-foreground" data-testid="today-loading-error">
-            {t("trainingV2.todayLoadingError")}
-          </p>
-        ) : !todayData || !sessionToShow ? (
-          <p className="text-sm text-muted-foreground" data-testid="today-no-session">
-            {t("trainingV2.todayNoSession")}
-          </p>
-        ) : (
-          <>
-            {isAdapted && (
-              <div className="flex items-center gap-2">
-                <span
-                  className="rounded-full bg-amber-500/10 border border-amber-500/30 px-2.5 py-0.5 text-xs font-semibold text-amber-400"
-                  data-testid="today-adapted-badge"
-                >
-                  {t("trainingV2.todayAdapted")}
-                </span>
-              </div>
-            )}
-            <div
-              className={`rounded-xl border p-4 ${WORKOUT_STYLES[sessionToShow.workout_type] ?? "border-border bg-card text-foreground"}`}
-              data-testid="today-session-card"
-            >
-              <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
-                {isAdapted ? t("trainingV2.todayAdaptedSession") : t("trainingV2.todayOriginal")}
-              </p>
-              <p className="mt-1 text-base font-semibold">{workoutTypeLabel}</p>
-              <div className="mt-2 flex flex-wrap gap-2 text-sm">
-                {isKnownNumber(sessionToShow.distance_km) && (
-                  <span className="rounded-full border border-current/20 px-2.5 py-1">
-                    {formatDistance(sessionToShow.distance_km, {})}
-                  </span>
-                )}
-                {isKnownNumber(sessionToShow.duration_minutes) && (
-                  <span className="rounded-full border border-current/20 px-2.5 py-1">
-                    {sessionToShow.duration_minutes} min
-                  </span>
-                )}
-              </div>
-            </div>
-            {isAdapted && todayData?.adaptation_reason && (
-              <p className="text-xs text-muted-foreground" data-testid="today-adapted-reason">
-                {t("trainingV2.todayAdaptedBecause")} {todayData.adaptation_reason}
-              </p>
-            )}
-            <p className="text-xs text-muted-foreground" data-testid="today-readiness">
-              {readinessLabel}
-            </p>
-          </>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-// ─── H2: Training Paces ─────────────────────────────────────────────────────
-
-const PACE_ZONES = [
-  {
-    key: "easy",
-    dataKey: "easy",
-    labelKey: "trainingV2.pacesEasyLabel",
-    descKey: "trainingV2.pacesEasyDesc",
-    isRange: true,
-    colorClass: "border-emerald-500/40 bg-emerald-500/10 text-emerald-100",
-  },
-  {
-    key: "marathon",
-    dataKey: "marathon",
-    labelKey: "trainingV2.pacesMarathonLabel",
-    descKey: "trainingV2.pacesMarathonDesc",
-    isRange: false,
-    colorClass: "border-blue-500/40 bg-blue-500/10 text-blue-100",
-  },
-  {
-    key: "threshold",
-    dataKey: "threshold",
-    labelKey: "trainingV2.pacesThresholdLabel",
-    descKey: "trainingV2.pacesThresholdDesc",
-    isRange: false,
-    colorClass: "border-amber-500/40 bg-amber-500/10 text-amber-100",
-  },
-  {
-    key: "interval",
-    dataKey: "interval",
-    labelKey: "trainingV2.pacesIntervalLabel",
-    descKey: "trainingV2.pacesIntervalDesc",
-    isRange: true,
-    colorClass: "border-orange-500/40 bg-orange-500/10 text-orange-100",
-  },
-  {
-    key: "repetition",
-    dataKey: "repetition",
-    labelKey: "trainingV2.pacesRepetitionLabel",
-    descKey: "trainingV2.pacesRepetitionDesc",
-    isRange: false,
-    colorClass: "border-red-500/40 bg-red-500/10 text-red-100",
-  },
-];
-
-function PaceCard({ zone, paceData, t }) {
-  const zoneData = paceData?.[zone.dataKey];
-  const paceDisplay = useMemo(() => {
-    if (!zoneData) return null;
-    if (zone.isRange && isKnownNumber(zoneData.lower?.min_per_km) && isKnownNumber(zoneData.upper?.min_per_km)) {
-      const faster = formatPace(zoneData.lower.min_per_km);  // lower = faster (lower min/km)
-      const slower = formatPace(zoneData.upper.min_per_km);  // upper = slower (higher min/km)
-      if (faster && slower) return `${faster} – ${slower}`;
-    }
-    if (isKnownNumber(zoneData.min_per_km)) {
-      return formatPace(zoneData.min_per_km);
-    }
-    return null;
-  }, [zoneData, zone.isRange]);
-
-  return (
-    <div
-      className={`rounded-xl border p-4 ${zone.colorClass}`}
-      data-testid={`pace-zone-${zone.key}`}
-    >
-      <p className="text-xs uppercase tracking-widest text-muted-foreground">{t(zone.labelKey)}</p>
-      {paceDisplay ? (
-        <p className="mt-1 text-xl font-bold" data-testid={`pace-value-${zone.key}`}>
-          {paceDisplay}
-          <span className="ml-1 text-sm font-normal opacity-70">{t("trainingV2.pacesPerKm")}</span>
-        </p>
-      ) : (
-        <p className="mt-1 text-sm opacity-60">—</p>
-      )}
-      <p className="mt-1 text-xs opacity-70">{t(zone.descKey)}</p>
-    </div>
-  );
-}
-
-function TrainingPacesSection({ pacesData, pacesError, t }) {
-  const confidence = pacesData?.confidence;
-  const confidenceKey = confidence
-    ? `trainingV2.pacesConfidence${confidence.charAt(0).toUpperCase() + confidence.slice(1).toLowerCase()}`
-    : null;
-  const confidenceLabel = confidenceKey ? t(confidenceKey) : null;
-  const confidenceStyle = CONFIDENCE_STYLES[confidence] ?? CONFIDENCE_STYLES.INSUFFICIENT;
-
-  const isInsufficient = !pacesData || confidence === "INSUFFICIENT" || pacesError;
-
-  return (
-    <Card data-testid="training-v2-paces">
-      <CardHeader>
-        <CardTitle className="flex items-center justify-between gap-2 text-base">
-          <span className="flex items-center gap-2">
-            <Zap className="h-4 w-4" />
-            {t("trainingV2.pacesTitle")}
-          </span>
-          {confidenceLabel && !isInsufficient && (
-            <span
-              className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${confidenceStyle}`}
-              data-testid="paces-confidence-badge"
-            >
-              {confidenceLabel}
-            </span>
-          )}
-        </CardTitle>
-        {!isInsufficient && (
-          <p className="text-xs text-muted-foreground">{t("trainingV2.pacesSubtitle")}</p>
-        )}
-      </CardHeader>
-      <CardContent>
-        {isInsufficient ? (
-          <p className="text-sm text-muted-foreground" data-testid="paces-insufficient-message">
-            {t("trainingV2.pacesInsufficientMessage")}
-          </p>
-        ) : (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5" data-testid="paces-grid">
-            {PACE_ZONES.map((zone) => (
-              <PaceCard key={zone.key} zone={zone} paceData={pacesData?.paces} t={t} />
-            ))}
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-// ─── H4: This Week ──────────────────────────────────────────────────────────
 
 function CycleWeekRow({ week, t, locale }) {
   const phaseLabel = week.phase
@@ -320,8 +92,6 @@ function CycleWeekRow({ week, t, locale }) {
     </div>
   );
 }
-
-// ─── H5: Training Cycle / Plan ──────────────────────────────────────────────
 
 function CycleSection({ cycleData, t, locale }) {
   const getTranslated = (key) => {
@@ -406,10 +176,6 @@ export default function TrainingPlanV2() {
   const { unitSystem } = useUnitSystem();
   const [weekData, setWeekData] = useState(null);
   const [cycleData, setCycleData] = useState(null);
-  const [todayData, setTodayData] = useState(null);
-  const [todayError, setTodayError] = useState(false);
-  const [pacesData, setPacesData] = useState(null);
-  const [pacesError, setPacesError] = useState(false);
   const [loading, setLoading] = useState(false);
   const [hasError, setHasError] = useState(false);
 
@@ -421,28 +187,14 @@ export default function TrainingPlanV2() {
     const loadData = async () => {
       setLoading(true);
       setHasError(false);
-      setTodayError(false);
-      setPacesError(false);
       try {
-        const [weekRes, cycleRes, todayRes, pacesRes] = await Promise.all([
+        const [weekRes, cycleRes] = await Promise.all([
           axios.get(`${API}/training/v2/week`),
           axios.get(`${API}/training/v2/cycle`).catch(() => ({ data: null })),
-          axios.get(`${API}/training/today`).catch(() => null),
-          axios.get(`${API}/training/v2/paces`).catch(() => null),
         ]);
         if (!ignore) {
           setWeekData(weekRes.data);
           setCycleData(cycleRes.data);
-          if (todayRes) {
-            setTodayData(todayRes.data);
-          } else {
-            setTodayError(true);
-          }
-          if (pacesRes) {
-            setPacesData(pacesRes.data);
-          } else {
-            setPacesError(true);
-          }
         }
       } catch (error) {
         if (!ignore) {
@@ -517,13 +269,6 @@ export default function TrainingPlanV2() {
         </div>
       </div>
 
-      {/* H1: Today */}
-      <TodaySection todayData={todayData} todayError={todayError} t={t} />
-
-      {/* H2: Training Paces */}
-      <TrainingPacesSection pacesData={pacesData} pacesError={pacesError} t={t} />
-
-      {/* H4: This Week — Objective + State + Target */}
       <div className="grid gap-4 xl:grid-cols-3">
         <Card>
           <CardHeader>
@@ -581,7 +326,6 @@ export default function TrainingPlanV2() {
         </Card>
       </div>
 
-      {/* H4: Weekly Sessions */}
       <Card>
         <CardHeader>
           <CardTitle>{t("trainingV2.week")}</CardTitle>
@@ -641,7 +385,6 @@ export default function TrainingPlanV2() {
         </CardContent>
       </Card>
 
-      {/* H5: Training Cycle / Plan */}
       {cycleData && (
         <CycleSection cycleData={cycleData} t={t} locale={locale} />
       )}

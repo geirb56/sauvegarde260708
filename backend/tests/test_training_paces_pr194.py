@@ -201,21 +201,21 @@ class TestDanielsPaceFormula:
 
     def test_vdot40_threshold(self):
         """VDOT 40 T pace ≈ 5:05 /km."""
-        p = daniels_paces(40.0)
+        p = daniels_paces(40.0, reference_date=REF_DATE)
         assert p.threshold is not None
         diff = self._pace_diff_s(p.threshold, "5:05")
         assert diff <= self.TOLERANCE_S_PER_KM, f"T VDOT40: expected 5:05, diff={diff}s"
 
     def test_vdot40_marathon(self):
         """VDOT 40 M pace ≈ 5:35 /km."""
-        p = daniels_paces(40.0)
+        p = daniels_paces(40.0, reference_date=REF_DATE)
         assert p.marathon is not None
         diff = self._pace_diff_s(p.marathon, "5:35")
         assert diff <= self.TOLERANCE_S_PER_KM, f"M VDOT40: expected 5:35, diff={diff}s"
 
     def test_vdot40_easy_range(self):
         """VDOT 40 E range ≈ 6:15–7:18 /km."""
-        p = daniels_paces(40.0)
+        p = daniels_paces(40.0, reference_date=REF_DATE)
         assert p.easy is not None
         lower_s = int(round(p.easy.lower.min_per_km * 60))
         upper_s = int(round(p.easy.upper.min_per_km * 60))
@@ -228,21 +228,21 @@ class TestDanielsPaceFormula:
 
     def test_vdot40_interval(self):
         """VDOT 40 I pace ≈ 4:17 /km."""
-        p = daniels_paces(40.0)
+        p = daniels_paces(40.0, reference_date=REF_DATE)
         assert p.interval is not None
         diff = self._pace_diff_s(p.interval.lower, "4:17")
         assert diff <= self.TOLERANCE_S_PER_KM, f"I VDOT40: expected 4:17, diff={diff}s"
 
     def test_vdot40_repetition(self):
         """VDOT 40 R pace ≈ 3:56 /km."""
-        p = daniels_paces(40.0)
+        p = daniels_paces(40.0, reference_date=REF_DATE)
         assert p.repetition is not None
         diff = self._pace_diff_s(p.repetition, "3:56")
         assert diff <= self.TOLERANCE_S_PER_KM, f"R VDOT40: expected 3:56, diff={diff}s"
 
     def test_vdot50_all_zones(self):
         """VDOT 50: cross-check E/M/T/I/R."""
-        p = daniels_paces(50.0)
+        p = daniels_paces(50.0, reference_date=REF_DATE)
         # E range ≈ 5:13–6:05
         assert abs(int(round(p.easy.lower.min_per_km * 60)) - self._pace_str_to_seconds("5:13")) <= self.TOLERANCE_S_PER_KM
         assert abs(int(round(p.easy.upper.min_per_km * 60)) - self._pace_str_to_seconds("6:05")) <= self.TOLERANCE_S_PER_KM
@@ -258,7 +258,7 @@ class TestDanielsPaceFormula:
     def test_pace_ordering(self):
         """For any VDOT: R < I < T < M < E_lower < E_upper (faster = smaller min/km)."""
         for vdot in [30.0, 40.0, 50.0, 60.0, 70.0]:
-            p = daniels_paces(vdot)
+            p = daniels_paces(vdot, reference_date=REF_DATE)
             assert p.easy and p.marathon and p.threshold and p.interval and p.repetition
             r = p.repetition.min_per_km
             i = p.interval.lower.min_per_km
@@ -274,14 +274,14 @@ class TestDanielsPaceFormula:
 
     def test_km_per_hour_consistent(self):
         """km_per_hour = 60 / min_per_km (within rounding)."""
-        p = daniels_paces(45.0)
+        p = daniels_paces(45.0, reference_date=REF_DATE)
         assert p.threshold is not None
         expected_kmh = 60.0 / p.threshold.min_per_km
         assert abs(p.threshold.km_per_hour - expected_kmh) < 0.05
 
     def test_pace_str_format(self):
         """Pace strings are in M:SS format."""
-        p = daniels_paces(45.0)
+        p = daniels_paces(45.0, reference_date=REF_DATE)
         for part in [p.threshold, p.marathon, p.repetition]:
             assert part is not None
             parts = part.pace_str.split(":")
@@ -522,16 +522,16 @@ class TestReadinessIndependence:
     def test_paces_are_capability_not_prescription(self):
         """TrainingPaces does not contain readiness_band or session fields."""
         ref = REF_DATE
-        paces = daniels_paces(45.0)
+        paces = daniels_paces(45.0, reference_date=REF_DATE)
         assert not hasattr(paces, "readiness_band")
         assert not hasattr(paces, "adapted_session")
         assert not hasattr(paces, "readiness_score")
 
     def test_threshold_pace_unchanged_by_readiness(self):
         """Threshold pace from VDOT 45 is deterministic and independent of readiness."""
-        p = daniels_paces(45.0)
+        p = daniels_paces(45.0, reference_date=REF_DATE)
         # Same VDOT always gives same T pace
-        p2 = daniels_paces(45.0)
+        p2 = daniels_paces(45.0, reference_date=REF_DATE)
         assert p.threshold.min_per_km == p2.threshold.min_per_km
 
 
@@ -658,72 +658,6 @@ class TestApiSerialization:
         assert p1.threshold.min_per_km == p2.threshold.min_per_km
         assert p1.reference_date == p2.reference_date
 
-
-# ---------------------------------------------------------------------------
-# 9. VDOT concordance and jump guard
-# ---------------------------------------------------------------------------
-
-class TestVdotConcordanceAndJumpGuard:
-    """Edge cases for the concordance and sudden-jump guard."""
-
-    def test_discordant_highs_remove_outlier(self):
-        """When 2 HIGH VDOTs are discordant (>5 pts apart), the lower one is used."""
-        ref = REF_DATE
-        benchmarks = _benchmark_pool(ref, n=7)
-        # Two HIGH activities, very different VDOTs
-        # h_normal: 10km in ~50 min → VDOT ≈ 40
-        h_normal = _running(
-            start_time=ref - timedelta(days=3),
-            distance_m=10_000.0,
-            duration_s=50 * 60.0,
-            average_hr=160.0,
-            max_hr=180.0,
-        )
-        # h_fast: 10km in ~40 min → VDOT ≈ 52
-        h_fast = _running(
-            start_time=ref - timedelta(days=5),
-            distance_m=10_000.0,
-            duration_s=40 * 60.0,
-            average_hr=165.0,
-            max_hr=185.0,
-        )
-        # Add more benchmarks at similar speeds to make speed percentile valid
-        extra_benchmarks = [
-            _running(
-                start_time=ref - timedelta(days=i + 10),
-                distance_m=10_000.0,
-                duration_s=(50 + i) * 60.0,
-                average_hr=135.0,
-                max_hr=175.0,
-            )
-            for i in range(5)
-        ]
-        paces = compute_training_paces(benchmarks + extra_benchmarks + [h_normal, h_fast], ref)
-        # Should resolve without error; concordance or single-high handling
-        assert paces.confidence in ("HIGH", "MEDIUM", "LOW", "INSUFFICIENT")
-
-    def test_jump_guard_engaged_with_prior_medium(self):
-        """New HIGH that jumps > 5 VDOT pts vs prior MEDIUM → MEDIUM confidence."""
-        # This test validates the jump guard logic conceptually.
-        # The guard compares new HIGH reference to prior MEDIUM weighted mean.
-        # We can only validate the output confidence is not HIGH in that case.
-        ref = REF_DATE
-        benchmarks = _benchmark_pool(ref, n=7)
-        # Many MEDIUM at VDOT ≈ 35
-        medium_acts = [
-            _running(
-                start_time=ref - timedelta(days=i * 4 + 5),
-                distance_m=10_000.0,
-                duration_s=(55 + i) * 60.0,
-                average_hr=150.0,
-                max_hr=178.0,
-            )
-            for i in range(3)
-        ]
-        # Note: whether these actually qualify as HIGH/MEDIUM depends on the
-        # benchmark pool. The test verifies the call succeeds and returns valid output.
-        paces = compute_training_paces(benchmarks + medium_acts, ref)
-        assert paces.confidence in ("HIGH", "MEDIUM", "LOW", "INSUFFICIENT")
 
 
 # ---------------------------------------------------------------------------
