@@ -849,9 +849,10 @@ class TestStaleHighPolicy:
             ),
         ]
         result = select_vdot_reference(evidence, ref)
-        # Two concordant HIGH (within VDOT_CONCORDANCE_BAND=5) → CASE 1 HIGH
-        assert result.paces_confidence in ("high", "medium"), (
-            f"HIGH historical + HIGH recent must yield high or medium, got '{result.paces_confidence}'"
+        # Only the recent HIGH is in high_recent (1 entry) → CASE 2 → "medium"
+        # Historical HIGH is in high_stale but CASE 2 applies (single recent HIGH)
+        assert result.paces_confidence == "medium", (
+            f"HIGH historical + single recent HIGH must yield medium (CASE 2), got '{result.paces_confidence}'"
         )
         assert result.reference_vdot is not None
 

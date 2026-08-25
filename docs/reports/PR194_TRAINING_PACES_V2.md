@@ -48,7 +48,6 @@ VDOT_SELECTION_POLICY =
          (confidence = high | medium | low)
 
   Recency windows — LOCAL to training_paces, NOT inherited from Race Predictions:
-    TP_STALE_HIGH_DAYS = 180  (Training Paces-specific)
     CONFIDENCE_HIGH_DAYS   = 21  (shared with performance_model)
     CONFIDENCE_MEDIUM_DAYS = 56  (shared with performance_model)
 
@@ -59,23 +58,22 @@ VDOT_SELECTION_POLICY =
   CASE 2 — exactly 1 HIGH, within CONFIDENCE_HIGH_DAYS:
             → that VDOT; paces_confidence = MEDIUM
 
-  CASE 3 — stale HIGH (CONFIDENCE_HIGH_DAYS < age ≤ TP_STALE_HIGH_DAYS):
+  CASE 3 — HIGH performance historical (age > CONFIDENCE_HIGH_DAYS), no recent HIGH:
             → that VDOT; paces_confidence = LOW
-            (paces survive — no abrupt deletion at day 22 or day 57)
+            HIGH_HISTORICAL_NEVER_EXPIRES = YES — no age cutoff silences paces
 
-  CASE 4 — MEDIUM only (no HIGH within CONFIDENCE_MEDIUM_DAYS):
+  CASE 4 — MEDIUM only (no HIGH at all):
             → best MEDIUM VDOT; paces_confidence = LOW
 
-  CASE 5 — no HIGH within TP_STALE_HIGH_DAYS AND no usable MEDIUM:
+  CASE 5 — no usable HIGH (recent or historical) AND no usable MEDIUM:
             → paces_confidence = INSUFFICIENT; all paces = null
             LOW-only also maps to INSUFFICIENT.
 
-STALE_HIGH_POLICY =
-  STALE_HIGH_DOES_NOT_ABRUPTLY_DELETE_PACES = YES
-  A HIGH performance aged up to 180 days continues to produce paces
-  at LOW confidence.  Paces go null only at INSUFFICIENT (CASE 5).
-  TP_STALE_HIGH_DAYS is deliberately decoupled from CONFIDENCE_MEDIUM_DAYS=56
-  (Race Predictions boundary) — they serve different purposes.
+HIGH_HISTORICAL_POLICY =
+  HIGH_HISTORICAL_NEVER_EXPIRES = YES
+  A HIGH performance retains its VDOT as a historical reference indefinitely.
+  Its confidence is degraded to LOW once it is no longer recent.
+  No arbitrary age cutoff silences paces — CASE 3 applies regardless of age.
 ```
 
 ## Invariants
