@@ -69,6 +69,14 @@ class Provider(ABC):
         """
         raise NotImplementedError
 
+    def get_max_metrics(self, user_id: str) -> List[Dict]:
+        """Return the raw gccli health max-metrics payload.
+
+        Callers normalize via ``GarminVO2Max.from_max_metrics()``.
+        Returns ``[]`` when the provider does not support this endpoint.
+        """
+        return []
+
     @abstractmethod
     def get_profile(self, user_id: str) -> Dict:
         raise NotImplementedError

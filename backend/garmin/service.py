@@ -15,7 +15,7 @@ from typing import Optional
 from .factory import get_provider_for_user, active_provider_name
 from .providers.base import STATUS_CONNECTED, STATUS_MFA_REQUIRED
 from . import session_store
-from .data_layer import GarminCapabilities
+from .data_layer import GarminCapabilities, GarminVO2Max
 from .sync_progress import get_sync_progress, update_sync_progress
 from events.stream import emit_activity_created
 from garmin.insights import compute_run_index
@@ -50,10 +50,84 @@ async def _persist_capabilities(db, user_id: str, capabilities: GarminCapabiliti
     )
 
 
+async def _persist_vo2max(db, user_id: str, vo2max: GarminVO2Max) -> None:
+    """Upsert a dated Garmin VO₂max point into the ``garmin_vo2max`` collection.
+
+    Each (user_id, date) pair is an independent document — a new measurement for
+    a different date does NOT overwrite an older one.  This preserves the full
+    sparse history of real Garmin readings.
+
+    Canonical date field: ``date`` (from ``calendarDate`` in the Garmin payload).
+    If Garmin does not provide a ``calendarDate`` the measurement is NOT persisted
+    as a historical point — no synthetic date is invented.
+
+    ``vo2max_running_precise`` is only written when the payload provides it; a
+    lower-fidelity payload does not erase a previously stored precise value for
+    the same date.
+    """
+    measurement_date = vo2max.date
+    if measurement_date is None:
+        # No date in payload → cannot create a meaningful historical point.
+        # Per design: no fabrication, no forward-fill.  Skip persistence.
+        logger.info(
+            "[Garmin] _persist_vo2max: no calendarDate in payload, skipping history write user=%s",
+            user_id,
+        )
+        return
+
+    set_fields: dict = {
+        "user_id": user_id,
+        "date": measurement_date,
+        "vo2max_running": vo2max.vo2max_running,
+        "source": vo2max.source,
+        "sport": "running",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if vo2max.vo2max_running_precise is not None:
+        set_fields["vo2max_running_precise"] = vo2max.vo2max_running_precise
+
+    await db.garmin_vo2max.update_one(
+        {"user_id": user_id, "date": measurement_date},
+        {"$set": set_fields},
+        upsert=True,
+    )
+    logger.info(
+        "[Garmin] VO2max persisted user=%s vo2max_running=%s precise=%s date=%s",
+        user_id, vo2max.vo2max_running, vo2max.vo2max_running_precise, measurement_date,
+    )
+
+
+async def _fetch_and_persist_vo2max(db, user_id: str, provider) -> Optional[float]:
+    """Fetch native Garmin VO₂max from gccli, normalize, and persist.
+
+    Returns the resolved ``vo2max_running`` value (or ``None``).
+    Never raises: any error is logged and ``None`` is returned so it does not
+    break the broader sync pipeline.
+
+    No-overwrite guard: when the payload yields no value (vo2max_running is None),
+    the collection is NOT updated so a previously stored good value is preserved.
+    """
+    try:
+        raw = provider.get_max_metrics(user_id)
+        vo2max = GarminVO2Max.from_max_metrics(raw)
+        if vo2max.vo2max_running is None:
+            logger.info(
+                "[Garmin] _fetch_and_persist_vo2max: no value in payload, skipping write user=%s",
+                user_id,
+            )
+            return None
+        await _persist_vo2max(db, user_id, vo2max)
+        return vo2max.vo2max_running
+    except Exception:
+        logger.exception("[Garmin] _fetch_and_persist_vo2max failed user=%s", user_id)
+        return None
+
+
 async def _build_and_persist_capabilities(db, user_id: str) -> None:
     """Build GarminCapabilities from already-stored daily metrics and persist them.
 
-    Uses ONLY data already in garmin_daily_metrics — no new gccli calls.
+    Uses ONLY data already in garmin_daily_metrics / garmin_vo2max — no new
+    gccli calls.
 
     Stored shapes (from GarminDailyMetrics.model_dump):
     - ``hrv``          : scalar float (lastNightAvg or weeklyAvg) → reconstituted as
@@ -62,6 +136,10 @@ async def _build_and_persist_capabilities(db, user_id: str) -> None:
                          but stored as None when absent) → reconstituted as
                          ``{"avgStressLevel": val}``
     - ``body_battery`` : int scalar → passed directly (from_probe uses _has_data)
+
+    VO2max:
+    - ``vo2max_running``: scalar float stored in garmin_vo2max → reconstituted as
+                          ``[{"vo2MaxValue": val}]`` proxy for from_probe
     """
     latest_hrv_doc = await db.garmin_daily_metrics.find_one(
         {"user_id": user_id, "hrv": {"$ne": None}},
@@ -90,10 +168,22 @@ async def _build_and_persist_capabilities(db, user_id: str) -> None:
     # time; wrap into the shape expected by GarminCapabilities._stress_ok.
     stress_payload = {"avgStressLevel": stress_val} if stress_val is not None else {}
 
+    # Native Garmin running VO₂max: read the most recent valid point from the
+    # sparse history stored in garmin_vo2max (sorted by measurement date DESC).
+    # The garmin_vo2max collection is updated by _fetch_and_persist_vo2max during sync.
+    vo2max_doc = await db.garmin_vo2max.find_one(
+        {"user_id": user_id, "vo2max_running": {"$ne": None}},
+        {"_id": 0, "vo2max_running": 1},
+        sort=[("date", -1)],
+    )
+    vo2max_val = (vo2max_doc or {}).get("vo2max_running")
+    max_metrics_proxy = [{"vo2MaxValue": vo2max_val}] if vo2max_val is not None else []
+
     capabilities = GarminCapabilities.from_probe(
         hrv=hrv_payload,
         body_battery=bb_val,
         stress=stress_payload,
+        max_metrics=max_metrics_proxy,
     )
     await _persist_capabilities(db, user_id, capabilities)
     logger.info("[Garmin] capabilities persisted user=%s %s", user_id, capabilities.model_dump())
@@ -373,6 +463,9 @@ async def _complete_post_activities_pipeline(
                 start_days_ago=1,
             ))
             metrics_count += await _persist_daily_metrics(db, user_id, metrics_7d)
+            # Fetch native Garmin VO₂max before capabilities build so
+            # _build_and_persist_capabilities can read the stored value for has_vo2max.
+            await _fetch_and_persist_vo2max(db, user_id, provider)
             await _build_and_persist_capabilities(db, user_id)
             readiness_payload = await compute_run_index(db, user_id)
             daily_metrics_status = "ready" if _has_usable_physio_data(metrics_7d) else "no_usable_data"
