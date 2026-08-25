@@ -9,9 +9,10 @@ JWT) is always used as user_id — never a client-supplied query parameter.
 
 from __future__ import annotations
 
+from datetime import date, datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -35,6 +36,20 @@ ACTIVE_SIGNAL_PREFIX = "runindex:active_signal:"
 ACTIVE_SIGNAL_TTL = 45 * 60  # 45 min — matches scheduler ACTIVE window
 
 garmin_router = APIRouter(prefix="/garmin", tags=["garmin"])
+
+
+def _subtract_months(anchor: date, months: int) -> date:
+    month_index = anchor.month - 1 - months
+    year = anchor.year + month_index // 12
+    month = (month_index % 12) + 1
+    if month == 2:
+        leap = year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+        max_day = 29 if leap else 28
+    elif month in (4, 6, 9, 11):
+        max_day = 30
+    else:
+        max_day = 31
+    return date(year, month, min(anchor.day, max_day))
 
 
 async def _safe_enqueue(user_id: str):
@@ -239,6 +254,47 @@ async def garmin_status(request: Request, user: dict = Depends(get_current_user)
     user_id = user["id"]
     db = request.app.state.db
     return await garmin_service.get_status(db, user_id)
+
+
+@garmin_router.get("/vo2max-history")
+async def garmin_vo2max_history(
+    request: Request,
+    user: dict = Depends(get_current_user),
+    period: str = Query("12m", description="3m | 6m | 12m"),
+):
+    user_id = user["id"]
+    db = request.app.state.db
+
+    period_months = {"3m": 3, "6m": 6, "12m": 12}.get((period or "12m").lower(), 12)
+    today = datetime.now(timezone.utc).date()
+    since = _subtract_months(today, period_months).isoformat()
+
+    cursor = (
+        db.garmin_vo2max.find(
+            {"user_id": user_id, "vo2max_running": {"$ne": None}, "date": {"$gte": since}},
+            {"_id": 0, "date": 1, "vo2max_running": 1, "vo2max_running_precise": 1},
+        )
+        .sort("date", 1)
+    )
+    rows = await cursor.to_list(length=2000)
+
+    history = [
+        {
+            "date": row.get("date"),
+            "value": row.get("vo2max_running"),
+            "precise": row.get("vo2max_running_precise"),
+            "source": "garmin",
+        }
+        for row in rows
+        if row.get("date")
+    ]
+    current = history[-1] if history else None
+
+    return {
+        "period": f"{period_months}m",
+        "current": current,
+        "history": history,
+    }
 
 
 @garmin_router.get("/queue/health")
