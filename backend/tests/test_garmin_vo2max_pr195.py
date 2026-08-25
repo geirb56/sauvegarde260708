@@ -195,7 +195,7 @@ class TestFetchAndPersistVO2Max:
         provider = MagicMock()
         provider.get_max_metrics.return_value = [{"vo2MaxValue": 53.0}]
 
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             garmin_service._fetch_and_persist_vo2max(db, "user_1", provider)
         )
 
@@ -211,7 +211,7 @@ class TestFetchAndPersistVO2Max:
         provider = MagicMock()
         provider.get_max_metrics.side_effect = RuntimeError("network error")
 
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             garmin_service._fetch_and_persist_vo2max(db, "user_1", provider)
         )
 
@@ -222,7 +222,7 @@ class TestFetchAndPersistVO2Max:
         provider = MagicMock()
         provider.get_max_metrics.return_value = []
 
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             garmin_service._fetch_and_persist_vo2max(db, "user_1", provider)
         )
 
@@ -263,7 +263,7 @@ class TestBuildCapabilitiesWithVO2Max:
     def test_has_vo2max_true_when_stored(self):
         db = self._mock_db(vo2max_val=52.0)
 
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             garmin_service._build_and_persist_capabilities(db, "user_1")
         )
 
@@ -273,7 +273,7 @@ class TestBuildCapabilitiesWithVO2Max:
     def test_has_vo2max_false_when_not_stored(self):
         db = self._mock_db(vo2max_val=None)
 
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             garmin_service._build_and_persist_capabilities(db, "user_1")
         )
 
@@ -317,7 +317,7 @@ class TestComputeRunIndexVO2Max:
 
         db = self._make_db(vo2max_val=51.5)
         ref_date = datetime.date(2024, 1, 16)
-        payload = asyncio.get_event_loop().run_until_complete(
+        payload = asyncio.run(
             compute_run_index(db, "u1", reference_date=ref_date)
         )
 
@@ -330,7 +330,7 @@ class TestComputeRunIndexVO2Max:
 
         db = self._make_db(vo2max_val=None)
         ref_date = datetime.date(2024, 1, 16)
-        payload = asyncio.get_event_loop().run_until_complete(
+        payload = asyncio.run(
             compute_run_index(db, "u1", reference_date=ref_date)
         )
 

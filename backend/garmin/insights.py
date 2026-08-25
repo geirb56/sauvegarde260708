@@ -111,7 +111,8 @@ async def compute_run_index(
         .to_list(length=200)
     )
 
-    # --- Native Garmin VO₂max (PR195) ---
+    # --- Native Garmin VO₂max ---
+    # Fetched from gccli health max-metrics during sync and stored in garmin_vo2max.
     vo2max_doc = await db.garmin_vo2max.find_one(
         {"user_id": user_id}, {"_id": 0, "vo2max_running": 1}
     )
@@ -333,7 +334,7 @@ async def compute_run_index(
                 "status": load_snapshot.status,
                 "confidence": load_snapshot.confidence,
             },
-            # Native Garmin running VO₂max (PR195).  None when the device does
+            # Native Garmin running VO₂max.  None when the device does
             # not produce this metric or before the first sync with max-metrics.
             "vo2max_running": vo2max_running,
         },

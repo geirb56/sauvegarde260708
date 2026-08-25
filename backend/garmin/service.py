@@ -101,7 +101,7 @@ async def _build_and_persist_capabilities(db, user_id: str) -> None:
                          ``{"avgStressLevel": val}``
     - ``body_battery`` : int scalar → passed directly (from_probe uses _has_data)
 
-    VO2max (PR195):
+    VO2max:
     - ``vo2max_running``: scalar float stored in garmin_vo2max → reconstituted as
                           ``[{"vo2MaxValue": val}]`` proxy for from_probe
     """
@@ -132,8 +132,9 @@ async def _build_and_persist_capabilities(db, user_id: str) -> None:
     # time; wrap into the shape expected by GarminCapabilities._stress_ok.
     stress_payload = {"avgStressLevel": stress_val} if stress_val is not None else {}
 
-    # VO2max (PR195): read the scalar stored by _fetch_and_persist_vo2max, then
+    # Native Garmin running VO₂max: read the scalar stored in garmin_vo2max, then
     # reconstruct a minimal proxy list so from_probe / _vo2max_ok can evaluate it.
+    # The garmin_vo2max collection is updated by _fetch_and_persist_vo2max during sync.
     vo2max_doc = await db.garmin_vo2max.find_one(
         {"user_id": user_id, "vo2max_running": {"$ne": None}},
         {"_id": 0, "vo2max_running": 1},
@@ -425,7 +426,7 @@ async def _complete_post_activities_pipeline(
                 start_days_ago=1,
             ))
             metrics_count += await _persist_daily_metrics(db, user_id, metrics_7d)
-            # PR195: fetch native Garmin VO₂max before capabilities build so
+            # Fetch native Garmin VO₂max before capabilities build so
             # _build_and_persist_capabilities can read the stored value for has_vo2max.
             await _fetch_and_persist_vo2max(db, user_id, provider)
             await _build_and_persist_capabilities(db, user_id)
