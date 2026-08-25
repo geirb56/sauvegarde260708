@@ -24,7 +24,9 @@ from training_v2.training_paces import (
     M_FRACTION,
     T_FRACTION,
     I_FRACTION,
+    I_FRACTION_SLOW,
     R_FRACTION,
+    TP_STALE_HIGH_DAYS,
     vdot_from_performance,
     daniels_paces,
     compute_training_paces,
@@ -692,3 +694,204 @@ class TestHistorySupport:
         p_without = compute_training_paces(benchmarks + [qualified], past_ref)
         p_with = compute_training_paces(benchmarks + [qualified, future_act], past_ref)
         assert p_without.vdot_result.reference_vdot == p_with.vdot_result.reference_vdot
+
+
+# ---------------------------------------------------------------------------
+# 11. Stale HIGH does not abruptly delete paces (STALE_HIGH_DOES_NOT_ABRUPTLY_DELETE_PACES)
+# ---------------------------------------------------------------------------
+
+class TestStaleHighPolicy:
+    """STALE_HIGH_DOES_NOT_ABRUPTLY_DELETE_PACES = YES.
+
+    A HIGH performance must continue to produce paces at LOW confidence
+    until TP_STALE_HIGH_DAYS has elapsed.  This policy is local to
+    training_paces and is independent of Race Predictions / performance_model
+    window constants.
+    """
+
+    def test_stale_high_at_day_57_paces_survive(self):
+        """A HIGH performance that is 57 days old must still produce paces.
+
+        Race Predictions uses CONFIDENCE_MEDIUM_DAYS=56 as a hard boundary.
+        Training Paces MUST NOT adopt that same boundary: paces must survive
+        beyond day 56.
+        """
+        from training_v2.training_paces import select_vdot_reference, VdotEvidence, _RECENCY_WEIGHT_OLD
+
+        ref = REF_DATE
+        days_old = 57  # one day past the old (broken) 56-day Race Predictions window
+        evidence = [
+            VdotEvidence(
+                vdot=45.0,
+                confidence="high",
+                performance_date=ref - timedelta(days=days_old),
+                days_old=days_old,
+                distance_m=10_000.0,
+                duration_s=47 * 60.0,
+                recency_weight=_RECENCY_WEIGHT_OLD,
+            )
+        ]
+        result = select_vdot_reference(evidence, ref)
+        assert result.paces_confidence == "low", (
+            f"Expected 'low' at day 57 (stale HIGH), got '{result.paces_confidence}'"
+        )
+        assert result.reference_vdot == 45.0, "VDOT must be preserved at day 57"
+
+    def test_stale_high_long_term_paces_survive(self):
+        """A HIGH performance aged up to TP_STALE_HIGH_DAYS continues to produce paces.
+
+        Checks several ages within the stale window: day 30, day 60, day 120,
+        and TP_STALE_HIGH_DAYS - 1.
+        """
+        from training_v2.training_paces import select_vdot_reference, VdotEvidence, _RECENCY_WEIGHT_OLD
+
+        ref = REF_DATE
+        for days_old in [30, 60, 120, TP_STALE_HIGH_DAYS - 1]:
+            evidence = [
+                VdotEvidence(
+                    vdot=43.0,
+                    confidence="high",
+                    performance_date=ref - timedelta(days=days_old),
+                    days_old=days_old,
+                    distance_m=10_000.0,
+                    duration_s=49 * 60.0,
+                    recency_weight=_RECENCY_WEIGHT_OLD,
+                )
+            ]
+            result = select_vdot_reference(evidence, ref)
+            assert result.paces_confidence == "low", (
+                f"Expected 'low' at day {days_old}, got '{result.paces_confidence}'"
+            )
+            assert result.reference_vdot == 43.0, (
+                f"VDOT must be preserved at day {days_old}"
+            )
+
+    def test_stale_high_confidence_is_low_not_insufficient(self):
+        """A stale HIGH must produce paces (confidence=LOW), not INSUFFICIENT."""
+        from training_v2.training_paces import select_vdot_reference, VdotEvidence, _RECENCY_WEIGHT_OLD
+
+        ref = REF_DATE
+        stale_days = 90  # well past 56d, still within TP_STALE_HIGH_DAYS
+        evidence = [
+            VdotEvidence(
+                vdot=47.0,
+                confidence="high",
+                performance_date=ref - timedelta(days=stale_days),
+                days_old=stale_days,
+                distance_m=10_000.0,
+                duration_s=46 * 60.0,
+                recency_weight=_RECENCY_WEIGHT_OLD,
+            )
+        ]
+        result = select_vdot_reference(evidence, ref)
+        assert result.paces_confidence != "insufficient", (
+            "Stale HIGH must not map to INSUFFICIENT within TP_STALE_HIGH_DAYS"
+        )
+        assert result.reference_vdot is not None
+
+    def test_low_only_is_insufficient(self):
+        """LOW-only qualified performances → INSUFFICIENT (no paces).
+
+        Verifies explicitly that LOW alone does not produce paces.
+        This test is independent of Race Predictions window constants.
+        """
+        from training_v2.training_paces import select_vdot_reference, VdotEvidence, _RECENCY_WEIGHT_RECENT
+
+        ref = REF_DATE
+        evidence = [
+            VdotEvidence(
+                vdot=40.0,
+                confidence="low",
+                performance_date=ref - timedelta(days=5),
+                days_old=5,
+                distance_m=10_000.0,
+                duration_s=50 * 60.0,
+                recency_weight=_RECENCY_WEIGHT_RECENT,
+            ),
+            VdotEvidence(
+                vdot=39.0,
+                confidence="low",
+                performance_date=ref - timedelta(days=12),
+                days_old=12,
+                distance_m=10_000.0,
+                duration_s=51 * 60.0,
+                recency_weight=_RECENCY_WEIGHT_RECENT,
+            ),
+        ]
+        result = select_vdot_reference(evidence, ref)
+        assert result.paces_confidence == "insufficient", (
+            f"LOW-only must → INSUFFICIENT, got '{result.paces_confidence}'"
+        )
+        assert result.reference_vdot is None
+
+    def test_stale_high_beyond_tp_window_is_insufficient(self):
+        """A HIGH performance older than TP_STALE_HIGH_DAYS → INSUFFICIENT."""
+        from training_v2.training_paces import select_vdot_reference, VdotEvidence
+
+        ref = REF_DATE
+        too_old = TP_STALE_HIGH_DAYS + 1
+        evidence = [
+            VdotEvidence(
+                vdot=45.0,
+                confidence="high",
+                performance_date=ref - timedelta(days=too_old),
+                days_old=too_old,
+                distance_m=10_000.0,
+                duration_s=47 * 60.0,
+                recency_weight=0.0,  # beyond any window
+            )
+        ]
+        result = select_vdot_reference(evidence, ref)
+        assert result.paces_confidence == "insufficient", (
+            f"Evidence older than TP_STALE_HIGH_DAYS must be INSUFFICIENT, got '{result.paces_confidence}'"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 12. Interval definition consistency
+# ---------------------------------------------------------------------------
+
+class TestIntervalDefinition:
+    """I_FRACTION (faster end) and I_FRACTION_SLOW (slower end) must be consistent
+    with the code that builds the interval PaceRange.
+    """
+
+    def test_interval_constants_defined(self):
+        """I_FRACTION and I_FRACTION_SLOW are accessible and in expected range."""
+        assert 1.0 < I_FRACTION <= 1.15, f"I_FRACTION out of range: {I_FRACTION}"
+        assert 0.95 <= I_FRACTION_SLOW <= 1.05, f"I_FRACTION_SLOW out of range: {I_FRACTION_SLOW}"
+        assert I_FRACTION > I_FRACTION_SLOW, "I_FRACTION (fast) must be > I_FRACTION_SLOW (slow)"
+
+    def test_interval_range_lower_is_faster(self):
+        """interval.lower (faster pace = smaller min/km) uses I_FRACTION."""
+        p = daniels_paces(50.0, reference_date=REF_DATE)
+        assert p.interval is not None
+        # Faster end (lower min/km) must correspond to I_FRACTION (1.0915)
+        # Slower end (higher min/km) must correspond to I_FRACTION_SLOW (1.0)
+        assert p.interval.lower.min_per_km < p.interval.upper.min_per_km, (
+            "interval.lower must be faster than interval.upper"
+        )
+
+    def test_interval_upper_matches_i_fraction_slow(self):
+        """interval.upper is computed from I_FRACTION_SLOW (1.0), not I_FRACTION * 0.95."""
+        from training_v2.training_paces import _pace_at_fraction
+        vdot = 50.0
+        p = daniels_paces(vdot, reference_date=REF_DATE)
+        expected_upper = _pace_at_fraction(vdot, I_FRACTION_SLOW)
+        assert expected_upper is not None
+        assert abs(p.interval.upper.min_per_km - expected_upper.min_per_km) < 0.001, (
+            f"interval.upper {p.interval.upper.min_per_km:.4f} != "
+            f"expected from I_FRACTION_SLOW {expected_upper.min_per_km:.4f}"
+        )
+
+    def test_interval_lower_matches_i_fraction(self):
+        """interval.lower is computed from I_FRACTION (1.0915)."""
+        from training_v2.training_paces import _pace_at_fraction
+        vdot = 50.0
+        p = daniels_paces(vdot, reference_date=REF_DATE)
+        expected_lower = _pace_at_fraction(vdot, I_FRACTION)
+        assert expected_lower is not None
+        assert abs(p.interval.lower.min_per_km - expected_lower.min_per_km) < 0.001, (
+            f"interval.lower {p.interval.lower.min_per_km:.4f} != "
+            f"expected from I_FRACTION {expected_lower.min_per_km:.4f}"
+        )

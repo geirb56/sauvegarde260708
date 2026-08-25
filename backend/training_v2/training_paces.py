@@ -46,7 +46,7 @@ measured tolerance ≤12 s/km across VDOT 30–70):
     E (Easy)       : [0.56, 0.68] VDOT  → RANGE [pace_faster, pace_slower]
     M (Marathon)   : 0.79 × VDOT        → SINGLE PACE
     T (Threshold)  : 0.88 × VDOT        → SINGLE PACE  (~1-hr race effort)
-    I (Interval)   : [1.0, 1.0915] × VDOT  → RANGE  (5-min rep effort)
+    I (Interval)   : [1.0915, 1.0] × VDOT  → RANGE  (faster=1.0915, slower=1.0)
     R (Repetition) : 1.2335 × VDOT      → SINGLE PACE  (1-min rep effort)
 
 These are RUNINDEX_DANIELS_TABLE_CALIBRATION values reproducing the official
@@ -61,32 +61,39 @@ VDOT selection policy
 Input: list of qualified performances from evaluate_performance_quality()
        (confidence = "high" | "medium" | "low")
 
-Recency windows (inherited from performance_model constants):
-    HIGH_DAYS   = 21
-    MEDIUM_DAYS = 56
-    LOW_DAYS    = 120
+Recency windows for Training Paces (local to this module — NOT inherited from
+Race Predictions / performance_model windows):
+    TP_HIGH_DAYS        = 21   (same as CONFIDENCE_HIGH_DAYS — used for recent HIGH)
+    TP_STALE_HIGH_DAYS  = 180  (Training Paces-specific — stale HIGH survives longer)
+    MEDIUM_DAYS         = 56   (CONFIDENCE_MEDIUM_DAYS — unchanged)
+
+STALE_HIGH_DOES_NOT_ABRUPTLY_DELETE_PACES = YES
+A HIGH performance continues to produce paces as long as its age ≤ TP_STALE_HIGH_DAYS,
+with degraded confidence.  Paces are silenced only when there is truly no usable evidence.
 
 Selection algorithm (evaluated at reference_date):
 
 CASE 1  — ≥2 HIGH performances, concordant (within VDOT_CONCORDANCE_BAND),
-          most-recent within HIGH_DAYS:
+          most-recent within CONFIDENCE_HIGH_DAYS:
           reference = weighted mean of concordant HIGH VDOTs
           paces_confidence = HIGH
 
-CASE 2  — exactly 1 HIGH performance, within HIGH_DAYS:
+CASE 2  — exactly 1 HIGH performance, within CONFIDENCE_HIGH_DAYS:
           reference = that VDOT
           paces_confidence = MEDIUM
 
-CASE 3  — HIGH performance stale (HIGH_DAYS < age ≤ MEDIUM_DAYS):
-          reference = that VDOT (no change—staleness is expressed via LOW conf)
+CASE 3  — HIGH performance stale (CONFIDENCE_HIGH_DAYS < age ≤ TP_STALE_HIGH_DAYS):
+          reference = that VDOT (staleness expressed via LOW confidence)
           paces_confidence = LOW
+          STALE_HIGH_DOES_NOT_ABRUPTLY_DELETE_PACES = YES
 
-CASE 4  — MEDIUM performances within MEDIUM_DAYS, no recent HIGH:
+CASE 4  — MEDIUM performances within CONFIDENCE_MEDIUM_DAYS, no recent HIGH:
           reference = recency-weighted mean of MEDIUM VDOTs
           paces_confidence = LOW
 
-CASE 5  — all evidence older than MEDIUM_DAYS or only LOW quality:
+CASE 5  — no HIGH within TP_STALE_HIGH_DAYS AND no usable MEDIUM:
           paces_confidence = INSUFFICIENT → no paces emitted
+          LOW-only evidence also maps to INSUFFICIENT.
 
 Concordance rule: discard any HIGH performance whose VDOT differs from
 the others by more than VDOT_CONCORDANCE_BAND (5 VDOT points).
@@ -151,12 +158,26 @@ VDOT_CONCORDANCE_BAND: float = 5.0
 # raises the prior reference VDOT by more than this.
 VDOT_JUMP_GUARD: float = 5.0
 
+# ---------------------------------------------------------------------------
+# Training Paces recency policy (LOCAL — not inherited from Race Predictions)
+# ---------------------------------------------------------------------------
+# TP_STALE_HIGH_DAYS is Training Paces-specific.  A HIGH performance remains
+# usable (at LOW confidence) for up to TP_STALE_HIGH_DAYS days.
+# This is intentionally longer than CONFIDENCE_MEDIUM_DAYS (56) used by
+# Race Predictions to avoid abruptly deleting paces at J+57.
+TP_STALE_HIGH_DAYS: int = 180
+
 # Daniels intensity fractions (calibrated, see module docstring)
 E_FRACTION_LOW: float = 0.56    # slow end of easy range
 E_FRACTION_HIGH: float = 0.68   # fast end of easy range
 M_FRACTION: float = 0.79        # marathon pace
 T_FRACTION: float = 0.88        # threshold / lactate threshold pace
-I_FRACTION: float = 1.0915      # interval pace (5-min rep calibration)
+# Interval range: RUNINDEX_DANIELS_TABLE_CALIBRATION
+#   I_FRACTION     = faster end (5-min rep calibration)
+#   I_FRACTION_SLOW = slower end (VO2max pace)
+# Together they reproduce the Daniels I-zone [slower=1.0, faster=1.0915] × VDOT.
+I_FRACTION: float = 1.0915      # interval faster end
+I_FRACTION_SLOW: float = 1.0    # interval slower end
 R_FRACTION: float = 1.2335      # repetition pace (1-min rep calibration)
 
 # Daniels/Gilbert VO2-speed polynomial coefficients
@@ -385,7 +406,7 @@ def _recency_weight(days_old: int) -> float:
         return _RECENCY_WEIGHT_RECENT
     if days_old <= CONFIDENCE_MEDIUM_DAYS:
         return _RECENCY_WEIGHT_MEDIUM
-    if days_old <= CONFIDENCE_LOW_DAYS:
+    if days_old <= TP_STALE_HIGH_DAYS:
         return _RECENCY_WEIGHT_OLD
     return 0.0
 
@@ -470,7 +491,7 @@ def _select_vdot_reference(
         )
 
     high_recent = [e for e in evidence if e.confidence == "high" and e.days_old <= CONFIDENCE_HIGH_DAYS]
-    high_stale  = [e for e in evidence if e.confidence == "high" and CONFIDENCE_HIGH_DAYS < e.days_old <= CONFIDENCE_MEDIUM_DAYS]
+    high_stale  = [e for e in evidence if e.confidence == "high" and CONFIDENCE_HIGH_DAYS < e.days_old <= TP_STALE_HIGH_DAYS]
     medium_usable = [e for e in evidence if e.confidence == "medium" and e.days_old <= CONFIDENCE_MEDIUM_DAYS]
     high_all    = high_recent + high_stale
 
@@ -642,10 +663,10 @@ def _build_training_paces(reference_date: date, vdot_result: VdotResult) -> Trai
     e_upper = _pace_at_fraction(vdot, E_FRACTION_LOW)
     easy = PaceRange(lower=e_lower, upper=e_upper) if (e_lower and e_upper) else None
 
-    # I range: lower = I_FRACTION (faster), upper = slightly below
+    # I range: lower (faster) = I_FRACTION, upper (slower) = I_FRACTION_SLOW
+    # RUNINDEX_DANIELS_TABLE_CALIBRATION: [slower=1.0, faster=1.0915] × VDOT
     i_pace = _pace_at_fraction(vdot, I_FRACTION)
-    # I upper (slower end) calibrated at 5-min effort but +5% slower
-    i_upper = _pace_at_fraction(vdot, I_FRACTION * 0.95)
+    i_upper = _pace_at_fraction(vdot, I_FRACTION_SLOW)
     interval = PaceRange(lower=i_pace, upper=i_upper) if (i_pace and i_upper) else None
 
     marathon = _pace_at_fraction(vdot, M_FRACTION)
