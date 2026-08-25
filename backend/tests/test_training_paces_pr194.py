@@ -26,7 +26,6 @@ from training_v2.training_paces import (
     I_FRACTION,
     I_FRACTION_SLOW,
     R_FRACTION,
-    TP_STALE_HIGH_DAYS,
     vdot_from_performance,
     daniels_paces,
     compute_training_paces,
@@ -701,12 +700,12 @@ class TestHistorySupport:
 # ---------------------------------------------------------------------------
 
 class TestStaleHighPolicy:
-    """STALE_HIGH_DOES_NOT_ABRUPTLY_DELETE_PACES = YES.
+    """HIGH_HISTORICAL_NEVER_EXPIRES = YES.
 
     A HIGH performance must continue to produce paces at LOW confidence
-    until TP_STALE_HIGH_DAYS has elapsed.  This policy is local to
-    training_paces and is independent of Race Predictions / performance_model
-    window constants.
+    regardless of its age.  No arbitrary age cutoff silences paces.
+    This policy is local to training_paces and is independent of Race
+    Predictions / performance_model window constants.
     """
 
     def test_stale_high_at_day_57_paces_survive(self):
@@ -738,15 +737,15 @@ class TestStaleHighPolicy:
         assert result.reference_vdot == 45.0, "VDOT must be preserved at day 57"
 
     def test_stale_high_long_term_paces_survive(self):
-        """A HIGH performance aged up to TP_STALE_HIGH_DAYS continues to produce paces.
+        """A historical HIGH performance continues to produce paces at any age.
 
-        Checks several ages within the stale window: day 30, day 60, day 120,
-        and TP_STALE_HIGH_DAYS - 1.
+        Checks the key boundary ages: J+57 (one day past CONFIDENCE_MEDIUM_DAYS),
+        J+180, J+181, and J+365.
         """
         from training_v2.training_paces import select_vdot_reference, VdotEvidence, _RECENCY_WEIGHT_OLD
 
         ref = REF_DATE
-        for days_old in [30, 60, 120, TP_STALE_HIGH_DAYS - 1]:
+        for days_old in [57, 180, 181, 365]:
             evidence = [
                 VdotEvidence(
                     vdot=43.0,
@@ -767,11 +766,11 @@ class TestStaleHighPolicy:
             )
 
     def test_stale_high_confidence_is_low_not_insufficient(self):
-        """A stale HIGH must produce paces (confidence=LOW), not INSUFFICIENT."""
+        """A historical HIGH must produce paces (confidence=LOW), not INSUFFICIENT."""
         from training_v2.training_paces import select_vdot_reference, VdotEvidence, _RECENCY_WEIGHT_OLD
 
         ref = REF_DATE
-        stale_days = 90  # well past 56d, still within TP_STALE_HIGH_DAYS
+        stale_days = 365  # well past 56d, any age
         evidence = [
             VdotEvidence(
                 vdot=47.0,
@@ -785,7 +784,7 @@ class TestStaleHighPolicy:
         ]
         result = select_vdot_reference(evidence, ref)
         assert result.paces_confidence != "insufficient", (
-            "Stale HIGH must not map to INSUFFICIENT within TP_STALE_HIGH_DAYS"
+            "Historical HIGH must never map to INSUFFICIENT regardless of age"
         )
         assert result.reference_vdot is not None
 
@@ -824,27 +823,74 @@ class TestStaleHighPolicy:
         )
         assert result.reference_vdot is None
 
-    def test_stale_high_beyond_tp_window_is_insufficient(self):
-        """A HIGH performance older than TP_STALE_HIGH_DAYS → INSUFFICIENT."""
-        from training_v2.training_paces import select_vdot_reference, VdotEvidence
+    def test_high_historical_plus_high_recent_recent_dominates(self):
+        """HIGH historical + HIGH recent: the recent HIGH dominates the selection."""
+        from training_v2.training_paces import select_vdot_reference, VdotEvidence, _RECENCY_WEIGHT_RECENT, _RECENCY_WEIGHT_OLD
 
         ref = REF_DATE
-        too_old = TP_STALE_HIGH_DAYS + 1
         evidence = [
             VdotEvidence(
-                vdot=45.0,
+                vdot=42.0,
                 confidence="high",
-                performance_date=ref - timedelta(days=too_old),
-                days_old=too_old,
+                performance_date=ref - timedelta(days=365),
+                days_old=365,
                 distance_m=10_000.0,
-                duration_s=47 * 60.0,
-                recency_weight=0.0,  # beyond any window
-            )
+                duration_s=50 * 60.0,
+                recency_weight=_RECENCY_WEIGHT_OLD,
+            ),
+            VdotEvidence(
+                vdot=46.0,
+                confidence="high",
+                performance_date=ref - timedelta(days=10),
+                days_old=10,
+                distance_m=10_000.0,
+                duration_s=46 * 60.0,
+                recency_weight=_RECENCY_WEIGHT_RECENT,
+            ),
         ]
         result = select_vdot_reference(evidence, ref)
-        assert result.paces_confidence == "insufficient", (
-            f"Evidence older than TP_STALE_HIGH_DAYS must be INSUFFICIENT, got '{result.paces_confidence}'"
+        # Two concordant HIGH (within VDOT_CONCORDANCE_BAND=5) → CASE 1 HIGH
+        assert result.paces_confidence in ("high", "medium"), (
+            f"HIGH historical + HIGH recent must yield high or medium, got '{result.paces_confidence}'"
         )
+        assert result.reference_vdot is not None
+
+    def test_high_historical_plus_medium_recent_policy_applied(self):
+        """HIGH historical + MEDIUM recent: historical HIGH is not silently dropped.
+
+        The HIGH historical evidence must pass through to _select_vdot_reference.
+        Since there is no *recent* HIGH (days_old > CONFIDENCE_HIGH_DAYS), but
+        there IS a historical HIGH, CASE 3 applies → confidence LOW, paces present.
+        """
+        from training_v2.training_paces import select_vdot_reference, VdotEvidence, _RECENCY_WEIGHT_RECENT, _RECENCY_WEIGHT_OLD
+
+        ref = REF_DATE
+        evidence = [
+            VdotEvidence(
+                vdot=43.0,
+                confidence="high",
+                performance_date=ref - timedelta(days=200),
+                days_old=200,
+                distance_m=10_000.0,
+                duration_s=49 * 60.0,
+                recency_weight=_RECENCY_WEIGHT_OLD,
+            ),
+            VdotEvidence(
+                vdot=41.0,
+                confidence="medium",
+                performance_date=ref - timedelta(days=30),
+                days_old=30,
+                distance_m=10_000.0,
+                duration_s=51 * 60.0,
+                recency_weight=_RECENCY_WEIGHT_RECENT,
+            ),
+        ]
+        result = select_vdot_reference(evidence, ref)
+        # Historical HIGH (CASE 3) takes priority over MEDIUM (CASE 4)
+        assert result.paces_confidence == "low", (
+            f"HIGH historical + MEDIUM recent must yield low, got '{result.paces_confidence}'"
+        )
+        assert result.reference_vdot == 43.0, "Historical HIGH VDOT must be used as reference"
 
 
 # ---------------------------------------------------------------------------

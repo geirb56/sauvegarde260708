@@ -63,13 +63,13 @@ Input: list of qualified performances from evaluate_performance_quality()
 
 Recency windows for Training Paces (local to this module — NOT inherited from
 Race Predictions / performance_model windows):
-    TP_HIGH_DAYS        = 21   (same as CONFIDENCE_HIGH_DAYS — used for recent HIGH)
-    TP_STALE_HIGH_DAYS  = 180  (Training Paces-specific — stale HIGH survives longer)
-    MEDIUM_DAYS         = 56   (CONFIDENCE_MEDIUM_DAYS — unchanged)
+    TP_HIGH_DAYS  = 21   (same as CONFIDENCE_HIGH_DAYS — used for recent HIGH)
+    MEDIUM_DAYS   = 56   (CONFIDENCE_MEDIUM_DAYS — unchanged)
 
-STALE_HIGH_DOES_NOT_ABRUPTLY_DELETE_PACES = YES
-A HIGH performance continues to produce paces as long as its age ≤ TP_STALE_HIGH_DAYS,
-with degraded confidence.  Paces are silenced only when there is truly no usable evidence.
+HIGH_HISTORICAL_NEVER_EXPIRES = YES
+A HIGH performance retains its VDOT as a historical reference indefinitely.
+Only its confidence is degraded (to LOW) once it is no longer recent.
+No arbitrary age cutoff silences paces.
 
 Selection algorithm (evaluated at reference_date):
 
@@ -82,16 +82,16 @@ CASE 2  — exactly 1 HIGH performance, within CONFIDENCE_HIGH_DAYS:
           reference = that VDOT
           paces_confidence = MEDIUM
 
-CASE 3  — HIGH performance stale (CONFIDENCE_HIGH_DAYS < age ≤ TP_STALE_HIGH_DAYS):
-          reference = that VDOT (staleness expressed via LOW confidence)
+CASE 3  — HIGH performance historical (age > CONFIDENCE_HIGH_DAYS), no recent HIGH:
+          reference = that VDOT (age expressed via LOW confidence)
           paces_confidence = LOW
-          STALE_HIGH_DOES_NOT_ABRUPTLY_DELETE_PACES = YES
+          HIGH_HISTORICAL_NEVER_EXPIRES = YES
 
-CASE 4  — MEDIUM performances within CONFIDENCE_MEDIUM_DAYS, no recent HIGH:
+CASE 4  — MEDIUM performances within CONFIDENCE_MEDIUM_DAYS, no HIGH at all:
           reference = recency-weighted mean of MEDIUM VDOTs
           paces_confidence = LOW
 
-CASE 5  — no HIGH within TP_STALE_HIGH_DAYS AND no usable MEDIUM:
+CASE 5  — no usable HIGH (recent or historical) AND no usable MEDIUM:
           paces_confidence = INSUFFICIENT → no paces emitted
           LOW-only evidence also maps to INSUFFICIENT.
 
@@ -157,15 +157,6 @@ VDOT_CONCORDANCE_BAND: float = 5.0
 # Sudden-jump guard: a new single HIGH is promoted to CASE 2 only if it
 # raises the prior reference VDOT by more than this.
 VDOT_JUMP_GUARD: float = 5.0
-
-# ---------------------------------------------------------------------------
-# Training Paces recency policy (LOCAL — not inherited from Race Predictions)
-# ---------------------------------------------------------------------------
-# TP_STALE_HIGH_DAYS is Training Paces-specific.  A HIGH performance remains
-# usable (at LOW confidence) for up to TP_STALE_HIGH_DAYS days.
-# This is intentionally longer than CONFIDENCE_MEDIUM_DAYS (56) used by
-# Race Predictions to avoid abruptly deleting paces at J+57.
-TP_STALE_HIGH_DAYS: int = 180
 
 # Daniels intensity fractions (calibrated, see module docstring)
 E_FRACTION_LOW: float = 0.56    # slow end of easy range
@@ -406,9 +397,7 @@ def _recency_weight(days_old: int) -> float:
         return _RECENCY_WEIGHT_RECENT
     if days_old <= CONFIDENCE_MEDIUM_DAYS:
         return _RECENCY_WEIGHT_MEDIUM
-    if days_old <= TP_STALE_HIGH_DAYS:
-        return _RECENCY_WEIGHT_OLD
-    return 0.0
+    return _RECENCY_WEIGHT_OLD
 
 
 def _collect_vdot_evidence(
@@ -491,7 +480,7 @@ def _select_vdot_reference(
         )
 
     high_recent = [e for e in evidence if e.confidence == "high" and e.days_old <= CONFIDENCE_HIGH_DAYS]
-    high_stale  = [e for e in evidence if e.confidence == "high" and CONFIDENCE_HIGH_DAYS < e.days_old <= TP_STALE_HIGH_DAYS]
+    high_stale  = [e for e in evidence if e.confidence == "high" and e.days_old > CONFIDENCE_HIGH_DAYS]
     medium_usable = [e for e in evidence if e.confidence == "medium" and e.days_old <= CONFIDENCE_MEDIUM_DAYS]
     high_all    = high_recent + high_stale
 
@@ -622,7 +611,7 @@ def _select_vdot_reference(
                 evidence=tuple(evidence),
             )
 
-    # ── CASE 5: all evidence too old or only LOW quality ─────────────────
+    # ── CASE 5: no usable HIGH or MEDIUM — LOW-only or no evidence ────────
     return VdotResult(
         reference_vdot=None,
         paces_confidence="insufficient",
