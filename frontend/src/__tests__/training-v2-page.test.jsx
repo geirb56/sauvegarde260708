@@ -81,31 +81,46 @@ function buildCycleResponse() {
   };
 }
 
+// buildTodayResponse uses the real /training/today contract (PR137/PR194).
+// Fields: original_prescription, adapted_prescription, adaptation_applied,
+//         adaptation_reason, readiness.band — NOT original_session/adapted_session/readiness_band.
 function buildTodayResponse({ adapted = false } = {}) {
   const original = { workout_type: "easy", distance_km: 9.2, duration_minutes: 45 };
-  const adapted_session = adapted
+  const adapted_prescription = adapted
     ? { workout_type: "recovery", distance_km: 5.5, duration_minutes: 30 }
     : original;
   return {
-    original_session: original,
-    adapted_session,
-    readiness_band: adapted ? "LOW" : "HIGH",
-    adaptation_reason: adapted ? "Low readiness" : null,
+    status: "success",
+    planned_session: original,
+    original_prescription: original,
+    adapted_prescription,
+    adaptation_applied: adapted,
+    adaptation_reason: adapted ? "Low readiness" : "",
+    reason_codes: adapted ? ["LOW_READINESS"] : ["PLAN_KEPT"],
+    readiness: {
+      band: adapted ? "LOW" : "HIGH",
+      score: adapted ? 0.3 : 0.85,
+      confidence: "MEDIUM",
+      available: true,
+    },
   };
 }
 
 function buildPacesResponse({ confidence = "HIGH" } = {}) {
   if (confidence === "INSUFFICIENT") {
-    return { confidence: "INSUFFICIENT", paces: null };
+    return {
+      confidence: "INSUFFICIENT",
+      paces: { easy: null, marathon: null, threshold: null, interval: null, repetition: null },
+    };
   }
   return {
     confidence,
     paces: {
-      easy: { lower: { min_per_km: 5.0 }, upper: { min_per_km: 6.0 } },
-      marathon: { min_per_km: 5.2 },
-      threshold: { min_per_km: 4.8 },
-      interval: { lower: { min_per_km: 4.2 }, upper: { min_per_km: 4.5 } },
-      repetition: { min_per_km: 3.9 },
+      easy: { lower: { min_per_km: 5.0, pace_str: "5:00" }, upper: { min_per_km: 6.0, pace_str: "6:00" }, lower_str: "5:00", upper_str: "6:00" },
+      marathon: { min_per_km: 5.2, pace_str: "5:12", km_per_hour: 11.54 },
+      threshold: { min_per_km: 4.8, pace_str: "4:48", km_per_hour: 12.5 },
+      interval: { lower: { min_per_km: 4.2, pace_str: "4:12" }, upper: { min_per_km: 4.5, pace_str: "4:30" }, lower_str: "4:12", upper_str: "4:30" },
+      repetition: { min_per_km: 3.9, pace_str: "3:54", km_per_hour: 15.38 },
     },
   };
 }
@@ -318,7 +333,7 @@ describe("TrainingPlanV2 — PR #177", () => {
   });
 });
 
-describe("TrainingPlanV2 — PR #196 (Paces V2 + Today)", () => {
+describe("TrainingPlanV2 — PR #194 (Paces V2 + Today)", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     window.localStorage.clear();
@@ -342,8 +357,15 @@ describe("TrainingPlanV2 — PR #196 (Paces V2 + Today)", () => {
   });
 
   // T3: No session shows no-session message (not crash)
-  it("shows no-session message when today returns null session", async () => {
-    mockAxiosSuccess({ todayData: { original_session: null, adapted_session: null, readiness_band: null } });
+  it("shows no-session message when today returns no session", async () => {
+    // Real /training/today no_session payload (PR137 contract)
+    const noSessionPayload = {
+      status: "no_session",
+      message: "No session planned for today",
+      date: "2026-08-25",
+      day: "Monday",
+    };
+    mockAxiosSuccess({ todayData: noSessionPayload });
     renderPage();
     await screen.findByTestId("training-v2-today");
     expect(screen.getByTestId("today-no-session")).toBeInTheDocument();

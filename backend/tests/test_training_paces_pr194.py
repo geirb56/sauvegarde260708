@@ -1,4 +1,4 @@
-"""PR196 — Training Paces V2 backend tests.
+"""PR194 — Training Paces V2 backend tests.
 
 Tests VDOT calculation, Daniels pace derivation, VDOT selection policy,
 confidence levels, no-lookahead invariant, Garmin VO2max independence,
@@ -569,53 +569,94 @@ class TestApiSerialization:
     """Verify the API serialization contract."""
 
     def test_insufficient_serializes_null_paces(self):
+        """INSUFFICIENT response: paces dict exists with all None values."""
         from training_v2.training_paces import training_paces_to_api_dict
         paces = compute_training_paces([], REF_DATE)
         d = training_paces_to_api_dict(paces)
         assert d["confidence"] == "INSUFFICIENT"
         assert d["vdot_reference"] is None
-        assert d["easy"] is None
-        assert d["marathon"] is None
-        assert d["threshold"] is None
-        assert d["interval"] is None
-        assert d["repetition"] is None
+        # C1: pace fields are nested under "paces"
+        assert "paces" in d
+        assert d["paces"]["easy"] is None
+        assert d["paces"]["marathon"] is None
+        assert d["paces"]["threshold"] is None
+        assert d["paces"]["interval"] is None
+        assert d["paces"]["repetition"] is None
 
     def test_full_paces_serializable(self):
+        """Full paces response is JSON-serializable and paces are nested under 'paces'."""
         from training_v2.training_paces import training_paces_to_api_dict
         import json
-        paces = daniels_paces(45.0)
+        ref = date(2026, 7, 1)
+        paces = daniels_paces(45.0, reference_date=ref)
         d = training_paces_to_api_dict(paces)
         # Must be JSON serializable
         json.dumps(d)
-        assert d["easy"]["lower_str"] is not None
-        assert d["easy"]["upper_str"] is not None
-        assert d["threshold"]["pace_str"] is not None
-        assert d["marathon"]["pace_str"] is not None
-        assert d["interval"]["lower_str"] is not None
-        assert d["repetition"]["pace_str"] is not None
+        # C1: pace fields nested under "paces"
+        assert "paces" in d
+        assert d["paces"]["easy"]["lower_str"] is not None
+        assert d["paces"]["easy"]["upper_str"] is not None
+        assert d["paces"]["threshold"]["pace_str"] is not None
+        assert d["paces"]["marathon"]["pace_str"] is not None
+        assert d["paces"]["interval"]["lower_str"] is not None
+        assert d["paces"]["repetition"]["pace_str"] is not None
 
     def test_serialization_keys(self):
+        """All required top-level keys are present in the API dict."""
         from training_v2.training_paces import training_paces_to_api_dict
-        paces = daniels_paces(40.0)
+        ref = date(2026, 7, 1)
+        paces = daniels_paces(40.0, reference_date=ref)
         d = training_paces_to_api_dict(paces)
-        required_keys = [
+        required_top_level = [
             "reference_date", "confidence", "vdot_reference",
-            "easy", "marathon", "threshold", "interval", "repetition",
-            "reason", "model_version",
+            "paces", "reason", "model_version",
         ]
-        for k in required_keys:
-            assert k in d, f"Missing key: {k}"
+        for k in required_top_level:
+            assert k in d, f"Missing top-level key: {k}"
+        # Nested paces keys
+        required_pace_keys = ["easy", "marathon", "threshold", "interval", "repetition"]
+        for k in required_pace_keys:
+            assert k in d["paces"], f"Missing paces key: {k}"
+
+    def test_no_flat_pace_keys_at_top_level(self):
+        """Pace fields must NOT appear at the top level (C1: paces nested under 'paces')."""
+        from training_v2.training_paces import training_paces_to_api_dict
+        ref = date(2026, 7, 1)
+        paces = daniels_paces(40.0, reference_date=ref)
+        d = training_paces_to_api_dict(paces)
+        for flat_key in ("easy", "marathon", "threshold", "interval", "repetition"):
+            assert flat_key not in d, (
+                f"Key '{flat_key}' must be inside d['paces'], not at top level"
+            )
 
     def test_threshold_pace_str_format(self):
+        """Threshold pace_str must be 'M:SS' format."""
         from training_v2.training_paces import training_paces_to_api_dict
-        paces = daniels_paces(50.0)
+        ref = date(2026, 7, 1)
+        paces = daniels_paces(50.0, reference_date=ref)
         d = training_paces_to_api_dict(paces)
-        ts = d["threshold"]["pace_str"]
+        ts = d["paces"]["threshold"]["pace_str"]
         # Must be "M:SS" format
         parts = ts.split(":")
         assert len(parts) == 2
         assert 0 <= int(parts[0]) < 60
         assert 0 <= int(parts[1]) < 60
+
+    def test_daniels_paces_reference_date_used(self):
+        """daniels_paces(vdot, reference_date) uses the provided date, not date.today()."""
+        fixed_date = date(2020, 1, 15)
+        p = daniels_paces(45.0, reference_date=fixed_date)
+        assert p.reference_date == fixed_date, (
+            f"Expected reference_date={fixed_date}, got {p.reference_date}"
+        )
+
+    def test_daniels_paces_deterministic_with_explicit_date(self):
+        """Two calls with same vdot + same reference_date produce identical results."""
+        ref = date(2026, 6, 1)
+        p1 = daniels_paces(45.0, reference_date=ref)
+        p2 = daniels_paces(45.0, reference_date=ref)
+        assert p1.threshold.min_per_km == p2.threshold.min_per_km
+        assert p1.reference_date == p2.reference_date
 
 
 # ---------------------------------------------------------------------------

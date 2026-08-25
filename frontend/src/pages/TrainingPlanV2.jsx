@@ -78,16 +78,19 @@ const normalizeGoalType = (goalType) => {
 // ─── H1: Today's session ────────────────────────────────────────────────────
 
 function TodaySection({ todayData, todayError, t }) {
-  const readinessKey = todayData?.readiness_band
-    ? `trainingV2.todayReadiness${todayData.readiness_band.charAt(0).toUpperCase() + todayData.readiness_band.slice(1).toLowerCase()}`
+  const readinessBand = todayData?.readiness?.band;
+  const readinessKey = readinessBand
+    ? `trainingV2.todayReadiness${readinessBand.charAt(0).toUpperCase() + readinessBand.slice(1).toLowerCase()}`
     : null;
   const readinessLabel = readinessKey ? t(readinessKey) : t("trainingV2.todayNoReadiness");
 
-  const isAdapted =
-    todayData?.adapted_session &&
-    todayData.adapted_session !== todayData.original_session;
+  // adaptation_applied is the authoritative flag from the backend (DailyAdaptation V2)
+  const isAdapted = todayData?.adaptation_applied === true;
 
-  const sessionToShow = isAdapted ? todayData.adapted_session : todayData?.original_session;
+  // Canonical session fields from /training/today (PR137 contract)
+  const sessionToShow = isAdapted
+    ? (todayData?.adapted_prescription ?? todayData?.planned_session)
+    : (todayData?.original_prescription ?? todayData?.planned_session);
   const workoutTypeLabel = sessionToShow?.workout_type
     ? getTranslatedValue(t, `trainingV2.workoutTypes.${sessionToShow.workout_type}`)
     : null;

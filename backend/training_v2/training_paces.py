@@ -1,6 +1,6 @@
 """Training Paces V2 — VDOT-based Daniels training zones.
 
-PR #196 — VDOT is derived exclusively from qualified performances (#188).
+PR #194 — VDOT is derived exclusively from qualified performances (#188).
 
 FORBIDDEN sources for training paces:
   - Garmin VO2max → training paces
@@ -40,13 +40,19 @@ Given VDOT and target VO2 fraction f:
                   / (2 × 0.000104)
     pace_min_km = 1000 / v
 
-Calibrated fractions (verified against Daniels VDOT tables ±2 s/km):
+RunIndex calibration fractions (calibrated against Daniels VDOT tables;
+measured tolerance ≤12 s/km across VDOT 30–70):
 
     E (Easy)       : [0.56, 0.68] VDOT  → RANGE [pace_faster, pace_slower]
     M (Marathon)   : 0.79 × VDOT        → SINGLE PACE
     T (Threshold)  : 0.88 × VDOT        → SINGLE PACE  (~1-hr race effort)
     I (Interval)   : [1.0, 1.0915] × VDOT  → RANGE  (5-min rep effort)
     R (Repetition) : 1.2335 × VDOT      → SINGLE PACE  (1-min rep effort)
+
+These are RUNINDEX_DANIELS_TABLE_CALIBRATION values reproducing the official
+Daniels VDOT tables via the inverse VO2-speed formula.  Fractions above 1.0
+do NOT represent a physiological percentage of VO2max; they are inverse-solve
+parameters that reproduce the published pace tables.
 
 ========================================================================
 VDOT selection policy
@@ -338,16 +344,27 @@ def vdot_from_performance(distance_m: float, duration_s: float) -> Optional[floa
     return float(max(VDOT_MIN, min(VDOT_MAX, vdot)))
 
 
-def daniels_paces(vdot: float) -> TrainingPaces:
+def daniels_paces(vdot: float, reference_date: Optional[date] = None) -> TrainingPaces:
     """Compute all five Daniels training zones from a VDOT value.
 
-    This is a pure function: no reference_date, no activities.
+    Parameters
+    ----------
+    vdot:
+        VDOT value. Clamped to [VDOT_MIN, VDOT_MAX].
+    reference_date:
+        Snapshot date written into the returned TrainingPaces.  When None,
+        falls back to ``date.today()`` (acceptable for ad-hoc utilities and
+        tests; the main pipeline always passes an explicit date via
+        ``compute_training_paces``).
+
+    This is a pure mathematical function: no activities, no lookahead.
     Use compute_training_paces() for the full pipeline.
 
     Returns a TrainingPaces with a synthetic VdotResult (no evidence).
     """
     vdot = float(max(VDOT_MIN, min(VDOT_MAX, vdot)))
-    today = date.today()
+    if reference_date is None:
+        reference_date = date.today()
     vdot_result = VdotResult(
         reference_vdot=vdot,
         paces_confidence="high",
@@ -358,7 +375,7 @@ def daniels_paces(vdot: float) -> TrainingPaces:
         reason="direct_vdot_input",
         evidence=(),
     )
-    return _build_training_paces(today, vdot_result)
+    return _build_training_paces(reference_date, vdot_result)
 
 
 # ---------------------------------------------------------------------------
@@ -727,11 +744,13 @@ def training_paces_to_api_dict(paces: TrainingPaces) -> dict:
         "vdot_medium_count": vr.medium_count,
         "vdot_concordant": vr.concordant,
         "vdot_reason": vr.reason,
-        "easy": pace_range_dict(paces.easy),
-        "marathon": pace_value_dict(paces.marathon),
-        "threshold": pace_value_dict(paces.threshold),
-        "interval": pace_range_dict(paces.interval),
-        "repetition": pace_value_dict(paces.repetition),
+        "paces": {
+            "easy": pace_range_dict(paces.easy),
+            "marathon": pace_value_dict(paces.marathon),
+            "threshold": pace_value_dict(paces.threshold),
+            "interval": pace_range_dict(paces.interval),
+            "repetition": pace_value_dict(paces.repetition),
+        },
         "reason": paces.reason,
         "model_version": paces.model_version,
     }

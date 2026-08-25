@@ -5050,7 +5050,7 @@ def _generate_fallback_week_plan(context: dict, phase: str, goal: str, target_km
     }
 
 
-# PR196 — GET /training/v2/paces
+# PR194 — GET /training/v2/paces
 # VDOT-based Daniels training paces derived exclusively from qualified performances.
 # FORBIDDEN sources: Garmin VO2max, VMA, Race Predictions outputs.
 # ---------------------------------------------------------------------------
@@ -5065,13 +5065,13 @@ async def get_training_v2_paces(user: dict = Depends(auth_user)):
     Response:
         confidence         "HIGH" | "MEDIUM" | "LOW" | "INSUFFICIENT"
         vdot_reference     float (internal, not surfaced to runner)
-        easy               {lower, upper} pace range in min/km
-        marathon           single pace in min/km
-        threshold          single pace in min/km
-        interval           {lower, upper} pace range in min/km
-        repetition         single pace in min/km
+        paces.easy         {lower, upper} pace range in min/km
+        paces.marathon     single pace in min/km
+        paces.threshold    single pace in min/km
+        paces.interval     {lower, upper} pace range in min/km
+        paces.repetition   single pace in min/km
 
-    When confidence == "INSUFFICIENT", all pace fields are null.
+    When confidence == "INSUFFICIENT", paces fields are all null.
     """
     from training_v2.training_paces import compute_training_paces, training_paces_to_api_dict
 
