@@ -642,3 +642,10 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
 - Runtime réel (da85***e7e7) : slope_evidence_count=1 → fallback k=1.06 ; prédictions physiologiques 5K 28:26 → Marathon 4h32 (spread 46 s/km vs 13 pré-#191) ; A inchangé (18 obs) ; VMA 10.04 indépendante.
 - Tests : perf model + PR191 = 185 passed ; suites PR (test_pr*.py) = 282 passed. Endpoints 200.
 - Rapport : /app/RUNINDEX_PR191_REPORT.md. Statut : agent-tested ; non user-confirmed ; non mergé upstream.
+
+## 2026-06 — Pull copilot/dev — PR #191 + #192 OFFICIELS (slope-evidence, version clean upstream)
+- Fetch + merge `sauvegarde/copilot/dev` (ec7b76b→81394ea). Conflits sur performance_model.py / test_pr191 / RUNINDEX_PR191_REPORT.md (mon implémentation locale interim vs officielle) → résolus en prenant la version **upstream officielle** (source de vérité). server.py auto-mergé + dédoublonnage manuel des clés diagnostics. `memory/PRD.md` + rapports locaux préservés.
+- PR #191/#192 = séparation QUALIFIED (niveau A) vs SLOPE-EVIDENCE (apprentissage de k) — même conception que mon Option 1 locale (désormais superseded) : slope_evidence = tier high #188, fallback `prior_k_low_slope_evidence_fallback` (k=1.06, A sur toutes les qualifiées), propagation diagnostics server.py + contrat API.
+- Validation (agent-tested, da85***e7e7) : backend redémarré, endpoints 200. Runtime : method=prior_k_low_slope_evidence_fallback, k=1.06, slope_evidence_count=1, prédictions physiologiques 5K 28:26 → Marathon 4h32 (spread 46 s/km). Convergent avec mon implémentation locale.
+- Tests : PR191/192 + api-contract + PR189/190 = **53 passed** ; régression suites PR = **287 passed**.
+- Statut : agent-tested ; non user-confirmed.
