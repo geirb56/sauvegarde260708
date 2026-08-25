@@ -51,33 +51,49 @@ async def _persist_capabilities(db, user_id: str, capabilities: GarminCapabiliti
 
 
 async def _persist_vo2max(db, user_id: str, vo2max: GarminVO2Max) -> None:
-    """Upsert the native Garmin VO₂max into the ``garmin_vo2max`` collection.
+    """Upsert a dated Garmin VO₂max point into the ``garmin_vo2max`` collection.
 
-    Always updates ``vo2max_running``, ``source``, and ``updated_at``.
-    Only updates ``vo2max_running_precise`` and ``vo2max_date`` when the new
-    payload actually provides those values — a lower-fidelity payload (one with
-    a valid standard value but no precise/date) does NOT erase previously stored
-    precise or date values.
+    Each (user_id, date) pair is an independent document — a new measurement for
+    a different date does NOT overwrite an older one.  This preserves the full
+    sparse history of real Garmin readings.
+
+    Canonical date field: ``date`` (from ``calendarDate`` in the Garmin payload).
+    If Garmin does not provide a ``calendarDate`` the measurement is NOT persisted
+    as a historical point — no synthetic date is invented.
+
+    ``vo2max_running_precise`` is only written when the payload provides it; a
+    lower-fidelity payload does not erase a previously stored precise value for
+    the same date.
     """
+    measurement_date = vo2max.date
+    if measurement_date is None:
+        # No date in payload → cannot create a meaningful historical point.
+        # Per design: no fabrication, no forward-fill.  Skip persistence.
+        logger.info(
+            "[Garmin] _persist_vo2max: no calendarDate in payload, skipping history write user=%s",
+            user_id,
+        )
+        return
+
     set_fields: dict = {
         "user_id": user_id,
+        "date": measurement_date,
         "vo2max_running": vo2max.vo2max_running,
         "source": vo2max.source,
+        "sport": "running",
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     if vo2max.vo2max_running_precise is not None:
         set_fields["vo2max_running_precise"] = vo2max.vo2max_running_precise
-    if vo2max.date is not None:
-        set_fields["vo2max_date"] = vo2max.date
 
     await db.garmin_vo2max.update_one(
-        {"user_id": user_id},
+        {"user_id": user_id, "date": measurement_date},
         {"$set": set_fields},
         upsert=True,
     )
     logger.info(
         "[Garmin] VO2max persisted user=%s vo2max_running=%s precise=%s date=%s",
-        user_id, vo2max.vo2max_running, vo2max.vo2max_running_precise, vo2max.date,
+        user_id, vo2max.vo2max_running, vo2max.vo2max_running_precise, measurement_date,
     )
 
 
@@ -152,12 +168,13 @@ async def _build_and_persist_capabilities(db, user_id: str) -> None:
     # time; wrap into the shape expected by GarminCapabilities._stress_ok.
     stress_payload = {"avgStressLevel": stress_val} if stress_val is not None else {}
 
-    # Native Garmin running VO₂max: read the scalar stored in garmin_vo2max, then
-    # reconstruct a minimal proxy list so from_probe / _vo2max_ok can evaluate it.
+    # Native Garmin running VO₂max: read the most recent valid point from the
+    # sparse history stored in garmin_vo2max (sorted by measurement date DESC).
     # The garmin_vo2max collection is updated by _fetch_and_persist_vo2max during sync.
     vo2max_doc = await db.garmin_vo2max.find_one(
         {"user_id": user_id, "vo2max_running": {"$ne": None}},
         {"_id": 0, "vo2max_running": 1},
+        sort=[("date", -1)],
     )
     vo2max_val = (vo2max_doc or {}).get("vo2max_running")
     max_metrics_proxy = [{"vo2MaxValue": vo2max_val}] if vo2max_val is not None else []

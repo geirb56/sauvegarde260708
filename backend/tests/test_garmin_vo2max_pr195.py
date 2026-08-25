@@ -317,7 +317,9 @@ class TestFetchAndPersistVO2Max:
     def test_persists_extracted_value(self):
         db = self._mock_db()
         provider = MagicMock()
-        provider.get_max_metrics.return_value = [{"vo2MaxValue": 53.0}]
+        provider.get_max_metrics.return_value = [
+            {"vo2MaxValue": 53.0, "calendarDate": "2026-03-15"}
+        ]
 
         result = asyncio.run(
             garmin_service._fetch_and_persist_vo2max(db, "user_1", provider)
@@ -326,9 +328,13 @@ class TestFetchAndPersistVO2Max:
         assert result == 53.0
         db.garmin_vo2max.update_one.assert_awaited_once()
         call_args = db.garmin_vo2max.update_one.call_args
+        # Filter must use (user_id, date) key — no single-user overwrite.
+        filter_doc = call_args[0][0]
+        assert filter_doc == {"user_id": "user_1", "date": "2026-03-15"}
         set_doc = call_args[0][1]["$set"]
         assert set_doc["vo2max_running"] == 53.0
         assert set_doc["user_id"] == "user_1"
+        assert set_doc["date"] == "2026-03-15"
 
     def test_persists_precise_value(self):
         db = self._mock_db()
@@ -341,17 +347,23 @@ class TestFetchAndPersistVO2Max:
             garmin_service._fetch_and_persist_vo2max(db, "user_1", provider)
         )
 
-        set_doc = db.garmin_vo2max.update_one.call_args[0][1]["$set"]
+        call_args = db.garmin_vo2max.update_one.call_args
+        filter_doc = call_args[0][0]
+        assert filter_doc == {"user_id": "user_1", "date": "2026-08-25"}
+        set_doc = call_args[0][1]["$set"]
         assert set_doc["vo2max_running"] == 43.0
         assert set_doc["vo2max_running_precise"] == 43.5
-        assert set_doc["vo2max_date"] == "2026-08-25"
+        # Canonical date field is "date", not "vo2max_date".
+        assert set_doc["date"] == "2026-08-25"
 
     def test_precise_not_in_set_when_absent(self):
-        """When payload has no precise value, vo2max_running_precise is NOT set
-        so a previously stored precise value is not erased."""
+        """When payload has no precise value, vo2max_running_precise is NOT in $set
+        so a previously stored precise value for that date is not erased."""
         db = self._mock_db()
         provider = MagicMock()
-        provider.get_max_metrics.return_value = [{"vo2MaxValue": 43.0}]
+        provider.get_max_metrics.return_value = [
+            {"vo2MaxValue": 43.0, "calendarDate": "2026-08-25"}
+        ]
 
         asyncio.run(
             garmin_service._fetch_and_persist_vo2max(db, "user_1", provider)
@@ -360,7 +372,20 @@ class TestFetchAndPersistVO2Max:
         set_doc = db.garmin_vo2max.update_one.call_args[0][1]["$set"]
         assert set_doc["vo2max_running"] == 43.0
         assert "vo2max_running_precise" not in set_doc
-        assert "vo2max_date" not in set_doc
+
+    def test_no_persist_when_date_absent(self):
+        """No date in payload → measurement is NOT persisted (no fabricated date)."""
+        db = self._mock_db()
+        provider = MagicMock()
+        provider.get_max_metrics.return_value = [{"vo2MaxValue": 43.0}]
+
+        result = asyncio.run(
+            garmin_service._fetch_and_persist_vo2max(db, "user_1", provider)
+        )
+
+        # Value returned (non-None) but no history write since no calendarDate.
+        assert result == 43.0
+        db.garmin_vo2max.update_one.assert_not_awaited()
 
     def test_returns_none_on_exception(self):
         db = self._mock_db()
@@ -420,7 +445,7 @@ class TestBuildCapabilitiesWithVO2Max:
 
         db.garmin_daily_metrics.find_one = AsyncMock(side_effect=find_one_daily)
 
-        async def find_one_vo2max(query, proj):
+        async def find_one_vo2max(query, proj, sort=None):
             if vo2max_val is not None:
                 return {"vo2max_running": vo2max_val}
             return None
@@ -472,13 +497,13 @@ class TestComputeRunIndexVO2Max:
         activities_cursor.to_list = AsyncMock(return_value=[])
         db.garmin_activities.find.return_value = activities_cursor
 
-        async def vo2max_find_one(query, proj):
+        async def vo2max_find_one(query, proj, sort=None):
             if vo2max_val is not None:
                 doc = {"vo2max_running": vo2max_val}
                 if vo2max_precise is not None:
                     doc["vo2max_running_precise"] = vo2max_precise
                 if vo2max_date is not None:
-                    doc["vo2max_date"] = vo2max_date
+                    doc["date"] = vo2max_date
                 return doc
             return None
 
@@ -540,3 +565,295 @@ class TestComputeRunIndexVO2Max:
         assert payload["metrics"]["vo2max_running_precise"] is None
         assert payload["metrics"]["vo2max_date"] is None
 
+
+# --------------------------------------------------------------------------- #
+# Fake in-memory collection for stateful persistence tests (sections 8–12)
+# --------------------------------------------------------------------------- #
+
+class FakeVO2MaxCollection:
+    """Minimal in-memory MongoDB collection for garmin_vo2max persistence tests.
+
+    Supports update_one with upsert and find_one with sort, which is all that
+    _persist_vo2max and the readers use.
+    """
+
+    def __init__(self):
+        self._docs: list = []
+
+    @property
+    def count(self) -> int:
+        return len(self._docs)
+
+    async def update_one(self, filter_query: dict, update: dict, upsert: bool = False):
+        set_fields = update.get("$set", {})
+        for doc in self._docs:
+            if all(doc.get(k) == v for k, v in filter_query.items()):
+                doc.update(set_fields)
+                return
+        if upsert:
+            new_doc = dict(filter_query)
+            new_doc.update(set_fields)
+            self._docs.append(new_doc)
+
+    async def find_one(self, query: dict, projection=None, sort=None):
+        matching = []
+        for doc in self._docs:
+            match = True
+            for k, v in query.items():
+                if isinstance(v, dict) and "$ne" in v:
+                    if doc.get(k) == v["$ne"]:
+                        match = False
+                        break
+                elif doc.get(k) != v:
+                    match = False
+                    break
+            if match:
+                matching.append(dict(doc))
+        if not matching:
+            return None
+        if sort:
+            key_field, direction = sort[0]
+            reverse = direction == -1
+            matching.sort(key=lambda d: d.get(key_field) or "", reverse=reverse)
+        return matching[0]
+
+
+def _make_minimal_provider(payload: list):
+    provider = MagicMock()
+    provider.get_max_metrics.return_value = payload
+    return provider
+
+
+def _make_db_with_fake_vo2max(fake_coll: FakeVO2MaxCollection):
+    db = MagicMock()
+    db.garmin_vo2max = fake_coll
+    db.garmin_connections.update_one = AsyncMock()
+    db.garmin_daily_metrics.find_one = AsyncMock(return_value=None)
+    return db
+
+
+# --------------------------------------------------------------------------- #
+# 9. Two-date historical persistence (section 8 of spec)
+# --------------------------------------------------------------------------- #
+
+class TestHistoricalPersistenceTwoDates:
+    """Two distinct measurement dates must produce two separate documents."""
+
+    def test_two_dates_create_two_documents(self):
+        coll = FakeVO2MaxCollection()
+        db = MagicMock()
+        db.garmin_vo2max = coll
+
+        # First measurement
+        p1 = _make_minimal_provider([
+            {"sportType": "running", "generic": {
+                "calendarDate": "2026-03-15", "vo2MaxValue": 45.0, "vo2MaxPreciseValue": 44.8,
+            }}
+        ])
+        asyncio.run(garmin_service._fetch_and_persist_vo2max(db, "user_1", p1))
+
+        # Second measurement (later date)
+        p2 = _make_minimal_provider([
+            {"sportType": "running", "generic": {
+                "calendarDate": "2026-08-25", "vo2MaxValue": 43.0, "vo2MaxPreciseValue": 43.5,
+            }}
+        ])
+        asyncio.run(garmin_service._fetch_and_persist_vo2max(db, "user_1", p2))
+
+        # DOCUMENT_COUNT = 2
+        assert coll.count == 2
+
+        # Both points present
+        docs_by_date = {d["date"]: d for d in coll._docs}
+        assert "2026-03-15" in docs_by_date
+        assert "2026-08-25" in docs_by_date
+        assert docs_by_date["2026-03-15"]["vo2max_running"] == 45.0
+        assert docs_by_date["2026-08-25"]["vo2max_running"] == 43.0
+
+    def test_latest_is_most_recent_date(self):
+        coll = FakeVO2MaxCollection()
+        db = MagicMock()
+        db.garmin_vo2max = coll
+
+        for payload in [
+            [{"sportType": "running", "generic": {
+                "calendarDate": "2026-03-15", "vo2MaxValue": 45.0, "vo2MaxPreciseValue": 44.8,
+            }}],
+            [{"sportType": "running", "generic": {
+                "calendarDate": "2026-08-25", "vo2MaxValue": 43.0, "vo2MaxPreciseValue": 43.5,
+            }}],
+        ]:
+            asyncio.run(garmin_service._fetch_and_persist_vo2max(db, "user_1", _make_minimal_provider(payload)))
+
+        latest = asyncio.run(
+            coll.find_one({"user_id": "user_1", "vo2max_running": {"$ne": None}}, {}, sort=[("date", -1)])
+        )
+        assert latest is not None
+        assert latest["vo2max_running"] == 43.0
+        assert latest["vo2max_running_precise"] == 43.5
+        assert latest["date"] == "2026-08-25"
+
+    def test_upsert_same_date_does_not_add_document(self):
+        coll = FakeVO2MaxCollection()
+        db = MagicMock()
+        db.garmin_vo2max = coll
+
+        p = _make_minimal_provider([
+            {"calendarDate": "2026-08-25", "vo2MaxValue": 43.0}
+        ])
+        asyncio.run(garmin_service._fetch_and_persist_vo2max(db, "user_1", p))
+        asyncio.run(garmin_service._fetch_and_persist_vo2max(db, "user_1", p))
+
+        # Same (user_id, date) → still one document
+        assert coll.count == 1
+
+
+# --------------------------------------------------------------------------- #
+# 10. Reverse insertion order (section 9 of spec)
+# --------------------------------------------------------------------------- #
+
+class TestReverseInsertionOrder:
+    """LATEST must be the doc with the highest measurement date, not inserted_at."""
+
+    def test_later_inserted_earlier_date_not_current(self):
+        coll = FakeVO2MaxCollection()
+        db = MagicMock()
+        db.garmin_vo2max = coll
+
+        # Insert 2026-08-25 first
+        asyncio.run(garmin_service._fetch_and_persist_vo2max(
+            db, "user_1",
+            _make_minimal_provider([{"calendarDate": "2026-08-25", "vo2MaxValue": 43.0}])
+        ))
+        # Then insert 2026-03-15 (earlier date, inserted later)
+        asyncio.run(garmin_service._fetch_and_persist_vo2max(
+            db, "user_1",
+            _make_minimal_provider([{"calendarDate": "2026-03-15", "vo2MaxValue": 45.0}])
+        ))
+
+        assert coll.count == 2
+
+        latest = asyncio.run(
+            coll.find_one({"user_id": "user_1", "vo2max_running": {"$ne": None}}, {}, sort=[("date", -1)])
+        )
+        # Current must be 43 @ 2026-08-25 regardless of insertion order
+        assert latest["vo2max_running"] == 43.0
+        assert latest["date"] == "2026-08-25"
+
+
+# --------------------------------------------------------------------------- #
+# 11. Empty payload after history (section 10 of spec)
+# --------------------------------------------------------------------------- #
+
+class TestEmptyPayloadAfterHistory:
+    """Empty sync payload must NOT erase existing history."""
+
+    def test_empty_payload_does_not_touch_collection(self):
+        coll = FakeVO2MaxCollection()
+        db = MagicMock()
+        db.garmin_vo2max = coll
+
+        # Pre-load a valid measurement
+        asyncio.run(garmin_service._fetch_and_persist_vo2max(
+            db, "user_1",
+            _make_minimal_provider([{"calendarDate": "2026-08-25", "vo2MaxValue": 43.0}])
+        ))
+        assert coll.count == 1
+
+        # Simulate max-metrics = []
+        asyncio.run(garmin_service._fetch_and_persist_vo2max(
+            db, "user_1",
+            _make_minimal_provider([])
+        ))
+
+        # DOCUMENT_COUNT unchanged, LATEST = 43
+        assert coll.count == 1
+        latest = asyncio.run(
+            coll.find_one({"user_id": "user_1", "vo2max_running": {"$ne": None}}, {}, sort=[("date", -1)])
+        )
+        assert latest is not None
+        assert latest["vo2max_running"] == 43.0
+
+    def test_capabilities_has_vo2max_true_after_empty_sync(self):
+        """has_vo2max must remain True when history exists but latest sync is empty."""
+        coll = FakeVO2MaxCollection()
+
+        # Seed history
+        asyncio.run(coll.update_one(
+            {"user_id": "user_1", "date": "2026-08-25"},
+            {"$set": {"user_id": "user_1", "date": "2026-08-25", "vo2max_running": 43.0,
+                      "source": "garmin", "sport": "running", "updated_at": "2026-08-25T00:00:00+00:00"}},
+            upsert=True,
+        ))
+
+        db = _make_db_with_fake_vo2max(coll)
+
+        asyncio.run(garmin_service._build_and_persist_capabilities(db, "user_1"))
+
+        set_doc = db.garmin_connections.update_one.call_args[0][1]["$set"]
+        assert set_doc["garmin_capabilities"]["has_vo2max"] is True
+
+
+# --------------------------------------------------------------------------- #
+# 12. No forward-fill (section 11 of spec)
+# --------------------------------------------------------------------------- #
+
+class TestNoForwardFill:
+    """Dates with no measurement must not produce any collection document."""
+
+    def test_only_real_measurements_are_stored(self):
+        coll = FakeVO2MaxCollection()
+        db = MagicMock()
+        db.garmin_vo2max = coll
+
+        # Date A — no measurement
+        asyncio.run(garmin_service._fetch_and_persist_vo2max(
+            db, "user_1", _make_minimal_provider([])
+        ))
+        # Date B — real measurement
+        asyncio.run(garmin_service._fetch_and_persist_vo2max(
+            db, "user_1",
+            _make_minimal_provider([{"calendarDate": "2026-08-25", "vo2MaxValue": 43.0}])
+        ))
+        # Date C — no measurement
+        asyncio.run(garmin_service._fetch_and_persist_vo2max(
+            db, "user_1", _make_minimal_provider([])
+        ))
+
+        # Exactly one document — the real measurement
+        assert coll.count == 1
+        assert coll._docs[0]["date"] == "2026-08-25"
+
+
+# --------------------------------------------------------------------------- #
+# 13. User isolation (section 12 of spec)
+# --------------------------------------------------------------------------- #
+
+class TestUserIsolation:
+    """User A and user B data must never mix."""
+
+    def test_latest_is_per_user(self):
+        coll = FakeVO2MaxCollection()
+        db = MagicMock()
+        db.garmin_vo2max = coll
+
+        asyncio.run(garmin_service._fetch_and_persist_vo2max(
+            db, "user_A",
+            _make_minimal_provider([{"calendarDate": "2026-08-25", "vo2MaxValue": 43.0}])
+        ))
+        asyncio.run(garmin_service._fetch_and_persist_vo2max(
+            db, "user_B",
+            _make_minimal_provider([{"calendarDate": "2026-08-25", "vo2MaxValue": 52.0}])
+        ))
+
+        assert coll.count == 2
+
+        latest_a = asyncio.run(
+            coll.find_one({"user_id": "user_A", "vo2max_running": {"$ne": None}}, {}, sort=[("date", -1)])
+        )
+        latest_b = asyncio.run(
+            coll.find_one({"user_id": "user_B", "vo2max_running": {"$ne": None}}, {}, sort=[("date", -1)])
+        )
+
+        assert latest_a["vo2max_running"] == 43.0
+        assert latest_b["vo2max_running"] == 52.0
