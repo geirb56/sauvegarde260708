@@ -101,11 +101,11 @@ function buildPacesResponse({ confidence = "HIGH" } = {}) {
   return {
     confidence,
     paces: {
-      easy: { pace_slower_min_per_km: 6.0, pace_faster_min_per_km: 5.0 },
-      marathon: { pace_min_per_km: 5.2 },
-      threshold: { pace_min_per_km: 4.8 },
-      interval: { pace_slower_min_per_km: 4.5, pace_faster_min_per_km: 4.2 },
-      repetition: { pace_min_per_km: 3.9 },
+      easy: { lower: { min_per_km: 5.0 }, upper: { min_per_km: 6.0 } },
+      marathon: { min_per_km: 5.2 },
+      threshold: { min_per_km: 4.8 },
+      interval: { lower: { min_per_km: 4.2 }, upper: { min_per_km: 4.5 } },
+      repetition: { min_per_km: 3.9 },
     },
   };
 }

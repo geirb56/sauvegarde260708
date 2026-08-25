@@ -45,7 +45,7 @@ Calibrated fractions (verified against Daniels VDOT tables ±2 s/km):
     E (Easy)       : [0.56, 0.68] VDOT  → RANGE [pace_faster, pace_slower]
     M (Marathon)   : 0.79 × VDOT        → SINGLE PACE
     T (Threshold)  : 0.88 × VDOT        → SINGLE PACE  (~1-hr race effort)
-    I (Interval)   : 1.0915 × VDOT      → SINGLE PACE  (5-min rep effort)
+    I (Interval)   : [1.0, 1.0915] × VDOT  → RANGE  (5-min rep effort)
     R (Repetition) : 1.2335 × VDOT      → SINGLE PACE  (1-min rep effort)
 
 ========================================================================
@@ -439,7 +439,7 @@ def _select_vdot_reference(
     evidence: List[VdotEvidence],
     reference_date: date,
 ) -> VdotResult:
-    """Implement the 8-case VDOT selection policy.
+    """Implement the 5-case VDOT selection policy.
 
     Returns VdotResult with selected reference_vdot and paces_confidence.
     """

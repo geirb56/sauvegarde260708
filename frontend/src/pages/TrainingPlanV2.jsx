@@ -206,13 +206,13 @@ function PaceCard({ zone, paceData, t }) {
   const zoneData = paceData?.[zone.dataKey];
   const paceDisplay = useMemo(() => {
     if (!zoneData) return null;
-    if (zone.isRange && isKnownNumber(zoneData.pace_slower_min_per_km) && isKnownNumber(zoneData.pace_faster_min_per_km)) {
-      const slower = formatPace(zoneData.pace_slower_min_per_km);
-      const faster = formatPace(zoneData.pace_faster_min_per_km);
-      if (slower && faster) return `${faster} – ${slower}`;
+    if (zone.isRange && isKnownNumber(zoneData.lower?.min_per_km) && isKnownNumber(zoneData.upper?.min_per_km)) {
+      const faster = formatPace(zoneData.lower.min_per_km);  // lower = faster (lower min/km)
+      const slower = formatPace(zoneData.upper.min_per_km);  // upper = slower (higher min/km)
+      if (faster && slower) return `${faster} – ${slower}`;
     }
-    if (isKnownNumber(zoneData.pace_min_per_km)) {
-      return formatPace(zoneData.pace_min_per_km);
+    if (isKnownNumber(zoneData.min_per_km)) {
+      return formatPace(zoneData.min_per_km);
     }
     return null;
   }, [zoneData, zone.isRange]);
