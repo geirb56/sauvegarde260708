@@ -649,3 +649,9 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
 - Validation (agent-tested, da85***e7e7) : backend redémarré, endpoints 200. Runtime : method=prior_k_low_slope_evidence_fallback, k=1.06, slope_evidence_count=1, prédictions physiologiques 5K 28:26 → Marathon 4h32 (spread 46 s/km). Convergent avec mon implémentation locale.
 - Tests : PR191/192 + api-contract + PR189/190 = **53 passed** ; régression suites PR = **287 passed**.
 - Statut : agent-tested ; non user-confirmed.
+
+## 2026-06 — Pull copilot/dev — PR #193 (UI Race Predictions alignée sur Performance Curve V2)
+- Fetch + merge `sauvegarde/copilot/dev` (81394ea→6f02c91). Merge ORT propre, frontend uniquement (Progress.jsx +83/-35, i18n +6, nouveau test jest). memory/PRD.md (651) + rapports préservés.
+- PR #193 = alignement de la carte Race Predictions sur la Performance Curve V2 : libellé « Estimées à partir de tes performances observées » (fin de « Basées sur ta VMA »), affichage de la confiance par distance, aucun readiness_label dans la carte prédictions.
+- Validation (agent-tested) : frontend redémarré. Jest `progress-race-predictions-v2` = **23 passed**. Screenshot FR compte réel : PRÉDICTIONS DE COURSE (5K 28:26 → Marathon 4h32, confiance « Insuffisante »), RunIndex/piliers réels, 0 erreur JS, 0 clé brute.
+- Statut : agent-tested + smoke visuel FR vérifié ; non user-confirmed.
