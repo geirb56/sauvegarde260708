@@ -5050,6 +5050,55 @@ def _generate_fallback_week_plan(context: dict, phase: str, goal: str, target_km
     }
 
 
+# PR194 — GET /training/v2/paces
+# VDOT-based Daniels training paces derived exclusively from qualified performances.
+# FORBIDDEN sources: Garmin VO2max, VMA, Race Predictions outputs.
+# ---------------------------------------------------------------------------
+
+@api_router.get("/training/v2/paces")
+async def get_training_v2_paces(user: dict = Depends(auth_user)):
+    """Return V2 training paces (Daniels E/M/T/I/R) derived from VDOT.
+
+    VDOT is computed exclusively from qualified running performances (#188).
+    Garmin VO2max and VMA never influence the paces returned here.
+
+    Response:
+        confidence         "HIGH" | "MEDIUM" | "LOW" | "INSUFFICIENT"
+        vdot_reference     float (internal, not surfaced to runner)
+        paces.easy         {lower, upper} pace range in min/km
+        paces.marathon     single pace in min/km
+        paces.threshold    single pace in min/km
+        paces.interval     {lower, upper} pace range in min/km
+        paces.repetition   single pace in min/km
+
+    When confidence == "INSUFFICIENT", paces fields are all null.
+    """
+    from training_v2.training_paces import compute_training_paces, training_paces_to_api_dict
+
+    user_id = user["id"]
+    now_utc = datetime.now(timezone.utc)
+    reference_date = now_utc.date()
+
+    # ── Load garmin activities → DomainActivity boundary ─────────────────
+    domain_activities = []
+    garmin_conn = await db.garmin_connections.find_one({"user_id": user_id}, {"_id": 0})
+    if garmin_conn and garmin_conn.get("connected"):
+        try:
+            garmin_activities = await (
+                db.garmin_activities.find({"user_id": user_id}, {"_id": 0})
+                .sort("start_time", -1)
+                .limit(500)
+                .to_list(length=500)
+            )
+            domain_activities = mongo_garmin_activities_to_domain(garmin_activities)
+        except Exception as exc:
+            logger.warning(f"[TrainingPaces] Garmin activity load failed: {exc}")
+
+    # ── Compute paces — no Garmin VO2max, no VMA, no Race Predictions ──────
+    paces = compute_training_paces(domain_activities, reference_date, user_max_hr=None)
+    return training_paces_to_api_dict(paces)
+
+
 @api_router.get("/subscription/tiers")
 async def get_subscription_tiers():
     """Get all available subscription tiers"""
