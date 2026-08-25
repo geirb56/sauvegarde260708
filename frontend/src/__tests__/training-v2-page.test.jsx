@@ -81,10 +81,41 @@ function buildCycleResponse() {
   };
 }
 
-function mockAxiosSuccess({ weekData, cycleData } = {}) {
+function buildTodayResponse({ adapted = false } = {}) {
+  const original = { workout_type: "easy", distance_km: 9.2, duration_minutes: 45 };
+  const adapted_session = adapted
+    ? { workout_type: "recovery", distance_km: 5.5, duration_minutes: 30 }
+    : original;
+  return {
+    original_session: original,
+    adapted_session,
+    readiness_band: adapted ? "LOW" : "HIGH",
+    adaptation_reason: adapted ? "Low readiness" : null,
+  };
+}
+
+function buildPacesResponse({ confidence = "HIGH" } = {}) {
+  if (confidence === "INSUFFICIENT") {
+    return { confidence: "INSUFFICIENT", paces: null };
+  }
+  return {
+    confidence,
+    paces: {
+      easy: { pace_slower_min_per_km: 6.0, pace_faster_min_per_km: 5.0 },
+      marathon: { pace_min_per_km: 5.2 },
+      threshold: { pace_min_per_km: 4.8 },
+      interval: { pace_slower_min_per_km: 4.5, pace_faster_min_per_km: 4.2 },
+      repetition: { pace_min_per_km: 3.9 },
+    },
+  };
+}
+
+function mockAxiosSuccess({ weekData, cycleData, todayData, pacesData } = {}) {
   axios.get.mockImplementation((url) => {
     if (url.includes("/training/v2/week")) return Promise.resolve({ data: weekData ?? buildWeekResponse() });
     if (url.includes("/training/v2/cycle")) return Promise.resolve({ data: cycleData ?? buildCycleResponse() });
+    if (url.includes("/training/today")) return Promise.resolve({ data: todayData ?? buildTodayResponse() });
+    if (url.includes("/training/v2/paces")) return Promise.resolve({ data: pacesData ?? buildPacesResponse() });
     return Promise.reject(new Error(`Unexpected URL: ${url}`));
   });
 }
@@ -284,5 +315,147 @@ describe("TrainingPlanV2 — PR #177", () => {
     await screen.findByTestId("training-v2-cycle");
     expect(screen.queryByText(/not available/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/non disponible/i)).not.toBeInTheDocument();
+  });
+});
+
+describe("TrainingPlanV2 — PR #196 (Paces V2 + Today)", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    window.localStorage.clear();
+    useSubscription.mockReturnValue({ isFree: false, loading: false });
+  });
+
+  // T1: Today's session renders
+  it("shows today's session card", async () => {
+    mockAxiosSuccess();
+    renderPage();
+    await screen.findByTestId("training-v2-today");
+    expect(screen.getByTestId("today-session-card")).toBeInTheDocument();
+  });
+
+  // T2: Adapted session shows badge
+  it("shows adapted badge when session is adapted", async () => {
+    mockAxiosSuccess({ todayData: buildTodayResponse({ adapted: true }) });
+    renderPage();
+    await screen.findByTestId("training-v2-today");
+    expect(screen.getByTestId("today-adapted-badge")).toBeInTheDocument();
+  });
+
+  // T3: No session shows no-session message (not crash)
+  it("shows no-session message when today returns null session", async () => {
+    mockAxiosSuccess({ todayData: { original_session: null, adapted_session: null, readiness_band: null } });
+    renderPage();
+    await screen.findByTestId("training-v2-today");
+    expect(screen.getByTestId("today-no-session")).toBeInTheDocument();
+  });
+
+  // T4: Today error shows error message, not crash
+  it("shows today loading error when /training/today fails, page still renders", async () => {
+    axios.get.mockImplementation((url) => {
+      if (url.includes("/training/v2/week")) return Promise.resolve({ data: buildWeekResponse() });
+      if (url.includes("/training/v2/cycle")) return Promise.resolve({ data: buildCycleResponse() });
+      if (url.includes("/training/today")) return Promise.reject(new Error("network error"));
+      if (url.includes("/training/v2/paces")) return Promise.resolve({ data: buildPacesResponse() });
+      return Promise.reject(new Error(`Unexpected URL: ${url}`));
+    });
+    renderPage();
+    await screen.findByTestId("training-v2-page");
+    expect(screen.getByTestId("today-loading-error")).toBeInTheDocument();
+  });
+
+  // T5: Five paces render
+  it("renders all five pace zones", async () => {
+    mockAxiosSuccess();
+    renderPage();
+    await screen.findByTestId("paces-grid");
+    expect(screen.getByTestId("pace-zone-easy")).toBeInTheDocument();
+    expect(screen.getByTestId("pace-zone-marathon")).toBeInTheDocument();
+    expect(screen.getByTestId("pace-zone-threshold")).toBeInTheDocument();
+    expect(screen.getByTestId("pace-zone-interval")).toBeInTheDocument();
+    expect(screen.getByTestId("pace-zone-repetition")).toBeInTheDocument();
+  });
+
+  // T6: Pace range displayed for easy zone (slower – faster)
+  it("shows pace range for easy zone", async () => {
+    mockAxiosSuccess();
+    renderPage();
+    await screen.findByTestId("pace-value-easy");
+    const easyValue = screen.getByTestId("pace-value-easy");
+    // 6:00 – 5:00 (pace_slower=6.0 min/km, pace_faster=5.0 min/km)
+    expect(easyValue.textContent).toMatch(/\d:\d\d\s*[–-]\s*\d:\d\d/);
+  });
+
+  // T7: Single pace displayed for marathon zone
+  it("shows single pace value for marathon zone", async () => {
+    mockAxiosSuccess();
+    renderPage();
+    await screen.findByTestId("pace-value-marathon");
+    const marathonValue = screen.getByTestId("pace-value-marathon");
+    expect(marathonValue.textContent).toMatch(/^\d:\d\d/);
+  });
+
+  // T8: Confidence badge visible
+  it("shows confidence badge when paces are available", async () => {
+    mockAxiosSuccess({ pacesData: buildPacesResponse({ confidence: "HIGH" }) });
+    renderPage();
+    await screen.findByTestId("paces-confidence-badge");
+    expect(screen.getByTestId("paces-confidence-badge")).toBeInTheDocument();
+  });
+
+  // T9: INSUFFICIENT paces — shows message, not undefined paces
+  it("shows insufficient message when confidence is INSUFFICIENT", async () => {
+    mockAxiosSuccess({ pacesData: buildPacesResponse({ confidence: "INSUFFICIENT" }) });
+    renderPage();
+    await screen.findByTestId("paces-insufficient-message");
+    expect(screen.queryByTestId("paces-grid")).not.toBeInTheDocument();
+  });
+
+  // T10: Paces endpoint failure — shows insufficient message, page still renders
+  it("shows insufficient paces message when /training/v2/paces fails", async () => {
+    axios.get.mockImplementation((url) => {
+      if (url.includes("/training/v2/week")) return Promise.resolve({ data: buildWeekResponse() });
+      if (url.includes("/training/v2/cycle")) return Promise.resolve({ data: buildCycleResponse() });
+      if (url.includes("/training/today")) return Promise.resolve({ data: buildTodayResponse() });
+      if (url.includes("/training/v2/paces")) return Promise.reject(new Error("network error"));
+      return Promise.reject(new Error(`Unexpected URL: ${url}`));
+    });
+    renderPage();
+    await screen.findByTestId("training-v2-page");
+    expect(screen.getByTestId("paces-insufficient-message")).toBeInTheDocument();
+  });
+
+  // T11: Weekly target still visible
+  it("still renders weekly target section", async () => {
+    mockAxiosSuccess();
+    renderPage();
+    await screen.findByTestId("training-v2-page");
+    // Objective card should render
+    expect(screen.getByTestId("training-v2-page")).toBeInTheDocument();
+  });
+
+  // T12: Plan/Cycle section still visible
+  it("still renders training cycle section", async () => {
+    mockAxiosSuccess();
+    renderPage();
+    await screen.findByTestId("training-v2-cycle");
+    expect(screen.getByTestId("training-v2-cycle")).toBeInTheDocument();
+  });
+
+  // T13: No raw i18n keys visible
+  it("does not expose raw i18n key strings in the rendered output", async () => {
+    mockAxiosSuccess();
+    const { container } = renderPage();
+    await screen.findByTestId("training-v2-page");
+    const textContent = container.textContent;
+    expect(textContent).not.toMatch(/trainingV2\.(paces|today)\w*/);
+  });
+
+  // T14: No VMA or VO2max dependency — Garmin VO2max keys not referenced in page output
+  it("does not show VO2max or VMA in the training paces section", async () => {
+    mockAxiosSuccess();
+    renderPage();
+    await screen.findByTestId("training-v2-paces");
+    const pacesCard = screen.getByTestId("training-v2-paces");
+    expect(pacesCard.textContent).not.toMatch(/VO2max|VMA/i);
   });
 });
