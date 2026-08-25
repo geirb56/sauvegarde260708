@@ -133,7 +133,6 @@ from training_v2.domain_activity import DomainActivity
 from training_v2.performance_model import (
     CONFIDENCE_HIGH_DAYS,
     CONFIDENCE_MEDIUM_DAYS,
-    CONFIDENCE_LOW_DAYS,
     evaluate_performance_quality,
     activity_date as _activity_date,
     performance_duration_s,
