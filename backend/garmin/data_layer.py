@@ -266,6 +266,108 @@ class GarminDailyMetrics(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
+# GarminVO2Max
+# --------------------------------------------------------------------------- #
+
+# Keys that carry a VO2max value inside a max-metrics item, in priority order.
+_VO2MAX_ITEM_KEYS = (
+    "vo2MaxRunning",   # running-specific field on some firmware versions
+    "vo2MaxValue",     # generic / multi-sport field
+    "vo2Max",          # alternate short form
+)
+
+# Sport-type strings that identify a running max-metrics item.
+_RUNNING_SPORT_KEYS = frozenset(
+    {"running", "run", "trail_running", "trail_run", "treadmill_running"}
+)
+
+
+def _extract_vo2max_from_item(item: Any) -> Optional[float]:
+    """Return the first positive VO2max number found inside a single max-metrics item.
+
+    Searches the item dict itself, then every nested dict value (handles shapes
+    like ``{"generic": {"vo2MaxValue": 52.0}}`` and
+    ``{"running": {"vo2MaxRunning": 51.5}}``).
+    """
+    item = _dict(item)
+    # Direct top-level keys first.
+    for key in _VO2MAX_ITEM_KEYS:
+        v = _num(item.get(key))
+        if v is not None and v > 0:
+            return v
+    # One level of nesting (e.g. item["generic"]["vo2MaxValue"]).
+    for nested in item.values():
+        if isinstance(nested, dict):
+            for key in _VO2MAX_ITEM_KEYS:
+                v = _num(nested.get(key))
+                if v is not None and v > 0:
+                    return v
+    return None
+
+
+def _item_sport(item: Any) -> Optional[str]:
+    """Return the lowercase sport/activity-type string for a max-metrics item."""
+    item = _dict(item)
+    for field in ("sportType", "sport", "activityType", "typeKey"):
+        val = item.get(field)
+        if isinstance(val, str) and val:
+            return val.lower()
+        if isinstance(val, dict):
+            inner = val.get("typeKey") or val.get("key")
+            if isinstance(inner, str) and inner:
+                return inner.lower()
+    return None
+
+
+class GarminVO2Max(BaseModel):
+    """Native Garmin running VO₂max extracted from ``gccli health max-metrics``.
+
+    ``vo2max_running`` is the *running-specific* value when the device produces
+    one, otherwise the generic/first positive value from the payload, otherwise
+    ``None``.
+
+    Design rules (same as the rest of the data layer):
+    - No fabrication: None means Garmin did not provide a usable value.
+    - No business logic: this is pure extraction / normalization.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    vo2max_running: Optional[float] = None
+    source: str = "garmin"
+
+    @classmethod
+    def from_max_metrics(cls, payload: Any) -> "GarminVO2Max":
+        """Extract running VO₂max from a ``gccli health max-metrics`` payload.
+
+        ``payload`` is expected to be a list of maxMetricDTO items.  An empty
+        list, ``None``, or a non-list value all yield ``vo2max_running=None``
+        without raising.
+
+        Priority:
+        1. Item whose sport is a running variant → first positive VO2max key.
+        2. Any item with a positive VO2max key (first found).
+        """
+        if not isinstance(payload, list) or not payload:
+            return cls(vo2max_running=None)
+
+        # Pass 1: prefer running-specific item.
+        for item in payload:
+            if _item_sport(item) in _RUNNING_SPORT_KEYS:
+                v = _extract_vo2max_from_item(item)
+                if v is not None:
+                    return cls(vo2max_running=round(v, 1))
+
+        # Pass 2: first item with any positive VO2max value.
+        for item in payload:
+            v = _extract_vo2max_from_item(item)
+            if v is not None:
+                return cls(vo2max_running=round(v, 1))
+
+        return cls(vo2max_running=None)
+
+
+# --------------------------------------------------------------------------- #
 # GarminCapabilities
 # --------------------------------------------------------------------------- #
 

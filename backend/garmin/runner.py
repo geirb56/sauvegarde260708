@@ -278,6 +278,27 @@ class GccliRunner:
                 metrics.append(entry)
         return metrics
 
+    def fetch_max_metrics(self, account: Optional[str] = None) -> List[Dict]:
+        """Fetch native Garmin VO₂max (and other max metrics) via ``gccli health max-metrics``.
+
+        Returns the raw payload list as-is; callers are responsible for
+        normalizing via :meth:`GarminVO2Max.from_max_metrics`.
+        Returns ``[]`` on any error (unavailable / non-JSON / timeout).
+        """
+        try:
+            data = self._run_json(["health", "max-metrics"], account=account)
+        except GccliError as exc:
+            logger.warning("[gccli] fetch_max_metrics failed: %s", exc)
+            return []
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            # Some gccli versions wrap the list in a dict; try common keys.
+            for key in ("maxMetrics", "metrics", "items", "data"):
+                if isinstance(data.get(key), list):
+                    return data[key]
+        return []
+
     def get_profile(self, account: Optional[str] = None) -> Dict:
         try:
             return self._run_json(["auth", "status"], account=account)
