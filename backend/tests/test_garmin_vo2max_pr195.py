@@ -346,6 +346,22 @@ class TestFetchAndPersistVO2Max:
         assert set_doc["vo2max_running_precise"] == 43.5
         assert set_doc["vo2max_date"] == "2026-08-25"
 
+    def test_precise_not_in_set_when_absent(self):
+        """When payload has no precise value, vo2max_running_precise is NOT set
+        so a previously stored precise value is not erased."""
+        db = self._mock_db()
+        provider = MagicMock()
+        provider.get_max_metrics.return_value = [{"vo2MaxValue": 43.0}]
+
+        asyncio.run(
+            garmin_service._fetch_and_persist_vo2max(db, "user_1", provider)
+        )
+
+        set_doc = db.garmin_vo2max.update_one.call_args[0][1]["$set"]
+        assert set_doc["vo2max_running"] == 43.0
+        assert "vo2max_running_precise" not in set_doc
+        assert "vo2max_date" not in set_doc
+
     def test_returns_none_on_exception(self):
         db = self._mock_db()
         provider = MagicMock()

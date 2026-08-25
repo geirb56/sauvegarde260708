@@ -51,19 +51,28 @@ async def _persist_capabilities(db, user_id: str, capabilities: GarminCapabiliti
 
 
 async def _persist_vo2max(db, user_id: str, vo2max: GarminVO2Max) -> None:
-    """Upsert the native Garmin VO₂max into the ``garmin_vo2max`` collection."""
+    """Upsert the native Garmin VO₂max into the ``garmin_vo2max`` collection.
+
+    Always updates ``vo2max_running``, ``source``, and ``updated_at``.
+    Only updates ``vo2max_running_precise`` and ``vo2max_date`` when the new
+    payload actually provides those values — a lower-fidelity payload (one with
+    a valid standard value but no precise/date) does NOT erase previously stored
+    precise or date values.
+    """
+    set_fields: dict = {
+        "user_id": user_id,
+        "vo2max_running": vo2max.vo2max_running,
+        "source": vo2max.source,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if vo2max.vo2max_running_precise is not None:
+        set_fields["vo2max_running_precise"] = vo2max.vo2max_running_precise
+    if vo2max.date is not None:
+        set_fields["vo2max_date"] = vo2max.date
+
     await db.garmin_vo2max.update_one(
         {"user_id": user_id},
-        {
-            "$set": {
-                "user_id": user_id,
-                "vo2max_running": vo2max.vo2max_running,
-                "vo2max_running_precise": vo2max.vo2max_running_precise,
-                "vo2max_date": vo2max.date,
-                "source": vo2max.source,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }
-        },
+        {"$set": set_fields},
         upsert=True,
     )
     logger.info(
