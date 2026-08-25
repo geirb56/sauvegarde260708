@@ -3,11 +3,12 @@
 Covers:
 1. GarminVO2Max.from_max_metrics — payload extraction (flat, nested, running-sport)
 2. GarminVO2Max.from_max_metrics — edge cases (None, [], bad types)
-3. GccliRunner.fetch_max_metrics — subprocess routing
-4. GccliProvider.get_max_metrics — delegates to runner
-5. service._fetch_and_persist_vo2max — persists to garmin_vo2max
-6. service._build_and_persist_capabilities — reads garmin_vo2max, sets has_vo2max
-7. insights.compute_run_index — exposes vo2max_running in metrics
+3. GarminVO2Max.from_max_metrics — precise value + date extraction
+4. GccliRunner.fetch_max_metrics — subprocess routing + date parameter
+5. GccliProvider.get_max_metrics — delegates to runner
+6. service._fetch_and_persist_vo2max — persists to garmin_vo2max; no-overwrite guard
+7. service._build_and_persist_capabilities — reads garmin_vo2max, sets has_vo2max
+8. insights.compute_run_index — exposes vo2max_running/precise/date in metrics
 """
 
 from __future__ import annotations
@@ -120,9 +121,108 @@ class TestGarminVO2MaxEdgeCases:
         result = GarminVO2Max.from_max_metrics([{"vo2MaxValue": 50.0}])
         assert result.source == "garmin"
 
+    def test_precise_absent_when_field_missing(self):
+        result = GarminVO2Max.from_max_metrics([{"vo2MaxValue": 50.0}])
+        assert result.vo2max_running_precise is None
+
+    def test_date_absent_when_field_missing(self):
+        result = GarminVO2Max.from_max_metrics([{"vo2MaxValue": 50.0}])
+        assert result.date is None
+
 
 # --------------------------------------------------------------------------- #
-# 3. GccliRunner.fetch_max_metrics
+# 3. GarminVO2Max.from_max_metrics — precise value + date extraction
+# --------------------------------------------------------------------------- #
+
+class TestGarminVO2MaxPreciseAndDate:
+    def test_precise_value_extracted_flat(self):
+        payload = [{"vo2MaxValue": 43.0, "vo2MaxPreciseValue": 43.5}]
+        result = GarminVO2Max.from_max_metrics(payload)
+        assert result.vo2max_running == 43.0
+        assert result.vo2max_running_precise == 43.5
+
+    def test_precise_not_rounded(self):
+        # Precise value must be stored as-is, not rounded to 1 decimal.
+        payload = [{"vo2MaxValue": 43.0, "vo2MaxPreciseValue": 43.57}]
+        result = GarminVO2Max.from_max_metrics(payload)
+        assert result.vo2max_running_precise == 43.57
+
+    def test_precise_in_generic_block(self):
+        payload = [{"generic": {"vo2MaxValue": 43.0, "vo2MaxPreciseValue": 43.5}}]
+        result = GarminVO2Max.from_max_metrics(payload)
+        assert result.vo2max_running == 43.0
+        assert result.vo2max_running_precise == 43.5
+
+    def test_precise_with_running_sport(self):
+        payload = [
+            {"sportType": "running", "generic": {
+                "calendarDate": "2026-08-25",
+                "vo2MaxValue": 43.0,
+                "vo2MaxPreciseValue": 43.5,
+            }},
+        ]
+        result = GarminVO2Max.from_max_metrics(payload)
+        assert result.vo2max_running == 43.0
+        assert result.vo2max_running_precise == 43.5
+        assert result.date == "2026-08-25"
+
+    def test_calendar_date_extracted_flat(self):
+        payload = [{"calendarDate": "2026-08-25", "vo2MaxValue": 43.0}]
+        result = GarminVO2Max.from_max_metrics(payload)
+        assert result.date == "2026-08-25"
+
+    def test_calendar_date_extracted_nested(self):
+        payload = [{"generic": {"calendarDate": "2026-08-25", "vo2MaxValue": 43.0}}]
+        result = GarminVO2Max.from_max_metrics(payload)
+        assert result.date == "2026-08-25"
+
+    def test_date_none_when_absent(self):
+        payload = [{"vo2MaxValue": 43.0}]
+        result = GarminVO2Max.from_max_metrics(payload)
+        assert result.date is None
+
+    def test_precise_zero_rejected(self):
+        payload = [{"vo2MaxValue": 43.0, "vo2MaxPreciseValue": 0}]
+        result = GarminVO2Max.from_max_metrics(payload)
+        assert result.vo2max_running_precise is None
+
+    def test_precise_negative_rejected(self):
+        payload = [{"vo2MaxValue": 43.0, "vo2MaxPreciseValue": -1.0}]
+        result = GarminVO2Max.from_max_metrics(payload)
+        assert result.vo2max_running_precise is None
+
+    def test_precise_bool_rejected(self):
+        payload = [{"vo2MaxValue": 43.0, "vo2MaxPreciseValue": True}]
+        result = GarminVO2Max.from_max_metrics(payload)
+        assert result.vo2max_running_precise is None
+
+    def test_value_only_no_precise(self):
+        # value present, precise absent: normal case.
+        payload = [{"generic": {"calendarDate": "2026-08-25", "vo2MaxValue": 44.0}}]
+        result = GarminVO2Max.from_max_metrics(payload)
+        assert result.vo2max_running == 44.0
+        assert result.vo2max_running_precise is None
+
+    def test_real_payload_example(self):
+        # Exact example from spec: calendarDate=2026-08-25, value=43.0, precise=43.5
+        payload = [
+            {
+                "sportType": "running",
+                "generic": {
+                    "calendarDate": "2026-08-25",
+                    "vo2MaxValue": 43.0,
+                    "vo2MaxPreciseValue": 43.5,
+                },
+            }
+        ]
+        result = GarminVO2Max.from_max_metrics(payload)
+        assert result.vo2max_running == 43.0
+        assert result.vo2max_running_precise == 43.5
+        assert result.date == "2026-08-25"
+
+
+# --------------------------------------------------------------------------- #
+# 4. GccliRunner.fetch_max_metrics — subprocess routing + date parameter
 # --------------------------------------------------------------------------- #
 
 class TestGccliRunnerFetchMaxMetrics:
@@ -164,9 +264,33 @@ class TestGccliRunnerFetchMaxMetrics:
             ["health", "max-metrics"], account="test@example.com"
         )
 
+    def test_passes_date_when_provided(self):
+        runner = self._make_runner()
+        with patch.object(runner, "_run_json", return_value=[]) as mock_run:
+            runner.fetch_max_metrics(date="2026-08-25")
+        mock_run.assert_called_once_with(
+            ["health", "max-metrics", "2026-08-25"], account=None
+        )
+
+    def test_no_date_appended_when_none(self):
+        runner = self._make_runner()
+        with patch.object(runner, "_run_json", return_value=[]) as mock_run:
+            runner.fetch_max_metrics()
+        mock_run.assert_called_once_with(
+            ["health", "max-metrics"], account=None
+        )
+
+    def test_date_and_account_together(self):
+        runner = self._make_runner()
+        with patch.object(runner, "_run_json", return_value=[]) as mock_run:
+            runner.fetch_max_metrics(account="u@example.com", date="2026-08-25")
+        mock_run.assert_called_once_with(
+            ["health", "max-metrics", "2026-08-25"], account="u@example.com"
+        )
+
 
 # --------------------------------------------------------------------------- #
-# 4. GccliProvider.get_max_metrics
+# 5. GccliProvider.get_max_metrics
 # --------------------------------------------------------------------------- #
 
 class TestGccliProviderGetMaxMetrics:
@@ -181,7 +305,7 @@ class TestGccliProviderGetMaxMetrics:
 
 
 # --------------------------------------------------------------------------- #
-# 5. service._fetch_and_persist_vo2max
+# 6. service._fetch_and_persist_vo2max — persists; no-overwrite guard
 # --------------------------------------------------------------------------- #
 
 class TestFetchAndPersistVO2Max:
@@ -206,6 +330,22 @@ class TestFetchAndPersistVO2Max:
         assert set_doc["vo2max_running"] == 53.0
         assert set_doc["user_id"] == "user_1"
 
+    def test_persists_precise_value(self):
+        db = self._mock_db()
+        provider = MagicMock()
+        provider.get_max_metrics.return_value = [
+            {"vo2MaxValue": 43.0, "vo2MaxPreciseValue": 43.5, "calendarDate": "2026-08-25"}
+        ]
+
+        asyncio.run(
+            garmin_service._fetch_and_persist_vo2max(db, "user_1", provider)
+        )
+
+        set_doc = db.garmin_vo2max.update_one.call_args[0][1]["$set"]
+        assert set_doc["vo2max_running"] == 43.0
+        assert set_doc["vo2max_running_precise"] == 43.5
+        assert set_doc["vo2max_date"] == "2026-08-25"
+
     def test_returns_none_on_exception(self):
         db = self._mock_db()
         provider = MagicMock()
@@ -217,7 +357,8 @@ class TestFetchAndPersistVO2Max:
 
         assert result is None
 
-    def test_persists_none_when_payload_empty(self):
+    def test_no_overwrite_when_payload_empty(self):
+        """No-overwrite guard: when payload yields no value, update_one is NOT called."""
         db = self._mock_db()
         provider = MagicMock()
         provider.get_max_metrics.return_value = []
@@ -227,12 +368,24 @@ class TestFetchAndPersistVO2Max:
         )
 
         assert result is None
-        set_doc = db.garmin_vo2max.update_one.call_args[0][1]["$set"]
-        assert set_doc["vo2max_running"] is None
+        db.garmin_vo2max.update_one.assert_not_awaited()
+
+    def test_no_overwrite_when_payload_has_null_value(self):
+        """No-overwrite guard: payload with null vo2MaxValue → no write."""
+        db = self._mock_db()
+        provider = MagicMock()
+        provider.get_max_metrics.return_value = [{"vo2MaxValue": None}]
+
+        result = asyncio.run(
+            garmin_service._fetch_and_persist_vo2max(db, "user_1", provider)
+        )
+
+        assert result is None
+        db.garmin_vo2max.update_one.assert_not_awaited()
 
 
 # --------------------------------------------------------------------------- #
-# 6. service._build_and_persist_capabilities — reads garmin_vo2max
+# 7. service._build_and_persist_capabilities — reads garmin_vo2max
 # --------------------------------------------------------------------------- #
 
 class TestBuildCapabilitiesWithVO2Max:
@@ -282,11 +435,11 @@ class TestBuildCapabilitiesWithVO2Max:
 
 
 # --------------------------------------------------------------------------- #
-# 7. insights.compute_run_index — vo2max_running in metrics
+# 8. insights.compute_run_index — vo2max fields in metrics
 # --------------------------------------------------------------------------- #
 
 class TestComputeRunIndexVO2Max:
-    def _make_db(self, vo2max_val=None):
+    def _make_db(self, vo2max_val=None, vo2max_precise=None, vo2max_date=None):
         db = MagicMock()
         metrics_cursor = MagicMock()
         metrics_cursor.sort.return_value = metrics_cursor
@@ -305,7 +458,12 @@ class TestComputeRunIndexVO2Max:
 
         async def vo2max_find_one(query, proj):
             if vo2max_val is not None:
-                return {"vo2max_running": vo2max_val}
+                doc = {"vo2max_running": vo2max_val}
+                if vo2max_precise is not None:
+                    doc["vo2max_running_precise"] = vo2max_precise
+                if vo2max_date is not None:
+                    doc["vo2max_date"] = vo2max_date
+                return doc
             return None
 
         db.garmin_vo2max.find_one = AsyncMock(side_effect=vo2max_find_one)
@@ -336,3 +494,33 @@ class TestComputeRunIndexVO2Max:
 
         assert payload is not None
         assert payload["metrics"]["vo2max_running"] is None
+
+    def test_vo2max_precise_and_date_exposed(self):
+        import datetime
+        from garmin.insights import compute_run_index
+
+        db = self._make_db(vo2max_val=43.0, vo2max_precise=43.5, vo2max_date="2026-08-25")
+        ref_date = datetime.date(2024, 1, 16)
+        payload = asyncio.run(
+            compute_run_index(db, "u1", reference_date=ref_date)
+        )
+
+        assert payload is not None
+        assert payload["metrics"]["vo2max_running"] == 43.0
+        assert payload["metrics"]["vo2max_running_precise"] == 43.5
+        assert payload["metrics"]["vo2max_date"] == "2026-08-25"
+
+    def test_vo2max_precise_none_when_not_stored(self):
+        import datetime
+        from garmin.insights import compute_run_index
+
+        db = self._make_db(vo2max_val=51.5)
+        ref_date = datetime.date(2024, 1, 16)
+        payload = asyncio.run(
+            compute_run_index(db, "u1", reference_date=ref_date)
+        )
+
+        assert payload is not None
+        assert payload["metrics"]["vo2max_running_precise"] is None
+        assert payload["metrics"]["vo2max_date"] is None
+

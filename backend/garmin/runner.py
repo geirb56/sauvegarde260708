@@ -278,15 +278,29 @@ class GccliRunner:
                 metrics.append(entry)
         return metrics
 
-    def fetch_max_metrics(self, account: Optional[str] = None) -> List[Dict]:
+    def fetch_max_metrics(self, account: Optional[str] = None, date: Optional[str] = None) -> List[Dict]:
         """Fetch native Garmin VO₂max (and other max metrics) via ``gccli health max-metrics``.
+
+        Parameters
+        ----------
+        account:
+            Optional Garmin account identifier passed via ``GCCLI_ACCOUNT`` env.
+        date:
+            Optional ISO date string (``YYYY-MM-DD``).  When provided and gccli
+            supports a date argument, it is appended to the command so gccli can
+            return metrics for that specific date.  The date is appended positionally
+            (``gccli health max-metrics <date>``) — pass ``None`` to omit it and
+            let gccli return the latest value as before.
 
         Returns the raw payload list as-is; callers are responsible for
         normalizing via :meth:`GarminVO2Max.from_max_metrics`.
         Returns ``[]`` on any error (unavailable / non-JSON / timeout).
         """
+        args: List[str] = ["health", "max-metrics"]
+        if date:
+            args.append(date)
         try:
-            data = self._run_json(["health", "max-metrics"], account=account)
+            data = self._run_json(args, account=account)
         except GccliError as exc:
             logger.warning("[gccli] fetch_max_metrics failed: %s", exc)
             return []

@@ -58,6 +58,8 @@ async def _persist_vo2max(db, user_id: str, vo2max: GarminVO2Max) -> None:
             "$set": {
                 "user_id": user_id,
                 "vo2max_running": vo2max.vo2max_running,
+                "vo2max_running_precise": vo2max.vo2max_running_precise,
+                "vo2max_date": vo2max.date,
                 "source": vo2max.source,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
@@ -65,8 +67,8 @@ async def _persist_vo2max(db, user_id: str, vo2max: GarminVO2Max) -> None:
         upsert=True,
     )
     logger.info(
-        "[Garmin] VO2max persisted user=%s vo2max_running=%s",
-        user_id, vo2max.vo2max_running,
+        "[Garmin] VO2max persisted user=%s vo2max_running=%s precise=%s date=%s",
+        user_id, vo2max.vo2max_running, vo2max.vo2max_running_precise, vo2max.date,
     )
 
 
@@ -76,10 +78,19 @@ async def _fetch_and_persist_vo2max(db, user_id: str, provider) -> Optional[floa
     Returns the resolved ``vo2max_running`` value (or ``None``).
     Never raises: any error is logged and ``None`` is returned so it does not
     break the broader sync pipeline.
+
+    No-overwrite guard: when the payload yields no value (vo2max_running is None),
+    the collection is NOT updated so a previously stored good value is preserved.
     """
     try:
         raw = provider.get_max_metrics(user_id)
         vo2max = GarminVO2Max.from_max_metrics(raw)
+        if vo2max.vo2max_running is None:
+            logger.info(
+                "[Garmin] _fetch_and_persist_vo2max: no value in payload, skipping write user=%s",
+                user_id,
+            )
+            return None
         await _persist_vo2max(db, user_id, vo2max)
         return vo2max.vo2max_running
     except Exception:
