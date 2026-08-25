@@ -631,7 +631,7 @@ export default function Progress() {
                       {t("progressExtended.racePredictions")}
                     </h2>
                     <p className="font-mono text-xs text-muted-foreground">
-                      {t("progressExtended.basedOnVma")}
+                     {t("progressExtended.racePredictionBasis")}
                     </p>
                   </div>
                 </div>
@@ -644,61 +644,80 @@ export default function Progress() {
                 <div className="p-4 space-y-4">
                   {/* Predictions by distance */}
                   <div className="space-y-2">
-                   {predictions.predictions?.map((pred) => {
-                      // PR184: derive goal label from V2 cycle goal_type
-                      const cycleGoalDist = cycleV2?.goal?.goal_type
-                        ? V2_GOAL_TO_PRED_DISTANCE[cycleV2.goal.goal_type] ?? null
-                        : null;
-                      const isGoal = cycleGoalDist !== null && pred.distance === cycleGoalDist;
+                  {(() => {
+                     // PR193: single lookup table for confidence — defined once, outside the per-prediction loop
+                     const CONFIDENCE_MAP = {
+                       high:         { i18nKey: "confidenceHigh",         color: "#22c55e" },
+                       medium:       { i18nKey: "confidenceMedium",        color: "#f59e0b" },
+                       low:          { i18nKey: "confidenceLow",           color: "#f97316" },
+                       insufficient: { i18nKey: "confidenceInsufficient",  color: "#6b7280" },
+                     };
+                     const cycleGoalDist = cycleV2?.goal?.goal_type
+                       ? V2_GOAL_TO_PRED_DISTANCE[cycleV2.goal.goal_type] ?? null
+                       : null;
+                     return predictions.predictions?.map((pred) => {
+                     const isGoal = cycleGoalDist !== null && pred.distance === cycleGoalDist;
+                     // PR193: colour and label derived from pred.confidence, not readiness
+                     const { i18nKey: confidenceI18nKey, color: confidenceColor } =
+                       CONFIDENCE_MAP[pred.confidence] ?? CONFIDENCE_MAP.insufficient;
+                     const confidenceText = t(`progressExtended.${confidenceI18nKey}`);
+
                       return (
                       <div 
                         key={pred.distance}
                         className="flex items-center gap-3 p-3 rounded-xl transition-all"
                         style={{ 
-                          background: isGoal ? `${pred.readiness_color}15` : "rgba(255,255,255,0.03)",
-                          border: isGoal ? `2px solid ${pred.readiness_color}` : "1px solid rgba(255,255,255,0.05)"
+                          background: isGoal ? "rgba(245,158,11,0.08)" : "rgba(255,255,255,0.03)",
+                          border: isGoal ? "2px solid rgba(245,158,11,0.5)" : "1px solid rgba(255,255,255,0.05)"
                         }}
                       >
-                        {/* Distance badge */}
+                        {/* Distance badge — GOAL badge attached here (PR193) */}
                         <div 
-                          className="shrink-0 w-14 h-14 rounded-xl flex flex-col items-center justify-center"
-                          style={{ background: `${pred.readiness_color}20` }}
+                          className="shrink-0 w-14 rounded-xl flex flex-col items-center justify-center gap-1 py-2"
+                          style={{ background: `${confidenceColor}20` }}
                         >
-                          <span className="text-sm font-bold" style={{ color: pred.readiness_color }}>
+                          <span className="text-sm font-bold" style={{ color: confidenceColor }}>
                             {pred.distance}
                           </span>
+                          {isGoal && (
+                            <span className="px-1.5 py-0.5 rounded-full text-[8px] font-bold leading-none" style={{ background: "var(--accent-green)", color: "#0a0e1a" }}>
+                              {t("progressExtended.goalLabel")}
+                            </span>
+                          )}
                         </div>
 
                         {/* Predicted time */}
                         <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="text-xl font-bold text-white">{pred.predicted_time}</span>
-                            {isGoal && (
-                              <span className="px-2 py-0.5 rounded-full text-[9px] font-bold" style={{ background: "var(--accent-green)", color: "#0a0e1a" }}>
-                                {t("progressExtended.goalLabel")}
-                              </span>
-                            )}
-                          </div>
-                          <p className="text-xs text-muted-foreground">
-                            {pred.predicted_pace} • {pred.predicted_range}
-                          </p>
+                          {pred.predicted_time ? (
+                            <>
+                              <span className="text-xl font-bold text-white">{pred.predicted_time}</span>
+                              <p className="text-xs text-muted-foreground">
+                                {pred.predicted_pace}
+                              </p>
+                            </>
+                          ) : (
+                            <span className="text-sm text-muted-foreground italic">
+                              {t("progressExtended.notEnoughPredictionData")}
+                            </span>
+                          )}
                         </div>
 
-                        {/* Readiness */}
+                        {/* Confidence — PR193: replaces readiness display */}
                         <div className="shrink-0 text-right">
-                          <div 
-                            className="px-3 py-1 rounded-full text-xs font-bold mb-1"
-                            style={{ background: `${pred.readiness_color}20`, color: pred.readiness_color }}
-                          >
-                            {pred.readiness_label}
-                          </div>
-                          <p className="text-[10px] text-muted-foreground">
-                            {pred.readiness_score}% {t("progressExtended.readinessPct")}
+                          <p className="text-[9px] text-muted-foreground mb-0.5">
+                            {t("progressExtended.confidenceLabel")}
                           </p>
+                          <div 
+                            className="px-2 py-0.5 rounded-full text-[10px] font-bold"
+                            style={{ background: `${confidenceColor}20`, color: confidenceColor }}
+                          >
+                            {confidenceText}
+                          </div>
                         </div>
                       </div>
                       );
-                    })}
+                      });
+                    })()}
                   </div>
                 </div>
               )}
