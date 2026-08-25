@@ -266,6 +266,174 @@ class GarminDailyMetrics(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
+# GarminVO2Max
+# --------------------------------------------------------------------------- #
+
+# Keys that carry a VO2max value inside a max-metrics item, in priority order.
+_VO2MAX_ITEM_KEYS = (
+    "vo2MaxRunning",   # running-specific field on some firmware versions
+    "vo2MaxValue",     # generic / multi-sport field
+    "vo2Max",          # alternate short form
+)
+
+# Sport-type strings that identify a running max-metrics item.
+_RUNNING_SPORT_KEYS = frozenset(
+    {"running", "run", "trail_running", "trail_run", "treadmill_running"}
+)
+
+
+def _extract_vo2max_from_item(item: Any) -> Optional[float]:
+    """Return the first positive VO2max number found inside a single max-metrics item.
+
+    Searches the item dict itself, then every nested dict value (handles shapes
+    like ``{"generic": {"vo2MaxValue": 52.0}}`` and
+    ``{"running": {"vo2MaxRunning": 51.5}}``).
+    """
+    item = _dict(item)
+    # Direct top-level keys first.
+    for key in _VO2MAX_ITEM_KEYS:
+        v = _num(item.get(key))
+        if v is not None and v > 0:
+            return v
+    # One level of nesting (e.g. item["generic"]["vo2MaxValue"]).
+    for nested in item.values():
+        if isinstance(nested, dict):
+            for key in _VO2MAX_ITEM_KEYS:
+                v = _num(nested.get(key))
+                if v is not None and v > 0:
+                    return v
+    return None
+
+
+def _item_sport(item: Any) -> Optional[str]:
+    """Return the lowercase sport/activity-type string for a max-metrics item."""
+    item = _dict(item)
+    for field in ("sportType", "sport", "activityType", "typeKey"):
+        val = item.get(field)
+        if isinstance(val, str) and val:
+            return val.lower()
+        if isinstance(val, dict):
+            inner = val.get("typeKey") or val.get("key")
+            if isinstance(inner, str) and inner:
+                return inner.lower()
+    return None
+
+
+def _extract_vo2max_precise_from_item(item: Any) -> Optional[float]:
+    """Return the precise VO₂max value (``vo2MaxPreciseValue``) from a single
+    max-metrics item, or ``None`` when absent or non-positive.
+
+    Searches the item dict itself, then every nested dict value (handles the
+    ``{"generic": {"vo2MaxPreciseValue": 43.5}}`` shape).
+    """
+    item = _dict(item)
+    key = "vo2MaxPreciseValue"
+    v = _num(item.get(key))
+    if v is not None and v > 0:
+        return v
+    for nested in item.values():
+        if isinstance(nested, dict):
+            v = _num(nested.get(key))
+            if v is not None and v > 0:
+                return v
+    return None
+
+
+def _extract_calendar_date_from_item(item: Any) -> Optional[str]:
+    """Return the ``calendarDate`` string from a single max-metrics item.
+
+    Searches the item dict itself, then every nested dict value.
+    Returns ``None`` when the field is absent or empty — never fabricates a date.
+    """
+    item = _dict(item)
+    d = _str(item.get("calendarDate"))
+    if d:
+        return d
+    for nested in item.values():
+        if isinstance(nested, dict):
+            d = _str(nested.get("calendarDate"))
+            if d:
+                return d
+    return None
+
+
+class GarminVO2Max(BaseModel):
+    """Native Garmin running VO₂max extracted from ``gccli health max-metrics``.
+
+    Fields:
+    - ``vo2max_running``: Garmin standard rounded value (``vo2MaxValue``), or
+      ``None`` when Garmin did not provide one.
+    - ``vo2max_running_precise``: Garmin precise value (``vo2MaxPreciseValue``),
+      kept as-is without further rounding — ``None`` when absent.
+    - ``date``: ``calendarDate`` from the chosen item, or ``None`` when Garmin
+      does not include a date in the payload.
+
+    Design rules (same as the rest of the data layer):
+    - No fabrication: None means Garmin did not provide a usable value.
+    - No business logic: this is pure extraction / normalization.
+    - vo2max_running and vo2max_running_precise are kept separate; never replace
+      one with the other.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    vo2max_running: Optional[float] = None
+    vo2max_running_precise: Optional[float] = None
+    date: Optional[str] = None
+    source: str = "garmin"
+
+    @classmethod
+    def from_max_metrics(cls, payload: Any) -> "GarminVO2Max":
+        """Extract running VO₂max from a ``gccli health max-metrics`` payload.
+
+        ``payload`` is expected to be a list of maxMetricDTO items.  An empty
+        list, ``None``, or a non-list value all yield ``vo2max_running=None``
+        without raising.
+
+        Priority:
+        1. Item whose sport is a running variant → extract value + precise + date.
+        2. Any item with a positive VO2max key (first found).
+
+        ``vo2MaxPreciseValue`` is extracted from the chosen item and stored as-is
+        (no additional rounding beyond what Garmin provides).  ``calendarDate`` is
+        extracted from the same item when available; never invented.
+        """
+        if not isinstance(payload, list) or not payload:
+            return cls()
+
+        chosen_item: Optional[Any] = None
+
+        # Pass 1: prefer running-specific item.
+        for item in payload:
+            if _item_sport(item) in _RUNNING_SPORT_KEYS:
+                v = _extract_vo2max_from_item(item)
+                if v is not None:
+                    chosen_item = item
+                    break
+
+        # Pass 2: first item with any positive VO2max value.
+        if chosen_item is None:
+            for item in payload:
+                v = _extract_vo2max_from_item(item)
+                if v is not None:
+                    chosen_item = item
+                    break
+
+        if chosen_item is None:
+            return cls()
+
+        value = _extract_vo2max_from_item(chosen_item)
+        precise = _extract_vo2max_precise_from_item(chosen_item)
+        date = _extract_calendar_date_from_item(chosen_item)
+
+        return cls(
+            vo2max_running=round(value, 1) if value is not None else None,
+            vo2max_running_precise=precise,
+            date=date,
+        )
+
+
+# --------------------------------------------------------------------------- #
 # GarminCapabilities
 # --------------------------------------------------------------------------- #
 
