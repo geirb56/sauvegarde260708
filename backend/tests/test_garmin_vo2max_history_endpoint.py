@@ -73,10 +73,20 @@ class _Collection:
                 results.append(dict(doc))
         return _Cursor(results)
 
+    async def find_one(self, query: dict, projection: Optional[dict] = None):
+        for doc in self._docs:
+            if all(doc.get(k) == v for k, v in query.items()):
+                return dict(doc)
+        return None
+
 
 class _FakeDB:
     def __init__(self, garmin_vo2max_docs: Optional[List[dict]] = None) -> None:
         self.garmin_vo2max = _Collection(garmin_vo2max_docs or [])
+        self.users = _Collection([
+            {"id": "u1", "email": "u1@example.com", "is_active": True, "is_email_verified": True},
+            {"id": "u2", "email": "u2@example.com", "is_active": True, "is_email_verified": True},
+        ])
 
 
 def _bearer(user_id: str) -> dict:
@@ -97,7 +107,7 @@ async def test_vo2max_history_user_isolation_and_order():
             {"user_id": "u1", "date": "2026-07-05", "vo2max_running": 43.0, "vo2max_running_precise": 43.5},
         ]
     )
-    with patch.object(server, "db", fake_db), patch("server.get_user_access", AsyncMock(side_effect=_premium_access)):
+    with patch.object(server.app.state, "db", fake_db, create=True), patch("server.get_user_access", AsyncMock(side_effect=_premium_access)):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://test") as client:
             response = await client.get("/api/garmin/vo2max-history?period=12m", headers=_bearer("u1"))
 
@@ -121,7 +131,7 @@ async def test_vo2max_history_period_filter_sparse_semantics_and_no_data():
             {"user_id": "u1", "date": today.isoformat(), "vo2max_running": None},
         ]
     )
-    with patch.object(server, "db", fake_db), patch("server.get_user_access", AsyncMock(side_effect=_premium_access)):
+    with patch.object(server.app.state, "db", fake_db, create=True), patch("server.get_user_access", AsyncMock(side_effect=_premium_access)):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://test") as client:
             response = await client.get("/api/garmin/vo2max-history?period=3m", headers=_bearer("u1"))
 
@@ -132,7 +142,7 @@ async def test_vo2max_history_period_filter_sparse_semantics_and_no_data():
     assert all("source" in point and point["source"] == "garmin" for point in payload["history"])
 
     empty_db = _FakeDB(garmin_vo2max_docs=[])
-    with patch.object(server, "db", empty_db), patch("server.get_user_access", AsyncMock(side_effect=_premium_access)):
+    with patch.object(server.app.state, "db", empty_db, create=True), patch("server.get_user_access", AsyncMock(side_effect=_premium_access)):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://test") as client:
             empty_response = await client.get("/api/garmin/vo2max-history?period=12m", headers=_bearer("u1"))
 
