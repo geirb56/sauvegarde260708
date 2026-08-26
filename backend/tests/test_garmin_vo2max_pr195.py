@@ -421,7 +421,7 @@ class TestFetchAndPersistVO2Max:
                 db,
                 "user_1",
                 provider,
-                date="2026-08-25",
+                target_date="2026-08-25",
             )
         )
 
@@ -690,7 +690,7 @@ class TestInitialVO2MaxBackfill:
             )
 
         assert count == 2
-        assert [call.kwargs["date"] for call in mock_fetch.await_args_list] == [
+        assert [call.kwargs["target_date"] for call in mock_fetch.await_args_list] == [
             "2026-01-15",
             "2026-08-25",
         ]

@@ -139,7 +139,7 @@ async def _fetch_and_persist_vo2max(
     user_id: str,
     provider,
     *,
-    date: Optional[str] = None,
+    target_date: Optional[str] = None,
 ) -> Optional[float]:
     """Fetch native Garmin VO₂max from gccli, normalize, and persist.
 
@@ -151,19 +151,23 @@ async def _fetch_and_persist_vo2max(
     the collection is NOT updated so a previously stored good value is preserved.
     """
     try:
-        raw = provider.get_max_metrics(user_id, date=date)
+        raw = provider.get_max_metrics(user_id, date=target_date)
         vo2max = GarminVO2Max.from_max_metrics(raw)
         if vo2max.vo2max_running is None:
             logger.info(
                 "[Garmin] _fetch_and_persist_vo2max: no value in payload, skipping write user=%s requested_date=%s",
                 user_id,
-                date,
+                target_date,
             )
             return None
         await _persist_vo2max(db, user_id, vo2max)
         return vo2max.vo2max_running
     except Exception:
-        logger.exception("[Garmin] _fetch_and_persist_vo2max failed user=%s requested_date=%s", user_id, date)
+        logger.exception(
+            "[Garmin] _fetch_and_persist_vo2max failed user=%s requested_date=%s",
+            user_id,
+            target_date,
+        )
         return None
 
 
@@ -201,7 +205,7 @@ async def _backfill_historical_vo2max_for_running_days(
 
     hits = 0
     for activity_day in running_days:
-        if await _fetch_and_persist_vo2max(db, user_id, provider, date=activity_day) is not None:
+        if await _fetch_and_persist_vo2max(db, user_id, provider, target_date=activity_day) is not None:
             hits += 1
     logger.info(
         "[Garmin] VO2max initial backfill complete user=%s running_days=%d persisted_days=%d",
