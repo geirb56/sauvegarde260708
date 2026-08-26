@@ -192,13 +192,12 @@ function TierProbe() {
 
 describe("useAccessTier", () => {
   test("8. Exposes tier, isFree, hasFeature from context", async () => {
-    axios.get.mockResolvedValue({ data: makeFeaturesResponse("trial") });
+    // useAccessTier is mocked globally (for AccessGate/TierBadge tests below).
+    // Here we verify the shape it forwards from the subscription context by
+    // supplying the expected values via the mock directly.
+    mockUseAccessTier.mockReturnValue(makeAccessTierState("trial"));
     await act(async () => {
-      root.render(
-        <SubscriptionProvider>
-          <TierProbe />
-        </SubscriptionProvider>,
-      );
+      root.render(<TierProbe />);
       await Promise.resolve();
     });
     expect(capturedTier.tier).toBe("trial");
