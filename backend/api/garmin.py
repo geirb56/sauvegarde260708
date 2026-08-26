@@ -269,6 +269,12 @@ async def garmin_vo2max_history(
     today = datetime.now(timezone.utc).date()
     since = _subtract_months(today, period_months).isoformat()
 
+    latest_doc = await db.garmin_vo2max.find_one(
+        {"user_id": user_id, "vo2max_running": {"$ne": None}},
+        {"_id": 0, "date": 1, "vo2max_running": 1, "vo2max_running_precise": 1},
+        sort=[("date", -1)],
+    )
+
     cursor = (
         db.garmin_vo2max.find(
             {"user_id": user_id, "vo2max_running": {"$ne": None}, "date": {"$gte": since}},
@@ -288,7 +294,14 @@ async def garmin_vo2max_history(
         for row in rows
         if row.get("date")
     ]
-    current = history[-1] if history else None
+    current = None
+    if latest_doc and latest_doc.get("date"):
+        current = {
+            "date": latest_doc.get("date"),
+            "value": latest_doc.get("vo2max_running"),
+            "precise": latest_doc.get("vo2max_running_precise"),
+            "source": "garmin",
+        }
 
     return {
         "period": f"{period_months}m",

@@ -9,6 +9,7 @@ import { LanguageProvider } from "@/context/LanguageContext";
 import { useSubscription } from "@/context/SubscriptionContext";
 import { UnitProvider } from "@/context/UnitContext";
 import { API_BASE_URL } from "@/config";
+import { UNIT_SYSTEM_KEY, formatDistance } from "@/utils/units";
 
 jest.mock("axios");
 jest.mock("@/context/SubscriptionContext", () => ({
@@ -17,6 +18,13 @@ jest.mock("@/context/SubscriptionContext", () => ({
 jest.mock("@/components/Paywall", () => function MockPaywall({ returnPath }) {
   return <div data-testid="paywall" data-return-path={returnPath}>Paywall</div>;
 });
+
+const FORBIDDEN_ENDPOINTS = [
+  "/training/plan",
+  "/training/full-cycle",
+  "/training/metrics",
+  "/training/refresh",
+];
 
 function weekData() {
   return {
@@ -103,7 +111,8 @@ function mockAxios({ today = todayData(), paces = pacesData(), week = weekData()
   });
 }
 
-function renderPage() {
+function renderPage({ unitSystem = "metric" } = {}) {
+  window.localStorage.setItem(UNIT_SYSTEM_KEY, unitSystem);
   return render(
     <UnitProvider>
       <LanguageProvider>
@@ -118,6 +127,7 @@ function renderPage() {
 describe("TrainingPlanV2 — PR196", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    window.localStorage.clear();
     useSubscription.mockReturnValue({ isFree: false, loading: false });
   });
 
@@ -130,6 +140,16 @@ describe("TrainingPlanV2 — PR196", () => {
     expect(axios.get).toHaveBeenCalledWith(`${API_BASE_URL}/training/v2/paces`);
     expect(axios.get).toHaveBeenCalledWith(`${API_BASE_URL}/training/v2/week`);
     expect(axios.get).toHaveBeenCalledWith(`${API_BASE_URL}/training/v2/cycle`);
+  });
+
+  test("never calls forbidden legacy training endpoints", async () => {
+    mockAxios();
+    renderPage();
+    await screen.findByTestId("training-v2-page");
+    const calledUrls = axios.get.mock.calls.map(([url]) => url);
+    FORBIDDEN_ENDPOINTS.forEach((endpoint) => {
+      expect(calledUrls.some((url) => String(url).includes(endpoint))).toBe(false);
+    });
   });
 
   test("shows paywall for free users", () => {
@@ -164,6 +184,21 @@ describe("TrainingPlanV2 — PR196", () => {
     expect(screen.getByText("3:42 /km")).toBeInTheDocument();
   });
 
+  test("renders distance basis in metric using km", async () => {
+    mockAxios();
+    renderPage({ unitSystem: "metric" });
+    await screen.findByTestId("training-v2-week");
+    expect(screen.getByText(formatDistance(8, { unitSystem: "metric" }))).toBeInTheDocument();
+  });
+
+  test("renders distance basis in imperial using miles without forced km", async () => {
+    mockAxios();
+    renderPage({ unitSystem: "imperial" });
+    const mileText = formatDistance(8, { unitSystem: "imperial" });
+    expect(await screen.findByText(mileText)).toBeInTheDocument();
+    expect(screen.queryByText(/\b8(?:\.0+)? km\b/i)).not.toBeInTheDocument();
+  });
+
   test("handles INSUFFICIENT confidence without inventing paces", async () => {
     mockAxios({ paces: pacesData({ confidence: "INSUFFICIENT" }) });
     renderPage();
@@ -179,6 +214,21 @@ describe("TrainingPlanV2 — PR196", () => {
       if (url.includes("/training/v2/week")) return Promise.resolve({ data: weekData() });
       if (url.includes("/training/v2/cycle")) return Promise.resolve({ data: cycleData() });
       return Promise.reject(new Error(`Unexpected URL: ${url}`));
+    });
+
+    test("estimated_tss null does not render 0 TSS", async () => {
+      mockAxios();
+      renderPage();
+      await screen.findByTestId("training-v2-day-monday");
+      const mondayCard = screen.getByTestId("training-v2-day-monday");
+      expect(mondayCard.textContent).not.toContain("0 TSS");
+    });
+
+    test("estimated_tss zero is rendered when provided by backend", async () => {
+      mockAxios();
+      renderPage();
+      const fridayCard = await screen.findByTestId("training-v2-day-friday");
+      expect(fridayCard.textContent).toContain("0 TSS");
     });
 
     renderPage();
@@ -212,5 +262,14 @@ describe("TrainingPlanV2 — PR196", () => {
     await waitFor(() => {
       expect(screen.getByTestId("cycle-current-badge")).toBeInTheDocument();
     });
+  });
+
+  test("cycle section does not render fake future prescriptions", async () => {
+    mockAxios();
+    renderPage();
+    const cycleCard = await screen.findByTestId("training-v2-cycle");
+    expect(cycleCard.textContent).not.toMatch(/target_km/i);
+    expect(cycleCard.textContent).not.toMatch(/prescription/i);
+    expect(cycleCard.textContent).not.toMatch(/TSS/i);
   });
 });

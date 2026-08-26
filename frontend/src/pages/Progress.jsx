@@ -191,7 +191,6 @@ export default function Progress() {
   ];
 
   const garminVo2CurrentValue = runIndexCurrent?.vo2max_running ?? garminVo2maxHistory?.current?.value ?? null;
-  const garminVo2CurrentPrecise = runIndexCurrent?.vo2max_running_precise ?? garminVo2maxHistory?.current?.precise ?? null;
   const garminVo2CurrentDate = runIndexCurrent?.vo2max_date ?? garminVo2maxHistory?.current?.date ?? null;
   const garminVo2Series = Array.isArray(garminVo2maxHistory?.history) ? garminVo2maxHistory.history : [];
 
@@ -596,7 +595,7 @@ export default function Progress() {
                       />
                       {garminVo2CurrentValue != null && (
                         <ReferenceLine
-                          y={garminVo2CurrentPrecise ?? garminVo2CurrentValue}
+                          y={garminVo2CurrentValue}
                           stroke="rgba(110, 235, 90, 0.3)"
                           strokeDasharray="3 3"
                         />

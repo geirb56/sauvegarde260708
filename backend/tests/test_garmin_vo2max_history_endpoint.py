@@ -73,10 +73,29 @@ class _Collection:
                 results.append(dict(doc))
         return _Cursor(results)
 
-    async def find_one(self, query: dict, projection: Optional[dict] = None):
+    async def find_one(self, query: dict, projection: Optional[dict] = None, sort: Optional[list[tuple[str, int]]] = None):
+        matches = []
         for doc in self._docs:
-            if all(doc.get(k) == v for k, v in query.items()):
-                return dict(doc)
+            ok = True
+            for key, expected in query.items():
+                if isinstance(expected, dict):
+                    if "$ne" in expected and doc.get(key) == expected["$ne"]:
+                        ok = False
+                        break
+                    if "$gte" in expected and (doc.get(key) or "") < expected["$gte"]:
+                        ok = False
+                        break
+                elif doc.get(key) != expected:
+                    ok = False
+                    break
+            if ok:
+                matches.append(dict(doc))
+        if sort and matches:
+            sort_key, direction = sort[0]
+            reverse = direction < 0
+            matches.sort(key=lambda d: d.get(sort_key) or "", reverse=reverse)
+        if matches:
+            return matches[0]
         return None
 
 
@@ -150,3 +169,22 @@ async def test_vo2max_history_period_filter_sparse_semantics_and_no_data():
     empty_payload = empty_response.json()
     assert empty_payload["current"] is None
     assert empty_payload["history"] == []
+
+
+@pytest.mark.asyncio
+async def test_vo2max_history_current_global_even_if_outside_period():
+    fake_db = _FakeDB(
+        garmin_vo2max_docs=[
+            {"user_id": "u1", "date": "2025-01-01", "vo2max_running": 45.0, "vo2max_running_precise": 45.4},
+        ]
+    )
+
+    with patch.object(server.app.state, "db", fake_db, create=True), patch("server.get_user_access", AsyncMock(side_effect=_premium_access)):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://test") as client:
+            response = await client.get("/api/garmin/vo2max-history?period=3m", headers=_bearer("u1"))
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["current"]["value"] == 45.0
+    assert payload["current"]["date"] == "2025-01-01"
+    assert payload["history"] == []
