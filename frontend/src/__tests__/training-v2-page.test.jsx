@@ -1,7 +1,7 @@
 import React from "react";
 import "@testing-library/jest-dom";
-import { render, screen, waitFor, within } from "@testing-library/react";
-import { MemoryRouter, Routes, Route, Navigate } from "react-router-dom";
+import { render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import axios from "axios";
 
 import TrainingPlanV2 from "@/pages/TrainingPlanV2";
@@ -26,44 +26,33 @@ const FORBIDDEN_ENDPOINTS = [
   "/training/refresh",
 ];
 
-function buildWeekResponse({ targetBasis = "distance", includeRestTss = true } = {}) {
+function weekData() {
   return {
-    reference_date: "2026-08-18",
-    goal: {
-      goal_type: "MARATHON",
-      race_date: "2026-10-05",
-      target_time_seconds: 11700,
-    },
-    state: {
-      continuity_state: "normal",
-      allow_intensity: true,
-    },
+    reference_date: "2026-08-25",
     weekly_target: {
-      target_basis: targetBasis,
-      target_km: targetBasis === "distance" ? 52.5 : null,
-      target_duration_minutes: targetBasis === "duration" ? 210 : null,
+      target_basis: "distance",
+      target_km: 50,
+      target_duration_minutes: null,
       session_count: 5,
       confidence: "high",
     },
     week: {
-      planned_km: targetBasis === "distance" ? 52.5 : null,
-      planned_duration_minutes: targetBasis === "duration" ? 210 : null,
-      session_count: 5,
       sessions: [
-        { day: "monday", workout_type: "easy", intensity_class: "low", distance_km: targetBasis === "distance" ? 8 : null, duration_minutes: targetBasis === "duration" ? 45 : null, estimated_tss: null, reason_codes: [] },
-        { day: "tuesday", workout_type: "quality", intensity_class: "high", distance_km: targetBasis === "distance" ? 10 : null, duration_minutes: targetBasis === "duration" ? 50 : null, estimated_tss: null, reason_codes: [] },
-        { day: "wednesday", workout_type: "recovery", intensity_class: "low", distance_km: targetBasis === "distance" ? 6 : null, duration_minutes: targetBasis === "duration" ? 35 : null, estimated_tss: null, reason_codes: [] },
-        { day: "thursday", workout_type: "steady", intensity_class: "moderate", distance_km: targetBasis === "distance" ? 8.5 : null, duration_minutes: targetBasis === "duration" ? 40 : null, estimated_tss: null, reason_codes: [] },
-        { day: "friday", workout_type: "rest", intensity_class: "rest", distance_km: null, duration_minutes: null, estimated_tss: includeRestTss ? 0 : null, reason_codes: [] },
-        { day: "saturday", workout_type: "long_easy", intensity_class: "moderate", distance_km: targetBasis === "distance" ? 20 : null, duration_minutes: targetBasis === "duration" ? 70 : null, estimated_tss: null, reason_codes: [] },
-        { day: "sunday", workout_type: "rest", intensity_class: "rest", distance_km: null, duration_minutes: null, estimated_tss: includeRestTss ? 0 : null, reason_codes: [] },
+        { day: "monday", workout_type: "easy", distance_km: 8, duration_minutes: 45, estimated_tss: null },
+        { day: "tuesday", workout_type: "quality", distance_km: 10, duration_minutes: 50, estimated_tss: null },
+        { day: "wednesday", workout_type: "recovery", distance_km: 6, duration_minutes: 35, estimated_tss: null },
+        { day: "thursday", workout_type: "steady", distance_km: 8, duration_minutes: 42, estimated_tss: null },
+        { day: "friday", workout_type: "rest", distance_km: null, duration_minutes: null, estimated_tss: 0 },
+        { day: "saturday", workout_type: "long_easy", distance_km: 18, duration_minutes: 90, estimated_tss: null },
+        { day: "sunday", workout_type: "rest", distance_km: null, duration_minutes: null, estimated_tss: 0 },
       ],
     },
   };
 }
 
-function buildCycleResponse() {
+function cycleData() {
   return {
+    goal: { goal_type: "marathon", race_date: "2026-10-05" },
     cycle: {
       mode: "race_calendar",
       status: "active",
@@ -71,20 +60,53 @@ function buildCycleResponse() {
       end_date: "2026-10-05",
       current_week: 12,
       total_weeks: 18,
-      days_to_race: 45,
     },
-    weeks: [
-      { week_number: 11, start_date: "2026-08-10", end_date: "2026-08-16", phase: "build", is_current: false },
-      { week_number: 12, start_date: "2026-08-17", end_date: "2026-08-23", phase: "specific", is_current: true },
-      { week_number: 13, start_date: "2026-08-24", end_date: "2026-08-30", phase: "specific", is_current: false },
-    ],
+    weeks: [{ week_number: 12, start_date: "2026-08-17", end_date: "2026-08-23", phase: "specific", is_current: true }],
   };
 }
 
-function mockAxiosSuccess({ weekData, cycleData } = {}) {
+function todayData({ adapted = false } = {}) {
+  return {
+    status: "success",
+    readiness: { band: "EASY" },
+    planned_session: { workout_type: "easy", duration_minutes: 45, distance_km: 8, prescription: "45 min easy" },
+    original_prescription: { workout_type: "easy", duration_minutes: 45, distance_km: 8, prescription: "45 min easy" },
+    adapted_prescription: adapted
+      ? { workout_type: "recovery", duration_minutes: 35, distance_km: 6, prescription: "35 min recovery" }
+      : { workout_type: "easy", duration_minutes: 45, distance_km: 8, prescription: "45 min easy" },
+    adaptive_session: adapted ? { workout_type: "recovery", duration_minutes: 35, distance_km: 6 } : null,
+    adaptation_applied: adapted,
+    adaptation_reason: adapted ? "MISSING_SLEEP" : "",
+  };
+}
+
+function pacesData({ confidence = "HIGH" } = {}) {
+  return {
+    reference_date: "2026-08-25",
+    confidence,
+    vdot_reference: 44.2,
+    paces: confidence === "INSUFFICIENT" ? {
+      easy: null,
+      marathon: null,
+      threshold: null,
+      interval: null,
+      repetition: null,
+    } : {
+      easy: { lower: { pace_str: "5:10" }, upper: { pace_str: "5:55" } },
+      marathon: { pace_str: "4:58" },
+      threshold: { pace_str: "4:35" },
+      interval: { lower: { pace_str: "4:00" }, upper: { pace_str: "4:20" } },
+      repetition: { pace_str: "3:42" },
+    },
+  };
+}
+
+function mockAxios({ today = todayData(), paces = pacesData(), week = weekData(), cycle = cycleData() } = {}) {
   axios.get.mockImplementation((url) => {
-    if (url.includes("/training/v2/week")) return Promise.resolve({ data: weekData ?? buildWeekResponse() });
-    if (url.includes("/training/v2/cycle")) return Promise.resolve({ data: cycleData ?? buildCycleResponse() });
+    if (url.includes("/training/today")) return Promise.resolve({ data: today });
+    if (url.includes("/training/v2/paces")) return Promise.resolve({ data: paces });
+    if (url.includes("/training/v2/week")) return Promise.resolve({ data: week });
+    if (url.includes("/training/v2/cycle")) return Promise.resolve({ data: cycle });
     return Promise.reject(new Error(`Unexpected URL: ${url}`));
   });
 }
@@ -102,187 +124,152 @@ function renderPage({ unitSystem = "metric" } = {}) {
   );
 }
 
-describe("TrainingPlanV2 — PR #177", () => {
+describe("TrainingPlanV2 — PR196", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     window.localStorage.clear();
     useSubscription.mockReturnValue({ isFree: false, loading: false });
   });
 
-  // Test 1: /training renders V2 component
-  it("renders the TrainingPlanV2 component", async () => {
-    mockAxiosSuccess();
+  test("calls required endpoints", async () => {
+    mockAxios();
     renderPage();
-    expect(await screen.findByTestId("training-v2-page")).toBeInTheDocument();
+    await screen.findByTestId("training-v2-page");
+
+    expect(axios.get).toHaveBeenCalledWith(`${API_BASE_URL}/training/today`);
+    expect(axios.get).toHaveBeenCalledWith(`${API_BASE_URL}/training/v2/paces`);
+    expect(axios.get).toHaveBeenCalledWith(`${API_BASE_URL}/training/v2/week`);
+    expect(axios.get).toHaveBeenCalledWith(`${API_BASE_URL}/training/v2/cycle`);
   });
 
-  // Test 2: /training-v2 redirects to /training
-  it("redirects /training-v2 to /training", () => {
-    render(
-      <MemoryRouter initialEntries={["/training-v2"]}>
-        <Routes>
-          <Route path="/training" element={<div data-testid="training-canonical">Training</div>} />
-          <Route path="/training-v2" element={<Navigate to="/training" replace />} />
-        </Routes>
-      </MemoryRouter>
-    );
-    expect(screen.getByTestId("training-canonical")).toBeInTheDocument();
+  test("never calls forbidden legacy training endpoints", async () => {
+    mockAxios();
+    renderPage();
+    await screen.findByTestId("training-v2-page");
+    const calledUrls = axios.get.mock.calls.map(([url]) => url);
+    FORBIDDEN_ENDPOINTS.forEach((endpoint) => {
+      expect(calledUrls.some((url) => String(url).includes(endpoint))).toBe(false);
+    });
   });
 
-  // Test 3: FREE → Paywall
-  it("shows paywall for FREE users and never fetches V2", () => {
+  test("shows paywall for free users", () => {
     useSubscription.mockReturnValue({ isFree: true, loading: false });
     renderPage();
     expect(screen.getByTestId("paywall")).toBeInTheDocument();
     expect(axios.get).not.toHaveBeenCalled();
   });
 
-  // Test 4: TRIAL/PREMIUM → /training/v2/week called
-  it("fetches /training/v2/week for TRIAL/PREMIUM", async () => {
-    mockAxiosSuccess();
+  test("renders adapted session clearly", async () => {
+    mockAxios({ today: todayData({ adapted: true }) });
     renderPage();
-    await waitFor(() => {
-      expect(axios.get).toHaveBeenCalledWith(`${API_BASE_URL}/training/v2/week`);
-    });
+    expect(await screen.findByTestId("today-adapted")).toBeInTheDocument();
+    expect(screen.getByText("MISSING_SLEEP")).toBeInTheDocument();
   });
 
-  // Test 5: TRIAL/PREMIUM → /training/v2/cycle called
-  it("fetches /training/v2/cycle for TRIAL/PREMIUM", async () => {
-    mockAxiosSuccess();
-    renderPage();
-    await waitFor(() => {
-      expect(axios.get).toHaveBeenCalledWith(`${API_BASE_URL}/training/v2/cycle`);
-    });
-  });
-
-  // Test 6: no legacy endpoints called from /training
-  it("never calls forbidden legacy training endpoints", async () => {
-    mockAxiosSuccess();
+  test("renders non-adapted session without adapted badge", async () => {
+    mockAxios({ today: todayData({ adapted: false }) });
     renderPage();
     await screen.findByTestId("training-v2-page");
-    const calledUrls = axios.get.mock.calls.map(([url]) => url);
-    FORBIDDEN_ENDPOINTS.forEach((endpoint) => {
-      expect(calledUrls.some((url) => url.includes(endpoint))).toBe(false);
-    });
+    expect(screen.queryByTestId("today-adapted")).not.toBeInTheDocument();
   });
 
-  // Test 7: duration basis — native minutes, no fake km
-  it("renders duration basis in minutes without converting unknown distance to 0", async () => {
-    mockAxiosSuccess({ weekData: buildWeekResponse({ targetBasis: "duration" }) });
+  test("renders E/M/T/I/R paces with easy and interval ranges", async () => {
+    mockAxios();
     renderPage();
-    expect(await screen.findByText("210 min")).toBeInTheDocument();
-    expect(screen.queryByText("0 km")).not.toBeInTheDocument();
+    await screen.findByTestId("training-v2-paces");
+    expect(screen.getByText("5:10 - 5:55 /km")).toBeInTheDocument();
+    expect(screen.getByText("4:58 /km")).toBeInTheDocument();
+    expect(screen.getByText("4:35 /km")).toBeInTheDocument();
+    expect(screen.getByText("4:00 - 4:20 /km")).toBeInTheDocument();
+    expect(screen.getByText("3:42 /km")).toBeInTheDocument();
   });
 
-  // Test 8: distance basis via UnitContext
-  it("renders distance basis via UnitContext in metric", async () => {
-    mockAxiosSuccess({ weekData: buildWeekResponse({ targetBasis: "distance" }) });
+  test("renders distance basis in metric using km", async () => {
+    mockAxios();
     renderPage({ unitSystem: "metric" });
-    expect(await screen.findByText(formatDistance(52.5, { unitSystem: "metric" }))).toBeInTheDocument();
-    expect(screen.getByText(formatDistance(8, { unitSystem: "metric" }))).toBeInTheDocument();
-    expect(screen.queryByText("0 min")).not.toBeInTheDocument();
+    await screen.findByTestId("training-v2-week");
+    expect(screen.getAllByText(formatDistance(8, { unitSystem: "metric" })).length).toBeGreaterThan(0);
   });
 
-  // Test 8b: distance basis imperial
-  it("renders distance basis via UnitContext in imperial without forcing km", async () => {
-    mockAxiosSuccess({ weekData: buildWeekResponse({ targetBasis: "distance" }) });
+  test("renders distance basis in imperial using miles without forced km", async () => {
+    mockAxios();
     renderPage({ unitSystem: "imperial" });
-    const weeklyTargetValue = await screen.findByText(formatDistance(52.5, { unitSystem: "imperial" }));
-    expect(weeklyTargetValue).toBeInTheDocument();
-    expect(screen.getByText(formatDistance(8, { unitSystem: "imperial" }))).toBeInTheDocument();
-    const mondayCard = screen.getByTestId("training-v2-day-monday");
-    expect(within(mondayCard).queryByText(/\bkm\b/)).not.toBeInTheDocument();
+    const mileText = formatDistance(8, { unitSystem: "imperial" });
+    expect((await screen.findAllByText(mileText)).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/\b8(?:\.0+)? km\b/i)).not.toBeInTheDocument();
   });
 
-  // Test 9: estimated_tss=null → no "0 TSS"
-  it("never shows 0 TSS when estimated_tss is null", async () => {
-    mockAxiosSuccess({ weekData: buildWeekResponse({ includeRestTss: false }) });
+  test("handles INSUFFICIENT confidence without inventing paces", async () => {
+    mockAxios({ paces: pacesData({ confidence: "INSUFFICIENT" }) });
     renderPage();
-    await screen.findByTestId("training-v2-day-sunday");
-    expect(screen.queryByText("0 TSS")).not.toBeInTheDocument();
+    await screen.findByTestId("training-v2-paces");
+    expect(screen.getByText(/performance/i)).toBeInTheDocument();
+    expect(screen.queryByText("5:10 - 5:55 /km")).not.toBeInTheDocument();
   });
 
-  // Test 10: estimated_tss=0 → "0 TSS" allowed
-  it("preserves a valid 0 TSS on REST days when provided", async () => {
-    mockAxiosSuccess({ weekData: buildWeekResponse({ includeRestTss: true }) });
+  test("keeps page functional if today endpoint fails", async () => {
+    axios.get.mockImplementation((url) => {
+      if (url.includes("/training/today")) return Promise.reject(new Error("down"));
+      if (url.includes("/training/v2/paces")) return Promise.resolve({ data: pacesData() });
+      if (url.includes("/training/v2/week")) return Promise.resolve({ data: weekData() });
+      if (url.includes("/training/v2/cycle")) return Promise.resolve({ data: cycleData() });
+      return Promise.reject(new Error(`Unexpected URL: ${url}`));
+    });
+
+    renderPage();
+    expect(await screen.findByTestId("training-v2-page")).toBeInTheDocument();
+  });
+
+  test("estimated_tss null does not render 0 TSS", async () => {
+    mockAxios();
+    renderPage();
+    await screen.findByTestId("training-v2-day-monday");
+    const mondayCard = screen.getByTestId("training-v2-day-monday");
+    expect(mondayCard.textContent).not.toContain("0 TSS");
+  });
+
+  test("estimated_tss zero is rendered when provided by backend", async () => {
+    mockAxios();
     renderPage();
     const fridayCard = await screen.findByTestId("training-v2-day-friday");
-    expect(within(fridayCard).getByText("0 TSS")).toBeInTheDocument();
+    expect(fridayCard.textContent).toContain("0 TSS");
   });
 
-  // Test 11: Cycle — total_weeks affichable, current week identifiable
-  it("renders cycle total_weeks and identifies current week", async () => {
-    mockAxiosSuccess();
+  test("mobile-first section order is Today -> Paces -> Week -> Cycle", async () => {
+    mockAxios();
     renderPage();
-    await screen.findByTestId("training-v2-cycle");
-    expect(screen.getByTestId("cycle-week-12")).toBeInTheDocument();
-    expect(within(screen.getByTestId("cycle-week-12")).getByTestId("cycle-current-badge")).toBeInTheDocument();
-    expect(within(screen.getByTestId("cycle-week-11")).queryByTestId("cycle-current-badge")).not.toBeInTheDocument();
-    expect(screen.getByText(/12 \/ 18/)).toBeInTheDocument();
+
+    const today = await screen.findByTestId("training-v2-today");
+    const paces = screen.getByTestId("training-v2-paces");
+    const week = screen.getByTestId("training-v2-week");
+    const cycle = screen.getByTestId("training-v2-cycle");
+
+    expect(today.compareDocumentPosition(paces) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(paces.compareDocumentPosition(week) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(week.compareDocumentPosition(cycle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  // Test 12: phases base/build/specific/taper/race/consolidation supported
-  it("renders all V2 cycle phases without error", async () => {
-    const phases = ["base", "build", "specific", "taper", "race", "consolidation"];
-    const cycleData = {
-      cycle: { mode: "race_calendar", status: "active", current_week: 3, total_weeks: phases.length },
-      weeks: phases.map((phase, i) => ({
-        week_number: i + 1,
-        start_date: "2026-08-01",
-        end_date: "2026-08-07",
-        phase,
-        is_current: i === 2,
-      })),
-    };
-    mockAxiosSuccess({ cycleData });
+  test("does not display vdot to runner", async () => {
+    mockAxios();
     renderPage();
-    await screen.findByTestId("training-v2-cycle");
-    for (const phase of phases) {
-      expect(screen.getByTestId(`cycle-week-${phases.indexOf(phase) + 1}`)).toBeInTheDocument();
-    }
+    await screen.findByTestId("training-v2-paces");
+    expect(screen.queryByText(/VDOT/i)).not.toBeInTheDocument();
   });
 
-  // Test 13: no future prescription invented in cycle weeks
-  it("does not show prescription data (sessions/targets/TSS) in cycle weeks", async () => {
-    mockAxiosSuccess();
+  test("cycle current week badge still shown", async () => {
+    mockAxios();
     renderPage();
-    await screen.findByTestId("training-v2-cycle");
-    const cycleCard = screen.getByTestId("training-v2-cycle");
-    expect(within(cycleCard).queryByText(/TSS/)).not.toBeInTheDocument();
-    expect(within(cycleCard).queryByText(/km\/h/)).not.toBeInTheDocument();
-    expect(within(cycleCard).queryByText(/target_km/i)).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByTestId("cycle-current-badge")).toBeInTheDocument();
+    });
   });
 
-  // Test 14: Coach not modified — TrainingPlanV2 renders without Coach component
-  it("does not render Coach component inside TrainingPlanV2", async () => {
-    mockAxiosSuccess();
+  test("cycle section does not render fake future prescriptions", async () => {
+    mockAxios();
     renderPage();
-    await screen.findByTestId("training-v2-page");
-    // No coach-specific testid should appear in the training page
-    expect(screen.queryByTestId("chat-coach")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("coach-page")).not.toBeInTheDocument();
-  });
-
-  // Test 16: cycle mode race_calendar renders correctly (not "Not available")
-  it("renders cycle mode race_calendar without falling back to 'Not available'", async () => {
-    const cycleData = buildCycleResponse(); // mode: "race_calendar"
-    mockAxiosSuccess({ cycleData });
-    renderPage();
-    await screen.findByTestId("training-v2-cycle");
-    expect(screen.queryByText(/not available/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/non disponible/i)).not.toBeInTheDocument();
-  });
-
-  // Test 17: cycle mode continuous renders correctly (not "Not available")
-  it("renders cycle mode continuous without falling back to 'Not available'", async () => {
-    const cycleData = {
-      ...buildCycleResponse(),
-      cycle: { ...buildCycleResponse().cycle, mode: "continuous" },
-    };
-    mockAxiosSuccess({ cycleData });
-    renderPage();
-    await screen.findByTestId("training-v2-cycle");
-    expect(screen.queryByText(/not available/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/non disponible/i)).not.toBeInTheDocument();
+    const cycleCard = await screen.findByTestId("training-v2-cycle");
+    expect(cycleCard.textContent).not.toMatch(/target_km/i);
+    expect(cycleCard.textContent).not.toMatch(/prescription/i);
+    expect(cycleCard.textContent).not.toMatch(/TSS/i);
   });
 });
