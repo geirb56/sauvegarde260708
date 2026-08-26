@@ -111,7 +111,7 @@ def test_sync_orders_activities_then_today_run_index_then_metrics_windows():
 
     async def fake_ingest(*_args, **_kwargs):
         events.append("activities_persisted")
-        return {"synced": 2, "new": 2, "newest_start": "2026-08-08T08:00:00"}
+        return {"synced": 2, "new": 2, "newest_start": "2026-08-08T08:00:00", "new_running_dates": ["2026-08-08"]}
 
     async def fake_refresh(*_args, **_kwargs):
         events.append("run_index_ready")
@@ -135,6 +135,7 @@ def test_sync_orders_activities_then_today_run_index_then_metrics_windows():
         patch.object(svc, "_ingest_activities", new=AsyncMock(side_effect=fake_ingest)),
         patch.object(svc, "_finalize_connection", new=AsyncMock(return_value=12)),
         patch.object(svc, "_persist_daily_metrics", new=AsyncMock(side_effect=fake_persist_metrics)),
+        patch.object(svc, "_sync_vo2max_for_running_dates", new=AsyncMock(return_value=1)),
         patch.object(svc, "_build_and_persist_capabilities", new=AsyncMock()),
         patch.object(svc, "refresh_today_run_index_after_garmin_activities", new=AsyncMock(side_effect=fake_refresh)),
         patch.object(svc, "backfill_run_index_history_after_garmin_sync", new=AsyncMock(side_effect=fake_history)),
@@ -182,9 +183,10 @@ def test_sync_without_hrv_still_marks_daily_metrics_ready():
         patch.object(svc.session_store, "ensure_session", new=AsyncMock(return_value=True)),
         patch.object(svc.session_store, "save_session", new=AsyncMock(return_value=True)),
         patch.object(svc, "get_provider_for_user", return_value=provider),
-        patch.object(svc, "_ingest_activities", new=AsyncMock(return_value={"synced": 1, "new": 1, "newest_start": "2026-08-08T08:00:00"})),
+        patch.object(svc, "_ingest_activities", new=AsyncMock(return_value={"synced": 1, "new": 1, "newest_start": "2026-08-08T08:00:00", "new_running_dates": ["2026-08-08"]})),
         patch.object(svc, "_finalize_connection", new=AsyncMock(return_value=7)),
         patch.object(svc, "_persist_daily_metrics", new=AsyncMock(side_effect=lambda *_args: len(_args[-1]))),
+        patch.object(svc, "_sync_vo2max_for_running_dates", new=AsyncMock(return_value=1)),
         patch.object(svc, "_build_and_persist_capabilities", new=AsyncMock()),
         patch.object(svc, "refresh_today_run_index_after_garmin_activities", new=AsyncMock(return_value={"today_snapshot": {"date": "2026-08-09"}, "workouts": []})),
         patch.object(svc, "backfill_run_index_history_after_garmin_sync", new=AsyncMock(return_value={})),
@@ -198,7 +200,46 @@ def test_sync_without_hrv_still_marks_daily_metrics_ready():
     assert result["readiness_status"] == "ready"
 
 
-def test_sync_with_no_usable_physio_marks_readiness_unavailable():
+def test_sync_fetches_vo2max_once_per_new_running_date():
+    db = _mock_db()
+    provider = MagicMock()
+    provider.sync_activities.return_value = [_activity(1), _activity(2)]
+    provider.get_daily_metrics.side_effect = [[_metric("2026-08-08", hrv=58)], []]
+    _, fake_update, fake_get = _progress_spy()
+
+    with (
+        patch.object(svc.session_store, "ensure_session", new=AsyncMock(return_value=True)),
+        patch.object(svc.session_store, "save_session", new=AsyncMock(return_value=True)),
+        patch.object(svc, "get_provider_for_user", return_value=provider),
+        patch.object(
+            svc,
+            "_ingest_activities",
+            new=AsyncMock(
+                return_value={
+                    "synced": 2,
+                    "new": 2,
+                    "newest_start": "2026-08-08T08:00:00",
+                    "new_running_dates": ["2026-08-08", "2026-08-07"],
+                }
+            ),
+        ),
+        patch.object(svc, "_finalize_connection", new=AsyncMock(return_value=8)),
+        patch.object(svc, "_persist_daily_metrics", new=AsyncMock(side_effect=lambda *_args: len(_args[-1]))),
+        patch.object(svc, "_sync_vo2max_for_running_dates", new=AsyncMock(return_value=2)) as mock_vo2max,
+        patch.object(svc, "_build_and_persist_capabilities", new=AsyncMock()),
+        patch.object(svc, "refresh_today_run_index_after_garmin_activities", new=AsyncMock(return_value={"today_snapshot": {"date": "2026-08-09"}, "workouts": []})),
+        patch.object(svc, "backfill_run_index_history_after_garmin_sync", new=AsyncMock(return_value={})),
+        patch.object(svc, "compute_run_index", new=AsyncMock(return_value={"metrics": {"run_readiness": 75}})),
+        patch.object(svc, "update_sync_progress", new=AsyncMock(side_effect=fake_update)),
+        patch.object(svc, "get_sync_progress", new=AsyncMock(side_effect=fake_get)),
+    ):
+        result = _run(svc.sync(db, "user-1"))
+
+    assert result["success"] is True
+    mock_vo2max.assert_awaited_once_with(db, "user-1", provider, ["2026-08-08", "2026-08-07"])
+
+
+def test_sync_with_no_usable_physio_keeps_readiness_ready_when_score_present():
     db = _mock_db()
     provider = MagicMock()
     provider.sync_activities.return_value = [_activity(1)]
@@ -209,9 +250,10 @@ def test_sync_with_no_usable_physio_marks_readiness_unavailable():
         patch.object(svc.session_store, "ensure_session", new=AsyncMock(return_value=True)),
         patch.object(svc.session_store, "save_session", new=AsyncMock(return_value=True)),
         patch.object(svc, "get_provider_for_user", return_value=provider),
-        patch.object(svc, "_ingest_activities", new=AsyncMock(return_value={"synced": 1, "new": 1, "newest_start": "2026-08-08T08:00:00"})),
+        patch.object(svc, "_ingest_activities", new=AsyncMock(return_value={"synced": 1, "new": 1, "newest_start": "2026-08-08T08:00:00", "new_running_dates": []})),
         patch.object(svc, "_finalize_connection", new=AsyncMock(return_value=4)),
         patch.object(svc, "_persist_daily_metrics", new=AsyncMock(side_effect=lambda *_args: len(_args[-1]))),
+        patch.object(svc, "_sync_vo2max_for_running_dates", new=AsyncMock(return_value=0)),
         patch.object(svc, "_build_and_persist_capabilities", new=AsyncMock()),
         patch.object(svc, "refresh_today_run_index_after_garmin_activities", new=AsyncMock(return_value={"today_snapshot": {"date": "2026-08-09"}, "workouts": []})),
         patch.object(svc, "backfill_run_index_history_after_garmin_sync", new=AsyncMock(return_value={})),
@@ -222,7 +264,7 @@ def test_sync_with_no_usable_physio_marks_readiness_unavailable():
         result = _run(svc.sync(db, "user-1"))
 
     assert result["daily_metrics_status"] == "no_usable_data"
-    assert result["readiness_status"] == "unavailable"
+    assert result["readiness_status"] == "ready"
 
 
 def test_metrics_failure_after_run_index_returns_partial_success():
@@ -236,8 +278,9 @@ def test_metrics_failure_after_run_index_returns_partial_success():
         patch.object(svc.session_store, "ensure_session", new=AsyncMock(return_value=True)),
         patch.object(svc.session_store, "save_session", new=AsyncMock(return_value=True)),
         patch.object(svc, "get_provider_for_user", return_value=provider),
-        patch.object(svc, "_ingest_activities", new=AsyncMock(return_value={"synced": 1, "new": 1, "newest_start": "2026-08-08T08:00:00"})),
+        patch.object(svc, "_ingest_activities", new=AsyncMock(return_value={"synced": 1, "new": 1, "newest_start": "2026-08-08T08:00:00", "new_running_dates": ["2026-08-08"]})),
         patch.object(svc, "_finalize_connection", new=AsyncMock(return_value=6)),
+        patch.object(svc, "_sync_vo2max_for_running_dates", new=AsyncMock(return_value=1)),
         patch.object(svc, "_build_and_persist_capabilities", new=AsyncMock()),
         patch.object(svc, "refresh_today_run_index_after_garmin_activities", new=AsyncMock(return_value={"today_snapshot": {"date": "2026-08-09"}, "workouts": []})),
         patch.object(svc, "update_sync_progress", new=AsyncMock(side_effect=fake_update)),
@@ -293,6 +336,7 @@ def test_sync_resume_retries_metrics_without_refetching_activities():
         patch.object(svc.session_store, "save_session", new=AsyncMock(return_value=True)),
         patch.object(svc, "get_provider_for_user", return_value=provider),
         patch.object(svc, "_persist_daily_metrics", new=AsyncMock(side_effect=lambda *_args: len(_args[-1]))),
+        patch.object(svc, "_sync_vo2max_for_running_dates", new=AsyncMock(return_value=0)),
         patch.object(svc, "_build_and_persist_capabilities", new=AsyncMock()),
         patch.object(svc, "refresh_today_run_index_after_garmin_activities", new=AsyncMock()) as mock_refresh,
         patch.object(svc, "backfill_run_index_history_after_garmin_sync", new=AsyncMock(return_value={})),
@@ -317,8 +361,10 @@ def test_incremental_sync_still_refreshes_run_index():
         patch.object(svc.session_store, "ensure_session", new=AsyncMock(return_value=True)),
         patch.object(svc.session_store, "save_session", new=AsyncMock(return_value=True)),
         patch.object(svc, "get_provider_for_user", return_value=provider),
-        patch.object(svc, "_ingest_activities", new=AsyncMock(return_value={"synced": 1, "new": 1, "newest_start": "2026-08-09T08:00:00"})),
+        patch.object(svc, "_ingest_activities", new=AsyncMock(return_value={"synced": 1, "new": 1, "newest_start": "2026-08-09T08:00:00", "new_running_dates": ["2026-08-09"]})),
         patch.object(svc, "_finalize_connection", new=AsyncMock(return_value=13)),
+        patch.object(svc, "_sync_vo2max_for_running_dates", new=AsyncMock(return_value=1)) as mock_vo2max,
+        patch.object(svc, "_build_and_persist_capabilities", new=AsyncMock()) as mock_caps,
         patch.object(svc, "refresh_today_run_index_after_garmin_activities", new=AsyncMock(return_value={"today_snapshot": {"date": "2026-08-09"}, "workouts": []})),
         patch.object(svc, "backfill_run_index_history_after_garmin_sync", new=AsyncMock(return_value={})),
         patch.object(svc, "update_sync_progress", new=AsyncMock(side_effect=fake_update)),
@@ -329,6 +375,8 @@ def test_incremental_sync_still_refreshes_run_index():
     assert result["success"] is True
     assert result["metrics_count"] == 0
     assert result["status"] == "complete"
+    mock_vo2max.assert_awaited_once_with(db, "user-1", provider, ["2026-08-09"])
+    mock_caps.assert_awaited_once()
 
 
 class _FakeRedis:

@@ -38,6 +38,17 @@ STATS_FAILED_KEY = "runindex:stats:failed_jobs"
 JOB_SYNC_USER = "SYNC_USER"          # full sync: activities + daily health metrics
 JOB_SYNC_ACTIVITY = "SYNC_ACTIVITY"  # activities-focused sync
 JOB_INCREMENTAL_SYNC = "INCREMENTAL_SYNC"  # incremental: only new activities (since last)
+JOB_VO2MAX_BACKFILL = "VO2MAX_BACKFILL"  # one-shot historical VO2max fetch
+
+
+def _pending_key(job_type: str, user_id: str) -> str:
+    if job_type == JOB_VO2MAX_BACKFILL:
+        return f"{PENDING_PREFIX}{user_id}:vo2max_backfill"
+    return f"{PENDING_PREFIX}{user_id}"
+
+
+def _should_update_sync_progress(job_type: str) -> bool:
+    return job_type in {JOB_SYNC_USER, JOB_SYNC_ACTIVITY, JOB_INCREMENTAL_SYNC}
 
 # Redis keys for throttling / dedupe
 LOCK_PREFIX = "sync_lock:"       # per-user concurrency lock (worker side)
@@ -62,13 +73,13 @@ async def _enqueue_deduped(job_type: str, user_id: str) -> dict:
     """Enqueue a job, skipping if one is already pending for this user."""
     r = get_redis()
     # NX pending flag prevents flooding the queue with duplicates for one user.
-    fresh = await r.set(f"{PENDING_PREFIX}{user_id}", job_type, nx=True, ex=PENDING_TTL)
+    fresh = await r.set(_pending_key(job_type, user_id), job_type, nx=True, ex=PENDING_TTL)
     if not fresh:
         logger.info("[queue] job=%s already pending user=%s (skipped)", job_type, user_id)
         return {"status": "already_queued"}
-    from garmin.sync_progress import update_sync_progress
-
-    await update_sync_progress(user_id, phase="queued", error_code=None)
+    if _should_update_sync_progress(job_type):
+        from garmin.sync_progress import update_sync_progress
+        await update_sync_progress(user_id, phase="queued", error_code=None)
     await _push(job_type, user_id)
     logger.info("[queue] enqueued job=%s user=%s", job_type, user_id)
     return {"status": "queued"}
@@ -87,6 +98,11 @@ async def enqueue_activity_sync(user_id: str) -> dict:
 async def enqueue_incremental_sync(user_id: str) -> dict:
     """Queue an incremental sync (only new activities since the last one)."""
     return await _enqueue_deduped(JOB_INCREMENTAL_SYNC, user_id)
+
+
+async def enqueue_vo2max_backfill(user_id: str) -> dict:
+    """Queue the one-shot historical VO2max backfill."""
+    return await _enqueue_deduped(JOB_VO2MAX_BACKFILL, user_id)
 
 
 # --------------------------------------------------------------------------- #

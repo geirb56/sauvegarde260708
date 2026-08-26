@@ -180,8 +180,17 @@ class GccliProvider(Provider):
             account=account,
         )
 
-    def get_max_metrics(self, user_id: str) -> List[Dict]:
-        return self._runner.fetch_max_metrics(account=self._account())
+    def get_max_metrics(
+        self,
+        user_id: str,
+        date: Optional[str] = None,
+        raise_on_error: bool = False,
+    ) -> List[Dict]:
+        return self._runner.fetch_max_metrics(
+            account=self._account(),
+            date=date,
+            raise_on_error=raise_on_error,
+        )
 
     def get_profile(self, user_id: str) -> Dict:
         return self._runner.get_profile(account=self._account())
