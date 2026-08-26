@@ -97,6 +97,12 @@ export default function Progress() {
   const { unitSystem } = useUnitSystem();
 
   useEffect(() => {
+    if (subLoading) return; // wait for subscription resolution
+    if (isFree) {
+      // FREE: paywall — no data fetches at all
+      setLoading(false);
+      return;
+    }
     const fetchData = async () => {
       try {
         const [statsRes, predictionsRes, cycleRes, runIndexRes, vo2HistoryRes] = await Promise.all([
@@ -130,10 +136,11 @@ export default function Progress() {
       }
     };
     fetchData();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [subLoading, isFree]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Fetch RunIndex history when period changes
+  // Fetch RunIndex history when period changes — TRIAL/PREMIUM only
   useEffect(() => {
+    if (subLoading || isFree) return;
     const fetchRunIndexHistory = async () => {
       try {
         const res = await axios.get(`${API}/run-index/history?period=${runIndexPeriod}&language=${lang}`);
@@ -143,7 +150,7 @@ export default function Progress() {
       }
     };
     fetchRunIndexHistory();
-  }, [runIndexPeriod, lang]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [runIndexPeriod, lang, subLoading, isFree]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (loading || subLoading) {
     return (
