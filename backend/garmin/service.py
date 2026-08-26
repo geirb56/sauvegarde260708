@@ -199,8 +199,9 @@ async def _fetch_and_persist_vo2max(
     """Fetch native Garmin VO₂max from gccli, normalize, and persist.
 
     Returns the resolved ``vo2max_running`` value (or ``None``).
-    Never raises: any error is logged and ``None`` is returned so it does not
-    break the broader sync pipeline.
+    By default errors are logged and ``None`` is returned so the broader sync
+    pipeline keeps running, but ``raise_on_error=True`` re-raises technical
+    failures so callers can use the existing worker retry path.
 
     No-overwrite guard: when the payload yields no value (vo2max_running is None),
     the collection is NOT updated so a previously stored good value is preserved.
@@ -294,16 +295,25 @@ async def _sync_vo2max_for_running_dates(
     conn = await _load_connection_state(db, user_id)
     requested_dates = _vo2max_requested_dates(conn)
     missing_dates = [running_day for running_day in sorted(set(running_dates)) if running_day not in requested_dates]
+    processed = 0
     for running_day in missing_dates:
-        await _fetch_and_persist_vo2max(
-            db,
-            user_id,
-            provider,
-            target_date=running_day,
-            raise_on_error=False,
-            mark_requested=True,
-        )
-    return len(missing_dates)
+        try:
+            await _fetch_and_persist_vo2max(
+                db,
+                user_id,
+                provider,
+                target_date=running_day,
+                raise_on_error=True,
+                mark_requested=True,
+            )
+            processed += 1
+        except Exception:
+            logger.warning(
+                "[Garmin] incremental VO2max fetch failed user=%s requested_date=%s",
+                user_id,
+                running_day,
+            )
+    return processed
 
 
 async def _schedule_initial_vo2max_backfill(
@@ -951,12 +961,7 @@ async def run_vo2max_backfill_job(db, user_id: str) -> dict:
             VO2MAX_BACKFILL_FAILED,
             vo2max_backfill_12m_error="session_unavailable",
         )
-        return {
-            "success": False,
-            "attempted_dates": 0,
-            "message": "Garmin session unavailable, please reconnect",
-            "error": "session_unavailable",
-        }
+        raise RuntimeError("session_unavailable")
 
     await _set_vo2max_backfill_status(
         db,

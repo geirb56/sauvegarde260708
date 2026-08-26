@@ -47,7 +47,7 @@ def _pending_key(job_type: str, user_id: str) -> str:
     return f"{PENDING_PREFIX}{user_id}"
 
 
-def _updates_sync_progress(job_type: str) -> bool:
+def _should_update_sync_progress(job_type: str) -> bool:
     return job_type in {JOB_SYNC_USER, JOB_SYNC_ACTIVITY, JOB_INCREMENTAL_SYNC}
 
 # Redis keys for throttling / dedupe
@@ -77,7 +77,7 @@ async def _enqueue_deduped(job_type: str, user_id: str) -> dict:
     if not fresh:
         logger.info("[queue] job=%s already pending user=%s (skipped)", job_type, user_id)
         return {"status": "already_queued"}
-    if _updates_sync_progress(job_type):
+    if _should_update_sync_progress(job_type):
         from garmin.sync_progress import update_sync_progress
         await update_sync_progress(user_id, phase="queued", error_code=None)
     await _push(job_type, user_id)

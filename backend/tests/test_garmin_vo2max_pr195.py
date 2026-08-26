@@ -800,6 +800,37 @@ class TestIncrementalVO2MaxDateSync:
             "2026-08-25",
         ]
 
+    def test_transient_error_does_not_mark_date_requested(self):
+        db = MagicMock()
+        db.garmin_connections.find_one = AsyncMock(return_value={"vo2max_requested_dates": []})
+        db.garmin_connections.update_one = AsyncMock()
+        provider = MagicMock()
+
+        with patch.object(
+            garmin_service,
+            "_fetch_and_persist_vo2max",
+            new=AsyncMock(side_effect=RuntimeError("gccli timeout")),
+        ) as mock_fetch:
+            count = asyncio.run(
+                garmin_service._sync_vo2max_for_running_dates(
+                    db,
+                    "user_1",
+                    provider,
+                    ["2026-08-25"],
+                )
+            )
+
+        assert count == 0
+        mock_fetch.assert_awaited_once_with(
+            db,
+            "user_1",
+            provider,
+            target_date="2026-08-25",
+            raise_on_error=True,
+            mark_requested=True,
+        )
+        db.garmin_connections.update_one.assert_not_awaited()
+
 
 class TestScheduleInitialVO2MaxBackfill:
     def _db(self, *, status=None, requested_dates=None):
@@ -880,6 +911,16 @@ class TestRunVO2MaxBackfillJob:
         assert result["success"] is True
         assert result["attempted_dates"] == 0
         mock_ensure.assert_not_awaited()
+
+    def test_session_unavailable_raises_for_worker_retry(self):
+        db = self._db()
+
+        with (
+            patch.object(garmin_service.session_store, "ensure_session", new=AsyncMock(return_value=False)),
+            patch.object(garmin_service, "_safe_save_session", new=AsyncMock()),
+            pytest.raises(RuntimeError, match="session_unavailable"),
+        ):
+            asyncio.run(garmin_service.run_vo2max_backfill_job(db, "user_1"))
 
 
 # --------------------------------------------------------------------------- #

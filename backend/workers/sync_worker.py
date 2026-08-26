@@ -45,7 +45,7 @@ from jobs.queue import (
     HEARTBEAT_INTERVAL,
     STATS_FAILED_KEY,
     _pending_key,
-    _updates_sync_progress,
+    _should_update_sync_progress,
     claim_job,
     ack_job,
     requeue_job,
@@ -121,7 +121,7 @@ async def process_job(db, redis, raw: str, job: dict) -> None:
         )
         await redis.delete(_pending_key(job_type, user_id))
         # Cooldown: throttle auto-syncs for this user after a successful run.
-        if _updates_sync_progress(job_type):
+        if _should_update_sync_progress(job_type):
             await rate_limiter.set_cooldown(user_id)
         # ACK only on success: this is the single point that removes the job.
         await ack_job(raw, job_id)
@@ -142,7 +142,7 @@ async def process_job(db, redis, raw: str, job: dict) -> None:
                 "[worker] sync_failed type=%s user=%s attempts=%s duration=%ss err=%s",
                 job_type, user_id, attempts, duration, exc,
             )
-            if _updates_sync_progress(job_type):
+            if _should_update_sync_progress(job_type):
                 await update_sync_progress(
                     user_id,
                     phase="failed",
