@@ -714,6 +714,25 @@ class TestInitialVO2MaxBackfill:
         assert count == 0
         mock_fetch.assert_not_awaited()
 
+    def test_returns_zero_when_all_backfill_fetches_miss(self):
+        with patch.object(
+            garmin_service,
+            "_fetch_and_persist_vo2max",
+            new=AsyncMock(return_value=None),
+        ) as mock_fetch:
+            count = asyncio.run(
+                garmin_service._backfill_historical_vo2max_for_running_days(
+                    MagicMock(),
+                    "user_1",
+                    MagicMock(),
+                    activities=[{"activity_type": "running", "start_time": "2026-08-25T08:00:00"}],
+                    reference_date=date(2026, 8, 26),
+                )
+            )
+
+        assert count == 0
+        mock_fetch.assert_awaited_once()
+
 
 # --------------------------------------------------------------------------- #
 # 9. Two-date historical persistence (section 8 of spec)

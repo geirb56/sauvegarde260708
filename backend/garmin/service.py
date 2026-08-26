@@ -209,7 +209,7 @@ async def _backfill_historical_vo2max_for_running_days(
         len(running_days),
         hits,
     )
-    return len(running_days)
+    return hits
 
 
 async def _build_and_persist_capabilities(db, user_id: str) -> None:
