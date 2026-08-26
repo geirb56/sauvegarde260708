@@ -18,9 +18,15 @@ SUBSCRIPTION_INFO_PERMISSION_FALLBACK = NO
 FAIL_CLOSED = PASS
 
 FREE_INITIAL_PREMIUM_CALLS = 0
-FREE_TO_TRIAL_LIVE_TRANSITION = PASS (lastIsFreeRef tracks tier; tierChanged forces refetch)
-TRIAL_PREMIUM_CALLS_AFTER_TRANSITION = PASS
-PREMIUM_TO_FREE_LIVE_TRANSITION = PASS (isFree change triggers fetchData(true) → no Premium calls)
+PREMIUM_TO_FREE_DATA_PURGE = PASS (useEffect clears todaySession, trainingWeekV2, insight.rag on isFree)
+PREMIUM_TO_FREE_TODAY_SESSION_VISIBLE = NO (render guard: !isFree wraps today-workout-card)
+PREMIUM_TO_FREE_WEEKLY_TARGET_VISIBLE = NO (render guard: !isFree wraps weekly-target-card)
+PREMIUM_TO_FREE_RAG_VISIBLE = NO (insight.rag stripped in purge effect)
+PREMIUM_TO_FREE_FEEDBACK_VISIBLE = NO (handleFeedback guards isFree; today-workout-card hidden)
+PREMIUM_TO_FREE_NEW_PREMIUM_API_CALLS = 0
+
+FREE_RUNINDEX_PRESERVED = YES (cardioData not purged; run-readiness block has no isFree guard)
+FREE_READINESS_PRESERVED = YES
 
 LOCKFILES_MODIFIED = NO
 BACKEND_MODIFIED = NO

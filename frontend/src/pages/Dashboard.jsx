@@ -452,6 +452,19 @@ export default function Dashboard() {
   const lastLangRef = useRef(lang);
   const lastIsFreeRef = useRef(null); // track tier so FREE→TRIAL and TRIAL→FREE re-fetch
 
+  // Purge Premium state immediately when user becomes FREE (downgrade or fail-closed)
+  useEffect(() => {
+    if (!subLoading && isFree) {
+      setTodaySession(null);
+      setTrainingWeekV2(null);
+      setInsight(prev => {
+        if (!prev) return prev;
+        const { rag: _rag, ...rest } = prev; // eslint-disable-line no-unused-vars
+        return rest;
+      });
+    }
+  }, [isFree, subLoading]);
+
   // Wait for subscription resolution before fetching — never launch Premium calls for FREE
   useEffect(() => {
     if (subLoading) return;
@@ -496,6 +509,7 @@ export default function Dashboard() {
   };
 
   const handleFeedback = async (day, status) => {
+    if (isFree) return; // FREE users must not trigger Premium training endpoints
     setFeedbackSubmitting(true);
     try {
       const today = new Date().toISOString().split('T')[0];
@@ -824,7 +838,8 @@ export default function Dashboard() {
         </>
       )}
 
-      {/* TODAY'S SESSION - Interactive with Adaptation */}
+      {/* TODAY'S SESSION - Interactive with Adaptation — TRIAL/PREMIUM only */}
+      {!isFree && (
       <div 
         className="today-workout-card animate-in" 
         style={{ 
@@ -932,9 +947,10 @@ export default function Dashboard() {
           </>
         )}
       </div>
+      )}
 
       {/* WEEKLY TARGET — V2 authority (TRIAL/PREMIUM only) */}
-      {trainingWeekV2?.weekly_target && (() => {
+      {!isFree && trainingWeekV2?.weekly_target && (() => {
         const wt = trainingWeekV2.weekly_target;
         const basis = wt.target_basis;
         return (
