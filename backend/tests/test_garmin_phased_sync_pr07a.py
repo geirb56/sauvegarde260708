@@ -239,7 +239,7 @@ def test_sync_fetches_vo2max_once_per_new_running_date():
     mock_vo2max.assert_awaited_once_with(db, "user-1", provider, ["2026-08-08", "2026-08-07"])
 
 
-def test_sync_with_no_usable_physio_marks_readiness_unavailable():
+def test_sync_with_no_usable_physio_keeps_readiness_ready_when_score_present():
     db = _mock_db()
     provider = MagicMock()
     provider.sync_activities.return_value = [_activity(1)]

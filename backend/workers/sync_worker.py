@@ -143,11 +143,11 @@ async def process_job(db, redis, raw: str, job: dict) -> None:
                 job_type, user_id, attempts, duration, exc,
             )
             if _updates_sync_progress(job_type):
-            await update_sync_progress(
-                user_id,
-                phase="failed",
-                error_code="worker_sync_failed",
-            )
+                await update_sync_progress(
+                    user_id,
+                    phase="failed",
+                    error_code="worker_sync_failed",
+                )
             await redis.delete(_pending_key(job_type, user_id))
             # Monitoring counter only (additive; failure handling unchanged).
             await redis.incr(STATS_FAILED_KEY)
