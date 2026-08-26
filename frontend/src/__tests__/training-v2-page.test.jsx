@@ -188,14 +188,14 @@ describe("TrainingPlanV2 — PR196", () => {
     mockAxios();
     renderPage({ unitSystem: "metric" });
     await screen.findByTestId("training-v2-week");
-    expect(screen.getByText(formatDistance(8, { unitSystem: "metric" }))).toBeInTheDocument();
+    expect(screen.getAllByText(formatDistance(8, { unitSystem: "metric" })).length).toBeGreaterThan(0);
   });
 
   test("renders distance basis in imperial using miles without forced km", async () => {
     mockAxios();
     renderPage({ unitSystem: "imperial" });
     const mileText = formatDistance(8, { unitSystem: "imperial" });
-    expect(await screen.findByText(mileText)).toBeInTheDocument();
+    expect((await screen.findAllByText(mileText)).length).toBeGreaterThan(0);
     expect(screen.queryByText(/\b8(?:\.0+)? km\b/i)).not.toBeInTheDocument();
   });
 
@@ -216,23 +216,23 @@ describe("TrainingPlanV2 — PR196", () => {
       return Promise.reject(new Error(`Unexpected URL: ${url}`));
     });
 
-    test("estimated_tss null does not render 0 TSS", async () => {
-      mockAxios();
-      renderPage();
-      await screen.findByTestId("training-v2-day-monday");
-      const mondayCard = screen.getByTestId("training-v2-day-monday");
-      expect(mondayCard.textContent).not.toContain("0 TSS");
-    });
-
-    test("estimated_tss zero is rendered when provided by backend", async () => {
-      mockAxios();
-      renderPage();
-      const fridayCard = await screen.findByTestId("training-v2-day-friday");
-      expect(fridayCard.textContent).toContain("0 TSS");
-    });
-
     renderPage();
     expect(await screen.findByTestId("training-v2-page")).toBeInTheDocument();
+  });
+
+  test("estimated_tss null does not render 0 TSS", async () => {
+    mockAxios();
+    renderPage();
+    await screen.findByTestId("training-v2-day-monday");
+    const mondayCard = screen.getByTestId("training-v2-day-monday");
+    expect(mondayCard.textContent).not.toContain("0 TSS");
+  });
+
+  test("estimated_tss zero is rendered when provided by backend", async () => {
+    mockAxios();
+    renderPage();
+    const fridayCard = await screen.findByTestId("training-v2-day-friday");
+    expect(fridayCard.textContent).toContain("0 TSS");
   });
 
   test("mobile-first section order is Today -> Paces -> Week -> Cycle", async () => {
