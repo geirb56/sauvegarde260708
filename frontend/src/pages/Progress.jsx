@@ -97,8 +97,27 @@ export default function Progress() {
   const { unitSystem } = useUnitSystem();
 
   useEffect(() => {
+    // PR198 — wait for subscription status before issuing any API calls.
+    // isFree is initially false (subscription=null), so we must wait for
+    // subLoading=false before we know the real tier.
+    if (subLoading) return;
+
     const fetchData = async () => {
       try {
+        // FREE tier: only fetch data available to all authenticated users.
+        // Do NOT call any Premium endpoints — they would return 403 and are
+        // shown behind the Paywall anyway.
+        if (isFree) {
+          const [statsRes, runIndexRes] = await Promise.all([
+            axios.get(`${API}/stats`),
+            axios.get(`${API}/run-index`).catch(() => ({ data: null })),
+          ]);
+          setStats(statsRes.data);
+          if (runIndexRes.data?.metrics) setRunIndexCurrent(runIndexRes.data.metrics);
+          return;
+        }
+
+        // TRIAL / PREMIUM: fetch all data including Premium endpoints.
         const [statsRes, predictionsRes, cycleRes, runIndexRes, vo2HistoryRes] = await Promise.all([
           axios.get(`${API}/stats`),
           axios.get(`${API}/training/race-predictions`).catch(() => ({ data: null })),
@@ -130,7 +149,7 @@ export default function Progress() {
       }
     };
     fetchData();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isFree, subLoading]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch RunIndex history when period changes
   useEffect(() => {

@@ -9,11 +9,24 @@ const API = API_BASE_URL;
 
 const SubscriptionContext = createContext(null);
 
+// PR198 — fail-closed canonical state used when backend cannot be reached.
+// No premium access is ever granted by default.
+const FAIL_CLOSED_STATE = {
+  plan: "free",
+  has_premium_access: false,
+  trial_active: false,
+  trial_days_remaining: null,
+  feature_access: {},
+};
+
 export function SubscriptionProvider({ children }) {
   const { lang } = useLanguage();
   const { user } = useAuth();
   const userId = user?.id;
-  const [subscription, setSubscription] = useState(null);
+  // canonical: data from /user/features (access_control single source of truth)
+  const [canonical, setCanonical] = useState(null);
+  // display: data from /subscription/info (UI labels only)
+  const [display, setDisplay] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -23,31 +36,33 @@ export function SubscriptionProvider({ children }) {
       return;
     }
     try {
-      const res = await axios.get(`${API}/subscription/info?language=${lang}`);
-      setSubscription(res.data);
-      setError(null);
+      // PR198 — call both endpoints in parallel.
+      // /user/features is the CANONICAL source for all access decisions.
+      // /subscription/info is used only for display labels.
+      const [featuresRes, infoRes] = await Promise.allSettled([
+        axios.get(`${API}/user/features`),
+        axios.get(`${API}/subscription/info?language=${lang}`),
+      ]);
+
+      if (featuresRes.status === "fulfilled") {
+        setCanonical(featuresRes.value.data);
+      } else {
+        // FAIL CLOSED: canonical data unavailable → no premium access
+        console.error("Error fetching /user/features:", featuresRes.reason);
+        setCanonical(FAIL_CLOSED_STATE);
+      }
+
+      if (infoRes.status === "fulfilled") {
+        setDisplay(infoRes.value.data);
+      }
+      // display failure is non-critical — UI labels fall back gracefully
+
+      setError(featuresRes.status === "rejected" ? featuresRes.reason : null);
     } catch (err) {
       console.error("Error fetching subscription:", err);
       setError(err);
-      // Fail-closed on error: no premium access granted until backend confirms status.
-      // Never default to trial/premium — the frontend MUST NOT decide access.
-      setSubscription({
-        status: "free",
-        features: {
-          training_plan: false,
-          plan_adaptation: false,
-          session_analysis: false,
-          sync_enabled: false,
-          api_access: false,
-          llm_access: false,
-          full_access: false
-        },
-        display: {
-          label: lang === "fr" ? "Accès limité" : lang === "es" ? "Acceso limitado" : "Limited access",
-          badge: lang === "fr" ? "LIMITÉ" : lang === "es" ? "LIMITADO" : "LIMITED",
-          badge_color: "gray"
-        }
-      });
+      // FAIL CLOSED: no premium access granted until backend confirms status
+      setCanonical(FAIL_CLOSED_STATE);
     } finally {
       setLoading(false);
     }
@@ -62,29 +77,52 @@ export function SubscriptionProvider({ children }) {
     fetchSubscription();
   }, [fetchSubscription]);
 
-  // Helper functions
-  const isActive = subscription?.status !== "free";
-  const isTrial = subscription?.status === "trial";
-  const isPremium = subscription?.status === "premium";
-  const isFree = subscription?.status === "free";
+  // PR198 — derive all status flags from the canonical backend contract.
+  // The frontend MUST NOT reconstruct its own access policy.
+  const plan = canonical?.plan ?? "free";
+  const hasPremiumAccess = canonical?.has_premium_access ?? false;
+  const isFree = plan === "free";
+  const isTrial = canonical?.trial_active ?? false;
+  const isPremium = plan === "premium";
+  const isActive = hasPremiumAccess;
 
+  // Feature access: always from canonical backend feature_access map.
+  // Unknown features default to false (fail closed).
   const hasFeature = (feature) => {
-    return subscription?.features?.[feature] ?? false;
+    return canonical?.feature_access?.[feature] ?? false;
   };
 
-  const trialDaysRemaining = subscription?.trial_days_remaining;
+  const trialDaysRemaining = canonical?.trial_days_remaining ?? null;
+
+  // Derive display labels from /subscription/info when available,
+  // with graceful fallback.
+  const statusLabel = display?.display?.label ?? null;
+  const statusBadge = display?.display?.badge ?? null;
+  const statusBadgeColor = display?.display?.badge_color ?? null;
+
+  // Legacy subscription shape for components still reading subscription.status
+  // PR198: keep backward-compat shim so existing consumers don't break
+  const subscription = canonical
+    ? {
+        status: plan,
+        features: canonical.feature_access ?? {},
+        trial_days_remaining: trialDaysRemaining,
+        display: display?.display ?? null,
+      }
+    : null;
 
   const value = {
     subscription,
     loading,
     error,
     refreshSubscription,
-    // Status helpers
+    // Status helpers (canonical)
     isActive,
     isTrial,
     isPremium,
     isFree,
-    // Feature helpers
+    hasPremiumAccess,
+    // Feature helpers (canonical)
     hasFeature,
     canAccessPlan: hasFeature("training_plan"),
     canAccessCoach: hasFeature("llm_access"),
@@ -92,9 +130,9 @@ export function SubscriptionProvider({ children }) {
     // Trial info
     trialDaysRemaining,
     // Display info
-    statusLabel: subscription?.display?.label,
-    statusBadge: subscription?.display?.badge,
-    statusBadgeColor: subscription?.display?.badge_color
+    statusLabel,
+    statusBadge,
+    statusBadgeColor,
   };
 
   return (
