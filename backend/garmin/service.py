@@ -300,7 +300,7 @@ async def _sync_vo2max_for_running_dates(
             user_id,
             provider,
             target_date=running_day,
-            raise_on_error=True,
+            raise_on_error=False,
             mark_requested=True,
         )
     return len(missing_dates)
