@@ -82,11 +82,8 @@ export function SubscriptionProvider({ children }) {
   const isActive = hasPremiumAccess;
 
   const hasFeature = (feature) => {
-    // feature_access from /user/features takes priority; fall back to subscription
-    if (features?.feature_access) {
-      return features.feature_access[feature] ?? false;
-    }
-    return subscription?.features?.[feature] ?? false;
+    // Authority: /user/features exclusively. Fail closed — no fallback to subscription.features.
+    return features?.feature_access?.[feature] ?? false;
   };
 
   const trialDaysRemaining = features?.trial_days_remaining ?? subscription?.trial_days_remaining ?? null;

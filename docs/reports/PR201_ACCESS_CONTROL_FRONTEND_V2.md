@@ -13,9 +13,17 @@ BACKEND_MODIFIED = NO
 LOCKFILES_MODIFIED = NO
 DEPENDENCIES_MODIFIED = NO
 
-FRONTEND_CANONICAL_ACCESS = /api/user/features
-FAIL_CLOSED = YES (hasPremiumAccess=false, isFree=true si /user/features indisponible)
-TRIAL_EQUALS_PREMIUM = YES (tous deux has_premium_access=true → même chemin fonctionnel)
+SOLE_ACCESS_AUTHORITY = /user/features
+SUBSCRIPTION_INFO_PERMISSION_FALLBACK = NO
+FAIL_CLOSED = PASS
+
+FREE_INITIAL_PREMIUM_CALLS = 0
+FREE_TO_TRIAL_LIVE_TRANSITION = PASS (lastIsFreeRef tracks tier; tierChanged forces refetch)
+TRIAL_PREMIUM_CALLS_AFTER_TRANSITION = PASS
+PREMIUM_TO_FREE_LIVE_TRANSITION = PASS (isFree change triggers fetchData(true) → no Premium calls)
+
+LOCKFILES_MODIFIED = NO
+BACKEND_MODIFIED = NO
 
 FREE_DASHBOARD_INSIGHT_CALLS = 1
 FREE_DASHBOARD_RUN_INDEX_CALLS = 1

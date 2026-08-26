@@ -366,3 +366,66 @@ describe("PREMIUM — same functional behavior as TRIAL", () => {
     unmount();
   });
 });
+
+// ---------------------------------------------------------------------------
+// LIVE TIER TRANSITION — FREE → TRIAL in same session
+// ---------------------------------------------------------------------------
+describe("FREE → TRIAL live transition — Dashboard refetches Premium endpoints", () => {
+  let container;
+  let root;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockSubState = { isFree: true, loading: false, hasPremiumAccess: false, isTrial: false, isPremium: false };
+    setupAxiosDefault();
+
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    jest.clearAllMocks();
+  });
+
+  it("starts as FREE — zero Premium calls", async () => {
+    act(() => {
+      root.render(
+        <LanguageProvider><MemoryRouter><Dashboard /></MemoryRouter></LanguageProvider>
+      );
+    });
+    await wait();
+
+    expect(countCalls("rag/dashboard")).toBe(0);
+    expect(countCalls("training/today")).toBe(0);
+    expect(countCalls("training/v2/week")).toBe(0);
+  });
+
+  it("after tier upgrade to TRIAL — Dashboard calls Premium endpoints on rerender", async () => {
+    // Initial FREE render
+    act(() => {
+      root.render(
+        <LanguageProvider><MemoryRouter><Dashboard /></MemoryRouter></LanguageProvider>
+      );
+    });
+    await wait();
+
+    // Upgrade to TRIAL
+    jest.clearAllMocks();
+    setupAxiosDefault();
+    mockSubState = { isFree: false, loading: false, hasPremiumAccess: true, isTrial: true, isPremium: false };
+
+    act(() => {
+      root.render(
+        <LanguageProvider><MemoryRouter><Dashboard /></MemoryRouter></LanguageProvider>
+      );
+    });
+    await wait();
+
+    expect(countCalls("rag/dashboard")).toBeGreaterThan(0);
+    expect(countCalls("training/today")).toBeGreaterThan(0);
+    expect(countCalls("training/v2/week")).toBeGreaterThan(0);
+  });
+});

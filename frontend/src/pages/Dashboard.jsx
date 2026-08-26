@@ -450,15 +450,18 @@ export default function Dashboard() {
   const { isFree, loading: subLoading } = useSubscription();
   const fetchedRef = useRef(false);
   const lastLangRef = useRef(lang);
+  const lastIsFreeRef = useRef(null); // track tier so FREE→TRIAL and TRIAL→FREE re-fetch
 
   // Wait for subscription resolution before fetching — never launch Premium calls for FREE
   useEffect(() => {
     if (subLoading) return;
-    if (fetchedRef.current && lastLangRef.current === lang) {
+    const tierChanged = lastIsFreeRef.current !== null && lastIsFreeRef.current !== isFree;
+    if (fetchedRef.current && lastLangRef.current === lang && !tierChanged) {
       return;
     }
     fetchedRef.current = true;
     lastLangRef.current = lang;
+    lastIsFreeRef.current = isFree;
     fetchData(isFree);
   }, [lang, subLoading, isFree]); // eslint-disable-line react-hooks/exhaustive-deps
 
