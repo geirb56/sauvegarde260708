@@ -124,11 +124,11 @@ function setupAxiosMocks({ withPremium = false } = {}) {
   });
 }
 
-function renderDashboard() {
+async function renderDashboard() {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
-  act(() => {
+  await act(async () => {
     root.render(
       <LanguageProvider>
         <MemoryRouter>

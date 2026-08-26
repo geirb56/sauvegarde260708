@@ -488,7 +488,7 @@ export default function Dashboard() {
         setTodaySession(todayRes.data);
       }
     });
-  }, [lang, subLoading, isFree]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [subLoading, isFree]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleFeedback = async (day, status) => {
     setFeedbackSubmitting(true);
