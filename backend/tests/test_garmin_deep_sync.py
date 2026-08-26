@@ -323,6 +323,38 @@ class TestDeepSync:
         assert result.get("deep_sync") is True
         mock_provider.fetch_all_activities.assert_called_once()
 
+    def test_deep_sync_backfills_vo2max_from_running_activity_days(self):
+        db = _mock_db(connected=True)
+        acts = [_raw_activity(1), _raw_activity(2)]
+        mock_provider = MagicMock()
+        mock_provider.fetch_all_activities.return_value = [
+            GccliProvider._normalize(a) for a in acts
+        ]
+        mock_provider.get_daily_metrics.return_value = []
+
+        from garmin import service as svc
+
+        with (
+            patch.object(svc, "get_provider_for_user", return_value=mock_provider),
+            patch.object(svc, "emit_activity_created", new=AsyncMock()),
+            patch.object(svc, "_backfill_historical_vo2max_for_running_days", new=AsyncMock(return_value=2)) as mock_backfill,
+            patch.object(svc, "_fetch_and_persist_vo2max", new=AsyncMock()) as mock_latest,
+            patch.object(svc, "_build_and_persist_capabilities", new=AsyncMock()),
+            patch.object(svc, "compute_run_index", new=AsyncMock(return_value=None)),
+            patch.object(
+                svc,
+                "refresh_today_run_index_after_garmin_activities",
+                new=AsyncMock(return_value={"today_snapshot": {"date": "2026-08-09"}, "workouts": []}),
+            ),
+            patch.object(svc, "backfill_run_index_history_after_garmin_sync", new=AsyncMock(return_value={})),
+        ):
+            result = _run(svc.deep_sync(db, "user-1"))
+
+        assert result["success"] is True
+        mock_backfill.assert_awaited_once()
+        assert mock_backfill.await_args.kwargs["activities"] == mock_provider.fetch_all_activities.return_value
+        mock_latest.assert_not_awaited()
+
     def test_deep_sync_sets_deep_sync_done_flag(self):
         """deep_sync() must persist deep_sync_done=True in garmin_connections."""
         db = _mock_db(connected=True)

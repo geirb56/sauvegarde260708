@@ -14,6 +14,7 @@ Covers:
 from __future__ import annotations
 
 import asyncio
+from datetime import date
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -301,7 +302,17 @@ class TestGccliProviderGetMaxMetrics:
         provider = GccliProvider(runner=runner, account="u@example.com")
         result = provider.get_max_metrics("user_1")
         assert result == [{"vo2MaxValue": 52.0}]
-        runner.fetch_max_metrics.assert_called_once_with(account="u@example.com")
+        runner.fetch_max_metrics.assert_called_once_with(account="u@example.com", date=None)
+
+    def test_passes_date_to_runner(self):
+        from garmin.providers.gccli_provider import GccliProvider
+        runner = MagicMock()
+        runner.fetch_max_metrics.return_value = [{"vo2MaxValue": 52.0}]
+        provider = GccliProvider(runner=runner, account="u@example.com")
+
+        provider.get_max_metrics("user_1", date="2026-08-25")
+
+        runner.fetch_max_metrics.assert_called_once_with(account="u@example.com", date="2026-08-25")
 
 
 # --------------------------------------------------------------------------- #
@@ -397,6 +408,25 @@ class TestFetchAndPersistVO2Max:
         )
 
         assert result is None
+
+    def test_passes_requested_date_to_provider(self):
+        db = self._mock_db()
+        provider = MagicMock()
+        provider.get_max_metrics.return_value = [
+            {"vo2MaxValue": 43.0, "calendarDate": "2026-08-25"}
+        ]
+
+        result = asyncio.run(
+            garmin_service._fetch_and_persist_vo2max(
+                db,
+                "user_1",
+                provider,
+                date="2026-08-25",
+            )
+        )
+
+        assert result == 43.0
+        provider.get_max_metrics.assert_called_once_with("user_1", date="2026-08-25")
 
     def test_no_overwrite_when_payload_empty(self):
         """No-overwrite guard: when payload yields no value, update_one is NOT called."""
@@ -630,6 +660,59 @@ def _make_db_with_fake_vo2max(fake_coll: FakeVO2MaxCollection):
     db.garmin_connections.update_one = AsyncMock()
     db.garmin_daily_metrics.find_one = AsyncMock(return_value=None)
     return db
+
+
+class TestInitialVO2MaxBackfill:
+    def test_distinct_running_days_last_12_months_only(self):
+        provider = MagicMock()
+        activities = [
+            {"activity_type": "running", "start_time": "2026-08-25T08:00:00"},
+            {"activity_type": "running", "start_time": "2026-08-25T18:30:00"},
+            {"activity_type": "trail_running", "start_time": "2026-01-15T07:00:00"},
+            {"activity_type": "cycling", "start_time": "2026-07-01T10:00:00"},
+            {"activity_type": "running", "start_time": "2025-08-25T06:00:00"},
+            {"activity_type": "running", "start_time": "bad-date"},
+        ]
+
+        with patch.object(
+            garmin_service,
+            "_fetch_and_persist_vo2max",
+            new=AsyncMock(return_value=43.0),
+        ) as mock_fetch:
+            count = asyncio.run(
+                garmin_service._backfill_historical_vo2max_for_running_days(
+                    MagicMock(),
+                    "user_1",
+                    provider,
+                    activities=activities,
+                    reference_date=date(2026, 8, 26),
+                )
+            )
+
+        assert count == 2
+        assert [call.kwargs["date"] for call in mock_fetch.await_args_list] == [
+            "2026-01-15",
+            "2026-08-25",
+        ]
+
+    def test_returns_zero_when_no_recent_running_days(self):
+        with patch.object(
+            garmin_service,
+            "_fetch_and_persist_vo2max",
+            new=AsyncMock(return_value=43.0),
+        ) as mock_fetch:
+            count = asyncio.run(
+                garmin_service._backfill_historical_vo2max_for_running_days(
+                    MagicMock(),
+                    "user_1",
+                    MagicMock(),
+                    activities=[{"activity_type": "cycling", "start_time": "2026-08-25T08:00:00"}],
+                    reference_date=date(2026, 8, 26),
+                )
+            )
+
+        assert count == 0
+        mock_fetch.assert_not_awaited()
 
 
 # --------------------------------------------------------------------------- #

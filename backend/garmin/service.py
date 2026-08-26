@@ -7,9 +7,10 @@ business data (connection status + activities). Never stores Garmin passwords.
 from __future__ import annotations
 
 import asyncio
+import calendar
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from .factory import get_provider_for_user, active_provider_name
@@ -31,6 +32,42 @@ logger = logging.getLogger(__name__)
 INITIAL_DAILY_METRICS_DAYS = 7
 ENRICHMENT_DAILY_METRICS_START_DAYS_AGO = 8
 ENRICHMENT_DAILY_METRICS_DAYS = 23
+INITIAL_VO2MAX_BACKFILL_MONTHS = 12
+_RUNNING_ACTIVITY_TYPES = frozenset(
+    {"running", "run", "trail_running", "trail_run", "treadmill_running"}
+)
+
+
+def _subtract_months(target_day: date, months: int) -> date:
+    year = target_day.year
+    month = target_day.month - months
+    while month <= 0:
+        month += 12
+        year -= 1
+    day = min(target_day.day, calendar.monthrange(year, month)[1])
+    return date(year, month, day)
+
+
+def _parse_activity_day(activity: dict) -> Optional[date]:
+    raw_value = activity.get("start_time") or activity.get("date")
+    if not raw_value:
+        return None
+    if isinstance(raw_value, datetime):
+        return raw_value.date()
+    if isinstance(raw_value, date):
+        return raw_value
+    try:
+        return datetime.fromisoformat(str(raw_value).replace("Z", "+00:00")).date()
+    except ValueError:
+        try:
+            return datetime.fromisoformat(str(raw_value).split("T")[0]).date()
+        except ValueError:
+            return None
+
+
+def _is_running_activity(activity: dict) -> bool:
+    activity_type = activity.get("activity_type")
+    return isinstance(activity_type, str) and activity_type.strip().lower() in _RUNNING_ACTIVITY_TYPES
 
 
 async def _persist_capabilities(db, user_id: str, capabilities: GarminCapabilities) -> None:
@@ -97,7 +134,13 @@ async def _persist_vo2max(db, user_id: str, vo2max: GarminVO2Max) -> None:
     )
 
 
-async def _fetch_and_persist_vo2max(db, user_id: str, provider) -> Optional[float]:
+async def _fetch_and_persist_vo2max(
+    db,
+    user_id: str,
+    provider,
+    *,
+    date: Optional[str] = None,
+) -> Optional[float]:
     """Fetch native Garmin VO₂max from gccli, normalize, and persist.
 
     Returns the resolved ``vo2max_running`` value (or ``None``).
@@ -108,19 +151,65 @@ async def _fetch_and_persist_vo2max(db, user_id: str, provider) -> Optional[floa
     the collection is NOT updated so a previously stored good value is preserved.
     """
     try:
-        raw = provider.get_max_metrics(user_id)
+        raw = provider.get_max_metrics(user_id, date=date)
         vo2max = GarminVO2Max.from_max_metrics(raw)
         if vo2max.vo2max_running is None:
             logger.info(
-                "[Garmin] _fetch_and_persist_vo2max: no value in payload, skipping write user=%s",
+                "[Garmin] _fetch_and_persist_vo2max: no value in payload, skipping write user=%s requested_date=%s",
                 user_id,
+                date,
             )
             return None
         await _persist_vo2max(db, user_id, vo2max)
         return vo2max.vo2max_running
     except Exception:
-        logger.exception("[Garmin] _fetch_and_persist_vo2max failed user=%s", user_id)
+        logger.exception("[Garmin] _fetch_and_persist_vo2max failed user=%s requested_date=%s", user_id, date)
         return None
+
+
+async def _backfill_historical_vo2max_for_running_days(
+    db,
+    user_id: str,
+    provider,
+    *,
+    activities: Optional[list[dict]] = None,
+    reference_date: Optional[date] = None,
+) -> int:
+    today = reference_date or datetime.now(timezone.utc).date()
+    cutoff_day = _subtract_months(today, INITIAL_VO2MAX_BACKFILL_MONTHS)
+    source_activities = activities
+    if source_activities is None:
+        source_activities = await (
+            db.garmin_activities.find(
+                {"user_id": user_id},
+                {"_id": 0, "activity_type": 1, "start_time": 1, "date": 1},
+            ).to_list(None)
+        )
+
+    running_days = sorted(
+        {
+            activity_day.isoformat()
+            for activity in source_activities
+            if _is_running_activity(activity)
+            for activity_day in [_parse_activity_day(activity)]
+            if activity_day is not None and cutoff_day <= activity_day <= today
+        }
+    )
+    if not running_days:
+        logger.info("[Garmin] VO2max initial backfill skipped user=%s running_days=0", user_id)
+        return 0
+
+    hits = 0
+    for activity_day in running_days:
+        if await _fetch_and_persist_vo2max(db, user_id, provider, date=activity_day) is not None:
+            hits += 1
+    logger.info(
+        "[Garmin] VO2max initial backfill complete user=%s running_days=%d persisted_days=%d",
+        user_id,
+        len(running_days),
+        hits,
+    )
+    return len(running_days)
 
 
 async def _build_and_persist_capabilities(db, user_id: str) -> None:
@@ -412,6 +501,7 @@ async def _complete_post_activities_pipeline(
     new_count: int,
     deep_sync: bool = False,
     resume_from: Optional[str] = None,
+    activities: Optional[list[dict]] = None,
 ) -> dict:
     metrics_count = 0
     history_backfill = None
@@ -463,15 +553,25 @@ async def _complete_post_activities_pipeline(
                 start_days_ago=1,
             ))
             metrics_count += await _persist_daily_metrics(db, user_id, metrics_7d)
-            # Fetch native Garmin VO₂max before capabilities build so
-            # _build_and_persist_capabilities can read the stored value for has_vo2max.
-            await _fetch_and_persist_vo2max(db, user_id, provider)
+            # First sync backfills sparse Garmin VO₂max history from distinct running
+            # days over the last 12 months; regular syncs keep the lightweight latest-only fetch.
+            vo2max_backfill_days = 0
+            if deep_sync:
+                vo2max_backfill_days = await _backfill_historical_vo2max_for_running_days(
+                    db,
+                    user_id,
+                    provider,
+                    activities=activities,
+                )
+            if not deep_sync or vo2max_backfill_days == 0:
+                await _fetch_and_persist_vo2max(db, user_id, provider)
             await _build_and_persist_capabilities(db, user_id)
             readiness_payload = await compute_run_index(db, user_id)
-            daily_metrics_status = "ready" if _has_usable_physio_data(metrics_7d) else "no_usable_data"
+            has_usable_physio = _has_usable_physio_data(metrics_7d)
+            daily_metrics_status = "ready" if has_usable_physio else "no_usable_data"
             # V2: score present (not None) → ready; score None (INSUFFICIENT) → unavailable.
             readiness_value = ((readiness_payload or {}).get("metrics") or {}).get("run_readiness") if readiness_payload else None
-            readiness_status = "ready" if readiness_value is not None else "unavailable"
+            readiness_status = "ready" if has_usable_physio and readiness_value is not None else "unavailable"
             await update_sync_progress(
                 user_id,
                 phase="readiness_ready" if readiness_status == "ready" else "readiness_unavailable",
@@ -638,6 +738,7 @@ async def deep_sync(db, user_id: str) -> dict:
                 synced_count=ingest["synced"],
                 new_count=ingest["new"],
                 deep_sync=True,
+                activities=activities,
             )
             result["message"] = f"Deep sync: imported {ingest['synced']} activities"
             return result
@@ -756,6 +857,7 @@ async def sync(db, user_id: str, since: Optional[str] = None) -> dict:
                 synced_count=ingest["synced"],
                 new_count=ingest["new"],
                 deep_sync=False,
+                activities=activities,
             )
             logger.info(
                 "[Garmin] synced %d activities (%d new), %d daily metrics user=%s status=%s",

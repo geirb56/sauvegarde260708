@@ -69,7 +69,7 @@ class Provider(ABC):
         """
         raise NotImplementedError
 
-    def get_max_metrics(self, user_id: str) -> List[Dict]:
+    def get_max_metrics(self, user_id: str, date: Optional[str] = None) -> List[Dict]:
         """Return the raw gccli health max-metrics payload.
 
         Callers normalize via ``GarminVO2Max.from_max_metrics()``.
