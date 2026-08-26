@@ -729,7 +729,7 @@ class TestInitialVO2MaxBackfill:
         assert count == 0
         mock_fetch.assert_not_awaited()
 
-    def test_returns_zero_when_all_backfill_fetches_miss(self):
+    def test_returns_attempt_count_when_all_backfill_fetches_miss(self):
         with patch.object(
             garmin_service,
             "_fetch_and_persist_vo2max",
