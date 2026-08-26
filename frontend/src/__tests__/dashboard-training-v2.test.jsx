@@ -282,9 +282,9 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     unmount();
   });
 
-  // 8. Today session comes from /training/today
+  // 8. Today session comes from /training/today (TRIAL/PREMIUM only — PR198)
   it("8. Today session source is /training/today", async () => {
-    mockUseSubscription.mockReturnValue({ isFree: true, loading: false });
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
     setupAxiosMocks(buildDefaultMocks());
 
     const { container, unmount } = renderDashboard();
@@ -320,9 +320,9 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     unmount();
   });
 
-  // 10. estimated_tss=0: "0 TSS" is rendered
+  // 10. estimated_tss=0: "0 TSS" is rendered (TRIAL/PREMIUM only — PR198)
   it("10. estimated_tss=0: '0 TSS' badge rendered", async () => {
-    mockUseSubscription.mockReturnValue({ isFree: true, loading: false });
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
     setupAxiosMocks(
       buildDefaultMocks({
         today: {
@@ -341,9 +341,9 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     unmount();
   });
 
-  // 10b. today recommendation absent: never fabricated as RUN HARD
+  // 10b. today recommendation absent: never fabricated as RUN HARD (TRIAL/PREMIUM only — PR198)
   it("10b. today recommendation absent: never shows fabricated RUN HARD", async () => {
-    mockUseSubscription.mockReturnValue({ isFree: true, loading: false });
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
     setupAxiosMocks(
       buildDefaultMocks({
         today: {
@@ -368,9 +368,9 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     unmount();
   });
 
-  // 10c. today unknown readiness uses gray badge, never red by default
+  // 10c. today unknown readiness uses gray badge, never red by default (TRIAL/PREMIUM only — PR198)
   it("10c. today unknown readiness uses neutral gray", async () => {
-    mockUseSubscription.mockReturnValue({ isFree: true, loading: false });
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
     setupAxiosMocks(
       buildDefaultMocks({
         today: {

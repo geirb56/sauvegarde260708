@@ -452,30 +452,42 @@ export default function Dashboard() {
   const lastLangRef = useRef(lang);
 
   useEffect(() => {
+    // PR198 — wait for subscription status before issuing any API calls.
+    // subLoading=true means we don't yet know the tier; do not call any endpoint.
+    if (subLoading) return;
+
     if (fetchedRef.current && lastLangRef.current === lang) {
       return;
     }
     fetchedRef.current = true;
     lastLangRef.current = lang;
     fetchData();
-  }, [lang]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [lang, subLoading, isFree]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [insightRes, ragRes, todayRes] = await Promise.all([
-        axios.get(`${API}/dashboard/insight?language=${lang}`),
-        axios.get(`${API}/rag/dashboard`).catch(() => ({ data: null })),
-        axios.get(`${API}/training/today`).catch(() => ({ data: null })),
-      ]);
-      setInsight(insightRes.data);
-      if (ragRes.data) {
-        setInsight(prev => ({ ...prev, rag: ragRes.data }));
-      }
-      
-      // Utiliser la réponse de /api/training/today (avec adaptation)
-      if (todayRes.data?.status === "success") {
-        setTodaySession(todayRes.data);
+      if (isFree) {
+        // FREE tier: only call FREE endpoints.
+        // Do NOT call /rag/dashboard or /training/today — both are Premium.
+        const insightRes = await axios.get(`${API}/dashboard/insight?language=${lang}`);
+        setInsight(insightRes.data);
+      } else {
+        // TRIAL / PREMIUM: full data fetch including Premium endpoints.
+        const [insightRes, ragRes, todayRes] = await Promise.all([
+          axios.get(`${API}/dashboard/insight?language=${lang}`),
+          axios.get(`${API}/rag/dashboard`).catch(() => ({ data: null })),
+          axios.get(`${API}/training/today`).catch(() => ({ data: null })),
+        ]);
+        setInsight(insightRes.data);
+        if (ragRes.data) {
+          setInsight(prev => ({ ...prev, rag: ragRes.data }));
+        }
+
+        // Utiliser la réponse de /api/training/today (avec adaptation)
+        if (todayRes.data?.status === "success") {
+          setTodaySession(todayRes.data);
+        }
       }
     } catch (error) {
       console.error("Failed to fetch data:", error);

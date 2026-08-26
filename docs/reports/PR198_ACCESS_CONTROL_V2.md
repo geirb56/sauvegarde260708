@@ -21,19 +21,31 @@ FREE_READINESS = YES — `dashboard_insight`, `basic_stats` are in `FREE_FEATURE
 
 FREE_VO2MAX = DENIED — `/api/garmin/` prefix is `PREMIUM`; `garmin_sync` is a `PREMIUM_FEATURE`; `can("garmin_sync") = False` for FREE.
 
-FREE_PROGRESS = PAYWALL — `Progress.jsx` now waits for `subLoading=false` before any API call; when `isFree=true`, only `/api/stats` and `/api/run-index` (both FREE) are called; the Paywall component is rendered immediately.
+FREE_PROGRESS = PAYWALL — `Progress.jsx` waits for `subLoading=false` before any API call; when `isFree=true`, only `/api/stats` and `/api/run-index` (both FREE) are called; the Paywall component is rendered immediately.
 
-FREE_TRAINING = PAYWALL — `TrainingPlanV2.jsx` already gated behind `if (subLoading || isFree) return` (pre-existing correct behavior, unchanged).
+FREE_TRAINING = PAYWALL — `TrainingPlanV2.jsx` gated behind `if (subLoading || isFree) return;` before any premium API call.
 
 TRIAL_EQUALS_PREMIUM = YES — `has_premium_access` is `True` for both `Tier.TRIAL` and `Tier.PREMIUM`; `can()` returns identical results for all features; verified by `TestTrialEqualsPremium`.
 
 ---
 
+DASHBOARD_FREE_RAG_CALLS = 0
+`Dashboard.jsx` now waits for `subLoading=false` before calling any endpoint; when `isFree=true`, only `/api/dashboard/insight` (FREE) is called. `/rag/dashboard` is never called for FREE.
+
+DASHBOARD_FREE_TRAINING_TODAY_CALLS = 0
+`/training/today` is only called inside the TRIAL/PREMIUM fetch branch of `Dashboard.jsx`. FREE users never trigger this call.
+
+FREE_DASHBOARD_PREMIUM_API_CALLS = 0
+Verified by React rendering tests: FREE users call only `/dashboard/insight` and `/run-index`.
+
 FREE_PROGRESS_PREMIUM_API_CALLS = 0
-Verified: `Progress.jsx` guards the entire premium fetch block behind `if (isFree) { /* free-only calls */ return; }`. Endpoints `/training/race-predictions`, `/training/v2/cycle`, `/garmin/vo2max-history`, `/garmin/daily-metrics` are never called for FREE users.
+Verified by React rendering tests: `/training/race-predictions`, `/training/v2/cycle`, `/garmin/vo2max-history`, `/garmin/daily-metrics` are never called for FREE.
 
 FREE_TRAINING_PREMIUM_API_CALLS = 0
-Pre-existing guard in `TrainingPlanV2.jsx`: `if (subLoading || isFree) return;` before any premium API call. Unchanged.
+Verified by React rendering tests: `/training/v2/week`, `/training/v2/cycle`, `/training/today`, `/training/v2/paces` are never called for FREE (paywall renders immediately).
+
+TRIAL_PREMIUM_BEHAVIOR_PRESERVED = YES
+React rendering tests confirm: TRIAL and PREMIUM call all premium endpoints for Dashboard, Progress, and Training pages.
 
 FAIL_CLOSED = YES
 - Backend: DB error → `FREE` returned (no premium access). Unknown feature → `False`. Unknown route → `PREMIUM`. Expired trial/premium → `FREE`.
@@ -41,12 +53,16 @@ FAIL_CLOSED = YES
 
 ---
 
-FILES_CHANGED = 3
+FILES_CHANGED = 6
 - `frontend/src/context/SubscriptionContext.jsx` — evolved to canonical `/user/features` contract; exposes `hasPremiumAccess`.
-- `frontend/src/pages/Progress.jsx` — gated premium API calls behind subscription status check; added `[isFree, subLoading]` deps.
-- `backend/tests/test_pr198_access_control_v2.py` — 56 new unit tests (no DB / no server).
+- `frontend/src/pages/Progress.jsx` — gated premium API calls behind subscription status check.
+- `frontend/src/pages/Dashboard.jsx` — gated `/rag/dashboard` and `/training/today` behind subscription status check.
+- `frontend/src/__tests__/pr198-access-control-api-gating.test.jsx` — 20 new React rendering tests.
+- `frontend/src/__tests__/dashboard-training-v2.test.jsx` — updated 4 tests to reflect correct TRIAL/PREMIUM-only today-card behavior.
+- `backend/tests/test_pr198_access_control_v2.py` — 56 backend unit tests.
 
-TEST_RESULTS = 56/56 PASSED (unit, no live server required)
+FRONTEND_TESTS = 20 new (pr198-access-control-api-gating) + 79 existing passing (pr198 suite + dashboard suites)
+BACKEND_PR198_TESTS = 56/56 PASSED
 
 BLOCKERS = NONE
 
