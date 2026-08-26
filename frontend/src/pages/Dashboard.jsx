@@ -463,26 +463,32 @@ export default function Dashboard() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [insightRes, ragRes, todayRes] = await Promise.all([
-        axios.get(`${API}/dashboard/insight?language=${lang}`),
-        axios.get(`${API}/rag/dashboard`).catch(() => ({ data: null })),
-        axios.get(`${API}/training/today`).catch(() => ({ data: null })),
-      ]);
+      // /dashboard/insight is FREE — always safe to call.
+      const insightRes = await axios.get(`${API}/dashboard/insight?language=${lang}`);
       setInsight(insightRes.data);
-      if (ragRes.data) {
-        setInsight(prev => ({ ...prev, rag: ragRes.data }));
-      }
-      
-      // Utiliser la réponse de /api/training/today (avec adaptation)
-      if (todayRes.data?.status === "success") {
-        setTodaySession(todayRes.data);
-      }
     } catch (error) {
       console.error("Failed to fetch data:", error);
     } finally {
       setLoading(false);
     }
   };
+
+  // TRIAL/PREMIUM-only: /rag/dashboard and /training/today.
+  // Never called for FREE users; never called while subscription is still loading.
+  useEffect(() => {
+    if (subLoading || isFree) return;
+    Promise.all([
+      axios.get(`${API}/rag/dashboard`).catch(() => ({ data: null })),
+      axios.get(`${API}/training/today`).catch(() => ({ data: null })),
+    ]).then(([ragRes, todayRes]) => {
+      if (ragRes.data) {
+        setInsight(prev => ({ ...prev, rag: ragRes.data }));
+      }
+      if (todayRes.data?.status === "success") {
+        setTodaySession(todayRes.data);
+      }
+    });
+  }, [subLoading, isFree]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleFeedback = async (day, status) => {
     setFeedbackSubmitting(true);

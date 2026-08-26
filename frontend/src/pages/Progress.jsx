@@ -86,6 +86,15 @@ export default function Progress() {
   const { unitSystem } = useUnitSystem();
 
   useEffect(() => {
+    // Wait for subscription status before making any calls.
+    if (subLoading) return;
+
+    // FREE users see the Paywall — no backend calls needed.
+    if (isFree) {
+      setLoading(false);
+      return;
+    }
+
     const fetchData = async () => {
       try {
         const [statsRes, predictionsRes, cycleRes, vmaHistoryRes] = await Promise.all([
@@ -119,7 +128,7 @@ export default function Progress() {
       }
     };
     fetchData();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [subLoading, isFree]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch RunIndex history when period changes
   useEffect(() => {
