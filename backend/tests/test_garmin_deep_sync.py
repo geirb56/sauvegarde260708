@@ -323,7 +323,7 @@ class TestDeepSync:
         assert result.get("deep_sync") is True
         mock_provider.fetch_all_activities.assert_called_once()
 
-    def test_deep_sync_backfills_vo2max_from_running_activity_days(self):
+    def test_deep_sync_fetches_latest_vo2max_and_queues_history_backfill(self):
         db = _mock_db(connected=True)
         acts = [_raw_activity(1), _raw_activity(2)]
         mock_provider = MagicMock()
@@ -337,8 +337,9 @@ class TestDeepSync:
         with (
             patch.object(svc, "get_provider_for_user", return_value=mock_provider),
             patch.object(svc, "emit_activity_created", new=AsyncMock()),
-            patch.object(svc, "_backfill_historical_vo2max_for_running_days", new=AsyncMock(return_value=2)) as mock_backfill,
-            patch.object(svc, "_fetch_and_persist_vo2max", new=AsyncMock()) as mock_latest,
+            patch.object(svc, "_fetch_and_persist_vo2max", new=AsyncMock(return_value=43.0)) as mock_latest,
+            patch.object(svc, "_schedule_initial_vo2max_backfill", new=AsyncMock(return_value=True)) as mock_schedule,
+            patch.object(svc, "_backfill_historical_vo2max_for_running_days", new=AsyncMock()) as mock_inline_backfill,
             patch.object(svc, "_build_and_persist_capabilities", new=AsyncMock()),
             patch.object(svc, "compute_run_index", new=AsyncMock(return_value=None)),
             patch.object(
@@ -351,9 +352,11 @@ class TestDeepSync:
             result = _run(svc.deep_sync(db, "user-1"))
 
         assert result["success"] is True
-        mock_backfill.assert_awaited_once()
-        assert mock_backfill.await_args.kwargs["activities"] == mock_provider.fetch_all_activities.return_value
-        mock_latest.assert_not_awaited()
+        mock_latest.assert_awaited_once()
+        assert mock_latest.await_args.kwargs["mark_requested"] is True
+        mock_schedule.assert_awaited_once()
+        assert mock_schedule.await_args.kwargs["activities"] == mock_provider.fetch_all_activities.return_value
+        mock_inline_backfill.assert_not_awaited()
 
     def test_deep_sync_sets_deep_sync_done_flag(self):
         """deep_sync() must persist deep_sync_done=True in garmin_connections."""
@@ -494,6 +497,8 @@ class TestSyncDispatch:
             patch.object(svc, "get_provider_for_user", return_value=mock_provider),
             patch.object(svc, "deep_sync", new=AsyncMock()) as mock_deep,
             patch.object(svc, "emit_activity_created", new=AsyncMock()),
+            patch.object(svc, "_sync_vo2max_for_running_dates", new=AsyncMock(return_value=0)),
+            patch.object(svc, "_build_and_persist_capabilities", new=AsyncMock()),
             patch.object(
                 svc,
                 "refresh_today_run_index_after_garmin_activities",

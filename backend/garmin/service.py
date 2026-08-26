@@ -20,6 +20,7 @@ from .data_layer import GarminCapabilities, GarminVO2Max
 from .sync_progress import get_sync_progress, update_sync_progress
 from events.stream import emit_activity_created
 from garmin.insights import compute_run_index
+from jobs.queue import enqueue_vo2max_backfill
 from services.run_index_history import (
     backfill_run_index_history_after_garmin_sync,
     refresh_today_run_index_after_garmin_activities,
@@ -36,6 +37,10 @@ INITIAL_VO2MAX_BACKFILL_MONTHS = 12
 _RUNNING_ACTIVITY_TYPES = frozenset(
     {"running", "run", "trail_running", "trail_run", "treadmill_running"}
 )
+VO2MAX_BACKFILL_PENDING = "pending"
+VO2MAX_BACKFILL_RUNNING = "running"
+VO2MAX_BACKFILL_COMPLETE = "complete"
+VO2MAX_BACKFILL_FAILED = "failed"
 
 
 def _subtract_months(target_day: date, months: int) -> date:
@@ -68,6 +73,54 @@ def _parse_activity_day(activity: dict) -> Optional[date]:
 def _is_running_activity(activity: dict) -> bool:
     activity_type = activity.get("activity_type")
     return isinstance(activity_type, str) and activity_type.strip().lower() in _RUNNING_ACTIVITY_TYPES
+
+
+def _running_activity_dates(
+    activities: list[dict],
+    *,
+    reference_date: Optional[date] = None,
+    months: Optional[int] = None,
+) -> list[str]:
+    today = reference_date or datetime.now(timezone.utc).date()
+    cutoff_day = None if months is None else _subtract_months(today, months)
+    running_days = {
+        activity_day.isoformat()
+        for activity in activities
+        if _is_running_activity(activity)
+        for activity_day in [_parse_activity_day(activity)]
+        if activity_day is not None
+        and activity_day <= today
+        and (cutoff_day is None or activity_day >= cutoff_day)
+    }
+    return sorted(running_days)
+
+
+def _vo2max_requested_dates(conn: Optional[dict]) -> set[str]:
+    raw_dates = (conn or {}).get("vo2max_requested_dates") or []
+    return {value for value in raw_dates if isinstance(value, str) and value}
+
+
+async def _mark_vo2max_date_requested(db, user_id: str, requested_date: Optional[str]) -> None:
+    if not requested_date:
+        return
+    await db.garmin_connections.update_one(
+        {"user_id": user_id},
+        {"$addToSet": {"vo2max_requested_dates": requested_date}},
+        upsert=True,
+    )
+
+
+async def _set_vo2max_backfill_status(db, user_id: str, status: str, **extra_fields) -> None:
+    fields = {
+        "vo2max_backfill_12m_status": status,
+        "vo2max_backfill_12m_updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    fields.update(extra_fields)
+    await db.garmin_connections.update_one({"user_id": user_id}, {"$set": fields}, upsert=True)
+
+
+async def _load_connection_state(db, user_id: str) -> dict:
+    return await db.garmin_connections.find_one({"user_id": user_id}, {"_id": 0}) or {}
 
 
 async def _persist_capabilities(db, user_id: str, capabilities: GarminCapabilities) -> None:
@@ -140,6 +193,8 @@ async def _fetch_and_persist_vo2max(
     provider,
     *,
     target_date: Optional[str] = None,
+    raise_on_error: bool = False,
+    mark_requested: bool = False,
 ) -> Optional[float]:
     """Fetch native Garmin VO₂max from gccli, normalize, and persist.
 
@@ -151,9 +206,12 @@ async def _fetch_and_persist_vo2max(
     the collection is NOT updated so a previously stored good value is preserved.
     """
     try:
-        raw = provider.get_max_metrics(user_id, date=target_date)
+        raw = provider.get_max_metrics(user_id, date=target_date, raise_on_error=raise_on_error)
         vo2max = GarminVO2Max.from_max_metrics(raw)
+        requested_date = target_date or vo2max.date
         if vo2max.vo2max_running is None:
+            if mark_requested:
+                await _mark_vo2max_date_requested(db, user_id, requested_date)
             logger.info(
                 "[Garmin] _fetch_and_persist_vo2max: no value in payload, skipping write user=%s requested_date=%s",
                 user_id,
@@ -161,6 +219,8 @@ async def _fetch_and_persist_vo2max(
             )
             return None
         await _persist_vo2max(db, user_id, vo2max)
+        if mark_requested:
+            await _mark_vo2max_date_requested(db, user_id, requested_date)
         return vo2max.vo2max_running
     except Exception:
         logger.exception(
@@ -168,6 +228,8 @@ async def _fetch_and_persist_vo2max(
             user_id,
             target_date,
         )
+        if raise_on_error:
+            raise
         return None
 
 
@@ -179,8 +241,7 @@ async def _backfill_historical_vo2max_for_running_days(
     activities: Optional[list[dict]] = None,
     reference_date: Optional[date] = None,
 ) -> int:
-    today = reference_date or datetime.now(timezone.utc).date()
-    cutoff_day = _subtract_months(today, INITIAL_VO2MAX_BACKFILL_MONTHS)
+    conn = await _load_connection_state(db, user_id)
     source_activities = activities
     if source_activities is None:
         source_activities = await (
@@ -189,31 +250,120 @@ async def _backfill_historical_vo2max_for_running_days(
                 {"_id": 0, "activity_type": 1, "start_time": 1, "date": 1},
             ).to_list(None)
         )
-
-    running_days = sorted(
-        {
-            activity_day.isoformat()
-            for activity in source_activities
-            if _is_running_activity(activity)
-            for activity_day in [_parse_activity_day(activity)]
-            if activity_day is not None and cutoff_day <= activity_day <= today
-        }
-    )
+    requested_dates = _vo2max_requested_dates(conn)
+    running_days = [
+        running_day
+        for running_day in _running_activity_dates(
+            source_activities,
+            reference_date=reference_date,
+            months=INITIAL_VO2MAX_BACKFILL_MONTHS,
+        )
+        if running_day not in requested_dates
+    ]
     if not running_days:
         logger.info("[Garmin] VO2max initial backfill skipped user=%s running_days=0", user_id)
         return 0
 
-    hits = 0
+    attempted = 0
     for activity_day in running_days:
-        if await _fetch_and_persist_vo2max(db, user_id, provider, target_date=activity_day) is not None:
-            hits += 1
+        await _fetch_and_persist_vo2max(
+            db,
+            user_id,
+            provider,
+            target_date=activity_day,
+            raise_on_error=True,
+            mark_requested=True,
+        )
+        attempted += 1
     logger.info(
-        "[Garmin] VO2max initial backfill complete user=%s running_days=%d persisted_days=%d",
+        "[Garmin] VO2max initial backfill complete user=%s attempted_days=%d",
         user_id,
-        len(running_days),
-        hits,
+        attempted,
     )
-    return hits
+    return attempted
+
+
+async def _sync_vo2max_for_running_dates(
+    db,
+    user_id: str,
+    provider,
+    running_dates: list[str],
+) -> int:
+    if not running_dates:
+        return 0
+    conn = await _load_connection_state(db, user_id)
+    requested_dates = _vo2max_requested_dates(conn)
+    missing_dates = [running_day for running_day in sorted(set(running_dates)) if running_day not in requested_dates]
+    for running_day in missing_dates:
+        await _fetch_and_persist_vo2max(
+            db,
+            user_id,
+            provider,
+            target_date=running_day,
+            raise_on_error=True,
+            mark_requested=True,
+        )
+    return len(missing_dates)
+
+
+async def _schedule_initial_vo2max_backfill(
+    db,
+    user_id: str,
+    *,
+    activities: Optional[list[dict]] = None,
+) -> bool:
+    conn = await _load_connection_state(db, user_id)
+    status = conn.get("vo2max_backfill_12m_status")
+    if status in {VO2MAX_BACKFILL_PENDING, VO2MAX_BACKFILL_RUNNING, VO2MAX_BACKFILL_COMPLETE}:
+        return False
+
+    source_activities = activities
+    if source_activities is None:
+        source_activities = await (
+            db.garmin_activities.find(
+                {"user_id": user_id},
+                {"_id": 0, "activity_type": 1, "start_time": 1, "date": 1},
+            ).to_list(None)
+        )
+    requested_dates = _vo2max_requested_dates(conn)
+    missing_dates = [
+        running_day
+        for running_day in _running_activity_dates(
+            source_activities,
+            months=INITIAL_VO2MAX_BACKFILL_MONTHS,
+        )
+        if running_day not in requested_dates
+    ]
+    if not missing_dates:
+        await _set_vo2max_backfill_status(
+            db,
+            user_id,
+            VO2MAX_BACKFILL_COMPLETE,
+            vo2max_backfill_12m_completed_at=datetime.now(timezone.utc).isoformat(),
+            vo2max_backfill_12m_error=None,
+        )
+        return False
+
+    try:
+        await _set_vo2max_backfill_status(
+            db,
+            user_id,
+            VO2MAX_BACKFILL_PENDING,
+            vo2max_backfill_12m_enqueued_at=datetime.now(timezone.utc).isoformat(),
+            vo2max_backfill_12m_error=None,
+        )
+        result = await enqueue_vo2max_backfill(user_id)
+    except Exception:
+        logger.exception("[Garmin] VO2max backfill enqueue failed user=%s", user_id)
+        await _set_vo2max_backfill_status(
+            db,
+            user_id,
+            VO2MAX_BACKFILL_FAILED,
+            vo2max_backfill_12m_error="queue_unavailable",
+        )
+        return False
+
+    return result.get("status") == "queued"
 
 
 async def _build_and_persist_capabilities(db, user_id: str) -> None:
@@ -404,6 +554,7 @@ async def _ingest_activities(db, user_id: str, activities: list) -> dict:
     """
     synced = new_count = 0
     newest_start = None
+    new_running_dates: set[str] = set()
     for act in activities:
         ext_id = act.get("external_id")
         if not ext_id:
@@ -421,11 +572,20 @@ async def _ingest_activities(db, user_id: str, activities: list) -> dict:
         # Emit only on first insert (dedupe) -> "created" event, no re-emit.
         if res.upserted_id is not None:
             new_count += 1
+            if _is_running_activity(act):
+                activity_day = _parse_activity_day(act)
+                if activity_day is not None:
+                    new_running_dates.add(activity_day.isoformat())
             try:
                 await emit_activity_created(user_id, doc)
             except Exception as exc:  # event bus must never fail ingestion
                 logger.error("[Garmin] emit ACTIVITY_CREATED failed user=%s: %s", user_id, exc)
-    return {"synced": synced, "new": new_count, "newest_start": newest_start}
+    return {
+        "synced": synced,
+        "new": new_count,
+        "newest_start": newest_start,
+        "new_running_dates": sorted(new_running_dates),
+    }
 
 
 async def _finalize_connection(db, user_id: str, newest_start: Optional[str]) -> int:
@@ -506,6 +666,7 @@ async def _complete_post_activities_pipeline(
     deep_sync: bool = False,
     resume_from: Optional[str] = None,
     activities: Optional[list[dict]] = None,
+    new_running_dates: Optional[list[str]] = None,
 ) -> dict:
     metrics_count = 0
     history_backfill = None
@@ -557,25 +718,32 @@ async def _complete_post_activities_pipeline(
                 start_days_ago=1,
             ))
             metrics_count += await _persist_daily_metrics(db, user_id, metrics_7d)
-            # First sync backfills sparse Garmin VO₂max history from distinct running
-            # days over the last 12 months; regular syncs keep the lightweight latest-only fetch.
-            vo2max_backfill_days = 0
             if deep_sync:
-                vo2max_backfill_days = await _backfill_historical_vo2max_for_running_days(
+                await _fetch_and_persist_vo2max(
                     db,
                     user_id,
                     provider,
+                    mark_requested=True,
+                )
+                await _schedule_initial_vo2max_backfill(
+                    db,
+                    user_id,
                     activities=activities,
                 )
-            if not deep_sync or vo2max_backfill_days == 0:
-                await _fetch_and_persist_vo2max(db, user_id, provider)
+            else:
+                await _sync_vo2max_for_running_dates(
+                    db,
+                    user_id,
+                    provider,
+                    new_running_dates or [],
+                )
             await _build_and_persist_capabilities(db, user_id)
             readiness_payload = await compute_run_index(db, user_id)
             has_usable_physio = _has_usable_physio_data(metrics_7d)
             daily_metrics_status = "ready" if has_usable_physio else "no_usable_data"
             # V2: score present (not None) → ready; score None (INSUFFICIENT) → unavailable.
             readiness_value = ((readiness_payload or {}).get("metrics") or {}).get("run_readiness") if readiness_payload else None
-            readiness_status = "ready" if has_usable_physio and readiness_value is not None else "unavailable"
+            readiness_status = "ready" if readiness_value is not None else "unavailable"
             await update_sync_progress(
                 user_id,
                 phase="readiness_ready" if readiness_status == "ready" else "readiness_unavailable",
@@ -767,6 +935,68 @@ async def deep_sync(db, user_id: str) -> dict:
         await _safe_save_session(db, user_id)
 
 
+async def run_vo2max_backfill_job(db, user_id: str) -> dict:
+    conn = await _load_connection_state(db, user_id)
+    if not conn or not conn.get("connected"):
+        return {"success": False, "attempted_dates": 0, "message": "Garmin not connected"}
+
+    if conn.get("vo2max_backfill_12m_status") == VO2MAX_BACKFILL_COMPLETE:
+        return {"success": True, "status": "complete", "attempted_dates": 0, "message": "VO2max backfill already complete"}
+
+    if not await session_store.ensure_session(db, user_id):
+        logger.warning("[Garmin] no gccli session available for VO2max backfill user=%s", user_id)
+        await _set_vo2max_backfill_status(
+            db,
+            user_id,
+            VO2MAX_BACKFILL_FAILED,
+            vo2max_backfill_12m_error="session_unavailable",
+        )
+        return {
+            "success": False,
+            "attempted_dates": 0,
+            "message": "Garmin session unavailable, please reconnect",
+            "error": "session_unavailable",
+        }
+
+    await _set_vo2max_backfill_status(
+        db,
+        user_id,
+        VO2MAX_BACKFILL_RUNNING,
+        vo2max_backfill_12m_started_at=datetime.now(timezone.utc).isoformat(),
+        vo2max_backfill_12m_error=None,
+    )
+
+    try:
+        provider = get_provider_for_user(user_id, garmin_account=conn.get("garmin_username"))
+        attempted_dates = await _backfill_historical_vo2max_for_running_days(db, user_id, provider)
+        await _build_and_persist_capabilities(db, user_id)
+        await _set_vo2max_backfill_status(
+            db,
+            user_id,
+            VO2MAX_BACKFILL_COMPLETE,
+            vo2max_backfill_12m_completed_at=datetime.now(timezone.utc).isoformat(),
+            vo2max_backfill_12m_error=None,
+        )
+        _dic.invalidate_user(user_id)
+        return {
+            "success": True,
+            "status": "complete",
+            "attempted_dates": attempted_dates,
+            "metrics_count": attempted_dates,
+            "message": f"VO2max backfill processed {attempted_dates} dates",
+        }
+    except Exception as exc:
+        await _set_vo2max_backfill_status(
+            db,
+            user_id,
+            VO2MAX_BACKFILL_FAILED,
+            vo2max_backfill_12m_error=str(exc)[:200],
+        )
+        raise
+    finally:
+        await _safe_save_session(db, user_id)
+
+
 async def sync(db, user_id: str, since: Optional[str] = None) -> dict:
     """Full Garmin sync (activities + daily metrics), used for manual triggers.
 
@@ -822,6 +1052,7 @@ async def sync(db, user_id: str, since: Optional[str] = None) -> dict:
                 new_count=0,
                 deep_sync=False,
                 resume_from=resume_from,
+                new_running_dates=[],
             )
         finally:
             await _safe_save_session(db, user_id)
@@ -862,6 +1093,7 @@ async def sync(db, user_id: str, since: Optional[str] = None) -> dict:
                 new_count=ingest["new"],
                 deep_sync=False,
                 activities=activities,
+                new_running_dates=ingest.get("new_running_dates", []),
             )
             logger.info(
                 "[Garmin] synced %d activities (%d new), %d daily metrics user=%s status=%s",
@@ -948,6 +1180,13 @@ async def incremental_sync(db, user_id: str) -> dict:
     ingest = await _ingest_activities(db, user_id, activities)
     activity_count = await _finalize_connection(db, user_id, ingest["newest_start"])
     try:
+        await _sync_vo2max_for_running_dates(
+            db,
+            user_id,
+            provider,
+            ingest.get("new_running_dates", []),
+        )
+        await _build_and_persist_capabilities(db, user_id)
         refreshed = await refresh_today_run_index_after_garmin_activities(db, user_id)
         await backfill_run_index_history_after_garmin_sync(db, user_id)
         # Invalidate the dashboard insight cache so the next GET /dashboard/insight

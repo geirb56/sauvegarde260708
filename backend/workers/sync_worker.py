@@ -37,13 +37,15 @@ from jobs.queue import (
     JOB_SYNC_USER,
     JOB_SYNC_ACTIVITY,
     JOB_INCREMENTAL_SYNC,
+    JOB_VO2MAX_BACKFILL,
     LOCK_PREFIX,
     LOCK_TTL,
-    PENDING_PREFIX,
     HEARTBEAT_PREFIX,
     HEARTBEAT_TTL,
     HEARTBEAT_INTERVAL,
     STATS_FAILED_KEY,
+    _pending_key,
+    _updates_sync_progress,
     claim_job,
     ack_job,
     requeue_job,
@@ -72,6 +74,8 @@ SCHEDULE_STAGGER_MS = int(os.environ.get("SYNC_SCHEDULE_STAGGER_MS", "200"))
 
 
 async def _run_job(db, job_type: str, user_id: str) -> dict:
+    if job_type == JOB_VO2MAX_BACKFILL:
+        return await garmin_service.run_vo2max_backfill_job(db, user_id)
     if job_type == JOB_INCREMENTAL_SYNC:
         return await garmin_service.incremental_sync(db, user_id)
     if job_type in (JOB_SYNC_USER, JOB_SYNC_ACTIVITY):
@@ -115,9 +119,10 @@ async def process_job(db, redis, raw: str, job: dict) -> None:
             result.get("synced_count"), result.get("new_count"), result.get("metrics_count"),
             result.get("status", "complete"),
         )
-        await redis.delete(f"{PENDING_PREFIX}{user_id}")
+        await redis.delete(_pending_key(job_type, user_id))
         # Cooldown: throttle auto-syncs for this user after a successful run.
-        await rate_limiter.set_cooldown(user_id)
+        if _updates_sync_progress(job_type):
+            await rate_limiter.set_cooldown(user_id)
         # ACK only on success: this is the single point that removes the job.
         await ack_job(raw, job_id)
     except Exception as exc:  # timeout or provider/runner failure
@@ -137,12 +142,13 @@ async def process_job(db, redis, raw: str, job: dict) -> None:
                 "[worker] sync_failed type=%s user=%s attempts=%s duration=%ss err=%s",
                 job_type, user_id, attempts, duration, exc,
             )
+            if _updates_sync_progress(job_type):
             await update_sync_progress(
                 user_id,
                 phase="failed",
                 error_code="worker_sync_failed",
             )
-            await redis.delete(f"{PENDING_PREFIX}{user_id}")
+            await redis.delete(_pending_key(job_type, user_id))
             # Monitoring counter only (additive; failure handling unchanged).
             await redis.incr(STATS_FAILED_KEY)
             # Terminal failure after max retries: drop from processing.

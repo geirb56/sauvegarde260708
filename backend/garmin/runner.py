@@ -278,7 +278,12 @@ class GccliRunner:
                 metrics.append(entry)
         return metrics
 
-    def fetch_max_metrics(self, account: Optional[str] = None, date: Optional[str] = None) -> List[Dict]:
+    def fetch_max_metrics(
+        self,
+        account: Optional[str] = None,
+        date: Optional[str] = None,
+        raise_on_error: bool = False,
+    ) -> List[Dict]:
         """Fetch native Garmin VO₂max (and other max metrics) via ``gccli health max-metrics``.
 
         Parameters
@@ -302,6 +307,8 @@ class GccliRunner:
         try:
             data = self._run_json(args, account=account)
         except GccliError as exc:
+            if raise_on_error:
+                raise
             logger.warning("[gccli] fetch_max_metrics failed: %s", exc)
             return []
         if isinstance(data, list):

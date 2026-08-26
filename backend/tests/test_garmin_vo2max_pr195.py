@@ -289,6 +289,13 @@ class TestGccliRunnerFetchMaxMetrics:
             ["health", "max-metrics", "2026-08-25"], account="u@example.com"
         )
 
+    def test_raise_on_error_propagates_gccli_failure(self):
+        runner = self._make_runner()
+        from garmin.runner import GccliError
+        with patch.object(runner, "_run_json", side_effect=GccliError("boom")):
+            with pytest.raises(GccliError):
+                runner.fetch_max_metrics(date="2026-08-25", raise_on_error=True)
+
 
 # --------------------------------------------------------------------------- #
 # 5. GccliProvider.get_max_metrics
@@ -302,7 +309,7 @@ class TestGccliProviderGetMaxMetrics:
         provider = GccliProvider(runner=runner, account="u@example.com")
         result = provider.get_max_metrics("user_1")
         assert result == [{"vo2MaxValue": 52.0}]
-        runner.fetch_max_metrics.assert_called_once_with(account="u@example.com", date=None)
+        runner.fetch_max_metrics.assert_called_once_with(account="u@example.com", date=None, raise_on_error=False)
 
     def test_passes_date_to_runner(self):
         from garmin.providers.gccli_provider import GccliProvider
@@ -310,9 +317,9 @@ class TestGccliProviderGetMaxMetrics:
         runner.fetch_max_metrics.return_value = [{"vo2MaxValue": 52.0}]
         provider = GccliProvider(runner=runner, account="u@example.com")
 
-        provider.get_max_metrics("user_1", date="2026-08-25")
+        provider.get_max_metrics("user_1", date="2026-08-25", raise_on_error=True)
 
-        runner.fetch_max_metrics.assert_called_once_with(account="u@example.com", date="2026-08-25")
+        runner.fetch_max_metrics.assert_called_once_with(account="u@example.com", date="2026-08-25", raise_on_error=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -426,7 +433,7 @@ class TestFetchAndPersistVO2Max:
         )
 
         assert result == 43.0
-        provider.get_max_metrics.assert_called_once_with("user_1", date="2026-08-25")
+        provider.get_max_metrics.assert_called_once_with("user_1", date="2026-08-25", raise_on_error=False)
 
     def test_no_overwrite_when_payload_empty(self):
         """No-overwrite guard: when payload yields no value, update_one is NOT called."""
@@ -663,6 +670,14 @@ def _make_db_with_fake_vo2max(fake_coll: FakeVO2MaxCollection):
 
 
 class TestInitialVO2MaxBackfill:
+    def _db(self, requested_dates=None):
+        db = MagicMock()
+        db.garmin_connections.find_one = AsyncMock(
+            return_value={"vo2max_requested_dates": list(requested_dates or [])}
+        )
+        db.garmin_connections.update_one = AsyncMock()
+        return db
+
     def test_distinct_running_days_last_12_months_only(self):
         provider = MagicMock()
         activities = [
@@ -681,7 +696,7 @@ class TestInitialVO2MaxBackfill:
         ) as mock_fetch:
             count = asyncio.run(
                 garmin_service._backfill_historical_vo2max_for_running_days(
-                    MagicMock(),
+                    self._db(),
                     "user_1",
                     provider,
                     activities=activities,
@@ -703,7 +718,7 @@ class TestInitialVO2MaxBackfill:
         ) as mock_fetch:
             count = asyncio.run(
                 garmin_service._backfill_historical_vo2max_for_running_days(
-                    MagicMock(),
+                    self._db(),
                     "user_1",
                     MagicMock(),
                     activities=[{"activity_type": "cycling", "start_time": "2026-08-25T08:00:00"}],
@@ -722,7 +737,7 @@ class TestInitialVO2MaxBackfill:
         ) as mock_fetch:
             count = asyncio.run(
                 garmin_service._backfill_historical_vo2max_for_running_days(
-                    MagicMock(),
+                    self._db(),
                     "user_1",
                     MagicMock(),
                     activities=[{"activity_type": "running", "start_time": "2026-08-25T08:00:00"}],
@@ -730,8 +745,141 @@ class TestInitialVO2MaxBackfill:
                 )
             )
 
-        assert count == 0
+        assert count == 1
         mock_fetch.assert_awaited_once()
+
+    def test_skips_already_requested_dates(self):
+        with patch.object(
+            garmin_service,
+            "_fetch_and_persist_vo2max",
+            new=AsyncMock(return_value=43.0),
+        ) as mock_fetch:
+            count = asyncio.run(
+                garmin_service._backfill_historical_vo2max_for_running_days(
+                    self._db(requested_dates={"2026-08-25"}),
+                    "user_1",
+                    MagicMock(),
+                    activities=[
+                        {"activity_type": "running", "start_time": "2026-08-25T08:00:00"},
+                        {"activity_type": "running", "start_time": "2026-08-24T08:00:00"},
+                    ],
+                    reference_date=date(2026, 8, 26),
+                )
+            )
+
+        assert count == 1
+        assert [call.kwargs["target_date"] for call in mock_fetch.await_args_list] == ["2026-08-24"]
+
+
+class TestIncrementalVO2MaxDateSync:
+    def _db(self, requested_dates=None):
+        db = MagicMock()
+        db.garmin_connections.find_one = AsyncMock(
+            return_value={"vo2max_requested_dates": list(requested_dates or [])}
+        )
+        return db
+
+    def test_syncs_each_missing_running_date_once(self):
+        with patch.object(
+            garmin_service,
+            "_fetch_and_persist_vo2max",
+            new=AsyncMock(return_value=43.0),
+        ) as mock_fetch:
+            count = asyncio.run(
+                garmin_service._sync_vo2max_for_running_dates(
+                    self._db(requested_dates={"2026-08-24"}),
+                    "user_1",
+                    MagicMock(),
+                    ["2026-08-25", "2026-08-25", "2026-08-24", "2026-08-23"],
+                )
+            )
+
+        assert count == 2
+        assert [call.kwargs["target_date"] for call in mock_fetch.await_args_list] == [
+            "2026-08-23",
+            "2026-08-25",
+        ]
+
+
+class TestScheduleInitialVO2MaxBackfill:
+    def _db(self, *, status=None, requested_dates=None):
+        db = MagicMock()
+        conn = {"vo2max_requested_dates": list(requested_dates or [])}
+        if status is not None:
+            conn["vo2max_backfill_12m_status"] = status
+        db.garmin_connections.find_one = AsyncMock(return_value=conn)
+        db.garmin_connections.update_one = AsyncMock()
+        return db
+
+    def test_enqueues_background_backfill_once(self):
+        activities = [{"activity_type": "running", "start_time": "2026-08-25T08:00:00"}]
+        db = self._db()
+
+        with patch.object(garmin_service, "enqueue_vo2max_backfill", new=AsyncMock(return_value={"status": "queued"})) as mock_enqueue:
+            queued = asyncio.run(
+                garmin_service._schedule_initial_vo2max_backfill(
+                    db,
+                    "user_1",
+                    activities=activities,
+                )
+            )
+
+        assert queued is True
+        mock_enqueue.assert_awaited_once_with("user_1")
+
+    def test_skips_queue_when_backfill_already_complete(self):
+        db = self._db(status=garmin_service.VO2MAX_BACKFILL_COMPLETE)
+
+        with patch.object(garmin_service, "enqueue_vo2max_backfill", new=AsyncMock()) as mock_enqueue:
+            queued = asyncio.run(
+                garmin_service._schedule_initial_vo2max_backfill(
+                    db,
+                    "user_1",
+                    activities=[{"activity_type": "running", "start_time": "2026-08-25T08:00:00"}],
+                )
+            )
+
+        assert queued is False
+        mock_enqueue.assert_not_awaited()
+
+
+class TestRunVO2MaxBackfillJob:
+    def _db(self, *, connected=True, status=None):
+        db = MagicMock()
+        conn = {"connected": connected, "garmin_username": "runner@example.com"}
+        if status is not None:
+            conn["vo2max_backfill_12m_status"] = status
+        db.garmin_connections.find_one = AsyncMock(return_value=conn)
+        db.garmin_connections.update_one = AsyncMock()
+        db.garmin_daily_metrics.find_one = AsyncMock(return_value=None)
+        return db
+
+    def test_job_marks_backfill_complete(self):
+        db = self._db()
+        provider = MagicMock()
+
+        with (
+            patch.object(garmin_service.session_store, "ensure_session", new=AsyncMock(return_value=True)),
+            patch.object(garmin_service, "get_provider_for_user", return_value=provider),
+            patch.object(garmin_service, "_backfill_historical_vo2max_for_running_days", new=AsyncMock(return_value=2)),
+            patch.object(garmin_service, "_build_and_persist_capabilities", new=AsyncMock()),
+            patch.object(garmin_service, "_safe_save_session", new=AsyncMock()),
+            patch.object(garmin_service._dic, "invalidate_user"),
+        ):
+            result = asyncio.run(garmin_service.run_vo2max_backfill_job(db, "user_1"))
+
+        assert result["success"] is True
+        assert result["attempted_dates"] == 2
+
+    def test_job_short_circuits_when_already_complete(self):
+        db = self._db(status=garmin_service.VO2MAX_BACKFILL_COMPLETE)
+
+        with patch.object(garmin_service.session_store, "ensure_session", new=AsyncMock()) as mock_ensure:
+            result = asyncio.run(garmin_service.run_vo2max_backfill_job(db, "user_1"))
+
+        assert result["success"] is True
+        assert result["attempted_dates"] == 0
+        mock_ensure.assert_not_awaited()
 
 
 # --------------------------------------------------------------------------- #
