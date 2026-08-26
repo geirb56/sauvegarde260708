@@ -450,32 +450,56 @@ export default function Dashboard() {
   const { isFree, loading: subLoading } = useSubscription();
   const fetchedRef = useRef(false);
   const lastLangRef = useRef(lang);
+  const lastIsFreeRef = useRef(null); // track tier so FREE→TRIAL and TRIAL→FREE re-fetch
 
+  // Purge Premium state immediately when user becomes FREE (downgrade or fail-closed)
   useEffect(() => {
-    if (fetchedRef.current && lastLangRef.current === lang) {
+    if (!subLoading && isFree) {
+      setTodaySession(null);
+      setTrainingWeekV2(null);
+      setInsight(prev => {
+        if (!prev) return prev;
+        const { rag: _rag, ...rest } = prev; // eslint-disable-line no-unused-vars
+        return rest;
+      });
+    }
+  }, [isFree, subLoading]);
+
+  // Wait for subscription resolution before fetching — never launch Premium calls for FREE
+  useEffect(() => {
+    if (subLoading) return;
+    const tierChanged = lastIsFreeRef.current !== null && lastIsFreeRef.current !== isFree;
+    if (fetchedRef.current && lastLangRef.current === lang && !tierChanged) {
       return;
     }
     fetchedRef.current = true;
     lastLangRef.current = lang;
-    fetchData();
-  }, [lang]); // eslint-disable-line react-hooks/exhaustive-deps
+    lastIsFreeRef.current = isFree;
+    fetchData(isFree);
+  }, [lang, subLoading, isFree]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const fetchData = async () => {
+  const fetchData = async (free) => {
     setLoading(true);
     try {
-      const [insightRes, ragRes, todayRes] = await Promise.all([
-        axios.get(`${API}/dashboard/insight?language=${lang}`),
-        axios.get(`${API}/rag/dashboard`).catch(() => ({ data: null })),
-        axios.get(`${API}/training/today`).catch(() => ({ data: null })),
-      ]);
-      setInsight(insightRes.data);
-      if (ragRes.data) {
-        setInsight(prev => ({ ...prev, rag: ragRes.data }));
-      }
-      
-      // Utiliser la réponse de /api/training/today (avec adaptation)
-      if (todayRes.data?.status === "success") {
-        setTodaySession(todayRes.data);
+      if (free) {
+        // FREE: only canonical insight endpoint — no rag/dashboard, no training/today
+        const insightRes = await axios.get(`${API}/dashboard/insight?language=${lang}`);
+        setInsight(insightRes.data);
+      } else {
+        // TRIAL / PREMIUM: full set
+        const [insightRes, ragRes, todayRes] = await Promise.all([
+          axios.get(`${API}/dashboard/insight?language=${lang}`),
+          axios.get(`${API}/rag/dashboard`).catch(() => ({ data: null })),
+          axios.get(`${API}/training/today`).catch(() => ({ data: null })),
+        ]);
+        setInsight(insightRes.data);
+        if (ragRes.data) {
+          setInsight(prev => ({ ...prev, rag: ragRes.data }));
+        }
+        // Utiliser la réponse de /api/training/today (avec adaptation)
+        if (todayRes.data?.status === "success") {
+          setTodaySession(todayRes.data);
+        }
       }
     } catch (error) {
       console.error("Failed to fetch data:", error);
@@ -485,6 +509,7 @@ export default function Dashboard() {
   };
 
   const handleFeedback = async (day, status) => {
+    if (isFree) return; // FREE users must not trigger Premium training endpoints
     setFeedbackSubmitting(true);
     try {
       const today = new Date().toISOString().split('T')[0];
@@ -813,7 +838,8 @@ export default function Dashboard() {
         </>
       )}
 
-      {/* TODAY'S SESSION - Interactive with Adaptation */}
+      {/* TODAY'S SESSION - Interactive with Adaptation — TRIAL/PREMIUM only */}
+      {!isFree && (
       <div 
         className="today-workout-card animate-in" 
         style={{ 
@@ -921,9 +947,10 @@ export default function Dashboard() {
           </>
         )}
       </div>
+      )}
 
       {/* WEEKLY TARGET — V2 authority (TRIAL/PREMIUM only) */}
-      {trainingWeekV2?.weekly_target && (() => {
+      {!isFree && trainingWeekV2?.weekly_target && (() => {
         const wt = trainingWeekV2.weekly_target;
         const basis = wt.target_basis;
         return (
