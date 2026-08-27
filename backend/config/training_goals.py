@@ -34,5 +34,11 @@ GOAL_CONFIG = {
         "long_run_ratio": 0.45,
         "intensity_pct": 10,
         "description": "Ultra-trail"
+    },
+    "MAINTENANCE": {
+        "cycle_weeks": 12,
+        "long_run_ratio": 0.30,
+        "intensity_pct": 15,
+        "description": "Maintenance"
     }
 }

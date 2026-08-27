@@ -162,12 +162,13 @@ def _build_weekly_context_from_workouts(
 
     plan_goal = build_plan_goal(
         goal_type=mapped_goal,
-        race_date=race_date,
+        race_date=race_date if mapped_goal != GoalType.maintenance else None,
         created_from="user",
     )
 
     # Periodization: single branching point — race future vs. maintenance/cycle.
-    if race_date and race_date > reference_date:
+    effective_race_date = plan_goal.race_date
+    if effective_race_date and effective_race_date > reference_date:
         periodization = build_periodization(
             plan_goal=plan_goal,
             reference_date=reference_date,

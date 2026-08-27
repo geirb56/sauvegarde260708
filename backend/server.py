@@ -3450,7 +3450,7 @@ async def set_training_goal(
     """
     Définit l'objectif principal du cycle.
     """
-    if goal.upper() not in ["5K", "10K", "SEMI", "MARATHON", "ULTRA"]:
+    if goal.upper() not in ["5K", "10K", "SEMI", "MARATHON", "ULTRA", "MAINTENANCE"]:
         return {"error": "Invalid goal"}
     
     goal_upper = goal.upper()
@@ -3530,12 +3530,12 @@ async def set_training_plan_goal(goal: str, user: dict = Depends(auth_user)):
     """
     Set the training goal (10K, SEMI, MARATHON, etc.)
     """
-    if goal.upper() not in ["5K", "10K", "SEMI", "MARATHON", "ULTRA"]:
+    if goal.upper() not in ["5K", "10K", "SEMI", "MARATHON", "ULTRA", "MAINTENANCE"]:
         return {"error": "Invalid goal"}
-    
+
     goal_upper = goal.upper()
     config = GOAL_CONFIG[goal_upper]
-    
+
     await db.training_cycles.update_one(
         {"user_id": user["id"]},
         {"$set": {
@@ -4784,6 +4784,7 @@ async def get_training_v2_cycle(user: dict = Depends(auth_user)):
         "MARATHON": GoalType.marathon,
         "5K": GoalType.five_k,
         "ULTRA": GoalType.ultra,
+        "MAINTENANCE": GoalType.maintenance,
     }
 
     user_id = user["id"]
@@ -4886,7 +4887,7 @@ async def get_training_v2_cycle(user: dict = Depends(auth_user)):
 
     plan_goal = build_plan_goal(
         goal_type=mapped_goal_type,
-        race_date=race_date_v2,
+        race_date=race_date_v2 if mapped_goal_type != _GoalType.maintenance else None,
         target_distance_km=target_distance_km_v2,
         created_from="user",
     )
