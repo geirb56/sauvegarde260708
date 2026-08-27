@@ -3450,7 +3450,7 @@ async def set_training_goal(
     """
     Définit l'objectif principal du cycle.
     """
-    if goal.upper() not in ["5K", "10K", "SEMI", "MARATHON", "ULTRA"]:
+    if goal.upper() not in ["5K", "10K", "SEMI", "MARATHON", "ULTRA", "MAINTENANCE"]:
         return {"error": "Invalid goal"}
     
     goal_upper = goal.upper()
@@ -3530,12 +3530,12 @@ async def set_training_plan_goal(goal: str, user: dict = Depends(auth_user)):
     """
     Set the training goal (10K, SEMI, MARATHON, etc.)
     """
-    if goal.upper() not in ["5K", "10K", "SEMI", "MARATHON", "ULTRA"]:
+    if goal.upper() not in ["5K", "10K", "SEMI", "MARATHON", "ULTRA", "MAINTENANCE"]:
         return {"error": "Invalid goal"}
-    
+
     goal_upper = goal.upper()
     config = GOAL_CONFIG[goal_upper]
-    
+
     await db.training_cycles.update_one(
         {"user_id": user["id"]},
         {"$set": {
@@ -3566,17 +3566,22 @@ async def get_dynamic_training_plan_legacy(user: dict = Depends(auth_user)):
 @api_router.get("/training/goals")
 async def get_available_goals():
     """Liste les types d'objectifs disponibles"""
+    def _goal_entry(goal_type: str, config: dict) -> dict:
+        entry: dict = {
+            "type": goal_type,
+            "description": config["description"],
+            "cycle_weeks": config["cycle_weeks"],
+        }
+        # long_run_ratio and intensity_pct are omitted for goals that have no
+        # canonical value (e.g. MAINTENANCE — these fields are not applicable).
+        if config.get("long_run_ratio") is not None:
+            entry["long_run_ratio"] = config["long_run_ratio"]
+        if config.get("intensity_pct") is not None:
+            entry["intensity_pct"] = config["intensity_pct"]
+        return entry
+
     return {
-        "goals": [
-            {
-                "type": goal_type,
-                "description": config["description"],
-                "cycle_weeks": config["cycle_weeks"],
-                "long_run_ratio": config["long_run_ratio"],
-                "intensity_pct": config["intensity_pct"]
-            }
-            for goal_type, config in GOAL_CONFIG.items()
-        ]
+        "goals": [_goal_entry(goal_type, config) for goal_type, config in GOAL_CONFIG.items()]
     }
 
 
@@ -4784,6 +4789,7 @@ async def get_training_v2_cycle(user: dict = Depends(auth_user)):
         "MARATHON": GoalType.marathon,
         "5K": GoalType.five_k,
         "ULTRA": GoalType.ultra,
+        "MAINTENANCE": GoalType.maintenance,
     }
 
     user_id = user["id"]
@@ -4886,7 +4892,7 @@ async def get_training_v2_cycle(user: dict = Depends(auth_user)):
 
     plan_goal = build_plan_goal(
         goal_type=mapped_goal_type,
-        race_date=race_date_v2,
+        race_date=race_date_v2 if mapped_goal_type != _GoalType.maintenance else None,
         target_distance_km=target_distance_km_v2,
         created_from="user",
     )
