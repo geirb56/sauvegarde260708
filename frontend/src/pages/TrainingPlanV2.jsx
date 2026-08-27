@@ -1,8 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import axios from "axios";
-import { CalendarDays, Gauge, MapPin, Sparkles } from "lucide-react";
+import { CalendarDays, ChevronDown, ChevronUp, Gauge, MapPin, Sparkles } from "lucide-react";
 
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import Paywall from "@/components/Paywall";
 import { useLanguage } from "@/context/LanguageContext";
@@ -23,7 +27,66 @@ const WORKOUT_STYLES = {
   long_easy: "border-blue-500/40 bg-blue-500/10 text-blue-100",
 };
 
+const DAY_INDEX = {
+  sunday: 0,
+  monday: 1,
+  tuesday: 2,
+  wednesday: 3,
+  thursday: 4,
+  friday: 5,
+  saturday: 6,
+};
+const DEFAULT_VISIBLE_WEEKS = 4;
+
 const isKnownNumber = (value) => typeof value === "number" && Number.isFinite(value);
+
+const normalizeGoalType = (goalType) => {
+  if (!goalType || typeof goalType !== "string") return null;
+  const normalized = goalType.trim().toLowerCase();
+  if (normalized === "half_marathon" || normalized === "semi_marathon") return "semi";
+  return normalized;
+};
+
+const getTranslatedValue = (t, path, fallbackKey = "trainingV2.notAvailable") => {
+  const translated = t(path);
+  return translated === path ? t(fallbackKey) : translated;
+};
+
+const getSessionType = (session) => session?.workout_type || session?.session_type || session?.type || null;
+
+const getPrescriptionText = (session) => {
+  if (!session || typeof session !== "object") return null;
+  return session.prescription || session.description || session.details || session.label || session.name || null;
+};
+
+const getSessionStatusKey = (session) => {
+  if (!session || typeof session !== "object") return null;
+  const raw = session.status || session.state || session.completion_status || session.execution_status;
+  if (!raw || typeof raw !== "string") return null;
+
+  const normalized = raw.toLowerCase();
+  if (normalized === "done" || normalized === "completed") return "done";
+  if (normalized === "planned" || normalized === "upcoming") return "planned";
+  if (normalized === "rest") return "rest";
+  if (normalized === "missed" || normalized === "skipped") return "missed";
+  return null;
+};
+
+const getSessionDetailRoute = (session) => {
+  if (!session || typeof session !== "object") return null;
+
+  const workoutId = session.workout_id ?? session.workoutId;
+  if (workoutId != null && workoutId !== "") {
+    return `/workout/${workoutId}`;
+  }
+
+  const sessionId = session.session_id ?? session.sessionId ?? session.id;
+  if (sessionId != null && sessionId !== "") {
+    return `/sessions/${sessionId}`;
+  }
+
+  return null;
+};
 
 const formatDate = (value, locale) => {
   if (!value || typeof value !== "string") return null;
@@ -37,31 +100,16 @@ const formatDate = (value, locale) => {
   }).format(new Date(Date.UTC(year, month - 1, day)));
 };
 
-const getTranslatedValue = (t, path, fallbackKey = "trainingV2.notAvailable") => {
-  const translated = t(path);
-  return translated === path ? t(fallbackKey) : translated;
+const getTodayDayKey = () => {
+  const day = new Date().getDay();
+  return Object.keys(DAY_INDEX).find((key) => DAY_INDEX[key] === day) || "monday";
 };
 
-const normalizeGoalType = (goalType) => {
-  if (!goalType || typeof goalType !== "string") return null;
-  const normalized = goalType.trim().toLowerCase();
-  if (normalized === "half_marathon") return "semi";
-  if (normalized === "semi_marathon") return "semi";
-  return normalized;
-};
-
-const getSessionType = (session) => session?.workout_type || session?.session_type || session?.type || null;
-
-const getPrescriptionText = (session) => {
-  if (!session || typeof session !== "object") return null;
-  return session.prescription || session.description || session.details || session.label || session.name || null;
-};
-
-function DetailRow({ label, value }) {
+function DetailRow({ label, value, valueClassName = "" }) {
   return (
     <div className="flex items-start justify-between gap-4 text-sm">
       <span className="text-muted-foreground">{label}</span>
-      <span className="text-right font-medium text-foreground">{value}</span>
+      <span className={`text-right font-medium text-foreground ${valueClassName}`}>{value}</span>
     </div>
   );
 }
@@ -70,83 +118,164 @@ function LoadingState() {
   return (
     <div className="p-4 md:p-6 space-y-4" data-testid="training-v2-loading">
       <Skeleton className="h-10 w-48" />
-      <div className="space-y-4">
-        <Skeleton className="h-36" />
-        <Skeleton className="h-36" />
-      </div>
-      <Skeleton className="h-64" />
+      <Skeleton className="h-44" />
+      <Skeleton className="h-60" />
+      <Skeleton className="h-44" />
     </div>
   );
 }
 
-function CycleWeekRow({ week, t, locale }) {
-  const phaseLabel = week.phase
-    ? (() => {
-        const translated = t(`trainingV2.cyclePhases.${week.phase}`);
-        return translated === `trainingV2.cyclePhases.${week.phase}` ? t("trainingV2.notAvailable") : translated;
-      })()
-    : t("trainingV2.notAvailable");
+function SessionStatusBadge({ t, status }) {
+  if (!status) return null;
+
+  const styles = {
+    done: "bg-emerald-500/15 text-emerald-200 border-emerald-400/30",
+    planned: "bg-blue-500/15 text-blue-200 border-blue-400/30",
+    rest: "bg-indigo-500/15 text-indigo-200 border-indigo-400/30",
+    missed: "bg-red-500/15 text-red-200 border-red-400/30",
+  };
+
   return (
-    <div
-      data-testid={`cycle-week-${week.week_number}`}
-      className={`rounded-lg border p-3 ${week.is_current ? "border-primary bg-primary/10" : "border-border bg-card"}`}
+    <Badge
+      variant="outline"
+      className={`text-[10px] uppercase tracking-wider ${styles[status] || "border-border text-foreground"}`}
+      data-testid={`session-status-${status}`}
     >
-      <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-        <span className="font-medium">
-          {t("trainingV2.cycleWeekLabel")} {week.week_number}
-          {week.is_current && (
-            <span className="ml-2 rounded-full bg-primary px-2 py-0.5 text-xs font-semibold text-primary-foreground" data-testid="cycle-current-badge">
-              {t("trainingV2.cycleCurrentBadge")}
-            </span>
+      {t(`trainingV2.sessionStates.${status}`)}
+    </Badge>
+  );
+}
+
+function SessionDayCard({ session, day, isToday, t, unitSystem }) {
+  const workoutType = session?.workout_type;
+  const isExplicitRest = workoutType === "rest" || getSessionStatusKey(session) === "rest";
+  const workoutTypeLabel = session
+    ? getTranslatedValue(t, `trainingV2.workoutTypes.${workoutType}`)
+    : t("trainingV2.noSessionLabel");
+
+  const metricParts = [];
+  if (session && isKnownNumber(session.distance_km)) metricParts.push(formatDistance(session.distance_km, { unitSystem }));
+  if (session && isKnownNumber(session.duration_minutes)) metricParts.push(`${session.duration_minutes} min`);
+  if (session && session.estimated_tss !== null && session.estimated_tss !== undefined && Number.isFinite(Number(session.estimated_tss))) {
+    metricParts.push(`${Number(session.estimated_tss)} TSS`);
+  }
+
+  const state = getSessionStatusKey(session)
+    || (isExplicitRest ? "rest" : null);
+
+  const detailRoute = getSessionDetailRoute(session);
+  const containerClassName = `rounded-xl border p-4 transition-colors ${
+    session ? (WORKOUT_STYLES[session.workout_type] ?? "border-border bg-card text-foreground") : "border-border bg-card text-foreground"
+  } ${isToday ? "ring-2 ring-primary/70" : ""}`;
+
+  const content = (
+    <>
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">{t(`trainingPlanDays.${day}`)}</p>
+          <p className="mt-1 text-base font-semibold" data-testid={`training-v2-day-type-${day}`}>{workoutTypeLabel}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {isToday && (
+            <Badge className="text-[10px]" data-testid="today-highlight-badge">
+              {t("trainingV2.todayBadge")}
+            </Badge>
           )}
-        </span>
-        <span className="text-muted-foreground">{phaseLabel}</span>
-        {week.start_date && week.end_date && (
-          <span className="text-xs text-muted-foreground">
-            {formatDate(week.start_date, locale)} – {formatDate(week.end_date, locale)}
+          <SessionStatusBadge t={t} status={state} />
+        </div>
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
+        {metricParts.length > 0 ? metricParts.map((part) => (
+          <span key={part} className="rounded-full border border-current/20 px-2.5 py-1">{part}</span>
+        )) : (
+          <span className="rounded-full border border-current/20 px-2.5 py-1">
+            {isExplicitRest ? t("trainingV2.restDay") : t("trainingV2.noSessionLabel")}
           </span>
         )}
       </div>
-    </div>
+    </>
+  );
+
+  if (!detailRoute) {
+    return (
+      <div className={containerClassName} data-testid={`training-v2-day-${day}`}>
+        {content}
+      </div>
+    );
+  }
+
+  return (
+    <Link
+      to={detailRoute}
+      className={`${containerClassName} block hover:brightness-110`}
+      data-testid={`training-v2-day-${day}`}
+      data-detail-route={detailRoute}
+    >
+      {content}
+    </Link>
   );
 }
 
-function CycleSection({ cycleData, t, locale }) {
-  if (!cycleData) return null;
-  const cycle = cycleData?.cycle;
-  const goalTypeKey = normalizeGoalType(cycleData?.goal?.goal_type);
-  const goalLabel = goalTypeKey
-    ? getTranslatedValue(t, `trainingV2.goalTypes.${goalTypeKey}`, "trainingV2.unknownGoal")
-    : t("trainingV2.unknownGoal");
-  const weeks = Array.isArray(cycleData?.weeks) ? cycleData.weeks : [];
+function FullCycleSection({ t, locale, weeks, openAll, setOpenAll }) {
+  const currentWeek = weeks.find((week) => week?.is_current) || null;
+  const visibleWeeks = openAll
+    ? weeks
+    : weeks.filter((week) => {
+      if (week.is_current) return true;
+      if (!currentWeek) return week.week_number <= DEFAULT_VISIBLE_WEEKS;
+      return Math.abs((week.week_number || 0) - (currentWeek.week_number || 0)) <= 2;
+    });
+
   return (
     <Card data-testid="training-v2-cycle">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
-          <MapPin className="h-4 w-4" />
-          {t("trainingV2.cycleTitle")}
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="grid gap-3 sm:grid-cols-2">
-          <DetailRow label={t("trainingV2.goalLabel")} value={goalLabel} />
-          {cycle?.current_week != null && cycle?.total_weeks != null && (
-            <DetailRow label={t("trainingV2.cycleWeekProgress")} value={`${cycle.current_week} / ${cycle.total_weeks}`} />
-          )}
-          {cycle?.mode && <DetailRow label={t("trainingV2.cycleMode")} value={getTranslatedValue(t, `trainingV2.cycleModes.${cycle.mode}`)} />}
-          {cycle?.status && <DetailRow label={t("trainingV2.cycleStatus")} value={getTranslatedValue(t, `trainingV2.cycleStatuses.${cycle.status}`)} />}
-          {cycle?.start_date && <DetailRow label={t("trainingV2.cycleStart")} value={formatDate(cycle.start_date, locale) ?? cycle.start_date} />}
-          {cycle?.end_date && <DetailRow label={t("trainingV2.cycleEnd")} value={formatDate(cycle.end_date, locale) ?? cycle.end_date} />}
-          {cycleData?.goal?.race_date && <DetailRow label={t("trainingV2.raceDate")} value={formatDate(cycleData.goal.race_date, locale) ?? cycleData.goal.race_date} />}
+      <CardHeader className="space-y-2">
+        <div className="flex items-center justify-between gap-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <MapPin className="h-4 w-4" />
+            {t("trainingV2.fullCycleTitle")}
+          </CardTitle>
+          <button
+            type="button"
+            onClick={() => setOpenAll((value) => !value)}
+            className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground"
+            data-testid="cycle-toggle-button"
+          >
+            {openAll ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+            {openAll ? t("trainingV2.collapse") : t("trainingV2.showAll")}
+          </button>
         </div>
-        {weeks.length > 0 && (
-          <div className="space-y-2 pt-2">
-            <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">{t("trainingV2.cycleWeeks")}</p>
-            {weeks.map((week) => (
-              <CycleWeekRow key={week.week_number} week={week} t={t} locale={locale} />
-            ))}
-          </div>
-        )}
+      </CardHeader>
+      <CardContent className="space-y-2">
+        {visibleWeeks.map((week) => {
+          const phaseLabel = week.phase
+            ? getTranslatedValue(t, `trainingV2.cyclePhases.${week.phase}`)
+            : t("trainingV2.notAvailable");
+          return (
+            <div
+              key={week.week_number}
+              data-testid={`cycle-week-${week.week_number}`}
+              className={`rounded-lg border p-3 ${week.is_current ? "border-primary bg-primary/10" : "border-border bg-card"}`}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                <span className="font-medium">
+                  {t("trainingV2.cycleWeekLabel")} {week.week_number}
+                  {week.is_current && (
+                    <span className="ml-2 rounded-full bg-primary px-2 py-0.5 text-xs font-semibold text-primary-foreground" data-testid="cycle-current-badge">
+                      {t("trainingV2.cycleCurrentBadge")}
+                    </span>
+                  )}
+                </span>
+                <span className="text-muted-foreground">{phaseLabel}</span>
+              </div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                {week.start_date && week.end_date
+                  ? `${formatDate(week.start_date, locale)} – ${formatDate(week.end_date, locale)}`
+                  : t("trainingV2.notAvailable")}
+              </div>
+            </div>
+          );
+        })}
       </CardContent>
     </Card>
   );
@@ -163,6 +292,8 @@ export default function TrainingPlanV2() {
   const [cycleData, setCycleData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [hasError, setHasError] = useState(false);
+  const [pacesOpen, setPacesOpen] = useState(false);
+  const [cycleOpenAll, setCycleOpenAll] = useState(false);
 
   useEffect(() => {
     if (subLoading || isFree) return;
@@ -179,6 +310,7 @@ export default function TrainingPlanV2() {
           axios.get(`${API}/training/v2/week`),
           axios.get(`${API}/training/v2/cycle`).catch(() => ({ data: null })),
         ]);
+
         if (!ignore) {
           setTodayData(todayRes.data);
           setPacesData(pacesRes.data);
@@ -199,7 +331,13 @@ export default function TrainingPlanV2() {
     };
   }, [isFree, subLoading]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    setPacesOpen(window.innerWidth >= 768);
+  }, []);
+
   const locale = lang === "fr" ? "fr-FR" : lang === "es" ? "es-ES" : "en-US";
+  const todayKey = getTodayDayKey();
 
   const orderedSessions = useMemo(() => {
     const sessions = weekData?.week?.sessions ?? [];
@@ -214,7 +352,7 @@ export default function TrainingPlanV2() {
       <div className="p-4 md:p-6">
         <Card className="border-border bg-card">
           <CardHeader>
-            <CardTitle>{t("trainingV2.title")}</CardTitle>
+            <CardTitle>{t("trainingV2.planHeader")}</CardTitle>
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground">{t("trainingV2.loadingError")}</p>
@@ -224,19 +362,34 @@ export default function TrainingPlanV2() {
     );
   }
 
+  const cycle = cycleData?.cycle;
+  const cycleWeeks = Array.isArray(cycleData?.weeks) ? cycleData.weeks : [];
+  const currentCycleWeek = cycleWeeks.find((week) => week?.is_current) || null;
+
+  const goalTypeKey = normalizeGoalType(cycleData?.goal?.goal_type || weekData?.goal?.goal_type);
+  const goalLabel = goalTypeKey
+    ? getTranslatedValue(t, `trainingV2.goalTypes.${goalTypeKey}`, "trainingV2.unknownGoal")
+    : t("trainingV2.unknownGoal");
+
+  const isMaintenanceGoal = goalTypeKey === "maintenance";
+
+  const phaseLabel = currentCycleWeek?.phase
+    ? getTranslatedValue(t, `trainingV2.cyclePhases.${currentCycleWeek.phase}`)
+    : t("trainingV2.notAvailable");
+
   const todaySession = todayData?.adaptation_applied
     ? todayData?.adapted_prescription || todayData?.adaptive_session || todayData?.planned_session
     : todayData?.planned_session || todayData?.original_prescription;
+
   const todayType = getSessionType(todaySession);
   const todayTypeLabel = todayType
     ? getTranslatedValue(t, `trainingV2.workoutTypes.${todayType}`)
-    : t("trainingV2.notAvailable");
-  const readinessBand = todayData?.readiness?.band
-    ? getTranslatedValue(t, `trainingV2.readinessBands.${String(todayData.readiness.band).toLowerCase()}`)
-    : t("trainingV2.notAvailable");
-  const confidenceLabel = pacesData?.confidence
-    ? getTranslatedValue(t, `trainingV2.pacesConfidence.${String(pacesData.confidence).toLowerCase()}`)
-    : t("trainingV2.notAvailable");
+    : t("trainingV2.noSessionType");
+
+  const todayPrescription = getPrescriptionText(todaySession)
+    || getPrescriptionText(todayData?.adapted_prescription)
+    || getPrescriptionText(todayData?.original_prescription)
+    || null;
 
   const weeklyTargetValue = weekData?.weekly_target?.target_basis === "distance"
     ? (isKnownNumber(weekData?.weekly_target?.target_km) ? formatDistance(weekData.weekly_target.target_km, { unitSystem }) : t("trainingV2.notAvailable"))
@@ -246,19 +399,49 @@ export default function TrainingPlanV2() {
     ? formatDistance(weekData.week.completed_km, { unitSystem })
     : (isKnownNumber(weekData?.week?.completed_duration_minutes) ? `${weekData.week.completed_duration_minutes} min` : t("trainingV2.notAvailable"));
 
+  const hasAnySessionLink = orderedSessions.some((session) => Boolean(getSessionDetailRoute(session)));
+
+  const progressValue = (cycle?.current_week && cycle?.total_weeks)
+    ? Math.max(0, Math.min(100, Math.round((cycle.current_week / cycle.total_weeks) * 100)))
+    : 0;
+
+  const confidenceLabel = pacesData?.confidence
+    ? getTranslatedValue(t, `trainingV2.pacesConfidence.${String(pacesData.confidence).toLowerCase()}`)
+    : t("trainingV2.notAvailable");
+
+  const showRaceCountdown = !isMaintenanceGoal
+    && cycle?.days_to_race !== null
+    && cycle?.days_to_race !== undefined
+    && Number.isFinite(Number(cycle?.days_to_race));
+
   return (
     <div className="p-4 md:p-6 space-y-4" data-testid="training-v2-page">
-      <div className="flex items-center gap-3">
-        <div className="rounded-xl border border-border bg-card p-3">
-          <CalendarDays className="h-5 w-5 text-primary" />
-        </div>
-        <div>
-          <h1 className="text-2xl font-semibold text-foreground">{t("trainingV2.title")}</h1>
-          <p className="text-sm text-muted-foreground">{t("trainingV2.subtitle")}</p>
-        </div>
-      </div>
+      <Card data-testid="training-v2-plan-status">
+        <CardContent className="pt-6 space-y-4">
+          <div className="flex items-center gap-3">
+            <div className="rounded-xl border border-border bg-card p-3">
+              <CalendarDays className="h-5 w-5 text-primary" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-semibold text-foreground">{t("trainingV2.planHeader")}</h1>
+              <p className="text-sm text-muted-foreground">{t("trainingV2.planSubheader")}</p>
+            </div>
+          </div>
 
-      <Card data-testid="training-v2-today">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <DetailRow label={t("trainingV2.goalLabel")} value={goalLabel} />
+            <DetailRow label={t("trainingV2.currentPhase")} value={phaseLabel} />
+            {showRaceCountdown && (
+              <DetailRow
+                label={t("trainingV2.raceCountdownLabel")}
+                value={t("trainingV2.raceCountdownValue").replace("{days}", String(cycle.days_to_race))}
+              />
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-primary/40" data-testid="training-v2-today">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <Sparkles className="h-4 w-4" />
@@ -267,23 +450,27 @@ export default function TrainingPlanV2() {
         </CardHeader>
         <CardContent className="space-y-3">
           {todayData?.status === "no_session" ? (
-            <p className="text-sm text-muted-foreground">{t("trainingV2.noSessionToday")}</p>
+            <div className="rounded-lg border border-border bg-card p-3" data-testid="today-rest-state">
+              <p className="font-medium">{t("trainingV2.restDay")}</p>
+              <p className="text-sm text-muted-foreground">{t("trainingV2.noSessionToday")}</p>
+            </div>
           ) : (
             <>
-              <DetailRow label={t("trainingV2.sessionType")} value={todayTypeLabel} />
-              <DetailRow label={t("trainingV2.readinessBand")} value={readinessBand} />
-              <DetailRow
-                label={t("trainingV2.sessionDuration")}
-                value={isKnownNumber(todaySession?.duration_minutes) ? `${todaySession.duration_minutes} min` : t("trainingV2.notAvailable")}
-              />
-              <DetailRow
-                label={t("trainingV2.sessionDistance")}
-                value={isKnownNumber(todaySession?.distance_km) ? formatDistance(todaySession.distance_km, { unitSystem }) : t("trainingV2.notAvailable")}
-              />
+              <DetailRow label={t("trainingV2.sessionType")} value={todayTypeLabel} valueClassName="text-base" />
               <DetailRow
                 label={t("trainingV2.sessionPrescription")}
-                value={getPrescriptionText(todayData?.adapted_prescription) || getPrescriptionText(todayData?.original_prescription) || getPrescriptionText(todaySession) || t("trainingV2.notAvailable")}
+                value={todayPrescription || t("trainingV2.notAvailable")}
+                valueClassName="max-w-[70%]"
               />
+              {isKnownNumber(todaySession?.duration_minutes) && (
+                <DetailRow label={t("trainingV2.sessionDuration")} value={`${todaySession.duration_minutes} min`} />
+              )}
+              {isKnownNumber(todaySession?.distance_km) && (
+                <DetailRow
+                  label={t("trainingV2.sessionDistance")}
+                  value={formatDistance(todaySession.distance_km, { unitSystem })}
+                />
+              )}
               {todayData?.adaptation_applied && (
                 <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm" data-testid="today-adapted">
                   <p className="font-medium text-amber-200">{t("trainingV2.adaptationApplied")}</p>
@@ -293,48 +480,6 @@ export default function TrainingPlanV2() {
                 </div>
               )}
             </>
-          )}
-        </CardContent>
-      </Card>
-
-      <Card data-testid="training-v2-paces">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Gauge className="h-4 w-4" />
-            {t("trainingV2.pacesTitle")}
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <DetailRow label={t("trainingV2.confidence")} value={confidenceLabel} />
-          {pacesData?.confidence === "INSUFFICIENT" ? (
-            <p className="text-sm text-muted-foreground">{t("trainingV2.pacesInsufficient")}</p>
-          ) : (
-            <div className="space-y-2 text-sm">
-              <DetailRow
-                label={t("trainingV2.paceEasy")}
-                value={pacesData?.paces?.easy?.lower?.pace_str && pacesData?.paces?.easy?.upper?.pace_str
-                  ? `${pacesData.paces.easy.lower.pace_str} - ${pacesData.paces.easy.upper.pace_str} /km`
-                  : t("trainingV2.notAvailable")}
-              />
-              <DetailRow
-                label={t("trainingV2.paceMarathon")}
-                value={pacesData?.paces?.marathon?.pace_str ? `${pacesData.paces.marathon.pace_str} /km` : t("trainingV2.notAvailable")}
-              />
-              <DetailRow
-                label={t("trainingV2.paceThreshold")}
-                value={pacesData?.paces?.threshold?.pace_str ? `${pacesData.paces.threshold.pace_str} /km` : t("trainingV2.notAvailable")}
-              />
-              <DetailRow
-                label={t("trainingV2.paceInterval")}
-                value={pacesData?.paces?.interval?.lower?.pace_str && pacesData?.paces?.interval?.upper?.pace_str
-                  ? `${pacesData.paces.interval.lower.pace_str} - ${pacesData.paces.interval.upper.pace_str} /km`
-                  : t("trainingV2.notAvailable")}
-              />
-              <DetailRow
-                label={t("trainingV2.paceRepetition")}
-                value={pacesData?.paces?.repetition?.pace_str ? `${pacesData.paces.repetition.pace_str} /km` : t("trainingV2.notAvailable")}
-              />
-            </div>
           )}
         </CardContent>
       </Card>
@@ -357,45 +502,104 @@ export default function TrainingPlanV2() {
             />
           </div>
 
-          <div className="space-y-3">
+          <div className="space-y-3" data-testid="week-sessions-list">
             {orderedSessions.map((session, index) => {
               const day = DAYS[index];
-              const workoutTypeLabel = session
-                ? getTranslatedValue(t, `trainingV2.workoutTypes.${session.workout_type}`)
-                : t("trainingV2.notAvailable");
-              const metricParts = [];
-
-              if (session && isKnownNumber(session.distance_km)) metricParts.push(formatDistance(session.distance_km, { unitSystem }));
-              if (session && isKnownNumber(session.duration_minutes)) metricParts.push(`${session.duration_minutes} min`);
-              if (session && isKnownNumber(session.estimated_tss)) metricParts.push(`${session.estimated_tss} TSS`);
-
               return (
-                <div
+                <SessionDayCard
                   key={day}
-                  className={`rounded-xl border p-4 ${session ? (WORKOUT_STYLES[session.workout_type] ?? "border-border bg-card text-foreground") : "border-border bg-card text-foreground"}`}
-                  data-testid={`training-v2-day-${day}`}
-                >
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">{t(`trainingPlanDays.${day}`)}</p>
-                      <p className="mt-1 text-base font-semibold">{workoutTypeLabel}</p>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2 text-sm">
-                      {metricParts.length > 0 ? metricParts.map((part) => (
-                        <span key={part} className="rounded-full border border-current/20 px-2.5 py-1">{part}</span>
-                      )) : (
-                        <span className="rounded-full border border-current/20 px-2.5 py-1">{t("trainingV2.notAvailable")}</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
+                  session={session}
+                  day={day}
+                  isToday={day === todayKey}
+                  t={t}
+                  unitSystem={unitSystem}
+                />
               );
             })}
           </div>
+
+          <p className="text-xs text-muted-foreground" data-testid="session-detail-support">
+            {hasAnySessionLink ? t("trainingV2.sessionDetailLinkAvailable") : t("trainingV2.sessionDetailLinkUnavailable")}
+          </p>
         </CardContent>
       </Card>
 
-      <CycleSection cycleData={cycleData} t={t} locale={locale} />
+      <Card data-testid="training-v2-cycle-progress">
+        <CardHeader>
+          <CardTitle>{t("trainingV2.cycleProgressTitle")}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-muted-foreground">{t("trainingV2.cycleWeekProgress")}</span>
+            <span className="font-semibold">
+              {cycle?.current_week != null && cycle?.total_weeks != null ? `${cycle.current_week} / ${cycle.total_weeks}` : t("trainingV2.notAvailable")}
+            </span>
+          </div>
+          <Progress value={progressValue} />
+          <p className="text-sm text-muted-foreground" data-testid="cycle-progress-percent">{progressValue}%</p>
+        </CardContent>
+      </Card>
+
+      <Card data-testid="training-v2-paces">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Gauge className="h-4 w-4" />
+            {t("trainingV2.pacesTitle")}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Collapsible open={pacesOpen} onOpenChange={setPacesOpen}>
+            <CollapsibleTrigger
+              className="mb-3 flex w-full items-center justify-between rounded-lg border border-border px-3 py-2 text-sm"
+              data-testid="paces-collapsible-trigger"
+            >
+              <span>{t("trainingV2.pacesSummary")}</span>
+              {pacesOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </CollapsibleTrigger>
+            <CollapsibleContent className="space-y-3" data-testid="paces-collapsible-content">
+              <DetailRow label={t("trainingV2.confidence")} value={confidenceLabel} />
+              {pacesData?.confidence === "INSUFFICIENT" ? (
+                <p className="text-sm text-muted-foreground">{t("trainingV2.pacesInsufficient")}</p>
+              ) : (
+                <div className="space-y-2 text-sm">
+                  <DetailRow
+                    label={t("trainingV2.paceEasy")}
+                    value={pacesData?.paces?.easy?.lower?.pace_str && pacesData?.paces?.easy?.upper?.pace_str
+                      ? `${pacesData.paces.easy.lower.pace_str} - ${pacesData.paces.easy.upper.pace_str} /km`
+                      : t("trainingV2.notAvailable")}
+                  />
+                  <DetailRow
+                    label={t("trainingV2.paceMarathon")}
+                    value={pacesData?.paces?.marathon?.pace_str ? `${pacesData.paces.marathon.pace_str} /km` : t("trainingV2.notAvailable")}
+                  />
+                  <DetailRow
+                    label={t("trainingV2.paceThreshold")}
+                    value={pacesData?.paces?.threshold?.pace_str ? `${pacesData.paces.threshold.pace_str} /km` : t("trainingV2.notAvailable")}
+                  />
+                  <DetailRow
+                    label={t("trainingV2.paceInterval")}
+                    value={pacesData?.paces?.interval?.lower?.pace_str && pacesData?.paces?.interval?.upper?.pace_str
+                      ? `${pacesData.paces.interval.lower.pace_str} - ${pacesData.paces.interval.upper.pace_str} /km`
+                      : t("trainingV2.notAvailable")}
+                  />
+                  <DetailRow
+                    label={t("trainingV2.paceRepetition")}
+                    value={pacesData?.paces?.repetition?.pace_str ? `${pacesData.paces.repetition.pace_str} /km` : t("trainingV2.notAvailable")}
+                  />
+                </div>
+              )}
+            </CollapsibleContent>
+          </Collapsible>
+        </CardContent>
+      </Card>
+
+      <FullCycleSection
+        t={t}
+        locale={locale}
+        weeks={cycleWeeks}
+        openAll={cycleOpenAll}
+        setOpenAll={setCycleOpenAll}
+      />
     </div>
   );
 }
