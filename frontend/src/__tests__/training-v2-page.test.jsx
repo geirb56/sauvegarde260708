@@ -49,6 +49,7 @@ function weekData() {
         { day: "thursday", workout_type: "steady", distance_km: 8, duration_minutes: 42, estimated_tss: null, status: "MISSED", prescription: "40 min steady" },
         { day: "friday", workout_type: "easy", distance_km: 7, duration_minutes: 40, estimated_tss: null, status: "PLANNED", prescription: "40 min easy" },
         { day: "saturday", workout_type: "rest", distance_km: null, duration_minutes: null, estimated_tss: null, status: "REST" },
+        { day: "sunday", workout_type: "long_easy", distance_km: 18, duration_minutes: 95, estimated_tss: null, status: "PLANNED", prescription: "Long run 18 km" },
       ],
     },
   };
@@ -260,8 +261,8 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     const week = await screen.findByTestId("training-v2-week");
     expect(within(week).getByTestId("today-highlight-badge")).toBeInTheDocument();
     expect(within(week).getByTestId("session-status-done")).toBeInTheDocument();
-    expect(within(week).getByTestId("session-status-planned")).toBeInTheDocument();
-    expect(within(week).getByTestId("session-status-rest")).toBeInTheDocument();
+    expect(within(week).getAllByTestId("session-status-planned").length).toBeGreaterThan(0);
+    expect(within(week).getAllByTestId("session-status-rest").length).toBeGreaterThan(0);
     expect(within(week).getByTestId("session-status-missed")).toBeInTheDocument();
   });
 
@@ -276,7 +277,7 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     const sundayRow = screen.getByTestId("training-v2-day-sunday");
     expect(sundayRow.getAttribute("data-day-state")).toBe("absent");
     expect(within(sundayRow).queryByTestId("session-status-rest")).not.toBeInTheDocument();
-    expect(within(sundayRow).getByText(/No session/i)).toBeInTheDocument();
+    expect(within(sundayRow).getAllByText(/No session/i).length).toBeGreaterThan(0);
   });
 
   test("paces section stays collapsible and closed by default", async () => {

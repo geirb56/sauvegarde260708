@@ -138,7 +138,7 @@ function WeekSessionRow({ session, day, isToday, todayIndex, unitSystem, t }) {
 
   const timelineState = !session
     ? "absent"
-    : (statusKey || (isExplicitRest ? "rest" : (dayIndex < todayIndex ? "done" : "planned")));
+    : (isToday ? "today" : (statusKey || (isExplicitRest ? "rest" : (dayIndex < todayIndex ? "done" : "planned"))));
 
   const stateMarker = timelineState === "done"
     ? "✓"
