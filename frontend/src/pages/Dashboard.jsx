@@ -130,6 +130,159 @@ const getSessionStyleKey = (type, intensity) => {
   return intensity || "endurance";
 };
 
+// TodayPreviewFree — static blurred card for FREE users, no Premium API calls
+function TodayPreviewFree({ t }) {
+  return (
+    <div
+      className="today-workout-card animate-in"
+      style={{ animationDelay: "200ms", position: "relative", overflow: "hidden" }}
+      data-testid="today-preview-free"
+    >
+      <p className="today-label" style={{ position: "relative", zIndex: 2 }}>{t("dashboard.todayLabel")}</p>
+
+      {/* Static placeholder blocks — blurred */}
+      <div
+        data-testid="today-preview-blur-content"
+        style={{ filter: "blur(6px)", opacity: 0.45, userSelect: "none", pointerEvents: "none" }}
+        aria-hidden="true"
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
+          <div style={{ height: 14, width: "85%", background: "#6ee7b7", borderRadius: 4 }} />
+          <div style={{ height: 10, width: "55%", background: "#6ee7b7", borderRadius: 4, opacity: 0.7 }} />
+          <div style={{ height: 10, width: "70%", background: "#6ee7b7", borderRadius: 4, opacity: 0.5 }} />
+        </div>
+        <div style={{ marginTop: 12, display: "flex", gap: 6 }}>
+          <div style={{ height: 28, flex: 1, background: "#374151", borderRadius: 6 }} />
+          <div style={{ height: 28, flex: 1, background: "#374151", borderRadius: 6 }} />
+        </div>
+      </div>
+
+      {/* Premium overlay */}
+      <div
+        data-testid="premium-overlay-today"
+        style={{
+          position: "absolute",
+          inset: 0,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 8,
+          background: "rgba(10,10,15,0.55)",
+          padding: "0 16px",
+          zIndex: 3,
+        }}
+      >
+        <span style={{ fontSize: 22 }}>🔒</span>
+        <span style={{ color: "#ffffff", fontWeight: 700, fontSize: 14, textAlign: "center" }}>
+          {t("dashboard.todayPreviewLock")}
+        </span>
+        <span style={{ color: "rgba(255,255,255,0.75)", fontSize: 12, textAlign: "center", lineHeight: 1.4 }}>
+          {t("dashboard.todayPreviewDesc")}
+        </span>
+        <Link
+          to="/subscription"
+          data-testid="premium-cta-today"
+          style={{
+            marginTop: 4,
+            padding: "8px 16px",
+            background: "#6EEB5A",
+            color: "#0a1f0a",
+            borderRadius: 8,
+            fontWeight: 700,
+            fontSize: 13,
+            textDecoration: "none",
+            display: "inline-block",
+          }}
+        >
+          {t("dashboard.todayPreviewCta")}
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+// WeekPreviewFree — static blurred card for FREE users, no Premium API calls
+function WeekPreviewFree({ t }) {
+  return (
+    <div
+      className="rounded-2xl p-4 animate-in"
+      style={{
+        background: "var(--bg-elevated, #1a1a1f)",
+        border: "1px solid var(--border, #2a2a30)",
+        position: "relative",
+        overflow: "hidden",
+      }}
+      data-testid="week-preview-free"
+    >
+      <div className="flex items-center gap-2" style={{ position: "relative", zIndex: 2 }}>
+        <Target className="w-4 h-4" style={{ color: "#6EEB5A" }} />
+        <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#6EEB5A" }}>
+          {t("dashboard.weeklyTarget")}
+        </span>
+      </div>
+
+      {/* Static placeholder blocks — blurred */}
+      <div
+        data-testid="week-preview-blur-content"
+        style={{ filter: "blur(6px)", opacity: 0.45, userSelect: "none", pointerEvents: "none", marginTop: 8 }}
+        aria-hidden="true"
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
+          <div style={{ height: 28, width: "45%", background: "#ffffff", borderRadius: 4 }} />
+          <div style={{ height: 12, width: "30%", background: "#6b7280", borderRadius: 4 }} />
+        </div>
+        <div style={{ marginTop: 10, height: 8, borderRadius: 4, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
+          <div style={{ width: "60%", height: "100%", background: "#6EEB5A", borderRadius: 4 }} />
+        </div>
+        <div style={{ marginTop: 8, height: 10, width: "75%", background: "#9ca3af", borderRadius: 4, opacity: 0.6 }} />
+      </div>
+
+      {/* Premium overlay */}
+      <div
+        data-testid="premium-overlay-week"
+        style={{
+          position: "absolute",
+          inset: 0,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 8,
+          background: "rgba(10,10,15,0.55)",
+          padding: "0 16px",
+          zIndex: 3,
+        }}
+      >
+        <span style={{ fontSize: 22 }}>🔒</span>
+        <span style={{ color: "#ffffff", fontWeight: 700, fontSize: 14, textAlign: "center" }}>
+          {t("dashboard.weekPreviewLock")}
+        </span>
+        <span style={{ color: "rgba(255,255,255,0.75)", fontSize: 12, textAlign: "center", lineHeight: 1.4 }}>
+          {t("dashboard.weekPreviewDesc")}
+        </span>
+        <Link
+          to="/subscription"
+          data-testid="premium-cta-week"
+          style={{
+            marginTop: 4,
+            padding: "8px 16px",
+            background: "#6EEB5A",
+            color: "#0a1f0a",
+            borderRadius: 8,
+            fontWeight: 700,
+            fontSize: 13,
+            textDecoration: "none",
+            display: "inline-block",
+          }}
+        >
+          {t("dashboard.weekPreviewCta")}
+        </Link>
+      </div>
+    </div>
+  );
+}
+
 // SessionCard component for displaying a session with colors
 function SessionCard({ session, isGrayed = false, fatigueColor = null }) {
   const { t } = useLanguage();
@@ -581,64 +734,7 @@ export default function Dashboard() {
   return (
     <div className="p-4 pb-24 space-y-4" style={{ background: "var(--bg-primary)" }}>
 
-      {runIndexData && (
-        <div
-          className="rounded-3xl p-5 space-y-4 animate-in"
-          style={{
-            background: "linear-gradient(135deg, #0d1a10 0%, #111827 60%, #0d1a10 100%)",
-            border: "1px solid rgba(110, 235, 90, 0.22)",
-            boxShadow: "0 16px 40px rgba(15, 23, 42, 0.22)",
-          }}
-        >
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.22em]" style={{ color: "#6EEB5A" }}>
-                {t("dashboard.runIndex")}
-              </p>
-              <h2 className="text-lg font-black mt-1" style={{ color: "#ffffff" }}>
-                {t("dashboard.runIndexOverall")}
-              </h2>
-              <p className="text-xs mt-2 max-w-md" style={{ color: "rgba(255,255,255,0.72)" }}>
-                {t("dashboard.runIndexDescription")}
-              </p>
-            </div>
-            <div className="px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider" style={{ background: "rgba(110, 235, 90, 0.12)", color: "#6EEB5A" }}>
-              {t("progress.confidence")}: {runIndexConfidence}%
-            </div>
-          </div>
-
-          <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-            <div>
-              {runIndexNull ? (
-                <p className="text-base font-semibold" style={{ color: "rgba(255,255,255,0.55)" }}>
-                  {t("dashboard.runIndexInsufficient") || "Insufficient data"}
-                </p>
-              ) : (
-                <div className="flex items-end gap-2">
-                  <span className="text-6xl font-black leading-none" style={{ color: "#ffffff" }}>
-                    {runIndexScore}
-                  </span>
-                  <span className="text-xl font-semibold pb-1" style={{ color: "#6EEB5A" }}>
-                    / 1000
-                  </span>
-                </div>
-              )}
-              <p className="text-sm mt-2" style={{ color: "rgba(255,255,255,0.72)" }}>
-                {t("dashboard.runIndexLevel")}
-              </p>
-            </div>
-          </div>
-
-          <div className="grid gap-3">
-            <RunIndexPillar icon={Zap} label={t("dashboard.runIndexPillars.speed")} value={runIndexData?.speed_score} color="#f59e0b" />
-            <RunIndexPillar icon={Heart} label={t("dashboard.runIndexPillars.endurance")} value={runIndexData?.endurance_score} color="#ef4444" />
-            <RunIndexPillar icon={TrendingUp} label={t("dashboard.runIndexPillars.consistency")} value={runIndexData?.consistency_score} color="#6EEB5A" />
-            <RunIndexPillar icon={Target} label={t("dashboard.runIndexPillars.efficiency")} value={runIndexData?.efficiency_score} color="#3b82f6" />
-          </div>
-        </div>
-      )}
-
-      {/* ── RUN READINESS SECTION ────────────────────────────────────── */}
+      {/* ── RUN READINESS SECTION (first) ───────────────────────────── */}
       {cardioLoading ? (
         <div
           className="flex flex-col items-center justify-center py-8 gap-3"
@@ -808,24 +904,6 @@ export default function Dashboard() {
                     />
                   </div>
 
-                  {/* 30-day Run Readiness trend */}
-                  {history.filter((h) => h.run_readiness !== undefined && h.run_readiness !== null).length >= 2 && (
-                    <div className="pt-1" data-testid="readiness-trend">
-                      <p className="text-[11px] uppercase tracking-wider font-semibold mb-1" style={{ color: "var(--text-tertiary)" }}>
-                        {t("dashboard.monthlyReadiness")}
-                      </p>
-                      <ReadinessChart data={history} height={150} />
-                      <div className="flex justify-between mt-1">
-                        <span className="text-[9px]" style={{ color: "var(--text-tertiary)" }}>
-                          {history[0]?.date ? history[0].date.slice(5) : ""}
-                        </span>
-                        <span className="text-[9px]" style={{ color: "var(--text-tertiary)" }}>
-                          {history[history.length - 1]?.date ? history[history.length - 1].date.slice(5) : ""}
-                        </span>
-                      </div>
-                    </div>
-                  )}
-
                   {cardioData?.mock && (
                     <p className="text-center text-[10px]" style={{ color: "var(--text-tertiary)" }}>
                       {t("dashboard.demoDataNotice")}
@@ -838,8 +916,10 @@ export default function Dashboard() {
         </>
       )}
 
-      {/* TODAY'S SESSION - Interactive with Adaptation — TRIAL/PREMIUM only */}
-      {!isFree && (
+      {/* TODAY'S SESSION - Interactive with Adaptation — TRIAL/PREMIUM only; FREE sees static blur preview */}
+      {isFree ? (
+        <TodayPreviewFree t={t} />
+      ) : (
       <div 
         className="today-workout-card animate-in" 
         style={{ 
@@ -949,8 +1029,69 @@ export default function Dashboard() {
       </div>
       )}
 
-      {/* WEEKLY TARGET — V2 authority (TRIAL/PREMIUM only) */}
-      {!isFree && trainingWeekV2?.weekly_target && (() => {
+      {/* ── RUNINDEX SECTION (third) ─────────────────────────────────── */}
+      {runIndexData && (
+        <div
+          className="rounded-3xl p-5 space-y-4 animate-in"
+          style={{
+            background: "linear-gradient(135deg, #0d1a10 0%, #111827 60%, #0d1a10 100%)",
+            border: "1px solid rgba(110, 235, 90, 0.22)",
+            boxShadow: "0 16px 40px rgba(15, 23, 42, 0.22)",
+          }}
+          data-testid="run-index-card"
+        >
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.22em]" style={{ color: "#6EEB5A" }}>
+                {t("dashboard.runIndex")}
+              </p>
+              <h2 className="text-lg font-black mt-1" style={{ color: "#ffffff" }}>
+                {t("dashboard.runIndexOverall")}
+              </h2>
+              <p className="text-xs mt-2 max-w-md" style={{ color: "rgba(255,255,255,0.72)" }}>
+                {t("dashboard.runIndexDescription")}
+              </p>
+            </div>
+            <div className="px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider" style={{ background: "rgba(110, 235, 90, 0.12)", color: "#6EEB5A" }}>
+              {t("progress.confidence")}: {runIndexConfidence}%
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+            <div>
+              {runIndexNull ? (
+                <p className="text-base font-semibold" style={{ color: "rgba(255,255,255,0.55)" }}>
+                  {t("dashboard.runIndexInsufficient") || "Insufficient data"}
+                </p>
+              ) : (
+                <div className="flex items-end gap-2">
+                  <span className="text-6xl font-black leading-none" style={{ color: "#ffffff" }}>
+                    {runIndexScore}
+                  </span>
+                  <span className="text-xl font-semibold pb-1" style={{ color: "#6EEB5A" }}>
+                    / 1000
+                  </span>
+                </div>
+              )}
+              <p className="text-sm mt-2" style={{ color: "rgba(255,255,255,0.72)" }}>
+                {t("dashboard.runIndexLevel")}
+              </p>
+            </div>
+          </div>
+
+          <div className="grid gap-3">
+            <RunIndexPillar icon={Zap} label={t("dashboard.runIndexPillars.speed")} value={runIndexData?.speed_score} color="#f59e0b" />
+            <RunIndexPillar icon={Heart} label={t("dashboard.runIndexPillars.endurance")} value={runIndexData?.endurance_score} color="#ef4444" />
+            <RunIndexPillar icon={TrendingUp} label={t("dashboard.runIndexPillars.consistency")} value={runIndexData?.consistency_score} color="#6EEB5A" />
+            <RunIndexPillar icon={Target} label={t("dashboard.runIndexPillars.efficiency")} value={runIndexData?.efficiency_score} color="#3b82f6" />
+          </div>
+        </div>
+      )}
+
+      {/* WEEKLY TARGET — V2 authority (TRIAL/PREMIUM only); FREE sees static blur preview */}
+      {isFree ? (
+        <WeekPreviewFree t={t} />
+      ) : trainingWeekV2?.weekly_target && (() => {
         const wt = trainingWeekV2.weekly_target;
         const basis = wt.target_basis;
         return (

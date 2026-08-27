@@ -375,12 +375,14 @@ describe("Test 10: history null entry ignored", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Test 11 — history: 0 entry kept
+// Test 11 — READINESS_HISTORY_ON_DASHBOARD = NO
+// The 30-day history chart was removed from the Dashboard (C202).
+// Verify it is never rendered regardless of history data.
 // ---------------------------------------------------------------------------
-describe("Test 11: history 0 score is kept (not filtered)", () => {
+describe("Test 11: READINESS_HISTORY_ON_DASHBOARD = NO", () => {
   afterEach(() => jest.clearAllMocks());
 
-  it("chart renders when history contains score of 0", async () => {
+  it("readiness history chart is never rendered on Dashboard (removed in C202)", async () => {
     const history = [
       { date: "2025-07-01", run_readiness: 0 },
       { date: "2025-07-02", run_readiness: 45 },
@@ -391,7 +393,7 @@ describe("Test 11: history 0 score is kept (not filtered)", () => {
     await wait();
 
     const chart = container.querySelector('[data-testid="readiness-chart"]');
-    expect(chart).not.toBeNull();
+    expect(chart).toBeNull();
 
     unmount();
   });
