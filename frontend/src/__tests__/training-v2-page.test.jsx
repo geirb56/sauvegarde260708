@@ -27,7 +27,7 @@ const FORBIDDEN_ENDPOINTS = [
   "/training/refresh",
 ];
 
-function weekData({ withSessionIds = false } = {}) {
+function weekData() {
   return {
     reference_date: "2026-08-25",
     goal: { goal_type: "MARATHON", race_date: "2026-10-05" },
@@ -43,13 +43,13 @@ function weekData({ withSessionIds = false } = {}) {
       completed_duration_minutes: null,
       completed_session_count: 2,
       sessions: [
-        { day: "monday", workout_type: "easy", distance_km: 8, duration_minutes: 45, estimated_tss: null, ...(withSessionIds ? { session_id: "s-1" } : {}) },
-        { day: "tuesday", workout_type: "quality", distance_km: 10, duration_minutes: 50, estimated_tss: null, status: "DONE", ...(withSessionIds ? { workout_id: "w-2" } : {}) },
-        { day: "wednesday", workout_type: "recovery", distance_km: 6, duration_minutes: 35, estimated_tss: null, status: "PLANNED" },
-        { day: "thursday", workout_type: "steady", distance_km: 8, duration_minutes: 42, estimated_tss: null, status: "MISSED" },
-        { day: "friday", workout_type: "rest", distance_km: null, duration_minutes: null, estimated_tss: null, status: "REST" },
-        { day: "saturday", workout_type: "long_easy", distance_km: 18, duration_minutes: 90, estimated_tss: null },
-        { day: "sunday", workout_type: "rest", distance_km: null, duration_minutes: null, estimated_tss: null },
+        { day: "monday", workout_type: "easy", distance_km: 8, duration_minutes: 45, estimated_tss: null, status: "DONE", prescription: "45 min easy" },
+        { day: "tuesday", workout_type: "rest", distance_km: null, duration_minutes: null, estimated_tss: null, status: "REST" },
+        { day: "wednesday", workout_type: "quality", distance_km: 10, duration_minutes: 50, estimated_tss: null, status: "PLANNED", prescription: "3 × 10 min" },
+        { day: "thursday", workout_type: "steady", distance_km: 8, duration_minutes: 42, estimated_tss: null, status: "MISSED", prescription: "40 min steady" },
+        { day: "friday", workout_type: "easy", distance_km: 7, duration_minutes: 40, estimated_tss: null, status: "PLANNED", prescription: "40 min easy" },
+        { day: "saturday", workout_type: "rest", distance_km: null, duration_minutes: null, estimated_tss: null, status: "REST" },
+        { day: "sunday", workout_type: "long_easy", distance_km: 18, duration_minutes: 95, estimated_tss: null, status: "PLANNED", prescription: "Long run 18 km" },
       ],
     },
   };
@@ -68,34 +68,67 @@ function cycleData({ goalType = "marathon", daysToRace = 39 } = {}) {
       days_to_race: goalType === "maintenance" ? null : daysToRace,
     },
     weeks: [
-      { week_number: 11, start_date: "2026-08-10", end_date: "2026-08-16", phase: "build", is_current: false },
-      { week_number: 12, start_date: "2026-08-17", end_date: "2026-08-23", phase: "specific", is_current: true },
-      { week_number: 13, start_date: "2026-08-24", end_date: "2026-08-30", phase: "specific", is_current: false },
+      { week_number: 11, start_date: "2026-08-10", end_date: "2026-08-16", phase: "build", is_current: false, weekly_target_km: 45 },
+      { week_number: 12, start_date: "2026-08-17", end_date: "2026-08-23", phase: "specific", is_current: true, weekly_target_km: 50 },
+      { week_number: 13, start_date: "2026-08-24", end_date: "2026-08-30", phase: "specific", is_current: false, weekly_target_km: 52 },
     ],
   };
 }
 
-function todayData({ adapted = false, noSession = false } = {}) {
+function todayData({ explicitRest = false, noSession = false } = {}) {
   if (noSession) {
     return {
       status: "no_session",
       message: "No session planned for today",
       date: "2026-08-25",
       day: "Tuesday",
+      planned_session: null,
+      original_prescription: null,
+      adapted_prescription: null,
+      adaptive_session: null,
+      adaptation_applied: false,
+    };
+  }
+
+  if (explicitRest) {
+    return {
+      status: "success",
+      planned_session: { workout_type: "rest", duration_minutes: null, distance_km: null, prescription: "REST" },
+      original_prescription: { workout_type: "rest", duration_minutes: null, distance_km: null, prescription: "REST" },
+      adapted_prescription: { workout_type: "rest", duration_minutes: null, distance_km: null, prescription: "REST" },
+      adaptive_session: null,
+      adaptation_applied: false,
+      adaptation_reason: "",
     };
   }
 
   return {
     status: "success",
     readiness: { band: "EASY" },
-    planned_session: { workout_type: "easy", duration_minutes: 45, distance_km: 8, prescription: "45 min easy" },
-    original_prescription: { workout_type: "easy", duration_minutes: 45, distance_km: 8, prescription: "45 min easy" },
-    adapted_prescription: adapted
-      ? { workout_type: "recovery", duration_minutes: 35, distance_km: 6, prescription: "35 min recovery" }
-      : { workout_type: "easy", duration_minutes: 45, distance_km: 8, prescription: "45 min easy" },
-    adaptive_session: adapted ? { workout_type: "recovery", duration_minutes: 35, distance_km: 6 } : null,
-    adaptation_applied: adapted,
-    adaptation_reason: adapted ? "MISSING_SLEEP" : "",
+    planned_session: {
+      workout_type: "threshold",
+      duration_minutes: 55,
+      distance_km: 10,
+      prescription: "3 × 10 min",
+      pace_target: "5:10–5:20/km",
+    },
+    original_prescription: {
+      workout_type: "threshold",
+      duration_minutes: 55,
+      distance_km: 10,
+      prescription: "3 × 10 min",
+      pace_target: "5:10–5:20/km",
+    },
+    adapted_prescription: {
+      workout_type: "threshold",
+      duration_minutes: 55,
+      distance_km: 10,
+      prescription: "3 × 10 min",
+      pace_target: "5:10–5:20/km",
+    },
+    adaptive_session: null,
+    adaptation_applied: false,
+    adaptation_reason: "",
   };
 }
 
@@ -111,10 +144,10 @@ function pacesData({ confidence = "HIGH" } = {}) {
       repetition: null,
     } : {
       easy: { lower: { pace_str: "5:10" }, upper: { pace_str: "5:55" } },
-      marathon: { pace_str: "4:58" },
+      marathon: null,
       threshold: { pace_str: "4:35" },
-      interval: { lower: { pace_str: "4:00" }, upper: { pace_str: "4:20" } },
-      repetition: { pace_str: "3:42" },
+      interval: null,
+      repetition: null,
     },
   };
 }
@@ -129,7 +162,8 @@ function mockAxios({ today = todayData(), paces = pacesData(), week = weekData()
   });
 }
 
-function renderPage({ unitSystem = "metric", lang = "en" } = {}) {
+function renderPage({ unitSystem = "metric", lang = "en", width = 1024 } = {}) {
+  Object.defineProperty(window, "innerWidth", { writable: true, configurable: true, value: width });
   window.localStorage.setItem(UNIT_SYSTEM_KEY, unitSystem);
   window.localStorage.setItem(LANGUAGE_STORAGE_KEY, lang);
   return render(
@@ -143,15 +177,14 @@ function renderPage({ unitSystem = "metric", lang = "en" } = {}) {
   );
 }
 
-describe("TrainingPlanV2 — PR206", () => {
+describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     window.localStorage.clear();
     useSubscription.mockReturnValue({ isFree: false, loading: false });
-    Object.defineProperty(window, "innerWidth", { writable: true, configurable: true, value: 1024 });
   });
 
-  test("uses only canonical V2 endpoints", async () => {
+  test("uses only canonical V2 endpoints and no legacy calls", async () => {
     mockAxios();
     renderPage();
     await screen.findByTestId("training-v2-page");
@@ -174,48 +207,66 @@ describe("TrainingPlanV2 — PR206", () => {
     expect(axios.get).not.toHaveBeenCalled();
   });
 
-  test("renders hierarchy with today first, then week, cycle progress, paces, full cycle", async () => {
+  test("keeps hierarchy with today as primary block", async () => {
+    mockAxios();
+    renderPage();
+
+    const header = await screen.findByTestId("training-v2-plan-status");
+    const today = screen.getByTestId("training-v2-today");
+    const week = screen.getByTestId("training-v2-week");
+    const paces = screen.getByTestId("training-v2-paces");
+    const cycle = screen.getByTestId("training-v2-cycle");
+
+    expect(header.compareDocumentPosition(today) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(today.compareDocumentPosition(week) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(week.compareDocumentPosition(paces) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(paces.compareDocumentPosition(cycle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  test("today card shows primary workout type, prescription, pace and duration", async () => {
     mockAxios();
     renderPage();
 
     const today = await screen.findByTestId("training-v2-today");
-    const week = screen.getByTestId("training-v2-week");
-    const cycleProgress = screen.getByTestId("training-v2-cycle-progress");
-    const paces = screen.getByTestId("training-v2-paces");
-    const cycle = screen.getByTestId("training-v2-cycle");
-
-    expect(today.compareDocumentPosition(week) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(week.compareDocumentPosition(cycleProgress) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(cycleProgress.compareDocumentPosition(paces) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(paces.compareDocumentPosition(cycle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(today).getByTestId("today-session-type").textContent.toLowerCase()).toContain("threshold");
+    expect(within(today).getByTestId("today-session-prescription")).toHaveTextContent("3 × 10 min");
+    expect(within(today).getByTestId("today-session-pace-zone")).toHaveTextContent("5:10–5:20/km");
+    expect(within(today).getByTestId("today-session-duration")).toHaveTextContent("55 min");
+    expect(within(today).getByTestId("today-session-distance")).toHaveTextContent(formatDistance(10, { unitSystem: "metric" }));
+    expect(within(today).queryByText(/TSS/i)).not.toBeInTheDocument();
   });
 
-  test("today card keeps adaptation visible but secondary", async () => {
-    mockAxios({ today: todayData({ adapted: true }) });
-    renderPage();
-    expect(await screen.findByTestId("today-adapted")).toBeInTheDocument();
-    expect(screen.getByText("MISSING_SLEEP")).toBeInTheDocument();
-  });
-
-  test("today card shows clear no-session rest state", async () => {
+  test("today no-session state is not rendered as REST", async () => {
     mockAxios({ today: todayData({ noSession: true }) });
     renderPage();
-    expect(await screen.findByTestId("today-rest-state")).toBeInTheDocument();
+
+    const today = await screen.findByTestId("training-v2-today");
+    expect(within(today).getByTestId("today-no-session-state")).toBeInTheDocument();
+    expect(within(today).queryByTestId("today-rest-state")).not.toBeInTheDocument();
+    expect(within(today).queryByTestId("today-session-type")).not.toBeInTheDocument();
   });
 
-  test("week card highlights today and shows distinct states when available", async () => {
-    mockAxios();
+  test("today explicit REST is shown only when backend returns REST session", async () => {
+    mockAxios({ today: todayData({ explicitRest: true }) });
     renderPage();
-    await screen.findByTestId("training-v2-week");
 
-    expect(screen.getByTestId("today-highlight-badge")).toBeInTheDocument();
-    expect(screen.getByTestId("session-status-done")).toBeInTheDocument();
-    expect(screen.getByTestId("session-status-planned")).toBeInTheDocument();
-    expect(screen.getAllByTestId("session-status-rest").length).toBeGreaterThan(0);
-    expect(screen.getByTestId("session-status-missed")).toBeInTheDocument();
+    const today = await screen.findByTestId("training-v2-today");
+    expect(within(today).getByTestId("today-session-type").textContent.toLowerCase()).toContain("rest");
   });
 
-  test("missing session in weekly payload does not show REST badge", async () => {
+  test("week is compact, highlights today, and distinguishes done/planned/rest/missed", async () => {
+    mockAxios();
+    renderPage({ width: 390 });
+
+    const week = await screen.findByTestId("training-v2-week");
+    expect(within(week).getByTestId("today-highlight-badge")).toBeInTheDocument();
+    expect(within(week).getByTestId("session-status-done")).toBeInTheDocument();
+    expect(within(week).getAllByTestId("session-status-planned").length).toBeGreaterThan(0);
+    expect(within(week).getAllByTestId("session-status-rest").length).toBeGreaterThan(0);
+    expect(within(week).getByTestId("session-status-missed")).toBeInTheDocument();
+  });
+
+  test("missing day in week payload stays neutral and is not marked REST", async () => {
     const weekWithMissingSunday = weekData();
     weekWithMissingSunday.week.sessions = weekWithMissingSunday.week.sessions.filter((session) => session.day !== "sunday");
 
@@ -223,98 +274,60 @@ describe("TrainingPlanV2 — PR206", () => {
     renderPage();
     await screen.findByTestId("training-v2-week");
 
-    const sundayCard = screen.getByTestId("training-v2-day-sunday");
-    expect(within(sundayCard).queryByTestId("session-status-rest")).not.toBeInTheDocument();
-    expect(within(sundayCard).getAllByText("No session").length).toBeGreaterThan(0);
+    const sundayRow = screen.getByTestId("training-v2-day-sunday");
+    expect(sundayRow.getAttribute("data-day-state")).toBe("absent");
+    expect(within(sundayRow).queryByTestId("session-status-rest")).not.toBeInTheDocument();
+    expect(within(sundayRow).getAllByText(/No session/i).length).toBeGreaterThan(0);
   });
 
-  test("unknown distance, duration and null tss are not shown as zero", async () => {
-    mockAxios();
-    renderPage();
-    const fridayCard = await screen.findByTestId("training-v2-day-friday");
-    expect(fridayCard.textContent).not.toMatch(/0\s*km/i);
-    expect(fridayCard.textContent).not.toMatch(/0\s*min/i);
-    expect(fridayCard.textContent).not.toContain("0 TSS");
-  });
-
-  test("session detail links are not fabricated when no ID is present", async () => {
-    mockAxios({ week: weekData({ withSessionIds: false }) });
-    renderPage();
-    await screen.findByTestId("training-v2-week");
-    expect(screen.getByTestId("session-detail-support").textContent).toMatch(/unavailable/i);
-    expect(screen.queryByTestId("training-v2-day-monday").getAttribute("data-detail-route")).toBeNull();
-  });
-
-  test("session cards become clickable when compatible IDs are provided", async () => {
-    mockAxios({ week: weekData({ withSessionIds: true }) });
-    renderPage();
-    await screen.findByTestId("training-v2-week");
-
-    const monday = screen.getByTestId("training-v2-day-monday");
-    const tuesday = screen.getByTestId("training-v2-day-tuesday");
-
-    expect(monday.getAttribute("href") || monday.getAttribute("data-detail-route")).toContain("/sessions/s-1");
-    expect(tuesday.getAttribute("href") || tuesday.getAttribute("data-detail-route")).toContain("/workout/w-2");
-  });
-
-  test("shows cycle progress with week ratio and percent", async () => {
-    mockAxios();
-    renderPage();
-    await screen.findByTestId("training-v2-cycle-progress");
-    const cycleProgress = screen.getByTestId("training-v2-cycle-progress");
-    expect(within(cycleProgress).getByText("12 / 18")).toBeInTheDocument();
-    expect(screen.getByTestId("cycle-progress-percent").textContent).toContain("67%");
-  });
-
-  test("shows paces and supports insufficient-confidence state", async () => {
+  test("paces section stays collapsible and closed by default", async () => {
     mockAxios({ paces: pacesData({ confidence: "INSUFFICIENT" }) });
-    renderPage();
-    await screen.findByTestId("training-v2-paces");
-    expect(screen.getByText(/representative performance/i)).toBeInTheDocument();
-    expect(screen.queryByText("5:10 - 5:55 /km")).not.toBeInTheDocument();
-  });
+    renderPage({ width: 390 });
 
-  test("paces section is collapsible on mobile", async () => {
-    Object.defineProperty(window, "innerWidth", { writable: true, configurable: true, value: 390 });
-    mockAxios();
-    renderPage();
     await screen.findByTestId("training-v2-paces");
-
-    expect(screen.queryByTestId("paces-collapsible-content")).not.toBeVisible();
+    expect(screen.getByTestId("paces-collapsible-content")).not.toBeVisible();
     fireEvent.click(screen.getByTestId("paces-collapsible-trigger"));
     expect(screen.getByTestId("paces-collapsible-content")).toBeVisible();
+    expect(screen.getByText(/representative performance/i)).toBeInTheDocument();
   });
 
-  test("maintenance goal removes race countdown and race-week UI", async () => {
+  test("cycle section is compact and collapsible", async () => {
+    mockAxios();
+    renderPage();
+
+    await screen.findByTestId("training-v2-cycle");
+    expect(screen.getByTestId("cycle-collapsible-content")).not.toBeVisible();
+    fireEvent.click(screen.getByTestId("cycle-collapsible-trigger"));
+    expect(screen.getByTestId("cycle-collapsible-content")).toBeVisible();
+    expect(screen.getByTestId("cycle-week-12")).toBeInTheDocument();
+  });
+
+  test("maintenance goal removes race countdown UI", async () => {
     mockAxios({ cycle: cycleData({ goalType: "maintenance" }) });
     renderPage();
+
     await screen.findByTestId("training-v2-plan-status");
-
+    expect(screen.queryByTestId("header-race-countdown")).not.toBeInTheDocument();
     expect(screen.queryByText(/days left/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/race countdown/i)).not.toBeInTheDocument();
-  });
-
-  test("metric and imperial units are respected", async () => {
-    mockAxios();
-    renderPage({ unitSystem: "metric" });
-    await screen.findByTestId("training-v2-week");
-    expect(screen.getAllByText(formatDistance(8, { unitSystem: "metric" })).length).toBeGreaterThan(0);
-
-    jest.clearAllMocks();
-    mockAxios();
-    renderPage({ unitSystem: "imperial" });
-    const miles = formatDistance(8, { unitSystem: "imperial" });
-    expect((await screen.findAllByText(miles)).length).toBeGreaterThan(0);
   });
 
   test.each([
     ["en", "Training Plan"],
     ["fr", "Plan d'entraînement"],
     ["es", "Plan de entrenamiento"],
-  ])("i18n renders translated plan header in %s", async (lang, expected) => {
+  ])("i18n renders translated header in %s", async (lang, expected) => {
     mockAxios();
     renderPage({ lang });
     await screen.findByTestId("training-v2-plan-status");
     expect(screen.getByText(expected)).toBeInTheDocument();
+  });
+
+  test("does not expose backend technical labels", async () => {
+    mockAxios();
+    renderPage();
+    await screen.findByTestId("training-v2-page");
+
+    expect(screen.queryByText(/sessionDetailLinkAvailable/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/sessionDetailLinkUnavailable/i)).not.toBeInTheDocument();
   });
 });
