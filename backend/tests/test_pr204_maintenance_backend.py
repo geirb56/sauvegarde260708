@@ -1,4 +1,4 @@
-"""PR205 — Tests: Training Goal MAINTENANCE Backend Support.
+"""PR204 — Tests: Training Goal MAINTENANCE Backend Support.
 
 Contracts verified
 ------------------
@@ -28,7 +28,7 @@ from typing import Optional
 
 import pytest
 
-os.environ.setdefault("JWT_SECRET", "test-secret-pr205")
+os.environ.setdefault("JWT_SECRET", "test-secret-pr204")
 os.environ.setdefault("JWT_ALGORITHM", "HS256")
 os.environ.setdefault("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "60")
 os.environ.setdefault("ENVIRONMENT", "test")
@@ -171,13 +171,15 @@ def test_maintenance_plan_goal_no_target_time():
 
 def test_maintenance_plan_goal_rejects_race_date():
     """race_date must be rejected for MAINTENANCE"""
-    with pytest.raises((ValueError, Exception)):
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
         build_plan_goal(goal_type=GoalType.maintenance, race_date=date(2025, 4, 1))
 
 
 def test_maintenance_plan_goal_rejects_target_time():
     """target_time_seconds must be rejected for MAINTENANCE"""
-    with pytest.raises((ValueError, Exception)):
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
         build_plan_goal(goal_type=GoalType.maintenance, target_time_seconds=7200)
 
 
@@ -216,7 +218,7 @@ def test_maintenance_cycle_start_date_today():
     goal = build_plan_goal(goal_type=GoalType.maintenance)
     resp = build_cycle_calendar_response(goal, today, cycle_anchor_date=today)
     assert resp.cycle.mode == "continuous"
-    assert resp.cycle.cycle_start is not None
+    assert resp.cycle.start_date is not None
 
 
 # ---------------------------------------------------------------------------
