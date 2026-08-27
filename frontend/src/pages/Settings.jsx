@@ -1,870 +1,915 @@
-import { useState, useEffect } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import axios from "axios";
-import { Card, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useAuth } from "@/context/AuthContext";
 import { useLanguage } from "@/context/LanguageContext";
 import { useSubscription } from "@/context/SubscriptionContext";
 import { useUnitSystem } from "@/context/UnitContext";
-import { Globe, Info, Loader2, Check, Target, Calendar, Trash2, Clock, Route, Crown, Sparkles, Dumbbell } from "lucide-react";
+import { useGarminSyncProgress } from "@/hooks/useGarminSyncProgress";
+import { API_BASE_URL } from "@/config";
+import { CheckCircle2, Crown, Dumbbell, Globe, Loader2, Mail, Route, ShieldCheck, Watch } from "lucide-react";
 import { toast } from "sonner";
 
-import { API_BASE_URL } from "@/config";
 const API = API_BASE_URL;
 
-const DISTANCE_OPTIONS = ["5k", "10k", "semi", "marathon", "ultra"];
-const DISTANCE_KM = {
-  "5k": 5,
-  "10k": 10,
-  "semi": 21.1,
-  "marathon": 42.195,
-  "ultra": 50
-};
-
-// Options pour le plan d'entraînement
-const TRAINING_GOAL_OPTIONS = [
-  { value: "5K", label: "5 km" },
-  { value: "10K", label: "10 km" },
-  { value: "SEMI", label: "Semi-Marathon" },
-  { value: "MARATHON", label: "Marathon" },
-  { value: "ULTRA", label: "Ultra-Trail" },
+const GOAL_OPTIONS = [
+  { value: "5K", translationKey: "onboarding.goalLabels.5K", cycleValue: "5k", distanceType: "5k", hasRaceSettings: true },
+  { value: "10K", translationKey: "onboarding.goalLabels.10K", cycleValue: "10k", distanceType: "10k", hasRaceSettings: true },
+  { value: "SEMI", translationKey: "onboarding.goalLabels.SEMI", cycleValue: "half_marathon", distanceType: "semi", hasRaceSettings: true },
+  { value: "MARATHON", translationKey: "onboarding.goalLabels.MARATHON", cycleValue: "marathon", distanceType: "marathon", hasRaceSettings: true },
+  { value: "ULTRA", translationKey: "onboarding.goalLabels.ULTRA", cycleValue: "ultra", distanceType: "ultra", hasRaceSettings: true },
+  { value: "MAINTENANCE", translationKey: "onboarding.goalLabels.MAINTENANCE", cycleValue: "maintenance", distanceType: null, hasRaceSettings: false },
 ];
-const SESSIONS_OPTIONS = [3, 4, 5, 6];
+
+const SUPPORTED_SESSION_VALUES = [3, 4, 5, 6];
+const TERMINAL_SYNC_STATUSES = new Set(["complete", "partial_success", "failed"]);
+const SUPPORTED_CYCLE_STATUSES = new Set(["active", "upcoming", "completed"]);
+
+function normalizeCycleGoalToUi(goalType) {
+  if (!goalType || typeof goalType !== "string") return null;
+  const normalized = goalType.trim().toLowerCase();
+  return GOAL_OPTIONS.find((option) => option.cycleValue === normalized)?.value || null;
+}
+
+function getGoalOption(goalValue) {
+  return GOAL_OPTIONS.find((option) => option.value === goalValue) || null;
+}
+
+function parseDateInput(value) {
+  if (!value || typeof value !== "string") return "";
+  return value.split("T")[0];
+}
+
+function formatIsoDate(value, locale) {
+  if (!value || typeof value !== "string") return null;
+  const [year, month, day] = value.split("T")[0].split("-").map(Number);
+  if (!year || !month || !day) return value;
+  return new Intl.DateTimeFormat(locale, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(Date.UTC(year, month - 1, day)));
+}
+
+function formatTargetTime(minutes) {
+  if (!Number.isFinite(Number(minutes)) || Number(minutes) <= 0) return null;
+  const totalMinutes = Number(minutes);
+  const hours = Math.floor(totalMinutes / 60);
+  const mins = totalMinutes % 60;
+  if (hours <= 0) return `${mins} min`;
+  return `${hours}h${String(mins).padStart(2, "0")}`;
+}
+
+function getTargetTimeParts(minutes) {
+  if (!Number.isFinite(Number(minutes)) || Number(minutes) <= 0) {
+    return { hours: "", minutes: "" };
+  }
+  const totalMinutes = Number(minutes);
+  return {
+    hours: String(Math.floor(totalMinutes / 60)),
+    minutes: String(totalMinutes % 60).padStart(2, "0"),
+  };
+}
+
+function getSubscriptionCode({ subscription, isTrial, isPremium }) {
+  const raw = String(subscription?.status || "").trim().toLowerCase();
+  if (raw === "premium") return "PREMIUM";
+  if (raw === "trial") return "TRIAL";
+  if (raw === "free") return "FREE";
+  if (isPremium) return "PREMIUM";
+  if (isTrial) return "TRIAL";
+  return "FREE";
+}
+
+function getSubscriptionBadgeClass(code) {
+  if (code === "PREMIUM") return "bg-amber-500 text-black";
+  if (code === "TRIAL") return "bg-blue-500 text-white";
+  return "bg-muted text-foreground";
+}
+
+function StatusMessage({ status, message, testId }) {
+  if (!message) return null;
+
+  const colorClass = status === "error"
+    ? "text-destructive"
+    : status === "saved"
+      ? "text-emerald-400"
+      : "text-muted-foreground";
+
+  return (
+    <p className={`text-xs ${colorClass}`} data-testid={testId}>
+      {message}
+    </p>
+  );
+}
+
+function SectionCard({ icon: Icon, title, description, children, testId }) {
+  return (
+    <Card className="border-border bg-card" data-testid={testId}>
+      <CardContent className="p-5 space-y-4">
+        <div className="flex items-start gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-border bg-muted shrink-0">
+            <Icon className="h-5 w-5 text-primary" />
+          </div>
+          <div className="min-w-0">
+            <h2 className="text-base font-semibold text-foreground">{title}</h2>
+            <p className="text-sm text-muted-foreground">{description}</p>
+          </div>
+        </div>
+        {children}
+      </CardContent>
+    </Card>
+  );
+}
+
+function SettingRow({ label, value, helper, action, testId }) {
+  return (
+    <div className="rounded-xl border border-border bg-muted/30 p-4" data-testid={testId}>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">{label}</p>
+          <p className="mt-1 text-sm font-medium text-foreground break-words">{value}</p>
+          {helper ? <p className="mt-1 text-xs text-muted-foreground">{helper}</p> : null}
+        </div>
+        {action ? <div className="shrink-0">{action}</div> : null}
+      </div>
+    </div>
+  );
+}
 
 export default function Settings() {
+  const navigate = useNavigate();
+  const { user } = useAuth();
   const { t, lang, setLang } = useLanguage();
   const {
     subscription,
     isTrial,
     isPremium,
-    isFree,
     trialDaysRemaining,
-    refreshSubscription
+    loading: subscriptionLoading,
+    statusLabel,
   } = useSubscription();
   const { unitSystem, setUnitSystem } = useUnitSystem();
-  const navigate = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams();
 
-  // Premium state
-  const [processingPayment, setProcessingPayment] = useState(false);
-  
-  // Goal state
-  const [goal, setGoal] = useState(null);
-  const [loadingGoal, setLoadingGoal] = useState(true);
-  const [eventName, setEventName] = useState("");
-  const [eventDate, setEventDate] = useState("");
-  const [distanceType, setDistanceType] = useState("marathon");
-  const [targetHours, setTargetHours] = useState("");
-  const [targetMinutes, setTargetMinutes] = useState("");
-  const [savingGoal, setSavingGoal] = useState(false);
-
-  // Training Plan state
+  const [planLoading, setPlanLoading] = useState(true);
+  const [planError, setPlanError] = useState("");
   const [trainingGoal, setTrainingGoal] = useState(null);
   const [sessionsPerWeek, setSessionsPerWeek] = useState(null);
-  const [loadingTrainingPlan, setLoadingTrainingPlan] = useState(true);
-  const [updatingTrainingPlan, setUpdatingTrainingPlan] = useState(false);
+  const [planStartDate, setPlanStartDate] = useState(null);
+  const [cycleStatus, setCycleStatus] = useState(null);
+  const [userGoal, setUserGoal] = useState(null);
+  const [goalForm, setGoalForm] = useState({ eventName: "", eventDate: "", targetHours: "", targetMinutes: "" });
+  const [planAction, setPlanAction] = useState({ status: "idle", message: "" });
+
+  const [garminLoading, setGarminLoading] = useState(true);
+  const [garminError, setGarminError] = useState("");
+  const [garminStatus, setGarminStatus] = useState(null);
+  const [garminAction, setGarminAction] = useState({ status: "idle", message: "" });
+  const [showReconnectForm, setShowReconnectForm] = useState(false);
+  const [garminUsername, setGarminUsername] = useState("");
+  const [garminPassword, setGarminPassword] = useState("");
+  const [garminBusyAction, setGarminBusyAction] = useState("");
+
+  const garminSyncStatusCode = typeof garminStatus?.sync_status?.status === "string"
+    ? garminStatus.sync_status.status.trim()
+    : "";
+  const shouldStreamGarminProgress = Boolean(
+    garminStatus?.connected
+    && garminStatus?.sync_status
+    && garminSyncStatusCode
+    && !TERMINAL_SYNC_STATUSES.has(garminSyncStatusCode)
+  );
+  const { progress: garminProgress } = useGarminSyncProgress({ enabled: shouldStreamGarminProgress });
+
+  const locale = lang === "fr" ? "fr-FR" : lang === "es" ? "es-ES" : "en-US";
+  const selectedGoalOption = useMemo(() => getGoalOption(trainingGoal), [trainingGoal]);
+  const effectiveGarminStatus = garminProgress || garminStatus?.sync_status || null;
+  const subscriptionCode = getSubscriptionCode({ subscription, isTrial, isPremium });
+
+  const loadPlanSettings = useCallback(async () => {
+    setPlanLoading(true);
+    setPlanError("");
+    const [cycleV2Result, weekV2Result, userGoalResult] = await Promise.allSettled([
+      axios.get(`${API}/training/v2/cycle`),
+      axios.get(`${API}/training/v2/week`),
+      axios.get(`${API}/user/goal`),
+    ]);
+
+    const nextError = cycleV2Result.status === "rejected" || weekV2Result.status === "rejected"
+      ? "settingsV2.plan.loadError"
+      : "";
+
+    if (cycleV2Result.status === "fulfilled") {
+      const cycleData = cycleV2Result.value.data;
+      setTrainingGoal(normalizeCycleGoalToUi(cycleData?.goal?.goal_type));
+      setPlanStartDate(cycleData?.cycle?.start_date || null);
+      setCycleStatus(cycleData?.cycle?.status || null);
+    } else {
+      setTrainingGoal(null);
+      setPlanStartDate(null);
+      setCycleStatus(null);
+    }
+
+    if (weekV2Result.status === "fulfilled") {
+      const sessionCount = weekV2Result.value.data?.weekly_target?.session_count;
+      setSessionsPerWeek(SUPPORTED_SESSION_VALUES.includes(sessionCount) ? sessionCount : null);
+    } else {
+      setSessionsPerWeek(null);
+    }
+
+    if (userGoalResult.status === "fulfilled" && userGoalResult.value.data) {
+      const loadedGoal = userGoalResult.value.data;
+      const { hours, minutes } = getTargetTimeParts(loadedGoal.target_time_minutes);
+      setUserGoal(loadedGoal);
+      setGoalForm({
+        eventName: loadedGoal.event_name || "",
+        eventDate: parseDateInput(loadedGoal.event_date),
+        targetHours: hours,
+        targetMinutes: minutes,
+      });
+    } else {
+      setUserGoal(null);
+      setGoalForm({
+        eventName: "",
+        eventDate: "",
+        targetHours: "",
+        targetMinutes: "",
+      });
+    }
+
+    setPlanError(nextError);
+    setPlanLoading(false);
+    return nextError === "";
+  }, []);
+
+  const loadGarminStatus = useCallback(async () => {
+    setGarminLoading(true);
+    setGarminError("");
+    try {
+      const res = await axios.get(`${API}/garmin/status`);
+      setGarminStatus(res.data || null);
+    } catch (error) {
+      console.error("Failed to load Garmin status:", error);
+      setGarminStatus(null);
+      setGarminError("settingsV2.garmin.loadError");
+    } finally {
+      setGarminLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    loadGoal();
-    loadTrainingPlan();
+    loadPlanSettings();
+    loadGarminStatus();
+  }, [loadGarminStatus, loadPlanSettings]);
 
-    // Clean up any stale legacy checkout query params that may linger in the URL
-    const sessionId = searchParams.get("session_id");
-    const premiumParam = searchParams.get("premium");
-    const subscriptionParam = searchParams.get("subscription");
-
-    if (sessionId || premiumParam || subscriptionParam) {
-      // If a payment was cancelled show a toast; otherwise silently clean up
-      if (premiumParam === "cancelled" || subscriptionParam === "cancelled") {
-        toast.info(t("settingsExtended.paymentCancelled"));
-      }
-      setSearchParams({});
-    }
-  }, [searchParams]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const loadTrainingPlan = async () => {
+  const handleSetTrainingGoal = async (goalValue) => {
+    setPlanAction({ status: "saving", message: t("settingsV2.common.saving") });
     try {
-      const res = await axios.get(`${API}/training/full-cycle`);
-      if (res.data) {
-        setTrainingGoal(res.data.goal || "SEMI");
-        setSessionsPerWeek(res.data.sessions_per_week || 4);
+      await axios.post(`${API}/training/set-goal?goal=${encodeURIComponent(goalValue)}`, {});
+      const reloadSucceeded = await loadPlanSettings();
+      if (!reloadSucceeded) {
+        setPlanAction({ status: "error", message: t("settingsV2.plan.loadError") });
+        toast.error(t("settingsV2.plan.loadError"));
+        return;
       }
-    } catch (error) {
-      console.error("Failed to load training plan:", error);
-      setTrainingGoal("SEMI");
-      setSessionsPerWeek(4);
-    } finally {
-      setLoadingTrainingPlan(false);
-    }
-  };
-
-  // ── Paddle checkout ──────────────────────────────────────────────────────
-  // The frontend NEVER decides that the user is Premium.
-  // Premium is activated server-side after Paddle sends a verified webhook.
-  // After the overlay closes with success, we refresh the subscription state.
-  const handleSubscribe = async () => {
-    setProcessingPayment(true);
-    try {
-      // 1. Create a Paddle transaction (identity from JWT, server-side)
-      const res = await axios.post(`${API}/subscription/paddle/checkout`, {});
-      const { transaction_id, paddle_environment, paddle_client_token } = res.data;
-
-      if (!transaction_id || !paddle_client_token) {
-        throw new Error("Invalid checkout configuration");
-      }
-
-      // 2. Initialize Paddle.js
-      const { initializePaddle } = await import("@paddle/paddle-js");
-      const paddle = await initializePaddle({
-        environment: paddle_environment === "production" ? "production" : "sandbox",
-        token: paddle_client_token,
+      setPlanAction({
+        status: "saved",
+        message: t("settingsV2.plan.goalUpdated").replace("{goal}", t(getGoalOption(goalValue)?.translationKey || "trainingV2.unknownGoal")),
       });
-      if (!paddle) throw new Error("Failed to initialize Paddle.js");
-
-      // 3. Open Paddle checkout overlay
-      paddle.Checkout.open({
-        transactionId: transaction_id,
-        settings: { displayMode: "overlay", theme: "dark" },
-        events: {
-          onPaymentSuccess: () => {
-            toast.success(`🎉 ${t("settingsExtended.premiumActivated") || "Premium activé !"}`);
-            refreshSubscription();
-            setProcessingPayment(false);
-          },
-          onCheckoutError: (err) => {
-            console.error("[Settings] Paddle checkout error:", err);
-            toast.error(t("settingsExtended.paymentError") || "Checkout failed");
-            setProcessingPayment(false);
-          },
-          onCheckoutClose: () => {
-            setProcessingPayment(false);
-          },
-        },
-      });
+      toast.success(t("settingsV2.plan.goalUpdated").replace("{goal}", t(getGoalOption(goalValue)?.translationKey || "trainingV2.unknownGoal")));
     } catch (error) {
-      console.error("[Settings] Checkout error:", error);
-      toast.error(t("settingsExtended.paymentError") || "Could not start checkout");
-      setProcessingPayment(false);
+      console.error("Failed to update training goal:", error);
+      setPlanAction({ status: "error", message: t("settingsV2.plan.goalUpdateError") });
+      toast.error(t("settingsV2.plan.goalUpdateError"));
     }
   };
 
-  const handleSetTrainingGoal = async (goal) => {
-    setUpdatingTrainingPlan(true);
+  const handleSetSessions = async (value) => {
+    setPlanAction({ status: "saving", message: t("settingsV2.common.saving") });
     try {
-      await axios.post(`${API}/training/set-goal?goal=${goal}`, {});
-      setTrainingGoal(goal);
-      toast.success(t("settingsExtended.goalSetWithName").replace("{goal}", goal));
-    } catch (err) {
-      toast.error(t("common.error"));
-    } finally {
-      setUpdatingTrainingPlan(false);
-    }
-  };
-
-  const handleSetSessionsPerWeek = async (sessions) => {
-    setUpdatingTrainingPlan(true);
-    try {
-      await axios.post(`${API}/training/refresh?sessions=${sessions}`, {});
-      setSessionsPerWeek(sessions);
-      toast.success(`${sessions} ${t("settingsExtended.sessionsPerWeekSet")}`);
-    } catch (err) {
-      toast.error(t("common.error"));
-    } finally {
-      setUpdatingTrainingPlan(false);
-    }
-  };
-
-  const loadGoal = async () => {
-    try {
-      const res = await axios.get(`${API}/user/goal`);
-      if (res.data) {
-        setGoal(res.data);
-        setEventName(res.data.event_name);
-        setEventDate(res.data.event_date);
-        setDistanceType(res.data.distance_type || "marathon");
-        if (res.data.target_time_minutes) {
-          setTargetHours(Math.floor(res.data.target_time_minutes / 60).toString());
-          setTargetMinutes((res.data.target_time_minutes % 60).toString().padStart(2, "0"));
-        }
+      await axios.post(`${API}/training/refresh?sessions=${encodeURIComponent(value)}`, {});
+      const reloadSucceeded = await loadPlanSettings();
+      if (!reloadSucceeded) {
+        setPlanAction({ status: "error", message: t("settingsV2.plan.loadError") });
+        toast.error(t("settingsV2.plan.loadError"));
+        return;
       }
+      setPlanAction({
+        status: "saved",
+        message: t("settingsV2.plan.sessionsUpdated").replace("{count}", String(value)),
+      });
+      toast.success(t("settingsV2.plan.sessionsUpdated").replace("{count}", String(value)));
     } catch (error) {
-      console.error("Failed to load goal:", error);
-    } finally {
-      setLoadingGoal(false);
+      console.error("Failed to update sessions per week:", error);
+      setPlanAction({ status: "error", message: t("settingsV2.plan.sessionsUpdateError") });
+      toast.error(t("settingsV2.plan.sessionsUpdateError"));
     }
   };
 
-  const handleSaveGoal = async () => {
-    if (!eventName.trim() || !eventDate || !distanceType) {
-      toast.error(t("settingsExtended.fillRequiredFields"));
+  const handleGoalFormChange = (key, value) => {
+    if (planAction.status !== "idle") {
+      setPlanAction({ status: "idle", message: "" });
+    }
+    setGoalForm((current) => ({ ...current, [key]: value }));
+  };
+
+  const handleSaveRaceSettings = async () => {
+    if (!selectedGoalOption?.hasRaceSettings) return;
+
+    if (!goalForm.eventName.trim() || !goalForm.eventDate) {
+      setPlanAction({ status: "error", message: t("settingsV2.plan.raceValidationError") });
+      toast.error(t("settingsV2.plan.raceValidationError"));
       return;
     }
-    
-    // Calculate target time in minutes
-    let targetTimeMinutes = null;
-    if (targetHours || targetMinutes) {
-      const hours = parseInt(targetHours) || 0;
-      const mins = parseInt(targetMinutes) || 0;
-      if (hours > 0 || mins > 0) {
-        targetTimeMinutes = hours * 60 + mins;
-      }
-    }
-    
-    setSavingGoal(true);
+
+    const hours = parseInt(goalForm.targetHours || "0", 10) || 0;
+    const minutes = parseInt(goalForm.targetMinutes || "0", 10) || 0;
+    const totalMinutes = hours > 0 || minutes > 0 ? (hours * 60) + minutes : null;
+
+    setPlanAction({ status: "saving", message: t("settingsV2.common.saving") });
     try {
-      const res = await axios.post(`${API}/user/goal`, {
-        event_name: eventName.trim(),
-        event_date: eventDate,
-        distance_type: distanceType,
-        target_time_minutes: targetTimeMinutes
+      await axios.post(`${API}/user/goal`, {
+        event_name: goalForm.eventName.trim(),
+        event_date: goalForm.eventDate,
+        distance_type: selectedGoalOption.distanceType,
+        target_time_minutes: totalMinutes,
       });
-      setGoal(res.data.goal);
-      toast.success(t("settings.goalSaved"));
+      const reloadSucceeded = await loadPlanSettings();
+      if (!reloadSucceeded) {
+        setPlanAction({ status: "error", message: t("settingsV2.plan.loadError") });
+        toast.error(t("settingsV2.plan.loadError"));
+        return;
+      }
+      setPlanAction({ status: "saved", message: t("settingsV2.plan.raceSaved") });
+      toast.success(t("settingsV2.plan.raceSaved"));
     } catch (error) {
-      console.error("Failed to save goal:", error);
-      toast.error(t("common.error"));
-    } finally {
-      setSavingGoal(false);
+      console.error("Failed to save race settings:", error);
+      setPlanAction({ status: "error", message: t("settingsV2.plan.raceSaveError") });
+      toast.error(t("settingsV2.plan.raceSaveError"));
     }
   };
 
-  const handleDeleteGoal = async () => {
+  const handleConnectGarmin = async (event) => {
+    event.preventDefault();
+
+    if (!garminUsername.trim() || !garminPassword) {
+      setGarminAction({ status: "error", message: t("onboarding.garminCredsRequired") });
+      toast.error(t("onboarding.garminCredsRequired"));
+      return;
+    }
+
+    setGarminBusyAction("connect");
+    setGarminAction({ status: "saving", message: t("settingsV2.common.saving") });
     try {
-      await axios.delete(`${API}/user/goal`);
-      setGoal(null);
-      setEventName("");
-      setEventDate("");
-      setDistanceType("marathon");
-      setTargetHours("");
-      setTargetMinutes("");
-      toast.success(t("settings.goalDeleted"));
+      const res = await axios.post(`${API}/garmin/connect`, {
+        garmin_username: garminUsername.trim(),
+        garmin_password: garminPassword,
+      });
+
+      if (res.data?.status === "connected") {
+        setGarminPassword("");
+        setShowReconnectForm(false);
+        await loadGarminStatus();
+        setGarminAction({ status: "saved", message: t("onboarding.garminConnected") });
+        toast.success(t("onboarding.garminConnected"));
+        return;
+      }
+
+      if (res.data?.status === "mfa_required") {
+        setGarminPassword("");
+        setGarminAction({ status: "error", message: t("onboarding.garminMfa") });
+        toast.error(t("onboarding.garminMfa"));
+        return;
+      }
+
+      setGarminAction({ status: "error", message: t("onboarding.garminFailed") });
+      toast.error(t("onboarding.garminFailed"));
     } catch (error) {
-      console.error("Failed to delete goal:", error);
-      toast.error(t("common.error"));
+      console.error("Failed to connect Garmin:", error);
+      setGarminAction({ status: "error", message: t("onboarding.garminFailed") });
+      toast.error(t("onboarding.garminFailed"));
+    } finally {
+      setGarminBusyAction("");
     }
   };
 
-  const formatLastSync = (isoString) => {
-    if (!isoString) return t("common.never");
-    const date = new Date(isoString);
-    const now = new Date();
-    const diffMs = now - date;
-    const diffMins = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMins / 60);
-    const diffDays = Math.floor(diffHours / 24);
-    const locale = lang === "fr" ? "fr-FR" : "en-US";
-    if (diffMins < 1) return t("common.justNow");
-    if (diffMins < 60) return t("common.timeAgoMins").replace("{n}", diffMins);
-    if (diffHours < 24) return t("common.timeAgoHours").replace("{n}", diffHours);
-    if (diffDays < 7) return t("common.timeAgoDays").replace("{n}", diffDays);
-    return date.toLocaleDateString(locale, { day: "numeric", month: "short" });
+  const handleSyncGarmin = async () => {
+    setGarminBusyAction("sync");
+    setGarminAction({ status: "saving", message: t("settingsV2.garmin.syncing") });
+    try {
+      const res = await axios.post(`${API}/garmin/sync`, {});
+      if (res.data?.status === "unavailable") {
+        throw new Error(res.data?.detail || "sync unavailable");
+      }
+      await loadGarminStatus();
+      setGarminAction({ status: "saved", message: t("settingsV2.garmin.syncQueued") });
+      toast.success(t("settingsV2.garmin.syncQueued"));
+    } catch (error) {
+      console.error("Failed to start Garmin sync:", error);
+      setGarminAction({ status: "error", message: t("onboarding.garminSyncFailed") });
+      toast.error(t("onboarding.garminSyncFailed"));
+    } finally {
+      setGarminBusyAction("");
+    }
   };
 
-  const calculateDaysUntil = (dateStr) => {
-    if (!dateStr) return null;
-    const eventDate = new Date(dateStr);
-    const today = new Date();
-    const diffTime = eventDate - today;
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-    return diffDays > 0 ? diffDays : null;
+  const handleDisconnectGarmin = async () => {
+    setGarminBusyAction("disconnect");
+    setGarminAction({ status: "saving", message: t("settingsV2.common.saving") });
+    try {
+      await axios.post(`${API}/garmin/disconnect`, {});
+      setGarminPassword("");
+      setShowReconnectForm(false);
+      await loadGarminStatus();
+      setGarminAction({ status: "saved", message: t("settingsV2.garmin.disconnected") });
+      toast.success(t("settingsV2.garmin.disconnected"));
+    } catch (error) {
+      console.error("Failed to disconnect Garmin:", error);
+      setGarminAction({ status: "error", message: t("settingsV2.garmin.disconnectError") });
+      toast.error(t("settingsV2.garmin.disconnectError"));
+    } finally {
+      setGarminBusyAction("");
+    }
   };
 
-  const formatTargetTime = (minutes) => {
-    if (!minutes) return null;
-    const hours = Math.floor(minutes / 60);
-    const mins = minutes % 60;
-    return `${hours}h${mins.toString().padStart(2, "0")}`;
-  };
-
-  const daysUntil = goal ? calculateDaysUntil(goal.event_date) : null;
+  const currentGoalLabel = selectedGoalOption
+    ? t(selectedGoalOption.translationKey)
+    : t("settingsV2.common.missing");
+  const currentSessionsLabel = sessionsPerWeek
+    ? t("settingsV2.plan.sessionsValue").replace("{count}", String(sessionsPerWeek))
+    : t("settingsV2.common.missing");
+  const planStartLabel = planStartDate
+    ? formatIsoDate(planStartDate, locale)
+    : t("settingsV2.common.missing");
+  const raceDateLabel = userGoal?.event_date
+    ? formatIsoDate(userGoal.event_date, locale)
+    : t("settingsV2.common.missing");
+  const targetTimeLabel = userGoal?.target_time_minutes
+    ? formatTargetTime(userGoal.target_time_minutes)
+    : t("settingsV2.common.optional");
+  const garminConnected = Boolean(garminStatus?.connected);
+  const garminLastSyncLabel = garminStatus?.last_sync
+    ? formatIsoDate(garminStatus.last_sync, locale)
+    : t("settingsV2.garmin.never");
+  const garminActivityCount = Number.isFinite(Number(garminStatus?.activity_count))
+    ? String(garminStatus.activity_count)
+    : "0";
+  const showRaceForm = Boolean(selectedGoalOption?.hasRaceSettings);
 
   return (
-    <div className="p-6 md:p-8 pb-24 md:pb-8" data-testid="settings-page">
-      {/* Header */}
-      <div className="mb-8">
-        <h1 className="font-heading text-2xl md:text-3xl uppercase tracking-tight font-bold mb-1">
-          {t("settings.title")}
-        </h1>
-        <p className="font-mono text-xs uppercase tracking-widest text-muted-foreground">
-          {t("settings.subtitle")}
-        </p>
-      </div>
+    <div className="p-4 pb-24 md:p-6 md:pb-8" data-testid="settings-page">
+      <div className="mx-auto max-w-4xl space-y-4">
+        <div>
+          <h1 className="text-2xl font-semibold text-foreground">{t("settings.title")}</h1>
+          <p className="text-sm text-muted-foreground">{t("settingsV2.subtitle")}</p>
+        </div>
 
-      <div className="space-y-6">
-        {/* Units Section */}
-        <Card className="bg-card border-border">
-          <CardContent className="p-6">
-            <div className="flex items-start gap-4">
-              <div className="w-10 h-10 flex items-center justify-center bg-muted border border-border flex-shrink-0">
-                <Route className="w-5 h-5 text-primary" />
-              </div>
-              <div className="flex-1">
-                <h2 className="font-heading text-lg uppercase tracking-tight font-semibold mb-1">
-                  {t("settingsExtended.units")}
-                </h2>
-                <p className="font-mono text-xs text-muted-foreground mb-4">
-                  {t("settingsExtended.unitSystemDesc")}
-                </p>
+        <SectionCard
+          icon={Dumbbell}
+          title={t("settingsV2.plan.title")}
+          description={t("settingsV2.plan.description")}
+          testId="settings-plan-section"
+        >
+          {planLoading ? (
+            <div className="space-y-3" data-testid="settings-plan-loading">
+              <Skeleton className="h-20 w-full" />
+              <Skeleton className="h-20 w-full" />
+              <Skeleton className="h-20 w-full" />
+            </div>
+          ) : planError ? (
+            <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive" data-testid="settings-plan-error">
+              {t(planError)}
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <SettingRow
+                label={t("settingsV2.plan.currentGoal")}
+                value={currentGoalLabel}
+                helper={cycleStatus && SUPPORTED_CYCLE_STATUSES.has(cycleStatus) ? t(`settingsV2.plan.statusValues.${cycleStatus}`) : null}
+                testId="settings-current-goal"
+              />
 
-                <div className="flex flex-col sm:flex-row gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setUnitSystem("metric")}
-                    className={`flex-1 p-4 border font-mono text-sm uppercase tracking-wider text-left transition-colors ${
-                      unitSystem === "metric"
-                        ? "border-primary bg-primary/10 text-primary"
-                        : "border-border text-muted-foreground hover:border-primary/30 hover:text-foreground"
-                    }`}
-                    data-testid="units-metric"
-                  >
-                    <span className="block text-xs mb-1">
-                      {t("settingsExtended.metric")}
-                    </span>
-                    <span className="block text-lg mb-1">km, min/km</span>
-                    <span className="block text-[10px] uppercase text-muted-foreground">
-                      km, km/h, m
-                    </span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setUnitSystem("imperial")}
-                    className={`flex-1 p-4 border font-mono text-sm uppercase tracking-wider text-left transition-colors ${
-                      unitSystem === "imperial"
-                        ? "border-primary bg-primary/10 text-primary"
-                        : "border-border text-muted-foreground hover:border-primary/30 hover:text-foreground"
-                    }`}
-                    data-testid="units-imperial"
-                  >
-                    <span className="block text-xs mb-1">
-                      {t("settingsExtended.imperial")}
-                    </span>
-                    <span className="block text-lg mb-1">mi, min/mi</span>
-                    <span className="block text-[10px] uppercase text-muted-foreground">
-                      mi, mph, ft
-                    </span>
-                  </button>
+              <div className="rounded-xl border border-border bg-muted/30 p-4" data-testid="settings-goal-options">
+                <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">{t("settingsV2.plan.changeGoal")}</p>
+                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  {GOAL_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={`rounded-xl border px-3 py-3 text-sm font-medium transition-colors ${
+                        trainingGoal === option.value
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-border bg-card text-foreground hover:border-primary/40"
+                      }`}
+                      data-testid={`training-goal-btn-${option.value}`}
+                      disabled={planAction.status === "saving"}
+                      onClick={() => handleSetTrainingGoal(option.value)}
+                    >
+                      {t(option.translationKey)}
+                    </button>
+                  ))}
                 </div>
               </div>
-            </div>
-          </CardContent>
-        </Card>
 
-        {/* Training Goal Section */}
-        <Card className="bg-card border-border">
-          <CardContent className="p-6">
-            <div className="flex items-start gap-4">
-              <div className="w-10 h-10 flex items-center justify-center bg-muted border border-border flex-shrink-0">
-                <Target className="w-5 h-5 text-primary" />
-              </div>
-              <div className="flex-1">
-                <h2 className="font-heading text-lg uppercase tracking-tight font-semibold mb-1">
-                  {t("settings.goal")}
-                </h2>
-                <p className="font-mono text-xs text-muted-foreground mb-4">
-                  {t("settings.goalDesc")}
-                </p>
-                
-                {loadingGoal ? (
-                  <div className="flex items-center gap-2 text-muted-foreground">
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span className="font-mono text-xs">{t("common.loading")}</span>
-                  </div>
-                ) : goal && daysUntil ? (
-                  <div className="space-y-4">
-                    {/* Current Goal Display */}
-                    <div className="p-4 bg-primary/5 border border-primary/20 rounded-lg">
-                      <div className="flex items-center justify-between mb-3">
-                        <span className="font-mono text-sm font-semibold text-primary">
-                          {goal.event_name}
-                        </span>
-                        <Button
-                          onClick={handleDeleteGoal}
-                          variant="ghost"
-                          size="sm"
-                          className="text-muted-foreground hover:text-destructive h-8 w-8 p-0"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
-                      </div>
-                      
-                      {/* Goal Details Grid */}
-                      <div className="grid grid-cols-2 gap-3 mb-3">
-                        <div className="flex items-center gap-2 text-muted-foreground">
-                          <Route className="w-4 h-4" />
-                          <span className="font-mono text-xs">
-                            {t(`settings.distances.${goal.distance_type}`)} ({goal.distance_km}km)
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-2 text-muted-foreground">
-                          <Calendar className="w-4 h-4" />
-                          <span className="font-mono text-xs">
-                            {new Date(goal.event_date).toLocaleDateString(
-                              lang === "fr" ? "fr-FR" : "en-US",
-                              { day: "numeric", month: "short", year: "numeric" }
-                            )}
-                          </span>
-                        </div>
-                        {goal.target_time_minutes && (
-                          <div className="flex items-center gap-2 text-muted-foreground">
-                            <Clock className="w-4 h-4" />
-                            <span className="font-mono text-xs">
-                              {t("settings.targetTime")}: {formatTargetTime(goal.target_time_minutes)}
-                            </span>
-                          </div>
-                        )}
-                        {goal.target_pace && (
-                          <div className="flex items-center gap-2 text-primary">
-                            <Target className="w-4 h-4" />
-                            <span className="font-mono text-xs font-semibold">
-                              {t("settings.targetPace")}: {goal.target_pace}/km
-                            </span>
-                          </div>
-                        )}
-                      </div>
-                      
-                      {/* Days Until */}
-                      <div className="pt-3 border-t border-primary/20">
-                        <p className="font-mono text-2xl font-bold text-primary">
-                          {daysUntil} <span className="text-sm font-normal">{t("settings.daysUntil")}</span>
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    {/* Goal Form */}
-                    <div className="space-y-3">
-                      {/* Event Name */}
-                      <div>
-                        <label className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground mb-1 block">
-                          {t("settings.eventName")} *
-                        </label>
-                        <Input
-                          value={eventName}
-                          onChange={(e) => setEventName(e.target.value)}
-                          placeholder={t("settingsExtended.placeholderGoalExample")}
-                          className="bg-muted border-border font-mono text-sm"
-                          data-testid="goal-name-input"
-                        />
-                      </div>
-                      
-                      {/* Distance Type */}
-                      <div>
-                        <label className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground mb-1 block">
-                          {t("settings.distance")} *
-                        </label>
-                        <Select value={distanceType} onValueChange={setDistanceType}>
-                          <SelectTrigger className="bg-muted border-border font-mono text-sm" data-testid="goal-distance-select">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {DISTANCE_OPTIONS.map((dist) => (
-                              <SelectItem key={dist} value={dist} className="font-mono text-sm">
-                                {t(`settings.distances.${dist}`)} ({DISTANCE_KM[dist]}km)
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      
-                      {/* Event Date */}
-                      <div>
-                        <label className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground mb-1 block">
-                          {t("settings.eventDate")} *
-                        </label>
-                        <Input
-                          type="date"
-                          value={eventDate}
-                          onChange={(e) => setEventDate(e.target.value)}
-                          min={new Date().toISOString().split('T')[0]}
-                          className="bg-muted border-border font-mono text-sm"
-                          data-testid="goal-date-input"
-                        />
-                      </div>
-                      
-                      {/* Target Time */}
-                      <div>
-                        <label className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground mb-1 block">
-                          {t("settings.targetTime")}
-                        </label>
-                        <p className="font-mono text-[9px] text-muted-foreground mb-2">
-                          {t("settings.targetTimeDesc")}
-                        </p>
-                        <div className="flex items-center gap-2">
-                          <Input
-                            type="number"
-                            min="0"
-                            max="24"
-                            value={targetHours}
-                            onChange={(e) => setTargetHours(e.target.value)}
-                            placeholder="0"
-                            className="bg-muted border-border font-mono text-sm w-16 sm:w-20 text-center"
-                            data-testid="goal-hours-input"
-                          />
-                          <span className="font-mono text-sm text-muted-foreground">h</span>
-                          <Input
-                            type="number"
-                            min="0"
-                            max="59"
-                            value={targetMinutes}
-                            onChange={(e) => setTargetMinutes(e.target.value)}
-                            placeholder="00"
-                            className="bg-muted border-border font-mono text-sm w-16 sm:w-20 text-center"
-                            data-testid="goal-minutes-input"
-                          />
-                          <span className="font-mono text-sm text-muted-foreground">min</span>
-                        </div>
-                      </div>
-                    </div>
-                    
-                    <Button
-                      onClick={handleSaveGoal}
-                      disabled={savingGoal || !eventName.trim() || !eventDate || !distanceType}
-                      data-testid="save-goal"
-                      className="bg-primary text-white hover:bg-primary/90 rounded-none uppercase font-bold tracking-wider text-xs h-9 px-4 flex items-center gap-2"
+              <SettingRow
+                label={t("settingsV2.plan.sessions")}
+                value={currentSessionsLabel}
+                helper={t("settingsV2.plan.sessionsHelp")}
+                testId="settings-sessions-current"
+              />
+
+              <div className="rounded-xl border border-border bg-muted/30 p-4" data-testid="settings-sessions-options">
+                <div className="grid grid-cols-4 gap-2">
+                  {SUPPORTED_SESSION_VALUES.map((value) => (
+                    <button
+                      key={value}
+                      type="button"
+                      className={`rounded-xl border px-3 py-3 text-sm font-semibold transition-colors ${
+                        sessionsPerWeek === value
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-border bg-card text-foreground hover:border-primary/40"
+                      }`}
+                      data-testid={`sessions-per-week-btn-${value}`}
+                      disabled={planAction.status === "saving"}
+                      onClick={() => handleSetSessions(value)}
                     >
-                      {savingGoal ? (
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                      ) : (
-                        <Check className="w-4 h-4" />
-                      )}
-                      {t("settings.saveGoal")}
-                    </Button>
-                  </div>
-                )}
+                      {value}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
-          </CardContent>
-        </Card>
 
-        {/* Training Plan Section - Objectif & Séances/semaine */}
-        <Card className="bg-card border-border">
-          <CardContent className="p-6">
-            <div className="flex items-start gap-4">
-              <div className="w-10 h-10 flex items-center justify-center bg-muted border border-border flex-shrink-0">
-                <Dumbbell className="w-5 h-5 text-primary" />
-              </div>
-              <div className="flex-1">
-                <h2 className="font-heading text-lg uppercase tracking-tight font-semibold mb-1">
-                  {t("settingsExtended.trainingPlan")}
-                </h2>
-                <p className="font-mono text-xs text-muted-foreground mb-4">
-                  {t("settingsExtended.trainingPlanDesc")}
-                </p>
-                <Button
-                  variant="outline"
-                  className="mb-4 uppercase text-xs tracking-wider"
-                  onClick={() => navigate("/onboarding")}
-                  data-testid="start-onboarding"
-                >
-                  Start onboarding
-                </Button>
-                
-                {loadingTrainingPlan ? (
-                  <div className="flex items-center gap-2 text-muted-foreground">
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span className="font-mono text-xs">{t("common.loading")}</span>
+              <SettingRow
+                label={t("settingsV2.plan.startDate")}
+                value={planStartLabel}
+                helper={t("settingsV2.plan.startDateReadOnly")}
+                testId="settings-plan-start-date"
+              />
+
+              {showRaceForm ? (
+                <div className="space-y-4 rounded-xl border border-border bg-muted/30 p-4" data-testid="settings-race-fields">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">{t("settingsV2.plan.raceSection")}</p>
+                    <p className="mt-1 text-sm text-muted-foreground">{t("settingsV2.plan.raceSectionHelp")}</p>
                   </div>
-                ) : (
-                  <div className="space-y-4">
-                    {/* Objectif de distance */}
+
+                  <SettingRow
+                    label={t("settingsV2.plan.currentRaceDate")}
+                    value={raceDateLabel}
+                    helper={userGoal?.event_name || t("settingsV2.plan.raceDetailsMissing")}
+                    testId="settings-race-date-current"
+                  />
+
+                  <div className="space-y-3">
                     <div>
-                      <label className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground mb-2 block">
-                        {t("settingsExtended.distanceGoal")}
+                      <label htmlFor="settings-race-name" className="mb-1 block text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                        {t("settingsV2.plan.raceName")}
                       </label>
-                      <div className="flex flex-wrap gap-2">
-                        {TRAINING_GOAL_OPTIONS.map((opt) => (
-                          <button
-                            key={opt.value}
-                            onClick={() => handleSetTrainingGoal(opt.value)}
-                            disabled={updatingTrainingPlan}
-                            className={`px-3 py-2 rounded-lg text-xs font-bold transition-all ${
-                              trainingGoal === opt.value 
-                                ? "text-white" 
-                                : "text-muted-foreground hover:text-foreground"
-                            }`}
-                            style={{
-                              background: trainingGoal === opt.value 
-                                ? "var(--accent-green)" 
-                                : "var(--muted)",
-                              border: `1px solid ${trainingGoal === opt.value ? "var(--accent-green)" : "var(--border)"}`,
-                              color: trainingGoal === opt.value ? "#0a0e1a" : undefined
-                            }}
-                            data-testid={`training-goal-btn-${opt.value}`}
-                          >
-                            {updatingTrainingPlan && trainingGoal !== opt.value ? (
-                              <span className="flex items-center gap-1">
-                                {opt.label}
-                              </span>
-                            ) : (
-                              opt.label
-                            )}
-                          </button>
-                        ))}
-                      </div>
+                      <Input
+                        id="settings-race-name"
+                        value={goalForm.eventName}
+                        onChange={(event) => handleGoalFormChange("eventName", event.target.value)}
+                        placeholder={t("settingsV2.plan.raceNamePlaceholder")}
+                        data-testid="goal-name-input"
+                      />
                     </div>
 
-                    {/* Séances par semaine */}
                     <div>
-                      <label className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground mb-2 block">
-                        {t("settingsExtended.sessionsPerWeekLabel")}
+                      <label htmlFor="settings-race-date" className="mb-1 block text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                        {t("settingsV2.plan.raceDate")}
                       </label>
-                      <div className="flex flex-wrap gap-2">
-                        {SESSIONS_OPTIONS.map((num) => (
-                          <button
-                            key={num}
-                            onClick={() => handleSetSessionsPerWeek(num)}
-                            disabled={updatingTrainingPlan}
-                            className={`w-11 h-11 sm:w-12 sm:h-12 rounded-lg text-sm font-bold transition-all ${
-                              sessionsPerWeek === num 
-                                ? "text-white" 
-                                : "text-muted-foreground hover:text-foreground"
-                            }`}
-                            style={{
-                              background: sessionsPerWeek === num 
-                                ? "linear-gradient(135deg, #22c55e 0%, #16a34a 100%)" 
-                                : "var(--muted)",
-                              border: `1px solid ${sessionsPerWeek === num ? "#22c55e" : "var(--border)"}`
-                            }}
-                            data-testid={`sessions-per-week-btn-${num}`}
-                          >
-                            {num}
-                          </button>
-                        ))}
+                      <Input
+                        id="settings-race-date"
+                        type="date"
+                        value={goalForm.eventDate}
+                        onChange={(event) => handleGoalFormChange("eventDate", event.target.value)}
+                        data-testid="goal-date-input"
+                      />
+                    </div>
+
+                    <div>
+                      <p className="mb-1 block text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                        {t("settingsV2.plan.targetTime")}
+                      </p>
+                      <p className="mb-2 text-xs text-muted-foreground">{t("settingsV2.plan.targetTimeHelp")}</p>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Input
+                          type="number"
+                          min="0"
+                          max="24"
+                          value={goalForm.targetHours}
+                          onChange={(event) => handleGoalFormChange("targetHours", event.target.value)}
+                          placeholder="0"
+                          className="w-20"
+                          data-testid="goal-hours-input"
+                        />
+                        <span className="text-sm text-muted-foreground">{t("settingsV2.plan.hoursShort")}</span>
+                        <Input
+                          type="number"
+                          min="0"
+                          max="59"
+                          value={goalForm.targetMinutes}
+                          onChange={(event) => handleGoalFormChange("targetMinutes", event.target.value)}
+                          placeholder="00"
+                          className="w-20"
+                          data-testid="goal-minutes-input"
+                        />
+                        <span className="text-sm text-muted-foreground">{t("settingsV2.plan.minutesShort")}</span>
                       </div>
-                      <p className="font-mono text-[10px] text-muted-foreground mt-2">
-                        {t("settingsExtended.planRegenerated")}
+                      <p className="mt-2 text-sm font-medium text-foreground" data-testid="settings-current-target-time">
+                        {t("settingsV2.plan.currentTargetTime")}: {targetTimeLabel}
                       </p>
                     </div>
                   </div>
-                )}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        {/* Language Setting */}
-        <Card className="bg-card border-border">
-          <CardContent className="p-6">
-            <div className="flex items-start gap-4">
-              <div className="w-10 h-10 flex items-center justify-center bg-muted border border-border flex-shrink-0">
-                <Globe className="w-5 h-5 text-primary" />
-              </div>
-              <div className="flex-1">
-                <h2 className="font-heading text-lg uppercase tracking-tight font-semibold mb-1">
-                  {t("settings.language")}
-                </h2>
-                <p className="font-mono text-xs text-muted-foreground mb-4">
-                  {t("settings.languageDesc")}
-                </p>
-                
-                <div className="flex gap-3">
-                  <button
-                    onClick={() => setLang("en")}
-                    data-testid="lang-en"
-                    className={`flex-1 p-4 border font-mono text-sm uppercase tracking-wider transition-colors ${
-                      lang === "en"
-                        ? "border-primary bg-primary/10 text-primary"
-                        : "border-border text-muted-foreground hover:border-primary/30 hover:text-foreground"
-                    }`}
-                  >
-                    <span className="block text-lg mb-1">EN</span>
-                    <span className="block text-xs">{t("settings.english")}</span>
-                  </button>
-                  
-                  <button
-                    onClick={() => setLang("fr")}
-                    data-testid="lang-fr"
-                    className={`flex-1 p-4 border font-mono text-sm uppercase tracking-wider transition-colors ${
-                      lang === "fr"
-                        ? "border-primary bg-primary/10 text-primary"
-                        : "border-border text-muted-foreground hover:border-primary/30 hover:text-foreground"
-                    }`}
-                  >
-                    <span className="block text-lg mb-1">FR</span>
-                    <span className="block text-xs">{t("settings.french")}</span>
-                  </button>
 
-                  <button
-                    onClick={() => setLang("es")}
-                    data-testid="lang-es"
-                    className={`flex-1 p-4 border font-mono text-sm uppercase tracking-wider transition-colors ${
-                      lang === "es"
-                        ? "border-primary bg-primary/10 text-primary"
-                        : "border-border text-muted-foreground hover:border-primary/30 hover:text-foreground"
-                    }`}
+                  <Button
+                    type="button"
+                    disabled={planAction.status === "saving"}
+                    onClick={handleSaveRaceSettings}
+                    data-testid="save-goal"
+                    className="w-full sm:w-auto"
                   >
-                    <span className="block text-lg mb-1">ES</span>
-                    <span className="block text-xs">{t("settings.spanish")}</span>
-                  </button>
+                    {planAction.status === "saving" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                    {t("settingsV2.plan.saveRace")}
+                  </Button>
                 </div>
-              </div>
+              ) : (
+                <SettingRow
+                  label={t("settingsV2.plan.raceSection")}
+                  value={t("settingsV2.plan.maintenanceMode")}
+                  helper={t("settingsV2.plan.maintenanceHelp")}
+                  testId="settings-maintenance-note"
+                />
+              )}
+
+              <StatusMessage
+                status={planAction.status}
+                message={planAction.message}
+                testId="settings-plan-feedback"
+              />
             </div>
-          </CardContent>
-        </Card>
+          )}
+        </SectionCard>
 
-        {/* Subscription Status */}
-        <Card className={`border-border ${
-          isPremium
-            ? "bg-gradient-to-br from-amber-500/10 to-orange-500/10 border-amber-500/30"
-            : isTrial
-              ? "bg-gradient-to-br from-blue-500/10 to-violet-500/10 border-blue-500/30"
-              : "bg-card"
-        }`}>
-          <CardContent className="p-6">
-            <div className="flex items-start gap-4">
-              <div className={`w-10 h-10 flex items-center justify-center flex-shrink-0 rounded-lg ${
-                isPremium
-                  ? "bg-gradient-to-br from-amber-500 to-orange-500"
-                  : isTrial
-                    ? "bg-gradient-to-br from-blue-500 to-violet-500"
-                    : "bg-muted border border-border"
-              }`}>
-                <Crown className={`w-5 h-5 ${(isPremium || isTrial) ? "text-white" : "text-muted-foreground"}`} />
+        <SectionCard
+          icon={Watch}
+          title={t("settingsV2.garmin.title")}
+          description={t("settingsV2.garmin.description")}
+          testId="settings-garmin-section"
+        >
+          {garminLoading ? (
+            <div className="space-y-3" data-testid="settings-garmin-loading">
+              <Skeleton className="h-20 w-full" />
+              <Skeleton className="h-24 w-full" />
+            </div>
+          ) : garminError ? (
+            <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive" data-testid="settings-garmin-error">
+              {t(garminError)}
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <SettingRow
+                label={t("settingsV2.garmin.connection")}
+                value={garminConnected ? t("settings.connected") : t("settings.notConnected")}
+                helper={effectiveGarminStatus?.status && !TERMINAL_SYNC_STATUSES.has(effectiveGarminStatus.status)
+                  ? t("settingsV2.garmin.syncInProgress")
+                  : null}
+                testId="settings-garmin-status"
+              />
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <SettingRow
+                  label={t("settingsV2.garmin.lastSync")}
+                  value={garminLastSyncLabel}
+                  testId="settings-garmin-last-sync"
+                />
+                <SettingRow
+                  label={t("settingsV2.garmin.activities")}
+                  value={t("settingsV2.garmin.activitiesValue").replace("{count}", garminActivityCount)}
+                  helper={effectiveGarminStatus?.activities_count !== undefined
+                    ? t("settingsV2.garmin.syncedValue").replace("{count}", String(effectiveGarminStatus.activities_count))
+                    : null}
+                  testId="settings-garmin-activities"
+                />
               </div>
-              <div className="flex-1">
-                <div className="flex items-center gap-2 mb-1">
-                  <h2 className="font-heading text-lg uppercase tracking-tight font-semibold">
-                    {t("settingsExtended.subscription")}
-                  </h2>
-                  {isPremium && (
-                    <Badge className="bg-amber-500 text-white text-[9px]">{t("settingsExtended.premiumBadge")}</Badge>
-                  )}
-                  {isTrial && (
-                    <Badge className="bg-blue-500 text-white text-[9px]">{t("settingsExtended.trialBadge")}</Badge>
-                  )}
-                  {isFree && (
-                    <Badge className="bg-gray-500 text-white text-[9px]">{t("settingsExtended.limitedBadge")}</Badge>
-                  )}
-                </div>
 
-                {/* Status Display */}
-                <p className="font-mono text-sm text-foreground mb-1">
-                  {isPremium && t("settingsExtended.premiumPrice")}
-                  {isTrial && t("settingsExtended.freeTrialActive")}
-                  {isFree && t("settingsExtended.limitedAccess")}
-                </p>
-                
-                {/* Trial countdown */}
-                {isTrial && trialDaysRemaining !== null && (
-                  <div className="mt-3 mb-4">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="font-mono text-xs text-muted-foreground">
-                        {t("settingsExtended.timeRemaining")}
-                      </span>
-                      <span className="font-mono text-xs font-bold text-blue-400">
-                        {trialDaysRemaining} {t("settingsExtended.days")}
-                      </span>
-                    </div>
-                    <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
-                      <div 
-                        className="h-full bg-gradient-to-r from-blue-500 to-violet-500 transition-all"
-                        style={{ width: `${Math.min(100, (trialDaysRemaining / 30) * 100)}%` }}
-                      />
-                    </div>
-                  </div>
-                )}
-                
-                {/* Premium benefits */}
-                {isPremium && (
-                  <div className="mt-4 space-y-2">
-                    <p className="font-mono text-xs text-muted-foreground mb-2">
-                      {t("settingsExtended.featuresIncluded")}
-                    </p>
-                    <ul className="space-y-1.5">
-                      {[
-                        t("settingsExtended.personalizedPlan"),
-                        t("settingsExtended.featureConversationalCoach"),
-                        t("settingsExtended.smartAnalysis"),
-                        t("settingsExtended.racePredictions")
-                      ].map((feature, idx) => (
-                        <li key={idx} className="flex items-center gap-2 text-xs text-muted-foreground">
-                          <Check className="w-3 h-3 text-amber-500" />
-                          {feature}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-                
-                {/* Subscribe CTA for trial/free users */}
-                {(isTrial || isFree) && (
-                  <div className="mt-4 space-y-4">
-                    <div className="p-4 rounded-lg" style={{ background: "rgba(251,191,36,0.1)", border: "1px solid rgba(251,191,36,0.2)" }}>
-                      <div className="flex items-center gap-2 mb-2">
-                        <Sparkles className="w-4 h-4 text-amber-400" />
-                        <span className="font-bold text-amber-400">
-                          {t("settingsExtended.premiumOffer")}
-                        </span>
-                      </div>
-                      <p className="text-2xl font-bold text-white mb-1">4,99 € <span className="text-sm font-normal text-muted-foreground">/ {t("subscription.perMonth")}</span></p>
-                      <p className="text-xs text-amber-300">{t("settingsExtended.priceGuaranteed")}</p>
-                    </div>
-                    
-                    <ul className="space-y-2">
-                      {[
-                        t("settingsExtended.personalizedPlan"),
-                        t("settingsExtended.unlimitedCoach"),
-                        t("settingsExtended.smartAnalysis"),
-                        t("settingsExtended.watchSync"),
-                        t("settingsExtended.racePredictions")
-                      ].map((feature, idx) => (
-                        <li key={idx} className="flex items-center gap-2 text-xs text-muted-foreground">
-                          <Sparkles className="w-3 h-3 text-amber-500" />
-                          {feature}
-                        </li>
-                      ))}
-                    </ul>
-                    
+              <div className="flex flex-col gap-2 sm:flex-row">
+                {garminConnected ? (
+                  <>
                     <Button
-                      onClick={handleSubscribe}
-                      disabled={processingPayment}
-                      data-testid="subscribe-premium"
-                      className="w-full bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white rounded-lg uppercase font-bold tracking-wider text-sm h-12 flex items-center justify-center gap-2"
+                      type="button"
+                      variant="outline"
+                      onClick={handleSyncGarmin}
+                      disabled={garminBusyAction !== ""}
+                      data-testid="settings-garmin-sync"
                     >
-                      {processingPayment ? (
-                        <>
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                          {t("settingsExtended.redirecting")}
-                        </>
-                      ) : (
-                        <>
-                          <Crown className="w-4 h-4" />
-                          {t("settingsExtended.activateCoach")}
-                        </>
-                      )}
+                      {garminBusyAction === "sync" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                      {t("settingsV2.garmin.sync")}
                     </Button>
-                  </div>
-                )}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setShowReconnectForm((current) => !current)}
+                      disabled={garminBusyAction !== ""}
+                      data-testid="settings-garmin-reconnect-toggle"
+                    >
+                      {t("settingsV2.garmin.reconnect")}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handleDisconnectGarmin}
+                      disabled={garminBusyAction !== ""}
+                      data-testid="settings-garmin-disconnect"
+                    >
+                      {garminBusyAction === "disconnect" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                      {t("settings.disconnect")}
+                    </Button>
+                  </>
+                ) : null}
               </div>
-            </div>
-          </CardContent>
-        </Card>
 
-        {/* About */}
-        <Card className="bg-card border-border">
-          <CardContent className="p-6">
-            <div className="flex items-start gap-4">
-              <div className="w-10 h-10 flex items-center justify-center bg-muted border border-border flex-shrink-0">
-                <Info className="w-5 h-5 text-muted-foreground" />
-              </div>
-              <div className="flex-1">
-                <h2 className="font-heading text-lg uppercase tracking-tight font-semibold mb-1">
-                  {t("settings.about")}
-                </h2>
-                <p className="font-mono text-xs text-muted-foreground mb-4">
-                  {t("settings.aboutDesc")}
-                </p>
-                <p className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-                  {t("settings.version")} 1.4.0
-                </p>
-              </div>
+              {(!garminConnected || showReconnectForm) && (
+                <form className="space-y-3 rounded-xl border border-border bg-muted/30 p-4" onSubmit={handleConnectGarmin} data-testid="settings-garmin-form">
+                  <div>
+                    <label htmlFor="settings-garmin-email" className="mb-1 block text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                      {t("settingsV2.garmin.email")}
+                    </label>
+                    <Input
+                      id="settings-garmin-email"
+                      type="email"
+                      name="username"
+                      autoComplete="section-garmin username"
+                      value={garminUsername}
+                      onChange={(event) => setGarminUsername(event.target.value)}
+                      placeholder={t("onboarding.garminEmailPlaceholder")}
+                      data-testid="garmin-email-input"
+                    />
+                  </div>
+
+                  <div>
+                    <label htmlFor="settings-garmin-password" className="mb-1 block text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                      {t("settingsV2.garmin.password")}
+                    </label>
+                    <Input
+                      id="settings-garmin-password"
+                      type="password"
+                      name="password"
+                      autoComplete="section-garmin current-password"
+                      value={garminPassword}
+                      onChange={(event) => setGarminPassword(event.target.value)}
+                      placeholder={t("onboarding.garminPasswordPlaceholder")}
+                      data-testid="garmin-password-input"
+                    />
+                  </div>
+
+                  <Button
+                    type="submit"
+                    disabled={garminBusyAction !== ""}
+                    data-testid="garmin-connect"
+                    className="w-full sm:w-auto"
+                  >
+                    {garminBusyAction === "connect" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                    {garminConnected ? t("settingsV2.garmin.reconnect") : t("settings.connect")}
+                  </Button>
+                </form>
+              )}
+
+              <StatusMessage
+                status={garminAction.status}
+                message={garminAction.message}
+                testId="settings-garmin-feedback"
+              />
             </div>
-          </CardContent>
-        </Card>
+          )}
+        </SectionCard>
+
+        <SectionCard
+          icon={Globe}
+          title={t("settingsV2.preferences.title")}
+          description={t("settingsV2.preferences.description")}
+          testId="settings-preferences-section"
+        >
+          <SettingRow
+            label={t("settings.language")}
+            value={lang.toUpperCase()}
+            helper={t("settingsV2.preferences.languageHelp")}
+            testId="settings-language-current"
+          />
+          <div className="grid grid-cols-3 gap-2" data-testid="settings-language-options">
+            {["en", "fr", "es"].map((value) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setLang(value)}
+                data-testid={`lang-${value}`}
+                className={`rounded-xl border px-3 py-3 text-sm font-medium transition-colors ${
+                  lang === value
+                    ? "border-primary bg-primary/10 text-primary"
+                    : "border-border bg-card text-foreground hover:border-primary/40"
+                }`}
+              >
+                {value.toUpperCase()}
+              </button>
+            ))}
+          </div>
+
+          <SettingRow
+            label={t("settingsV2.preferences.units")}
+            value={unitSystem === "imperial" ? t("settingsExtended.imperial") : t("settingsExtended.metric")}
+            helper={t("settingsExtended.unitSystemDesc")}
+            testId="settings-units-current"
+          />
+          <div className="grid grid-cols-2 gap-2" data-testid="settings-units-options">
+            {["metric", "imperial"].map((value) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setUnitSystem(value)}
+                data-testid={`units-${value}`}
+                className={`rounded-xl border px-3 py-3 text-sm font-medium transition-colors ${
+                  unitSystem === value
+                    ? "border-primary bg-primary/10 text-primary"
+                    : "border-border bg-card text-foreground hover:border-primary/40"
+                }`}
+              >
+                {value === "imperial" ? t("settingsExtended.imperial") : t("settingsExtended.metric")}
+              </button>
+            ))}
+          </div>
+        </SectionCard>
+
+        <SectionCard
+          icon={Crown}
+          title={t("settingsV2.account.title")}
+          description={t("settingsV2.account.description")}
+          testId="settings-account-section"
+        >
+          <div className="grid gap-3 sm:grid-cols-2">
+            <SettingRow
+              label={t("settingsV2.account.email")}
+              value={user?.email || t("settingsV2.common.missing")}
+              action={<Mail className="h-4 w-4 text-muted-foreground" />}
+              testId="settings-account-email"
+            />
+            <SettingRow
+              label={t("settingsV2.account.subscription")}
+              value={subscriptionLoading ? t("common.loading") : subscriptionCode}
+              helper={statusLabel || null}
+              action={subscriptionLoading ? null : <Badge className={getSubscriptionBadgeClass(subscriptionCode)} data-testid="settings-subscription-badge">{subscriptionCode}</Badge>}
+              testId="settings-subscription-status"
+            />
+          </div>
+
+          {subscriptionCode === "TRIAL" && trialDaysRemaining !== null ? (
+            <SettingRow
+              label={t("settingsV2.account.trial")}
+              value={t("settingsV2.account.trialDays").replace("{count}", String(trialDaysRemaining))}
+              testId="settings-subscription-trial"
+            />
+          ) : null}
+
+          <SettingRow
+            label={t("settingsV2.account.verification")}
+            value={user?.is_email_verified ? t("settingsV2.account.verified") : t("settingsV2.account.unverified")}
+            action={<ShieldCheck className="h-4 w-4 text-muted-foreground" />}
+            testId="settings-account-verification"
+          />
+
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <Button type="button" onClick={() => navigate("/subscription")} data-testid="settings-manage-subscription">
+              {t("settingsV2.account.manageSubscription")}
+            </Button>
+            <Button type="button" variant="outline" onClick={() => navigate("/training")} data-testid="settings-open-training">
+              {t("settingsV2.account.openTraining")}
+            </Button>
+          </div>
+        </SectionCard>
+
+        <SectionCard
+          icon={Route}
+          title={t("settings.about")}
+          description={t("settings.aboutDesc")}
+          testId="settings-about-section"
+        >
+          <SettingRow
+            label={t("settings.version")}
+            value="1.4.0"
+            testId="settings-version"
+          />
+          <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-sm text-emerald-300" data-testid="settings-no-password-note">
+            <div className="flex items-start gap-2">
+              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>{t("settingsV2.garmin.passwordSafety")}</span>
+            </div>
+          </div>
+        </SectionCard>
       </div>
     </div>
   );
