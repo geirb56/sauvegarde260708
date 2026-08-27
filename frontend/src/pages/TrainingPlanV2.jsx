@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import axios from "axios";
-import { CalendarDays, ChevronDown, ChevronUp, Gauge, MapPin, Sparkles } from "lucide-react";
+import { CalendarDays, ChevronDown, ChevronUp, Gauge, MapPin } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -17,15 +17,6 @@ import { formatDistance } from "@/utils/units";
 const API = API_BASE_URL;
 const DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
 
-const WORKOUT_STYLES = {
-  rest: "border-indigo-500/40 bg-indigo-500/10 text-indigo-100",
-  recovery: "border-cyan-500/40 bg-cyan-500/10 text-cyan-100",
-  easy: "border-emerald-500/40 bg-emerald-500/10 text-emerald-100",
-  steady: "border-amber-500/40 bg-amber-500/10 text-amber-100",
-  quality: "border-orange-500/40 bg-orange-500/10 text-orange-100",
-  long_easy: "border-blue-500/40 bg-blue-500/10 text-blue-100",
-};
-
 const DAY_INDEX = {
   sunday: 0,
   monday: 1,
@@ -35,7 +26,6 @@ const DAY_INDEX = {
   friday: 5,
   saturday: 6,
 };
-const DEFAULT_VISIBLE_WEEKS = 4;
 
 const isKnownNumber = (value) => typeof value === "number" && Number.isFinite(value);
 
@@ -75,14 +65,10 @@ const getSessionDetailRoute = (session) => {
   if (!session || typeof session !== "object") return null;
 
   const workoutId = session.workout_id ?? session.workoutId;
-  if (workoutId != null && workoutId !== "") {
-    return `/workout/${workoutId}`;
-  }
+  if (workoutId != null && workoutId !== "") return `/workout/${workoutId}`;
 
   const sessionId = session.session_id ?? session.sessionId ?? session.id;
-  if (sessionId != null && sessionId !== "") {
-    return `/sessions/${sessionId}`;
-  }
+  if (sessionId != null && sessionId !== "") return `/sessions/${sessionId}`;
 
   return null;
 };
@@ -104,19 +90,19 @@ const getTodayDayKey = () => {
   return Object.keys(DAY_INDEX).find((key) => DAY_INDEX[key] === day) || "monday";
 };
 
-function DetailRow({ label, value, valueClassName = "" }) {
-  return (
-    <div className="flex items-start justify-between gap-4 text-sm">
-      <span className="text-muted-foreground">{label}</span>
-      <span className={`text-right font-medium text-foreground ${valueClassName}`}>{value}</span>
-    </div>
-  );
-}
+const getSessionPaceOrZone = (session) => {
+  if (!session || typeof session !== "object") return null;
+  const pace = session.pace_target || session.pace || session.pace_range || session.target_pace || session.pace_str;
+  if (pace && typeof pace === "string") return pace;
+  const zone = session.target_zone || session.zone || session.hr_zone || session.intensity_zone;
+  if (zone && typeof zone === "string") return zone;
+  return null;
+};
 
 function LoadingState() {
   return (
     <div className="p-4 md:p-6 space-y-4" data-testid="training-v2-loading">
-      <Skeleton className="h-10 w-48" />
+      <Skeleton className="h-20" />
       <Skeleton className="h-44" />
       <Skeleton className="h-60" />
       <Skeleton className="h-44" />
@@ -124,157 +110,135 @@ function LoadingState() {
   );
 }
 
-function SessionStatusBadge({ t, status }) {
-  if (!status) return null;
+function SessionStatePill({ t, state }) {
+  if (!state) return null;
 
-  const styles = {
-    done: "bg-emerald-500/15 text-emerald-200 border-emerald-400/30",
-    planned: "bg-blue-500/15 text-blue-200 border-blue-400/30",
-    rest: "bg-indigo-500/15 text-indigo-200 border-indigo-400/30",
-    missed: "bg-red-500/15 text-red-200 border-red-400/30",
+  const labels = {
+    done: t("trainingV2.sessionStates.done"),
+    planned: t("trainingV2.sessionStates.planned"),
+    rest: t("trainingV2.sessionStates.rest"),
+    missed: t("trainingV2.sessionStates.missed"),
   };
 
   return (
-    <Badge
-      variant="outline"
-      className={`text-[10px] uppercase tracking-wider ${styles[status] || "border-border text-foreground"}`}
-      data-testid={`session-status-${status}`}
+    <span
+      className="text-[10px] uppercase tracking-wide text-muted-foreground"
+      data-testid={`session-status-${state}`}
     >
-      {t(`trainingV2.sessionStates.${status}`)}
-    </Badge>
+      {labels[state]}
+    </span>
   );
 }
 
-function SessionDayCard({ session, day, isToday, t, unitSystem }) {
-  const workoutType = session?.workout_type;
+function WeekSessionRow({ session, day, isToday, todayIndex, unitSystem, t }) {
+  const workoutType = getSessionType(session);
   const isExplicitRest = workoutType === "rest" || getSessionStatusKey(session) === "rest";
-  const workoutTypeLabel = session
-    ? getTranslatedValue(t, `trainingV2.workoutTypes.${workoutType}`)
-    : t("trainingV2.noSessionLabel");
+  const statusKey = getSessionStatusKey(session);
+  const dayIndex = DAY_INDEX[day] ?? 1;
 
-  const metricParts = [];
-  if (session && isKnownNumber(session.distance_km)) metricParts.push(formatDistance(session.distance_km, { unitSystem }));
-  if (session && isKnownNumber(session.duration_minutes)) metricParts.push(`${session.duration_minutes} min`);
-  if (session && session.estimated_tss !== null && session.estimated_tss !== undefined && Number.isFinite(Number(session.estimated_tss))) {
-    metricParts.push(`${Number(session.estimated_tss)} TSS`);
-  }
+  const timelineState = !session
+    ? "absent"
+    : (statusKey || (isExplicitRest ? "rest" : (dayIndex < todayIndex ? "done" : "planned")));
 
-  const state = getSessionStatusKey(session)
-    || (isExplicitRest ? "rest" : null);
+  const stateMarker = timelineState === "done"
+    ? "✓"
+    : timelineState === "today"
+      ? "●"
+      : timelineState === "rest"
+        ? "—"
+        : "";
+
+  const typeLabel = !session
+    ? t("trainingV2.noSessionLabel")
+    : isExplicitRest
+      ? t("trainingV2.restDay")
+      : getTranslatedValue(t, `trainingV2.workoutTypes.${workoutType}`, "trainingV2.noSessionType");
+
+  const prescription = getPrescriptionText(session);
+  const distance = isKnownNumber(session?.distance_km) ? formatDistance(session.distance_km, { unitSystem }) : null;
+  const duration = isKnownNumber(session?.duration_minutes) ? `${session.duration_minutes} min` : null;
+  const compactMetric = distance || duration || (isExplicitRest ? t("trainingV2.restDay") : (session ? "" : t("trainingV2.noSessionLabel")));
 
   const detailRoute = getSessionDetailRoute(session);
-  const containerClassName = `rounded-xl border p-4 transition-colors ${
-    session ? (WORKOUT_STYLES[session.workout_type] ?? "border-border bg-card text-foreground") : "border-border bg-card text-foreground"
-  } ${isToday ? "ring-2 ring-primary/70" : ""}`;
-
-  const content = (
-    <>
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div>
-          <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">{t(`trainingPlanDays.${day}`)}</p>
-          <p className="mt-1 text-base font-semibold" data-testid={`training-v2-day-type-${day}`}>{workoutTypeLabel}</p>
-        </div>
-        <div className="flex items-center gap-2">
-          {isToday && (
-            <Badge className="text-[10px]" data-testid="today-highlight-badge">
-              {t("trainingV2.todayBadge")}
-            </Badge>
-          )}
-          <SessionStatusBadge t={t} status={state} />
-        </div>
-      </div>
-
-      <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
-        {metricParts.length > 0 ? metricParts.map((part) => (
-          <span key={part} className="rounded-full border border-current/20 px-2.5 py-1">{part}</span>
-        )) : (
-          <span className="rounded-full border border-current/20 px-2.5 py-1">
-            {isExplicitRest ? t("trainingV2.restDay") : t("trainingV2.noSessionLabel")}
-          </span>
-        )}
-      </div>
-    </>
-  );
-
-  if (!detailRoute) {
-    return (
-      <div className={containerClassName} data-testid={`training-v2-day-${day}`}>
-        {content}
-      </div>
-    );
-  }
+  const Wrapper = detailRoute ? Link : "div";
 
   return (
-    <Link
-      to={detailRoute}
-      className={`${containerClassName} block hover:brightness-110`}
+    <Wrapper
+      {...(detailRoute ? { to: detailRoute } : {})}
       data-testid={`training-v2-day-${day}`}
-      data-detail-route={detailRoute}
+      data-day-state={timelineState}
+      className={`grid grid-cols-[56px_minmax(0,1fr)_auto] items-center gap-2 rounded-md border px-2 py-2 text-sm ${
+        isToday ? "border-primary bg-primary/10" : "border-border bg-card"
+      } ${detailRoute ? "hover:brightness-110" : ""}`}
     >
-      {content}
-    </Link>
+      <span className="text-xs text-muted-foreground">{t(`trainingPlanDays.${day}`)}</span>
+      <div className="min-w-0">
+        <p className="truncate font-medium" data-testid={`training-v2-day-type-${day}`}>{typeLabel}</p>
+        {prescription && !isExplicitRest && (
+          <p className="truncate text-xs text-muted-foreground" data-testid={`training-v2-day-prescription-${day}`}>{prescription}</p>
+        )}
+      </div>
+      <div className="text-right">
+        {isToday ? (
+          <Badge className="mb-1 text-[10px]" data-testid="today-highlight-badge">{t("trainingV2.todayBadge")}</Badge>
+        ) : (
+          <span className="block text-xs text-muted-foreground">{stateMarker}</span>
+        )}
+        <p className="text-xs text-muted-foreground">{compactMetric}</p>
+        {statusKey && <SessionStatePill t={t} state={statusKey} />}
+      </div>
+    </Wrapper>
   );
 }
 
-function FullCycleSection({ t, locale, weeks, openAll, setOpenAll }) {
-  const currentWeek = weeks.find((week) => week?.is_current) || null;
-  const visibleWeeks = openAll
-    ? weeks
-    : weeks.filter((week) => {
-      if (week.is_current) return true;
-      if (!currentWeek) return week.week_number <= DEFAULT_VISIBLE_WEEKS;
-      return Math.abs((week.week_number || 0) - (currentWeek.week_number || 0)) <= 2;
-    });
+function FullCycleSection({ t, locale, weeks }) {
+  const [open, setOpen] = useState(false);
 
   return (
     <Card data-testid="training-v2-cycle">
-      <CardHeader className="space-y-2">
-        <div className="flex items-center justify-between gap-3">
+      <CardHeader className="pb-2">
+        <button
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          className="flex w-full items-center justify-between text-left"
+          data-testid="cycle-collapsible-trigger"
+          aria-expanded={open}
+          aria-controls="cycle-collapsible-content"
+        >
           <CardTitle className="flex items-center gap-2 text-base">
             <MapPin className="h-4 w-4" />
             {t("trainingV2.fullCycleTitle")}
           </CardTitle>
-          <button
-            type="button"
-            onClick={() => setOpenAll((value) => !value)}
-            className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground"
-            data-testid="cycle-toggle-button"
-          >
-            {openAll ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-            {openAll ? t("trainingV2.collapse") : t("trainingV2.showAll")}
-          </button>
-        </div>
+          {open ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+        </button>
       </CardHeader>
-      <CardContent className="space-y-2">
-        {visibleWeeks.map((week) => {
-          const phaseLabel = week.phase
-            ? getTranslatedValue(t, `trainingV2.cyclePhases.${week.phase}`)
-            : t("trainingV2.notAvailable");
-          return (
-            <div
-              key={week.week_number}
-              data-testid={`cycle-week-${week.week_number}`}
-              className={`rounded-lg border p-3 ${week.is_current ? "border-primary bg-primary/10" : "border-border bg-card"}`}
-            >
-              <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-                <span className="font-medium">
-                  {t("trainingV2.cycleWeekLabel")} {week.week_number}
-                  {week.is_current && (
-                    <span className="ml-2 rounded-full bg-primary px-2 py-0.5 text-xs font-semibold text-primary-foreground" data-testid="cycle-current-badge">
-                      {t("trainingV2.cycleCurrentBadge")}
-                    </span>
-                  )}
-                </span>
-                <span className="text-muted-foreground">{phaseLabel}</span>
+      <CardContent>
+        <div
+          id="cycle-collapsible-content"
+          data-testid="cycle-collapsible-content"
+          style={open ? undefined : { display: "none" }}
+          className="space-y-2"
+        >
+          {weeks.map((week) => {
+            const phaseLabel = week.phase
+              ? getTranslatedValue(t, `trainingV2.cyclePhases.${week.phase}`)
+              : t("trainingV2.notAvailable");
+            const target = isKnownNumber(week.weekly_target_km)
+              ? `${week.weekly_target_km} km`
+              : (isKnownNumber(week.weekly_target_minutes) ? `${week.weekly_target_minutes} min` : null);
+            return (
+              <div
+                key={week.week_number}
+                data-testid={`cycle-week-${week.week_number}`}
+                className={`grid grid-cols-[auto_1fr_auto] items-center gap-2 rounded-md border px-2 py-2 text-xs ${week.is_current ? "border-primary bg-primary/10" : "border-border bg-card"}`}
+              >
+                <span className="font-semibold">{t("trainingV2.cycleWeekShort")} {week.week_number}</span>
+                <span className="truncate text-muted-foreground">{phaseLabel}</span>
+                <span className="text-muted-foreground">{target || (week.start_date && week.end_date ? `${formatDate(week.start_date, locale)}–${formatDate(week.end_date, locale)}` : t("trainingV2.notAvailable"))}</span>
               </div>
-              <div className="mt-1 text-xs text-muted-foreground">
-                {week.start_date && week.end_date
-                  ? `${formatDate(week.start_date, locale)} – ${formatDate(week.end_date, locale)}`
-                  : t("trainingV2.notAvailable")}
-              </div>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </CardContent>
     </Card>
   );
@@ -292,7 +256,6 @@ export default function TrainingPlanV2() {
   const [loading, setLoading] = useState(false);
   const [hasError, setHasError] = useState(false);
   const [pacesOpen, setPacesOpen] = useState(false);
-  const [cycleOpenAll, setCycleOpenAll] = useState(false);
 
   useEffect(() => {
     if (subLoading || isFree) return;
@@ -329,11 +292,6 @@ export default function TrainingPlanV2() {
       ignore = true;
     };
   }, [isFree, subLoading]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    setPacesOpen(window.innerWidth >= 768);
-  }, []);
 
   const locale = lang === "fr" ? "fr-FR" : lang === "es" ? "es-ES" : "en-US";
   const todayKey = getTodayDayKey();
@@ -390,15 +348,15 @@ export default function TrainingPlanV2() {
     || getPrescriptionText(todayData?.original_prescription)
     || null;
 
-  const weeklyTargetValue = weekData?.weekly_target?.target_basis === "distance"
-    ? (isKnownNumber(weekData?.weekly_target?.target_km) ? formatDistance(weekData.weekly_target.target_km, { unitSystem }) : t("trainingV2.notAvailable"))
-    : (isKnownNumber(weekData?.weekly_target?.target_duration_minutes) ? `${weekData.weekly_target.target_duration_minutes} min` : t("trainingV2.notAvailable"));
+  const todayPaceOrZone = getSessionPaceOrZone(todaySession);
+  const todayDuration = isKnownNumber(todaySession?.duration_minutes) ? `${todaySession.duration_minutes} min` : null;
+  const todayDistance = isKnownNumber(todaySession?.distance_km) ? formatDistance(todaySession.distance_km, { unitSystem }) : null;
+  const todayIsExplicitRest = todayType === "rest" || getSessionStatusKey(todaySession) === "rest";
 
-  const weeklyCompleted = isKnownNumber(weekData?.week?.completed_km)
-    ? formatDistance(weekData.week.completed_km, { unitSystem })
-    : (isKnownNumber(weekData?.week?.completed_duration_minutes) ? `${weekData.week.completed_duration_minutes} min` : t("trainingV2.notAvailable"));
-
-  const hasAnySessionLink = orderedSessions.some((session) => Boolean(getSessionDetailRoute(session)));
+  const showRaceCountdown = !isMaintenanceGoal
+    && cycle?.days_to_race !== null
+    && cycle?.days_to_race !== undefined
+    && Number.isFinite(Number(cycle?.days_to_race));
 
   const progressValue = (cycle?.current_week && cycle?.total_weeks)
     ? Math.max(0, Math.min(100, Math.round((cycle.current_week / cycle.total_weeks) * 100)))
@@ -408,206 +366,154 @@ export default function TrainingPlanV2() {
     ? getTranslatedValue(t, `trainingV2.pacesConfidence.${String(pacesData.confidence).toLowerCase()}`)
     : t("trainingV2.notAvailable");
 
-  const showRaceCountdown = !isMaintenanceGoal
-    && cycle?.days_to_race !== null
-    && cycle?.days_to_race !== undefined
-    && Number.isFinite(Number(cycle?.days_to_race));
+  const todayIndex = DAY_INDEX[todayKey] ?? 1;
 
   return (
-    <div className="p-4 md:p-6 space-y-4" data-testid="training-v2-page">
+    <div className="space-y-4 p-4 md:p-6" data-testid="training-v2-page">
       <Card data-testid="training-v2-plan-status">
-        <CardContent className="pt-6 space-y-4">
-          <div className="flex items-center gap-3">
-            <div className="rounded-xl border border-border bg-card p-3">
-              <CalendarDays className="h-5 w-5 text-primary" />
-            </div>
-            <div>
-              <h1 className="text-2xl font-semibold text-foreground">{t("trainingV2.planHeader")}</h1>
-              <p className="text-sm text-muted-foreground">{t("trainingV2.planSubheader")}</p>
-            </div>
+        <CardContent className="space-y-3 pt-4">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <CalendarDays className="h-4 w-4" />
+            <span>{t("trainingV2.planHeader")}</span>
           </div>
-
-          <div className="grid gap-3 sm:grid-cols-2">
-            <DetailRow label={t("trainingV2.goalLabel")} value={goalLabel} />
-            <DetailRow label={t("trainingV2.currentPhase")} value={phaseLabel} />
-            {showRaceCountdown && (
-              <DetailRow
-                label={t("trainingV2.raceCountdownLabel")}
-                value={t("trainingV2.raceCountdownValue").replace("{days}", String(cycle.days_to_race))}
-              />
-            )}
+          <div className="flex flex-wrap items-center gap-2" data-testid="training-v2-header-summary">
+            <h1 className="text-xl font-semibold">{goalLabel}</h1>
+            <span className="text-muted-foreground">·</span>
+            <span className="font-medium" data-testid="header-week-ratio">
+              {cycle?.current_week != null && cycle?.total_weeks != null
+                ? `${t("trainingV2.week")} ${cycle.current_week}/${cycle.total_weeks}`
+                : `${t("trainingV2.week")} ${t("trainingV2.notAvailable")}`}
+            </span>
           </div>
+          <p className="text-sm text-muted-foreground" data-testid="header-phase-label">{phaseLabel}</p>
+          <Progress value={progressValue} />
+          {showRaceCountdown && (
+            <p className="text-xs text-muted-foreground" data-testid="header-race-countdown">
+              {t("trainingV2.raceCountdownValue").replace("{days}", String(cycle.days_to_race))}
+            </p>
+          )}
         </CardContent>
       </Card>
 
       <Card className="border-primary/40" data-testid="training-v2-today">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Sparkles className="h-4 w-4" />
-            {t("trainingV2.todayTitle")}
-          </CardTitle>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">{t("trainingV2.todayTitle")}</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-3">
-          {todayData?.status === "no_session" ? (
-            <div className="rounded-lg border border-border bg-card p-3" data-testid="today-rest-state">
-              <p className="font-medium">{t("trainingV2.restDay")}</p>
-              <p className="text-sm text-muted-foreground">{t("trainingV2.noSessionToday")}</p>
+        <CardContent className="space-y-2">
+          {!todaySession ? (
+            <div className="rounded-md border border-border px-3 py-3" data-testid="today-no-session-state">
+              <p className="font-medium">{t("trainingV2.noSessionLabel")}</p>
             </div>
           ) : (
             <>
-              <DetailRow label={t("trainingV2.sessionType")} value={todayTypeLabel} valueClassName="text-base" />
-              <DetailRow
-                label={t("trainingV2.sessionPrescription")}
-                value={todayPrescription || t("trainingV2.notAvailable")}
-                valueClassName="max-w-[70%]"
-              />
-              {isKnownNumber(todaySession?.duration_minutes) && (
-                <DetailRow label={t("trainingV2.sessionDuration")} value={`${todaySession.duration_minutes} min`} />
+              <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">{t("trainingV2.sessionType")}</p>
+              <p className="text-lg font-semibold" data-testid="today-session-type">{todayIsExplicitRest ? t("trainingV2.restDay") : todayTypeLabel}</p>
+              {todayPrescription && !todayIsExplicitRest && (
+                <p className="text-base" data-testid="today-session-prescription">{todayPrescription}</p>
               )}
-              {isKnownNumber(todaySession?.distance_km) && (
-                <DetailRow
-                  label={t("trainingV2.sessionDistance")}
-                  value={formatDistance(todaySession.distance_km, { unitSystem })}
-                />
+              {todayPaceOrZone && !todayIsExplicitRest && (
+                <p className="text-sm text-muted-foreground" data-testid="today-session-pace-zone">{todayPaceOrZone}</p>
               )}
-              {todayData?.adaptation_applied && (
-                <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm" data-testid="today-adapted">
-                  <p className="font-medium text-amber-200">{t("trainingV2.adaptationApplied")}</p>
-                  {todayData?.adaptation_reason && (
-                    <p className="mt-1 text-amber-100/90">{todayData.adaptation_reason}</p>
-                  )}
-                </div>
-              )}
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                {todayDuration && <Badge variant="outline" data-testid="today-session-duration">{todayDuration}</Badge>}
+                {todayDistance && <Badge variant="outline" data-testid="today-session-distance">{todayDistance}</Badge>}
+              </div>
             </>
           )}
         </CardContent>
       </Card>
 
       <Card data-testid="training-v2-week">
-        <CardHeader>
-          <CardTitle>{t("trainingV2.weekTitle")}</CardTitle>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">{t("trainingV2.weekTitle")}</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <DetailRow label={t("trainingV2.weekGoal")} value={weeklyTargetValue} />
-            <DetailRow label={t("trainingV2.weekCompleted")} value={weeklyCompleted} />
-            <DetailRow
-              label={t("trainingV2.weekPlannedSessions")}
-              value={isKnownNumber(weekData?.weekly_target?.session_count) ? String(weekData.weekly_target.session_count) : t("trainingV2.notAvailable")}
-            />
-            <DetailRow
-              label={t("trainingV2.weekCompletedSessions")}
-              value={isKnownNumber(weekData?.week?.completed_session_count) ? String(weekData.week.completed_session_count) : t("trainingV2.notAvailable")}
-            />
-          </div>
-
-          <div className="space-y-3" data-testid="week-sessions-list">
-            {orderedSessions.map((session, index) => {
-              const day = DAYS[index];
-              return (
-                <SessionDayCard
-                  key={day}
-                  session={session}
-                  day={day}
-                  isToday={day === todayKey}
-                  t={t}
-                  unitSystem={unitSystem}
-                />
-              );
-            })}
-          </div>
-
-          <p className="text-xs text-muted-foreground" data-testid="session-detail-support">
-            {hasAnySessionLink ? t("trainingV2.sessionDetailLinkAvailable") : t("trainingV2.sessionDetailLinkUnavailable")}
-          </p>
-        </CardContent>
-      </Card>
-
-      <Card data-testid="training-v2-cycle-progress">
-        <CardHeader>
-          <CardTitle>{t("trainingV2.cycleProgressTitle")}</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="flex items-center justify-between text-sm">
-            <span className="text-muted-foreground">{t("trainingV2.cycleWeekProgress")}</span>
-            <span className="font-semibold">
-              {cycle?.current_week != null && cycle?.total_weeks != null ? `${cycle.current_week} / ${cycle.total_weeks}` : t("trainingV2.notAvailable")}
-            </span>
-          </div>
-          <Progress value={progressValue} />
-          <p className="text-sm text-muted-foreground" data-testid="cycle-progress-percent">{progressValue}%</p>
+        <CardContent className="space-y-2" data-testid="week-sessions-list">
+          {orderedSessions.map((session, index) => {
+            const day = DAYS[index];
+            return (
+              <WeekSessionRow
+                key={day}
+                session={session}
+                day={day}
+                isToday={day === todayKey}
+                todayIndex={todayIndex}
+                unitSystem={unitSystem}
+                t={t}
+              />
+            );
+          })}
         </CardContent>
       </Card>
 
       <Card data-testid="training-v2-paces">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Gauge className="h-4 w-4" />
-            {t("trainingV2.pacesTitle")}
-          </CardTitle>
+        <CardHeader className="pb-2">
+          <button
+            type="button"
+            className="flex w-full items-center justify-between text-left"
+            data-testid="paces-collapsible-trigger"
+            aria-expanded={pacesOpen}
+            aria-controls="paces-collapsible-content"
+            onClick={() => setPacesOpen((v) => !v)}
+          >
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Gauge className="h-4 w-4" />
+              {t("trainingV2.pacesTitle")}
+            </CardTitle>
+            {pacesOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          </button>
         </CardHeader>
         <CardContent>
-          <div>
-            <button
-              type="button"
-              className="mb-3 flex w-full items-center justify-between rounded-lg border border-border px-3 py-2 text-sm"
-              data-testid="paces-collapsible-trigger"
-              aria-expanded={pacesOpen}
-              aria-controls="paces-collapsible-content"
-              onClick={() => setPacesOpen((v) => !v)}
-            >
-              <span>{t("trainingV2.pacesSummary")}</span>
-              {pacesOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-            </button>
-            <div
-              id="paces-collapsible-content"
-              className="space-y-3"
-              data-testid="paces-collapsible-content"
-              style={pacesOpen ? undefined : { display: "none" }}
-            >
-              <DetailRow label={t("trainingV2.confidence")} value={confidenceLabel} />
-              {pacesData?.confidence === "INSUFFICIENT" ? (
-                <p className="text-sm text-muted-foreground">{t("trainingV2.pacesInsufficient")}</p>
-              ) : (
-                <div className="space-y-2 text-sm">
-                  <DetailRow
-                    label={t("trainingV2.paceEasy")}
-                    value={pacesData?.paces?.easy?.lower?.pace_str && pacesData?.paces?.easy?.upper?.pace_str
-                      ? `${pacesData.paces.easy.lower.pace_str} - ${pacesData.paces.easy.upper.pace_str} /km`
-                      : t("trainingV2.notAvailable")}
-                  />
-                  <DetailRow
-                    label={t("trainingV2.paceMarathon")}
-                    value={pacesData?.paces?.marathon?.pace_str ? `${pacesData.paces.marathon.pace_str} /km` : t("trainingV2.notAvailable")}
-                  />
-                  <DetailRow
-                    label={t("trainingV2.paceThreshold")}
-                    value={pacesData?.paces?.threshold?.pace_str ? `${pacesData.paces.threshold.pace_str} /km` : t("trainingV2.notAvailable")}
-                  />
-                  <DetailRow
-                    label={t("trainingV2.paceInterval")}
-                    value={pacesData?.paces?.interval?.lower?.pace_str && pacesData?.paces?.interval?.upper?.pace_str
-                      ? `${pacesData.paces.interval.lower.pace_str} - ${pacesData.paces.interval.upper.pace_str} /km`
-                      : t("trainingV2.notAvailable")}
-                  />
-                  <DetailRow
-                    label={t("trainingV2.paceRepetition")}
-                    value={pacesData?.paces?.repetition?.pace_str ? `${pacesData.paces.repetition.pace_str} /km` : t("trainingV2.notAvailable")}
-                  />
-                </div>
-              )}
+          <div
+            id="paces-collapsible-content"
+            className="space-y-3"
+            data-testid="paces-collapsible-content"
+            style={pacesOpen ? undefined : { display: "none" }}
+          >
+            <div className="flex items-start justify-between gap-4 text-sm">
+              <span className="text-muted-foreground">{t("trainingV2.confidence")}</span>
+              <span className="text-right font-medium text-foreground">{confidenceLabel}</span>
             </div>
+            {pacesData?.confidence === "INSUFFICIENT" ? (
+              <p className="text-sm text-muted-foreground">{t("trainingV2.pacesInsufficient")}</p>
+            ) : (
+              <div className="space-y-2 text-sm">
+                {pacesData?.paces?.easy?.lower?.pace_str && pacesData?.paces?.easy?.upper?.pace_str && (
+                  <div className="flex items-start justify-between gap-4">
+                    <span className="text-muted-foreground">{t("trainingV2.paceEasy")}</span>
+                    <span className="text-right font-medium">{`${pacesData.paces.easy.lower.pace_str} - ${pacesData.paces.easy.upper.pace_str} /km`}</span>
+                  </div>
+                )}
+                {pacesData?.paces?.marathon?.pace_str && (
+                  <div className="flex items-start justify-between gap-4">
+                    <span className="text-muted-foreground">{t("trainingV2.paceMarathon")}</span>
+                    <span className="text-right font-medium">{`${pacesData.paces.marathon.pace_str} /km`}</span>
+                  </div>
+                )}
+                {pacesData?.paces?.threshold?.pace_str && (
+                  <div className="flex items-start justify-between gap-4">
+                    <span className="text-muted-foreground">{t("trainingV2.paceThreshold")}</span>
+                    <span className="text-right font-medium">{`${pacesData.paces.threshold.pace_str} /km`}</span>
+                  </div>
+                )}
+                {pacesData?.paces?.interval?.lower?.pace_str && pacesData?.paces?.interval?.upper?.pace_str && (
+                  <div className="flex items-start justify-between gap-4">
+                    <span className="text-muted-foreground">{t("trainingV2.paceInterval")}</span>
+                    <span className="text-right font-medium">{`${pacesData.paces.interval.lower.pace_str} - ${pacesData.paces.interval.upper.pace_str} /km`}</span>
+                  </div>
+                )}
+                {pacesData?.paces?.repetition?.pace_str && (
+                  <div className="flex items-start justify-between gap-4">
+                    <span className="text-muted-foreground">{t("trainingV2.paceRepetition")}</span>
+                    <span className="text-right font-medium">{`${pacesData.paces.repetition.pace_str} /km`}</span>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>
 
-      <FullCycleSection
-        t={t}
-        locale={locale}
-        weeks={cycleWeeks}
-        openAll={cycleOpenAll}
-        setOpenAll={setCycleOpenAll}
-      />
+      <FullCycleSection t={t} locale={locale} weeks={cycleWeeks} />
     </div>
   );
 }
