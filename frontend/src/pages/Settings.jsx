@@ -184,7 +184,6 @@ export default function Settings() {
 
   const locale = lang === "fr" ? "fr-FR" : lang === "es" ? "es-ES" : "en-US";
   const selectedGoalOption = useMemo(() => getGoalOption(trainingGoal), [trainingGoal]);
-  const isMaintenanceGoal = selectedGoalOption?.value === "MAINTENANCE";
   const effectiveGarminStatus = garminProgress || garminStatus?.sync_status || null;
   const subscriptionCode = getSubscriptionCode({ subscription, isTrial, isPremium });
 
