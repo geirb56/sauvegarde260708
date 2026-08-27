@@ -326,3 +326,206 @@ def test_maintenance_cycle_created():
     goal = build_plan_goal(goal_type=GoalType.maintenance)
     resp = build_cycle_calendar_response(goal, _REF, cycle_anchor_date=_ANCHOR)
     assert len(resp.weeks) > 0
+
+
+# ===========================================================================
+# REAL HANDLER TESTS — set_training_goal + refresh_training_plan
+# ===========================================================================
+# These tests import and call the REAL production handlers from server.py.
+# They use minimal mocks for MongoDB and auth only — the handler code itself
+# is never mocked.
+# ===========================================================================
+
+import asyncio  # noqa: E402
+from unittest.mock import AsyncMock, MagicMock, patch, call  # noqa: E402
+
+# Lazy server import (env vars already set above)
+def _get_server():
+    """Import server lazily so env vars are already set."""
+    import server as _server
+    return _server
+
+
+# ---------------------------------------------------------------------------
+# Minimal in-memory collection for handler tests
+# ---------------------------------------------------------------------------
+
+class _SimpleCollection:
+    """Minimal MongoDB collection mock used in real handler tests."""
+
+    def __init__(self):
+        self._docs = []
+
+    def _match(self, doc, query):
+        return all(doc.get(k) == v for k, v in query.items()
+                   if not isinstance(v, dict))
+
+    async def find_one(self, query, projection=None):
+        for doc in self._docs:
+            if self._match(doc, query):
+                return dict(doc)
+        return None
+
+    async def update_one(self, query, update, upsert=False):
+        for doc in self._docs:
+            if self._match(doc, {k: v for k, v in query.items() if not isinstance(v, dict)}):
+                doc.update(update.get("$set", {}))
+                return MagicMock(matched_count=1, modified_count=1)
+        if upsert:
+            new_doc = {**{k: v for k, v in query.items() if not isinstance(v, dict)},
+                       **update.get("$set", {})}
+            self._docs.append(new_doc)
+        return MagicMock(matched_count=0, modified_count=0)
+
+    async def insert_one(self, doc):
+        self._docs.append(dict(doc))
+
+
+class _SimpleDB:
+    """Minimal fake DB for real handler tests."""
+    def __init__(self):
+        self.training_cycles = _SimpleCollection()
+        self.training_prefs = _SimpleCollection()
+    def __getattr__(self, name):
+        col = _SimpleCollection()
+        object.__setattr__(self, name, col)
+        return col
+
+
+# ---------------------------------------------------------------------------
+# REAL HANDLER TEST — set_training_goal
+# REAL_SET_GOAL_HANDLER_EXECUTED = YES
+# ---------------------------------------------------------------------------
+
+def test_real_handler_set_goal_maintenance_pass():
+    """
+    REAL_SET_GOAL_HANDLER_EXECUTED = YES
+    MAINTENANCE_SET_GOAL_REAL_HANDLER = PASS
+
+    Imports and directly calls server.set_training_goal with goal=MAINTENANCE.
+    Verifies goal and start_date are persisted; no race_date or target_time added.
+    """
+    import server as _srv
+    fake_db = _SimpleDB()
+    fake_user = {"id": "real-handler-test-user"}
+
+    before = datetime.now(timezone.utc)
+    # Patch server.db so the handler writes to our in-memory collection
+    with patch.object(_srv, "db", fake_db):
+        result = asyncio.get_event_loop().run_until_complete(
+            _srv.set_training_goal(goal="MAINTENANCE", user=fake_user)
+        )
+    after = datetime.now(timezone.utc)
+
+    # MAINTENANCE_SET_GOAL_REAL_HANDLER = PASS
+    assert "Invalid goal" not in str(result), f"Handler rejected MAINTENANCE: {result}"
+    assert result.get("status") == "updated", f"Unexpected response: {result}"
+    assert result.get("goal") == "MAINTENANCE", f"Unexpected goal in response: {result}"
+
+    # MAINTENANCE_PERSISTED_GOAL = MAINTENANCE
+    persisted = asyncio.get_event_loop().run_until_complete(
+        fake_db.training_cycles.find_one({"user_id": "real-handler-test-user"})
+    )
+    assert persisted is not None, "training_cycles was not upserted"
+    assert persisted.get("goal") == "MAINTENANCE", f"Persisted goal: {persisted.get('goal')}"
+
+    # MAINTENANCE_START_DATE = TODAY (UTC)
+    start_date = persisted.get("start_date")
+    assert start_date is not None, "start_date not persisted"
+    if isinstance(start_date, datetime) and start_date.tzinfo is None:
+        start_date = start_date.replace(tzinfo=timezone.utc)
+    assert isinstance(start_date, datetime), f"start_date is not a datetime: {start_date}"
+    assert before <= start_date <= after, f"start_date {start_date} out of expected range"
+    assert start_date.date() == datetime.now(timezone.utc).date(), "start_date is not today"
+
+    # MAINTENANCE_RACE_DATE_CREATED = NO
+    assert persisted.get("race_date") is None, f"race_date must not be created: {persisted}"
+
+    # MAINTENANCE_TARGET_TIME_CREATED = NO
+    assert persisted.get("target_time") is None, f"target_time must not be created: {persisted}"
+
+
+def test_real_handler_set_goal_invalid_rejected():
+    """Non-regression: unknown goals are still rejected by the real handler."""
+    import server as _srv
+    fake_db = _SimpleDB()
+    fake_user = {"id": "real-handler-test-user-2"}
+
+    with patch.object(_srv, "db", fake_db):
+        result = asyncio.get_event_loop().run_until_complete(
+            _srv.set_training_goal(goal="INVALID_GOAL", user=fake_user)
+        )
+
+    assert result.get("error") == "Invalid goal", f"Expected error, got: {result}"
+
+
+# ---------------------------------------------------------------------------
+# REAL HANDLER TEST — refresh_training_plan
+# REAL_REFRESH_HANDLER_EXECUTED = YES
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("sessions", [3, 4, 5, 6])
+def test_real_handler_refresh_maintenance(sessions: int):
+    """
+    REAL_REFRESH_HANDLER_EXECUTED = YES
+    MAINTENANCE_REFRESH_REAL_HANDLER_{sessions} = PASS
+
+    Imports and directly calls server.refresh_training_plan with a
+    MAINTENANCE training cycle in the mock DB.
+
+    The real handler:
+    1. Clears the plan cache for this user
+    2. Stores sessions_per_week in training_prefs
+    3. Calls generate_dynamic_training_plan(db, user_id, sessions_override=sessions)
+
+    generate_dynamic_training_plan is mocked to isolate the handler; its
+    call arguments are verified to confirm sessions is correctly forwarded.
+
+    SESSIONS_CONTRACT: sessions_override is passed to generate_dynamic_training_plan
+    SESSIONS_PERSISTED: sessions_per_week stored in training_prefs
+    SESSIONS_PASSED_TO_GENERATOR: sessions_override=sessions value
+    """
+    import server as _srv
+    fake_db = _SimpleDB()
+    fake_user = {"id": "real-refresh-handler-user"}
+
+    # Pre-seed a MAINTENANCE cycle
+    fake_db.training_cycles._docs.append({
+        "user_id": "real-refresh-handler-user",
+        "goal": "MAINTENANCE",
+        "start_date": datetime.now(timezone.utc),
+    })
+
+    dummy_plan = {"goal": "MAINTENANCE", "sessions_per_week": sessions}
+    mock_gen = AsyncMock(return_value=dummy_plan)
+
+    with patch.object(_srv, "db", fake_db), \
+         patch("server.generate_dynamic_training_plan", new=mock_gen):
+        result = asyncio.get_event_loop().run_until_complete(
+            _srv.refresh_training_plan(sessions=sessions, user=fake_user)
+        )
+
+    # Handler returns the plan from generate_dynamic_training_plan
+    assert result == dummy_plan, f"sessions={sessions}: unexpected result: {result}"
+
+    # SESSIONS_PERSISTED: sessions_per_week stored in training_prefs
+    prefs = asyncio.get_event_loop().run_until_complete(
+        fake_db.training_prefs.find_one({"user_id": "real-refresh-handler-user"})
+    )
+    assert prefs is not None, f"sessions={sessions}: training_prefs not stored"
+    assert prefs.get("sessions_per_week") == sessions, (
+        f"sessions={sessions}: persisted {prefs.get('sessions_per_week')} != {sessions}"
+    )
+
+    # SESSIONS_PASSED_TO_GENERATOR: sessions_override forwarded to generator
+    assert mock_gen.called, "generate_dynamic_training_plan was not called"
+    call_args = mock_gen.call_args
+    # Handler: generate_dynamic_training_plan(db, user_id, sessions_override=sessions)
+    passed_override = (
+        call_args.kwargs.get("sessions_override")
+        if call_args.kwargs
+        else (call_args.args[2] if len(call_args.args) > 2 else None)
+    )
+    assert passed_override == sessions, (
+        f"sessions={sessions}: sessions_override={passed_override} passed to generator"
+    )

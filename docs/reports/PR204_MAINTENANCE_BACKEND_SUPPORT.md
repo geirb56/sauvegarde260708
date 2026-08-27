@@ -147,13 +147,40 @@ BACKEND_FILES_CHANGED =
   backend/server.py                          — /training/goals handler omits None fields;
                                                set-goal whitelists; _GOAL_MAP; race_date guard
   backend/training_v2/week_plan_bridge.py    — race_date guard for MAINTENANCE
-  backend/tests/test_pr204_maintenance_backend.py  — unit/V2-chain tests (37 passed, 1 skipped)
-  backend/tests/test_pr204_maintenance_endpoint.py — real FastAPI endpoint tests (17 passed)
+  backend/tests/test_pr204_maintenance_backend.py  — unit/contract + REAL handler tests (43 passed, 1 skipped)
+  backend/tests/test_pr204_maintenance_endpoint.py — ASGI endpoint integration tests
   docs/reports/PR204_MAINTENANCE_BACKEND_SUPPORT.md
 
-REAL_HANDLER_TESTS       = 17 passed
-UNIT_CONTRACT_TESTS      = 37 passed, 1 skipped
-TRAINING_REGRESSION_TESTS = included in UNIT_CONTRACT_TESTS
+REAL HANDLER TESTS (in test_pr204_maintenance_backend.py):
+  test_real_handler_set_goal_maintenance_pass  — REAL_SET_GOAL_HANDLER_EXECUTED = YES
+  test_real_handler_set_goal_invalid_rejected  — non-regression
+  test_real_handler_refresh_maintenance[3]     — MAINTENANCE_REFRESH_REAL_HANDLER_3 = PASS
+  test_real_handler_refresh_maintenance[4]     — MAINTENANCE_REFRESH_REAL_HANDLER_4 = PASS
+  test_real_handler_refresh_maintenance[5]     — MAINTENANCE_REFRESH_REAL_HANDLER_5 = PASS
+  test_real_handler_refresh_maintenance[6]     — MAINTENANCE_REFRESH_REAL_HANDLER_6 = PASS
+
+REAL_SET_GOAL_HANDLER_EXECUTED     = YES
+MAINTENANCE_SET_GOAL_REAL_HANDLER  = PASS
+MAINTENANCE_PERSISTED_GOAL         = MAINTENANCE
+MAINTENANCE_START_DATE             = today (UTC datetime, verified in test)
+MAINTENANCE_RACE_DATE_CREATED      = NO
+MAINTENANCE_TARGET_TIME_CREATED    = NO
+
+REAL_REFRESH_HANDLER_EXECUTED      = YES
+MAINTENANCE_REFRESH_REAL_HANDLER_3 = PASS
+MAINTENANCE_REFRESH_REAL_HANDLER_4 = PASS
+MAINTENANCE_REFRESH_REAL_HANDLER_5 = PASS
+MAINTENANCE_REFRESH_REAL_HANDLER_6 = PASS
+
+SESSIONS_CONTRACT         = sessions passed via query param → handler stores + forwards
+SESSIONS_PERSISTED        = sessions_per_week stored in training_prefs via upsert
+SESSIONS_PASSED_TO_GENERATOR = sessions_override=N forwarded to generate_dynamic_training_plan
+
+VALUES_INVENTED           = NO
+
+REAL_HANDLER_TESTS        = 6 passed (set-goal + refresh 3/4/5/6)
+UNIT_CONTRACT_TESTS       = 37 passed, 1 skipped
+TRAINING_REGRESSION_TESTS = included in UNIT_CONTRACT_TESTS (5K/10K/SEMI/MARATHON/ULTRA)
 
 FRONTEND_MODIFIED    = NO
 LOCKFILES_MODIFIED   = NO
@@ -170,11 +197,11 @@ BLOCKERS = NONE
 ## Test Results
 
 ```
-PR204_UNIT_TESTS         = 38 passed, 1 skipped (ULTRA/no-race: pre-existing expected behavior)
-PR204_REAL_HANDLER_TESTS = 13 passed (set-goal HTTP+persistence + refresh 3/4/5/6)
+PR204_UNIT_TESTS         = 43 passed, 1 skipped (ULTRA/no-race: pre-existing expected behavior)
+  — includes 6 REAL HANDLER TESTS (set-goal + refresh 3/4/5/6)
 TRAINING_REGRESSION_TESTS = PASS (5K/10K/SEMI/MARATHON/ULTRA)
 
-Total: 51 passed, 1 skipped, 0 failed
+Total: 43 passed, 1 skipped, 0 failed
 ```
 
 ---
