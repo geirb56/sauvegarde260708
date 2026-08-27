@@ -284,7 +284,7 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
 
   // 8. Today session comes from /training/today
   it("8. Today session source is /training/today", async () => {
-    mockUseSubscription.mockReturnValue({ isFree: true, loading: false });
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
     setupAxiosMocks(buildDefaultMocks());
 
     const { container, unmount } = renderDashboard();
@@ -301,7 +301,7 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
 
   // 9. estimated_tss=null: no "0 TSS"
   it("9. estimated_tss=null: no TSS badge rendered", async () => {
-    mockUseSubscription.mockReturnValue({ isFree: true, loading: false });
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
     setupAxiosMocks(
       buildDefaultMocks({
         today: {
@@ -322,7 +322,7 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
 
   // 10. estimated_tss=0: "0 TSS" is rendered
   it("10. estimated_tss=0: '0 TSS' badge rendered", async () => {
-    mockUseSubscription.mockReturnValue({ isFree: true, loading: false });
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
     setupAxiosMocks(
       buildDefaultMocks({
         today: {
@@ -343,7 +343,7 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
 
   // 10b. today recommendation absent: never fabricated as RUN HARD
   it("10b. today recommendation absent: never shows fabricated RUN HARD", async () => {
-    mockUseSubscription.mockReturnValue({ isFree: true, loading: false });
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
     setupAxiosMocks(
       buildDefaultMocks({
         today: {
@@ -370,7 +370,7 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
 
   // 10c. today unknown readiness uses gray badge, never red by default
   it("10c. today unknown readiness uses neutral gray", async () => {
-    mockUseSubscription.mockReturnValue({ isFree: true, loading: false });
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
     setupAxiosMocks(
       buildDefaultMocks({
         today: {
@@ -437,7 +437,7 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
   });
 
   // 12. no extra legacy endpoints
-  it("12. no legacy endpoints introduced (subscription/info, run-index, training/today, dashboard/insight only)", async () => {
+  it("12. no legacy endpoints introduced (dashboard/insight, run-index only for FREE)", async () => {
     mockUseSubscription.mockReturnValue({ isFree: true, loading: false });
     setupAxiosMocks(buildDefaultMocks());
 
@@ -446,8 +446,6 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
 
     const allowedPatterns = [
       "dashboard/insight",
-      "rag/dashboard",
-      "training/today",
       "run-index",
     ];
 
