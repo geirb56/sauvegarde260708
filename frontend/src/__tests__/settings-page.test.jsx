@@ -112,7 +112,7 @@ describe("Settings UX V2", () => {
 
     expect(await screen.findByTestId("settings-current-goal")).toHaveTextContent("Marathon");
     expect(screen.getByTestId("settings-sessions-current")).toHaveTextContent("4 sessions/week");
-    expect(screen.getByTestId("settings-plan-start-date")).toHaveTextContent("27 Aug 2026");
+    expect(screen.getByTestId("settings-plan-start-date")).toHaveTextContent("Aug 27, 2026");
     expect(screen.getByTestId("settings-plan-start-date")).toHaveTextContent("Read only");
 
     ["5K", "10K", "SEMI", "MARATHON", "ULTRA", "MAINTENANCE"].forEach((goal) => {
