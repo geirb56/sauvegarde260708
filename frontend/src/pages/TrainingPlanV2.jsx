@@ -148,9 +148,10 @@ function SessionStatusBadge({ t, status }) {
 
 function SessionDayCard({ session, day, isToday, t, unitSystem }) {
   const workoutType = session?.workout_type;
+  const isExplicitRest = workoutType === "rest" || getSessionStatusKey(session) === "rest";
   const workoutTypeLabel = session
     ? getTranslatedValue(t, `trainingV2.workoutTypes.${workoutType}`)
-    : t("trainingV2.restDay");
+    : t("trainingV2.noSessionLabel");
 
   const metricParts = [];
   if (session && isKnownNumber(session.distance_km)) metricParts.push(formatDistance(session.distance_km, { unitSystem }));
@@ -160,7 +161,7 @@ function SessionDayCard({ session, day, isToday, t, unitSystem }) {
   }
 
   const state = getSessionStatusKey(session)
-    || ((session?.workout_type === "rest" || !session) ? "rest" : null);
+    || (isExplicitRest ? "rest" : null);
 
   const detailRoute = getSessionDetailRoute(session);
   const containerClassName = `rounded-xl border p-4 transition-colors ${
@@ -188,7 +189,9 @@ function SessionDayCard({ session, day, isToday, t, unitSystem }) {
         {metricParts.length > 0 ? metricParts.map((part) => (
           <span key={part} className="rounded-full border border-current/20 px-2.5 py-1">{part}</span>
         )) : (
-          <span className="rounded-full border border-current/20 px-2.5 py-1">{t("trainingV2.restDay")}</span>
+          <span className="rounded-full border border-current/20 px-2.5 py-1">
+            {isExplicitRest ? t("trainingV2.restDay") : t("trainingV2.noSessionLabel")}
+          </span>
         )}
       </div>
     </>

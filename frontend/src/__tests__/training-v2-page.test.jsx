@@ -215,6 +215,19 @@ describe("TrainingPlanV2 — PR206", () => {
     expect(screen.getByTestId("session-status-missed")).toBeInTheDocument();
   });
 
+  test("missing session in weekly payload does not show REST badge", async () => {
+    const weekWithMissingSunday = weekData();
+    weekWithMissingSunday.week.sessions = weekWithMissingSunday.week.sessions.filter((session) => session.day !== "sunday");
+
+    mockAxios({ week: weekWithMissingSunday });
+    renderPage();
+    await screen.findByTestId("training-v2-week");
+
+    const sundayCard = screen.getByTestId("training-v2-day-sunday");
+    expect(within(sundayCard).queryByTestId("session-status-rest")).not.toBeInTheDocument();
+    expect(within(sundayCard).getAllByText("No session").length).toBeGreaterThan(0);
+  });
+
   test("unknown distance, duration and null tss are not shown as zero", async () => {
     mockAxios();
     renderPage();
