@@ -28,6 +28,7 @@ const GOAL_OPTIONS = [
 
 const SUPPORTED_SESSION_VALUES = [3, 4, 5, 6];
 const TERMINAL_SYNC_STATUSES = new Set(["complete", "partial_success", "failed"]);
+const SUPPORTED_CYCLE_STATUSES = new Set(["active", "upcoming", "completed"]);
 
 function normalizeCycleGoalToUi(goalType) {
   if (!goalType || typeof goalType !== "string") return null;
@@ -490,7 +491,7 @@ export default function Settings() {
               <SettingRow
                 label={t("settingsV2.plan.currentGoal")}
                 value={currentGoalLabel}
-                helper={cycleStatus ? t(`settingsV2.plan.statusValues.${cycleStatus}`) : null}
+                helper={cycleStatus && SUPPORTED_CYCLE_STATUSES.has(cycleStatus) ? t(`settingsV2.plan.statusValues.${cycleStatus}`) : null}
                 testId="settings-current-goal"
               />
 
@@ -861,7 +862,7 @@ export default function Settings() {
               label={t("settingsV2.account.subscription")}
               value={subscriptionLoading ? t("common.loading") : subscriptionCode}
               helper={statusLabel || null}
-              action={<Badge className={getSubscriptionBadgeClass(subscriptionCode)} data-testid="settings-subscription-badge">{subscriptionCode}</Badge>}
+              action={subscriptionLoading ? null : <Badge className={getSubscriptionBadgeClass(subscriptionCode)} data-testid="settings-subscription-badge">{subscriptionCode}</Badge>}
               testId="settings-subscription-status"
             />
           </div>

@@ -1,5 +1,5 @@
 BASE_SHA = 1b327cdc5662f8b334aae9620afbbd94d3fcebc2
-HEAD_SHA = TO_UPDATE
+HEAD_SHA = 3f84e0b791463b381d3a42cc9485c74f1dc3f65a
 
 SETTINGS_CONTRACT_AUDIT =
 
@@ -77,7 +77,7 @@ BACKEND_MODIFIED = NO
 LOCKFILES_MODIFIED = NO
 DEPENDENCIES_MODIFIED = NO
 
-TESTS =
+TESTS = PASS
 - `frontend: npm test -- --watchAll=false --runInBand --runTestsByPath src/__tests__/settings-page.test.jsx src/__tests__/onboarding-garmin-autofill.test.jsx src/lib/i18n.test.js` = PASS
 - `frontend: yarn build` = PASS
 
