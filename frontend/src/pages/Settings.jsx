@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import { Badge } from "@/components/ui/badge";
@@ -187,7 +187,7 @@ export default function Settings() {
   const effectiveGarminStatus = garminProgress || garminStatus?.sync_status || null;
   const subscriptionCode = getSubscriptionCode({ subscription, isTrial, isPremium });
 
-  const loadPlanSettings = async () => {
+  const loadPlanSettings = useCallback(async () => {
     setPlanLoading(true);
     setPlanError("");
     const [cycleV2Result, weekV2Result, userGoalResult] = await Promise.allSettled([
@@ -240,9 +240,10 @@ export default function Settings() {
 
     setPlanError(nextError);
     setPlanLoading(false);
-  };
+    return nextError === "";
+  }, [t]);
 
-  const loadGarminStatus = async () => {
+  const loadGarminStatus = useCallback(async () => {
     setGarminLoading(true);
     setGarminError("");
     try {
@@ -255,18 +256,23 @@ export default function Settings() {
     } finally {
       setGarminLoading(false);
     }
-  };
+  }, [t]);
 
   useEffect(() => {
     loadPlanSettings();
     loadGarminStatus();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [loadGarminStatus, loadPlanSettings]);
 
   const handleSetTrainingGoal = async (goalValue) => {
     setPlanAction({ status: "saving", message: t("settingsV2.common.saving") });
     try {
       await axios.post(`${API}/training/set-goal?goal=${encodeURIComponent(goalValue)}`, {});
-      await loadPlanSettings();
+      const reloadSucceeded = await loadPlanSettings();
+      if (!reloadSucceeded) {
+        setPlanAction({ status: "error", message: t("settingsV2.plan.loadError") });
+        toast.error(t("settingsV2.plan.loadError"));
+        return;
+      }
       setPlanAction({
         status: "saved",
         message: t("settingsV2.plan.goalUpdated").replace("{goal}", t(getGoalOption(goalValue)?.translationKey || "trainingV2.unknownGoal")),
@@ -282,8 +288,13 @@ export default function Settings() {
   const handleSetSessions = async (value) => {
     setPlanAction({ status: "saving", message: t("settingsV2.common.saving") });
     try {
-      await axios.post(`${API}/training/refresh?sessions=${value}`, {});
-      await loadPlanSettings();
+      await axios.post(`${API}/training/refresh?sessions=${encodeURIComponent(value)}`, {});
+      const reloadSucceeded = await loadPlanSettings();
+      if (!reloadSucceeded) {
+        setPlanAction({ status: "error", message: t("settingsV2.plan.loadError") });
+        toast.error(t("settingsV2.plan.loadError"));
+        return;
+      }
       setPlanAction({
         status: "saved",
         message: t("settingsV2.plan.sessionsUpdated").replace("{count}", String(value)),
@@ -321,7 +332,12 @@ export default function Settings() {
         distance_type: selectedGoalOption.distanceType,
         target_time_minutes: totalMinutes,
       });
-      await loadPlanSettings();
+      const reloadSucceeded = await loadPlanSettings();
+      if (!reloadSucceeded) {
+        setPlanAction({ status: "error", message: t("settingsV2.plan.loadError") });
+        toast.error(t("settingsV2.plan.loadError"));
+        return;
+      }
       setPlanAction({ status: "saved", message: t("settingsV2.plan.raceSaved") });
       toast.success(t("settingsV2.plan.raceSaved"));
     } catch (error) {
