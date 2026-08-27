@@ -300,8 +300,8 @@ async def test_set_goal_maintenance_no_race_date_created():
         f"target_time must not be set by set-goal handler: {persisted}"
     )
 
-
-
+@pytest.mark.asyncio
+async def test_set_goal_invalid_value_rejected():
     """POST /training/set-goal?goal=INVALID returns error, not 200 with goal."""
     fake_db = _FakeDB()
     r = await _call("post", "/api/training/set-goal?goal=INVALID",
@@ -420,8 +420,8 @@ async def test_refresh_maintenance_sessions_passed_to_generator(sessions: int):
         f"sessions_override={passed_override} was passed to generator, expected {sessions}"
     )
 
-
-
+@pytest.mark.asyncio
+async def test_refresh_maintenance_plan_returned():
     """Refresh endpoint returns the plan payload produced by generate_dynamic_training_plan."""
     fake_db = _make_db_with_maintenance_cycle()
     expected = {"goal": "MAINTENANCE", "sessions_per_week": 4, "sessions": []}
