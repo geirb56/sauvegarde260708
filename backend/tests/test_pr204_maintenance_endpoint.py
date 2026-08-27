@@ -285,7 +285,23 @@ async def test_set_goal_maintenance_start_date_persisted():
 
 
 @pytest.mark.asyncio
-async def test_set_goal_invalid_value_rejected():
+async def test_set_goal_maintenance_no_race_date_created():
+    """set-goal handler must NOT write race_date to training_cycles for MAINTENANCE."""
+    fake_db = _FakeDB()
+    r = await _call("post", "/api/training/set-goal?goal=MAINTENANCE",
+                    _patches(fake_db), headers=_bearer())
+    assert r.status_code == 200, r.text
+    persisted = await fake_db.training_cycles.find_one({"user_id": _USER_ID})
+    assert persisted is not None
+    assert persisted.get("race_date") is None, (
+        f"race_date must not be set by set-goal handler: {persisted}"
+    )
+    assert persisted.get("target_time") is None, (
+        f"target_time must not be set by set-goal handler: {persisted}"
+    )
+
+
+
     """POST /training/set-goal?goal=INVALID returns error, not 200 with goal."""
     fake_db = _FakeDB()
     r = await _call("post", "/api/training/set-goal?goal=INVALID",
@@ -369,7 +385,43 @@ async def test_refresh_maintenance_sessions_stored(sessions: int):
 
 
 @pytest.mark.asyncio
-async def test_refresh_maintenance_plan_returned():
+@pytest.mark.parametrize("sessions", [3, 4, 5, 6])
+async def test_refresh_maintenance_sessions_passed_to_generator(sessions: int):
+    """The refresh handler passes sessions_override=N to generate_dynamic_training_plan.
+
+    SESSIONS_CONTRACT: sessions_override parameter is forwarded to the generator.
+    SESSIONS_PERSISTED: sessions_per_week stored in training_prefs.
+    SESSIONS_PASSED_TO_GENERATOR: sessions_override=sessions_value.
+    """
+    fake_db = _make_db_with_maintenance_cycle()
+    mock_gen = AsyncMock(return_value={"goal": "MAINTENANCE"})
+
+    with patch("server.generate_dynamic_training_plan", new=mock_gen):
+        r = await _call(
+            "post",
+            f"/api/training/refresh?sessions={sessions}",
+            _patches(fake_db),
+            headers=_bearer(),
+        )
+
+    assert r.status_code == 200, f"sessions={sessions}: {r.text}"
+
+    # Verify the generator was called with the correct sessions_override
+    assert mock_gen.called, "generate_dynamic_training_plan was not called"
+    call_kwargs = mock_gen.call_args
+    # Handler calls: generate_dynamic_training_plan(db, user_id, sessions_override=sessions)
+    if call_kwargs.kwargs:
+        passed_override = call_kwargs.kwargs.get("sessions_override")
+    else:
+        # Positional args: db, user_id, sessions_override
+        args = call_kwargs.args
+        passed_override = args[2] if len(args) > 2 else None
+    assert passed_override == sessions, (
+        f"sessions_override={passed_override} was passed to generator, expected {sessions}"
+    )
+
+
+
     """Refresh endpoint returns the plan payload produced by generate_dynamic_training_plan."""
     fake_db = _make_db_with_maintenance_cycle()
     expected = {"goal": "MAINTENANCE", "sessions_per_week": 4, "sessions": []}
