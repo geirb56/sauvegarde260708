@@ -66,20 +66,8 @@ async function flush() {
 }
 
 function goToGarminStep(container) {
+  // PR203 new flow: welcome CTA goes directly to garmin step
   click(container, '[data-testid="onboarding-start"]');
-  click(container, '[data-testid^="fitness-option-"]');
-  click(container, "button.ml-auto");
-  click(container, '[data-testid^="goal-option-"]');
-  click(container, "button.ml-auto");
-  click(container, '[data-testid^="frequency-option-"]');
-  click(container, "button.ml-auto");
-
-  const deviceOptions = Array.from(container.querySelectorAll('[data-testid^="device-option-"]'));
-  expect(deviceOptions.length).toBeGreaterThan(1);
-  const garminOption = deviceOptions.find((option) => option.getAttribute("data-testid").includes("garmin")) || deviceOptions[1];
-  act(() => {
-    garminOption.click();
-  });
 }
 
 function getGarminFormElements(container) {
