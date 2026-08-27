@@ -734,64 +734,7 @@ export default function Dashboard() {
   return (
     <div className="p-4 pb-24 space-y-4" style={{ background: "var(--bg-primary)" }}>
 
-      {runIndexData && (
-        <div
-          className="rounded-3xl p-5 space-y-4 animate-in"
-          style={{
-            background: "linear-gradient(135deg, #0d1a10 0%, #111827 60%, #0d1a10 100%)",
-            border: "1px solid rgba(110, 235, 90, 0.22)",
-            boxShadow: "0 16px 40px rgba(15, 23, 42, 0.22)",
-          }}
-        >
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.22em]" style={{ color: "#6EEB5A" }}>
-                {t("dashboard.runIndex")}
-              </p>
-              <h2 className="text-lg font-black mt-1" style={{ color: "#ffffff" }}>
-                {t("dashboard.runIndexOverall")}
-              </h2>
-              <p className="text-xs mt-2 max-w-md" style={{ color: "rgba(255,255,255,0.72)" }}>
-                {t("dashboard.runIndexDescription")}
-              </p>
-            </div>
-            <div className="px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider" style={{ background: "rgba(110, 235, 90, 0.12)", color: "#6EEB5A" }}>
-              {t("progress.confidence")}: {runIndexConfidence}%
-            </div>
-          </div>
-
-          <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-            <div>
-              {runIndexNull ? (
-                <p className="text-base font-semibold" style={{ color: "rgba(255,255,255,0.55)" }}>
-                  {t("dashboard.runIndexInsufficient") || "Insufficient data"}
-                </p>
-              ) : (
-                <div className="flex items-end gap-2">
-                  <span className="text-6xl font-black leading-none" style={{ color: "#ffffff" }}>
-                    {runIndexScore}
-                  </span>
-                  <span className="text-xl font-semibold pb-1" style={{ color: "#6EEB5A" }}>
-                    / 1000
-                  </span>
-                </div>
-              )}
-              <p className="text-sm mt-2" style={{ color: "rgba(255,255,255,0.72)" }}>
-                {t("dashboard.runIndexLevel")}
-              </p>
-            </div>
-          </div>
-
-          <div className="grid gap-3">
-            <RunIndexPillar icon={Zap} label={t("dashboard.runIndexPillars.speed")} value={runIndexData?.speed_score} color="#f59e0b" />
-            <RunIndexPillar icon={Heart} label={t("dashboard.runIndexPillars.endurance")} value={runIndexData?.endurance_score} color="#ef4444" />
-            <RunIndexPillar icon={TrendingUp} label={t("dashboard.runIndexPillars.consistency")} value={runIndexData?.consistency_score} color="#6EEB5A" />
-            <RunIndexPillar icon={Target} label={t("dashboard.runIndexPillars.efficiency")} value={runIndexData?.efficiency_score} color="#3b82f6" />
-          </div>
-        </div>
-      )}
-
-      {/* ── RUN READINESS SECTION ────────────────────────────────────── */}
+      {/* ── RUN READINESS SECTION (first) ───────────────────────────── */}
       {cardioLoading ? (
         <div
           className="flex flex-col items-center justify-center py-8 gap-3"
@@ -961,24 +904,6 @@ export default function Dashboard() {
                     />
                   </div>
 
-                  {/* 30-day Run Readiness trend */}
-                  {history.filter((h) => h.run_readiness !== undefined && h.run_readiness !== null).length >= 2 && (
-                    <div className="pt-1" data-testid="readiness-trend">
-                      <p className="text-[11px] uppercase tracking-wider font-semibold mb-1" style={{ color: "var(--text-tertiary)" }}>
-                        {t("dashboard.monthlyReadiness")}
-                      </p>
-                      <ReadinessChart data={history} height={150} />
-                      <div className="flex justify-between mt-1">
-                        <span className="text-[9px]" style={{ color: "var(--text-tertiary)" }}>
-                          {history[0]?.date ? history[0].date.slice(5) : ""}
-                        </span>
-                        <span className="text-[9px]" style={{ color: "var(--text-tertiary)" }}>
-                          {history[history.length - 1]?.date ? history[history.length - 1].date.slice(5) : ""}
-                        </span>
-                      </div>
-                    </div>
-                  )}
-
                   {cardioData?.mock && (
                     <p className="text-center text-[10px]" style={{ color: "var(--text-tertiary)" }}>
                       {t("dashboard.demoDataNotice")}
@@ -1102,6 +1027,65 @@ export default function Dashboard() {
           </>
         )}
       </div>
+      )}
+
+      {/* ── RUNINDEX SECTION (third) ─────────────────────────────────── */}
+      {runIndexData && (
+        <div
+          className="rounded-3xl p-5 space-y-4 animate-in"
+          style={{
+            background: "linear-gradient(135deg, #0d1a10 0%, #111827 60%, #0d1a10 100%)",
+            border: "1px solid rgba(110, 235, 90, 0.22)",
+            boxShadow: "0 16px 40px rgba(15, 23, 42, 0.22)",
+          }}
+          data-testid="run-index-card"
+        >
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.22em]" style={{ color: "#6EEB5A" }}>
+                {t("dashboard.runIndex")}
+              </p>
+              <h2 className="text-lg font-black mt-1" style={{ color: "#ffffff" }}>
+                {t("dashboard.runIndexOverall")}
+              </h2>
+              <p className="text-xs mt-2 max-w-md" style={{ color: "rgba(255,255,255,0.72)" }}>
+                {t("dashboard.runIndexDescription")}
+              </p>
+            </div>
+            <div className="px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider" style={{ background: "rgba(110, 235, 90, 0.12)", color: "#6EEB5A" }}>
+              {t("progress.confidence")}: {runIndexConfidence}%
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+            <div>
+              {runIndexNull ? (
+                <p className="text-base font-semibold" style={{ color: "rgba(255,255,255,0.55)" }}>
+                  {t("dashboard.runIndexInsufficient") || "Insufficient data"}
+                </p>
+              ) : (
+                <div className="flex items-end gap-2">
+                  <span className="text-6xl font-black leading-none" style={{ color: "#ffffff" }}>
+                    {runIndexScore}
+                  </span>
+                  <span className="text-xl font-semibold pb-1" style={{ color: "#6EEB5A" }}>
+                    / 1000
+                  </span>
+                </div>
+              )}
+              <p className="text-sm mt-2" style={{ color: "rgba(255,255,255,0.72)" }}>
+                {t("dashboard.runIndexLevel")}
+              </p>
+            </div>
+          </div>
+
+          <div className="grid gap-3">
+            <RunIndexPillar icon={Zap} label={t("dashboard.runIndexPillars.speed")} value={runIndexData?.speed_score} color="#f59e0b" />
+            <RunIndexPillar icon={Heart} label={t("dashboard.runIndexPillars.endurance")} value={runIndexData?.endurance_score} color="#ef4444" />
+            <RunIndexPillar icon={TrendingUp} label={t("dashboard.runIndexPillars.consistency")} value={runIndexData?.consistency_score} color="#6EEB5A" />
+            <RunIndexPillar icon={Target} label={t("dashboard.runIndexPillars.efficiency")} value={runIndexData?.efficiency_score} color="#3b82f6" />
+          </div>
+        </div>
       )}
 
       {/* WEEKLY TARGET — V2 authority (TRIAL/PREMIUM only); FREE sees static blur preview */}

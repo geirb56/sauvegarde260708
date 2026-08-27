@@ -323,3 +323,129 @@ describe("TRIAL/PREMIUM — real cards, no blur preview", () => {
     unmount();
   });
 });
+
+// ─── DOM ORDER TESTS ───────────────────────────────────────────────────────────
+
+// Helper: returns true if elA appears before elB in document order
+function isBefore(elA, elB) {
+  if (!elA || !elB) return false;
+  return !!(elA.compareDocumentPosition(elB) & Node.DOCUMENT_POSITION_FOLLOWING);
+}
+
+const CARDIO_WITH_READINESS = {
+  mock: false,
+  source: "garmin",
+  recommendation: "EASY RUN",
+  recommendation_color: "green",
+  recommendation_emoji: "🟢",
+  reasons: [],
+  metrics: {
+    run_readiness: 72,
+    hrv_today: 45, hrv_baseline: 50, hrv_delta: -5,
+    hrv_status: "green", hrv_available: true,
+    rhr_today: 52, rhr_baseline: 51, rhr_status: "gray",
+    sleep_hours: 7.5, sleep_status: "green",
+    training_load: 0.9, training_load_status: "green",
+  },
+  history: [],
+};
+
+const INSIGHT_WITH_RUNINDEX = {
+  week: { sessions: 3, volume_km: 25, actual_duration_minutes: 135 },
+  month: { volume_km: 90 },
+  run_index: { run_index: 264, confidence_score: 87, status: "ok", speed_score: 70, endurance_score: 75, consistency_score: 80, efficiency_score: 65 },
+};
+
+function setupAxiosFreeWithReadiness() {
+  axios.get.mockImplementation((url) => {
+    if (url.includes("dashboard/insight")) return Promise.resolve({ data: INSIGHT_WITH_RUNINDEX });
+    if (url.includes("run-index")) return Promise.resolve({ data: CARDIO_WITH_READINESS });
+    if (url.includes("rag/dashboard")) return Promise.reject(new Error("FORBIDDEN for FREE"));
+    if (url.includes("training/today")) return Promise.reject(new Error("FORBIDDEN for FREE"));
+    if (url.includes("training/v2/week")) return Promise.reject(new Error("FORBIDDEN for FREE"));
+    return Promise.resolve({ data: null });
+  });
+}
+
+function setupAxiosPremiumWithReadiness() {
+  axios.get.mockImplementation((url) => {
+    if (url.includes("dashboard/insight")) return Promise.resolve({ data: INSIGHT_WITH_RUNINDEX });
+    if (url.includes("run-index")) return Promise.resolve({ data: CARDIO_WITH_READINESS });
+    if (url.includes("rag/dashboard")) return Promise.resolve({ data: null });
+    if (url.includes("training/today")) return Promise.resolve({ data: TODAY_PREMIUM_PAYLOAD });
+    if (url.includes("training/v2/week")) return Promise.resolve({ data: WEEK_PREMIUM_PAYLOAD });
+    return Promise.resolve({ data: null });
+  });
+}
+
+describe("Dashboard DOM order — FREE", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockUseSubscription.mockReturnValue({ isFree: true, loading: false });
+    setupAxiosFreeWithReadiness();
+  });
+
+  it("FREE order: Readiness < TodayPreview < RunIndex < WeekPreview", async () => {
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const readiness = container.querySelector('[data-testid="run-readiness-card"]');
+    const todayPreview = container.querySelector('[data-testid="today-preview-free"]');
+    const runIndex = container.querySelector('[data-testid="run-index-card"]');
+    const weekPreview = container.querySelector('[data-testid="week-preview-free"]');
+
+    expect(readiness).not.toBeNull();
+    expect(todayPreview).not.toBeNull();
+    expect(runIndex).not.toBeNull();
+    expect(weekPreview).not.toBeNull();
+
+    expect(isBefore(readiness, todayPreview)).toBe(true);
+    expect(isBefore(todayPreview, runIndex)).toBe(true);
+    expect(isBefore(runIndex, weekPreview)).toBe(true);
+    unmount();
+  });
+
+  it("READINESS_HISTORY_ON_DASHBOARD = NO — readiness-trend not in DOM", async () => {
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+    const trend = container.querySelector('[data-testid="readiness-trend"]');
+    expect(trend).toBeNull();
+    unmount();
+  });
+});
+
+describe("Dashboard DOM order — TRIAL/PREMIUM", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosPremiumWithReadiness();
+  });
+
+  it("PREMIUM order: Readiness < TodayWorkout < RunIndex < WeeklyTarget", async () => {
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const readiness = container.querySelector('[data-testid="run-readiness-card"]');
+    const todayWorkout = container.querySelector('[data-testid="today-workout-card"]');
+    const runIndex = container.querySelector('[data-testid="run-index-card"]');
+    const weeklyTarget = container.querySelector('[data-testid="weekly-target-card"]');
+
+    expect(readiness).not.toBeNull();
+    expect(todayWorkout).not.toBeNull();
+    expect(runIndex).not.toBeNull();
+    expect(weeklyTarget).not.toBeNull();
+
+    expect(isBefore(readiness, todayWorkout)).toBe(true);
+    expect(isBefore(todayWorkout, runIndex)).toBe(true);
+    expect(isBefore(runIndex, weeklyTarget)).toBe(true);
+    unmount();
+  });
+
+  it("PREMIUM — no blur preview cards in DOM", async () => {
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+    expect(container.querySelector('[data-testid="today-preview-free"]')).toBeNull();
+    expect(container.querySelector('[data-testid="week-preview-free"]')).toBeNull();
+    unmount();
+  });
+});
