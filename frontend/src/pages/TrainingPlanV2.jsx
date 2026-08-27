@@ -5,7 +5,6 @@ import { CalendarDays, ChevronDown, ChevronUp, Gauge, MapPin, Sparkles } from "l
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import Paywall from "@/components/Paywall";
@@ -548,15 +547,24 @@ export default function TrainingPlanV2() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <Collapsible open={pacesOpen} onOpenChange={setPacesOpen}>
-            <CollapsibleTrigger
+          <div>
+            <button
+              type="button"
               className="mb-3 flex w-full items-center justify-between rounded-lg border border-border px-3 py-2 text-sm"
               data-testid="paces-collapsible-trigger"
+              aria-expanded={pacesOpen}
+              aria-controls="paces-collapsible-content"
+              onClick={() => setPacesOpen((v) => !v)}
             >
               <span>{t("trainingV2.pacesSummary")}</span>
               {pacesOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-            </CollapsibleTrigger>
-            <CollapsibleContent className="space-y-3" data-testid="paces-collapsible-content">
+            </button>
+            <div
+              id="paces-collapsible-content"
+              className="space-y-3"
+              data-testid="paces-collapsible-content"
+              style={pacesOpen ? undefined : { display: "none" }}
+            >
               <DetailRow label={t("trainingV2.confidence")} value={confidenceLabel} />
               {pacesData?.confidence === "INSUFFICIENT" ? (
                 <p className="text-sm text-muted-foreground">{t("trainingV2.pacesInsufficient")}</p>
@@ -588,8 +596,8 @@ export default function TrainingPlanV2() {
                   />
                 </div>
               )}
-            </CollapsibleContent>
-          </Collapsible>
+            </div>
+          </div>
         </CardContent>
       </Card>
 
