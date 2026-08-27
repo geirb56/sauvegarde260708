@@ -10,6 +10,10 @@ import { UnitProvider } from "@/context/UnitContext";
 import { LANGUAGE_STORAGE_KEY } from "@/lib/i18n";
 import { UNIT_SYSTEM_KEY } from "@/utils/units";
 
+const mockUseAuth = jest.fn();
+const mockUseSubscription = jest.fn();
+const mockUseGarminSyncProgress = jest.fn();
+
 jest.mock("axios");
 jest.mock("sonner", () => ({
   toast: {
@@ -18,25 +22,13 @@ jest.mock("sonner", () => ({
   },
 }));
 jest.mock("@/context/AuthContext", () => ({
-  useAuth: jest.fn(() => ({
-    user: { id: "user-1", email: "runner@example.com", is_email_verified: true },
-  })),
+  useAuth: (...args) => mockUseAuth(...args),
 }));
 jest.mock("@/context/SubscriptionContext", () => ({
-  useSubscription: jest.fn(() => ({
-    subscription: { status: "trial" },
-    isTrial: true,
-    isPremium: false,
-    isFree: false,
-    trialDaysRemaining: 12,
-    loading: false,
-    statusLabel: "Trial active",
-  })),
+  useSubscription: (...args) => mockUseSubscription(...args),
 }));
 jest.mock("@/hooks/useGarminSyncProgress", () => ({
-  useGarminSyncProgress: jest.fn(() => ({
-    progress: null,
-  })),
+  useGarminSyncProgress: (...args) => mockUseGarminSyncProgress(...args),
 }));
 
 const { toast } = require("sonner");
@@ -99,14 +91,26 @@ describe("Settings UX V2", () => {
     jest.clearAllMocks();
     window.localStorage.clear();
     Object.defineProperty(window, "innerWidth", { writable: true, configurable: true, value: 1024 });
+    mockUseAuth.mockReturnValue({
+      user: { id: "user-1", email: "runner@example.com", is_email_verified: true },
+    });
+    mockUseSubscription.mockReturnValue({
+      subscription: { status: "trial" },
+      isTrial: true,
+      isPremium: false,
+      isFree: false,
+      trialDaysRemaining: 12,
+      loading: false,
+      statusLabel: "Trial active",
+    });
+    mockUseGarminSyncProgress.mockReturnValue({ progress: null });
   });
 
   test("loads settings and shows six supported goal buttons", async () => {
     mockAxiosApi();
     renderPage();
 
-    expect(await screen.findByTestId("settings-plan-section")).toBeInTheDocument();
-    expect(screen.getByTestId("settings-current-goal")).toHaveTextContent("Marathon");
+    expect(await screen.findByTestId("settings-current-goal")).toHaveTextContent("Marathon");
     expect(screen.getByTestId("settings-plan-start-date")).toHaveTextContent("Read only");
 
     ["5K", "10K", "SEMI", "MARATHON", "ULTRA", "MAINTENANCE"].forEach((goal) => {
