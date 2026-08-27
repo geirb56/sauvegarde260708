@@ -130,6 +130,159 @@ const getSessionStyleKey = (type, intensity) => {
   return intensity || "endurance";
 };
 
+// TodayPreviewFree — static blurred card for FREE users, no Premium API calls
+function TodayPreviewFree({ t }) {
+  return (
+    <div
+      className="today-workout-card animate-in"
+      style={{ animationDelay: "200ms", position: "relative", overflow: "hidden" }}
+      data-testid="today-preview-free"
+    >
+      <p className="today-label" style={{ position: "relative", zIndex: 2 }}>{t("dashboard.todayLabel")}</p>
+
+      {/* Static placeholder blocks — blurred */}
+      <div
+        data-testid="today-preview-blur-content"
+        style={{ filter: "blur(6px)", opacity: 0.45, userSelect: "none", pointerEvents: "none" }}
+        aria-hidden="true"
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
+          <div style={{ height: 14, width: "85%", background: "#6ee7b7", borderRadius: 4 }} />
+          <div style={{ height: 10, width: "55%", background: "#6ee7b7", borderRadius: 4, opacity: 0.7 }} />
+          <div style={{ height: 10, width: "70%", background: "#6ee7b7", borderRadius: 4, opacity: 0.5 }} />
+        </div>
+        <div style={{ marginTop: 12, display: "flex", gap: 6 }}>
+          <div style={{ height: 28, flex: 1, background: "#374151", borderRadius: 6 }} />
+          <div style={{ height: 28, flex: 1, background: "#374151", borderRadius: 6 }} />
+        </div>
+      </div>
+
+      {/* Premium overlay */}
+      <div
+        data-testid="premium-overlay-today"
+        style={{
+          position: "absolute",
+          inset: 0,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 8,
+          background: "rgba(10,10,15,0.55)",
+          padding: "0 16px",
+          zIndex: 3,
+        }}
+      >
+        <span style={{ fontSize: 22 }}>🔒</span>
+        <span style={{ color: "#ffffff", fontWeight: 700, fontSize: 14, textAlign: "center" }}>
+          {t("dashboard.todayPreviewLock")}
+        </span>
+        <span style={{ color: "rgba(255,255,255,0.75)", fontSize: 12, textAlign: "center", lineHeight: 1.4 }}>
+          {t("dashboard.todayPreviewDesc")}
+        </span>
+        <Link
+          to="/subscription"
+          data-testid="premium-cta-today"
+          style={{
+            marginTop: 4,
+            padding: "8px 16px",
+            background: "#6EEB5A",
+            color: "#0a1f0a",
+            borderRadius: 8,
+            fontWeight: 700,
+            fontSize: 13,
+            textDecoration: "none",
+            display: "inline-block",
+          }}
+        >
+          {t("dashboard.todayPreviewCta")}
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+// WeekPreviewFree — static blurred card for FREE users, no Premium API calls
+function WeekPreviewFree({ t }) {
+  return (
+    <div
+      className="rounded-2xl p-4 animate-in"
+      style={{
+        background: "var(--bg-elevated, #1a1a1f)",
+        border: "1px solid var(--border, #2a2a30)",
+        position: "relative",
+        overflow: "hidden",
+      }}
+      data-testid="week-preview-free"
+    >
+      <div className="flex items-center gap-2" style={{ position: "relative", zIndex: 2 }}>
+        <Target className="w-4 h-4" style={{ color: "#6EEB5A" }} />
+        <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#6EEB5A" }}>
+          {t("dashboard.weeklyTarget")}
+        </span>
+      </div>
+
+      {/* Static placeholder blocks — blurred */}
+      <div
+        data-testid="week-preview-blur-content"
+        style={{ filter: "blur(6px)", opacity: 0.45, userSelect: "none", pointerEvents: "none", marginTop: 8 }}
+        aria-hidden="true"
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
+          <div style={{ height: 28, width: "45%", background: "#ffffff", borderRadius: 4 }} />
+          <div style={{ height: 12, width: "30%", background: "#6b7280", borderRadius: 4 }} />
+        </div>
+        <div style={{ marginTop: 10, height: 8, borderRadius: 4, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
+          <div style={{ width: "60%", height: "100%", background: "#6EEB5A", borderRadius: 4 }} />
+        </div>
+        <div style={{ marginTop: 8, height: 10, width: "75%", background: "#9ca3af", borderRadius: 4, opacity: 0.6 }} />
+      </div>
+
+      {/* Premium overlay */}
+      <div
+        data-testid="premium-overlay-week"
+        style={{
+          position: "absolute",
+          inset: 0,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 8,
+          background: "rgba(10,10,15,0.55)",
+          padding: "0 16px",
+          zIndex: 3,
+        }}
+      >
+        <span style={{ fontSize: 22 }}>🔒</span>
+        <span style={{ color: "#ffffff", fontWeight: 700, fontSize: 14, textAlign: "center" }}>
+          {t("dashboard.weekPreviewLock")}
+        </span>
+        <span style={{ color: "rgba(255,255,255,0.75)", fontSize: 12, textAlign: "center", lineHeight: 1.4 }}>
+          {t("dashboard.weekPreviewDesc")}
+        </span>
+        <Link
+          to="/subscription"
+          data-testid="premium-cta-week"
+          style={{
+            marginTop: 4,
+            padding: "8px 16px",
+            background: "#6EEB5A",
+            color: "#0a1f0a",
+            borderRadius: 8,
+            fontWeight: 700,
+            fontSize: 13,
+            textDecoration: "none",
+            display: "inline-block",
+          }}
+        >
+          {t("dashboard.weekPreviewCta")}
+        </Link>
+      </div>
+    </div>
+  );
+}
+
 // SessionCard component for displaying a session with colors
 function SessionCard({ session, isGrayed = false, fatigueColor = null }) {
   const { t } = useLanguage();
@@ -838,8 +991,10 @@ export default function Dashboard() {
         </>
       )}
 
-      {/* TODAY'S SESSION - Interactive with Adaptation — TRIAL/PREMIUM only */}
-      {!isFree && (
+      {/* TODAY'S SESSION - Interactive with Adaptation — TRIAL/PREMIUM only; FREE sees static blur preview */}
+      {isFree ? (
+        <TodayPreviewFree t={t} />
+      ) : (
       <div 
         className="today-workout-card animate-in" 
         style={{ 
@@ -949,8 +1104,10 @@ export default function Dashboard() {
       </div>
       )}
 
-      {/* WEEKLY TARGET — V2 authority (TRIAL/PREMIUM only) */}
-      {!isFree && trainingWeekV2?.weekly_target && (() => {
+      {/* WEEKLY TARGET — V2 authority (TRIAL/PREMIUM only); FREE sees static blur preview */}
+      {isFree ? (
+        <WeekPreviewFree t={t} />
+      ) : trainingWeekV2?.weekly_target && (() => {
         const wt = trainingWeekV2.weekly_target;
         const basis = wt.target_basis;
         return (
