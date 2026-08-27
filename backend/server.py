@@ -3566,17 +3566,22 @@ async def get_dynamic_training_plan_legacy(user: dict = Depends(auth_user)):
 @api_router.get("/training/goals")
 async def get_available_goals():
     """Liste les types d'objectifs disponibles"""
+    def _goal_entry(goal_type: str, config: dict) -> dict:
+        entry: dict = {
+            "type": goal_type,
+            "description": config["description"],
+            "cycle_weeks": config["cycle_weeks"],
+        }
+        # long_run_ratio and intensity_pct are omitted for goals that have no
+        # canonical value (e.g. MAINTENANCE — these fields are not applicable).
+        if config.get("long_run_ratio") is not None:
+            entry["long_run_ratio"] = config["long_run_ratio"]
+        if config.get("intensity_pct") is not None:
+            entry["intensity_pct"] = config["intensity_pct"]
+        return entry
+
     return {
-        "goals": [
-            {
-                "type": goal_type,
-                "description": config["description"],
-                "cycle_weeks": config["cycle_weeks"],
-                "long_run_ratio": config["long_run_ratio"],
-                "intensity_pct": config["intensity_pct"]
-            }
-            for goal_type, config in GOAL_CONFIG.items()
-        ]
+        "goals": [_goal_entry(goal_type, config) for goal_type, config in GOAL_CONFIG.items()]
     }
 
 
