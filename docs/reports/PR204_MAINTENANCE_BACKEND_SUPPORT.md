@@ -5,7 +5,7 @@
 ```
 BASE_SHA = d8bb513ed841c47bf514633c4965c032a0b7315c
 OLD_HEAD  = c23cfe88733edc342c989130f1bd9d8abb0a475a
-NEW_HEAD  = (set after commit)
+NEW_HEAD  = dfecee8861661ff2db7fb8914febcafac2efbd5e
 ```
 
 ---
@@ -81,12 +81,15 @@ REAL_SET_GOAL_HANDLER_EXECUTED = YES
 MAINTENANCE_SET_GOAL_RESULT    = PASS
 MAINTENANCE_PERSISTED_GOAL     = MAINTENANCE
 MAINTENANCE_PERSISTED_START_DATE = TODAY
+MAINTENANCE_RACE_DATE_CREATED  = NO
+MAINTENANCE_TARGET_TIME_CREATED = NO
 
 Tests (test_pr204_maintenance_endpoint.py — httpx.AsyncClient + ASGITransport):
   test_set_goal_maintenance_http_success          → HTTP 200
   test_set_goal_maintenance_response_valid        → goal=MAINTENANCE, status=updated, no "Invalid goal"
   test_set_goal_maintenance_cycle_persisted       → training_cycles upserted with goal=MAINTENANCE
   test_set_goal_maintenance_start_date_persisted  → start_date = today (UTC, within call window)
+  test_set_goal_maintenance_no_race_date_created  → race_date=None, target_time=None in persisted doc
   test_set_goal_invalid_value_rejected            → INVALID still returns error
 ```
 
@@ -95,15 +98,20 @@ Tests (test_pr204_maintenance_endpoint.py — httpx.AsyncClient + ASGITransport)
 ```
 REAL_REFRESH_HANDLER_EXECUTED = YES
 
-MAINTENANCE_REFRESH_3 = PASS
-MAINTENANCE_REFRESH_4 = PASS
-MAINTENANCE_REFRESH_5 = PASS
-MAINTENANCE_REFRESH_6 = PASS
+MAINTENANCE_REFRESH_REAL_HANDLER_3 = PASS
+MAINTENANCE_REFRESH_REAL_HANDLER_4 = PASS
+MAINTENANCE_REFRESH_REAL_HANDLER_5 = PASS
+MAINTENANCE_REFRESH_REAL_HANDLER_6 = PASS
+
+SESSIONS_CONTRACT        = sessions_override parameter passed to generate_dynamic_training_plan
+SESSIONS_PERSISTED       = YES (sessions_per_week stored in training_prefs for sessions in [3,4,5,6])
+SESSIONS_PASSED_TO_GENERATOR = sessions_override=sessions_value (verified via mock call_args)
 
 Tests (test_pr204_maintenance_endpoint.py — real FastAPI handler):
-  test_refresh_maintenance_sessions[3/4/5/6]         → HTTP 200, no crash, goal=MAINTENANCE in response
-  test_refresh_maintenance_sessions_stored[3/4/5/6]  → sessions_per_week stored in training_prefs
-  test_refresh_maintenance_plan_returned              → plan payload returned verbatim
+  test_refresh_maintenance_sessions[3/4/5/6]                    → HTTP 200, no crash, goal=MAINTENANCE in response
+  test_refresh_maintenance_sessions_stored[3/4/5/6]             → sessions_per_week stored in training_prefs
+  test_refresh_maintenance_sessions_passed_to_generator[3/4/5/6]→ generator called with sessions_override=N
+  test_refresh_maintenance_plan_returned                         → plan payload returned verbatim
 ```
 
 ---
@@ -139,13 +147,22 @@ BACKEND_FILES_CHANGED =
   backend/server.py                          — /training/goals handler omits None fields;
                                                set-goal whitelists; _GOAL_MAP; race_date guard
   backend/training_v2/week_plan_bridge.py    — race_date guard for MAINTENANCE
-  backend/tests/test_pr204_maintenance_backend.py  — unit/V2-chain tests (38 tests)
-  backend/tests/test_pr204_maintenance_endpoint.py — real FastAPI endpoint tests (13 tests)
+  backend/tests/test_pr204_maintenance_backend.py  — unit/V2-chain tests (37 passed, 1 skipped)
+  backend/tests/test_pr204_maintenance_endpoint.py — real FastAPI endpoint tests (17 passed)
   docs/reports/PR204_MAINTENANCE_BACKEND_SUPPORT.md
+
+REAL_HANDLER_TESTS       = 17 passed
+UNIT_CONTRACT_TESTS      = 37 passed, 1 skipped
+TRAINING_REGRESSION_TESTS = included in UNIT_CONTRACT_TESTS
 
 FRONTEND_MODIFIED    = NO
 LOCKFILES_MODIFIED   = NO
 DEPENDENCIES_MODIFIED = NO
+
+PR_TITLE   = PR204 — Training Goal MAINTENANCE Backend Support
+PR_BODY_UPDATED = YES
+
+BLOCKERS = NONE
 ```
 
 ---
