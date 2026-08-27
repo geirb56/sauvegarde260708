@@ -21,13 +21,20 @@ const API = API_BASE_URL;
  * Goal business values are kept independent of the display language.
  * The set-goal endpoint accepts: 5K | 10K | SEMI | MARATHON | ULTRA
  *
- * NOTE — backend contract gap:
- *   /training/set-goal and /training/refresh do not yet accept plan_start_date
- *   or race_date. Those fields are collected in the UI but only sessions_per_week
- *   and goal are persisted. See docs/reports/PR203_ONBOARDING_UX_V2.md §BLOCKERS.
+ * NOTE — MAINTENANCE backend blocker (C203):
+ *   /training/set-goal currently rejects "MAINTENANCE" (not in allowlist).
+ *   MAINTENANCE is supported by the Training Engine V2 (GoalType.maintenance exists)
+ *   but the allowlist in server.py:3453 must be extended. Until then, MAINTENANCE
+ *   is not shown in the onboarding.
+ *   See docs/reports/PR203_ONBOARDING_UX_V2.md §BLOCKERS.
+ *
+ * NOTE — Dates (C203):
+ *   No dates are collected in onboarding. plan_start_date = TODAY (backend default).
+ *   Race date and plan start date will be editable in Settings.
  */
 
 // Stable backend values — NEVER translated.
+// MAINTENANCE is intentionally absent until the backend allowlist is extended.
 const GOAL_VALUES = ["5K", "10K", "SEMI", "MARATHON", "ULTRA"];
 const STEPS = ["welcome", "garmin", "sync", "firstvalue", "goal", "params", "done"];
 
@@ -53,10 +60,9 @@ export default function Onboarding() {
   const syncedCount = syncProgress?.activities_count ?? 0;
 
   // Goal & plan params
+  // Dates are NOT collected in onboarding. plan_start_date = TODAY (backend default).
   const [trainingGoal, setTrainingGoal] = useState("");
   const [sessionsPerWeek, setSessionsPerWeek] = useState(4);
-  const [raceDate, setRaceDate] = useState("");
-  const [planStartDate, setPlanStartDate] = useState(() => new Date().toISOString().split("T")[0]);
   const [saving, setSaving] = useState(false);
 
   const goToStep = (key) => setStepIndex(STEPS.indexOf(key));
