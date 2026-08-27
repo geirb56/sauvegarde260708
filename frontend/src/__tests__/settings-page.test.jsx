@@ -34,15 +34,15 @@ jest.mock("@/hooks/useGarminSyncProgress", () => ({
 const { toast } = require("sonner");
 
 function createApiState({
-  fullCycle = {
-    goal: "MARATHON",
-    sessions_per_week: 4,
-    start_date: "2026-08-27",
-  },
   cycle = {
     goal: { goal_type: "marathon", race_date: "2026-10-12", target_time_seconds: 13500 },
     cycle: { start_date: "2026-08-27", status: "active", days_to_race: 46 },
     weeks: [],
+  },
+  week = {
+    goal: { goal_type: "marathon", race_date: "2026-10-12", target_time_seconds: 13500 },
+    weekly_target: { session_count: 4, target_basis: "distance", target_km: 52, target_duration_minutes: null, confidence: "high" },
+    week: { session_count: 4, planned_km: 52, planned_duration_minutes: null, sessions: [] },
   },
   userGoal = {
     event_name: "Berlin Marathon",
@@ -58,13 +58,13 @@ function createApiState({
     sync_status: { status: "complete", activities_count: 18 },
   },
 } = {}) {
-  return { fullCycle, cycle, userGoal, garminStatus };
+  return { cycle, week, userGoal, garminStatus };
 }
 
 function mockAxiosApi(state = createApiState()) {
   axios.get.mockImplementation((url) => {
-    if (url.includes("/training/full-cycle")) return Promise.resolve({ data: state.fullCycle });
     if (url.includes("/training/v2/cycle")) return Promise.resolve({ data: state.cycle });
+    if (url.includes("/training/v2/week")) return Promise.resolve({ data: state.week });
     if (url.includes("/user/goal")) return Promise.resolve({ data: state.userGoal });
     if (url.includes("/garmin/status")) return Promise.resolve({ data: state.garminStatus });
     return Promise.reject(new Error(`Unexpected GET ${url}`));
@@ -111,6 +111,7 @@ describe("Settings UX V2", () => {
     renderPage();
 
     expect(await screen.findByTestId("settings-current-goal")).toHaveTextContent("Marathon");
+    expect(screen.getByTestId("settings-sessions-current")).toHaveTextContent("4 sessions/week");
     expect(screen.getByTestId("settings-plan-start-date")).toHaveTextContent("Read only");
 
     ["5K", "10K", "SEMI", "MARATHON", "ULTRA", "MAINTENANCE"].forEach((goal) => {
@@ -121,13 +122,29 @@ describe("Settings UX V2", () => {
     });
   });
 
+  test("loads plan settings from v2 endpoints only", async () => {
+    mockAxiosApi();
+    renderPage();
+
+    await screen.findByTestId("settings-current-goal");
+
+    const calledUrls = axios.get.mock.calls.map(([url]) => String(url));
+    expect(calledUrls.some((url) => url.includes("/training/v2/cycle"))).toBe(true);
+    expect(calledUrls.some((url) => url.includes("/training/v2/week"))).toBe(true);
+    expect(calledUrls.some((url) => url.includes("/training/full-cycle"))).toBe(false);
+  });
+
   test("maintenance hides race-only fields", async () => {
     mockAxiosApi(createApiState({
-      fullCycle: { goal: "MAINTENANCE", sessions_per_week: 5, start_date: "2026-08-27" },
       cycle: {
         goal: { goal_type: "maintenance", race_date: null, target_time_seconds: null },
         cycle: { start_date: "2026-08-27", status: "active", days_to_race: null },
         weeks: [],
+      },
+      week: {
+        goal: { goal_type: "maintenance", race_date: null, target_time_seconds: null },
+        weekly_target: { session_count: 5, target_basis: "distance", target_km: 40, target_duration_minutes: null, confidence: "high" },
+        week: { session_count: 5, planned_km: 40, planned_duration_minutes: null, sessions: [] },
       },
       userGoal: null,
     }));

@@ -190,23 +190,13 @@ export default function Settings() {
   const loadPlanSettings = async () => {
     setPlanLoading(true);
     setPlanError("");
-    let fullCycleData = null;
-    try {
-      const fullCycleRes = await axios.get(`${API}/training/full-cycle`);
-      fullCycleData = fullCycleRes.data;
-      const sessions = fullCycleData?.sessions_per_week;
-      setSessionsPerWeek(SUPPORTED_SESSION_VALUES.includes(sessions) ? sessions : null);
-    } catch (error) {
-      console.error("Failed to load training full cycle:", error);
-      setSessionsPerWeek(null);
-    }
-
-    const [cycleV2Result, userGoalResult] = await Promise.allSettled([
+    const [cycleV2Result, weekV2Result, userGoalResult] = await Promise.allSettled([
       axios.get(`${API}/training/v2/cycle`),
+      axios.get(`${API}/training/v2/week`),
       axios.get(`${API}/user/goal`),
     ]);
 
-    const nextError = !fullCycleData || cycleV2Result.status === "rejected"
+    const nextError = cycleV2Result.status === "rejected" || weekV2Result.status === "rejected"
       ? t("settingsV2.plan.loadError")
       : "";
 
@@ -219,6 +209,13 @@ export default function Settings() {
       setTrainingGoal(null);
       setPlanStartDate(null);
       setCycleStatus(null);
+    }
+
+    if (weekV2Result.status === "fulfilled") {
+      const sessionCount = weekV2Result.value.data?.weekly_target?.session_count;
+      setSessionsPerWeek(SUPPORTED_SESSION_VALUES.includes(sessionCount) ? sessionCount : null);
+    } else {
+      setSessionsPerWeek(null);
     }
 
     if (userGoalResult.status === "fulfilled" && userGoalResult.value.data) {
