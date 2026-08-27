@@ -553,12 +553,14 @@ export default function TrainingPlanV2() {
               className="mb-3 flex w-full items-center justify-between rounded-lg border border-border px-3 py-2 text-sm"
               data-testid="paces-collapsible-trigger"
               aria-expanded={pacesOpen}
+              aria-controls="paces-collapsible-content"
               onClick={() => setPacesOpen((v) => !v)}
             >
               <span>{t("trainingV2.pacesSummary")}</span>
               {pacesOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
             </button>
             <div
+              id="paces-collapsible-content"
               className="space-y-3"
               data-testid="paces-collapsible-content"
               style={pacesOpen ? undefined : { display: "none" }}
