@@ -175,10 +175,14 @@ export default function Settings() {
   const [garminPassword, setGarminPassword] = useState("");
   const [garminBusyAction, setGarminBusyAction] = useState("");
 
+  const garminSyncStatusCode = typeof garminStatus?.sync_status?.status === "string"
+    ? garminStatus.sync_status.status.trim()
+    : "";
   const shouldStreamGarminProgress = Boolean(
     garminStatus?.connected
     && garminStatus?.sync_status
-    && !TERMINAL_SYNC_STATUSES.has(garminStatus.sync_status.status)
+    && garminSyncStatusCode
+    && !TERMINAL_SYNC_STATUSES.has(garminSyncStatusCode)
   );
   const { progress: garminProgress } = useGarminSyncProgress({ enabled: shouldStreamGarminProgress });
 
@@ -197,7 +201,7 @@ export default function Settings() {
     ]);
 
     const nextError = cycleV2Result.status === "rejected" || weekV2Result.status === "rejected"
-      ? t("settingsV2.plan.loadError")
+      ? "settingsV2.plan.loadError"
       : "";
 
     if (cycleV2Result.status === "fulfilled") {
@@ -241,7 +245,7 @@ export default function Settings() {
     setPlanError(nextError);
     setPlanLoading(false);
     return nextError === "";
-  }, [t]);
+  }, []);
 
   const loadGarminStatus = useCallback(async () => {
     setGarminLoading(true);
@@ -252,11 +256,11 @@ export default function Settings() {
     } catch (error) {
       console.error("Failed to load Garmin status:", error);
       setGarminStatus(null);
-      setGarminError(t("settingsV2.garmin.loadError"));
+      setGarminError("settingsV2.garmin.loadError");
     } finally {
       setGarminLoading(false);
     }
-  }, [t]);
+  }, []);
 
   useEffect(() => {
     loadPlanSettings();
@@ -308,6 +312,9 @@ export default function Settings() {
   };
 
   const handleGoalFormChange = (key, value) => {
+    if (planAction.status !== "idle") {
+      setPlanAction({ status: "idle", message: "" });
+    }
     setGoalForm((current) => ({ ...current, [key]: value }));
   };
 
@@ -476,7 +483,7 @@ export default function Settings() {
             </div>
           ) : planError ? (
             <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive" data-testid="settings-plan-error">
-              {planError}
+              {t(planError)}
             </div>
           ) : (
             <div className="space-y-4">
@@ -662,7 +669,7 @@ export default function Settings() {
             </div>
           ) : garminError ? (
             <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive" data-testid="settings-garmin-error">
-              {garminError}
+              {t(garminError)}
             </div>
           ) : (
             <div className="space-y-4">
