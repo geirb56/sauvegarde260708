@@ -902,12 +902,6 @@ export default function Settings() {
             value="1.4.0"
             testId="settings-version"
           />
-          <SettingRow
-            label={t("settingsV2.account.backendContract")}
-            value={t("settingsV2.account.backendContractValue")}
-            helper={t("settingsV2.account.backendContractHelp")}
-            testId="settings-backend-contract"
-          />
           <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-sm text-emerald-300" data-testid="settings-no-password-note">
             <div className="flex items-start gap-2">
               <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />

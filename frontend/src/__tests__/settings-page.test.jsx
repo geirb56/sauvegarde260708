@@ -113,7 +113,9 @@ describe("Settings UX V2", () => {
     expect(await screen.findByTestId("settings-current-goal")).toHaveTextContent("Marathon");
     expect(screen.getByTestId("settings-sessions-current")).toHaveTextContent("4 sessions/week");
     expect(screen.getByTestId("settings-plan-start-date")).toHaveTextContent("Aug 27, 2026");
-    expect(screen.getByTestId("settings-plan-start-date")).toHaveTextContent("Read only");
+    expect(screen.getByTestId("settings-plan-start-date")).toHaveTextContent("This date is currently read-only.");
+    expect(document.body).not.toHaveTextContent("Backend contract");
+    expect(document.body).not.toHaveTextContent("Backend unchanged");
 
     ["5K", "10K", "SEMI", "MARATHON", "ULTRA", "MAINTENANCE"].forEach((goal) => {
       expect(screen.getByTestId(`training-goal-btn-${goal}`)).toBeInTheDocument();
@@ -191,16 +193,24 @@ describe("Settings UX V2", () => {
 
     expect(await screen.findByText("Training Plan")).toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/settingsV2\.|settings\./);
+    expect(document.body).not.toHaveTextContent("Backend contract");
+    expect(document.body).not.toHaveTextContent("Backend unchanged");
     enView.unmount();
 
     mockAxiosApi();
     const frView = renderPage({ lang: "fr" });
     expect(await screen.findByText("Plan d'entraînement")).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent("Contrat backend");
+    expect(document.body).not.toHaveTextContent("Backend inchangé");
+    expect(screen.getByTestId("settings-plan-start-date")).toHaveTextContent("Cette date est actuellement en lecture seule.");
     frView.unmount();
 
     mockAxiosApi();
     renderPage({ lang: "es" });
     expect(await screen.findByText("Plan de entrenamiento")).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent("Contrato backend");
+    expect(document.body).not.toHaveTextContent("Backend sin cambios");
+    expect(screen.getByTestId("settings-plan-start-date")).toHaveTextContent("Esta fecha es actualmente de solo lectura.");
   });
 
   test("save race settings shows success feedback only after backend confirmation", async () => {
