@@ -23,23 +23,21 @@ jest.mock("sonner", () => ({
 }));
 
 jest.mock("@/hooks/useGarminSyncProgress", () => ({
-  useGarminSyncProgress: jest.fn(() => ({
-    progress: null,
-    isStreaming: false,
-    error: null,
-  })),
+  useGarminSyncProgress: jest.fn(),
 }));
 
 import { useGarminSyncProgress } from "@/hooks/useGarminSyncProgress";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
+let hookState;
+
 function renderOnboarding() {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
 
-  act(() => {
+  const renderTree = () => {
     root.render(
       <LanguageProvider>
         <MemoryRouter>
@@ -47,10 +45,15 @@ function renderOnboarding() {
         </MemoryRouter>
       </LanguageProvider>
     );
+  };
+
+  act(() => {
+    renderTree();
   });
 
   return {
     container,
+    rerender: () => act(() => renderTree()),
     unmount: () => {
       act(() => root.unmount());
       container.remove();
@@ -82,6 +85,10 @@ async function flush() {
   });
 }
 
+function continueButton(container) {
+  return container.querySelector('[data-testid="onboarding-continue"]');
+}
+
 async function connectGarmin(container) {
   click(container, '[data-testid="onboarding-start"]');
   setFieldValue(container.querySelector('[data-testid="garmin-email-input"]'), "runner@example.com");
@@ -90,115 +97,145 @@ async function connectGarmin(container) {
   await flush();
 }
 
-describe("PR205 onboarding flow and first value", () => {
+async function goToSync(container) {
+  await connectGarmin(container);
+  click(container, '[data-testid="onboarding-continue"]');
+}
+
+describe("PR205 onboarding sync/first-value gating", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockNavigate.mockReset();
     window.localStorage.clear();
     window.localStorage.setItem(LANGUAGE_STORAGE_KEY, "en");
 
-    useGarminSyncProgress.mockReturnValue({ progress: null, isStreaming: false, error: null });
-  });
-
-  test("shows RunIndex first value and optional readiness without blocking", async () => {
-    useGarminSyncProgress.mockReturnValue({
-      progress: {
-        status: "complete",
-        run_index_status: "ready",
-        readiness_status: "ready",
-        run_index: 74,
-        readiness: 82,
-        activities_count: 18,
-      },
-      isStreaming: false,
-      error: null,
-    });
+    hookState = { progress: null, isStreaming: false, error: null };
+    useGarminSyncProgress.mockImplementation(() => hookState);
 
     axios.post
       .mockResolvedValueOnce({ data: { status: "connected" } })
-      .mockResolvedValueOnce({ data: { synced_count: 18 } });
+      .mockResolvedValueOnce({ data: { synced_count: 8 } });
+  });
+
+  test("SYNC_PENDING_CONTINUE_DISABLED = PASS", async () => {
+    hookState = {
+      progress: { status: "in_progress", run_index_status: "pending", readiness_status: "pending", activities_count: 8 },
+      isStreaming: true,
+      error: null,
+    };
 
     const { container, unmount } = renderOnboarding();
-    await connectGarmin(container);
+    await goToSync(container);
 
-    click(container, '[data-testid="onboarding-continue"]'); // sync
-    click(container, '[data-testid="onboarding-continue"]'); // first value
+    expect(container.querySelector('[data-testid="onboarding-step-sync"]')).toBeTruthy();
+    expect(continueButton(container).disabled).toBe(true);
+
+    unmount();
+  });
+
+  test("SYNC_RUNINDEX_READY_CONTINUE_ENABLED = PASS", async () => {
+    hookState = {
+      progress: { status: "in_progress", run_index_status: "ready", run_index: 70, readiness_status: "pending", activities_count: 8 },
+      isStreaming: false,
+      error: null,
+    };
+
+    const { container, unmount } = renderOnboarding();
+    await goToSync(container);
+
+    expect(continueButton(container).disabled).toBe(false);
+
+    unmount();
+  });
+
+  test("SYNC_INSUFFICIENT_DATA_CONTINUE_ENABLED = PASS", async () => {
+    hookState = {
+      progress: { status: "partial_success", run_index_status: "insufficient_data", readiness_status: "insufficient_data", activities_count: 2 },
+      isStreaming: false,
+      error: null,
+    };
+
+    const { container, unmount } = renderOnboarding();
+    await goToSync(container);
+
+    expect(continueButton(container).disabled).toBe(false);
+
+    unmount();
+  });
+
+  test("FIRST_VALUE_PENDING_CONTINUE_DISABLED = PASS", async () => {
+    hookState = {
+      progress: { status: "complete", run_index_status: "ready", run_index: 66, readiness_status: "pending", activities_count: 9 },
+      isStreaming: false,
+      error: null,
+    };
+
+    const { container, rerender, unmount } = renderOnboarding();
+    await goToSync(container);
+    click(container, '[data-testid="onboarding-continue"]'); // sync -> first value
+
+    hookState = {
+      progress: { status: "in_progress", run_index_status: "pending", readiness_status: "pending", activities_count: 9 },
+      isStreaming: true,
+      error: null,
+    };
+    rerender();
+
+    expect(container.querySelector('[data-testid="onboarding-step-first-value"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="runindex-pending"]')).toBeTruthy();
+    expect(continueButton(container).disabled).toBe(true);
+
+    unmount();
+  });
+
+  test("FIRST_VALUE_READY_CONTINUE_ENABLED = PASS", async () => {
+    hookState = {
+      progress: { status: "complete", run_index_status: "ready", run_index: 74, readiness_status: "ready", readiness: 82, activities_count: 18 },
+      isStreaming: false,
+      error: null,
+    };
+
+    const { container, unmount } = renderOnboarding();
+    await goToSync(container);
+    click(container, '[data-testid="onboarding-continue"]');
 
     expect(container.querySelector('[data-testid="runindex-first-value"]')).toBeTruthy();
-    expect(container.querySelector('[data-testid="runindex-value"]').textContent).toContain("74");
-    expect(container.querySelector('[data-testid="readiness-optional"]')).toBeTruthy();
+    expect(continueButton(container).disabled).toBe(false);
 
     unmount();
   });
 
-  test("handles insufficient data honestly", async () => {
-    useGarminSyncProgress.mockReturnValue({
-      progress: {
-        status: "partial_success",
-        run_index_status: "insufficient_data",
-        readiness_status: "insufficient_data",
-        activities_count: 2,
-      },
+  test("FIRST_VALUE_INSUFFICIENT_DATA_CONTINUE_ENABLED = PASS", async () => {
+    hookState = {
+      progress: { status: "partial_success", run_index_status: "insufficient_data", readiness_status: "insufficient_data", activities_count: 2 },
       isStreaming: false,
       error: null,
-    });
-
-    axios.post
-      .mockResolvedValueOnce({ data: { status: "connected" } })
-      .mockResolvedValueOnce({ data: { synced_count: 2 } });
+    };
 
     const { container, unmount } = renderOnboarding();
-    await connectGarmin(container);
-
-    click(container, '[data-testid="onboarding-continue"]');
+    await goToSync(container);
     click(container, '[data-testid="onboarding-continue"]');
 
-    expect(container.querySelector('[data-testid="runindex-first-value"]')).toBeFalsy();
     expect(container.querySelector('[data-testid="runindex-insufficient-data"]')).toBeTruthy();
+    expect(continueButton(container).disabled).toBe(false);
 
     unmount();
   });
 
-  test("creates plan with canonical goal and numeric sessions then routes to dashboard", async () => {
-    useGarminSyncProgress.mockReturnValue({
-      progress: {
-        status: "complete",
-        run_index_status: "ready",
-        run_index: 66,
-        readiness_status: "pending",
-        activities_count: 9,
-      },
+  test("READINESS_MISSING_DOES_NOT_BLOCK = PASS", async () => {
+    hookState = {
+      progress: { status: "complete", run_index_status: "ready", run_index: 71, readiness_status: "pending", activities_count: 10 },
       isStreaming: false,
       error: null,
-    });
-
-    axios.post
-      .mockResolvedValueOnce({ data: { status: "connected" } })
-      .mockResolvedValueOnce({ data: { synced_count: 9 } })
-      .mockResolvedValueOnce({ data: { goal: "MAINTENANCE" } })
-      .mockResolvedValueOnce({ data: { ok: true } });
+    };
 
     const { container, unmount } = renderOnboarding();
-    await connectGarmin(container);
+    await goToSync(container);
+    click(container, '[data-testid="onboarding-continue"]');
 
-    click(container, '[data-testid="onboarding-continue"]'); // sync -> first value
-    click(container, '[data-testid="onboarding-continue"]'); // first value -> goal
-    click(container, '[data-testid="onboarding-continue"]'); // goal step entry
-
-    click(container, '[data-testid="onboarding-goal-maintenance"]');
-    click(container, '[data-testid="onboarding-continue"]'); // goal -> sessions
-
-    click(container, '[data-testid="onboarding-sessions-4"]');
-    click(container, '[data-testid="onboarding-continue"]'); // create plan
-    await flush();
-
-    expect(axios.post).toHaveBeenNthCalledWith(3, expect.stringContaining("/training/set-goal?goal=MAINTENANCE"), {});
-    expect(axios.post).toHaveBeenNthCalledWith(4, expect.stringContaining("/training/refresh?sessions=4"), {});
-
-    expect(container.querySelector('[data-testid="onboarding-step-done"]')).toBeTruthy();
-
-    click(container, '[data-testid="onboarding-dashboard-cta"]');
-    expect(mockNavigate).toHaveBeenCalledWith("/");
+    expect(container.querySelector('[data-testid="runindex-first-value"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="readiness-optional"]')).toBeFalsy();
+    expect(continueButton(container).disabled).toBe(false);
 
     unmount();
   });

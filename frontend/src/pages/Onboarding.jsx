@@ -104,17 +104,19 @@ export default function Onboarding() {
   const terminalSync = syncProgress && ["complete", "partial_success", "failed"].includes(syncProgress.status);
   const insufficientData =
     syncProgress?.run_index_status === "insufficient_data" || (terminalSync && !runIndexReady && !syncError);
+  const terminalError = Boolean(syncError) && !isSyncStreaming;
+  const syncOutcomeKnown = runIndexReady || insufficientData || terminalError;
   const syncedCount = syncProgress?.activities_count ?? garminCount;
 
   const canContinue = useMemo(() => {
     if (stepKey === "welcome") return true;
     if (stepKey === "garmin") return isGarminConnected;
-    if (stepKey === "sync") return isGarminConnected;
-    if (stepKey === "firstValue") return true;
+    if (stepKey === "sync") return syncOutcomeKnown;
+    if (stepKey === "firstValue") return syncOutcomeKnown;
     if (stepKey === "goal") return Boolean(goal);
     if (stepKey === "sessions") return Boolean(sessionsPerWeek) && !savingPlan;
     return false;
-  }, [stepKey, isGarminConnected, goal, sessionsPerWeek, savingPlan]);
+  }, [stepKey, isGarminConnected, syncOutcomeKnown, goal, sessionsPerWeek, savingPlan]);
 
   const connectGarmin = async () => {
     if (!garminUsername.trim() || !garminPassword) {
@@ -340,6 +342,10 @@ export default function Onboarding() {
                     {syncProgress.run_index} <span className="text-lg font-semibold text-muted-foreground">/ 1000</span>
                   </p>
                   <p className="text-sm text-muted-foreground">{t("onboarding.runIndexExplanation")}</p>
+                </div>
+              ) : terminalError ? (
+                <div className="rounded-xl border border-border bg-muted/20 p-4" data-testid="runindex-terminal-error">
+                  <p className="text-sm text-destructive">{t("onboarding.garminSyncFailed")}</p>
                 </div>
               ) : insufficientData ? (
                 <div className="rounded-xl border border-border bg-muted/20 p-4" data-testid="runindex-insufficient-data">
