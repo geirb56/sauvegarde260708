@@ -42,7 +42,7 @@ export default function Register() {
 
     if (result.ok) {
       toast.success(t("auth.accountCreated"));
-      navigate("/", { replace: true });
+      navigate("/onboarding", { replace: true });
     } else {
       setError(mapAuthErrorDetail(t, result.errorDetail, "auth.somethingWentWrong"));
     }
@@ -50,7 +50,7 @@ export default function Register() {
 
   const handleOAuthSuccess = () => {
     toast.success(t("auth.accountCreated"));
-    navigate("/", { replace: true });
+    navigate("/onboarding", { replace: true });
   };
 
   return (
