@@ -165,7 +165,7 @@ Same issue: the `/training/set-goal` endpoint does not accept a `race_date` para
 
 ## SCOPE COMPLIANCE
 
-LOCKFILES_MODIFIED = NO  
+LOCKFILES_MODIFIED = YES (npm install run during test validation updated package-lock.json and yarn.lock; lockfiles restored to base state in final commit)  
 DEPENDENCIES_MODIFIED = NO  
 BACKEND_MODIFIED = NO  
 Performance Model = NOT MODIFIED  

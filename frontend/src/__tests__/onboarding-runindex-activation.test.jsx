@@ -83,7 +83,7 @@ async function flush() {
 }
 
 /** Navigate the onboarding wizard to the Garmin connect step (PR203 flow). */
-function goToDeviceStep(container) {
+function goToGarminStep(container) {
   click(container, '[data-testid="onboarding-start"]');
 }
 
@@ -134,7 +134,7 @@ test("T1: run_index_status=ready shows RunIndex without Readiness", async () => 
     .mockResolvedValueOnce({ data: { synced_count: 15 } });
 
   const { container, unmount } = renderOnboarding();
-  goToDeviceStep(container);
+  goToGarminStep(container);
   await connectGarmin(container);
 
   // After connect we are on sync step — advance to firstvalue
@@ -172,7 +172,7 @@ test("T1b: activities_count=144 in SSE progress displays '144 activités import�
     .mockResolvedValueOnce({ data: { synced_count: 0 } });
 
   const { container, unmount } = renderOnboarding();
-  goToDeviceStep(container);
+  goToGarminStep(container);
   await connectGarmin(container);
 
   // Activity count visible on sync step (no need to advance)
@@ -204,7 +204,7 @@ test("T2: readiness_status=ready adds Readiness row alongside RunIndex", async (
     .mockResolvedValueOnce({ data: { synced_count: 20 } });
 
   const { container, unmount } = renderOnboarding();
-  goToDeviceStep(container);
+  goToGarminStep(container);
   await connectGarmin(container);
 
   // Advance from sync to firstvalue
@@ -240,7 +240,7 @@ test("T3: readiness still in-progress does not hide RunIndex", async () => {
     .mockResolvedValueOnce({ data: { synced_count: 10 } });
 
   const { container, unmount } = renderOnboarding();
-  goToDeviceStep(container);
+  goToGarminStep(container);
   await connectGarmin(container);
 
   // runIndexReady=true so sync-continue is available even while streaming; advance to firstvalue
@@ -280,7 +280,7 @@ test("T4: no usable data shows honest message without fabricating a score", asyn
     .mockResolvedValueOnce({ data: { synced_count: 2 } });
 
   const { container, unmount } = renderOnboarding();
-  goToDeviceStep(container);
+  goToGarminStep(container);
   await connectGarmin(container);
 
   // sync has finished with partial_success; advance to firstvalue
@@ -323,7 +323,7 @@ test("T5: CTA See my dashboard is present on the done step and navigates to /das
   const { container, unmount } = renderOnboarding();
 
   // welcome → garmin
-  goToDeviceStep(container);
+  goToGarminStep(container);
   await connectGarmin(container);     // → sync
 
   // sync → firstvalue
@@ -366,7 +366,7 @@ test("T6: SSE error shows sync-failed message and does not re-prompt credentials
     .mockResolvedValueOnce({ data: { synced_count: 0 } });
 
   const { container, unmount } = renderOnboarding();
-  goToDeviceStep(container);
+  goToGarminStep(container);
   await connectGarmin(container);
 
   // Sync error message shown
