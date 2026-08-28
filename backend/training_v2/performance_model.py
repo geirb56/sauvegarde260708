@@ -1,35 +1,10 @@
-"""Performance Model V2 — Pure business logic for VMA estimation and race predictions.
+"""Performance Model V2 — Pure business logic for race predictions.
 
 This module is intentionally I/O-free:
   - No Mongo / database calls
   - No FastAPI / HTTP
   - No datetime.now() (reference_date is always an explicit parameter)
   - No references to the workouts collection
-
-VMA V2 — ACTIVE PATH:
-
-  SOURCE B — Individual HR-speed model (modèle individuel vitesse–FC):
-    Linear regression speed = a * HR + b on multiple clean running activities.
-    Requires >= 4 activities with average HR spanning >= 20 bpm.
-    FCmax from the robust observed Garmin max HR (see _resolve_fcmax_robust).
-    Extrapolation target: 95% of FCmax (aerobic ceiling, conservative).
-    If R² < 0.30 or slope <= 0: vma_kmh = null.
-
-  SOURCE A — Explicit performance: REMOVED.
-    No Garmin field identifies an activity as a race or test.
-    All related code has been deleted.
-
-  If SOURCE B yields insufficient data or quality: vma_kmh = null.
-
-FCmax policy:
-  FCMAX_RUNTIME_SOURCE = ROBUST_OBSERVED_GARMIN_MAX_HR
-  FCMAX_OUTLIER_PROTECTION = YES (active when n >= 3 observations)
-  USER_MAX_HR_RUNTIME_WIRED = NOT_AVAILABLE
-  No 220-age formula, no population fallback, no hr_max+5.
-
-  Robust estimator: for n >= 3, if the highest observed max_hr is > 10% above
-  the second-highest, it is treated as a Garmin artefact and discarded.
-  For n < 3: raw max (no outlier protection, documented).
 
 Race predictions — ROAD ONLY:
   RIEGEL_SOURCE = QUALIFIED_OBSERVED_ACTIVITY_ONLY
@@ -42,23 +17,11 @@ Personal speed percentile uses a 90-day strictly-prior benchmark (no look-ahead,
 Without HR: qualification is still possible, but only via a stricter speed-only fallback and
 the resulting prediction confidence is capped at MEDIUM.
 
-VMA / Predictions independence:
-  RIEGEL_VMA_CONFIDENCE_DEPENDENCY = NO
-  Race predictions are computed from #188-qualified performances and the
-  performance curve only. Qualification can depend on FCmax through relative HR.
-  VMA output and derived VO2max never directly alter race times.
-
-VMA history:
-  VMA_WINDOW_DAYS = 42 (rolling window, non-cumulative)
-  Each snapshot uses only activities within the 42-day window ending at snapshot_date.
-  estimate_vma() applies this window internally.
-  NO look-ahead.
-
 duration_s semantics:
   GARMIN_DURATION_SOURCE = summaryDTO.movingDuration (preferred) → summaryDTO.duration (fallback)
   Performance duration authority: _performance_duration_s() prefers moving_duration_s when
   moving_duration_s > 0 and moving_duration_s <= duration_s (or duration_s absent).
-  This is the single authority for speed, VMA, and Riegel calculations.
+  This is the single authority for speed and Riegel calculations.
 
 FORBIDDEN:
   - avg_speed-divided-by-0.70 fallback (removed)
@@ -74,7 +37,6 @@ Inputs:
     user_max_hr            — optional known FCmax from user profile (wired to None at runtime)
 
 Outputs (dataclasses, not Pydantic):
-    VMAEstimate
     RacePrediction
     PerformanceEstimate
 """
@@ -147,20 +109,6 @@ MIN_DISTANCE_M: float = 500.0
 # Minimum duration (s) for an effort to be informative
 MIN_INFORMATIVE_DURATION_S: float = 5 * 60   # 5 min
 
-# HR-speed model: activity filtering
-MIN_DURATION_HR_MODEL_S: float = 10 * 60     # 10 min — short sprints not representative
-MIN_AVG_HR: float = 90.0                      # bpm floor — below this is likely invalid
-MAX_AVG_HR: float = 220.0                     # bpm ceiling — above this is aberrant
-
-# HR-speed model: coverage requirements
-MIN_ACTIVITIES_HR_MODEL: int = 4
-MIN_DISTINCT_HR_LEVELS: int = 3
-MIN_HR_RANGE_BPM: float = 20.0               # min spread across observed HR values
-
-# HR-speed model: quality
-MIN_R2: float = 0.30                          # minimum R² — weak correlation → null
-MAX_EXTRAPOLATION_RATIO: float = 1.25         # max HR extrapolation beyond observed max
-
 # Staleness thresholds (days) for confidence
 CONFIDENCE_HIGH_DAYS = 21
 CONFIDENCE_MEDIUM_DAYS = 56
@@ -188,9 +136,6 @@ PERFORMANCE_HIGH_CONFIDENCE_RELATIVE_HR: float = 0.85
 PERFORMANCE_HIGH_CONFIDENCE_SPEED_PERCENTILE: float = 90.0
 MIN_RIEGEL_RELATIVE_HR: float = PERFORMANCE_MIN_RELATIVE_HR
 
-# VMA rolling window (used for both CURRENT and HISTORY)
-VMA_WINDOW_DAYS: int = 42
-
 # Target race distances (m)
 RACE_DISTANCES_M = {
     "5K": 5_000.0,
@@ -202,15 +147,6 @@ RACE_DISTANCES_M = {
 # ---------------------------------------------------------------------------
 # Reason codes
 # ---------------------------------------------------------------------------
-
-REASON_HR_SPEED_MODEL_SOURCE = "HR_SPEED_MODEL_SOURCE"
-REASON_HR_RANGE_INSUFFICIENT = "HR_RANGE_INSUFFICIENT"
-REASON_HR_LEVELS_INSUFFICIENT = "HR_LEVELS_INSUFFICIENT"
-REASON_HR_MODEL_POOR_FIT = "HR_MODEL_POOR_FIT"
-REASON_EXTRAPOLATION_TOO_LARGE = "EXTRAPOLATION_TOO_LARGE"
-REASON_NO_FCMAX = "NO_FCMAX"
-REASON_NO_DATA = "NO_DATA"
-REASON_INSUFFICIENT_ACTIVITIES = "INSUFFICIENT_ACTIVITIES"
 
 REASON_PERF_QUALIFIED_HR_SPEED = "PERF_QUALIFIED_HR_SPEED"
 REASON_PERF_QUALIFIED_SPEED_ONLY = "PERF_QUALIFIED_SPEED_ONLY"
@@ -262,7 +198,6 @@ def _performance_duration_s(a: DomainActivity) -> Optional[float]:
     This function is the single authority for duration used in:
     - _speed_kmh()
     - _validate_activity() duration check
-    - _is_usable_for_hr_model() duration check
     - Riegel source duration in predict_races()
     """
     moving = a.moving_duration_s
@@ -340,79 +275,6 @@ def _is_road_comparable(a: DomainActivity, reference_date: date) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# HR-speed model filtering
-# ---------------------------------------------------------------------------
-
-
-def _is_usable_for_hr_model(a: DomainActivity, reference_date: date) -> bool:
-    """Additional filters for HR-speed model activities.
-
-    On top of _validate_activity, also requires:
-    - Not trail_running (road/track only for HR-speed model)
-    - HR present and plausible
-    - Duration >= MIN_DURATION_HR_MODEL_S (no short sprints)
-    - Elevation gain per km <= MAX_ROAD_ELEVATION_GAIN_PER_KM (trail/hilly → not comparable)
-    - Not a future activity
-    """
-    if not _validate_activity(a, reference_date):
-        return False
-    # trail_running excluded from road HR-speed model
-    act_type = (a.activity_type or "").strip().lower().replace(" ", "_")
-    if act_type == "trail_running":
-        return False
-    hr = a.average_hr
-    if hr is None or hr < MIN_AVG_HR or hr > MAX_AVG_HR:
-        return False
-    dur = _performance_duration_s(a)
-    if (dur or 0) < MIN_DURATION_HR_MODEL_S:
-        return False
-    # Elevation: reject if data exists and per-km exceeds road threshold
-    if a.elevation_gain_m is not None and a.distance_m and a.distance_m > 0:
-        elev_per_km = a.elevation_gain_m / (a.distance_m / 1000.0)
-        if elev_per_km > MAX_ROAD_ELEVATION_GAIN_PER_KM:
-            return False
-    return True
-
-
-# ---------------------------------------------------------------------------
-# Linear regression: speed = a * HR + b
-# ---------------------------------------------------------------------------
-
-
-def _linear_regression(
-    xs: List[float], ys: List[float]
-) -> Tuple[float, float, float]:
-    """Ordinary least-squares: y = a*x + b.
-
-    Returns (a, b, r_squared).
-    r_squared in [-inf, 1]; negative means regression is worse than flat mean.
-    """
-    n = len(xs)
-    if n < 2:
-        return 0.0, 0.0, 0.0
-
-    mean_x = sum(xs) / n
-    mean_y = sum(ys) / n
-
-    ss_xy = sum((xs[i] - mean_x) * (ys[i] - mean_y) for i in range(n))
-    ss_xx = sum((xs[i] - mean_x) ** 2 for i in range(n))
-    ss_yy = sum((ys[i] - mean_y) ** 2 for i in range(n))
-
-    if ss_xx < 1e-12:
-        return 0.0, mean_y, 0.0
-
-    a = ss_xy / ss_xx
-    b = mean_y - a * mean_x
-
-    if ss_yy < 1e-12:
-        r2 = 1.0
-    else:
-        r2 = (ss_xy ** 2) / (ss_xx * ss_yy)
-
-    return a, b, r2
-
-
-# ---------------------------------------------------------------------------
 # FCmax resolution — robust observed Garmin max HR
 # ---------------------------------------------------------------------------
 
@@ -475,196 +337,6 @@ def _resolve_fcmax(
         return _resolve_fcmax_robust(observed)
 
     return None
-
-
-# ---------------------------------------------------------------------------
-# HR-speed model (Source B)
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class _HRModelResult:
-    """Internal result of the HR-speed model."""
-    vma_kmh: Optional[float]
-    slope: Optional[float]           # a in speed = a*HR + b
-    intercept: Optional[float]       # b
-    r_squared: Optional[float]
-    n_activities: int
-    hr_range_bpm: float
-    max_observed_hr: float
-    target_hr: Optional[float]       # FCmax used for extrapolation
-    extrapolation_ratio: float       # target_hr / max_observed_hr
-    reason_code: str                 # why null if null
-
-
-def _fit_hr_speed_model(
-    activities: List[DomainActivity],
-    reference_date: date,
-    user_max_hr: Optional[float] = None,
-    resolved_fcmax: Optional[float] = None,
-) -> _HRModelResult:
-    """Fit a personal HR-speed linear model and extrapolate to aerobic VMA.
-
-    Requirements:
-    - >= MIN_ACTIVITIES_HR_MODEL usable activities
-    - >= MIN_DISTINCT_HR_LEVELS distinct HR levels
-    - HR range >= MIN_HR_RANGE_BPM
-    - R² >= MIN_R2
-    - Extrapolation ratio <= MAX_EXTRAPOLATION_RATIO
-
-    FCmax: resolved_fcmax when provided, else from user profile or observed max only (no 220-age).
-    Extrapolation target: 95% of FCmax (aerobic ceiling, not 100%).
-    """
-    usable = [a for a in activities if _is_usable_for_hr_model(a, reference_date)]
-
-    null_base = _HRModelResult(
-        vma_kmh=None, slope=None, intercept=None, r_squared=None,
-        n_activities=len(usable), hr_range_bpm=0.0,
-        max_observed_hr=0.0, target_hr=None, extrapolation_ratio=0.0,
-        reason_code=REASON_INSUFFICIENT_ACTIVITIES,
-    )
-
-    if len(usable) < MIN_ACTIVITIES_HR_MODEL:
-        return null_base
-
-    hrs = [a.average_hr for a in usable]  # type: ignore[misc]
-    speeds = [_speed_kmh(a) for a in usable]  # type: ignore[misc]
-
-    # HR range check
-    hr_min = min(hrs)
-    hr_max = max(hrs)
-    hr_range = hr_max - hr_min
-
-    if hr_range < MIN_HR_RANGE_BPM:
-        return _HRModelResult(
-            vma_kmh=None, slope=None, intercept=None, r_squared=None,
-            n_activities=len(usable), hr_range_bpm=round(hr_range, 1),
-            max_observed_hr=round(hr_max, 1), target_hr=None,
-            extrapolation_ratio=0.0, reason_code=REASON_HR_RANGE_INSUFFICIENT,
-        )
-
-    # Distinct HR levels check (bin into ~5 bpm buckets)
-    bucket_size = 5.0
-    buckets = set(int(hr / bucket_size) for hr in hrs)
-    if len(buckets) < MIN_DISTINCT_HR_LEVELS:
-        return _HRModelResult(
-            vma_kmh=None, slope=None, intercept=None, r_squared=None,
-            n_activities=len(usable), hr_range_bpm=round(hr_range, 1),
-            max_observed_hr=round(hr_max, 1), target_hr=None,
-            extrapolation_ratio=0.0, reason_code=REASON_HR_LEVELS_INSUFFICIENT,
-        )
-
-    # Linear regression
-    a, b, r2 = _linear_regression(hrs, speeds)
-
-    if r2 < MIN_R2:
-        return _HRModelResult(
-            vma_kmh=None, slope=round(a, 5), intercept=round(b, 4),
-            r_squared=round(r2, 4),
-            n_activities=len(usable), hr_range_bpm=round(hr_range, 1),
-            max_observed_hr=round(hr_max, 1), target_hr=None,
-            extrapolation_ratio=0.0, reason_code=REASON_HR_MODEL_POOR_FIT,
-        )
-
-    # Slope sanity: speed must increase with HR (positive slope)
-    if a <= 0:
-        return _HRModelResult(
-            vma_kmh=None, slope=round(a, 5), intercept=round(b, 4),
-            r_squared=round(r2, 4),
-            n_activities=len(usable), hr_range_bpm=round(hr_range, 1),
-            max_observed_hr=round(hr_max, 1), target_hr=None,
-            extrapolation_ratio=0.0, reason_code=REASON_HR_MODEL_POOR_FIT,
-        )
-
-    # FCmax resolution — use pre-resolved value when provided; else from all valid activities
-    fcmax = resolved_fcmax if resolved_fcmax is not None else _resolve_fcmax(activities, user_max_hr, reference_date)
-
-    # FCmax is mandatory for extrapolation; no synthetic fallback allowed
-    if fcmax is None:
-        return _HRModelResult(
-            vma_kmh=None, slope=round(a, 5), intercept=round(b, 4),
-            r_squared=round(r2, 4),
-            n_activities=len(usable), hr_range_bpm=round(hr_range, 1),
-            max_observed_hr=round(hr_max, 1), target_hr=None,
-            extrapolation_ratio=0.0, reason_code=REASON_NO_FCMAX,
-        )
-
-    # Extrapolation target: 95% of FCmax (aerobic ceiling, conservative)
-    target_hr = fcmax * 0.95
-
-    extrapolation_ratio = target_hr / hr_max if hr_max > 0 else 999.0
-
-    if extrapolation_ratio > MAX_EXTRAPOLATION_RATIO:
-        return _HRModelResult(
-            vma_kmh=None, slope=round(a, 5), intercept=round(b, 4),
-            r_squared=round(r2, 4),
-            n_activities=len(usable), hr_range_bpm=round(hr_range, 1),
-            max_observed_hr=round(hr_max, 1), target_hr=round(target_hr, 1),
-            extrapolation_ratio=round(extrapolation_ratio, 4),
-            reason_code=REASON_EXTRAPOLATION_TOO_LARGE,
-        )
-
-    # Predicted speed at target_hr
-    predicted_speed = a * target_hr + b
-
-    # Sanity bounds
-    if predicted_speed < MIN_SPEED_KMH or predicted_speed > MAX_SPEED_KMH:
-        return _HRModelResult(
-            vma_kmh=None, slope=round(a, 5), intercept=round(b, 4),
-            r_squared=round(r2, 4),
-            n_activities=len(usable), hr_range_bpm=round(hr_range, 1),
-            max_observed_hr=round(hr_max, 1), target_hr=round(target_hr, 1),
-            extrapolation_ratio=round(extrapolation_ratio, 4),
-            reason_code=REASON_HR_MODEL_POOR_FIT,
-        )
-
-    vma = round(predicted_speed, 2)
-
-    return _HRModelResult(
-        vma_kmh=vma, slope=round(a, 5), intercept=round(b, 4),
-        r_squared=round(r2, 4),
-        n_activities=len(usable), hr_range_bpm=round(hr_range, 1),
-        max_observed_hr=round(hr_max, 1), target_hr=round(target_hr, 1),
-        extrapolation_ratio=round(extrapolation_ratio, 4),
-        reason_code=REASON_HR_SPEED_MODEL_SOURCE,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Confidence
-# ---------------------------------------------------------------------------
-
-
-def _hr_model_confidence(
-    model: _HRModelResult,
-    reference_date: date,
-    activities: List[DomainActivity],
-) -> str:
-    """Confidence for HR-speed model result.
-
-    HIGH:   n >= 6, r² >= 0.6, extrapolation <= 1.10, recent data
-    MEDIUM: n >= 4, r² >= 0.3, extrapolation <= 1.20
-    LOW:    barely valid
-    """
-    if model.vma_kmh is None:
-        return "insufficient"
-
-    # Recency of activities used in model
-    usable = [a for a in activities if _is_usable_for_hr_model(a, reference_date)]
-    most_recent_days = min(
-        (_days_ago(_activity_date(a) or date.min, reference_date) for a in usable),
-        default=999,
-    )
-
-    n = model.n_activities
-    r2 = model.r_squared or 0.0
-    ext = model.extrapolation_ratio
-
-    if n >= 6 and r2 >= 0.60 and ext <= 1.10 and most_recent_days <= CONFIDENCE_HIGH_DAYS:
-        return "high"
-    if n >= 4 and r2 >= 0.40 and ext <= 1.20 and most_recent_days <= CONFIDENCE_MEDIUM_DAYS:
-        return "medium"
-    return "low"
 
 
 # ---------------------------------------------------------------------------
@@ -853,31 +525,6 @@ def evaluate_performance_quality(
 
 
 @dataclass(frozen=True)
-class VMAEstimate:
-    """VMA estimation result.
-
-    vma_kmh=None means insufficient data to estimate.
-    """
-    vma_kmh: Optional[float]
-    confidence: str              # "high" | "medium" | "low" | "insufficient"
-    method: Optional[str]
-    source_activity_date: Optional[date]
-    source_distance_m: Optional[float]
-    source_duration_s: Optional[float]
-    reason_code: str = REASON_NO_DATA
-    # HR-speed model details (None when not used)
-    hr_model_r_squared: Optional[float] = None
-    hr_model_n_activities: int = 0
-    hr_model_hr_range_bpm: float = 0.0
-    hr_model_extrapolation_ratio: float = 0.0
-    model_version: str = "v2"
-
-    @property
-    def has_data(self) -> bool:
-        return self.vma_kmh is not None
-
-
-@dataclass(frozen=True)
 class RacePrediction:
     """Predicted race time for a single distance."""
     distance_label: str
@@ -909,118 +556,10 @@ class RacePrediction:
 class PerformanceEstimate:
     """Top-level result for a user snapshot."""
     has_data: bool
-    vma: VMAEstimate
     predictions: List[RacePrediction] = field(default_factory=list)
     athlete_profile: dict = field(default_factory=dict)
     race_curve_diagnostics: Dict[str, Any] = field(default_factory=dict)
     model_version: str = "v2"
-
-
-# ---------------------------------------------------------------------------
-# VMA window helper
-# ---------------------------------------------------------------------------
-
-
-def _activities_in_vma_window(
-    activities: List[DomainActivity],
-    reference_date: date,
-    window_days: int = VMA_WINDOW_DAYS,
-) -> List[DomainActivity]:
-    """Return activities within [reference_date - (window_days-1), reference_date].
-
-    Window is inclusive on both ends.  A window_days of 42 covers days 0..41,
-    i.e. [reference_date - 41 days, reference_date].
-    """
-    window_start = date.fromordinal(reference_date.toordinal() - (window_days - 1))
-    return [
-        a for a in activities
-        if (_activity_date(a) or date.min) >= window_start
-        and (_activity_date(a) or date.max) <= reference_date
-    ]
-
-
-# ---------------------------------------------------------------------------
-# VMA estimation — dual-path
-# ---------------------------------------------------------------------------
-
-
-def estimate_vma(
-    activities: List[DomainActivity],
-    reference_date: Union[date, datetime],
-    user_max_hr: Optional[float] = None,
-) -> VMAEstimate:
-    """Estimate VMA from DomainActivity objects using the HR-speed model.
-
-    SOURCE A (explicit performance) is DISABLED — no Garmin field currently
-    identifies a race/test/competition.  Only SOURCE B (HR-speed linear model)
-    is used.
-
-    The model is fitted on activities within the VMA_WINDOW_DAYS (42-day) rolling
-    window ending at reference_date.  No look-ahead; no fallback to older data.
-
-    FCmax is resolved from the same 42-day window as the model activities.
-    This ensures that estimate_vma(all_activities, ref) ==
-    estimate_vma(_activities_in_vma_window(all_activities, ref), ref),
-    making CURRENT and HISTORY snapshots strictly identical.
-
-    Returns VMAEstimate(vma_kmh=None) when the model yields insufficient data.
-
-    220-age and hr_max+5 are forbidden.
-    """
-    if isinstance(reference_date, datetime):
-        reference_date = reference_date.date()
-
-    # Apply 42-day VMA window for model fitting
-    windowed = _activities_in_vma_window(activities, reference_date)
-
-    # FCmax resolved from the same 42-day window used for the model.
-    # Using the identical window for both ensures CURRENT == HISTORY snapshots
-    # are strictly deterministic: an activity outside the window cannot influence
-    # the FCmax used by the extrapolation step.
-    fcmax = _resolve_fcmax(windowed, user_max_hr, reference_date)
-
-    # --- Source A: DISABLED ---
-    # SOURCE_A_DISABLED = True: no Garmin field identifies explicit performances.
-
-    # --- Source B: HR-speed model (windowed activities, pre-resolved FCmax) ---
-    hr_model = _fit_hr_speed_model(windowed, reference_date, user_max_hr, resolved_fcmax=fcmax)
-    vma_b: Optional[float] = hr_model.vma_kmh
-    conf_b: Optional[str] = (
-        _hr_model_confidence(hr_model, reference_date, windowed)
-        if vma_b is not None else None
-    )
-    method_b: Optional[str] = (
-        f"hr_speed_model_n{hr_model.n_activities}_r2{hr_model.r_squared:.2f}"
-        if vma_b is not None and hr_model.r_squared is not None else None
-    )
-
-    if vma_b is None:
-        reason = hr_model.reason_code if hr_model.reason_code else REASON_NO_DATA
-        return VMAEstimate(
-            vma_kmh=None,
-            confidence="insufficient",
-            method=None,
-            source_activity_date=None,
-            source_distance_m=None,
-            source_duration_s=None,
-            reason_code=reason,
-            hr_model_n_activities=hr_model.n_activities,
-            hr_model_hr_range_bpm=hr_model.hr_range_bpm,
-        )
-
-    return VMAEstimate(
-        vma_kmh=vma_b,
-        confidence=conf_b or "low",
-        method=method_b,
-        source_activity_date=None,
-        source_distance_m=None,
-        source_duration_s=None,
-        reason_code=REASON_HR_SPEED_MODEL_SOURCE,
-        hr_model_r_squared=hr_model.r_squared,
-        hr_model_n_activities=hr_model.n_activities,
-        hr_model_hr_range_bpm=hr_model.hr_range_bpm,
-        hr_model_extrapolation_ratio=hr_model.extrapolation_ratio,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -1933,28 +1472,12 @@ def predict_races(
     reference_date: Union[date, datetime],
     user_max_hr: Optional[float] = None,
 ) -> PerformanceEstimate:
-    """Compute VMA V2 estimate and race predictions V2.
+    """Compute race predictions V2 from qualified observed performances.
 
-    VMA is estimated via the HR-speed model (SOURCE A is disabled).
-
-    Race predictions use only #188-qualified observed performances and one
-    shared time-distance curve for all targets.
-    No synthetic effort is ever created.
-
-    If no defensible observed source exists for a target distance, the
-    prediction for that distance is null (predicted_time_s = None).
-    Race times are independent of VMA output: VMA can be available while
-    some or all predictions are null, and VMA/VO2max outputs never directly
-    alter race times. #188 qualification may still depend on FCmax-relative HR.
+    VMA is removed (#214); predictions use the performance curve only.
     """
     if isinstance(reference_date, datetime):
         reference_date = reference_date.date()
-
-    vma_est = estimate_vma(activities, reference_date, user_max_hr)
-
-    # Race times are independent of VMA output.
-    # Do NOT return early when VMA is null — predictions may still exist from
-    # observed qualified performances.
 
     # Weekly volume & long run for athlete profile
     cutoff_28 = date.fromordinal(reference_date.toordinal() - 28)
@@ -2071,26 +1594,22 @@ def predict_races(
             contributors_count=len(sorted_contributors),
         ))
 
-    vo2max_estimated: Optional[float] = None
-    if vma_est.vma_kmh is not None:
-        vo2max_estimated = round(vma_est.vma_kmh * 3.5, 1)
-
     athlete_profile = {
         "weekly_km": round(weekly_km, 1),
         "max_long_run_km": round(max_long_run_m / 1000.0, 1),
-        "estimated_vma": vma_est.vma_kmh,
-        "estimated_vo2max": vo2max_estimated,
-        "vo2max_note": "Derived estimate (VMA × 3.5). Not a lab or Garmin measurement.",
-        "vma_method": vma_est.method,
-        "vma_confidence": vma_est.confidence,
-        "vma_reason_code": vma_est.reason_code,
+        "estimated_vma": None,
+        "estimated_vo2max": None,
+        "vo2max_note": None,
+        "vma_method": None,
+        "vma_confidence": None,
+        "vma_reason_code": None,
         "calculation_window": "garmin_activities (all available)",
         "model_version": "v2",
     }
 
-    # has_data = True when VMA is available OR at least one prediction has a time
+    # has_data = True when at least one prediction has a time
     has_any_prediction = any(p.predicted_time_s is not None for p in predictions)
-    result_has_data = vma_est.has_data or has_any_prediction
+    result_has_data = has_any_prediction
 
     confidence_aggregates = _curve_confidence_aggregates(tuple(sorted_contributors))
 
@@ -2112,7 +1631,6 @@ def predict_races(
 
     return PerformanceEstimate(
         has_data=result_has_data,
-        vma=vma_est,
         predictions=predictions,
         athlete_profile=athlete_profile,
         race_curve_diagnostics={
@@ -2202,6 +1720,5 @@ seconds_to_str = _seconds_to_str
 validate_activity = _validate_activity
 activity_date = _activity_date
 performance_duration_s = _performance_duration_s
-activities_in_vma_window = _activities_in_vma_window
 is_road_comparable = _is_road_comparable
 personal_speed_percentile_90d = _personal_speed_percentile_90d

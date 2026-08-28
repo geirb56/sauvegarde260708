@@ -263,11 +263,6 @@ class TestProgressFrontendStaticAnalysis:
             "Progress.jsx must not filter null run_index before passing to chart"
         )
 
-    def test_vma_history_endpoint_preserved(self):
-        """I/J — VMA_FRONTEND_PRESERVED = YES."""
-        code = open(self._PROGRESS_PATH).read()
-        assert "/training/vma-history" in code
-
     def test_race_predictions_endpoint_preserved(self):
         """K — PREDICTIONS_FRONTEND_PRESERVED = YES."""
         code = open(self._PROGRESS_PATH).read()
