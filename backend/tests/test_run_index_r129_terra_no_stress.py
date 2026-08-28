@@ -56,6 +56,7 @@ def _make_db(docs: List[dict], acts: List[dict]) -> MagicMock:
 
     db.garmin_daily_metrics.find = MagicMock(return_value=_cursor(docs))
     db.garmin_activities.find = MagicMock(return_value=_cursor(acts))
+    db.garmin_vo2max.find_one = AsyncMock(return_value=None)
     return db
 
 

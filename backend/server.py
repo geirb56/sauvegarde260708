@@ -2680,7 +2680,7 @@ async def get_detailed_analysis(workout_id: str, language: str = "en", user: dic
 
 # ========== CARDIO COACH RUNNING SCREEN ==========
 
-# Returned when no wearable (Garmin/Terra) is connected: explicit "no data"
+# Returned when no wearable connection is available: explicit "no data"
 # state so the UI shows an empty/connect prompt instead of fabricated data.
 _CARDIO_COACH_NO_DATA = {
     "mock": False,
