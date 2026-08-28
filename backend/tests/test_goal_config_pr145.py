@@ -76,21 +76,13 @@ def test_server_does_not_define_goal_config():
 # ------------------------------------------------------------------
 
 def test_server_no_goal_config_from_training_engine():
-    """server.py must not import GOAL_CONFIG from training_engine."""
+    """server.py must not import anything from training_engine."""
     server_path = os.path.join(os.path.dirname(__file__), "..", "server.py")
     with open(server_path) as f:
         content = f.read()
 
-    match = re.search(
-        r"from training_engine import \((.*?)\)",
-        content,
-        re.DOTALL,
-    )
-    assert match is not None, "training_engine import block not found"
-    import_body = match.group(1)
-    assert "GOAL_CONFIG" not in import_body, (
-        "GOAL_CONFIG should not be in training_engine import block"
-    )
+    assert "from training_engine import" not in content
+    assert "import training_engine" not in content
 
 
 # ------------------------------------------------------------------
@@ -118,19 +110,10 @@ def test_training_engine_no_goal_config():
 # ------------------------------------------------------------------
 
 def test_dead_imports_removed():
-    """vma_pace, vma_pace_range, adapt_session_to_readiness must not be imported."""
+    """Legacy training_engine imports must be fully removed from server.py."""
     server_path = os.path.join(os.path.dirname(__file__), "..", "server.py")
     with open(server_path) as f:
         content = f.read()
 
-    match = re.search(
-        r"from training_engine import \((.*?)\)",
-        content,
-        re.DOTALL,
-    )
-    assert match is not None
-    import_body = match.group(1)
-    for symbol in ["vma_pace", "vma_pace_range", "adapt_session_to_readiness"]:
-        assert symbol not in import_body, (
-            f"Dead import '{symbol}' should be removed from training_engine imports"
-        )
+    assert "from training_engine import" not in content
+    assert "import training_engine" not in content

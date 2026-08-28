@@ -94,7 +94,6 @@ PREMIUM_FEATURES: frozenset = frozenset({
     "coach_detailed",
     "coach_workout_analysis",
     "race_predictions",
-    "full_cycle",
     "garmin_sync",
 })
 
@@ -416,7 +415,6 @@ ROUTE_ACCESS_MAP: Dict[str, RouteAccess] = {
     # ── Premium (TRIAL or PREMIUM required) ──────────────────────────────
     "/api/training/plan":             RouteAccess.PREMIUM,
     "/api/training/refresh":          RouteAccess.PREMIUM,
-    "/api/training/full-cycle":       RouteAccess.PREMIUM,
     "/api/training/race-predictions": RouteAccess.PREMIUM,
     "/api/training/dynamic-plan":     RouteAccess.PREMIUM,
     "/api/training/feedback":         RouteAccess.PREMIUM,
