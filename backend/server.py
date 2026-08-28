@@ -3417,28 +3417,6 @@ async def get_week_plan(user: dict = Depends(auth_user)):
     twenty_eight_days_ago = today - timedelta(days=28)
     ninety_days_ago = today - timedelta(days=90)
 
-    workouts_7 = await db.workouts.find({
-        "user_id": user_id,
-        "date": {"$gte": seven_days_ago.isoformat()}
-    }).to_list(100)
-
-    workouts_28 = await db.workouts.find({
-        "user_id": user_id,
-        "date": {"$gte": twenty_eight_days_ago.isoformat()}
-    }).to_list(100)
-
-    # PR149: 90-day window for V2 chain (matches coach_service pattern).
-    workouts_90 = await db.workouts.find({
-        "user_id": user_id,
-        "date": {"$gte": ninety_days_ago.isoformat()}
-    }).to_list(1000)
-
-    # Calculer les métriques
-    km_7 = sum(w.get("distance_km", 0) or 0 for w in workouts_7)
-    km_28 = sum(w.get("distance_km", 0) or 0 for w in workouts_28)
-    load_7 = km_7 * 10
-    load_28 = km_28 * 10
-
     # ── PR149/PR163: WeeklyTarget V2 + WorkoutGenerator V2 ──────────────────
     # PR163: use build_weekly_plan_from_workouts so WorkoutGenerator V2 is the
     # authority on session distribution (long_easy distance in particular).
@@ -3448,6 +3426,13 @@ async def get_week_plan(user: dict = Depends(auth_user)):
         build_weekly_plan_from_workouts,
         workouts_to_domain_activities,
     )
+
+    # Canonical Training V2 source: garmin_activities → DomainActivity.
+    garmin_activities_90 = await db.garmin_activities.find({
+        "user_id": user_id,
+        "start_time": {"$gte": ninety_days_ago.isoformat()}
+    }, {"_id": 0}).to_list(1000)
+    domain_activities_90 = mongo_garmin_activities_to_domain(garmin_activities_90)
 
     goal_start_date = goal["start_date"]
     if isinstance(goal_start_date, datetime) and goal_start_date.tzinfo is None:
@@ -3510,7 +3495,7 @@ async def get_week_plan(user: dict = Depends(auth_user)):
         )
 
     weekly_target, weekly_plan_v2 = build_weekly_plan_from_workouts(
-        workouts=workouts_90,
+        workouts=domain_activities_90,
         goal_type=goal["goal_type"],
         race_date=race_date_v2,
         cycle_start_date=cycle_start_v2,
@@ -3532,15 +3517,21 @@ async def get_week_plan(user: dict = Depends(auth_user)):
     )
 
     running_activities_7 = [
-        a for a in workouts_to_domain_activities(workouts_7)
+        a for a in domain_activities_90
         if (a.activity_type or "").lower() in RUNNING_TYPES
+        and activity_date(a) is not None
+        and activity_date(a) >= seven_days_ago.date()
     ]
     running_activities_28 = [
-        a for a in workouts_to_domain_activities(workouts_28)
+        a for a in domain_activities_90
         if (a.activity_type or "").lower() in RUNNING_TYPES
+        and activity_date(a) is not None
+        and activity_date(a) >= twenty_eight_days_ago.date()
     ]
     km_7_running = sum((a.distance_m or 0.0) / 1000.0 for a in running_activities_7)
     km_28_running = sum((a.distance_m or 0.0) / 1000.0 for a in running_activities_28)
+    load_7 = km_7_running
+    load_28 = km_28_running
 
     start_date = goal["start_date"]
     cycle_weeks = goal["cycle_weeks"]
@@ -3717,13 +3708,15 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
 
     # ── Workouts — 90-day window (same as /training/week-plan) ───────────
     ninety_days_ago = now_utc - timedelta(days=90)
-    workouts_90 = await db.workouts.find(
-        {"user_id": user_id, "date": {"$gte": ninety_days_ago.isoformat()}}
+    garmin_activities_90 = await db.garmin_activities.find(
+        {"user_id": user_id, "start_time": {"$gte": ninety_days_ago.isoformat()}},
+        {"_id": 0},
     ).to_list(1000)
+    domain_activities_90 = mongo_garmin_activities_to_domain(garmin_activities_90)
 
     # ── Canonical builder — single call, no duplication ──────────────────
     weekly_target, weekly_plan = build_weekly_plan_from_workouts(
-        workouts=workouts_90,
+        workouts=domain_activities_90,
         goal_type=goal_type,
         race_date=race_date_v2,
         cycle_start_date=cycle_start_v2,

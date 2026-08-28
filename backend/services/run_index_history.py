@@ -244,12 +244,6 @@ def build_snapshot_document(
     }
 
 
-async def load_user_workouts(db, user_id: str) -> list[dict]:
-    # LEGACY: reads db.workouts. Not used for RunIndex Garmin after PR179.
-    cursor = db.workouts.find({"user_id": user_id}, {"_id": 0}).sort("date", 1)
-    return await cursor.to_list(None)
-
-
 async def load_garmin_domain_activities(db, user_id: str) -> list[DomainActivity]:
     """Load garmin_activities for a user and convert to DomainActivity.
 

@@ -26,6 +26,7 @@ from llm_coach import (
     enrich_workout_analysis,
 )
 from garmin.domain_adapter import mongo_garmin_activities_to_domain
+from training_v2.domain_activity import DomainActivity
 from training_v2.plan_goal import GoalType, ULTRA_MIN_DISTANCE_KM, build_plan_goal
 from training_v2.periodization import build_periodization
 from training_v2.runner_profile import build_runner_profile
@@ -532,6 +533,22 @@ def _workouts_fingerprint(workouts: List[dict]) -> str:
     return _stable_hash({"workouts": compact})
 
 
+def _activities_fingerprint(activities: List[DomainActivity]) -> str:
+    compact = []
+    for activity in activities:
+        compact.append(
+            {
+                "id": activity.source_activity_id,
+                "date": activity.start_time,
+                "activity_type": activity.activity_type,
+                "distance_m": activity.distance_m,
+                "duration_s": activity.duration_s,
+            }
+        )
+    compact.sort(key=lambda x: (str(x["date"]), str(x["id"])))
+    return _stable_hash({"activities": compact})
+
+
 def _profile_fingerprint(profile_doc: Optional[dict]) -> str:
     if not isinstance(profile_doc, dict):
         return "none"
@@ -585,9 +602,11 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
     profile_doc = await db.user_profiles.find_one({"user_id": user_id}) if hasattr(db, "user_profiles") else None
 
     ninety_days_ago = now - timedelta(days=90)
-    workouts = await db.workouts.find(
-        {"user_id": user_id, "date": {"$gte": ninety_days_ago.isoformat()}}
+    garmin_docs = await db.garmin_activities.find(
+        {"user_id": user_id, "start_time": {"$gte": ninety_days_ago.isoformat()}},
+        {"_id": 0},
     ).to_list(1000)
+    activities = mongo_garmin_activities_to_domain(garmin_docs)
 
     goal_type, goal_label = _runtime_goal_and_type(cycle.get("goal"))
     race_date = _parse_optional_date((user_goal or {}).get("event_date") or cycle.get("race_date"))
@@ -603,7 +622,7 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
         "cycle_start_date": cycle_start_date.isoformat() if cycle_start_date else None,
         "ultra_distance_km": ultra_distance,
         "sessions_override": sessions_per_week,
-        "workouts_fingerprint": _workouts_fingerprint(workouts),
+        "activities_fingerprint": _activities_fingerprint(activities),
         "profile_fingerprint": _profile_fingerprint(profile_doc),
     }
     cache_key = f"plan_v2_{_stable_hash(_cache_payload)}"
@@ -685,7 +704,6 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
             "generated_at": now.isoformat(),
         }
 
-    activities = [_to_domain_activity_from_workout(w) for w in workouts]
     training_history = build_training_history(activities, reference_date)
     training_load = build_training_load(activities, reference_date)
     runner_profile = build_runner_profile(
