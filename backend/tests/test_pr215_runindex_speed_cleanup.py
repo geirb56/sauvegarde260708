@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
 
 sys_path_root = Path(__file__).resolve().parents[1]
-import sys
 
 sys.path.insert(0, str(sys_path_root))
 
@@ -165,11 +165,15 @@ def test_run_index_not_coupled_to_forbidden_external_signals(extra_key: str, lef
 
 def test_runindex_global_pillar_weights_unchanged():
     src = _read(os.path.join(BACKEND_DIR, "engine", "run_index_engine.py"))
-    assert '(speed["score"], 0.40)' in src
-    assert '(endurance["score"], 0.25)' in src
-    assert '(consistency["score"], 0.20)' in src
-    assert '(efficiency["score"], 0.15)' in src
-    assert '(speed["confidence"] if speed["score"] is not None else None, 0.40)' in src
-    assert '(endurance["confidence"] if endurance["score"] is not None else None, 0.25)' in src
-    assert '(consistency["confidence"] if consistency["score"] is not None else None, 0.20)' in src
-    assert '(efficiency["confidence"] if efficiency["score"] is not None else None, 0.15)' in src
+    required_patterns = [
+        r'\(speed\["score"\],\s*0\.4(?:0+)?\)',
+        r'\(endurance\["score"\],\s*0\.25\)',
+        r'\(consistency\["score"\],\s*0\.2(?:0+)?\)',
+        r'\(efficiency\["score"\],\s*0\.15\)',
+        r'\(speed\["confidence"\]\s+if\s+speed\["score"\]\s+is\s+not\s+None\s+else\s+None,\s*0\.4(?:0+)?\)',
+        r'\(endurance\["confidence"\]\s+if\s+endurance\["score"\]\s+is\s+not\s+None\s+else\s+None,\s*0\.25\)',
+        r'\(consistency\["confidence"\]\s+if\s+consistency\["score"\]\s+is\s+not\s+None\s+else\s+None,\s*0\.2(?:0+)?\)',
+        r'\(efficiency\["confidence"\]\s+if\s+efficiency\["score"\]\s+is\s+not\s+None\s+else\s+None,\s*0\.15\)',
+    ]
+    for pattern in required_patterns:
+        assert re.search(pattern, src), f"Missing expected global weight pattern: {pattern}"
