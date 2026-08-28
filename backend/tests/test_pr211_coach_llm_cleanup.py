@@ -133,15 +133,10 @@ def test_no_legacy_performance_fallback_formulas_in_coach_service():
 
 
 def test_coach_service_has_no_perf_vma_consumers():
-    tree = ast.parse(Path(coach_service.__file__).read_text(encoding="utf-8"))
-
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Attribute) and node.attr in {"vma", "vma_kmh"}:
-            root = node
-            while isinstance(root, ast.Attribute):
-                root = root.value
-            if isinstance(root, ast.Name) and root.id == "perf":
-                raise AssertionError("coach_service still consumes perf.vma/perf.vma_kmh")
+    source = Path(coach_service.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    assert "perf.vma" not in source
+    assert ".vma_kmh" not in source
 
     calls = {
         node.func.id
