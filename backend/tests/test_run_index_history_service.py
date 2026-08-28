@@ -192,11 +192,12 @@ def test_backfill_run_index_history_creates_progressive_snapshots():
     result = asyncio.run(backfill_run_index_history(db, "runner-1", reference_date=date(2026, 7, 9)))
 
     history = sorted(db.run_index_scores.docs, key=lambda doc: doc["date"])
+    scored_history = [doc for doc in history if doc["run_index"] is not None]
     assert result["snapshots_targeted"] == len(history)
     assert len(history) >= 30
     assert len({doc["date"] for doc in history}) == len(history)
-    assert len({doc["run_index"] for doc in history}) > 1
-    assert history[0]["run_index"] < history[-1]["run_index"]
+    assert len({doc["run_index"] for doc in scored_history}) > 1
+    assert scored_history[0]["run_index"] < scored_history[-1]["run_index"]
 
 
 def test_backfill_run_index_history_is_idempotent():
@@ -213,7 +214,7 @@ def test_backfill_run_index_history_is_idempotent():
 def test_empty_history_snapshot_has_low_confidence():
     snapshot = build_snapshot_document("runner-1", [], date(2026, 7, 9))
 
-    assert snapshot["run_index"] == 0
+    assert snapshot["run_index"] is None
     assert snapshot["confidence_score"] == 0
 
 
@@ -236,7 +237,8 @@ def test_history_payload_returns_complete_12_month_view():
     assert len(payload["history"]) == 13
     assert payload["history"][0]["date"].startswith("2025-07")
     assert payload["history"][-1]["date"] == "2026-07-09"
-    assert payload["history"][0]["run_index"] < payload["history"][-1]["run_index"]
+    scored_history = [entry for entry in payload["history"] if entry["run_index"] is not None]
+    assert scored_history[0]["run_index"] < scored_history[-1]["run_index"]
     assert {"speed", "endurance", "consistency", "efficiency"} <= set(payload["history"][0].keys())
 
 

@@ -160,9 +160,9 @@ def _divergent_dataset_b() -> List[dict]:
     return [_workout_run(d, 9.0) for d in (30, 33, 36)]
 
 
-def _expected_from(dataset: List[dict]) -> tuple[Any, Any]:
+def _expected_from_garmin_dataset(garmin_dataset: List[dict]) -> tuple[Any, Any]:
     return build_weekly_plan_from_workouts(
-        workouts=mongo_garmin_activities_to_domain(dataset),
+        workouts=mongo_garmin_activities_to_domain(garmin_dataset),
         goal_type="MARATHON",
         race_date=None,
         cycle_start_date=(datetime.now(timezone.utc).date() - timedelta(days=21)),
@@ -190,7 +190,7 @@ async def test_training_week_plan_uses_canonical_garmin_source_when_workouts_div
     fake_db = _FakeDB(garmin_activities=garmin_a, workouts=workouts_b)
 
     response = await _call("/api/training/week-plan", fake_db)
-    expected_a, plan_a = _expected_from(garmin_a)
+    expected_a, plan_a = _expected_from_garmin_dataset(garmin_a)
     expected_b, _ = build_weekly_plan_from_workouts(
         workouts=workouts_b,
         goal_type="MARATHON",
@@ -212,7 +212,7 @@ async def test_training_v2_week_uses_canonical_garmin_source_when_workouts_diver
     fake_db = _FakeDB(garmin_activities=garmin_a, workouts=workouts_b)
 
     response = await _call("/api/training/v2/week", fake_db)
-    expected_a, plan_a = _expected_from(garmin_a)
+    expected_a, plan_a = _expected_from_garmin_dataset(garmin_a)
     expected_b, _ = build_weekly_plan_from_workouts(
         workouts=workouts_b,
         goal_type="MARATHON",
@@ -235,7 +235,7 @@ async def test_dynamic_training_plan_uses_canonical_garmin_source_when_workouts_
     fake_db = _FakeDB(garmin_activities=garmin_a, workouts=workouts_b)
 
     result = await coach_service.generate_dynamic_training_plan(fake_db, "u1")
-    expected_a, _ = _expected_from(garmin_a)
+    expected_a, _ = _expected_from_garmin_dataset(garmin_a)
     expected_b, _ = build_weekly_plan_from_workouts(
         workouts=workouts_b,
         goal_type="MARATHON",

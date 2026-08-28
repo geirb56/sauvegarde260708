@@ -92,6 +92,7 @@ def _make_db(metrics_docs: List[dict], activity_docs: List[dict]) -> MagicMock:
 
     db.garmin_daily_metrics.find.side_effect = _metrics_find
     db.garmin_activities.find.side_effect = _activities_find
+    db.garmin_vo2max.find_one = AsyncMock(return_value=None)
     return db
 
 
