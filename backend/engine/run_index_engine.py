@@ -166,12 +166,9 @@ def calculate_speed_score(
     """Speed pillar.
 
     Components:
-    - race_performance_score (60 %): best predicted time for 5K/10K/half
+    - race_performance_score (80 %): best predicted time for 5K/10K/half
       within ±20 % of target distance in last 180 days.
-    - speed_proxy_score (25 %): proxy based on estimated sustainable speed
-      (NOT a measured VO2max). Named explicitly to avoid false physiological
-      claims.
-    - sustained_speed_score (15 %): best pace over a 20–75 min effort.
+    - sustained_speed_score (20 %): best pace over a 20–75 min effort.
       NOT a lactate threshold. Renamed from threshold_score to avoid LT claims.
 
     Missing component → None → excluded from weighted average.
@@ -213,34 +210,6 @@ def calculate_speed_score(
             race_source = race_name
             break
 
-    # speed_proxy_score: proxy for sustainable speed based on effort duration.
-    # This is NOT a physiological VO2max measurement — it is an internal proxy only.
-    speed_proxy_candidates = []
-    for run in recent_runs:
-        speed = run["avg_speed_kmh"]
-        duration = run["duration_minutes"]
-        if speed is None or duration < 6:
-            continue
-        if duration >= 20:
-            estimated_vma_proxy = speed / 0.85
-        elif duration >= 12:
-            estimated_vma_proxy = speed / 0.90
-        else:
-            estimated_vma_proxy = speed / 0.95
-        speed_proxy_candidates.append((estimated_vma_proxy * 3.5, run))
-
-    speed_proxy_score: Optional[float] = None
-    speed_proxy_confidence = 0.0
-    if speed_proxy_candidates:
-        best_proxy, best_proxy_run = max(speed_proxy_candidates, key=lambda item: item[0])
-        speed_proxy_score = _normalize(best_proxy, 32.0, 75.0)
-        speed_proxy_confidence = _weighted_average(
-            [
-                (_confidence_from_count(len(speed_proxy_candidates), 4), 0.5),
-                (_freshness_confidence(best_proxy_run["days_ago"], 30, 180), 0.5),
-            ]
-        )
-
     # sustained_speed_score: best pace over 20–75 min effort.
     # NOT a lactate threshold measurement. Renamed to avoid LT1/LT2 claims.
     sustained_candidates = [
@@ -260,17 +229,15 @@ def calculate_speed_score(
 
     score = _weighted_average_nullable(
         [
-            (race_score, 0.60),
-            (speed_proxy_score, 0.25),
-            (sustained_speed_score, 0.15),
+            (race_score, 0.80),
+            (sustained_speed_score, 0.20),
         ]
     )
     # Confidence: only components that contributed are included.
     confidence = _weighted_average_nullable(
         [
-            (race_confidence if race_score is not None else None, 0.60),
-            (speed_proxy_confidence if speed_proxy_score is not None else None, 0.25),
-            (sustained_confidence if sustained_speed_score is not None else None, 0.15),
+            (race_confidence if race_score is not None else None, 0.80),
+            (sustained_confidence if sustained_speed_score is not None else None, 0.20),
         ]
     )
     if confidence is None:
@@ -281,7 +248,6 @@ def calculate_speed_score(
         "confidence": int(round(confidence)),
         "components": {
             "race_performance_score": None if race_score is None else int(round(race_score)),
-            "speed_proxy_score": None if speed_proxy_score is None else int(round(speed_proxy_score)),
             "sustained_speed_score": None if sustained_speed_score is None else int(round(sustained_speed_score)),
             "race_source": race_source,
             "days_since_race_performance": race_date_gap,
