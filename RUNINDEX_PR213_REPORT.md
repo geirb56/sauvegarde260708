@@ -3,7 +3,7 @@
 ## Metadata
 - Base branch: `copilot/dev`
 - Base SHA (post-merge PR #212): `e29061cbb9e76046130ccd8ad2ee61a84301f524`
-- Head SHA: `05a4208627213a955c617fb20bb43ee5f167b6c3`
+- Head SHA: `8c368ff337cfb58933bd44e01de48d05a4346857`
 - PR target: Draft PR #213 (no merge)
 
 ## 1) Audit avant suppression
