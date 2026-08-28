@@ -3759,7 +3759,6 @@ async def get_week_plan(user: dict = Depends(auth_user)):
     # authority on session distribution (long_easy distance in particular).
     from training_v2.periodization import build_periodization
     from training_v2.plan_goal import GoalType, ULTRA_MIN_DISTANCE_KM, build_plan_goal
-    from training_v2.training_cycle_response import build_cycle_calendar_response
     from training_v2.week_plan_bridge import (
         build_weekly_plan_from_workouts,
         workouts_to_domain_activities,
@@ -3827,20 +3826,10 @@ async def get_week_plan(user: dict = Depends(auth_user)):
             reference_date=today.date(),
             race_plan_start_date=cycle_start_v2,
         )
-        cycle_response = build_cycle_calendar_response(
-            plan_goal_v2,
-            today.date(),
-            race_plan_start_date=cycle_start_v2,
-        )
     else:
         periodization = build_periodization(
             plan_goal=plan_goal_v2,
             reference_date=today.date(),
-            cycle_anchor_date=cycle_start_v2 or today.date(),
-        )
-        cycle_response = build_cycle_calendar_response(
-            plan_goal_v2,
-            today.date(),
             cycle_anchor_date=cycle_start_v2 or today.date(),
         )
 
@@ -3877,14 +3866,15 @@ async def get_week_plan(user: dict = Depends(auth_user)):
     km_7_running = sum((a.distance_m or 0.0) / 1000.0 for a in running_activities_7)
     km_28_running = sum((a.distance_m or 0.0) / 1000.0 for a in running_activities_28)
 
-    cycle_meta = cycle_response.cycle
-    if cycle_meta.current_week is not None:
-        current_week = cycle_meta.current_week
-    elif cycle_meta.status == "upcoming":
+    start_date = goal["start_date"]
+    cycle_weeks = goal["cycle_weeks"]
+    if isinstance(start_date, datetime) and start_date.tzinfo is None:
+        start_date = start_date.replace(tzinfo=timezone.utc)
+    if today < start_date:
         current_week = 0
     else:
-        current_week = cycle_meta.total_weeks + 1
-    cycle_weeks = cycle_meta.total_weeks
+        delta_days = (today - start_date).days
+        current_week = min(delta_days // 7 + 1, cycle_weeks + 1)
     phase = periodization.phase.value
 
     # ── Legacy compat context (LLM) ─────────────────────────────────────────

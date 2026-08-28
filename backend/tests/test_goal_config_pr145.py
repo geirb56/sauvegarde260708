@@ -25,7 +25,7 @@ def test_goal_config_exists():
 
 def test_goal_config_keys():
     """All expected goal types are present."""
-    expected_keys = {"5K", "10K", "SEMI", "MARATHON", "ULTRA"}
+    expected_keys = {"5K", "10K", "SEMI", "MARATHON", "ULTRA", "MAINTENANCE"}
     assert set(GOAL_CONFIG.keys()) == expected_keys
 
 
