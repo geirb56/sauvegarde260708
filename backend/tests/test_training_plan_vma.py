@@ -279,49 +279,6 @@ class TestTrainingPlanRefresh:
             f"Requested {sessions} sessions but got {non_rest_count} non-rest sessions"
 
 
-# Cache for full cycle data
-_full_cycle_cache = None
-
-def get_full_cycle_cached():
-    """Get full cycle data with caching to avoid rate limiting"""
-    global _full_cycle_cache
-    if _full_cycle_cache is None:
-        time.sleep(2)  # Rate limiting protection
-        response = requests.get(
-            f"{BASE_URL}/api/training/full-cycle",
-        )
-        if response.status_code == 200:
-            _full_cycle_cache = response.json()
-    return _full_cycle_cache
-
-
-class TestFullCycleWithVMA:
-    """Test the full cycle endpoint"""
-
-    def test_full_cycle_returns_200(self):
-        """Test that /api/training/full-cycle returns 200"""
-        data = get_full_cycle_cached()
-        assert data is not None, "Full cycle API should return data"
-        
-        assert "weeks" in data
-        assert "total_weeks" in data
-        assert "current_week" in data
-        assert "goal" in data
-
-    def test_full_cycle_weeks_have_required_fields(self):
-        """Test that each week in full cycle has required fields"""
-        data = get_full_cycle_cached()
-        assert data is not None
-        
-        weeks = data["weeks"]
-        assert len(weeks) > 0, "Should have at least one week"
-        
-        required_fields = ["week", "phase", "phase_name", "target_km", "sessions", "is_current"]
-        for week in weeks:
-            for field in required_fields:
-                assert field in week, f"Week {week.get('week', 'unknown')} should have '{field}' field"
-
-
 class TestPacesCalculation:
     """Test VMA to pace conversion calculations"""
 

@@ -59,7 +59,6 @@ from rag_engine import (
     generate_workout_analysis_rag
 )
 
-# Import training engine for periodization
 from training_v2.training_load import build_training_load
 from training_v2.training_history import RUNNING_TYPES, build_training_history
 from training_v2.runner_profile import build_runner_profile
@@ -85,21 +84,7 @@ from training_v2.daily_runtime_helpers import (
 from garmin.readiness_adapter import build_readiness_v2_from_garmin_data
 from garmin.domain_adapter import mongo_garmin_activities_to_domain
 from training_v2.performance_model import estimate_vma, predict_races, activity_date  # PR185
-from training_engine import (
-    DEFAULT_WEEKLY_KM,
-    compute_current_weekly_km,
-    compute_cycle_dates,
-    compute_target_km,
-    apply_resume_guard,
-    resolve_chronic_base,
-    resolve_reprise_plan,
-    REPRISE_STABLE_WEEKS,
-    compute_week_number,
-    determine_phase,
-    get_phase_description,
-    is_running,
-    normalized_distance_km,
-)
+from training_v2.plan_goal import GoalType
 
 from config.training_goals import GOAL_CONFIG  # noqa: E402  # PR145: single source
 
@@ -140,6 +125,16 @@ from engine.run_index_engine import calculate_run_index, calculate_run_index_fro
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
+
+_LEGACY_GOAL_TO_V2: dict[str, GoalType] = {
+    "10K": GoalType.ten_k,
+    "SEMI": GoalType.half_marathon,
+    "HALF_MARATHON": GoalType.half_marathon,
+    "MARATHON": GoalType.marathon,
+    "5K": GoalType.five_k,
+    "ULTRA": GoalType.ultra,
+    "MAINTENANCE": GoalType.maintenance,
+}
 
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
@@ -3705,185 +3700,6 @@ async def get_vma_history(user: dict = Depends(auth_user)):
     }
 
 
-@api_router.get("/training/full-cycle")
-async def get_full_training_cycle(
-    user: dict = Depends(auth_user),
-    lang: str = Query("en", description="Language for phase and session labels (en, fr)")
-):
-    """
-    Returns the full training cycle overview with all weeks.
-    Phase names/focus and session type keys are returned; frontend translates keys via i18n.
-    Cycle dates are anchored to user_goals.event_date (single source of truth).
-    """
-    # Retrieve user cycle
-    cycle = await db.training_cycles.find_one({"user_id": user["id"]})
-
-    if not cycle:
-        # Create a default cycle
-        default_cycle = {
-            "user_id": user["id"],
-            "goal": "SEMI",
-            "start_date": datetime.now(timezone.utc),
-            "created_at": datetime.now(timezone.utc)
-        }
-        await db.training_cycles.insert_one(default_cycle)
-        cycle = await db.training_cycles.find_one({"user_id": user["id"]})
-
-    goal = cycle.get("goal", "SEMI")
-    config = GOAL_CONFIG.get(goal, GOAL_CONFIG["SEMI"])
-    # Use readiness-adjusted cycle length stored by the detailed plan engine so
-    # phases (and therefore target_km per week) match the detailed plan exactly.
-    standard_weeks = cycle.get("adjusted_weeks") or config["cycle_weeks"]
-
-    # Retrieve session preferences
-    prefs = await db.training_prefs.find_one({"user_id": user["id"]})
-    sessions_per_week = prefs.get("sessions_per_week", 4) if prefs else 4
-
-    # --- Temporal alignment: anchor cycle to event_date (user_goals) ---
-    user_goal = await db.user_goals.find_one({"user_id": user["id"]})
-    raw_event_date = (user_goal or {}).get("event_date") if user_goal else None
-    event_date_obj = None
-    if raw_event_date:
-        try:
-            if isinstance(raw_event_date, str):
-                event_date_obj = datetime.fromisoformat(raw_event_date.split("T")[0]).date()
-            elif hasattr(raw_event_date, "date"):
-                event_date_obj = raw_event_date.date()
-        except (ValueError, AttributeError):
-            event_date_obj = None
-
-    today_date = datetime.now(timezone.utc).date()
-
-    # Cap standard_weeks to weeks available before the race
-    if event_date_obj is not None:
-        weeks_available = max(1, (event_date_obj - today_date).days // 7)
-        total_weeks = min(standard_weeks, weeks_available)
-    else:
-        total_weeks = standard_weeks
-
-    cycle_dates = compute_cycle_dates(
-        event_date=event_date_obj,
-        total_weeks=total_weeks,
-        today=today_date,
-    )
-    current_week = cycle_dates["current_week"]
-    cycle_status = cycle_dates["status"]
-
-    # Retrieve athlete's current volume (based on last 28 days)
-    today = datetime.now(timezone.utc)
-    twenty_eight_days_ago = today - timedelta(days=28)
-    
-    workouts_28 = await db.workouts.find({
-        "user_id": user["id"],
-        "date": {"$gte": twenty_eight_days_ago.isoformat()}
-    }).to_list(300)
-    
-    km_28 = sum(normalized_distance_km(w) for w in workouts_28 if is_running(w))
-    base_weekly_km = compute_current_weekly_km(workouts_28)
-    # PR76b: use an active-weeks base so a comeback (sparse data) is not
-    # diluted by the fixed /4 divisor, and a genuine 0 km resolves to a
-    # conservative reprise base instead of the 20 km default.
-    target_base_km = resolve_chronic_base(workouts_28)
-
-    # PR76 resume guard: also look at last 7 days to detect resuming athletes
-    seven_days_ago = today - timedelta(days=7)
-    workouts_7 = [w for w in workouts_28 if (w.get("date") or "") >= seven_days_ago.isoformat()]
-    km_7 = sum(normalized_distance_km(w) for w in workouts_7 if is_running(w))
-
-    # Reprise-aware target/state for the CURRENT week (single source of truth).
-    current_phase = determine_phase(current_week, total_weeks)
-    reprise = resolve_reprise_plan(workouts_28, goal, current_phase, km_7=km_7)
-    reprise_state = reprise["state"]
-    reprise_active = reprise_state in ("deep_reprise", "partial_reprise")
-    # Projected calendar week where intensity is re-introduced (reprise_exit):
-    # once REPRISE_STABLE_WEEKS active weeks are completed.
-    reprise_transition_week = (
-        current_week + max(0, REPRISE_STABLE_WEEKS - reprise["active_weeks"])
-        if reprise_active else None
-    )
-
-    # Generate overview of all weeks
-    weeks_overview = []
-    
-    for week_num in range(1, total_weeks + 1):
-        phase = determine_phase(week_num, total_weeks)
-        phase_info = get_phase_description(phase, lang)
-        
-        # Target volume — SAME engine as the detailed week plan so cards match sessions.
-        # The current week uses the reprise-aware target; future weeks project normally.
-        is_current_week = cycle_status == "active" and week_num == current_week
-        if is_current_week:
-            target_km = reprise["target_km"]
-        else:
-            target_km = compute_target_km(target_base_km, goal, phase)
-            target_km = apply_resume_guard(target_km, km_7, target_base_km)
-        
-        # Session type keys (frontend translates via i18n trainingPlan.sessionType.*)
-        if phase == "build":
-            session_types = ["endurance", "endurance", "long_run"] if sessions_per_week <= 3 else ["endurance", "endurance", "fartlek", "long_run"]
-        elif phase == "deload":
-            session_types = ["recovery", "easy", "short_easy"]
-        elif phase == "intensification":
-            session_types = ["endurance", "tempo", "intervals", "long_run"]
-        elif phase == "taper":
-            session_types = ["easy", "speed_reminder", "easy_run"]
-        elif phase == "race":
-            session_types = ["activation", "race"]
-        else:
-            session_types = ["endurance", "long_run"]
-
-        # Reprise: the current week is easy-only (no threshold/tempo/long run).
-        is_reprise_week = is_current_week and reprise_state in ("deep_reprise", "partial_reprise")
-        if is_reprise_week:
-            session_types = ["endurance", "recovery", "endurance"]
-
-        if is_reprise_week:
-            week_sessions = len(session_types)
-        elif phase in ["taper", "race"]:
-            week_sessions = min(3, sessions_per_week)
-        else:
-            week_sessions = sessions_per_week
-
-        weeks_overview.append({
-            "week": week_num,
-            "phase": phase,
-            "phase_name": phase_info.get("name", phase),
-            "phase_focus": phase_info.get("focus", ""),
-            "target_km": target_km,
-            "sessions": week_sessions,
-            "session_types": session_types[:sessions_per_week],
-            "is_current": is_current_week,
-            "is_completed": cycle_status == "active" and week_num < current_week,
-            "is_reprise": is_reprise_week,
-            "is_reprise_transition": reprise_active and reprise_transition_week is not None and week_num == reprise_transition_week,
-            "intensity_pct": phase_info.get("intensity_pct", 15)
-        })
-    
-    current_target_km = reprise["target_km"]
-
-    return {
-        "goal": goal,
-        "goal_description": config["description"],
-        "total_weeks": total_weeks,
-        "current_week": current_week,
-        "start_date": cycle_dates["start_date"].isoformat(),
-        "end_date": cycle_dates["end_date"].isoformat(),
-        "event_date": event_date_obj.isoformat() if event_date_obj else None,
-        "days_to_race": cycle_dates["days_to_race"],
-        "status": cycle_status,
-        "sessions_per_week": sessions_per_week,
-        "base_weekly_km": round(base_weekly_km),
-        "debug_volume": {
-            "km_7": round(km_7, 1),
-            "km_28": round(km_28, 1),
-            "current_weekly_km": round(base_weekly_km, 1),
-            "target_km": current_target_km,
-            "phase": current_phase,
-        },
-        "weeks": weeks_overview
-    }
-
-
 @api_router.get("/training/week-plan")
 async def get_week_plan(user: dict = Depends(auth_user)):
     """
@@ -3947,15 +3763,18 @@ async def get_week_plan(user: dict = Depends(auth_user)):
     # Calculer les métriques
     km_7 = sum(w.get("distance_km", 0) or 0 for w in workouts_7)
     km_28 = sum(w.get("distance_km", 0) or 0 for w in workouts_28)
-    km_7_running = sum(normalized_distance_km(w) for w in workouts_7 if is_running(w))
-    km_28_running = sum(normalized_distance_km(w) for w in workouts_28 if is_running(w))
     load_7 = km_7 * 10
     load_28 = km_28 * 10
 
     # ── PR149/PR163: WeeklyTarget V2 + WorkoutGenerator V2 ──────────────────
     # PR163: use build_weekly_plan_from_workouts so WorkoutGenerator V2 is the
     # authority on session distribution (long_easy distance in particular).
-    from training_v2.week_plan_bridge import build_weekly_plan_from_workouts
+    from training_v2.periodization import build_periodization
+    from training_v2.plan_goal import ULTRA_MIN_DISTANCE_KM, build_plan_goal
+    from training_v2.week_plan_bridge import (
+        build_weekly_plan_from_workouts,
+        workouts_to_domain_activities,
+    )
 
     goal_start_date = goal["start_date"]
     if isinstance(goal_start_date, datetime) and goal_start_date.tzinfo is None:
@@ -3972,6 +3791,50 @@ async def get_week_plan(user: dict = Depends(auth_user)):
             pass
 
     cycle_start_v2 = goal_start_date.date() if isinstance(goal_start_date, datetime) else goal_start_date
+
+    mapped_goal_type = _LEGACY_GOAL_TO_V2.get(goal_type.upper() if goal_type else "")
+    if mapped_goal_type is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot map goal_type '{goal_type}' to V2 GoalType.",
+        )
+
+    target_distance_km_v2: Optional[float] = None
+    if mapped_goal_type == GoalType.ultra:
+        raw_dist = user_goal.get("distance_km") if user_goal else None
+        if (
+            not isinstance(raw_dist, (int, float))
+            or isinstance(raw_dist, bool)
+            or raw_dist <= ULTRA_MIN_DISTANCE_KM
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "ULTRA goal requires target_distance_km > 42.195 km. "
+                    "Set your goal distance via /api/user/goal first."
+                ),
+            )
+        target_distance_km_v2 = float(raw_dist)
+
+    plan_goal_v2 = build_plan_goal(
+        goal_type=mapped_goal_type,
+        race_date=race_date_v2 if mapped_goal_type != GoalType.maintenance else None,
+        target_distance_km=target_distance_km_v2,
+        created_from="user",
+    )
+
+    if plan_goal_v2.race_date is not None:
+        periodization = build_periodization(
+            plan_goal=plan_goal_v2,
+            reference_date=today.date(),
+            race_plan_start_date=cycle_start_v2,
+        )
+    else:
+        periodization = build_periodization(
+            plan_goal=plan_goal_v2,
+            reference_date=today.date(),
+            cycle_anchor_date=cycle_start_v2 or today.date(),
+        )
 
     weekly_target, weekly_plan_v2 = build_weekly_plan_from_workouts(
         workouts=workouts_90,
@@ -3995,6 +3858,28 @@ async def get_week_plan(user: dict = Depends(auth_user)):
         None,
     )
 
+    running_activities_7 = [
+        a for a in workouts_to_domain_activities(workouts_7)
+        if (a.activity_type or "").lower() in RUNNING_TYPES
+    ]
+    running_activities_28 = [
+        a for a in workouts_to_domain_activities(workouts_28)
+        if (a.activity_type or "").lower() in RUNNING_TYPES
+    ]
+    km_7_running = sum((a.distance_m or 0.0) / 1000.0 for a in running_activities_7)
+    km_28_running = sum((a.distance_m or 0.0) / 1000.0 for a in running_activities_28)
+
+    start_date = goal["start_date"]
+    cycle_weeks = goal["cycle_weeks"]
+    if isinstance(start_date, datetime) and start_date.tzinfo is None:
+        start_date = start_date.replace(tzinfo=timezone.utc)
+    if today < start_date:
+        current_week = 0
+    else:
+        delta_days = (today - start_date).days
+        current_week = min(delta_days // 7 + 1, cycle_weeks + 1)
+    phase = periodization.phase.value
+
     # ── Legacy compat context (LLM) ─────────────────────────────────────────
     # ctl/atl/tsb km-based aliases removed (PR #127 — faux physiological metrics).
     # load_7/load_28 kept for context transparency; no longer consumed by
@@ -4009,21 +3894,6 @@ async def get_week_plan(user: dict = Depends(auth_user)):
         "load_7": load_7,
         "load_28": load_28,
     }
-
-    # Calculer la phase (legacy — kept for LLM/fallback compat)
-    start_date = goal["start_date"]
-    cycle_weeks = goal["cycle_weeks"]
-
-    if isinstance(start_date, datetime) and start_date.tzinfo is None:
-        start_date = start_date.replace(tzinfo=timezone.utc)
-
-    if today < start_date:
-        current_week = 0
-    else:
-        delta_days = (today - start_date).days
-        current_week = min(delta_days // 7 + 1, cycle_weeks + 1)
-
-    phase = determine_phase(current_week, cycle_weeks)
 
     # PR157: determine_target_load removed — target_load is display context only,
     # never drives distances / durations / intensity.  planned_load → None.
@@ -4066,7 +3936,7 @@ async def get_week_plan(user: dict = Depends(auth_user)):
         "debug_volume": {
             "km_7": round(km_7_running, 1),
             "km_28": round(km_28_running, 1),
-            "current_weekly_km": round(context.get("weekly_km", DEFAULT_WEEKLY_KM), 1),
+            "current_weekly_km": round(km_28_running / 4.0, 1),
             "target_km": target_km_protected,
             "target_basis": weekly_target.target_basis,
             "target_duration_minutes": weekly_target.target_duration_minutes,
@@ -4257,17 +4127,6 @@ async def get_training_v2_cycle(user: dict = Depends(auth_user)):
     from training_v2.plan_goal import GoalType, build_plan_goal
     from training_v2.training_cycle_response import build_cycle_calendar_response
 
-    # Closed mapping: legacy goal strings → GoalType V2
-    _GOAL_MAP: dict[str, GoalType] = {
-        "10K": GoalType.ten_k,
-        "SEMI": GoalType.half_marathon,
-        "HALF_MARATHON": GoalType.half_marathon,
-        "MARATHON": GoalType.marathon,
-        "5K": GoalType.five_k,
-        "ULTRA": GoalType.ultra,
-        "MAINTENANCE": GoalType.maintenance,
-    }
-
     user_id = user["id"]
 
     # ── Single clock (same doctrine as /training/v2/week) ─────────────────
@@ -4338,7 +4197,7 @@ async def get_training_v2_cycle(user: dict = Depends(auth_user)):
         target_time_seconds = int(target_time_minutes_raw * 60)
 
     # ── Build PlanGoal V2 ─────────────────────────────────────────────────
-    mapped_goal_type = _GOAL_MAP.get(goal_type_raw.upper() if goal_type_raw else "")
+    mapped_goal_type = _LEGACY_GOAL_TO_V2.get(goal_type_raw.upper() if goal_type_raw else "")
     if mapped_goal_type is None:
         raise HTTPException(
             status_code=400,
@@ -4404,132 +4263,6 @@ async def get_training_v2_cycle(user: dict = Depends(auth_user)):
         )
 
     return response.model_dump(mode="json")
-
-
-def _generate_fallback_week_plan(context: dict, phase: str, goal: str, target_km_protected: float = None) -> dict:
-    """Génère un plan de secours basé sur des templates.
-
-    PR149 BLOCKER 1: When WeeklyTarget V2 prescribes duration-based (target_km_protected=None),
-    this fallback MUST NOT invent km. It produces duration-only sessions instead.
-    """
-    # PR149: duration-based path — no km invention.
-    target_duration_minutes = context.get("target_duration_minutes")
-    if target_km_protected is None and target_duration_minutes is not None:
-        # Duration-based fallback: simple easy sessions, no km.
-        sessions_count = 3
-        per_session = target_duration_minutes // sessions_count
-        remainder = target_duration_minutes - per_session * sessions_count
-        sessions = [
-            {"day": "monday", "type": "rest", "duration": "0min", "details": "Récupération complète", "intensity": "rest", "estimated_tss": None, "distance_km": None},
-            {"day": "tuesday", "type": "endurance", "duration": f"{per_session}min", "details": f"{per_session}min endurance facile", "intensity": "easy", "estimated_tss": None, "distance_km": None},
-            {"day": "wednesday", "type": "rest", "duration": "0min", "details": "Récupération", "intensity": "rest", "estimated_tss": None, "distance_km": None},
-            {"day": "thursday", "type": "endurance", "duration": f"{per_session}min", "details": f"{per_session}min endurance facile", "intensity": "easy", "estimated_tss": None, "distance_km": None},
-            {"day": "friday", "type": "rest", "duration": "0min", "details": "Récupération", "intensity": "rest", "estimated_tss": None, "distance_km": None},
-            {"day": "saturday", "type": "endurance", "duration": f"{per_session + remainder}min", "details": f"{per_session + remainder}min endurance facile", "intensity": "easy", "estimated_tss": None, "distance_km": None},
-            {"day": "sunday", "type": "rest", "duration": "0min", "details": "Récupération", "intensity": "rest", "estimated_tss": None, "distance_km": None},
-        ]
-        return {
-            "focus": phase,
-            "planned_load": None,
-            "weekly_km": None,
-            "target_duration_minutes": target_duration_minutes,
-            "target_basis": "duration",
-            "sessions": sessions,
-            "total_tss": None,
-            "advice": get_phase_description(phase).get("advice", "Keep it up!")
-        }
-
-    # Distance-based fallback (legacy path — target_km_protected is set).
-    weekly_km = context.get("weekly_km", DEFAULT_WEEKLY_KM)
-    
-    # Ajuster selon la phase
-    phase_multipliers = {
-        "build": 1.0,
-        "deload": 0.7,
-        "intensification": 1.05,
-        "taper": 0.6,
-        "race": 0.25
-    }
-    adjusted_km = weekly_km * phase_multipliers.get(phase, 1.0)
-
-    # PR76: honour the pre-computed protected target so the fallback never
-    # exceeds the resume-guard cap.
-    if target_km_protected is not None:
-        adjusted_km = min(adjusted_km, target_km_protected)
-    
-    # Allures de référence (à personnaliser selon le profil utilisateur)
-    # Format: allure en min:sec/km
-    paces = {
-        "z1": "6:30-7:00",  # Récupération
-        "z2": "5:45-6:15",  # Endurance fondamentale
-        "z3": "5:15-5:30",  # Tempo / Allure marathon
-        "z4": "4:45-5:00",  # Seuil
-        "z5": "4:15-4:30",  # VMA
-        "semi": "5:00-5:15", # Allure semi-marathon
-        "10k": "4:40-4:55",  # Allure 10K
-    }
-    
-    # FC cibles (à personnaliser selon FC max utilisateur ~185 bpm)
-    hr_zones = {
-        "z1": "120-135",
-        "z2": "135-150", 
-        "z3": "150-165",
-        "z4": "165-175",
-        "z5": "175-185",
-    }
-    
-    # Templates by phase with enriched details
-    if phase == "deload":
-        sessions = [
-            {"day": "monday", "type": "rest", "duration": "0min", "details": "Récupération complète • Étirements ou yoga", "intensity": "rest", "estimated_tss": None, "distance_km": 0},
-            {"day": "tuesday", "type": "endurance", "duration": "30min", "details": f"5 km • {paces['z1']}/km • FC {hr_zones['z1']} bpm", "intensity": "easy", "estimated_tss": None, "distance_km": 5},
-            {"day": "wednesday", "type": "rest", "duration": "0min", "details": "Récupération active • Marche ou natation légère", "intensity": "rest", "estimated_tss": None, "distance_km": 0},
-            {"day": "thursday", "type": "endurance", "duration": "35min", "details": f"6 km • {paces['z2']}/km • FC {hr_zones['z2']} bpm", "intensity": "easy", "estimated_tss": None, "distance_km": 6},
-            {"day": "friday", "type": "rest", "duration": "0min", "details": "Récupération complète • Priorité au sommeil", "intensity": "rest", "estimated_tss": None, "distance_km": 0},
-            {"day": "saturday", "type": "endurance", "duration": "40min", "details": f"7 km progressif • {paces['z2']}/km → {paces['z3']}/km • FC {hr_zones['z2']} bpm", "intensity": "easy", "estimated_tss": None, "distance_km": 7},
-            {"day": "sunday", "type": "rest", "duration": "0min", "details": "Récupération complète • Préparation semaine suivante", "intensity": "rest", "estimated_tss": None, "distance_km": 0},
-        ]
-    elif phase == "taper":
-        sessions = [
-            {"day": "monday", "type": "rest", "duration": "0min", "details": "Récupération complète • Hydratation ++", "intensity": "rest", "estimated_tss": None, "distance_km": 0},
-            {"day": "tuesday", "type": "endurance", "duration": "30min", "details": f"5 km + 4×100m rapide • {paces['z2']}/km puis sprint • FC {hr_zones['z2']} bpm", "intensity": "easy", "estimated_tss": None, "distance_km": 5.5},
-            {"day": "wednesday", "type": "rest", "duration": "0min", "details": "Récupération complète • Préparation mentale", "intensity": "rest", "estimated_tss": None, "distance_km": 0},
-            {"day": "thursday", "type": "tempo", "duration": "25min", "details": f"4 km dont 2 km allure course • {paces['semi']}/km • FC {hr_zones['z3']} bpm", "intensity": "moderate", "estimated_tss": None, "distance_km": 4},
-            {"day": "friday", "type": "rest", "duration": "0min", "details": "Repos total • Préparation matériel final", "intensity": "rest", "estimated_tss": None, "distance_km": 0},
-            {"day": "saturday", "type": "activation", "duration": "20min", "details": f"3 km + 3×200m allure course • {paces['z2']}/km • FC {hr_zones['z2']} bpm", "intensity": "easy", "estimated_tss": None, "distance_km": 3.6},
-            {"day": "sunday", "type": "rest", "duration": "0min", "details": "VEILLE DE COURSE • Repos total, glucides", "intensity": "rest", "estimated_tss": None, "distance_km": 0},
-        ]
-    else:  # build, intensification
-        sessions = [
-            {"day": "monday", "type": "rest", "duration": "0min", "details": "Récupération complète • Étirements recommandés", "intensity": "rest", "estimated_tss": None, "distance_km": 0},
-            {"day": "tuesday", "type": "endurance", "duration": "50min", "details": f"8 km • {paces['z2']}/km • FC {hr_zones['z2']} bpm • Zone 2 stricte", "intensity": "easy", "estimated_tss": None, "distance_km": 8},
-            {"day": "wednesday", "type": "threshold", "duration": "40min", "details": f"7 km dont 20min à {paces['z4']}/km • FC {hr_zones['z4']} bpm • 2min récup entre blocs", "intensity": "hard", "estimated_tss": None, "distance_km": 7},
-            {"day": "thursday", "type": "recovery", "duration": "30min", "details": f"5 km très facile • {paces['z1']}/km • FC <{hr_zones['z1'].split('-')[1]} bpm max", "intensity": "easy", "estimated_tss": None, "distance_km": 5},
-            {"day": "friday", "type": "rest", "duration": "0min", "details": "Récupération complète • Cross-training possible (vélo, natation)", "intensity": "rest", "estimated_tss": None, "distance_km": 0},
-            {"day": "saturday", "type": "tempo", "duration": "45min", "details": f"8 km dont 25min à {paces['semi']}/km • FC {hr_zones['z3']} bpm • Allure semi-marathon", "intensity": "moderate", "estimated_tss": None, "distance_km": 8},
-            {"day": "sunday", "type": "long_run", "duration": "70min", "details": f"12 km progressif • {paces['z2']}/km → {paces['z3']}/km • FC {hr_zones['z2']} → {hr_zones['z3']} bpm", "intensity": "moderate", "estimated_tss": None, "distance_km": 12},
-        ]
-    
-    total_tss = None
-    total_km = sum(s.get("distance_km", 0) for s in sessions)
-
-    # PR76: if adjusted_km caps the total, scale all running sessions down
-    # proportionally so the plan respects target_km_protected.
-    if total_km > adjusted_km > 0:
-        scale = adjusted_km / total_km
-        for s in sessions:
-            if s.get("distance_km", 0) > 0:
-                s["distance_km"] = round(s["distance_km"] * scale, 1)
-        total_km = sum(s.get("distance_km", 0) for s in sessions)
-
-    return {
-        "focus": phase,
-        "planned_load": None,
-        "weekly_km": round(total_km, 1),
-        "sessions": sessions,
-        "total_tss": total_tss,
-        "advice": get_phase_description(phase).get("advice", "Keep it up!")
-    }
 
 
 # PR194 — GET /training/v2/paces

@@ -92,8 +92,7 @@ def test_compute_target_km_pr2_non_regression():
 def test_source_unique_usage_in_plan_paths():
     root = Path(__file__).resolve().parents[1]
     server_src = (root / "server.py").read_text(encoding="utf-8")
-    assert "base_weekly_km = compute_current_weekly_km(workouts_28)" in server_src
-    assert '"weekly_km": compute_current_weekly_km(workouts_28)' not in server_src
+    assert "compute_current_weekly_km(" not in server_src
     assert '"weekly_km": km_28_running / 4.0' in server_src
     assert "else 25" not in server_src
     assert "km_7 < 0.5" not in server_src

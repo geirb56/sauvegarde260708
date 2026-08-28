@@ -582,10 +582,10 @@ class TestArchitecture:
             source = f.read()
         assert '"/training/plan"' in source
 
-    def test_legacy_endpoint_full_cycle_still_exists(self):
+    def test_legacy_endpoint_full_cycle_removed(self):
         with open(self._SERVER_PATH) as f:
             source = f.read()
-        assert '"/training/full-cycle"' in source
+        assert '"/training/full-cycle"' not in source
 
     def test_v2_week_route_registered(self):
         with open(self._SERVER_PATH) as f:
