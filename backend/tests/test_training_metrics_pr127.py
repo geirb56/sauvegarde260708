@@ -377,7 +377,7 @@ def test_j_week_plan_acwr_none_in_context():
 
 
 # ---------------------------------------------------------------------------
-# K. /run-index Terra path: no None→0.0→0.1 clamp, uses TrainingLoad V2
+# K. /run-index legacy fallback removed (Garmin-only runtime)
 # ---------------------------------------------------------------------------
 
 
@@ -403,16 +403,12 @@ def test_k_run_index_no_0_1_clamp():
     )
 
 
-def test_k_run_index_uses_build_training_load_for_terra():
-    """K. /run-index Terra path must use build_training_load (V2)."""
+def test_k_run_index_has_no_terra_fallback():
+    """K. /run-index must not keep legacy Terra fallback in runtime."""
     server_path = _BACKEND / "server.py"
     source = server_path.read_text()
-    assert "_load_snapshot = build_training_load(" in source, (
-        "/run-index Terra path must call build_training_load"
-    )
-    assert "_load_snapshot.acwr" in source, (
-        "/run-index Terra path must read acwr from V2 snapshot"
-    )
+    assert "db.terra_tokens.find_one" not in source, "/run-index must not query Terra tokens"
+    assert "syncDailyMetrics(" not in source, "/run-index must not call Terra daily sync"
 
 
 def test_k_run_index_no_computeTrainingLoad_call():

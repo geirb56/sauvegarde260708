@@ -29,10 +29,6 @@ jest.mock("@/context/AuthContext", () => ({
   useAuth: jest.fn(),
 }));
 
-jest.mock("@/hooks/useAutoSync", () => ({
-  useAutoSync: jest.fn(),
-}));
-
 jest.mock("@/components/ChatCoach", () => () => null);
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;

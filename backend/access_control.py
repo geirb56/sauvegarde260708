@@ -95,7 +95,6 @@ PREMIUM_FEATURES: frozenset = frozenset({
     "coach_workout_analysis",
     "race_predictions",
     "full_cycle",
-    "terra_sync",
     "garmin_sync",
 })
 
@@ -438,7 +437,6 @@ ROUTE_ACCESS_MAP: Dict[str, RouteAccess] = {
     "/api/coach/digest":              RouteAccess.PREMIUM,
     "/api/coach/":                    RouteAccess.PREMIUM,
     "/api/rag/":                      RouteAccess.PREMIUM,
-    "/api/terra/":                    RouteAccess.PREMIUM,
     "/api/garmin/":                   RouteAccess.PREMIUM,
     "/api/sync/":                     RouteAccess.PREMIUM,
 }
