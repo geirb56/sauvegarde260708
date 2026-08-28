@@ -164,32 +164,157 @@ Supprimé : `test_vma_history_endpoint_preserved` → endpoint supprimé, le tes
 
 ---
 
-## 9. Tests exécutés + résultats
+## 9. Tests exécutés + résultats — C214 Validation complète
 
-```
-tests/test_pr214_legacy_cleanup.py     13/13 PASSED
-tests/test_performance_model_pr189.py  27/27 PASSED
-tests/test_performance_model_pr190.py  10/10 PASSED
-```
+### Garde-fous structurels
 
-(Suites complètes à relancer dans CI avec toutes les dépendances)
+| Suite | PASS | FAIL | SKIP | Statut |
+|-------|------|------|------|--------|
+| `test_pr214_legacy_cleanup.py` | 13 | 0 | 0 | ✅ |
+| `test_pr212_training_engine_runtime_consumers.py` | 5 | 0 | 0 | ✅ |
+
+### Performance Model V2 — suite complète
+
+| Suite | PASS | FAIL | SKIP | Statut |
+|-------|------|------|------|--------|
+| `test_performance_model_pr185.py` | 27 | 0 | 0 | ✅ |
+| `test_performance_model_pr186.py` | 18 | 0 | 0 | ✅ |
+| `test_performance_model_pr187.py` | 18 | 0 | 0 | ✅ |
+| `test_performance_model_pr188.py` | 8 | 0 | 0 | ✅ |
+| `test_performance_model_pr189.py` | 27 | 0 | 0 | ✅ |
+| `test_performance_model_pr190.py` | 10 | 0 | 0 | ✅ |
+| `test_performance_model_pr191.py` | 31 | 0 | 0 | ✅ |
+| **Total** | **139** | **0** | **0** | ✅ |
+
+### Training Paces V2 + API Contract
+
+| Suite | PASS | FAIL | SKIP | Statut |
+|-------|------|------|------|--------|
+| `test_training_paces_v2_*.py` (all paces) | 55 | 0 | 0 | ✅ |
+
+### Coach / LLM
+
+| Suite | PASS | FAIL | SKIP | Statut |
+|-------|------|------|------|--------|
+| `test_pr211_coach_llm_cleanup.py` | 8 | 0 | 0 | ✅ |
+| `test_coach_conversational.py` | — | 16 | — | PRE_EXISTING (live server requis) |
+| `test_coach_load_context_pr128.py` | 11 | — | — | ✅ |
+
+### Garmin VO2max / Progress
+
+| Suite | PASS | FAIL | SKIP | Statut |
+|-------|------|------|------|--------|
+| `test_garmin_vo2max_pr195.py` | 56 | 0 | 0 | ✅ |
+| `test_garmin_vo2max_history_endpoint.py` | 23 | 0 | 0 | ✅ |
+| `test_progress_stats_v2_pr184.py` + Garmin queue | 22 | 0 | 0 | ✅ |
+| **Total** | **101** | **0** | **0** | ✅ |
+
+### Readiness V2
+
+| Suite | PASS | FAIL | SKIP | Statut |
+|-------|------|------|------|--------|
+| Readiness V2 full (`test_readiness_v2_*.py`, etc.) | 181 | 0 | 0 | ✅ |
+
+### Training V2
+
+| Suite | PASS | FAIL | SKIP | Statut |
+|-------|------|------|------|--------|
+| `test_pr167_training_v2_week_api.py` | 54 | 0 | 0 | ✅ |
+| `test_pr175_training_v2_cycle.py` | 43 | 0 | 4 | ✅ |
+| `test_pr204_maintenance_endpoint.py` | 19 | 0 | 6 | ✅ |
+| week plan V2 (pr149/155/162/163/165) | 66 | 0 | 0 | ✅ |
+| Training V2 domain (load, domain_activity, workout_generator) | 187 | 0 | 0 | ✅ |
+
+### Access Control / Sécurité
+
+| Suite | PASS | FAIL | SKIP | Statut |
+|-------|------|------|------|--------|
+| `test_idor_authorization.py` | — | — | — | ✅ 39 passed |
+| `test_demo_mode_security.py` | — | — | — | ✅ |
+| `test_security_blockers_1.py` | — | — | — | ✅ |
+| **Total** | **39** | **0** | **0** | ✅ |
+
+### RunIndex Engine
+
+| Suite | PASS | FAIL | SKIP | Statut |
+|-------|------|------|------|--------|
+| `test_run_index_r3_readiness_v2.py` | — | — | — | ✅ |
+| `test_run_index_engine.py` | 54 | 0 | 0 | ✅ |
+| `test_run_index_r3_5_load_alignment.py` + others | 77 | 0 | 0 | ✅ |
+| `test_run_index_pr179_domain_source.py` | 23 | 4 | 0 | PRE_EXISTING (base SHA idem) |
+| `test_run_index_r129_fatigue_removal.py` / `r5` | — | 21 | — | PRE_EXISTING (base SHA idem) |
+| `test_run_index_screen.py` | — | 3 | — | PRE_EXISTING (live server requis) |
+
+### Échecs PRE_EXISTING (base SHA `80bfdbe`)
+
+| Test | Raison | Classification |
+|------|--------|----------------|
+| `test_run_index_pr179_domain_source.py` (4) | `ModuleNotFoundError: jobs.queue` + assert isinstance None int | PRE_EXISTING — idem sur base SHA |
+| `test_run_index_r129_fatigue_removal.py` (21) | `TypeError: MagicMock can't be used in 'await'` | PRE_EXISTING — idem sur base SHA |
+| `test_run_index_r5_history_fatigue_cleanup.py` (1) | `TypeError: MagicMock can't be used in 'await'` | PRE_EXISTING |
+| `test_run_index_screen.py` (3) | `Connection refused localhost:8001` | PRE_EXISTING (live server) |
+| `test_coach_conversational.py` (16) | `MissingSchema: Invalid URL` — live server requis | PRE_EXISTING |
+| `test_cardio_coach_screen.py` (27) | `Connection refused localhost:8001` | PRE_EXISTING (live server) |
+
+Aucun échec causé par PR#214.
 
 ---
 
-## 10. Recherche exhaustive finale
+## 10. Preuve non-régression PerformanceEstimate.vma
 
-### Patterns résiduels vérifiés
+Recherche complète dans tout le runtime (hors tests et rapports) :
 
-| Pattern | Résultat |
-|---------|----------|
-| `estimate_vma` en runtime backend | ❌ 0 occurrence |
-| `VMAEstimate` en runtime backend | ❌ 0 occurrence |
-| `HR_SPEED_MODEL_SOURCE` en runtime backend | ❌ 0 occurrence |
-| `/training/vma-history` dans server.py | ❌ absent |
-| `/training/vma-history` dans access_control.py | ❌ absent |
-| `vma_kmh * 3.5` ou `vma * 3.5` en runtime | ❌ 0 occurrence |
-| `TrainingPlan.jsx` fichier | ❌ supprimé |
-| `/training/full-cycle` consumer actif | ❌ 0 |
+```
+grep -rn "\.result\.vma\|perf\.vma\|PerformanceEstimate(.*vma=\|\.vma_kmh\b" backend/ frontend/src/
+→ 0 résultats
+```
+
+Aucun consumer de `PerformanceEstimate.vma` ne reste dans le runtime.
+
+### Training Paces V2 — preuve d'intégrité
+
+- `test_training_paces_v2_*.py` : 55/55 PASSED
+- Les allures V2 sont basées exclusivement sur VDOT (performances qualifiées)
+- Garmin VO2max n'intervient pas dans le calcul des allures
+- Aucun fallback VMA synthétique détecté
+
+### Coach — preuve d'intégrité
+
+- `test_pr211_coach_llm_cleanup.py` : 8/8 PASSED
+- Patterns `perf.vma`, `result.vma`, `vma_kmh` : 0 occurrence dans `coach_service.py`
+- VMA coach reste `None` (comportement volontaire)
+
+### Garmin VO2max — preuve d'intégrité
+
+- `test_garmin_vo2max_pr195.py` : 56/56 PASSED
+- `test_garmin_vo2max_history_endpoint.py` : 23/23 PASSED
+- `garmin/service.py` : aucune modification dans PR#214
+
+### Access Control — preuve d'intégrité
+
+- `test_idor_authorization.py` : 39/39 PASSED
+- `"/api/training/vma-history"` supprimé de `PREMIUM_ROUTES` — aucune permission fantôme
+- `"vma_estimate"` supprimé de `FREE_FEATURES` — aucun premium leak
+
+---
+
+## 11. Recherche exhaustive finale (post-C214)
+
+| Pattern | Occurrences runtime | Catégorie |
+|---------|--------------------|-----------| 
+| `estimate_vma` | 0 | — |
+| `VMAEstimate` | 0 | — |
+| `_fit_hr_speed_model` | 0 | — |
+| `HR_SPEED_MODEL_SOURCE` | 0 | — |
+| `/training/vma-history` | 0 runtime | Mentions dans tests-garde et rapports uniquement |
+| `/user/vma-estimate` | 0 runtime | — |
+| `vma_kmh * 3.5` | 0 | — |
+| `vma * 3.5` (runtime) | 0 | — |
+| `TrainingPlan.jsx` | Supprimé | — |
+| `/training/full-cycle` active consumer | 0 | Mentions historiques uniquement |
+| `perf.vma` | 0 | — |
+| `result.vma` | 0 | — |
+| `estimated_vma_proxy * 3.5` | 1 (engine/run_index_engine.py:230) | Calcul RunIndex indépendant — PRE_EXISTING sur base SHA. N'utilise pas `estimate_vma()`. Utilise `avg_speed_kmh` réel. |
 
 ---
 
@@ -215,4 +340,4 @@ GARMIN_VO2MAX_PIPELINE_CHANGED    = NO
 
 ---
 
-*Généré par Copilot Task Agent — PR#214 RUNINDEX Legacy Cleanup*
+*Généré par Copilot Task Agent — PR#214 RUNINDEX Legacy Cleanup + C214 Validation Non-Régression*
