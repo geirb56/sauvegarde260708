@@ -3,7 +3,7 @@
 ## Base / Head
 - Base branch: `copilot/dev`
 - Base SHA: `38e36e197ed10695c1cf7cf420326cc90836caf1` (includes merged PR #210)
-- HEAD (core cleanup commit): `d3b54cf19e7bd670a9f59408a96314d502e691f0`
+- HEAD (current, with C211 correction): `2c95c4782e5663a286de4c363313320231585652`
 
 ## Audit callers before changes
 ### `llm_coach.generate_cycle_week`
@@ -39,11 +39,11 @@
 - `llm_coach` no longer imports `training_engine`.
 - `coach_service` no longer imports or references `generate_cycle_week`.
 - Legacy performance compatibility function removed and replaced by canonical sources:
-  - Performance Model V2 (`predict_races` on Garmin DomainActivity) for VMA/method/confidence
   - Garmin observed VO2max (`garmin_vo2max` latest `vo2max_running`)
   - Training paces V2 (`compute_training_paces`) mapped to runtime pace slots
 - Compatibility metric renamed to `goal_compatibility_score` (no `readiness_score` field in coach response payload/context).
-- `/coach/analyze` now uses canonical V2 performance/paces context and Garmin observed VO2max (or unavailable), without synthetic fallback generation.
+- `/coach/analyze` now uses Race Predictions V2 (`predict_races(...).predictions`), Training Paces V2, and Garmin observed VO2max.
+- C211: Coach/LLM paths no longer consume `PerformanceEstimate.vma` / `perf.vma.vma_kmh`; `vma` stays `None`.
 
 ## Legacy functions removed
 - `backend/llm_coach.py`
@@ -55,8 +55,8 @@
 ## Canonical replacement sources used
 - Garmin VO2max observed:
   - `db.garmin_vo2max` latest `vo2max_running` (no invented fallback)
-- Performance Model V2:
-  - `training_v2.performance_model.predict_races(...)` for VMA signal (`vma_kmh`, `method`, `confidence`)
+- Race Predictions V2:
+  - `training_v2.performance_model.predict_races(...)` predictions only (no `perf.vma` consumption)
 - Training paces canonical:
   - `training_v2.training_paces.compute_training_paces(...)`
 - Missing data policy:
@@ -75,9 +75,9 @@
 - `all_sessions`: from recent workouts history formatting
 - `training_plan`: from `db.training_plans`
 - `current_goal`: from `db.training_plans`
-- `vma`: from Performance Model V2 output (`predict_races`)
+- `vma`: always `None` in this coach context (no HR-speed VMA exposure)
 - `vo2max`: from Garmin observed `garmin_vo2max.vo2max_running`
-- `predictions`: from Performance Model V2 predictions list
+- `predictions`: from Performance Model V2 predictions list (`predict_races(...).predictions`)
 - `paces`: from Training Paces V2 output
 
 ### `/chat/send` via `coach_service.chat_response`
@@ -100,20 +100,39 @@
   - `backend/tests/test_pr163_long_run_v2_authority.py`
 - Updated compatibility test scaffolding:
   - `backend/tests/test_coach_load_context_pr128.py`
+- Updated C211 coverage in:
+  - `backend/tests/test_pr211_coach_llm_cleanup.py`
 
 ## Tests executed
 - Command:
   - `python -m pytest tests/test_pr211_coach_llm_cleanup.py tests/test_dynamic_plan_v2_pr135.py tests/test_coach_load_context_pr128.py tests/test_pr156_no_unvalidated_tss_generate_cycle_week.py tests/test_pr157_remove_determine_target_load.py tests/test_pr161_no_double_guard.py tests/test_pr162_week_plan_observed_weekly_km.py tests/test_pr163_long_run_v2_authority.py`
 - Result:
-  - `36 passed`
+  - `39 passed`
 
 ## Blockers / notes
 - Full `pip install -r backend/requirements.txt` was blocked by unreachable private wheel host (`customer-assets.emergentagent.com`) in this sandbox.
 - Validation proceeded with minimal required test dependencies installed locally (`pytest`, `pytest-xdist`, `pytest-asyncio`, `python-dotenv`, `pydantic`).
 
+## C211 audit proof (runtime paths)
+- `backend/coach_service.py`
+  - no runtime `perf.vma` / `perf.vma.vma_kmh` consumption
+  - no `predict_races(...)` call in coach dynamic-plan path
+  - still consumes `compute_training_paces(...)` and `garmin_vo2max`
+- `backend/server.py` (`analyze_with_coach`)
+  - no `perf.vma` usage
+  - no `"Estimated VMA: ..."` synthesis
+  - keeps `predict_races(...).predictions`
+  - keeps `compute_training_paces(...)`
+  - keeps observed Garmin VO2max query (`garmin_vo2max`)
+
 LLM_TRAINING_ENGINE_IMPORTS = 0
 LLM_PLAN_GENERATOR_LEGACY = 0
 COACH_LEGACY_PERFORMANCE_FALLBACKS = 0
+
+COACH_HR_SPEED_VMA_CONSUMERS = 0
+LLM_HR_SPEED_VMA_CONSUMERS = 0
+COACH_SYNTHETIC_VMA_FALLBACKS = 0
+COACH_SYNTHETIC_VO2MAX_FALLBACKS = 0
 
 TRAINING_V2_PIPELINE_UNCHANGED = TRUE
 READINESS_V2_FORMULA_UNCHANGED = TRUE
