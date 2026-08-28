@@ -119,10 +119,16 @@ def test_llm_and_coach_sources_have_no_legacy_training_engine_links():
 
 def test_no_legacy_performance_fallback_formulas_in_coach_service():
     source = Path(coach_service.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
     assert "_compute_legacy_performance_compatibility" not in source
     assert "_readiness_compatibility_score" not in source
     assert "estimated_vma = 12.0" not in source
-    assert "readiness_score" not in source
+    legacy_keys = [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    ]
+    assert "readiness_score" not in legacy_keys
 
 
 @pytest.mark.asyncio

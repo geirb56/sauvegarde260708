@@ -444,11 +444,12 @@ def _to_runtime_paces(paces_v2) -> dict:
         paces["marathon"] = paces_v2.marathon.pace_str
     if paces_v2.threshold is not None:
         paces["z3"] = paces_v2.threshold.pace_str
+        paces["semi"] = paces_v2.threshold.pace_str
     if paces_v2.interval is not None:
         paces["z4"] = paces_v2.interval.upper_str
         paces["z5"] = paces_v2.interval.lower_str
     if paces_v2.repetition is not None:
-        paces["semi"] = paces_v2.repetition.pace_str
+        paces["rep"] = paces_v2.repetition.pace_str
     return paces
 
 
@@ -475,11 +476,17 @@ async def _load_canonical_performance_signals(db, user_id: str, reference_date) 
         runtime_paces = _to_runtime_paces(paces_v2)
 
     if hasattr(db, "garmin_vo2max"):
-        vo2_doc = await db.garmin_vo2max.find_one(
-            {"user_id": user_id, "vo2max_running": {"$ne": None}},
-            {"_id": 0, "vo2max_running": 1},
-            sort=[("date", -1)],
-        )
+        query = {"user_id": user_id, "vo2max_running": {"$ne": None}}
+        projection = {"_id": 0, "vo2max_running": 1}
+        try:
+            vo2_doc = await db.garmin_vo2max.find_one(
+                query,
+                projection,
+                sort=[("date", -1)],
+            )
+        except TypeError:
+            rows = await db.garmin_vo2max.find(query, projection).sort("date", -1).to_list(1)
+            vo2_doc = rows[0] if rows else None
         if vo2_doc:
             vo2max = _to_positive_float(vo2_doc.get("vo2max_running"))
 
