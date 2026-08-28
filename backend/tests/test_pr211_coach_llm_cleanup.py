@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Optional
 
 import pytest
@@ -131,6 +132,44 @@ def test_no_legacy_performance_fallback_formulas_in_coach_service():
     assert "readiness_score" not in legacy_keys
 
 
+def test_coach_service_has_no_perf_vma_consumers():
+    tree = ast.parse(Path(coach_service.__file__).read_text(encoding="utf-8"))
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr in {"vma", "vma_kmh"}:
+            root = node
+            while isinstance(root, ast.Attribute):
+                root = root.value
+            if isinstance(root, ast.Name) and root.id == "perf":
+                raise AssertionError("coach_service still consumes perf.vma/perf.vma_kmh")
+
+    calls = {
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert "predict_races" not in calls
+
+
+def test_server_coach_analyze_no_hr_speed_vma_exposure():
+    server_path = Path(__file__).resolve().parent.parent / "server.py"
+    source = server_path.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    target = next(
+        (n for n in tree.body if isinstance(n, ast.AsyncFunctionDef) and n.name == "analyze_with_coach"),
+        None,
+    )
+    assert target is not None
+
+    fn_src = ast.get_source_segment(source, target) or ""
+    assert "perf.vma" not in fn_src
+    assert "vma_kmh" not in fn_src
+    assert "Estimated VMA:" not in fn_src
+    assert "predict_races(" in fn_src
+    assert "compute_training_paces(" in fn_src
+    assert "garmin_vo2max" in fn_src
+
+
 @pytest.mark.asyncio
 async def test_generate_dynamic_plan_handles_missing_performance_signals():
     coach_service.clear_cache()
@@ -146,6 +185,40 @@ async def test_generate_dynamic_plan_handles_missing_performance_signals():
     assert "readiness_score" not in result
     assert "goal_compatibility_score" in result["context"]
     assert "readiness_score" not in result["context"]
+
+
+@pytest.mark.asyncio
+async def test_canonical_loader_keeps_vma_none_and_preserves_vo2max_and_paces(monkeypatch):
+    coach_service.clear_cache()
+    db = _FakeDB(
+        workouts=[],
+        garmin_activities=[{"user_id": "u1", "activity_type": "running", "start_time": datetime.now(timezone.utc).isoformat()}],
+        garmin_vo2max=[{"user_id": "u1", "date": "2026-08-01", "vo2max_running": 51.2}],
+    )
+
+    monkeypatch.setattr(coach_service, "mongo_garmin_activities_to_domain", lambda _docs: [SimpleNamespace()])
+    monkeypatch.setattr(
+        coach_service,
+        "compute_training_paces",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            easy=SimpleNamespace(lower_str="5:50", upper_str="6:20"),
+            marathon=SimpleNamespace(pace_str="5:20"),
+            threshold=SimpleNamespace(pace_str="4:50"),
+            interval=SimpleNamespace(lower_str="4:10", upper_str="4:25"),
+            repetition=SimpleNamespace(pace_str="3:55"),
+        ),
+    )
+
+    vma, vo2max, vma_method, vma_confidence, paces = await coach_service._load_canonical_performance_signals(
+        db, "u1", datetime.now(timezone.utc).date()
+    )
+
+    assert vma is None
+    assert vma_method is None
+    assert vma_confidence == "insufficient"
+    assert vo2max == 51.2
+    assert paces["z1"] == "5:50-6:20"
+    assert paces["z2"] == "5:20"
 
 
 @pytest.mark.asyncio

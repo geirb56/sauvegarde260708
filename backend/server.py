@@ -1668,7 +1668,7 @@ async def analyze_with_coach(request: CoachRequest, user: dict = Depends(auth_us
         logger.warning(f"Could not fetch training plan for coach context: {e}")
     
     # 6. Récupérer les signaux physiologiques depuis les sources canoniques V2
-    vma_info = ""
+    vma_info = None
     predictions_summary = ""
     vo2max_value: Optional[float] = None
     paces_summary = ""
@@ -1680,8 +1680,6 @@ async def analyze_with_coach(request: CoachRequest, user: dict = Depends(auth_us
         if domain_activities:
             acwr = build_training_load(domain_activities, today.date()).acwr
             perf = predict_races(domain_activities, today.date())
-            if perf.vma and perf.vma.vma_kmh is not None:
-                vma_info = f"Estimated VMA: {perf.vma.vma_kmh} km/h"
             predictions = [
                 f"{pred.distance_label}: {pred.predicted_time_str}"
                 for pred in perf.predictions
@@ -1708,7 +1706,7 @@ async def analyze_with_coach(request: CoachRequest, user: dict = Depends(auth_us
             vo2max_value = latest_vo2.get("vo2max_running")
     except Exception as e:
         logger.warning(f"Could not load canonical performance context: {e}")
-        vma_info = "VMA: non calculée"
+        vma_info = None
     
     # 7. Construire le contexte complet
     context = {

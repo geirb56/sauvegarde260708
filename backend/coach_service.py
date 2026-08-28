@@ -26,7 +26,6 @@ from llm_coach import (
     enrich_workout_analysis,
 )
 from garmin.domain_adapter import mongo_garmin_activities_to_domain
-from training_v2.performance_model import predict_races
 from training_v2.plan_goal import GoalType, ULTRA_MIN_DISTANCE_KM, build_plan_goal
 from training_v2.periodization import build_periodization
 from training_v2.runner_profile import build_runner_profile
@@ -466,12 +465,6 @@ async def _load_canonical_performance_signals(db, user_id: str, reference_date) 
 
     if garmin_docs:
         domain_activities = mongo_garmin_activities_to_domain(garmin_docs)
-        perf = predict_races(domain_activities, reference_date)
-        if perf.vma and perf.vma.vma_kmh is not None:
-            vma = perf.vma.vma_kmh
-            vma_method = perf.vma.method
-            vma_confidence = perf.vma.confidence
-
         paces_v2 = compute_training_paces(domain_activities, reference_date, user_max_hr=None)
         runtime_paces = _to_runtime_paces(paces_v2)
 
