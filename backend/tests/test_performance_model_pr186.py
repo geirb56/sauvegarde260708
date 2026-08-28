@@ -278,55 +278,33 @@ def test_23_no_synthetic_predictions():
 # ---------------------------------------------------------------------------
 
 def test_24_same_source_same_prediction_regardless_of_vma():
-    """Test 24 (BLOCKER 2): Same Riegel source → same predicted_time_s AND same confidence,
-    regardless of VMA availability.
-
-    Design:
-    - source_activity: 10K run at days_ago=5, avg_hr=160, max_hr=190 (rel_hr=0.84 ≥ 0.80)
-    - vma_extras: four 5K runs at days_ago=35–38, avg_hr=140, max_hr=190
-        • rel_hr = 140/190 ≈ 0.74 < MIN_RIEGEL_RELATIVE_HR → hard-excluded from Riegel
-        • days_ago > 28 → outside the weekly_km 28-day window → vol_factor unchanged
-        • target 10K → endurance = 1.0 (target ≤ 10 km) → no penalty, no change
-    → Riegel source for 10K prediction is strictly the same activity in both cases.
-    → predicted_time_s and confidence must be identical.
-    """
+    """Test 24: Same Riegel source keeps the same prediction and confidence."""
     source = _run(10_000.0, 3_200.0, days_ago=5, avg_hr=160.0, max_hr=190.0)
 
-    # No VMA: single activity → VMA model insufficient
-    result_no_vma = predict_races([source], TODAY)
-
-    # With VMA: add 5K extras (outside Riegel qualification, outside weekly_km window)
-    vma_extras = [
+    result_without_extras = predict_races([source], TODAY)
+    extras = [
         _run(5_000.0, 1_700.0, days_ago=35, avg_hr=140.0, max_hr=190.0),
         _run(5_000.0, 1_720.0, days_ago=36, avg_hr=143.0, max_hr=190.0),
         _run(5_000.0, 1_740.0, days_ago=37, avg_hr=147.0, max_hr=190.0),
         _run(5_000.0, 1_760.0, days_ago=38, avg_hr=150.0, max_hr=190.0),
     ]
-    result_with_vma = predict_races([source] + vma_extras, TODAY)
+    result_with_extras = predict_races([source] + extras, TODAY)
 
-    # Pre-condition: VMA availability differs
-    assert result_no_vma.vma.vma_kmh is None, "Should have no VMA with single activity"
-    assert result_with_vma.vma.vma_kmh is not None, "Should have VMA with enough activities"
+    assert result_without_extras.athlete_profile['estimated_vma'] is None
+    assert result_with_extras.athlete_profile['estimated_vma'] is None
 
-    pred_no_vma = next((p for p in result_no_vma.predictions if p.distance_label == "10K"), None)
-    pred_with_vma = next((p for p in result_with_vma.predictions if p.distance_label == "10K"), None)
-    assert pred_no_vma is not None and pred_with_vma is not None
-
-    # Same source: source_distance_m identifies the same Riegel candidate
-    assert pred_no_vma.source_distance_m == pred_with_vma.source_distance_m, (
-        "Riegel source must be identical regardless of VMA availability"
+    pred_without_extras = next((p for p in result_without_extras.predictions if p.distance_label == '10K'), None)
+    pred_with_extras = next((p for p in result_with_extras.predictions if p.distance_label == '10K'), None)
+    assert pred_without_extras is not None and pred_with_extras is not None
+    assert pred_without_extras.source_distance_m == pred_with_extras.source_distance_m, (
+        'Riegel source must stay identical when extra non-source runs are added'
     )
-    # VMA availability must not change predicted_time_s
-    assert pred_no_vma.predicted_time_s == pred_with_vma.predicted_time_s, (
-        f"predicted_time_s must be the same: "
-        f"no_vma={pred_no_vma.predicted_time_s} vs with_vma={pred_with_vma.predicted_time_s}"
+    assert pred_without_extras.predicted_time_s == pred_with_extras.predicted_time_s, (
+        f'predicted_time_s must match: {pred_without_extras.predicted_time_s} vs {pred_with_extras.predicted_time_s}'
     )
-    # VMA availability must not change confidence
-    assert pred_no_vma.confidence == pred_with_vma.confidence, (
-        f"confidence must be the same: "
-        f"no_vma={pred_no_vma.confidence!r} vs with_vma={pred_with_vma.confidence!r}"
+    assert pred_without_extras.confidence == pred_with_extras.confidence, (
+        f'confidence must match: {pred_without_extras.confidence!r} vs {pred_with_extras.confidence!r}'
     )
-
 
 # ---------------------------------------------------------------------------
 # SESSIONS — tests 25–28

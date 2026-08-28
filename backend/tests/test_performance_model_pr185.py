@@ -13,8 +13,6 @@ from typing import List, Optional
 
 from training_v2.domain_activity import DomainActivity
 from training_v2.performance_model import (
-    RACE_DISTANCES_M,
-    REASON_HR_RANGE_INSUFFICIENT,
     _resolve_fcmax,
     _resolve_fcmax_robust,
     _riegel,
@@ -49,12 +47,6 @@ def _run(
         max_hr=max_hr,
         elevation_gain_m=elevation_gain_m,
     )
-
-
-
-
-
-
 
 
 def _speed_benchmark_runs() -> List[DomainActivity]:
@@ -117,23 +109,6 @@ def _slow_qualification_benchmark_runs() -> List[DomainActivity]:
 
 # ---------------------------------------------------------------------------
 # Test 8: Good correlation + sufficient HR range → VMA deterministic
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# Test 9: Excessive extrapolation → confidence reduced or null
-# ---------------------------------------------------------------------------
-
-    # else it's null due to extrapolation check — also acceptable
-
-
-# ---------------------------------------------------------------------------
-# Test 10: FCmax absent → no 220-age fallback
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# Test 11: Future activity → ignored
 # ---------------------------------------------------------------------------
 
 
