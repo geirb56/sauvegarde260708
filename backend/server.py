@@ -2683,7 +2683,7 @@ async def update_training_v2_cycle_start_date(
             detail="plan_start_date cannot be in the future.",
         )
 
-    mapped_goal_type = _LEGACY_GOAL_TO_V2.get(goal_type_raw.upper() if goal_type_raw else "")
+    mapped_goal_type = _LEGACY_GOAL_TO_V2.get(goal_type_raw.upper())
     if mapped_goal_type is None:
         raise HTTPException(
             status_code=400,
