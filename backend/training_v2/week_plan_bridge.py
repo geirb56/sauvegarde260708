@@ -199,8 +199,19 @@ def _build_weekly_context_from_workouts(
 
 
 def workouts_to_domain_activities(workouts: List[dict]) -> List[DomainActivity]:
-    """Convert raw db.workouts documents to canonical DomainActivity objects."""
-    return [to_domain_activity(_normalize_workout_to_domain_fields(w)) for w in workouts]
+    """Convert workout-like inputs to canonical DomainActivity objects.
+
+    Accepts either:
+    - raw ``db.workouts`` documents that need field normalization, or
+    - already canonical DomainActivity objects / dicts carrying canonical fields.
+    """
+    activities: List[DomainActivity] = []
+    for workout in workouts:
+        if isinstance(workout, DomainActivity):
+            activities.append(workout)
+            continue
+        activities.append(to_domain_activity(_normalize_workout_to_domain_fields(workout)))
+    return activities
 
 
 def build_weekly_target_from_workouts(

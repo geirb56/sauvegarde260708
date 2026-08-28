@@ -99,7 +99,7 @@ describe("auth pages and oauth UI", () => {
 
     expect(first.container.textContent).toContain("Inicia sesión en tu cuenta");
     expect(first.container.textContent).toContain("Continuar con Google");
-    expect(first.container.textContent).toContain("Continuar con Apple");
+    expect(first.container.textContent).not.toContain("Continuar con Apple");
     expect(first.container.querySelector(".min-h-screen")).not.toBeNull();
     expect(first.container.querySelector(".max-w-sm")).not.toBeNull();
 
@@ -164,11 +164,7 @@ describe("auth pages and oauth UI", () => {
       buttons.find((button) => button.textContent.includes("Google")).click();
     });
     expect(container.textContent).toContain("El inicio de sesión con Google no está configurado.");
-
-    await act(async () => {
-      buttons.find((button) => button.textContent.includes("Apple")).click();
-    });
-    expect(container.textContent).toContain("El inicio de sesión con Apple no está configurado.");
+    expect(container.textContent).not.toContain("Apple");
     unmount();
   });
 
