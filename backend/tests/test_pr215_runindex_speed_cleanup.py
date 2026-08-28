@@ -34,7 +34,7 @@ def _runtime_backend_py_sources() -> list[tuple[str, str]]:
             if not fname.endswith(".py"):
                 continue
             full = os.path.join(root, fname)
-            if "/tests/" in full or os.path.basename(full).startswith("test_"):
+            if "tests" in Path(full).parts or os.path.basename(full).startswith("test_"):
                 continue
             result.append((full, _read(full)))
     return result
@@ -58,6 +58,7 @@ def _count_runtime_line_matches(patterns: list[str]) -> int:
         for pat in compiled:
             if pat.search(line):
                 total += 1
+                break
     return total
 
 
