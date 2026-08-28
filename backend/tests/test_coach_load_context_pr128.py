@@ -6,7 +6,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, List, Optional
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -142,12 +142,7 @@ async def test_generate_dynamic_training_plan_injects_v2_acwr():
         training_cycles=[{"user_id": user_id, "goal": "SEMI", "start_date": datetime.now(timezone.utc)}],
     )
 
-    with patch.object(
-        coach_service,
-        "generate_cycle_week",
-        AsyncMock(return_value=([{"type": "Footing", "details": "easy"}], True, {})),
-    ):
-        result = await coach_service.generate_dynamic_training_plan(fake_db, user_id)
+    result = await coach_service.generate_dynamic_training_plan(fake_db, user_id)
 
     expected = build_training_load(garmin_activities, datetime.now(timezone.utc).date()).acwr
     assert result["context"]["acwr"] == expected
@@ -164,12 +159,7 @@ async def test_generate_dynamic_training_plan_without_snapshot_keeps_acwr_none()
         training_cycles=[{"user_id": user_id, "goal": "SEMI", "start_date": datetime.now(timezone.utc)}],
     )
 
-    with patch.object(
-        coach_service,
-        "generate_cycle_week",
-        AsyncMock(return_value=([{"type": "Footing", "details": "easy"}], True, {})),
-    ):
-        result = await coach_service.generate_dynamic_training_plan(fake_db, user_id)
+    result = await coach_service.generate_dynamic_training_plan(fake_db, user_id)
 
     assert result["context"]["acwr"] is None
     assert result["context"]["tsb"] is None

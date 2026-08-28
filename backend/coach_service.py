@@ -24,14 +24,15 @@ from llm_coach import (
     enrich_chat_response,
     enrich_weekly_review,
     enrich_workout_analysis,
-    generate_cycle_week,
-    LLM_MODEL
 )
+from garmin.domain_adapter import mongo_garmin_activities_to_domain
+from training_v2.performance_model import predict_races
 from training_v2.plan_goal import GoalType, ULTRA_MIN_DISTANCE_KM, build_plan_goal
 from training_v2.periodization import build_periodization
 from training_v2.runner_profile import build_runner_profile
 from training_v2.training_history import build_training_history
 from training_v2.training_load import build_training_load
+from training_v2.training_paces import compute_training_paces
 from training_v2.training_response import build_recent_training_response
 from training_v2.training_state import build_training_state
 from training_v2.weekly_reconciliation import build_weekly_reconciliation
@@ -296,6 +297,8 @@ async def chat_response(
     language = context.get("language", "en")
     if language == "fr":
         error_msg = "Le service de coaching IA n'est pas disponible actuellement."
+    elif language == "es":
+        error_msg = "El servicio de coaching con IA no está disponible actualmente."
     else:
         error_msg = "The AI coaching service is currently unavailable."
     return error_msg, False, {}
@@ -432,76 +435,75 @@ def _to_domain_activity_from_workout(workout: dict) -> dict:
     }
 
 
-def _compute_legacy_performance_compatibility(workouts_6w: List[dict]) -> tuple[float, float, str, str, dict]:
-    running = [w for w in workouts_6w if _is_running_workout(w)]
-    paces = []
-    vma_efforts = []
-    for workout in running:
-        dist = _workout_distance_km(workout)
-        duration_min = _workout_duration_seconds(workout) / 60.0
-        if dist <= 0 or duration_min <= 0:
-            continue
-        pace = duration_min / dist
-        if 3 < pace < 10:
-            paces.append(pace)
-            if duration_min >= 6 and pace < 5.5:
-                vma_efforts.append({"speed_kmh": 60.0 / pace, "duration": duration_min})
-
-    if paces:
-        avg_pace = sum(paces) / len(paces)
-        if vma_efforts:
-            best_effort = max(vma_efforts, key=lambda x: x["speed_kmh"])
-            if best_effort["duration"] >= 20:
-                estimated_vma = best_effort["speed_kmh"] / 0.85
-            elif best_effort["duration"] >= 12:
-                estimated_vma = best_effort["speed_kmh"] / 0.90
-            else:
-                estimated_vma = best_effort["speed_kmh"] / 0.95
-            vma_method = "effort"
-        else:
-            estimated_vma = (60.0 / avg_pace) / 0.70
-            vma_method = "average"
-    else:
-        estimated_vma = 12.0
-        vma_method = "default"
-
-    estimated_vma = round(estimated_vma, 1)
-    vo2max = round(estimated_vma * 3.5, 1)
-    vma_confidence = {"effort": "high", "average": "low", "default": "low"}.get(vma_method, "low")
-
-    def _pace(vma_pct: float) -> str:
-        speed = max(0.1, estimated_vma * vma_pct)
-        pace = 60.0 / speed
-        mins = int(pace)
-        secs = int((pace % 1) * 60)
-        return f"{mins}:{secs:02d}"
-
-    personalized_paces = {
-        "z1": f"{_pace(0.65)}-{_pace(0.70)}",
-        "z2": f"{_pace(0.75)}-{_pace(0.80)}",
-        "z3": f"{_pace(0.82)}-{_pace(0.87)}",
-        "z4": f"{_pace(0.88)}-{_pace(0.93)}",
-        "z5": f"{_pace(0.95)}-{_pace(1.00)}",
-        "marathon": f"{_pace(0.78)}-{_pace(0.82)}",
-        "semi": f"{_pace(0.82)}-{_pace(0.85)}",
-    }
-    return estimated_vma, vo2max, vma_method, vma_confidence, personalized_paces
+def _to_runtime_paces(paces_v2) -> dict:
+    paces = {}
+    if paces_v2.easy is not None:
+        paces["z1"] = f"{paces_v2.easy.lower_str}-{paces_v2.easy.upper_str}"
+    if paces_v2.marathon is not None:
+        paces["z2"] = paces_v2.marathon.pace_str
+        paces["marathon"] = paces_v2.marathon.pace_str
+    if paces_v2.threshold is not None:
+        paces["z3"] = paces_v2.threshold.pace_str
+    if paces_v2.interval is not None:
+        paces["z4"] = paces_v2.interval.upper_str
+        paces["z5"] = paces_v2.interval.lower_str
+    if paces_v2.repetition is not None:
+        paces["semi"] = paces_v2.repetition.pace_str
+    return paces
 
 
-def _readiness_compatibility_score(goal_label: str, weekly_km: float, vo2max: float) -> tuple[float, str, int]:
+async def _load_canonical_performance_signals(db, user_id: str, reference_date) -> tuple[Optional[float], Optional[float], Optional[str], str, dict]:
+    vma = None
+    vo2max = None
+    vma_method = None
+    vma_confidence = "insufficient"
+    runtime_paces: dict = {}
+
+    garmin_docs = []
+    if hasattr(db, "garmin_activities"):
+        garmin_docs = await db.garmin_activities.find({"user_id": user_id}, {"_id": 0}).to_list(2000)
+
+    if garmin_docs:
+        domain_activities = mongo_garmin_activities_to_domain(garmin_docs)
+        perf = predict_races(domain_activities, reference_date)
+        if perf.vma and perf.vma.vma_kmh is not None:
+            vma = perf.vma.vma_kmh
+            vma_method = perf.vma.method
+            vma_confidence = perf.vma.confidence
+
+        paces_v2 = compute_training_paces(domain_activities, reference_date, user_max_hr=None)
+        runtime_paces = _to_runtime_paces(paces_v2)
+
+    if hasattr(db, "garmin_vo2max"):
+        vo2_doc = await db.garmin_vo2max.find_one(
+            {"user_id": user_id, "vo2max_running": {"$ne": None}},
+            {"_id": 0, "vo2max_running": 1},
+            sort=[("date", -1)],
+        )
+        if vo2_doc:
+            vo2max = _to_positive_float(vo2_doc.get("vo2max_running"))
+
+    return vma, vo2max, vma_method, vma_confidence, runtime_paces
+
+
+def _goal_compatibility_score(goal_label: str, weekly_km: float, vo2max: Optional[float]) -> tuple[float, str, int]:
     req = _GOAL_REQUIREMENTS.get(goal_label, _GOAL_REQUIREMENTS["SEMI"])
     volume_score = min(100.0, (weekly_km / req["min_weekly_km"]) * 100) if req["min_weekly_km"] > 0 else 50.0
-    fitness_score = min(100.0, (vo2max / req["min_vo2max"]) * 100) if req["min_vo2max"] > 0 else 50.0
-    readiness_score = round(volume_score * 0.6 + fitness_score * 0.4, 1)
-    if readiness_score >= 90:
+    if vo2max is None:
+        score = round(volume_score, 1)
+    else:
+        fitness_score = min(100.0, (vo2max / req["min_vo2max"]) * 100) if req["min_vo2max"] > 0 else 50.0
+        score = round(volume_score * 0.6 + fitness_score * 0.4, 1)
+
+    if score >= 90:
         prep_status = "avancé"
-    elif readiness_score >= 70:
+    elif score >= 70:
         prep_status = "normal"
-    elif readiness_score >= 50:
+    elif score >= 50:
         prep_status = "progressif"
     else:
         prep_status = "débutant"
-    return readiness_score, prep_status, req["base_weeks"]
+    return score, prep_status, req["base_weeks"]
 
 
 def _runtime_goal_and_type(raw_goal: str) -> tuple[GoalType, str]:
@@ -612,16 +614,10 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
         _update_latency(latency, is_cache=True)
         return cached[0]
 
-    workouts_6w = []
-    six_weeks_threshold = now - timedelta(days=42)
-    for w in workouts:
-        dt = _parse_optional_datetime(w.get("date"))
-        if dt is None:
-            continue
-        if dt >= six_weeks_threshold:
-            workouts_6w.append(w)
-    performance_vma, performance_vo2max, vma_method, vma_confidence, personalized_paces = (
-        _compute_legacy_performance_compatibility(workouts_6w)
+    performance_vma, performance_vo2max, vma_method, vma_confidence, personalized_paces = await _load_canonical_performance_signals(
+        db,
+        user_id,
+        reference_date,
     )
 
     if goal_type == GoalType.ultra and (ultra_distance is None or ultra_distance <= ULTRA_MIN_DISTANCE_KM):
@@ -639,7 +635,7 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
             "vma_method": vma_method,
             "vma_confidence": vma_confidence,
             "paces": personalized_paces,
-            "readiness_score": None,
+            "goal_compatibility_score": None,
             "prep_status": None,
             "adjusted_weeks": None,
             "prep_insufficient": None,
@@ -656,7 +652,7 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
 
     if cycle_start_date and cycle_start_date > reference_date:
         days_to_start = (cycle_start_date - reference_date).days
-        readiness_score, prep_status, base_weeks = _readiness_compatibility_score(
+        goal_compatibility_score, prep_status, base_weeks = _goal_compatibility_score(
             goal_label, 0.0, performance_vo2max
         )
         return {
@@ -673,7 +669,7 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
             "vma_method": vma_method,
             "vma_confidence": vma_confidence,
             "paces": personalized_paces,
-            "readiness_score": readiness_score,
+            "goal_compatibility_score": goal_compatibility_score,
             "prep_status": prep_status,
             "adjusted_weeks": base_weeks,
             "prep_insufficient": race_date is not None and (race_date - reference_date).days // 7 < base_weeks,
@@ -744,7 +740,7 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
             "vma_method": vma_method,
             "vma_confidence": vma_confidence,
             "paces": personalized_paces,
-            "readiness_score": None,
+            "goal_compatibility_score": None,
             "prep_status": None,
             "adjusted_weeks": None,
             "prep_insufficient": None,
@@ -787,7 +783,7 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
     )
 
     weekly_km_recent = training_history.window_7d.distance_km if training_history.window_7d.activity_count > 0 else 0.0
-    readiness_score, prep_status, base_weeks = _readiness_compatibility_score(
+    goal_compatibility_score, prep_status, base_weeks = _goal_compatibility_score(
         goal_label,
         weekly_km_recent,
         performance_vo2max,
@@ -819,7 +815,7 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
         "vma_method": vma_method,
         "vma_confidence": vma_confidence,
         "paces": personalized_paces,
-        "readiness_score": readiness_score,
+        "goal_compatibility_score": goal_compatibility_score,
         "prep_status": prep_status,
         "training_state": training_state.continuity_state,
         "training_state_v2": training_state.continuity_state,
@@ -846,7 +842,7 @@ async def generate_dynamic_training_plan(db, user_id: str, sessions_override: in
         "vma_method": vma_method,
         "vma_confidence": vma_confidence,
         "paces": personalized_paces,
-        "readiness_score": readiness_score,
+        "goal_compatibility_score": goal_compatibility_score,
         "prep_status": prep_status,
         "adjusted_weeks": total_weeks,
         "prep_insufficient": prep_insufficient,
