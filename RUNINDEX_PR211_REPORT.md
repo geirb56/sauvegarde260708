@@ -3,7 +3,7 @@
 ## Base / Head
 - Base branch: `copilot/dev`
 - Base SHA: `38e36e197ed10695c1cf7cf420326cc90836caf1` (includes merged PR #210)
-- HEAD (current): `d3b54cf19e7bd670a9f59408a96314d502e691f0`
+- HEAD (core cleanup commit): `d3b54cf19e7bd670a9f59408a96314d502e691f0`
 
 ## Audit callers before changes
 ### `llm_coach.generate_cycle_week`
