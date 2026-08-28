@@ -94,8 +94,6 @@ PREMIUM_FEATURES: frozenset = frozenset({
     "coach_detailed",
     "coach_workout_analysis",
     "race_predictions",
-    "full_cycle",
-    "terra_sync",
     "garmin_sync",
 })
 
@@ -109,7 +107,6 @@ FREE_FEATURES: frozenset = frozenset({
     "settings",
     "profile",
     "run_index",
-    "vma_estimate",
 })
 
 # Chat quota constants
@@ -417,7 +414,6 @@ ROUTE_ACCESS_MAP: Dict[str, RouteAccess] = {
     # ── Premium (TRIAL or PREMIUM required) ──────────────────────────────
     "/api/training/plan":             RouteAccess.PREMIUM,
     "/api/training/refresh":          RouteAccess.PREMIUM,
-    "/api/training/full-cycle":       RouteAccess.PREMIUM,
     "/api/training/race-predictions": RouteAccess.PREMIUM,
     "/api/training/dynamic-plan":     RouteAccess.PREMIUM,
     "/api/training/feedback":         RouteAccess.PREMIUM,
@@ -426,7 +422,6 @@ ROUTE_ACCESS_MAP: Dict[str, RouteAccess] = {
     "/api/training/v2/week":          RouteAccess.PREMIUM,  # PR167 — native V2 week endpoint
     "/api/training/v2/cycle":         RouteAccess.PREMIUM,  # PR175 — native V2 cycle calendar endpoint
     "/api/training/metrics":          RouteAccess.PREMIUM,
-    "/api/training/vma-history":      RouteAccess.PREMIUM,
     "/api/training/set-goal":         RouteAccess.PREMIUM,
     "/api/training/goals":            RouteAccess.PREMIUM,
     "/api/training/":                 RouteAccess.PREMIUM,
@@ -438,7 +433,6 @@ ROUTE_ACCESS_MAP: Dict[str, RouteAccess] = {
     "/api/coach/digest":              RouteAccess.PREMIUM,
     "/api/coach/":                    RouteAccess.PREMIUM,
     "/api/rag/":                      RouteAccess.PREMIUM,
-    "/api/terra/":                    RouteAccess.PREMIUM,
     "/api/garmin/":                   RouteAccess.PREMIUM,
     "/api/sync/":                     RouteAccess.PREMIUM,
 }

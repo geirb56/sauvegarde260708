@@ -4,7 +4,7 @@ from typing import List, Dict, Optional
 class Provider(ABC):
     """Interface métier que le reste de l'application utilise.
 
-    Important: ne contient aucune logique gccli/terra.
+    Important: ne contient aucune logique provider spécifique.
     """
 
     @abstractmethod

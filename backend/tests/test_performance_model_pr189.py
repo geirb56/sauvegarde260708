@@ -435,62 +435,6 @@ def test_r_conflict_fallback_reestimates_a_with_forced_k():
     assert curve.a == pytest.approx(math.exp(expected_log_a), rel=1e-10, abs=1e-10)
 
 
-def test_s_vma_output_mutations_do_not_change_race_predictions_architecture(monkeypatch):
-    activities = _benchmark_runs() + [
-        _run(days_ago=8, distance_m=5_000.0, duration_s=1_490.0, avg_hr=159.0, max_hr=176.0),
-        _run(days_ago=5, distance_m=10_000.0, duration_s=3_080.0, avg_hr=160.0, max_hr=178.0),
-        _run(days_ago=4, distance_m=15_000.0, duration_s=4_880.0, avg_hr=160.0, max_hr=178.0),
-    ]
-    fixed_fcmax = 182.0
-    baseline = predict_races(activities, TODAY, user_max_hr=fixed_fcmax)
-    base_preds = _pred_by_label(baseline)
-
-    variants = [
-        pm.VMAEstimate(
-            vma_kmh=None,
-            confidence="insufficient",
-            method="hr_speed_model",
-            source_activity_date=None,
-            source_distance_m=None,
-            source_duration_s=None,
-        ),
-        pm.VMAEstimate(
-            vma_kmh=11.0,
-            confidence="low",
-            method="hr_speed_model",
-            source_activity_date=TODAY,
-            source_distance_m=5_000.0,
-            source_duration_s=1_700.0,
-        ),
-        pm.VMAEstimate(
-            vma_kmh=20.5,
-            confidence="high",
-            method="hr_speed_model",
-            source_activity_date=TODAY,
-            source_distance_m=10_000.0,
-            source_duration_s=2_700.0,
-        ),
-    ]
-
-    for variant in variants:
-        monkeypatch.setattr(
-            pm,
-            "estimate_vma",
-            lambda acts, ref, user_max_hr=None, _v=variant: _v,
-        )
-        mutated = predict_races(activities, TODAY, user_max_hr=fixed_fcmax)
-        mutated_preds = _pred_by_label(mutated)
-        for label in ["5K", "10K", "Semi", "Marathon"]:
-            assert mutated_preds[label].predicted_time_s == base_preds[label].predicted_time_s
-            assert mutated_preds[label].curve_k == base_preds[label].curve_k
-            assert mutated_preds[label].curve_method == base_preds[label].curve_method
-        assert mutated.race_curve_diagnostics["curve_k"] == baseline.race_curve_diagnostics["curve_k"]
-        assert (
-            mutated.race_curve_diagnostics["curve_method"]
-            == baseline.race_curve_diagnostics["curve_method"]
-        )
-
-
 def test_t_pr188_qualification_semantics_unchanged():
     candidate = _run(days_ago=7, distance_m=10_000.0, duration_s=2_980.0, avg_hr=120.0, max_hr=170.0)
     quality = evaluate_performance_quality(candidate, _benchmark_runs() + [candidate], TODAY)

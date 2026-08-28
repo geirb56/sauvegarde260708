@@ -37,7 +37,7 @@ from analysis_engine import (
     generate_dashboard_insight,
 )
 
-# Import LLM coach module (GPT-4o-mini)
+# Import LLM coach module
 from llm_coach import LLM_MODEL
 
 # Import coach service (cascade strategy)
@@ -59,7 +59,6 @@ from rag_engine import (
     generate_workout_analysis_rag
 )
 
-# Import training engine for periodization
 from training_v2.training_load import build_training_load
 from training_v2.training_history import RUNNING_TYPES, build_training_history
 from training_v2.runner_profile import build_runner_profile
@@ -84,22 +83,8 @@ from training_v2.daily_runtime_helpers import (
 )
 from garmin.readiness_adapter import build_readiness_v2_from_garmin_data
 from garmin.domain_adapter import mongo_garmin_activities_to_domain
-from training_v2.performance_model import estimate_vma, predict_races, activity_date  # PR185
-from training_engine import (
-    DEFAULT_WEEKLY_KM,
-    compute_current_weekly_km,
-    compute_cycle_dates,
-    compute_target_km,
-    apply_resume_guard,
-    resolve_chronic_base,
-    resolve_reprise_plan,
-    REPRISE_STABLE_WEEKS,
-    compute_week_number,
-    determine_phase,
-    get_phase_description,
-    is_running,
-    normalized_distance_km,
-)
+from training_v2.performance_model import predict_races, activity_date  # PR185
+from training_v2.plan_goal import GoalType
 
 from config.training_goals import GOAL_CONFIG  # noqa: E402  # PR145: single source
 
@@ -137,18 +122,19 @@ from services.paddle_webhook_security import verify_and_parse_paddle_event, Padd
 from api.dashboard import dashboard_router
 from engine.run_index_engine import calculate_run_index, calculate_run_index_from_domain
 
-# Import Terra integration module
-from terra_integration import (
-    syncDailyMetrics,
-    computeRecoveryScore,
-    computeTrainingLoad,
-    generateWorkoutRecommendation,
-    syncTerraWorkouts,
-    fetch_terra_user,
-)
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
+
+_LEGACY_GOAL_TO_V2: dict[str, GoalType] = {
+    "10K": GoalType.ten_k,
+    "SEMI": GoalType.half_marathon,
+    "HALF_MARATHON": GoalType.half_marathon,
+    "MARATHON": GoalType.marathon,
+    "5K": GoalType.five_k,
+    "ULTRA": GoalType.ultra,
+    "MAINTENANCE": GoalType.maintenance,
+}
 
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
@@ -751,318 +737,6 @@ async def create_workout(workout: WorkoutCreate, user: dict = Depends(auth_user)
     return workout_obj
 
 
-# ========== VMA / VO2MAX ESTIMATION ==========
-
-class VMAEstimationResponse(BaseModel):
-    has_sufficient_data: bool
-    confidence: str  # "high", "medium", "low", "insufficient"
-    confidence_score: int  # 1-5 (5 = very confident)
-    vma_kmh: Optional[float] = None
-    vo2max: Optional[float] = None
-    data_source: Optional[str] = None
-    training_zones: Optional[dict] = None
-    message: str
-    recommendations: Optional[List[str]] = None
-
-
-def estimate_vma_from_race(distance_km: float, time_minutes: int) -> dict:
-    """Estimate VMA from race performance using VDOT tables (Jack Daniels)"""
-    if distance_km <= 0 or time_minutes <= 0:
-        return None
-    
-    # Calculate pace in min/km
-    pace_min_km = time_minutes / distance_km
-    
-    # Simplified VDOT estimation based on pace
-    # These are approximations from Jack Daniels' tables
-    speed_kmh = 60 / pace_min_km  # Convert pace to km/h
-    
-    # VMA is approximately the speed you can sustain for 4-7 minutes
-    # From race performance, we estimate VMA based on distance
-    # Longer distances = lower % of VMA
-    vma_percentage = {
-        5: 0.95,      # 5km ≈ 95% VMA
-        10: 0.90,     # 10km ≈ 90% VMA
-        21.1: 0.85,   # Semi ≈ 85% VMA
-        42.195: 0.80  # Marathon ≈ 80% VMA
-    }
-    
-    # Find closest distance
-    closest_dist = min(vma_percentage.keys(), key=lambda x: abs(x - distance_km))
-    pct = vma_percentage[closest_dist]
-    
-    vma_kmh = speed_kmh / pct
-    vo2max = vma_kmh * 3.5  # Standard formula: VO2max ≈ VMA × 3.5
-    
-    return {
-        "vma_kmh": round(vma_kmh, 1),
-        "vo2max": round(vo2max, 1),
-        "method": "race_performance",
-        "confidence": "high" if distance_km >= 5 else "medium"
-    }
-
-
-def estimate_vma_from_workouts(workouts: list) -> dict:
-    """Estimate VMA from training data (Z5 efforts)"""
-    
-    # Filter running workouts with HR zones
-    running_workouts = [
-        w for w in workouts 
-        if w.get("type") == "run" and w.get("effort_zone_distribution")
-    ]
-    
-    if len(running_workouts) < 3:
-        return {
-            "has_sufficient_data": False,
-            "reason": "need_more_workouts",
-            "count": len(running_workouts)
-        }
-    
-    # Analyze Z5 efforts
-    z5_efforts = []
-    z4_efforts = []
-    
-    for w in running_workouts:
-        zones = w.get("effort_zone_distribution", {})
-        z5_pct = zones.get("z5", 0) or 0
-        z4_pct = zones.get("z4", 0) or 0
-        duration = w.get("duration_minutes", 0)
-        
-        # Z5 time in minutes
-        z5_time = (z5_pct / 100) * duration
-        z4_time = (z4_pct / 100) * duration
-        
-        # Best pace as proxy for VMA effort
-        best_pace = w.get("best_pace_min_km")
-        avg_pace = w.get("avg_pace_min_km")
-        
-        if z5_time >= 2 and best_pace:  # At least 2 min in Z5
-            z5_efforts.append({
-                "workout": w.get("name"),
-                "date": w.get("date"),
-                "z5_time_min": z5_time,
-                "best_pace": best_pace,
-                "avg_pace": avg_pace
-            })
-        
-        if z4_time >= 5 and avg_pace:  # At least 5 min in Z4
-            z4_efforts.append({
-                "workout": w.get("name"),
-                "date": w.get("date"),
-                "z4_time_min": z4_time,
-                "avg_pace": avg_pace
-            })
-    
-    # Priority 1: Use Z5 efforts (most reliable)
-    if len(z5_efforts) >= 2:
-        # Take best paces from Z5 efforts
-        best_paces = [e["best_pace"] for e in z5_efforts if e["best_pace"]]
-        if best_paces:
-            # VMA ≈ best pace in Z5 (slightly faster)
-            avg_best_pace = sum(best_paces) / len(best_paces)
-            vma_kmh = 60 / avg_best_pace  # Convert min/km to km/h
-            vo2max = vma_kmh * 3.5
-            
-            return {
-                "has_sufficient_data": True,
-                "vma_kmh": round(vma_kmh, 1),
-                "vo2max": round(vo2max, 1),
-                "method": "z5_efforts",
-                "confidence": "medium",
-                "sample_count": len(z5_efforts),
-                "efforts": z5_efforts[:3]  # Return top 3 for reference
-            }
-    
-    # Priority 2: Use Z4 efforts (less reliable)
-    if len(z4_efforts) >= 3:
-        avg_paces = [e["avg_pace"] for e in z4_efforts if e["avg_pace"]]
-        if avg_paces:
-            # Z4 pace ≈ 85-90% VMA, so VMA ≈ Z4 pace / 0.87
-            avg_z4_pace = sum(avg_paces) / len(avg_paces)
-            z4_speed = 60 / avg_z4_pace
-            vma_kmh = z4_speed / 0.87
-            vo2max = vma_kmh * 3.5
-            
-            return {
-                "has_sufficient_data": True,
-                "vma_kmh": round(vma_kmh, 1),
-                "vo2max": round(vo2max, 1),
-                "method": "z4_extrapolation",
-                "confidence": "low",
-                "sample_count": len(z4_efforts),
-                "warning": "Estimation basée sur Z4 uniquement - moins fiable"
-            }
-    
-    # Not enough high-intensity data
-    return {
-        "has_sufficient_data": False,
-        "reason": "need_high_intensity",
-        "z5_count": len(z5_efforts),
-        "z4_count": len(z4_efforts)
-    }
-
-
-def calculate_training_zones(vma_kmh: float, language: str = "en") -> dict:
-    """Calculate training zones based on VMA"""
-    
-    def kmh_to_pace(speed_kmh):
-        if speed_kmh <= 0:
-            return None
-        pace = 60 / speed_kmh
-        mins = int(pace)
-        secs = int((pace - mins) * 60)
-        return f"{mins}:{secs:02d}"
-    
-    zones = {
-        "z1": {
-            "name": "Recovery" if language == "en" else "Recovery",
-            "pct_vma": "60-65%",
-            "pace_range": f"{kmh_to_pace(vma_kmh * 0.60)} - {kmh_to_pace(vma_kmh * 0.65)}"
-        },
-        "z2": {
-            "name": "Endurance" if language == "en" else "Endurance",
-            "pct_vma": "65-75%",
-            "pace_range": f"{kmh_to_pace(vma_kmh * 0.65)} - {kmh_to_pace(vma_kmh * 0.75)}"
-        },
-        "z3": {
-            "name": "Tempo" if language == "en" else "Tempo",
-            "pct_vma": "75-85%",
-            "pace_range": f"{kmh_to_pace(vma_kmh * 0.75)} - {kmh_to_pace(vma_kmh * 0.85)}"
-        },
-        "z4": {
-            "name": "Threshold" if language == "en" else "Seuil",
-            "pct_vma": "85-95%",
-            "pace_range": f"{kmh_to_pace(vma_kmh * 0.85)} - {kmh_to_pace(vma_kmh * 0.95)}"
-        },
-        "z5": {
-            "name": "VMA/VO2max",
-            "pct_vma": "95-105%",
-            "pace_range": f"{kmh_to_pace(vma_kmh * 0.95)} - {kmh_to_pace(vma_kmh * 1.05)}"
-        }
-    }
-    
-    return zones
-
-
-@api_router.get("/user/vma-estimate")
-async def get_vma_estimate(user: dict = Depends(auth_user), language: str = "en"):
-    """Estimate VMA and VO2max from user data"""
-    
-    user_id = user["id"]
-    # Check if user has a goal (race performance to use)
-    user_goal = await db.user_goals.find_one({"user_id": user_id}, {"_id": 0})
-    
-    # Get all running workouts (scoped to authenticated user)
-    all_workouts = await db.workouts.find(
-        {"type": "run", "user_id": user_id},
-        {"_id": 0}
-    ).sort("date", -1).to_list(100)
-    
-    if not all_workouts:
-        return VMAEstimationResponse(
-            has_sufficient_data=False,
-            confidence="insufficient",
-            confidence_score=0,
-            message="Insufficient data. No running workouts recorded." if language == "fr" else "Insufficient data. No running workouts recorded.",
-            recommendations=[
-                "Record some running workouts" if language == "fr" else "Record some running workouts",
-                "Do some runs with heart rate monitor" if language == "fr" else "Do some runs with heart rate monitor"
-            ]
-        )
-    
-    result = None
-    data_source = None
-    
-    # Priority 1: Use goal race performance if it's a past event or use target
-    if user_goal and user_goal.get("target_time_minutes") and user_goal.get("distance_km"):
-        race_estimate = estimate_vma_from_race(
-            user_goal["distance_km"],
-            user_goal["target_time_minutes"]
-        )
-        if race_estimate:
-            result = race_estimate
-            data_source = f"Goal: {user_goal['event_name']}" if language == "fr" else f"Goal: {user_goal['event_name']}"
-    
-    # Priority 2: Analyze workout data
-    if not result:
-        workout_estimate = estimate_vma_from_workouts(all_workouts)
-        
-        if not workout_estimate.get("has_sufficient_data"):
-            reason = workout_estimate.get("reason")
-
-            if reason == "need_more_workouts":
-                msg = f"Insufficient data. Only {workout_estimate.get('count')} workouts with HR data." if language == "fr" else f"Insufficient data. Only {workout_estimate.get('count')} workouts with HR data."
-                recs = [
-                    "Keep syncing your workouts" if language == "fr" else "Keep syncing your workouts",
-                    "At least 3 workouts with HR monitor needed" if language == "fr" else "At least 3 workouts with HR monitor needed"
-                ]
-            else:  # need_high_intensity
-                msg = f"Insufficient data. Not enough high-intensity efforts (Z4/Z5) to estimate VMA." if language == "fr" else f"Insufficient data. Not enough high-intensity efforts (Z4/Z5) to estimate VMA."
-                recs = [
-                    "Do an interval session or VMA test" if language == "fr" else "Do an interval session or VMA test",
-                    f"Z5 sessions found: {workout_estimate.get('z5_count', 0)}, Z4: {workout_estimate.get('z4_count', 0)}"
-                ]
-            
-            return VMAEstimationResponse(
-                has_sufficient_data=False,
-                confidence="insufficient",
-                confidence_score=0,
-                message=msg,
-                recommendations=recs
-            )
-        
-        result = workout_estimate
-        method = result.get("method")
-        if method == "z5_efforts":
-            data_source = f"Analysis of {result.get('sample_count')} Z5 efforts" if language == "fr" else f"Analysis of {result.get('sample_count')} Z5 efforts"
-        else:
-            data_source = f"Extrapolation from {result.get('sample_count')} Z4 sessions" if language == "fr" else f"Extrapolation from {result.get('sample_count')} Z4 sessions"
-    
-    # Calculate training zones
-    vma_kmh = result["vma_kmh"]
-    vo2max = result["vo2max"]
-    training_zones = calculate_training_zones(vma_kmh, language)
-    
-    # Confidence mapping
-    confidence = result.get("confidence", "medium")
-    confidence_scores = {"high": 5, "medium": 3, "low": 2}
-    confidence_score = confidence_scores.get(confidence, 1)
-    
-    # Build message
-    if confidence == "high":
-        msg = f"VMA estimated with good reliability from your race goal." if language == "fr" else "VMA estimated with good reliability from your race goal."
-    elif confidence == "medium":
-        msg = f"VMA estimated from your intense efforts. Decent reliability." if language == "fr" else "VMA estimated from your intense efforts. Decent reliability."
-    else:
-        msg = f"VMA estimated by extrapolation. Limited reliability - a VMA test would be more accurate." if language == "fr" else "VMA estimated by extrapolation. Limited reliability - a VMA test would be more accurate."
-    
-    # Recommendations based on VMA
-    if language == "fr":
-        recs = [
-            f"Easy/endurance pace: {training_zones['z2']['pace_range']}/km",
-            f"Threshold (tempo) pace: {training_zones['z4']['pace_range']}/km",
-            f"VMA intervals: {training_zones['z5']['pace_range']}/km"
-        ]
-    else:
-        recs = [
-            f"Easy/endurance pace: {training_zones['z2']['pace_range']}/km",
-            f"Threshold (tempo) pace: {training_zones['z4']['pace_range']}/km",
-            f"VMA intervals: {training_zones['z5']['pace_range']}/km"
-        ]
-    
-    return VMAEstimationResponse(
-        has_sufficient_data=True,
-        confidence=confidence,
-        confidence_score=confidence_score,
-        vma_kmh=vma_kmh,
-        vo2max=vo2max,
-        data_source=data_source,
-        training_zones=training_zones,
-        message=msg,
-        recommendations=recs
-    )
-
-
 class DashboardInsightResponse(BaseModel):
     coach_insight: str
     week: dict
@@ -1571,7 +1245,7 @@ async def get_stats(user: dict = Depends(auth_user)):
 
 @api_router.post("/coach/analyze", response_model=CoachResponse)
 async def analyze_with_coach(request: CoachRequest, user: dict = Depends(auth_user)):
-    """Conversational Chat Coach with GPT-4o-mini
+    """Conversational chat coach with server-side LLM enrichment.
 
     The coach has access to:
     - Conversation history
@@ -1618,9 +1292,6 @@ async def analyze_with_coach(request: CoachRequest, user: dict = Depends(auth_us
     km_7 = sum(get_distance_km(w) for w in recent_activities)
     km_28 = sum(get_distance_km(w) for w in all_activities)
     
-    # ACWR — TrainingLoad V2 not available in this context (no garmin_activities).
-    # CTL/ATL/TSB km-based aliases removed (PR #127 — faux physiological metrics).
-    # km_7/(km_28/4) must NOT be exposed as ACWR (#127 pre-merge corrections).
     acwr: Optional[float] = None
 
     # 4. Prepare summary of ALL sessions (not just 5)
@@ -1679,114 +1350,46 @@ async def analyze_with_coach(request: CoachRequest, user: dict = Depends(auth_us
     except Exception as e:
         logger.warning(f"Could not fetch training plan for coach context: {e}")
     
-    # 6. Récupérer la VMA et les prédictions depuis l'endpoint existant
-    vma_info = ""
+    # 6. Récupérer les signaux physiologiques depuis les sources canoniques V2
+    vma_info = None
     predictions_summary = ""
+    vo2max_value: Optional[float] = None
+    paces_summary = ""
     try:
-        # Utiliser la même logique que /api/training/race-predictions
-        sixty_days_ago = today - timedelta(days=60)
-        pred_activities = await db.workouts.find({
-            "user_id": user_id,
-            "date": {"$gte": sixty_days_ago.isoformat()}
-        }).to_list(500)
-        
-        if pred_activities:
-            # Calculate VMA with the correct method
-            def get_pred_distance(a):
-                dist = a.get("distance", 0)
-                if dist > 1000:
-                    return dist / 1000
-                return a.get("distance_km", dist)
-            
-            def get_pred_duration(a):
-                moving_time = a.get("moving_time", 0)
-                if moving_time > 0:
-                    return moving_time / 60
-                elapsed = a.get("elapsed_time", 0)
-                if elapsed > 0:
-                    return elapsed / 60
-                return a.get("duration_minutes", 0)
-            
-            def get_pred_pace(a):
-                pace = a.get("avg_pace_min_km")
-                if pace:
-                    return pace
-                speed = a.get("average_speed", 0)
-                if speed > 0:
-                    return (1000 / speed) / 60
-                dist = get_pred_distance(a)
-                duration_min = get_pred_duration(a)
-                if dist > 0 and duration_min > 0:
-                    return duration_min / dist
-                return None
-            
-            paces = []
-            vma_efforts = []
-            MIN_VMA_DURATION = 6
-            
-            for a in pred_activities:
-                dist = get_pred_distance(a)
-                pace = get_pred_pace(a)
-                duration_min = get_pred_duration(a)
-                
-                if dist > 0 and pace and 3 < pace < 10:
-                    paces.append(pace)
-                    # Efforts >= 6 min ET allure rapide (< 5:30/km)
-                    if duration_min >= MIN_VMA_DURATION and pace < 5.5:
-                        vma_efforts.append({
-                            "pace": pace,
-                            "duration": duration_min,
-                            "speed_kmh": 60 / pace
-                        })
-            
-            if paces:
-                avg_pace = sum(paces) / len(paces)
+        from training_v2.training_paces import compute_training_paces, training_paces_to_api_dict
 
-                # Calculate VMA with the correct method
-                if vma_efforts:
-                    best_vma_effort = max(vma_efforts, key=lambda x: x["speed_kmh"])
-                    best_sustained_speed = best_vma_effort["speed_kmh"]
-                    duration = best_vma_effort["duration"]
+        garmin_raw = await db.garmin_activities.find({"user_id": user_id}, {"_id": 0}).to_list(2000)
+        domain_activities = mongo_garmin_activities_to_domain(garmin_raw)
+        if domain_activities:
+            acwr = build_training_load(domain_activities, today.date()).acwr
+            perf = predict_races(domain_activities, today.date())
+            predictions = [
+                f"{pred.distance_label}: {pred.predicted_time_str}"
+                for pred in perf.predictions
+                if pred.predicted_time_str
+            ]
+            predictions_summary = " | ".join(predictions)
 
-                    if duration >= 20:
-                        estimated_vma = best_sustained_speed / 0.85
-                    elif duration >= 12:
-                        estimated_vma = best_sustained_speed / 0.90
-                    else:
-                        estimated_vma = best_sustained_speed / 0.95
-                else:
-                    avg_speed_kmh = 60 / avg_pace
-                    estimated_vma = avg_speed_kmh / 0.70
+            paces_v2 = training_paces_to_api_dict(
+                compute_training_paces(domain_activities, today.date(), user_max_hr=None)
+            )
+            easy = ((paces_v2.get("paces") or {}).get("easy") or {})
+            threshold = ((paces_v2.get("paces") or {}).get("threshold") or {})
+            easy_text = f"{easy.get('lower_str')}-{easy.get('upper_str')}" if easy.get("lower_str") and easy.get("upper_str") else None
+            threshold_text = threshold.get("pace_str")
+            pace_parts = [p for p in [easy_text, threshold_text] if p]
+            paces_summary = " | ".join(pace_parts)
 
-                estimated_vma = round(estimated_vma, 1)
-                vma_info = f"Estimated VMA: {estimated_vma} km/h"
-
-                # VMA-based predictions
-                pred_5k_speed = estimated_vma * 0.95
-                pred_5k_pace = 60 / pred_5k_speed
-                time_5k = (pred_5k_pace * 5)
-                
-                pred_10k_speed = estimated_vma * 0.90
-                pred_10k_pace = 60 / pred_10k_speed
-                time_10k = (pred_10k_pace * 10)
-                
-                pred_semi_speed = estimated_vma * 0.82
-                pred_semi_pace = 60 / pred_semi_speed
-                time_semi = (pred_semi_pace * 21.1)
-                h_semi = int(time_semi // 60)
-                m_semi = int(time_semi % 60)
-                
-                pred_marathon_speed = estimated_vma * 0.75
-                pred_marathon_pace = 60 / pred_marathon_speed
-                time_marathon = (pred_marathon_pace * 42.195)
-                h_mar = int(time_marathon // 60)
-                m_mar = int(time_marathon % 60)
-                
-                predictions_summary = f"5K: {int(time_5k)}:{int((time_5k % 1) * 60):02d} | 10K: {int(time_10k)}:{int((time_10k % 1) * 60):02d} | Semi: {h_semi}h{m_semi:02d} | Marathon: {h_mar}h{m_mar:02d}"
-                
+        latest_vo2 = await db.garmin_vo2max.find_one(
+            {"user_id": user_id, "vo2max_running": {"$ne": None}},
+            {"_id": 0, "vo2max_running": 1},
+            sort=[("date", -1)],
+        )
+        if latest_vo2:
+            vo2max_value = latest_vo2.get("vo2max_running")
     except Exception as e:
-        logger.warning(f"Could not calculate VMA for coach context: {e}")
-        vma_info = "VMA: non calculée"
+        logger.warning(f"Could not load canonical performance context: {e}")
+        vma_info = None
     
     # 7. Construire le contexte complet
     context = {
@@ -1813,7 +1416,9 @@ async def analyze_with_coach(request: CoachRequest, user: dict = Depends(auth_us
         "training_plan": training_plan_summary if training_plan_summary else "No active training plan",
         "current_goal": current_goal,
         "vma": vma_info,
-        "predictions": predictions_summary
+        "vo2max": vo2max_value,
+        "predictions": predictions_summary,
+        "paces": paces_summary,
     }
 
     # 5. If workout_id specified, enrich context with session details
@@ -1842,7 +1447,7 @@ async def analyze_with_coach(request: CoachRequest, user: dict = Depends(auth_us
         "timestamp": datetime.now(timezone.utc).isoformat()
     })
     
-    # 7. Appeler GPT-4o-mini pour générer la réponse
+    # 7. Appeler le modèle LLM serveur configuré pour générer la réponse
     llm_response, success, meta = await enrich_chat_response(
         user_message=user_message,
         context=context,
@@ -1852,9 +1457,15 @@ async def analyze_with_coach(request: CoachRequest, user: dict = Depends(auth_us
     
     if not success or not llm_response:
         logger.warning(f"LLM chat failed: {meta}")
+        if language == "fr":
+            message = "Le service de coaching IA n'est pas disponible actuellement."
+        elif language == "es":
+            message = "El servicio de coaching con IA no está disponible actualmente."
+        else:
+            message = "The AI coaching service is currently unavailable."
         raise HTTPException(
             status_code=503,
-            detail="Le service de coaching IA n'est pas disponible actuellement." if language == "fr" else "The AI coaching service is currently unavailable."
+            detail=message,
         )
     
     response_text = llm_response
@@ -2288,7 +1899,7 @@ async def get_rag_dashboard(user: dict = Depends(auth_user)):
 
 @api_router.get("/rag/weekly-review")
 async def get_rag_weekly_review(user: dict = Depends(auth_user), language: str = "fr"):
-    """Get RAG-enriched weekly review with GPT-4o-mini enhancement"""
+    """Get RAG-enriched weekly review with server-side LLM enhancement."""
     user_id = user["id"]
     workouts = await db.workouts.find(
         {"user_id": user_id},
@@ -2326,7 +1937,7 @@ async def get_rag_weekly_review(user: dict = Depends(auth_user), language: str =
 
 @api_router.get("/rag/workout/{workout_id}")
 async def get_rag_workout_analysis(workout_id: str, user: dict = Depends(auth_user), language: str = "fr"):
-    """Get RAG-enriched workout analysis with GPT-4o-mini enhancement"""
+    """Get RAG-enriched workout analysis with server-side LLM enhancement."""
     user_id = user["id"]
     # Fetch the workout
     workout = await db.workouts.find_one(
@@ -2687,249 +2298,9 @@ async def get_detailed_analysis(workout_id: str, language: str = "en", user: dic
     )
 
 
-# ========== TERRA INTEGRATION ENDPOINTS ==========
-# Terra is the primary wearable data aggregator replacing Strava.
-
-class TerraConnectionStatus(BaseModel):
-    connected: bool
-    last_sync: Optional[str] = None
-    workout_count: int = 0
-    terra_user_id: Optional[str] = None
-
-
-class TerraSyncResult(BaseModel):
-    success: bool
-    synced_count: int
-    message: str
-
-
-class TerraConnectRequest(BaseModel):
-    token: str
-    terra_user_id: Optional[str] = None
-
-
-@api_router.get("/terra/status")
-async def get_terra_status(user: dict = Depends(auth_user)):
-    """Get Terra connection status for a user."""
-    user_id = user["id"]
-    token_doc = await db.terra_tokens.find_one({"user_id": user_id}, {"_id": 0})
-
-    if not token_doc:
-        return TerraConnectionStatus(connected=False)
-
-    sync_info = await db.sync_history.find_one(
-        {"user_id": user_id, "source": "terra"},
-        {"_id": 0},
-        sort=[("synced_at", -1)],
-    )
-
-    workout_count = await db.workouts.count_documents({
-        "data_source": "terra",
-        "user_id": user_id,
-    })
-
-    return TerraConnectionStatus(
-        connected=True,
-        last_sync=sync_info.get("synced_at") if sync_info else None,
-        workout_count=workout_count,
-        terra_user_id=token_doc.get("terra_user_id"),
-    )
-
-
-@api_router.post("/terra/connect")
-async def terra_connect(req: TerraConnectRequest, user: dict = Depends(auth_user)):
-    """Save a Terra access token for a user (token-based auth flow).
-
-    In production, replace this with a full Terra OAuth widget flow.
-    The client obtains a Terra user token via the Terra Connect Widget and
-    posts it here to persist the connection.
-    """
-    user_id = user["id"]
-    if not req.token:
-        raise HTTPException(status_code=400, detail="Terra token is required")
-
-    # Optionally verify the token by fetching the Terra user profile.
-    terra_user = await fetch_terra_user(req.token)
-    terra_user_id = req.terra_user_id or terra_user.get("user_id") or terra_user.get("id")
-
-    await db.terra_tokens.update_one(
-        {"user_id": user_id},
-        {"$set": {
-            "user_id": user_id,
-            "access_token": req.token,
-            "terra_user_id": terra_user_id,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }},
-        upsert=True,
-    )
-
-    logger.info("Terra connected for user: %s (terra_user_id=%s)", user_id, terra_user_id)
-    return {"success": True, "message": "Terra connected successfully", "terra_user_id": terra_user_id}
-
-
-@api_router.post("/terra/sync", response_model=TerraSyncResult)
-async def sync_terra(user: dict = Depends(auth_user)):
-    """Sync all Terra data for a user: workouts + daily metrics.
-
-    Calls syncTerraWorkouts and syncDailyMetrics then regenerates the
-    recovery score, training load, and workout recommendation.
-    """
-    user_id = user["id"]
-    token_doc = await db.terra_tokens.find_one({"user_id": user_id}, {"_id": 0})
-    if not token_doc:
-        return TerraSyncResult(success=False, synced_count=0, message="Not connected to Terra")
-
-    try:
-        # Sync workouts from Terra
-        workout_result = await syncTerraWorkouts(user_id, db)
-
-        # Sync daily metrics (HRV, RHR, sleep)
-        await syncDailyMetrics(user_id, db)
-
-        # Recompute derived scores
-        await computeTrainingLoad(user_id, db)
-        await computeRecoveryScore(user_id, db)
-        await generateWorkoutRecommendation(user_id, db)
-
-        logger.info("Terra full sync completed for user: %s", user_id)
-        return TerraSyncResult(
-            success=True,
-            synced_count=workout_result.get("synced_count", 0),
-            message=workout_result.get("message", "Sync completed"),
-        )
-    except Exception as exc:
-        logger.error("Terra sync error for user %s: %s", user_id, exc)
-        return TerraSyncResult(success=False, synced_count=0, message=f"Sync failed: {exc}")
-
-
-@api_router.post("/terra/sync-daily")
-async def sync_terra_daily(user: dict = Depends(auth_user)):
-    """Sync daily health metrics from Terra (HRV, RHR, sleep).
-
-    Useful for a lightweight, metrics-only refresh without re-importing workouts.
-    """
-    user_id = user["id"]
-    token_doc = await db.terra_tokens.find_one({"user_id": user_id}, {"_id": 0})
-    if not token_doc:
-        raise HTTPException(status_code=400, detail="Not connected to Terra")
-
-    try:
-        metrics = await syncDailyMetrics(user_id, db)
-        recovery = await computeRecoveryScore(user_id, db)
-        recommendation = await generateWorkoutRecommendation(user_id, db)
-
-        return {
-            "success": True,
-            "metrics": metrics,
-            "recovery_score": recovery.get("recovery_score"),
-            "fatigue_score": recovery.get("fatigue_score"),
-            "recommendation": {
-                "type": recommendation.get("type"),
-                "duration": recommendation.get("duration"),
-                "intensity": recommendation.get("intensity"),
-            },
-        }
-    except Exception as exc:
-        logger.error("Terra daily sync error for user %s: %s", user_id, exc)
-        raise HTTPException(status_code=500, detail=f"Daily sync failed: {exc}")
-
-
-@api_router.delete("/terra/disconnect")
-async def disconnect_terra(user: dict = Depends(auth_user)):
-    """Disconnect Terra for a user (remove stored token)."""
-    user_id = user["id"]
-    await db.terra_tokens.delete_one({"user_id": user_id})
-    logger.info("Terra disconnected for user: %s", user_id)
-    return {"success": True, "message": "Terra disconnected"}
-
-
-@api_router.get("/terra/recovery")
-async def get_terra_recovery(user: dict = Depends(auth_user)):
-    """Return the latest persisted recovery score for a user.
-
-    If no score exists for today, triggers a fresh computation.
-    """
-    user_id = user["id"]
-    today = datetime.now(timezone.utc).date().isoformat()
-    doc = await db.recovery_scores.find_one({"user_id": user_id, "date": today}, {"_id": 0})
-
-    if not doc:
-        # Try to compute if Terra is connected.
-        token_doc = await db.terra_tokens.find_one({"user_id": user_id})
-        if token_doc:
-            doc = await computeRecoveryScore(user_id, db)
-        else:
-            return {"recovery_score": None, "fatigue_score": None, "status": "no_data"}
-
-    return {
-        "recovery_score": doc.get("recovery_score"),
-        "fatigue_score": doc.get("fatigue_score"),
-        "readiness": doc.get("readiness"),
-        "status": doc.get("status"),
-        "hrv_available": doc.get("hrv_available", False),
-        "computed_at": doc.get("computed_at"),
-    }
-
-
-@api_router.get("/terra/recommendation")
-async def get_terra_recommendation(user: dict = Depends(auth_user)):
-    """Return today's workout recommendation derived from Terra data.
-
-    Triggers computation if no recommendation exists for today.
-    """
-    user_id = user["id"]
-    today = datetime.now(timezone.utc).date().isoformat()
-    doc = await db.workout_recommendations.find_one(
-        {"user_id": user_id, "date": today}, {"_id": 0}
-    )
-
-    if not doc:
-        token_doc = await db.terra_tokens.find_one({"user_id": user_id})
-        if token_doc:
-            doc = await generateWorkoutRecommendation(user_id, db)
-        else:
-            return {"type": None, "duration": None, "intensity": None, "status": "no_data"}
-
-    return {
-        "type": doc.get("type"),
-        "duration": doc.get("duration"),
-        "intensity": doc.get("intensity"),
-        "recovery_score": doc.get("recovery_score"),
-        "acwr": doc.get("acwr"),
-        "readiness": doc.get("readiness"),
-        "computed_at": doc.get("computed_at"),
-    }
-
-
-@api_router.get("/terra/daily-metrics")
-async def get_terra_daily_metrics(user: dict = Depends(auth_user)):
-    """Return the latest daily metrics (HRV, RHR, sleep) for a user."""
-    user_id = user["id"]
-    today = datetime.now(timezone.utc).date().isoformat()
-    doc = await db.daily_metrics.find_one({"user_id": user_id, "date": today}, {"_id": 0})
-
-    if not doc:
-        # Attempt sync if connected.
-        token_doc = await db.terra_tokens.find_one({"user_id": user_id})
-        if token_doc:
-            doc = await syncDailyMetrics(user_id, db)
-        else:
-            return {"hrv": None, "rhr": None, "sleep_hours": None, "status": "no_data"}
-
-    return {
-        "date": doc.get("date"),
-        "hrv": doc.get("hrv"),
-        "rhr": doc.get("rhr"),
-        "avg_hr": doc.get("avg_hr"),
-        "sleep_hours": doc.get("sleep_hours"),
-        "sleep_quality": doc.get("sleep_quality"),
-        "synced_at": doc.get("synced_at"),
-    }
-
-
 # ========== CARDIO COACH RUNNING SCREEN ==========
 
-# Returned when no wearable (Garmin/Terra) is connected: explicit "no data"
+# Returned when no wearable connection is available: explicit "no data"
 # state so the UI shows an empty/connect prompt instead of fabricated data.
 _CARDIO_COACH_NO_DATA = {
     "mock": False,
@@ -2948,24 +2319,9 @@ _CARDIO_COACH_NO_DATA = {
 
 @api_router.get("/run-index")
 async def get_run_index(user: dict = Depends(auth_user), language: str = "fr"):
-    """Return the full RunIndex running-screen payload.
-
-    Data source: 100% real Garmin (gccli). Resting HR + sleep come from gccli;
-    training load / ACWR / readiness are computed from the real synced activities.
-
-    Terra is implemented for POSSIBLE FUTURE USE but is NOT connected: when no
-    Terra token exists (current state), the endpoint returns a NO_DATA payload
-    (never mock data).
-    """
+    """Return the RunIndex running-screen payload from Garmin only."""
     user_id = user["id"]
-    today = datetime.now(timezone.utc).date()
-    today_iso = today.isoformat()
 
-    # ----------------------------------------------------------------
-    # Prefer REAL Garmin data when the Garmin connector is active.
-    # Resting HR + sleep come from gccli; training load / ACWR / fatigue
-    # ratio / readiness are computed from the real synced activities.
-    # ----------------------------------------------------------------
     garmin_conn = await db.garmin_connections.find_one({"user_id": user_id}, {"_id": 0})
     if garmin_conn and garmin_conn.get("connected"):
         try:
@@ -2976,204 +2332,7 @@ async def get_run_index(user: dict = Depends(auth_user), language: str = "fr"):
         except Exception as e:
             logger.warning(f"[run-index] Garmin computation failed, falling back: {e}")
 
-    # ----------------------------------------------------------------
-    # Terra fallback — DORMANT (future use). No token = no data (no mock).
-    # ----------------------------------------------------------------
-    token_doc = await db.terra_tokens.find_one({"user_id": user_id}, {"_id": 0})
-    if not token_doc:
-        return _CARDIO_COACH_NO_DATA
-
-    # ----------------------------------------------------------------
-    # Daily metrics (sync today's if not yet stored).
-    # ----------------------------------------------------------------
-    daily_doc = await db.daily_metrics.find_one({"user_id": user_id, "date": today_iso})
-    if not daily_doc:
-        synced = await syncDailyMetrics(user_id, db)
-        daily_doc = await db.daily_metrics.find_one({"user_id": user_id, "date": today_iso}) or {}
-
-    hrv_today: Optional[float] = daily_doc.get("hrv")
-    rhr_today: Optional[float] = daily_doc.get("rhr")
-    raw_sleep_hours: Optional[float] = daily_doc.get("sleep_hours")
-    # sleep_quality stored as 0-100 score or 0-1 fraction.
-    raw_sleep_quality: Optional[float] = daily_doc.get("sleep_quality")
-
-    # Normalise sleep efficiency to a 0-1 fraction.
-    if raw_sleep_quality is not None:
-        sleep_efficiency = raw_sleep_quality / 100.0 if raw_sleep_quality > 1.0 else raw_sleep_quality
-    else:
-        sleep_efficiency = 0.80  # Reasonable default
-
-    sleep_hours = raw_sleep_hours or 7.0
-
-    # ----------------------------------------------------------------
-    # Baselines.
-    # ----------------------------------------------------------------
-    baseline_doc = await db.baselines.find_one({"user_id": user_id}) or {}
-    hrv_baseline: Optional[float] = baseline_doc.get("baseline_hrv")
-    rhr_baseline: Optional[float] = baseline_doc.get("baseline_rhr")
-
-    # Use rolling 30-day mean from stored daily_metrics when no explicit baseline.
-    if hrv_baseline is None or rhr_baseline is None:
-        thirty_days_ago = (today - timedelta(days=30)).isoformat()
-        hist_cursor = db.daily_metrics.find(
-            {"user_id": user_id, "date": {"$gte": thirty_days_ago, "$lt": today_iso}},
-            {"hrv": 1, "rhr": 1, "_id": 0},
-        )
-        hist_docs = await hist_cursor.to_list(30)
-        if hist_docs:
-            hrv_vals = [d["hrv"] for d in hist_docs if d.get("hrv") is not None]
-            rhr_vals = [d["rhr"] for d in hist_docs if d.get("rhr") is not None]
-            if hrv_baseline is None and hrv_vals:
-                hrv_baseline = sum(hrv_vals) / len(hrv_vals)
-            if rhr_baseline is None and rhr_vals:
-                rhr_baseline = sum(rhr_vals) / len(rhr_vals)
-
-    # Final fallbacks to sensible population averages.
-    hrv_baseline = hrv_baseline or 55.0
-    rhr_baseline = rhr_baseline or 55.0
-    hrv_today = hrv_today or hrv_baseline
-
-    # Training load — TrainingLoad V2 (PR #127 correction: no None→0.0→0.1 clamp).
-    # Fetch Terra workouts and adapt them to the TrainingLoad V2 domain format so
-    # that build_training_load() can compute ACWR from duration data.
-    # If no duration data is present, acwr stays None — no numeric fallback.
-    # ----------------------------------------------------------------
-    _twenty_eight_days_ago = (today - timedelta(days=28)).isoformat()
-    _terra_workouts = await db.workouts.find(
-        {"user_id": user_id, "date": {"$gte": _twenty_eight_days_ago}},
-        {"type": 1, "date": 1, "distance_km": 1, "duration_minutes": 1, "_id": 0},
-    ).to_list(200)
-
-    def _adapt_workout_for_v2(w: dict) -> dict:
-        """Map a db.workouts document to a TrainingLoad V2-compatible activity dict."""
-        wtype = (w.get("type") or "").lower()
-        if wtype == "run":
-            act_type = "running"
-        elif wtype == "trail":
-            act_type = "trail_running"
-        elif wtype == "treadmill":
-            act_type = "treadmill_running"
-        else:
-            act_type = wtype  # non-running types are filtered out by build_training_load
-        dur_min = w.get("duration_minutes")
-        dist_km = w.get("distance_km")
-        return {
-            "activity_type": act_type,
-            "start_time": w.get("date"),
-            "distance_m": dist_km * 1000.0 if dist_km is not None else None,
-            "duration_s": dur_min * 60.0 if dur_min is not None else None,
-        }
-
-    _v2_activities = [_adapt_workout_for_v2(w) for w in _terra_workouts]
-    _load_snapshot = build_training_load(_v2_activities, today)
-    acwr: Optional[float] = _load_snapshot.acwr
-    # training_load mirrors acwr — None when unavailable (no 0.0/0.1 clamp).
-    training_load: Optional[float] = acwr
-
-    # ----------------------------------------------------------------
-    # Recommendation — Terra path.
-    # Terra is currently non-connected / future use.  Readiness V2 is NOT
-    # available on this path, so no physiological formula is invented.
-    # A neutral UNAVAILABLE state is returned explicitly.
-    # ----------------------------------------------------------------
-    hrv_delta = float(hrv_baseline) - float(hrv_today)            # positive → HRV below baseline (bad)
-    rhr_delta = float(rhr_today) - float(rhr_baseline)            # positive → RHR above baseline (bad)
-    sleep_score = max(0.0, 8.0 - sleep_hours) + (1.0 - sleep_efficiency) * 2.0
-
-    # Readiness V2 unavailable on Terra path — no parallel physio formula.
-    recommendation = "UNAVAILABLE"
-    recommendation_emoji = "⚫"
-    recommendation_color = "gray"
-
-    # ----------------------------------------------------------------
-    # Per-metric status colours (raw data preserved for display/debug).
-    # ----------------------------------------------------------------
-    hrv_status = "green" if hrv_delta <= 5 else ("yellow" if hrv_delta <= 10 else "red")
-    rhr_status = "green" if rhr_delta <= 3 else ("yellow" if rhr_delta <= 7 else "red")
-    sleep_status = "green" if sleep_score <= 1.0 else ("yellow" if sleep_score <= 2.5 else "red")
-    load_status = (
-        "gray" if acwr is None
-        else ("green" if 0.8 <= acwr <= 1.3 else ("yellow" if acwr <= 1.5 else "red"))
-    )
-
-    # ----------------------------------------------------------------
-    # Human-readable reasons.
-    # ----------------------------------------------------------------
-    hrv_prefix = "+" if hrv_delta >= 0 else ""  # "+" = below baseline; "-" = above baseline
-    rhr_prefix = "+" if rhr_delta >= 0 else ""  # "+" = above baseline
-    reasons = [
-        f"HRV deviation {hrv_prefix}{hrv_delta:.1f} ms vs baseline",
-        f"RHR {rhr_prefix}{rhr_delta:.1f} bpm vs baseline",
-        f"Sleep {sleep_hours:.1f} h at {sleep_efficiency * 100:.0f}% efficiency",
-        f"Training Load (ACWR) {acwr:.2f}" if acwr is not None else "Training Load (ACWR) unavailable",
-    ]
-
-    # ----------------------------------------------------------------
-    # 7-day history from daily_metrics.
-    # ----------------------------------------------------------------
-    seven_days_ago = (today - timedelta(days=7)).isoformat()
-    hist_cursor = db.daily_metrics.find(
-        {"user_id": user_id, "date": {"$gte": seven_days_ago, "$lte": today_iso}},
-        {"date": 1, "hrv": 1, "rhr": 1, "sleep_hours": 1, "sleep_quality": 1, "_id": 0},
-    ).sort("date", 1)
-    hist_docs = await hist_cursor.to_list(7)
-
-    history = []
-    day_abbrevs = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-    for doc in hist_docs:
-        doc_date = doc.get("date", "")
-        try:
-            d = datetime.fromisoformat(doc_date)
-            day_label = day_abbrevs[d.weekday()]
-        except Exception:
-            day_label = doc_date[-2:] if doc_date else "?"
-
-        doc_hrv = doc.get("hrv") or hrv_baseline
-        doc_hrv_delta = float(hrv_baseline) - float(doc_hrv)
-        doc_rhr = doc.get("rhr") or rhr_baseline
-        doc_rhr_delta = float(doc_rhr) - float(rhr_baseline)
-        doc_sleep = doc.get("sleep_hours") or 7.0
-        doc_sq = doc.get("sleep_quality")
-        if doc_sq is not None:
-            doc_eff = doc_sq / 100.0 if doc_sq > 1.0 else doc_sq
-        else:
-            doc_eff = 0.80
-
-        history.append({
-            "day": day_label,
-            "date": doc_date,
-            "hrv": round(float(doc_hrv), 1),
-            "training_load": round(training_load, 2) if training_load is not None else None,
-        })
-
-    # Leave history empty if fewer than 7 days of data (no mock padding).
-    if not history:
-        history = []
-
-    return {
-        "mock": False,
-        "recommendation": recommendation,
-        "recommendation_emoji": recommendation_emoji,
-        "recommendation_color": recommendation_color,
-        "metrics": {
-            "hrv_today": round(float(hrv_today), 1),
-            "hrv_baseline": round(float(hrv_baseline), 1),
-            "hrv_delta": round(hrv_delta, 1),
-            "hrv_status": hrv_status,
-            "rhr_today": round(float(rhr_today), 1),
-            "rhr_baseline": round(float(rhr_baseline), 1),
-            "rhr_delta": round(rhr_delta, 1),
-            "rhr_status": rhr_status,
-            "sleep_hours": round(sleep_hours, 1),
-            "sleep_efficiency": round(sleep_efficiency, 2),
-            "sleep_score": round(sleep_score, 2),
-            "sleep_status": sleep_status,
-            "training_load": round(acwr, 2) if acwr is not None else None,
-            "training_load_status": load_status,
-        },
-        "reasons": reasons,
-        "history": history,
-    }
+    return _CARDIO_COACH_NO_DATA
 
 
 @api_router.get("/run-index/history")
@@ -4061,11 +3220,7 @@ async def get_race_predictions(user: dict = Depends(auth_user)):
             "vma_confidence": ap.get("vma_confidence"),
             "source_date": ap.get("source_date"),
             "source_distance_km": ap.get("source_distance_km"),
-            "vma_efforts_count": (
-                result.vma.hr_model_n_activities
-                if result.vma.hr_model_n_activities > 1
-                else (1 if result.vma.has_data else 0)
-            ),
+            "vma_efforts_count": 0,
             "total_sessions_6w": len([
                 a for a in domain_activities
                 if validate_activity(a, reference_date)
@@ -4114,303 +3269,6 @@ async def get_race_predictions(user: dict = Depends(auth_user)):
             "model_version": "v2",
         },
     }
-    
-@api_router.get("/training/vma-history")
-async def get_vma_history(user: dict = Depends(auth_user)):
-    """
-    PR185 — VMA history V2.
-    Source: garmin_activities → DomainActivity (running only).
-    Historical snapshots computed with no look-ahead (reference_date = snapshot date).
-    Each snapshot uses a 42-day rolling window (VMA_HISTORY_WINDOW_DAYS = 42).
-    Non-cumulative: only activities within [snapshot-41, snapshot] are considered.
-    No db.workouts. No avg_speed/0.70 fallback.
-    Frontend contract preserved (has_data, current_vma, current_vo2max, history[]).
-    """
-    import calendar as _cal
-    from datetime import date as _date, timedelta as _timedelta
-    from training_v2.performance_model import validate_activity  # noqa: F401 (used below)
-    VMA_HISTORY_WINDOW_DAYS = 42
-    user_id = user["id"]
-    today = datetime.now(timezone.utc).date()
-
-    # Canonical source: garmin_activities → DomainActivity (PR185)
-    raw_activities = await db.garmin_activities.find(
-        {"user_id": user_id}, {"_id": 0}
-    ).to_list(2000)
-    domain_activities = mongo_garmin_activities_to_domain(raw_activities)
-
-    if not domain_activities:
-        return {"has_data": False, "history": [], "model_version": "v2"}
-
-    # Generate 24 half-month snapshot points over 12 months — no look-ahead
-    month_names_fr = ["Jan", "Fév", "Mar", "Avr", "Mai", "Juin",
-                      "Juil", "Août", "Sep", "Oct", "Nov", "Déc"]
-    vo2max_history = []
-
-    for i in range(24):
-        months_back = 11 - (i // 2)
-        half = 1 if (i % 2 == 0) else 2
-
-        # Compute snapshot date (reference_date for this historical point)
-        approx = today.replace(day=1)
-        for _ in range(months_back):
-            if approx.month == 1:
-                approx = approx.replace(year=approx.year - 1, month=12)
-            else:
-                approx = approx.replace(month=approx.month - 1)
-        year, month = approx.year, approx.month
-
-        if half == 1:
-            try:
-                snapshot_date = _date(year, month, 15)
-            except ValueError:
-                snapshot_date = _date(year, month, 14)
-        else:
-            last_day = _cal.monthrange(year, month)[1]
-            snapshot_date = _date(year, month, last_day)
-
-        # Cap future snapshots at today — no look-ahead
-        if snapshot_date > today:
-            snapshot_date = today
-
-        # Rolling 42-day window: [snapshot - 41 days, snapshot]
-        window_start = snapshot_date - _timedelta(days=VMA_HISTORY_WINDOW_DAYS - 1)
-        activities_in_window = [
-            a for a in domain_activities
-            if validate_activity(a, snapshot_date)
-            and (activity_date(a) or _date.min) >= window_start
-        ]
-
-        # Estimate VMA using only activities in the 42-day window (strict no look-ahead)
-        vma_est = estimate_vma(activities_in_window, snapshot_date)
-        vma_val = vma_est.vma_kmh
-        vo2max_val = round(vma_val * 3.5, 1) if vma_val is not None else None
-
-        month_name = month_names_fr[month - 1]
-        period_key = f"{year}-{month:02d}-{half}"
-
-        vo2max_history.append({
-            "period": period_key,
-            "period_label": f"{month_name} {half}",
-            "month": f"{year}-{month:02d}",
-            "month_label": month_name,
-            "half": half,
-            "vma": vma_val,
-            "vo2max": vo2max_val,
-            "sessions": len(activities_in_window),
-            "window_days": VMA_HISTORY_WINDOW_DAYS,
-            "model_version": "v2",
-        })
-
-    # Current values = most recent non-null snapshot (not a copy-paste of current VMA)
-    current_vma = None
-    current_vo2max = None
-    for h in reversed(vo2max_history):
-        if h["vma"] is not None:
-            current_vma = h["vma"]
-            current_vo2max = h["vo2max"]
-            break
-
-    valid_vo2max = [h["vo2max"] for h in vo2max_history if h["vo2max"] is not None]
-    trend = 0.0
-    trend_pct = 0.0
-    if len(valid_vo2max) >= 2:
-        trend = round(valid_vo2max[-1] - valid_vo2max[0], 1)
-        trend_pct = round((trend / valid_vo2max[0]) * 100, 1) if valid_vo2max[0] > 0 else 0.0
-
-    return {
-        "has_data": len(valid_vo2max) > 0,
-        "current_vma": current_vma,
-        "current_vo2max": current_vo2max,
-        "calculation_window": "garmin_activities (no look-ahead)",
-        "trend": trend,
-        "trend_pct": trend_pct,
-        "period_count": 24,
-        "months": 12,
-        "history": vo2max_history,
-        "model_version": "v2",
-    }
-
-
-@api_router.get("/training/full-cycle")
-async def get_full_training_cycle(
-    user: dict = Depends(auth_user),
-    lang: str = Query("en", description="Language for phase and session labels (en, fr)")
-):
-    """
-    Returns the full training cycle overview with all weeks.
-    Phase names/focus and session type keys are returned; frontend translates keys via i18n.
-    Cycle dates are anchored to user_goals.event_date (single source of truth).
-    """
-    # Retrieve user cycle
-    cycle = await db.training_cycles.find_one({"user_id": user["id"]})
-
-    if not cycle:
-        # Create a default cycle
-        default_cycle = {
-            "user_id": user["id"],
-            "goal": "SEMI",
-            "start_date": datetime.now(timezone.utc),
-            "created_at": datetime.now(timezone.utc)
-        }
-        await db.training_cycles.insert_one(default_cycle)
-        cycle = await db.training_cycles.find_one({"user_id": user["id"]})
-
-    goal = cycle.get("goal", "SEMI")
-    config = GOAL_CONFIG.get(goal, GOAL_CONFIG["SEMI"])
-    # Use readiness-adjusted cycle length stored by the detailed plan engine so
-    # phases (and therefore target_km per week) match the detailed plan exactly.
-    standard_weeks = cycle.get("adjusted_weeks") or config["cycle_weeks"]
-
-    # Retrieve session preferences
-    prefs = await db.training_prefs.find_one({"user_id": user["id"]})
-    sessions_per_week = prefs.get("sessions_per_week", 4) if prefs else 4
-
-    # --- Temporal alignment: anchor cycle to event_date (user_goals) ---
-    user_goal = await db.user_goals.find_one({"user_id": user["id"]})
-    raw_event_date = (user_goal or {}).get("event_date") if user_goal else None
-    event_date_obj = None
-    if raw_event_date:
-        try:
-            if isinstance(raw_event_date, str):
-                event_date_obj = datetime.fromisoformat(raw_event_date.split("T")[0]).date()
-            elif hasattr(raw_event_date, "date"):
-                event_date_obj = raw_event_date.date()
-        except (ValueError, AttributeError):
-            event_date_obj = None
-
-    today_date = datetime.now(timezone.utc).date()
-
-    # Cap standard_weeks to weeks available before the race
-    if event_date_obj is not None:
-        weeks_available = max(1, (event_date_obj - today_date).days // 7)
-        total_weeks = min(standard_weeks, weeks_available)
-    else:
-        total_weeks = standard_weeks
-
-    cycle_dates = compute_cycle_dates(
-        event_date=event_date_obj,
-        total_weeks=total_weeks,
-        today=today_date,
-    )
-    current_week = cycle_dates["current_week"]
-    cycle_status = cycle_dates["status"]
-
-    # Retrieve athlete's current volume (based on last 28 days)
-    today = datetime.now(timezone.utc)
-    twenty_eight_days_ago = today - timedelta(days=28)
-    
-    workouts_28 = await db.workouts.find({
-        "user_id": user["id"],
-        "date": {"$gte": twenty_eight_days_ago.isoformat()}
-    }).to_list(300)
-    
-    km_28 = sum(normalized_distance_km(w) for w in workouts_28 if is_running(w))
-    base_weekly_km = compute_current_weekly_km(workouts_28)
-    # PR76b: use an active-weeks base so a comeback (sparse data) is not
-    # diluted by the fixed /4 divisor, and a genuine 0 km resolves to a
-    # conservative reprise base instead of the 20 km default.
-    target_base_km = resolve_chronic_base(workouts_28)
-
-    # PR76 resume guard: also look at last 7 days to detect resuming athletes
-    seven_days_ago = today - timedelta(days=7)
-    workouts_7 = [w for w in workouts_28 if (w.get("date") or "") >= seven_days_ago.isoformat()]
-    km_7 = sum(normalized_distance_km(w) for w in workouts_7 if is_running(w))
-
-    # Reprise-aware target/state for the CURRENT week (single source of truth).
-    current_phase = determine_phase(current_week, total_weeks)
-    reprise = resolve_reprise_plan(workouts_28, goal, current_phase, km_7=km_7)
-    reprise_state = reprise["state"]
-    reprise_active = reprise_state in ("deep_reprise", "partial_reprise")
-    # Projected calendar week where intensity is re-introduced (reprise_exit):
-    # once REPRISE_STABLE_WEEKS active weeks are completed.
-    reprise_transition_week = (
-        current_week + max(0, REPRISE_STABLE_WEEKS - reprise["active_weeks"])
-        if reprise_active else None
-    )
-
-    # Generate overview of all weeks
-    weeks_overview = []
-    
-    for week_num in range(1, total_weeks + 1):
-        phase = determine_phase(week_num, total_weeks)
-        phase_info = get_phase_description(phase, lang)
-        
-        # Target volume — SAME engine as the detailed week plan so cards match sessions.
-        # The current week uses the reprise-aware target; future weeks project normally.
-        is_current_week = cycle_status == "active" and week_num == current_week
-        if is_current_week:
-            target_km = reprise["target_km"]
-        else:
-            target_km = compute_target_km(target_base_km, goal, phase)
-            target_km = apply_resume_guard(target_km, km_7, target_base_km)
-        
-        # Session type keys (frontend translates via i18n trainingPlan.sessionType.*)
-        if phase == "build":
-            session_types = ["endurance", "endurance", "long_run"] if sessions_per_week <= 3 else ["endurance", "endurance", "fartlek", "long_run"]
-        elif phase == "deload":
-            session_types = ["recovery", "easy", "short_easy"]
-        elif phase == "intensification":
-            session_types = ["endurance", "tempo", "intervals", "long_run"]
-        elif phase == "taper":
-            session_types = ["easy", "speed_reminder", "easy_run"]
-        elif phase == "race":
-            session_types = ["activation", "race"]
-        else:
-            session_types = ["endurance", "long_run"]
-
-        # Reprise: the current week is easy-only (no threshold/tempo/long run).
-        is_reprise_week = is_current_week and reprise_state in ("deep_reprise", "partial_reprise")
-        if is_reprise_week:
-            session_types = ["endurance", "recovery", "endurance"]
-
-        if is_reprise_week:
-            week_sessions = len(session_types)
-        elif phase in ["taper", "race"]:
-            week_sessions = min(3, sessions_per_week)
-        else:
-            week_sessions = sessions_per_week
-
-        weeks_overview.append({
-            "week": week_num,
-            "phase": phase,
-            "phase_name": phase_info.get("name", phase),
-            "phase_focus": phase_info.get("focus", ""),
-            "target_km": target_km,
-            "sessions": week_sessions,
-            "session_types": session_types[:sessions_per_week],
-            "is_current": is_current_week,
-            "is_completed": cycle_status == "active" and week_num < current_week,
-            "is_reprise": is_reprise_week,
-            "is_reprise_transition": reprise_active and reprise_transition_week is not None and week_num == reprise_transition_week,
-            "intensity_pct": phase_info.get("intensity_pct", 15)
-        })
-    
-    current_target_km = reprise["target_km"]
-
-    return {
-        "goal": goal,
-        "goal_description": config["description"],
-        "total_weeks": total_weeks,
-        "current_week": current_week,
-        "start_date": cycle_dates["start_date"].isoformat(),
-        "end_date": cycle_dates["end_date"].isoformat(),
-        "event_date": event_date_obj.isoformat() if event_date_obj else None,
-        "days_to_race": cycle_dates["days_to_race"],
-        "status": cycle_status,
-        "sessions_per_week": sessions_per_week,
-        "base_weekly_km": round(base_weekly_km),
-        "debug_volume": {
-            "km_7": round(km_7, 1),
-            "km_28": round(km_28, 1),
-            "current_weekly_km": round(base_weekly_km, 1),
-            "target_km": current_target_km,
-            "phase": current_phase,
-        },
-        "weeks": weeks_overview
-    }
-
-
 @api_router.get("/training/week-plan")
 async def get_week_plan(user: dict = Depends(auth_user)):
     """
@@ -4474,15 +3332,18 @@ async def get_week_plan(user: dict = Depends(auth_user)):
     # Calculer les métriques
     km_7 = sum(w.get("distance_km", 0) or 0 for w in workouts_7)
     km_28 = sum(w.get("distance_km", 0) or 0 for w in workouts_28)
-    km_7_running = sum(normalized_distance_km(w) for w in workouts_7 if is_running(w))
-    km_28_running = sum(normalized_distance_km(w) for w in workouts_28 if is_running(w))
     load_7 = km_7 * 10
     load_28 = km_28 * 10
 
     # ── PR149/PR163: WeeklyTarget V2 + WorkoutGenerator V2 ──────────────────
     # PR163: use build_weekly_plan_from_workouts so WorkoutGenerator V2 is the
     # authority on session distribution (long_easy distance in particular).
-    from training_v2.week_plan_bridge import build_weekly_plan_from_workouts
+    from training_v2.periodization import build_periodization
+    from training_v2.plan_goal import ULTRA_MIN_DISTANCE_KM, build_plan_goal
+    from training_v2.week_plan_bridge import (
+        build_weekly_plan_from_workouts,
+        workouts_to_domain_activities,
+    )
 
     goal_start_date = goal["start_date"]
     if isinstance(goal_start_date, datetime) and goal_start_date.tzinfo is None:
@@ -4499,6 +3360,50 @@ async def get_week_plan(user: dict = Depends(auth_user)):
             pass
 
     cycle_start_v2 = goal_start_date.date() if isinstance(goal_start_date, datetime) else goal_start_date
+
+    mapped_goal_type = _LEGACY_GOAL_TO_V2.get(goal_type.upper() if goal_type else "")
+    if mapped_goal_type is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot map goal_type '{goal_type}' to V2 GoalType.",
+        )
+
+    target_distance_km_v2: Optional[float] = None
+    if mapped_goal_type == GoalType.ultra:
+        raw_dist = user_goal.get("distance_km") if user_goal else None
+        if (
+            not isinstance(raw_dist, (int, float))
+            or isinstance(raw_dist, bool)
+            or raw_dist <= ULTRA_MIN_DISTANCE_KM
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "ULTRA goal requires target_distance_km > 42.195 km. "
+                    "Set your goal distance via /api/user/goal first."
+                ),
+            )
+        target_distance_km_v2 = float(raw_dist)
+
+    plan_goal_v2 = build_plan_goal(
+        goal_type=mapped_goal_type,
+        race_date=race_date_v2 if mapped_goal_type != GoalType.maintenance else None,
+        target_distance_km=target_distance_km_v2,
+        created_from="user",
+    )
+
+    if plan_goal_v2.race_date is not None:
+        periodization = build_periodization(
+            plan_goal=plan_goal_v2,
+            reference_date=today.date(),
+            race_plan_start_date=cycle_start_v2,
+        )
+    else:
+        periodization = build_periodization(
+            plan_goal=plan_goal_v2,
+            reference_date=today.date(),
+            cycle_anchor_date=cycle_start_v2 or today.date(),
+        )
 
     weekly_target, weekly_plan_v2 = build_weekly_plan_from_workouts(
         workouts=workouts_90,
@@ -4522,6 +3427,28 @@ async def get_week_plan(user: dict = Depends(auth_user)):
         None,
     )
 
+    running_activities_7 = [
+        a for a in workouts_to_domain_activities(workouts_7)
+        if (a.activity_type or "").lower() in RUNNING_TYPES
+    ]
+    running_activities_28 = [
+        a for a in workouts_to_domain_activities(workouts_28)
+        if (a.activity_type or "").lower() in RUNNING_TYPES
+    ]
+    km_7_running = sum((a.distance_m or 0.0) / 1000.0 for a in running_activities_7)
+    km_28_running = sum((a.distance_m or 0.0) / 1000.0 for a in running_activities_28)
+
+    start_date = goal["start_date"]
+    cycle_weeks = goal["cycle_weeks"]
+    if isinstance(start_date, datetime) and start_date.tzinfo is None:
+        start_date = start_date.replace(tzinfo=timezone.utc)
+    if today < start_date:
+        current_week = 0
+    else:
+        delta_days = (today - start_date).days
+        current_week = min(delta_days // 7 + 1, cycle_weeks + 1)
+    phase = periodization.phase.value
+
     # ── Legacy compat context (LLM) ─────────────────────────────────────────
     # ctl/atl/tsb km-based aliases removed (PR #127 — faux physiological metrics).
     # load_7/load_28 kept for context transparency; no longer consumed by
@@ -4536,21 +3463,6 @@ async def get_week_plan(user: dict = Depends(auth_user)):
         "load_7": load_7,
         "load_28": load_28,
     }
-
-    # Calculer la phase (legacy — kept for LLM/fallback compat)
-    start_date = goal["start_date"]
-    cycle_weeks = goal["cycle_weeks"]
-
-    if isinstance(start_date, datetime) and start_date.tzinfo is None:
-        start_date = start_date.replace(tzinfo=timezone.utc)
-
-    if today < start_date:
-        current_week = 0
-    else:
-        delta_days = (today - start_date).days
-        current_week = min(delta_days // 7 + 1, cycle_weeks + 1)
-
-    phase = determine_phase(current_week, cycle_weeks)
 
     # PR157: determine_target_load removed — target_load is display context only,
     # never drives distances / durations / intensity.  planned_load → None.
@@ -4593,7 +3505,7 @@ async def get_week_plan(user: dict = Depends(auth_user)):
         "debug_volume": {
             "km_7": round(km_7_running, 1),
             "km_28": round(km_28_running, 1),
-            "current_weekly_km": round(context.get("weekly_km", DEFAULT_WEEKLY_KM), 1),
+            "current_weekly_km": round(km_28_running / 4.0, 1),
             "target_km": target_km_protected,
             "target_basis": weekly_target.target_basis,
             "target_duration_minutes": weekly_target.target_duration_minutes,
@@ -4784,17 +3696,6 @@ async def get_training_v2_cycle(user: dict = Depends(auth_user)):
     from training_v2.plan_goal import GoalType, build_plan_goal
     from training_v2.training_cycle_response import build_cycle_calendar_response
 
-    # Closed mapping: legacy goal strings → GoalType V2
-    _GOAL_MAP: dict[str, GoalType] = {
-        "10K": GoalType.ten_k,
-        "SEMI": GoalType.half_marathon,
-        "HALF_MARATHON": GoalType.half_marathon,
-        "MARATHON": GoalType.marathon,
-        "5K": GoalType.five_k,
-        "ULTRA": GoalType.ultra,
-        "MAINTENANCE": GoalType.maintenance,
-    }
-
     user_id = user["id"]
 
     # ── Single clock (same doctrine as /training/v2/week) ─────────────────
@@ -4865,7 +3766,7 @@ async def get_training_v2_cycle(user: dict = Depends(auth_user)):
         target_time_seconds = int(target_time_minutes_raw * 60)
 
     # ── Build PlanGoal V2 ─────────────────────────────────────────────────
-    mapped_goal_type = _GOAL_MAP.get(goal_type_raw.upper() if goal_type_raw else "")
+    mapped_goal_type = _LEGACY_GOAL_TO_V2.get(goal_type_raw.upper() if goal_type_raw else "")
     if mapped_goal_type is None:
         raise HTTPException(
             status_code=400,
@@ -4931,132 +3832,6 @@ async def get_training_v2_cycle(user: dict = Depends(auth_user)):
         )
 
     return response.model_dump(mode="json")
-
-
-def _generate_fallback_week_plan(context: dict, phase: str, goal: str, target_km_protected: float = None) -> dict:
-    """Génère un plan de secours basé sur des templates.
-
-    PR149 BLOCKER 1: When WeeklyTarget V2 prescribes duration-based (target_km_protected=None),
-    this fallback MUST NOT invent km. It produces duration-only sessions instead.
-    """
-    # PR149: duration-based path — no km invention.
-    target_duration_minutes = context.get("target_duration_minutes")
-    if target_km_protected is None and target_duration_minutes is not None:
-        # Duration-based fallback: simple easy sessions, no km.
-        sessions_count = 3
-        per_session = target_duration_minutes // sessions_count
-        remainder = target_duration_minutes - per_session * sessions_count
-        sessions = [
-            {"day": "monday", "type": "rest", "duration": "0min", "details": "Récupération complète", "intensity": "rest", "estimated_tss": None, "distance_km": None},
-            {"day": "tuesday", "type": "endurance", "duration": f"{per_session}min", "details": f"{per_session}min endurance facile", "intensity": "easy", "estimated_tss": None, "distance_km": None},
-            {"day": "wednesday", "type": "rest", "duration": "0min", "details": "Récupération", "intensity": "rest", "estimated_tss": None, "distance_km": None},
-            {"day": "thursday", "type": "endurance", "duration": f"{per_session}min", "details": f"{per_session}min endurance facile", "intensity": "easy", "estimated_tss": None, "distance_km": None},
-            {"day": "friday", "type": "rest", "duration": "0min", "details": "Récupération", "intensity": "rest", "estimated_tss": None, "distance_km": None},
-            {"day": "saturday", "type": "endurance", "duration": f"{per_session + remainder}min", "details": f"{per_session + remainder}min endurance facile", "intensity": "easy", "estimated_tss": None, "distance_km": None},
-            {"day": "sunday", "type": "rest", "duration": "0min", "details": "Récupération", "intensity": "rest", "estimated_tss": None, "distance_km": None},
-        ]
-        return {
-            "focus": phase,
-            "planned_load": None,
-            "weekly_km": None,
-            "target_duration_minutes": target_duration_minutes,
-            "target_basis": "duration",
-            "sessions": sessions,
-            "total_tss": None,
-            "advice": get_phase_description(phase).get("advice", "Keep it up!")
-        }
-
-    # Distance-based fallback (legacy path — target_km_protected is set).
-    weekly_km = context.get("weekly_km", DEFAULT_WEEKLY_KM)
-    
-    # Ajuster selon la phase
-    phase_multipliers = {
-        "build": 1.0,
-        "deload": 0.7,
-        "intensification": 1.05,
-        "taper": 0.6,
-        "race": 0.25
-    }
-    adjusted_km = weekly_km * phase_multipliers.get(phase, 1.0)
-
-    # PR76: honour the pre-computed protected target so the fallback never
-    # exceeds the resume-guard cap.
-    if target_km_protected is not None:
-        adjusted_km = min(adjusted_km, target_km_protected)
-    
-    # Allures de référence (à personnaliser selon le profil utilisateur)
-    # Format: allure en min:sec/km
-    paces = {
-        "z1": "6:30-7:00",  # Récupération
-        "z2": "5:45-6:15",  # Endurance fondamentale
-        "z3": "5:15-5:30",  # Tempo / Allure marathon
-        "z4": "4:45-5:00",  # Seuil
-        "z5": "4:15-4:30",  # VMA
-        "semi": "5:00-5:15", # Allure semi-marathon
-        "10k": "4:40-4:55",  # Allure 10K
-    }
-    
-    # FC cibles (à personnaliser selon FC max utilisateur ~185 bpm)
-    hr_zones = {
-        "z1": "120-135",
-        "z2": "135-150", 
-        "z3": "150-165",
-        "z4": "165-175",
-        "z5": "175-185",
-    }
-    
-    # Templates by phase with enriched details
-    if phase == "deload":
-        sessions = [
-            {"day": "monday", "type": "rest", "duration": "0min", "details": "Récupération complète • Étirements ou yoga", "intensity": "rest", "estimated_tss": None, "distance_km": 0},
-            {"day": "tuesday", "type": "endurance", "duration": "30min", "details": f"5 km • {paces['z1']}/km • FC {hr_zones['z1']} bpm", "intensity": "easy", "estimated_tss": None, "distance_km": 5},
-            {"day": "wednesday", "type": "rest", "duration": "0min", "details": "Récupération active • Marche ou natation légère", "intensity": "rest", "estimated_tss": None, "distance_km": 0},
-            {"day": "thursday", "type": "endurance", "duration": "35min", "details": f"6 km • {paces['z2']}/km • FC {hr_zones['z2']} bpm", "intensity": "easy", "estimated_tss": None, "distance_km": 6},
-            {"day": "friday", "type": "rest", "duration": "0min", "details": "Récupération complète • Priorité au sommeil", "intensity": "rest", "estimated_tss": None, "distance_km": 0},
-            {"day": "saturday", "type": "endurance", "duration": "40min", "details": f"7 km progressif • {paces['z2']}/km → {paces['z3']}/km • FC {hr_zones['z2']} bpm", "intensity": "easy", "estimated_tss": None, "distance_km": 7},
-            {"day": "sunday", "type": "rest", "duration": "0min", "details": "Récupération complète • Préparation semaine suivante", "intensity": "rest", "estimated_tss": None, "distance_km": 0},
-        ]
-    elif phase == "taper":
-        sessions = [
-            {"day": "monday", "type": "rest", "duration": "0min", "details": "Récupération complète • Hydratation ++", "intensity": "rest", "estimated_tss": None, "distance_km": 0},
-            {"day": "tuesday", "type": "endurance", "duration": "30min", "details": f"5 km + 4×100m rapide • {paces['z2']}/km puis sprint • FC {hr_zones['z2']} bpm", "intensity": "easy", "estimated_tss": None, "distance_km": 5.5},
-            {"day": "wednesday", "type": "rest", "duration": "0min", "details": "Récupération complète • Préparation mentale", "intensity": "rest", "estimated_tss": None, "distance_km": 0},
-            {"day": "thursday", "type": "tempo", "duration": "25min", "details": f"4 km dont 2 km allure course • {paces['semi']}/km • FC {hr_zones['z3']} bpm", "intensity": "moderate", "estimated_tss": None, "distance_km": 4},
-            {"day": "friday", "type": "rest", "duration": "0min", "details": "Repos total • Préparation matériel final", "intensity": "rest", "estimated_tss": None, "distance_km": 0},
-            {"day": "saturday", "type": "activation", "duration": "20min", "details": f"3 km + 3×200m allure course • {paces['z2']}/km • FC {hr_zones['z2']} bpm", "intensity": "easy", "estimated_tss": None, "distance_km": 3.6},
-            {"day": "sunday", "type": "rest", "duration": "0min", "details": "VEILLE DE COURSE • Repos total, glucides", "intensity": "rest", "estimated_tss": None, "distance_km": 0},
-        ]
-    else:  # build, intensification
-        sessions = [
-            {"day": "monday", "type": "rest", "duration": "0min", "details": "Récupération complète • Étirements recommandés", "intensity": "rest", "estimated_tss": None, "distance_km": 0},
-            {"day": "tuesday", "type": "endurance", "duration": "50min", "details": f"8 km • {paces['z2']}/km • FC {hr_zones['z2']} bpm • Zone 2 stricte", "intensity": "easy", "estimated_tss": None, "distance_km": 8},
-            {"day": "wednesday", "type": "threshold", "duration": "40min", "details": f"7 km dont 20min à {paces['z4']}/km • FC {hr_zones['z4']} bpm • 2min récup entre blocs", "intensity": "hard", "estimated_tss": None, "distance_km": 7},
-            {"day": "thursday", "type": "recovery", "duration": "30min", "details": f"5 km très facile • {paces['z1']}/km • FC <{hr_zones['z1'].split('-')[1]} bpm max", "intensity": "easy", "estimated_tss": None, "distance_km": 5},
-            {"day": "friday", "type": "rest", "duration": "0min", "details": "Récupération complète • Cross-training possible (vélo, natation)", "intensity": "rest", "estimated_tss": None, "distance_km": 0},
-            {"day": "saturday", "type": "tempo", "duration": "45min", "details": f"8 km dont 25min à {paces['semi']}/km • FC {hr_zones['z3']} bpm • Allure semi-marathon", "intensity": "moderate", "estimated_tss": None, "distance_km": 8},
-            {"day": "sunday", "type": "long_run", "duration": "70min", "details": f"12 km progressif • {paces['z2']}/km → {paces['z3']}/km • FC {hr_zones['z2']} → {hr_zones['z3']} bpm", "intensity": "moderate", "estimated_tss": None, "distance_km": 12},
-        ]
-    
-    total_tss = None
-    total_km = sum(s.get("distance_km", 0) for s in sessions)
-
-    # PR76: if adjusted_km caps the total, scale all running sessions down
-    # proportionally so the plan respects target_km_protected.
-    if total_km > adjusted_km > 0:
-        scale = adjusted_km / total_km
-        for s in sessions:
-            if s.get("distance_km", 0) > 0:
-                s["distance_km"] = round(s["distance_km"] * scale, 1)
-        total_km = sum(s.get("distance_km", 0) for s in sessions)
-
-    return {
-        "focus": phase,
-        "planned_load": None,
-        "weekly_km": round(total_km, 1),
-        "sessions": sessions,
-        "total_tss": total_tss,
-        "advice": get_phase_description(phase).get("advice", "Keep it up!")
-    }
 
 
 # PR194 — GET /training/v2/paces
@@ -6112,8 +4887,7 @@ async def create_db_indexes():
         # Idempotent: if a non-unique index on user_id already exists (legacy),
         # drop it first so we can (re)create it as UNIQUE without error.
         await _ensure_subscriptions_unique_index(db)
-        # Terra integration collections
-        await db.terra_tokens.create_index("user_id", sparse=True)
+        # Historical readiness/run-index collections (kept for non-destructive compatibility)
         await db.daily_metrics.create_index([("user_id", 1), ("date", -1)])
         await db.baselines.create_index("user_id", sparse=True)
         await db.training_load.create_index([("user_id", 1), ("date", -1)])

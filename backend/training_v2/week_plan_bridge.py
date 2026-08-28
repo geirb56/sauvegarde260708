@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import List, Optional
 
-from .domain_activity import to_domain_activity
+from .domain_activity import DomainActivity, to_domain_activity
 from .periodization import PeriodizationSnapshot, build_periodization
 from .plan_goal import GoalType, PlanGoal, build_plan_goal
 from .runner_profile import RunnerProfile, build_runner_profile
@@ -140,7 +140,7 @@ def _build_weekly_context_from_workouts(
         )
 
     # Provider adapter: Mongo/Garmin field names → DomainActivity contract.
-    activities = [to_domain_activity(_normalize_workout_to_domain_fields(w)) for w in workouts]
+    activities = workouts_to_domain_activities(workouts)
 
     # V2 chain — each builder called exactly once.
     training_history = build_training_history(activities, reference_date)
@@ -196,6 +196,11 @@ def _build_weekly_context_from_workouts(
         plan_goal=plan_goal,
         periodization=periodization,
     )
+
+
+def workouts_to_domain_activities(workouts: List[dict]) -> List[DomainActivity]:
+    """Convert raw db.workouts documents to canonical DomainActivity objects."""
+    return [to_domain_activity(_normalize_workout_to_domain_fields(w)) for w in workouts]
 
 
 def build_weekly_target_from_workouts(

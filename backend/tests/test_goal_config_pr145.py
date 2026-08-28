@@ -1,10 +1,9 @@
-"""PR145/PR146 — GOAL_CONFIG single source of truth tests.
+"""PR145/PR146/PR213 — GOAL_CONFIG single source of truth tests.
 
 Verifies that config.training_goals.GOAL_CONFIG is the unique definition
-and that training_engine.py no longer contains a copy.
+and that training_engine.py has been removed.
 """
 
-import ast
 import sys
 import os
 import re
@@ -25,7 +24,7 @@ def test_goal_config_exists():
 
 def test_goal_config_keys():
     """All expected goal types are present."""
-    expected_keys = {"5K", "10K", "SEMI", "MARATHON", "ULTRA"}
+    expected_keys = {"5K", "10K", "SEMI", "MARATHON", "ULTRA", "MAINTENANCE"}
     assert set(GOAL_CONFIG.keys()) == expected_keys
 
 
@@ -76,41 +75,23 @@ def test_server_does_not_define_goal_config():
 # ------------------------------------------------------------------
 
 def test_server_no_goal_config_from_training_engine():
-    """server.py must not import GOAL_CONFIG from training_engine."""
+    """server.py must not import anything from training_engine."""
     server_path = os.path.join(os.path.dirname(__file__), "..", "server.py")
     with open(server_path) as f:
         content = f.read()
 
-    match = re.search(
-        r"from training_engine import \((.*?)\)",
-        content,
-        re.DOTALL,
-    )
-    assert match is not None, "training_engine import block not found"
-    import_body = match.group(1)
-    assert "GOAL_CONFIG" not in import_body, (
-        "GOAL_CONFIG should not be in training_engine import block"
-    )
+    assert "from training_engine import" not in content
+    assert "import training_engine" not in content
 
 
 # ------------------------------------------------------------------
-# 7. training_engine.py no longer defines GOAL_CONFIG (PR146)
+# 7. training_engine.py removed (PR213)
 # ------------------------------------------------------------------
 
-def test_training_engine_no_goal_config():
-    """training_engine.py must not contain a GOAL_CONFIG definition."""
+def test_training_engine_file_removed():
+    """training_engine.py must be physically absent."""
     engine_path = os.path.join(os.path.dirname(__file__), "..", "training_engine.py")
-    with open(engine_path) as f:
-        tree = ast.parse(f.read())
-
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            for target in node.targets:
-                if isinstance(target, ast.Name) and target.id == "GOAL_CONFIG":
-                    raise AssertionError(
-                        "training_engine.py still defines GOAL_CONFIG — "
-                        "the orphaned copy should have been removed in PR146"
-                    )
+    assert not os.path.exists(engine_path)
 
 
 # ------------------------------------------------------------------
@@ -118,19 +99,10 @@ def test_training_engine_no_goal_config():
 # ------------------------------------------------------------------
 
 def test_dead_imports_removed():
-    """vma_pace, vma_pace_range, adapt_session_to_readiness must not be imported."""
+    """Legacy training_engine imports must be fully removed from server.py."""
     server_path = os.path.join(os.path.dirname(__file__), "..", "server.py")
     with open(server_path) as f:
         content = f.read()
 
-    match = re.search(
-        r"from training_engine import \((.*?)\)",
-        content,
-        re.DOTALL,
-    )
-    assert match is not None
-    import_body = match.group(1)
-    for symbol in ["vma_pace", "vma_pace_range", "adapt_session_to_readiness"]:
-        assert symbol not in import_body, (
-            f"Dead import '{symbol}' should be removed from training_engine imports"
-        )
+    assert "from training_engine import" not in content
+    assert "import training_engine" not in content

@@ -1,57 +1,8 @@
 """
-Tests for Performance Model V2 PR187 — Data Quality corrections.
+Tests for Performance Model V2 PR187 after VMA removal.
 
-Covers all 29 mandatory tests from the PR187 specification:
-
-MOVING DURATION (tests 1–6):
-1. moving=3000 / elapsed=3600 / 10km → 12 km/h
-2. moving absent → fallback to duration_s
-3. moving=0 → fallback to duration_s
-4. moving > duration → fallback to duration_s
-5. Riegel uses moving_duration_s
-6. VMA uses moving_duration_s
-
-VMA WINDOW (tests 7–11):
-7. J-41 included
-8. J-42 excluded
-9. J+1 (future) excluded
-10. Old strong activity outside window has no effect
-11. CURRENT == snapshot today (same window)
-
-TERRAIN (tests 12–15):
-12. trail_running excluded from VMA model
-13. 10km +350m (35 m/km) excluded
-14. 30km +350m (11.7 m/km) accepted
-15. D+ absent accepted
-
-RIEGEL (tests 16–23):
-16. relative_hr 0.79 → rejected
-17. relative_hr 0.80 → eligible
-18. avg_hr absent → rejected
-19. FCmax absent → rejected
-20. trail → rejected
-21. >30 m/km D+ → rejected
-22. no qualified source → prediction null/insufficient
-23. no synthetic source
-
-INDEPENDENCE (test 24):
-24. Same source with VMA available/null → same prediction and confidence
-
-SESSIONS (tests 25–28):
-25. J-41 counted
-26. J-42 not counted
-27. Future not counted
-28. Non-running not counted
-
-NO LOOK-AHEAD (test 29):
-29. Future max_hr does not influence past FCmax
-
-MOVING_DURATION_PROPAGATED = YES
-VMA_WINDOW_DAYS = 42
-MIN_RIEGEL_RELATIVE_HR = 0.80
-RIEGEL_WITHOUT_AVG_HR = NO
-RIEGEL_WITHOUT_FCMAX = NO
-TOTAL_SESSIONS_6W_FIXED = YES
+Retains moving-duration, road-comparability, performance qualification,
+prediction, session-counting, and FCmax coverage that still exists.
 """
 
 from __future__ import annotations
@@ -59,21 +10,15 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import List, Optional
 
-import pytest
-
 from training_v2.domain_activity import DomainActivity, to_domain_activity
 from training_v2.performance_model import (
-    VMA_WINDOW_DAYS,
     MIN_RIEGEL_RELATIVE_HR,
     _performance_duration_s,
-    _activities_in_vma_window,
     _score_riegel_candidate,
-    _is_usable_for_hr_model,
+    _is_road_comparable,
     _resolve_fcmax,
-    _validate_activity,
     evaluate_performance_quality,
     validate_activity,
-    estimate_vma,
     predict_races,
 )
 
@@ -107,14 +52,6 @@ def _run(
     )
 
 
-def _make_vma_activities(fcmax: float = 190.0, days_offset: int = 0) -> List[DomainActivity]:
-    """Four running activities suitable for the HR-speed VMA model."""
-    return [
-        _run(8_000.0,  3_200.0, days_ago=5  + days_offset, avg_hr=140.0, max_hr=fcmax),
-        _run(10_000.0, 3_600.0, days_ago=10 + days_offset, avg_hr=155.0, max_hr=fcmax),
-        _run(12_000.0, 4_000.0, days_ago=15 + days_offset, avg_hr=168.0, max_hr=fcmax),
-        _run(14_000.0, 4_500.0, days_ago=20 + days_offset, avg_hr=178.0, max_hr=fcmax),
-    ]
 
 
 def _qualification_benchmark() -> List[DomainActivity]:
@@ -213,142 +150,37 @@ def test_05_riegel_uses_moving_duration():
         assert pred_moving[0].predicted_time_s < pred_elapsed[0].predicted_time_s
 
 
-def test_06_vma_uses_moving_duration():
-    """Test 6: VMA HR-speed model uses moving_duration_s for speed computation."""
-    fcmax = 190.0
-    # Two sets: identical activities, one with moving=3000 (faster), one without
-    activities_moving = [
-        _run(10_000.0, 4_000.0, days_ago=5,  avg_hr=150.0, max_hr=fcmax, moving_duration_s=3200.0),
-        _run(12_000.0, 4_500.0, days_ago=10, avg_hr=162.0, max_hr=fcmax, moving_duration_s=3800.0),
-        _run(14_000.0, 5_000.0, days_ago=15, avg_hr=172.0, max_hr=fcmax, moving_duration_s=4300.0),
-        _run(16_000.0, 5_500.0, days_ago=20, avg_hr=180.0, max_hr=fcmax, moving_duration_s=4800.0),
-    ]
-    activities_elapsed = [
-        _run(10_000.0, 4_000.0, days_ago=5,  avg_hr=150.0, max_hr=fcmax),
-        _run(12_000.0, 4_500.0, days_ago=10, avg_hr=162.0, max_hr=fcmax),
-        _run(14_000.0, 5_000.0, days_ago=15, avg_hr=172.0, max_hr=fcmax),
-        _run(16_000.0, 5_500.0, days_ago=20, avg_hr=180.0, max_hr=fcmax),
-    ]
-    vma_moving = estimate_vma(activities_moving, TODAY)
-    vma_elapsed = estimate_vma(activities_elapsed, TODAY)
-    # Moving duration produces higher speeds → higher VMA
-    if vma_moving.vma_kmh is not None and vma_elapsed.vma_kmh is not None:
-        assert vma_moving.vma_kmh >= vma_elapsed.vma_kmh
-
 
 # ---------------------------------------------------------------------------
 # VMA WINDOW — tests 7–11
 # ---------------------------------------------------------------------------
-
-def test_07_window_day_41_included():
-    """Test 7: Activity at J-41 (exactly 41 days ago) is included in the 42-day window."""
-    ref = TODAY
-    a = _run(10_000.0, 3_600.0, days_ago=41)
-    windowed = _activities_in_vma_window([a], ref, window_days=42)
-    assert len(windowed) == 1, "J-41 activity should be included in the 42-day window"
-
-
-def test_08_window_day_42_excluded():
-    """Test 8: Activity at J-42 (42 days ago) is excluded from the 42-day window."""
-    ref = TODAY
-    a = _run(10_000.0, 3_600.0, days_ago=42)
-    windowed = _activities_in_vma_window([a], ref, window_days=42)
-    assert len(windowed) == 0, "J-42 activity should be excluded from the 42-day window"
-
-
-def test_09_future_excluded_from_window():
-    """Test 9: Future activity (J+1) is excluded from the VMA window."""
-    ref = TODAY
-    future_start = (TODAY + timedelta(days=1)).isoformat()
-    a = DomainActivity(
-        activity_type="running",
-        start_time=future_start,
-        distance_m=10_000.0,
-        duration_s=3_600.0,
-    )
-    windowed = _activities_in_vma_window([a], ref, window_days=42)
-    assert len(windowed) == 0, "Future activity should be excluded from VMA window"
-
-
-def test_10_old_strong_activity_outside_window_no_effect():
-    """Test 10: A fast activity older than 42 days has no effect on current VMA."""
-    # Strong activity at J-50 (outside window)
-    old_strong = [
-        _run(8_000.0,  2_000.0, days_ago=50, avg_hr=140.0, max_hr=190.0),
-        _run(10_000.0, 2_500.0, days_ago=55, avg_hr=155.0, max_hr=190.0),
-        _run(12_000.0, 3_000.0, days_ago=60, avg_hr=168.0, max_hr=190.0),
-        _run(14_000.0, 3_500.0, days_ago=65, avg_hr=178.0, max_hr=190.0),
-    ]
-    # Recent slow activities within window
-    recent_slow = [
-        _run(8_000.0,  4_000.0, days_ago=5,  avg_hr=140.0, max_hr=190.0),
-        _run(10_000.0, 5_000.0, days_ago=10, avg_hr=155.0, max_hr=190.0),
-        _run(12_000.0, 6_000.0, days_ago=15, avg_hr=168.0, max_hr=190.0),
-        _run(14_000.0, 7_000.0, days_ago=20, avg_hr=178.0, max_hr=190.0),
-    ]
-
-    vma_with_old = estimate_vma(old_strong + recent_slow, TODAY)
-    vma_without_old = estimate_vma(recent_slow, TODAY)
-
-    # Adding old strong activities outside the window must not change VMA
-    assert vma_with_old.vma_kmh == vma_without_old.vma_kmh, (
-        "Activities outside VMA window must not affect current VMA"
-    )
-
-
-def test_11_current_equals_snapshot_today():
-    """Test 11: estimate_vma(all, today) == estimate_vma(windowed, today)."""
-    # This ensures no look-ahead: current VMA = snapshot at today with the same window
-    fcmax = 190.0
-    in_window = _make_vma_activities(fcmax)
-    out_of_window = [
-        _run(8_000.0,  2_500.0, days_ago=50, avg_hr=140.0, max_hr=fcmax),
-        _run(10_000.0, 3_000.0, days_ago=55, avg_hr=155.0, max_hr=fcmax),
-    ]
-    all_activities = in_window + out_of_window
-    windowed = _activities_in_vma_window(all_activities, TODAY, window_days=42)
-    vma_all = estimate_vma(all_activities, TODAY)
-    vma_windowed = estimate_vma(windowed, TODAY)
-    assert vma_all.vma_kmh == vma_windowed.vma_kmh, (
-        "estimate_vma with all activities must equal estimate_vma with pre-windowed activities"
-    )
 
 
 # ---------------------------------------------------------------------------
 # TERRAIN — tests 12–15
 # ---------------------------------------------------------------------------
 
-def test_12_trail_excluded_from_vma_model():
-    """Test 12: trail_running activities are excluded from the HR-speed VMA model."""
-    a = _run(10_000.0, 3_600.0, days_ago=5, avg_hr=155.0, max_hr=190.0,
-             activity_type="trail_running")
-    assert not _is_usable_for_hr_model(a, TODAY), "trail_running must be excluded from VMA model"
-
 
 def test_13_10km_350m_excluded():
-    """Test 13: 10km run with +350m elevation (35 m/km > 30 m/km) is excluded from VMA model."""
+    """Test 13: 10km run with +350m elevation is not road-comparable."""
     a = _run(10_000.0, 3_600.0, days_ago=5, avg_hr=155.0, max_hr=190.0, elevation_gain_m=350.0)
-    assert not _is_usable_for_hr_model(a, TODAY), (
-        "10km +350m (35 m/km) must be excluded from VMA model (threshold 30 m/km)"
+    assert not _is_road_comparable(a, TODAY), (
+        '10km +350m (35 m/km) must be excluded as road-comparable'
     )
-
 
 def test_14_30km_350m_accepted():
-    """Test 14: 30km run with +350m elevation (11.7 m/km < 30 m/km) is accepted for VMA model."""
+    """Test 14: 30km run with +350m elevation remains road-comparable."""
     a = _run(30_000.0, 9_000.0, days_ago=5, avg_hr=155.0, max_hr=190.0, elevation_gain_m=350.0)
-    # 350/30 = 11.67 m/km < 30 → accepted
-    assert _is_usable_for_hr_model(a, TODAY), (
-        "30km +350m (11.7 m/km) must be accepted for VMA model (threshold 30 m/km)"
+    assert _is_road_comparable(a, TODAY), (
+        '30km +350m (11.7 m/km) must remain road-comparable'
     )
-
 
 def test_15_no_elevation_data_accepted():
-    """Test 15: Activity with no elevation data is not rejected for missing D+."""
+    """Test 15: Missing elevation data remains road-comparable."""
     a = _run(10_000.0, 3_600.0, days_ago=5, avg_hr=155.0, max_hr=190.0, elevation_gain_m=None)
-    assert _is_usable_for_hr_model(a, TODAY), (
-        "Activity with no elevation data must not be rejected from VMA model"
+    assert _is_road_comparable(a, TODAY), (
+        'Missing elevation data must remain road-comparable'
     )
-
 
 # ---------------------------------------------------------------------------
 # RIEGEL QUALIFICATION — tests 16–23
@@ -434,69 +266,45 @@ def test_22_no_qualified_source_prediction_null():
 
 def test_23_no_synthetic_predictions():
     """Test 23: No synthetic/invented predictions are ever generated."""
-    # Empty activities → all predictions must be null
     result = predict_races([], TODAY)
     for pred in result.predictions:
         assert pred.predicted_time_s is None, (
-            f"Empty activities must produce null predictions, got {pred.predicted_time_s}"
+            f'Empty activities must produce null predictions, got {pred.predicted_time_s}'
         )
-    assert result.vma.vma_kmh is None
-
+    assert result.athlete_profile['estimated_vma'] is None
 
 # ---------------------------------------------------------------------------
 # INDEPENDENCE — test 24
 # ---------------------------------------------------------------------------
 
 def test_24_same_source_same_prediction_regardless_of_vma():
-    """Test 24 (BLOCKER 2): Same Riegel source → same predicted_time_s AND same confidence,
-    regardless of VMA availability.
-
-    Design:
-    - source_activity: 10K run at days_ago=5, avg_hr=160, max_hr=190 (rel_hr=0.84 ≥ 0.80)
-    - vma_extras: four 5K runs at days_ago=35–38, avg_hr=140, max_hr=190
-        • rel_hr = 140/190 ≈ 0.74 < MIN_RIEGEL_RELATIVE_HR → hard-excluded from Riegel
-        • days_ago > 28 → outside the weekly_km 28-day window → vol_factor unchanged
-        • target 10K → endurance = 1.0 (target ≤ 10 km) → no penalty, no change
-    → Riegel source for 10K prediction is strictly the same activity in both cases.
-    → predicted_time_s and confidence must be identical.
-    """
+    """Test 24: Same Riegel source keeps the same prediction and confidence."""
     source = _run(10_000.0, 3_200.0, days_ago=5, avg_hr=160.0, max_hr=190.0)
 
-    # No VMA: single activity → VMA model insufficient
-    result_no_vma = predict_races([source], TODAY)
-
-    # With VMA: add 5K extras (outside Riegel qualification, outside weekly_km window)
-    vma_extras = [
+    result_without_extras = predict_races([source], TODAY)
+    extras = [
         _run(5_000.0, 1_700.0, days_ago=35, avg_hr=140.0, max_hr=190.0),
         _run(5_000.0, 1_720.0, days_ago=36, avg_hr=143.0, max_hr=190.0),
         _run(5_000.0, 1_740.0, days_ago=37, avg_hr=147.0, max_hr=190.0),
         _run(5_000.0, 1_760.0, days_ago=38, avg_hr=150.0, max_hr=190.0),
     ]
-    result_with_vma = predict_races([source] + vma_extras, TODAY)
+    result_with_extras = predict_races([source] + extras, TODAY)
 
-    # Pre-condition: VMA availability differs
-    assert result_no_vma.vma.vma_kmh is None, "Should have no VMA with single activity"
-    assert result_with_vma.vma.vma_kmh is not None, "Should have VMA with enough activities"
+    assert result_without_extras.athlete_profile['estimated_vma'] is None
+    assert result_with_extras.athlete_profile['estimated_vma'] is None
 
-    pred_no_vma = next((p for p in result_no_vma.predictions if p.distance_label == "10K"), None)
-    pred_with_vma = next((p for p in result_with_vma.predictions if p.distance_label == "10K"), None)
-    assert pred_no_vma is not None and pred_with_vma is not None
-
-    # Same source: source_distance_m identifies the same Riegel candidate
-    assert pred_no_vma.source_distance_m == pred_with_vma.source_distance_m, (
-        "Riegel source must be identical regardless of VMA availability"
+    pred_without_extras = next((p for p in result_without_extras.predictions if p.distance_label == '10K'), None)
+    pred_with_extras = next((p for p in result_with_extras.predictions if p.distance_label == '10K'), None)
+    assert pred_without_extras is not None and pred_with_extras is not None
+    assert pred_without_extras.source_distance_m == pred_with_extras.source_distance_m, (
+        'Riegel source must stay identical when extra non-source runs are added'
     )
-    # VMA availability must not change predicted_time_s
-    assert pred_no_vma.predicted_time_s == pred_with_vma.predicted_time_s, (
-        f"predicted_time_s must be the same: "
-        f"no_vma={pred_no_vma.predicted_time_s} vs with_vma={pred_with_vma.predicted_time_s}"
+    assert pred_without_extras.predicted_time_s == pred_with_extras.predicted_time_s, (
+        f'predicted_time_s must match: {pred_without_extras.predicted_time_s} vs {pred_with_extras.predicted_time_s}'
     )
-    # VMA availability must not change confidence
-    assert pred_no_vma.confidence == pred_with_vma.confidence, (
-        f"confidence must be the same: "
-        f"no_vma={pred_no_vma.confidence!r} vs with_vma={pred_with_vma.confidence!r}"
+    assert pred_without_extras.confidence == pred_with_extras.confidence, (
+        f'confidence must match: {pred_without_extras.confidence!r} vs {pred_with_extras.confidence!r}'
     )
-
 
 # ---------------------------------------------------------------------------
 # SESSIONS — tests 25–28
@@ -517,29 +325,6 @@ def _sessions_in_42d_window(domain_activities, reference_date: date) -> int:
         and (_act_date(a) or date.min) >= cutoff
     ])
 
-
-def test_25_session_day_41_counted():
-    """Test 25: Running session at J-41 is counted in total_sessions_6w."""
-    a = _run(10_000.0, 3_600.0, days_ago=41)
-    assert _sessions_in_42d_window([a], TODAY) == 1
-
-
-def test_26_session_day_42_not_counted():
-    """Test 26: Running session at J-42 is NOT counted in total_sessions_6w."""
-    a = _run(10_000.0, 3_600.0, days_ago=42)
-    assert _sessions_in_42d_window([a], TODAY) == 0
-
-
-def test_27_future_session_not_counted():
-    """Test 27: Future running session (J+1) is NOT counted in total_sessions_6w."""
-    future_start = (TODAY + timedelta(days=1)).isoformat()
-    a = DomainActivity(
-        activity_type="running",
-        start_time=future_start,
-        distance_m=10_000.0,
-        duration_s=3_600.0,
-    )
-    assert _sessions_in_42d_window([a], TODAY) == 0
 
 
 def test_28_non_running_not_counted():
@@ -594,56 +379,28 @@ def test_29_future_max_hr_does_not_affect_past_fcmax():
 
 
 def test_30_fcmax_window_out_of_window_max_hr_does_not_affect_vma():
-    """Test 30 (BLOCKER 1): Old max_hr outside the 42-day VMA window must NOT
-    influence the VMA estimate.
+    """Out-of-window max_hr must not affect FCmax when callers pre-filter activities."""
+    from training_v2.performance_model import activity_date as _act_date
 
-    This test would have FAILED before the BLOCKER 1 fix, because estimate_vma()
-    used to resolve FCmax from ALL non-future activities.
-
-    Scenario:
-    - One activity at J-100 with max_hr=205 (well outside 42-day window)
-    - Four recent activities (J-5..J-20) with max_hr=185..187 suitable for VMA model
-
-    With the fix:
-      estimate_vma(all_activities, ref)
-      == estimate_vma(_activities_in_vma_window(all_activities, ref), ref)
-
-    Because FCmax is now resolved only from windowed activities (max_hr=187),
-    not from the J-100 outlier (max_hr=205).
-    """
     reference_date = TODAY
-
-    # Old activity with very high max_hr, well outside the 42-day window
+    cutoff = reference_date - timedelta(days=41)
     old_outlier = _run(15_000.0, 4_500.0, days_ago=100, avg_hr=175.0, max_hr=205.0)
-
-    # Recent VMA-eligible activities inside the 42-day window
     recent = [
         _run(8_000.0,  2_800.0, days_ago=5,  avg_hr=140.0, max_hr=185.0),
         _run(10_000.0, 3_400.0, days_ago=10, avg_hr=155.0, max_hr=186.0),
         _run(12_000.0, 4_000.0, days_ago=15, avg_hr=168.0, max_hr=187.0),
         _run(14_000.0, 4_700.0, days_ago=20, avg_hr=178.0, max_hr=187.0),
     ]
-
     all_activities = [old_outlier] + recent
-    windowed = _activities_in_vma_window(all_activities, reference_date)
+    windowed = [
+        a for a in all_activities
+        if validate_activity(a, reference_date) and (_act_date(a) or date.min) >= cutoff
+    ]
 
-    # Verify the outlier is excluded from the window
-    assert old_outlier not in windowed, "J-100 activity must be outside the 42-day window"
-    assert len(windowed) == len(recent), "Only recent activities should be in the window"
-
-    # Both calls must yield identical VMA
-    vma_all = estimate_vma(all_activities, reference_date)
-    vma_windowed = estimate_vma(windowed, reference_date)
-
-    assert vma_all.vma_kmh is not None, "VMA model should have enough data"
-    assert vma_all.vma_kmh == vma_windowed.vma_kmh, (
-        f"VMA must be identical: all={vma_all.vma_kmh} vs windowed={vma_windowed.vma_kmh}. "
-        "max_hr=205 from J-100 must NOT influence the VMA estimate."
-    )
-    assert vma_all.reason_code == vma_windowed.reason_code, (
-        "reason_code must be identical regardless of out-of-window activities"
-    )
-
+    assert old_outlier not in windowed
+    assert len(windowed) == len(recent)
+    assert _resolve_fcmax(all_activities, None, reference_date) == 205.0
+    assert _resolve_fcmax(windowed, None, reference_date) == 187.0
 
 # ---------------------------------------------------------------------------
 # SESSIONS VALID ACTIVITY — tests 31–34 (BLOCKER 3)

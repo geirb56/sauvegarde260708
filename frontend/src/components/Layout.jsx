@@ -1,14 +1,9 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState } from "react";
 import { Outlet, NavLink, useLocation } from "react-router-dom";
 import { Activity, Home, CalendarDays, MessageCircle, RefreshCw, Settings, TrendingUp, LogOut, Shield } from "lucide-react";
 import { useLanguage } from "@/context/LanguageContext";
-import { useAutoSync } from "@/hooks/useAutoSync";
 import { useAuth } from "@/context/AuthContext";
 import ChatCoach from "@/components/ChatCoach";
-import axios from "axios";
-
-import { API_BASE_URL } from "@/config";
-const API = API_BASE_URL;
 
 export const Layout = () => {
   const location = useLocation();
@@ -16,37 +11,6 @@ export const Layout = () => {
   const { user, logout } = useAuth();
   const userId = user?.id;
   const [chatOpen, setChatOpen] = useState(false);
-  const [lastSyncMinutes, setLastSyncMinutes] = useState(null);
-  
-  // Auto-sync Terra data on startup
-  useAutoSync();
-
-  // Get last sync time
-  useEffect(() => {
-    const checkSync = async () => {
-      if (!userId) return;
-      try {
-        const res = await axios.get(`${API}/terra/status`);
-        if (res.data.last_sync) {
-          const syncDate = new Date(res.data.last_sync);
-          const now = new Date();
-          const diffMins = Math.round((now - syncDate) / 60000);
-          setLastSyncMinutes(diffMins);
-        }
-      } catch (err) {
-        // Ignore
-      }
-    };
-    checkSync();
-  }, [userId]);
-
-  const lastSyncLabel = useMemo(() => {
-    if (lastSyncMinutes == null) return null;
-    if (lastSyncMinutes < 60) {
-      return t("common.timeAgoMins").replace("{n}", lastSyncMinutes);
-    }
-    return t("common.timeAgoHours").replace("{n}", Math.round(lastSyncMinutes / 60));
-  }, [lastSyncMinutes, t]);
 
   const navItems = [
     { path: "/", icon: Home, labelKey: "nav.dashboard" },
@@ -72,12 +36,6 @@ export const Layout = () => {
             className="header-logo-img"
             data-testid="app-logo"
           />
-          {lastSyncLabel && (
-            <div className="sync-status">
-              <span className="sync-dot" />
-              <span>{lastSyncLabel}</span>
-            </div>
-          )}
         </div>
         
         <div className="header-actions">

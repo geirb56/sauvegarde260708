@@ -115,7 +115,6 @@ FEATURES = {
 PROTECTED_ROUTES = [
     "/api/training/plan",
     "/api/training/refresh",
-    "/api/training/full-cycle",
     "/api/training/race-predictions",
     "/api/coach/analyze",
     "/api/coach/workout-analysis",
