@@ -1422,6 +1422,13 @@ def _curve_prediction_confidence(
     if len(curve.contributors) == 1 and base == "high":
         base = "medium"
 
+    # PR216: a numeric prediction produced from a real curve within the hard
+    # extrapolation guardrail remains defendable, even when cumulative penalties
+    # stack. Reserve INSUFFICIENT for true absence of defendable prediction:
+    # no curve, no extrapolation anchor, or extrapolation beyond the null limit.
+    if base == "insufficient":
+        return "low"
+
     return base
 
 

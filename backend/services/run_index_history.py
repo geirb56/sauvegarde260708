@@ -149,7 +149,12 @@ def _expected_period_points(period_config: HistoryPeriod, reference_date: Option
     return list(reversed(points))
 
 
-def _build_history_response(history: list[dict], period_config: HistoryPeriod, reference_date: Optional[date] = None) -> dict:
+def _build_history_response(
+    history: list[dict],
+    period_config: HistoryPeriod,
+    reference_date: Optional[date] = None,
+    current_snapshot: Optional[dict] = None,
+) -> dict:
     if not history:
         return {
             "has_data": False,
@@ -166,6 +171,7 @@ def _build_history_response(history: list[dict], period_config: HistoryPeriod, r
         }
 
     current = history[-1]
+    current_source = current_snapshot or current
     first = next((entry for entry in history if entry.get("run_index") is not None), None)
     last = next((entry for entry in reversed(history) if entry.get("run_index") is not None), None)
 
@@ -175,7 +181,7 @@ def _build_history_response(history: list[dict], period_config: HistoryPeriod, r
 
     pillars = {}
     for pillar in ("speed", "endurance", "consistency", "efficiency"):
-        current_val = current.get(pillar)
+        current_val = current_source.get(pillar)
         first_val = first.get(pillar) if first else None
         pillars[pillar] = {
             "current": current_val,
@@ -188,7 +194,7 @@ def _build_history_response(history: list[dict], period_config: HistoryPeriod, r
     return {
         "has_data": True,
         "has_full_period_data": len(history) >= expected_bucket_count,
-        "current_run_index": current.get("run_index"),
+        "current_run_index": current_source.get("run_index"),
         "trend": trend,
         "period": period_config.key,
         "period_months": period_config.months,
@@ -350,13 +356,29 @@ async def get_run_index_history_payload(
     today = _reference_day(reference_date)
     period_start = _subtract_months(today, period_config.months).isoformat()
 
+    # PR216: refresh today's snapshot from the canonical Garmin DomainActivity
+    # path before reading historical snapshots so Progress and Dashboard share
+    # the same current RunIndex authority independently of navigation order.
+    activities = await load_garmin_domain_activities(db, user_id)
+    current_snapshot = await upsert_run_index_snapshot(
+        db,
+        user_id,
+        activities=activities,
+        snapshot_date=today,
+    )
+
     documents = await db.run_index_scores.find(
         {"user_id": user_id, "date": {"$gte": period_start, "$lte": today.isoformat()}},
         _history_projection(),
     ).sort("date", 1).to_list(MAX_HISTORY_DOCS)
 
     history = _select_period_history(documents, period_config.granularity)
-    return _build_history_response(history, period_config, reference_date=today)
+    return _build_history_response(
+        history,
+        period_config,
+        reference_date=today,
+        current_snapshot=current_snapshot,
+    )
 
 
 async def upsert_run_index_snapshot(

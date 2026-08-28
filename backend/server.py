@@ -2578,6 +2578,18 @@ class TrainingGoalRequest(BaseModel):
     event_date: str = Field(..., description="Date de l'événement (YYYY-MM-DD)")
     event_name: Optional[str] = Field(None, description="Nom de la course")
 
+class TrainingCycleStartDateUpdateRequest(BaseModel):
+    start_date: str = Field(..., description="Plan start date (YYYY-MM-DD)")
+
+    @field_validator("start_date")
+    @classmethod
+    def validate_start_date(cls, value: str) -> str:
+        try:
+            date.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError("start_date must use YYYY-MM-DD format.") from exc
+        return value
+
 class TrainingGoalResponse(BaseModel):
     success: bool
     goal_type: str
@@ -2597,6 +2609,19 @@ class TrainingPlanResponse(BaseModel):
     recommendation: dict
     context: dict
     days_until_event: Optional[int]
+
+
+def _parse_iso_date_field(value) -> Optional[date]:
+    if isinstance(value, datetime):
+        return value.date() if value.tzinfo else value.replace(tzinfo=timezone.utc).date()
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
+        except (ValueError, TypeError):
+            return None
+    if isinstance(value, date):
+        return value
+    return None
 
 
 # ========== TRAINING ENDPOINTS ==========
@@ -2627,6 +2652,88 @@ async def set_training_goal(
     logger.info(f"[Training] Goal set for user {user['id']}: {goal_upper}")
     
     return {"status": "updated", "goal": goal_upper}
+
+
+@api_router.post("/training/v2/cycle/start-date")
+async def update_training_v2_cycle_start_date(
+    payload: TrainingCycleStartDateUpdateRequest,
+    user: dict = Depends(auth_user),
+):
+    """Update the canonical Training V2 cycle start date for the authenticated user."""
+    user_id = user["id"]
+    cycle = await db.training_cycles.find_one({"user_id": user_id}, {"_id": 0})
+    if not cycle:
+        raise HTTPException(
+            status_code=400,
+            detail="No training cycle defined. Use /api/training/set-goal first.",
+        )
+
+    goal_type_raw = cycle.get("goal")
+    if not goal_type_raw or goal_type_raw not in GOAL_CONFIG:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown or missing goal type: {goal_type_raw}",
+        )
+
+    requested_start_date = date.fromisoformat(payload.start_date)
+    reference_date = datetime.now(timezone.utc).date()
+    if requested_start_date > reference_date:
+        raise HTTPException(
+            status_code=400,
+            detail="plan_start_date cannot be in the future.",
+        )
+
+    mapped_goal_type = _LEGACY_GOAL_TO_V2.get(goal_type_raw.upper() if goal_type_raw else "")
+    if mapped_goal_type is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot map goal_type '{goal_type_raw}' to V2 GoalType.",
+        )
+
+    from training_v2.plan_goal import GoalType as _GoalType
+
+    if mapped_goal_type != _GoalType.maintenance:
+        user_goal = await db.user_goals.find_one({"user_id": user_id}, {"_id": 0})
+        race_date_raw = user_goal.get("event_date") if user_goal else None
+        if race_date_raw:
+            race_date = _parse_iso_date_field(race_date_raw)
+            if race_date is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Could not parse race_date in user goal.",
+                )
+            if requested_start_date > race_date:
+                raise HTTPException(
+                    status_code=400,
+                    detail="plan_start_date must be on or before race_date.",
+                )
+
+    updated_at = datetime.now(timezone.utc)
+    persisted_start = datetime(
+        requested_start_date.year,
+        requested_start_date.month,
+        requested_start_date.day,
+        tzinfo=timezone.utc,
+    )
+    await db.training_cycles.update_one(
+        {"user_id": user_id},
+        {
+            "$set": {
+                "start_date": persisted_start,
+                "updated_at": updated_at,
+            }
+        },
+        upsert=False,
+    )
+
+    return {
+        "status": "updated",
+        "cycle": {
+            "goal": goal_type_raw,
+            "start_date": requested_start_date.isoformat(),
+            "updated_at": updated_at.isoformat(),
+        },
+    }
 
 
 @api_router.get("/training/plan")

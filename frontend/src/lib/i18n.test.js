@@ -12,9 +12,7 @@ describe("i18n auth coverage", () => {
       "auth.forgotPassword",
       "auth.resetPassword",
       "auth.continueWithGoogle",
-      "auth.continueWithApple",
       "auth.googleNotConfigured",
-      "auth.appleNotConfigured",
       "auth.logout",
     ];
 

@@ -260,6 +260,47 @@ def test_3_identifiable_true_curve_k_learned():
     )
 
 
+def test_pr216_curve_confidence_floor_keeps_defendable_prediction_low_not_insufficient():
+    quality = pm.PerformanceQuality(
+        qualified=True,
+        score=0.55,
+        confidence="low",
+        personal_speed_percentile=75.0,
+        benchmark_count=8,
+        relative_avg_hr=None,
+        historical_fcmax=None,
+        reason_code="TEST",
+    )
+    activity = _run(days_ago=160, distance_m=10_000.0, duration_s=3_200.0)
+    contributor = pm._CurveObservation(
+        activity=activity,
+        quality=quality,
+        distance_m=10_000.0,
+        duration_s=3_200.0,
+        days_ago=160,
+        base_weight=1.0,
+        robust_weight=1.0,
+    )
+    curve = pm._CurveModel(
+        method="robust_weighted_log_fit",
+        a=1.0,
+        k=1.06,
+        fit_quality=0.39,
+        k_conflict=True,
+        k_fallback_applied=False,
+        k_raw=1.06,
+        two_point_evidence_strength=None,
+        qualified_performance_count=3,
+        contributors=(contributor,),
+        observed_distance_min=10_000.0,
+        observed_distance_max=10_000.0,
+    )
+
+    confidence = pm._curve_prediction_confidence(curve, extrapolation_ratio=3.5)
+
+    assert confidence == "low"
+
+
 # ---------------------------------------------------------------------------
 # TEST 4 — True outlier is still under-weighted
 # ---------------------------------------------------------------------------
