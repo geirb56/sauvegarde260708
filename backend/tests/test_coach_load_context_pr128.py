@@ -15,7 +15,6 @@ if str(_BACKEND) not in sys.path:
     sys.path.insert(0, str(_BACKEND))
 
 import coach_service
-from training_engine import build_training_context
 from training_v2.training_load import build_training_load
 
 
@@ -116,19 +115,6 @@ def _garmin_activity(user_id: str, days_ago: int, duration_s: Optional[float]) -
     if duration_s is not None:
         doc["duration"] = duration_s
     return doc
-
-
-def test_build_training_context_keeps_legacy_metrics_absent():
-    context = build_training_context({"load_7": 300.0, "load_28": 1200.0}, weekly_km=30.0)
-
-    assert context["load_7"] == 300.0
-    assert context["load_28"] == 1200.0
-    assert context["weekly_km"] == 30.0
-    assert context["acwr"] is None
-    assert context["tsb"] is None
-    assert context["ctl"] is None
-    assert context["atl"] is None
-    assert "risk_level" not in context
 
 
 @pytest.mark.asyncio

@@ -81,36 +81,6 @@ class TestWeeklyTargetV2Source:
 
 
 # ---------------------------------------------------------------------------
-# Test 2: determine_target_load does NOT decide target_km
-# ---------------------------------------------------------------------------
-
-class TestDetermineTargetLoadDecoupled:
-    """Prove that determine_target_load is not the source of the V2 prescription."""
-
-    def test_target_load_is_independent_of_weekly_target(self):
-        """determine_target_load returns a pseudo-load, not the V2 km target."""
-        from training_engine import determine_target_load
-
-        context = {"ctl": None, "atl": None, "tsb": None, "acwr": None,
-                   "weekly_km": 25.0, "load_7": 250, "load_28": 1000}
-        target_load = determine_target_load(context, "build")
-
-        # target_load is in "load units" (km*10 adjusted), NOT the same as WeeklyTarget.target_km
-        workouts = [_make_workout(days_ago=d, distance_km=8.0, ref=REFERENCE_DATE)
-                    for d in range(1, 22, 3)]
-        wt = build_weekly_target_from_workouts(
-            workouts=workouts,
-            goal_type="SEMI",
-            race_date=RACE_DATE,
-            cycle_start_date=CYCLE_START,
-            reference_date=REFERENCE_DATE,
-        )
-
-        # The two values are fundamentally different metrics
-        assert target_load != wt.target_km
-
-
-# ---------------------------------------------------------------------------
 # Test 3: deep_reprise → duration-based, target_km = None
 # ---------------------------------------------------------------------------
 
@@ -354,22 +324,6 @@ class TestBlocker1DurationFallbackNoKm:
             assert session.get("distance_km") is None
             assert session.get("estimated_tss") is None
             assert session.get("estimated_tss") != 0  # None != 0
-
-    def test_fallback_code_path_exists_in_server(self):
-        """Verify the duration-based branch exists in server.py source code."""
-        import pathlib
-        server_path = pathlib.Path(__file__).resolve().parent.parent / "server.py"
-        source = server_path.read_text()
-        # The duration-based fallback must check target_duration_minutes
-        assert "target_km_protected is None and target_duration_minutes is not None" in source
-        # It must produce weekly_km: None
-        assert '"weekly_km": None' in source or "'weekly_km': None" in source
-        # It must set target_basis to duration
-        assert '"target_basis": "duration"' in source or "'target_basis': \"duration\"" in source
-        # estimated_tss and total_tss must be None (not 0) in duration-based fallback
-        assert '"estimated_tss": None' in source
-        assert '"total_tss": None' in source
-
 
 # ---------------------------------------------------------------------------
 # BLOCKER 2: reference_date mandatory — no implicit today

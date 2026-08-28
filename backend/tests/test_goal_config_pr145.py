@@ -1,10 +1,9 @@
-"""PR145/PR146 — GOAL_CONFIG single source of truth tests.
+"""PR145/PR146/PR213 — GOAL_CONFIG single source of truth tests.
 
 Verifies that config.training_goals.GOAL_CONFIG is the unique definition
-and that training_engine.py no longer contains a copy.
+and that training_engine.py has been removed.
 """
 
-import ast
 import sys
 import os
 import re
@@ -86,23 +85,13 @@ def test_server_no_goal_config_from_training_engine():
 
 
 # ------------------------------------------------------------------
-# 7. training_engine.py no longer defines GOAL_CONFIG (PR146)
+# 7. training_engine.py removed (PR213)
 # ------------------------------------------------------------------
 
-def test_training_engine_no_goal_config():
-    """training_engine.py must not contain a GOAL_CONFIG definition."""
+def test_training_engine_file_removed():
+    """training_engine.py must be physically absent."""
     engine_path = os.path.join(os.path.dirname(__file__), "..", "training_engine.py")
-    with open(engine_path) as f:
-        tree = ast.parse(f.read())
-
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            for target in node.targets:
-                if isinstance(target, ast.Name) and target.id == "GOAL_CONFIG":
-                    raise AssertionError(
-                        "training_engine.py still defines GOAL_CONFIG — "
-                        "the orphaned copy should have been removed in PR146"
-                    )
+    assert not os.path.exists(engine_path)
 
 
 # ------------------------------------------------------------------

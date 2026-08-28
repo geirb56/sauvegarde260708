@@ -8,13 +8,15 @@ _BACKEND = Path(__file__).resolve().parents[1]
 _SERVER = _BACKEND / "server.py"
 _ACCESS_CONTROL = _BACKEND / "access_control.py"
 _SUBSCRIPTION_MANAGER = _BACKEND / "subscription_manager.py"
+_TRAINING_ENGINE_FILE = _BACKEND / "training_engine.py"
 
 
-def _runtime_python_files() -> list[Path]:
+def _python_files(*, include_tests: bool) -> list[Path]:
     return sorted(
-        path for path in _BACKEND.rglob("*.py")
-        if path.name != "training_engine.py"
-        and "tests" not in path.parts
+        path
+        for path in _BACKEND.rglob("*.py")
+        if path != _TRAINING_ENGINE_FILE
+        and (include_tests or "tests" not in path.parts)
     )
 
 
@@ -30,12 +32,28 @@ def _training_engine_import_count(path: Path) -> int:
     return count
 
 
-def test_training_engine_runtime_consumers_zero():
-    training_engine_runtime_consumers = sum(
+def _total_imports(*, include_tests: bool) -> int:
+    return sum(
         _training_engine_import_count(path)
-        for path in _runtime_python_files()
+        for path in _python_files(include_tests=include_tests)
     )
-    assert training_engine_runtime_consumers == 0
+
+
+def test_training_engine_file_absent():
+    assert not _TRAINING_ENGINE_FILE.exists()
+
+
+def test_training_engine_runtime_imports_zero():
+    assert _total_imports(include_tests=False) == 0
+
+
+def test_training_engine_test_imports_zero():
+    test_imports = sum(
+        _training_engine_import_count(path)
+        for path in _python_files(include_tests=True)
+        if "tests" in path.parts
+    )
+    assert test_imports == 0
 
 
 def test_server_training_engine_imports_zero():
