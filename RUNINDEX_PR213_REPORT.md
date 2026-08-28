@@ -106,6 +106,9 @@ Result summary:
     - `tests/test_training_state_pr04.py::test_continuity_confidence_89_days`
     - `tests/test_training_state_pr04.py::test_pr94_cas2_history_27d_last_run_27d`
     - `tests/test_plan_goal_pr05.py::test_27_no_legacy_imports`
+- Baseline status note:
+  - these 4 failures are pre-existing and outside PR213 kill-final scope (no `training_engine.py` restoration and no V2 formula edits allowed in this PR).
+  - they require dedicated follow-up work in separate PR(s); PR213 only removes legacy training_engine artifacts and residual legacy tests.
 
 No failure remains from PR149 legacy fallback-path assertion.
 
