@@ -94,12 +94,20 @@ Result:
 Command executed with broad V2-related test selection.
 
 Result summary:
-- Many suites passed.
-- Existing unrelated failures observed in repository baseline (not introduced by PR213), including:
-  - `tests/test_pr149_week_plan_v2.py::TestBlocker1DurationFallbackNoKm::test_fallback_code_path_exists_in_server`
-  - additional baseline failures in `test_training_state_pr04.py` and `test_plan_goal_pr05.py` when running broad matrix together.
+- Legacy PR149 test cleanup applied in PR213:
+  - removed `tests/test_pr149_week_plan_v2.py::TestBlocker1DurationFallbackNoKm::test_fallback_code_path_exists_in_server`
+  - reason: strict legacy assertion on deleted `_generate_fallback_week_plan` runtime path from PR212.
+- Required re-runs after cleanup:
+  - `python -m pytest tests/test_pr149_week_plan_v2.py` → `16 passed`
+  - `python -m pytest tests/test_pr212_training_engine_runtime_consumers.py` → `5 passed`
+- Re-run of the PR213 V2 matrix:
+  - remaining baseline failures are now limited to:
+    - `tests/test_training_state_pr04.py::test_continuity_confidence_29_days`
+    - `tests/test_training_state_pr04.py::test_continuity_confidence_89_days`
+    - `tests/test_training_state_pr04.py::test_pr94_cas2_history_27d_last_run_27d`
+    - `tests/test_plan_goal_pr05.py::test_27_no_legacy_imports`
 
-These failures are outside PR213 scope and not caused by `training_engine.py` deletion.
+No failure remains from PR149 legacy fallback-path assertion.
 
 ## 6) Recherche finale
 Final AST import audit over backend:

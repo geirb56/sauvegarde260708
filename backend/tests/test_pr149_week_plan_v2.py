@@ -325,22 +325,6 @@ class TestBlocker1DurationFallbackNoKm:
             assert session.get("estimated_tss") is None
             assert session.get("estimated_tss") != 0  # None != 0
 
-    def test_fallback_code_path_exists_in_server(self):
-        """Verify the duration-based branch exists in server.py source code."""
-        import pathlib
-        server_path = pathlib.Path(__file__).resolve().parent.parent / "server.py"
-        source = server_path.read_text()
-        # The duration-based fallback must check target_duration_minutes
-        assert "target_km_protected is None and target_duration_minutes is not None" in source
-        # It must produce weekly_km: None
-        assert '"weekly_km": None' in source or "'weekly_km': None" in source
-        # It must set target_basis to duration
-        assert '"target_basis": "duration"' in source or "'target_basis': \"duration\"" in source
-        # estimated_tss and total_tss must be None (not 0) in duration-based fallback
-        assert '"estimated_tss": None' in source
-        assert '"total_tss": None' in source
-
-
 # ---------------------------------------------------------------------------
 # BLOCKER 2: reference_date mandatory — no implicit today
 # ---------------------------------------------------------------------------
