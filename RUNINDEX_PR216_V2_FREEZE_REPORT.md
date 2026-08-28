@@ -1,5 +1,5 @@
 BASE_SHA = f03babc69233b64536824d7e8d87d2a65d31728b
-AUDITED_CODE_SHA = b743aac621954c77bcfd1536a007f3bcd8197d15
+AUDITED_CODE_SHA = af0e4ec800f2fce081c3c07ddbd2dcbfe791d349
 
 --------------------------------------------------
 FINAL VERDICT
