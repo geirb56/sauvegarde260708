@@ -37,7 +37,7 @@ from analysis_engine import (
     generate_dashboard_insight,
 )
 
-# Import LLM coach module (GPT-4o-mini)
+# Import LLM coach module
 from llm_coach import LLM_MODEL
 
 # Import coach service (cascade strategy)
@@ -1562,7 +1562,7 @@ async def get_stats(user: dict = Depends(auth_user)):
 
 @api_router.post("/coach/analyze", response_model=CoachResponse)
 async def analyze_with_coach(request: CoachRequest, user: dict = Depends(auth_user)):
-    """Conversational Chat Coach with GPT-4o-mini
+    """Conversational chat coach with server-side LLM enrichment.
 
     The coach has access to:
     - Conversation history
@@ -1609,9 +1609,6 @@ async def analyze_with_coach(request: CoachRequest, user: dict = Depends(auth_us
     km_7 = sum(get_distance_km(w) for w in recent_activities)
     km_28 = sum(get_distance_km(w) for w in all_activities)
     
-    # ACWR — TrainingLoad V2 not available in this context (no garmin_activities).
-    # CTL/ATL/TSB km-based aliases removed (PR #127 — faux physiological metrics).
-    # km_7/(km_28/4) must NOT be exposed as ACWR (#127 pre-merge corrections).
     acwr: Optional[float] = None
 
     # 4. Prepare summary of ALL sessions (not just 5)
@@ -1670,114 +1667,46 @@ async def analyze_with_coach(request: CoachRequest, user: dict = Depends(auth_us
     except Exception as e:
         logger.warning(f"Could not fetch training plan for coach context: {e}")
     
-    # 6. Récupérer la VMA et les prédictions depuis l'endpoint existant
-    vma_info = ""
+    # 6. Récupérer les signaux physiologiques depuis les sources canoniques V2
+    vma_info = None
     predictions_summary = ""
+    vo2max_value: Optional[float] = None
+    paces_summary = ""
     try:
-        # Utiliser la même logique que /api/training/race-predictions
-        sixty_days_ago = today - timedelta(days=60)
-        pred_activities = await db.workouts.find({
-            "user_id": user_id,
-            "date": {"$gte": sixty_days_ago.isoformat()}
-        }).to_list(500)
-        
-        if pred_activities:
-            # Calculate VMA with the correct method
-            def get_pred_distance(a):
-                dist = a.get("distance", 0)
-                if dist > 1000:
-                    return dist / 1000
-                return a.get("distance_km", dist)
-            
-            def get_pred_duration(a):
-                moving_time = a.get("moving_time", 0)
-                if moving_time > 0:
-                    return moving_time / 60
-                elapsed = a.get("elapsed_time", 0)
-                if elapsed > 0:
-                    return elapsed / 60
-                return a.get("duration_minutes", 0)
-            
-            def get_pred_pace(a):
-                pace = a.get("avg_pace_min_km")
-                if pace:
-                    return pace
-                speed = a.get("average_speed", 0)
-                if speed > 0:
-                    return (1000 / speed) / 60
-                dist = get_pred_distance(a)
-                duration_min = get_pred_duration(a)
-                if dist > 0 and duration_min > 0:
-                    return duration_min / dist
-                return None
-            
-            paces = []
-            vma_efforts = []
-            MIN_VMA_DURATION = 6
-            
-            for a in pred_activities:
-                dist = get_pred_distance(a)
-                pace = get_pred_pace(a)
-                duration_min = get_pred_duration(a)
-                
-                if dist > 0 and pace and 3 < pace < 10:
-                    paces.append(pace)
-                    # Efforts >= 6 min ET allure rapide (< 5:30/km)
-                    if duration_min >= MIN_VMA_DURATION and pace < 5.5:
-                        vma_efforts.append({
-                            "pace": pace,
-                            "duration": duration_min,
-                            "speed_kmh": 60 / pace
-                        })
-            
-            if paces:
-                avg_pace = sum(paces) / len(paces)
+        from training_v2.training_paces import compute_training_paces, training_paces_to_api_dict
 
-                # Calculate VMA with the correct method
-                if vma_efforts:
-                    best_vma_effort = max(vma_efforts, key=lambda x: x["speed_kmh"])
-                    best_sustained_speed = best_vma_effort["speed_kmh"]
-                    duration = best_vma_effort["duration"]
+        garmin_raw = await db.garmin_activities.find({"user_id": user_id}, {"_id": 0}).to_list(2000)
+        domain_activities = mongo_garmin_activities_to_domain(garmin_raw)
+        if domain_activities:
+            acwr = build_training_load(domain_activities, today.date()).acwr
+            perf = predict_races(domain_activities, today.date())
+            predictions = [
+                f"{pred.distance_label}: {pred.predicted_time_str}"
+                for pred in perf.predictions
+                if pred.predicted_time_str
+            ]
+            predictions_summary = " | ".join(predictions)
 
-                    if duration >= 20:
-                        estimated_vma = best_sustained_speed / 0.85
-                    elif duration >= 12:
-                        estimated_vma = best_sustained_speed / 0.90
-                    else:
-                        estimated_vma = best_sustained_speed / 0.95
-                else:
-                    avg_speed_kmh = 60 / avg_pace
-                    estimated_vma = avg_speed_kmh / 0.70
+            paces_v2 = training_paces_to_api_dict(
+                compute_training_paces(domain_activities, today.date(), user_max_hr=None)
+            )
+            easy = ((paces_v2.get("paces") or {}).get("easy") or {})
+            threshold = ((paces_v2.get("paces") or {}).get("threshold") or {})
+            easy_text = f"{easy.get('lower_str')}-{easy.get('upper_str')}" if easy.get("lower_str") and easy.get("upper_str") else None
+            threshold_text = threshold.get("pace_str")
+            pace_parts = [p for p in [easy_text, threshold_text] if p]
+            paces_summary = " | ".join(pace_parts)
 
-                estimated_vma = round(estimated_vma, 1)
-                vma_info = f"Estimated VMA: {estimated_vma} km/h"
-
-                # VMA-based predictions
-                pred_5k_speed = estimated_vma * 0.95
-                pred_5k_pace = 60 / pred_5k_speed
-                time_5k = (pred_5k_pace * 5)
-                
-                pred_10k_speed = estimated_vma * 0.90
-                pred_10k_pace = 60 / pred_10k_speed
-                time_10k = (pred_10k_pace * 10)
-                
-                pred_semi_speed = estimated_vma * 0.82
-                pred_semi_pace = 60 / pred_semi_speed
-                time_semi = (pred_semi_pace * 21.1)
-                h_semi = int(time_semi // 60)
-                m_semi = int(time_semi % 60)
-                
-                pred_marathon_speed = estimated_vma * 0.75
-                pred_marathon_pace = 60 / pred_marathon_speed
-                time_marathon = (pred_marathon_pace * 42.195)
-                h_mar = int(time_marathon // 60)
-                m_mar = int(time_marathon % 60)
-                
-                predictions_summary = f"5K: {int(time_5k)}:{int((time_5k % 1) * 60):02d} | 10K: {int(time_10k)}:{int((time_10k % 1) * 60):02d} | Semi: {h_semi}h{m_semi:02d} | Marathon: {h_mar}h{m_mar:02d}"
-                
+        latest_vo2 = await db.garmin_vo2max.find_one(
+            {"user_id": user_id, "vo2max_running": {"$ne": None}},
+            {"_id": 0, "vo2max_running": 1},
+            sort=[("date", -1)],
+        )
+        if latest_vo2:
+            vo2max_value = latest_vo2.get("vo2max_running")
     except Exception as e:
-        logger.warning(f"Could not calculate VMA for coach context: {e}")
-        vma_info = "VMA: non calculée"
+        logger.warning(f"Could not load canonical performance context: {e}")
+        vma_info = None
     
     # 7. Construire le contexte complet
     context = {
@@ -1804,7 +1733,9 @@ async def analyze_with_coach(request: CoachRequest, user: dict = Depends(auth_us
         "training_plan": training_plan_summary if training_plan_summary else "No active training plan",
         "current_goal": current_goal,
         "vma": vma_info,
-        "predictions": predictions_summary
+        "vo2max": vo2max_value,
+        "predictions": predictions_summary,
+        "paces": paces_summary,
     }
 
     # 5. If workout_id specified, enrich context with session details
@@ -1833,7 +1764,7 @@ async def analyze_with_coach(request: CoachRequest, user: dict = Depends(auth_us
         "timestamp": datetime.now(timezone.utc).isoformat()
     })
     
-    # 7. Appeler GPT-4o-mini pour générer la réponse
+    # 7. Appeler le modèle LLM serveur configuré pour générer la réponse
     llm_response, success, meta = await enrich_chat_response(
         user_message=user_message,
         context=context,
@@ -1843,9 +1774,15 @@ async def analyze_with_coach(request: CoachRequest, user: dict = Depends(auth_us
     
     if not success or not llm_response:
         logger.warning(f"LLM chat failed: {meta}")
+        if language == "fr":
+            message = "Le service de coaching IA n'est pas disponible actuellement."
+        elif language == "es":
+            message = "El servicio de coaching con IA no está disponible actualmente."
+        else:
+            message = "The AI coaching service is currently unavailable."
         raise HTTPException(
             status_code=503,
-            detail="Le service de coaching IA n'est pas disponible actuellement." if language == "fr" else "The AI coaching service is currently unavailable."
+            detail=message,
         )
     
     response_text = llm_response
@@ -2279,7 +2216,7 @@ async def get_rag_dashboard(user: dict = Depends(auth_user)):
 
 @api_router.get("/rag/weekly-review")
 async def get_rag_weekly_review(user: dict = Depends(auth_user), language: str = "fr"):
-    """Get RAG-enriched weekly review with GPT-4o-mini enhancement"""
+    """Get RAG-enriched weekly review with server-side LLM enhancement."""
     user_id = user["id"]
     workouts = await db.workouts.find(
         {"user_id": user_id},
@@ -2317,7 +2254,7 @@ async def get_rag_weekly_review(user: dict = Depends(auth_user), language: str =
 
 @api_router.get("/rag/workout/{workout_id}")
 async def get_rag_workout_analysis(workout_id: str, user: dict = Depends(auth_user), language: str = "fr"):
-    """Get RAG-enriched workout analysis with GPT-4o-mini enhancement"""
+    """Get RAG-enriched workout analysis with server-side LLM enhancement."""
     user_id = user["id"]
     # Fetch the workout
     workout = await db.workouts.find_one(

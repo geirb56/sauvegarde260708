@@ -3,7 +3,7 @@ Tests for Dynamic Training Plan with VMA-based Paces
 
 Tests the following features:
 1. Personalized paces (paces) calculated dynamically from VMA
-2. Plan returns VMA, VO2MAX, readiness_score and prep_status
+2. Plan returns VMA, VO2MAX, goal_compatibility_score and prep_status
 3. Sessions contain personalized paces in 'details' field
 4. Plan duration (adjusted_weeks) adapts to user level
 """
@@ -47,37 +47,33 @@ class TestTrainingPlanVMA:
         data = get_plan_cached()
         assert data is not None
         
-        # VMA should be a float between 8-25 km/h (realistic range)
+        # VMA can be unavailable when canonical performance evidence is insufficient.
         assert "vma" in data, "Response should contain 'vma' field"
         vma = data["vma"]
-        assert isinstance(vma, (int, float)), f"VMA should be numeric, got {type(vma)}"
-        assert 8 <= vma <= 25, f"VMA {vma} should be in realistic range [8-25] km/h"
+        if vma is not None:
+            assert isinstance(vma, (int, float)), f"VMA should be numeric, got {type(vma)}"
+            assert 8 <= vma <= 25, f"VMA {vma} should be in realistic range [8-25] km/h"
 
     def test_plan_contains_vo2max_field(self):
         """Test that plan returns VO2MAX value"""
         data = get_plan_cached()
         assert data is not None
         
-        # VO2MAX should be VMA * 3.5 (Cooper formula approximation)
+        # VO2MAX is sourced from Garmin observed values and can be unavailable.
         assert "vo2max" in data, "Response should contain 'vo2max' field"
         vo2max = data["vo2max"]
-        vma = data["vma"]
-        
-        assert isinstance(vo2max, (int, float)), f"VO2MAX should be numeric, got {type(vo2max)}"
-        # VO2MAX = VMA * 3.5 (with some tolerance)
-        expected_vo2max = vma * 3.5
-        assert abs(vo2max - expected_vo2max) < 0.5, f"VO2MAX {vo2max} should be close to VMA*3.5={expected_vo2max}"
+        if vo2max is not None:
+            assert isinstance(vo2max, (int, float)), f"VO2MAX should be numeric, got {type(vo2max)}"
 
-    def test_plan_contains_readiness_score(self):
-        """Test that plan returns readiness_score"""
+    def test_plan_contains_goal_compatibility_score(self):
+        """Test that plan returns goal_compatibility_score."""
         data = get_plan_cached()
         assert data is not None
-        
-        # readiness_score should be 0-100
-        assert "readiness_score" in data, "Response should contain 'readiness_score' field"
-        score = data["readiness_score"]
-        assert isinstance(score, (int, float)), f"readiness_score should be numeric, got {type(score)}"
-        assert 0 <= score <= 100, f"readiness_score {score} should be in range [0-100]"
+
+        assert "goal_compatibility_score" in data, "Response should contain 'goal_compatibility_score' field"
+        score = data["goal_compatibility_score"]
+        assert isinstance(score, (int, float)), f"goal_compatibility_score should be numeric, got {type(score)}"
+        assert 0 <= score <= 100, f"goal_compatibility_score {score} should be in range [0-100]"
 
     def test_plan_contains_prep_status(self):
         """Test that plan returns prep_status"""
@@ -214,16 +210,16 @@ class TestPlanAdaptation:
         context = data["context"]
         
         # Check essential fitness metrics in context
-        expected_fields = ["acwr", "tsb", "weekly_km", "vma", "vo2max", "readiness_score", "prep_status"]
+        expected_fields = ["acwr", "tsb", "weekly_km", "vma", "vo2max", "goal_compatibility_score", "prep_status"]
         for field in expected_fields:
             assert field in context, f"Context should contain '{field}' field"
 
     def test_adjusted_weeks_varies_with_prep_status(self):
-        """Test the relationship between readiness_score and adjusted_weeks"""
+        """Test the relationship between goal_compatibility_score and adjusted_weeks."""
         data = get_plan_cached()
         assert data is not None
-        
-        readiness = data["readiness_score"]
+
+        readiness = data["goal_compatibility_score"]
         prep_status = data["prep_status"]
         adjusted_weeks = data["adjusted_weeks"]
         goal = data.get("goal", "SEMI")
