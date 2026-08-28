@@ -84,6 +84,8 @@ from training_v2.daily_runtime_helpers import (
 from garmin.readiness_adapter import build_readiness_v2_from_garmin_data
 from garmin.domain_adapter import mongo_garmin_activities_to_domain
 from training_v2.performance_model import estimate_vma, predict_races, activity_date  # PR185
+from training_v2.plan_goal import GoalType
+
 from config.training_goals import GOAL_CONFIG  # noqa: E402  # PR145: single source
 
 # Import subscription manager
@@ -123,6 +125,16 @@ from engine.run_index_engine import calculate_run_index, calculate_run_index_fro
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
+
+_LEGACY_GOAL_TO_V2: dict[str, GoalType] = {
+    "10K": GoalType.ten_k,
+    "SEMI": GoalType.half_marathon,
+    "HALF_MARATHON": GoalType.half_marathon,
+    "MARATHON": GoalType.marathon,
+    "5K": GoalType.five_k,
+    "ULTRA": GoalType.ultra,
+    "MAINTENANCE": GoalType.maintenance,
+}
 
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
@@ -3758,7 +3770,7 @@ async def get_week_plan(user: dict = Depends(auth_user)):
     # PR163: use build_weekly_plan_from_workouts so WorkoutGenerator V2 is the
     # authority on session distribution (long_easy distance in particular).
     from training_v2.periodization import build_periodization
-    from training_v2.plan_goal import GoalType, ULTRA_MIN_DISTANCE_KM, build_plan_goal
+    from training_v2.plan_goal import ULTRA_MIN_DISTANCE_KM, build_plan_goal
     from training_v2.week_plan_bridge import (
         build_weekly_plan_from_workouts,
         workouts_to_domain_activities,
@@ -3780,16 +3792,7 @@ async def get_week_plan(user: dict = Depends(auth_user)):
 
     cycle_start_v2 = goal_start_date.date() if isinstance(goal_start_date, datetime) else goal_start_date
 
-    _GOAL_MAP: dict[str, GoalType] = {
-        "10K": GoalType.ten_k,
-        "SEMI": GoalType.half_marathon,
-        "HALF_MARATHON": GoalType.half_marathon,
-        "MARATHON": GoalType.marathon,
-        "5K": GoalType.five_k,
-        "ULTRA": GoalType.ultra,
-        "MAINTENANCE": GoalType.maintenance,
-    }
-    mapped_goal_type = _GOAL_MAP.get(goal_type.upper() if goal_type else "")
+    mapped_goal_type = _LEGACY_GOAL_TO_V2.get(goal_type.upper() if goal_type else "")
     if mapped_goal_type is None:
         raise HTTPException(
             status_code=400,
@@ -4124,17 +4127,6 @@ async def get_training_v2_cycle(user: dict = Depends(auth_user)):
     from training_v2.plan_goal import GoalType, build_plan_goal
     from training_v2.training_cycle_response import build_cycle_calendar_response
 
-    # Closed mapping: legacy goal strings → GoalType V2
-    _GOAL_MAP: dict[str, GoalType] = {
-        "10K": GoalType.ten_k,
-        "SEMI": GoalType.half_marathon,
-        "HALF_MARATHON": GoalType.half_marathon,
-        "MARATHON": GoalType.marathon,
-        "5K": GoalType.five_k,
-        "ULTRA": GoalType.ultra,
-        "MAINTENANCE": GoalType.maintenance,
-    }
-
     user_id = user["id"]
 
     # ── Single clock (same doctrine as /training/v2/week) ─────────────────
@@ -4205,7 +4197,7 @@ async def get_training_v2_cycle(user: dict = Depends(auth_user)):
         target_time_seconds = int(target_time_minutes_raw * 60)
 
     # ── Build PlanGoal V2 ─────────────────────────────────────────────────
-    mapped_goal_type = _GOAL_MAP.get(goal_type_raw.upper() if goal_type_raw else "")
+    mapped_goal_type = _LEGACY_GOAL_TO_V2.get(goal_type_raw.upper() if goal_type_raw else "")
     if mapped_goal_type is None:
         raise HTTPException(
             status_code=400,
