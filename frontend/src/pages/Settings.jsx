@@ -162,6 +162,7 @@ export default function Settings() {
   const [trainingGoal, setTrainingGoal] = useState(null);
   const [sessionsPerWeek, setSessionsPerWeek] = useState(null);
   const [planStartDate, setPlanStartDate] = useState(null);
+  const [planStartDateDraft, setPlanStartDateDraft] = useState("");
   const [cycleStatus, setCycleStatus] = useState(null);
   const [userGoal, setUserGoal] = useState(null);
   const [goalForm, setGoalForm] = useState({ eventName: "", eventDate: "", targetHours: "", targetMinutes: "" });
@@ -209,10 +210,12 @@ export default function Settings() {
       const cycleData = cycleV2Result.value.data;
       setTrainingGoal(normalizeCycleGoalToUi(cycleData?.goal?.goal_type));
       setPlanStartDate(cycleData?.cycle?.start_date || null);
+      setPlanStartDateDraft(parseDateInput(cycleData?.cycle?.start_date || ""));
       setCycleStatus(cycleData?.cycle?.status || null);
     } else {
       setTrainingGoal(null);
       setPlanStartDate(null);
+      setPlanStartDateDraft("");
       setCycleStatus(null);
     }
 
@@ -309,6 +312,33 @@ export default function Settings() {
       console.error("Failed to update sessions per week:", error);
       setPlanAction({ status: "error", message: t("settingsV2.plan.sessionsUpdateError") });
       toast.error(t("settingsV2.plan.sessionsUpdateError"));
+    }
+  };
+
+  const handleSetPlanStartDate = async () => {
+    if (!planStartDateDraft) {
+      setPlanAction({ status: "error", message: t("settingsV2.plan.startDateRequired") });
+      toast.error(t("settingsV2.plan.startDateRequired"));
+      return;
+    }
+
+    setPlanAction({ status: "saving", message: t("settingsV2.common.saving") });
+    try {
+      await axios.post(`${API}/training/v2/cycle/start-date`, {
+        start_date: planStartDateDraft,
+      });
+      const reloadSucceeded = await loadPlanSettings();
+      if (!reloadSucceeded) {
+        setPlanAction({ status: "error", message: t("settingsV2.plan.loadError") });
+        toast.error(t("settingsV2.plan.loadError"));
+        return;
+      }
+      setPlanAction({ status: "saved", message: t("settingsV2.plan.startDateUpdated") });
+      toast.success(t("settingsV2.plan.startDateUpdated"));
+    } catch (error) {
+      console.error("Failed to update plan start date:", error);
+      setPlanAction({ status: "error", message: t("settingsV2.plan.startDateUpdateError") });
+      toast.error(t("settingsV2.plan.startDateUpdateError"));
     }
   };
 
@@ -548,9 +578,39 @@ export default function Settings() {
               <SettingRow
                 label={t("settingsV2.plan.startDate")}
                 value={planStartLabel}
-                helper={t("settingsV2.plan.startDateReadOnly")}
+                helper={t("settingsV2.plan.startDateHelp")}
                 testId="settings-plan-start-date"
               />
+
+              <div className="rounded-xl border border-border bg-muted/30 p-4" data-testid="settings-plan-start-date-editor">
+                <label
+                  htmlFor="settings-plan-start-date-input"
+                  className="mb-2 block text-xs uppercase tracking-[0.18em] text-muted-foreground"
+                >
+                  {t("settingsV2.plan.startDateLabel")}
+                </label>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                  <Input
+                    id="settings-plan-start-date-input"
+                    type="date"
+                    value={planStartDateDraft}
+                    onChange={(event) => setPlanStartDateDraft(event.target.value)}
+                    disabled={planAction.status === "saving"}
+                    data-testid="plan-start-date-input"
+                    className="sm:max-w-xs"
+                  />
+                  <Button
+                    type="button"
+                    disabled={planAction.status === "saving"}
+                    onClick={handleSetPlanStartDate}
+                    data-testid="save-plan-start-date"
+                    className="w-full sm:w-auto"
+                  >
+                    {planAction.status === "saving" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                    {t("settingsV2.plan.saveStartDate")}
+                  </Button>
+                </div>
+              </div>
 
               {showRaceForm ? (
                 <div className="space-y-4 rounded-xl border border-border bg-muted/30 p-4" data-testid="settings-race-fields">

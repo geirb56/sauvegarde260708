@@ -132,6 +132,8 @@ class _FakeDB:
     ) -> None:
         self.garmin_daily_metrics = _FakeCollection(metrics_docs)
         self.garmin_activities = _FakeCollection(activity_docs)
+        self.garmin_vo2max = MagicMock()
+        self.garmin_vo2max.find_one = AsyncMock(return_value=None)
 
 
 # ---------------------------------------------------------------------------

@@ -58,11 +58,14 @@ class _FakeCollection:
         self._workouts = workouts or []
         self._single = single
 
-    def find(self, query):
-        gte = query.get("date", {}).get("$gte")
+    def find(self, query, projection=None):
+        gte = query.get("date", {}).get("$gte") or query.get("start_time", {}).get("$gte")
         if gte is None:
             return _FakeCursor(list(self._workouts))
-        return _FakeCursor([w for w in self._workouts if w["date"] >= gte])
+        return _FakeCursor([
+            w for w in self._workouts
+            if (w.get("date") or w.get("start_time")) >= gte
+        ])
 
     async def find_one(self, query):
         return self._single
@@ -77,6 +80,18 @@ class _FakeCollection:
 class _FakeDB:
     def __init__(self, workouts):
         self.workouts = _FakeCollection(workouts=workouts)
+        self.garmin_activities = _FakeCollection(workouts=[
+            {
+                "user_id": "u1",
+                "activity_type": w.get("activity_type") or w.get("type") or "running",
+                "start_time": w.get("start_time") or w.get("date"),
+                "distance_m": (w.get("distance_km") or 0) * 1000.0 if w.get("distance_km") else w.get("distance_m"),
+                "duration_s": w.get("moving_time") or w.get("elapsed_time") or w.get("duration_s"),
+                "source": "garmin",
+                "source_activity_id": w.get("id"),
+            }
+            for w in workouts
+        ])
         self.training_prefs = _FakeCollection(single={"user_id": "u1", "sessions_per_week": 4})
         self.training_cycles = _FakeCollection(single={"user_id": "u1", "goal": "MARATHON"})
         self.user_goals = _FakeCollection(single=None)  # no event_date -> active week 1

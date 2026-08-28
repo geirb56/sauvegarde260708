@@ -87,6 +87,19 @@ class _FakeDB:
         self.training_prefs = _Collection([{"user_id": "u1", "sessions_per_week": 4}])
         self.training_cycles = _Collection([cycle])
         self.workouts = _Collection(workouts or [])
+        self.garmin_activities = _Collection([
+            {
+                "user_id": w.get("user_id", "u1"),
+                "activity_type": w.get("activity_type") or w.get("type") or "running",
+                "start_time": w.get("start_time") or w.get("date"),
+                "distance_m": (w.get("distance_km") or 0) * 1000.0 if w.get("distance_km") else w.get("distance_m"),
+                "duration_s": w.get("moving_time") or w.get("elapsed_time") or w.get("duration_s"),
+                "average_hr": w.get("average_hr") or w.get("avg_heart_rate"),
+                "source": "garmin",
+                "source_activity_id": w.get("id"),
+            }
+            for w in (workouts or [])
+        ])
         self.user_goals = _Collection(
             [{"user_id": "u1", "event_date": event_date, "target_distance_km": ultra_distance}]
             if event_date is not None or ultra_distance is not None else []

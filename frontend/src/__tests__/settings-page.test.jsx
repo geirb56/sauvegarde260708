@@ -69,7 +69,12 @@ function mockAxiosApi(state = createApiState()) {
     if (url.includes("/garmin/status")) return Promise.resolve({ data: state.garminStatus });
     return Promise.reject(new Error(`Unexpected GET ${url}`));
   });
-  axios.post.mockResolvedValue({ data: { status: "connected" } });
+  axios.post.mockImplementation((url) => {
+    if (url.includes("/training/v2/cycle/start-date")) {
+      return Promise.resolve({ data: { status: "updated", cycle: { start_date: "2026-08-20" } } });
+    }
+    return Promise.resolve({ data: { status: "connected" } });
+  });
 }
 
 function renderPage({ lang = "en", unitSystem = "metric" } = {}) {
@@ -113,7 +118,8 @@ describe("Settings UX V2", () => {
     expect(await screen.findByTestId("settings-current-goal")).toHaveTextContent("Marathon");
     expect(screen.getByTestId("settings-sessions-current")).toHaveTextContent("4 sessions/week");
     expect(screen.getByTestId("settings-plan-start-date")).toHaveTextContent("Aug 27, 2026");
-    expect(screen.getByTestId("settings-plan-start-date")).toHaveTextContent("This date is currently read-only.");
+    expect(screen.getByTestId("settings-plan-start-date")).toHaveTextContent("Update the canonical Training V2 cycle anchor used by Settings and Training V2.");
+    expect(screen.getByTestId("plan-start-date-input")).toHaveValue("2026-08-27");
     expect(document.body).not.toHaveTextContent("Backend contract");
     expect(document.body).not.toHaveTextContent("Backend unchanged");
 
@@ -202,7 +208,7 @@ describe("Settings UX V2", () => {
     expect(await screen.findByText("Plan d'entraînement")).toBeInTheDocument();
     expect(document.body).not.toHaveTextContent("Contrat backend");
     expect(document.body).not.toHaveTextContent("Backend inchangé");
-    expect(screen.getByTestId("settings-plan-start-date")).toHaveTextContent("Cette date est actuellement en lecture seule.");
+    expect(screen.getByTestId("settings-plan-start-date")).toHaveTextContent("Modifie l'ancre canonique du cycle Training V2 utilisée par Settings et Training V2.");
     frView.unmount();
 
     mockAxiosApi();
@@ -210,7 +216,24 @@ describe("Settings UX V2", () => {
     expect(await screen.findByText("Plan de entrenamiento")).toBeInTheDocument();
     expect(document.body).not.toHaveTextContent("Contrato backend");
     expect(document.body).not.toHaveTextContent("Backend sin cambios");
-    expect(screen.getByTestId("settings-plan-start-date")).toHaveTextContent("Esta fecha es actualmente de solo lectura.");
+    expect(screen.getByTestId("settings-plan-start-date")).toHaveTextContent("Actualiza el ancla canónica del ciclo Training V2 usada por Ajustes y Training V2.");
+  });
+
+  test("save plan start date uses canonical backend contract and reloads plan settings", async () => {
+    mockAxiosApi();
+    renderPage();
+
+    await screen.findByTestId("settings-plan-start-date");
+    fireEvent.change(screen.getByTestId("plan-start-date-input"), { target: { value: "2026-08-20" } });
+    fireEvent.click(screen.getByTestId("save-plan-start-date"));
+
+    await waitFor(() => {
+      expect(axios.post).toHaveBeenCalledWith(
+        expect.stringContaining("/training/v2/cycle/start-date"),
+        { start_date: "2026-08-20" }
+      );
+    });
+    expect(toast.success).toHaveBeenCalled();
   });
 
   test("save race settings shows success feedback only after backend confirmation", async () => {
