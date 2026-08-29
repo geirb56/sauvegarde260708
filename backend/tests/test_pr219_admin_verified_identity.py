@@ -1,16 +1,24 @@
-"""PR #220 — Admin attribution only after authenticated identity proof.
+"""PR #219 — A55: ADMIN_EMAILS requires verified email identity.
 
-Invariant verified:
-    IDENTITY PROVED → CANONICAL USER RESOLVED → ADMIN EVALUATED → ADMIN ATTRIBUTED (maybe)
+Security invariant:
+    ADMIN_EMAIL + is_email_verified=False  →  USER
+    ADMIN_EMAIL + is_email_verified=True   →  ADMIN
+
+After register with an admin email, is_email_verified=False so the JWT returned
+does NOT grant admin access. Admin is only granted after the email is verified
+server-side.
 
 Tests:
-  1. Authenticated admin-email user → is_admin=True
-  2. Authenticated non-admin user → is_admin=False
-  3. Client registers with admin email → role stored as "user", not "admin"
-  4. Server-side identity wins over any pre-auth client claim
-  5. Unauthenticated request → no admin, 401
-  6. Regression: normal users can still register and log in
-  7. Admin guard rejects non-admin authenticated user
+  1.  ADMIN_EMAIL + unverified → role=user, is_admin=False
+  2.  ADMIN_EMAIL + unverified → require_admin = 403
+  3.  ADMIN_EMAIL + verified   → role=admin, is_admin=True
+  4.  ADMIN_EMAIL + verified   → require_admin = 200
+  5.  Normal email verified    → role=user
+  6.  Normal email unverified  → role=user
+  7.  register always persists role="user"
+  8.  Unauthenticated          → 401
+  9.  Client cannot self-grant admin via register payload
+ 10.  Explicit DB role="admin" (legitimate admin account) continues to work
 """
 
 from __future__ import annotations
@@ -18,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from datetime import datetime, timezone
 
 import httpx
 import pytest
@@ -133,7 +142,6 @@ class _FakeDB:
 
 def _make_app(fake_db):
     from fastapi import FastAPI, Depends
-    from fastapi.responses import JSONResponse
     from auth.router import auth_router
     from auth.dependencies import get_current_user, require_admin
 
@@ -176,36 +184,117 @@ def _bearer(token: str):
     return {"Authorization": "Bearer " + token}
 
 
-async def _register_and_login(client, email: str, password: str = _PASSWORD):
+async def _register(client, email: str, password: str = _PASSWORD):
     r = await client.post("/auth/register", json={"email": email, "password": password})
     assert r.status_code == 201, r.text
     return r.json()["access_token"]
 
 
+async def _verify_email_in_db(fake_db, email: str) -> None:
+    """Simulate server-side email verification (e.g. via email link click)."""
+    await fake_db.users.update_one(
+        {"email": email},
+        {"$set": {"is_email_verified": True}},
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
-# Test 1 — Authenticated admin-email user → is_admin=True after auth
+# Test 1 — A55 exploit: ADMIN_EMAIL + unverified → USER  (not admin)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-async def test_authenticated_admin_user_receives_admin_status(client, monkeypatch):
-    """After successful auth, a user with an admin email is recognised as admin."""
+async def test_admin_email_unverified_gets_user_role(client, fake_db, monkeypatch):
+    """A55 exploit scenario: register with admin email → JWT does NOT grant admin.
+
+    register sets is_email_verified=False; JWT after register must yield
+    role=user / is_admin=False even though the email is in ADMIN_EMAILS.
+    """
     monkeypatch.setenv("ADMIN_EMAILS", _ADMIN_EMAIL)
-    token = await _register_and_login(client, _ADMIN_EMAIL)
+
+    token = await _register(client, _ADMIN_EMAIL)
+
+    # Confirm DB state
+    stored = await fake_db.users.find_one({"email": _ADMIN_EMAIL})
+    assert stored is not None
+    assert stored.get("is_email_verified") is False
+    assert stored.get("role") == "user"
+
+    # JWT from register must NOT grant admin
     res = await client.get("/protected", headers=_bearer(token))
     assert res.status_code == 200
     data = res.json()
+    assert data["is_admin"] is False, "A55: unverified admin email must not grant is_admin=True"
+    assert data["role"] == "user", "A55: unverified admin email must not grant role=admin"
+    assert data["is_email_verified"] is False
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test 2 — ADMIN_EMAIL + unverified → require_admin = 403
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def test_admin_email_unverified_blocked_by_require_admin(client, monkeypatch):
+    """require_admin must return 403 for a valid JWT with unverified admin email."""
+    monkeypatch.setenv("ADMIN_EMAILS", _ADMIN_EMAIL)
+
+    token = await _register(client, _ADMIN_EMAIL)
+    res = await client.get("/admin-only", headers=_bearer(token))
+    assert res.status_code == 403, (
+        "A55: unverified admin email JWT must be rejected by require_admin with 403"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test 3 — ADMIN_EMAIL + verified → role=admin, is_admin=True
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def test_admin_email_verified_gets_admin_role(client, fake_db, monkeypatch):
+    """After server-side email verification, ADMIN_EMAIL user becomes admin."""
+    monkeypatch.setenv("ADMIN_EMAILS", _ADMIN_EMAIL)
+
+    token = await _register(client, _ADMIN_EMAIL)
+
+    # Before verification: USER
+    res = await client.get("/protected", headers=_bearer(token))
+    assert res.json()["is_admin"] is False
+
+    # Simulate server-side email verification
+    await _verify_email_in_db(fake_db, _ADMIN_EMAIL)
+
+    # After verification: ADMIN
+    res2 = await client.get("/protected", headers=_bearer(token))
+    assert res2.status_code == 200
+    data = res2.json()
     assert data["is_admin"] is True
     assert data["role"] == "admin"
-    assert data["authenticated"] is True
+    assert data["is_email_verified"] is True
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Test 2 — Authenticated non-admin user → no admin
+# Test 4 — ADMIN_EMAIL + verified → require_admin = 200
 # ═══════════════════════════════════════════════════════════════════════════════
 
-async def test_authenticated_non_admin_user_has_no_admin_status(client, monkeypatch):
-    """A successfully authenticated user not in ADMIN_EMAILS gets no admin rights."""
+async def test_admin_email_verified_allowed_by_require_admin(client, fake_db, monkeypatch):
+    """After email verification, require_admin allows the ADMIN_EMAIL user."""
     monkeypatch.setenv("ADMIN_EMAILS", _ADMIN_EMAIL)
-    token = await _register_and_login(client, _USER_EMAIL)
+
+    token = await _register(client, _ADMIN_EMAIL)
+    await _verify_email_in_db(fake_db, _ADMIN_EMAIL)
+
+    res = await client.get("/admin-only", headers=_bearer(token))
+    assert res.status_code == 200
+    assert res.json()["is_admin"] is True
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test 5 — Normal email verified → USER
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def test_normal_email_verified_stays_user(client, fake_db, monkeypatch):
+    """A normal (non-admin) email remains USER even after email verification."""
+    monkeypatch.setenv("ADMIN_EMAILS", _ADMIN_EMAIL)
+
+    token = await _register(client, _USER_EMAIL)
+    await _verify_email_in_db(fake_db, _USER_EMAIL)
+
     res = await client.get("/protected", headers=_bearer(token))
     assert res.status_code == 200
     data = res.json()
@@ -214,106 +303,112 @@ async def test_authenticated_non_admin_user_has_no_admin_status(client, monkeypa
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Test 3 — Client-supplied admin email at register → role stored as "user"
+# Test 6 — Normal email unverified → USER
 # ═══════════════════════════════════════════════════════════════════════════════
 
-async def test_register_stores_role_user_not_admin_in_db(client, fake_db, monkeypatch):
-    """Registration must NEVER write role=admin to the DB based on client email."""
-    monkeypatch.setenv("ADMIN_EMAILS", _ADMIN_EMAIL)
-    await _register_and_login(client, _ADMIN_EMAIL)
-
-    stored = await fake_db.users.find_one({"email": _ADMIN_EMAIL})
-    assert stored is not None
-    # The persisted role must be "user" — admin is evaluated at auth time only
-    assert stored.get("role") == "user", (
-        f"role must be stored as 'user' at registration; got {stored.get('role')!r}"
-    )
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Test 4 — Server-side identity always wins over client claim
-# ═══════════════════════════════════════════════════════════════════════════════
-
-async def test_server_identity_wins_over_client_claim(client, fake_db, monkeypatch):
-    """Even if a client registers with an admin email, the DB role is 'user' and
-    admin is resolved at auth time from the server-side DB record, not from the
-    registration payload."""
+async def test_normal_email_unverified_is_user(client, monkeypatch):
+    """A freshly registered normal user with unverified email is USER."""
     monkeypatch.setenv("ADMIN_EMAILS", _ADMIN_EMAIL)
 
-    # Attacker registers with admin email
-    token = await _register_and_login(client, _ADMIN_EMAIL)
-
-    # The stored role is "user" (fix invariant: no pre-auth admin bake-in)
-    stored = await fake_db.users.find_one({"email": _ADMIN_EMAIL})
-    assert stored["role"] == "user"
-
-    # Yet the authenticated response correctly reflects admin (email in ADMIN_EMAILS)
-    # because resolve_user_role checks the DB email at auth time
+    token = await _register(client, _USER_EMAIL)
     res = await client.get("/protected", headers=_bearer(token))
     assert res.status_code == 200
     data = res.json()
-    assert data["is_admin"] is True   # email-based check in roles.py fires post-auth
+    assert data["is_admin"] is False
+    assert data["role"] == "user"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Test 5 — Unauthenticated request → 401, no admin
+# Test 7 — register always persists role="user"
 # ═══════════════════════════════════════════════════════════════════════════════
 
-async def test_unauthenticated_request_gets_no_admin(client):
-    """A request without a token must be rejected with 401."""
-    res = await client.get("/protected")
-    assert res.status_code == 401
+async def test_register_always_stores_role_user(client, fake_db, monkeypatch):
+    """Registration must never write role=admin to the DB regardless of email."""
+    monkeypatch.setenv("ADMIN_EMAILS", _ADMIN_EMAIL)
 
-    res_admin = await client.get("/admin-only")
-    assert res_admin.status_code in (401, 403)
+    for email in (_ADMIN_EMAIL, _USER_EMAIL):
+        await client.post("/auth/register", json={"email": email, "password": _PASSWORD})
+        stored = await fake_db.users.find_one({"email": email})
+        assert stored is not None
+        assert stored.get("role") == "user", (
+            f"register must store role='user'; got {stored.get('role')!r} for {email}"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Test 6 — Regression: normal users can still use the auth flow
+# Test 8 — Unauthenticated → 401
 # ═══════════════════════════════════════════════════════════════════════════════
 
-async def test_normal_user_can_register_and_login(client, monkeypatch):
-    """Normal registration and login flows must not be broken by the fix."""
+async def test_unauthenticated_request_rejected(client):
+    """Requests without a token are rejected with 401."""
+    assert (await client.get("/protected")).status_code == 401
+    assert (await client.get("/admin-only")).status_code in (401, 403)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test 9 — Client cannot self-grant admin via register
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def test_client_cannot_self_grant_admin(client, fake_db, monkeypatch):
+    """Extra fields in the register body are ignored; no admin privilege obtained."""
+    monkeypatch.setenv("ADMIN_EMAILS", _ADMIN_EMAIL)
+
+    res = await client.post(
+        "/auth/register",
+        json={
+            "email": _ADMIN_EMAIL,
+            "password": _PASSWORD,
+            "role": "admin",
+            "is_admin": True,
+            "is_email_verified": True,
+        },
+    )
+    assert res.status_code == 201
+
+    # Check DB: is_email_verified must still be False (client cannot set it)
+    stored = await fake_db.users.find_one({"email": _ADMIN_EMAIL})
+    assert stored["is_email_verified"] is False
+    assert stored["role"] == "user"
+
+    # JWT from register must not grant admin
+    token = res.json()["access_token"]
+    prot = await client.get("/protected", headers=_bearer(token))
+    assert prot.json()["is_admin"] is False
+    assert (await client.get("/admin-only", headers=_bearer(token))).status_code == 403
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test 10 — Explicit DB role="admin" (legitimate pre-provisioned admin) works
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def test_explicit_db_role_admin_still_works(app, fake_db, monkeypatch):
+    """An account pre-provisioned in the DB with role=admin is still recognised
+    as admin, regardless of is_email_verified.  This preserves the existing
+    policy for server-side admin accounts that are not created via /register.
+    """
     monkeypatch.setenv("ADMIN_EMAILS", "")
 
-    reg = await client.post(
-        "/auth/register",
-        json={"email": "normal@example.com", "password": _PASSWORD},
-    )
-    assert reg.status_code == 201
-    token = reg.json()["access_token"]
+    now = datetime.now(timezone.utc)
+    admin_id = "pre-provisioned-admin-id"
+    await fake_db.users.insert_one({
+        "id": admin_id,
+        "email": "provisioned@internal.io",
+        "role": "admin",
+        "password_hash": None,
+        "is_email_verified": False,   # even unverified, DB role wins
+        "is_active": True,
+        "auth_providers": [],
+        "created_at": now,
+        "updated_at": now,
+        "last_login_at": now,
+    })
 
-    login = await client.post(
-        "/auth/login",
-        json={"email": "normal@example.com", "password": _PASSWORD},
-    )
-    assert login.status_code == 200
-    login_token = login.json()["access_token"]
-
-    for tok in (token, login_token):
-        res = await client.get("/protected", headers=_bearer(tok))
+    token = create_access_token(admin_id, "provisioned@internal.io")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as c:
+        res = await c.get("/protected", headers=_bearer(token))
         assert res.status_code == 200
-        assert res.json()["email"] == "normal@example.com"
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Test 7 — Admin guard rejects authenticated non-admin
-# ═══════════════════════════════════════════════════════════════════════════════
-
-async def test_admin_guard_rejects_non_admin(client, monkeypatch):
-    """require_admin must return 403 for a valid but non-admin authenticated user."""
-    monkeypatch.setenv("ADMIN_EMAILS", _ADMIN_EMAIL)
-
-    token = await _register_and_login(client, _USER_EMAIL)
-    res = await client.get("/admin-only", headers=_bearer(token))
-    assert res.status_code == 403
-
-
-async def test_admin_guard_allows_admin(client, monkeypatch):
-    """require_admin must allow a valid, admin-email authenticated user."""
-    monkeypatch.setenv("ADMIN_EMAILS", _ADMIN_EMAIL)
-
-    token = await _register_and_login(client, _ADMIN_EMAIL)
-    res = await client.get("/admin-only", headers=_bearer(token))
-    assert res.status_code == 200
-    assert res.json()["is_admin"] is True
+        data = res.json()
+        assert data["is_admin"] is True
+        assert data["role"] == "admin"
