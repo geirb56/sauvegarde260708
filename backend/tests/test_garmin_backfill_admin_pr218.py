@@ -256,7 +256,7 @@ async def test_admin_scope_all_allowed():
 
     with (
         patch("api.garmin.backfill_connected_users_run_index_history", new=_fake_global_backfill),
-        patch("asyncio.create_task", side_effect=lambda coro: asyncio.ensure_future(coro)) as mock_create,
+        patch("api.garmin.asyncio.create_task", side_effect=lambda coro: asyncio.ensure_future(coro)) as mock_create,
     ):
         r = await _post(app, "/api/garmin/backfill?scope=all",
                         headers=_bearer(ADMIN_ID, ADMIN_EMAIL))
