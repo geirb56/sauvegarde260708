@@ -531,7 +531,7 @@ class TestChatStoreResponseA35:
         assert stored[0]["role"] == "assistant"
         assert stored[0]["source"] == "webllm"
 
-    # ---- TEST 8 — USER_A vs USER_B multi-user isolation --------------------
+    # ---- TEST 6 — USER_A vs USER_B multi-user isolation --------------------
 
     async def test_user_a_cannot_write_under_user_b(self, real_client):
         """
