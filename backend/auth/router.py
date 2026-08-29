@@ -236,7 +236,7 @@ async def register(body: UserCreate, request: Request):
     user_doc = {
         "id": user_id,
         "email": user_email,
-        "role": "admin" if is_admin_user({"email": user_email}) else "user",
+        "role": "user",
         "password_hash": hash_password(body.password),
         "auth_providers": ["password"],
         "is_email_verified": False,
