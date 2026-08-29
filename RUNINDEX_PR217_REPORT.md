@@ -205,13 +205,56 @@ USER_A ne peut jamais créer/modifier une entrée `chat_messages` attribuée à 
 
 ## Runtime
 
-**NON TESTÉ**
+**TESTÉ — 21 passed, 0 failed**
 
-L'environnement sandbox ne dispose pas des dépendances runtime installées (pydantic, FastAPI, motor indisponibles — accès réseau bloqué). Les tests ont été **validés syntaxiquement** (`ast.parse` → OK) et **statiquement** (logique du patch vérifiée à la lecture).
+Commande exécutée :
 
-Les tests sont prêts à être exécutés dans un environnement avec les dépendances complètes (`python -m pytest tests/test_idor_integration.py::TestChatStoreResponseA35 -v`).
+```
+python3 -m pytest tests/test_idor_integration.py -v --override-ini="addopts="
+```
 
-### Validation statique effectuée
+Environnement : Python 3.12.3, pytest-9.1.1, pytest-asyncio-1.4.0, httpx-0.28.1, FastAPI-0.141.1, Pydantic-2.13.5.
+
+### Résultats TestChatStoreResponseA35 (6/6 PASSED)
+
+```
+tests/test_idor_integration.py::TestChatStoreResponseA35::test_authenticated_user_stores_under_own_id PASSED
+tests/test_idor_integration.py::TestChatStoreResponseA35::test_unauthenticated_request_rejected      PASSED
+tests/test_idor_integration.py::TestChatStoreResponseA35::test_user_id_param_no_longer_accepted      PASSED
+tests/test_idor_integration.py::TestChatStoreResponseA35::test_forged_user_id_ignored                PASSED
+tests/test_idor_integration.py::TestChatStoreResponseA35::test_legitimate_chatcoach_flow             PASSED
+tests/test_idor_integration.py::TestChatStoreResponseA35::test_user_a_cannot_write_under_user_b      PASSED
+```
+
+### Résultats suite complète tests/test_idor_integration.py (21/21 PASSED)
+
+```
+tests/test_idor_integration.py::TestMessagesIntegration::test_anonymous_denied                       PASSED
+tests/test_idor_integration.py::TestMessagesIntegration::test_owner_sees_own_messages                PASSED
+tests/test_idor_integration.py::TestMessagesIntegration::test_user_b_cannot_see_user_a_messages      PASSED
+tests/test_idor_integration.py::TestRagWorkoutIntegration::test_anonymous_denied                     PASSED
+tests/test_idor_integration.py::TestRagWorkoutIntegration::test_owner_gets_200                       PASSED
+tests/test_idor_integration.py::TestRagWorkoutIntegration::test_non_owner_gets_404                   PASSED
+tests/test_idor_integration.py::TestCoachWorkoutAnalysisIntegration::test_anonymous_denied           PASSED
+tests/test_idor_integration.py::TestCoachWorkoutAnalysisIntegration::test_owner_gets_200             PASSED
+tests/test_idor_integration.py::TestCoachWorkoutAnalysisIntegration::test_non_owner_gets_404         PASSED
+tests/test_idor_integration.py::TestCoachDetailedAnalysisIntegration::test_anonymous_denied          PASSED
+tests/test_idor_integration.py::TestCoachDetailedAnalysisIntegration::test_owner_gets_200            PASSED
+tests/test_idor_integration.py::TestCoachDetailedAnalysisIntegration::test_non_owner_gets_404        PASSED
+tests/test_idor_integration.py::TestChatSendIntegration::test_anonymous_returns_401                  PASSED
+tests/test_idor_integration.py::TestChatSendIntegration::test_owner_gets_200                         PASSED
+tests/test_idor_integration.py::TestChatSendIntegration::test_workouts_scoped_to_authenticated_user  PASSED
+tests/test_idor_integration.py::TestChatStoreResponseA35::test_authenticated_user_stores_under_own_id PASSED
+tests/test_idor_integration.py::TestChatStoreResponseA35::test_unauthenticated_request_rejected      PASSED
+tests/test_idor_integration.py::TestChatStoreResponseA35::test_user_id_param_no_longer_accepted      PASSED
+tests/test_idor_integration.py::TestChatStoreResponseA35::test_forged_user_id_ignored                PASSED
+tests/test_idor_integration.py::TestChatStoreResponseA35::test_legitimate_chatcoach_flow             PASSED
+tests/test_idor_integration.py::TestChatStoreResponseA35::test_user_a_cannot_write_under_user_b      PASSED
+
+======================== 21 passed, 6 warnings in 0.86s ========================
+```
+
+### Validation statique (confirmée par exécution réelle)
 
 | Type | Résultat |
 |------|---------|
