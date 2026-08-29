@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -163,9 +163,15 @@ async def garmin_backfill_endpoint(
     - scope=all: backfill every connected Garmin user in a background task.
     """
     import asyncio
+
     user_id = user["id"]
     db = request.app.state.db
     if scope == "all":
+        if not user.get("is_admin"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Admin access required for global backfill",
+            )
         asyncio.create_task(backfill_connected_users_run_index_history(db))
         return {"status": "started", "scope": "all"}
     result = await garmin_backfill.backfill_user(db, user_id)
