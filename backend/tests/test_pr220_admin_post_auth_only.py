@@ -189,8 +189,6 @@ async def _register_and_login(client, email: str, password: str = _PASSWORD):
 async def test_authenticated_admin_user_receives_admin_status(client, monkeypatch):
     """After successful auth, a user with an admin email is recognised as admin."""
     monkeypatch.setenv("ADMIN_EMAILS", _ADMIN_EMAIL)
-    # Force roles module to re-read env
-    import auth.roles as roles_mod
     token = await _register_and_login(client, _ADMIN_EMAIL)
     res = await client.get("/protected", headers=_bearer(token))
     assert res.status_code == 200
