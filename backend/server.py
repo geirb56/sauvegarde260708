@@ -937,6 +937,30 @@ def calculate_target_pace(distance_km: float, target_time_minutes: int) -> str:
     return f"{pace_min}:{pace_sec:02d}"
 
 
+# PR226 — single place for ULTRA distance validation so future threshold or
+# error-message changes only need one edit.
+_ULTRA_MIN_DISTANCE_KM: float = 42.195
+
+
+def _validate_ultra_distance_km(distance_km: Optional[float]) -> float:
+    """Return validated ultra distance or raise HTTP 400.
+
+    Raises:
+        HTTPException(400): when distance_km is absent, non-numeric, or ≤ 42.195.
+    """
+    if (
+        distance_km is None
+        or not isinstance(distance_km, (int, float))
+        or isinstance(distance_km, bool)
+        or distance_km <= _ULTRA_MIN_DISTANCE_KM
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"ULTRA goal requires distance_km > {_ULTRA_MIN_DISTANCE_KM} km.",
+        )
+    return float(distance_km)
+
+
 class UserGoal(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -975,17 +999,7 @@ async def set_user_goal(goal: UserGoalCreate, user: dict = Depends(auth_user)):
 
     # PR226: for ultra, caller must supply distance_km > 42.195.
     if goal.distance_type == "ultra":
-        if (
-            goal.distance_km is None
-            or not isinstance(goal.distance_km, (int, float))
-            or isinstance(goal.distance_km, bool)
-            or goal.distance_km <= 42.195
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail="ULTRA goal requires distance_km > 42.195 km.",
-            )
-        distance_km = float(goal.distance_km)
+        distance_km = _validate_ultra_distance_km(goal.distance_km)
     else:
         # For all standard distances the canonical value is authoritative.
         distance_km = DISTANCE_TYPES.get(goal.distance_type, 42.195)
@@ -2712,17 +2726,7 @@ async def set_training_goal(
     # PR226: ULTRA requires an explicit distance > 42.195 km.
     ultra_distance_km: Optional[float] = None
     if goal_upper == "ULTRA":
-        if (
-            distance_km is None
-            or not isinstance(distance_km, (int, float))
-            or isinstance(distance_km, bool)
-            or distance_km <= 42.195
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail="ULTRA goal requires distance_km > 42.195 km.",
-            )
-        ultra_distance_km = float(distance_km)
+        ultra_distance_km = _validate_ultra_distance_km(distance_km)
 
     cycle_set: dict = {
         "goal": goal_upper,
@@ -2908,17 +2912,7 @@ async def set_training_plan_goal(
     # PR226: ULTRA requires an explicit distance > 42.195 km.
     ultra_distance_km: Optional[float] = None
     if goal_upper == "ULTRA":
-        if (
-            distance_km is None
-            or not isinstance(distance_km, (int, float))
-            or isinstance(distance_km, bool)
-            or distance_km <= 42.195
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail="ULTRA goal requires distance_km > 42.195 km.",
-            )
-        ultra_distance_km = float(distance_km)
+        ultra_distance_km = _validate_ultra_distance_km(distance_km)
 
     cycle_set: dict = {
         "goal": goal_upper,

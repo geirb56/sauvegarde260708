@@ -119,7 +119,7 @@ export default function Onboarding() {
     if (stepKey === "goal") return Boolean(goal) && (goal !== "ULTRA" || (parseFloat(ultraDistanceKm) > 42.195));
     if (stepKey === "sessions") return Boolean(sessionsPerWeek) && !savingPlan;
     return false;
-  }, [stepKey, isGarminConnected, syncOutcomeKnown, goal, sessionsPerWeek, savingPlan]);
+  }, [stepKey, isGarminConnected, syncOutcomeKnown, goal, ultraDistanceKm, sessionsPerWeek, savingPlan]);
 
   const connectGarmin = async () => {
     if (!garminUsername.trim() || !garminPassword) {
