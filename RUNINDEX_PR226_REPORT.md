@@ -135,22 +135,31 @@ Le payload envoyé à `POST /user/goal` inclut `distance_km`.
 
 ## Tests — `backend/tests/test_goal_truth_pr226.py`
 
-| # | Test | Scénario | Résultat attendu |
-|---|---|---|---|
-| 1 | `test_standard_goals_set_correctly[5K]` | POST set-goal?goal=5K | goal=5K dans training_cycles |
-| 2 | `test_standard_goals_set_correctly[10K]` | POST set-goal?goal=10K | goal=10K dans training_cycles |
-| 3 | `test_standard_goals_set_correctly[SEMI]` | POST set-goal?goal=SEMI | goal=SEMI dans training_cycles |
-| 4 | `test_standard_goals_set_correctly[MARATHON]` | POST set-goal?goal=MARATHON | goal=MARATHON dans training_cycles |
-| 5 | `test_maintenance_clears_race_date_and_target_time` | user_goals pré-existant → set-goal MAINTENANCE | user_goals supprimé |
-| 6 | `test_no_stale_race_date_after_goal_change` | user_goals MARATHON → set-goal 5K | user_goals supprimé |
-| 7 | `test_fallback_without_goal_is_maintenance` | inspection du code source | `plan_data.get("goal", "MAINTENANCE")` présent |
-| 8 | `test_ultra_without_distance_rejected_set_goal` | POST set-goal?goal=ULTRA (sans distance_km) | HTTP 400 |
-| 9 | `test_ultra_with_invalid_distance_rejected` | distance_km=42.195 et 40.0 | HTTP 400 |
-| 10 | `test_ultra_with_valid_distance_propagated` | POST set-goal?goal=ULTRA&distance_km=50 | cycle.ultra_distance_km=50.0 |
-| 11 | `test_ultra_user_goal_without_distance_rejected` | POST /user/goal ultra sans distance_km | HTTP 400 |
-| 12 | `test_ultra_user_goal_with_valid_distance_accepted` | POST /user/goal ultra distance_km=100 | user_goals.distance_km=100.0 |
-| 13 | `test_ultra_distance_preserved_not_overwritten_by_default` | distance_km=170 | stocké 170.0 (pas 50.0) |
-| 14 | `test_maintenance_has_no_race_date_in_plan_goal` | build_plan_goal(MAINTENANCE) | race_date=None, distance=None |
+| 1 | `test_goal_config_has_all_goals` | GOAL_CONFIG has 5K/10K/SEMI/MARATHON/ULTRA/MAINTENANCE | ✅ PASSED |
+| 2 | `test_standard_goal_cycle_weeks[5K]` | cycle_weeks > 0 for 5K | ✅ PASSED |
+| 3 | `test_standard_goal_cycle_weeks[10K]` | cycle_weeks > 0 for 10K | ✅ PASSED |
+| 4 | `test_standard_goal_cycle_weeks[SEMI]` | cycle_weeks > 0 for SEMI | ✅ PASSED |
+| 5 | `test_standard_goal_cycle_weeks[MARATHON]` | cycle_weeks > 0 for MARATHON | ✅ PASSED |
+| 6 | `test_maintenance_has_no_race_date_in_plan_goal` | build_plan_goal(MAINTENANCE) → race_date=None | ✅ PASSED |
+| 7 | `test_maintenance_has_no_target_time_in_plan_goal` | build_plan_goal(MAINTENANCE) → target_time=None | ✅ PASSED |
+| 8 | `test_maintenance_has_no_target_distance_in_plan_goal` | build_plan_goal(MAINTENANCE) → distance=None | ✅ PASSED |
+| 9 | `test_maintenance_rejects_race_date` | PlanGoal MAINTENANCE + race_date → ValueError | ✅ PASSED |
+| 10 | `test_maintenance_rejects_target_time` | PlanGoal MAINTENANCE + target_time → ValueError | ✅ PASSED |
+| 11 | `test_fallback_without_goal_is_maintenance_not_semi` | `plan_data.get("goal", "SEMI")` absent; `"MAINTENANCE"` present | ✅ PASSED |
+| 12 | `test_set_goal_deletes_user_goals_in_source` | set_training_goal calls user_goals.delete_many | ✅ PASSED |
+| 13 | `test_set_training_plan_goal_deletes_user_goals_in_source` | set_training_plan_goal calls user_goals.delete_many | ✅ PASSED |
+| 14 | `test_ultra_without_distance_refused` | build_plan_goal(ultra) no distance → raises | ✅ PASSED |
+| 15 | `test_ultra_exactly_marathon_refused` | distance=42.195 → raises | ✅ PASSED |
+| 16 | `test_ultra_below_marathon_refused` | distance=40.0 → raises | ✅ PASSED |
+| 17 | `test_ultra_with_valid_distance_accepted` | distance=50.0 → accepted, target_distance_km=50.0 | ✅ PASSED |
+| 18 | `test_ultra_distance_propagated_exactly` | distance=170.0 → stored 170.0 (not 50.0) | ✅ PASSED |
+| 19 | `test_set_goal_endpoint_validates_ultra_distance` | set_training_goal body checks ULTRA + 42.195 | ✅ PASSED |
+| 20 | `test_set_goal_stores_ultra_distance_in_cycles` | training_cycles.ultra_distance_km present | ✅ PASSED |
+| 21 | `test_user_goal_create_model_has_distance_km` | UserGoalCreate.distance_km field present | ✅ PASSED |
+| 22 | `test_user_goal_endpoint_validates_ultra_distance` | set_user_goal body checks ultra + 42.195 | ✅ PASSED |
+| 23 | `test_v2_endpoints_have_ultra_distance_fallback` | ultra_distance_km appears ≥3× in server.py | ✅ PASSED |
+
+**Total: 23/23 PASSED**
 
 ---
 
