@@ -6,7 +6,7 @@
   "display": "standalone",
   "orientation": "portrait-primary",
   "background_color": "#0a0a0a",
-  "theme_color": "#3B82F6",
+  "theme_color": "#000000",
   "scope": "/",
   "prefer_related_applications": false,
   "categories": ["fitness", "health", "sports"],
