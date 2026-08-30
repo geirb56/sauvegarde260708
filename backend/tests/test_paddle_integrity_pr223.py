@@ -142,6 +142,7 @@ async def _call(
     *,
     headers: Optional[dict] = None,
     json_body: Optional[dict] = None,
+    content: Optional[bytes] = None,
     patches: Optional[list[Any]] = None,
     raise_app_exceptions: bool = True,
 ) -> httpx.Response:
@@ -165,6 +166,8 @@ async def _call(
                 kwargs["headers"] = headers
             if json_body is not None:
                 kwargs["json"] = json_body
+            if content is not None:
+                kwargs["content"] = content
             return await fn(path, **kwargs)
     finally:
         server.app.dependency_overrides.clear()
@@ -262,6 +265,7 @@ async def test_invalid_webhook_signature_does_not_mutate_subscription():
         "post",
         "/api/webhook/paddle",
         headers={"Paddle-Signature": "ts=1;h1=bad"},
+        content=body,
         patches=[
             patch.object(server, "PADDLE_WEBHOOK_SECRET", _SECRET),
             patch("subscription_manager.activate_premium", activate_mock),
@@ -298,6 +302,7 @@ async def test_processed_webhook_is_idempotent():
         "post",
         "/api/webhook/paddle",
         headers={"Paddle-Signature": _make_sig(_SECRET, str(int(time.time())), body)},
+        content=body,
         patches=[
             patch.object(server, "PADDLE_WEBHOOK_SECRET", _SECRET),
             patch("subscription_manager.activate_premium", activate_mock),
@@ -329,6 +334,7 @@ async def test_failed_webhook_mutation_stays_retryable_and_unprocessed():
         "post",
         "/api/webhook/paddle",
         headers={"Paddle-Signature": _make_sig(_SECRET, str(int(time.time())), body)},
+        content=body,
         patches=[
             patch.object(server, "PADDLE_WEBHOOK_SECRET", _SECRET),
             patch("subscription_manager.activate_premium", activate_mock),
@@ -364,6 +370,7 @@ async def test_webhook_retry_replays_after_failure_then_marks_processed():
         "post",
         "/api/webhook/paddle",
         headers={"Paddle-Signature": sig},
+        content=body,
         patches=[
             patch.object(server, "PADDLE_WEBHOOK_SECRET", _SECRET),
             patch("subscription_manager.activate_premium", activate_mock),
@@ -375,6 +382,7 @@ async def test_webhook_retry_replays_after_failure_then_marks_processed():
         "post",
         "/api/webhook/paddle",
         headers={"Paddle-Signature": sig},
+        content=body,
         patches=[
             patch.object(server, "PADDLE_WEBHOOK_SECRET", _SECRET),
             patch("subscription_manager.activate_premium", activate_mock),
@@ -409,6 +417,7 @@ async def test_successful_webhook_marks_processed_after_business_mutation():
         "post",
         "/api/webhook/paddle",
         headers={"Paddle-Signature": _make_sig(_SECRET, str(int(time.time())), body)},
+        content=body,
         patches=[
             patch.object(server, "PADDLE_WEBHOOK_SECRET", _SECRET),
             patch("subscription_manager.activate_premium", activate_mock),
@@ -443,6 +452,7 @@ async def test_transaction_completed_does_not_grant_premium_without_expiry():
         "post",
         "/api/webhook/paddle",
         headers={"Paddle-Signature": _make_sig(_SECRET, str(int(time.time())), body)},
+        content=body,
         patches=[
             patch.object(server, "PADDLE_WEBHOOK_SECRET", _SECRET),
             patch("subscription_manager.activate_premium", activate_mock),

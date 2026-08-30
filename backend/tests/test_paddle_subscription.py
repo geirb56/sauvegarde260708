@@ -250,7 +250,11 @@ class TestAccessControlResolve:
     def test_user_isolation(self):
         """Two users with different tiers must not share access."""
         free_access = _resolve_access("user_free", {"user_id": "user_free", "status": "free"})
-        prem_access = _resolve_access("user_prem", {"user_id": "user_prem", "status": "premium"})
+        future = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+        prem_access = _resolve_access(
+            "user_prem",
+            {"user_id": "user_prem", "status": "premium", "premium_expires_at": future},
+        )
 
         assert free_access.tier == Tier.FREE
         assert prem_access.tier == Tier.PREMIUM
