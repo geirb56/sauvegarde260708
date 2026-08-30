@@ -46,8 +46,10 @@ _REAL_ASYNC_CLIENT = httpx.AsyncClient
 
 
 class _UpdateResult:
-    matched_count = 1
-    modified_count = 1
+    def __init__(self, matched_count: int = 0, modified_count: int = 0, upserted_id: Optional[str] = None) -> None:
+        self.matched_count = matched_count
+        self.modified_count = modified_count
+        self.upserted_id = upserted_id
 
 
 class _Collection:
@@ -55,10 +57,47 @@ class _Collection:
         self._docs = [dict(doc) for doc in (docs or [])]
         self.index_calls: list[dict[str, Any]] = []
         self._unique_indexes: set[str] = set()
+        self.before_update_hook = None
 
     @staticmethod
     def _matches(doc: dict, query: dict) -> bool:
-        return all(doc.get(k) == v for k, v in query.items() if not isinstance(v, dict))
+        def _eval_clause(field_value, op: str, expected, *, field_exists: bool) -> bool:
+            if op == "$exists":
+                return field_exists is bool(expected)
+            if op == "$lt":
+                return field_value is not None and field_value < expected
+            if op == "$lte":
+                return field_value is not None and field_value <= expected
+            if op == "$ne":
+                return field_value != expected
+            if op == "$in":
+                return field_value in (expected or [])
+            if op == "$type":
+                if expected == "string":
+                    return isinstance(field_value, str)
+                return False
+            return False
+
+        for key, value in query.items():
+            if key == "$or":
+                if not any(_Collection._matches(doc, sub) for sub in value):
+                    return False
+                continue
+            if key == "$and":
+                if not all(_Collection._matches(doc, sub) for sub in value):
+                    return False
+                continue
+
+            field_exists = key in doc
+            field_value = doc.get(key)
+            if isinstance(value, dict):
+                for op, expected in value.items():
+                    if not _eval_clause(field_value, op, expected, field_exists=field_exists):
+                        return False
+            else:
+                if field_value != value:
+                    return False
+        return True
 
     def _copy(self, doc: Optional[dict]) -> Optional[dict]:
         return None if doc is None else dict(doc)
@@ -102,6 +141,8 @@ class _Collection:
         self._docs.append(new_doc)
 
     async def update_one(self, query: dict, update: dict, upsert: bool = False) -> _UpdateResult:
+        if self.before_update_hook:
+            await self.before_update_hook(query, update, upsert)
         for doc in self._docs:
             if self._matches(doc, query):
                 candidate = dict(doc)
@@ -109,13 +150,15 @@ class _Collection:
                 self._check_uniques(candidate, ignore=doc)
                 doc.clear()
                 doc.update(candidate)
-                return _UpdateResult()
+                return _UpdateResult(matched_count=1, modified_count=1)
         if upsert:
             new_doc = {k: v for k, v in query.items() if not isinstance(v, dict)}
             self._apply_update(new_doc, update, inserting=True)
             self._check_uniques(new_doc)
+            new_doc["_id"] = new_doc.get("_id", f"upsert-{len(self._docs)+1}")
             self._docs.append(new_doc)
-        return _UpdateResult()
+            return _UpdateResult(matched_count=0, modified_count=0, upserted_id=str(new_doc["_id"]))
+        return _UpdateResult(matched_count=0, modified_count=0)
 
     async def find_one_and_update(
         self,
@@ -273,6 +316,7 @@ async def _call(
         for item in [patch.object(server, "db", fake_db), *patches]:
             item.start()
             started.append(item)
+        server.rate_limiter.requests.clear()
         async with _REAL_ASYNC_CLIENT(
             transport=httpx.ASGITransport(app=server.app, raise_app_exceptions=raise_app_exceptions),
             base_url="http://test",
@@ -556,6 +600,146 @@ async def test_invalid_current_period_end_fails_closed():
     assert event_doc["status"] == "failed"
 
 
+async def test_legacy_event_without_status_is_recovered_and_processed():
+    fake_db = _FakeDB()
+    fake_db.paddle_events._docs.append(
+        {"event_id": "evt_legacy_no_status", "event_type": "subscription.activated"}
+    )
+    body = _event_body(
+        event_id="evt_legacy_no_status",
+        event_type="subscription.activated",
+        occurred_at=datetime.now(timezone.utc),
+        data=_subscription_data(period_end=datetime.now(timezone.utc) + timedelta(days=30)),
+    )
+    activate_mock = AsyncMock(return_value={"status": "premium"})
+
+    res = await _post_webhook(
+        fake_db,
+        body,
+        patches=[patch("subscription_manager.activate_premium", activate_mock)],
+    )
+
+    assert res.status_code == 200, res.text
+    assert activate_mock.await_count == 1
+    event_doc = await fake_db.paddle_events.find_one({"event_id": "evt_legacy_no_status"})
+    assert event_doc["status"] == "processed"
+
+
+async def test_processing_recent_claim_is_not_reclaimed():
+    fake_db = _FakeDB()
+    fake_db.paddle_events._docs.append(
+        {
+            "event_id": "evt_processing_recent",
+            "event_type": "subscription.activated",
+            "status": "processing",
+            "claimed_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    body = _event_body(
+        event_id="evt_processing_recent",
+        event_type="subscription.activated",
+        occurred_at=datetime.now(timezone.utc),
+        data=_subscription_data(period_end=datetime.now(timezone.utc) + timedelta(days=30)),
+    )
+    activate_mock = AsyncMock()
+
+    res = await _post_webhook(
+        fake_db,
+        body,
+        patches=[patch("subscription_manager.activate_premium", activate_mock)],
+    )
+
+    assert res.status_code == 200, res.text
+    assert res.json()["status"] == "processing"
+    assert activate_mock.await_count == 0
+
+
+async def test_processing_stale_claim_is_reclaimed():
+    fake_db = _FakeDB()
+    stale_at = datetime.now(timezone.utc) - timedelta(seconds=server.PADDLE_EVENT_PROCESSING_LEASE_SECONDS + 5)
+    fake_db.paddle_events._docs.append(
+        {
+            "event_id": "evt_processing_stale",
+            "event_type": "subscription.activated",
+            "status": "processing",
+            "claimed_at": stale_at.isoformat(),
+        }
+    )
+    body = _event_body(
+        event_id="evt_processing_stale",
+        event_type="subscription.activated",
+        occurred_at=datetime.now(timezone.utc),
+        data=_subscription_data(period_end=datetime.now(timezone.utc) + timedelta(days=30)),
+    )
+    activate_mock = AsyncMock(return_value={"status": "premium"})
+
+    res = await _post_webhook(
+        fake_db,
+        body,
+        patches=[patch("subscription_manager.activate_premium", activate_mock)],
+    )
+
+    assert res.status_code == 200, res.text
+    assert activate_mock.await_count == 1
+    event_doc = await fake_db.paddle_events.find_one({"event_id": "evt_processing_stale"})
+    assert event_doc["status"] == "processed"
+
+
+async def test_processing_invalid_claimed_at_is_reclaimed_fail_safe():
+    fake_db = _FakeDB()
+    fake_db.paddle_events._docs.append(
+        {
+            "event_id": "evt_processing_invalid_claimed_at",
+            "event_type": "subscription.activated",
+            "status": "processing",
+            "claimed_at": "not-a-date",
+        }
+    )
+    body = _event_body(
+        event_id="evt_processing_invalid_claimed_at",
+        event_type="subscription.activated",
+        occurred_at=datetime.now(timezone.utc),
+        data=_subscription_data(period_end=datetime.now(timezone.utc) + timedelta(days=30)),
+    )
+    activate_mock = AsyncMock(return_value={"status": "premium"})
+
+    res = await _post_webhook(
+        fake_db,
+        body,
+        patches=[patch("subscription_manager.activate_premium", activate_mock)],
+    )
+
+    assert res.status_code == 200, res.text
+    assert activate_mock.await_count == 1
+
+
+async def test_processing_missing_claimed_at_is_reclaimed_fail_safe():
+    fake_db = _FakeDB()
+    fake_db.paddle_events._docs.append(
+        {
+            "event_id": "evt_processing_missing_claimed_at",
+            "event_type": "subscription.activated",
+            "status": "processing",
+        }
+    )
+    body = _event_body(
+        event_id="evt_processing_missing_claimed_at",
+        event_type="subscription.activated",
+        occurred_at=datetime.now(timezone.utc),
+        data=_subscription_data(period_end=datetime.now(timezone.utc) + timedelta(days=30)),
+    )
+    activate_mock = AsyncMock(return_value={"status": "premium"})
+
+    res = await _post_webhook(
+        fake_db,
+        body,
+        patches=[patch("subscription_manager.activate_premium", activate_mock)],
+    )
+
+    assert res.status_code == 200, res.text
+    assert activate_mock.await_count == 1
+
+
 async def test_two_simultaneous_deliveries_execute_mutation_once():
     fake_db = _FakeDB()
     release = asyncio.Event()
@@ -573,6 +757,51 @@ async def test_two_simultaneous_deliveries_execute_mutation_once():
         event_type="subscription.activated",
         occurred_at=datetime.now(timezone.utc),
         data=_subscription_data(period_end=future),
+    )
+
+    first_task = asyncio.create_task(
+        _post_webhook(fake_db, body, patches=[patch("subscription_manager.activate_premium", activate_mock)])
+    )
+    await entered.wait()
+    second_res = await _post_webhook(
+        fake_db,
+        body,
+        patches=[patch("subscription_manager.activate_premium", activate_mock)],
+    )
+    release.set()
+    first_res = await first_task
+
+    assert first_res.status_code == 200, first_res.text
+    assert second_res.status_code == 200, second_res.text
+    assert second_res.json()["status"] == "processing"
+    assert activate_mock.await_count == 1
+
+
+async def test_two_simultaneous_stale_reclaims_execute_mutation_once():
+    fake_db = _FakeDB()
+    stale_at = datetime.now(timezone.utc) - timedelta(seconds=server.PADDLE_EVENT_PROCESSING_LEASE_SECONDS + 5)
+    fake_db.paddle_events._docs.append(
+        {
+            "event_id": "evt_stale_reclaim_once",
+            "event_type": "subscription.activated",
+            "status": "processing",
+            "claimed_at": stale_at.isoformat(),
+        }
+    )
+    release = asyncio.Event()
+    entered = asyncio.Event()
+
+    async def _activate(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        return {"status": "premium"}
+
+    activate_mock = AsyncMock(side_effect=_activate)
+    body = _event_body(
+        event_id="evt_stale_reclaim_once",
+        event_type="subscription.activated",
+        occurred_at=datetime.now(timezone.utc),
+        data=_subscription_data(period_end=datetime.now(timezone.utc) + timedelta(days=30)),
     )
 
     first_task = asyncio.create_task(
@@ -734,6 +963,230 @@ async def test_newer_event_can_update_subscription_state_normally():
     assert subscription["premium_expires_at"] == _iso(second_end)
 
 
+async def test_concurrent_two_event_ids_old_starts_first_newer_event_wins():
+    fake_db = _FakeDB()
+    now = datetime.now(timezone.utc)
+    t1 = now - timedelta(minutes=1)
+    t2 = now
+    _seed_subscription(
+        fake_db,
+        premium_expires_at=now + timedelta(days=30),
+        paddle_last_event_at=now - timedelta(days=2),
+    )
+
+    old_entered = asyncio.Event()
+    release_old = asyncio.Event()
+
+    async def _delay_old_event(_query, update, _upsert):
+        event_id = ((update or {}).get("$set") or {}).get("paddle_last_event_id")
+        if event_id == "evt_old_start_first":
+            old_entered.set()
+            await release_old.wait()
+
+    fake_db.subscriptions.before_update_hook = _delay_old_event
+
+    old_event = _event_body(
+        event_id="evt_old_start_first",
+        event_type="subscription.updated",
+        occurred_at=t1,
+        data=_subscription_data(status="active", period_end=now + timedelta(days=10), subscription_id="sub_old"),
+    )
+    new_event = _event_body(
+        event_id="evt_new_start_second",
+        event_type="subscription.updated",
+        occurred_at=t2,
+        data=_subscription_data(status="active", period_end=now + timedelta(days=30), subscription_id="sub_new"),
+    )
+
+    old_task = asyncio.create_task(_post_webhook(fake_db, old_event))
+    await asyncio.wait_for(old_entered.wait(), timeout=2.0)
+    new_res = await _post_webhook(fake_db, new_event)
+    release_old.set()
+    old_res = await old_task
+
+    assert old_res.status_code == 200, old_res.text
+    assert new_res.status_code == 200, new_res.text
+    subscription = await fake_db.subscriptions.find_one({"user_id": _USER_ID})
+    assert subscription["paddle_last_event_at"] == _iso(t2)
+    assert subscription["paddle_subscription_id"] == "sub_new"
+
+
+async def test_concurrent_two_event_ids_new_starts_first_old_finishes_first_newer_event_wins():
+    fake_db = _FakeDB()
+    now = datetime.now(timezone.utc)
+    t1 = now - timedelta(minutes=1)
+    t2 = now
+    _seed_subscription(
+        fake_db,
+        premium_expires_at=now + timedelta(days=30),
+        paddle_last_event_at=now - timedelta(days=2),
+    )
+
+    new_entered = asyncio.Event()
+    release_new = asyncio.Event()
+
+    async def _delay_new_event(_query, update, _upsert):
+        event_id = ((update or {}).get("$set") or {}).get("paddle_last_event_id")
+        if event_id == "evt_new_start_first":
+            new_entered.set()
+            await release_new.wait()
+
+    fake_db.subscriptions.before_update_hook = _delay_new_event
+
+    new_event = _event_body(
+        event_id="evt_new_start_first",
+        event_type="subscription.updated",
+        occurred_at=t2,
+        data=_subscription_data(status="active", period_end=now + timedelta(days=30), subscription_id="sub_new"),
+    )
+    old_event = _event_body(
+        event_id="evt_old_finishes_first",
+        event_type="subscription.updated",
+        occurred_at=t1,
+        data=_subscription_data(status="active", period_end=now + timedelta(days=10), subscription_id="sub_old"),
+    )
+
+    new_task = asyncio.create_task(_post_webhook(fake_db, new_event))
+    await asyncio.wait_for(new_entered.wait(), timeout=2.0)
+    old_res = await _post_webhook(fake_db, old_event)
+    release_new.set()
+    new_res = await new_task
+
+    assert old_res.status_code == 200, old_res.text
+    assert new_res.status_code == 200, new_res.text
+    subscription = await fake_db.subscriptions.find_one({"user_id": _USER_ID})
+    assert subscription["paddle_last_event_at"] == _iso(t2)
+    assert subscription["paddle_subscription_id"] == "sub_new"
+
+
+async def test_concurrent_canceled_newer_blocks_older_active():
+    fake_db = _FakeDB()
+    now = datetime.now(timezone.utc)
+    t1 = now - timedelta(minutes=1)
+    t2 = now
+    _seed_subscription(
+        fake_db,
+        premium_expires_at=now + timedelta(days=30),
+        paddle_last_event_at=now - timedelta(days=2),
+    )
+
+    old_entered = asyncio.Event()
+    release_old = asyncio.Event()
+
+    async def _delay_old_event(_query, update, _upsert):
+        event_id = ((update or {}).get("$set") or {}).get("paddle_last_event_id")
+        if event_id == "evt_old_active":
+            old_entered.set()
+            await release_old.wait()
+
+    fake_db.subscriptions.before_update_hook = _delay_old_event
+
+    old_active = _event_body(
+        event_id="evt_old_active",
+        event_type="subscription.updated",
+        occurred_at=t1,
+        data=_subscription_data(status="active", period_end=now + timedelta(days=10), subscription_id="sub_old"),
+    )
+    new_canceled = _event_body(
+        event_id="evt_new_canceled",
+        event_type="subscription.canceled",
+        occurred_at=t2,
+        data=_subscription_data(period_end=now - timedelta(minutes=5), subscription_id="sub_old"),
+    )
+
+    old_task = asyncio.create_task(_post_webhook(fake_db, old_active))
+    await asyncio.wait_for(old_entered.wait(), timeout=2.0)
+    canceled_res = await _post_webhook(fake_db, new_canceled)
+    release_old.set()
+    old_res = await old_task
+
+    assert old_res.status_code == 200, old_res.text
+    assert canceled_res.status_code == 200, canceled_res.text
+    subscription = await fake_db.subscriptions.find_one({"user_id": _USER_ID})
+    assert subscription["paddle_last_event_at"] == _iso(t2)
+    assert subscription["status"] == "free"
+    assert subscription.get("paddle_last_event_id") == "evt_new_canceled"
+
+
+async def test_concurrent_active_newer_blocks_older_canceled():
+    fake_db = _FakeDB()
+    now = datetime.now(timezone.utc)
+    t1 = now - timedelta(minutes=1)
+    t2 = now
+    _seed_subscription(
+        fake_db,
+        premium_expires_at=now + timedelta(days=30),
+        paddle_last_event_at=now - timedelta(days=2),
+    )
+
+    old_entered = asyncio.Event()
+    release_old = asyncio.Event()
+
+    async def _delay_old_event(_query, update, _upsert):
+        event_id = ((update or {}).get("$set") or {}).get("paddle_last_event_id")
+        if event_id == "evt_old_canceled":
+            old_entered.set()
+            await release_old.wait()
+
+    fake_db.subscriptions.before_update_hook = _delay_old_event
+
+    old_canceled = _event_body(
+        event_id="evt_old_canceled",
+        event_type="subscription.canceled",
+        occurred_at=t1,
+        data=_subscription_data(period_end=now - timedelta(minutes=5), subscription_id="sub_old"),
+    )
+    new_active = _event_body(
+        event_id="evt_new_active",
+        event_type="subscription.updated",
+        occurred_at=t2,
+        data=_subscription_data(status="active", period_end=now + timedelta(days=25), subscription_id="sub_new"),
+    )
+
+    old_task = asyncio.create_task(_post_webhook(fake_db, old_canceled))
+    await asyncio.wait_for(old_entered.wait(), timeout=2.0)
+    active_res = await _post_webhook(fake_db, new_active)
+    release_old.set()
+    old_res = await old_task
+
+    assert old_res.status_code == 200, old_res.text
+    assert active_res.status_code == 200, active_res.text
+    subscription = await fake_db.subscriptions.find_one({"user_id": _USER_ID})
+    assert subscription["paddle_last_event_at"] == _iso(t2)
+    assert subscription["status"] == "premium"
+    assert subscription["paddle_subscription_id"] == "sub_new"
+
+
+async def test_equal_occurred_at_uses_event_id_tie_break_deterministically():
+    fake_db = _FakeDB()
+    now = datetime.now(timezone.utc)
+    shared_time = now
+
+    low_id = _event_body(
+        event_id="evt_equal_A",
+        event_type="subscription.updated",
+        occurred_at=shared_time,
+        data=_subscription_data(status="active", period_end=now + timedelta(days=7), subscription_id="sub_low"),
+    )
+    high_id = _event_body(
+        event_id="evt_equal_B",
+        event_type="subscription.updated",
+        occurred_at=shared_time,
+        data=_subscription_data(status="active", period_end=now + timedelta(days=30), subscription_id="sub_high"),
+    )
+
+    first = asyncio.create_task(_post_webhook(fake_db, low_id))
+    second = asyncio.create_task(_post_webhook(fake_db, high_id))
+    first_res, second_res = await asyncio.gather(first, second)
+
+    assert first_res.status_code == 200, first_res.text
+    assert second_res.status_code == 200, second_res.text
+    subscription = await fake_db.subscriptions.find_one({"user_id": _USER_ID})
+    assert subscription["paddle_last_event_at"] == _iso(shared_time)
+    assert subscription["paddle_last_event_id"] == "evt_equal_B"
+    assert subscription["paddle_subscription_id"] == "sub_high"
+
+
 async def test_transaction_completed_does_not_grant_premium():
     fake_db = _FakeDB()
     fake_db.payment_transactions._docs.append({"transaction_id": "txn_done", "status": "pending"})
@@ -763,19 +1216,68 @@ async def test_transaction_completed_does_not_grant_premium():
     assert txn["status"] == "completed"
 
 
-async def test_startup_creates_unique_paddle_event_index():
+async def test_startup_uses_paddle_event_index_helper():
     fake_db = _FakeDB()
     fake_bootstrap = types.SimpleNamespace(bootstrap=lambda: None)
+    ensure_paddle_index = AsyncMock()
 
     with patch.object(server, "db", fake_db), \
          patch.object(server, "_ensure_subscriptions_unique_index", AsyncMock()), \
+         patch.object(server, "_ensure_paddle_events_unique_index", ensure_paddle_index), \
          patch.object(server, "validate_environment_configuration"), \
          patch.object(server, "validate_demo_mode_safety"), \
          patch.object(server, "log_demo_mode_status"), \
          patch.dict(sys.modules, {"garmin.bootstrap": fake_bootstrap}):
         await server.create_db_indexes()
 
-    assert any(
-        call.get("key") == "event_id" and call.get("unique") is True
-        for call in fake_db.paddle_events.index_calls
-    )
+    ensure_paddle_index.assert_awaited_once_with(fake_db)
+
+
+async def test_startup_fails_fast_when_paddle_index_helper_fails():
+    fake_db = _FakeDB()
+    fake_bootstrap = types.SimpleNamespace(bootstrap=lambda: None)
+    ensure_error = RuntimeError("paddle index failed")
+    ensure_paddle_index = AsyncMock(side_effect=ensure_error)
+    other_index = AsyncMock()
+    fake_db.workouts.create_index = other_index
+
+    with patch.object(server, "db", fake_db), \
+         patch.object(server, "_ensure_subscriptions_unique_index", AsyncMock()), \
+         patch.object(server, "_ensure_paddle_events_unique_index", ensure_paddle_index), \
+         patch.object(server, "validate_environment_configuration"), \
+         patch.object(server, "validate_demo_mode_safety"), \
+         patch.object(server, "log_demo_mode_status"), \
+         patch.dict(sys.modules, {"garmin.bootstrap": fake_bootstrap}):
+        with pytest.raises(RuntimeError, match="paddle index failed"):
+            await server.create_db_indexes()
+
+    other_index.assert_not_called()
+
+
+async def test_lease_seconds_uses_valid_integer():
+    assert server._resolve_paddle_event_processing_lease_seconds("900") == 900
+
+
+async def test_lease_seconds_clamps_minimum_60():
+    assert server._resolve_paddle_event_processing_lease_seconds("30") == 60
+
+
+async def test_lease_seconds_empty_string_falls_back_to_900(caplog):
+    caplog.set_level("WARNING", logger=server.logger.name)
+    value = server._resolve_paddle_event_processing_lease_seconds("")
+    assert value == 900
+    assert "falling back to 900" in caplog.text
+
+
+async def test_lease_seconds_invalid_string_falls_back_to_900(caplog):
+    caplog.set_level("WARNING", logger=server.logger.name)
+    value = server._resolve_paddle_event_processing_lease_seconds("900s")
+    assert value == 900
+    assert "falling back to 900" in caplog.text
+
+
+async def test_lease_seconds_missing_env_falls_back_to_900():
+    with patch.dict(os.environ, {}, clear=True):
+        assert server._resolve_paddle_event_processing_lease_seconds(
+            os.getenv("PADDLE_EVENT_PROCESSING_LEASE_SECONDS")
+        ) == 900
