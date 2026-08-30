@@ -294,31 +294,61 @@ rate_limiter = RateLimiter(requests_per_minute=120, burst_limit=30)
 RATE_LIMIT_EXEMPT = {"/api/cache/stats"}
 
 
-def get_user_id_from_request(request: Request) -> str:
-    """Extract user_id from request.
+def get_rate_limit_key_from_request(request: Request) -> str:
+    """Return a technical key used exclusively for rate limiting.
 
-    Resolution order (Step 2: JWT-only for client identity):
-    1. JWT ****** — Authorization: ****** (sub claim)
-    2. IP address        — last-resort fallback
+    Resolution order:
+    1. JWT sub claim — if a valid JWT is present.
+    2. X-Forwarded-For / client IP — anonymous fallback.
+
+    IMPORTANT: the returned value is only suitable as a rate-limit bucket key.
+    It MUST NOT be used as a user_id, subscription identity, or passed to
+    get_user_access().  An IP address is never a user identity.
     """
-    # 1. Try JWT ****** first
+    # 1. Try JWT first
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
         token = auth_header[len("Bearer "):]
         try:
             from auth.jwt_utils import decode_access_token
             payload = decode_access_token(token)
-            user_id = payload.get("sub")
-            if user_id:
-                return user_id
+            sub = payload.get("sub")
+            if sub:
+                return sub
         except Exception:
-            pass  # Fall through to next resolution method
+            pass  # Fall through to IP-based key
 
-    # 2. Fallback to IP
+    # 2. Fallback to IP (acceptable only for rate limiting)
     forwarded = request.headers.get("X-Forwarded-For")
     if forwarded:
         return forwarded.split(",")[0].strip()
     return request.client.host if request.client else "unknown"
+
+
+def get_jwt_user_id_from_request(request: Request) -> Optional[str]:
+    """Extract the authenticated user_id exclusively from a valid JWT.
+
+    Returns the JWT ``sub`` claim when a valid, non-expired ****** is
+    present.  Returns ``None`` in every other case:
+      - no Authorization header
+      - malformed / expired / invalid token
+      - token present but ``sub`` claim missing
+
+    This function NEVER falls back to an IP address or any other pseudo-identity.
+    It is the only safe source of identity for subscription / access-control
+    decisions.
+    """
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return None
+    token = auth_header[len("Bearer "):]
+    try:
+        from auth.jwt_utils import decode_access_token
+        payload = decode_access_token(token)
+        sub = payload.get("sub")
+        return sub if sub else None
+    except Exception:
+        return None
 
 
 # ========== AUTH DEPENDENCY ==========
@@ -380,7 +410,7 @@ async def rate_limit_middleware(request: Request, call_next):
     if not request.url.path.startswith("/api"):
         return await call_next(request)
     
-    user_id = get_user_id_from_request(request)
+    user_id = get_rate_limit_key_from_request(request)
     
     if rate_limiter.is_limited(user_id):
         logger.warning(f"[RateLimit] User {user_id} exceeded rate limit")
@@ -421,8 +451,22 @@ async def subscription_middleware(request: Request, call_next):
     if route_access != RouteAccess.PREMIUM:
         return await call_next(request)
 
-    # Premium route — verify user's subscription tier
-    user_id = get_user_id_from_request(request)
+    # Premium route — verify user's subscription tier.
+    # Identity MUST come from a valid JWT; an IP address is never a user identity.
+    user_id = get_jwt_user_id_from_request(request)
+
+    if not user_id:
+        # No valid JWT (absent, expired, or invalid) → 401 before any DB access.
+        # get_user_access() is NOT called, so no subscription document is created.
+        logger.info(f"[Subscription] Unauthenticated request to premium route '{path}' — 401")
+        return JSONResponse(
+            status_code=401,
+            content={
+                "error": "authentication_required",
+                "message": "Authentication required",
+            },
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     try:
         user_access = await get_user_access(db, user_id)
