@@ -411,6 +411,15 @@ async def check_premium_expiration(db: AsyncIOMotorDatabase, subscription: Dict)
 
     expires_str = subscription.get("premium_expires_at")
     if not expires_str:
+        now = datetime.now(timezone.utc)
+        await db.subscriptions.update_one(
+            {"user_id": subscription["user_id"]},
+            {"$set": {"status": SubscriptionStatus.FREE, "updated_at": now.isoformat()}},
+        )
+        subscription["status"] = SubscriptionStatus.FREE
+        logger.warning(
+            f"Premium for user '{subscription['user_id']}' missing expiry — set to FREE"
+        )
         return subscription
 
     try:
@@ -427,7 +436,16 @@ async def check_premium_expiration(db: AsyncIOMotorDatabase, subscription: Dict)
                 f"Premium expired for user '{subscription['user_id']}' — set to FREE"
             )
     except Exception as exc:
-        logger.error(f"Error checking premium expiration: {exc}")
+        now = datetime.now(timezone.utc)
+        await db.subscriptions.update_one(
+            {"user_id": subscription["user_id"]},
+            {"$set": {"status": SubscriptionStatus.FREE, "updated_at": now.isoformat()}},
+        )
+        subscription["status"] = SubscriptionStatus.FREE
+        logger.error(
+            f"Error checking premium expiration for user '{subscription['user_id']}': {exc}. "
+            "Set to FREE."
+        )
 
     return subscription
 

@@ -4620,7 +4620,7 @@ async def create_paddle_checkout(
     Returns a transaction_id that the frontend passes to
     ``Paddle.Checkout.open({ transactionId })`` to display the checkout overlay.
 
-    The price defaults to PADDLE_PRICE_ID (Premium 4.99 EUR/month).
+    The price is ALWAYS taken from PADDLE_PRICE_ID (Premium 4.99 EUR/month).
 
     Security:
     - user_id is ALWAYS taken from the JWT token, never from the request body.
@@ -4629,11 +4629,13 @@ async def create_paddle_checkout(
     """
     if not PADDLE_API_KEY:
         raise HTTPException(status_code=503, detail="Paddle not configured on this server")
-    if not PADDLE_PRICE_ID and not request.price_id:
+    if not PADDLE_PRICE_ID:
         raise HTTPException(status_code=503, detail="Paddle price ID not configured")
+    if request.price_id and request.price_id != PADDLE_PRICE_ID:
+        raise HTTPException(status_code=400, detail="Client price_id does not match configured Paddle price")
 
     user_id = user["id"]
-    price_id = request.price_id or PADDLE_PRICE_ID
+    price_id = PADDLE_PRICE_ID
 
     # Resolve existing Paddle customer_id if available, so Paddle pre-fills the
     # checkout form for returning subscribers.
@@ -4729,14 +4731,14 @@ async def paddle_webhook(request: Request):
     - All subscription mutations go through subscription_manager helpers,
       which are then surfaced via access_control.get_user_access() — the
       single source of truth.
-    - Idempotence: events are deduplicated on their `event_id`.
+    - Idempotence: only events already completed successfully are treated as duplicates.
 
     Supported Paddle Billing event types:
         subscription.activated   → activate_premium()
         subscription.updated     → renew_premium() (renewal / plan update)
         subscription.cancelled   → cancel_subscription()
         subscription.past_due    → log warning (access expires naturally)
-        transaction.completed    → fallback for one-time or initial payment
+        transaction.completed    → audit/update local transaction state only
         transaction.payment_failed → log warning (access will lapse at expiry)
     """
     body = await request.body()
@@ -4756,21 +4758,17 @@ async def paddle_webhook(request: Request):
     event_type = event.get("event_type", "")
     data       = event.get("data", {})
 
+    if not event_id:
+        logger.error("[Paddle] Webhook missing stable event_id — rejecting event")
+        raise HTTPException(status_code=400, detail="Paddle webhook event_id is required")
+
     logger.info(f"[Paddle] Webhook received: event_type={event_type!r} event_id={event_id!r}")
 
     # ── Idempotence guard ────────────────────────────────────────────────────
-    if event_id:
-        existing = await db.paddle_events.find_one({"event_id": event_id})
-        if existing:
-            logger.info(f"[Paddle] Duplicate event_id={event_id!r} — skipping")
-            return {"received": True, "status": "duplicate"}
-        # Record before processing to prevent double-activation in case of
-        # retry arriving before DB write completes (best-effort idempotence).
-        await db.paddle_events.insert_one({
-            "event_id": event_id,
-            "event_type": event_type,
-            "processed_at": datetime.now(timezone.utc).isoformat(),
-        })
+    existing = await db.paddle_events.find_one({"event_id": event_id})
+    if existing and existing.get("status") == "processed":
+        logger.info(f"[Paddle] Duplicate processed event_id={event_id!r} — skipping")
+        return {"received": True, "status": "duplicate"}
 
     # ── Helper: extract user_id from custom_data ─────────────────────────────
     def _user_id_from_event(evt_data: dict) -> Optional[str]:
@@ -4793,156 +4791,180 @@ async def paddle_webhook(request: Request):
         except (ValueError, TypeError):
             return None
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # subscription.activated
-    # Fired when a subscription's status becomes "active" (typically after the
-    # first payment is processed).
-    # ─────────────────────────────────────────────────────────────────────────
-    if event_type == "subscription.activated":
-        user_id              = _user_id_from_event(data)
-        paddle_sub_id        = data.get("id")
-        paddle_customer_id   = data.get("customer_id")
-        next_billed_at       = _parse_paddle_dt(data.get("next_billed_at"))
+    def _require_premium_expiry(evt_type: str, value: Optional[str]) -> datetime:
+        parsed = _parse_paddle_dt(value)
+        if parsed is None:
+            raise RuntimeError(
+                f"Paddle event {evt_type!r} missing valid next_billed_at; refusing Premium mutation"
+            )
+        return parsed
 
-        if not user_id:
-            logger.warning("[Paddle] subscription.activated — missing user_id in custom_data")
-            return {"received": True, "status": "no_user_id"}
+    try:
+        # ─────────────────────────────────────────────────────────────────────
+        # subscription.activated
+        # Fired when a subscription's status becomes "active" (typically after the
+        # first payment is processed).
+        # ─────────────────────────────────────────────────────────────────────
+        if event_type == "subscription.activated":
+            user_id              = _user_id_from_event(data)
+            paddle_sub_id        = data.get("id")
+            paddle_customer_id   = data.get("customer_id")
 
-        from subscription_manager import activate_premium
-        await activate_premium(
-            db,
-            user_id,
-            paddle_subscription_id=paddle_sub_id,
-            paddle_customer_id=paddle_customer_id,
-            premium_expires_at=next_billed_at,
-        )
-        logger.info(
-            f"[Paddle] PREMIUM activated for user '{user_id}' "
-            f"(sub={paddle_sub_id}, next_billed={next_billed_at})"
-        )
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # subscription.updated
-    # Covers renewals, plan changes, and reactivations after past_due recovery.
-    # ─────────────────────────────────────────────────────────────────────────
-    elif event_type == "subscription.updated":
-        user_id            = _user_id_from_event(data)
-        paddle_sub_id      = data.get("id")
-        new_status         = (data.get("status") or "").lower()
-        next_billed_at     = _parse_paddle_dt(data.get("next_billed_at"))
-        paddle_customer_id = data.get("customer_id")
-
-        if not user_id:
-            logger.warning("[Paddle] subscription.updated — missing user_id in custom_data")
-            return {"received": True, "status": "no_user_id"}
-
-        if new_status in ("active", "trialing"):
-            from subscription_manager import renew_premium
-            if next_billed_at:
-                await renew_premium(db, user_id, paddle_sub_id, next_billed_at)
+            if not user_id:
+                logger.warning("[Paddle] subscription.activated — missing user_id in custom_data")
+                result = {"received": True, "status": "no_user_id"}
             else:
-                # Renewal without a known next billing date — keep premium, reset expiry
+                next_billed_at = _require_premium_expiry(event_type, data.get("next_billed_at"))
                 from subscription_manager import activate_premium
                 await activate_premium(
-                    db, user_id,
+                    db,
+                    user_id,
                     paddle_subscription_id=paddle_sub_id,
                     paddle_customer_id=paddle_customer_id,
+                    premium_expires_at=next_billed_at,
                 )
-            logger.info(
-                f"[Paddle] PREMIUM renewed for user '{user_id}' until {next_billed_at}"
+                logger.info(
+                    f"[Paddle] PREMIUM activated for user '{user_id}' "
+                    f"(sub={paddle_sub_id}, next_billed={next_billed_at})"
+                )
+                result = {"received": True}
+
+        # ─────────────────────────────────────────────────────────────────────
+        # subscription.updated
+        # Covers renewals, plan changes, and reactivations after past_due recovery.
+        # ─────────────────────────────────────────────────────────────────────
+        elif event_type == "subscription.updated":
+            user_id            = _user_id_from_event(data)
+            paddle_sub_id      = data.get("id")
+            new_status         = (data.get("status") or "").lower()
+
+            if not user_id:
+                logger.warning("[Paddle] subscription.updated — missing user_id in custom_data")
+                result = {"received": True, "status": "no_user_id"}
+            elif new_status in ("active", "trialing"):
+                next_billed_at = _require_premium_expiry(event_type, data.get("next_billed_at"))
+                from subscription_manager import renew_premium
+                await renew_premium(db, user_id, paddle_sub_id, next_billed_at)
+                logger.info(
+                    f"[Paddle] PREMIUM renewed for user '{user_id}' until {next_billed_at}"
+                )
+                result = {"received": True}
+            elif new_status == "cancelled":
+                from subscription_manager import cancel_subscription
+                await cancel_subscription(db, user_id)
+                logger.info(f"[Paddle] Subscription cancelled for user '{user_id}'")
+                result = {"received": True}
+            else:
+                logger.info(
+                    f"[Paddle] subscription.updated status={new_status!r} for user '{user_id}' — no action"
+                )
+                result = {"received": True}
+
+        # ─────────────────────────────────────────────────────────────────────
+        # subscription.cancelled
+        # The user or Paddle has cancelled the subscription.
+        # ─────────────────────────────────────────────────────────────────────
+        elif event_type == "subscription.cancelled":
+            user_id = _user_id_from_event(data)
+            if not user_id:
+                logger.warning("[Paddle] subscription.cancelled — missing user_id in custom_data")
+                result = {"received": True, "status": "no_user_id"}
+            else:
+                from subscription_manager import cancel_subscription
+                await cancel_subscription(db, user_id)
+                logger.info(f"[Paddle] Subscription cancelled for user '{user_id}'")
+                result = {"received": True}
+
+        # ─────────────────────────────────────────────────────────────────────
+        # subscription.past_due
+        # Payment failed; Paddle will retry. We do NOT immediately revoke access —
+        # access naturally lapses when premium_expires_at passes.
+        # ─────────────────────────────────────────────────────────────────────
+        elif event_type == "subscription.past_due":
+            user_id = _user_id_from_event(data)
+            logger.warning(
+                f"[Paddle] subscription.past_due for user '{user_id}' "
+                f"— access will lapse at premium_expires_at"
             )
-        elif new_status == "cancelled":
-            from subscription_manager import cancel_subscription
-            await cancel_subscription(db, user_id)
-            logger.info(f"[Paddle] Subscription cancelled for user '{user_id}'")
+            result = {"received": True}
+
+        # ─────────────────────────────────────────────────────────────────────
+        # transaction.completed
+        # Fired for every completed payment. Premium activation waits for the
+        # subscription webhook because that flow carries the canonical expiry.
+        # ─────────────────────────────────────────────────────────────────────
+        elif event_type == "transaction.completed":
+            user_id            = _user_id_from_event(data)
+            paddle_customer_id = data.get("customer_id")
+            transaction_id     = data.get("id")
+
+            logger.info(
+                f"[Paddle] transaction.completed for user '{user_id}' "
+                f"(txn={transaction_id}) — awaiting subscription webhook for Premium activation"
+            )
+
+            if transaction_id:
+                await db.payment_transactions.update_one(
+                    {"transaction_id": transaction_id},
+                    {
+                        "$set": {
+                            "status": "completed",
+                            "completed_at": datetime.now(timezone.utc).isoformat(),
+                            "paddle_customer_id": paddle_customer_id,
+                        }
+                    },
+                )
+            result = {"received": True}
+
+        # ─────────────────────────────────────────────────────────────────────
+        # transaction.payment_failed
+        # ─────────────────────────────────────────────────────────────────────
+        elif event_type == "transaction.payment_failed":
+            user_id        = _user_id_from_event(data)
+            transaction_id = data.get("id")
+            logger.warning(
+                f"[Paddle] transaction.payment_failed for user '{user_id}' txn={transaction_id}"
+            )
+            if transaction_id:
+                await db.payment_transactions.update_one(
+                    {"transaction_id": transaction_id},
+                    {"$set": {"status": "payment_failed", "updated_at": datetime.now(timezone.utc).isoformat()}},
+                )
+            result = {"received": True}
+
         else:
-            logger.info(
-                f"[Paddle] subscription.updated status={new_status!r} for user '{user_id}' — no action"
-            )
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # subscription.cancelled
-    # The user or Paddle has cancelled the subscription.
-    # ─────────────────────────────────────────────────────────────────────────
-    elif event_type == "subscription.cancelled":
-        user_id = _user_id_from_event(data)
-        if not user_id:
-            logger.warning("[Paddle] subscription.cancelled — missing user_id in custom_data")
-            return {"received": True, "status": "no_user_id"}
-
-        from subscription_manager import cancel_subscription
-        await cancel_subscription(db, user_id)
-        logger.info(f"[Paddle] Subscription cancelled for user '{user_id}'")
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # subscription.past_due
-    # Payment failed; Paddle will retry. We do NOT immediately revoke access —
-    # access naturally lapses when premium_expires_at passes.
-    # ─────────────────────────────────────────────────────────────────────────
-    elif event_type == "subscription.past_due":
-        user_id = _user_id_from_event(data)
-        logger.warning(
-            f"[Paddle] subscription.past_due for user '{user_id}' "
-            f"— access will lapse at premium_expires_at"
+            logger.info(f"[Paddle] Unhandled event type: {event_type!r}")
+            result = {"received": True}
+    except Exception as exc:
+        await db.paddle_events.update_one(
+            {"event_id": event_id},
+            {
+                "$set": {
+                    "event_id": event_id,
+                    "event_type": event_type,
+                    "status": "failed",
+                    "last_error": str(exc),
+                    "failed_at": datetime.now(timezone.utc).isoformat(),
+                }
+            },
+            upsert=True,
         )
+        raise
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # transaction.completed
-    # Fired for every completed payment (including the initial one for a
-    # subscription). Used as a fallback if subscription.activated is delayed.
-    # ─────────────────────────────────────────────────────────────────────────
-    elif event_type == "transaction.completed":
-        user_id            = _user_id_from_event(data)
-        paddle_sub_id      = data.get("subscription_id")
-        paddle_customer_id = data.get("customer_id")
-        transaction_id     = data.get("id")
+    await db.paddle_events.update_one(
+        {"event_id": event_id},
+        {
+            "$set": {
+                "event_id": event_id,
+                "event_type": event_type,
+                "status": "processed",
+                "processed_at": datetime.now(timezone.utc).isoformat(),
+            }
+        },
+        upsert=True,
+    )
 
-        if user_id and paddle_sub_id:
-            # Only activate if there is an associated subscription
-            from subscription_manager import activate_premium
-            await activate_premium(
-                db,
-                user_id,
-                paddle_subscription_id=paddle_sub_id,
-                paddle_customer_id=paddle_customer_id,
-            )
-            logger.info(
-                f"[Paddle] transaction.completed → PREMIUM for user '{user_id}' "
-                f"(txn={transaction_id})"
-            )
-
-        # Update transaction status in our DB
-        if transaction_id:
-            await db.payment_transactions.update_one(
-                {"transaction_id": transaction_id},
-                {
-                    "$set": {
-                        "status": "completed",
-                        "completed_at": datetime.now(timezone.utc).isoformat(),
-                        "paddle_customer_id": paddle_customer_id,
-                    }
-                },
-            )
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # transaction.payment_failed
-    # ─────────────────────────────────────────────────────────────────────────
-    elif event_type == "transaction.payment_failed":
-        user_id        = _user_id_from_event(data)
-        transaction_id = data.get("id")
-        logger.warning(
-            f"[Paddle] transaction.payment_failed for user '{user_id}' txn={transaction_id}"
-        )
-        if transaction_id:
-            await db.payment_transactions.update_one(
-                {"transaction_id": transaction_id},
-                {"$set": {"status": "payment_failed", "updated_at": datetime.now(timezone.utc).isoformat()}},
-            )
-
-    else:
-        logger.info(f"[Paddle] Unhandled event type: {event_type!r}")
-
-    return {"received": True}
+    return result
 from api.garmin import garmin_router
 api_router.include_router(garmin_router)
 

@@ -350,7 +350,14 @@ def _resolve_access(user_id: str, subscription: dict) -> UserAccess:
 
     # ── PREMIUM (canonical) ───────────────────────────────────────────────
     if status == "premium":
-        premium_expires_at = _parse_dt(subscription.get("premium_expires_at"))
+        raw_premium_expires_at = subscription.get("premium_expires_at")
+        premium_expires_at = _parse_dt(raw_premium_expires_at)
+        if premium_expires_at is None:
+            logger.warning(
+                f"[AccessControl] Premium subscription for '{user_id}' missing/invalid expiry "
+                "— failing closed to FREE"
+            )
+            return UserAccess(user_id=user_id, tier=Tier.FREE)
         if premium_expires_at and now > premium_expires_at:
             logger.info(f"[AccessControl] Premium expired for '{user_id}'")
             return UserAccess(
