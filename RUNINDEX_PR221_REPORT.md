@@ -6,7 +6,7 @@
 - Verification: commit message `Merge pull request #220 ...` confirms #220 merged.
 
 ## Branche
-- Working branch: `copilot/221-trial-security-one-garmin-one-trial`
+- Working branch: `copilot/copilot221-unique-server-authority`
 
 ## Cause A37
 `POST /api/subscription/start-trial` allowed any authenticated JWT user to activate a trial directly, bypassing Garmin Trial Registry authority.
@@ -22,12 +22,18 @@ Single server authority remains Garmin connect flow:
 
 `/api/subscription/start-trial` now always returns `403` and cannot activate trial.
 
+## V2/Beta contract
+1 authenticated Garmin email = 1 trial maximum.
+
 ## Source exacte de `garmin_identity`
 Server-derived only from Garmin provider profile email:
 - `backend/garmin/service.py::_derive_garmin_identity_from_profile(profile)`
 - Source field: `profile["email"]` returned by `provider.get_profile(user_id)`
 - Canonicalization: `strip().lower()`
 - Frontend-provided username/email is not used for trial grant.
+
+## V3 follow-up
+Migrate `garmin_identity` to an immutable Garmin account/provider identifier if Garmin/gccli exposes one.
 
 ## Garantie atomique
 Atomic claim is enforced in `activate_garmin_trial` with:
@@ -40,8 +46,10 @@ Concurrent requests for same Garmin identity result in one winner only.
 ## Changements fonctionnels
 - `backend/server.py`
   - Hardened `/api/subscription/start-trial`: direct activation removed, returns `403`.
+  - Startup comment near `garmin_trial_registry.create_index(...)` now matches the V2/Beta email contract and keeps V3 as documentation only.
 - `backend/subscription_manager.py`
-  - Added guardrails in `activate_garmin_trial`:
+  - Documentation/comments/messages now align with V2/Beta server-authenticated Garmin email identity.
+  - Guardrails in `activate_garmin_trial` remain unchanged:
     - PREMIUM remains PREMIUM (no regression)
     - Active TRIAL is not restarted
     - `trial_used=True` users cannot get a second trial

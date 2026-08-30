@@ -711,7 +711,7 @@ async def test_activate_garmin_trial_raises_when_identity_unavailable(db):
         with pytest.raises(NotImplementedError) as exc_info:
             await activate_garmin_trial(db, user_id, garmin_id)
 
-        assert "BLOCKER" in str(exc_info.value)
+        assert "server-authenticated Garmin identity" in str(exc_info.value)
     finally:
         sm._GARMIN_IDENTITY_AVAILABLE = original
 

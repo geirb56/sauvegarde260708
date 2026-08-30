@@ -51,10 +51,11 @@ else:  # pragma: no cover - runtime typing fallback for constrained environments
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Garmin trial blocker sentinel
+# Garmin trial identity availability sentinel
 # ---------------------------------------------------------------------------
 
-# Garmin identity is now derived server-side from gcccli auth status email.
+# V2/Beta contract: the authenticated Garmin email derived server-side from
+# gccli auth status is accepted as garmin_identity after strip().lower().
 _GARMIN_IDENTITY_AVAILABLE: bool = True
 
 # ---------------------------------------------------------------------------
@@ -243,7 +244,8 @@ async def activate_garmin_trial(
     Attempt to activate a 30-day Premium trial for a RunIndex user linked to
     a specific Garmin identity.
 
-    Enforces the product rule: 1 Garmin account = 1 Trial maximum.
+    Enforces the V2/Beta product rule: 1 authenticated Garmin email = 1 Trial
+    maximum.
 
     Algorithm (atomic, race-condition safe):
     1. Validate that garmin_identity is a non-empty server-provided value.
@@ -257,9 +259,11 @@ async def activate_garmin_trial(
     Args:
         db:               AsyncIOMotorDatabase
         user_id:          RunIndex user UUID (from JWT, never frontend-provided)
-        garmin_identity:  Stable, server-derived Garmin account identifier.
-                          MUST come from the Garmin backend, never from the
-                          request body or frontend storage.
+        garmin_identity:  Canonical server-derived Garmin identity for V2/Beta.
+                          Currently this is the authenticated Garmin email
+                          normalized with strip().lower(). It MUST come from the
+                          Garmin backend, never from the request body or
+                          frontend storage.
 
     Returns:
         The updated subscription document (status may be "trial" or "free").
@@ -269,12 +273,11 @@ async def activate_garmin_trial(
     """
     if not _GARMIN_IDENTITY_AVAILABLE:
         raise NotImplementedError(
-            "BLOCKER: activate_garmin_trial() requires a per-user Garmin identity. "
-            "The current Garmin integration uses a single shared backend account "
-            "(GARMIN_USERNAME env var) and provides no per-user Garmin identifier. "
-            "This function will be enabled once the Garmin multi-user OAuth "
-            "architecture is implemented. "
-            "See AUDIT_GARMIN_STEP3.md and the feature/garmin-trial-eligibility PR."
+            "activate_garmin_trial() requires a server-authenticated Garmin identity. "
+            "For V2/Beta this is the authenticated Garmin email derived on the "
+            "backend from gccli auth status. The guard should stay enabled unless "
+            "that server-side identity source is temporarily unavailable. "
+            "V3 may migrate to an immutable Garmin provider/account identifier if available."
         )
 
     if not garmin_identity or not str(garmin_identity).strip():
