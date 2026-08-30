@@ -2,29 +2,14 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any
+
+from services.datetime_utils import normalize_utc_datetime
 
 logger = logging.getLogger(__name__)
 
 _TARGET_PARTIAL_FILTER = {"event_id": {"$exists": True}}
 _TARGET_INDEX_NAME = "event_id_unique_partial"
-
-
-def _parse_utc_datetime(value: Any) -> Optional[datetime]:
-    if not value:
-        return None
-    if isinstance(value, datetime):
-        if value.tzinfo is None:
-            return value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc)
-    try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except (ValueError, TypeError):
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
-
 
 def _event_status_rank(status: Any) -> int:
     normalized = str(status or "").strip().lower()
@@ -39,13 +24,14 @@ def _event_status_rank(status: Any) -> int:
 
 def _event_recency(doc: dict[str, Any]) -> datetime:
     for field in ("processed_at", "failed_at", "claimed_at", "updated_at", "occurred_at"):
-        parsed = _parse_utc_datetime(doc.get(field))
+        parsed = normalize_utc_datetime(doc.get(field))
         if parsed is not None:
             return parsed
     return datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
 def _pick_event_winner(docs: list[dict[str, Any]]) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
+    """Pick one deterministic winner for a duplicate event_id group."""
     ranked = sorted(
         docs,
         key=lambda doc: (
@@ -64,6 +50,7 @@ def _pick_event_winner(docs: list[dict[str, Any]]) -> tuple[dict[str, Any], list
 
 
 async def _deduplicate_event_id_docs(col: Any, archive_col: Any) -> int:
+    """Archive and remove duplicate event_id rows before unique index creation."""
     duplicate_groups = await col.aggregate(
         [
             {"$match": {"event_id": {"$exists": True, "$ne": None}}},
@@ -125,6 +112,12 @@ def _is_target_unique_index(idx: dict[str, Any]) -> bool:
 
 
 async def ensure_paddle_events_unique_index(db: Any) -> None:
+    """
+    Idempotently migrate paddle_events to a unique partial index on event_id.
+
+    The helper deduplicates duplicate event_id groups first, archives removed
+    rows, then ensures a single compatible unique partial index.
+    """
     col = db.paddle_events
     archive_col = db.paddle_events_dedup_archive
 

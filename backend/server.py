@@ -4752,8 +4752,14 @@ async def _claim_paddle_event(db_handle, event_id: str, event_type: str) -> str:
             {
                 "$set": {
                     "event_type": event_type,
+                    "status": "processing",
                     "claimed_at": claimed_at,
-                }
+                },
+                "$unset": {
+                    "processed_at": "",
+                    "failed_at": "",
+                    "last_error": "",
+                },
             },
             return_document=ReturnDocument.AFTER,
         )
@@ -4785,7 +4791,17 @@ async def _claim_paddle_event(db_handle, event_id: str, event_type: str) -> str:
         return "processed"
     if current_status == "processing":
         return "processing"
-    return "processing"
+    if await _try_claim_existing_paddle_event(
+        db_handle,
+        event_id,
+        event_type,
+        claimed_at,
+        (current or {}).get("status"),
+    ):
+        return "claimed"
+    raise RuntimeError(
+        f"Paddle event {event_id!r} could not be claimed from status {current_status!r}"
+    )
 
 
 async def _mark_paddle_event_failed(db_handle, event_id: str, event_type: str, error: str) -> None:

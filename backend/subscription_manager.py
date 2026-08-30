@@ -42,6 +42,7 @@ from uuid import uuid4
 import logging
 
 from auth.mongo_errors import DuplicateKeyError
+from services.datetime_utils import normalize_utc_datetime
 
 if TYPE_CHECKING:
     from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -105,22 +106,6 @@ FEATURES = {
     SubscriptionStatus.PREMIUM: _premium_features(True),
     SubscriptionStatus.FREE:    _premium_features(False),
 }
-
-
-def _normalize_utc_datetime(value: Any) -> Optional[datetime]:
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        if value.tzinfo is None:
-            return value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc)
-    try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except (ValueError, TypeError):
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
 
 
 # ---------------------------------------------------------------------------
@@ -563,10 +548,10 @@ async def cancel_subscription(
 
     # Determine whether access should stay Premium until end of paid period
     subscription = await db.subscriptions.find_one({"user_id": user_id})
-    effective_expires_at = _normalize_utc_datetime(premium_expires_at)
+    effective_expires_at = normalize_utc_datetime(premium_expires_at)
     if subscription and effective_expires_at is None:
         raw_exp = subscription.get("premium_expires_at") or subscription.get("expires_at")
-        effective_expires_at = _normalize_utc_datetime(raw_exp)
+        effective_expires_at = normalize_utc_datetime(raw_exp)
 
     if effective_expires_at and effective_expires_at > now:
         # Access remains PREMIUM until end of paid period
@@ -587,7 +572,7 @@ async def cancel_subscription(
     }
     if effective_expires_at:
         update_fields["premium_expires_at"] = effective_expires_at.isoformat()
-    normalized_last_event_at = _normalize_utc_datetime(paddle_last_event_at)
+    normalized_last_event_at = normalize_utc_datetime(paddle_last_event_at)
     if normalized_last_event_at:
         update_fields["paddle_last_event_at"] = normalized_last_event_at.isoformat()
 
