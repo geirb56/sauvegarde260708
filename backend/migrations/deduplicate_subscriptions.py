@@ -66,6 +66,8 @@ _STATUS_PRIORITY: Dict[str, int] = {
     "free":          10,
     "expired":        5,
     "canceled":       5,
+    # Retained only for legacy documents written before Paddle spelling was
+    # normalized to "canceled".
     "cancelled":      5,
 }
 

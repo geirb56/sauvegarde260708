@@ -4720,7 +4720,9 @@ async def _claim_paddle_event(db_handle, event_id: str, event_type: str) -> str:
             return "processed"
         return "processing"
 
-    return "processing"
+    raise RuntimeError(
+        f"Paddle event {event_id!r} has unsupported stored status {existing_status!r}"
+    )
 
 
 async def _mark_paddle_event_failed(db_handle, event_id: str, event_type: str, error: str) -> None:

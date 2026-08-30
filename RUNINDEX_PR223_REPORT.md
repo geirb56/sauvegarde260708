@@ -1,7 +1,7 @@
 # RUNINDEX PR223 Report
 
 - Base SHA réel: `5ef2b51587b9163003590ba51618bf05e83836bb`
-- Head SHA final: `HEAD_SHA_PENDING_FINAL_COMMIT`
+- Head SHA final: `1f4f1043c3f01e62916987cf7dee3ba5208a7566`
 
 ## Fichiers modifiés
 - `RUNINDEX_PR223_REPORT.md`

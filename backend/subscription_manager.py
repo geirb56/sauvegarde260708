@@ -536,7 +536,7 @@ async def cancel_subscription(
     paddle_last_event_at: Optional[datetime] = None,
 ) -> Dict:
     """
-    Mark a subscription as cancelled.
+    Mark a subscription as canceled.
 
     Per business rule: the user keeps Premium access until premium_expires_at.
     Only when that date passes does access revert to FREE (handled lazily by
