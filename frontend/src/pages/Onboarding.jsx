@@ -9,6 +9,7 @@ import { toast } from "sonner";
 
 import { API_BASE_URL } from "@/config";
 import { useLanguage } from "@/context/LanguageContext";
+import { useSubscription } from "@/context/SubscriptionContext";
 import { useGarminSyncProgress } from "@/hooks/useGarminSyncProgress";
 
 const API = API_BASE_URL;
@@ -42,6 +43,7 @@ function SelectGrid({ options, value, onSelect, testIdPrefix }) {
 export default function Onboarding() {
   const { t } = useLanguage();
   const navigate = useNavigate();
+  const { refreshSubscription } = useSubscription();
 
   const [stepIndex, setStepIndex] = useState(0);
   const [goal, setGoal] = useState("");
@@ -134,6 +136,7 @@ export default function Onboarding() {
 
       if (res.data?.status === "connected") {
         setGarminPassword("");
+        await refreshSubscription();
         try {
           const syncRes = await axios.post(`${API}/garmin/sync`, {});
           setGarminCount(syncRes.data?.synced_count || 0);

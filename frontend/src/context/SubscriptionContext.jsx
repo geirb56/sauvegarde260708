@@ -69,9 +69,9 @@ export function SubscriptionProvider({ children }) {
     fetchSubscription();
   }, [fetchSubscription]);
 
-  const refreshSubscription = useCallback(() => {
+  const refreshSubscription = useCallback(async () => {
     setLoading(true);
-    fetchSubscription();
+    await fetchSubscription();
   }, [fetchSubscription]);
 
   // Access authority: derived exclusively from /user/features (fail closed)

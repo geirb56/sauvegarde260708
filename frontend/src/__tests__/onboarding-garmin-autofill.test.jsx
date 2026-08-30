@@ -11,6 +11,11 @@ jest.mock("axios");
 jest.mock("sonner", () => ({
   toast: { success: jest.fn(), error: jest.fn() },
 }));
+jest.mock("@/context/SubscriptionContext", () => ({
+  useSubscription: () => ({
+    refreshSubscription: jest.fn(() => Promise.resolve()),
+  }),
+}));
 
 jest.mock("@/hooks/useGarminSyncProgress", () => ({
   useGarminSyncProgress: jest.fn(() => ({
