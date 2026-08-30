@@ -106,6 +106,23 @@ FEATURES = {
     SubscriptionStatus.FREE:    _premium_features(False),
 }
 
+
+def _normalize_utc_datetime(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 # ---------------------------------------------------------------------------
 # Route tables — DEPRECATED
 # Use access_control.get_route_access() instead of these lists.
@@ -546,14 +563,10 @@ async def cancel_subscription(
 
     # Determine whether access should stay Premium until end of paid period
     subscription = await db.subscriptions.find_one({"user_id": user_id})
-    effective_expires_at = premium_expires_at
+    effective_expires_at = _normalize_utc_datetime(premium_expires_at)
     if subscription and effective_expires_at is None:
         raw_exp = subscription.get("premium_expires_at") or subscription.get("expires_at")
-        if raw_exp:
-            try:
-                effective_expires_at = datetime.fromisoformat(raw_exp.replace("Z", "+00:00"))
-            except (ValueError, TypeError):
-                pass
+        effective_expires_at = _normalize_utc_datetime(raw_exp)
 
     if effective_expires_at and effective_expires_at > now:
         # Access remains PREMIUM until end of paid period
@@ -574,8 +587,9 @@ async def cancel_subscription(
     }
     if effective_expires_at:
         update_fields["premium_expires_at"] = effective_expires_at.isoformat()
-    if paddle_last_event_at:
-        update_fields["paddle_last_event_at"] = paddle_last_event_at.isoformat()
+    normalized_last_event_at = _normalize_utc_datetime(paddle_last_event_at)
+    if normalized_last_event_at:
+        update_fields["paddle_last_event_at"] = normalized_last_event_at.isoformat()
 
     await db.subscriptions.update_one(
         {"user_id": user_id},

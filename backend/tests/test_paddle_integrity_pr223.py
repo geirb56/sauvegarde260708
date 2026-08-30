@@ -556,6 +556,146 @@ async def test_invalid_current_period_end_fails_closed():
     assert event_doc["status"] == "failed"
 
 
+async def test_legacy_event_without_status_is_recovered_and_processed():
+    fake_db = _FakeDB()
+    fake_db.paddle_events._docs.append(
+        {"event_id": "evt_legacy_no_status", "event_type": "subscription.activated"}
+    )
+    body = _event_body(
+        event_id="evt_legacy_no_status",
+        event_type="subscription.activated",
+        occurred_at=datetime.now(timezone.utc),
+        data=_subscription_data(period_end=datetime.now(timezone.utc) + timedelta(days=30)),
+    )
+    activate_mock = AsyncMock(return_value={"status": "premium"})
+
+    res = await _post_webhook(
+        fake_db,
+        body,
+        patches=[patch("subscription_manager.activate_premium", activate_mock)],
+    )
+
+    assert res.status_code == 200, res.text
+    assert activate_mock.await_count == 1
+    event_doc = await fake_db.paddle_events.find_one({"event_id": "evt_legacy_no_status"})
+    assert event_doc["status"] == "processed"
+
+
+async def test_processing_recent_claim_is_not_reclaimed():
+    fake_db = _FakeDB()
+    fake_db.paddle_events._docs.append(
+        {
+            "event_id": "evt_processing_recent",
+            "event_type": "subscription.activated",
+            "status": "processing",
+            "claimed_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    body = _event_body(
+        event_id="evt_processing_recent",
+        event_type="subscription.activated",
+        occurred_at=datetime.now(timezone.utc),
+        data=_subscription_data(period_end=datetime.now(timezone.utc) + timedelta(days=30)),
+    )
+    activate_mock = AsyncMock()
+
+    res = await _post_webhook(
+        fake_db,
+        body,
+        patches=[patch("subscription_manager.activate_premium", activate_mock)],
+    )
+
+    assert res.status_code == 200, res.text
+    assert res.json()["status"] == "processing"
+    assert activate_mock.await_count == 0
+
+
+async def test_processing_stale_claim_is_reclaimed():
+    fake_db = _FakeDB()
+    stale_at = datetime.now(timezone.utc) - timedelta(seconds=server.PADDLE_EVENT_PROCESSING_LEASE_SECONDS + 5)
+    fake_db.paddle_events._docs.append(
+        {
+            "event_id": "evt_processing_stale",
+            "event_type": "subscription.activated",
+            "status": "processing",
+            "claimed_at": stale_at.isoformat(),
+        }
+    )
+    body = _event_body(
+        event_id="evt_processing_stale",
+        event_type="subscription.activated",
+        occurred_at=datetime.now(timezone.utc),
+        data=_subscription_data(period_end=datetime.now(timezone.utc) + timedelta(days=30)),
+    )
+    activate_mock = AsyncMock(return_value={"status": "premium"})
+
+    res = await _post_webhook(
+        fake_db,
+        body,
+        patches=[patch("subscription_manager.activate_premium", activate_mock)],
+    )
+
+    assert res.status_code == 200, res.text
+    assert activate_mock.await_count == 1
+    event_doc = await fake_db.paddle_events.find_one({"event_id": "evt_processing_stale"})
+    assert event_doc["status"] == "processed"
+
+
+async def test_processing_invalid_claimed_at_is_reclaimed_fail_safe():
+    fake_db = _FakeDB()
+    fake_db.paddle_events._docs.append(
+        {
+            "event_id": "evt_processing_invalid_claimed_at",
+            "event_type": "subscription.activated",
+            "status": "processing",
+            "claimed_at": "not-a-date",
+        }
+    )
+    body = _event_body(
+        event_id="evt_processing_invalid_claimed_at",
+        event_type="subscription.activated",
+        occurred_at=datetime.now(timezone.utc),
+        data=_subscription_data(period_end=datetime.now(timezone.utc) + timedelta(days=30)),
+    )
+    activate_mock = AsyncMock(return_value={"status": "premium"})
+
+    res = await _post_webhook(
+        fake_db,
+        body,
+        patches=[patch("subscription_manager.activate_premium", activate_mock)],
+    )
+
+    assert res.status_code == 200, res.text
+    assert activate_mock.await_count == 1
+
+
+async def test_processing_missing_claimed_at_is_reclaimed_fail_safe():
+    fake_db = _FakeDB()
+    fake_db.paddle_events._docs.append(
+        {
+            "event_id": "evt_processing_missing_claimed_at",
+            "event_type": "subscription.activated",
+            "status": "processing",
+        }
+    )
+    body = _event_body(
+        event_id="evt_processing_missing_claimed_at",
+        event_type="subscription.activated",
+        occurred_at=datetime.now(timezone.utc),
+        data=_subscription_data(period_end=datetime.now(timezone.utc) + timedelta(days=30)),
+    )
+    activate_mock = AsyncMock(return_value={"status": "premium"})
+
+    res = await _post_webhook(
+        fake_db,
+        body,
+        patches=[patch("subscription_manager.activate_premium", activate_mock)],
+    )
+
+    assert res.status_code == 200, res.text
+    assert activate_mock.await_count == 1
+
+
 async def test_two_simultaneous_deliveries_execute_mutation_once():
     fake_db = _FakeDB()
     release = asyncio.Event()
@@ -573,6 +713,51 @@ async def test_two_simultaneous_deliveries_execute_mutation_once():
         event_type="subscription.activated",
         occurred_at=datetime.now(timezone.utc),
         data=_subscription_data(period_end=future),
+    )
+
+    first_task = asyncio.create_task(
+        _post_webhook(fake_db, body, patches=[patch("subscription_manager.activate_premium", activate_mock)])
+    )
+    await entered.wait()
+    second_res = await _post_webhook(
+        fake_db,
+        body,
+        patches=[patch("subscription_manager.activate_premium", activate_mock)],
+    )
+    release.set()
+    first_res = await first_task
+
+    assert first_res.status_code == 200, first_res.text
+    assert second_res.status_code == 200, second_res.text
+    assert second_res.json()["status"] == "processing"
+    assert activate_mock.await_count == 1
+
+
+async def test_two_simultaneous_stale_reclaims_execute_mutation_once():
+    fake_db = _FakeDB()
+    stale_at = datetime.now(timezone.utc) - timedelta(seconds=server.PADDLE_EVENT_PROCESSING_LEASE_SECONDS + 5)
+    fake_db.paddle_events._docs.append(
+        {
+            "event_id": "evt_stale_reclaim_once",
+            "event_type": "subscription.activated",
+            "status": "processing",
+            "claimed_at": stale_at.isoformat(),
+        }
+    )
+    release = asyncio.Event()
+    entered = asyncio.Event()
+
+    async def _activate(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        return {"status": "premium"}
+
+    activate_mock = AsyncMock(side_effect=_activate)
+    body = _event_body(
+        event_id="evt_stale_reclaim_once",
+        event_type="subscription.activated",
+        occurred_at=datetime.now(timezone.utc),
+        data=_subscription_data(period_end=datetime.now(timezone.utc) + timedelta(days=30)),
     )
 
     first_task = asyncio.create_task(
@@ -763,19 +948,18 @@ async def test_transaction_completed_does_not_grant_premium():
     assert txn["status"] == "completed"
 
 
-async def test_startup_creates_unique_paddle_event_index():
+async def test_startup_uses_paddle_event_index_helper():
     fake_db = _FakeDB()
     fake_bootstrap = types.SimpleNamespace(bootstrap=lambda: None)
+    ensure_paddle_index = AsyncMock()
 
     with patch.object(server, "db", fake_db), \
          patch.object(server, "_ensure_subscriptions_unique_index", AsyncMock()), \
+         patch.object(server, "_ensure_paddle_events_unique_index", ensure_paddle_index), \
          patch.object(server, "validate_environment_configuration"), \
          patch.object(server, "validate_demo_mode_safety"), \
          patch.object(server, "log_demo_mode_status"), \
          patch.dict(sys.modules, {"garmin.bootstrap": fake_bootstrap}):
         await server.create_db_indexes()
 
-    assert any(
-        call.get("key") == "event_id" and call.get("unique") is True
-        for call in fake_db.paddle_events.index_calls
-    )
+    ensure_paddle_index.assert_awaited_once_with(fake_db)

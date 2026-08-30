@@ -4666,8 +4666,41 @@ def _require_occurred_at(event_type: str, event: dict) -> datetime:
     return occurred_at
 
 
+PADDLE_EVENT_PROCESSING_LEASE_SECONDS = max(
+    60,
+    int(os.getenv("PADDLE_EVENT_PROCESSING_LEASE_SECONDS", "900")),
+)
+
+
+async def _try_claim_existing_paddle_event(
+    db_handle,
+    event_id: str,
+    event_type: str,
+    now_iso: str,
+    match_status,
+) -> bool:
+    reclaimed = await db_handle.paddle_events.find_one_and_update(
+        {"event_id": event_id, "status": match_status},
+        {
+            "$set": {
+                "event_type": event_type,
+                "status": "processing",
+                "claimed_at": now_iso,
+            },
+            "$unset": {
+                "processed_at": "",
+                "failed_at": "",
+                "last_error": "",
+            },
+        },
+        return_document=ReturnDocument.AFTER,
+    )
+    return reclaimed is not None
+
+
 async def _claim_paddle_event(db_handle, event_id: str, event_type: str) -> str:
-    claimed_at = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(timezone.utc)
+    claimed_at = now.isoformat()
 
     try:
         existing = await db_handle.paddle_events.find_one_and_update(
@@ -4689,40 +4722,70 @@ async def _claim_paddle_event(db_handle, event_id: str, event_type: str) -> str:
     if existing is None:
         return "claimed"
 
-    existing_status = (existing.get("status") or "").lower()
+    existing_status = str(existing.get("status") or "").strip().lower()
     if existing_status == "processed":
         return "processed"
-    if existing_status == "processing":
-        return "processing"
-    if existing_status == "failed":
+    if existing_status in {"failed", ""}:
+        if await _try_claim_existing_paddle_event(
+            db_handle,
+            event_id,
+            event_type,
+            claimed_at,
+            existing.get("status"),
+        ):
+            return "claimed"
+
+    elif existing_status == "processing":
+        claimed_at_dt = _parse_paddle_dt(existing.get("claimed_at"))
+        is_stale = claimed_at_dt is None or (now - claimed_at_dt) >= timedelta(
+            seconds=PADDLE_EVENT_PROCESSING_LEASE_SECONDS
+        )
+        if not is_stale:
+            return "processing"
+
         reclaimed = await db_handle.paddle_events.find_one_and_update(
-            {"event_id": event_id, "status": "failed"},
+            {
+                "event_id": event_id,
+                "status": "processing",
+                "claimed_at": existing.get("claimed_at"),
+            },
             {
                 "$set": {
                     "event_type": event_type,
-                    "status": "processing",
                     "claimed_at": claimed_at,
-                },
-                "$unset": {
-                    "processed_at": "",
-                    "failed_at": "",
-                    "last_error": "",
-                },
+                }
             },
             return_document=ReturnDocument.AFTER,
         )
         if reclaimed is not None:
+            logger.warning(
+                "[Paddle] Reclaimed stale processing event_id=%r (lease=%ss)",
+                event_id,
+                PADDLE_EVENT_PROCESSING_LEASE_SECONDS,
+            )
+            return "claimed"
+    else:
+        if await _try_claim_existing_paddle_event(
+            db_handle,
+            event_id,
+            event_type,
+            claimed_at,
+            existing.get("status"),
+        ):
+            logger.warning(
+                "[Paddle] Recovered legacy/unknown event status for event_id=%r status=%r",
+                event_id,
+                existing.get("status"),
+            )
             return "claimed"
 
-        current = await db_handle.paddle_events.find_one({"event_id": event_id})
-        current_status = ((current or {}).get("status") or "").lower()
-        if current_status == "processed":
-            return "processed"
+    current = await db_handle.paddle_events.find_one({"event_id": event_id})
+    current_status = str((current or {}).get("status") or "").strip().lower()
+    if current_status == "processed":
+        return "processed"
+    if current_status == "processing":
         return "processing"
-
-    raise RuntimeError(
-        f"Paddle event {event_id!r} has unsupported stored status {existing_status!r}"
-    )
+    return "processing"
 
 
 async def _mark_paddle_event_failed(db_handle, event_id: str, event_type: str, error: str) -> None:
@@ -5167,6 +5230,12 @@ async def _ensure_subscriptions_unique_index(db_handle) -> None:
     await ensure_subscriptions_unique_index(db_handle)
 
 
+async def _ensure_paddle_events_unique_index(db_handle) -> None:
+    """Thin wrapper — delegates to the testable service module."""
+    from services.paddle_event_index import ensure_paddle_events_unique_index
+    await ensure_paddle_events_unique_index(db_handle)
+
+
 @app.on_event("startup")
 async def create_db_indexes():
     """Create MongoDB indexes for common query patterns"""
@@ -5195,7 +5264,7 @@ async def create_db_indexes():
         # OAuth state store: auto-expire after TTL (expires_at stored as datetime)
         await db.oauth_states.create_index("state", unique=True)
         await db.oauth_states.create_index("expires_at", expireAfterSeconds=0)
-        await db.paddle_events.create_index("event_id", unique=True)
+        await _ensure_paddle_events_unique_index(db)
         # Subscriptions: enforce 1 document per user.
         # Idempotent: if a non-unique index on user_id already exists (legacy),
         # drop it first so we can (re)create it as UNIQUE without error.
