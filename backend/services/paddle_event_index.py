@@ -8,7 +8,7 @@ from services.datetime_utils import normalize_utc_datetime
 
 logger = logging.getLogger(__name__)
 
-_TARGET_PARTIAL_FILTER = {"event_id": {"$exists": True}}
+_TARGET_PARTIAL_FILTER = {"event_id": {"$type": "string", "$ne": ""}}
 _TARGET_INDEX_NAME = "event_id_unique_partial"
 
 def _event_status_rank(status: Any) -> int:
@@ -55,7 +55,7 @@ async def _deduplicate_event_id_docs(col: Any, archive_col: Any) -> int:
     """Archive and remove duplicate event_id rows before unique index creation."""
     duplicate_groups = await col.aggregate(
         [
-            {"$match": {"event_id": {"$exists": True, "$ne": None}}},
+            {"$match": _TARGET_PARTIAL_FILTER},
             {"$group": {"_id": "$event_id", "count": {"$sum": 1}, "docs": {"$push": "$$ROOT"}}},
             {"$match": {"count": {"$gt": 1}}},
         ]
@@ -110,7 +110,20 @@ def _is_event_id_index(idx: dict[str, Any]) -> bool:
 
 
 def _is_target_unique_index(idx: dict[str, Any]) -> bool:
-    return bool(idx.get("unique")) and (idx.get("partialFilterExpression") or {}) == _TARGET_PARTIAL_FILTER
+    return (
+        _is_event_id_index(idx)
+        and bool(idx.get("unique"))
+        and (idx.get("partialFilterExpression") or {}) == _TARGET_PARTIAL_FILTER
+    )
+
+
+async def _assert_target_index_present(col: Any) -> None:
+    async for idx in col.list_indexes():
+        if _is_target_unique_index(idx):
+            return
+    raise RuntimeError(
+        "Critical paddle_events event_id unique partial index missing/incompatible after migration"
+    )
 
 
 async def ensure_paddle_events_unique_index(db: Any) -> None:
@@ -138,6 +151,7 @@ async def ensure_paddle_events_unique_index(db: Any) -> None:
     has_target = any(_is_target_unique_index(idx) for _, idx in event_id_indexes)
     if has_target:
         logger.info("paddle_events.event_id unique partial index already present")
+        await _assert_target_index_present(col)
         return
 
     for name, idx in event_id_indexes:
@@ -150,4 +164,5 @@ async def ensure_paddle_events_unique_index(db: Any) -> None:
         unique=True,
         partialFilterExpression=_TARGET_PARTIAL_FILTER,
     )
+    await _assert_target_index_present(col)
     logger.info("Created paddle_events.event_id unique partial index")

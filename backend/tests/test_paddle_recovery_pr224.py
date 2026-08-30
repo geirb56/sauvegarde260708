@@ -4,6 +4,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any, Optional
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -48,7 +49,7 @@ class _PaddleEventsCollection:
         grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for doc in self.docs:
             event_id = doc.get("event_id")
-            if event_id is not None:
+            if isinstance(event_id, str) and event_id != "":
                 grouped[str(event_id)].append(doc)
         groups = []
         for event_id, docs in grouped.items():
@@ -112,7 +113,7 @@ async def test_index_migration_creates_unique_index_on_clean_collection():
     await ensure_paddle_events_unique_index(db)
     assert len(db.paddle_events.create_calls) == 1
     assert db.paddle_events.create_calls[0]["unique"] is True
-    assert db.paddle_events.create_calls[0]["partialFilterExpression"] == {"event_id": {"$exists": True}}
+    assert db.paddle_events.create_calls[0]["partialFilterExpression"] == {"event_id": {"$type": "string", "$ne": ""}}
 
 
 async def test_index_migration_replaces_non_unique_event_id_index():
@@ -173,13 +174,115 @@ async def test_index_migration_noop_when_target_unique_index_exists():
                 "name": "event_id_unique_partial",
                 "key": {"event_id": 1},
                 "unique": True,
-                "partialFilterExpression": {"event_id": {"$exists": True}},
+                "partialFilterExpression": {"event_id": {"$type": "string", "$ne": ""}},
             },
         ]
     )
     await ensure_paddle_events_unique_index(db)
     assert db.paddle_events.create_calls == []
     assert db.paddle_events.drop_calls == []
+
+
+async def test_index_migration_create_index_failure_raises():
+    db = _DB()
+    db.paddle_events.create_index = AsyncMock(side_effect=RuntimeError("create failed"))
+    with pytest.raises(RuntimeError, match="create failed"):
+        await ensure_paddle_events_unique_index(db)
+
+
+async def test_index_migration_drop_index_failure_raises():
+    db = _DB(
+        paddle_indexes=[
+            {"name": "_id_", "key": {"_id": 1}},
+            {"name": "event_id_1", "key": {"event_id": 1}, "unique": False},
+        ]
+    )
+    db.paddle_events.drop_index = AsyncMock(side_effect=RuntimeError("drop failed"))
+    with pytest.raises(RuntimeError, match="drop failed"):
+        await ensure_paddle_events_unique_index(db)
+
+
+async def test_index_migration_archive_failure_raises():
+    now = datetime.now(timezone.utc)
+    db = _DB(
+        paddle_docs=[
+            {"_id": "a", "event_id": "evt_dup", "status": "failed", "failed_at": now.isoformat()},
+            {"_id": "b", "event_id": "evt_dup", "status": "processed", "processed_at": now.isoformat()},
+        ]
+    )
+    db.paddle_events_dedup_archive.update_one = AsyncMock(side_effect=RuntimeError("archive failed"))
+    with pytest.raises(RuntimeError, match="archive failed"):
+        await ensure_paddle_events_unique_index(db)
+
+
+async def test_index_migration_raises_when_target_index_absent_after_creation():
+    db = _DB()
+    db.paddle_events.create_index = AsyncMock(return_value="event_id_unique_partial")
+    with pytest.raises(RuntimeError, match="index missing/incompatible"):
+        await ensure_paddle_events_unique_index(db)
+
+
+async def test_index_migration_raises_when_created_index_not_unique():
+    db = _DB()
+
+    async def _create_non_unique(_key, **_kwargs):
+        db.paddle_events.indexes.append(
+            {
+                "name": "event_id_unique_partial",
+                "key": {"event_id": 1},
+                "unique": False,
+                "partialFilterExpression": {"event_id": {"$type": "string", "$ne": ""}},
+            }
+        )
+        return "event_id_unique_partial"
+
+    db.paddle_events.create_index = AsyncMock(side_effect=_create_non_unique)
+    with pytest.raises(RuntimeError, match="index missing/incompatible"):
+        await ensure_paddle_events_unique_index(db)
+
+
+async def test_index_migration_raises_when_created_index_has_wrong_partial_filter():
+    db = _DB()
+
+    async def _create_wrong_partial(_key, **_kwargs):
+        db.paddle_events.indexes.append(
+            {
+                "name": "event_id_unique_partial",
+                "key": {"event_id": 1},
+                "unique": True,
+                "partialFilterExpression": {"event_id": {"$exists": True}},
+            }
+        )
+        return "event_id_unique_partial"
+
+    db.paddle_events.create_index = AsyncMock(side_effect=_create_wrong_partial)
+    with pytest.raises(RuntimeError, match="index missing/incompatible"):
+        await ensure_paddle_events_unique_index(db)
+
+
+async def test_index_migration_keeps_multiple_null_event_ids():
+    db = _DB(
+        paddle_docs=[
+            {"_id": "n1", "event_id": None, "status": "processed"},
+            {"_id": "n2", "event_id": None, "status": "failed"},
+            {"_id": "ok", "event_id": "evt_unique", "status": "processed"},
+        ]
+    )
+    await ensure_paddle_events_unique_index(db)
+    assert len([doc for doc in db.paddle_events.docs if doc.get("event_id") is None]) == 2
+
+
+async def test_index_migration_keeps_mixed_missing_null_and_real_event_ids():
+    db = _DB(
+        paddle_docs=[
+            {"_id": "m1", "event_type": "legacy"},
+            {"_id": "m2", "event_id": None},
+            {"_id": "m3", "event_id": "evt_one"},
+            {"_id": "m4", "event_id": "evt_two"},
+        ]
+    )
+    await ensure_paddle_events_unique_index(db)
+    assert len([doc for doc in db.paddle_events.docs if doc.get("event_id") in (None, "evt_one", "evt_two")]) == 4
 
 
 async def test_cancel_subscription_accepts_iso_z_expiry():
@@ -212,7 +315,7 @@ async def test_cancel_subscription_invalid_expiry_falls_back_to_free():
     assert sub["status"] == SubscriptionStatus.FREE
 
 
-async def test_cancel_subscription_naive_expiry_never_raises_type_error():
+async def test_cancel_subscription_naive_datetime_parameter_treated_as_utc():
     naive_future = (datetime.now(timezone.utc) + timedelta(days=1)).replace(tzinfo=None)
     db = _DB(subscriptions=[{"user_id": "u_dt_obj", "status": "premium"}])
     sub = await cancel_subscription(db, "u_dt_obj", premium_expires_at=naive_future)

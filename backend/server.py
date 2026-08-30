@@ -4842,21 +4842,6 @@ async def _mark_paddle_event_processed(db_handle, event_id: str, event_type: str
     )
 
 
-async def _is_stale_subscription_event(
-    db_handle,
-    user_id: str,
-    occurred_at: datetime,
-) -> bool:
-    subscription = await db_handle.subscriptions.find_one({"user_id": user_id}, {"_id": 0})
-    if not subscription:
-        return False
-
-    last_event_at = _parse_paddle_dt(subscription.get("paddle_last_event_at"))
-    if last_event_at is None:
-        return False
-    return occurred_at < last_event_at
-
-
 @api_router.post("/subscription/paddle/checkout", response_model=PaddleCheckoutResponse)
 async def create_paddle_checkout(
     request: PaddleCheckoutRequest,
@@ -5049,20 +5034,21 @@ async def paddle_webhook(request: Request):
                 result = {"received": True, "status": "no_user_id"}
             else:
                 occurred_at = _require_occurred_at(event_type, event)
-                if await _is_stale_subscription_event(db, user_id, occurred_at):
+                period_end = _require_current_period_end(event_type, data)
+                from subscription_manager import activate_premium
+                activation = await activate_premium(
+                    db,
+                    user_id,
+                    paddle_subscription_id=paddle_sub_id,
+                    paddle_customer_id=paddle_customer_id,
+                    premium_expires_at=period_end,
+                    paddle_last_event_at=occurred_at,
+                    paddle_event_id=event_id,
+                )
+                if activation.get("_stale_event"):
                     logger.info(f"[Paddle] Ignoring stale subscription.activated for user '{user_id}'")
                     result = {"received": True, "status": "stale"}
                 else:
-                    period_end = _require_current_period_end(event_type, data)
-                    from subscription_manager import activate_premium
-                    await activate_premium(
-                        db,
-                        user_id,
-                        paddle_subscription_id=paddle_sub_id,
-                        paddle_customer_id=paddle_customer_id,
-                        premium_expires_at=period_end,
-                        paddle_last_event_at=occurred_at,
-                    )
                     logger.info(
                         f"[Paddle] PREMIUM activated for user '{user_id}' "
                         f"(sub={paddle_sub_id}, period_end={period_end})"
@@ -5083,37 +5069,39 @@ async def paddle_webhook(request: Request):
                 result = {"received": True, "status": "no_user_id"}
             elif new_status in ("active", "trialing"):
                 occurred_at = _require_occurred_at(event_type, event)
-                if await _is_stale_subscription_event(db, user_id, occurred_at):
+                period_end = _require_current_period_end(event_type, data)
+                from subscription_manager import renew_premium
+                renewal = await renew_premium(
+                    db,
+                    user_id,
+                    paddle_sub_id,
+                    period_end,
+                    paddle_last_event_at=occurred_at,
+                    paddle_event_id=event_id,
+                )
+                if renewal.get("_stale_event"):
                     logger.info(f"[Paddle] Ignoring stale subscription.updated for user '{user_id}'")
                     result = {"received": True, "status": "stale"}
                 else:
-                    period_end = _require_current_period_end(event_type, data)
-                    from subscription_manager import renew_premium
-                    await renew_premium(
-                        db,
-                        user_id,
-                        paddle_sub_id,
-                        period_end,
-                        paddle_last_event_at=occurred_at,
-                    )
                     logger.info(
                         f"[Paddle] PREMIUM renewed for user '{user_id}' until {period_end}"
                     )
                     result = {"received": True}
             elif new_status == "canceled":
                 occurred_at = _require_occurred_at(event_type, event)
-                if await _is_stale_subscription_event(db, user_id, occurred_at):
+                period_end = _extract_current_period_end(data)
+                from subscription_manager import cancel_subscription
+                cancellation = await cancel_subscription(
+                    db,
+                    user_id,
+                    premium_expires_at=period_end,
+                    paddle_last_event_at=occurred_at,
+                    paddle_event_id=event_id,
+                )
+                if cancellation.get("_stale_event"):
                     logger.info(f"[Paddle] Ignoring stale canceled subscription.updated for user '{user_id}'")
                     result = {"received": True, "status": "stale"}
                 else:
-                    period_end = _extract_current_period_end(data)
-                    from subscription_manager import cancel_subscription
-                    await cancel_subscription(
-                        db,
-                        user_id,
-                        premium_expires_at=period_end,
-                        paddle_last_event_at=occurred_at,
-                    )
                     logger.info(f"[Paddle] Subscription canceled for user '{user_id}'")
                     result = {"received": True}
             else:
@@ -5129,18 +5117,19 @@ async def paddle_webhook(request: Request):
                 result = {"received": True, "status": "no_user_id"}
             else:
                 occurred_at = _require_occurred_at(event_type, event)
-                if await _is_stale_subscription_event(db, user_id, occurred_at):
+                period_end = _extract_current_period_end(data)
+                from subscription_manager import cancel_subscription
+                cancellation = await cancel_subscription(
+                    db,
+                    user_id,
+                    premium_expires_at=period_end,
+                    paddle_last_event_at=occurred_at,
+                    paddle_event_id=event_id,
+                )
+                if cancellation.get("_stale_event"):
                     logger.info(f"[Paddle] Ignoring stale subscription.canceled for user '{user_id}'")
                     result = {"received": True, "status": "stale"}
                 else:
-                    period_end = _extract_current_period_end(data)
-                    from subscription_manager import cancel_subscription
-                    await cancel_subscription(
-                        db,
-                        user_id,
-                        premium_expires_at=period_end,
-                        paddle_last_event_at=occurred_at,
-                    )
                     logger.info(f"[Paddle] Subscription canceled for user '{user_id}'")
                     result = {"received": True}
 
@@ -5270,6 +5259,8 @@ async def create_db_indexes():
         raise
     except Exception as e:
         logger.warning(f"gccli bootstrap skipped: {e}")
+    # Critical Paddle idempotence index must be guaranteed before startup continues.
+    await _ensure_paddle_events_unique_index(db)
     try:
         # Workouts: filter + sort by user and date
         await db.workouts.create_index([("user_id", 1), ("date", -1)])
@@ -5280,7 +5271,6 @@ async def create_db_indexes():
         # OAuth state store: auto-expire after TTL (expires_at stored as datetime)
         await db.oauth_states.create_index("state", unique=True)
         await db.oauth_states.create_index("expires_at", expireAfterSeconds=0)
-        await _ensure_paddle_events_unique_index(db)
         # Subscriptions: enforce 1 document per user.
         # Idempotent: if a non-unique index on user_id already exists (legacy),
         # drop it first so we can (re)create it as UNIQUE without error.
