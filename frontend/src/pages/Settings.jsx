@@ -168,6 +168,8 @@ export default function Settings() {
   const [userGoal, setUserGoal] = useState(null);
   const [goalForm, setGoalForm] = useState({ eventName: "", eventDate: "", targetHours: "", targetMinutes: "", ultraDistanceKm: "" });
   const [planAction, setPlanAction] = useState({ status: "idle", message: "" });
+  // PR226: pending ultra distance — shown inline when user clicks ULTRA goal button
+  const [pendingUltraDistance, setPendingUltraDistance] = useState("");
 
   const [garminLoading, setGarminLoading] = useState(true);
   const [garminError, setGarminError] = useState("");
@@ -275,9 +277,24 @@ export default function Settings() {
   }, [loadGarminStatus, loadPlanSettings]);
 
   const handleSetTrainingGoal = async (goalValue) => {
+    // PR226: ULTRA must have distance_km > 42.195 before calling set-goal.
+    if (goalValue === "ULTRA") {
+      const km = parseFloat(pendingUltraDistance);
+      if (!(km > 42.195)) {
+        // Show inline distance prompt instead of calling the API.
+        setPlanAction({ status: "error", message: t("settingsV2.plan.ultraDistanceError") });
+        return;
+      }
+    }
+
     setPlanAction({ status: "saving", message: t("settingsV2.common.saving") });
     try {
-      await axios.post(`${API}/training/set-goal?goal=${encodeURIComponent(goalValue)}`, {});
+      const url =
+        goalValue === "ULTRA"
+          ? `${API}/training/set-goal?goal=${encodeURIComponent(goalValue)}&distance_km=${encodeURIComponent(pendingUltraDistance)}`
+          : `${API}/training/set-goal?goal=${encodeURIComponent(goalValue)}`;
+      await axios.post(url, {});
+      if (goalValue === "ULTRA") setPendingUltraDistance("");
       const reloadSucceeded = await loadPlanSettings();
       if (!reloadSucceeded) {
         setPlanAction({ status: "error", message: t("settingsV2.plan.loadError") });
@@ -563,6 +580,27 @@ export default function Settings() {
                       {t(option.translationKey)}
                     </button>
                   ))}
+                </div>
+                {/* PR226: ULTRA distance input — must be set before set-goal is called */}
+                <div className="mt-3 space-y-1" data-testid="settings-ultra-distance-block">
+                  <label className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                    {t("settingsV2.plan.ultraDistanceLabel")}
+                  </label>
+                  <Input
+                    type="number"
+                    min="42.196"
+                    step="0.1"
+                    value={pendingUltraDistance}
+                    onChange={(e) => { setPendingUltraDistance(e.target.value); if (planAction.status === "error") setPlanAction({ status: "idle", message: "" }); }}
+                    placeholder={t("settingsV2.plan.ultraDistancePlaceholder")}
+                    data-testid="settings-ultra-distance-pending-input"
+                  />
+                  <p className="text-xs text-muted-foreground">{t("settingsV2.plan.ultraDistanceHint")}</p>
+                  {pendingUltraDistance && !(parseFloat(pendingUltraDistance) > 42.195) && (
+                    <p className="text-xs text-destructive" data-testid="settings-ultra-distance-pending-error">
+                      {t("settingsV2.plan.ultraDistanceError")}
+                    </p>
+                  )}
                 </div>
               </div>
 

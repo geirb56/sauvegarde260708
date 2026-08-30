@@ -118,6 +118,7 @@ def _build_weekly_context_from_workouts(
     cycle_start_date: Optional[date],
     reference_date: date,
     user_profile: Optional[dict],
+    target_distance_km: Optional[float] = None,
 ) -> _WeeklyBuildContext:
     """Canonical internal V2 build pipeline — single construction site.
 
@@ -163,6 +164,7 @@ def _build_weekly_context_from_workouts(
     plan_goal = build_plan_goal(
         goal_type=mapped_goal,
         race_date=race_date if mapped_goal != GoalType.maintenance else None,
+        target_distance_km=target_distance_km if mapped_goal == GoalType.ultra else None,
         created_from="user",
     )
 
@@ -258,6 +260,7 @@ def build_weekly_plan_from_workouts(
     cycle_start_date: Optional[date] = None,
     reference_date: date,
     user_profile: Optional[dict] = None,
+    target_distance_km: Optional[float] = None,
 ) -> tuple[WeeklyTarget, WeeklyPlan]:
     """Build WeeklyTarget V2 + WeeklyPlan V2 from raw workout documents.
 
@@ -265,6 +268,8 @@ def build_weekly_plan_from_workouts(
     WeeklyPlan so that WorkoutGenerator V2 is the authority on session
     distribution (including long_easy distance).  llm_coach must NOT
     re-compute the long run itself.
+
+    PR226: target_distance_km added for ULTRA goals — passed to build_plan_goal.
 
     The WeeklyTarget returned here is the SAME object that
     build_weekly_target_from_workouts would return for identical inputs —
@@ -282,6 +287,7 @@ def build_weekly_plan_from_workouts(
         cycle_start_date=cycle_start_date,
         reference_date=reference_date,
         user_profile=user_profile,
+        target_distance_km=target_distance_km,
     )
 
     weekly_plan = build_weekly_plan(
