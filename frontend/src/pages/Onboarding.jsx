@@ -202,7 +202,7 @@ export default function Onboarding() {
 
           {stepKey === "welcome" && (
             <div className="space-y-5 text-center" data-testid="onboarding-step-welcome">
-              <img src="/runindex-logo.png" alt="RunIndex" className="h-12 w-auto mx-auto" data-testid="onboarding-logo" />
+              <img src="/runindex-logo.svg" alt="RunIndex" className="h-16 w-auto mx-auto" data-testid="onboarding-logo" />
               <div className="space-y-1">
                 <h1 className="text-3xl font-black tracking-tight">{t("onboarding.heroLine1")}</h1>
                 <p className="text-lg font-semibold">{t("onboarding.heroLine2")}</p>

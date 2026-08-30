@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 580 150" width="580" height="150" role="img" aria-label="RunIndex — Know your potential. Train for it.">
+  <defs>
+    <linearGradient id="riBars" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#16a34a"/>
+      <stop offset="0.55" stop-color="#4ade80"/>
+      <stop offset="1" stop-color="#bef264"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 4-bar ascending symbol -->
+  <g>
+    <rect x="6"   y="92"  width="26" height="46"  rx="6" fill="url(#riBars)"/>
+    <rect x="40"  y="70"  width="26" height="68"  rx="6" fill="url(#riBars)"/>
+    <rect x="74"  y="44"  width="26" height="94"  rx="6" fill="url(#riBars)"/>
+    <rect x="108" y="16"  width="26" height="122" rx="6" fill="url(#riBars)"/>
+  </g>
+
+  <!-- Wordmark -->
+  <text x="160" y="86" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-weight="800" font-size="62" letter-spacing="-1">
+    <tspan fill="#ffffff">Run</tspan><tspan fill="#22c55e">Index</tspan>
+  </text>
+
+  <!-- Baseline -->
+  <text x="162" y="122" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-weight="600" font-size="16.5" letter-spacing="2.4" fill="#9ca3af">KNOW YOUR POTENTIAL. TRAIN FOR IT.</text>
+</svg>

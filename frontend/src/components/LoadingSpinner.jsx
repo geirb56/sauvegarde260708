@@ -36,7 +36,7 @@ export const BrandSplash = ({ text = "" }) => (
     data-testid="brand-splash"
   >
     <img
-      src="/runindex-logo-compact.png"
+      src="/runindex-logo.svg"
       alt="RunIndex"
       className="h-14 w-auto brand-splash-logo"
     />

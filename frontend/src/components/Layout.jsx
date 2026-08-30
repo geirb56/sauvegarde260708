@@ -31,7 +31,7 @@ export const Layout = () => {
       <header className="header-modern">
         <div className="header-logo">
           <img
-            src="/runindex-logo-compact.png"
+            src="/runindex-logo.svg"
             alt="RunIndex"
             className="header-logo-img"
             data-testid="app-logo"
