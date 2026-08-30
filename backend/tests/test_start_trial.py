@@ -1,12 +1,11 @@
-"""Free trial (no card) — minimal integration tests.
+"""`/api/subscription/start-trial` hardening tests.
 
 Hits the real /api/subscription/start-trial route in server.py via an in-process
 ASGI client with an in-memory fake DB. No live Mongo/Redis/LLM/Paddle needed.
 
 Covered:
   - anonymous (no JWT) -> 401
-  - Free user -> Start Trial -> 200, status becomes "trial" (no card, no checkout)
-  - second Start Trial -> 409 (refused)
+  - authenticated user -> 403 (direct trial bypass blocked)
 """
 from __future__ import annotations
 
@@ -117,28 +116,19 @@ async def test_start_trial_requires_auth(client):
     assert r.status_code == 401
 
 
-async def test_free_user_starts_trial_without_card(client):
+async def test_start_trial_rejects_direct_activation(client):
     c, fake_db = client
+    await fake_db.subscriptions.insert_one(
+        {
+            "user_id": "u-trial",
+            "status": "free",
+            "trial_used": False,
+        }
+    )
     r = await c.post("/api/subscription/start-trial", headers=_bearer("u-trial", "u@test.com"))
-    assert r.status_code == 200
-    body = r.json()
-    assert body["success"] is True
-    assert body["status"] == "trial"
-    assert body.get("trial_end")
-    # No card / no checkout: the response must not expose any payment artifacts.
-    blob = str(body).lower()
-    for leak in ("transaction", "client_token", "checkout", "card", "paddle", "stripe"):
-        assert leak not in blob
-    # Persisted server-side under the authenticated user.
+    assert r.status_code == 403
+    assert "garmin" in r.json().get("detail", "").lower()
     sub = await fake_db.subscriptions.find_one({"user_id": "u-trial"})
-    assert sub["status"] == "trial"
-    assert sub["trial_used"] is True
-
-
-async def test_second_trial_is_refused(client):
-    c, _ = client
-    h = _bearer("u-twice", "twice@test.com")
-    first = await c.post("/api/subscription/start-trial", headers=h)
-    assert first.status_code == 200
-    second = await c.post("/api/subscription/start-trial", headers=h)
-    assert second.status_code == 409
+    assert sub is not None
+    assert sub["status"] == "free"
+    assert sub["trial_used"] is False
