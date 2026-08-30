@@ -4666,9 +4666,32 @@ def _require_occurred_at(event_type: str, event: dict) -> datetime:
     return occurred_at
 
 
-PADDLE_EVENT_PROCESSING_LEASE_SECONDS = max(
-    60,
-    int(os.getenv("PADDLE_EVENT_PROCESSING_LEASE_SECONDS", "900")),
+def _resolve_paddle_event_processing_lease_seconds(raw_value: Optional[str]) -> int:
+    default_value = 900
+    if raw_value is None:
+        return default_value
+    cleaned = str(raw_value).strip()
+    if cleaned == "":
+        logger.warning(
+            "Invalid PADDLE_EVENT_PROCESSING_LEASE_SECONDS=%r; falling back to %s",
+            raw_value,
+            default_value,
+        )
+        return default_value
+    try:
+        parsed = int(cleaned)
+    except (ValueError, TypeError):
+        logger.warning(
+            "Invalid PADDLE_EVENT_PROCESSING_LEASE_SECONDS=%r; falling back to %s",
+            raw_value,
+            default_value,
+        )
+        return default_value
+    return max(60, parsed)
+
+
+PADDLE_EVENT_PROCESSING_LEASE_SECONDS = _resolve_paddle_event_processing_lease_seconds(
+    os.getenv("PADDLE_EVENT_PROCESSING_LEASE_SECONDS")
 )
 
 

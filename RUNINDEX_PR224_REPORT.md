@@ -183,3 +183,30 @@ Commande exécutée sur worktree base (`/tmp/pr224_basecheck`):
 ### Test MongoDB réel
 - `REAL_MONGODB_INDEX_TEST=NOT RUN`
 - Raison: `ServerSelectionTimeoutError` (localhost:27017 refusé).
+
+---
+
+## PATCH FINAL PR #224 — lease parsing safety
+
+### Correctif appliqué
+- Parsing sécurisé de `PADDLE_EVENT_PROCESSING_LEASE_SECONDS` via helper dédié:
+  - entier valide → utilisé
+  - valeur `< 60` → clamp à `60`
+  - valeur vide/invalide → fallback `900`
+  - variable absente → fallback `900`
+  - warning log émis lors fallback vide/invalide
+
+### Fichiers modifiés
+- `/home/runner/work/sauvegarde260708/sauvegarde260708/backend/server.py`
+- `/home/runner/work/sauvegarde260708/sauvegarde260708/backend/tests/test_paddle_integrity_pr223.py`
+
+### Tests ajoutés
+- `test_lease_seconds_uses_valid_integer` (`"900" -> 900`)
+- `test_lease_seconds_clamps_minimum_60` (`"30" -> 60`)
+- `test_lease_seconds_empty_string_falls_back_to_900` (`"" -> 900`)
+- `test_lease_seconds_invalid_string_falls_back_to_900` (`"900s" -> 900`)
+- `test_lease_seconds_missing_env_falls_back_to_900` (env absente -> 900)
+
+### Tests relancés (exact)
+1. `cd /home/runner/work/sauvegarde260708/sauvegarde260708/backend && pip install pytest pytest-xdist pytest-asyncio fastapi pydantic pymongo motor python-dotenv python-jose email-validator redis httpx >/tmp/pr224_patch_final_pip.log && python -m pytest tests/test_paddle_integrity_pr223.py tests/test_paddle_recovery_pr224.py`
+   - Résultat: `58 passed, 12 warnings in 2.56s`

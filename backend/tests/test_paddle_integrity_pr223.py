@@ -1252,3 +1252,32 @@ async def test_startup_fails_fast_when_paddle_index_helper_fails():
             await server.create_db_indexes()
 
     other_index.assert_not_called()
+
+
+async def test_lease_seconds_uses_valid_integer():
+    assert server._resolve_paddle_event_processing_lease_seconds("900") == 900
+
+
+async def test_lease_seconds_clamps_minimum_60():
+    assert server._resolve_paddle_event_processing_lease_seconds("30") == 60
+
+
+async def test_lease_seconds_empty_string_falls_back_to_900(caplog):
+    caplog.set_level("WARNING", logger=server.logger.name)
+    value = server._resolve_paddle_event_processing_lease_seconds("")
+    assert value == 900
+    assert "falling back to 900" in caplog.text
+
+
+async def test_lease_seconds_invalid_string_falls_back_to_900(caplog):
+    caplog.set_level("WARNING", logger=server.logger.name)
+    value = server._resolve_paddle_event_processing_lease_seconds("900s")
+    assert value == 900
+    assert "falling back to 900" in caplog.text
+
+
+async def test_lease_seconds_missing_env_falls_back_to_900():
+    with patch.dict(os.environ, {}, clear=True):
+        assert server._resolve_paddle_event_processing_lease_seconds(
+            os.getenv("PADDLE_EVENT_PROCESSING_LEASE_SECONDS")
+        ) == 900
