@@ -63,6 +63,16 @@ class _PaddleEventsCollection:
         self.docs = [doc for doc in self.docs if doc.get("_id") not in ids]
         return SimpleNamespace(deleted_count=before - len(self.docs))
 
+    async def update_many(self, query: dict[str, Any], update: dict[str, Any]):
+        modified = 0
+        for doc in self.docs:
+            if all(doc.get(k) == v for k, v in query.items()):
+                for field in (update.get("$unset") or {}):
+                    if field in doc:
+                        del doc[field]
+                        modified += 1
+        return SimpleNamespace(modified_count=modified)
+
 
 class _ArchiveCollection:
     def __init__(self) -> None:
@@ -113,7 +123,7 @@ async def test_index_migration_creates_unique_index_on_clean_collection():
     await ensure_paddle_events_unique_index(db)
     assert len(db.paddle_events.create_calls) == 1
     assert db.paddle_events.create_calls[0]["unique"] is True
-    assert db.paddle_events.create_calls[0]["partialFilterExpression"] == {"event_id": {"$type": "string", "$ne": ""}}
+    assert db.paddle_events.create_calls[0]["partialFilterExpression"] == {"event_id": {"$type": "string"}}
 
 
 async def test_index_migration_replaces_non_unique_event_id_index():
@@ -174,7 +184,7 @@ async def test_index_migration_noop_when_target_unique_index_exists():
                 "name": "event_id_unique_partial",
                 "key": {"event_id": 1},
                 "unique": True,
-                "partialFilterExpression": {"event_id": {"$type": "string", "$ne": ""}},
+                "partialFilterExpression": {"event_id": {"$type": "string"}},
             },
         ]
     )
@@ -231,7 +241,7 @@ async def test_index_migration_raises_when_created_index_not_unique():
                 "name": "event_id_unique_partial",
                 "key": {"event_id": 1},
                 "unique": False,
-                "partialFilterExpression": {"event_id": {"$type": "string", "$ne": ""}},
+                "partialFilterExpression": {"event_id": {"$type": "string"}},
             }
         )
         return "event_id_unique_partial"
@@ -283,6 +293,29 @@ async def test_index_migration_keeps_mixed_missing_null_and_real_event_ids():
     )
     await ensure_paddle_events_unique_index(db)
     assert len([doc for doc in db.paddle_events.docs if doc.get("event_id") in (None, "evt_one", "evt_two")]) == 4
+
+
+async def test_index_migration_unsets_empty_event_id_without_deleting_docs():
+    db = _DB(
+        paddle_docs=[
+            {"_id": "e1", "event_id": "", "status": "processed"},
+            {"_id": "e2", "event_id": "", "status": "failed"},
+            {"_id": "ok", "event_id": "evt_unique", "status": "processed"},
+        ]
+    )
+    before_count = len(db.paddle_events.docs)
+    await ensure_paddle_events_unique_index(db)
+    after_count = len(db.paddle_events.docs)
+    assert before_count == after_count
+    assert all("event_id" not in doc for doc in db.paddle_events.docs if doc["_id"] in {"e1", "e2"})
+
+
+async def test_index_partial_filter_has_no_ne_operator():
+    db = _DB()
+    await ensure_paddle_events_unique_index(db)
+    partial = db.paddle_events.create_calls[0]["partialFilterExpression"]
+    assert partial == {"event_id": {"$type": "string"}}
+    assert "$ne" not in str(partial)
 
 
 async def test_cancel_subscription_accepts_iso_z_expiry():

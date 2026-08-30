@@ -25,7 +25,8 @@
   - deduplicates duplicate `event_id` groups first,
   - archives loser documents into `paddle_events_dedup_archive`,
   - drops incompatible `event_id` indexes,
-  - creates/ensures unique partial index on `event_id` (`partialFilterExpression: {"event_id": {"$type": "string", "$ne": ""}}`),
+  - migrates legacy `event_id=""` out of indexed scope via `$unset` (no document deletion),
+  - creates/ensures unique partial index on `event_id` (`partialFilterExpression: {"event_id": {"$type": "string"}}`),
   - remains idempotent on repeated startup.
 - `cancel_subscription()` now normalizes expiry values to UTC-aware datetimes before comparison and persistence.
 
@@ -100,11 +101,12 @@
 - Après création/migration, le helper relit les indexes et exige:
   - clé `event_id`,
   - `unique=True`,
-  - `partialFilterExpression={"event_id": {"$type": "string", "$ne": ""}}`.
+  - `partialFilterExpression={"event_id": {"$type": "string"}}`.
 - Sinon, exception explicite (startup fail).
 
 ### Stratégie event_id=null / legacy
-- Le partial unique index cible uniquement les `event_id` string non vides.
+- Le partial unique index cible les `event_id` de type string.
+- Les legacy `event_id=""` sont migrés avant création d’index via `$unset` de `event_id` (documents conservés).
 - Les documents sans `event_id` ou `event_id=null` restent hors contrainte unique et ne bloquent pas le startup.
 - La déduplication ne traite que les vrais `event_id` utilisables (string non vide).
 
@@ -137,3 +139,47 @@
 
 ### Runtime
 - Runtime réel backend + webhooks Paddle en environnement live: **NON TESTÉ** dans cette tâche.
+
+---
+
+## C224 blocker final — MongoDB partialFilterExpression valid
+
+### Correction appliquée
+- `partialFilterExpression` final: `{"event_id": {"$type": "string"}}` (MongoDB valide).
+- Aucune utilisation de `$ne` dans la spec d’index.
+- Migration pré-index des docs legacy `event_id=""` par `$unset` de `event_id` (aucune suppression de document).
+- `event_id=null` et `event_id` absent restent hors index.
+- Déduplication + archivage limités aux vrais `event_id` string non vides.
+- Vérification post-création conservée (relecture index + clé/event_id + unique + partial exact), startup fail-fast conservé.
+
+### Fichiers modifiés pour ce blocker
+- `/home/runner/work/sauvegarde260708/sauvegarde260708/backend/services/paddle_event_index.py`
+- `/home/runner/work/sauvegarde260708/sauvegarde260708/backend/tests/test_paddle_recovery_pr224.py`
+- `/home/runner/work/sauvegarde260708/sauvegarde260708/RUNINDEX_PR224_REPORT.md`
+
+### Tests exacts (cette correction)
+1. `cd /home/runner/work/sauvegarde260708/sauvegarde260708/backend && python -m pytest tests/test_paddle_recovery_pr224.py tests/test_paddle_integrity_pr223.py tests/test_unique_subscription.py`
+   - Résultat: `90 passed, 12 warnings in 2.65s`
+
+2. `cd /home/runner/work/sauvegarde260708/sauvegarde260708/backend && MONGO_URL='mongodb://localhost:27017' DB_NAME='test_db' ENVIRONMENT='test' JWT_SECRET='test-secret-32chars-long........' JWT_SECRET_KEY='test-secret-32chars-long........' python -m pytest tests/test_paddle_subscription.py tests/test_subscription_trial.py`
+   - Résultat: `4 failed, 41 passed, 13 warnings, 2 errors in 1.66s`
+
+### Clarification “4 failed / 2 errors” (noms exacts)
+**FAILED**
+- `tests/test_paddle_subscription.py::TestFrontendFailClosed::test_error_fallback_is_free_not_trial`
+- `tests/test_paddle_subscription.py::TestFrontendFailClosed::test_error_fallback_features_are_disabled`
+- `tests/test_paddle_subscription.py::TestWebhookIdempotence::test_paddle_webhook_checks_event_id`
+- `tests/test_paddle_subscription.py::TestVerifyCheckoutDisabled::test_endpoint_returns_410_in_source`
+
+**ERROR**
+- `tests/test_subscription_trial.py` import-time assertion: `REACT_APP_BACKEND_URL missing` (x2 workers)
+
+### Vérification sur base `copilot/dev`
+Commande exécutée sur worktree base (`/tmp/pr224_basecheck`):
+- `cd /tmp/pr224_basecheck/backend && MONGO_URL='mongodb://localhost:27017' DB_NAME='test_db' ENVIRONMENT='test' JWT_SECRET='test-secret-32chars-long........' JWT_SECRET_KEY='test-secret-32chars-long........' python -m pytest tests/test_paddle_subscription.py tests/test_subscription_trial.py`
+- Résultat: **même statut** `4 failed, 41 passed, 13 warnings, 2 errors in 1.90s`
+- Conclusion: ces 4 fails + 2 errors sont aussi présents sur `copilot/dev` (préexistants, non introduits par PR224).
+
+### Test MongoDB réel
+- `REAL_MONGODB_INDEX_TEST=NOT RUN`
+- Raison: `ServerSelectionTimeoutError` (localhost:27017 refusé).

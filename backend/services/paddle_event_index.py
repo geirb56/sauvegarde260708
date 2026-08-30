@@ -8,7 +8,8 @@ from services.datetime_utils import normalize_utc_datetime
 
 logger = logging.getLogger(__name__)
 
-_TARGET_PARTIAL_FILTER = {"event_id": {"$type": "string", "$ne": ""}}
+_TARGET_PARTIAL_FILTER = {"event_id": {"$type": "string"}}
+_DEDUP_MATCH_FILTER = {"event_id": {"$type": "string", "$nin": [""]}}
 _TARGET_INDEX_NAME = "event_id_unique_partial"
 
 def _event_status_rank(status: Any) -> int:
@@ -55,7 +56,7 @@ async def _deduplicate_event_id_docs(col: Any, archive_col: Any) -> int:
     """Archive and remove duplicate event_id rows before unique index creation."""
     duplicate_groups = await col.aggregate(
         [
-            {"$match": _TARGET_PARTIAL_FILTER},
+            {"$match": _DEDUP_MATCH_FILTER},
             {"$group": {"_id": "$event_id", "count": {"$sum": 1}, "docs": {"$push": "$$ROOT"}}},
             {"$match": {"count": {"$gt": 1}}},
         ]
@@ -135,6 +136,12 @@ async def ensure_paddle_events_unique_index(db: Any) -> None:
     """
     col = db.paddle_events
     archive_col = db.paddle_events_dedup_archive
+    migrated_empty = await col.update_many({"event_id": ""}, {"$unset": {"event_id": ""}})
+    if getattr(migrated_empty, "modified_count", 0):
+        logger.warning(
+            "Migrated %d legacy paddle_events documents with empty event_id out of unique-index scope",
+            migrated_empty.modified_count,
+        )
 
     deduped = await _deduplicate_event_id_docs(col, archive_col)
     if deduped:
