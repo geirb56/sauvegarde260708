@@ -473,6 +473,15 @@ export default function Progress() {
             <h2 className="font-mono text-xs uppercase tracking-widest text-muted-foreground">
               {t("progressExtended.garminHealthTitle")}
             </h2>
+            {/* Staleness banner — show when latest measurement is not from today/yesterday */}
+            {garminHealth.latest.is_current === false && garminHealth.latest.measurement_date && (
+              <span
+                className="font-mono text-[10px] uppercase tracking-wider text-amber-400 ml-1"
+                data-testid="garmin-health-stale-banner"
+              >
+                · {formatMeasurementDate(garminHealth.latest.measurement_date, lang)}
+              </span>
+            )}
           </div>
           <div className="grid grid-cols-3 gap-2 sm:gap-3">
             <Card className="bg-card border-border" data-testid="garmin-hrv">
@@ -484,9 +493,16 @@ export default function Progress() {
                   </span>
                 </div>
                 <p className="font-heading text-xl sm:text-3xl font-bold text-white break-words">
-                  {garminHealth.latest.hrv ?? "--"}
+                  {garminHealth.latest.is_current !== false
+                    ? (garminHealth.latest.hrv ?? "--")
+                    : "--"}
                   <span className="text-sm text-muted-foreground ml-1">ms</span>
                 </p>
+                {garminHealth.latest.is_current === false && garminHealth.latest.hrv != null && (
+                  <p className="font-mono text-[10px] text-amber-400 mt-1" data-testid="garmin-hrv-stale">
+                    {garminHealth.latest.hrv} · {formatMeasurementDate(garminHealth.latest.measurement_date, lang)}
+                  </p>
+                )}
               </CardContent>
             </Card>
 
@@ -499,9 +515,16 @@ export default function Progress() {
                   </span>
                 </div>
                 <p className="font-heading text-xl sm:text-3xl font-bold text-white break-words">
-                  {garminHealth.latest.resting_hr ?? "--"}
+                  {garminHealth.latest.is_current !== false
+                    ? (garminHealth.latest.resting_hr ?? "--")
+                    : "--"}
                   <span className="text-sm text-muted-foreground ml-1">bpm</span>
                 </p>
+                {garminHealth.latest.is_current === false && garminHealth.latest.resting_hr != null && (
+                  <p className="font-mono text-[10px] text-amber-400 mt-1" data-testid="garmin-rhr-stale">
+                    {garminHealth.latest.resting_hr} · {formatMeasurementDate(garminHealth.latest.measurement_date, lang)}
+                  </p>
+                )}
               </CardContent>
             </Card>
 
@@ -514,9 +537,16 @@ export default function Progress() {
                   </span>
                 </div>
                 <p className="font-heading text-xl sm:text-3xl font-bold text-white break-words">
-                  {garminHealth.latest.sleep_hours ?? "--"}
+                  {garminHealth.latest.is_current !== false
+                    ? (garminHealth.latest.sleep_hours ?? "--")
+                    : "--"}
                   <span className="text-sm text-muted-foreground ml-1">h</span>
                 </p>
+                {garminHealth.latest.is_current === false && garminHealth.latest.sleep_hours != null && (
+                  <p className="font-mono text-[10px] text-amber-400 mt-1" data-testid="garmin-sleep-stale">
+                    {garminHealth.latest.sleep_hours} · {formatMeasurementDate(garminHealth.latest.measurement_date, lang)}
+                  </p>
+                )}
               </CardContent>
             </Card>
           </div>

@@ -21,9 +21,9 @@ sans vérifier leur date — un document RHR/HRV/sommeil vieux de plusieurs sema
 être présenté comme la mesure actuelle.
 
 **Correction :**  
-- Ajout de la constante `_MAX_PHYSIO_STALENESS_DAYS = 7`.
+- Ajout initial de la constante `_MAX_PHYSIO_STALENESS_DAYS = 7` (renommée en `_CURRENT_SIGNAL_MAX_AGE_DAYS = 1` lors du round de correction — voir §3).
 - `_latest_doc_with` accepte désormais un paramètre `reference_date` et rejette tout document
-  dont la date est absente, non parseable, ou antérieure à `reference_date − 7 jours`.
+  dont la date est absente, non parseable, ou antérieure à la fenêtre courante.
 - `_build_sleep_record` idem : staleness gate obligatoire.
 - `_build_physio_signal` passe `reference_date` à `_latest_doc_with`.
 - `build_readiness_v2_from_garmin_data` passe `reference_date` à `_build_sleep_record`.
@@ -42,7 +42,7 @@ sans vérifier leur date — un document RHR/HRV/sommeil vieux de plusieurs sema
 | `"sleep_efficiency": round(sleep_efficiency, 2)` | idem | 0.85 inventé affiché |
 
 **Corrections :**
-- `_latest_with` : staleness gate identique à l'adapter (importe `_MAX_PHYSIO_STALENESS_DAYS`),
+- `_latest_with` : staleness gate identique à l'adapter (importe `_CURRENT_SIGNAL_MAX_AGE_DAYS`, anciennement `_MAX_PHYSIO_STALENESS_DAYS`),
   appelée avec `today` comme référence.
 - `sleep_efficiency` : `None` quand `sleep_score_raw is None` — aucun défaut synthétique.
 - `sleep_hours_val` : reste le `sleep_hours` brut (`Optional[float]`), jamais remplacé par `7.0`.
@@ -128,3 +128,88 @@ Résultat : **203 passed** — aucune régression.
 ## Runtime Garmin réel
 
 DEFERRED TO FINAL RUNTIME GATE (non disponible en sandbox CI).
+
+---
+
+## Correction Round (2026-08-30) — Second Pass
+
+### Problèmes supplémentaires adressés
+
+#### 1. Staleness TTL générique de 7 jours supprimé
+
+`_MAX_PHYSIO_STALENESS_DAYS = 7` renommé en `_CURRENT_SIGNAL_MAX_AGE_DAYS = 1`.
+
+Le signal courant doit provenir de J0 (aujourd'hui) ou J-1 (hier — mesure nocturne).
+Toute donnée de J-2 ou plus ancienne → `None`. La baseline historique (fenêtre 14 jours)
+n'est pas affectée.
+
+Fichiers modifiés :
+- `backend/garmin/readiness_adapter.py` — constante renommée + valeur abaissée à 1
+- `backend/garmin/insights.py` — import mis à jour
+
+#### 2. `incremental_sync()` rafraîchit maintenant les daily metrics (J-2 → J0)
+
+Avant : activities-only.
+Après : après l'ingestion des activités, `provider.get_daily_metrics(user_id, days=3, start_days_ago=0)`
+est appelé et upserted dans MongoDB. J0 est donc disponible dès le prochain appel Readiness.
+
+`metrics_count` est désormais remonté dans le résultat et le statut `daily_metrics_status`
+est mis à jour correctement.
+
+#### 3. `/garmin/daily-metrics` expose `measurement_date` et `is_current`
+
+`get_daily_metrics()` injecte deux champs dans `latest` :
+- `measurement_date` : date ISO de la mesure (déjà présente dans le document Mongo, désormais
+  explicitement exposée)
+- `is_current` : `True` si la date est J0 ou J-1, `False` sinon
+
+#### 4. `Progress.jsx` — affichage de la fraîcheur
+
+- Si `is_current === false` : les cartes HRV / FC repos / Sommeil affichent `--` comme
+  valeur principale.
+- La donnée stale est affichée en sous-texte amber avec la date de mesure.
+- Un bandeau amber dans le titre de la section indique la date de la dernière mesure
+  disponible quand elle n'est pas actuelle.
+
+### Tests correction round (7 nouveaux)
+
+| # | Nom du test | Résultat |
+|---|---|---|
+| 7 | `test_incremental_sync_fetches_daily_metrics` | ✅ PASS |
+| 8 | `test_j0_present_is_used_as_current_signal` | ✅ PASS |
+| 9 | `test_j_minus_1_accepted_when_j0_absent` | ✅ PASS |
+| 10 | `test_j_minus_2_only_yields_none` | ✅ PASS |
+| 11 | `test_j_minus_2_sleep_not_used_as_current` | ✅ PASS |
+| 12 | `test_j_minus_2_rhr_hrv_not_used_as_current` | ✅ PASS |
+| 13 | `test_get_daily_metrics_is_current_flag` | ✅ PASS |
+
+**Total PR #225 : 16/16 PASS**
+
+### Régressions Readiness V2
+
+Commande :
+```
+python -m pytest tests/test_run_index_r3_readiness_v2.py \
+  tests/test_training_v2_readiness.py \
+  tests/test_training_v2_readiness_signals.py \
+  tests/test_training_v2_readiness_subscores.py \
+  tests/test_training_v2_readiness_sufficiency.py \
+  tests/test_training_v2_readiness_decision.py -v
+```
+
+Résultat : **203 passed** — aucune régression.
+
+### Fichiers modifiés (correction round)
+
+| Fichier | Nature |
+|---|---|
+| `backend/garmin/readiness_adapter.py` | `_CURRENT_SIGNAL_MAX_AGE_DAYS = 1` (was 7) |
+| `backend/garmin/insights.py` | import mis à jour |
+| `backend/garmin/service.py` | `incremental_sync` + `get_daily_metrics` |
+| `frontend/src/pages/Progress.jsx` | affichage fraîcheur |
+| `backend/tests/test_readiness_data_truth_pr225.py` | 7 nouveaux tests |
+| `RUNINDEX_PR225_REPORT.md` | ce rapport |
+
+---
+
+**READY FOR RE-AUDIT**

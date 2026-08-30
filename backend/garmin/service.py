@@ -1131,11 +1131,12 @@ async def sync(db, user_id: str, since: Optional[str] = None) -> dict:
 
 
 async def incremental_sync(db, user_id: str) -> dict:
-    """Incremental sync: fetch ONLY activities newer than the last stored one.
+    """Incremental sync: activities + recent daily metrics (J-2 → J0).
 
-    Uses `since = last_activity_timestamp` so Garmin API usage stays flat (small
-    payload) vs a full re-sync. Activities-only (no daily-metrics fetch) to keep
-    the batch light; dedupe + event emission happen in _ingest_activities.
+    Fetches activities newer than the last stored one (``since`` anchoring) so
+    Garmin API usage stays light.  Also refreshes daily health metrics for the
+    last 3 days so that J0's RHR/HRV/sleep are always up-to-date and Readiness
+    never reads stale physiological data as today's signal.
     """
     conn = await db.garmin_connections.find_one({"user_id": user_id}, {"_id": 0})
     if not conn or not conn.get("connected"):
@@ -1192,6 +1193,23 @@ async def incremental_sync(db, user_id: str) -> dict:
             ingest.get("new_running_dates", []),
         )
         await _build_and_persist_capabilities(db, user_id)
+
+        # -----------------------------------------------------------------
+        # Refresh recent daily metrics (J-2 → J0) so that Readiness always
+        # has today's RHR/HRV/sleep.  Fetching 3 days keeps the API call
+        # lightweight while guaranteeing J0 is included when Garmin has
+        # already uploaded it.  Each day is upserted — no duplicates.
+        # -----------------------------------------------------------------
+        metrics_count = 0
+        metrics_recent: list = []
+        try:
+            metrics_recent = list(provider.get_daily_metrics(user_id, days=3, start_days_ago=0))
+            if metrics_recent:
+                metrics_count = await _persist_daily_metrics(db, user_id, metrics_recent)
+                logger.info("[Garmin] incremental daily_metrics persisted=%d user=%s", metrics_count, user_id)
+        except Exception as exc:
+            logger.warning("[Garmin] incremental daily_metrics fetch failed user=%s: %s", user_id, exc)
+
         refreshed = await refresh_today_run_index_after_garmin_activities(db, user_id)
         await backfill_run_index_history_after_garmin_sync(db, user_id)
         # Invalidate the dashboard insight cache so the next GET /dashboard/insight
@@ -1202,13 +1220,15 @@ async def incremental_sync(db, user_id: str) -> dict:
             await _backfill_workouts_user(db, user_id, prune=False)
         except Exception:
             logger.exception("[Garmin] workouts self-heal failed user=%s", user_id)
+        has_physio = _has_usable_physio_data(metrics_recent) if metrics_recent else False
+        dm_status = "ready" if has_physio else ("no_usable_data" if metrics_count > 0 else "pending")
         await update_sync_progress(
             user_id,
             phase="complete",
             activities_status="ready",
             activities_count=activity_count,
             run_index_status="ready",
-            daily_metrics_status="pending",
+            daily_metrics_status=dm_status,
             readiness_status="pending",
             error_code=None,
         )
@@ -1230,15 +1250,15 @@ async def incremental_sync(db, user_id: str) -> dict:
             "message": "RunIndex refresh failed",
         }
     await _safe_save_session(db, user_id)
-    logger.info("[Garmin] incremental synced=%d new=%d user=%s since=%s",
-                ingest["synced"], ingest["new"], user_id, since)
+    logger.info("[Garmin] incremental synced=%d new=%d metrics=%d user=%s since=%s",
+                ingest["synced"], ingest["new"], metrics_count, user_id, since)
     return {
         "success": True,
         "status": "complete",
         "synced_count": ingest["synced"],
         "new_count": ingest["new"],
-        "metrics_count": 0,
-        "message": f"{ingest['new']} new activities",
+        "metrics_count": metrics_count,
+        "message": f"{ingest['new']} new activities, {metrics_count} daily metrics",
     }
 
 
@@ -1277,13 +1297,35 @@ async def disconnect(db, user_id: str) -> dict:
 
 
 async def get_daily_metrics(db, user_id: str, days: int = 7) -> dict:
+    """Return the most recent *days* daily-metrics documents for the user.
+
+    The ``latest`` entry is the most recently stored document.  Two extra
+    fields are injected so consumers can judge freshness without doing date
+    arithmetic in the frontend:
+
+    - ``latest.measurement_date`` — ISO date string of the reading (passthrough
+      from the ``date`` field already in the document).
+    - ``latest.is_current`` — True only when the reading is from today or
+      yesterday; False means the data is stale and should be displayed with a
+      date qualifier or hidden altogether.
+    """
     cursor = (
         db.garmin_daily_metrics.find({"user_id": user_id}, {"_id": 0})
         .sort("date", -1)
         .limit(days)
     )
     metrics = await cursor.to_list(length=days)
-    latest = metrics[0] if metrics else None
+    latest = dict(metrics[0]) if metrics else None
+    if latest is not None:
+        measurement_date: Optional[str] = latest.get("date")
+        latest["measurement_date"] = measurement_date
+        try:
+            doc_date = date.fromisoformat(str(measurement_date)[:10])
+            today = datetime.now(timezone.utc).date()
+            days_ago = (today - doc_date).days
+            latest["is_current"] = days_ago <= 1  # today (J0) or yesterday (J-1)
+        except (TypeError, ValueError):
+            latest["is_current"] = False
     return {"metrics": metrics, "latest": latest, "count": len(metrics)}
 
 

@@ -25,7 +25,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional
 
 from garmin.readiness_adapter import (
-    _MAX_PHYSIO_STALENESS_DAYS,
+    _CURRENT_SIGNAL_MAX_AGE_DAYS,
     build_readiness_v2_from_garmin_data,
     get_rhr_v2_baseline,
 )
@@ -74,14 +74,14 @@ def _latest_with(
     """Return the most recent metrics doc whose `key` is a real (non-null) value.
 
     metrics_docs is sorted newest-first.  When *reference_date* is supplied,
-    only documents dated within ``_MAX_PHYSIO_STALENESS_DAYS`` of
+    only documents dated within ``_CURRENT_SIGNAL_MAX_AGE_DAYS`` of
     *reference_date* are considered.  A doc whose date cannot be parsed, or
     that is older than the staleness window, is silently skipped — stale data
     must never be presented as a current measurement.
     """
     cutoff: Optional[date] = None
     if reference_date is not None:
-        cutoff = reference_date - timedelta(days=_MAX_PHYSIO_STALENESS_DAYS)
+        cutoff = reference_date - timedelta(days=_CURRENT_SIGNAL_MAX_AGE_DAYS)
 
     for doc in metrics_docs:
         if doc.get(key) is None:

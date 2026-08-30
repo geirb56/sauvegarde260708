@@ -34,12 +34,17 @@ from datetime import date, timedelta
 from typing import List, Optional
 
 # ---------------------------------------------------------------------------
-# Staleness limit for physio signals (RHR, HRV, sleep).
-# A daily-metrics document older than this many days relative to reference_date
-# is NEVER used as the "current" reading; it would be stale data presented as
-# today's measurement.
+# Staleness limit for the *current* physio signal (RHR, HRV, sleep).
+#
+# Only a measurement from today (J0) or yesterday (J-1) is accepted as the
+# runner's "current" physiological state.  Anything older is absent/stale →
+# the signal stays None.  This deliberately removes the previous 7-day
+# generic TTL which could silently present week-old data as today's reading.
+#
+# The baseline (14-day rolling mean) is computed from an independent window
+# that always looks back to J-1 regardless of this constant.
 # ---------------------------------------------------------------------------
-_MAX_PHYSIO_STALENESS_DAYS = 7
+_CURRENT_SIGNAL_MAX_AGE_DAYS = 1
 
 from training_v2.readiness import build_readiness_result, ReadinessResult
 from training_v2.readiness_signals import (
@@ -84,14 +89,14 @@ def _latest_doc_with(
     """Return the most recent document that has a non-None value for *field*.
 
     When *reference_date* is supplied, only documents whose ``date`` field is
-    within the last ``_MAX_PHYSIO_STALENESS_DAYS`` days are considered.  A
+    within the last ``_CURRENT_SIGNAL_MAX_AGE_DAYS`` days are considered.  A
     document without a parseable ``date`` is always excluded when
     *reference_date* is provided so that undated records are never silently
     treated as current.
     """
     cutoff: Optional[date] = None
     if reference_date is not None:
-        cutoff = reference_date - timedelta(days=_MAX_PHYSIO_STALENESS_DAYS)
+        cutoff = reference_date - timedelta(days=_CURRENT_SIGNAL_MAX_AGE_DAYS)
 
     for doc in docs:
         if doc.get(field) is None:
@@ -162,7 +167,7 @@ def _build_physio_signal(
     """Build a PhysioSignal for *field* (e.g. 'resting_hr' or 'hrv').
 
     recent_value is taken from the most recent document that has a non-None
-    value for *field* and whose date is within ``_MAX_PHYSIO_STALENESS_DAYS``
+    value for *field* and whose date is within ``_CURRENT_SIGNAL_MAX_AGE_DAYS``
     of *reference_date*.  A document older than that window is silently treated
     as absent — stale data is never presented as current.
 
@@ -193,13 +198,13 @@ def _build_sleep_record(
     """Return the most recent SleepRecord within the staleness window, or None.
 
     When *reference_date* is supplied, only documents dated within
-    ``_MAX_PHYSIO_STALENESS_DAYS`` of *reference_date* are considered.  A
+    ``_CURRENT_SIGNAL_MAX_AGE_DAYS`` of *reference_date* are considered.  A
     sleep record older than that window is treated as absent — it must not be
     silently used as "last night's" sleep.
     """
     cutoff: Optional[date] = None
     if reference_date is not None:
-        cutoff = reference_date - timedelta(days=_MAX_PHYSIO_STALENESS_DAYS)
+        cutoff = reference_date - timedelta(days=_CURRENT_SIGNAL_MAX_AGE_DAYS)
 
     for doc in docs:
         duration = doc.get("sleep_hours")
