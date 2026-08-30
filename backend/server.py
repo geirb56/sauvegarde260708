@@ -1254,8 +1254,8 @@ async def get_stats(user: dict = Depends(auth_user)):
 
     # Build weekly_summary from the 7-day window (DomainActivity, running only)
     daily_data: dict = defaultdict(lambda: {"distance": 0.0, "duration": 0, "count": 0})
-    for activity, activity_date in _iter_recent_running_domain_activities(garmin_domain_activities, max_days=7):
-        date_str = activity_date.isoformat()
+    for activity, activity_day in _iter_recent_running_domain_activities(garmin_domain_activities, max_days=7):
+        date_str = activity_day.isoformat()
         daily_data[date_str]["distance"] += round(
             (getattr(activity, "distance_m", None) or 0.0) / 1000.0, 3
         )

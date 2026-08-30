@@ -83,9 +83,9 @@ class TestDistanceBasedFallbackNoUnvalidatedTSS:
             goal="10k",
             target_km_protected=40.0,
         )
-        assert plan["total_tss"] is not 0  # noqa: E711
+        assert plan["total_tss"] != 0
         for s in plan["sessions"]:
-            assert s["estimated_tss"] is not 0  # noqa: E711
+            assert s["estimated_tss"] != 0
 
 
 class TestDurationBasedFallbackUnchanged:

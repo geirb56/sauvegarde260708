@@ -632,7 +632,7 @@ def generate_weekly_review(
             days_until = (event_date - today).days
             if days_until and days_until > 0:
                 advice += f" Goal {user_goal['event_name']} in {days_until} days."
-        except:
+        except Exception:
             pass
 
     # ========================================

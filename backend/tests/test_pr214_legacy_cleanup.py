@@ -247,7 +247,6 @@ def test_garmin_vo2max_pipeline_unchanged():
     """Garmin VO2max service module must not have been altered in this PR.
     Verify that garmin/service.py imports and is syntactically valid.
     """
-    import ast
     garmin_service = os.path.join(BACKEND_DIR, "garmin", "service.py")
     if os.path.exists(garmin_service):
         src = _read(garmin_service)

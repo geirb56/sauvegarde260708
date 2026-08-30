@@ -27,7 +27,11 @@ import os
 import sys
 import textwrap
 from datetime import date, timedelta
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from training_v2.weekly_target import WeeklyTarget
+    from training_v2.workout_generator import WeeklyPlan, WorkoutPrescription
 
 import pytest
 

@@ -23,7 +23,7 @@ class TestCoachConversationalFormat:
         # Cleanup: Clear conversation history for test user
         try:
             requests.delete(f"{BASE_URL}/api/coach/history?user_id={self.user_id}")
-        except:
+        except Exception:
             pass
     
     def test_api_health(self):

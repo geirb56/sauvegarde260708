@@ -655,3 +655,10 @@ Verified by testing_agent iteration_27: 100% backend+frontend, analysis renders 
 - PR #193 = alignement de la carte Race Predictions sur la Performance Curve V2 : libellé « Estimées à partir de tes performances observées » (fin de « Basées sur ta VMA »), affichage de la confiance par distance, aucun readiness_label dans la carte prédictions.
 - Validation (agent-tested) : frontend redémarré. Jest `progress-race-predictions-v2` = **23 passed**. Screenshot FR compte réel : PRÉDICTIONS DE COURSE (5K 28:26 → Marathon 4h32, confiance « Insuffisante »), RunIndex/piliers réels, 0 erreur JS, 0 clé brute.
 - Statut : agent-tested + smoke visuel FR vérifié ; non user-confirmed.
+
+## 2026-06 — Pull copilot/dev — PR #223 + #224 (Durcissement paiement Paddle)
+- Fetch + merge `sauvegarde/copilot/dev` (5ef2b51→c25294a, 16 commits remote). Merge ORT propre. Backend uniquement : server.py (+620/-...), subscription_manager.py, access_control.py, nouveaux services `paddle_event_index.py` + `datetime_utils.py`, migrations, 2 nouvelles suites de tests.
+- PR223/224 = ordering atomique des événements Paddle (CAS sur occurred_at), claim/lease atomique via `_claim_paddle_event`/`_mark_paddle_event_processed`, index partiel unique `paddle_events.event_id`, fail-fast index au démarrage, parsing env lease durci.
+- Validation (agent-tested) : backend redémarré, startup OK, index partiel `paddle_events.event_id` créé sans erreur fail-fast. Nouvelles suites `test_paddle_integrity_pr223` + `test_paddle_recovery_pr224` = **58 passed**. Smoke API : /api/ 401 (intentionnel), /api/webhook/paddle 400 (validation). Idempotence + fail-closed frontend vérifiés dans le source.
+- Note : `test_paddle_subscription.py` (ancien) a 4 assertions d'inspection de source obsolètes (noms de fonctions/chaînes changés par le refactor légitime PR224) — non-régressions produit, remplacées par les nouvelles suites. Tests upstream non modifiés localement.
+- Statut : agent-tested ; non user-confirmed.

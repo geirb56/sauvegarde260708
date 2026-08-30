@@ -1746,7 +1746,7 @@ def _get_allure_comment(context: Dict) -> str:
     try:
         parts = allure.split(":")
         pace_min = float(parts[0]) + float(parts[1]) / 60
-    except:
+    except Exception:
         return "solid"
 
     if pace_min < 4.5:
@@ -1797,7 +1797,7 @@ def _get_allure_cible(context: Dict) -> str:
         target_min = int(target_pace)
         target_sec = int((target_pace - target_min) * 60)
         return f"{target_min}:{target_sec:02d}"
-    except:
+    except Exception:
         return "5:30"
 
 
@@ -1837,7 +1837,7 @@ def _get_temps_estime(context: Dict) -> str:
             return f"{hours}h{minutes:02d}"
         else:
             return f"{minutes} min"
-    except:
+    except Exception:
         return "to calculate"
 
 
@@ -1884,7 +1884,7 @@ def _get_allure_z2(context: Dict) -> str:
         z2_min = int(z2_pace)
         z2_sec = int((z2_pace - z2_min) * 60)
         return f"{z2_min}:{z2_sec:02d}"
-    except:
+    except Exception:
         return "7:00-7:30"
 
 

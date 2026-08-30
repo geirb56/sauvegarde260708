@@ -34,7 +34,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any, List, Optional
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -736,8 +736,6 @@ def test_real_pipeline_self_heal_wiring():
     - db.workouts is never consulted for RunIndex.
     """
     import asyncio
-    import sys
-    from unittest.mock import AsyncMock, MagicMock, patch
 
     user_id = "user-wiring"
 
@@ -795,8 +793,6 @@ def test_real_pipeline_self_heal_wiring():
         return _orig_calc(activities, reference_date=reference_date)
 
     async def _run_incremental_sync():
-        import sys
-        from types import ModuleType
         from garmin import service as svc
         mock_backfill = AsyncMock(return_value=SENTINEL)
 
@@ -849,7 +845,6 @@ def test_real_pipeline_self_heal_failure_isolation():
     fall back to db.workouts and must NOT cause incremental_sync to return failure.
     """
     import asyncio
-    from unittest.mock import AsyncMock, MagicMock, patch
 
     user_id = "user-wiring-fail"
 

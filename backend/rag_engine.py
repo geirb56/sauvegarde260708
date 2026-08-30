@@ -528,7 +528,7 @@ def calculate_metrics(workouts: List[Dict], period_days: int = 7) -> Dict:
                     w_date = datetime.fromisoformat(w_date + "T23:59:59+00:00")
             if w_date and (most_recent_date is None or w_date > most_recent_date):
                 most_recent_date = w_date
-        except:
+        except Exception:
             continue
     
     # Fall back to current time if no valid dates found
@@ -549,7 +549,7 @@ def calculate_metrics(workouts: List[Dict], period_days: int = 7) -> Dict:
                     w_date = datetime.fromisoformat(w_date + "T00:00:00+00:00")
             if w_date and w_date >= period_start:
                 period_workouts.append(w)
-        except:
+        except Exception:
             continue
     
     if not period_workouts:
@@ -762,7 +762,7 @@ def generate_dashboard_rag(
                 conditionnels.append(random.choice(DASHBOARD_CONDITIONALS["objectif_proche"]).format(
                     jours=jours
                 ))
-        except:
+        except Exception:
             pass
     
     if km_mois < 30:
