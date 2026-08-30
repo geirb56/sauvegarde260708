@@ -4965,6 +4965,8 @@ async def paddle_webhook(request: Request):
     )
 
     return result
+
+
 from api.garmin import garmin_router
 api_router.include_router(garmin_router)
 

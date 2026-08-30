@@ -358,7 +358,7 @@ def _resolve_access(user_id: str, subscription: dict) -> UserAccess:
                 "— failing closed to FREE"
             )
             return UserAccess(user_id=user_id, tier=Tier.FREE)
-        if premium_expires_at and now > premium_expires_at:
+        if now > premium_expires_at:
             logger.info(f"[AccessControl] Premium expired for '{user_id}'")
             return UserAccess(
                 user_id=user_id, tier=Tier.FREE, premium_expires_at=premium_expires_at
