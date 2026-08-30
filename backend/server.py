@@ -927,6 +927,10 @@ DISTANCE_TYPES = {
     # "ultra" intentionally absent — distance must be supplied explicitly (> 42.195)
 }
 
+# All valid distance_type values — derived from DISTANCE_TYPES plus "ultra"
+# so there is a single source of truth for what types are allowed.
+_VALID_DISTANCE_TYPES: frozenset[str] = frozenset(DISTANCE_TYPES.keys()) | {"ultra"}
+
 # Goal→distance_type coherence map (upper-case legacy goal → canonical distance_type key)
 _GOAL_TO_DISTANCE_TYPE: dict[str, str] = {
     "5K": "5k",
@@ -1036,6 +1040,11 @@ async def _resolve_goal_v2(user_id: str) -> "_ResolvedGoal":
         )
 
     start_raw = cycle.get("start_date")
+    if not start_raw:
+        raise HTTPException(
+            status_code=400,
+            detail="Training cycle has no start_date. Re-set your goal via /api/training/set-goal.",
+        )
     cycle_start: Optional[date] = None
     if isinstance(start_raw, datetime):
         cycle_start = start_raw.date() if start_raw.tzinfo else start_raw.replace(tzinfo=timezone.utc).date()
@@ -1044,6 +1053,11 @@ async def _resolve_goal_v2(user_id: str) -> "_ResolvedGoal":
             cycle_start = datetime.fromisoformat(start_raw.replace("Z", "+00:00")).date()
         except (ValueError, TypeError):
             pass
+    if cycle_start is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Training cycle start_date '{start_raw}' is not a valid date. Re-set your goal.",
+        )
 
     user_goal_doc = await db.user_goals.find_one({"user_id": user_id}, {"_id": 0})
 
@@ -1078,13 +1092,25 @@ async def _resolve_goal_v2(user_id: str) -> "_ResolvedGoal":
     race_date: Optional[date] = None
     if user_goal_doc:
         rd_raw = user_goal_doc.get("event_date")
-        if isinstance(rd_raw, datetime):
-            race_date = rd_raw.date() if rd_raw.tzinfo else rd_raw.replace(tzinfo=timezone.utc).date()
-        elif isinstance(rd_raw, str):
-            try:
-                race_date = datetime.fromisoformat(rd_raw.replace("Z", "+00:00")).date()
-            except (ValueError, TypeError):
-                pass
+        if rd_raw is not None:
+            if isinstance(rd_raw, datetime):
+                race_date = rd_raw.date() if rd_raw.tzinfo else rd_raw.replace(tzinfo=timezone.utc).date()
+            elif isinstance(rd_raw, str):
+                try:
+                    race_date = datetime.fromisoformat(rd_raw.replace("Z", "+00:00")).date()
+                except (ValueError, TypeError):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"user_goal.event_date '{rd_raw}' is not a valid ISO date. "
+                            "Update your goal via /api/user/goal."
+                        ),
+                    )
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"user_goal.event_date has unexpected type '{type(rd_raw).__name__}'. Update your goal.",
+                )
 
     target_time_sec: Optional[int] = None
     if user_goal_doc:
@@ -1179,11 +1205,10 @@ async def set_user_goal(goal: UserGoalCreate, user: dict = Depends(auth_user)):
             detail=f"event_date '{goal.event_date}' must be a future date.",
         )
 
-    VALID_DISTANCE_TYPES = {"5k", "10k", "semi", "marathon", "ultra"}
-    if goal.distance_type not in VALID_DISTANCE_TYPES:
+    if goal.distance_type not in _VALID_DISTANCE_TYPES:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid distance_type '{goal.distance_type}'. Must be one of {sorted(VALID_DISTANCE_TYPES)}.",
+            detail=f"Invalid distance_type '{goal.distance_type}'. Must be one of {sorted(_VALID_DISTANCE_TYPES)}.",
         )
 
     if goal.distance_type == "ultra":
@@ -3762,7 +3787,7 @@ async def get_week_plan(user: dict = Depends(auth_user)):
         periodization = build_periodization(
             plan_goal=plan_goal_v2,
             reference_date=today.date(),
-            cycle_anchor_date=cycle_start_v2 or today.date(),
+            cycle_anchor_date=cycle_start_v2,
         )
 
     weekly_target, weekly_plan_v2 = build_weekly_plan_from_workouts(
@@ -3805,14 +3830,18 @@ async def get_week_plan(user: dict = Depends(auth_user)):
     load_7 = km_7_running
     load_28 = km_28_running
 
-    start_date = resolved.cycle_doc.get("start_date")
     cycle_weeks = GOAL_CONFIG[goal_type]["cycle_weeks"]
-    if isinstance(start_date, datetime) and start_date.tzinfo is None:
-        start_date = start_date.replace(tzinfo=timezone.utc)
-    if today < start_date:
+    # resolved.cycle_start is already validated — never None after _resolve_goal_v2.
+    cycle_start_dt = datetime(
+        resolved.cycle_start.year,
+        resolved.cycle_start.month,
+        resolved.cycle_start.day,
+        tzinfo=timezone.utc,
+    )
+    if today < cycle_start_dt:
         current_week = 0
     else:
-        delta_days = (today - start_date).days
+        delta_days = (today - cycle_start_dt).days
         current_week = min(delta_days // 7 + 1, cycle_weeks + 1)
     phase = periodization.phase.value
 
@@ -4015,12 +4044,6 @@ async def get_training_v2_cycle(user: dict = Depends(auth_user)):
 
     # ── PR226: canonical resolver — single source of truth ────────────────
     resolved = await _resolve_goal_v2(user_id)
-
-    if resolved.cycle_start is None:
-        raise HTTPException(
-            status_code=400,
-            detail="No start_date in training cycle.",
-        )
 
     # ── Build PlanGoal V2 ─────────────────────────────────────────────────
     plan_goal = build_plan_goal(

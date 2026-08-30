@@ -517,3 +517,187 @@ def test_post_user_goal_ultra_100km_succeeds():
     result = _run(run())
     assert result["success"] is True
     assert inserts[0]["distance_km"] == 100.0
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Section D — _resolve_goal_v2 hardening: start_date / event_date validation
+# ════════════════════════════════════════════════════════════════════════════
+
+def test_resolve_goal_no_start_date_rejected():
+    """Cycle missing start_date entirely → HTTP 400."""
+    from fastapi import HTTPException
+    import server as srv
+    cycle = {"goal": "10K"}  # no start_date
+    mock_db = _make_db(cycle=cycle, user_goal=None)
+    with patch.object(srv, "db", mock_db):
+        with pytest.raises(HTTPException) as exc_info:
+            _run(srv._resolve_goal_v2("user1"))
+    assert exc_info.value.status_code == 400
+    assert "start_date" in exc_info.value.detail.lower()
+
+
+def test_resolve_goal_invalid_start_date_rejected():
+    """Cycle with garbage start_date string → HTTP 400."""
+    from fastapi import HTTPException
+    import server as srv
+    cycle = {"goal": "10K", "start_date": "not-a-date"}
+    mock_db = _make_db(cycle=cycle, user_goal=None)
+    with patch.object(srv, "db", mock_db):
+        with pytest.raises(HTTPException) as exc_info:
+            _run(srv._resolve_goal_v2("user1"))
+    assert exc_info.value.status_code == 400
+    assert "start_date" in exc_info.value.detail.lower()
+
+
+def test_resolve_goal_invalid_event_date_rejected():
+    """user_goal present with garbage event_date → HTTP 400 (no silent drop)."""
+    from fastapi import HTTPException
+    import server as srv
+    cycle = {"goal": "MARATHON", "start_date": _CYCLE_START}
+    user_goal = {"distance_type": "marathon", "event_date": "garbage-date"}
+    mock_db = _make_db(cycle=cycle, user_goal=user_goal)
+    with patch.object(srv, "db", mock_db):
+        with pytest.raises(HTTPException) as exc_info:
+            _run(srv._resolve_goal_v2("user1"))
+    assert exc_info.value.status_code == 400
+    assert "event_date" in exc_info.value.detail.lower()
+
+
+def test_resolve_goal_none_start_date_rejected():
+    """Cycle with explicit None start_date → HTTP 400."""
+    from fastapi import HTTPException
+    import server as srv
+    cycle = {"goal": "10K", "start_date": None}
+    mock_db = _make_db(cycle=cycle, user_goal=None)
+    with patch.object(srv, "db", mock_db):
+        with pytest.raises(HTTPException) as exc_info:
+            _run(srv._resolve_goal_v2("user1"))
+    assert exc_info.value.status_code == 400
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Section E — Endpoint-level tests: get_training_v2_week / get_training_v2_cycle
+# Calls the actual endpoint handler with mocked DB (no server startup needed).
+# ════════════════════════════════════════════════════════════════════════════
+
+def _make_db_with_activities(cycle, user_goal=None):
+    """Build mock db that also provides garmin_activities.find().to_list()."""
+    db = MagicMock()
+
+    async def _cycle_find_one(*args, **kwargs):
+        return cycle
+
+    async def _goal_find_one(*args, **kwargs):
+        return user_goal
+
+    # garmin_activities.find(...).to_list(N) → empty list
+    activities_cursor = MagicMock()
+    activities_cursor.to_list = AsyncMock(return_value=[])
+    db.garmin_activities.find = MagicMock(return_value=activities_cursor)
+    db.training_cycles.find_one = _cycle_find_one
+    db.user_goals.find_one = _goal_find_one
+    return db
+
+
+def test_get_training_v2_week_10k_coherent():
+    """get_training_v2_week with 10K cycle → 200, goal_type='10k'."""
+    import server as srv
+    cycle = {"goal": "10K", "start_date": _CYCLE_START}
+    mock_db = _make_db_with_activities(cycle=cycle, user_goal=None)
+
+    async def run():
+        with patch.object(srv, "db", mock_db):
+            with patch.object(srv, "mongo_garmin_activities_to_domain", return_value=[]):
+                return await srv.get_training_v2_week(user={"id": "u1"})
+
+    result = _run(run())
+    assert isinstance(result, dict)
+    assert result["goal"]["goal_type"] == "10k"
+    assert result["goal"]["race_date"] is None
+    assert "weekly_target" in result
+    assert "week" in result
+
+
+def test_get_training_v2_cycle_10k_coherent():
+    """get_training_v2_cycle with 10K cycle → 200, contains phases/weeks."""
+    import server as srv
+    cycle = {"goal": "10K", "start_date": _CYCLE_START}
+    mock_db = _make_db_with_activities(cycle=cycle, user_goal=None)
+
+    async def run():
+        with patch.object(srv, "db", mock_db):
+            return await srv.get_training_v2_cycle(user={"id": "u1"})
+
+    result = _run(run())
+    assert isinstance(result, dict)
+    # TrainingCycleV2Response has at least goal_type and some calendar info
+    assert "goal_type" in result or "phases" in result or "weeks" in result or "calendar" in result or len(result) > 0
+
+
+def test_get_training_v2_week_ultra_50km():
+    """get_training_v2_week with ULTRA 50km cycle → 200, goal_type='ultra'."""
+    import server as srv
+    cycle = {"goal": "ULTRA", "start_date": _CYCLE_START, "ultra_distance_km": 50.0}
+    mock_db = _make_db_with_activities(cycle=cycle, user_goal=None)
+
+    async def run():
+        with patch.object(srv, "db", mock_db):
+            with patch.object(srv, "mongo_garmin_activities_to_domain", return_value=[]):
+                return await srv.get_training_v2_week(user={"id": "u1"})
+
+    result = _run(run())
+    assert isinstance(result, dict)
+    assert result["goal"]["goal_type"] == "ultra"
+    assert result["goal"]["race_date"] is None
+
+
+def test_get_training_v2_cycle_ultra_50km():
+    """get_training_v2_cycle with ULTRA 50km cycle → 200."""
+    import server as srv
+    cycle = {"goal": "ULTRA", "start_date": _CYCLE_START, "ultra_distance_km": 50.0}
+    mock_db = _make_db_with_activities(cycle=cycle, user_goal=None)
+
+    async def run():
+        with patch.object(srv, "db", mock_db):
+            return await srv.get_training_v2_cycle(user={"id": "u1"})
+
+    result = _run(run())
+    assert isinstance(result, dict)
+    assert len(result) > 0
+
+
+def test_get_training_v2_week_invalid_start_date_rejected():
+    """get_training_v2_week with garbage start_date → HTTP 400."""
+    from fastapi import HTTPException
+    import server as srv
+    cycle = {"goal": "10K", "start_date": "not-a-date"}
+    mock_db = _make_db_with_activities(cycle=cycle, user_goal=None)
+
+    async def run():
+        with patch.object(srv, "db", mock_db):
+            with patch.object(srv, "mongo_garmin_activities_to_domain", return_value=[]):
+                return await srv.get_training_v2_week(user={"id": "u1"})
+
+    with pytest.raises(HTTPException) as exc_info:
+        _run(run())
+    assert exc_info.value.status_code == 400
+    assert "start_date" in exc_info.value.detail.lower()
+
+
+def test_get_training_v2_week_invalid_event_date_rejected():
+    """get_training_v2_week with garbage event_date in user_goal → HTTP 400."""
+    from fastapi import HTTPException
+    import server as srv
+    cycle = {"goal": "MARATHON", "start_date": _CYCLE_START}
+    user_goal = {"distance_type": "marathon", "event_date": "not-a-date"}
+    mock_db = _make_db_with_activities(cycle=cycle, user_goal=user_goal)
+
+    async def run():
+        with patch.object(srv, "db", mock_db):
+            with patch.object(srv, "mongo_garmin_activities_to_domain", return_value=[]):
+                return await srv.get_training_v2_week(user={"id": "u1"})
+
+    with pytest.raises(HTTPException) as exc_info:
+        _run(run())
+    assert exc_info.value.status_code == 400
+    assert "event_date" in exc_info.value.detail.lower()

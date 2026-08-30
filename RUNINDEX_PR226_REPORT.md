@@ -97,7 +97,7 @@ Corrigé en `raise HTTPException(status_code=400, detail="Invalid goal")`.
 
 ## Tests — `backend/tests/test_goal_truth_pr226.py`
 
-**40 tests, 0 skips, 0 failures.**
+**50 tests, 0 skips, 0 failures** (40 after initial patch + 10 added in final patch).
 
 ### Section A — Unitaires / source-inspection
 
@@ -162,3 +162,42 @@ DEFERRED TO FINAL RUNTIME GATE.
 ## C226
 
 PR #226 — base: `copilot/dev`. NE PAS merger.
+
+---
+
+## Patch supplémentaire (final)
+
+### Corrections `_resolve_goal_v2`
+
+1. **`start_date` absent ou invalide → HTTP 400**
+   - `cycle.get("start_date")` retourne `None` → `raise HTTPException(400)`
+   - Parse échoue (garbage string) → `raise HTTPException(400)`
+   - Plus aucun fallback silencieux `cycle_start = None`
+
+2. **`event_date` présente mais invalide → HTTP 400**
+   - Si `rd_raw` est présent mais non parseable → `raise HTTPException(400, "event_date '...' is not a valid ISO date")`
+   - Type inattendu → `raise HTTPException(400)`
+   - Plus de `pass` silencieux dans le bloc sauf
+
+### Correction `/training/week-plan`
+
+- Suppression du `or today.date()` dans `build_periodization(cycle_anchor_date=...)`
+- Suppression de la relecture de `resolved.cycle_doc.get("start_date")` brut
+- `cycle_start_v2` (déjà validé dans `_resolve_goal_v2`) utilisé exclusivement via `resolved.cycle_start`
+
+### Tests ajoutés — Section D et E (10 nouveaux tests, 0 skip)
+
+| # | Test | Résultat |
+|---|---|---|
+| 41 | `test_resolve_goal_no_start_date_rejected` | PASS |
+| 42 | `test_resolve_goal_invalid_start_date_rejected` | PASS |
+| 43 | `test_resolve_goal_invalid_event_date_rejected` | PASS |
+| 44 | `test_resolve_goal_none_start_date_rejected` | PASS |
+| 45 | `test_get_training_v2_week_10k_coherent` | PASS |
+| 46 | `test_get_training_v2_cycle_10k_coherent` | PASS |
+| 47 | `test_get_training_v2_week_ultra_50km` | PASS |
+| 48 | `test_get_training_v2_cycle_ultra_50km` | PASS |
+| 49 | `test_get_training_v2_week_invalid_start_date_rejected` | PASS |
+| 50 | `test_get_training_v2_week_invalid_event_date_rejected` | PASS |
+
+**Total : 50 tests, 0 skip, 0 failure.**
