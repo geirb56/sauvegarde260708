@@ -288,6 +288,18 @@ async def activate_garmin_trial(
     trial_end = now + timedelta(days=TRIAL_DURATION_DAYS)
     claim_token = uuid4().hex
 
+    current_subscription = await get_user_subscription(db, user_id)
+    current_status = current_subscription.get("status")
+
+    # Existing paid or active trial users must keep their status; never restart
+    # an active trial and never regress premium to trial.
+    if current_status in (SubscriptionStatus.PREMIUM, SubscriptionStatus.TRIAL):
+        return current_subscription
+
+    # Never grant a second trial to the same RunIndex user.
+    if current_subscription.get("trial_used"):
+        return current_subscription
+
     # ── Step 1: Check if this Garmin identity already used a trial ────────────
     # The garmin_trial_registry has a unique index on garmin_identity.
     # We use find_one_and_update with upsert=True and $setOnInsert to atomically
@@ -330,11 +342,7 @@ async def activate_garmin_trial(
             garmin_identity,
             user_id,
         )
-        # Return current subscription unchanged (except lazy expiration transition).
-        sub = await db.subscriptions.find_one({"user_id": user_id}, {"_id": 0})
-        if not sub:
-            return await create_free_subscription(db, user_id)
-        return await check_trial_expiration(db, sub)
+        return await get_user_subscription(db, user_id)
 
     # ── Step 2: Activate the trial for this user ──────────────────────────────
     await db.subscriptions.update_one(
