@@ -38,7 +38,7 @@ export const BrandSplash = ({ text = "" }) => (
     <img
       src="/runindex-logo-compact.png"
       alt="RunIndex"
-      className="h-24 w-auto brand-splash-logo"
+      className="h-36 w-auto brand-splash-logo"
     />
     <div className="flex items-center gap-3">
       <Loader2 className="w-5 h-5 animate-spin text-primary" />
