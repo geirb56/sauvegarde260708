@@ -156,7 +156,7 @@ describe("PR222 trial Garmin handoff", () => {
     fireEvent.change(screen.getByTestId("garmin-password-input"), { target: { value: "Password123!" } });
     fireEvent.click(screen.getByTestId("trial-garmin-connect-btn"));
 
-    expect(await screen.findByTestId("trial-garmin-status-message")).toHaveTextContent("connection to Garmin failed");
+    expect(await screen.findByTestId("trial-garmin-status-message")).toHaveTextContent("Garmin connection failed");
     expect(mockRefreshSubscription).not.toHaveBeenCalled();
     expect(screen.getByTestId("start-free-trial-btn")).toBeInTheDocument();
     expect(screen.queryByTestId("trial-active-banner")).not.toBeInTheDocument();
