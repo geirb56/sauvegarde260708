@@ -25,7 +25,7 @@
   - deduplicates duplicate `event_id` groups first,
   - archives loser documents into `paddle_events_dedup_archive`,
   - drops incompatible `event_id` indexes,
-  - creates/ensures unique partial index on `event_id` (`partialFilterExpression: {"event_id": {"$exists": true}}`),
+  - creates/ensures unique partial index on `event_id` (`partialFilterExpression: {"event_id": {"$type": "string", "$ne": ""}}`),
   - remains idempotent on repeated startup.
 - `cancel_subscription()` now normalizes expiry values to UTC-aware datetimes before comparison and persistence.
 
@@ -65,3 +65,75 @@
 - Title: `PR #224 — Paddle legacy event recovery and safe idempotency index migration`
 - Base: `copilot/dev`
 - URL: `https://github.com/geirb56/sauvegarde260708/pull/224`
+
+---
+
+## C224 follow-up (post-audit changes requested)
+
+### HEAD réel avant correction C224
+- `de76478a9e3c5b244d37105daaa2dbcc089c2131`
+
+### HEAD final C224
+- `3710b02fad4f734bd2122b27d411b1df876481b2`
+
+### Root cause occurred_at race
+- Le webhook faisait une décision stale/non-stale via lecture séparée (`find_one`) avant mutation.
+- Deux événements différents pouvaient lire le même `paddle_last_event_at` historique, puis écrire hors ordre.
+
+### Design CAS atomique appliqué
+- Le CAS `occurred_at` est maintenant dans le filtre Mongo des mutations subscription (dans `subscription_manager`), pas en pré-check séparé.
+- Condition atomique: update autorisé seulement si:
+  - `paddle_last_event_at` absent/null, ou
+  - `paddle_last_event_at < occurred_at`, ou
+  - `paddle_last_event_at == occurred_at` avec tie-break déterministe `paddle_last_event_id <= event_id`.
+- Le webhook n’utilise plus `_is_stale_subscription_event()`; la décision stale provient du résultat CAS des helpers.
+
+### Comportement égalité occurred_at
+- Égalité autorisée uniquement avec tie-break stable sur `event_id` (ordre lexical croissant, donc le plus grand `event_id` reste gagnant final).
+- Ce choix est explicite et testé avec deux `event_id` distincts au même `occurred_at`.
+
+### Startup fail-fast index critique Paddle
+- `ensure_paddle_events_unique_index()` est exécuté **hors** du grand bloc warning-only.
+- Si migration/dedup/archive/drop/create/vérification finale échoue: startup échoue (fail-fast).
+
+### Vérification finale de l’index
+- Après création/migration, le helper relit les indexes et exige:
+  - clé `event_id`,
+  - `unique=True`,
+  - `partialFilterExpression={"event_id": {"$type": "string", "$ne": ""}}`.
+- Sinon, exception explicite (startup fail).
+
+### Stratégie event_id=null / legacy
+- Le partial unique index cible uniquement les `event_id` string non vides.
+- Les documents sans `event_id` ou `event_id=null` restent hors contrainte unique et ne bloquent pas le startup.
+- La déduplication ne traite que les vrais `event_id` utilisables (string non vide).
+
+### Fichiers modifiés (C224 follow-up)
+- `/home/runner/work/sauvegarde260708/sauvegarde260708/backend/server.py`
+- `/home/runner/work/sauvegarde260708/sauvegarde260708/backend/subscription_manager.py`
+- `/home/runner/work/sauvegarde260708/sauvegarde260708/backend/services/paddle_event_index.py`
+- `/home/runner/work/sauvegarde260708/sauvegarde260708/backend/tests/test_paddle_integrity_pr223.py`
+- `/home/runner/work/sauvegarde260708/sauvegarde260708/backend/tests/test_paddle_recovery_pr224.py`
+
+### Tests exécutés (commandes exactes + résultats exacts)
+1. `cd /home/runner/work/sauvegarde260708/sauvegarde260708/backend && python -m pytest tests/test_paddle_integrity_pr223.py -k 'concurrent or equal_occurred or startup_fails_fast' -vv`
+   - Résultat: `6 passed, 12 warnings in 1.67s`
+
+2. `cd /home/runner/work/sauvegarde260708/sauvegarde260708/backend && python -m pytest tests/test_paddle_integrity_pr223.py`
+   - Résultat: `31 passed, 12 warnings in 1.81s`
+
+3. `cd /home/runner/work/sauvegarde260708/sauvegarde260708/backend && python -m pytest tests/test_paddle_recovery_pr224.py`
+   - Résultat: `20 passed in 1.48s`
+
+4. `cd /home/runner/work/sauvegarde260708/sauvegarde260708/backend && python -m pytest tests/test_unique_subscription.py`
+   - Résultat: `37 passed in 1.43s`
+
+5. `cd /home/runner/work/sauvegarde260708/sauvegarde260708/backend && MONGO_URL='mongodb://localhost:27017' DB_NAME='test_db' ENVIRONMENT='test' JWT_SECRET='test-secret-32chars-long........' JWT_SECRET_KEY='test-secret-32chars-long........' python -m pytest tests/test_subscription_middleware_a63.py`
+   - Résultat: `24 passed in 1.97s`
+
+6. `cd /home/runner/work/sauvegarde260708/sauvegarde260708/backend && MONGO_URL='mongodb://localhost:27017' DB_NAME='test_db' ENVIRONMENT='test' JWT_SECRET='test-secret-32chars-long........' JWT_SECRET_KEY='test-secret-32chars-long........' python -m pytest tests/test_paddle_subscription.py tests/test_subscription_trial.py`
+   - Résultat: `4 failed, 41 passed, 13 warnings, 2 errors in 1.64s`
+   - Détail: échecs/errors préexistants frontend/source assertions + `REACT_APP_BACKEND_URL missing`.
+
+### Runtime
+- Runtime réel backend + webhooks Paddle en environnement live: **NON TESTÉ** dans cette tâche.

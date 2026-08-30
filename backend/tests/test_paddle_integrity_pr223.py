@@ -316,6 +316,7 @@ async def _call(
         for item in [patch.object(server, "db", fake_db), *patches]:
             item.start()
             started.append(item)
+        server.rate_limiter.requests.clear()
         async with _REAL_ASYNC_CLIENT(
             transport=httpx.ASGITransport(app=server.app, raise_app_exceptions=raise_app_exceptions),
             base_url="http://test",
@@ -967,6 +968,11 @@ async def test_concurrent_two_event_ids_old_starts_first_newer_event_wins():
     now = datetime.now(timezone.utc)
     t1 = now - timedelta(minutes=1)
     t2 = now
+    _seed_subscription(
+        fake_db,
+        premium_expires_at=now + timedelta(days=30),
+        paddle_last_event_at=now - timedelta(days=2),
+    )
 
     old_entered = asyncio.Event()
     release_old = asyncio.Event()
@@ -993,7 +999,7 @@ async def test_concurrent_two_event_ids_old_starts_first_newer_event_wins():
     )
 
     old_task = asyncio.create_task(_post_webhook(fake_db, old_event))
-    await old_entered.wait()
+    await asyncio.wait_for(old_entered.wait(), timeout=2.0)
     new_res = await _post_webhook(fake_db, new_event)
     release_old.set()
     old_res = await old_task
@@ -1010,6 +1016,11 @@ async def test_concurrent_two_event_ids_new_starts_first_old_finishes_first_newe
     now = datetime.now(timezone.utc)
     t1 = now - timedelta(minutes=1)
     t2 = now
+    _seed_subscription(
+        fake_db,
+        premium_expires_at=now + timedelta(days=30),
+        paddle_last_event_at=now - timedelta(days=2),
+    )
 
     new_entered = asyncio.Event()
     release_new = asyncio.Event()
@@ -1036,7 +1047,7 @@ async def test_concurrent_two_event_ids_new_starts_first_old_finishes_first_newe
     )
 
     new_task = asyncio.create_task(_post_webhook(fake_db, new_event))
-    await new_entered.wait()
+    await asyncio.wait_for(new_entered.wait(), timeout=2.0)
     old_res = await _post_webhook(fake_db, old_event)
     release_new.set()
     new_res = await new_task
@@ -1053,6 +1064,11 @@ async def test_concurrent_canceled_newer_blocks_older_active():
     now = datetime.now(timezone.utc)
     t1 = now - timedelta(minutes=1)
     t2 = now
+    _seed_subscription(
+        fake_db,
+        premium_expires_at=now + timedelta(days=30),
+        paddle_last_event_at=now - timedelta(days=2),
+    )
 
     old_entered = asyncio.Event()
     release_old = asyncio.Event()
@@ -1079,7 +1095,7 @@ async def test_concurrent_canceled_newer_blocks_older_active():
     )
 
     old_task = asyncio.create_task(_post_webhook(fake_db, old_active))
-    await old_entered.wait()
+    await asyncio.wait_for(old_entered.wait(), timeout=2.0)
     canceled_res = await _post_webhook(fake_db, new_canceled)
     release_old.set()
     old_res = await old_task
@@ -1097,6 +1113,11 @@ async def test_concurrent_active_newer_blocks_older_canceled():
     now = datetime.now(timezone.utc)
     t1 = now - timedelta(minutes=1)
     t2 = now
+    _seed_subscription(
+        fake_db,
+        premium_expires_at=now + timedelta(days=30),
+        paddle_last_event_at=now - timedelta(days=2),
+    )
 
     old_entered = asyncio.Event()
     release_old = asyncio.Event()
@@ -1123,7 +1144,7 @@ async def test_concurrent_active_newer_blocks_older_canceled():
     )
 
     old_task = asyncio.create_task(_post_webhook(fake_db, old_canceled))
-    await old_entered.wait()
+    await asyncio.wait_for(old_entered.wait(), timeout=2.0)
     active_res = await _post_webhook(fake_db, new_active)
     release_old.set()
     old_res = await old_task

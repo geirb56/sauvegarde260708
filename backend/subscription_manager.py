@@ -146,12 +146,7 @@ async def _apply_paddle_event_ordered_update(
     """
     normalized_occurred_at = normalize_utc_datetime(occurred_at)
     if not event_id or normalized_occurred_at is None:
-        await db.subscriptions.update_one(
-            {"user_id": user_id},
-            {"$set": update_fields},
-            upsert=False,
-        )
-        return True
+        return False
 
     occurred_at_iso = normalized_occurred_at.isoformat()
     update_payload = dict(update_fields)
@@ -555,13 +550,6 @@ async def activate_premium(
     }
     if premium_expires_at:
         update_fields["premium_expires_at"] = premium_expires_at.isoformat()
-    applied = await _apply_paddle_event_ordered_update(
-        db,
-        user_id,
-        paddle_event_id,
-        paddle_last_event_at,
-        update_fields,
-    )
     if not paddle_event_id or normalize_utc_datetime(paddle_last_event_at) is None:
         await db.subscriptions.update_one(
             {"user_id": user_id},
@@ -569,6 +557,14 @@ async def activate_premium(
             upsert=True,
         )
         applied = True
+    else:
+        applied = await _apply_paddle_event_ordered_update(
+            db,
+            user_id,
+            paddle_event_id,
+            paddle_last_event_at,
+            update_fields,
+        )
     if not applied:
         current = await db.subscriptions.find_one({"user_id": user_id}) or {"user_id": user_id}
         current.pop("_id", None)
@@ -603,13 +599,6 @@ async def renew_premium(
         "updated_at": now.isoformat(),
         "cancelled_at": None,
     }
-    applied = await _apply_paddle_event_ordered_update(
-        db,
-        user_id,
-        paddle_event_id,
-        paddle_last_event_at,
-        update_fields,
-    )
     if not paddle_event_id or normalize_utc_datetime(paddle_last_event_at) is None:
         await db.subscriptions.update_one(
             {"user_id": user_id},
@@ -617,6 +606,14 @@ async def renew_premium(
             upsert=True,
         )
         applied = True
+    else:
+        applied = await _apply_paddle_event_ordered_update(
+            db,
+            user_id,
+            paddle_event_id,
+            paddle_last_event_at,
+            update_fields,
+        )
     if not applied:
         current = await db.subscriptions.find_one({"user_id": user_id}) or {"user_id": user_id}
         current.pop("_id", None)
@@ -672,13 +669,20 @@ async def cancel_subscription(
     }
     if effective_expires_at:
         update_fields["premium_expires_at"] = effective_expires_at.isoformat()
-    applied = await _apply_paddle_event_ordered_update(
-        db,
-        user_id,
-        paddle_event_id,
-        paddle_last_event_at,
-        update_fields,
-    )
+    if not paddle_event_id or normalize_utc_datetime(paddle_last_event_at) is None:
+        await db.subscriptions.update_one(
+            {"user_id": user_id},
+            {"$set": update_fields},
+        )
+        applied = True
+    else:
+        applied = await _apply_paddle_event_ordered_update(
+            db,
+            user_id,
+            paddle_event_id,
+            paddle_last_event_at,
+            update_fields,
+        )
     if not applied:
         current = await db.subscriptions.find_one({"user_id": user_id}) or {"user_id": user_id}
         current.pop("_id", None)

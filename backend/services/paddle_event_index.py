@@ -151,7 +151,6 @@ async def ensure_paddle_events_unique_index(db: Any) -> None:
     has_target = any(_is_target_unique_index(idx) for _, idx in event_id_indexes)
     if has_target:
         logger.info("paddle_events.event_id unique partial index already present")
-        await _assert_target_index_present(col)
         return
 
     for name, idx in event_id_indexes:
