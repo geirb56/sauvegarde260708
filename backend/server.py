@@ -4590,7 +4590,6 @@ async def start_free_trial(user: dict = Depends(auth_user)):
     (`garmin.service.connect` -> `activate_garmin_trial`) so that every grant is
     tied to a verified Garmin identity in `garmin_trial_registry`.
     """
-    _ = user["id"]  # authenticated user required; no body-based trial activation
     raise HTTPException(
         status_code=403,
         detail="Trial activation is only available during Garmin connection",

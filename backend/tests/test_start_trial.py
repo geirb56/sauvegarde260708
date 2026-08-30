@@ -118,8 +118,17 @@ async def test_start_trial_requires_auth(client):
 
 async def test_start_trial_rejects_direct_activation(client):
     c, fake_db = client
+    await fake_db.subscriptions.insert_one(
+        {
+            "user_id": "u-trial",
+            "status": "free",
+            "trial_used": False,
+        }
+    )
     r = await c.post("/api/subscription/start-trial", headers=_bearer("u-trial", "u@test.com"))
     assert r.status_code == 403
     assert "garmin" in r.json().get("detail", "").lower()
     sub = await fake_db.subscriptions.find_one({"user_id": "u-trial"})
-    assert sub is None
+    assert sub is not None
+    assert sub["status"] == "free"
+    assert sub["trial_used"] is False
