@@ -8,6 +8,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from auth.router import auth_router
 from auth.oauth_router import oauth_router
 from auth.dependencies import get_current_user, require_admin
+from auth.jwt_utils import decode_access_token
 from admin.router import admin_router
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -310,7 +311,6 @@ def get_rate_limit_key_from_request(request: Request) -> str:
     if auth_header.startswith("Bearer "):
         token = auth_header[len("Bearer "):]
         try:
-            from auth.jwt_utils import decode_access_token
             payload = decode_access_token(token)
             sub = payload.get("sub")
             if sub:
@@ -343,7 +343,6 @@ def get_jwt_user_id_from_request(request: Request) -> Optional[str]:
         return None
     token = auth_header[len("Bearer "):]
     try:
-        from auth.jwt_utils import decode_access_token
         payload = decode_access_token(token)
         sub = payload.get("sub")
         return sub if sub else None
