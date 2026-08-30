@@ -428,3 +428,138 @@ class TestChatSendIntegration:
         assert all(uid == "user-b" for uid in stored_user_ids), (
             f"Messages were stored for unexpected users: {stored_user_ids}"
         )
+
+
+# ---------------------------------------------------------------------------
+# PR217 — A35 /api/chat/store-response security tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+class TestChatStoreResponseA35:
+    """
+    PR217 — A35 P0 security: /api/chat/store-response must bind writes to
+    the authenticated user only; no client-supplied user_id is accepted.
+    """
+
+    # ---- helpers -----------------------------------------------------------
+
+    @staticmethod
+    def _url(message_id: str = "msg-1", response: str = "ok") -> str:
+        return (
+            f"/api/chat/store-response"
+            f"?message_id={message_id}&response={response}"
+        )
+
+    # ---- TEST 1 — authenticated user writes under their own identity -------
+
+    async def test_authenticated_user_stores_under_own_id(self, real_client):
+        """USER_A → stored entry must carry user_id == 'user-a'. PASS expected."""
+        client, fake_db = real_client
+        r = await client.post(
+            self._url("msg-auth-1", "Good run!"),
+            headers=_bearer("user-a", "a@test.com"),
+        )
+        assert r.status_code == 200
+        assert r.json() == {"success": True}
+
+        stored = [m for m in fake_db.chat_messages._docs if m["id"] == "msg-auth-1"]
+        assert len(stored) == 1
+        assert stored[0]["user_id"] == "user-a"
+
+    # ---- TEST 2 — unauthenticated request must be rejected -----------------
+
+    async def test_unauthenticated_request_rejected(self, real_client):
+        """No JWT → 401; no DB write must occur."""
+        client, fake_db = real_client
+        before_count = len(fake_db.chat_messages._docs)
+        r = await client.post(self._url("msg-anon-1", "hacked"))
+        assert r.status_code == 401
+        assert len(fake_db.chat_messages._docs) == before_count
+
+    # ---- TEST 3 — cross-user attempt via query param removed ---------------
+
+    async def test_user_id_param_no_longer_accepted(self, real_client):
+        """
+        user_id is no longer a query param; supplying it should have no effect.
+        The write must be attributed to the JWT owner, not any extra param.
+        """
+        client, fake_db = real_client
+        # Attempt to pass an extra user_id param that used to be accepted
+        r = await client.post(
+            "/api/chat/store-response"
+            "?message_id=msg-xuser-1&response=evil&user_id=user-b",
+            headers=_bearer("user-a", "a@test.com"),
+        )
+        # Must succeed (extra unknown params are ignored by FastAPI)
+        assert r.status_code == 200
+        stored = [m for m in fake_db.chat_messages._docs if m["id"] == "msg-xuser-1"]
+        assert len(stored) == 1, "Expected exactly one stored message"
+        assert stored[0]["user_id"] == "user-a", (
+            f"Write was attributed to '{stored[0]['user_id']}' instead of 'user-a'"
+        )
+
+    # ---- TEST 4 — forged/arbitrary user_id cannot influence owner ----------
+
+    async def test_forged_user_id_ignored(self, real_client):
+        """Supplying an arbitrary/non-existent user_id value must not change ownership."""
+        client, fake_db = real_client
+        r = await client.post(
+            "/api/chat/store-response"
+            "?message_id=msg-forge-1&response=test&user_id=attacker-xyz",
+            headers=_bearer("user-a", "a@test.com"),
+        )
+        assert r.status_code == 200
+        stored = [m for m in fake_db.chat_messages._docs if m["id"] == "msg-forge-1"]
+        assert len(stored) == 1
+        assert stored[0]["user_id"] == "user-a"
+
+    # ---- TEST 5 — legitimate ChatCoach flow continues to work --------------
+
+    async def test_legitimate_chatcoach_flow(self, real_client):
+        """Normal WebLLM store call for authenticated user must succeed end-to-end."""
+        client, fake_db = real_client
+        r = await client.post(
+            "/api/chat/store-response"
+            "?message_id=msg-legit-1&response=Here+is+your+training+tip",
+            headers=_bearer("user-b", "b@test.com"),
+        )
+        assert r.status_code == 200
+        assert r.json() == {"success": True}
+        stored = [m for m in fake_db.chat_messages._docs if m["id"] == "msg-legit-1"]
+        assert len(stored) == 1
+        assert stored[0]["user_id"] == "user-b"
+        assert stored[0]["role"] == "assistant"
+        assert stored[0]["source"] == "webllm"
+
+    # ---- TEST 6 — USER_A vs USER_B multi-user isolation --------------------
+
+    async def test_user_a_cannot_write_under_user_b(self, real_client):
+        """
+        Multi-user isolation: USER_A authenticated, attempts store for USER_B.
+        Must be impossible — no chat_messages entry attributed to USER_B.
+        """
+        client, fake_db = real_client
+
+        # USER_A stores a response (even if they try to hint user_id=user-b)
+        r = await client.post(
+            "/api/chat/store-response"
+            "?message_id=msg-isolation-1&response=injected&user_id=user-b",
+            headers=_bearer("user-a", "a@test.com"),
+        )
+        assert r.status_code == 200
+
+        # No entry in chat_messages should belong to user-b
+        entries_for_b = [
+            m for m in fake_db.chat_messages._docs
+            if m["id"] == "msg-isolation-1" and m["user_id"] == "user-b"
+        ]
+        assert len(entries_for_b) == 0, (
+            "Cross-user write succeeded: user-a wrote under user-b identity"
+        )
+
+        # The entry must be under user-a
+        entries_for_a = [
+            m for m in fake_db.chat_messages._docs
+            if m["id"] == "msg-isolation-1" and m["user_id"] == "user-a"
+        ]
+        assert len(entries_for_a) == 1

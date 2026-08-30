@@ -9,14 +9,16 @@ JWT) is always used as user_id — never a client-supplied query parameter.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import date, datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from auth.dependencies import get_current_user
+from auth.roles import is_admin_user
 from garmin import service as garmin_service
 from garmin import backfill as garmin_backfill
 from services.run_index_history import backfill_connected_users_run_index_history, backfill_run_index_history
@@ -162,10 +164,14 @@ async def garmin_backfill_endpoint(
     - scope=user (default): backfill one user synchronously, returns counts.
     - scope=all: backfill every connected Garmin user in a background task.
     """
-    import asyncio
     user_id = user["id"]
     db = request.app.state.db
     if scope == "all":
+        if not is_admin_user(user):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Admin access required for global backfill",
+            )
         asyncio.create_task(backfill_connected_users_run_index_history(db))
         return {"status": "started", "scope": "all"}
     result = await garmin_backfill.backfill_user(db, user_id)

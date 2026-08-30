@@ -23,7 +23,8 @@ def resolve_user_role(user: dict | None) -> str:
         return "admin"
 
     email = str(user.get("email") or "").strip().lower()
-    if email and email in _admin_emails():
+    email_verified = bool(user.get("is_email_verified", False))
+    if email and email_verified and email in _admin_emails():
         return "admin"
 
     return "user"
