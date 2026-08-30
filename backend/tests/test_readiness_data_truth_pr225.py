@@ -119,7 +119,7 @@ def test_absent_physio_stays_none():
 
 
 def test_absent_rhr_hrv_produces_none_signals():
-    """Docs without resting_hr or hrv → physio signals must be None, not invented."""
+    """Docs without resting_hr or hrv → no physio signals → score must be None."""
     docs = [
         {
             "date": _TODAY.isoformat(),
@@ -134,12 +134,12 @@ def test_absent_rhr_hrv_produces_none_signals():
         activities=_activities(),
         reference_date=_TODAY,
     )
-    # Without any RHR or HRV the adapter must not invent physio; score may be
-    # None (INSUFFICIENT) because of missing_rhr + missing_hrv.
-    assert result.score is None or isinstance(result.score, float)
-    # The key invariant: if score is not None it must be a real float.
-    if result.score is not None:
-        assert 0.0 <= result.score <= 100.0
+    # Without any RHR or HRV the adapter must not invent physio; the sufficiency
+    # classifier must yield INSUFFICIENT → score must be None.
+    assert result.score is None, (
+        f"Expected None score when both RHR and HRV are absent, got {result.score}. "
+        "A fabricated physio score (e.g. primary=70 fallback) would produce a non-None value."
+    )
 
 
 # ---------------------------------------------------------------------------

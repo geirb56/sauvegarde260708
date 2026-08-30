@@ -200,9 +200,14 @@ async def compute_run_index(
     )
     # sleep_penalty: only computed from real device data; None when sleep is absent.
     # Hours term (max(0, 8 - h)) is computed whenever hours are available.
-    # Efficiency term is added only when sleep_score is present; no invented default.
+    # Efficiency term is added only when sleep_score is present; when absent the
+    # term is zero (i.e. the efficiency component is omitted entirely — no invented
+    # neutral value, just hours-only penalty).
     if sleep_hours_val is not None:
         hours_penalty = max(0.0, 8.0 - sleep_hours_val)
+        # When sleep_efficiency is None the device did not report a sleep score;
+        # we omit the efficiency component (0.0 contribution) rather than assuming
+        # any particular efficiency level.
         eff_penalty = (1.0 - sleep_efficiency) * 2.0 if sleep_efficiency is not None else 0.0
         sleep_penalty: Optional[float] = hours_penalty + eff_penalty
     else:
