@@ -42,6 +42,7 @@ from uuid import uuid4
 import logging
 
 from auth.mongo_errors import DuplicateKeyError
+from services.datetime_utils import normalize_utc_datetime
 
 if TYPE_CHECKING:
     from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -74,7 +75,8 @@ class SubscriptionStatus:
     FREE      = "free"
     PREMIUM   = "premium"
     EXPIRED   = "expired"
-    CANCELLED = "cancelled"
+    CANCELED  = "canceled"
+    CANCELLED = CANCELED
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +106,77 @@ FEATURES = {
     SubscriptionStatus.PREMIUM: _premium_features(True),
     SubscriptionStatus.FREE:    _premium_features(False),
 }
+
+
+def _build_paddle_event_cas_filter(user_id: str, occurred_at_iso: str, event_id: str) -> Dict[str, Any]:
+    """Filter enforcing Paddle occurred_at ordering atomically in MongoDB."""
+    return {
+        "user_id": user_id,
+        "$or": [
+            {"paddle_last_event_at": {"$exists": False}},
+            {"paddle_last_event_at": None},
+            {"paddle_last_event_at": {"$lt": occurred_at_iso}},
+            {
+                "$and": [
+                    {"paddle_last_event_at": occurred_at_iso},
+                    {
+                        "$or": [
+                            {"paddle_last_event_id": {"$exists": False}},
+                            {"paddle_last_event_id": None},
+                            {"paddle_last_event_id": {"$lte": event_id}},
+                        ]
+                    },
+                ]
+            },
+        ],
+    }
+
+
+async def _apply_paddle_event_ordered_update(
+    db: AsyncIOMotorDatabase,
+    user_id: str,
+    event_id: Optional[str],
+    occurred_at: Optional[datetime],
+    update_fields: Dict[str, Any],
+) -> bool:
+    """
+    Apply subscription update only if event ordering CAS condition matches.
+
+    Returns True when update is applied, False when stale/lost race.
+    """
+    normalized_occurred_at = normalize_utc_datetime(occurred_at)
+    if not event_id or normalized_occurred_at is None:
+        return False
+
+    occurred_at_iso = normalized_occurred_at.isoformat()
+    update_payload = dict(update_fields)
+    update_payload["paddle_last_event_at"] = occurred_at_iso
+    update_payload["paddle_last_event_id"] = event_id
+
+    cas_filter = _build_paddle_event_cas_filter(user_id, occurred_at_iso, event_id)
+    first = await db.subscriptions.update_one(
+        cas_filter,
+        {"$set": update_payload},
+        upsert=False,
+    )
+    if getattr(first, "matched_count", 0) > 0:
+        return True
+
+    existing = await db.subscriptions.find_one({"user_id": user_id}, {"_id": 1})
+    if existing is None:
+        try:
+            await db.subscriptions.insert_one({"user_id": user_id, **update_payload})
+            return True
+        except DuplicateKeyError:
+            pass
+
+    second = await db.subscriptions.update_one(
+        cas_filter,
+        {"$set": update_payload},
+        upsert=False,
+    )
+    return getattr(second, "matched_count", 0) > 0
+
 
 # ---------------------------------------------------------------------------
 # Route tables — DEPRECATED
@@ -411,6 +484,15 @@ async def check_premium_expiration(db: AsyncIOMotorDatabase, subscription: Dict)
 
     expires_str = subscription.get("premium_expires_at")
     if not expires_str:
+        now = datetime.now(timezone.utc)
+        await db.subscriptions.update_one(
+            {"user_id": subscription["user_id"]},
+            {"$set": {"status": SubscriptionStatus.FREE, "updated_at": now.isoformat()}},
+        )
+        subscription["status"] = SubscriptionStatus.FREE
+        logger.warning(
+            f"Premium for user '{subscription['user_id']}' missing expiry — set to FREE"
+        )
         return subscription
 
     try:
@@ -427,7 +509,16 @@ async def check_premium_expiration(db: AsyncIOMotorDatabase, subscription: Dict)
                 f"Premium expired for user '{subscription['user_id']}' — set to FREE"
             )
     except Exception as exc:
-        logger.error(f"Error checking premium expiration: {exc}")
+        now = datetime.now(timezone.utc)
+        await db.subscriptions.update_one(
+            {"user_id": subscription["user_id"]},
+            {"$set": {"status": SubscriptionStatus.FREE, "updated_at": now.isoformat()}},
+        )
+        subscription["status"] = SubscriptionStatus.FREE
+        logger.error(
+            f"Error checking premium expiration for user '{subscription['user_id']}': {exc}. "
+            "Set to FREE."
+        )
 
     return subscription
 
@@ -438,6 +529,8 @@ async def activate_premium(
     paddle_subscription_id: str,
     paddle_customer_id: str,
     premium_expires_at: Optional[datetime] = None,
+    paddle_last_event_at: Optional[datetime] = None,
+    paddle_event_id: Optional[str] = None,
 ) -> Dict:
     """
     Activate Premium for a user after a successful Paddle payment.
@@ -457,12 +550,26 @@ async def activate_premium(
     }
     if premium_expires_at:
         update_fields["premium_expires_at"] = premium_expires_at.isoformat()
-
-    await db.subscriptions.update_one(
-        {"user_id": user_id},
-        {"$set": update_fields},
-        upsert=True,
-    )
+    if not paddle_event_id or normalize_utc_datetime(paddle_last_event_at) is None:
+        await db.subscriptions.update_one(
+            {"user_id": user_id},
+            {"$set": update_fields},
+            upsert=True,
+        )
+        applied = True
+    else:
+        applied = await _apply_paddle_event_ordered_update(
+            db,
+            user_id,
+            paddle_event_id,
+            paddle_last_event_at,
+            update_fields,
+        )
+    if not applied:
+        current = await db.subscriptions.find_one({"user_id": user_id}) or {"user_id": user_id}
+        current.pop("_id", None)
+        current["_stale_event"] = True
+        return current
     logger.info(
         f"Activated PREMIUM for user '{user_id}' "
         f"(paddle_sub={paddle_subscription_id}, expires={premium_expires_at})"
@@ -478,24 +585,40 @@ async def renew_premium(
     user_id: str,
     paddle_subscription_id: str,
     new_expires_at: datetime,
+    paddle_last_event_at: Optional[datetime] = None,
+    paddle_event_id: Optional[str] = None,
 ) -> Dict:
     """
     Extend Premium expiry after a successful Paddle renewal payment.
     """
     now = datetime.now(timezone.utc)
-    await db.subscriptions.update_one(
-        {"user_id": user_id},
-        {
-            "$set": {
-                "status": SubscriptionStatus.PREMIUM,
-                "paddle_subscription_id": paddle_subscription_id,
-                "premium_expires_at": new_expires_at.isoformat(),
-                "updated_at": now.isoformat(),
-                "cancelled_at": None,
-            }
-        },
-        upsert=True,
-    )
+    update_fields = {
+        "status": SubscriptionStatus.PREMIUM,
+        "paddle_subscription_id": paddle_subscription_id,
+        "premium_expires_at": new_expires_at.isoformat(),
+        "updated_at": now.isoformat(),
+        "cancelled_at": None,
+    }
+    if not paddle_event_id or normalize_utc_datetime(paddle_last_event_at) is None:
+        await db.subscriptions.update_one(
+            {"user_id": user_id},
+            {"$set": update_fields},
+            upsert=True,
+        )
+        applied = True
+    else:
+        applied = await _apply_paddle_event_ordered_update(
+            db,
+            user_id,
+            paddle_event_id,
+            paddle_last_event_at,
+            update_fields,
+        )
+    if not applied:
+        current = await db.subscriptions.find_one({"user_id": user_id}) or {"user_id": user_id}
+        current.pop("_id", None)
+        current["_stale_event"] = True
+        return current
     logger.info(
         f"Renewed PREMIUM for user '{user_id}' until {new_expires_at.isoformat()}"
     )
@@ -504,9 +627,15 @@ async def renew_premium(
     return subscription
 
 
-async def cancel_subscription(db: AsyncIOMotorDatabase, user_id: str) -> Dict:
+async def cancel_subscription(
+    db: AsyncIOMotorDatabase,
+    user_id: str,
+    premium_expires_at: Optional[datetime] = None,
+    paddle_last_event_at: Optional[datetime] = None,
+    paddle_event_id: Optional[str] = None,
+) -> Dict:
     """
-    Mark a subscription as cancelled.
+    Mark a subscription as canceled.
 
     Per business rule: the user keeps Premium access until premium_expires_at.
     Only when that date passes does access revert to FREE (handled lazily by
@@ -516,37 +645,49 @@ async def cancel_subscription(db: AsyncIOMotorDatabase, user_id: str) -> Dict:
 
     # Determine whether access should stay Premium until end of paid period
     subscription = await db.subscriptions.find_one({"user_id": user_id})
-    premium_expires_at = None
-    if subscription:
+    effective_expires_at = normalize_utc_datetime(premium_expires_at)
+    if subscription and effective_expires_at is None:
         raw_exp = subscription.get("premium_expires_at") or subscription.get("expires_at")
-        if raw_exp:
-            try:
-                premium_expires_at = datetime.fromisoformat(raw_exp.replace("Z", "+00:00"))
-            except (ValueError, TypeError):
-                pass
+        effective_expires_at = normalize_utc_datetime(raw_exp)
 
-    if premium_expires_at and premium_expires_at > now:
+    if effective_expires_at and effective_expires_at > now:
         # Access remains PREMIUM until end of paid period
         new_status = SubscriptionStatus.PREMIUM
         logger.info(
             f"Subscription cancelled for '{user_id}' — Premium access until "
-            f"{premium_expires_at.isoformat()}"
+            f"{effective_expires_at.isoformat()}"
         )
     else:
         # No remaining paid period — revert to FREE immediately
         new_status = SubscriptionStatus.FREE
         logger.info(f"Subscription cancelled for '{user_id}' — set to FREE immediately")
 
-    await db.subscriptions.update_one(
-        {"user_id": user_id},
-        {
-            "$set": {
-                "status": new_status,
-                "cancelled_at": now.isoformat(),
-                "updated_at": now.isoformat(),
-            }
-        },
-    )
+    update_fields = {
+        "status": new_status,
+        "cancelled_at": now.isoformat(),
+        "updated_at": now.isoformat(),
+    }
+    if effective_expires_at:
+        update_fields["premium_expires_at"] = effective_expires_at.isoformat()
+    if not paddle_event_id or normalize_utc_datetime(paddle_last_event_at) is None:
+        await db.subscriptions.update_one(
+            {"user_id": user_id},
+            {"$set": update_fields},
+        )
+        applied = True
+    else:
+        applied = await _apply_paddle_event_ordered_update(
+            db,
+            user_id,
+            paddle_event_id,
+            paddle_last_event_at,
+            update_fields,
+        )
+    if not applied:
+        current = await db.subscriptions.find_one({"user_id": user_id}) or {"user_id": user_id}
+        current.pop("_id", None)
+        current["_stale_event"] = True
+        return current
 
     subscription = await db.subscriptions.find_one({"user_id": user_id})
     subscription.pop("_id", None)
