@@ -107,6 +107,7 @@ describe("Settings UX V2", () => {
       trialDaysRemaining: 12,
       loading: false,
       statusLabel: "Trial active",
+      refreshSubscription: jest.fn(() => Promise.resolve()),
     });
     mockUseGarminSyncProgress.mockReturnValue({ progress: null });
   });

@@ -154,6 +154,7 @@ export default function Settings() {
     trialDaysRemaining,
     loading: subscriptionLoading,
     statusLabel,
+    refreshSubscription,
   } = useSubscription();
   const { unitSystem, setUnitSystem } = useUnitSystem();
 
@@ -406,6 +407,7 @@ export default function Settings() {
         setGarminPassword("");
         setShowReconnectForm(false);
         await loadGarminStatus();
+        await refreshSubscription();
         setGarminAction({ status: "saved", message: t("onboarding.garminConnected") });
         toast.success(t("onboarding.garminConnected"));
         return;
