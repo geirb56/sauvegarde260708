@@ -6,7 +6,7 @@
 - Verification: `origin/copilot/dev` currently points to merge commit `Merge pull request #221 from geirb56/copilot/221-unique-server-authority`.
 
 ## Head SHA
-- Head SHA: `PENDING_FINAL_COMMIT`
+- Head SHA: `3058358de402ff8cbd5a1fee781f26c63e527ad0`
 
 ## Anciens appels `/subscription/start-trial` trouvés
 - `frontend/src/pages/Subscription.jsx` (legacy Trial CTA calling `POST /api/subscription/start-trial` on the base branch)
