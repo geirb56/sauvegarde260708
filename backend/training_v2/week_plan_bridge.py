@@ -224,6 +224,7 @@ def build_weekly_target_from_workouts(
     cycle_start_date: Optional[date] = None,
     reference_date: date,
     user_profile: Optional[dict] = None,
+    target_distance_km: Optional[float] = None,
 ) -> WeeklyTarget:
     """Build a WeeklyTarget V2 from raw workout documents and goal info.
 
@@ -235,6 +236,7 @@ def build_weekly_target_from_workouts(
     cycle_start_date : start of the training cycle.
     reference_date : anchor date — MANDATORY, no implicit today.
     user_profile : optional user_profiles document for RunnerProfile enrichment.
+    target_distance_km : explicit race distance (km). Required for ULTRA goals.
 
     Raises
     ------
@@ -248,6 +250,7 @@ def build_weekly_target_from_workouts(
         cycle_start_date=cycle_start_date,
         reference_date=reference_date,
         user_profile=user_profile,
+        target_distance_km=target_distance_km,
     )
     return ctx.weekly_target
 

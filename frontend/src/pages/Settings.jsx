@@ -168,8 +168,10 @@ export default function Settings() {
   const [userGoal, setUserGoal] = useState(null);
   const [goalForm, setGoalForm] = useState({ eventName: "", eventDate: "", targetHours: "", targetMinutes: "", ultraDistanceKm: "" });
   const [planAction, setPlanAction] = useState({ status: "idle", message: "" });
-  // PR226: pending ultra distance — shown inline when user clicks ULTRA goal button
+  // PR226: pending ultra distance — shown when ULTRA is the current or pending goal
   const [pendingUltraDistance, setPendingUltraDistance] = useState("");
+  // PR226: shown when user clicks the ULTRA button so they can enter distance first
+  const [showUltraDistanceInput, setShowUltraDistanceInput] = useState(false);
 
   const [garminLoading, setGarminLoading] = useState(true);
   const [garminError, setGarminError] = useState("");
@@ -281,10 +283,14 @@ export default function Settings() {
     if (goalValue === "ULTRA") {
       const km = parseFloat(pendingUltraDistance);
       if (!(km > 42.195)) {
-        // Show inline distance prompt instead of calling the API.
+        // Reveal the distance input and show an inline prompt — do NOT call the API.
+        setShowUltraDistanceInput(true);
         setPlanAction({ status: "error", message: t("settingsV2.plan.ultraDistanceError") });
         return;
       }
+    } else {
+      // Switching away from ULTRA: hide the distance input.
+      setShowUltraDistanceInput(false);
     }
 
     setPlanAction({ status: "saving", message: t("settingsV2.common.saving") });
@@ -581,7 +587,8 @@ export default function Settings() {
                     </button>
                   ))}
                 </div>
-                {/* PR226: ULTRA distance input — must be set before set-goal is called */}
+                {/* PR226: ULTRA distance input — shown only when ULTRA is active or being selected */}
+                {(trainingGoal === "ULTRA" || showUltraDistanceInput) && (
                 <div className="mt-3 space-y-1" data-testid="settings-ultra-distance-block">
                   <label className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
                     {t("settingsV2.plan.ultraDistanceLabel")}
@@ -602,6 +609,7 @@ export default function Settings() {
                     </p>
                   )}
                 </div>
+                )}
               </div>
 
               <SettingRow
