@@ -552,3 +552,99 @@ def test_get_daily_metrics_is_current_flag():
     asyncio.run(_run(_TODAY - timedelta(days=2), False))
     # J-7 → is_current = False
     asyncio.run(_run(_TODAY - timedelta(days=7), False))
+
+
+# ---------------------------------------------------------------------------
+# Test 14 — _persist_daily_metrics: partial refresh preserves existing values
+# ---------------------------------------------------------------------------
+
+def test_persist_daily_metrics_partial_refresh_preserves_existing_rhr():
+    """A partial provider refresh with RHR=None must NOT overwrite a real RHR
+    that was already stored in Mongo for the same calendar day."""
+    import asyncio
+    from unittest.mock import MagicMock, AsyncMock
+
+    async def _run():
+        # Simulate Mongo already containing a doc with resting_hr=58 for today
+        existing_doc = {
+            "_id": "fake_id",
+            "user_id": "user_y",
+            "date": _TODAY.isoformat(),
+            "resting_hr": 58.0,
+            "hrv": 72.0,
+            "sleep_hours": 7.2,
+            "sleep_score": 82.0,
+            "synced_at": "2026-01-28T06:00:00+00:00",
+        }
+
+        # Partial refresh: provider returns same day but resting_hr is None
+        partial_metric = {
+            "date": _TODAY.isoformat(),
+            "resting_hr": None,      # missing in this partial pull
+            "hrv": 74.0,             # HRV updated
+            "sleep_hours": None,     # missing
+            "sleep_score": None,     # missing
+        }
+
+        captured_set: dict = {}
+
+        async def fake_update_one(filter_, update, upsert=False):
+            captured_set.update(update.get("$set", {}))
+
+        db_mock = MagicMock()
+        db_mock.garmin_daily_metrics.update_one = fake_update_one
+
+        from garmin.service import _persist_daily_metrics
+        count = await _persist_daily_metrics(db_mock, "user_y", [partial_metric])
+
+        assert count == 1, "Should have processed 1 metric"
+
+        # resting_hr=None must NOT appear in the $set payload — existing value preserved
+        assert "resting_hr" not in captured_set, (
+            f"resting_hr=None must not overwrite existing value, but found in $set: {captured_set}"
+        )
+        # The real new value (HRV=74) must be written
+        assert captured_set.get("hrv") == 74.0, (
+            f"Updated HRV should be 74.0, got {captured_set.get('hrv')}"
+        )
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Test 15 — get_daily_metrics: future date yields is_current=False
+# ---------------------------------------------------------------------------
+
+def test_get_daily_metrics_future_date_is_not_current():
+    """A doc dated in the future must yield is_current=False (days_ago < 0)."""
+    import asyncio
+    from unittest.mock import MagicMock, AsyncMock, patch
+    from datetime import datetime, timezone
+
+    future_date = _TODAY + timedelta(days=1)
+    fake_now = datetime(_TODAY.year, _TODAY.month, _TODAY.day, 10, 0, tzinfo=timezone.utc)
+
+    async def _run():
+        doc = {
+            "date": future_date.isoformat(),
+            "resting_hr": 50.0,
+        }
+        cursor_mock = MagicMock()
+        cursor_mock.sort.return_value = cursor_mock
+        cursor_mock.limit.return_value = cursor_mock
+        cursor_mock.to_list = AsyncMock(return_value=[doc])
+        db_mock = MagicMock()
+        db_mock.garmin_daily_metrics.find.return_value = cursor_mock
+
+        with patch("garmin.service.datetime") as mock_dt:
+            mock_dt.now.return_value = fake_now
+            mock_dt.fromisoformat = datetime.fromisoformat
+            from garmin.service import get_daily_metrics
+            result = await get_daily_metrics(db_mock, "user_future", days=7)
+
+        assert result["latest"]["is_current"] is False, (
+            f"Future date {future_date} must yield is_current=False, "
+            f"got {result['latest']['is_current']}"
+        )
+
+    asyncio.run(_run())

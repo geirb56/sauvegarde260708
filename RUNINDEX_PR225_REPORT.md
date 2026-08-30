@@ -213,3 +213,70 @@ Résultat : **203 passed** — aucune régression.
 ---
 
 **READY FOR RE-AUDIT**
+
+---
+
+## §4 — Patch final (2026-08-30)
+
+### Corrections
+
+#### 1. `_persist_daily_metrics` — merge field-by-field
+**Problème** : `$set: {**metric, ...}` écrasait toute valeur existante avec `None` lors d'un refresh partiel du provider.
+
+**Correction** : filtre `{k: v for k, v in metric.items() if v is not None}` — seuls les champs non-null sont écrits dans `$set`.
+
+```python
+update_fields: dict = {k: v for k, v in metric.items() if v is not None}
+update_fields["user_id"] = user_id
+update_fields["synced_at"] = datetime.now(timezone.utc).isoformat()
+await db.garmin_daily_metrics.update_one(
+    {"user_id": user_id, "date": day},
+    {"$set": update_fields},
+    upsert=True,
+)
+```
+
+#### 2. `get_daily_metrics` — `is_current = 0 <= days_ago <= 1`
+**Problème** : `days_ago <= 1` acceptait les dates futures (days_ago négatif).
+
+**Correction** : `0 <= days_ago <= 1` — rejette les dates futures.
+
+### Tests ajoutés
+
+| # | Nom | Résultat |
+|---|---|---|
+| 14 | `test_persist_daily_metrics_partial_refresh_preserves_existing_rhr` | PASS |
+| 15 | `test_get_daily_metrics_future_date_is_not_current` | PASS |
+
+### Résultats
+
+```
+python -m pytest tests/test_readiness_data_truth_pr225.py -v
+```
+
+**Total PR #225 : 18/18 PASS**
+
+| Test | Résultat |
+|---|---|
+| test_today_metric_is_used | PASS |
+| test_stale_metric_not_presented_as_current | PASS |
+| test_absent_physio_stays_none | PASS |
+| test_absent_rhr_hrv_produces_none_signals | PASS |
+| test_no_sleep_7h_fallback_in_insights | PASS |
+| test_today_sync_refreshes_metrics_used_by_readiness | PASS |
+| test_readiness_v2_complete_data_produces_float_score | PASS |
+| test_readiness_v2_no_activities_score_is_none | PASS |
+| test_readiness_v2_formula_not_mutated | PASS |
+| test_incremental_sync_fetches_daily_metrics | PASS |
+| test_j0_present_is_used_as_current_signal | PASS |
+| test_j_minus_1_accepted_when_j0_absent | PASS |
+| test_j_minus_2_only_yields_none | PASS |
+| test_j_minus_2_sleep_not_used_as_current | PASS |
+| test_j_minus_2_rhr_hrv_not_used_as_current | PASS |
+| test_get_daily_metrics_is_current_flag | PASS |
+| test_persist_daily_metrics_partial_refresh_preserves_existing_rhr | PASS |
+| test_get_daily_metrics_future_date_is_not_current | PASS |
+
+---
+
+**READY FOR RE-AUDIT**

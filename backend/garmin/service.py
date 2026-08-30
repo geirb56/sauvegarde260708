@@ -611,14 +611,29 @@ async def _finalize_connection(db, user_id: str, newest_start: Optional[str]) ->
 
 
 async def _persist_daily_metrics(db, user_id: str, metrics: list[dict]) -> int:
+    """Upsert daily metrics using field-by-field merge.
+
+    Only non-null values from *metric* are written so that a partial refresh
+    (e.g. provider returned RHR=None for a day we already have a real RHR for)
+    never overwrites a previously stored real value with None.
+    """
     metrics_count = 0
     for metric in metrics:
         day = metric.get("date")
         if not day:
             continue
+        # Build an update payload containing only fields with real values so
+        # that a null in a fresh partial fetch cannot erase an existing value.
+        update_fields: dict = {
+            k: v
+            for k, v in metric.items()
+            if v is not None
+        }
+        update_fields["user_id"] = user_id
+        update_fields["synced_at"] = datetime.now(timezone.utc).isoformat()
         await db.garmin_daily_metrics.update_one(
             {"user_id": user_id, "date": day},
-            {"$set": {**metric, "user_id": user_id, "synced_at": datetime.now(timezone.utc).isoformat()}},
+            {"$set": update_fields},
             upsert=True,
         )
         metrics_count += 1
@@ -1323,7 +1338,7 @@ async def get_daily_metrics(db, user_id: str, days: int = 7) -> dict:
             doc_date = date.fromisoformat(str(measurement_date)[:10])
             today = datetime.now(timezone.utc).date()
             days_ago = (today - doc_date).days
-            latest["is_current"] = days_ago <= 1  # today (J0) or yesterday (J-1)
+            latest["is_current"] = 0 <= days_ago <= 1  # today (J0) or yesterday (J-1); future dates excluded
         except (TypeError, ValueError):
             latest["is_current"] = False
     return {"metrics": metrics, "latest": latest, "count": len(metrics)}
