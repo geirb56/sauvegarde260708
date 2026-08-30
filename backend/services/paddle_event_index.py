@@ -12,6 +12,7 @@ _TARGET_PARTIAL_FILTER = {"event_id": {"$exists": True}}
 _TARGET_INDEX_NAME = "event_id_unique_partial"
 
 def _event_status_rank(status: Any) -> int:
+    """Rank event states for dedup winner choice (lower is better)."""
     normalized = str(status or "").strip().lower()
     if normalized == "processed":
         return 0
@@ -23,6 +24,7 @@ def _event_status_rank(status: Any) -> int:
 
 
 def _event_recency(doc: dict[str, Any]) -> datetime:
+    """Return most relevant event timestamp for deterministic tie-breaking."""
     for field in ("processed_at", "failed_at", "claimed_at", "updated_at", "occurred_at"):
         parsed = normalize_utc_datetime(doc.get(field))
         if parsed is not None:

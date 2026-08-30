@@ -217,3 +217,11 @@ async def test_cancel_subscription_naive_expiry_never_raises_type_error():
     db = _DB(subscriptions=[{"user_id": "u_dt_obj", "status": "premium"}])
     sub = await cancel_subscription(db, "u_dt_obj", premium_expires_at=naive_future)
     assert sub["status"] == SubscriptionStatus.PREMIUM
+
+
+async def test_cancel_subscription_naive_datetime_stored_in_db_is_normalized():
+    naive_future = (datetime.now(timezone.utc) + timedelta(days=1)).replace(tzinfo=None)
+    db = _DB(subscriptions=[{"user_id": "u_db_naive", "status": "premium", "premium_expires_at": naive_future}])
+    sub = await cancel_subscription(db, "u_db_naive")
+    assert sub["status"] == SubscriptionStatus.PREMIUM
+    assert sub["premium_expires_at"].endswith("+00:00")

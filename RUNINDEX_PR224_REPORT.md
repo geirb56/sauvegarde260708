@@ -46,7 +46,7 @@
    - Result: `11 passed in 0.45s`
 
 2. `cd /home/runner/work/sauvegarde260708/sauvegarde260708/backend && python -m pytest tests/test_paddle_recovery_pr224.py tests/test_paddle_integrity_pr223.py tests/test_unique_subscription.py`
-   - Result: `73 passed, 12 warnings in 1.58s`
+   - Result: `74 passed, 12 warnings in 1.57s`
 
 3. `cd /home/runner/work/sauvegarde260708/sauvegarde260708/backend && MONGO_URL='mongodb://localhost:27017' DB_NAME='test_db' ENVIRONMENT='test' JWT_SECRET='test-secret-32chars-long........' JWT_SECRET_KEY='test-secret-32chars-long........' python -m pytest tests/test_subscription_middleware_a63.py`
    - Result: `24 passed in 1.00s`
@@ -57,8 +57,9 @@
 - Startup unique-index migration hardened and idempotent.
 - UTC aware normalization enforced on cancellation expiry path.
 
-## Commit
-- Current commit SHA: `7fb4a39`
+## Commit(s)
+- `7fb4a39` — Paddle claim/index/datetime core fixes
+- `ce2cc9e` — report + shared datetime helper integration
 
 ## Pull request
 - Title: `PR #224 — Paddle legacy event recovery and safe idempotency index migration`
