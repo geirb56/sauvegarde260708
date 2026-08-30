@@ -4584,44 +4584,17 @@ async def reset_to_trial(user: dict = Depends(auth_user)):
 @api_router.post("/subscription/start-trial")
 async def start_free_trial(user: dict = Depends(auth_user)):
     """
-    Activate a 30-day free trial for the authenticated Free user.
+    Direct trial activation is disabled.
 
-    No credit card, no Paddle/Stripe checkout. Identity comes strictly from the
-    JWT (user["id"]) — never from the request body. A user can only ever start
-    one trial: a second attempt (or an already trial/premium user) is refused.
+    Trial activation must go through the Garmin server authority
+    (`garmin.service.connect` -> `activate_garmin_trial`) so that every grant is
+    tied to a verified Garmin identity in `garmin_trial_registry`.
     """
-    user_id = user["id"]
-
-    # get_user_subscription creates a FREE subscription if none exists and
-    # lazily persists trial/premium expiration.
-    subscription = await get_user_subscription(db, user_id)
-
-    if subscription.get("trial_used"):
-        raise HTTPException(status_code=409, detail="Trial already used")
-    if subscription.get("status") in (SubscriptionStatus.TRIAL, SubscriptionStatus.PREMIUM):
-        raise HTTPException(status_code=409, detail="An active plan already exists")
-
-    now = datetime.now(timezone.utc)
-    trial_end = now + timedelta(days=TRIAL_DURATION_DAYS)
-
-    await db.subscriptions.update_one(
-        {"user_id": user_id},
-        {
-            "$set": {
-                "status": SubscriptionStatus.TRIAL,
-                "trial_start": now.isoformat(),
-                "trial_end": trial_end.isoformat(),
-                "trial_used": True,
-                "updated_at": now.isoformat(),
-            }
-        },
+    _ = user["id"]  # authenticated user required; no body-based trial activation
+    raise HTTPException(
+        status_code=403,
+        detail="Trial activation is only available during Garmin connection",
     )
-
-    return {
-        "success": True,
-        "status": SubscriptionStatus.TRIAL,
-        "trial_end": trial_end.isoformat(),
-    }
 
 
 
