@@ -166,7 +166,7 @@ export default function Settings() {
   const [planStartDateDraft, setPlanStartDateDraft] = useState("");
   const [cycleStatus, setCycleStatus] = useState(null);
   const [userGoal, setUserGoal] = useState(null);
-  const [goalForm, setGoalForm] = useState({ eventName: "", eventDate: "", targetHours: "", targetMinutes: "" });
+  const [goalForm, setGoalForm] = useState({ eventName: "", eventDate: "", targetHours: "", targetMinutes: "", ultraDistanceKm: "" });
   const [planAction, setPlanAction] = useState({ status: "idle", message: "" });
 
   const [garminLoading, setGarminLoading] = useState(true);
@@ -236,6 +236,7 @@ export default function Settings() {
         eventDate: parseDateInput(loadedGoal.event_date),
         targetHours: hours,
         targetMinutes: minutes,
+        ultraDistanceKm: loadedGoal.distance_type === "ultra" ? String(loadedGoal.distance_km || "") : "",
       });
     } else {
       setUserGoal(null);
@@ -244,6 +245,7 @@ export default function Settings() {
         eventDate: "",
         targetHours: "",
         targetMinutes: "",
+        ultraDistanceKm: "",
       });
     }
 
@@ -359,18 +361,33 @@ export default function Settings() {
       return;
     }
 
+    // PR226: ULTRA requires a valid distance > 42.195 km.
+    if (selectedGoalOption.value === "ULTRA") {
+      const ultraKm = parseFloat(goalForm.ultraDistanceKm);
+      if (!(ultraKm > 42.195)) {
+        setPlanAction({ status: "error", message: t("settingsV2.plan.ultraDistanceError") });
+        toast.error(t("settingsV2.plan.ultraDistanceError"));
+        return;
+      }
+    }
+
     const hours = parseInt(goalForm.targetHours || "0", 10) || 0;
     const minutes = parseInt(goalForm.targetMinutes || "0", 10) || 0;
     const totalMinutes = hours > 0 || minutes > 0 ? (hours * 60) + minutes : null;
 
+    const payload = {
+      event_name: goalForm.eventName.trim(),
+      event_date: goalForm.eventDate,
+      distance_type: selectedGoalOption.distanceType,
+      target_time_minutes: totalMinutes,
+    };
+    if (selectedGoalOption.value === "ULTRA") {
+      payload.distance_km = parseFloat(goalForm.ultraDistanceKm);
+    }
+
     setPlanAction({ status: "saving", message: t("settingsV2.common.saving") });
     try {
-      await axios.post(`${API}/user/goal`, {
-        event_name: goalForm.eventName.trim(),
-        event_date: goalForm.eventDate,
-        distance_type: selectedGoalOption.distanceType,
-        target_time_minutes: totalMinutes,
-      });
+      await axios.post(`${API}/user/goal`, payload);
       const reloadSucceeded = await loadPlanSettings();
       if (!reloadSucceeded) {
         setPlanAction({ status: "error", message: t("settingsV2.plan.loadError") });
@@ -654,6 +671,29 @@ export default function Settings() {
                         data-testid="goal-date-input"
                       />
                     </div>
+
+                    {selectedGoalOption?.value === "ULTRA" && (
+                      <div>
+                        <label htmlFor="settings-ultra-distance" className="mb-1 block text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                          {t("settingsV2.plan.ultraDistanceLabel")}
+                        </label>
+                        <Input
+                          id="settings-ultra-distance"
+                          type="number"
+                          min="42.196"
+                          step="0.1"
+                          value={goalForm.ultraDistanceKm}
+                          onChange={(event) => handleGoalFormChange("ultraDistanceKm", event.target.value)}
+                          placeholder={t("settingsV2.plan.ultraDistancePlaceholder")}
+                          data-testid="goal-ultra-distance-input"
+                        />
+                        {goalForm.ultraDistanceKm && !(parseFloat(goalForm.ultraDistanceKm) > 42.195) && (
+                          <p className="mt-1 text-xs text-destructive" data-testid="goal-ultra-distance-error">
+                            {t("settingsV2.plan.ultraDistanceError")}
+                          </p>
+                        )}
+                      </div>
+                    )}
 
                     <div>
                       <p className="mb-1 block text-xs uppercase tracking-[0.18em] text-muted-foreground">

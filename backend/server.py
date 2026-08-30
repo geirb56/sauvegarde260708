@@ -955,6 +955,7 @@ class UserGoalCreate(BaseModel):
     event_date: str
     distance_type: str  # 5k, 10k, semi, marathon, ultra
     target_time_minutes: Optional[int] = None  # Target time in minutes
+    distance_km: Optional[float] = None  # PR226: explicit distance for ultra (must be > 42.195)
 
 
 @api_router.get("/user/goal")
@@ -971,15 +972,29 @@ async def set_user_goal(goal: UserGoalCreate, user: dict = Depends(auth_user)):
     user_id = user["id"]
     # Delete existing goal
     await db.user_goals.delete_many({"user_id": user_id})
-    
-    # Get distance in km
-    distance_km = DISTANCE_TYPES.get(goal.distance_type, 42.195)
-    
+
+    # PR226: for ultra, caller must supply distance_km > 42.195.
+    if goal.distance_type == "ultra":
+        if (
+            goal.distance_km is None
+            or not isinstance(goal.distance_km, (int, float))
+            or isinstance(goal.distance_km, bool)
+            or goal.distance_km <= 42.195
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="ULTRA goal requires distance_km > 42.195 km.",
+            )
+        distance_km = float(goal.distance_km)
+    else:
+        # For all standard distances the canonical value is authoritative.
+        distance_km = DISTANCE_TYPES.get(goal.distance_type, 42.195)
+
     # Calculate target pace if time provided
     target_pace = None
     if goal.target_time_minutes:
         target_pace = calculate_target_pace(distance_km, goal.target_time_minutes)
-    
+
     # Create new goal
     goal_obj = UserGoal(
         user_id=user_id,
@@ -988,14 +1003,14 @@ async def set_user_goal(goal: UserGoalCreate, user: dict = Depends(auth_user)):
         distance_type=goal.distance_type,
         distance_km=distance_km,
         target_time_minutes=goal.target_time_minutes,
-        target_pace=target_pace
+        target_pace=target_pace,
     )
     doc = goal_obj.model_dump()
     await db.user_goals.insert_one(doc)
-    
+
     # Return without _id
     doc.pop("_id", None)
-    
+
     logger.info(f"Goal set for user {user_id}: {goal.event_name} ({goal.distance_type}) on {goal.event_date}, target: {goal.target_time_minutes}min")
     return {"success": True, "goal": doc}
 
@@ -1380,7 +1395,7 @@ async def analyze_with_coach(request: CoachRequest, user: dict = Depends(auth_us
             sort=[("created_at", -1)]
         )
         if plan_data:
-            current_goal = plan_data.get("goal", "SEMI")
+            current_goal = plan_data.get("goal", "MAINTENANCE")
             sessions_per_week = plan_data.get("sessions_per_week", 4)
             sessions = plan_data.get("sessions", [])
             if sessions:
@@ -2679,28 +2694,59 @@ def _parse_iso_date_field(value) -> Optional[date]:
 @api_router.post("/training/set-goal")
 async def set_training_goal(
     goal: str = Query(..., description="10K | SEMI | MARATHON"),
+    distance_km: Optional[float] = Query(None, description="Required for ULTRA: target distance in km (> 42.195)"),
     user: dict = Depends(auth_user)
 ):
     """
     Définit l'objectif principal du cycle.
+
+    PR226: goal change always clears stale user_goals race data.
+    ULTRA requires distance_km > 42.195 stored in training_cycles.ultra_distance_km.
+    MAINTENANCE never inherits a race_date or target_time.
     """
     if goal.upper() not in ["5K", "10K", "SEMI", "MARATHON", "ULTRA", "MAINTENANCE"]:
         return {"error": "Invalid goal"}
-    
+
     goal_upper = goal.upper()
-    
+
+    # PR226: ULTRA requires an explicit distance > 42.195 km.
+    ultra_distance_km: Optional[float] = None
+    if goal_upper == "ULTRA":
+        if (
+            distance_km is None
+            or not isinstance(distance_km, (int, float))
+            or isinstance(distance_km, bool)
+            or distance_km <= 42.195
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="ULTRA goal requires distance_km > 42.195 km.",
+            )
+        ultra_distance_km = float(distance_km)
+
+    cycle_set: dict = {
+        "goal": goal_upper,
+        "start_date": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
+    }
+    if ultra_distance_km is not None:
+        cycle_set["ultra_distance_km"] = ultra_distance_km
+    else:
+        # Clear any previously stored ultra distance when switching away from ULTRA.
+        cycle_set["ultra_distance_km"] = None
+
     await db.training_cycles.update_one(
         {"user_id": user["id"]},
-        {"$set": {
-            "goal": goal_upper,
-            "start_date": datetime.now(timezone.utc),
-            "updated_at": datetime.now(timezone.utc)
-        }},
-        upsert=True
+        {"$set": cycle_set},
+        upsert=True,
     )
-    
+
+    # PR226: any goal change invalidates the previous race metadata so that
+    # consumers never see a stale race_date from the old goal.
+    await db.user_goals.delete_many({"user_id": user["id"]})
+
     logger.info(f"[Training] Goal set for user {user['id']}: {goal_upper}")
-    
+
     return {"status": "updated", "goal": goal_upper}
 
 
@@ -2842,9 +2888,16 @@ async def get_training_plan(user: dict = Depends(auth_user)):
 
 
 @api_router.post("/training-plan/set-goal")
-async def set_training_plan_goal(goal: str, user: dict = Depends(auth_user)):
+async def set_training_plan_goal(
+    goal: str,
+    distance_km: Optional[float] = Query(None, description="Required for ULTRA: target distance in km (> 42.195)"),
+    user: dict = Depends(auth_user),
+):
     """
     Set the training goal (10K, SEMI, MARATHON, etc.)
+
+    PR226: mirrors /training/set-goal — clears stale user_goals on any change;
+    ULTRA requires distance_km > 42.195.
     """
     if goal.upper() not in ["5K", "10K", "SEMI", "MARATHON", "ULTRA", "MAINTENANCE"]:
         return {"error": "Invalid goal"}
@@ -2852,22 +2905,43 @@ async def set_training_plan_goal(goal: str, user: dict = Depends(auth_user)):
     goal_upper = goal.upper()
     config = GOAL_CONFIG[goal_upper]
 
+    # PR226: ULTRA requires an explicit distance > 42.195 km.
+    ultra_distance_km: Optional[float] = None
+    if goal_upper == "ULTRA":
+        if (
+            distance_km is None
+            or not isinstance(distance_km, (int, float))
+            or isinstance(distance_km, bool)
+            or distance_km <= 42.195
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="ULTRA goal requires distance_km > 42.195 km.",
+            )
+        ultra_distance_km = float(distance_km)
+
+    cycle_set: dict = {
+        "goal": goal_upper,
+        "updated_at": datetime.now(timezone.utc),
+        "ultra_distance_km": ultra_distance_km,
+    }
+
     await db.training_cycles.update_one(
         {"user_id": user["id"]},
-        {"$set": {
-            "goal": goal_upper,
-            "updated_at": datetime.now(timezone.utc)
-        }},
-        upsert=True
+        {"$set": cycle_set},
+        upsert=True,
     )
-    
+
+    # PR226: any goal change invalidates the previous race metadata.
+    await db.user_goals.delete_many({"user_id": user["id"]})
+
     logger.info(f"[Training] Goal updated for user {user['id']}: {goal_upper}")
-    
+
     return {
         "status": "updated",
         "goal": goal_upper,
         "cycle_weeks": config["cycle_weeks"],
-        "description": config["description"]
+        "description": config["description"],
     }
 
 
@@ -3510,6 +3584,9 @@ async def get_week_plan(user: dict = Depends(auth_user)):
     target_distance_km_v2: Optional[float] = None
     if mapped_goal_type == GoalType.ultra:
         raw_dist = user_goal.get("distance_km") if user_goal else None
+        # PR226: fall back to training_cycles.ultra_distance_km (set via set-goal?distance_km=)
+        if not (isinstance(raw_dist, (int, float)) and not isinstance(raw_dist, bool) and raw_dist > ULTRA_MIN_DISTANCE_KM):
+            raw_dist = cycle.get("ultra_distance_km") if cycle else None
         if (
             not isinstance(raw_dist, (int, float))
             or isinstance(raw_dist, bool)
@@ -3921,12 +3998,15 @@ async def get_training_v2_cycle(user: dict = Depends(auth_user)):
         )
 
     # ── Ultra: resolve target_distance_km from canonical DB source ────────
-    # Same source as /user/goal stores it: user_goals.distance_km.
-    # No hardcoded fallback — absent data → 400, not invented distance.
+    # PR226: user_goals.distance_km is primary; training_cycles.ultra_distance_km is fallback
+    # (set via /training/set-goal?distance_km=... from onboarding).
     from training_v2.plan_goal import GoalType as _GoalType, ULTRA_MIN_DISTANCE_KM
     target_distance_km_v2: Optional[float] = None
     if mapped_goal_type == _GoalType.ultra:
         raw_dist = user_goal.get("distance_km") if user_goal else None
+        # PR226 fallback: try training_cycles.ultra_distance_km when user_goals absent.
+        if not (isinstance(raw_dist, (int, float)) and not isinstance(raw_dist, bool) and raw_dist > ULTRA_MIN_DISTANCE_KM):
+            raw_dist = cycle.get("ultra_distance_km") if cycle else None
         if (
             not isinstance(raw_dist, (int, float))
             or isinstance(raw_dist, bool)
