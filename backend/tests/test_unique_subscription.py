@@ -409,8 +409,8 @@ class TestDeduplicationStrategy:
         winner, losers, ambiguous = _pick_winner(docs)
         assert winner["status"] == "active"
 
-    def test_cancelled_loses_to_free(self):
-        docs = [self._doc("cancelled"), self._doc("free")]
+    def test_canceled_loses_to_free(self):
+        docs = [self._doc("canceled"), self._doc("free")]
         winner, losers, ambiguous = _pick_winner(docs)
         assert winner["status"] == "free"
 

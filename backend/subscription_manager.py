@@ -74,7 +74,8 @@ class SubscriptionStatus:
     FREE      = "free"
     PREMIUM   = "premium"
     EXPIRED   = "expired"
-    CANCELLED = "cancelled"
+    CANCELED  = "canceled"
+    CANCELLED = CANCELED
 
 
 # ---------------------------------------------------------------------------
@@ -456,6 +457,7 @@ async def activate_premium(
     paddle_subscription_id: str,
     paddle_customer_id: str,
     premium_expires_at: Optional[datetime] = None,
+    paddle_last_event_at: Optional[datetime] = None,
 ) -> Dict:
     """
     Activate Premium for a user after a successful Paddle payment.
@@ -475,6 +477,8 @@ async def activate_premium(
     }
     if premium_expires_at:
         update_fields["premium_expires_at"] = premium_expires_at.isoformat()
+    if paddle_last_event_at:
+        update_fields["paddle_last_event_at"] = paddle_last_event_at.isoformat()
 
     await db.subscriptions.update_one(
         {"user_id": user_id},
@@ -496,22 +500,25 @@ async def renew_premium(
     user_id: str,
     paddle_subscription_id: str,
     new_expires_at: datetime,
+    paddle_last_event_at: Optional[datetime] = None,
 ) -> Dict:
     """
     Extend Premium expiry after a successful Paddle renewal payment.
     """
     now = datetime.now(timezone.utc)
+    update_fields = {
+        "status": SubscriptionStatus.PREMIUM,
+        "paddle_subscription_id": paddle_subscription_id,
+        "premium_expires_at": new_expires_at.isoformat(),
+        "updated_at": now.isoformat(),
+        "cancelled_at": None,
+    }
+    if paddle_last_event_at:
+        update_fields["paddle_last_event_at"] = paddle_last_event_at.isoformat()
+
     await db.subscriptions.update_one(
         {"user_id": user_id},
-        {
-            "$set": {
-                "status": SubscriptionStatus.PREMIUM,
-                "paddle_subscription_id": paddle_subscription_id,
-                "premium_expires_at": new_expires_at.isoformat(),
-                "updated_at": now.isoformat(),
-                "cancelled_at": None,
-            }
-        },
+        {"$set": update_fields},
         upsert=True,
     )
     logger.info(
@@ -522,7 +529,12 @@ async def renew_premium(
     return subscription
 
 
-async def cancel_subscription(db: AsyncIOMotorDatabase, user_id: str) -> Dict:
+async def cancel_subscription(
+    db: AsyncIOMotorDatabase,
+    user_id: str,
+    premium_expires_at: Optional[datetime] = None,
+    paddle_last_event_at: Optional[datetime] = None,
+) -> Dict:
     """
     Mark a subscription as cancelled.
 
@@ -534,36 +546,40 @@ async def cancel_subscription(db: AsyncIOMotorDatabase, user_id: str) -> Dict:
 
     # Determine whether access should stay Premium until end of paid period
     subscription = await db.subscriptions.find_one({"user_id": user_id})
-    premium_expires_at = None
-    if subscription:
+    effective_expires_at = premium_expires_at
+    if subscription and effective_expires_at is None:
         raw_exp = subscription.get("premium_expires_at") or subscription.get("expires_at")
         if raw_exp:
             try:
-                premium_expires_at = datetime.fromisoformat(raw_exp.replace("Z", "+00:00"))
+                effective_expires_at = datetime.fromisoformat(raw_exp.replace("Z", "+00:00"))
             except (ValueError, TypeError):
                 pass
 
-    if premium_expires_at and premium_expires_at > now:
+    if effective_expires_at and effective_expires_at > now:
         # Access remains PREMIUM until end of paid period
         new_status = SubscriptionStatus.PREMIUM
         logger.info(
             f"Subscription cancelled for '{user_id}' — Premium access until "
-            f"{premium_expires_at.isoformat()}"
+            f"{effective_expires_at.isoformat()}"
         )
     else:
         # No remaining paid period — revert to FREE immediately
         new_status = SubscriptionStatus.FREE
         logger.info(f"Subscription cancelled for '{user_id}' — set to FREE immediately")
 
+    update_fields = {
+        "status": new_status,
+        "cancelled_at": now.isoformat(),
+        "updated_at": now.isoformat(),
+    }
+    if effective_expires_at:
+        update_fields["premium_expires_at"] = effective_expires_at.isoformat()
+    if paddle_last_event_at:
+        update_fields["paddle_last_event_at"] = paddle_last_event_at.isoformat()
+
     await db.subscriptions.update_one(
         {"user_id": user_id},
-        {
-            "$set": {
-                "status": new_status,
-                "cancelled_at": now.isoformat(),
-                "updated_at": now.isoformat(),
-            }
-        },
+        {"$set": update_fields},
     )
 
     subscription = await db.subscriptions.find_one({"user_id": user_id})

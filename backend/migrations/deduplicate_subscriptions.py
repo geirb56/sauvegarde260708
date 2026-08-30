@@ -65,6 +65,7 @@ _STATUS_PRIORITY: Dict[str, int] = {
     "trial":         50,
     "free":          10,
     "expired":        5,
+    "canceled":       5,
     "cancelled":      5,
 }
 

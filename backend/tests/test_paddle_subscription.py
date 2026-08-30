@@ -82,7 +82,7 @@ class TestPaddleWebhookSecurity:
         original = self._body("subscription.activated")
         ts = str(int(time.time()))
         sig = _make_sig(self.SECRET, ts, original)
-        tampered = original.replace(b"subscription.activated", b"subscription.cancelled")
+        tampered = original.replace(b"subscription.activated", b"subscription.canceled")
         with pytest.raises(PaddleWebhookError, match="mismatch"):
             verify_and_parse_paddle_event(tampered, sig, self.SECRET)
 
@@ -109,7 +109,7 @@ class TestPaddleWebhookSecurity:
         for etype in [
             "subscription.activated",
             "subscription.updated",
-            "subscription.cancelled",
+            "subscription.canceled",
             "subscription.past_due",
             "transaction.completed",
             "transaction.payment_failed",
