@@ -201,3 +201,21 @@ PR #226 — base: `copilot/dev`. NE PAS merger.
 | 50 | `test_get_training_v2_week_invalid_event_date_rejected` | PASS |
 
 **Total : 50 tests, 0 skip, 0 failure.**
+
+---
+
+## Patch Ultime — event_date strict validation (POST /user/goal)
+
+**Problem:** `date.fromisoformat(goal.event_date[:10])` silently accepted `"2027-01-01garbage"` because the 10-char slice strips the suffix before parsing.
+
+**Fix (server.py `POST /user/goal`):**
+- Added `re.fullmatch(r"\d{4}-\d{2}-\d{2}", goal.event_date)` guard **before** `date.fromisoformat()` — no slice; rejects any suffix.
+- Stored `parsed_event_date.isoformat()` (normalized) instead of raw `goal.event_date`.
+
+**Tests added (Section F):**
+| # | Test | Result |
+|---|------|--------|
+| 51 | `test_post_user_goal_garbage_suffix_date_rejected_no_mutation` — `"2027-01-01garbage"` → HTTP 400, `delete_many` NOT called | ✅ PASS |
+| 52 | `test_post_user_goal_normalized_date_stored` — `"2028-06-15"` → inserted with exact `isoformat()` value | ✅ PASS |
+
+**Total: 52 tests, 0 skipped, 0 failures**

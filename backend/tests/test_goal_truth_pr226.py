@@ -701,3 +701,72 @@ def test_get_training_v2_week_invalid_event_date_rejected():
         _run(run())
     assert exc_info.value.status_code == 400
     assert "event_date" in exc_info.value.detail.lower()
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Section F — event_date strict validation in POST /user/goal
+# ════════════════════════════════════════════════════════════════════════════
+
+def test_post_user_goal_garbage_suffix_date_rejected_no_mutation():
+    """'2027-01-01garbage' → HTTP 400; delete_many must NOT be called."""
+    from fastapi import HTTPException
+    import server as srv
+
+    cycle = {"goal": "MARATHON", "start_date": _CYCLE_START}
+    mock_db = _make_db(cycle=cycle)
+    delete_called = []
+
+    async def fake_delete(*a, **kw):
+        delete_called.append(True)
+        return MagicMock(deleted_count=0)
+
+    mock_db.user_goals.delete_many = fake_delete
+
+    goal_payload = srv.UserGoalCreate(
+        event_name="Marathon Race",
+        event_date="2027-01-01garbage",
+        distance_type="marathon",
+    )
+
+    async def run():
+        with patch.object(srv, "db", mock_db):
+            return await srv.set_user_goal(goal_payload, user={"id": "u1"})
+
+    with pytest.raises(HTTPException) as exc_info:
+        _run(run())
+    assert exc_info.value.status_code == 400
+    assert "event_date" in exc_info.value.detail.lower() or "2027-01-01garbage" in exc_info.value.detail
+    assert not delete_called, "delete_many must NOT be called when payload is invalid"
+
+
+def test_post_user_goal_normalized_date_stored():
+    """Valid date '2028-06-15' → inserted with normalized isoformat, not raw input."""
+    import server as srv
+
+    cycle = {"goal": "MARATHON", "start_date": _CYCLE_START}
+    mock_db = _make_db(cycle=cycle)
+    inserts = []
+
+    async def fake_delete(*a, **kw):
+        return MagicMock(deleted_count=0)
+
+    async def fake_insert(doc):
+        inserts.append(doc)
+        return MagicMock(inserted_id="xyz")
+
+    mock_db.user_goals.delete_many = fake_delete
+    mock_db.user_goals.insert_one = fake_insert
+
+    goal_payload = srv.UserGoalCreate(
+        event_name="Marathon",
+        event_date="2028-06-15",
+        distance_type="marathon",
+    )
+
+    async def run():
+        with patch.object(srv, "db", mock_db):
+            return await srv.set_user_goal(goal_payload, user={"id": "u1"})
+
+    result = _run(run())
+    assert result["success"] is True
+    assert inserts[0]["event_date"] == "2028-06-15"

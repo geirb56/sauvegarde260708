@@ -1191,10 +1191,18 @@ async def set_user_goal(goal: UserGoalCreate, user: dict = Depends(auth_user)):
 
     # ── 1. Validate inputs BEFORE touching the DB ──────────────────────────
 
-    # event_date: must be a valid ISO date string
+    # event_date: must be exactly YYYY-MM-DD — no suffixes, no trailing garbage.
+    # date.fromisoformat(s[:10]) would accept "2027-01-01garbage" by slicing,
+    # so we validate the full string first.
+    import re as _re
+    if not isinstance(goal.event_date, str) or not _re.fullmatch(r"\d{4}-\d{2}-\d{2}", goal.event_date):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid event_date '{goal.event_date}'. Must be exactly YYYY-MM-DD.",
+        )
     try:
-        parsed_event_date = date.fromisoformat(goal.event_date[:10])
-    except (ValueError, TypeError, AttributeError):
+        parsed_event_date = date.fromisoformat(goal.event_date)
+    except (ValueError, TypeError):
         raise HTTPException(
             status_code=400,
             detail=f"Invalid event_date '{goal.event_date}'. Must be ISO format YYYY-MM-DD.",
@@ -1252,7 +1260,7 @@ async def set_user_goal(goal: UserGoalCreate, user: dict = Depends(auth_user)):
     goal_obj = UserGoal(
         user_id=user_id,
         event_name=goal.event_name,
-        event_date=goal.event_date,
+        event_date=parsed_event_date.isoformat(),  # always stored normalized YYYY-MM-DD
         distance_type=goal.distance_type,
         distance_km=distance_km,
         target_time_minutes=goal.target_time_minutes,
