@@ -370,6 +370,8 @@ def _apply_target_time_modulation(
     target_time_profile: Optional[str],
     allow_intensity: bool,
 ) -> tuple[list[tuple[str, str]], Optional[str]]:
+    # Intentionally conservative: adjust at most one slot per week so target_time
+    # influences composition without overriding continuity/phase protection logic.
     if target_time_profile is None or not allow_intensity:
         return skeleton, None
 

@@ -113,8 +113,8 @@ def _activity(days_ago: int, km: float) -> dict:
 
 def test_10k_without_target_time_keeps_baseline():
     base = _build(GoalType.ten_k, None)
-    no_target = _build(GoalType.ten_k, None)
-    assert _running_signature(base) == _running_signature(no_target)
+    realistic_neutral = _build(GoalType.ten_k, 50 * 60)
+    assert _running_signature(base) == _running_signature(realistic_neutral)
     assert "target_time_profile_aggressive" not in base.reason_codes
     assert "target_time_profile_conservative" not in base.reason_codes
 
