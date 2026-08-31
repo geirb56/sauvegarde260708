@@ -269,6 +269,38 @@ describe("Settings UX V2", () => {
     expect(toast.success).toHaveBeenCalled();
   });
 
+  test("save goal target time without race metadata sends null event fields", async () => {
+    mockAxiosApi();
+    axios.post.mockImplementation((url) => {
+      if (url.includes("/user/goal")) {
+        return Promise.resolve({ data: { success: true } });
+      }
+      return Promise.resolve({ data: {} });
+    });
+
+    renderPage();
+    await screen.findByTestId("settings-race-fields");
+
+    fireEvent.change(screen.getByTestId("goal-name-input"), { target: { value: "" } });
+    fireEvent.change(screen.getByTestId("goal-date-input"), { target: { value: "" } });
+    fireEvent.change(screen.getByTestId("goal-hours-input"), { target: { value: "0" } });
+    fireEvent.change(screen.getByTestId("goal-minutes-input"), { target: { value: "50" } });
+    fireEvent.click(screen.getByTestId("save-goal"));
+
+    await waitFor(() => {
+      expect(axios.post).toHaveBeenCalledWith(
+        expect.stringContaining("/user/goal"),
+        expect.objectContaining({
+          event_name: null,
+          event_date: null,
+          distance_type: "marathon",
+          target_time_minutes: 50,
+        })
+      );
+    });
+    expect(toast.success).toHaveBeenCalled();
+  });
+
   test("save race settings shows error feedback on backend failure", async () => {
     mockAxiosApi();
     axios.post.mockImplementation((url) => {

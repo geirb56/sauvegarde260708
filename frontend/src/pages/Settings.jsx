@@ -378,12 +378,6 @@ export default function Settings() {
   const handleSaveRaceSettings = async () => {
     if (!selectedGoalOption?.hasRaceSettings) return;
 
-    if (!goalForm.eventName.trim() || !goalForm.eventDate) {
-      setPlanAction({ status: "error", message: t("settingsV2.plan.raceValidationError") });
-      toast.error(t("settingsV2.plan.raceValidationError"));
-      return;
-    }
-
     // PR226: ULTRA requires a valid distance > 42.195 km.
     if (selectedGoalOption.value === "ULTRA") {
       const ultraKm = parseFloat(goalForm.ultraDistanceKm);
@@ -399,8 +393,8 @@ export default function Settings() {
     const totalMinutes = hours > 0 || minutes > 0 ? (hours * 60) + minutes : null;
 
     const payload = {
-      event_name: goalForm.eventName.trim(),
-      event_date: goalForm.eventDate,
+      event_name: goalForm.eventName.trim() || null,
+      event_date: goalForm.eventDate || null,
       distance_type: selectedGoalOption.distanceType,
       target_time_minutes: totalMinutes,
     };

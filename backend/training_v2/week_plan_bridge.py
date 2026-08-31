@@ -25,6 +25,7 @@ from .plan_goal import GoalType, PlanGoal, build_plan_goal
 from .runner_profile import RunnerProfile, build_runner_profile
 from .training_history import build_training_history
 from .training_load import build_training_load
+from .training_paces import TrainingPaces, compute_training_paces, vdot_from_performance
 from .training_state import build_training_state
 from .weekly_target import WeeklyTarget, build_weekly_target
 from .workout_generator import WeeklyPlan, build_weekly_plan
@@ -61,6 +62,70 @@ class _WeeklyBuildContext:
     runner_profile: RunnerProfile
     plan_goal: PlanGoal
     periodization: PeriodizationSnapshot
+    target_capability_time_seconds: Optional[int]
+
+
+def _equivalent_time_seconds_from_vdot(
+    *,
+    target_distance_km: float,
+    vdot: float,
+) -> Optional[int]:
+    """Invert Daniels VDOT to equivalent performance time on exact target distance."""
+    if target_distance_km <= 0 or vdot <= 0:
+        return None
+
+    target_distance_m = target_distance_km * 1000.0
+    lo = 300.0
+    hi = 12 * 3600.0
+
+    lo_vdot = vdot_from_performance(target_distance_m, lo)
+    hi_vdot = vdot_from_performance(target_distance_m, hi)
+    while lo_vdot is None and lo < hi:
+        lo *= 1.5
+        lo_vdot = vdot_from_performance(target_distance_m, lo)
+    while hi_vdot is None and hi > lo:
+        hi *= 0.8
+        hi_vdot = vdot_from_performance(target_distance_m, hi)
+
+    if lo_vdot is None or hi_vdot is None or lo >= hi:
+        return None
+    if not (lo_vdot >= vdot >= hi_vdot):
+        return None
+
+    for _ in range(40):
+        mid = (lo + hi) / 2.0
+        mid_vdot = vdot_from_performance(target_distance_m, mid)
+        if mid_vdot is None:
+            return None
+        if mid_vdot > vdot:
+            lo = mid
+        else:
+            hi = mid
+    return int(round((lo + hi) / 2.0))
+
+
+def _resolve_capability_time_for_goal(
+    *,
+    paces: TrainingPaces,
+    plan_goal: PlanGoal,
+) -> Optional[int]:
+    """Resolve equivalent capability time on PlanGoal.target_distance_km."""
+    if plan_goal.goal_type == GoalType.ultra:
+        # Explicit V2 decision: disable target_time modulation for ULTRA.
+        return None
+    if plan_goal.target_time_seconds is None:
+        return None
+    if plan_goal.target_distance_km is None or plan_goal.target_distance_km <= 0:
+        return None
+    if paces.confidence not in {"HIGH", "MEDIUM"}:
+        return None
+    if paces.vdot_result.reference_vdot is None:
+        return None
+
+    return _equivalent_time_seconds_from_vdot(
+        target_distance_km=plan_goal.target_distance_km,
+        vdot=paces.vdot_result.reference_vdot,
+    )
 
 
 def _normalize_workout_to_domain_fields(workout: dict) -> dict:
@@ -119,6 +184,7 @@ def _build_weekly_context_from_workouts(
     reference_date: date,
     user_profile: Optional[dict],
     target_distance_km: Optional[float] = None,
+    target_time_seconds: Optional[int] = None,
 ) -> _WeeklyBuildContext:
     """Canonical internal V2 build pipeline — single construction site.
 
@@ -165,6 +231,7 @@ def _build_weekly_context_from_workouts(
         goal_type=mapped_goal,
         race_date=race_date if mapped_goal != GoalType.maintenance else None,
         target_distance_km=target_distance_km if mapped_goal == GoalType.ultra else None,
+        target_time_seconds=target_time_seconds if mapped_goal != GoalType.maintenance else None,
         created_from="user",
     )
 
@@ -192,11 +259,20 @@ def _build_weekly_context_from_workouts(
         reference_date=reference_date,
     )
 
+    target_capability_time_seconds: Optional[int] = None
+    if plan_goal.target_time_seconds is not None:
+        training_paces = compute_training_paces(activities, reference_date, user_max_hr=None)
+        target_capability_time_seconds = _resolve_capability_time_for_goal(
+            paces=training_paces,
+            plan_goal=plan_goal,
+        )
+
     return _WeeklyBuildContext(
         weekly_target=weekly_target,
         runner_profile=runner_profile,
         plan_goal=plan_goal,
         periodization=periodization,
+        target_capability_time_seconds=target_capability_time_seconds,
     )
 
 
@@ -225,6 +301,7 @@ def build_weekly_target_from_workouts(
     reference_date: date,
     user_profile: Optional[dict] = None,
     target_distance_km: Optional[float] = None,
+    target_time_seconds: Optional[int] = None,
 ) -> WeeklyTarget:
     """Build a WeeklyTarget V2 from raw workout documents and goal info.
 
@@ -237,6 +314,7 @@ def build_weekly_target_from_workouts(
     reference_date : anchor date — MANDATORY, no implicit today.
     user_profile : optional user_profiles document for RunnerProfile enrichment.
     target_distance_km : explicit race distance (km). Required for ULTRA goals.
+    target_time_seconds : optional chronometric objective in canonical seconds.
 
     Raises
     ------
@@ -251,6 +329,7 @@ def build_weekly_target_from_workouts(
         reference_date=reference_date,
         user_profile=user_profile,
         target_distance_km=target_distance_km,
+        target_time_seconds=target_time_seconds,
     )
     return ctx.weekly_target
 
@@ -264,6 +343,7 @@ def build_weekly_plan_from_workouts(
     reference_date: date,
     user_profile: Optional[dict] = None,
     target_distance_km: Optional[float] = None,
+    target_time_seconds: Optional[int] = None,
 ) -> tuple[WeeklyTarget, WeeklyPlan]:
     """Build WeeklyTarget V2 + WeeklyPlan V2 from raw workout documents.
 
@@ -273,6 +353,7 @@ def build_weekly_plan_from_workouts(
     re-compute the long run itself.
 
     PR226: target_distance_km added for ULTRA goals — passed to build_plan_goal.
+    PR227: target_time_seconds propagated to PlanGoal for prescription modulation.
 
     The WeeklyTarget returned here is the SAME object that
     build_weekly_target_from_workouts would return for identical inputs —
@@ -291,6 +372,7 @@ def build_weekly_plan_from_workouts(
         reference_date=reference_date,
         user_profile=user_profile,
         target_distance_km=target_distance_km,
+        target_time_seconds=target_time_seconds,
     )
 
     weekly_plan = build_weekly_plan(
@@ -299,6 +381,7 @@ def build_weekly_plan_from_workouts(
         plan_goal=ctx.plan_goal,
         periodization=ctx.periodization,
         reference_date=reference_date,
+        target_capability_time_seconds=ctx.target_capability_time_seconds,
     )
 
     return ctx.weekly_target, weekly_plan

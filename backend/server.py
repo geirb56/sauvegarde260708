@@ -952,6 +952,28 @@ def calculate_target_pace(distance_km: float, target_time_minutes: int) -> str:
     return f"{pace_min}:{pace_sec:02d}"
 
 
+def _validate_target_time_minutes(value: Optional[object]) -> Optional[int]:
+    """Validate target_time_minutes input for POST /user/goal."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise HTTPException(
+            status_code=400,
+            detail="target_time_minutes must be a positive number when provided.",
+        )
+    if value <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="target_time_minutes must be strictly greater than 0 when provided.",
+        )
+    if isinstance(value, float) and not value.is_integer():
+        raise HTTPException(
+            status_code=400,
+            detail="target_time_minutes must be a whole number of minutes when provided.",
+        )
+    return int(value)
+
+
 # PR226 — single place for ULTRA distance validation so future threshold or
 # error-message changes only need one edit.
 _ULTRA_MIN_DISTANCE_KM: float = 42.195
@@ -1092,6 +1114,8 @@ async def _resolve_goal_v2(user_id: str) -> "_ResolvedGoal":
     race_date: Optional[date] = None
     if user_goal_doc:
         rd_raw = user_goal_doc.get("event_date")
+        if isinstance(rd_raw, str) and rd_raw.strip() == "":
+            rd_raw = None
         if rd_raw is not None:
             if isinstance(rd_raw, datetime):
                 race_date = rd_raw.date() if rd_raw.tzinfo else rd_raw.replace(tzinfo=timezone.utc).date()
@@ -1151,8 +1175,8 @@ class UserGoal(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     user_id: str
-    event_name: str
-    event_date: str  # ISO date string
+    event_name: Optional[str] = None
+    event_date: Optional[str] = None  # ISO date string
     distance_type: str  # 5k, 10k, semi, marathon, ultra
     distance_km: float  # Actual distance in km
     target_time_minutes: Optional[int] = None  # Target time in minutes
@@ -1161,10 +1185,10 @@ class UserGoal(BaseModel):
 
 
 class UserGoalCreate(BaseModel):
-    event_name: str
-    event_date: str
+    event_name: Optional[str] = None
+    event_date: Optional[str] = None
     distance_type: str  # 5k, 10k, semi, marathon, ultra
-    target_time_minutes: Optional[int] = None  # Target time in minutes
+    target_time_minutes: Optional[int | float | str | bool] = None  # validated manually in set_user_goal
     distance_km: Optional[float] = None  # PR226: explicit distance for ultra (must be > 42.195)
 
 
@@ -1178,11 +1202,11 @@ async def get_user_goal(user: dict = Depends(auth_user)):
 
 @api_router.post("/user/goal")
 async def set_user_goal(goal: UserGoalCreate, user: dict = Depends(auth_user)):
-    """Set user's goal (event with date, distance, target time).
+    """Set user's goal (event metadata optional, target time optional).
 
     PR226 rules (all checked BEFORE any DB mutation):
     - MAINTENANCE cycle → rejected (no race metadata on a maintenance cycle)
-    - event_date must be a parseable future ISO date
+    - event_date is optional; if provided it must be a parseable future ISO date
     - distance_type must be valid
     - ULTRA requires distance_km > 42.195
     - distance_type must match active training_cycles.goal (coherence check)
@@ -1191,27 +1215,35 @@ async def set_user_goal(goal: UserGoalCreate, user: dict = Depends(auth_user)):
 
     # ── 1. Validate inputs BEFORE touching the DB ──────────────────────────
 
-    # event_date: must be exactly YYYY-MM-DD — no suffixes, no trailing garbage.
-    # date.fromisoformat(s[:10]) would accept "2027-01-01garbage" by slicing,
-    # so we validate the full string first.
-    import re as _re
-    if not isinstance(goal.event_date, str) or not _re.fullmatch(r"\d{4}-\d{2}-\d{2}", goal.event_date):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid event_date '{goal.event_date}'. Must be exactly YYYY-MM-DD.",
-        )
-    try:
-        parsed_event_date = date.fromisoformat(goal.event_date)
-    except (ValueError, TypeError):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid event_date '{goal.event_date}'. Must be ISO format YYYY-MM-DD.",
-        )
-    if parsed_event_date <= datetime.now(timezone.utc).date():
-        raise HTTPException(
-            status_code=400,
-            detail=f"event_date '{goal.event_date}' must be a future date.",
-        )
+    event_name = goal.event_name.strip() if isinstance(goal.event_name, str) else None
+    if event_name == "":
+        event_name = None
+
+    raw_event_date = goal.event_date.strip() if isinstance(goal.event_date, str) else None
+    if raw_event_date == "":
+        raw_event_date = None
+
+    parsed_event_date: Optional[date] = None
+    if raw_event_date is not None:
+        # event_date: must be exactly YYYY-MM-DD — no suffixes, no trailing garbage.
+        import re as _re
+        if not _re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw_event_date):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid event_date '{raw_event_date}'. Must be exactly YYYY-MM-DD.",
+            )
+        try:
+            parsed_event_date = date.fromisoformat(raw_event_date)
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid event_date '{raw_event_date}'. Must be ISO format YYYY-MM-DD.",
+            )
+        if parsed_event_date <= datetime.now(timezone.utc).date():
+            raise HTTPException(
+                status_code=400,
+                detail=f"event_date '{raw_event_date}' must be a future date.",
+            )
 
     if goal.distance_type not in _VALID_DISTANCE_TYPES:
         raise HTTPException(
@@ -1223,6 +1255,7 @@ async def set_user_goal(goal: UserGoalCreate, user: dict = Depends(auth_user)):
         distance_km = _validate_ultra_distance_km(goal.distance_km)
     else:
         distance_km = DISTANCE_TYPES[goal.distance_type]
+    validated_target_time_minutes = _validate_target_time_minutes(goal.target_time_minutes)
 
     # ── 2. Coherence: distance_type must match active training_cycles.goal ──
     cycle = await db.training_cycles.find_one({"user_id": user_id}, {"_id": 0})
@@ -1251,19 +1284,19 @@ async def set_user_goal(goal: UserGoalCreate, user: dict = Depends(auth_user)):
 
     # ── 3. Calculate target pace ────────────────────────────────────────────
     target_pace = None
-    if goal.target_time_minutes:
-        target_pace = calculate_target_pace(distance_km, goal.target_time_minutes)
+    if validated_target_time_minutes is not None:
+        target_pace = calculate_target_pace(distance_km, validated_target_time_minutes)
 
     # ── 4. Write: delete then insert (all validation passed) ────────────────
     await db.user_goals.delete_many({"user_id": user_id})
 
     goal_obj = UserGoal(
         user_id=user_id,
-        event_name=goal.event_name,
-        event_date=parsed_event_date.isoformat(),  # always stored normalized YYYY-MM-DD
+        event_name=event_name,
+        event_date=parsed_event_date.isoformat() if parsed_event_date else None,  # normalized YYYY-MM-DD when provided
         distance_type=goal.distance_type,
         distance_km=distance_km,
-        target_time_minutes=goal.target_time_minutes,
+        target_time_minutes=validated_target_time_minutes,
         target_pace=target_pace,
     )
     doc = goal_obj.model_dump()
@@ -1271,7 +1304,12 @@ async def set_user_goal(goal: UserGoalCreate, user: dict = Depends(auth_user)):
 
     doc.pop("_id", None)
 
-    logger.info(f"Goal set for user {user_id}: {goal.event_name} ({goal.distance_type}) on {goal.event_date}, target: {goal.target_time_minutes}min")
+    logger.info(
+        f"Goal set for user {user_id}: "
+        f"name={event_name!r} distance_type={goal.distance_type} "
+        f"event_date={parsed_event_date.isoformat() if parsed_event_date else None} "
+        f"target_time_minutes={validated_target_time_minutes}"
+    )
     return {"success": True, "goal": doc}
 
 
@@ -3782,6 +3820,7 @@ async def get_week_plan(user: dict = Depends(auth_user)):
         goal_type=resolved.mapped_goal,
         race_date=race_date_v2,  # already None for MAINTENANCE
         target_distance_km=resolved.target_distance_km,
+        target_time_seconds=resolved.target_time_sec,
         created_from="user",
     )
 
@@ -3805,6 +3844,7 @@ async def get_week_plan(user: dict = Depends(auth_user)):
         cycle_start_date=cycle_start_v2,
         reference_date=today.date(),
         target_distance_km=resolved.target_distance_km,
+        target_time_seconds=resolved.target_time_sec,
     )
 
     # PR149: V2 prescription → target_km_protected (distance-based only).
@@ -3974,6 +4014,7 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
         cycle_start_date=resolved.cycle_start,
         reference_date=reference_date,
         target_distance_km=resolved.target_distance_km,
+        target_time_seconds=resolved.target_time_sec,
     )
 
     # ── Assemble native V2 response — no adapter, no coercion ────────────
@@ -4058,6 +4099,7 @@ async def get_training_v2_cycle(user: dict = Depends(auth_user)):
         goal_type=resolved.mapped_goal,
         race_date=resolved.race_date,  # already None for MAINTENANCE
         target_distance_km=resolved.target_distance_km,
+        target_time_seconds=resolved.target_time_sec,
         created_from="user",
     )
 
