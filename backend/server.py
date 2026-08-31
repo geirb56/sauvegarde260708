@@ -3305,48 +3305,95 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     """
     Returns today's adaptive training session.
 
-    Runtime path (PR137 — Daily Runtime Migration V2):
-        plan V2 (#135)
+    Runtime path (PR228 — unified canonical orchestration):
+        Garmin actual → TrainingHistory → TrainingLoad → RunnerProfile
+          → TrainingState → PlanGoal → Periodization → WeeklyTarget
+          → RecentTrainingResponse → WeeklyReconciliation
+          → WorkoutGenerator → reconciled WeeklyPlan
+          (identical to /training/v2/week — single canonical plan)
           ↓
-        séance prévue aujourd'hui (WorkoutPrescription)
+        séance prévue aujourd'hui (WorkoutPrescription from WeeklyPlan)
           ↓
-        ReadinessResult V2
+        ReadinessDecision V2
           ↓
-        ReadinessDecision V2 (#133)
-          ↓
-        DailyAdaptation V2 (#133)
+        DailyAdaptation V2  ← Today only, never rebuilds WeeklyPlan
           ↓
         séance du jour adaptée → payload /training/today
 
-    ReadinessDecision is the single readiness translation layer.
-    DailyAdaptation only adapts (keep or reduce), never increases.
-    None ≠ 0: absent data is never treated as bad readiness.
+    PR228 guarantees:
+    - Today's session is derived from the SAME reconciled plan as /training/v2/week.
+    - No second WorkoutGenerator. No second WeeklyReconciliation.
+    - DailyAdaptation modifies Today only (keep or reduce, never increase).
+    - None ≠ 0: absent data is never treated as bad readiness.
     """
+    from training_v2.week_plan_bridge import build_canonical_weekly_plan
+
     # Anchor date determined here at the runtime boundary, then passed explicitly
     # to all V2 pure layers (no hidden now()/today() inside business functions).
     today = datetime.now(timezone.utc).date()
     today_iso = today.isoformat()
     day_name = today.strftime("%A")
 
-    # ── 1. Plan V2 — source of the planned session ────────────────────────────
-    plan = await generate_dynamic_training_plan(db, user["id"])
-    if plan is None:
-        return {
-            "has_plan": False,
-            "message": "Aucun plan d'entraînement actif",
-            "suggestion": "Créez un objectif pour générer votre plan personnalisé.",
-        }
-    sessions = (plan.get("plan") or {}).get("sessions", [])
-    vma = plan.get("vma") or (plan.get("context", {}) or {}).get("vma")
+    # ── 1. Goal resolver — single source of truth (PR226) ────────────────
+    resolved = await _resolve_goal_v2(user["id"])
 
-    # Find today's planned session by day name
-    planned_session_runtime: Optional[dict] = None
-    for session in sessions:
-        if session.get("day", "").lower() == day_name.lower():
-            planned_session_runtime = session
+    # ── 2. Garmin activities — 90-day window (same scope as /training/v2/week) ─
+    now_utc = datetime.now(timezone.utc)
+    ninety_days_ago = now_utc - timedelta(days=90)
+    domain_activities_90: list = []
+    readiness_result = None
+    training_load = None
+    recent_response_for_readiness = None
+    readiness_data_source = "unavailable"
+
+    garmin_conn = await db.garmin_connections.find_one({"user_id": user["id"]}, {"_id": 0})
+    if garmin_conn and garmin_conn.get("connected"):
+        try:
+            garmin_activities_90 = await db.garmin_activities.find(
+                {"user_id": user["id"], "start_time": {"$gte": ninety_days_ago.isoformat()}},
+                {"_id": 0},
+            ).to_list(1000)
+            domain_activities_90 = mongo_garmin_activities_to_domain(garmin_activities_90)
+
+            metrics_docs = await (
+                db.garmin_daily_metrics.find({"user_id": user["id"]}, {"_id": 0})
+                .sort("date", -1)
+                .limit(30)
+                .to_list(length=30)
+            )
+            # ── Mongo → DomainActivity boundary ─────────────────────────
+            training_load = build_training_load(domain_activities_90, today)
+            readiness_result = build_readiness_v2_from_garmin_data(
+                metrics_docs, domain_activities_90, today, load_snapshot=training_load
+            )
+            recent_response_for_readiness = build_recent_training_response(domain_activities_90, today)
+            readiness_data_source = "garmin"
+        except Exception as exc:
+            logger.warning(f"[TrainingToday] Garmin V2 readiness build failed: {exc}")
+
+    # ── 3. Canonical plan — SAME pipeline as /training/v2/week (PR228) ───
+    # build_canonical_weekly_plan includes WeeklyReconciliation internally.
+    # Today's session comes from this reconciled plan — no second WorkoutGenerator,
+    # no second WeeklyReconciliation.
+    canonical = build_canonical_weekly_plan(
+        workouts=domain_activities_90,
+        goal_type=resolved.goal_type,
+        race_date=resolved.race_date,
+        cycle_start_date=resolved.cycle_start,
+        reference_date=today,
+        target_distance_km=resolved.target_distance_km,
+        target_time_seconds=resolved.target_time_sec,
+    )
+    weekly_plan = canonical.weekly_plan
+
+    # ── 4. Find today's planned session from the reconciled WeeklyPlan ───
+    planned_prescription: Optional[WorkoutPrescription] = None
+    for session in weekly_plan.sessions:
+        if session.day.lower() == day_name.lower():
+            planned_prescription = session
             break
 
-    if not planned_session_runtime:
+    if planned_prescription is None:
         return {
             "status": "no_session",
             "message": "No session planned for today",
@@ -3354,72 +3401,28 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
             "day": day_name,
         }
 
-    # ── 2. Convert runtime dict → WorkoutPrescription (V2 contract) ───────────
-    planned_prescription = runtime_session_to_prescription(planned_session_runtime)
-
-    # ── 3. ReadinessResult V2 — from Garmin data (no legacy proxy) ───────────
-    readiness_result = None
-    training_load = None
-    recent_response = None
-    readiness_data_source = "unavailable"
-
-    garmin_conn = await db.garmin_connections.find_one({"user_id": user["id"]}, {"_id": 0})
-    if garmin_conn and garmin_conn.get("connected"):
-        try:
-            metrics_docs = await (
-                db.garmin_daily_metrics.find({"user_id": user["id"]}, {"_id": 0})
-                .sort("date", -1)
-                .limit(30)
-                .to_list(length=30)
-            )
-            garmin_activities = await (
-                db.garmin_activities.find({"user_id": user["id"]}, {"_id": 0})
-                .sort("start_time", -1)
-                .limit(200)
-                .to_list(length=200)
-            )
-            # ── Mongo → DomainActivity boundary (PR137) ──────────────────────
-            # Raw MongoDB documents are never passed directly to Training V2
-            # modules.  The explicit adapter resolves the garmin_activity
-            # sub-document (normalized field names) with fallback to top-level
-            # aliases for legacy documents.
-            domain_activities = mongo_garmin_activities_to_domain(garmin_activities)
-            # TrainingLoadSnapshot — single computation shared with ReadinessResult V2
-            training_load = build_training_load(domain_activities, today)
-            # ReadinessResult V2 (reuses pre-built load_snapshot, no duplicate computation)
-            readiness_result = build_readiness_v2_from_garmin_data(
-                metrics_docs, domain_activities, today, load_snapshot=training_load
-            )
-            # RecentTrainingResponse V2 (#132)
-            recent_response = build_recent_training_response(domain_activities, today)
-            readiness_data_source = "garmin"
-        except Exception as exc:
-            logger.warning(f"[TrainingToday] Garmin V2 readiness build failed: {exc}")
-
-    # ── 4. ReadinessDecision V2 — canonical translation (no thresholds in endpoint) ─
+    # ── 5. ReadinessDecision V2 — canonical translation ──────────────────
     readiness_decision: ReadinessDecision = build_readiness_decision(readiness_result)
 
-    # ── 5. DailyAdaptation V2 — engine #133 (keep or reduce, never increase) ──
+    # ── 6. DailyAdaptation V2 — Today only (keep or reduce, never increase) ─
+    # Applied AFTER the canonical plan is built. Does NOT rebuild WeeklyPlan.
     adaptation_result: DailyAdaptationResult = build_daily_adaptation(
         workout=planned_prescription,
         readiness_decision=readiness_decision,
         training_load=training_load,
-        recent_response=recent_response,
+        recent_response=recent_response_for_readiness,
     )
 
-    # ── 6. Map adapted prescription back to runtime dict format ──────────────
-    # original_prescription: derived directly from planned_session_runtime to
-    # avoid any implicit divergence via the WorkoutPrescription round-trip.
+    # ── 7. Map prescription to legacy runtime dict format ─────────────────
+    planned_session_runtime = prescription_to_runtime_session(planned_prescription)
     adapted_runtime = prescription_to_runtime_session(adaptation_result.adapted_workout)
     adaptation_applied = adaptation_result.action != DailyAdaptationAction.KEEP
     adaptation_reason = ", ".join(adaptation_result.reason_codes)
 
-    # ── 7. Legacy compat: recommendation / recommendation_color derived from V2 ─
-    # These fields remain temporarily because the frontend may still consume them.
-    # Direction: V2 ReadinessDecision → compatibility adapter. Never legacy → V2.
+    # ── 8. Legacy compat: recommendation / recommendation_color derived from V2 ─
     recommendation, recommendation_color = BAND_TO_RECOMMENDATION[readiness_decision.band]
 
-    # ── 8. Historical feedback (unchanged) ────────────────────────────────────
+    # ── 9. Historical feedback (unchanged) ────────────────────────────────
     feedback_cursor = db.training_feedback.find(
         {"user_id": user["id"]},
         {"_id": 0}
@@ -3430,9 +3433,12 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
         "status": "success",
         "date": today_iso,
         "day": day_name,
-        # Original planned session (runtime dict from plan V2)
+        # planned_session: runtime dict of today's session from the reconciled canonical plan.
+        # PR228: this is now the output of prescription_to_runtime_session(planned_prescription)
+        # rather than a raw dict from generate_dynamic_training_plan.
         "planned_session": planned_session_runtime,
-        # V2 prescription objects (preferred by new consumers)
+        # original_prescription: identical to planned_session — both represent the planned
+        # session before DailyAdaptation. Preserved for backward compat with existing consumers.
         "original_prescription": planned_session_runtime,
         "adapted_prescription": adapted_runtime,
         # Legacy compat: adaptive_session present when adaptation changed the session
@@ -3450,15 +3456,24 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
             "available": readiness_decision.band != ReadinessBand.UNAVAILABLE,
             "data_source": readiness_data_source,
         },
-        # Legacy compat: fatigue block derived from V2 (no fatigue_ratio/fatigue_status/fatigue_physio)
+        # Legacy compat: fatigue block derived from V2
         "fatigue": {
             "run_readiness": readiness_decision.score,
             "recommendation": recommendation,
             "recommendation_color": recommendation_color,
             "data_source": readiness_data_source,
         },
-        "vma": vma,
-        "vma_confidence": plan.get("vma_confidence"),
+        # PR228: reconciliation audit (same reconciliation applied to /training/v2/week)
+        "weekly_reconciliation": {
+            "action": canonical.reconciliation_result.action.value,
+            "reason_codes": list(canonical.reconciliation_result.reason_codes),
+        },
+        # vma / vma_confidence: PR228 — no longer computed in /training/today.
+        # These fields were supplied by generate_dynamic_training_plan (coach_service path)
+        # which has been removed. Verified: frontend does not consume vma from this endpoint.
+        # VMA is available at /run-index (canonical source) and /training/v2/week context.
+        "vma": None,
+        "vma_confidence": None,
         "recent_feedback": recent_feedback,
     }
 
@@ -3974,13 +3989,15 @@ async def get_week_plan(user: dict = Depends(auth_user)):
 async def get_training_v2_week(user: dict = Depends(auth_user)):
     """Return the current week's V2 native prescription.
 
-    Pipeline (reuses the canonical builder from week_plan_bridge):
+    Pipeline (PR228 — canonical reconciled path):
       TrainingHistory → TrainingState → PlanGoal → Periodization
-      → WeeklyTarget → WorkoutGenerator → WeeklyPlan
+      → WeeklyTarget → RecentTrainingResponse → WeeklyReconciliation
+      → WorkoutGenerator → WeeklyPlan
 
     No legacy adapter applied. None stays None (None != 0 doctrine).
+    WeeklyReconciliation: preserve/reduce only, never increase.
     """
-    from training_v2.week_plan_bridge import build_weekly_plan_from_workouts
+    from training_v2.week_plan_bridge import build_canonical_weekly_plan
     from training_v2.training_week_response import (
         WeekV2GoalResponse,
         WeekV2PlanResponse,
@@ -4006,8 +4023,8 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
     ).to_list(1000)
     domain_activities_90 = mongo_garmin_activities_to_domain(garmin_activities_90)
 
-    # ── Canonical builder — single call ──────────────────────────────────
-    weekly_target, weekly_plan = build_weekly_plan_from_workouts(
+    # ── PR228: canonical builder — single call with reconciliation ────────
+    canonical = build_canonical_weekly_plan(
         workouts=domain_activities_90,
         goal_type=resolved.goal_type,
         race_date=resolved.race_date,
@@ -4016,6 +4033,9 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
         target_distance_km=resolved.target_distance_km,
         target_time_seconds=resolved.target_time_sec,
     )
+    weekly_target = canonical.reconciled_target
+    weekly_plan = canonical.weekly_plan
+    reconciliation_result = canonical.reconciliation_result
 
     # ── Assemble native V2 response — no adapter, no coercion ────────────
     _WEEK_GOAL_NORM: dict[str, str] = {
@@ -4063,10 +4083,11 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
             session_count=weekly_plan.session_count,
             sessions=sessions,
         ),
+        reconciliation_action=reconciliation_result.action.value,
+        reconciliation_reason_codes=list(reconciliation_result.reason_codes),
     )
 
     return response.model_dump(mode="json")
-
 
 # PR175 — GET /training/v2/cycle
 # Native V2 endpoint: returns cycle calendar structure without any session
