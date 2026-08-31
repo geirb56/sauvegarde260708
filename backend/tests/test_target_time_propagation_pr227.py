@@ -8,13 +8,21 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from training_v2.periodization import PeriodizationMode, PeriodizationPhase, PeriodizationSnapshot
+from training_v2.periodization import (
+    PeriodizationMode,
+    PeriodizationPhase,
+    PeriodizationSnapshot,
+    build_periodization,
+)
 from training_v2.plan_goal import GoalType, build_plan_goal
 from training_v2.runner_profile import RunnerProfile
 from training_v2.training_paces import PaceRange, PaceValue, TrainingPaces, VdotResult
+from training_v2.week_plan_bridge import (
+    _equivalent_time_seconds_from_vdot,
+    build_weekly_plan_from_workouts,
+)
 from training_v2.weekly_target import WeeklyTarget
 from training_v2.workout_generator import WeeklyPlan, build_weekly_plan
-from training_v2.week_plan_bridge import build_weekly_plan_from_workouts
 
 
 REF = date(2026, 8, 11)
@@ -84,11 +92,11 @@ def _periodization(phase: PeriodizationPhase = PeriodizationPhase.build) -> Peri
     )
 
 
-def _build(
+def _build_direct(
     *,
     goal_type: GoalType,
     target_time_seconds: int | None,
-    capability_pace_seconds_per_km: float | None,
+    capability_time_seconds: int | None,
     continuity_state: str = "normal",
     allow_intensity: bool = True,
     phase: PeriodizationPhase = PeriodizationPhase.build,
@@ -104,7 +112,7 @@ def _build(
         plan_goal=plan_goal,
         periodization=_periodization(phase),
         reference_date=REF,
-        target_capability_pace_seconds_per_km=capability_pace_seconds_per_km,
+        target_capability_time_seconds=capability_time_seconds,
     )
 
 
@@ -116,10 +124,6 @@ def _running_signature(plan: WeeklyPlan) -> tuple[tuple[str, str, float | None],
     )
 
 
-def _count_types(plan: WeeklyPlan, kind: str) -> int:
-    return sum(1 for s in plan.sessions if s.workout_type == kind)
-
-
 def _activity(km: float, duration_s: float) -> dict:
     return {
         "activity_type": "running",
@@ -129,19 +133,11 @@ def _activity(km: float, duration_s: float) -> dict:
     }
 
 
-def _paces_with_threshold_seconds_per_km(
-    threshold_seconds_per_km: float,
-    *,
-    confidence: str = "HIGH",
-) -> TrainingPaces:
-    threshold_min_per_km = threshold_seconds_per_km / 60.0
-    marathon_min_per_km = threshold_min_per_km + 0.3
-    easy_lower = threshold_min_per_km + 0.8
-    easy_upper = threshold_min_per_km + 1.2
+def _paces_from_vdot(vdot: float, confidence: str) -> TrainingPaces:
     return TrainingPaces(
         reference_date=REF,
         vdot_result=VdotResult(
-            reference_vdot=50.0,
+            reference_vdot=vdot,
             paces_confidence=confidence.lower(),
             evidence_count=2,
             high_count=2 if confidence == "HIGH" else 0,
@@ -151,154 +147,180 @@ def _paces_with_threshold_seconds_per_km(
         ),
         confidence=confidence,
         easy=PaceRange(
-            lower=PaceValue(min_per_km=easy_lower, km_per_hour=60.0 / easy_lower),
-            upper=PaceValue(min_per_km=easy_upper, km_per_hour=60.0 / easy_upper),
+            lower=PaceValue(min_per_km=5.2, km_per_hour=11.54),
+            upper=PaceValue(min_per_km=5.6, km_per_hour=10.71),
         ),
-        marathon=PaceValue(min_per_km=marathon_min_per_km, km_per_hour=60.0 / marathon_min_per_km),
-        threshold=PaceValue(min_per_km=threshold_min_per_km, km_per_hour=60.0 / threshold_min_per_km),
+        marathon=PaceValue(min_per_km=4.5, km_per_hour=13.33),
+        threshold=PaceValue(min_per_km=4.2, km_per_hour=14.29),
         interval=PaceRange(
-            lower=PaceValue(min_per_km=threshold_min_per_km - 0.3, km_per_hour=60.0 / (threshold_min_per_km - 0.3)),
-            upper=PaceValue(min_per_km=threshold_min_per_km - 0.1, km_per_hour=60.0 / (threshold_min_per_km - 0.1)),
+            lower=PaceValue(min_per_km=3.9, km_per_hour=15.38),
+            upper=PaceValue(min_per_km=4.1, km_per_hour=14.63),
         ),
-        repetition=PaceValue(min_per_km=threshold_min_per_km - 0.5, km_per_hour=60.0 / (threshold_min_per_km - 0.5)),
+        repetition=PaceValue(min_per_km=3.7, km_per_hour=16.22),
         reason="test",
     )
 
 
-def test_10k_aggressive_when_target_faster_than_observed_capability():
-    plan = _build(
-        goal_type=GoalType.ten_k,
-        target_time_seconds=42 * 60,
-        capability_pace_seconds_per_km=300.0,
+def _assert_distance_goal_modulation(goal_type: GoalType) -> None:
+    plan_goal = build_plan_goal(goal_type=goal_type, target_time_seconds=1, created_from="user")
+    cap = _equivalent_time_seconds_from_vdot(
+        target_distance_km=plan_goal.target_distance_km,
+        vdot=50.0,
     )
-    assert "target_time_profile_aggressive" in plan.reason_codes
+    assert cap is not None
 
-
-def test_10k_conservative_when_target_slower_than_observed_capability():
-    plan = _build(
-        goal_type=GoalType.ten_k,
-        target_time_seconds=62 * 60,
-        capability_pace_seconds_per_km=300.0,
+    aggressive = _build_direct(
+        goal_type=goal_type,
+        target_time_seconds=int(cap * 0.95),
+        capability_time_seconds=cap,
     )
-    assert "target_time_profile_conservative" in plan.reason_codes
-
-
-def test_insufficient_capability_does_not_alter_prescription():
-    no_target = _build(
-        goal_type=GoalType.ten_k,
-        target_time_seconds=None,
-        capability_pace_seconds_per_km=None,
+    conservative = _build_direct(
+        goal_type=goal_type,
+        target_time_seconds=int(cap * 1.05),
+        capability_time_seconds=cap,
     )
-    with_target_but_no_cap = _build(
-        goal_type=GoalType.ten_k,
-        target_time_seconds=45 * 60,
-        capability_pace_seconds_per_km=None,
-    )
-    assert _running_signature(no_target) == _running_signature(with_target_but_no_cap)
-    assert "target_time_profile_aggressive" not in with_target_but_no_cap.reason_codes
-    assert "target_time_profile_conservative" not in with_target_but_no_cap.reason_codes
+    assert "target_time_profile_aggressive" in aggressive.reason_codes
+    assert "target_time_profile_conservative" in conservative.reason_codes
 
 
-def test_same_target_time_two_runners_can_be_classified_differently():
-    slow_runner = _build(
-        goal_type=GoalType.ten_k,
-        target_time_seconds=50 * 60,
-        capability_pace_seconds_per_km=330.0,
-    )
-    fast_runner = _build(
-        goal_type=GoalType.ten_k,
-        target_time_seconds=50 * 60,
-        capability_pace_seconds_per_km=270.0,
-    )
-
-    assert "target_time_profile_aggressive" in slow_runner.reason_codes
-    assert "target_time_profile_conservative" in fast_runner.reason_codes
+def test_5k_daniels_capability_vs_target_time():
+    _assert_distance_goal_modulation(GoalType.five_k)
 
 
-def test_bridge_uses_canonical_paces_for_target_time_modulation():
-    workouts = [_activity(10.0, 50 * 60)]
-    forced_state = type(
-        "TS",
-        (),
-        {"continuity_state": "normal", "overall_confidence": "medium"},
-    )()
+def test_10k_daniels_capability_vs_target_time():
+    _assert_distance_goal_modulation(GoalType.ten_k)
+
+
+def test_semi_daniels_capability_vs_target_time():
+    _assert_distance_goal_modulation(GoalType.half_marathon)
+
+
+def test_marathon_daniels_capability_vs_target_time():
+    _assert_distance_goal_modulation(GoalType.marathon)
+
+
+def test_same_target_time_two_vdot_levels_different_classification():
+    workouts = [_activity(10.0, 48 * 60)]
+    forced_state = type("TS", (), {"continuity_state": "normal", "overall_confidence": "medium"})()
+
     with patch(
         "training_v2.week_plan_bridge.compute_training_paces",
-        return_value=_paces_with_threshold_seconds_per_km(300.0, confidence="HIGH"),
-    ), patch(
-        "training_v2.week_plan_bridge.build_training_state",
-        return_value=forced_state,
-    ), patch(
+        side_effect=[
+            _paces_from_vdot(44.0, "HIGH"),
+            _paces_from_vdot(58.0, "HIGH"),
+        ],
+    ), patch("training_v2.week_plan_bridge.build_training_state", return_value=forced_state), patch(
         "training_v2.week_plan_bridge.build_weekly_target",
         return_value=_weekly_target(),
     ):
-        _, plan = build_weekly_plan_from_workouts(
+        _, runner_low_vdot = build_weekly_plan_from_workouts(
             workouts=workouts,
             goal_type="10K",
             race_date=None,
             cycle_start_date=REF,
             reference_date=REF,
-            target_time_seconds=42 * 60,
+            target_time_seconds=50 * 60,
         )
-    assert "target_time_profile_aggressive" in plan.reason_codes
+        _, runner_high_vdot = build_weekly_plan_from_workouts(
+            workouts=workouts,
+            goal_type="10K",
+            race_date=None,
+            cycle_start_date=REF,
+            reference_date=REF,
+            target_time_seconds=50 * 60,
+        )
+
+    assert "target_time_profile_aggressive" in runner_low_vdot.reason_codes
+    assert "target_time_profile_conservative" in runner_high_vdot.reason_codes
 
 
-def test_taper_aggressive_target_does_not_reintroduce_steady_or_quality():
-    plan = _build(
-        goal_type=GoalType.ten_k,
-        target_time_seconds=42 * 60,
-        capability_pace_seconds_per_km=300.0,
-        phase=PeriodizationPhase.taper,
-    )
-    assert _count_types(plan, "quality") == 0
-    assert _count_types(plan, "steady") == 0
-
-
-def test_race_aggressive_target_keeps_race_week_unchanged():
-    baseline = _build(
-        goal_type=GoalType.ten_k,
-        target_time_seconds=None,
-        capability_pace_seconds_per_km=300.0,
-        phase=PeriodizationPhase.race,
-    )
-    aggressive = _build(
-        goal_type=GoalType.ten_k,
-        target_time_seconds=42 * 60,
-        capability_pace_seconds_per_km=300.0,
-        phase=PeriodizationPhase.race,
-    )
-    assert _running_signature(baseline) == _running_signature(aggressive)
-
-
-def test_reprise_target_time_keeps_protections_unchanged():
-    baseline = _build(
+def test_low_and_insufficient_confidence_disable_target_time_modulation():
+    baseline = _build_direct(
         goal_type=GoalType.ten_k,
         target_time_seconds=None,
-        capability_pace_seconds_per_km=300.0,
-        continuity_state="partial_reprise",
-        allow_intensity=False,
+        capability_time_seconds=None,
     )
-    aggressive = _build(
+
+    workouts = [_activity(10.0, 48 * 60)]
+    forced_state = type("TS", (), {"continuity_state": "normal", "overall_confidence": "medium"})()
+    for confidence in ("LOW", "INSUFFICIENT"):
+        with patch(
+            "training_v2.week_plan_bridge.compute_training_paces",
+            return_value=_paces_from_vdot(50.0, confidence),
+        ), patch("training_v2.week_plan_bridge.build_training_state", return_value=forced_state), patch(
+            "training_v2.week_plan_bridge.build_weekly_target",
+            return_value=_weekly_target(),
+        ):
+            _, plan = build_weekly_plan_from_workouts(
+                workouts=workouts,
+                goal_type="10K",
+                race_date=None,
+                cycle_start_date=REF,
+                reference_date=REF,
+                target_time_seconds=42 * 60,
+            )
+        assert _running_signature(plan) == _running_signature(baseline)
+        assert "target_time_profile_aggressive" not in plan.reason_codes
+        assert "target_time_profile_conservative" not in plan.reason_codes
+
+
+def test_ultra_target_time_modulation_explicitly_disabled():
+    baseline = _build_direct(
+        goal_type=GoalType.ultra,
+        target_time_seconds=None,
+        capability_time_seconds=None,
+    )
+    with_target = _build_direct(
+        goal_type=GoalType.ultra,
+        target_time_seconds=6 * 3600,
+        capability_time_seconds=5 * 3600,
+    )
+    assert _running_signature(with_target) == _running_signature(baseline)
+    assert "target_time_profile_aggressive" not in with_target.reason_codes
+    assert "target_time_profile_conservative" not in with_target.reason_codes
+
+
+def test_target_time_without_race_date_keeps_continuous_periodization():
+    goal_no_race = build_plan_goal(
         goal_type=GoalType.ten_k,
-        target_time_seconds=42 * 60,
-        capability_pace_seconds_per_km=300.0,
-        continuity_state="partial_reprise",
-        allow_intensity=False,
+        target_time_seconds=50 * 60,
+        race_date=None,
+        created_from="user",
     )
-    assert _running_signature(baseline) == _running_signature(aggressive)
-    assert _count_types(aggressive, "quality") == 0
-    assert _count_types(aggressive, "steady") == 0
+    snap = build_periodization(
+        goal_no_race,
+        REF,
+        cycle_anchor_date=date(2026, 1, 1),
+    )
+    assert snap.mode == PeriodizationMode.continuous
+    assert snap.phase != PeriodizationPhase.taper
+    assert snap.phase != PeriodizationPhase.race
 
 
-def test_without_target_time_baseline_is_unchanged():
-    baseline = _build(
-        goal_type=GoalType.half_marathon,
-        target_time_seconds=None,
-        capability_pace_seconds_per_km=330.0,
+def test_adding_race_date_reenables_race_periodization():
+    goal_with_race = build_plan_goal(
+        goal_type=GoalType.ten_k,
+        target_time_seconds=50 * 60,
+        race_date=date(2026, 9, 30),
+        created_from="user",
     )
-    no_target_again = _build(
-        goal_type=GoalType.half_marathon,
-        target_time_seconds=None,
-        capability_pace_seconds_per_km=330.0,
+    snap = build_periodization(
+        goal_with_race,
+        REF,
+        race_plan_start_date=date(2026, 7, 1),
     )
-    assert _running_signature(baseline) == _running_signature(no_target_again)
+    assert snap.mode == PeriodizationMode.race_calendar
+
+
+def test_target_time_without_value_keeps_baseline_unchanged():
+    baseline = _build_direct(
+        goal_type=GoalType.ten_k,
+        target_time_seconds=None,
+        capability_time_seconds=3000,
+    )
+    without_target = _build_direct(
+        goal_type=GoalType.ten_k,
+        target_time_seconds=None,
+        capability_time_seconds=3000,
+    )
+    assert _running_signature(without_target) == _running_signature(baseline)

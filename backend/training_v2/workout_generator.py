@@ -332,24 +332,19 @@ def _intensity_class(workout_type: str) -> str:
 def _resolve_target_time_profile(
     plan_goal: PlanGoal,
     *,
-    target_capability_pace_seconds_per_km: Optional[float],
+    target_capability_time_seconds: Optional[int],
 ) -> Optional[str]:
-    """Classify target-time ambition using observed/canonical capability only."""
+    """Classify target-time ambition using equivalent capability time on target distance."""
     if (
         plan_goal.target_time_seconds is None
         or plan_goal.target_time_seconds <= 0
-        or target_capability_pace_seconds_per_km is None
-        or target_capability_pace_seconds_per_km <= 0
+        or target_capability_time_seconds is None
+        or target_capability_time_seconds <= 0
     ):
         return None
-    if plan_goal.target_distance_km is None or plan_goal.target_distance_km <= 0:
-        return None
-
-    pace_seconds_per_km = plan_goal.target_time_seconds / plan_goal.target_distance_km
-
-    if pace_seconds_per_km <= target_capability_pace_seconds_per_km * 0.97:
+    if plan_goal.target_time_seconds <= int(target_capability_time_seconds * 0.97):
         return "aggressive"
-    if pace_seconds_per_km >= target_capability_pace_seconds_per_km * 1.03:
+    if plan_goal.target_time_seconds >= int(target_capability_time_seconds * 1.03):
         return "conservative"
     return None
 
@@ -979,7 +974,7 @@ def build_weekly_plan(
     plan_goal: PlanGoal,
     periodization: PeriodizationSnapshot,
     reference_date: date,
-    target_capability_pace_seconds_per_km: Optional[float] = None,
+    target_capability_time_seconds: Optional[int] = None,
 ) -> WeeklyPlan:
     """Build an immutable WeeklyPlan from explicit V2 inputs.
 
@@ -1013,7 +1008,7 @@ def build_weekly_plan(
     reason_codes: list[str] = list(weekly_target.reason_codes)
     target_time_profile = _resolve_target_time_profile(
         plan_goal,
-        target_capability_pace_seconds_per_km=target_capability_pace_seconds_per_km,
+        target_capability_time_seconds=target_capability_time_seconds,
     )
 
     # --- route by continuity state -----------------------------------------

@@ -277,6 +277,23 @@ def test_resolve_goal_10k_with_coherent_user_goal():
     assert resolved.target_time_sec == 55 * 60
 
 
+def test_resolve_goal_10k_target_time_without_event_date():
+    """10K cycle + target_time only (no race date) resolves with race_date=None."""
+    import server as srv
+    cycle = {"goal": "10K", "start_date": _CYCLE_START}
+    user_goal = {
+        "distance_type": "10k",
+        "event_date": None,
+        "target_time_minutes": 50,
+    }
+    mock_db = _make_db(cycle=cycle, user_goal=user_goal)
+    with patch.object(srv, "db", mock_db):
+        resolved = _run(srv._resolve_goal_v2("user1"))
+    assert resolved.goal_type == "10K"
+    assert resolved.race_date is None
+    assert resolved.target_time_sec == 50 * 60
+
+
 def test_resolve_goal_10k_incoherent_semi_rejected():
     """10K cycle + user_goal distance_type=semi → HTTP 400."""
     from fastapi import HTTPException
@@ -605,6 +622,42 @@ def test_post_user_goal_ultra_100km_succeeds():
     assert inserts[0]["distance_km"] == 100.0
 
 
+def test_post_user_goal_10k_target_time_without_race_date_succeeds():
+    """Target-time-only goal must save with event_name/event_date=None."""
+    import server as srv
+
+    cycle = {"goal": "10K", "start_date": _CYCLE_START}
+    mock_db = _make_db(cycle=cycle)
+    inserts = []
+
+    async def fake_delete(*a, **kw):
+        return MagicMock(deleted_count=0)
+
+    async def fake_insert(doc):
+        inserts.append(doc)
+        return MagicMock(inserted_id="abc")
+
+    mock_db.user_goals.delete_many = fake_delete
+    mock_db.user_goals.insert_one = fake_insert
+
+    goal_payload = srv.UserGoalCreate(
+        event_name=None,
+        event_date=None,
+        distance_type="10k",
+        target_time_minutes=50,
+    )
+
+    async def run():
+        with patch.object(srv, "db", mock_db):
+            return await srv.set_user_goal(goal_payload, user={"id": "u1"})
+
+    result = _run(run())
+    assert result["success"] is True
+    assert inserts[0]["event_name"] is None
+    assert inserts[0]["event_date"] is None
+    assert inserts[0]["target_time_minutes"] == 50
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # Section D — _resolve_goal_v2 hardening: start_date / event_date validation
 # ════════════════════════════════════════════════════════════════════════════
@@ -704,6 +757,25 @@ def test_get_training_v2_week_10k_coherent():
     assert "week" in result
 
 
+def test_get_training_v2_week_target_time_without_race_date():
+    """Week endpoint must support target_time with race_date=None."""
+    import server as srv
+    cycle = {"goal": "10K", "start_date": _CYCLE_START}
+    user_goal = {"distance_type": "10k", "event_name": None, "event_date": None, "target_time_minutes": 50}
+    mock_db = _make_db_with_activities(cycle=cycle, user_goal=user_goal)
+
+    async def run():
+        with patch.object(srv, "db", mock_db):
+            with patch.object(srv, "mongo_garmin_activities_to_domain", return_value=[]):
+                return await srv.get_training_v2_week(user={"id": "u1"})
+
+    result = _run(run())
+    assert result["goal"]["goal_type"] == "10k"
+    assert result["goal"]["race_date"] is None
+    assert result["goal"]["target_time_seconds"] == 50 * 60
+    assert not any(s.get("phase") in {"taper", "race"} for s in result["week"]["sessions"])
+
+
 def test_get_training_v2_cycle_10k_coherent():
     """get_training_v2_cycle with 10K cycle → 200, contains phases/weeks."""
     import server as srv
@@ -718,6 +790,42 @@ def test_get_training_v2_cycle_10k_coherent():
     assert isinstance(result, dict)
     # TrainingCycleV2Response has at least goal_type and some calendar info
     assert "goal_type" in result or "phases" in result or "weeks" in result or "calendar" in result or len(result) > 0
+
+
+def test_get_training_v2_cycle_target_time_without_race_date_is_continuous():
+    """Cycle endpoint must stay continuous without race_date."""
+    import server as srv
+    cycle = {"goal": "10K", "start_date": _CYCLE_START}
+    user_goal = {"distance_type": "10k", "event_name": None, "event_date": None, "target_time_minutes": 50}
+    mock_db = _make_db_with_activities(cycle=cycle, user_goal=user_goal)
+
+    async def run():
+        with patch.object(srv, "db", mock_db):
+            return await srv.get_training_v2_cycle(user={"id": "u1"})
+
+    result = _run(run())
+    assert result["goal"]["goal_type"] == "10k"
+    assert result["goal"]["race_date"] is None
+    assert result["goal"]["target_time_seconds"] == 50 * 60
+    assert result["cycle"]["mode"] == "continuous"
+    assert not any(w["phase"] in {"taper", "race"} for w in result["weeks"])
+
+
+def test_get_training_v2_cycle_adding_race_date_enables_race_calendar():
+    """When race_date is later provided, cycle endpoint returns race_calendar."""
+    import server as srv
+    cycle = {"goal": "10K", "start_date": _CYCLE_START}
+    future_date = (datetime.now(timezone.utc).date() + timedelta(days=90)).isoformat()
+    user_goal = {"distance_type": "10k", "event_name": "Race", "event_date": future_date, "target_time_minutes": 50}
+    mock_db = _make_db_with_activities(cycle=cycle, user_goal=user_goal)
+
+    async def run():
+        with patch.object(srv, "db", mock_db):
+            return await srv.get_training_v2_cycle(user={"id": "u1"})
+
+    result = _run(run())
+    assert result["cycle"]["mode"] == "race_calendar"
+    assert any(w["phase"] in {"taper", "race"} for w in result["weeks"])
 
 
 def test_get_training_v2_week_ultra_50km():
