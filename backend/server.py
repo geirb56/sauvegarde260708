@@ -917,13 +917,28 @@ def calculate_recovery_score(workouts: list, language: str = "en") -> dict:
 
 # ========== USER GOALS ==========
 
-# Distance types with km values
+# Distance types with km values — aligned with plan_goal.py V2 canonical constants.
+# PR226: semi aligned to 21.0975 (V2 constant); ultra hardcode removed (must be explicit).
 DISTANCE_TYPES = {
     "5k": 5.0,
     "10k": 10.0,
-    "semi": 21.1,
+    "semi": 21.0975,   # canonical: plan_goal.DISTANCE_HALF_MARATHON_KM
     "marathon": 42.195,
-    "ultra": 50.0  # Default for ultra, actual distance in event_name
+    # "ultra" intentionally absent — distance must be supplied explicitly (> 42.195)
+}
+
+# All valid distance_type values — derived from DISTANCE_TYPES plus "ultra"
+# so there is a single source of truth for what types are allowed.
+_VALID_DISTANCE_TYPES: frozenset[str] = frozenset(DISTANCE_TYPES.keys()) | {"ultra"}
+
+# Goal→distance_type coherence map (upper-case legacy goal → canonical distance_type key)
+_GOAL_TO_DISTANCE_TYPE: dict[str, str] = {
+    "5K": "5k",
+    "10K": "10k",
+    "SEMI": "semi",
+    "MARATHON": "marathon",
+    "ULTRA": "ultra",
+    # MAINTENANCE has no distance_type
 }
 
 
@@ -937,12 +952,231 @@ def calculate_target_pace(distance_km: float, target_time_minutes: int) -> str:
     return f"{pace_min}:{pace_sec:02d}"
 
 
+def _validate_target_time_minutes(value: Optional[object]) -> Optional[int]:
+    """Validate target_time_minutes input for POST /user/goal."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise HTTPException(
+            status_code=400,
+            detail="target_time_minutes must be a positive number when provided.",
+        )
+    if value <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="target_time_minutes must be strictly greater than 0 when provided.",
+        )
+    if isinstance(value, float) and not value.is_integer():
+        raise HTTPException(
+            status_code=400,
+            detail="target_time_minutes must be a whole number of minutes when provided.",
+        )
+    return int(value)
+
+
+# PR226 — single place for ULTRA distance validation so future threshold or
+# error-message changes only need one edit.
+_ULTRA_MIN_DISTANCE_KM: float = 42.195
+
+
+def _validate_ultra_distance_km(distance_km: Optional[float]) -> float:
+    """Return validated ultra distance or raise HTTP 400.
+
+    Raises:
+        HTTPException(400): when distance_km is absent, non-numeric, or ≤ 42.195.
+    """
+    if (
+        distance_km is None
+        or not isinstance(distance_km, (int, float))
+        or isinstance(distance_km, bool)
+        or distance_km <= _ULTRA_MIN_DISTANCE_KM
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"ULTRA goal requires distance_km > {_ULTRA_MIN_DISTANCE_KM} km.",
+        )
+    return float(distance_km)
+
+
+# ---------------------------------------------------------------------------
+# PR226 — Canonical goal resolver
+# Single function that reads training_cycles + user_goals and returns all
+# fields needed by /training/v2/week, /training/v2/cycle, /training/week-plan.
+# Incoherent legacy data → explicit 400, never silently combined.
+# ---------------------------------------------------------------------------
+
+class _ResolvedGoal:
+    """Immutable bag of resolved goal fields returned by _resolve_goal_v2."""
+    __slots__ = (
+        "goal_type",       # str, e.g. "MARATHON"
+        "mapped_goal",     # GoalType V2 enum
+        "cycle_start",     # date | None
+        "race_date",       # date | None  (always None for MAINTENANCE)
+        "target_time_sec", # int | None   (always None for MAINTENANCE)
+        "target_distance_km",  # float | None (ULTRA only)
+        "cycle_doc",       # raw training_cycles document
+        "user_goal_doc",   # raw user_goals document | None
+    )
+
+    def __init__(self, **kw):
+        for k, v in kw.items():
+            object.__setattr__(self, k, v)
+
+
+async def _resolve_goal_v2(user_id: str) -> "_ResolvedGoal":
+    """Resolve goal truth from canonical DB sources for V2 endpoints.
+
+    Reads ``training_cycles`` (authoritative goal type) and ``user_goals``
+    (optional race metadata).  Validates coherence; raises ``HTTPException``
+    on any inconsistency so callers never receive silently combined bad data.
+
+    Rules
+    -----
+    - No cycle            → HTTP 400
+    - Unknown goal type   → HTTP 400
+    - MAINTENANCE         → race_date=None, target_time_sec=None always
+    - ULTRA + no distance → HTTP 400
+    - user_goals present but distance_type mismatches cycle.goal → HTTP 400
+    """
+    from training_v2.plan_goal import GoalType as _GT, ULTRA_MIN_DISTANCE_KM as _ULTRA_MIN
+
+    cycle = await db.training_cycles.find_one({"user_id": user_id}, {"_id": 0})
+    if not cycle:
+        raise HTTPException(
+            status_code=400,
+            detail="No training goal defined. Use /api/training/set-goal first.",
+        )
+
+    goal_type = (cycle.get("goal") or "").upper()
+    if not goal_type or goal_type not in GOAL_CONFIG:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown or missing goal type: '{goal_type}'.",
+        )
+
+    mapped_goal = _LEGACY_GOAL_TO_V2.get(goal_type)
+    if mapped_goal is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot map goal type '{goal_type}' to V2 GoalType.",
+        )
+
+    start_raw = cycle.get("start_date")
+    if not start_raw:
+        raise HTTPException(
+            status_code=400,
+            detail="Training cycle has no start_date. Re-set your goal via /api/training/set-goal.",
+        )
+    cycle_start: Optional[date] = None
+    if isinstance(start_raw, datetime):
+        cycle_start = start_raw.date() if start_raw.tzinfo else start_raw.replace(tzinfo=timezone.utc).date()
+    elif isinstance(start_raw, str):
+        try:
+            cycle_start = datetime.fromisoformat(start_raw.replace("Z", "+00:00")).date()
+        except (ValueError, TypeError):
+            pass
+    if cycle_start is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Training cycle start_date '{start_raw}' is not a valid date. Re-set your goal.",
+        )
+
+    user_goal_doc = await db.user_goals.find_one({"user_id": user_id}, {"_id": 0})
+
+    # Coherence: if a user_goal exists, its distance_type must match the cycle goal.
+    if user_goal_doc:
+        dist_type = user_goal_doc.get("distance_type", "")
+        expected = _GOAL_TO_DISTANCE_TYPE.get(goal_type)
+        if expected and dist_type != expected:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Incoherent goal data: cycle goal is '{goal_type}' but "
+                    f"user_goal.distance_type is '{dist_type}' (expected '{expected}'). "
+                    "Update your goal via /api/training/set-goal."
+                ),
+            )
+
+    # MAINTENANCE: race metadata is always None — never expose stale data.
+    if mapped_goal == _GT.maintenance:
+        return _ResolvedGoal(
+            goal_type=goal_type,
+            mapped_goal=mapped_goal,
+            cycle_start=cycle_start,
+            race_date=None,
+            target_time_sec=None,
+            target_distance_km=None,
+            cycle_doc=cycle,
+            user_goal_doc=user_goal_doc,
+        )
+
+    # Race metadata from user_goals (optional).
+    race_date: Optional[date] = None
+    if user_goal_doc:
+        rd_raw = user_goal_doc.get("event_date")
+        if isinstance(rd_raw, str) and rd_raw.strip() == "":
+            rd_raw = None
+        if rd_raw is not None:
+            if isinstance(rd_raw, datetime):
+                race_date = rd_raw.date() if rd_raw.tzinfo else rd_raw.replace(tzinfo=timezone.utc).date()
+            elif isinstance(rd_raw, str):
+                try:
+                    race_date = datetime.fromisoformat(rd_raw.replace("Z", "+00:00")).date()
+                except (ValueError, TypeError):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"user_goal.event_date '{rd_raw}' is not a valid ISO date. "
+                            "Update your goal via /api/user/goal."
+                        ),
+                    )
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"user_goal.event_date has unexpected type '{type(rd_raw).__name__}'. Update your goal.",
+                )
+
+    target_time_sec: Optional[int] = None
+    if user_goal_doc:
+        ttm = user_goal_doc.get("target_time_minutes")
+        if isinstance(ttm, (int, float)) and not isinstance(ttm, bool) and ttm > 0:
+            target_time_sec = int(ttm * 60)
+
+    # ULTRA: resolve target_distance_km (user_goals.distance_km → cycle fallback).
+    target_distance_km: Optional[float] = None
+    if mapped_goal == _GT.ultra:
+        raw_dist = user_goal_doc.get("distance_km") if user_goal_doc else None
+        if not (isinstance(raw_dist, (int, float)) and not isinstance(raw_dist, bool) and raw_dist > _ULTRA_MIN):
+            raw_dist = cycle.get("ultra_distance_km")
+        if not (isinstance(raw_dist, (int, float)) and not isinstance(raw_dist, bool) and raw_dist > _ULTRA_MIN):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"ULTRA goal requires target_distance_km > {_ULTRA_MIN} km. "
+                    "Set your goal distance via /api/user/goal or "
+                    "/api/training/set-goal?goal=ULTRA&distance_km=<km>."
+                ),
+            )
+        target_distance_km = float(raw_dist)
+
+    return _ResolvedGoal(
+        goal_type=goal_type,
+        mapped_goal=mapped_goal,
+        cycle_start=cycle_start,
+        race_date=race_date,
+        target_time_sec=target_time_sec,
+        target_distance_km=target_distance_km,
+        cycle_doc=cycle,
+        user_goal_doc=user_goal_doc,
+    )
+
+
 class UserGoal(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     user_id: str
-    event_name: str
-    event_date: str  # ISO date string
+    event_name: Optional[str] = None
+    event_date: Optional[str] = None  # ISO date string
     distance_type: str  # 5k, 10k, semi, marathon, ultra
     distance_km: float  # Actual distance in km
     target_time_minutes: Optional[int] = None  # Target time in minutes
@@ -951,10 +1185,11 @@ class UserGoal(BaseModel):
 
 
 class UserGoalCreate(BaseModel):
-    event_name: str
-    event_date: str
+    event_name: Optional[str] = None
+    event_date: Optional[str] = None
     distance_type: str  # 5k, 10k, semi, marathon, ultra
-    target_time_minutes: Optional[int] = None  # Target time in minutes
+    target_time_minutes: Optional[int | float | str | bool] = None  # validated manually in set_user_goal
+    distance_km: Optional[float] = None  # PR226: explicit distance for ultra (must be > 42.195)
 
 
 @api_router.get("/user/goal")
@@ -967,36 +1202,114 @@ async def get_user_goal(user: dict = Depends(auth_user)):
 
 @api_router.post("/user/goal")
 async def set_user_goal(goal: UserGoalCreate, user: dict = Depends(auth_user)):
-    """Set user's goal (event with date, distance, target time)"""
+    """Set user's goal (event metadata optional, target time optional).
+
+    PR226 rules (all checked BEFORE any DB mutation):
+    - MAINTENANCE cycle → rejected (no race metadata on a maintenance cycle)
+    - event_date is optional; if provided it must be a parseable future ISO date
+    - distance_type must be valid
+    - ULTRA requires distance_km > 42.195
+    - distance_type must match active training_cycles.goal (coherence check)
+    """
     user_id = user["id"]
-    # Delete existing goal
-    await db.user_goals.delete_many({"user_id": user_id})
-    
-    # Get distance in km
-    distance_km = DISTANCE_TYPES.get(goal.distance_type, 42.195)
-    
-    # Calculate target pace if time provided
+
+    # ── 1. Validate inputs BEFORE touching the DB ──────────────────────────
+
+    event_name = goal.event_name.strip() if isinstance(goal.event_name, str) else None
+    if event_name == "":
+        event_name = None
+
+    raw_event_date = goal.event_date.strip() if isinstance(goal.event_date, str) else None
+    if raw_event_date == "":
+        raw_event_date = None
+
+    parsed_event_date: Optional[date] = None
+    if raw_event_date is not None:
+        # event_date: must be exactly YYYY-MM-DD — no suffixes, no trailing garbage.
+        import re as _re
+        if not _re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw_event_date):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid event_date '{raw_event_date}'. Must be exactly YYYY-MM-DD.",
+            )
+        try:
+            parsed_event_date = date.fromisoformat(raw_event_date)
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid event_date '{raw_event_date}'. Must be ISO format YYYY-MM-DD.",
+            )
+        if parsed_event_date <= datetime.now(timezone.utc).date():
+            raise HTTPException(
+                status_code=400,
+                detail=f"event_date '{raw_event_date}' must be a future date.",
+            )
+
+    if goal.distance_type not in _VALID_DISTANCE_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid distance_type '{goal.distance_type}'. Must be one of {sorted(_VALID_DISTANCE_TYPES)}.",
+        )
+
+    if goal.distance_type == "ultra":
+        distance_km = _validate_ultra_distance_km(goal.distance_km)
+    else:
+        distance_km = DISTANCE_TYPES[goal.distance_type]
+    validated_target_time_minutes = _validate_target_time_minutes(goal.target_time_minutes)
+
+    # ── 2. Coherence: distance_type must match active training_cycles.goal ──
+    cycle = await db.training_cycles.find_one({"user_id": user_id}, {"_id": 0})
+    if cycle:
+        active_goal = (cycle.get("goal") or "").upper()
+        # MAINTENANCE cycles must never receive race metadata
+        if active_goal == "MAINTENANCE":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Cannot set race goal while training cycle is MAINTENANCE. "
+                    "Change your training cycle first via /api/training/set-goal."
+                ),
+            )
+        expected_dist_type = _GOAL_TO_DISTANCE_TYPE.get(active_goal)
+        if expected_dist_type and goal.distance_type != expected_dist_type:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Incoherent goal: training cycle is '{active_goal}' "
+                    f"but user_goal.distance_type is '{goal.distance_type}' "
+                    f"(expected '{expected_dist_type}'). "
+                    "Change your training cycle goal first via /api/training/set-goal."
+                ),
+            )
+
+    # ── 3. Calculate target pace ────────────────────────────────────────────
     target_pace = None
-    if goal.target_time_minutes:
-        target_pace = calculate_target_pace(distance_km, goal.target_time_minutes)
-    
-    # Create new goal
+    if validated_target_time_minutes is not None:
+        target_pace = calculate_target_pace(distance_km, validated_target_time_minutes)
+
+    # ── 4. Write: delete then insert (all validation passed) ────────────────
+    await db.user_goals.delete_many({"user_id": user_id})
+
     goal_obj = UserGoal(
         user_id=user_id,
-        event_name=goal.event_name,
-        event_date=goal.event_date,
+        event_name=event_name,
+        event_date=parsed_event_date.isoformat() if parsed_event_date else None,  # normalized YYYY-MM-DD when provided
         distance_type=goal.distance_type,
         distance_km=distance_km,
-        target_time_minutes=goal.target_time_minutes,
-        target_pace=target_pace
+        target_time_minutes=validated_target_time_minutes,
+        target_pace=target_pace,
     )
     doc = goal_obj.model_dump()
     await db.user_goals.insert_one(doc)
-    
-    # Return without _id
+
     doc.pop("_id", None)
-    
-    logger.info(f"Goal set for user {user_id}: {goal.event_name} ({goal.distance_type}) on {goal.event_date}, target: {goal.target_time_minutes}min")
+
+    logger.info(
+        f"Goal set for user {user_id}: "
+        f"name={event_name!r} distance_type={goal.distance_type} "
+        f"event_date={parsed_event_date.isoformat() if parsed_event_date else None} "
+        f"target_time_minutes={validated_target_time_minutes}"
+    )
     return {"success": True, "goal": doc}
 
 
@@ -1380,7 +1693,7 @@ async def analyze_with_coach(request: CoachRequest, user: dict = Depends(auth_us
             sort=[("created_at", -1)]
         )
         if plan_data:
-            current_goal = plan_data.get("goal", "SEMI")
+            current_goal = plan_data.get("goal", "MAINTENANCE")
             sessions_per_week = plan_data.get("sessions_per_week", 4)
             sessions = plan_data.get("sessions", [])
             if sessions:
@@ -2679,28 +2992,49 @@ def _parse_iso_date_field(value) -> Optional[date]:
 @api_router.post("/training/set-goal")
 async def set_training_goal(
     goal: str = Query(..., description="10K | SEMI | MARATHON"),
+    distance_km: Optional[float] = Query(None, description="Required for ULTRA: target distance in km (> 42.195)"),
     user: dict = Depends(auth_user)
 ):
     """
     Définit l'objectif principal du cycle.
+
+    PR226: goal change always clears stale user_goals race data.
+    ULTRA requires distance_km > 42.195 stored in training_cycles.ultra_distance_km.
+    MAINTENANCE never inherits a race_date or target_time.
     """
     if goal.upper() not in ["5K", "10K", "SEMI", "MARATHON", "ULTRA", "MAINTENANCE"]:
-        return {"error": "Invalid goal"}
-    
+        raise HTTPException(status_code=400, detail="Invalid goal")
+
     goal_upper = goal.upper()
-    
+
+    # PR226: ULTRA requires an explicit distance > 42.195 km.
+    ultra_distance_km: Optional[float] = None
+    if goal_upper == "ULTRA":
+        ultra_distance_km = _validate_ultra_distance_km(distance_km)
+
+    cycle_set: dict = {
+        "goal": goal_upper,
+        "start_date": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
+    }
+    if ultra_distance_km is not None:
+        cycle_set["ultra_distance_km"] = ultra_distance_km
+    else:
+        # Clear any previously stored ultra distance when switching away from ULTRA.
+        cycle_set["ultra_distance_km"] = None
+
     await db.training_cycles.update_one(
         {"user_id": user["id"]},
-        {"$set": {
-            "goal": goal_upper,
-            "start_date": datetime.now(timezone.utc),
-            "updated_at": datetime.now(timezone.utc)
-        }},
-        upsert=True
+        {"$set": cycle_set},
+        upsert=True,
     )
-    
+
+    # PR226: any goal change invalidates the previous race metadata so that
+    # consumers never see a stale race_date from the old goal.
+    await db.user_goals.delete_many({"user_id": user["id"]})
+
     logger.info(f"[Training] Goal set for user {user['id']}: {goal_upper}")
-    
+
     return {"status": "updated", "goal": goal_upper}
 
 
@@ -2842,32 +3176,50 @@ async def get_training_plan(user: dict = Depends(auth_user)):
 
 
 @api_router.post("/training-plan/set-goal")
-async def set_training_plan_goal(goal: str, user: dict = Depends(auth_user)):
+async def set_training_plan_goal(
+    goal: str,
+    distance_km: Optional[float] = Query(None, description="Required for ULTRA: target distance in km (> 42.195)"),
+    user: dict = Depends(auth_user),
+):
     """
     Set the training goal (10K, SEMI, MARATHON, etc.)
+
+    PR226: mirrors /training/set-goal — clears stale user_goals on any change;
+    ULTRA requires distance_km > 42.195.
     """
     if goal.upper() not in ["5K", "10K", "SEMI", "MARATHON", "ULTRA", "MAINTENANCE"]:
-        return {"error": "Invalid goal"}
+        raise HTTPException(status_code=400, detail="Invalid goal")
 
     goal_upper = goal.upper()
     config = GOAL_CONFIG[goal_upper]
 
+    # PR226: ULTRA requires an explicit distance > 42.195 km.
+    ultra_distance_km: Optional[float] = None
+    if goal_upper == "ULTRA":
+        ultra_distance_km = _validate_ultra_distance_km(distance_km)
+
+    cycle_set: dict = {
+        "goal": goal_upper,
+        "updated_at": datetime.now(timezone.utc),
+        "ultra_distance_km": ultra_distance_km,
+    }
+
     await db.training_cycles.update_one(
         {"user_id": user["id"]},
-        {"$set": {
-            "goal": goal_upper,
-            "updated_at": datetime.now(timezone.utc)
-        }},
-        upsert=True
+        {"$set": cycle_set},
+        upsert=True,
     )
-    
+
+    # PR226: any goal change invalidates the previous race metadata.
+    await db.user_goals.delete_many({"user_id": user["id"]})
+
     logger.info(f"[Training] Goal updated for user {user['id']}: {goal_upper}")
-    
+
     return {
         "status": "updated",
         "goal": goal_upper,
         "cycle_weeks": config["cycle_weeks"],
-        "description": config["description"]
+        "description": config["description"],
     }
 
 
@@ -2953,62 +3305,77 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     """
     Returns today's adaptive training session.
 
-    Runtime path (PR137 — Daily Runtime Migration V2):
-        plan V2 (#135)
+    Runtime path (PR228 — unified canonical orchestration):
+        Garmin actual → TrainingHistory → TrainingLoad → RunnerProfile
+          → TrainingState → PlanGoal → Periodization → WeeklyTarget
+          → RecentTrainingResponse → WeeklyReconciliation
+          → WorkoutGenerator → reconciled WeeklyPlan
+          (identical to /training/v2/week — single canonical plan)
           ↓
-        séance prévue aujourd'hui (WorkoutPrescription)
+        séance prévue aujourd'hui (WorkoutPrescription from WeeklyPlan)
           ↓
-        ReadinessResult V2
+        ReadinessDecision V2
           ↓
-        ReadinessDecision V2 (#133)
-          ↓
-        DailyAdaptation V2 (#133)
+        DailyAdaptation V2  ← Today only, never rebuilds WeeklyPlan
           ↓
         séance du jour adaptée → payload /training/today
 
-    ReadinessDecision is the single readiness translation layer.
-    DailyAdaptation only adapts (keep or reduce), never increases.
-    None ≠ 0: absent data is never treated as bad readiness.
+    PR228 guarantees:
+    - Today's session is derived from the SAME reconciled plan as /training/v2/week.
+    - No second WorkoutGenerator. No second WeeklyReconciliation.
+    - DailyAdaptation modifies Today only (keep or reduce, never increase).
+    - None ≠ 0: absent data is never treated as bad readiness.
     """
-    # Anchor date determined here at the runtime boundary, then passed explicitly
-    # to all V2 pure layers (no hidden now()/today() inside business functions).
-    today = datetime.now(timezone.utc).date()
+    from training_v2.week_plan_bridge import build_canonical_weekly_plan
+
+    # Single clock — all time derivations use this single anchor.
+    # No second now() call anywhere in this handler.
+    now_utc = datetime.now(timezone.utc)
+    today = now_utc.date()
     today_iso = today.isoformat()
     day_name = today.strftime("%A")
+    ninety_days_ago = now_utc - timedelta(days=90)
 
-    # ── 1. Plan V2 — source of the planned session ────────────────────────────
-    plan = await generate_dynamic_training_plan(db, user["id"])
-    if plan is None:
-        return {
-            "has_plan": False,
-            "message": "Aucun plan d'entraînement actif",
-            "suggestion": "Créez un objectif pour générer votre plan personnalisé.",
-        }
-    sessions = (plan.get("plan") or {}).get("sessions", [])
-    vma = plan.get("vma") or (plan.get("context", {}) or {}).get("vma")
+    # ── 1. Goal resolver — single source of truth (PR226) ────────────────
+    resolved = await _resolve_goal_v2(user["id"])
 
-    # Find today's planned session by day name
-    planned_session_runtime: Optional[dict] = None
-    for session in sessions:
-        if session.get("day", "").lower() == day_name.lower():
-            planned_session_runtime = session
-            break
+    # ── 2. Garmin activities — 90-day window, ALWAYS loaded (PR228 fail-closed) ─
+    # Garmin history is loaded unconditionally so that Week and Today always
+    # share the same canonical activity source.
+    # Rule: the garmin connection flag only gates live data that requires an
+    # active connection (daily_metrics, readiness).  Historical activities
+    # already stored in the DB are available regardless of connection status.
+    #
+    # FAIL-CLOSED: a technical error during activity load or domain-conversion
+    # must propagate as an explicit HTTP error.  We must NEVER build
+    # TrainingHistory / WeeklyPlan with workouts=[] when the true cause is
+    # a storage failure — that would silently produce a deep_reprise plan.
+    # Absence of history (user has never run) is handled cleanly upstream
+    # (empty list from the DB with no exception).
+    try:
+        garmin_activities_90 = await db.garmin_activities.find(
+            {"user_id": user["id"], "start_time": {"$gte": ninety_days_ago.isoformat()}},
+            {"_id": 0},
+        ).to_list(1000)
+    except Exception as exc:
+        logger.error(f"[TrainingToday] Garmin activities DB read failed: {exc}")
+        raise HTTPException(
+            status_code=503,
+            detail="Training plan temporarily unavailable: Garmin activity data could not be read.",
+        ) from exc
+    try:
+        domain_activities_90: list = mongo_garmin_activities_to_domain(garmin_activities_90)
+    except Exception as exc:
+        logger.error(f"[TrainingToday] Garmin activities domain conversion failed: {exc}")
+        raise HTTPException(
+            status_code=503,
+            detail="Training plan temporarily unavailable: Garmin activity data could not be processed.",
+        ) from exc
 
-    if not planned_session_runtime:
-        return {
-            "status": "no_session",
-            "message": "No session planned for today",
-            "date": today_iso,
-            "day": day_name,
-        }
-
-    # ── 2. Convert runtime dict → WorkoutPrescription (V2 contract) ───────────
-    planned_prescription = runtime_session_to_prescription(planned_session_runtime)
-
-    # ── 3. ReadinessResult V2 — from Garmin data (no legacy proxy) ───────────
+    # ── 3. Readiness (live data) — only when Garmin connection is active ──
     readiness_result = None
     training_load = None
-    recent_response = None
+    recent_response_for_readiness = None
     readiness_data_source = "unavailable"
 
     garmin_conn = await db.garmin_connections.find_one({"user_id": user["id"]}, {"_id": 0})
@@ -3020,54 +3387,68 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
                 .limit(30)
                 .to_list(length=30)
             )
-            garmin_activities = await (
-                db.garmin_activities.find({"user_id": user["id"]}, {"_id": 0})
-                .sort("start_time", -1)
-                .limit(200)
-                .to_list(length=200)
-            )
-            # ── Mongo → DomainActivity boundary (PR137) ──────────────────────
-            # Raw MongoDB documents are never passed directly to Training V2
-            # modules.  The explicit adapter resolves the garmin_activity
-            # sub-document (normalized field names) with fallback to top-level
-            # aliases for legacy documents.
-            domain_activities = mongo_garmin_activities_to_domain(garmin_activities)
-            # TrainingLoadSnapshot — single computation shared with ReadinessResult V2
-            training_load = build_training_load(domain_activities, today)
-            # ReadinessResult V2 (reuses pre-built load_snapshot, no duplicate computation)
+            # TrainingLoad and RecentTrainingResponse use the already-loaded activities.
+            training_load = build_training_load(domain_activities_90, today)
             readiness_result = build_readiness_v2_from_garmin_data(
-                metrics_docs, domain_activities, today, load_snapshot=training_load
+                metrics_docs, domain_activities_90, today, load_snapshot=training_load
             )
-            # RecentTrainingResponse V2 (#132)
-            recent_response = build_recent_training_response(domain_activities, today)
+            recent_response_for_readiness = build_recent_training_response(domain_activities_90, today)
             readiness_data_source = "garmin"
         except Exception as exc:
             logger.warning(f"[TrainingToday] Garmin V2 readiness build failed: {exc}")
 
-    # ── 4. ReadinessDecision V2 — canonical translation (no thresholds in endpoint) ─
+    # ── 4. Canonical plan — SAME pipeline as /training/v2/week (PR228) ───
+    # build_canonical_weekly_plan includes WeeklyReconciliation internally.
+    # Today's session comes from this reconciled plan — no second WorkoutGenerator,
+    # no second WeeklyReconciliation.
+    canonical = build_canonical_weekly_plan(
+        workouts=domain_activities_90,
+        goal_type=resolved.goal_type,
+        race_date=resolved.race_date,
+        cycle_start_date=resolved.cycle_start,
+        reference_date=today,
+        target_distance_km=resolved.target_distance_km,
+        target_time_seconds=resolved.target_time_sec,
+    )
+    weekly_plan = canonical.weekly_plan
+
+    # ── 5. Find today's planned session from the reconciled WeeklyPlan ───
+    planned_prescription: Optional[WorkoutPrescription] = None
+    for session in weekly_plan.sessions:
+        if session.day.lower() == day_name.lower():
+            planned_prescription = session
+            break
+
+    if planned_prescription is None:
+        return {
+            "status": "no_session",
+            "message": "No session planned for today",
+            "date": today_iso,
+            "day": day_name,
+        }
+
+    # ── 6. ReadinessDecision V2 — canonical translation ──────────────────
     readiness_decision: ReadinessDecision = build_readiness_decision(readiness_result)
 
-    # ── 5. DailyAdaptation V2 — engine #133 (keep or reduce, never increase) ──
+    # ── 7. DailyAdaptation V2 — Today only (keep or reduce, never increase) ─
+    # Applied AFTER the canonical plan is built. Does NOT rebuild WeeklyPlan.
     adaptation_result: DailyAdaptationResult = build_daily_adaptation(
         workout=planned_prescription,
         readiness_decision=readiness_decision,
         training_load=training_load,
-        recent_response=recent_response,
+        recent_response=recent_response_for_readiness,
     )
 
-    # ── 6. Map adapted prescription back to runtime dict format ──────────────
-    # original_prescription: derived directly from planned_session_runtime to
-    # avoid any implicit divergence via the WorkoutPrescription round-trip.
+    # ── 8. Map prescription to legacy runtime dict format ─────────────────
+    planned_session_runtime = prescription_to_runtime_session(planned_prescription)
     adapted_runtime = prescription_to_runtime_session(adaptation_result.adapted_workout)
     adaptation_applied = adaptation_result.action != DailyAdaptationAction.KEEP
     adaptation_reason = ", ".join(adaptation_result.reason_codes)
 
-    # ── 7. Legacy compat: recommendation / recommendation_color derived from V2 ─
-    # These fields remain temporarily because the frontend may still consume them.
-    # Direction: V2 ReadinessDecision → compatibility adapter. Never legacy → V2.
+    # ── 9. Legacy compat: recommendation / recommendation_color derived from V2 ─
     recommendation, recommendation_color = BAND_TO_RECOMMENDATION[readiness_decision.band]
 
-    # ── 8. Historical feedback (unchanged) ────────────────────────────────────
+    # ── 10. Historical feedback (unchanged) ───────────────────────────────
     feedback_cursor = db.training_feedback.find(
         {"user_id": user["id"]},
         {"_id": 0}
@@ -3078,9 +3459,12 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
         "status": "success",
         "date": today_iso,
         "day": day_name,
-        # Original planned session (runtime dict from plan V2)
+        # planned_session: runtime dict of today's session from the reconciled canonical plan.
+        # PR228: this is now the output of prescription_to_runtime_session(planned_prescription)
+        # rather than a raw dict from generate_dynamic_training_plan.
         "planned_session": planned_session_runtime,
-        # V2 prescription objects (preferred by new consumers)
+        # original_prescription: identical to planned_session — both represent the planned
+        # session before DailyAdaptation. Preserved for backward compat with existing consumers.
         "original_prescription": planned_session_runtime,
         "adapted_prescription": adapted_runtime,
         # Legacy compat: adaptive_session present when adaptation changed the session
@@ -3098,15 +3482,24 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
             "available": readiness_decision.band != ReadinessBand.UNAVAILABLE,
             "data_source": readiness_data_source,
         },
-        # Legacy compat: fatigue block derived from V2 (no fatigue_ratio/fatigue_status/fatigue_physio)
+        # Legacy compat: fatigue block derived from V2
         "fatigue": {
             "run_readiness": readiness_decision.score,
             "recommendation": recommendation,
             "recommendation_color": recommendation_color,
             "data_source": readiness_data_source,
         },
-        "vma": vma,
-        "vma_confidence": plan.get("vma_confidence"),
+        # PR228: reconciliation audit (same reconciliation applied to /training/v2/week)
+        "weekly_reconciliation": {
+            "action": canonical.reconciliation_result.action.value,
+            "reason_codes": list(canonical.reconciliation_result.reason_codes),
+        },
+        # vma / vma_confidence: PR228 — no longer computed in /training/today.
+        # These fields were supplied by generate_dynamic_training_plan (coach_service path)
+        # which has been removed. Verified: frontend does not consume vma from this endpoint.
+        # VMA is available at /run-index (canonical source) and /training/v2/week context.
+        "vma": None,
+        "vma_confidence": None,
         "recent_feedback": recent_feedback,
     }
 
@@ -3436,101 +3829,42 @@ async def get_week_plan(user: dict = Depends(auth_user)):
     PR157: determine_target_load removed from this path (display context only).
     """
     user_id = user["id"]
-    # PR155: Read from canonical sources instead of legacy db.training_goals
-    cycle = await db.training_cycles.find_one({"user_id": user_id}, {"_id": 0})
 
-    if not cycle:
-        raise HTTPException(status_code=400, detail="No goal defined. Use /api/training/set-goal first.")
-
-    goal_type = cycle.get("goal")
-    if not goal_type or goal_type not in GOAL_CONFIG:
-        raise HTTPException(status_code=400, detail=f"Unknown or missing goal type: {goal_type}")
-
-    start_date_raw = cycle.get("start_date")
-    if not start_date_raw:
-        raise HTTPException(status_code=400, detail="No start_date in training cycle.")
-
-    # Optional race metadata from user_goals
-    user_goal = await db.user_goals.find_one({"user_id": user_id}, {"_id": 0})
-    event_name = user_goal.get("event_name") if user_goal else None
-    event_date = user_goal.get("event_date") if user_goal else None
-
-    # Build normalized goal dict matching legacy shape consumed downstream
-    goal = {
-        "goal_type": goal_type,
-        "start_date": start_date_raw,
-        "cycle_weeks": GOAL_CONFIG[goal_type]["cycle_weeks"],
-        "event_name": event_name,
-        "event_date": event_date,
-    }
-
-    # Retrieve recent data for context
+    # ── Single clock ──────────────────────────────────────────────────────
     today = datetime.now(timezone.utc)
     seven_days_ago = today - timedelta(days=7)
     twenty_eight_days_ago = today - timedelta(days=28)
     ninety_days_ago = today - timedelta(days=90)
 
-    # ── PR149/PR163: WeeklyTarget V2 + WorkoutGenerator V2 ──────────────────
-    # PR163: use build_weekly_plan_from_workouts so WorkoutGenerator V2 is the
-    # authority on session distribution (long_easy distance in particular).
+    # ── PR226: canonical resolver — single source of truth ────────────────
     from training_v2.periodization import build_periodization
-    from training_v2.plan_goal import ULTRA_MIN_DISTANCE_KM, build_plan_goal
+    from training_v2.plan_goal import build_plan_goal
     from training_v2.week_plan_bridge import (
         build_weekly_plan_from_workouts,
         workouts_to_domain_activities,
     )
 
-    # Canonical Training V2 source: garmin_activities → DomainActivity.
+    resolved = await _resolve_goal_v2(user_id)
+    goal_type = resolved.goal_type
+
+    # event_name for display context (not used by V2 builder)
+    event_name = resolved.user_goal_doc.get("event_name") if resolved.user_goal_doc else None
+
+    # ── Workouts — 90-day window ──────────────────────────────────────────
     garmin_activities_90 = await db.garmin_activities.find({
         "user_id": user_id,
         "start_time": {"$gte": ninety_days_ago.isoformat()}
     }, {"_id": 0}).to_list(1000)
     domain_activities_90 = mongo_garmin_activities_to_domain(garmin_activities_90)
 
-    goal_start_date = goal["start_date"]
-    if isinstance(goal_start_date, datetime) and goal_start_date.tzinfo is None:
-        goal_start_date = goal_start_date.replace(tzinfo=timezone.utc)
-
-    race_date_raw = goal.get("event_date")
-    race_date_v2 = None
-    if isinstance(race_date_raw, datetime):
-        race_date_v2 = race_date_raw.date() if race_date_raw.tzinfo else race_date_raw.replace(tzinfo=timezone.utc).date()
-    elif isinstance(race_date_raw, str):
-        try:
-            race_date_v2 = datetime.fromisoformat(race_date_raw.replace("Z", "+00:00")).date()
-        except (ValueError, TypeError):
-            pass
-
-    cycle_start_v2 = goal_start_date.date() if isinstance(goal_start_date, datetime) else goal_start_date
-
-    mapped_goal_type = _LEGACY_GOAL_TO_V2.get(goal_type.upper() if goal_type else "")
-    if mapped_goal_type is None:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot map goal_type '{goal_type}' to V2 GoalType.",
-        )
-
-    target_distance_km_v2: Optional[float] = None
-    if mapped_goal_type == GoalType.ultra:
-        raw_dist = user_goal.get("distance_km") if user_goal else None
-        if (
-            not isinstance(raw_dist, (int, float))
-            or isinstance(raw_dist, bool)
-            or raw_dist <= ULTRA_MIN_DISTANCE_KM
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "ULTRA goal requires target_distance_km > 42.195 km. "
-                    "Set your goal distance via /api/user/goal first."
-                ),
-            )
-        target_distance_km_v2 = float(raw_dist)
+    cycle_start_v2 = resolved.cycle_start
+    race_date_v2 = resolved.race_date
 
     plan_goal_v2 = build_plan_goal(
-        goal_type=mapped_goal_type,
-        race_date=race_date_v2 if mapped_goal_type != GoalType.maintenance else None,
-        target_distance_km=target_distance_km_v2,
+        goal_type=resolved.mapped_goal,
+        race_date=race_date_v2,  # already None for MAINTENANCE
+        target_distance_km=resolved.target_distance_km,
+        target_time_seconds=resolved.target_time_sec,
         created_from="user",
     )
 
@@ -3544,15 +3878,17 @@ async def get_week_plan(user: dict = Depends(auth_user)):
         periodization = build_periodization(
             plan_goal=plan_goal_v2,
             reference_date=today.date(),
-            cycle_anchor_date=cycle_start_v2 or today.date(),
+            cycle_anchor_date=cycle_start_v2,
         )
 
     weekly_target, weekly_plan_v2 = build_weekly_plan_from_workouts(
         workouts=domain_activities_90,
-        goal_type=goal["goal_type"],
+        goal_type=goal_type,
         race_date=race_date_v2,
         cycle_start_date=cycle_start_v2,
         reference_date=today.date(),
+        target_distance_km=resolved.target_distance_km,
+        target_time_seconds=resolved.target_time_sec,
     )
 
     # PR149: V2 prescription → target_km_protected (distance-based only).
@@ -3586,14 +3922,18 @@ async def get_week_plan(user: dict = Depends(auth_user)):
     load_7 = km_7_running
     load_28 = km_28_running
 
-    start_date = goal["start_date"]
-    cycle_weeks = goal["cycle_weeks"]
-    if isinstance(start_date, datetime) and start_date.tzinfo is None:
-        start_date = start_date.replace(tzinfo=timezone.utc)
-    if today < start_date:
+    cycle_weeks = GOAL_CONFIG[goal_type]["cycle_weeks"]
+    # resolved.cycle_start is already validated — never None after _resolve_goal_v2.
+    cycle_start_dt = datetime(
+        resolved.cycle_start.year,
+        resolved.cycle_start.month,
+        resolved.cycle_start.day,
+        tzinfo=timezone.utc,
+    )
+    if today < cycle_start_dt:
         current_week = 0
     else:
-        delta_days = (today - start_date).days
+        delta_days = (today - cycle_start_dt).days
         current_week = min(delta_days // 7 + 1, cycle_weeks + 1)
     phase = periodization.phase.value
 
@@ -3642,9 +3982,9 @@ async def get_week_plan(user: dict = Depends(auth_user)):
 
     return {
         "goal": {
-            "type": goal["goal_type"],
-            "name": goal["event_name"],
-            "event_date": goal["event_date"].isoformat() if isinstance(goal["event_date"], datetime) else goal["event_date"]
+            "type": goal_type,
+            "name": event_name,
+            "event_date": resolved.race_date.isoformat() if resolved.race_date else None,
         },
         "current_week": current_week,
         "total_weeks": cycle_weeks,
@@ -3678,13 +4018,15 @@ async def get_week_plan(user: dict = Depends(auth_user)):
 async def get_training_v2_week(user: dict = Depends(auth_user)):
     """Return the current week's V2 native prescription.
 
-    Pipeline (reuses the canonical builder from week_plan_bridge):
+    Pipeline (PR228 — canonical reconciled path):
       TrainingHistory → TrainingState → PlanGoal → Periodization
-      → WeeklyTarget → WorkoutGenerator → WeeklyPlan
+      → WeeklyTarget → RecentTrainingResponse → WeeklyReconciliation
+      → WorkoutGenerator → WeeklyPlan
 
     No legacy adapter applied. None stays None (None != 0 doctrine).
+    WeeklyReconciliation: preserve/reduce only, never increase.
     """
-    from training_v2.week_plan_bridge import build_weekly_plan_from_workouts
+    from training_v2.week_plan_bridge import build_canonical_weekly_plan
     from training_v2.training_week_response import (
         WeekV2GoalResponse,
         WeekV2PlanResponse,
@@ -3695,71 +4037,14 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
 
     user_id = user["id"]
 
-    # ── Single clock: resolve now_utc ONCE to avoid midnight-boundary skew ─
+    # ── Single clock to avoid midnight-boundary skew ──────────────────────
     now_utc = datetime.now(timezone.utc)
     reference_date = now_utc.date()
 
-    # ── Goal & cycle from canonical sources (same as /training/week-plan) ─
-    cycle = await db.training_cycles.find_one({"user_id": user_id}, {"_id": 0})
-    if not cycle:
-        raise HTTPException(
-            status_code=400,
-            detail="No training goal defined. Use /api/training/set-goal first.",
-        )
+    # ── PR226: canonical resolver — single source of truth ────────────────
+    resolved = await _resolve_goal_v2(user_id)
 
-    goal_type = cycle.get("goal")
-    if not goal_type or goal_type not in GOAL_CONFIG:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unknown or missing goal type: {goal_type}",
-        )
-
-    start_date_raw = cycle.get("start_date")
-    if not start_date_raw:
-        raise HTTPException(status_code=400, detail="No start_date in training cycle.")
-
-    # ── Optional race metadata from user_goals ────────────────────────────
-    user_goal = await db.user_goals.find_one({"user_id": user_id}, {"_id": 0})
-
-    race_date_raw = user_goal.get("event_date") if user_goal else None
-    race_date_v2 = None
-    if isinstance(race_date_raw, datetime):
-        race_date_v2 = (
-            race_date_raw.date()
-            if race_date_raw.tzinfo
-            else race_date_raw.replace(tzinfo=timezone.utc).date()
-        )
-    elif isinstance(race_date_raw, str):
-        try:
-            race_date_v2 = datetime.fromisoformat(
-                race_date_raw.replace("Z", "+00:00")
-            ).date()
-        except (ValueError, TypeError):
-            pass
-
-    target_time_minutes_raw = user_goal.get("target_time_minutes") if user_goal else None
-    # Convert minutes→seconds at the API boundary (canonical DB field is target_time_minutes)
-    if isinstance(target_time_minutes_raw, (int, float)) and not isinstance(target_time_minutes_raw, bool) and target_time_minutes_raw > 0:
-        target_time_seconds = int(target_time_minutes_raw * 60)
-    else:
-        target_time_seconds = None
-
-    cycle_start_v2: Optional[date] = None
-    if isinstance(start_date_raw, datetime):
-        cycle_start_v2 = (
-            start_date_raw.date()
-            if start_date_raw.tzinfo
-            else start_date_raw.replace(tzinfo=timezone.utc).date()
-        )
-    elif isinstance(start_date_raw, str):
-        try:
-            cycle_start_v2 = datetime.fromisoformat(
-                start_date_raw.replace("Z", "+00:00")
-            ).date()
-        except (ValueError, TypeError):
-            pass
-
-    # ── Workouts — 90-day window (same as /training/week-plan) ───────────
+    # ── Workouts — 90-day window ──────────────────────────────────────────
     ninety_days_ago = now_utc - timedelta(days=90)
     garmin_activities_90 = await db.garmin_activities.find(
         {"user_id": user_id, "start_time": {"$gte": ninety_days_ago.isoformat()}},
@@ -3767,24 +4052,28 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
     ).to_list(1000)
     domain_activities_90 = mongo_garmin_activities_to_domain(garmin_activities_90)
 
-    # ── Canonical builder — single call, no duplication ──────────────────
-    weekly_target, weekly_plan = build_weekly_plan_from_workouts(
+    # ── PR228: canonical builder — single call with reconciliation ────────
+    canonical = build_canonical_weekly_plan(
         workouts=domain_activities_90,
-        goal_type=goal_type,
-        race_date=race_date_v2,
-        cycle_start_date=cycle_start_v2,
+        goal_type=resolved.goal_type,
+        race_date=resolved.race_date,
+        cycle_start_date=resolved.cycle_start,
         reference_date=reference_date,
+        target_distance_km=resolved.target_distance_km,
+        target_time_seconds=resolved.target_time_sec,
     )
+    weekly_target = canonical.reconciled_target
+    weekly_plan = canonical.weekly_plan
+    reconciliation_result = canonical.reconciliation_result
 
     # ── Assemble native V2 response — no adapter, no coercion ────────────
-    # Normalize goal_type to V2 enum value for contract coherence with /v2/cycle.
     _WEEK_GOAL_NORM: dict[str, str] = {
         "5K": "5k", "10K": "10k", "SEMI": "half_marathon",
         "HALF_MARATHON": "half_marathon", "MARATHON": "marathon",
         "ULTRA": "ultra", "MAINTENANCE": "maintenance",
     }
     _goal_type_v2_str: str = _WEEK_GOAL_NORM.get(
-        goal_type.upper() if goal_type else "", goal_type
+        resolved.goal_type.upper() if resolved.goal_type else "", resolved.goal_type
     )
     sessions = [
         WeekV2SessionResponse(
@@ -3793,7 +4082,6 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
             intensity_class=s.intensity_class,
             distance_km=s.distance_km,
             duration_minutes=s.duration_minutes,
-            # TSS doctrine: active sessions → None, rest sessions → 0.
             estimated_tss=0 if s.workout_type == "rest" else None,
             reason_codes=list(s.reason_codes),
         )
@@ -3804,8 +4092,8 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
         reference_date=reference_date.isoformat(),
         goal=WeekV2GoalResponse(
             goal_type=_goal_type_v2_str,
-            race_date=race_date_v2.isoformat() if race_date_v2 else None,
-            target_time_seconds=target_time_seconds,
+            race_date=resolved.race_date.isoformat() if resolved.race_date else None,
+            target_time_seconds=resolved.target_time_sec,
         ),
         state=WeekV2StateResponse(
             continuity_state=weekly_target.continuity_state,
@@ -3824,10 +4112,11 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
             session_count=weekly_plan.session_count,
             sessions=sessions,
         ),
+        reconciliation_action=reconciliation_result.action.value,
+        reconciliation_reason_codes=list(reconciliation_result.reason_codes),
     )
 
     return response.model_dump(mode="json")
-
 
 # PR175 — GET /training/v2/cycle
 # Native V2 endpoint: returns cycle calendar structure without any session
@@ -3843,142 +4132,42 @@ async def get_training_v2_cycle(user: dict = Depends(auth_user)):
     Calendar only — no session prescription, no future WeeklyTarget.
     Uses the same canonical goal / cycle sources as /training/v2/week.
     """
-    from training_v2.plan_goal import GoalType, build_plan_goal
+    from training_v2.plan_goal import build_plan_goal
     from training_v2.training_cycle_response import build_cycle_calendar_response
 
     user_id = user["id"]
 
-    # ── Single clock (same doctrine as /training/v2/week) ─────────────────
+    # ── Single clock ─────────────────────────────────────────────────────
     now_utc = datetime.now(timezone.utc)
     reference_date = now_utc.date()
 
-    # ── Goal & cycle — same canonical sources as /training/v2/week ────────
-    cycle = await db.training_cycles.find_one({"user_id": user_id}, {"_id": 0})
-    if not cycle:
-        raise HTTPException(
-            status_code=400,
-            detail="No training goal defined. Use /api/training/set-goal first.",
-        )
-
-    goal_type_raw = cycle.get("goal")
-    if not goal_type_raw or goal_type_raw not in GOAL_CONFIG:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unknown or missing goal type: {goal_type_raw}",
-        )
-
-    start_date_raw = cycle.get("start_date")
-    if not start_date_raw:
-        raise HTTPException(status_code=400, detail="No start_date in training cycle.")
-
-    # Resolve cycle_start_date (same logic as /training/v2/week)
-    cycle_start_v2: Optional[date] = None
-    if isinstance(start_date_raw, datetime):
-        cycle_start_v2 = (
-            start_date_raw.date()
-            if start_date_raw.tzinfo
-            else start_date_raw.replace(tzinfo=timezone.utc).date()
-        )
-    elif isinstance(start_date_raw, str):
-        try:
-            cycle_start_v2 = datetime.fromisoformat(
-                start_date_raw.replace("Z", "+00:00")
-            ).date()
-        except (ValueError, TypeError):
-            pass
-
-    # ── Optional race metadata — same sources as /training/v2/week ────────
-    user_goal = await db.user_goals.find_one({"user_id": user_id}, {"_id": 0})
-
-    race_date_raw = user_goal.get("event_date") if user_goal else None
-    race_date_v2: Optional[date] = None
-    if isinstance(race_date_raw, datetime):
-        race_date_v2 = (
-            race_date_raw.date()
-            if race_date_raw.tzinfo
-            else race_date_raw.replace(tzinfo=timezone.utc).date()
-        )
-    elif isinstance(race_date_raw, str):
-        try:
-            race_date_v2 = datetime.fromisoformat(
-                race_date_raw.replace("Z", "+00:00")
-            ).date()
-        except (ValueError, TypeError):
-            pass
-
-    target_time_minutes_raw = user_goal.get("target_time_minutes") if user_goal else None
-    target_time_seconds: Optional[int] = None
-    if (
-        isinstance(target_time_minutes_raw, (int, float))
-        and not isinstance(target_time_minutes_raw, bool)
-        and target_time_minutes_raw > 0
-    ):
-        target_time_seconds = int(target_time_minutes_raw * 60)
+    # ── PR226: canonical resolver — single source of truth ────────────────
+    resolved = await _resolve_goal_v2(user_id)
 
     # ── Build PlanGoal V2 ─────────────────────────────────────────────────
-    mapped_goal_type = _LEGACY_GOAL_TO_V2.get(goal_type_raw.upper() if goal_type_raw else "")
-    if mapped_goal_type is None:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot map goal_type '{goal_type_raw}' to V2 GoalType.",
-        )
-
-    # ── Ultra: resolve target_distance_km from canonical DB source ────────
-    # Same source as /user/goal stores it: user_goals.distance_km.
-    # No hardcoded fallback — absent data → 400, not invented distance.
-    from training_v2.plan_goal import GoalType as _GoalType, ULTRA_MIN_DISTANCE_KM
-    target_distance_km_v2: Optional[float] = None
-    if mapped_goal_type == _GoalType.ultra:
-        raw_dist = user_goal.get("distance_km") if user_goal else None
-        if (
-            not isinstance(raw_dist, (int, float))
-            or isinstance(raw_dist, bool)
-            or raw_dist <= ULTRA_MIN_DISTANCE_KM
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "ULTRA goal requires target_distance_km > 42.195 km. "
-                    "Set your goal distance via /api/user/goal first."
-                ),
-            )
-        target_distance_km_v2 = float(raw_dist)
-
     plan_goal = build_plan_goal(
-        goal_type=mapped_goal_type,
-        race_date=race_date_v2 if mapped_goal_type != _GoalType.maintenance else None,
-        target_distance_km=target_distance_km_v2,
+        goal_type=resolved.mapped_goal,
+        race_date=resolved.race_date,  # already None for MAINTENANCE
+        target_distance_km=resolved.target_distance_km,
+        target_time_seconds=resolved.target_time_sec,
         created_from="user",
     )
 
-    # ── Determine mode and pass appropriate anchor ────────────────────────
-    # PlanGoal invariant: maintenance can't have race_date, so
+    # PlanGoal invariant: maintenance can't have race_date →
     # plan_goal.race_date is not None ↔ race_calendar mode.
-    is_race_calendar = plan_goal.race_date is not None
-
-    if is_race_calendar:
-        if cycle_start_v2 is None:
-            raise HTTPException(
-                status_code=400,
-                detail="Could not parse start_date in training cycle (required for race_calendar mode).",
-            )
+    if plan_goal.race_date is not None:
         response = build_cycle_calendar_response(
             plan_goal,
             reference_date,
-            race_plan_start_date=cycle_start_v2,
-            target_time_seconds=target_time_seconds,
+            race_plan_start_date=resolved.cycle_start,
+            target_time_seconds=resolved.target_time_sec,
         )
     else:
-        if cycle_start_v2 is None:
-            raise HTTPException(
-                status_code=400,
-                detail="Could not parse start_date in training cycle.",
-            )
         response = build_cycle_calendar_response(
             plan_goal,
             reference_date,
-            cycle_anchor_date=cycle_start_v2,
-            target_time_seconds=target_time_seconds,
+            cycle_anchor_date=resolved.cycle_start,
+            target_time_seconds=resolved.target_time_sec,
         )
 
     return response.model_dump(mode="json")

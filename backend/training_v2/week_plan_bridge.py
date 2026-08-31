@@ -1,4 +1,4 @@
-"""PR149/PR163 — Bridge: build WeeklyTarget V2 from raw workout documents.
+"""PR149/PR163/PR228 — Bridge: build WeeklyTarget V2 from raw workout documents.
 
 This module provides a thin orchestration entry-point for endpoints that
 need a V2 WeeklyTarget without owning the full V2 rendering pipeline.
@@ -11,6 +11,9 @@ Design rules:
 - reference_date is MANDATORY — no implicit datetime.now().
 - ONE canonical internal pipeline (_build_weekly_context_from_workouts) shared by
   both public APIs — no divergence possible.
+- PR228: WeeklyReconciliation is now part of the canonical pipeline.
+  build_weekly_plan_from_workouts returns the RECONCILED target and plan.
+  Week and Today share the exact same reconciled session source.
 """
 
 from __future__ import annotations
@@ -25,7 +28,10 @@ from .plan_goal import GoalType, PlanGoal, build_plan_goal
 from .runner_profile import RunnerProfile, build_runner_profile
 from .training_history import build_training_history
 from .training_load import build_training_load
+from .training_paces import TrainingPaces, compute_training_paces, vdot_from_performance
+from .training_response import RecentTrainingResponse, build_recent_training_response
 from .training_state import build_training_state
+from .weekly_reconciliation import WeeklyReconciliationResult, build_weekly_reconciliation
 from .weekly_target import WeeklyTarget, build_weekly_target
 from .workout_generator import WeeklyPlan, build_weekly_plan
 
@@ -55,12 +61,87 @@ class _WeeklyBuildContext:
     Holds every intermediate object produced by
     _build_weekly_context_from_workouts so that both public APIs can share
     the exact same construction without any duplication.
+
+    PR228: reconciliation_result is now part of the canonical context.
+    weekly_target is the ORIGINAL (pre-reconciliation) target.
+    Use reconciliation_result.reconciled_target for plan generation and display.
     """
 
     weekly_target: WeeklyTarget
+    """Original (pre-reconciliation) WeeklyTarget — kept for audit."""
+
+    reconciliation_result: WeeklyReconciliationResult
+    """Result of WeeklyReconciliation applied to weekly_target.
+    reconciliation_result.reconciled_target is the canonical published target.
+    """
+
     runner_profile: RunnerProfile
     plan_goal: PlanGoal
     periodization: PeriodizationSnapshot
+    target_capability_time_seconds: Optional[int]
+
+
+def _equivalent_time_seconds_from_vdot(
+    *,
+    target_distance_km: float,
+    vdot: float,
+) -> Optional[int]:
+    """Invert Daniels VDOT to equivalent performance time on exact target distance."""
+    if target_distance_km <= 0 or vdot <= 0:
+        return None
+
+    target_distance_m = target_distance_km * 1000.0
+    lo = 300.0
+    hi = 12 * 3600.0
+
+    lo_vdot = vdot_from_performance(target_distance_m, lo)
+    hi_vdot = vdot_from_performance(target_distance_m, hi)
+    while lo_vdot is None and lo < hi:
+        lo *= 1.5
+        lo_vdot = vdot_from_performance(target_distance_m, lo)
+    while hi_vdot is None and hi > lo:
+        hi *= 0.8
+        hi_vdot = vdot_from_performance(target_distance_m, hi)
+
+    if lo_vdot is None or hi_vdot is None or lo >= hi:
+        return None
+    if not (lo_vdot >= vdot >= hi_vdot):
+        return None
+
+    for _ in range(40):
+        mid = (lo + hi) / 2.0
+        mid_vdot = vdot_from_performance(target_distance_m, mid)
+        if mid_vdot is None:
+            return None
+        if mid_vdot > vdot:
+            lo = mid
+        else:
+            hi = mid
+    return int(round((lo + hi) / 2.0))
+
+
+def _resolve_capability_time_for_goal(
+    *,
+    paces: TrainingPaces,
+    plan_goal: PlanGoal,
+) -> Optional[int]:
+    """Resolve equivalent capability time on PlanGoal.target_distance_km."""
+    if plan_goal.goal_type == GoalType.ultra:
+        # Explicit V2 decision: disable target_time modulation for ULTRA.
+        return None
+    if plan_goal.target_time_seconds is None:
+        return None
+    if plan_goal.target_distance_km is None or plan_goal.target_distance_km <= 0:
+        return None
+    if paces.confidence not in {"HIGH", "MEDIUM"}:
+        return None
+    if paces.vdot_result.reference_vdot is None:
+        return None
+
+    return _equivalent_time_seconds_from_vdot(
+        target_distance_km=plan_goal.target_distance_km,
+        vdot=paces.vdot_result.reference_vdot,
+    )
 
 
 def _normalize_workout_to_domain_fields(workout: dict) -> dict:
@@ -118,6 +199,8 @@ def _build_weekly_context_from_workouts(
     cycle_start_date: Optional[date],
     reference_date: date,
     user_profile: Optional[dict],
+    target_distance_km: Optional[float] = None,
+    target_time_seconds: Optional[int] = None,
 ) -> _WeeklyBuildContext:
     """Canonical internal V2 build pipeline — single construction site.
 
@@ -163,6 +246,8 @@ def _build_weekly_context_from_workouts(
     plan_goal = build_plan_goal(
         goal_type=mapped_goal,
         race_date=race_date if mapped_goal != GoalType.maintenance else None,
+        target_distance_km=target_distance_km if mapped_goal == GoalType.ultra else None,
+        target_time_seconds=target_time_seconds if mapped_goal != GoalType.maintenance else None,
         created_from="user",
     )
 
@@ -190,11 +275,32 @@ def _build_weekly_context_from_workouts(
         reference_date=reference_date,
     )
 
+    target_capability_time_seconds: Optional[int] = None
+    if plan_goal.target_time_seconds is not None:
+        training_paces = compute_training_paces(activities, reference_date, user_max_hr=None)
+        target_capability_time_seconds = _resolve_capability_time_for_goal(
+            paces=training_paces,
+            plan_goal=plan_goal,
+        )
+
+    # PR228 — WeeklyReconciliation is now part of the canonical pipeline.
+    # Applies structural reconciliation (preserve/reduce only, never increase).
+    # None stays None: no_history / unavailable response → KEEP action.
+    recent_response: Optional[RecentTrainingResponse] = build_recent_training_response(
+        activities, reference_date
+    )
+    reconciliation_result: WeeklyReconciliationResult = build_weekly_reconciliation(
+        proposed_target=weekly_target,
+        recent_response=recent_response,
+    )
+
     return _WeeklyBuildContext(
         weekly_target=weekly_target,
+        reconciliation_result=reconciliation_result,
         runner_profile=runner_profile,
         plan_goal=plan_goal,
         periodization=periodization,
+        target_capability_time_seconds=target_capability_time_seconds,
     )
 
 
@@ -222,6 +328,8 @@ def build_weekly_target_from_workouts(
     cycle_start_date: Optional[date] = None,
     reference_date: date,
     user_profile: Optional[dict] = None,
+    target_distance_km: Optional[float] = None,
+    target_time_seconds: Optional[int] = None,
 ) -> WeeklyTarget:
     """Build a WeeklyTarget V2 from raw workout documents and goal info.
 
@@ -233,6 +341,8 @@ def build_weekly_target_from_workouts(
     cycle_start_date : start of the training cycle.
     reference_date : anchor date — MANDATORY, no implicit today.
     user_profile : optional user_profiles document for RunnerProfile enrichment.
+    target_distance_km : explicit race distance (km). Required for ULTRA goals.
+    target_time_seconds : optional chronometric objective in canonical seconds.
 
     Raises
     ------
@@ -246,6 +356,8 @@ def build_weekly_target_from_workouts(
         cycle_start_date=cycle_start_date,
         reference_date=reference_date,
         user_profile=user_profile,
+        target_distance_km=target_distance_km,
+        target_time_seconds=target_time_seconds,
     )
     return ctx.weekly_target
 
@@ -258,6 +370,8 @@ def build_weekly_plan_from_workouts(
     cycle_start_date: Optional[date] = None,
     reference_date: date,
     user_profile: Optional[dict] = None,
+    target_distance_km: Optional[float] = None,
+    target_time_seconds: Optional[int] = None,
 ) -> tuple[WeeklyTarget, WeeklyPlan]:
     """Build WeeklyTarget V2 + WeeklyPlan V2 from raw workout documents.
 
@@ -266,14 +380,17 @@ def build_weekly_plan_from_workouts(
     distribution (including long_easy distance).  llm_coach must NOT
     re-compute the long run itself.
 
-    The WeeklyTarget returned here is the SAME object that
-    build_weekly_target_from_workouts would return for identical inputs —
-    both APIs share the same internal pipeline (_build_weekly_context_from_workouts).
+    PR226: target_distance_km added for ULTRA goals — passed to build_plan_goal.
+    PR227: target_time_seconds propagated to PlanGoal for prescription modulation.
+    PR228: WeeklyReconciliation is now applied inside the canonical pipeline.
+    The returned WeeklyTarget is the RECONCILED target.  Callers that also
+    need the full reconciliation audit should use build_canonical_weekly_plan.
 
     Returns
     -------
-    (WeeklyTarget, WeeklyPlan)
-        Both immutable V2 objects built from the same chain.
+    (reconciled_target, weekly_plan)
+        Both immutable V2 objects built from the same reconciled chain.
+        reconciled_target == original_target when reconciliation action is KEEP.
     """
     ctx = _build_weekly_context_from_workouts(
         workouts=workouts,
@@ -282,14 +399,100 @@ def build_weekly_plan_from_workouts(
         cycle_start_date=cycle_start_date,
         reference_date=reference_date,
         user_profile=user_profile,
+        target_distance_km=target_distance_km,
+        target_time_seconds=target_time_seconds,
     )
 
+    # PR228 — use the RECONCILED target as the plan authority.
+    # reconciliation_result.reconciled_target == ctx.weekly_target when KEEP action.
+    reconciled_target = ctx.reconciliation_result.reconciled_target
+
     weekly_plan = build_weekly_plan(
-        weekly_target=ctx.weekly_target,
+        weekly_target=reconciled_target,
         runner_profile=ctx.runner_profile,
         plan_goal=ctx.plan_goal,
         periodization=ctx.periodization,
         reference_date=reference_date,
+        target_capability_time_seconds=ctx.target_capability_time_seconds,
     )
 
-    return ctx.weekly_target, weekly_plan
+    return reconciled_target, weekly_plan
+
+
+@dataclass(frozen=True)
+class CanonicalWeeklyPlan:
+    """PR228 — Full canonical weekly plan with reconciliation audit.
+
+    Returned by build_canonical_weekly_plan for consumers that need to
+    surface the reconciliation result alongside the plan.
+    """
+
+    original_target: WeeklyTarget
+    """Pre-reconciliation WeeklyTarget — kept for audit/display."""
+
+    reconciliation_result: WeeklyReconciliationResult
+    """Full reconciliation audit: action, reason_codes, observed stats."""
+
+    reconciled_target: WeeklyTarget
+    """Reconciled WeeklyTarget — the canonical published target.
+    Equals original_target when reconciliation action is KEEP.
+    """
+
+    weekly_plan: WeeklyPlan
+    """WorkoutGenerator output built from reconciled_target."""
+
+
+def build_canonical_weekly_plan(
+    *,
+    workouts: List[dict],
+    goal_type: str,
+    race_date: Optional[date] = None,
+    cycle_start_date: Optional[date] = None,
+    reference_date: date,
+    user_profile: Optional[dict] = None,
+    target_distance_km: Optional[float] = None,
+    target_time_seconds: Optional[int] = None,
+) -> CanonicalWeeklyPlan:
+    """PR228 — Build the full canonical weekly plan including reconciliation audit.
+
+    This is the preferred entry-point for Week and Today consumers that need:
+    - The original WeeklyTarget (pre-reconciliation)
+    - The WeeklyReconciliationResult (action, reason_codes, observed stats)
+    - The reconciled WeeklyTarget (canonical published target)
+    - The WeeklyPlan built from the reconciled target
+
+    Week and Today MUST call this function (or build_weekly_plan_from_workouts)
+    so that the reconciled session source is always the same.
+    DailyAdaptation is applied ONLY for Today, after this call.
+
+    Asymmetric invariant: reconciled_target is always ≤ original_target
+    (preserve/reduce only, never increase).
+    """
+    ctx = _build_weekly_context_from_workouts(
+        workouts=workouts,
+        goal_type=goal_type,
+        race_date=race_date,
+        cycle_start_date=cycle_start_date,
+        reference_date=reference_date,
+        user_profile=user_profile,
+        target_distance_km=target_distance_km,
+        target_time_seconds=target_time_seconds,
+    )
+
+    reconciled_target = ctx.reconciliation_result.reconciled_target
+
+    weekly_plan = build_weekly_plan(
+        weekly_target=reconciled_target,
+        runner_profile=ctx.runner_profile,
+        plan_goal=ctx.plan_goal,
+        periodization=ctx.periodization,
+        reference_date=reference_date,
+        target_capability_time_seconds=ctx.target_capability_time_seconds,
+    )
+
+    return CanonicalWeeklyPlan(
+        original_target=ctx.weekly_target,
+        reconciliation_result=ctx.reconciliation_result,
+        reconciled_target=reconciled_target,
+        weekly_plan=weekly_plan,
+    )

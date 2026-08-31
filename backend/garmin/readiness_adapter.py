@@ -33,6 +33,19 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import List, Optional
 
+# ---------------------------------------------------------------------------
+# Staleness limit for the *current* physio signal (RHR, HRV, sleep).
+#
+# Only a measurement from today (J0) or yesterday (J-1) is accepted as the
+# runner's "current" physiological state.  Anything older is absent/stale →
+# the signal stays None.  This deliberately removes the previous 7-day
+# generic TTL which could silently present week-old data as today's reading.
+#
+# The baseline (14-day rolling mean) is computed from an independent window
+# that always looks back to J-1 regardless of this constant.
+# ---------------------------------------------------------------------------
+_CURRENT_SIGNAL_MAX_AGE_DAYS = 1
+
 from training_v2.readiness import build_readiness_result, ReadinessResult
 from training_v2.readiness_signals import (
     ReadinessLoadSignal,
@@ -68,11 +81,37 @@ _BASELINE_WINDOW_DAYS = 14  # look-back window for valid_measures count
 # ---------------------------------------------------------------------------
 
 
-def _latest_doc_with(docs: List[dict], field: str) -> Optional[dict]:
-    """Return the most recent document that has a non-None value for *field*."""
+def _latest_doc_with(
+    docs: List[dict],
+    field: str,
+    reference_date: Optional[date] = None,
+) -> Optional[dict]:
+    """Return the most recent document that has a non-None value for *field*.
+
+    When *reference_date* is supplied, only documents whose ``date`` field is
+    within the last ``_CURRENT_SIGNAL_MAX_AGE_DAYS`` days are considered.  A
+    document without a parseable ``date`` is always excluded when
+    *reference_date* is provided so that undated records are never silently
+    treated as current.
+    """
+    cutoff: Optional[date] = None
+    if reference_date is not None:
+        cutoff = reference_date - timedelta(days=_CURRENT_SIGNAL_MAX_AGE_DAYS)
+
     for doc in docs:
-        if doc.get(field) is not None:
-            return doc
+        if doc.get(field) is None:
+            continue
+        if cutoff is not None:
+            raw_date = doc.get("date")
+            if raw_date is None:
+                continue
+            try:
+                doc_date = date.fromisoformat(str(raw_date)[:10])
+            except ValueError:
+                continue
+            if doc_date < cutoff or doc_date > reference_date:
+                continue
+        return doc
     return None
 
 
@@ -128,11 +167,15 @@ def _build_physio_signal(
     """Build a PhysioSignal for *field* (e.g. 'resting_hr' or 'hrv').
 
     recent_value is taken from the most recent document that has a non-None
-    value for *field*.  The baseline is computed only from documents whose
-    date strictly precedes recent_date (within the 14-day window), so that
-    the recent measurement never inflates its own reference.
+    value for *field* and whose date is within ``_CURRENT_SIGNAL_MAX_AGE_DAYS``
+    of *reference_date*.  A document older than that window is silently treated
+    as absent — stale data is never presented as current.
+
+    The baseline is computed only from documents whose date strictly precedes
+    recent_date (within the 14-day window), so that the recent measurement
+    never inflates its own reference.
     """
-    recent_doc = _latest_doc_with(docs, field)
+    recent_doc = _latest_doc_with(docs, field, reference_date)
     if recent_doc is None:
         # Signal entirely absent — return None so ReadinessSufficiency can
         # detect missing_rhr / missing_hrv.
@@ -148,16 +191,40 @@ def _build_physio_signal(
     return PhysioSignal(recent_value=recent_value, baseline=baseline)
 
 
-def _build_sleep_record(docs: List[dict]) -> Optional[SleepRecord]:
-    """Return the most recent SleepRecord, or None if no sleep data."""
+def _build_sleep_record(
+    docs: List[dict],
+    reference_date: Optional[date] = None,
+) -> Optional[SleepRecord]:
+    """Return the most recent SleepRecord within the staleness window, or None.
+
+    When *reference_date* is supplied, only documents dated within
+    ``_CURRENT_SIGNAL_MAX_AGE_DAYS`` of *reference_date* are considered.  A
+    sleep record older than that window is treated as absent — it must not be
+    silently used as "last night's" sleep.
+    """
+    cutoff: Optional[date] = None
+    if reference_date is not None:
+        cutoff = reference_date - timedelta(days=_CURRENT_SIGNAL_MAX_AGE_DAYS)
+
     for doc in docs:
         duration = doc.get("sleep_hours")
         score = doc.get("sleep_score")
-        if duration is not None or score is not None:
-            return SleepRecord(
-                duration_hours=float(duration) if duration is not None else None,
-                score=float(score) if score is not None else None,
-            )
+        if duration is None and score is None:
+            continue
+        if cutoff is not None:
+            raw_date = doc.get("date")
+            if raw_date is None:
+                continue
+            try:
+                doc_date = date.fromisoformat(str(raw_date)[:10])
+            except ValueError:
+                continue
+            if doc_date < cutoff or doc_date > reference_date:
+                continue
+        return SleepRecord(
+            duration_hours=float(duration) if duration is not None else None,
+            score=float(score) if score is not None else None,
+        )
     return None
 
 
@@ -233,7 +300,7 @@ def build_readiness_v2_from_garmin_data(
     # 2. Build sleep record from garmin_daily_metrics.
     #    Garmin field names: sleep_hours, sleep_score.
     # ------------------------------------------------------------------
-    sleep_record = _build_sleep_record(metrics_docs)
+    sleep_record = _build_sleep_record(metrics_docs, reference_date)
 
     # ------------------------------------------------------------------
     # 3. TrainingLoadSnapshot — use the caller-supplied one when available

@@ -117,6 +117,8 @@ class TrainingWeekV2Response(BaseModel):
 
     Contains all V2 native objects required to render TrainingPlanV2.
     No legacy adapter applied. No field coercion (None stays None).
+
+    PR228: reconciliation field added — exposes WeeklyReconciliation audit.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -128,6 +130,12 @@ class TrainingWeekV2Response(BaseModel):
     state: WeekV2StateResponse
     weekly_target: WeekV2TargetResponse
     week: WeekV2PlanResponse
+
+    reconciliation_action: Optional[str] = None
+    """PR228 — WeeklyReconciliation action: KEEP | REDUCE_VOLUME | REDUCE_FREQUENCY | REDUCE_BOTH."""
+
+    reconciliation_reason_codes: Optional[List[str]] = None
+    """PR228 — Language-neutral diagnostic codes from WeeklyReconciliation."""
 
 
 __all__ = [
