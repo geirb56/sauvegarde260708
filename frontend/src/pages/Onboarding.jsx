@@ -47,6 +47,7 @@ export default function Onboarding() {
 
   const [stepIndex, setStepIndex] = useState(0);
   const [goal, setGoal] = useState("");
+  const [ultraDistanceKm, setUltraDistanceKm] = useState("");
   const [sessionsPerWeek, setSessionsPerWeek] = useState(null);
   const [savingPlan, setSavingPlan] = useState(false);
   const [planError, setPlanError] = useState("");
@@ -115,10 +116,10 @@ export default function Onboarding() {
     if (stepKey === "garmin") return isGarminConnected;
     if (stepKey === "sync") return syncOutcomeKnown;
     if (stepKey === "firstValue") return syncOutcomeKnown;
-    if (stepKey === "goal") return Boolean(goal);
+    if (stepKey === "goal") return Boolean(goal) && (goal !== "ULTRA" || (parseFloat(ultraDistanceKm) > 42.195));
     if (stepKey === "sessions") return Boolean(sessionsPerWeek) && !savingPlan;
     return false;
-  }, [stepKey, isGarminConnected, syncOutcomeKnown, goal, sessionsPerWeek, savingPlan]);
+  }, [stepKey, isGarminConnected, syncOutcomeKnown, goal, ultraDistanceKm, sessionsPerWeek, savingPlan]);
 
   const connectGarmin = async () => {
     if (!garminUsername.trim() || !garminPassword) {
@@ -170,11 +171,16 @@ export default function Onboarding() {
 
   const createPlan = async () => {
     if (!goal || !sessionsPerWeek) return;
+    if (goal === "ULTRA" && !(parseFloat(ultraDistanceKm) > 42.195)) return;
 
     setPlanError("");
     setSavingPlan(true);
     try {
-      await axios.post(`${API}/training/set-goal?goal=${encodeURIComponent(goal)}`, {});
+      const setGoalUrl =
+        goal === "ULTRA"
+          ? `${API}/training/set-goal?goal=${encodeURIComponent(goal)}&distance_km=${encodeURIComponent(ultraDistanceKm)}`
+          : `${API}/training/set-goal?goal=${encodeURIComponent(goal)}`;
+      await axios.post(setGoalUrl, {});
       await axios.post(`${API}/training/refresh?sessions=${sessionsPerWeek}`, {});
       setStepIndex(steps.findIndex((s) => s.key === DONE_STEP_KEY));
     } catch {
@@ -375,7 +381,27 @@ export default function Onboarding() {
           {stepKey === "goal" && (
             <div className="space-y-3" data-testid="onboarding-step-goal">
               <h2 className="text-lg font-semibold">{t("onboarding.goalTitle")}</h2>
-              <SelectGrid options={goalOptions} value={goal} onSelect={setGoal} testIdPrefix="onboarding-goal" />
+              <SelectGrid options={goalOptions} value={goal} onSelect={(v) => { setGoal(v); setUltraDistanceKm(""); }} testIdPrefix="onboarding-goal" />
+              {goal === "ULTRA" && (
+                <div className="space-y-1" data-testid="onboarding-ultra-distance-field">
+                  <label className="text-sm font-medium">{t("onboarding.ultraDistanceLabel")}</label>
+                  <input
+                    type="number"
+                    min="42.196"
+                    step="0.1"
+                    className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                    placeholder={t("onboarding.ultraDistancePlaceholder")}
+                    value={ultraDistanceKm}
+                    onChange={(e) => setUltraDistanceKm(e.target.value)}
+                    data-testid="onboarding-ultra-distance-input"
+                  />
+                  {ultraDistanceKm && !(parseFloat(ultraDistanceKm) > 42.195) && (
+                    <p className="text-xs text-destructive" data-testid="onboarding-ultra-distance-error">
+                      {t("onboarding.ultraDistanceError")}
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
