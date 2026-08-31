@@ -199,13 +199,13 @@ def test_insufficient_all_physio_absent_and_no_load():
     assert result.score is None
 
 
-def test_insufficient_physio_absent_only():
-    """No RHR + No HRV → missing_physio (blocking) → INSUFFICIENT even if load exists."""
+def test_degraded_physio_absent_with_sleep_and_load_available():
+    """No RHR + No HRV with sleep+load available → DEGRADED, score still computed."""
     metrics = _make_metrics(rhr=None, hrv=None)
     result = build_readiness_v2_from_garmin_data(metrics, _make_activities(), _REF_DATE)
     assert ReasonCode.missing_physio in result.reasons
-    assert result.sufficiency_level == SufficiencyLevel.INSUFFICIENT
-    assert result.score is None
+    assert result.sufficiency_level == SufficiencyLevel.DEGRADED
+    assert result.score is not None
 
 
 def test_hrv_unsupported_and_rhr_temporarily_absent_is_not_blocking():
@@ -218,7 +218,17 @@ def test_hrv_unsupported_and_rhr_temporarily_absent_is_not_blocking():
     )
     assert result.sufficiency_level == SufficiencyLevel.DEGRADED
     assert result.score is not None
-    assert ReasonCode.missing_physio not in result.reasons
+    assert ReasonCode.missing_physio in result.reasons
+
+
+def test_has_hrv_true_false_none_same_readiness_with_identical_signals():
+    metrics = _make_metrics(rhr=None, hrv=None, sleep_hours=7.4, sleep_score=82.0)
+    activities = _make_activities()
+    r_true = build_readiness_v2_from_garmin_data(metrics, activities, _REF_DATE, hrv_supported=True)
+    r_false = build_readiness_v2_from_garmin_data(metrics, activities, _REF_DATE, hrv_supported=False)
+    r_none = build_readiness_v2_from_garmin_data(metrics, activities, _REF_DATE, hrv_supported=None)
+    assert r_true.sufficiency_level == r_false.sufficiency_level == r_none.sufficiency_level
+    assert r_true.score == r_false.score == r_none.score
 
 
 # ---------------------------------------------------------------------------
@@ -233,7 +243,7 @@ def test_user_isolation_adapter_is_pure():
     per-user documents (the adapter itself does no DB queries).
     """
     metrics_a = _make_metrics(rhr=45.0, hrv=80.0)
-    metrics_b = _make_metrics(rhr=None, hrv=None)  # INSUFFICIENT user
+    metrics_b = _make_metrics(rhr=None, hrv=None)  # degraded user (sleep+load still present)
     acts = _make_activities()
 
     result_a = build_readiness_v2_from_garmin_data(metrics_a, acts, _REF_DATE)
@@ -241,9 +251,9 @@ def test_user_isolation_adapter_is_pure():
 
     # user A: physio present → not INSUFFICIENT
     assert result_a.score is not None
-    # user B: no physio → INSUFFICIENT
-    assert result_b.score is None
-    assert result_b.sufficiency_level == SufficiencyLevel.INSUFFICIENT
+    # user B: no physio but sleep+load available → DEGRADED
+    assert result_b.score is not None
+    assert result_b.sufficiency_level == SufficiencyLevel.DEGRADED
 
 
 # ---------------------------------------------------------------------------

@@ -39,8 +39,10 @@
 ### 4) Readiness canonical edge-case adjustment (no fake fallback)
 - Added optional `hrv_supported` to readiness sufficiency input.
 - In `backend/training_v2/readiness_sufficiency.py`:
-  - HRV unsupported (`hrv_supported=False`) no longer creates `missing_hrv`.
-  - Full physio branch absence is not automatically blocking when HRV is intrinsically unsupported.
+  - `hrv_supported` is reserved/informational and not used to infer intrinsic unsupported HRV.
+  - Canonical guard added: fewer than 2 usable branches (`physio`, `sleep`, `load`) is always `INSUFFICIENT`.
+  - `sleep+load` remains calculable (`DEGRADED`) when physio is absent.
+  - Load-only/sleep-only/physio-only never produce a readiness score.
 - In `backend/garmin/readiness_adapter.py`:
   - Added optional `hrv_supported` propagation to sufficiency input.
 - In `backend/garmin/insights.py`:
@@ -103,9 +105,9 @@
 
 ### Corrected blockers
 1. **`hrv_supported` propagation**
-   - `/training/today` now forwards `hrv_supported` from `garmin_connections.garmin_capabilities.has_hrv`.
+   - `/training/today` now passes neutral capability (`hrv_supported=None`) in absence of independent hardware/provider evidence.
    - Dashboard history computation no longer projects current capability backward (`hrv_supported=None` in history path).
-   - Capability parsing now preserves unknown as `None` (no implicit `bool(None) -> False`).
+   - `has_hrv=False` is no longer interpreted as “HRV unsupported”.
 
 2. **`partial_success` with zero usable metrics**
    - Runner now classifies endpoint-partial + zero usable metrics as `technical_failure`, not `partial_success`.
@@ -161,3 +163,37 @@
 
 ### Static checks (non-executed)
 - Full deferred runtime gate scenario (persisted live session, scheduler wait, Mongo J0/J-1 verification, UI live state verification) remains **deferred** as requested.
+
+---
+
+## C229 final correction (last blocker)
+
+### Final canonical rule
+- **Minimum 2 usable branches required** before final readiness aggregation:
+  - usable branches = `physio_available + sleep_available + load_available`.
+  - if usable branches `< 2` → `INSUFFICIENT`, `score=None`, `confidence=NONE`.
+
+### has_hrv interpretation fix
+- `GarminCapabilities.has_hrv=False` is treated as **observed-absence only**.
+- It is **not** interpreted as definitive hardware/provider unsupported capability.
+- Until a dedicated unsupported capability source exists, readiness uses neutral capability (`hrv_supported=None`).
+
+### 3-branch matrix (final)
+- physio + sleep + load → calculable (`SUFFICIENT` or `DEGRADED` by quality).
+- physio + load (sleep absent) → calculable `DEGRADED`.
+- sleep + load (physio absent) → calculable `DEGRADED`.
+- physio + sleep + load absent → `INSUFFICIENT` (load doctrine kept blocking).
+- load only → `INSUFFICIENT`, score `None`.
+- sleep only → `INSUFFICIENT`, score `None`.
+- physio only → `INSUFFICIENT`, score `None`.
+- no branch → `INSUFFICIENT`.
+
+### Tests executed for final blocker
+- `python -m pytest tests/test_training_v2_readiness_sufficiency.py tests/test_run_index_r3_readiness_v2.py tests/test_run_index_r4b_history_readiness_v2.py tests/test_handlers_pr228.py -k "readiness or hrv_supported or has_hrv or branch or missing_sleep or missing_physio"`
+  - **PASS: 95 / FAIL: 0 / SKIP: 0**
+- `python -m pytest tests/test_garmin_daily_metrics_pr03.py tests/test_garmin_phased_sync_pr07a.py tests/test_readiness_data_truth_pr225.py tests/test_weekly_unification_pr228.py tests/test_run_index_compute_integration.py`
+  - **PASS: 104 / FAIL: 0 / SKIP: 0**
+- `python -m pytest tests/test_garmin_queue_backfill_pr197.py`
+  - **PASS: 4 / FAIL: 0 / SKIP: 0**
+- `npx craco test --watchAll=false --forceExit --runTestsByPath src/__tests__/dashboard-run-readiness-v2.test.jsx src/__tests__/dashboard-run-readiness-null.test.jsx`
+  - **PASS: 35 / FAIL: 0 / SKIP: 0**

@@ -135,23 +135,10 @@ async def compute_run_index(
         .limit(200)
         .to_list(length=200)
     )
-    conn_doc = None
-    try:
-        conn_doc = await db.garmin_connections.find_one(
-            {"user_id": user_id},
-            {"_id": 0, "garmin_capabilities.has_hrv": 1},
-        )
-    except AttributeError:
-        conn_doc = None
+    # Current garmin_capabilities.has_hrv reflects observed data availability,
+    # not a definitive hardware capability. Keep readiness capability neutral
+    # until a dedicated provider-level "unsupported" signal exists.
     hrv_supported = None
-    if isinstance(conn_doc, dict):
-        caps = conn_doc.get("garmin_capabilities") or {}
-        if isinstance(caps, dict) and "has_hrv" in caps:
-            raw_has_hrv = caps.get("has_hrv")
-            if raw_has_hrv is True:
-                hrv_supported = True
-            elif raw_has_hrv is False:
-                hrv_supported = False
 
     # --- Native Garmin VO₂max ---
     # Fetched from gccli health max-metrics during sync and stored in garmin_vo2max.

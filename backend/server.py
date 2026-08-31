@@ -3415,14 +3415,6 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
                 .limit(30)
                 .to_list(length=30)
             )
-            hrv_supported = None
-            caps = garmin_conn.get("garmin_capabilities") if isinstance(garmin_conn, dict) else None
-            if isinstance(caps, dict) and "has_hrv" in caps:
-                raw_has_hrv = caps.get("has_hrv")
-                if raw_has_hrv is True:
-                    hrv_supported = True
-                elif raw_has_hrv is False:
-                    hrv_supported = False
             # TrainingLoad and RecentTrainingResponse use the already-loaded activities.
             training_load = build_training_load(domain_activities_90, today)
             readiness_result = build_readiness_v2_from_garmin_data(
@@ -3430,7 +3422,7 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
                 domain_activities_90,
                 today,
                 load_snapshot=training_load,
-                hrv_supported=hrv_supported,
+                hrv_supported=None,
             )
             recent_response_for_readiness = build_recent_training_response(domain_activities_90, today)
             readiness_data_source = "garmin"

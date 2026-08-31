@@ -13,16 +13,17 @@ Classification
 --------------
 The function returns one of three levels:
 
-    SUFFICIENT   — all signals are exploitable and baselines are solid.
-    DEGRADED     — computation is possible but at least one needed signal is
-                   incomplete or its baseline is thin.
-    INSUFFICIENT — a blocking signal is entirely missing.
+    SUFFICIENT   — all 3 branches (PHYSIO, SLEEP, LOAD) are exploitable and
+                   baselines are solid.
+    DEGRADED     — exactly 2 branches are exploitable, or 3 are exploitable
+                   with thin baseline/load-depth/sleep-missing signals.
+    INSUFFICIENT — fewer than 2 exploitable branches, or load is not exploitable.
 
 Exactly 8 reason codes (cumulable)
 -----------------------------------
     missing_hrv           — no recent HRV measure
     missing_rhr           — no recent RHR measure
-    missing_physio        — both HRV and RHR are absent  (blocking)
+    missing_physio        — both HRV and RHR are absent
     missing_sleep         — no recent sleep record
     missing_load          — no exploitable training load  (blocking)
     thin_baseline_rhr     — RHR baseline < 5 valid measures over 14 days
@@ -154,9 +155,8 @@ class ReadinessSufficiencyInput(BaseModel):
     ------
     rhr    : Recent RHR measurement + baseline.  None = signal entirely absent.
     hrv    : Recent HRV measurement + baseline.  None = signal entirely absent.
-    hrv_supported: optional capability flag. False means HRV is intrinsically
-             unavailable on the user's device/profile and must not be treated as
-             transient missing data.
+    hrv_supported: reserved optional capability flag. It is currently informational
+             only and MUST NOT be used to infer intrinsic hardware incompatibility.
     sleep  : Recent sleep record.                None = no recent sleep data.
     load   : TrainingLoadSnapshot computed by training_v2.training_load.
              Must be supplied explicitly by the caller (no lazy computation).
@@ -251,16 +251,13 @@ def build_readiness_sufficiency(
     # ------------------------------------------------------------------
     rhr_present = _has_recent_value(inputs.rhr)
     hrv_present = _has_recent_value(inputs.hrv)
-    hrv_intrinsically_unavailable = inputs.hrv_supported is False
-
     if not rhr_present:
         reasons.append(ReasonCode.missing_rhr)
-    if not hrv_present and not hrv_intrinsically_unavailable:
+    if not hrv_present:
         reasons.append(ReasonCode.missing_hrv)
 
-    all_physio_absent = not rhr_present and not hrv_present
-    physio_blocking = (all_physio_absent and not hrv_intrinsically_unavailable)
-    if physio_blocking:
+    physio_available = rhr_present or hrv_present
+    if not physio_available:
         reasons.append(ReasonCode.missing_physio)
 
     # ------------------------------------------------------------------
@@ -275,6 +272,7 @@ def build_readiness_sufficiency(
     # ------------------------------------------------------------------
     load_blocking, load_codes = _load_confidence_to_codes(inputs.load.confidence)
     reasons.extend(load_codes)
+    load_available = not load_blocking
 
     # ------------------------------------------------------------------
     # 4. Baseline quality — only for the signal(s) actually present
@@ -290,8 +288,14 @@ def build_readiness_sufficiency(
     # ------------------------------------------------------------------
     # 5. Determine level
     # ------------------------------------------------------------------
-    # INSUFFICIENT takes priority: any blocking reason
-    if physio_blocking or load_blocking:
+    usable_branch_count = int(physio_available) + int(not sleep_missing) + int(load_available)
+
+    # Explicit canonical guard before aggregation:
+    # fewer than 2 usable branches can never produce a readiness score.
+    if usable_branch_count < 2:
+        level = SufficiencyLevel.INSUFFICIENT
+    # Preserve current doctrine: load is mandatory.
+    elif load_blocking:
         level = SufficiencyLevel.INSUFFICIENT
     else:
         # Check whether DEGRADED conditions apply
@@ -301,8 +305,8 @@ def build_readiness_sufficiency(
         if sleep_missing:
             degraded = True
 
-        # Entire physio branch temporarily absent but non-blocking
-        if all_physio_absent and not physio_blocking:
+        # Entire physio branch absent while sleep+load are available
+        if not physio_available:
             degraded = True
 
         # Thin load history

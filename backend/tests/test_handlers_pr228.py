@@ -721,7 +721,7 @@ async def test_training_today_propagates_hrv_supported_to_readiness_builder():
 
     assert result["status"] == 200, f"Today response failed: {result['body']}"
     assert captured, "Readiness builder should be called in /training/today"
-    assert captured[0] is False
+    assert captured[0] is None
 
 
 # ---------------------------------------------------------------------------

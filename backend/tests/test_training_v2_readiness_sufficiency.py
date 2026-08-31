@@ -187,11 +187,11 @@ class TestRHRAbsentHRVSolid:
 
 
 class TestBothPhysioAbsent:
-    """Both HRV and RHR absent → INSUFFICIENT + missing_physio."""
+    """Both HRV and RHR absent."""
 
-    def test_insufficient_missing_physio(self):
+    def test_sleep_and_load_available_is_degraded(self):
         result = _build(_absent_signal(), _absent_signal(), _sleep(), "high")
-        assert result.level == SufficiencyLevel.INSUFFICIENT
+        assert result.level == SufficiencyLevel.DEGRADED
         assert ReasonCode.missing_physio in result.reasons
         assert ReasonCode.missing_hrv in result.reasons
         assert ReasonCode.missing_rhr in result.reasons
@@ -204,18 +204,61 @@ class TestBothPhysioAbsent:
 
 
 class TestHRVUnsupportedFallbackPolicy:
-    """HRV unsupported + temporary missing RHR must not force INSUFFICIENT."""
+    """has_hrv-derived flags must not change sufficiency decisions."""
 
     def test_hrv_unsupported_with_rhr_present_is_sufficient(self):
         result = _build(_solid_rhr(), _absent_signal(), _sleep(), "high", hrv_supported=False)
         assert result.level == SufficiencyLevel.SUFFICIENT
-        assert ReasonCode.missing_hrv not in result.reasons
+        assert ReasonCode.missing_hrv in result.reasons
 
-    def test_hrv_unsupported_rhr_absent_sleep_and_load_available_is_degraded(self):
-        result = _build(_absent_signal(), _absent_signal(), _sleep(), "high", hrv_supported=False)
+    def test_hrv_supported_flag_true_false_none_same_decision(self):
+        base_args = (_absent_signal(), _absent_signal(), _sleep(), "high")
+        r_true = _build(*base_args, hrv_supported=True)
+        r_false = _build(*base_args, hrv_supported=False)
+        r_none = _build(*base_args, hrv_supported=None)
+        assert r_true.level == r_false.level == r_none.level == SufficiencyLevel.DEGRADED
+
+
+class TestBranchMatrixCanonical:
+    def test_A_physio_sleep_load_calculable(self):
+        result = _build(_solid_rhr(), _solid_hrv(), _sleep(), "high")
+        assert result.level == SufficiencyLevel.SUFFICIENT
+
+    def test_B_physio_and_load_sleep_absent_is_degraded(self):
+        result = _build(_solid_rhr(), _absent_signal(), None, "high")
         assert result.level == SufficiencyLevel.DEGRADED
-        assert ReasonCode.missing_rhr in result.reasons
-        assert ReasonCode.missing_physio not in result.reasons
+        assert ReasonCode.missing_sleep in result.reasons
+
+    def test_C_sleep_and_load_physio_absent_is_degraded(self):
+        result = _build(_absent_signal(), _absent_signal(), _sleep(), "high")
+        assert result.level == SufficiencyLevel.DEGRADED
+        assert ReasonCode.missing_physio in result.reasons
+
+    def test_D_physio_and_sleep_load_absent_is_insufficient(self):
+        result = _build(_solid_rhr(), _solid_hrv(), _sleep(), "none")
+        assert result.level == SufficiencyLevel.INSUFFICIENT
+        assert ReasonCode.missing_load in result.reasons
+
+    def test_E_load_only_is_insufficient(self):
+        result = _build(_absent_signal(), _absent_signal(), None, "high")
+        assert result.level == SufficiencyLevel.INSUFFICIENT
+        assert ReasonCode.missing_physio in result.reasons
+        assert ReasonCode.missing_sleep in result.reasons
+
+    def test_F_sleep_only_is_insufficient(self):
+        result = _build(_absent_signal(), _absent_signal(), _sleep(), "none")
+        assert result.level == SufficiencyLevel.INSUFFICIENT
+        assert ReasonCode.missing_load in result.reasons
+        assert ReasonCode.missing_physio in result.reasons
+
+    def test_G_physio_only_is_insufficient(self):
+        result = _build(_solid_rhr(), _absent_signal(), None, "none")
+        assert result.level == SufficiencyLevel.INSUFFICIENT
+        assert ReasonCode.missing_load in result.reasons
+
+    def test_H_no_branches_is_insufficient(self):
+        result = _build(_absent_signal(), _absent_signal(), None, "none")
+        assert result.level == SufficiencyLevel.INSUFFICIENT
 
 
 class TestSleepAbsent:
