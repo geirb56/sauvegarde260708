@@ -991,19 +991,7 @@ async def test_garmin_db_load_failure_fails_today():
     broken_cursor.to_list = _AsyncMock(side_effect=RuntimeError("DB connection timeout"))
     fake_db.garmin_activities.find = _MagicMock(return_value=broken_cursor)
 
-    build_calls_with_empty: list = []
-    _original_build = None
-
-    import training_v2.week_plan_bridge as _bridge
-    _original_build = _bridge.build_canonical_weekly_plan
-
-    def _tracking_build(**kwargs):
-        if kwargs.get("workouts") == [] or kwargs.get("workouts") is None and not kwargs.get("workouts"):
-            build_calls_with_empty.append(kwargs)
-        return _original_build(**kwargs)
-
-    with _patch.object(_bridge, "build_canonical_weekly_plan", wraps=_original_build):
-        result = await _get_today(fake_db)
+    result = await _get_today(fake_db)
 
     assert result["status"] in (503, 500), (
         f"Expected 503/500 when Garmin DB fails, got {result['status']}: {result['body']}"

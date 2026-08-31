@@ -218,7 +218,6 @@ Combined run (non-handler): **146 passed + 190 passed = 336 passed, 0 skip, 0 fa
 ## Asymmetric Invariants Enforced
 
 1. `reconciled_target.target_km ≤ original_target.target_km` (or None)
-1. `reconciled_target.target_km ≤ original_target.target_km` (or None)
 2. `reconciled_target.target_sessions ≤ original_target.target_sessions`
 3. `reconciled_target.target_duration_minutes ≤ original_target.target_duration_minutes` (or None)
 4. `adaptation_result.adapted_workout.distance_km ≤ planned_prescription.distance_km` (or None)
