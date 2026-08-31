@@ -148,6 +148,7 @@ def test_pr03_runner_adds_garmin_daily_metrics_subdocument():
 
     runner._run_json = fake_run_json
     runner._ensure_available = lambda: None
+    runner.is_authenticated = lambda _account=None: True
 
     metrics = runner.fetch_daily_metrics(days=1)
     assert len(metrics) == 1

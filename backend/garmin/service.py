@@ -1230,22 +1230,12 @@ async def incremental_sync(db, user_id: str) -> dict:
         # -----------------------------------------------------------------
         metrics_count = 0
         metrics_recent: list = []
-        fetch_method = getattr(provider, "get_daily_metrics_fetch_result", None)
         try:
-            if callable(fetch_method):
-                fetch_result = fetch_method(user_id, days=3, start_days_ago=0)
-            else:
-                fetch_result = None
-            if not isinstance(fetch_result, dict):
-                metrics = list(provider.get_daily_metrics(user_id, days=3, start_days_ago=0))
-                fetch_result = {
-                    "metrics": metrics,
-                    "status": "success" if metrics else "success_no_data",
-                    "endpoint_success_count": 0,
-                    "endpoint_failure_count": 0,
-                    "endpoint_total_count": 0,
-                    "endpoint_failures": [],
-                }
+            fetch_result = provider.get_daily_metrics_fetch_result(
+                user_id,
+                days=3,
+                start_days_ago=0,
+            )
         except Exception as exc:
             logger.warning("[Garmin] incremental daily_metrics fetch failed user=%s: %s", user_id, exc)
             fetch_result = {

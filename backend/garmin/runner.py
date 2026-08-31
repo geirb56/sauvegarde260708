@@ -264,7 +264,7 @@ class GccliRunner:
         endpoint_total_count = max(days, 0) * 3
         now = datetime.now(timezone.utc)
         end_days_ago = start_days_ago + max(days, 0)
-        if account and not self.is_authenticated(account):
+        if not self.is_authenticated(account):
             return DailyMetricsFetchResult(
                 metrics=[],
                 status="session_unavailable",
