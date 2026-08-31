@@ -559,8 +559,10 @@ class TestArchitecture:
 
     def test_canonical_builder_is_used(self):
         body = self._get_v2_week_func_body()
-        assert "build_weekly_plan_from_workouts" in body, (
-            "get_training_v2_week must use build_weekly_plan_from_workouts"
+        # PR228: route now uses build_canonical_weekly_plan (which wraps
+        # build_weekly_plan_from_workouts + WeeklyReconciliation).
+        assert "build_canonical_weekly_plan" in body, (
+            "get_training_v2_week must use build_canonical_weekly_plan (PR228)"
         )
 
     def test_training_engine_not_imported(self):
