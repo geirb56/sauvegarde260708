@@ -3328,19 +3328,34 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     """
     from training_v2.week_plan_bridge import build_canonical_weekly_plan
 
-    # Anchor date determined here at the runtime boundary, then passed explicitly
-    # to all V2 pure layers (no hidden now()/today() inside business functions).
-    today = datetime.now(timezone.utc).date()
+    # Single clock — all time derivations use this single anchor.
+    # No second datetime.now() call anywhere in this handler.
+    now_utc = datetime.now(timezone.utc)
+    today = now_utc.date()
     today_iso = today.isoformat()
     day_name = today.strftime("%A")
+    ninety_days_ago = now_utc - timedelta(days=90)
 
     # ── 1. Goal resolver — single source of truth (PR226) ────────────────
     resolved = await _resolve_goal_v2(user["id"])
 
-    # ── 2. Garmin activities — 90-day window (same scope as /training/v2/week) ─
-    now_utc = datetime.now(timezone.utc)
-    ninety_days_ago = now_utc - timedelta(days=90)
+    # ── 2. Garmin activities — 90-day window, ALWAYS loaded (PR228-patch) ─
+    # Garmin history is loaded unconditionally so that Week and Today always
+    # share the same canonical activity source.
+    # Rule: garmin_connections.connected only gates live data that requires an
+    # active connection (daily_metrics, readiness).  Historical activities
+    # already stored in the DB are available regardless of connected status.
     domain_activities_90: list = []
+    try:
+        garmin_activities_90 = await db.garmin_activities.find(
+            {"user_id": user["id"], "start_time": {"$gte": ninety_days_ago.isoformat()}},
+            {"_id": 0},
+        ).to_list(1000)
+        domain_activities_90 = mongo_garmin_activities_to_domain(garmin_activities_90)
+    except Exception as exc:
+        logger.warning(f"[TrainingToday] Garmin activities load failed: {exc}")
+
+    # ── 3. Readiness (live data) — only when Garmin connection is active ──
     readiness_result = None
     training_load = None
     recent_response_for_readiness = None
@@ -3349,19 +3364,13 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     garmin_conn = await db.garmin_connections.find_one({"user_id": user["id"]}, {"_id": 0})
     if garmin_conn and garmin_conn.get("connected"):
         try:
-            garmin_activities_90 = await db.garmin_activities.find(
-                {"user_id": user["id"], "start_time": {"$gte": ninety_days_ago.isoformat()}},
-                {"_id": 0},
-            ).to_list(1000)
-            domain_activities_90 = mongo_garmin_activities_to_domain(garmin_activities_90)
-
             metrics_docs = await (
                 db.garmin_daily_metrics.find({"user_id": user["id"]}, {"_id": 0})
                 .sort("date", -1)
                 .limit(30)
                 .to_list(length=30)
             )
-            # ── Mongo → DomainActivity boundary ─────────────────────────
+            # TrainingLoad and RecentTrainingResponse use the already-loaded activities.
             training_load = build_training_load(domain_activities_90, today)
             readiness_result = build_readiness_v2_from_garmin_data(
                 metrics_docs, domain_activities_90, today, load_snapshot=training_load
@@ -3371,7 +3380,7 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
         except Exception as exc:
             logger.warning(f"[TrainingToday] Garmin V2 readiness build failed: {exc}")
 
-    # ── 3. Canonical plan — SAME pipeline as /training/v2/week (PR228) ───
+    # ── 4. Canonical plan — SAME pipeline as /training/v2/week (PR228) ───
     # build_canonical_weekly_plan includes WeeklyReconciliation internally.
     # Today's session comes from this reconciled plan — no second WorkoutGenerator,
     # no second WeeklyReconciliation.
@@ -3386,7 +3395,7 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     )
     weekly_plan = canonical.weekly_plan
 
-    # ── 4. Find today's planned session from the reconciled WeeklyPlan ───
+    # ── 5. Find today's planned session from the reconciled WeeklyPlan ───
     planned_prescription: Optional[WorkoutPrescription] = None
     for session in weekly_plan.sessions:
         if session.day.lower() == day_name.lower():
@@ -3401,10 +3410,10 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
             "day": day_name,
         }
 
-    # ── 5. ReadinessDecision V2 — canonical translation ──────────────────
+    # ── 6. ReadinessDecision V2 — canonical translation ──────────────────
     readiness_decision: ReadinessDecision = build_readiness_decision(readiness_result)
 
-    # ── 6. DailyAdaptation V2 — Today only (keep or reduce, never increase) ─
+    # ── 7. DailyAdaptation V2 — Today only (keep or reduce, never increase) ─
     # Applied AFTER the canonical plan is built. Does NOT rebuild WeeklyPlan.
     adaptation_result: DailyAdaptationResult = build_daily_adaptation(
         workout=planned_prescription,
@@ -3413,16 +3422,16 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
         recent_response=recent_response_for_readiness,
     )
 
-    # ── 7. Map prescription to legacy runtime dict format ─────────────────
+    # ── 8. Map prescription to legacy runtime dict format ─────────────────
     planned_session_runtime = prescription_to_runtime_session(planned_prescription)
     adapted_runtime = prescription_to_runtime_session(adaptation_result.adapted_workout)
     adaptation_applied = adaptation_result.action != DailyAdaptationAction.KEEP
     adaptation_reason = ", ".join(adaptation_result.reason_codes)
 
-    # ── 8. Legacy compat: recommendation / recommendation_color derived from V2 ─
+    # ── 9. Legacy compat: recommendation / recommendation_color derived from V2 ─
     recommendation, recommendation_color = BAND_TO_RECOMMENDATION[readiness_decision.band]
 
-    # ── 9. Historical feedback (unchanged) ────────────────────────────────
+    # ── 10. Historical feedback (unchanged) ───────────────────────────────
     feedback_cursor = db.training_feedback.find(
         {"user_id": user["id"]},
         {"_id": 0}
