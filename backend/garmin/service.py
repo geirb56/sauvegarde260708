@@ -1231,13 +1231,12 @@ async def incremental_sync(db, user_id: str) -> dict:
         metrics_count = 0
         metrics_recent: list = []
         fetch_method = getattr(provider, "get_daily_metrics_fetch_result", None)
-        use_fetch_result = callable(fetch_method) and callable(
-            getattr(provider.__class__, "get_daily_metrics_fetch_result", None)
-        )
         try:
-            if use_fetch_result:
+            if callable(fetch_method):
                 fetch_result = fetch_method(user_id, days=3, start_days_ago=0)
             else:
+                fetch_result = None
+            if not isinstance(fetch_result, dict):
                 metrics = list(provider.get_daily_metrics(user_id, days=3, start_days_ago=0))
                 fetch_result = {
                     "metrics": metrics,

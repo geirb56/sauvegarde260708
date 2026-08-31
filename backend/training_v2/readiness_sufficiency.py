@@ -258,7 +258,8 @@ def build_readiness_sufficiency(
     if not hrv_present and not hrv_intrinsically_unavailable:
         reasons.append(ReasonCode.missing_hrv)
 
-    physio_blocking = (not rhr_present and not hrv_present and not hrv_intrinsically_unavailable)
+    all_physio_absent = not rhr_present and not hrv_present
+    physio_blocking = (all_physio_absent and not hrv_intrinsically_unavailable)
     if physio_blocking:
         reasons.append(ReasonCode.missing_physio)
 
@@ -298,6 +299,10 @@ def build_readiness_sufficiency(
 
         # Sleep missing
         if sleep_missing:
+            degraded = True
+
+        # Entire physio branch temporarily absent but non-blocking
+        if all_physio_absent and not physio_blocking:
             degraded = True
 
         # Thin load history
