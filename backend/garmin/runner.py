@@ -337,7 +337,10 @@ class GccliRunner:
         elif endpoint_failure_count == endpoint_total_count:
             status = "session_unavailable" if saw_session_error else "technical_failure"
         elif endpoint_failure_count > 0:
-            status = "partial_success"
+            # Partial success is usable only when at least one normalized daily
+            # metric is available; endpoint-level technical successes with zero
+            # usable metrics are treated as retryable technical failures.
+            status = "partial_success" if metrics else "technical_failure"
         elif not metrics:
             status = "success_no_data"
         else:

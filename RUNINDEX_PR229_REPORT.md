@@ -96,3 +96,68 @@
 ## Non-goals
 - No fabricated neutral fallback values for HRV/RHR/sleep.
 - No forced reconnect on technical daily-metrics endpoint failures when session remains valid.
+
+---
+
+## C229 post-audit corrections (same PR #229)
+
+### Corrected blockers
+1. **`hrv_supported` propagation**
+   - `/training/today` now forwards `hrv_supported` from `garmin_connections.garmin_capabilities.has_hrv`.
+   - Dashboard history computation no longer projects current capability backward (`hrv_supported=None` in history path).
+   - Capability parsing now preserves unknown as `None` (no implicit `bool(None) -> False`).
+
+2. **`partial_success` with zero usable metrics**
+   - Runner now classifies endpoint-partial + zero usable metrics as `technical_failure`, not `partial_success`.
+   - Incremental and phased sync enforce retryable failure for this state.
+
+3. **RunIndex refresh independence from daily-metrics failures**
+   - Incremental flow now executes:
+     `activities ingest -> run-index refresh/history backfill -> daily metrics`.
+   - Daily-metrics technical failure no longer prevents activity-based RunIndex refresh.
+   - `run_index_status` is set to `ready` only after actual refresh execution.
+
+4. **Deep/first/resume sync migration to structured fetch contract**
+   - `_complete_post_activities_pipeline` now uses `get_daily_metrics_fetch_result(...)` for both 7d and enrichment windows.
+   - Distinguishes `success`, `success_no_data`, `partial_success`, `technical_failure`, `session_unavailable`.
+   - First/deep sync all-endpoint failures now return explicit failed technical state.
+
+5. **Dashboard corrections**
+   - Missing HRV now maps to gray status (never green for missing).
+   - Readiness unavailable now displays an explicit known cause message from backend cause code.
+   - `MetricWidget` unknown status fallback changed from green to gray.
+
+6. **No-lookahead on capability**
+   - Historical readiness path now intentionally avoids using current capability flags.
+
+### Files updated in C229 correction pass
+- `backend/garmin/runner.py`
+- `backend/garmin/service.py`
+- `backend/garmin/insights.py`
+- `backend/server.py`
+- `frontend/src/pages/Dashboard.jsx`
+- `backend/tests/test_garmin_daily_metrics_pr03.py`
+- `backend/tests/test_garmin_phased_sync_pr07a.py`
+- `backend/tests/test_garmin_deep_sync.py`
+- `backend/tests/test_run_index_r4b_history_readiness_v2.py`
+- `backend/tests/test_handlers_pr228.py`
+- `frontend/src/__tests__/dashboard-run-readiness-null.test.jsx`
+
+### Tests executed (runtime)
+- `python -m pytest tests/test_garmin_daily_metrics_pr03.py tests/test_garmin_phased_sync_pr07a.py tests/test_garmin_deep_sync.py tests/test_run_index_r4b_history_readiness_v2.py`
+  - **PASS: 66 / FAIL: 0 / SKIP: 0**
+- `python -m pytest tests/test_handlers_pr228.py -k "propagates_hrv_supported"`
+  - **PASS: 1 / FAIL: 0 / SKIP: 0**
+- `python -m pytest tests/test_run_index_compute_integration.py tests/test_garmin_queue_backfill_pr197.py`
+  - **PASS: 16 / FAIL: 0 / SKIP: 0**
+- `python -m pytest tests/test_training_v2_readiness_sufficiency.py tests/test_readiness_data_truth_pr225.py tests/test_run_index_r3_readiness_v2.py`
+  - **PASS: 89 / FAIL: 0 / SKIP: 0**
+- `python -m pytest tests/test_weekly_unification_pr228.py`
+  - **PASS: 45 / FAIL: 0 / SKIP: 0**
+- `npx craco test --watchAll=false --forceExit --runTestsByPath src/__tests__/dashboard-run-readiness-null.test.jsx`
+  - **PASS: 6 / FAIL: 0 / SKIP: 0**
+- `npx craco test --watchAll=false --forceExit --runTestsByPath src/__tests__/dashboard-run-readiness-v2.test.jsx src/__tests__/dashboard-run-readiness-null.test.jsx`
+  - **PASS: 35 / FAIL: 0 / SKIP: 0**
+
+### Static checks (non-executed)
+- Full deferred runtime gate scenario (persisted live session, scheduler wait, Mongo J0/J-1 verification, UI live state verification) remains **deferred** as requested.

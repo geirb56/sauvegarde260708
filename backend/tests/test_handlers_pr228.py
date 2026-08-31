@@ -333,11 +333,14 @@ def _seed_garmin_activities(
         })
 
 
-def _seed_connected(fake_db: _FakeDB, connected: bool = True) -> None:
-    fake_db.garmin_connections._docs.append({
+def _seed_connected(fake_db: _FakeDB, connected: bool = True, has_hrv=None) -> None:
+    doc = {
         "user_id": _USER_ID,
         "connected": connected,
-    })
+    }
+    if has_hrv is not None:
+        doc["garmin_capabilities"] = {"has_hrv": has_hrv}
+    fake_db.garmin_connections._docs.append(doc)
 
 
 # ---------------------------------------------------------------------------
@@ -697,6 +700,28 @@ async def test_maintenance_goal_both_handlers():
 
     assert week_result["status"] == 200, f"Week maintenance: {week_result['body']}"
     assert today_result["status"] == 200, f"Today maintenance: {today_result['body']}"
+
+
+@pytest.mark.asyncio
+async def test_training_today_propagates_hrv_supported_to_readiness_builder():
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    _seed_garmin_activities(fake_db, n=8)
+    _seed_connected(fake_db, connected=True, has_hrv=False)
+
+    captured = []
+    original_builder = server.build_readiness_v2_from_garmin_data
+
+    def _spy_builder(*args, **kwargs):
+        captured.append(kwargs.get("hrv_supported", "__missing__"))
+        return original_builder(*args, **kwargs)
+
+    with patch("server.build_readiness_v2_from_garmin_data", side_effect=_spy_builder):
+        result = await _get_today(fake_db)
+
+    assert result["status"] == 200, f"Today response failed: {result['body']}"
+    assert captured, "Readiness builder should be called in /training/today"
+    assert captured[0] is False
 
 
 # ---------------------------------------------------------------------------

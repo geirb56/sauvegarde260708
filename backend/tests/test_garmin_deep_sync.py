@@ -283,6 +283,17 @@ def _mock_db(connected: bool = True, deep_sync_done: bool = False) -> MagicMock:
     return db
 
 
+def _fetch_result(metrics, status="success_no_data"):
+    return {
+        "metrics": metrics,
+        "status": status,
+        "endpoint_success_count": 3,
+        "endpoint_failure_count": 0 if status in {"success", "success_no_data"} else 1,
+        "endpoint_total_count": 3,
+        "endpoint_failures": [],
+    }
+
+
 class TestDeepSync:
     def test_deep_sync_not_connected_returns_failure(self):
         db = _mock_db(connected=False)
@@ -300,7 +311,10 @@ class TestDeepSync:
         mock_provider.fetch_all_activities.return_value = [
             GccliProvider._normalize(a) for a in acts
         ]
-        mock_provider.get_daily_metrics.return_value = []
+        mock_provider.get_daily_metrics_fetch_result.side_effect = [
+            _fetch_result([], "success_no_data"),
+            _fetch_result([], "success_no_data"),
+        ]
 
         from garmin import service as svc
 
@@ -330,7 +344,10 @@ class TestDeepSync:
         mock_provider.fetch_all_activities.return_value = [
             GccliProvider._normalize(a) for a in acts
         ]
-        mock_provider.get_daily_metrics.return_value = []
+        mock_provider.get_daily_metrics_fetch_result.side_effect = [
+            _fetch_result([], "success_no_data"),
+            _fetch_result([], "success_no_data"),
+        ]
 
         from garmin import service as svc
 
@@ -363,7 +380,10 @@ class TestDeepSync:
         db = _mock_db(connected=True)
         mock_provider = MagicMock()
         mock_provider.fetch_all_activities.return_value = []
-        mock_provider.get_daily_metrics.return_value = []
+        mock_provider.get_daily_metrics_fetch_result.side_effect = [
+            _fetch_result([], "success_no_data"),
+            _fetch_result([], "success_no_data"),
+        ]
 
         from garmin import service as svc
 
@@ -401,6 +421,37 @@ class TestDeepSync:
 
         assert result["success"] is False
 
+    def test_deep_sync_daily_metrics_all_endpoints_fail_returns_technical_failure(self):
+        db = _mock_db(connected=True)
+        mock_provider = MagicMock()
+        mock_provider.fetch_all_activities.return_value = []
+        mock_provider.get_daily_metrics_fetch_result.return_value = {
+            "metrics": [],
+            "status": "technical_failure",
+            "endpoint_success_count": 0,
+            "endpoint_failure_count": 21,
+            "endpoint_total_count": 21,
+            "endpoint_failures": [{"endpoint": "health hr", "date": "2026-08-09", "error": "timeout"}],
+        }
+
+        from garmin import service as svc
+
+        with (
+            patch.object(svc, "get_provider_for_user", return_value=mock_provider),
+            patch.object(svc, "emit_activity_created", new=AsyncMock()),
+            patch.object(svc, "_build_and_persist_capabilities", new=AsyncMock()),
+            patch.object(
+                svc,
+                "refresh_today_run_index_after_garmin_activities",
+                new=AsyncMock(return_value={"today_snapshot": {"date": "2026-08-09"}, "workouts": []}),
+            ),
+        ):
+            result = _run(svc.deep_sync(db, "user-1"))
+
+        assert result["success"] is False
+        assert result["status"] == "failed"
+        assert result["error"] == "daily_metrics_7d_failed"
+
 
 class TestSyncDispatch:
     def test_sync_triggers_deep_sync_on_first_connection(self):
@@ -427,7 +478,10 @@ class TestSyncDispatch:
         db = _mock_db(connected=True, deep_sync_done=True)
         mock_provider = MagicMock()
         mock_provider.sync_activities.return_value = []
-        mock_provider.get_daily_metrics.return_value = []
+        mock_provider.get_daily_metrics_fetch_result.side_effect = [
+            _fetch_result([], "success_no_data"),
+            _fetch_result([], "success_no_data"),
+        ]
 
         from garmin import service as svc
 
@@ -457,7 +511,10 @@ class TestSyncDispatch:
         db = _mock_db(connected=True, deep_sync_done=False)
         mock_provider = MagicMock()
         mock_provider.sync_activities.return_value = []
-        mock_provider.get_daily_metrics.return_value = []
+        mock_provider.get_daily_metrics_fetch_result.side_effect = [
+            _fetch_result([], "success_no_data"),
+            _fetch_result([], "success_no_data"),
+        ]
 
         from garmin import service as svc
 
@@ -538,7 +595,10 @@ class TestRunIndexBackfillAfterDeepSync:
         db = _mock_db(connected=True)
         mock_provider = MagicMock()
         mock_provider.fetch_all_activities.return_value = []
-        mock_provider.get_daily_metrics.return_value = []
+        mock_provider.get_daily_metrics_fetch_result.side_effect = [
+            _fetch_result([], "success_no_data"),
+            _fetch_result([], "success_no_data"),
+        ]
 
         from garmin import service as svc
 

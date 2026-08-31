@@ -246,3 +246,27 @@ def test_pr03_fetch_result_health_sleep_error_is_technical_state():
     result = runner.fetch_daily_metrics_result(days=1)
     assert result.status == "partial_success"
     assert any(item["endpoint"] == "health sleep" for item in result.endpoint_failures)
+
+
+def test_pr03_fetch_result_two_endpoint_errors_one_empty_is_technical_failure():
+    runner = GccliRunner.__new__(GccliRunner)
+    runner.gccli_path = "gccli"
+    runner.home = "/tmp"
+    runner.keyring_backend = "file"
+    runner.timeout = 45
+    runner.max_retries = 3
+    runner.is_authenticated = lambda _account=None: True
+
+    def run_json(args, account=None):
+        key = " ".join(args[:2])
+        if key in {"health hr", "health sleep"}:
+            raise GccliError(f"{key} timeout")
+        if key == "health hrv":
+            return {}
+        return {}
+
+    runner._run_json = run_json
+    runner._ensure_available = lambda: None
+    result = runner.fetch_daily_metrics_result(days=1)
+    assert result.metrics == []
+    assert result.status == "technical_failure"

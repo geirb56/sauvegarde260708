@@ -135,15 +135,23 @@ async def compute_run_index(
         .limit(200)
         .to_list(length=200)
     )
-    conn_doc = await db.garmin_connections.find_one(
-        {"user_id": user_id},
-        {"_id": 0, "garmin_capabilities.has_hrv": 1},
-    )
+    conn_doc = None
+    try:
+        conn_doc = await db.garmin_connections.find_one(
+            {"user_id": user_id},
+            {"_id": 0, "garmin_capabilities.has_hrv": 1},
+        )
+    except AttributeError:
+        conn_doc = None
     hrv_supported = None
     if isinstance(conn_doc, dict):
         caps = conn_doc.get("garmin_capabilities") or {}
         if isinstance(caps, dict) and "has_hrv" in caps:
-            hrv_supported = bool(caps.get("has_hrv"))
+            raw_has_hrv = caps.get("has_hrv")
+            if raw_has_hrv is True:
+                hrv_supported = True
+            elif raw_has_hrv is False:
+                hrv_supported = False
 
     # --- Native Garmin VO₂max ---
     # Fetched from gccli health max-metrics during sync and stored in garmin_vo2max.
@@ -261,7 +269,7 @@ async def compute_run_index(
         recommendation = _REC_I18N.get(recommendation, {}).get(lang, recommendation)
 
     # --- Statuses ---
-    hrv_status = "green"
+    hrv_status = "gray"
     if hrv_delta is not None:
         hrv_status = "green" if hrv_delta <= 5 else ("yellow" if hrv_delta <= 10 else "red")
     rhr_status = (
@@ -351,7 +359,9 @@ async def compute_run_index(
             hist_metrics,
             hist_activities,
             hist_day,
-            hrv_supported=hrv_supported,
+            # Historical readiness must be no-lookahead: current device
+            # capability is not projected backwards to prior days.
+            hrv_supported=None,
         )
         doc_readiness: Optional[float] = hist_v2.score  # float 0–100 or None
         hist_load_snapshot = build_training_load(hist_activities, hist_day)
