@@ -75,9 +75,21 @@ def _equivalent_time_seconds_from_vdot(
         return None
 
     target_distance_m = target_distance_km * 1000.0
-    lo = 90.0
+    lo = 300.0
     hi = 12 * 3600.0
-    if vdot_from_performance(target_distance_m, lo) is None or vdot_from_performance(target_distance_m, hi) is None:
+
+    lo_vdot = vdot_from_performance(target_distance_m, lo)
+    hi_vdot = vdot_from_performance(target_distance_m, hi)
+    while lo_vdot is None and lo < hi:
+        lo *= 1.5
+        lo_vdot = vdot_from_performance(target_distance_m, lo)
+    while hi_vdot is None and hi > lo:
+        hi *= 0.8
+        hi_vdot = vdot_from_performance(target_distance_m, hi)
+
+    if lo_vdot is None or hi_vdot is None or lo >= hi:
+        return None
+    if not (lo_vdot >= vdot >= hi_vdot):
         return None
 
     for _ in range(40):
@@ -247,11 +259,13 @@ def _build_weekly_context_from_workouts(
         reference_date=reference_date,
     )
 
-    training_paces = compute_training_paces(activities, reference_date, user_max_hr=None)
-    target_capability_time_seconds = _resolve_capability_time_for_goal(
-        paces=training_paces,
-        plan_goal=plan_goal,
-    )
+    target_capability_time_seconds: Optional[int] = None
+    if plan_goal.target_time_seconds is not None:
+        training_paces = compute_training_paces(activities, reference_date, user_max_hr=None)
+        target_capability_time_seconds = _resolve_capability_time_for_goal(
+            paces=training_paces,
+            plan_goal=plan_goal,
+        )
 
     return _WeeklyBuildContext(
         weekly_target=weekly_target,

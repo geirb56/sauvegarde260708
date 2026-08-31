@@ -19,6 +19,7 @@ from training_v2.runner_profile import RunnerProfile
 from training_v2.training_paces import PaceRange, PaceValue, TrainingPaces, VdotResult
 from training_v2.week_plan_bridge import (
     _equivalent_time_seconds_from_vdot,
+    _resolve_capability_time_for_goal,
     build_weekly_plan_from_workouts,
 )
 from training_v2.weekly_target import WeeklyTarget
@@ -97,12 +98,14 @@ def _build_direct(
     goal_type: GoalType,
     target_time_seconds: int | None,
     capability_time_seconds: int | None,
+    target_distance_km: float | None = None,
     continuity_state: str = "normal",
     allow_intensity: bool = True,
     phase: PeriodizationPhase = PeriodizationPhase.build,
 ) -> WeeklyPlan:
     plan_goal = build_plan_goal(
         goal_type=goal_type,
+        target_distance_km=target_distance_km,
         target_time_seconds=target_time_seconds,
         created_from="user",
     )
@@ -200,7 +203,13 @@ def test_marathon_daniels_capability_vs_target_time():
 
 
 def test_same_target_time_two_vdot_levels_different_classification():
-    workouts = [_activity(10.0, 48 * 60)]
+    goal_10k = build_plan_goal(goal_type=GoalType.ten_k, target_time_seconds=1, created_from="user")
+    cap_low = _equivalent_time_seconds_from_vdot(target_distance_km=goal_10k.target_distance_km, vdot=44.0)
+    cap_high = _equivalent_time_seconds_from_vdot(target_distance_km=goal_10k.target_distance_km, vdot=58.0)
+    assert cap_low is not None and cap_high is not None and cap_low > cap_high
+    target_time = int((cap_low + cap_high) / 2)
+
+    workouts = [_activity(10.0, 52 * 60)]
     forced_state = type("TS", (), {"continuity_state": "normal", "overall_confidence": "medium"})()
 
     with patch(
@@ -213,25 +222,25 @@ def test_same_target_time_two_vdot_levels_different_classification():
         "training_v2.week_plan_bridge.build_weekly_target",
         return_value=_weekly_target(),
     ):
-        _, runner_low_vdot = build_weekly_plan_from_workouts(
+        _, plan_low_vdot = build_weekly_plan_from_workouts(
             workouts=workouts,
             goal_type="10K",
             race_date=None,
             cycle_start_date=REF,
             reference_date=REF,
-            target_time_seconds=50 * 60,
+            target_time_seconds=target_time,
         )
-        _, runner_high_vdot = build_weekly_plan_from_workouts(
+        _, plan_high_vdot = build_weekly_plan_from_workouts(
             workouts=workouts,
             goal_type="10K",
             race_date=None,
             cycle_start_date=REF,
             reference_date=REF,
-            target_time_seconds=50 * 60,
+            target_time_seconds=target_time,
         )
 
-    assert "target_time_profile_aggressive" in runner_low_vdot.reason_codes
-    assert "target_time_profile_conservative" in runner_high_vdot.reason_codes
+    assert "target_time_profile_aggressive" in plan_low_vdot.reason_codes
+    assert "target_time_profile_conservative" in plan_high_vdot.reason_codes
 
 
 def test_low_and_insufficient_confidence_disable_target_time_modulation():
@@ -265,15 +274,28 @@ def test_low_and_insufficient_confidence_disable_target_time_modulation():
 
 
 def test_ultra_target_time_modulation_explicitly_disabled():
+    ultra_goal = build_plan_goal(
+        goal_type=GoalType.ultra,
+        target_distance_km=50.0,
+        target_time_seconds=6 * 3600,
+        created_from="user",
+    )
+    assert _resolve_capability_time_for_goal(
+        paces=_paces_from_vdot(50.0, "HIGH"),
+        plan_goal=ultra_goal,
+    ) is None
+
     baseline = _build_direct(
         goal_type=GoalType.ultra,
         target_time_seconds=None,
         capability_time_seconds=None,
+        target_distance_km=50.0,
     )
     with_target = _build_direct(
         goal_type=GoalType.ultra,
         target_time_seconds=6 * 3600,
-        capability_time_seconds=5 * 3600,
+        capability_time_seconds=None,
+        target_distance_km=50.0,
     )
     assert _running_signature(with_target) == _running_signature(baseline)
     assert "target_time_profile_aggressive" not in with_target.reason_codes
@@ -316,7 +338,7 @@ def test_target_time_without_value_keeps_baseline_unchanged():
     baseline = _build_direct(
         goal_type=GoalType.ten_k,
         target_time_seconds=None,
-        capability_time_seconds=3000,
+        capability_time_seconds=None,
     )
     without_target = _build_direct(
         goal_type=GoalType.ten_k,
