@@ -25,6 +25,7 @@ from .plan_goal import GoalType, PlanGoal, build_plan_goal
 from .runner_profile import RunnerProfile, build_runner_profile
 from .training_history import build_training_history
 from .training_load import build_training_load
+from .training_paces import TrainingPaces, compute_training_paces
 from .training_state import build_training_state
 from .weekly_target import WeeklyTarget, build_weekly_target
 from .workout_generator import WeeklyPlan, build_weekly_plan
@@ -61,6 +62,36 @@ class _WeeklyBuildContext:
     runner_profile: RunnerProfile
     plan_goal: PlanGoal
     periodization: PeriodizationSnapshot
+    target_capability_pace_seconds_per_km: Optional[float]
+
+
+def _resolve_capability_pace_for_goal(
+    *,
+    paces: TrainingPaces,
+    plan_goal: PlanGoal,
+) -> Optional[float]:
+    """Resolve goal-relevant observed capability pace when confidence is sufficient."""
+    if paces.confidence not in {"HIGH", "MEDIUM"}:
+        return None
+
+    goal_type = plan_goal.goal_type
+
+    if goal_type in {GoalType.five_k, GoalType.ten_k, GoalType.half_marathon}:
+        if paces.threshold is None:
+            return None
+        return float(paces.threshold.min_per_km * 60.0)
+
+    if goal_type == GoalType.marathon:
+        if paces.marathon is None:
+            return None
+        return float(paces.marathon.min_per_km * 60.0)
+
+    if goal_type == GoalType.ultra:
+        if paces.easy is None or paces.easy.upper is None:
+            return None
+        return float(paces.easy.upper.min_per_km * 60.0)
+
+    return None
 
 
 def _normalize_workout_to_domain_fields(workout: dict) -> dict:
@@ -194,11 +225,18 @@ def _build_weekly_context_from_workouts(
         reference_date=reference_date,
     )
 
+    training_paces = compute_training_paces(activities, reference_date, user_max_hr=None)
+    target_capability_pace_seconds_per_km = _resolve_capability_pace_for_goal(
+        paces=training_paces,
+        plan_goal=plan_goal,
+    )
+
     return _WeeklyBuildContext(
         weekly_target=weekly_target,
         runner_profile=runner_profile,
         plan_goal=plan_goal,
         periodization=periodization,
+        target_capability_pace_seconds_per_km=target_capability_pace_seconds_per_km,
     )
 
 
@@ -307,6 +345,7 @@ def build_weekly_plan_from_workouts(
         plan_goal=ctx.plan_goal,
         periodization=ctx.periodization,
         reference_date=reference_date,
+        target_capability_pace_seconds_per_km=ctx.target_capability_pace_seconds_per_km,
     )
 
     return ctx.weekly_target, weekly_plan

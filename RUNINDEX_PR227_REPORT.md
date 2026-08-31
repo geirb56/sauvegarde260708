@@ -1,97 +1,77 @@
-# RUNINDEX — PR #227 Report
+# RUNINDEX — PATCH PR #227 Report
 
 ## Scope
-- Target: make `target_time` a real Training V2 engine input (not decorative).
-- Base branch: `copilot/dev`.
-- Rule kept: never synthesize/invent `target_time`.
-- Rule kept: `MAINTENANCE => target_time=None`.
-- Rule kept: no `target_time` => V2 behavior unchanged.
+- Same PR #227, no merge.
+- Fix 3 blockers: remove universal pace references, enforce absolute protection priority, and hard-validate `target_time_minutes` at POST `/user/goal`.
 
-## Audit (requested components)
+## Blocker fixes
 
-### `_resolve_goal_v2` (backend/server.py)
-- Reads canonical `user_goals.target_time_minutes`.
-- Converts only valid positive numeric values to `target_time_sec = int(minutes * 60)`.
-- Invalid/missing values remain `None` (no synthetic fallback).
-- `MAINTENANCE` path always returns `target_time_sec=None`.
+### 1) Remove universal reference paces
+- Removed `_goal_reference_pace_seconds_per_km` from `workout_generator`.
+- Target-time classification now compares goal pace only against an observed/canonical capability pace.
+- Capability source used: Training Paces V2 (VDOT from qualified observed performances), resolved in `week_plan_bridge`.
+- If capability confidence is insufficient (`LOW` / `INSUFFICIENT`) or missing pace signal, target-time modulation is disabled.
+- No VMA, no Garmin VO2max, no race-prediction shortcut, no synthetic per-distance reference pace.
 
-### `PlanGoal` (backend/training_v2/plan_goal.py)
-- Already supports `target_time_seconds`.
-- Validation already forbids `target_time_seconds` for maintenance.
-
-### `Periodization`
-- Target-time agnostic by design (calendar layer only). No prescription logic here.
-
-### `WeeklyTarget`
-- Still target-time agnostic by design (weekly load guardrails/reprise logic).
-- No target-time synthesis introduced.
-
-### `WorkoutGenerator`
-- **Changed**: target-time now influences session composition (when physiologically relevant).
-- Modulation applies only when:
+### 2) Absolute priority for protections
+- Target-time modulation is now bounded and can apply only when all are true:
+  - `continuity_state == "normal"`,
+  - `allow_intensity == True`,
   - `target_basis == "distance"`,
-  - intensity is allowed,
-  - valid `PlanGoal.target_time_seconds` and `PlanGoal.target_distance_km` exist.
-- Profiles:
-  - aggressive chrono target → promote one easy/recovery slot to steady;
-  - conservative chrono target → downgrade quality slot to steady.
-- No effect when target-time is absent/invalid.
+  - phase in `{base, build, specific}`.
+- Therefore no chrono effect in:
+  - `no_history`, `deep_reprise`, `partial_reprise`, `reprise_exit`,
+  - `taper`, `race`, `consolidation`,
+  - any `allow_intensity=False` path.
+- Chrono never overrides TrainingState / WeeklyTarget / Periodization protections.
 
-### `week_plan_bridge`
-- **Changed**: `target_time_seconds` propagated into `build_plan_goal(...)` in canonical weekly pipeline.
-- Added optional `target_time_seconds` argument to:
-  - `_build_weekly_context_from_workouts`
-  - `build_weekly_target_from_workouts`
-  - `build_weekly_plan_from_workouts`
-
-### `/training/v2/week`
-- **Changed**: passes resolved `target_time_sec` into bridge (`target_time_seconds=...`).
-- Response `goal.target_time_seconds` unchanged and still exposed.
-
-### `/training/v2/cycle`
-- **Changed**: `PlanGoal` now receives `target_time_seconds` as input as well.
-- Response passthrough of `target_time_seconds` unchanged.
-
-### Dashboard / Training frontend
-- Existing UI consumes week/cycle responses as before.
-- No frontend code change required for this PR’s engine-level objective.
+### 3) POST `/user/goal` target_time validation
+- Added strict validation (`_validate_target_time_minutes`) before any mutation:
+  - `None` accepted.
+  - provided value must be numeric and strictly `> 0`.
+  - `0`, negative, bool, non-numeric => HTTP 400.
+- Invalid target time is rejected before `delete_many` / `insert_one`.
+- No invalid value is stored then silently transformed to `None`.
 
 ## Files changed
-- `backend/server.py`
-- `backend/training_v2/week_plan_bridge.py`
 - `backend/training_v2/workout_generator.py`
-- `backend/tests/test_target_time_propagation_pr227.py` (new)
+- `backend/training_v2/week_plan_bridge.py`
+- `backend/server.py`
+- `backend/tests/test_target_time_propagation_pr227.py`
+- `backend/tests/test_goal_truth_pr226.py`
 
-## Mandatory tests and results
+## Mandatory tests (blockers)
 
-### 10K sans target_time => baseline inchangée
-- Covered by: `test_10k_without_target_time_keeps_baseline`
-- Result: ✅ PASS
+### Capacity-relative chrono behavior
+- `test_10k_aggressive_when_target_faster_than_observed_capability` ✅
+- `test_10k_conservative_when_target_slower_than_observed_capability` ✅
+- `test_same_target_time_two_runners_can_be_classified_differently` ✅
+- `test_insufficient_capability_does_not_alter_prescription` ✅
+- `test_bridge_uses_canonical_paces_for_target_time_modulation` ✅
 
-### 10K avec objectif réaliste => propagation complète
-- Covered by: `test_bridge_propagates_target_time_seconds_to_workout_generator`
-- Result: ✅ PASS (`target_time_seconds=3000` reaches engine PlanGoal)
+### Protection priority
+- `test_taper_aggressive_target_does_not_reintroduce_steady_or_quality` ✅
+- `test_race_aggressive_target_keeps_race_week_unchanged` ✅
+- `test_reprise_target_time_keeps_protections_unchanged` ✅
+- `test_without_target_time_baseline_is_unchanged` ✅
 
-### 10K avec deux chronos différents => effet mesurable sur prescription
-- Covered by: `test_10k_two_target_times_change_prescription`
-- Result: ✅ PASS (different running signature + profile reason codes)
+### POST `/user/goal` validation
+- `test_post_user_goal_invalid_target_time_rejected_without_mutation` ✅
+- `test_post_user_goal_non_numeric_target_time_rejected_without_mutation` ✅
 
-### Semi idem
-- Covered by: `test_semi_two_target_times_change_prescription`
-- Result: ✅ PASS
+## Required suite reruns
 
-### MAINTENANCE => aucun target_time
-- Covered by: `test_maintenance_never_uses_target_time`
-- Result: ✅ PASS
+Command:
+- `python -m pytest tests/test_target_time_propagation_pr227.py tests/test_training_paces_pr194.py tests/test_workout_generator_v2.py tests/test_weekly_target_v2.py tests/test_periodization_pr06.py -q`
 
-### Aucun fallback chrono synthétique
-- Covered by: `test_bridge_without_target_time_does_not_synthesize_seconds`
-- Result: ✅ PASS (`None` remains `None`)
+Result:
+- ✅ `282 passed`
 
-### Aucune régression volume/reprise/long-run/intensity caps
-- Command:
-  - `python -m pytest tests/test_target_time_propagation_pr227.py tests/test_workout_generator_v2.py tests/test_weekly_target_v2.py -q`
-- Result: ✅ PASS (`176 passed`)
+Additional validation command:
+- `python -m pytest tests/test_goal_truth_pr226.py -k "invalid_target_time or non_numeric_target_time" -q`
+
+Result:
+- ✅ `4 passed`
 
 ## Runtime gate
-- **Runtime: DEFERRED TO FINAL RUNTIME GATE.**
+- Runtime: **DEFERRED TO FINAL RUNTIME GATE**.

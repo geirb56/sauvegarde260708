@@ -952,6 +952,28 @@ def calculate_target_pace(distance_km: float, target_time_minutes: int) -> str:
     return f"{pace_min}:{pace_sec:02d}"
 
 
+def _validate_target_time_minutes(value: Optional[object]) -> Optional[int]:
+    """Validate target_time_minutes input for POST /user/goal."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise HTTPException(
+            status_code=400,
+            detail="target_time_minutes must be a positive number when provided.",
+        )
+    if value <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="target_time_minutes must be strictly greater than 0 when provided.",
+        )
+    if isinstance(value, float) and not value.is_integer():
+        raise HTTPException(
+            status_code=400,
+            detail="target_time_minutes must be a whole number of minutes when provided.",
+        )
+    return int(value)
+
+
 # PR226 — single place for ULTRA distance validation so future threshold or
 # error-message changes only need one edit.
 _ULTRA_MIN_DISTANCE_KM: float = 42.195
@@ -1164,7 +1186,7 @@ class UserGoalCreate(BaseModel):
     event_name: str
     event_date: str
     distance_type: str  # 5k, 10k, semi, marathon, ultra
-    target_time_minutes: Optional[int] = None  # Target time in minutes
+    target_time_minutes: Optional[int | float | str | bool] = None  # validated manually in set_user_goal
     distance_km: Optional[float] = None  # PR226: explicit distance for ultra (must be > 42.195)
 
 
@@ -1223,6 +1245,7 @@ async def set_user_goal(goal: UserGoalCreate, user: dict = Depends(auth_user)):
         distance_km = _validate_ultra_distance_km(goal.distance_km)
     else:
         distance_km = DISTANCE_TYPES[goal.distance_type]
+    validated_target_time_minutes = _validate_target_time_minutes(goal.target_time_minutes)
 
     # ── 2. Coherence: distance_type must match active training_cycles.goal ──
     cycle = await db.training_cycles.find_one({"user_id": user_id}, {"_id": 0})
@@ -1251,8 +1274,8 @@ async def set_user_goal(goal: UserGoalCreate, user: dict = Depends(auth_user)):
 
     # ── 3. Calculate target pace ────────────────────────────────────────────
     target_pace = None
-    if goal.target_time_minutes:
-        target_pace = calculate_target_pace(distance_km, goal.target_time_minutes)
+    if validated_target_time_minutes is not None:
+        target_pace = calculate_target_pace(distance_km, validated_target_time_minutes)
 
     # ── 4. Write: delete then insert (all validation passed) ────────────────
     await db.user_goals.delete_many({"user_id": user_id})
@@ -1263,7 +1286,7 @@ async def set_user_goal(goal: UserGoalCreate, user: dict = Depends(auth_user)):
         event_date=parsed_event_date.isoformat(),  # always stored normalized YYYY-MM-DD
         distance_type=goal.distance_type,
         distance_km=distance_km,
-        target_time_minutes=goal.target_time_minutes,
+        target_time_minutes=validated_target_time_minutes,
         target_pace=target_pace,
     )
     doc = goal_obj.model_dump()

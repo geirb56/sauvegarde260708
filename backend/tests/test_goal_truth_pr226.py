@@ -484,6 +484,92 @@ def test_post_user_goal_past_date_rejected():
     assert "future" in exc_info.value.detail.lower() or "past" in exc_info.value.detail.lower() or "event_date" in exc_info.value.detail
 
 
+@pytest.mark.parametrize("invalid_target_time", [0, -15, True, 12.5])
+def test_post_user_goal_invalid_target_time_rejected_without_mutation(invalid_target_time):
+    """target_time_minutes invalid => HTTP 400 before any DB mutation."""
+    from fastapi import HTTPException
+    import server as srv
+
+    cycle = {"goal": "10K", "start_date": _CYCLE_START}
+    mock_db = _make_db(cycle=cycle)
+    delete_called = []
+    insert_called = []
+
+    async def fake_delete(*a, **kw):
+        delete_called.append(True)
+        return MagicMock(deleted_count=0)
+
+    async def fake_insert(doc):
+        insert_called.append(doc)
+        return MagicMock(inserted_id="x")
+
+    mock_db.user_goals.delete_many = fake_delete
+    mock_db.user_goals.insert_one = fake_insert
+
+    future_date = (datetime.now(timezone.utc) + timedelta(days=90)).strftime("%Y-%m-%d")
+    goal_payload = srv.UserGoalCreate(
+        event_name="10K Target",
+        event_date=future_date,
+        distance_type="10k",
+        target_time_minutes=invalid_target_time,
+    )
+
+    async def run():
+        with patch.object(srv, "db", mock_db):
+            return await srv.set_user_goal(goal_payload, user={"id": "u1"})
+
+    with pytest.raises(HTTPException) as exc_info:
+        _run(run())
+
+    assert exc_info.value.status_code == 400
+    assert "target_time_minutes" in exc_info.value.detail
+    assert not delete_called, "delete_many must NOT be called when target_time is invalid"
+    assert not insert_called, "insert_one must NOT be called when target_time is invalid"
+
+
+def test_post_user_goal_non_numeric_target_time_rejected_without_mutation():
+    """Non-numeric target_time_minutes => HTTP 400 before any DB mutation."""
+    from fastapi import HTTPException
+    import server as srv
+
+    cycle = {"goal": "10K", "start_date": _CYCLE_START}
+    mock_db = _make_db(cycle=cycle)
+    delete_called = []
+    insert_called = []
+
+    async def fake_delete(*a, **kw):
+        delete_called.append(True)
+        return MagicMock(deleted_count=0)
+
+    async def fake_insert(doc):
+        insert_called.append(doc)
+        return MagicMock(inserted_id="x")
+
+    mock_db.user_goals.delete_many = fake_delete
+    mock_db.user_goals.insert_one = fake_insert
+
+    future_date = (datetime.now(timezone.utc) + timedelta(days=90)).strftime("%Y-%m-%d")
+    goal_payload = srv.UserGoalCreate.model_construct(
+        event_name="10K Target",
+        event_date=future_date,
+        distance_type="10k",
+        target_time_minutes="abc",
+        distance_km=None,
+    )
+
+    async def run():
+        with patch.object(srv, "db", mock_db):
+            return await srv.set_user_goal(goal_payload, user={"id": "u1"})
+
+    with pytest.raises(HTTPException) as exc_info:
+        _run(run())
+
+    assert exc_info.value.status_code == 400
+    assert "target_time_minutes" in exc_info.value.detail
+    assert not delete_called
+    assert not insert_called
+
+
 def test_post_user_goal_ultra_100km_succeeds():
     """Ultra 100 km with coherent ULTRA cycle → insert called once."""
     import server as srv

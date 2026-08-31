@@ -329,37 +329,27 @@ def _intensity_class(workout_type: str) -> str:
     return _INTENSITY_CLASS.get(workout_type, "low")
 
 
-def _goal_reference_pace_seconds_per_km(goal_type: str) -> Optional[float]:
-    return {
-        "5k": 270.0,
-        "10k": 300.0,
-        "half_marathon": 330.0,
-        "marathon": 360.0,
-        "ultra": 390.0,
-    }.get(goal_type)
-
-
-def _resolve_target_time_profile(plan_goal: PlanGoal) -> Optional[str]:
-    """Classify target-time ambition to modulate session composition when relevant."""
-    if plan_goal.target_time_seconds is None or plan_goal.target_time_seconds <= 0:
+def _resolve_target_time_profile(
+    plan_goal: PlanGoal,
+    *,
+    target_capability_pace_seconds_per_km: Optional[float],
+) -> Optional[str]:
+    """Classify target-time ambition using observed/canonical capability only."""
+    if (
+        plan_goal.target_time_seconds is None
+        or plan_goal.target_time_seconds <= 0
+        or target_capability_pace_seconds_per_km is None
+        or target_capability_pace_seconds_per_km <= 0
+    ):
         return None
     if plan_goal.target_distance_km is None or plan_goal.target_distance_km <= 0:
         return None
 
-    goal_type = (
-        plan_goal.goal_type.value if hasattr(plan_goal.goal_type, "value") else str(plan_goal.goal_type)
-    )
-    ref_pace = _goal_reference_pace_seconds_per_km(goal_type)
-    if ref_pace is None:
-        return None
-
     pace_seconds_per_km = plan_goal.target_time_seconds / plan_goal.target_distance_km
-    if pace_seconds_per_km <= 0:
-        return None
 
-    if pace_seconds_per_km <= ref_pace * 0.92:
+    if pace_seconds_per_km <= target_capability_pace_seconds_per_km * 0.97:
         return "aggressive"
-    if pace_seconds_per_km >= ref_pace * 1.08:
+    if pace_seconds_per_km >= target_capability_pace_seconds_per_km * 1.03:
         return "conservative"
     return None
 
@@ -989,6 +979,7 @@ def build_weekly_plan(
     plan_goal: PlanGoal,
     periodization: PeriodizationSnapshot,
     reference_date: date,
+    target_capability_pace_seconds_per_km: Optional[float] = None,
 ) -> WeeklyPlan:
     """Build an immutable WeeklyPlan from explicit V2 inputs.
 
@@ -1020,7 +1011,10 @@ def build_weekly_plan(
     phase = periodization.phase
 
     reason_codes: list[str] = list(weekly_target.reason_codes)
-    target_time_profile = _resolve_target_time_profile(plan_goal)
+    target_time_profile = _resolve_target_time_profile(
+        plan_goal,
+        target_capability_pace_seconds_per_km=target_capability_pace_seconds_per_km,
+    )
 
     # --- route by continuity state -----------------------------------------
     if continuity in ("no_history", "deep_reprise"):
@@ -1037,7 +1031,11 @@ def build_weekly_plan(
         # reprise_exit or normal
         skeleton = _get_skeleton(n_sessions)
         skeleton = _apply_phase_modulation(skeleton, phase, allow_intensity)
-        if target_basis == "distance":
+        if (
+            target_basis == "distance"
+            and continuity == "normal"
+            and phase in (PeriodizationPhase.base, PeriodizationPhase.build, PeriodizationPhase.specific)
+        ):
             skeleton, target_time_reason = _apply_target_time_modulation(
                 skeleton,
                 target_time_profile=target_time_profile,
