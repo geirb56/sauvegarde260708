@@ -972,14 +972,15 @@ def test_garmin_activities_load_outside_connected_guard():
 async def test_garmin_db_load_failure_fails_today():
     """A DB error during Garmin activity read must propagate as HTTP 503.
 
-    Rule: we must never call build_canonical_weekly_plan(workouts=[]) when
-    the true cause of an empty list is a storage failure, not an empty history.
+    Rule: we must never call build_canonical_weekly_plan when the cause of
+    the failure is a storage error, not an empty history.
 
     Asserts:
-    - /training/today returns HTTP 503.
-    - build_canonical_weekly_plan is never called (or if called, not with workouts=[]).
+    - /training/today returns HTTP 503 (strict).
+    - build_canonical_weekly_plan is never called.
     """
     from unittest.mock import patch as _patch, AsyncMock as _AsyncMock, MagicMock as _MagicMock
+    import training_v2.week_plan_bridge as _bridge
 
     fake_db = _FakeDB()
     _seed_cycle(fake_db)
@@ -991,35 +992,45 @@ async def test_garmin_db_load_failure_fails_today():
     broken_cursor.to_list = _AsyncMock(side_effect=RuntimeError("DB connection timeout"))
     fake_db.garmin_activities.find = _MagicMock(return_value=broken_cursor)
 
-    result = await _get_today(fake_db)
+    mock_builder = MagicMock()
+    with _patch.object(_bridge, "build_canonical_weekly_plan", mock_builder):
+        result = await _get_today(fake_db)
 
-    assert result["status"] in (503, 500), (
-        f"Expected 503/500 when Garmin DB fails, got {result['status']}: {result['body']}"
+    assert result["status"] == 503, (
+        f"Expected 503 when Garmin DB fails, got {result['status']}: {result['body']}"
     )
+    mock_builder.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_garmin_domain_conversion_failure_fails_today():
-    """A conversion error in mongo_garmin_activities_to_domain must propagate as HTTP 503."""
+    """A conversion error in mongo_garmin_activities_to_domain must propagate as HTTP 503.
+
+    Asserts:
+    - /training/today returns HTTP 503 (strict).
+    - build_canonical_weekly_plan is never called.
+    """
+    from unittest.mock import patch as _patch
     import server as _server
+    import training_v2.week_plan_bridge as _bridge
 
     fake_db = _FakeDB()
     _seed_cycle(fake_db)
     _seed_garmin_activities(fake_db, n=5)
     _seed_connected(fake_db, connected=True)
 
-    from unittest.mock import patch as _patch
-
+    mock_builder = MagicMock()
     with _patch.object(
         _server,
         "mongo_garmin_activities_to_domain",
         side_effect=ValueError("Corrupt activity document"),
-    ):
+    ), _patch.object(_bridge, "build_canonical_weekly_plan", mock_builder):
         result = await _get_today(fake_db)
 
-    assert result["status"] in (503, 500), (
-        f"Expected 503/500 when domain conversion fails, got {result['status']}: {result['body']}"
+    assert result["status"] == 503, (
+        f"Expected 503 when domain conversion fails, got {result['status']}: {result['body']}"
     )
+    mock_builder.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

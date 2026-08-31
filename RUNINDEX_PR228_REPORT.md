@@ -250,8 +250,8 @@ All pure-layer tests pass. Server integration tests require a running MongoDB in
 **Alignment:** behaviour now identical to `/training/v2/week`.
 
 **New tests (`test_handlers_pr228.py`):**
-- `test_garmin_db_load_failure_fails_today` — mock `.to_list()` raises `RuntimeError`; asserts HTTP 503/500.
-- `test_garmin_domain_conversion_failure_fails_today` — mock `mongo_garmin_activities_to_domain` raises `ValueError`; asserts HTTP 503/500.
+- `test_garmin_db_load_failure_fails_today` — mock `.to_list()` raises `RuntimeError`; asserts HTTP **503 strict**; `build_canonical_weekly_plan` **NOT CALLED**.
+- `test_garmin_domain_conversion_failure_fails_today` — mock `mongo_garmin_activities_to_domain` raises `ValueError`; asserts HTTP **503 strict**; `build_canonical_weekly_plan` **NOT CALLED**.
 
 ### 2. Real Race-Day Phase Test
 
