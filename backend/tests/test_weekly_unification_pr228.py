@@ -303,8 +303,6 @@ class TestReconciliationKeep:
 
     def test_none_recent_response_results_in_keep(self):
         """None recent_response passed directly → KEEP."""
-        from training_v2.weekly_target import WeeklyTarget
-
         # Build a target to test against
         canonical = _build_canonical_no_garmin()
         target = canonical.original_target
