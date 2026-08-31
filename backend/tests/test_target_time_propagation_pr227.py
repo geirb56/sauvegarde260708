@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import asyncio
-from datetime import date, datetime, timezone
+from datetime import date
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import sys
 
@@ -14,6 +13,7 @@ from training_v2.plan_goal import GoalType, build_plan_goal
 from training_v2.runner_profile import RunnerProfile
 from training_v2.weekly_target import WeeklyTarget
 from training_v2.workout_generator import WorkoutPrescription, WeeklyPlan, build_weekly_plan
+from training_v2.week_plan_bridge import build_weekly_plan_from_workouts
 
 
 REF = date(2026, 8, 11)
@@ -102,25 +102,13 @@ def _running_signature(plan: WeeklyPlan) -> tuple[tuple[str, str, float | None],
     )
 
 
-def _make_db(cycle: dict, user_goal: dict | None):
-    db = MagicMock()
-
-    async def _cycle_find_one(*args, **kwargs):
-        return cycle
-
-    async def _goal_find_one(*args, **kwargs):
-        return user_goal
-
-    cursor = MagicMock()
-    cursor.to_list = AsyncMock(return_value=[])
-    db.garmin_activities.find = MagicMock(return_value=cursor)
-    db.training_cycles.find_one = _cycle_find_one
-    db.user_goals.find_one = _goal_find_one
-    return db
-
-
-def _run(coro):
-    return asyncio.run(coro)
+def _activity(days_ago: int, km: float) -> dict:
+    return {
+        "activity_type": "running",
+        "start_time": f"2026-08-{max(1, 11 - days_ago):02d}T08:00:00+00:00",
+        "distance_m": km * 1000.0,
+        "duration_s": max(1.0, km * 360.0),
+    }
 
 
 def test_10k_without_target_time_keeps_baseline():
@@ -158,20 +146,11 @@ def test_maintenance_never_uses_target_time():
         )
 
 
-def test_week_endpoint_propagates_target_time_minutes_to_engine_seconds():
-    import server as srv
-
-    cycle = {"goal": "10K", "start_date": datetime(2026, 1, 1, tzinfo=timezone.utc)}
-    user_goal = {
-        "distance_type": "10k",
-        "event_date": "2027-06-01",
-        "target_time_minutes": 50,
-    }
-    mock_db = _make_db(cycle=cycle, user_goal=user_goal)
+def test_bridge_propagates_target_time_seconds_to_workout_generator():
     captured: dict = {}
 
-    def _fake_build_weekly_plan_from_workouts(**kwargs):
-        captured.update(kwargs)
+    def _fake_build_weekly_plan(*, plan_goal, **kwargs):
+        captured["target_time_seconds"] = plan_goal.target_time_seconds
         weekly_target = _weekly_target()
         sessions = tuple(
             WorkoutPrescription(
@@ -194,37 +173,38 @@ def test_week_endpoint_propagates_target_time_minutes_to_engine_seconds():
             allow_intensity=True,
             reason_codes=(),
         )
-        return weekly_target, weekly_plan
+        return weekly_plan
 
-    async def _call():
-        with patch.object(srv, "db", mock_db):
-            with patch.object(srv, "mongo_garmin_activities_to_domain", return_value=[]):
-                with patch("training_v2.week_plan_bridge.build_weekly_plan_from_workouts", side_effect=_fake_build_weekly_plan_from_workouts):
-                    return await srv.get_training_v2_week(user={"id": "u1"})
+    workouts = [_activity(days, 8.0) for days in (3, 6, 9, 12, 15, 18, 24, 31, 38)]
+    with patch("training_v2.week_plan_bridge.build_weekly_plan", side_effect=_fake_build_weekly_plan):
+        _, _ = build_weekly_plan_from_workouts(
+            workouts=workouts,
+            goal_type="10K",
+            race_date=None,
+            cycle_start_date=REF,
+            reference_date=REF,
+            target_time_seconds=3000,
+        )
 
-    result = _run(_call())
-    assert result["goal"]["target_time_seconds"] == 3000
     assert captured["target_time_seconds"] == 3000
 
 
-def test_week_endpoint_without_target_time_does_not_synthesize_seconds():
-    import server as srv
-
-    cycle = {"goal": "10K", "start_date": datetime(2026, 1, 1, tzinfo=timezone.utc)}
-    user_goal = {"distance_type": "10k", "event_date": "2027-06-01"}
-    mock_db = _make_db(cycle=cycle, user_goal=user_goal)
+def test_bridge_without_target_time_does_not_synthesize_seconds():
     captured: dict = {}
 
-    def _fake_build_weekly_plan_from_workouts(**kwargs):
-        captured.update(kwargs)
-        return _weekly_target(), _build(GoalType.ten_k, None)
+    def _fake_build_weekly_plan(*, plan_goal, **kwargs):
+        captured["target_time_seconds"] = plan_goal.target_time_seconds
+        return _build(GoalType.ten_k, None)
 
-    async def _call():
-        with patch.object(srv, "db", mock_db):
-            with patch.object(srv, "mongo_garmin_activities_to_domain", return_value=[]):
-                with patch("training_v2.week_plan_bridge.build_weekly_plan_from_workouts", side_effect=_fake_build_weekly_plan_from_workouts):
-                    return await srv.get_training_v2_week(user={"id": "u1"})
+    workouts = [_activity(days, 8.0) for days in (3, 6, 9, 12, 15, 18, 24, 31, 38)]
+    with patch("training_v2.week_plan_bridge.build_weekly_plan", side_effect=_fake_build_weekly_plan):
+        _, _ = build_weekly_plan_from_workouts(
+            workouts=workouts,
+            goal_type="10K",
+            race_date=None,
+            cycle_start_date=REF,
+            reference_date=REF,
+            target_time_seconds=None,
+        )
 
-    result = _run(_call())
-    assert result["goal"]["target_time_seconds"] is None
     assert captured["target_time_seconds"] is None
