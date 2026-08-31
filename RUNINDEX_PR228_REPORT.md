@@ -150,8 +150,74 @@ build_canonical_weekly_plan()
 
 ---
 
+## Handler Tests — test_handlers_pr228.py (PR228-patch)
+
+**File:** `backend/tests/test_handlers_pr228.py`  
+**Command:** `python -m pytest tests/test_handlers_pr228.py -q --override-ini="addopts="`
+
+These tests exercise the real FastAPI handlers via `httpx.AsyncClient` + `ASGITransport`,
+using an in-memory fake database (`_FakeDB`) and JWT auth.
+
+### Clock Mock Fix (PR228-patch)
+
+The original `_FixedDatetime(instance)` shim replaced `server.datetime` with a non-class
+object, causing `isinstance(x, datetime)` calls in `_resolve_goal_v2` to raise `TypeError`.
+
+**Fix:** `_make_fixed_datetime_class(fixed)` returns a real `datetime` subclass that
+overrides `now()` classmethod. Patching with the class (not an instance) ensures all
+`isinstance(x, datetime)` checks in server.py remain valid.
+
+### REDUCE Scenario
+
+8 activities concentrated in days 8–22 back (none in the most recent 7 days):
+- `chronic_base = total_km / 3_active_weeks = 120 km / 3 = 40 km/week`
+- `target_km = chronic_base * 1.10 = 44 km` (or 40 km with phase modulation)
+- `observed_weekly = 120 km / 4 calendar_weeks = 30 km/week`
+- `vol_threshold = 40 * 0.80 = 32 km` → `30 < 32` → **REDUCE_VOLUME**
+
+### Handler Test Results
+
+| # | Test | Result |
+|---|------|--------|
+| 1 | `test_week_and_today_same_session_source` | ✅ PASS |
+| 2 | `test_connected_false_history_present_same_plan` | ✅ PASS |
+| 3 | `test_reconciliation_action_consistent_week_and_today` | ✅ PASS |
+| 4 | `test_reconciliation_keep_same_baseline` | ✅ PASS |
+| 5 | `test_reconciliation_reduce_same_session_source` | ✅ PASS — `reconciliation_action = REDUCE_VOLUME` |
+| 6 | `test_no_garmin_history_returns_valid_plan` | ✅ PASS |
+| 7 | `test_taper_phase_plan_is_valid` | ✅ PASS — plan present, no quality sessions, consistent actions |
+| 8 | `test_race_week_plan_is_valid` | ✅ PASS — plan present, no quality sessions, consistent actions |
+| 9 | `test_maintenance_goal_both_handlers` | ✅ PASS |
+| 10 | `test_daily_adaptation_does_not_change_week_sessions` | ✅ PASS |
+| 11 | `test_adapted_session_respects_keep_or_reduce` | ✅ PASS |
+| 12 | `test_adaptation_isolation_caution_reduces_today_not_week` | ✅ PASS — CAUTION → Today reduced, Week unchanged |
+| 13 | `test_no_double_workout_generator_in_today_body` | ✅ PASS |
+| 14 | `test_no_double_reconciliation_in_today_body` | ✅ PASS |
+| 15 | `test_no_double_workout_generator_in_week_body` | ✅ PASS |
+| 16 | `test_single_clock_in_today` | ✅ PASS |
+| 17 | `test_garmin_activities_load_outside_connected_guard` | ✅ PASS |
+
+**Total: 17 passed, 0 skip, 0 fail**
+
+### Full Suite Summary (all required test files)
+
+| File | Command | Result |
+|------|---------|--------|
+| `test_handlers_pr228.py` | `pytest tests/test_handlers_pr228.py` | ✅ **17 passed, 0 skip, 0 fail** |
+| `test_weekly_unification_pr228.py` | `pytest tests/test_weekly_unification_pr228.py` | ✅ 45 passed |
+| `test_weekly_reconciliation_pr134.py` | `pytest tests/test_weekly_reconciliation_pr134.py` | ✅ Passed |
+| `test_pr167_training_v2_week_api.py` | `pytest tests/test_pr167_training_v2_week_api.py` | ✅ Passed |
+| `test_daily_adaptation_pr133.py` | `pytest tests/test_daily_adaptation_pr133.py` | ✅ Passed |
+| `test_periodization_pr06.py` | `pytest tests/test_periodization_pr06.py` | ✅ Passed |
+| `test_workout_generator_v2.py` | `pytest tests/test_workout_generator_v2.py` | ✅ Passed |
+
+Combined run (non-handler): **146 passed + 190 passed = 336 passed, 0 skip, 0 fail**
+
+---
+
 ## Asymmetric Invariants Enforced
 
+1. `reconciled_target.target_km ≤ original_target.target_km` (or None)
 1. `reconciled_target.target_km ≤ original_target.target_km` (or None)
 2. `reconciled_target.target_sessions ≤ original_target.target_sessions`
 3. `reconciled_target.target_duration_minutes ≤ original_target.target_duration_minutes` (or None)

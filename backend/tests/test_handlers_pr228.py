@@ -547,9 +547,12 @@ async def test_reconciliation_reduce_same_session_source():
     assert week_action is not None, "Week response missing reconciliation_action"
     assert today_action is not None, "Today response missing weekly_reconciliation.action"
 
-    # The sparse dataset must trigger a REDUCE (not KEEP) for both endpoints.
-    assert week_action != "KEEP", (
-        f"Expected REDUCE for Week (sparse data) but got: {week_action!r}"
+    # The sparse dataset (8 runs in days 8-22, none in days 0-7) must produce
+    # REDUCE_VOLUME: chronic_base = 120km/3active_weeks = 40km; weekly_observed =
+    # 120km/4 = 30km; 30 < 40 * 0.80 = 32 → REDUCE_VOLUME.
+    # See _seed_garmin_activities_sparse_reduce docstring for the full math.
+    assert week_action == "REDUCE_VOLUME", (
+        f"Expected REDUCE_VOLUME for Week (week-1 gap dataset) but got: {week_action!r}"
     )
     assert today_action == week_action, (
         f"Reconciliation action diverged: Week={week_action!r} Today={today_action!r}"
