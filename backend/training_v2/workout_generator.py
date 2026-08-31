@@ -329,6 +329,64 @@ def _intensity_class(workout_type: str) -> str:
     return _INTENSITY_CLASS.get(workout_type, "low")
 
 
+def _goal_reference_pace_seconds_per_km(goal_type: str) -> Optional[float]:
+    return {
+        "5k": 270.0,
+        "10k": 300.0,
+        "half_marathon": 330.0,
+        "marathon": 360.0,
+        "ultra": 390.0,
+    }.get(goal_type)
+
+
+def _resolve_target_time_profile(plan_goal: PlanGoal) -> Optional[str]:
+    """Classify target-time ambition to modulate session composition when relevant."""
+    if plan_goal.target_time_seconds is None or plan_goal.target_time_seconds <= 0:
+        return None
+    if plan_goal.target_distance_km is None or plan_goal.target_distance_km <= 0:
+        return None
+
+    goal_type = (
+        plan_goal.goal_type.value if hasattr(plan_goal.goal_type, "value") else str(plan_goal.goal_type)
+    )
+    ref_pace = _goal_reference_pace_seconds_per_km(goal_type)
+    if ref_pace is None:
+        return None
+
+    pace_seconds_per_km = plan_goal.target_time_seconds / plan_goal.target_distance_km
+    if pace_seconds_per_km <= 0:
+        return None
+
+    if pace_seconds_per_km <= ref_pace * 0.92:
+        return "aggressive"
+    if pace_seconds_per_km >= ref_pace * 1.08:
+        return "conservative"
+    return None
+
+
+def _apply_target_time_modulation(
+    skeleton: list[tuple[str, str]],
+    *,
+    target_time_profile: Optional[str],
+    allow_intensity: bool,
+) -> tuple[list[tuple[str, str]], Optional[str]]:
+    if target_time_profile is None or not allow_intensity:
+        return skeleton, None
+
+    adjusted = list(skeleton)
+    if target_time_profile == "aggressive":
+        for idx, (day, slot_type) in enumerate(adjusted):
+            if slot_type in ("easy", "recovery"):
+                adjusted[idx] = (day, "steady")
+                return adjusted, "target_time_profile_aggressive"
+    elif target_time_profile == "conservative":
+        for idx, (day, slot_type) in enumerate(adjusted):
+            if slot_type == "quality":
+                adjusted[idx] = (day, "steady")
+                return adjusted, "target_time_profile_conservative"
+    return skeleton, None
+
+
 # ---------------------------------------------------------------------------
 # Long run computation
 # ---------------------------------------------------------------------------
@@ -960,6 +1018,7 @@ def build_weekly_plan(
     phase = periodization.phase
 
     reason_codes: list[str] = list(weekly_target.reason_codes)
+    target_time_profile = _resolve_target_time_profile(plan_goal)
 
     # --- route by continuity state -----------------------------------------
     if continuity in ("no_history", "deep_reprise"):
@@ -976,6 +1035,14 @@ def build_weekly_plan(
         # reprise_exit or normal
         skeleton = _get_skeleton(n_sessions)
         skeleton = _apply_phase_modulation(skeleton, phase, allow_intensity)
+        if target_basis == "distance":
+            skeleton, target_time_reason = _apply_target_time_modulation(
+                skeleton,
+                target_time_profile=target_time_profile,
+                allow_intensity=allow_intensity,
+            )
+            if target_time_reason:
+                reason_codes.append(target_time_reason)
         # Re-assign days respecting RunnerProfile constraints
         session_types = [t for _, t in skeleton if t != "rest"]
         skeleton, constraint_codes = _assign_days(session_types, runner_profile)

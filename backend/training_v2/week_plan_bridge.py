@@ -119,6 +119,7 @@ def _build_weekly_context_from_workouts(
     reference_date: date,
     user_profile: Optional[dict],
     target_distance_km: Optional[float] = None,
+    target_time_seconds: Optional[int] = None,
 ) -> _WeeklyBuildContext:
     """Canonical internal V2 build pipeline — single construction site.
 
@@ -165,6 +166,7 @@ def _build_weekly_context_from_workouts(
         goal_type=mapped_goal,
         race_date=race_date if mapped_goal != GoalType.maintenance else None,
         target_distance_km=target_distance_km if mapped_goal == GoalType.ultra else None,
+        target_time_seconds=target_time_seconds if mapped_goal != GoalType.maintenance else None,
         created_from="user",
     )
 
@@ -225,6 +227,7 @@ def build_weekly_target_from_workouts(
     reference_date: date,
     user_profile: Optional[dict] = None,
     target_distance_km: Optional[float] = None,
+    target_time_seconds: Optional[int] = None,
 ) -> WeeklyTarget:
     """Build a WeeklyTarget V2 from raw workout documents and goal info.
 
@@ -237,6 +240,7 @@ def build_weekly_target_from_workouts(
     reference_date : anchor date — MANDATORY, no implicit today.
     user_profile : optional user_profiles document for RunnerProfile enrichment.
     target_distance_km : explicit race distance (km). Required for ULTRA goals.
+    target_time_seconds : optional chronometric objective in canonical seconds.
 
     Raises
     ------
@@ -251,6 +255,7 @@ def build_weekly_target_from_workouts(
         reference_date=reference_date,
         user_profile=user_profile,
         target_distance_km=target_distance_km,
+        target_time_seconds=target_time_seconds,
     )
     return ctx.weekly_target
 
@@ -264,6 +269,7 @@ def build_weekly_plan_from_workouts(
     reference_date: date,
     user_profile: Optional[dict] = None,
     target_distance_km: Optional[float] = None,
+    target_time_seconds: Optional[int] = None,
 ) -> tuple[WeeklyTarget, WeeklyPlan]:
     """Build WeeklyTarget V2 + WeeklyPlan V2 from raw workout documents.
 
@@ -273,6 +279,7 @@ def build_weekly_plan_from_workouts(
     re-compute the long run itself.
 
     PR226: target_distance_km added for ULTRA goals — passed to build_plan_goal.
+    PR227: target_time_seconds propagated to PlanGoal for prescription modulation.
 
     The WeeklyTarget returned here is the SAME object that
     build_weekly_target_from_workouts would return for identical inputs —
@@ -291,6 +298,7 @@ def build_weekly_plan_from_workouts(
         reference_date=reference_date,
         user_profile=user_profile,
         target_distance_km=target_distance_km,
+        target_time_seconds=target_time_seconds,
     )
 
     weekly_plan = build_weekly_plan(

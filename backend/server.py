@@ -3782,6 +3782,7 @@ async def get_week_plan(user: dict = Depends(auth_user)):
         goal_type=resolved.mapped_goal,
         race_date=race_date_v2,  # already None for MAINTENANCE
         target_distance_km=resolved.target_distance_km,
+        target_time_seconds=resolved.target_time_sec,
         created_from="user",
     )
 
@@ -3805,6 +3806,7 @@ async def get_week_plan(user: dict = Depends(auth_user)):
         cycle_start_date=cycle_start_v2,
         reference_date=today.date(),
         target_distance_km=resolved.target_distance_km,
+        target_time_seconds=resolved.target_time_sec,
     )
 
     # PR149: V2 prescription → target_km_protected (distance-based only).
@@ -3974,6 +3976,7 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
         cycle_start_date=resolved.cycle_start,
         reference_date=reference_date,
         target_distance_km=resolved.target_distance_km,
+        target_time_seconds=resolved.target_time_sec,
     )
 
     # ── Assemble native V2 response — no adapter, no coercion ────────────
@@ -4058,6 +4061,7 @@ async def get_training_v2_cycle(user: dict = Depends(auth_user)):
         goal_type=resolved.mapped_goal,
         race_date=resolved.race_date,  # already None for MAINTENANCE
         target_distance_km=resolved.target_distance_km,
+        target_time_seconds=resolved.target_time_sec,
         created_from="user",
     )
 
