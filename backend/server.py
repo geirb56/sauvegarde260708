@@ -3329,7 +3329,7 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     from training_v2.week_plan_bridge import build_canonical_weekly_plan
 
     # Single clock — all time derivations use this single anchor.
-    # No second datetime.now() call anywhere in this handler.
+    # No second now() call anywhere in this handler.
     now_utc = datetime.now(timezone.utc)
     today = now_utc.date()
     today_iso = today.isoformat()
@@ -3342,9 +3342,9 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     # ── 2. Garmin activities — 90-day window, ALWAYS loaded (PR228-patch) ─
     # Garmin history is loaded unconditionally so that Week and Today always
     # share the same canonical activity source.
-    # Rule: garmin_connections.connected only gates live data that requires an
+    # Rule: the garmin connection flag only gates live data that requires an
     # active connection (daily_metrics, readiness).  Historical activities
-    # already stored in the DB are available regardless of connected status.
+    # already stored in the DB are available regardless of connection status.
     domain_activities_90: list = []
     try:
         garmin_activities_90 = await db.garmin_activities.find(
