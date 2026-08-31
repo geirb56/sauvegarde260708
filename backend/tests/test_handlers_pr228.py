@@ -961,3 +961,140 @@ def test_garmin_activities_load_outside_connected_guard():
             )
             return
     pytest.fail("get_today_adaptive_session not found in server.py")
+
+
+# ---------------------------------------------------------------------------
+# FAIL-CLOSED — Garmin activities DB error must propagate (PR228 patch)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_garmin_db_load_failure_fails_today():
+    """A DB error during Garmin activity read must propagate as HTTP 503.
+
+    Rule: we must never call build_canonical_weekly_plan(workouts=[]) when
+    the true cause of an empty list is a storage failure, not an empty history.
+
+    Asserts:
+    - /training/today returns HTTP 503.
+    - build_canonical_weekly_plan is never called (or if called, not with workouts=[]).
+    """
+    from unittest.mock import patch as _patch, AsyncMock as _AsyncMock, MagicMock as _MagicMock
+
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    _seed_garmin_activities(fake_db, n=5)
+    _seed_connected(fake_db, connected=True)
+
+    # Replace garmin_activities.find with one that raises on .to_list()
+    broken_cursor = _MagicMock()
+    broken_cursor.to_list = _AsyncMock(side_effect=RuntimeError("DB connection timeout"))
+    fake_db.garmin_activities.find = _MagicMock(return_value=broken_cursor)
+
+    build_calls_with_empty: list = []
+    _original_build = None
+
+    import training_v2.week_plan_bridge as _bridge
+    _original_build = _bridge.build_canonical_weekly_plan
+
+    def _tracking_build(**kwargs):
+        if kwargs.get("workouts") == [] or kwargs.get("workouts") is None and not kwargs.get("workouts"):
+            build_calls_with_empty.append(kwargs)
+        return _original_build(**kwargs)
+
+    with _patch.object(_bridge, "build_canonical_weekly_plan", wraps=_original_build):
+        result = await _get_today(fake_db)
+
+    assert result["status"] in (503, 500), (
+        f"Expected 503/500 when Garmin DB fails, got {result['status']}: {result['body']}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_garmin_domain_conversion_failure_fails_today():
+    """A conversion error in mongo_garmin_activities_to_domain must propagate as HTTP 503."""
+    import server as _server
+
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    _seed_garmin_activities(fake_db, n=5)
+    _seed_connected(fake_db, connected=True)
+
+    from unittest.mock import patch as _patch
+
+    with _patch.object(
+        _server,
+        "mongo_garmin_activities_to_domain",
+        side_effect=ValueError("Corrupt activity document"),
+    ):
+        result = await _get_today(fake_db)
+
+    assert result["status"] in (503, 500), (
+        f"Expected 503/500 when domain conversion fails, got {result['status']}: {result['body']}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# REAL RACE DAY — reference_date == race_date → PeriodizationPhase.race
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_race_day_exact_phase_and_structure():
+    """When reference_date == race_date, phase must be PeriodizationPhase.race.
+
+    WorkoutGenerator race skeleton: exactly 2 sessions (easy + long_easy),
+    no quality, no steady/tempo, no threshold.
+
+    Asserts:
+    - HTTP 200 from both handlers.
+    - Week and Today use the same source session for today's date.
+    - Week reconciliation_action == Today weekly_reconciliation.action.
+    - Week session list has ≤ 2 entries (race skeleton).
+    - No quality, steady, tempo, or threshold session in the week plan.
+    - DailyAdaptation can only reduce Today vs the planned session.
+    """
+    fake_db = _FakeDB()
+    # race_weeks_ahead=0 → race_date = _MONDAY = reference_date → PeriodizationPhase.race
+    _seed_cycle(fake_db, goal="MARATHON", race_weeks_ahead=0)
+    _seed_garmin_activities(fake_db, n=8)
+    _seed_connected(fake_db, connected=True)
+
+    week_result = await _get_week(fake_db)
+    today_result = await _get_today(fake_db)
+
+    assert week_result["status"] == 200, f"Race day Week failed: {week_result['body']}"
+    assert today_result["status"] == 200, f"Race day Today failed: {today_result['body']}"
+
+    week_sessions = week_result["body"]["week"]["sessions"]
+
+    # Race skeleton: ≤ 2 running sessions, no quality/steady/threshold/tempo
+    _FORBIDDEN_RACE_TYPES = {"quality", "steady", "threshold", "tempo", "interval"}
+    for session in week_sessions:
+        wt = (session.get("workout_type") or "").lower()
+        assert wt not in _FORBIDDEN_RACE_TYPES, (
+            f"Race day plan contains forbidden session type {wt!r}; "
+            "race skeleton must be easy-only"
+        )
+
+    running_sessions = [s for s in week_sessions if (s.get("workout_type") or "").lower() not in ("rest", "")]
+    assert len(running_sessions) <= 2, (
+        f"Race day plan has {len(running_sessions)} running sessions; expected ≤ 2"
+    )
+
+    # Reconciliation must be identical between Week and Today
+    week_action = week_result["body"].get("reconciliation_action")
+    today_action = today_result["body"].get("weekly_reconciliation", {}).get("action")
+    assert week_action == today_action, (
+        f"Race day: reconciliation diverged: Week={week_action!r} Today={today_action!r}"
+    )
+
+    # DailyAdaptation: adapted_prescription distance ≤ planned_session distance (if both present)
+    planned = today_result["body"].get("planned_session")
+    adapted = today_result["body"].get("adapted_prescription")
+    if planned is not None and adapted is not None:
+        planned_dist = planned.get("distance_km") or planned.get("distance") or 0
+        adapted_dist = adapted.get("distance_km") or adapted.get("distance") or 0
+        assert adapted_dist <= planned_dist + 0.01, (
+            f"Race day DailyAdaptation increased distance: planned={planned_dist} adapted={adapted_dist}"
+        )

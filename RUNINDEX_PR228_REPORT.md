@@ -230,3 +230,68 @@ Combined run (non-handler): **146 passed + 190 passed = 336 passed, 0 skip, 0 fa
 
 DEFERRED TO FINAL RUNTIME GATE — no live Garmin data available in CI.
 All pure-layer tests pass. Server integration tests require a running MongoDB instance.
+
+---
+
+## Patch Final — PR228 (session 4)
+
+### 1. Fail-Closed Garmin Activity Load (`/training/today`)
+
+**Change:** `server.py` — removed the `try/except` wrapper around
+`db.garmin_activities.find(...).to_list()` and `mongo_garmin_activities_to_domain()`.
+
+**Behaviour:**
+- DB read error → `logger.error` + `HTTPException(503)` immediately.
+- Domain-conversion error → `logger.error` + `HTTPException(503)` immediately.
+- `build_canonical_weekly_plan(workouts=[])` is never called when the cause
+  is a storage failure.
+- Permitted fallbacks (readiness, daily metrics, live non-critical data)
+  unchanged in their own separate `try/except` blocks.
+
+**Alignment:** behaviour now identical to `/training/v2/week`.
+
+**New tests (`test_handlers_pr228.py`):**
+- `test_garmin_db_load_failure_fails_today` — mock `.to_list()` raises `RuntimeError`; asserts HTTP 503/500.
+- `test_garmin_domain_conversion_failure_fails_today` — mock `mongo_garmin_activities_to_domain` raises `ValueError`; asserts HTTP 503/500.
+
+### 2. Real Race-Day Phase Test
+
+**Change:** `test_handlers_pr228.py` — new test `test_race_day_exact_phase_and_structure`.
+
+**Setup:** `_seed_cycle(goal="MARATHON", race_weeks_ahead=0)` → `race_date == _MONDAY == reference_date`
+→ `periodization.build_periodization` returns `PeriodizationPhase.race` (days_to_race == 0 path).
+
+**Asserts:**
+- HTTP 200 from both `/training/v2/week` and `/training/today`.
+- No forbidden session types (`quality`, `steady`, `threshold`, `tempo`, `interval`) in the week plan.
+- ≤ 2 running sessions in the race skeleton.
+- `reconciliation_action` identical between Week and Today.
+- `adapted_prescription.distance ≤ planned_session.distance` (DailyAdaptation never increases).
+
+**Existing taper test (`test_race_week_plan_is_valid`):** kept unchanged — tests J+6 = taper phase.
+
+### 3. Final Test Run Results
+
+Command:
+```
+pytest tests/test_handlers_pr228.py tests/test_weekly_unification_pr228.py \
+       tests/test_weekly_reconciliation_pr134.py tests/test_pr167_training_v2_week_api.py \
+       tests/test_daily_adaptation_pr133.py tests/test_periodization_pr06.py \
+       tests/test_workout_generator_v2.py
+```
+
+Result: **356 PASSED — 0 FAILED — 0 SKIPPED**
+
+Test file breakdown:
+| File | Tests |
+|------|-------|
+| test_handlers_pr228.py | 22 |
+| test_weekly_unification_pr228.py | 45 |
+| test_weekly_reconciliation_pr134.py | varies |
+| test_pr167_training_v2_week_api.py | varies |
+| test_daily_adaptation_pr133.py | varies |
+| test_periodization_pr06.py | varies |
+| test_workout_generator_v2.py | varies |
+| **Total** | **356** |
+
+Python 3.12.3 / pytest 9.1.1 / pytest-xdist 3.8.0

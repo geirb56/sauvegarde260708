@@ -3339,21 +3339,38 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     # ── 1. Goal resolver — single source of truth (PR226) ────────────────
     resolved = await _resolve_goal_v2(user["id"])
 
-    # ── 2. Garmin activities — 90-day window, ALWAYS loaded (PR228-patch) ─
+    # ── 2. Garmin activities — 90-day window, ALWAYS loaded (PR228 fail-closed) ─
     # Garmin history is loaded unconditionally so that Week and Today always
     # share the same canonical activity source.
     # Rule: the garmin connection flag only gates live data that requires an
     # active connection (daily_metrics, readiness).  Historical activities
     # already stored in the DB are available regardless of connection status.
-    domain_activities_90: list = []
+    #
+    # FAIL-CLOSED: a technical error during activity load or domain-conversion
+    # must propagate as an explicit HTTP error.  We must NEVER build
+    # TrainingHistory / WeeklyPlan with workouts=[] when the true cause is
+    # a storage failure — that would silently produce a deep_reprise plan.
+    # Absence of history (user has never run) is handled cleanly upstream
+    # (empty list from the DB with no exception).
     try:
         garmin_activities_90 = await db.garmin_activities.find(
             {"user_id": user["id"], "start_time": {"$gte": ninety_days_ago.isoformat()}},
             {"_id": 0},
         ).to_list(1000)
-        domain_activities_90 = mongo_garmin_activities_to_domain(garmin_activities_90)
     except Exception as exc:
-        logger.warning(f"[TrainingToday] Garmin activities load failed: {exc}")
+        logger.error(f"[TrainingToday] Garmin activities DB read failed: {exc}")
+        raise HTTPException(
+            status_code=503,
+            detail="Training plan temporarily unavailable: Garmin activity data could not be read.",
+        ) from exc
+    try:
+        domain_activities_90: list = mongo_garmin_activities_to_domain(garmin_activities_90)
+    except Exception as exc:
+        logger.error(f"[TrainingToday] Garmin activities domain conversion failed: {exc}")
+        raise HTTPException(
+            status_code=503,
+            detail="Training plan temporarily unavailable: Garmin activity data could not be processed.",
+        ) from exc
 
     # ── 3. Readiness (live data) — only when Garmin connection is active ──
     readiness_result = None
