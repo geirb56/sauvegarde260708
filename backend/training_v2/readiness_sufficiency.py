@@ -154,6 +154,9 @@ class ReadinessSufficiencyInput(BaseModel):
     ------
     rhr    : Recent RHR measurement + baseline.  None = signal entirely absent.
     hrv    : Recent HRV measurement + baseline.  None = signal entirely absent.
+    hrv_supported: optional capability flag. False means HRV is intrinsically
+             unavailable on the user's device/profile and must not be treated as
+             transient missing data.
     sleep  : Recent sleep record.                None = no recent sleep data.
     load   : TrainingLoadSnapshot computed by training_v2.training_load.
              Must be supplied explicitly by the caller (no lazy computation).
@@ -163,6 +166,7 @@ class ReadinessSufficiencyInput(BaseModel):
 
     rhr: Optional[PhysioSignal]
     hrv: Optional[PhysioSignal]
+    hrv_supported: Optional[bool] = None
     sleep: Optional[SleepRecord]
     load: TrainingLoadSnapshot
 
@@ -247,13 +251,14 @@ def build_readiness_sufficiency(
     # ------------------------------------------------------------------
     rhr_present = _has_recent_value(inputs.rhr)
     hrv_present = _has_recent_value(inputs.hrv)
+    hrv_intrinsically_unavailable = inputs.hrv_supported is False
 
     if not rhr_present:
         reasons.append(ReasonCode.missing_rhr)
-    if not hrv_present:
+    if not hrv_present and not hrv_intrinsically_unavailable:
         reasons.append(ReasonCode.missing_hrv)
 
-    physio_blocking = not rhr_present and not hrv_present
+    physio_blocking = (not rhr_present and not hrv_present and not hrv_intrinsically_unavailable)
     if physio_blocking:
         reasons.append(ReasonCode.missing_physio)
 

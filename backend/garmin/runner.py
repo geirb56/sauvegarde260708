@@ -25,6 +25,7 @@ import select
 import shutil
 import subprocess
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
@@ -43,6 +44,16 @@ class GccliUnavailable(GccliError):
 
 class GccliMfaRequired(GccliError):
     """Raised when login requires an MFA code we don't have."""
+
+
+@dataclass(frozen=True)
+class DailyMetricsFetchResult:
+    metrics: List[Dict]
+    status: str
+    endpoint_success_count: int
+    endpoint_failure_count: int
+    endpoint_total_count: int
+    endpoint_failures: List[Dict[str, str]]
 
 
 class GccliRunner:
@@ -233,9 +244,42 @@ class GccliRunner:
         account: Optional[str] = None,
     ) -> List[Dict]:
         """Fetch daily gccli payloads and normalize via GarminDailyMetrics."""
+        return self.fetch_daily_metrics_result(
+            days=days,
+            start_days_ago=start_days_ago,
+            account=account,
+        ).metrics
+
+    def fetch_daily_metrics_result(
+        self,
+        days: int = 7,
+        start_days_ago: int = 1,
+        account: Optional[str] = None,
+    ) -> DailyMetricsFetchResult:
+        """Fetch daily metrics with explicit technical status classification."""
         metrics: List[Dict] = []
+        endpoint_failures: List[Dict[str, str]] = []
+        endpoint_success_count = 0
+        endpoint_failure_count = 0
+        endpoint_total_count = max(days, 0) * 3
         now = datetime.now(timezone.utc)
         end_days_ago = start_days_ago + max(days, 0)
+        if account and not self.is_authenticated(account):
+            return DailyMetricsFetchResult(
+                metrics=[],
+                status="session_unavailable",
+                endpoint_success_count=0,
+                endpoint_failure_count=0,
+                endpoint_total_count=endpoint_total_count,
+                endpoint_failures=[],
+            )
+
+        def _is_session_error(exc: Exception) -> bool:
+            low = str(exc).lower()
+            markers = ("not logged", "auth", "unauthor", "forbidden", "token")
+            return any(marker in low for marker in markers)
+
+        saw_session_error = False
         for i in range(start_days_ago, end_days_ago):  # start from the requested day offset
             day = (now - timedelta(days=i)).date().isoformat()
             hr: Dict = {}
@@ -246,22 +290,34 @@ class GccliRunner:
             try:
                 hr_payload = self._run_json(["health", "hr", day], account=account)
                 hr = hr_payload if isinstance(hr_payload, dict) else {}
-            except GccliError:
+                endpoint_success_count += 1
+            except GccliError as exc:
                 hr = {}
+                endpoint_failure_count += 1
+                endpoint_failures.append({"endpoint": "health hr", "date": day, "error": str(exc)[:200]})
+                saw_session_error = saw_session_error or _is_session_error(exc)
 
             # Sleep
             try:
                 sleep_payload = self._run_json(["health", "sleep", day], account=account)
                 sleep = sleep_payload if isinstance(sleep_payload, dict) else {}
-            except GccliError:
+                endpoint_success_count += 1
+            except GccliError as exc:
                 sleep = {}
+                endpoint_failure_count += 1
+                endpoint_failures.append({"endpoint": "health sleep", "date": day, "error": str(exc)[:200]})
+                saw_session_error = saw_session_error or _is_session_error(exc)
 
             # HRV (may be empty for accounts/devices without HRV)
             try:
                 hrv_payload = self._run_json(["health", "hrv", day], account=account)
                 hrv = hrv_payload if isinstance(hrv_payload, dict) else {}
-            except GccliError:
+                endpoint_success_count += 1
+            except GccliError as exc:
                 hrv = {}
+                endpoint_failure_count += 1
+                endpoint_failures.append({"endpoint": "health hrv", "date": day, "error": str(exc)[:200]})
+                saw_session_error = saw_session_error or _is_session_error(exc)
 
             normalized = GarminDailyMetrics.from_gccli(
                 date=day,
@@ -276,7 +332,24 @@ class GccliRunner:
             # Only keep days that have at least one real metric
             if any(entry.get(k) is not None for k in ("resting_hr", "sleep_hours", "hrv")):
                 metrics.append(entry)
-        return metrics
+        if endpoint_total_count == 0:
+            status = "success_no_data"
+        elif endpoint_failure_count == endpoint_total_count:
+            status = "session_unavailable" if saw_session_error else "technical_failure"
+        elif endpoint_failure_count > 0:
+            status = "partial_success"
+        elif not metrics:
+            status = "success_no_data"
+        else:
+            status = "success"
+        return DailyMetricsFetchResult(
+            metrics=metrics,
+            status=status,
+            endpoint_success_count=endpoint_success_count,
+            endpoint_failure_count=endpoint_failure_count,
+            endpoint_total_count=endpoint_total_count,
+            endpoint_failures=endpoint_failures,
+        )
 
     def fetch_max_metrics(
         self,

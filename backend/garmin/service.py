@@ -598,12 +598,19 @@ async def _ingest_activities(db, user_id: str, activities: list) -> dict:
     }
 
 
-async def _finalize_connection(db, user_id: str, newest_start: Optional[str]) -> int:
+async def _finalize_connection(
+    db,
+    user_id: str,
+    newest_start: Optional[str],
+    *,
+    update_last_sync: bool = True,
+) -> int:
     total = await db.garmin_activities.count_documents({"user_id": user_id})
     update = {
-        "last_sync": datetime.now(timezone.utc).isoformat(),
         "activity_count": total,
     }
+    if update_last_sync:
+        update["last_sync"] = datetime.now(timezone.utc).isoformat()
     if newest_start:
         update["last_activity_at"] = newest_start
     await db.garmin_connections.update_one({"user_id": user_id}, {"$set": update})
@@ -899,6 +906,7 @@ async def deep_sync(db, user_id: str) -> dict:
             activities_status="pending",
             run_index_status="pending",
             daily_metrics_status="pending",
+            daily_metrics_fetch_status="pending",
             readiness_status="pending",
             error_code=None,
         )
@@ -1199,7 +1207,12 @@ async def incremental_sync(db, user_id: str) -> dict:
         return {"success": False, "synced_count": 0, "new_count": 0, "message": "Sync failed"}
 
     ingest = await _ingest_activities(db, user_id, activities)
-    activity_count = await _finalize_connection(db, user_id, ingest["newest_start"])
+    activity_count = await _finalize_connection(
+        db,
+        user_id,
+        ingest["newest_start"],
+        update_last_sync=False,
+    )
     try:
         await _sync_vo2max_for_running_dates(
             db,
@@ -1217,13 +1230,86 @@ async def incremental_sync(db, user_id: str) -> dict:
         # -----------------------------------------------------------------
         metrics_count = 0
         metrics_recent: list = []
+        fetch_method = getattr(provider, "get_daily_metrics_fetch_result", None)
+        use_fetch_result = callable(fetch_method) and callable(
+            getattr(provider.__class__, "get_daily_metrics_fetch_result", None)
+        )
         try:
-            metrics_recent = list(provider.get_daily_metrics(user_id, days=3, start_days_ago=0))
-            if metrics_recent:
-                metrics_count = await _persist_daily_metrics(db, user_id, metrics_recent)
-                logger.info("[Garmin] incremental daily_metrics persisted=%d user=%s", metrics_count, user_id)
+            if use_fetch_result:
+                fetch_result = fetch_method(user_id, days=3, start_days_ago=0)
+            else:
+                metrics = list(provider.get_daily_metrics(user_id, days=3, start_days_ago=0))
+                fetch_result = {
+                    "metrics": metrics,
+                    "status": "success" if metrics else "success_no_data",
+                    "endpoint_success_count": 0,
+                    "endpoint_failure_count": 0,
+                    "endpoint_total_count": 0,
+                    "endpoint_failures": [],
+                }
         except Exception as exc:
             logger.warning("[Garmin] incremental daily_metrics fetch failed user=%s: %s", user_id, exc)
+            fetch_result = {
+                "metrics": [],
+                "status": "technical_failure",
+                "endpoint_success_count": 0,
+                "endpoint_failure_count": 0,
+                "endpoint_total_count": 0,
+                "endpoint_failures": [],
+            }
+        if not isinstance(fetch_result, dict):
+            fetch_result = {
+                "metrics": list(fetch_result or []),
+                "status": "success" if fetch_result else "success_no_data",
+                "endpoint_success_count": 0,
+                "endpoint_failure_count": 0,
+                "endpoint_total_count": 0,
+                "endpoint_failures": [],
+            }
+        metrics_recent = list(fetch_result.get("metrics") or [])
+        fetch_status = str(fetch_result.get("status") or "success_no_data")
+        if metrics_recent:
+            metrics_count = await _persist_daily_metrics(db, user_id, metrics_recent)
+            logger.info("[Garmin] incremental daily_metrics persisted=%d user=%s", metrics_count, user_id)
+        if fetch_status == "session_unavailable":
+            await _mark_sync_failed(
+                user_id,
+                "session_unavailable",
+                activities_status="ready",
+                activities_count=activity_count,
+                run_index_status="ready",
+                daily_metrics_status="failed",
+                daily_metrics_fetch_status=fetch_status,
+            )
+            return {
+                "success": False,
+                "status": "failed",
+                "error": "session_unavailable",
+                "synced_count": ingest["synced"],
+                "new_count": ingest["new"],
+                "metrics_count": metrics_count,
+                "message": "Garmin session unavailable, please reconnect",
+            }
+        if fetch_status == "technical_failure":
+            await _mark_sync_failed(
+                user_id,
+                "daily_metrics_fetch_failed",
+                activities_status="ready",
+                activities_count=activity_count,
+                run_index_status="ready",
+                daily_metrics_status="failed",
+                daily_metrics_fetch_status=fetch_status,
+                readiness_status="pending",
+            )
+            return {
+                "success": False,
+                "status": "failed",
+                "error": "daily_metrics_fetch_failed",
+                "synced_count": ingest["synced"],
+                "new_count": ingest["new"],
+                "metrics_count": metrics_count,
+                "message": "Daily metrics fetch failed",
+            }
 
         refreshed = await refresh_today_run_index_after_garmin_activities(db, user_id)
         await backfill_run_index_history_after_garmin_sync(db, user_id)
@@ -1237,6 +1323,9 @@ async def incremental_sync(db, user_id: str) -> dict:
             logger.exception("[Garmin] workouts self-heal failed user=%s", user_id)
         has_physio = _has_usable_physio_data(metrics_recent) if metrics_recent else False
         dm_status = "ready" if has_physio else ("no_usable_data" if metrics_count > 0 else "pending")
+        if fetch_status == "success_no_data":
+            dm_status = "no_usable_data"
+        await _finalize_connection(db, user_id, ingest["newest_start"], update_last_sync=True)
         await update_sync_progress(
             user_id,
             phase="complete",
@@ -1244,6 +1333,7 @@ async def incremental_sync(db, user_id: str) -> dict:
             activities_count=activity_count,
             run_index_status="ready",
             daily_metrics_status=dm_status,
+            daily_metrics_fetch_status=fetch_status,
             readiness_status="pending",
             error_code=None,
         )
@@ -1256,6 +1346,7 @@ async def incremental_sync(db, user_id: str) -> dict:
             activities_count=activity_count,
             run_index_status="failed",
             daily_metrics_status="pending",
+            daily_metrics_fetch_status="pending",
         )
         return {
             "success": False,

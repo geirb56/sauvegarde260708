@@ -208,6 +208,19 @@ def test_insufficient_physio_absent_only():
     assert result.score is None
 
 
+def test_hrv_unsupported_and_rhr_temporarily_absent_is_not_blocking():
+    metrics = _make_metrics(rhr=None, hrv=None, sleep_hours=7.4, sleep_score=82.0)
+    result = build_readiness_v2_from_garmin_data(
+        metrics,
+        _make_activities(),
+        _REF_DATE,
+        hrv_supported=False,
+    )
+    assert result.sufficiency_level == SufficiencyLevel.DEGRADED
+    assert result.score is not None
+    assert ReasonCode.missing_physio not in result.reasons
+
+
 # ---------------------------------------------------------------------------
 # 8. isolation user_id — adapter uses only supplied docs
 # ---------------------------------------------------------------------------

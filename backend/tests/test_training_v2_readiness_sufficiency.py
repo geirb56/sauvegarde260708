@@ -123,10 +123,12 @@ def _build(
     hrv: PhysioSignal | None,
     sleep: SleepRecord | None,
     load_confidence: str,
+    hrv_supported: bool | None = None,
 ) -> ReadinessSufficiency:
     inp = ReadinessSufficiencyInput(
         rhr=rhr,
         hrv=hrv,
+        hrv_supported=hrv_supported,
         sleep=sleep,
         load=_load_snapshot(load_confidence),
     )
@@ -199,6 +201,21 @@ class TestBothPhysioAbsent:
         assert result.level == SufficiencyLevel.INSUFFICIENT
         assert ReasonCode.missing_physio in result.reasons
         assert ReasonCode.missing_load in result.reasons
+
+
+class TestHRVUnsupportedFallbackPolicy:
+    """HRV unsupported + temporary missing RHR must not force INSUFFICIENT."""
+
+    def test_hrv_unsupported_with_rhr_present_is_sufficient(self):
+        result = _build(_solid_rhr(), _absent_signal(), _sleep(), "high", hrv_supported=False)
+        assert result.level == SufficiencyLevel.SUFFICIENT
+        assert ReasonCode.missing_hrv not in result.reasons
+
+    def test_hrv_unsupported_rhr_absent_sleep_and_load_available_is_degraded(self):
+        result = _build(_absent_signal(), _absent_signal(), _sleep(), "high", hrv_supported=False)
+        assert result.level == SufficiencyLevel.DEGRADED
+        assert ReasonCode.missing_rhr in result.reasons
+        assert ReasonCode.missing_physio not in result.reasons
 
 
 class TestSleepAbsent:

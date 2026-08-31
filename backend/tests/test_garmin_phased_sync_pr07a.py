@@ -379,6 +379,78 @@ def test_incremental_sync_still_refreshes_run_index():
     mock_caps.assert_awaited_once()
 
 
+def test_incremental_sync_daily_metrics_technical_failure_returns_failed():
+    db = _mock_db()
+    provider = MagicMock()
+    provider.sync_activities.return_value = [_activity(9)]
+    provider.get_daily_metrics_fetch_result.return_value = {
+        "metrics": [],
+        "status": "technical_failure",
+        "endpoint_success_count": 0,
+        "endpoint_failure_count": 9,
+        "endpoint_total_count": 9,
+        "endpoint_failures": [{"endpoint": "health hr", "date": "2026-08-09", "error": "timeout"}],
+    }
+    progress_states, fake_update, fake_get = _progress_spy()
+
+    with (
+        patch.object(svc.session_store, "ensure_session", new=AsyncMock(return_value=True)),
+        patch.object(svc.session_store, "save_session", new=AsyncMock(return_value=True)),
+        patch.object(svc, "get_provider_for_user", return_value=provider),
+        patch.object(svc, "_ingest_activities", new=AsyncMock(return_value={"synced": 1, "new": 1, "newest_start": "2026-08-09T08:00:00", "new_running_dates": ["2026-08-09"]})),
+        patch.object(svc, "_finalize_connection", new=AsyncMock(return_value=13)) as mock_finalize,
+        patch.object(svc, "_sync_vo2max_for_running_dates", new=AsyncMock(return_value=1)),
+        patch.object(svc, "_build_and_persist_capabilities", new=AsyncMock()),
+        patch.object(svc, "refresh_today_run_index_after_garmin_activities", new=AsyncMock(return_value={"today_snapshot": {"date": "2026-08-09"}, "workouts": []})),
+        patch.object(svc, "backfill_run_index_history_after_garmin_sync", new=AsyncMock(return_value={})),
+        patch.object(svc, "update_sync_progress", new=AsyncMock(side_effect=fake_update)),
+        patch.object(svc, "get_sync_progress", new=AsyncMock(side_effect=fake_get)),
+    ):
+        result = _run(svc.incremental_sync(db, "user-1"))
+
+    assert result["success"] is False
+    assert result["error"] == "daily_metrics_fetch_failed"
+    assert progress_states[-1]["phase"] == "failed"
+    assert progress_states[-1]["daily_metrics_status"] == "failed"
+    assert progress_states[-1]["daily_metrics_fetch_status"] == "technical_failure"
+    assert mock_finalize.await_count == 1
+
+
+def test_incremental_sync_true_no_data_marks_no_usable_data():
+    db = _mock_db()
+    provider = MagicMock()
+    provider.sync_activities.return_value = [_activity(9)]
+    provider.get_daily_metrics_fetch_result.return_value = {
+        "metrics": [],
+        "status": "success_no_data",
+        "endpoint_success_count": 9,
+        "endpoint_failure_count": 0,
+        "endpoint_total_count": 9,
+        "endpoint_failures": [],
+    }
+    _, fake_update, fake_get = _progress_spy()
+
+    with (
+        patch.object(svc.session_store, "ensure_session", new=AsyncMock(return_value=True)),
+        patch.object(svc.session_store, "save_session", new=AsyncMock(return_value=True)),
+        patch.object(svc, "get_provider_for_user", return_value=provider),
+        patch.object(svc, "_ingest_activities", new=AsyncMock(return_value={"synced": 1, "new": 1, "newest_start": "2026-08-09T08:00:00", "new_running_dates": ["2026-08-09"]})),
+        patch.object(svc, "_finalize_connection", new=AsyncMock(return_value=13)) as mock_finalize,
+        patch.object(svc, "_sync_vo2max_for_running_dates", new=AsyncMock(return_value=1)),
+        patch.object(svc, "_build_and_persist_capabilities", new=AsyncMock()),
+        patch.object(svc, "refresh_today_run_index_after_garmin_activities", new=AsyncMock(return_value={"today_snapshot": {"date": "2026-08-09"}, "workouts": []})),
+        patch.object(svc, "backfill_run_index_history_after_garmin_sync", new=AsyncMock(return_value={})),
+        patch.object(svc, "update_sync_progress", new=AsyncMock(side_effect=fake_update)),
+        patch.object(svc, "get_sync_progress", new=AsyncMock(side_effect=fake_get)),
+    ):
+        result = _run(svc.incremental_sync(db, "user-1"))
+
+    assert result["success"] is True
+    assert result["metrics_count"] == 0
+    assert result["status"] == "complete"
+    assert mock_finalize.await_count == 2
+
+
 class _FakeRedis:
     def __init__(self):
         self.data = {}

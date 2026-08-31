@@ -264,6 +264,7 @@ def build_readiness_v2_from_garmin_data(
     activities: List[dict],
     reference_date: date,
     load_snapshot: Optional[TrainingLoadSnapshot] = None,
+    hrv_supported: Optional[bool] = None,
 ) -> ReadinessResult:
     """Build a ReadinessResult (V2) from pre-fetched Garmin/MongoDB data.
 
@@ -316,6 +317,7 @@ def build_readiness_v2_from_garmin_data(
     sufficiency_input = ReadinessSufficiencyInput(
         rhr=rhr_signal,
         hrv=hrv_signal,
+        hrv_supported=hrv_supported,
         sleep=sleep_record,
         load=load_snapshot,
     )

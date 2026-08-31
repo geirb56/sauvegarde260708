@@ -325,7 +325,14 @@ def test_incremental_sync_fetches_daily_metrics():
 
     provider_stub = MagicMock()
     provider_stub.sync_activities.return_value = []
-    provider_stub.get_daily_metrics.return_value = fake_metrics
+    provider_stub.get_daily_metrics_fetch_result.return_value = {
+        "metrics": fake_metrics,
+        "status": "success",
+        "endpoint_success_count": 9,
+        "endpoint_failure_count": 0,
+        "endpoint_total_count": 9,
+        "endpoint_failures": [],
+    }
 
     # Minimal db stub
     async def _find_one(*a, **kw):
@@ -363,8 +370,8 @@ def test_incremental_sync_fetches_daily_metrics():
         result = asyncio.run(incremental_sync(db_stub, "user_123"))
 
     # Provider must have been asked for recent daily metrics
-    provider_stub.get_daily_metrics.assert_called_once()
-    call_kwargs = provider_stub.get_daily_metrics.call_args
+    provider_stub.get_daily_metrics_fetch_result.assert_called_once()
+    call_kwargs = provider_stub.get_daily_metrics_fetch_result.call_args
     assert call_kwargs.kwargs.get("days", call_kwargs.args[1] if len(call_kwargs.args) > 1 else None) == 3 or \
            3 in call_kwargs.args, \
            f"Expected days=3, got: {call_kwargs}"

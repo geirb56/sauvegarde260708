@@ -143,6 +143,31 @@ function SettingRow({ label, value, helper, action, testId }) {
   );
 }
 
+function getGarminSyncHelper(t, syncStatus) {
+  if (!syncStatus || typeof syncStatus !== "object") return null;
+  const status = typeof syncStatus.status === "string" ? syncStatus.status.trim() : "";
+  const errorCode = syncStatus.error_code || syncStatus.error || null;
+  const fetchStatus = syncStatus.daily_metrics_fetch_status || null;
+  const metricsStatus = syncStatus.daily_metrics_status || null;
+
+  if (status && !TERMINAL_SYNC_STATUSES.has(status)) {
+    return t("settingsV2.garmin.syncInProgress");
+  }
+  if (errorCode === "session_unavailable") {
+    return t("settingsV2.garmin.reconnectRequired");
+  }
+  if (errorCode === "daily_metrics_fetch_failed" || errorCode === "daily_metrics_7d_failed" || errorCode === "daily_metrics_enrichment_failed") {
+    return t("settingsV2.garmin.dailyMetricsFetchError");
+  }
+  if (status === "complete" && fetchStatus === "partial_success") {
+    return t("settingsV2.garmin.partialData");
+  }
+  if (metricsStatus === "no_usable_data" || fetchStatus === "success_no_data") {
+    return t("settingsV2.garmin.noDataAvailableYet");
+  }
+  return null;
+}
+
 export default function Settings() {
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -196,6 +221,10 @@ export default function Settings() {
   const locale = lang === "fr" ? "fr-FR" : lang === "es" ? "es-ES" : "en-US";
   const selectedGoalOption = useMemo(() => getGoalOption(trainingGoal), [trainingGoal]);
   const effectiveGarminStatus = garminProgress || garminStatus?.sync_status || null;
+  const garminSyncHelper = useMemo(
+    () => getGarminSyncHelper(t, effectiveGarminStatus),
+    [t, effectiveGarminStatus]
+  );
   const subscriptionCode = getSubscriptionCode({ subscription, isTrial, isPremium });
 
   const loadPlanSettings = useCallback(async () => {
@@ -819,9 +848,7 @@ export default function Settings() {
               <SettingRow
                 label={t("settingsV2.garmin.connection")}
                 value={garminConnected ? t("settings.connected") : t("settings.notConnected")}
-                helper={effectiveGarminStatus?.status && !TERMINAL_SYNC_STATUSES.has(effectiveGarminStatus.status)
-                  ? t("settingsV2.garmin.syncInProgress")
-                  : null}
+                helper={garminSyncHelper}
                 testId="settings-garmin-status"
               />
 
