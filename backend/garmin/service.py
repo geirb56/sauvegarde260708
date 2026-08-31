@@ -1256,15 +1256,6 @@ async def incremental_sync(db, user_id: str) -> dict:
                 "endpoint_total_count": 0,
                 "endpoint_failures": [],
             }
-        if not isinstance(fetch_result, dict):
-            fetch_result = {
-                "metrics": list(fetch_result or []),
-                "status": "success" if fetch_result else "success_no_data",
-                "endpoint_success_count": 0,
-                "endpoint_failure_count": 0,
-                "endpoint_total_count": 0,
-                "endpoint_failures": [],
-            }
         metrics_recent = list(fetch_result.get("metrics") or [])
         fetch_status = str(fetch_result.get("status") or "success_no_data")
         if metrics_recent:
