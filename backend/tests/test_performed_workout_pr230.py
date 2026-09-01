@@ -6,10 +6,15 @@ supplied and no clock is consulted.
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, time
 
 import pytest
 
+from garmin.domain_adapter import (
+    garmin_local_start_time,
+    mongo_garmin_to_observed_activity,
+    mongo_garmin_to_observed_activities,
+)
 from training_v2.domain_activity import DomainActivity
 from training_v2.performed_workout import (
     ADHERENCE_TOLERANCE_RATIO,
@@ -24,12 +29,12 @@ from training_v2.performed_workout import (
     RC_FUTURE_SESSION,
     RC_MATCHED_NO_COMPARABLE_DIMENSION,
     RC_NO_CANDIDATE,
+    RC_RESOLVED_BY_PLANNED_START_TIME,
     RC_NO_PRESCRIPTION,
     RC_REST_NOT_MATCHABLE,
     RC_WINDOW_CLOSED,
     RC_WINDOW_OPEN,
     build_performed_workouts,
-    to_observed_activities,
     to_observed_activity,
 )
 
@@ -53,6 +58,7 @@ def _prescription(
     duration_min=None,
     pace=None,
     intensity_class="low",
+    planned_start_time=None,
 ) -> PrescribedWorkout:
     return PrescribedWorkout(
         prescription_id=prescription_id,
@@ -63,6 +69,7 @@ def _prescription(
         planned_distance_km=distance_km,
         planned_duration_min=duration_min,
         planned_pace_min_per_km=pace,
+        planned_start_time=planned_start_time,
     )
 
 
@@ -117,7 +124,7 @@ def test_planned_session_with_compatible_run_is_matched():
     assert row.adherence_status is AdherenceStatus.COMPLETED_AS_PLANNED
     assert row.activity_id == "a1"
     assert row.actual_distance_km == 10.0
-    assert row.comparison_basis == "distance"
+    assert row.comparison_dimensions == ("distance",)
     assert ledger.matched_count == 1
     assert ledger.unmatched_actual_count == 0
 
@@ -279,7 +286,9 @@ def test_two_strictly_equivalent_runs_are_ambiguous_and_not_matched():
     ledger = _build([prescription], [a, b])
     row = _by_prescription(ledger, "p1")
 
-    assert row.matching_status is MatchingStatus.PLANNED
+    assert row.matching_status is MatchingStatus.AMBIGUOUS
+    assert row.adherence_status is AdherenceStatus.AMBIGUOUS
+    assert row.candidate_activity_ids == ("a1", "a2")
     assert RC_AMBIGUOUS_MULTIPLE_CANDIDATES in row.reason_codes
     assert row.activity_id is None
     assert ledger.matched_count == 0
@@ -322,9 +331,12 @@ def test_local_date_drives_matching_not_utc_string():
         start_time="2026-06-10 23:30:00",
         distance_m=10000.0,
         duration_s=3300.0,
+        source="garmin",
         source_activity_id="a-late",
     )
-    observed = to_observed_activity(domain, user_id=USER)
+    observed = to_observed_activity(
+        domain, user_id=USER, local_start_time="2026-06-10 23:30:00"
+    )
 
     assert observed is not None
     assert observed.local_date == date(2026, 6, 10)
@@ -373,7 +385,7 @@ def test_duration_basis_used_when_no_planned_distance():
 
     row = _by_prescription(_build([prescription], [activity]), "p1")
 
-    assert row.comparison_basis == "duration"
+    assert row.comparison_dimensions == ("duration",)
     assert row.adherence_status is AdherenceStatus.COMPLETED_AS_PLANNED
     assert row.duration_delta_min == pytest.approx(3.0)
 
@@ -404,7 +416,7 @@ def test_no_comparable_dimension_matches_as_unverified():
 
     assert row.matching_status is MatchingStatus.MATCHED
     assert row.adherence_status is AdherenceStatus.COMPLETED_UNVERIFIED
-    assert row.comparison_basis is None
+    assert row.comparison_dimensions == ()
     assert row.deviation_ratio is None
     assert RC_MATCHED_NO_COMPARABLE_DIMENSION in row.reason_codes
 
@@ -481,9 +493,12 @@ def test_zero_distance_activity_is_not_turned_into_zero_value():
         start_time="2026-06-10T07:00:00",
         distance_m=0,
         duration_s=1800,
+        source="garmin",
         source_activity_id="a-zero",
     )
-    observed = to_observed_activity(domain, user_id=USER)
+    observed = to_observed_activity(
+        domain, user_id=USER, local_start_time="2026-06-10T07:00:00"
+    )
 
     assert observed is not None
     assert observed.distance_km is None
@@ -596,6 +611,7 @@ def test_engine_never_emits_a_completed_matching_status():
         "planned",
         "matched",
         "missed",
+        "ambiguous",
         "unmatched_actual",
     }
     assert "completed" not in {s.value for s in MatchingStatus}
@@ -647,18 +663,21 @@ def test_engine_module_has_no_io_dependencies():
 def test_to_observed_activity_from_domain_activity():
     domain = DomainActivity(
         activity_type="running",
-        start_time="2026-06-10T07:15:00",
+        start_time="2026-06-10T05:15:00",  # GMT-first value — NOT used for the day
         distance_m=10500.0,
         duration_s=3300.0,
         source="garmin",
         source_activity_id="123456",
     )
 
-    observed = to_observed_activity(domain, user_id=USER)
+    observed = to_observed_activity(
+        domain, user_id=USER, local_start_time="2026-06-10T07:15:00"
+    )
 
     assert observed is not None
     assert observed.activity_id == "123456"
     assert observed.user_id == USER
+    assert observed.source == "garmin"
     assert observed.local_date == date(2026, 6, 10)
     assert observed.start_time == datetime(2026, 6, 10, 7, 15, 0)
     assert observed.distance_km == pytest.approx(10.5)
@@ -667,23 +686,515 @@ def test_to_observed_activity_from_domain_activity():
     assert observed.is_running is True
 
 
-def test_to_observed_activity_rejects_activities_without_date_or_id():
-    no_date = DomainActivity(activity_type="running", source_activity_id="1")
-    no_id = DomainActivity(activity_type="running", start_time="2026-06-10T07:00:00")
+def test_to_observed_activity_rejects_activities_without_local_time_or_id():
+    no_local = DomainActivity(
+        activity_type="running", source="garmin", source_activity_id="1"
+    )
+    no_id = DomainActivity(
+        activity_type="running", source="garmin", start_time="2026-06-10T07:00:00"
+    )
 
-    assert to_observed_activity(no_date, user_id=USER) is None
-    assert to_observed_activity(no_id, user_id=USER) is None
+    assert to_observed_activity(no_local, user_id=USER, local_start_time=None) is None
+    assert (
+        to_observed_activity(no_id, user_id=USER, local_start_time="2026-06-10T07:00:00")
+        is None
+    )
 
 
-def test_to_observed_activities_skips_unusable_inputs():
-    usable = DomainActivity(
+# ===========================================================================
+# C230 CORRECTIONS
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# C230 #1 — real Garmin local date (startTimeLocal), full Mongo chain
+# ---------------------------------------------------------------------------
+
+
+def _mongo_doc(
+    *,
+    activity_id="9001",
+    start_time_local="2026-06-10 00:30:00",
+    start_time_gmt="2026-06-09 22:30:00",
+    distance_m=10000.0,
+    duration_s=3300.0,
+    activity_type="running",
+    source="garmin",
+):
+    """A realistic ``garmin_activities`` document.
+
+    Reproduces the real asymmetry: the ``garmin_activity`` sub-document is
+    GMT-first while the top-level ``start_time`` is local-first.
+    """
+    doc = {
+        "activity_id": activity_id,
+        "source": source,
+        "activity_type": activity_type,
+        "start_time": start_time_local,  # ingestion contract: local first
+        "distance": distance_m,
+        "duration": duration_s,
+        "garmin_activity": {
+            "activity_id": activity_id,
+            "activity_type": activity_type,
+            "start_time": start_time_gmt,  # model convention: GMT first
+            "start_time_local": start_time_local,
+            "distance_m": distance_m,
+            "duration_s": duration_s,
+        },
+    }
+    return doc
+
+
+def test_mongo_chain_matches_on_real_local_day_not_gmt_day():
+    """startTimeLocal 2026-06-10 00:30 / GMT 2026-06-09 22:30 → matched on 06-10."""
+    doc = _mongo_doc()
+
+    observed = mongo_garmin_to_observed_activity(doc, user_id=USER)
+
+    assert observed is not None
+    assert observed.local_date == date(2026, 6, 10)
+    assert observed.start_time == datetime(2026, 6, 10, 0, 30, 0)
+
+    prescription = _prescription(planned_date=date(2026, 6, 10), distance_km=10.0)
+    ledger = _build([prescription], [observed], reference_date=date(2026, 6, 11))
+
+    row = _by_prescription(ledger, "p1")
+    assert row.matching_status is MatchingStatus.MATCHED
+    assert row.activity_id == "9001"
+    assert ledger.unmatched_actual_count == 0
+
+
+def test_mongo_chain_does_not_match_the_gmt_day():
+    """The GMT day (06-09) must NOT receive the activity."""
+    doc = _mongo_doc()
+    observed = mongo_garmin_to_observed_activity(doc, user_id=USER)
+
+    prescription = _prescription(planned_date=date(2026, 6, 9), distance_km=10.0)
+    ledger = _build([prescription], [observed], reference_date=date(2026, 6, 11))
+
+    row = _by_prescription(ledger, "p1")
+    assert row.matching_status is MatchingStatus.MISSED
+    assert ledger.unmatched_actual_count == 1
+
+
+def test_domain_start_time_alone_would_have_picked_the_wrong_day():
+    """Regression guard: the GMT sub-document value is a different calendar day."""
+    from garmin.domain_adapter import mongo_garmin_to_domain
+
+    doc = _mongo_doc()
+    domain = mongo_garmin_to_domain(doc)
+
+    # DomainActivity.start_time is the GMT-first value → previous day.
+    assert str(domain.start_time).startswith("2026-06-09")
+    # The dedicated adapter resolves the REAL local day.
+    assert garmin_local_start_time(doc) == "2026-06-10 00:30:00"
+
+
+def test_garmin_local_start_time_prefers_explicit_local_field():
+    doc = _mongo_doc()
+    doc["start_time"] = "2026-06-09 22:30:00"  # degraded top-level
+    assert garmin_local_start_time(doc) == "2026-06-10 00:30:00"
+
+
+def test_garmin_local_start_time_refuses_gmt_only_document():
+    """No local evidence at all → no fabricated local day."""
+    doc = _mongo_doc()
+    doc["garmin_activity"].pop("start_time_local")
+    doc["start_time"] = doc["garmin_activity"]["start_time"]  # GMT fallback
+
+    assert garmin_local_start_time(doc) is None
+    assert mongo_garmin_to_observed_activity(doc, user_id=USER) is None
+
+
+def test_garmin_local_start_time_accepts_raw_start_time_local_key():
+    doc = _mongo_doc()
+    doc["garmin_activity"].pop("start_time_local")
+    doc["startTimeLocal"] = "2026-06-10 00:30:00"
+    doc["start_time"] = "2026-06-09 22:30:00"
+
+    assert garmin_local_start_time(doc) == "2026-06-10 00:30:00"
+
+
+def test_garmin_activity_model_exposes_start_time_local():
+    """The Garmin normalisation layer really carries startTimeLocal."""
+    from garmin.data_layer import GarminActivity
+
+    normalized = GarminActivity.from_summary(
+        {
+            "activityId": 42,
+            "activityType": {"typeKey": "running"},
+            "summaryDTO": {
+                "startTimeGMT": "2026-06-09 22:30:00",
+                "startTimeLocal": "2026-06-10 00:30:00",
+                "distance": 10000.0,
+                "duration": 3300.0,
+            },
+        }
+    )
+
+    assert normalized.start_time == "2026-06-09 22:30:00"  # GMT-first convention
+    assert normalized.start_time_local == "2026-06-10 00:30:00"
+
+
+def test_mongo_garmin_to_observed_activities_skips_unusable_documents():
+    good = _mongo_doc(activity_id="ok")
+    bad_source = _mongo_doc(activity_id="bad", source="workout")
+    bad_source.pop("garmin_activity")
+
+    result = mongo_garmin_to_observed_activities([good, bad_source, None], user_id=USER)
+
+    assert [a.activity_id for a in result] == ["ok"]
+
+
+# ---------------------------------------------------------------------------
+# C230 #2 — ambiguity is never missed, no arbitrary clock tiebreak
+# ---------------------------------------------------------------------------
+
+
+def test_two_identical_runs_morning_and_evening_are_ambiguous():
+    """10 km at 07:00 and 10 km at 18:00, prescription 10 km without a time."""
+    prescription = _prescription(distance_km=10.0)
+    morning = _activity(
+        activity_id="a_morning",
+        distance_km=10.0,
+        duration_min=55.0,
+        start_time=datetime(2026, 6, 10, 7, 0, 0),
+    )
+    evening = _activity(
+        activity_id="a_evening",
+        distance_km=10.0,
+        duration_min=55.0,
+        start_time=datetime(2026, 6, 10, 18, 0, 0),
+    )
+
+    ledger = _build([prescription], [morning, evening])
+    row = _by_prescription(ledger, "p1")
+
+    assert row.matching_status is MatchingStatus.AMBIGUOUS
+    assert row.activity_id is None
+    assert row.candidate_activity_ids == ("a_evening", "a_morning")
+    assert ledger.ambiguous_count == 1
+    assert ledger.unmatched_actual_count == 2
+
+
+def test_ambiguity_stays_ambiguous_after_window_closes():
+    prescription = _prescription(planned_date=date(2026, 6, 3), distance_km=10.0)
+    common = dict(
+        local_date=date(2026, 6, 3), distance_km=10.0, duration_min=55.0
+    )
+    morning = _activity(
+        activity_id="a_morning", start_time=datetime(2026, 6, 3, 7, 0, 0), **common
+    )
+    evening = _activity(
+        activity_id="a_evening", start_time=datetime(2026, 6, 3, 18, 0, 0), **common
+    )
+
+    ledger = _build([prescription], [morning, evening], reference_date=REF)
+    row = _by_prescription(ledger, "p1")
+
+    assert row.matching_status is MatchingStatus.AMBIGUOUS
+    assert row.matching_status is not MatchingStatus.MISSED
+    assert row.adherence_status is AdherenceStatus.AMBIGUOUS
+    assert ledger.missed_count == 0
+    assert RC_WINDOW_CLOSED in row.reason_codes
+
+
+def test_ambiguous_prescription_is_never_matched_missed_or_completed():
+    prescription = _prescription(planned_date=date(2026, 6, 3), distance_km=10.0)
+    a = _activity(
+        activity_id="a1",
+        local_date=date(2026, 6, 3),
+        start_time=datetime(2026, 6, 3, 7, 0, 0),
+    )
+    b = _activity(
+        activity_id="a2",
+        local_date=date(2026, 6, 3),
+        start_time=datetime(2026, 6, 3, 20, 0, 0),
+    )
+
+    row = _by_prescription(_build([prescription], [a, b], reference_date=REF), "p1")
+
+    assert row.matching_status not in (MatchingStatus.MATCHED, MatchingStatus.MISSED)
+    assert row.adherence_status not in (
+        AdherenceStatus.COMPLETED_AS_PLANNED,
+        AdherenceStatus.COMPLETED_MODIFIED,
+        AdherenceStatus.COMPLETED_UNVERIFIED,
+        AdherenceStatus.MISSED,
+    )
+
+
+def test_clearly_better_candidate_on_prescribed_dimensions_is_matched():
+    prescription = _prescription(distance_km=10.0, duration_min=55.0)
+    good = _activity(
+        activity_id="a_good",
+        distance_km=10.1,
+        duration_min=56.0,
+        start_time=datetime(2026, 6, 10, 18, 0, 0),
+    )
+    poor = _activity(
+        activity_id="a_poor",
+        distance_km=7.0,
+        duration_min=40.0,
+        start_time=datetime(2026, 6, 10, 7, 0, 0),
+    )
+
+    ledger = _build([prescription], [poor, good])
+    row = _by_prescription(ledger, "p1")
+
+    assert row.matching_status is MatchingStatus.MATCHED
+    assert row.activity_id == "a_good"  # later run, but better evidence
+
+
+def test_prescribed_start_time_is_a_legitimate_tiebreaker():
+    prescription = _prescription(
+        distance_km=10.0, planned_start_time=time(18, 0)
+    )
+    morning = _activity(
+        activity_id="a_morning", start_time=datetime(2026, 6, 10, 7, 0, 0)
+    )
+    evening = _activity(
+        activity_id="a_evening", start_time=datetime(2026, 6, 10, 18, 5, 0)
+    )
+
+    row = _by_prescription(_build([prescription], [morning, evening]), "p1")
+
+    assert row.matching_status is MatchingStatus.MATCHED
+    assert row.activity_id == "a_evening"
+    assert RC_RESOLVED_BY_PLANNED_START_TIME in row.reason_codes
+
+
+def test_without_prescribed_start_time_earlier_run_is_not_preferred():
+    """The old (deviation, start_time) ranking would have picked the morning run."""
+    prescription = _prescription(distance_km=10.0)
+    morning = _activity(
+        activity_id="a_morning", start_time=datetime(2026, 6, 10, 6, 0, 0)
+    )
+    evening = _activity(
+        activity_id="a_evening", start_time=datetime(2026, 6, 10, 19, 0, 0)
+    )
+
+    row = _by_prescription(_build([prescription], [morning, evening]), "p1")
+
+    assert row.activity_id is None
+    assert row.matching_status is MatchingStatus.AMBIGUOUS
+
+
+# ---------------------------------------------------------------------------
+# C230 #3 — multi-dimension adherence
+# ---------------------------------------------------------------------------
+
+
+def test_case_A_all_dimensions_within_tolerance_is_as_planned():
+    prescription = _prescription(distance_km=10.0, duration_min=60.0)
+    activity = _activity(distance_km=10.0, duration_min=60.0)
+
+    row = _by_prescription(_build([prescription], [activity]), "p1")
+
+    assert row.matching_status is MatchingStatus.MATCHED
+    assert row.adherence_status is AdherenceStatus.COMPLETED_AS_PLANNED
+    assert row.comparison_dimensions == ("distance", "duration")
+    assert row.distance_deviation_ratio == pytest.approx(0.0)
+    assert row.duration_deviation_ratio == pytest.approx(0.0)
+
+
+def test_case_B_perfect_distance_but_long_duration_is_modified_not_as_planned():
+    prescription = _prescription(distance_km=10.0, duration_min=60.0)
+    activity = _activity(distance_km=10.0, duration_min=75.0)  # +25 %
+
+    row = _by_prescription(_build([prescription], [activity]), "p1")
+
+    assert row.matching_status is MatchingStatus.MATCHED
+    assert row.adherence_status is AdherenceStatus.COMPLETED_MODIFIED
+    assert row.distance_deviation_ratio == pytest.approx(0.0)
+    assert row.duration_deviation_ratio == pytest.approx(0.25)
+    assert row.deviation_ratio == pytest.approx(0.25)
+    assert row.duration_delta_min == pytest.approx(15.0)
+
+
+def test_case_C_perfect_distance_but_double_duration_is_never_as_planned():
+    """10 km / 60 min prescribed, 10 km / 120 min performed → incompatible."""
+    prescription = _prescription(
+        planned_date=date(2026, 6, 3), distance_km=10.0, duration_min=60.0
+    )
+    activity = _activity(
+        local_date=date(2026, 6, 3),
+        start_time=datetime(2026, 6, 3, 7, 0, 0),
+        distance_km=10.0,
+        duration_min=120.0,  # +100 % → above MATCH_MAX_DEVIATION_RATIO
+    )
+
+    ledger = _build([prescription], [activity], reference_date=REF)
+    row = _by_prescription(ledger, "p1")
+
+    assert row.adherence_status is not AdherenceStatus.COMPLETED_AS_PLANNED
+    assert row.matching_status is MatchingStatus.MISSED
+    assert RC_CANDIDATE_REJECTED_DEVIATION in row.reason_codes
+    assert ledger.unmatched_actual_count == 1
+
+
+def test_case_D_duration_used_when_distance_absent_on_one_side():
+    prescription = _prescription(distance_km=None, duration_min=60.0)
+    activity = _activity(distance_km=10.0, duration_min=62.0)
+
+    row = _by_prescription(_build([prescription], [activity]), "p1")
+
+    assert row.comparison_dimensions == ("duration",)
+    assert row.distance_deviation_ratio is None
+    assert row.adherence_status is AdherenceStatus.COMPLETED_AS_PLANNED
+    assert row.actual_distance_km == 10.0  # kept as raw evidence
+    assert row.planned_distance_km is None  # never fabricated
+
+
+def test_case_E_prescribed_pace_divergence_is_not_ignored():
+    prescription = _prescription(distance_km=10.0, pace=5.0)
+    activity = _activity(distance_km=10.0, duration_min=65.0)  # pace 6.5 → +30 %
+
+    row = _by_prescription(_build([prescription], [activity]), "p1")
+
+    assert "pace" in row.comparison_dimensions
+    assert row.pace_deviation_ratio == pytest.approx(0.30)
+    assert row.adherence_status is AdherenceStatus.COMPLETED_MODIFIED
+    assert row.pace_delta_min_per_km == pytest.approx(1.5)
+
+
+def test_extreme_prescribed_pace_divergence_rejects_the_candidate():
+    prescription = _prescription(
+        planned_date=date(2026, 6, 3), distance_km=10.0, pace=4.0
+    )
+    activity = _activity(
+        local_date=date(2026, 6, 3),
+        start_time=datetime(2026, 6, 3, 7, 0, 0),
+        distance_km=10.0,
+        duration_min=90.0,  # pace 9.0 → +125 %
+    )
+
+    row = _by_prescription(_build([prescription], [activity], reference_date=REF), "p1")
+
+    assert row.matching_status is MatchingStatus.MISSED
+    assert RC_CANDIDATE_REJECTED_DEVIATION in row.reason_codes
+
+
+def test_pace_is_never_compared_when_not_really_prescribed():
+    prescription = _prescription(distance_km=10.0, pace=None)
+    activity = _activity(distance_km=10.0, duration_min=55.0)
+
+    row = _by_prescription(_build([prescription], [activity]), "p1")
+
+    assert "pace" not in row.comparison_dimensions
+    assert row.pace_deviation_ratio is None
+    assert row.planned_pace_min_per_km is None
+    assert row.actual_pace_min_per_km == pytest.approx(5.5)
+
+
+# ---------------------------------------------------------------------------
+# C230 #4 — explicit Garmin provenance
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("source", ["legacy", "workout", "manual", "strava", None])
+def test_non_garmin_source_is_refused_as_evidence(source):
+    domain = DomainActivity(
         activity_type="running",
         start_time="2026-06-10T07:00:00",
-        source_activity_id="ok",
+        distance_m=10000.0,
+        duration_s=3300.0,
+        source=source,
+        source_activity_id="x1",
     )
-    unusable = DomainActivity(activity_type="running")
 
-    result = to_observed_activities([usable, unusable], user_id=USER)
+    assert (
+        to_observed_activity(
+            domain, user_id=USER, local_start_time="2026-06-10T07:00:00"
+        )
+        is None
+    )
 
-    assert len(result) == 1
-    assert result[0].activity_id == "ok"
+
+def test_garmin_source_is_accepted_as_evidence():
+    domain = DomainActivity(
+        activity_type="running",
+        start_time="2026-06-10T07:00:00",
+        distance_m=10000.0,
+        duration_s=3300.0,
+        source="garmin",
+        source_activity_id="x1",
+    )
+
+    observed = to_observed_activity(
+        domain, user_id=USER, local_start_time="2026-06-10T07:00:00"
+    )
+
+    assert observed is not None
+    assert observed.source == "garmin"
+
+
+def test_no_fallback_relabels_an_activity_as_garmin():
+    """A non-Garmin Mongo document never becomes Garmin evidence."""
+    doc = _mongo_doc(source="workout")
+    doc.pop("garmin_activity")
+
+    assert mongo_garmin_to_observed_activity(doc, user_id=USER) is None
+
+
+def test_engine_drops_activities_whose_source_is_not_garmin():
+    """Even a hand-built ObservedActivity cannot smuggle in non-Garmin data."""
+    fake = _activity(activity_id="fake").model_copy(update={"source": "workout"})
+
+    ledger = _build([_prescription()], [fake])
+
+    assert _by_prescription(ledger, "p1").matching_status is MatchingStatus.PLANNED
+    assert ledger.matched_count == 0
+    assert ledger.unmatched_actual_count == 0
+
+
+# ---------------------------------------------------------------------------
+# Full logical integration: Mongo → domain → ObservedActivity → ledger
+# ---------------------------------------------------------------------------
+
+
+def test_full_mongo_to_ledger_integration_is_deterministic():
+    docs = [
+        _mongo_doc(
+            activity_id="d1",
+            start_time_local="2026-06-08 07:00:00",
+            start_time_gmt="2026-06-08 05:00:00",
+            distance_m=10000.0,
+            duration_s=3300.0,
+        ),
+        _mongo_doc(
+            activity_id="d2",
+            start_time_local="2026-06-10 00:30:00",
+            start_time_gmt="2026-06-09 22:30:00",
+            distance_m=8000.0,
+            duration_s=2700.0,
+        ),
+        _mongo_doc(
+            activity_id="d3",
+            start_time_local="2026-06-10 18:00:00",
+            start_time_gmt="2026-06-10 16:00:00",
+            distance_m=4000.0,
+            duration_s=1500.0,
+        ),
+    ]
+
+    observed = mongo_garmin_to_observed_activities(docs, user_id=USER)
+    prescriptions = [
+        _prescription(
+            prescription_id="p1", planned_date=date(2026, 6, 8), distance_km=10.0
+        ),
+        _prescription(
+            prescription_id="p2", planned_date=date(2026, 6, 10), distance_km=8.0
+        ),
+        _prescription(
+            prescription_id="p3", planned_date=date(2026, 6, 9), distance_km=12.0
+        ),
+    ]
+
+    ledger = _build(prescriptions, observed, reference_date=date(2026, 6, 11))
+
+    assert _by_prescription(ledger, "p1").activity_id == "d1"
+    assert _by_prescription(ledger, "p2").activity_id == "d2"
+    assert _by_prescription(ledger, "p3").matching_status is MatchingStatus.MISSED
+    assert ledger.unmatched_actual_count == 1  # d3 stays visible
+
+    again = _build(prescriptions, list(reversed(observed)), reference_date=date(2026, 6, 11))
+    assert ledger.model_dump() == again.model_dump()

@@ -29,7 +29,7 @@ PR134 exposes:           WeeklyReconciliationAction, WeeklyReconciliationResult,
 PR230 exposes:           MatchingStatus, AdherenceStatus, PrescribedWorkout,
                          ObservedActivity, PerformedWorkout,
                          PerformedWorkoutLedger, build_performed_workouts,
-                         to_observed_activity, to_observed_activities.
+                         to_observed_activity.
 """
 
 from .domain_activity import DomainActivity
@@ -107,7 +107,6 @@ from .performed_workout import (
     PerformedWorkoutLedger,
     PrescribedWorkout,
     build_performed_workouts,
-    to_observed_activities,
     to_observed_activity,
 )
 
@@ -177,6 +176,5 @@ __all__ = [
     "PerformedWorkoutLedger",
     "PrescribedWorkout",
     "build_performed_workouts",
-    "to_observed_activities",
     "to_observed_activity",
 ]

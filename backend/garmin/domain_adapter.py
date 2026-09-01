@@ -209,3 +209,120 @@ def to_domain_capabilities(capabilities: GarminCapabilities) -> DomainCapabiliti
         has_power=capabilities.has_power,
         has_running_dynamics=capabilities.has_running_dynamics,
     )
+
+
+# ---------------------------------------------------------------------------
+# PR230 — garmin_activities → ObservedActivity boundary (performed workouts)
+# ---------------------------------------------------------------------------
+
+GARMIN_SOURCE = "garmin"
+"""The only provenance accepted as proof of a really performed workout."""
+
+
+def garmin_local_start_time(doc: Dict[str, Any]) -> Optional[str]:
+    """Return the REAL device-local start time of a ``garmin_activities`` doc.
+
+    Why this exists (PR230)
+    -----------------------
+    ``DomainActivity.start_time`` must NOT be assumed to be local:
+
+    - ``garmin_activity.start_time`` follows the model convention
+      **GMT first** (``startTimeGMT`` then ``startTimeLocal``) —
+      see :meth:`GarminActivity.from_summary`.
+    - the top-level Mongo ``start_time`` follows the historical ingestion
+      contract **local first** (``startTimeLocal`` then ``startTimeGMT``) —
+      see ``gccli_provider``.
+
+    Since ``mongo_garmin_to_domain`` prefers the sub-document, a run started at
+    00:30 local (22:30 GMT the day before) would otherwise be attributed to the
+    wrong calendar day.
+
+    Resolution order (local evidence only, **no GMT fallback**):
+
+    1. ``garmin_activity.start_time_local``  — explicit, added in PR230
+    2. ``startTimeLocal`` at document level  — raw Garmin field when persisted
+    3. top-level ``start_time``              — local-first ingestion contract,
+       used only when the sub-document carries no GMT value that would prove
+       the top-level value is itself a GMT fallback.
+
+    Returns ``None`` when no local start time can be established.  The caller
+    must then refuse to build matching evidence rather than guess.
+    """
+    sub: Dict[str, Any] = doc.get("garmin_activity") or {}
+
+    explicit_local = sub.get("start_time_local") or doc.get("startTimeLocal")
+    if isinstance(explicit_local, str) and explicit_local != "":
+        return explicit_local
+
+    top_level = doc.get("start_time")
+    if not isinstance(top_level, str) or top_level == "":
+        return None
+
+    # The top-level value is local-first, but it silently degrades to GMT when
+    # Garmin did not provide startTimeLocal.  We can detect that degradation:
+    # if the sub-document GMT value is identical, the top-level value IS the
+    # GMT fallback and carries no local evidence.
+    sub_start = sub.get("start_time")
+    if isinstance(sub_start, str) and sub_start == top_level and not explicit_local:
+        # Ambiguous: could be a genuine UTC-offset-zero local time, but we have
+        # no proof it is local. Refuse rather than risk a wrong calendar day.
+        return None
+
+    return top_level
+
+
+def mongo_garmin_to_observed_activity(
+    doc: Dict[str, Any],
+    *,
+    user_id: str,
+) -> Optional["ObservedActivity"]:
+    """Convert a raw ``garmin_activities`` document into an ObservedActivity.
+
+    This is the ONLY sanctioned way to produce performed-workout evidence.
+
+    Guarantees
+    ----------
+    - Provenance: the document must carry ``source == "garmin"`` (or a
+      ``garmin_activity`` sub-document produced by the Garmin normalisation
+      layer).  Nothing else — legacy rows, ``db.workouts``, manual entries —
+      can become evidence.
+    - Local date: derived from :func:`garmin_local_start_time` only.
+    - Returns ``None`` when provenance or local time cannot be established.
+    """
+    from training_v2.performed_workout import ObservedActivity, to_observed_activity
+
+    if not isinstance(doc, dict):
+        return None
+
+    source = doc.get("source")
+    has_garmin_subdoc = isinstance(doc.get("garmin_activity"), dict)
+    if source != GARMIN_SOURCE and not has_garmin_subdoc:
+        return None
+
+    local_start = garmin_local_start_time(doc)
+    if local_start is None:
+        return None
+
+    domain = mongo_garmin_to_domain(doc)
+    if domain.source != GARMIN_SOURCE:
+        domain = domain.model_copy(update={"source": GARMIN_SOURCE})
+
+    return to_observed_activity(
+        domain,
+        user_id=user_id,
+        local_start_time=local_start,
+    )
+
+
+def mongo_garmin_to_observed_activities(
+    docs: List[Dict[str, Any]],
+    *,
+    user_id: str,
+) -> List["ObservedActivity"]:
+    """Convert ``garmin_activities`` documents; unusable documents are skipped."""
+    observed = []
+    for doc in docs or []:
+        item = mongo_garmin_to_observed_activity(doc, user_id=user_id)
+        if item is not None:
+            observed.append(item)
+    return observed

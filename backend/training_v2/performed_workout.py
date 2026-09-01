@@ -6,7 +6,7 @@ This module is the first real Data Moat brick: it separates
 
     what RunIndex PRESCRIBED      (WorkoutPrescription / plan)
 from
-    what the athlete ACTUALLY DID (Garmin activity → DomainActivity)
+    what the athlete ACTUALLY DID (real Garmin activity)
 
 and produces a deterministic, auditable reconciliation between the two.
 
@@ -28,12 +28,32 @@ Design rules
   the engine only produces new PerformedWorkout rows.
 - None ≠ 0.  A missing value stays ``None``; it is never replaced by 0.
 
-Source of truth
----------------
+Source of truth and provenance lock (C230 #4)
+----------------------------------------------
 The only accepted evidence of a performed session is a real activity coming
-from ``garmin_activities`` normalised into :class:`DomainActivity`
-(``garmin.domain_adapter.mongo_garmin_to_domain``).  ``db.workouts`` is NOT a
-source of truth for what was actually performed and is not consumed here.
+from ``garmin_activities``.  ``db.workouts`` is NOT a source of truth and is
+not consumed here.
+
+``to_observed_activity`` therefore REFUSES any activity whose ``source`` is not
+``"garmin"`` (legacy, manual, workout, ``None`` …).  Provenance is never
+re-labelled: there is no fallback that turns a non-Garmin activity into Garmin
+evidence.  The sanctioned entry point from persistence is
+``garmin.domain_adapter.mongo_garmin_to_observed_activity``.
+
+Local date contract (C230 #1)
+------------------------------
+``DomainActivity.start_time`` must NOT be assumed to be a local time: the
+normalised ``garmin_activity`` sub-document is **GMT-first**
+(``startTimeGMT`` then ``startTimeLocal``), while the top-level Mongo document
+is **local-first**.  A run started at 00:30 local (22:30 GMT the previous day)
+would therefore land on the wrong calendar day.
+
+Consequence: :func:`to_observed_activity` takes an explicit
+``local_start_time`` argument that carries the REAL Garmin
+``startTimeLocal``.  ``ObservedActivity.local_date`` is derived from that value
+only.  When no local evidence exists the activity is refused (``None``) instead
+of being matched on a GMT-derived day.
+``garmin.domain_adapter.garmin_local_start_time`` implements the resolution.
 
 States (matching_status)
 ------------------------
@@ -43,8 +63,12 @@ planned
 matched
     A real running activity has been deterministically attributed to it.
 missed
-    The matching window is definitively closed and no acceptable activity was
-    attributed to the prescription.
+    The matching window is definitively closed, no acceptable activity was
+    attributed, **and** no ambiguity was detected.
+ambiguous
+    Several activities are strictly equivalent on the available evidence.
+    The engine refuses to choose.  An ambiguous prescription is never matched,
+    never missed, never completed — even after the window has closed.
 unmatched_actual
     A real running activity that could not be attributed to any prescription.
     It stays fully visible — it is never dropped.
@@ -63,36 +87,52 @@ Matching rules (deterministic, evidence only)
 3. Running activities only (``RUNNING_TYPES``).  A non-running activity is
    never matched, and is not reported as ``unmatched_actual`` either — it is
    simply out of scope for the running plan.
-4. Deviation guard: the candidate must stay within
-   ``MATCH_MAX_DEVIATION_RATIO`` of the prescribed dimension (distance first,
-   duration as fallback).  Beyond that, the activity is NOT considered the
-   realisation of that prescription.
+4. Deviation guard, applied to EVERY comparable dimension (see below): if any
+   comparable dimension deviates by more than ``MATCH_MAX_DEVIATION_RATIO``,
+   the activity is NOT the realisation of that prescription.
 5. One activity can be attributed to at most one prescription.
-6. Multi-activity resolution: the best candidate is the one minimising the
-   comparison deviation, then the earlier local start time.  If two candidates
-   are strictly equivalent on those comparison keys, the situation is
-   AMBIGUOUS: nothing is matched (see ``AMBIGUOUS_MULTIPLE_CANDIDATES``).
+6. Multi-activity resolution (C230 #2): candidates are ranked by their worst
+   comparable deviation only.  Clock time is NOT a business criterion unless
+   a start time was really prescribed (``planned_start_time``), in which case
+   proximity to that prescribed time is used as an explicit second key.
+   If the two best candidates remain strictly equal on those real criteria,
+   the prescription is ``ambiguous`` and no activity is attributed.
 
-Adherence (factual only — no arbitrary physiological score)
------------------------------------------------------------
-completed_as_planned
-    matched and within ``ADHERENCE_TOLERANCE_RATIO`` on the comparison
-    dimension.
-completed_modified
-    matched but outside that tolerance (still inside the matching guard).
-completed_unverified
-    matched on date + running type, but no comparable dimension was available
-    on either side.  We do not fabricate a deviation.
-missed / unmatched_actual
-    mirror the corresponding matching_status.
-pending
-    nothing can be asserted yet (window still open / future session).
-not_applicable
-    rest day: never matched, never missed.
+Multi-dimension adherence (C230 #3)
+------------------------------------
+Adherence uses EVERY dimension that is really available on BOTH sides:
+
+    distance   — planned_distance_km      vs actual distance
+    duration   — planned_duration_min     vs actual duration
+    pace       — planned_pace_min_per_km  vs actual pace
+                 (only when a pace was REALLY prescribed)
+
+A dimension is comparable only when both sides carry a strictly positive
+value.  A missing dimension is never fabricated.
+
+    completed_as_planned
+        matched and ALL comparable dimensions stay within
+        ``ADHERENCE_TOLERANCE_RATIO``.
+    completed_modified
+        matched, but at least one comparable dimension exceeds the tolerance
+        (while all stay within ``MATCH_MAX_DEVIATION_RATIO``).
+    completed_unverified
+        matched on date + running type, with no comparable dimension at all.
+    missed / ambiguous / unmatched_actual
+        mirror the corresponding matching_status.
+    pending
+        nothing can be asserted yet (window still open / future session).
+    not_applicable
+        rest day: never matched, never missed.
+
+Example that the previous single-dimension logic got wrong:
+planned 10 km / 60 min, performed 10 km / 120 min → the duration deviation is
++100 %, above the guard, so the activity is NOT the realisation of that
+session.  It can never be reported as ``completed_as_planned``.
 
 Raw deltas (``distance_delta_km``, ``duration_delta_min``,
 ``pace_delta_min_per_km``) are kept as-is, signed (actual − planned), and are
-``None`` when not computable.
+``None`` when not computable.  Per-dimension deviation ratios are exposed too.
 
 No-lookahead guarantee
 ----------------------
@@ -104,7 +144,7 @@ state of a historical prescription, and a future prescription is always
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from enum import Enum
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -129,6 +169,12 @@ ADHERENCE_TOLERANCE_RATIO: float = 0.10
 MATCH_MAX_DEVIATION_RATIO: float = 0.50
 """Relative deviation above which an activity is NOT the realisation (±50 %)."""
 
+GARMIN_SOURCE: str = "garmin"
+"""The only activity provenance accepted as performed-workout evidence."""
+
+COMPARABLE_DIMENSIONS: Tuple[str, ...] = ("distance", "duration", "pace")
+"""All dimensions evaluated when both sides really carry a value."""
+
 _ROUND = 2
 
 
@@ -143,6 +189,7 @@ class MatchingStatus(str, Enum):
     PLANNED = "planned"
     MATCHED = "matched"
     MISSED = "missed"
+    AMBIGUOUS = "ambiguous"
     UNMATCHED_ACTUAL = "unmatched_actual"
 
 
@@ -154,6 +201,7 @@ class AdherenceStatus(str, Enum):
     COMPLETED_MODIFIED = "completed_modified"
     COMPLETED_UNVERIFIED = "completed_unverified"
     MISSED = "missed"
+    AMBIGUOUS = "ambiguous"
     UNMATCHED_ACTUAL = "unmatched_actual"
     NOT_APPLICABLE = "not_applicable"
 
@@ -164,6 +212,7 @@ class AdherenceStatus(str, Enum):
 
 RC_MATCHED_ON_DISTANCE = "MATCHED_ON_DISTANCE"
 RC_MATCHED_ON_DURATION = "MATCHED_ON_DURATION"
+RC_MATCHED_ON_PACE = "MATCHED_ON_PACE"
 RC_MATCHED_NO_COMPARABLE_DIMENSION = "MATCHED_NO_COMPARABLE_DIMENSION"
 RC_WITHIN_TOLERANCE = "WITHIN_TOLERANCE"
 RC_OUTSIDE_TOLERANCE = "OUTSIDE_TOLERANCE"
@@ -175,6 +224,7 @@ RC_CANDIDATE_REJECTED_DEVIATION = "CANDIDATE_REJECTED_DEVIATION"
 RC_AMBIGUOUS_MULTIPLE_CANDIDATES = "AMBIGUOUS_MULTIPLE_CANDIDATES"
 RC_REST_NOT_MATCHABLE = "REST_NOT_MATCHABLE"
 RC_NO_PRESCRIPTION = "NO_PRESCRIPTION"
+RC_RESOLVED_BY_PLANNED_START_TIME = "RESOLVED_BY_PLANNED_START_TIME"
 
 
 # ---------------------------------------------------------------------------
@@ -203,6 +253,13 @@ class PrescribedWorkout(BaseModel):
     planned_pace_min_per_km: Optional[float] = None
     """Only set when a pace was really prescribed. Never derived here."""
 
+    planned_start_time: Optional[time] = None
+    """Local clock time, ONLY when a start time was really prescribed.
+
+    Clock proximity is otherwise not a business criterion: without a prescribed
+    start time, an earlier run is not better evidence than a later one.
+    """
+
     @property
     def is_rest(self) -> bool:
         return self.workout_type == "rest"
@@ -217,7 +274,11 @@ class PrescribedWorkout(BaseModel):
 
 
 class ObservedActivity(BaseModel):
-    """A real activity actually performed by the athlete (Garmin truth)."""
+    """A real activity actually performed by the athlete (Garmin truth).
+
+    ``local_date`` / ``start_time`` are the REAL device-local values
+    (``startTimeLocal``), never a GMT-derived approximation.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -225,6 +286,9 @@ class ObservedActivity(BaseModel):
     user_id: str
     local_date: date
     start_time: Optional[datetime] = None
+    """Local start datetime, when the local value carries a clock component."""
+
+    source: str = GARMIN_SOURCE
     activity_type: Optional[str] = None
     distance_km: Optional[float] = None
     duration_min: Optional[float] = None
@@ -270,11 +334,18 @@ class PerformedWorkout(BaseModel):
     duration_delta_min: Optional[float] = None
     pace_delta_min_per_km: Optional[float] = None
 
-    comparison_basis: Optional[str] = None
-    """'distance' | 'duration' | None when nothing was comparable."""
+    distance_deviation_ratio: Optional[float] = None
+    duration_deviation_ratio: Optional[float] = None
+    pace_deviation_ratio: Optional[float] = None
+
+    comparison_dimensions: Tuple[str, ...] = ()
+    """Dimensions really comparable on BOTH sides: distance / duration / pace."""
 
     deviation_ratio: Optional[float] = None
-    """Absolute relative deviation on the comparison basis, or None."""
+    """Worst absolute relative deviation across comparable dimensions."""
+
+    candidate_activity_ids: Tuple[str, ...] = ()
+    """Activities involved in an ambiguous situation (never attributed)."""
 
     reason_codes: Tuple[str, ...] = ()
 
@@ -291,6 +362,7 @@ class PerformedWorkoutLedger(BaseModel):
     matched_count: int
     missed_count: int
     planned_count: int
+    ambiguous_count: int
     unmatched_actual_count: int
 
 
@@ -336,20 +408,39 @@ def to_observed_activity(
     activity: Any,
     *,
     user_id: str,
+    local_start_time: Any,
     activity_id: Optional[str] = None,
 ) -> Optional[ObservedActivity]:
-    """Convert a :class:`DomainActivity` (or coercible input) into an
-    :class:`ObservedActivity` owned by ``user_id``.
+    """Convert a Garmin :class:`DomainActivity` into an :class:`ObservedActivity`.
 
-    Returns ``None`` when the activity carries no usable local date or no
-    stable identifier: without those, no deterministic matching is possible
-    and we refuse to invent one.
+    Parameters
+    ----------
+    activity
+        A :class:`DomainActivity` (or coercible input) produced by the Garmin
+        normalisation layer.
+    user_id
+        Owner of the evidence.
+    local_start_time
+        The REAL device-local start time (``startTimeLocal``).  Mandatory:
+        ``DomainActivity.start_time`` is GMT-first and must never be used to
+        derive the local calendar day.
+
+    Returns
+    -------
+    ``None`` when the activity cannot become evidence:
+
+    - provenance is not Garmin (``source != "garmin"``) — no re-labelling;
+    - no usable local start time;
+    - no stable activity identifier.
     """
     domain: DomainActivity = (
         activity if isinstance(activity, DomainActivity) else to_domain_activity(activity)
     )
 
-    local_date = _parse_date(domain.start_time)
+    if domain.source != GARMIN_SOURCE:
+        return None
+
+    local_date = _parse_date(local_start_time)
     if local_date is None:
         return None
 
@@ -357,8 +448,8 @@ def to_observed_activity(
     if not isinstance(resolved_id, str) or resolved_id == "":
         return None
 
-    distance_km = _positive_float(domain.distance_m)
-    distance_km = round(distance_km / 1000.0, 3) if distance_km is not None else None
+    distance_m = _positive_float(domain.distance_m)
+    distance_km = round(distance_m / 1000.0, 3) if distance_m is not None else None
 
     duration_s = _positive_float(domain.duration_s)
     duration_min = round(duration_s / 60.0, 2) if duration_s is not None else None
@@ -371,7 +462,8 @@ def to_observed_activity(
         activity_id=resolved_id,
         user_id=user_id,
         local_date=local_date,
-        start_time=_parse_datetime(domain.start_time),
+        start_time=_parse_datetime(local_start_time),
+        source=GARMIN_SOURCE,
         activity_type=domain.activity_type,
         distance_km=distance_km,
         duration_min=duration_min,
@@ -379,49 +471,52 @@ def to_observed_activity(
     )
 
 
-def to_observed_activities(
-    activities: Sequence[Any],
-    *,
-    user_id: str,
-) -> Tuple[ObservedActivity, ...]:
-    """Convert a sequence of activities; unusable inputs are skipped."""
-    observed: List[ObservedActivity] = []
-    for activity in activities or ():
-        item = to_observed_activity(activity, user_id=user_id)
-        if item is not None:
-            observed.append(item)
-    return tuple(observed)
-
-
 # ---------------------------------------------------------------------------
 # Comparison helpers
 # ---------------------------------------------------------------------------
 
 
-def _comparison(
+def _ratio(planned: Optional[float], actual: Optional[float]) -> Optional[float]:
+    """Absolute relative deviation, or None when the dimension is not comparable."""
+    p = _positive_float(planned)
+    a = _positive_float(actual)
+    if p is None or a is None:
+        return None
+    return abs(a - p) / p
+
+
+def _deviations(
     prescription: PrescribedWorkout,
     activity: ObservedActivity,
-) -> Tuple[Optional[str], Optional[float]]:
-    """Return (basis, absolute relative deviation) or (None, None).
+) -> Dict[str, float]:
+    """Return the deviation of every dimension comparable on BOTH sides.
 
-    Distance is the primary basis; duration is the fallback.  A dimension is
-    only usable when BOTH sides carry a strictly positive value.
+    Pace is only considered when a pace was REALLY prescribed; it is never
+    derived from the prescription's distance/duration.
     """
-    planned_km = _positive_float(prescription.planned_distance_km)
-    actual_km = _positive_float(activity.distance_km)
-    if planned_km is not None and actual_km is not None:
-        return "distance", abs(actual_km - planned_km) / planned_km
+    deviations: Dict[str, float] = {}
 
-    planned_min = _positive_float(prescription.planned_duration_min)
-    actual_min = _positive_float(activity.duration_min)
-    if planned_min is not None and actual_min is not None:
-        return "duration", abs(actual_min - planned_min) / planned_min
+    distance = _ratio(prescription.planned_distance_km, activity.distance_km)
+    if distance is not None:
+        deviations["distance"] = distance
 
-    return None, None
+    duration = _ratio(prescription.planned_duration_min, activity.duration_min)
+    if duration is not None:
+        deviations["duration"] = duration
+
+    pace = _ratio(prescription.planned_pace_min_per_km, activity.pace_min_per_km)
+    if pace is not None:
+        deviations["pace"] = pace
+
+    return deviations
+
+
+def _worst_deviation(deviations: Dict[str, float]) -> Optional[float]:
+    return max(deviations.values()) if deviations else None
 
 
 def _sort_key_activity(activity: ObservedActivity) -> Tuple[Any, ...]:
-    """Stable, deterministic ordering for observed activities."""
+    """Stable, deterministic ordering for observed activities (output only)."""
     return (
         activity.local_date,
         activity.start_time.isoformat() if activity.start_time is not None else "",
@@ -429,19 +524,43 @@ def _sort_key_activity(activity: ObservedActivity) -> Tuple[Any, ...]:
     )
 
 
+def _start_time_distance_seconds(
+    prescription: PrescribedWorkout,
+    activity: ObservedActivity,
+) -> Optional[float]:
+    """Absolute gap to the PRESCRIBED start time, or None when not prescribed.
+
+    This is the only situation where clock time is a legitimate business
+    criterion: it compares the activity to a real prescription, not one
+    activity to another.
+    """
+    planned = prescription.planned_start_time
+    if planned is None or activity.start_time is None:
+        return None
+    planned_seconds = planned.hour * 3600 + planned.minute * 60 + planned.second
+    actual = activity.start_time
+    actual_seconds = actual.hour * 3600 + actual.minute * 60 + actual.second
+    return abs(float(actual_seconds - planned_seconds))
+
+
 def _candidate_rank(
     deviation: Optional[float],
-    activity: ObservedActivity,
-) -> Tuple[float, str]:
+    start_gap_seconds: Optional[float],
+) -> Tuple[float, float]:
     """Comparison keys used to elect the best candidate.
 
-    ``activity_id`` is deliberately NOT part of this key: two activities that
-    are equivalent on the real comparison evidence must be reported as
-    ambiguous rather than silently disambiguated by an arbitrary identifier.
+    Only REAL evidence is used:
+      1. worst deviation across comparable prescribed dimensions;
+      2. distance to the prescribed start time, when a start time was really
+         prescribed (otherwise neutral for every candidate).
+
+    Neither ``activity_id`` nor the raw clock time is part of this key: two
+    activities equally compatible with the prescription must be reported as
+    ambiguous, never silently disambiguated.
     """
     dev = deviation if deviation is not None else float("inf")
-    start = activity.start_time.isoformat() if activity.start_time is not None else ""
-    return (dev, start)
+    gap = start_gap_seconds if start_gap_seconds is not None else 0.0
+    return (dev, gap)
 
 
 def _delta(actual: Optional[float], planned: Optional[float]) -> Optional[float]:
@@ -450,6 +569,10 @@ def _delta(actual: Optional[float], planned: Optional[float]) -> Optional[float]
     if a is None or p is None:
         return None
     return round(a - p, _ROUND)
+
+
+def _round_ratio(value: Optional[float]) -> Optional[float]:
+    return round(value, 4) if value is not None else None
 
 
 # ---------------------------------------------------------------------------
@@ -463,6 +586,7 @@ def _unmatched_prescription_row(
     matching_status: MatchingStatus,
     adherence_status: AdherenceStatus,
     reason_codes: Tuple[str, ...],
+    candidate_activity_ids: Tuple[str, ...] = (),
 ) -> PerformedWorkout:
     return PerformedWorkout(
         user_id=prescription.user_id,
@@ -484,30 +608,47 @@ def _unmatched_prescription_row(
         distance_delta_km=None,
         duration_delta_min=None,
         pace_delta_min_per_km=None,
-        comparison_basis=None,
+        distance_deviation_ratio=None,
+        duration_deviation_ratio=None,
+        pace_deviation_ratio=None,
+        comparison_dimensions=(),
         deviation_ratio=None,
+        candidate_activity_ids=candidate_activity_ids,
         reason_codes=reason_codes,
     )
+
+
+_DIMENSION_REASON_CODE: Dict[str, str] = {
+    "distance": RC_MATCHED_ON_DISTANCE,
+    "duration": RC_MATCHED_ON_DURATION,
+    "pace": RC_MATCHED_ON_PACE,
+}
 
 
 def _matched_row(
     prescription: PrescribedWorkout,
     activity: ObservedActivity,
     *,
-    basis: Optional[str],
-    deviation: Optional[float],
+    deviations: Dict[str, float],
+    resolved_by_start_time: bool,
 ) -> PerformedWorkout:
-    if basis is None:
+    dimensions = tuple(d for d in COMPARABLE_DIMENSIONS if d in deviations)
+    worst = _worst_deviation(deviations)
+
+    if not dimensions:
         adherence = AdherenceStatus.COMPLETED_UNVERIFIED
         codes: List[str] = [RC_MATCHED_NO_COMPARABLE_DIMENSION]
     else:
-        codes = [RC_MATCHED_ON_DISTANCE if basis == "distance" else RC_MATCHED_ON_DURATION]
-        if deviation is not None and deviation <= ADHERENCE_TOLERANCE_RATIO:
+        codes = [_DIMENSION_REASON_CODE[d] for d in dimensions]
+        if worst is not None and worst <= ADHERENCE_TOLERANCE_RATIO:
             adherence = AdherenceStatus.COMPLETED_AS_PLANNED
             codes.append(RC_WITHIN_TOLERANCE)
         else:
             adherence = AdherenceStatus.COMPLETED_MODIFIED
             codes.append(RC_OUTSIDE_TOLERANCE)
+
+    if resolved_by_start_time:
+        codes.append(RC_RESOLVED_BY_PLANNED_START_TIME)
 
     return PerformedWorkout(
         user_id=prescription.user_id,
@@ -531,8 +672,12 @@ def _matched_row(
         pace_delta_min_per_km=_delta(
             activity.pace_min_per_km, prescription.planned_pace_min_per_km
         ),
-        comparison_basis=basis,
-        deviation_ratio=round(deviation, 4) if deviation is not None else None,
+        distance_deviation_ratio=_round_ratio(deviations.get("distance")),
+        duration_deviation_ratio=_round_ratio(deviations.get("duration")),
+        pace_deviation_ratio=_round_ratio(deviations.get("pace")),
+        comparison_dimensions=dimensions,
+        deviation_ratio=_round_ratio(worst),
+        candidate_activity_ids=(),
         reason_codes=tuple(codes),
     )
 
@@ -558,8 +703,12 @@ def _unmatched_actual_row(activity: ObservedActivity) -> PerformedWorkout:
         distance_delta_km=None,
         duration_delta_min=None,
         pace_delta_min_per_km=None,
-        comparison_basis=None,
+        distance_deviation_ratio=None,
+        duration_deviation_ratio=None,
+        pace_deviation_ratio=None,
+        comparison_dimensions=(),
         deviation_ratio=None,
+        candidate_activity_ids=(),
         reason_codes=(RC_NO_PRESCRIPTION,),
     )
 
@@ -590,26 +739,29 @@ def build_performed_workouts(
     prescriptions
         Immutable prescribed sessions.  Never mutated.
     activities
-        Observed activities (Garmin truth) converted with
-        :func:`to_observed_activity`.
+        Observed Garmin activities built with
+        :func:`garmin.domain_adapter.mongo_garmin_to_observed_activity`.
 
     Returns
     -------
     PerformedWorkoutLedger
         Prescription rows first (ordered by planned_date, prescription_id),
-        then unmatched real activities (ordered by date, start time, id).
+        then unmatched real activities (ordered by local date, start time, id).
     """
     own_prescriptions = sorted(
         (p for p in (prescriptions or ()) if p.user_id == user_id),
         key=lambda p: (p.planned_date, p.prescription_id),
     )
 
-    # No-lookahead + user isolation + running only.
+    # No-lookahead + user isolation + Garmin provenance + running only.
     usable_activities = sorted(
         (
             a
             for a in (activities or ())
-            if a.user_id == user_id and a.local_date <= reference_date and a.is_running
+            if a.user_id == user_id
+            and a.source == GARMIN_SOURCE
+            and a.local_date <= reference_date
+            and a.is_running
         ),
         key=_sort_key_activity,
     )
@@ -639,25 +791,29 @@ def build_performed_workouts(
             and prescription.window_start <= a.local_date <= prescription.window_end
         ]
 
-        evaluated: List[Tuple[ObservedActivity, Optional[str], Optional[float]]] = []
+        evaluated: List[Tuple[ObservedActivity, Dict[str, float], Optional[float]]] = []
         rejected_for_deviation = False
         for activity in candidates:
-            basis, deviation = _comparison(prescription, activity)
-            if (
-                basis is not None
-                and deviation is not None
-                and deviation > MATCH_MAX_DEVIATION_RATIO
-            ):
+            deviations = _deviations(prescription, activity)
+            worst = _worst_deviation(deviations)
+            if worst is not None and worst > MATCH_MAX_DEVIATION_RATIO:
+                # At least one comparable dimension makes this activity
+                # incompatible with the prescription.
                 rejected_for_deviation = True
                 continue
-            evaluated.append((activity, basis, deviation))
+            evaluated.append(
+                (
+                    activity,
+                    deviations,
+                    _start_time_distance_seconds(prescription, activity),
+                )
+            )
 
         if not evaluated:
             codes: List[str] = []
-            if rejected_for_deviation:
-                codes.append(RC_CANDIDATE_REJECTED_DEVIATION)
-            else:
-                codes.append(RC_NO_CANDIDATE)
+            codes.append(
+                RC_CANDIDATE_REJECTED_DEVIATION if rejected_for_deviation else RC_NO_CANDIDATE
+            )
             if is_future:
                 codes.append(RC_FUTURE_SESSION)
             codes.append(RC_WINDOW_CLOSED if window_closed else RC_WINDOW_OPEN)
@@ -675,36 +831,47 @@ def build_performed_workouts(
             )
             continue
 
-        ranked = sorted(evaluated, key=lambda item: _candidate_rank(item[2], item[0]))
-        best_activity, best_basis, best_deviation = ranked[0]
+        ranked = sorted(
+            evaluated,
+            key=lambda item: _candidate_rank(_worst_deviation(item[1]), item[2]),
+        )
+        best_rank = _candidate_rank(_worst_deviation(ranked[0][1]), ranked[0][2])
 
-        if len(ranked) > 1 and _candidate_rank(ranked[0][2], ranked[0][0]) == _candidate_rank(
-            ranked[1][2], ranked[1][0]
+        if len(ranked) > 1 and best_rank == _candidate_rank(
+            _worst_deviation(ranked[1][1]), ranked[1][2]
         ):
-            # Genuinely ambiguous evidence: refuse to guess.
-            codes = [RC_AMBIGUOUS_MULTIPLE_CANDIDATES]
-            codes.append(RC_WINDOW_CLOSED if window_closed else RC_WINDOW_OPEN)
+            # Genuinely equivalent evidence: refuse to guess, and never
+            # degrade the uncertainty into "missed" — even after the window
+            # has closed.  The candidate activities stay unattributed.
+            tied_ids = tuple(
+                sorted(
+                    activity.activity_id
+                    for activity, deviations, gap in ranked
+                    if _candidate_rank(_worst_deviation(deviations), gap) == best_rank
+                )
+            )
             rows.append(
                 _unmatched_prescription_row(
                     prescription,
-                    matching_status=(
-                        MatchingStatus.MISSED if window_closed else MatchingStatus.PLANNED
+                    matching_status=MatchingStatus.AMBIGUOUS,
+                    adherence_status=AdherenceStatus.AMBIGUOUS,
+                    reason_codes=(
+                        RC_AMBIGUOUS_MULTIPLE_CANDIDATES,
+                        RC_WINDOW_CLOSED if window_closed else RC_WINDOW_OPEN,
                     ),
-                    adherence_status=(
-                        AdherenceStatus.MISSED if window_closed else AdherenceStatus.PENDING
-                    ),
-                    reason_codes=tuple(codes),
+                    candidate_activity_ids=tied_ids,
                 )
             )
             continue
 
+        best_activity, best_deviations, best_gap = ranked[0]
         attributed[best_activity.activity_id] = prescription.prescription_id
         rows.append(
             _matched_row(
                 prescription,
                 best_activity,
-                basis=best_basis,
-                deviation=best_deviation,
+                deviations=best_deviations,
+                resolved_by_start_time=best_gap is not None,
             )
         )
 
@@ -712,19 +879,16 @@ def build_performed_workouts(
         if activity.activity_id not in attributed:
             rows.append(_unmatched_actual_row(activity))
 
-    matched_count = sum(1 for r in rows if r.matching_status is MatchingStatus.MATCHED)
-    missed_count = sum(1 for r in rows if r.matching_status is MatchingStatus.MISSED)
-    planned_count = sum(1 for r in rows if r.matching_status is MatchingStatus.PLANNED)
-    unmatched_count = sum(
-        1 for r in rows if r.matching_status is MatchingStatus.UNMATCHED_ACTUAL
-    )
+    def _count(status: MatchingStatus) -> int:
+        return sum(1 for r in rows if r.matching_status is status)
 
     return PerformedWorkoutLedger(
         user_id=user_id,
         reference_date=reference_date,
         entries=tuple(rows),
-        matched_count=matched_count,
-        missed_count=missed_count,
-        planned_count=planned_count,
-        unmatched_actual_count=unmatched_count,
+        matched_count=_count(MatchingStatus.MATCHED),
+        missed_count=_count(MatchingStatus.MISSED),
+        planned_count=_count(MatchingStatus.PLANNED),
+        ambiguous_count=_count(MatchingStatus.AMBIGUOUS),
+        unmatched_actual_count=_count(MatchingStatus.UNMATCHED_ACTUAL),
     )
