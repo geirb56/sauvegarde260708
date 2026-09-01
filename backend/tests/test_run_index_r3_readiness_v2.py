@@ -7,7 +7,7 @@ Test matrix (problem statement requirements)
 3. RHR absente (RHR absent) — score still computable from HRV (if present), else check
 4. sommeil absent (sleep absent) — DEGRADED, score not None
 5. charge absente (no load) — INSUFFICIENT, score None
-6. load_change_percent=None — score still computed (LoadSubscore falls back)
+6. load_change_percent=None — load branch is non-scorable and treated as missing_load
 7. données insuffisantes (insufficient data: no physio) — INSUFFICIENT, score None
 8. isolation user_id — adapter uses only the supplied docs, not cross-user
 9. /run-index backward-compatible — run_readiness key always present (float or null)
@@ -166,22 +166,40 @@ def test_load_absent_insufficient_score_none():
 # ---------------------------------------------------------------------------
 
 
-def test_load_change_percent_none_score_still_computed():
+def test_load_change_percent_none_blocks_load_branch():
     """When previous_7d_load == 0 → load_change_percent=None → LoadSubscore=None.
 
-    Score can still be computed from physio + sleep (confidence REDUCED).
+    Load branch is not scorable and must be treated as missing_load.
     """
     # Only 5 days of activities → previous window is empty → load_change_percent=None
     activities = _make_activities(n=5)
     result = build_readiness_v2_from_garmin_data(_make_metrics(), activities, _REF_DATE)
     # load_change_percent=None → LoadSubscore.score=None
-    # But physio + sleep are present → score should still exist (REDUCED confidence)
-    # (unless INSUFFICIENT due to thin load history)
-    # thin_load_history → DEGRADED, not INSUFFICIENT
-    if result.sufficiency_level != SufficiencyLevel.INSUFFICIENT:
-        assert result.score is not None
-    else:
-        assert result.score is None
+    assert result.sufficiency_level == SufficiencyLevel.INSUFFICIENT
+    assert ReasonCode.missing_load in result.reasons
+    assert result.score is None
+
+
+def test_recent_rhr_without_baseline_does_not_unlock_scoring():
+    metrics = _make_metrics(n=1, hrv=None, sleep_hours=None, sleep_score=None)
+    result = build_readiness_v2_from_garmin_data(metrics, _make_activities(), _REF_DATE)
+    assert result.sufficiency_level == SufficiencyLevel.INSUFFICIENT
+    assert result.score is None
+
+
+def test_recent_hrv_without_baseline_does_not_unlock_scoring():
+    metrics = _make_metrics(n=1, rhr=None, sleep_hours=None, sleep_score=None)
+    result = build_readiness_v2_from_garmin_data(metrics, _make_activities(), _REF_DATE)
+    assert result.sufficiency_level == SufficiencyLevel.INSUFFICIENT
+    assert result.score is None
+
+
+def test_sleep_score_without_duration_does_not_unlock_scoring():
+    metrics = _make_metrics(rhr=None, hrv=None, sleep_hours=None, sleep_score=84.0)
+    result = build_readiness_v2_from_garmin_data(metrics, _make_activities(), _REF_DATE)
+    assert result.sufficiency_level == SufficiencyLevel.INSUFFICIENT
+    assert ReasonCode.missing_sleep in result.reasons
+    assert result.score is None
 
 
 # ---------------------------------------------------------------------------

@@ -197,3 +197,42 @@
   - **PASS: 4 / FAIL: 0 / SKIP: 0**
 - `npx craco test --watchAll=false --forceExit --runTestsByPath src/__tests__/dashboard-run-readiness-v2.test.jsx src/__tests__/dashboard-run-readiness-null.test.jsx`
   - **PASS: 35 / FAIL: 0 / SKIP: 0**
+
+---
+
+## PR229 correction finale R1 ↔ R2 (scorable-branch contract)
+
+### Canonical definition (final)
+- **Branche exploitable = branche réellement scorable** (`subscore.score is not None`).
+- R1 branch counting is aligned to scorability inputs:
+  - physio exploitable only when at least one physio signal can produce a deviation score;
+  - sleep exploitable only when `sleep.duration_hours` exists;
+  - load exploitable only when load can produce `load_sub.score` (`load_change_percent` available and load not blocked).
+
+### Defensive guard in R2 aggregation
+- Added final defensive contract in `readiness.py`:
+  - `usable_subscore_count = int(physio_score is not None) + int(sleep_score is not None) + int(load_score is not None)`
+  - if `< 2` ⇒ force `score=None`, `confidence=NONE`, `sufficiency_level=INSUFFICIENT`.
+- This guarantees no path can produce a numeric readiness from a single scored branch.
+
+### Matrix A→I (final behavior)
+- A. RHR scorée (baseline valide) + load scorée + sleep absente → **DEGRADED calculable**
+- B. RHR récente sans baseline exploitable + load scorée + sleep absente → **INSUFFICIENT**
+- C. HRV récente sans baseline exploitable + load scorée + sleep absente → **INSUFFICIENT**
+- D. Sleep duration présente + load scorée + physio absente → **DEGRADED calculable**
+- E. Sleep score présent mais duration absente + load scorée + physio absente → **INSUFFICIENT**
+- F. Physio scorée + sleep scorée + load non scorée → **INSUFFICIENT** (doctrine `missing_load` conservée)
+- G. Physio seule scorée → **INSUFFICIENT**
+- H. Sleep seule scorée → **INSUFFICIENT**
+- I. Load seule scorée → **INSUFFICIENT**
+
+### Tests exécutés (runtime) — exact commands
+- `python -m pytest tests/test_training_v2_readiness_sufficiency.py tests/test_training_v2_readiness_signals.py tests/test_training_v2_readiness_subscores.py tests/test_training_v2_readiness.py tests/test_run_index_r3_readiness_v2.py tests/test_readiness_data_truth_pr225.py tests/test_garmin_daily_metrics_pr03.py tests/test_garmin_phased_sync_pr07a.py tests/test_garmin_deep_sync.py -q`
+  - **PASS: 278 / FAIL: 0 / SKIP: 0**
+- `python -m pytest tests/test_handlers_pr228.py -k "propagates_hrv_supported" -q`
+  - **PASS: 1 / FAIL: 0 / SKIP: 0**
+- `python -m pytest -n 0 tests/test_handlers_pr228.py::test_race_day_exact_phase_and_structure -q`
+  - **PASS: 1 / FAIL: 0 / SKIP: 0**
+
+### Audit statique (non exécuté dans ce passage)
+- Le fichier `test_handlers_pr228.py` complet n’a pas été reroulé en mode suite entière dans cette passe finale R1↔R2; seules les assertions directement liées à la cohérence readiness (`hrv_supported` propagation et race-day contract) ont été exécutées.
