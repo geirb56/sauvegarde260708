@@ -282,10 +282,10 @@ def mongo_garmin_to_observed_activity(
 
     Guarantees
     ----------
-    - Provenance: the document must carry ``source == "garmin"`` (or a
-      ``garmin_activity`` sub-document produced by the Garmin normalisation
-      layer).  Nothing else — legacy rows, ``db.workouts``, manual entries —
-      can become evidence.
+    - Provenance: the document MUST carry ``source == "garmin"`` at the top
+      level.  Nothing else — legacy rows, ``db.workouts``, manual entries —
+      can become evidence, and no fallback ever re-labels a document as
+      Garmin.
     - Local date: derived from :func:`garmin_local_start_time` only.
     - Returns ``None`` when provenance or local time cannot be established.
     """
@@ -294,9 +294,7 @@ def mongo_garmin_to_observed_activity(
     if not isinstance(doc, dict):
         return None
 
-    source = doc.get("source")
-    has_garmin_subdoc = isinstance(doc.get("garmin_activity"), dict)
-    if source != GARMIN_SOURCE and not has_garmin_subdoc:
+    if doc.get("source") != GARMIN_SOURCE:
         return None
 
     local_start = garmin_local_start_time(doc)
@@ -304,8 +302,6 @@ def mongo_garmin_to_observed_activity(
         return None
 
     domain = mongo_garmin_to_domain(doc)
-    if domain.source != GARMIN_SOURCE:
-        domain = domain.model_copy(update={"source": GARMIN_SOURCE})
 
     return to_observed_activity(
         domain,

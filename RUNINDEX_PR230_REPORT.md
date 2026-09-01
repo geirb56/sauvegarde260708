@@ -135,9 +135,10 @@ Source chain unchanged: `garmin_activities` → Garmin normalisation → domain 
 ## C230 #4 — Guaranteed Garmin provenance
 
 - `to_observed_activity` returns `None` unless `DomainActivity.source == "garmin"`.
-- `mongo_garmin_to_observed_activity` additionally requires the document to
-  carry `source == "garmin"` or a `garmin_activity` sub-document produced by the
-  Garmin normalisation layer.
+- `mongo_garmin_to_observed_activity` additionally requires the Mongo document
+  itself to carry `source == "garmin"` at the top level (as written by the
+  Garmin sync in `gccli_provider.py`). There is no sub-document fallback and no
+  `model_copy` that would rewrite the domain source.
 - `build_performed_workouts` re-checks `activity.source == GARMIN_SOURCE`, so a
   hand-built `ObservedActivity` cannot smuggle in non-Garmin evidence.
 - **No fallback re-labels an activity as Garmin.** `legacy`, `manual`,

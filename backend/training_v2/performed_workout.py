@@ -871,7 +871,15 @@ def build_performed_workouts(
                 prescription,
                 best_activity,
                 deviations=best_deviations,
-                resolved_by_start_time=best_gap is not None,
+                # The reason code is emitted only when the prescribed start
+                # time was *actually* usable for ranking: a prescription can
+                # carry a planned start time while the activity carries no
+                # start time, in which case the gap is None and the clock
+                # played no part in the decision.
+                resolved_by_start_time=(
+                    prescription.planned_start_time is not None
+                    and best_gap is not None
+                ),
             )
         )
 
