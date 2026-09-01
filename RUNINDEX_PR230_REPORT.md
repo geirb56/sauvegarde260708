@@ -303,4 +303,4 @@ self-declared completion without any Garmin evidence.
 
 ---
 
-## C230
+**C230** — PR230 delivered: engine + contract + tests + audit. NOT merged. UX/consumer cleanup deferred to #231.
