@@ -72,7 +72,7 @@ def _activities(n: int = 20, ref: date = _TODAY) -> List[dict]:
     return acts
 
 
-def _make_db(metrics_docs: List[dict], activity_docs: List[dict]) -> MagicMock:
+def _make_db(metrics_docs: List[dict], activity_docs: List[dict], *, has_hrv=None) -> MagicMock:
     """Return an async mock DB with garmin_daily_metrics and garmin_activities."""
     db = MagicMock()
 
@@ -93,6 +93,8 @@ def _make_db(metrics_docs: List[dict], activity_docs: List[dict]) -> MagicMock:
     db.garmin_daily_metrics.find.side_effect = _metrics_find
     db.garmin_activities.find.side_effect = _activities_find
     db.garmin_vo2max.find_one = AsyncMock(return_value=None)
+    conn_doc = {"garmin_capabilities": {"has_hrv": has_hrv}} if has_hrv is not None else None
+    db.garmin_connections.find_one = AsyncMock(return_value=conn_doc)
     return db
 
 
@@ -582,3 +584,32 @@ async def test_history_invalid_date_metric_excluded():
         f"Invalid-date metric leaked into history[{target_day}]: "
         f"got {entry['run_readiness']!r}, expected {expected.score!r}"
     )
+
+
+@pytest.mark.asyncio
+async def test_history_no_lookahead_when_current_hrv_capability_changes():
+    target_day = _TODAY - timedelta(days=4)
+    base_docs = _metrics(n=14, ref=_TODAY, hrv=None, rhr=53.0, sleep=7.3)
+    acts = _activities(n=10, ref=_TODAY)
+    docs_with_future_hrv = list(base_docs) + [
+        {
+            "date": _TODAY.isoformat(),
+            "resting_hr": 53.0,
+            "hrv": 70.0,
+            "sleep_hours": 7.3,
+            "sleep_score": 80.0,
+        }
+    ]
+    docs_with_future_hrv.sort(key=lambda d: d["date"], reverse=True)
+
+    db_without = _make_db(base_docs, acts, has_hrv=False)
+    db_with = _make_db(docs_with_future_hrv, acts, has_hrv=True)
+
+    payload_without = await compute_run_index(db_without, "userA", reference_date=_TODAY)
+    payload_with = await compute_run_index(db_with, "userA", reference_date=_TODAY)
+    assert payload_without is not None and payload_with is not None
+
+    h_without = next((e for e in payload_without["history"] if e["date"] == target_day.isoformat()), None)
+    h_with = next((e for e in payload_with["history"] if e["date"] == target_day.isoformat()), None)
+    assert h_without is not None and h_with is not None
+    assert h_without["run_readiness"] == h_with["run_readiness"]

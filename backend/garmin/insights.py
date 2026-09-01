@@ -135,6 +135,10 @@ async def compute_run_index(
         .limit(200)
         .to_list(length=200)
     )
+    # Current garmin_capabilities.has_hrv reflects observed data availability,
+    # not a definitive hardware capability. Keep readiness capability neutral
+    # until a dedicated provider-level "unsupported" signal exists.
+    hrv_supported = None
 
     # --- Native Garmin VO₂max ---
     # Fetched from gccli health max-metrics during sync and stored in garmin_vo2max.
@@ -215,7 +219,11 @@ async def compute_run_index(
 
     # --- Run Readiness V2 ---
     _v2_result = build_readiness_v2_from_garmin_data(
-        metrics_docs, activities, today, load_snapshot=load_snapshot
+        metrics_docs,
+        activities,
+        today,
+        load_snapshot=load_snapshot,
+        hrv_supported=hrv_supported,
     )
     run_readiness_v2: Optional[float] = _v2_result.score
     readiness_v2_confidence: str = _v2_result.confidence.value
@@ -248,7 +256,7 @@ async def compute_run_index(
         recommendation = _REC_I18N.get(recommendation, {}).get(lang, recommendation)
 
     # --- Statuses ---
-    hrv_status = "green"
+    hrv_status = "gray"
     if hrv_delta is not None:
         hrv_status = "green" if hrv_delta <= 5 else ("yellow" if hrv_delta <= 10 else "red")
     rhr_status = (
@@ -334,7 +342,14 @@ async def compute_run_index(
             act_dt = _parse_day(a.get("start_time") or a.get("synced_at") or "")
             if act_dt is not None and act_dt.date() <= hist_day:
                 hist_activities.append(a)
-        hist_v2 = build_readiness_v2_from_garmin_data(hist_metrics, hist_activities, hist_day)
+        hist_v2 = build_readiness_v2_from_garmin_data(
+            hist_metrics,
+            hist_activities,
+            hist_day,
+            # Historical readiness must be no-lookahead: current device
+            # capability is not projected backwards to prior days.
+            hrv_supported=None,
+        )
         doc_readiness: Optional[float] = hist_v2.score  # float 0–100 or None
         hist_load_snapshot = build_training_load(hist_activities, hist_day)
         doc_training_load: Optional[float] = hist_load_snapshot.acwr

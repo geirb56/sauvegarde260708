@@ -69,6 +69,22 @@ class Provider(ABC):
         """
         raise NotImplementedError
 
+    def get_daily_metrics_fetch_result(
+        self,
+        user_id: str,
+        days: int = 7,
+        start_days_ago: int = 1,
+    ) -> Dict:
+        metrics = self.get_daily_metrics(user_id, days=days, start_days_ago=start_days_ago)
+        return {
+            "metrics": metrics,
+            "status": "success" if metrics else "success_no_data",
+            "endpoint_success_count": 0,
+            "endpoint_failure_count": 0,
+            "endpoint_total_count": 0,
+            "endpoint_failures": [],
+        }
+
     def get_max_metrics(
         self,
         user_id: str,

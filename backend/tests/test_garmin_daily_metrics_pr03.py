@@ -5,7 +5,7 @@ import inspect
 import pytest
 
 from garmin.data_layer import GarminDailyMetrics
-from garmin.runner import GccliRunner
+from garmin.runner import GccliError, GccliRunner
 
 
 SLEEP_REAL = {
@@ -148,6 +148,7 @@ def test_pr03_runner_adds_garmin_daily_metrics_subdocument():
 
     runner._run_json = fake_run_json
     runner._ensure_available = lambda: None
+    runner.is_authenticated = lambda _account=None: True
 
     metrics = runner.fetch_daily_metrics(days=1)
     assert len(metrics) == 1
@@ -156,3 +157,116 @@ def test_pr03_runner_adds_garmin_daily_metrics_subdocument():
     assert doc["resting_hr"] == 48
     assert "garmin_daily_metrics" in doc
     assert doc["garmin_daily_metrics"]["date"] == "2026-08-03"
+
+
+def test_pr03_fetch_result_technical_failure_not_mapped_to_no_data():
+    runner = GccliRunner.__new__(GccliRunner)
+    runner.gccli_path = "gccli"
+    runner.home = "/tmp"
+    runner.keyring_backend = "file"
+    runner.timeout = 45
+    runner.max_retries = 3
+    runner.is_authenticated = lambda _account=None: True
+
+    def failing_run_json(args, account=None):
+        raise GccliError(f"gccli {' '.join(args)} timeout")
+
+    runner._run_json = failing_run_json
+    runner._ensure_available = lambda: None
+
+    result = runner.fetch_daily_metrics_result(days=1)
+    assert result.metrics == []
+    assert result.status == "technical_failure"
+    assert result.endpoint_failure_count == 3
+
+
+def test_pr03_fetch_result_success_no_data_without_exception():
+    runner = GccliRunner.__new__(GccliRunner)
+    runner.gccli_path = "gccli"
+    runner.home = "/tmp"
+    runner.keyring_backend = "file"
+    runner.timeout = 45
+    runner.max_retries = 3
+    runner.is_authenticated = lambda _account=None: True
+    runner._run_json = lambda _args, account=None: {}
+    runner._ensure_available = lambda: None
+
+    result = runner.fetch_daily_metrics_result(days=1)
+    assert result.metrics == []
+    assert result.status == "success_no_data"
+
+
+def test_pr03_fetch_result_health_hr_error_is_technical_state():
+    runner = GccliRunner.__new__(GccliRunner)
+    runner.gccli_path = "gccli"
+    runner.home = "/tmp"
+    runner.keyring_backend = "file"
+    runner.timeout = 45
+    runner.max_retries = 3
+    runner.is_authenticated = lambda _account=None: True
+
+    def run_json(args, account=None):
+        key = " ".join(args[:2])
+        if key == "health hr":
+            raise GccliError("health hr timeout")
+        if key == "health sleep":
+            return SLEEP_REAL
+        if key == "health hrv":
+            return HRV_REAL
+        return {}
+
+    runner._run_json = run_json
+    runner._ensure_available = lambda: None
+    result = runner.fetch_daily_metrics_result(days=1)
+    assert result.status == "partial_success"
+    assert any(item["endpoint"] == "health hr" for item in result.endpoint_failures)
+
+
+def test_pr03_fetch_result_health_sleep_error_is_technical_state():
+    runner = GccliRunner.__new__(GccliRunner)
+    runner.gccli_path = "gccli"
+    runner.home = "/tmp"
+    runner.keyring_backend = "file"
+    runner.timeout = 45
+    runner.max_retries = 3
+    runner.is_authenticated = lambda _account=None: True
+
+    def run_json(args, account=None):
+        key = " ".join(args[:2])
+        if key == "health hr":
+            return HR_REAL
+        if key == "health sleep":
+            raise GccliError("health sleep timeout")
+        if key == "health hrv":
+            return HRV_REAL
+        return {}
+
+    runner._run_json = run_json
+    runner._ensure_available = lambda: None
+    result = runner.fetch_daily_metrics_result(days=1)
+    assert result.status == "partial_success"
+    assert any(item["endpoint"] == "health sleep" for item in result.endpoint_failures)
+
+
+def test_pr03_fetch_result_two_endpoint_errors_one_empty_is_technical_failure():
+    runner = GccliRunner.__new__(GccliRunner)
+    runner.gccli_path = "gccli"
+    runner.home = "/tmp"
+    runner.keyring_backend = "file"
+    runner.timeout = 45
+    runner.max_retries = 3
+    runner.is_authenticated = lambda _account=None: True
+
+    def run_json(args, account=None):
+        key = " ".join(args[:2])
+        if key in {"health hr", "health sleep"}:
+            raise GccliError(f"{key} timeout")
+        if key == "health hrv":
+            return {}
+        return {}
+
+    runner._run_json = run_json
+    runner._ensure_available = lambda: None
+    result = runner.fetch_daily_metrics_result(days=1)
+    assert result.metrics == []
+    assert result.status == "technical_failure"
