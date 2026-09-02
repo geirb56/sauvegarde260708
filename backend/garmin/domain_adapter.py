@@ -286,8 +286,12 @@ def mongo_garmin_to_observed_activity(
       level.  Nothing else — legacy rows, ``db.workouts``, manual entries —
       can become evidence, and no fallback ever re-labels a document as
       Garmin.
+    - Ownership: ``doc["user_id"]`` is the authority.  The document is refused
+      unless it already belongs to ``user_id``; the caller can never re-label
+      the owner of an activity, and a document without ``user_id`` is refused.
     - Local date: derived from :func:`garmin_local_start_time` only.
-    - Returns ``None`` when provenance or local time cannot be established.
+    - Returns ``None`` when provenance, ownership or local time cannot be
+      established.
     """
     from training_v2.performed_workout import ObservedActivity, to_observed_activity
 
@@ -295,6 +299,12 @@ def mongo_garmin_to_observed_activity(
         return None
 
     if doc.get("source") != GARMIN_SOURCE:
+        return None
+
+    doc_user_id = doc.get("user_id")
+    if not isinstance(doc_user_id, str) or doc_user_id == "":
+        return None
+    if doc_user_id != user_id:
         return None
 
     local_start = garmin_local_start_time(doc)
@@ -305,7 +315,7 @@ def mongo_garmin_to_observed_activity(
 
     return to_observed_activity(
         domain,
-        user_id=user_id,
+        user_id=doc_user_id,
         local_start_time=local_start,
     )
 
@@ -315,7 +325,10 @@ def mongo_garmin_to_observed_activities(
     *,
     user_id: str,
 ) -> List["ObservedActivity"]:
-    """Convert ``garmin_activities`` documents; unusable documents are skipped."""
+    """Convert ``garmin_activities`` documents; unusable documents are skipped.
+
+    Documents belonging to another user are skipped, never re-owned.
+    """
     observed = []
     for doc in docs or []:
         item = mongo_garmin_to_observed_activity(doc, user_id=user_id)

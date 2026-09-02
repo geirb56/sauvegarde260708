@@ -288,7 +288,12 @@ class ObservedActivity(BaseModel):
     start_time: Optional[datetime] = None
     """Local start datetime, when the local value carries a clock component."""
 
-    source: str = GARMIN_SOURCE
+    source: str
+    """Provenance of the evidence. MANDATORY and explicit: there is no default,
+    so an ``ObservedActivity`` can never be silently assumed to be Garmin.
+    Anything other than ``"garmin"`` is refused as performed-workout evidence.
+    """
+
     activity_type: Optional[str] = None
     distance_km: Optional[float] = None
     duration_min: Optional[float] = None
@@ -865,21 +870,31 @@ def build_performed_workouts(
             continue
 
         best_activity, best_deviations, best_gap = ranked[0]
+
+        # RC_RESOLVED_BY_PLANNED_START_TIME is emitted ONLY when the prescribed
+        # start time genuinely broke a tie: several candidates survived, the
+        # runner-up was equivalent on every deviation dimension, and only the
+        # gap to the prescribed clock time separated them.
+        resolved_by_start_time = False
+        if len(ranked) > 1 and prescription.planned_start_time is not None:
+            runner_up_deviations, runner_up_gap = ranked[1][1], ranked[1][2]
+            same_deviation = _worst_deviation(best_deviations) == _worst_deviation(
+                runner_up_deviations
+            )
+            gap_discriminated = (
+                best_gap is not None
+                and runner_up_gap is not None
+                and best_gap != runner_up_gap
+            )
+            resolved_by_start_time = same_deviation and gap_discriminated
+
         attributed[best_activity.activity_id] = prescription.prescription_id
         rows.append(
             _matched_row(
                 prescription,
                 best_activity,
                 deviations=best_deviations,
-                # The reason code is emitted only when the prescribed start
-                # time was *actually* usable for ranking: a prescription can
-                # carry a planned start time while the activity carries no
-                # start time, in which case the gap is None and the clock
-                # played no part in the decision.
-                resolved_by_start_time=(
-                    prescription.planned_start_time is not None
-                    and best_gap is not None
-                ),
+                resolved_by_start_time=resolved_by_start_time,
             )
         )
 

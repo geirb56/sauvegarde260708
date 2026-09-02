@@ -141,8 +141,43 @@ Source chain unchanged: `garmin_activities` → Garmin normalisation → domain 
   `model_copy` that would rewrite the domain source.
 - `build_performed_workouts` re-checks `activity.source == GARMIN_SOURCE`, so a
   hand-built `ObservedActivity` cannot smuggle in non-Garmin evidence.
+- `ObservedActivity.source` is a **mandatory field with no default**: building
+  one without an explicit source raises a pydantic `ValidationError`, so a
+  Garmin provenance can never be obtained by omission.
 - **No fallback re-labels an activity as Garmin.** `legacy`, `manual`,
-  `workout`, `strava`, `None` → refused.
+  `workout`, `strava`, `""`, `None` → refused.
+
+---
+
+## C230 final — `user_id` is the document's authority
+
+`mongo_garmin_to_observed_activity(doc, user_id=...)` treats `doc["user_id"]` as
+the **source of authority**, never the caller argument:
+
+| Document | Caller | Result |
+|---|---|---|
+| `user_id = "A"` | `"A"` | accepted, `ObservedActivity.user_id = "A"` |
+| `user_id = "B"` | `"A"` | **refused** (`None`) |
+| `user_id` missing / `""` / `None` | any | **refused** (`None`) |
+
+The caller argument is only an ownership *assertion* that must be confirmed by
+the document. The `ObservedActivity` is built with `doc["user_id"]`, so no code
+path can re-label the owner of a Garmin activity.
+`mongo_garmin_to_observed_activities()` applies the same rule per document:
+foreign documents are skipped, never re-owned.
+
+### `RC_RESOLVED_BY_PLANNED_START_TIME` — precise semantics
+
+The code is emitted **only when the prescribed start time actually broke a tie**,
+i.e. all of the following hold:
+
+1. the prescription really carries a `planned_start_time`;
+2. more than one candidate survived the deviation filter;
+3. the runner-up has the **same worst deviation** as the winner;
+4. both gaps to the prescribed time are known **and differ**.
+
+A single candidate, a match decided by distance/duration/pace, or two identical
+gaps (→ `ambiguous`) never produce the code.
 
 ---
 
@@ -302,9 +337,9 @@ Raw signed deltas (`distance_delta_km`, `duration_delta_min`,
 |---|---|
 | `backend/training_v2/performed_workout.py` | **New** — models, enums, reason codes, deterministic matching engine `build_performed_workouts()`, provenance-locked `to_observed_activity()`. C230: `ambiguous` state, multi-dimension adherence, mandatory `local_start_time`, `source == "garmin"` lock. |
 | `backend/garmin/data_layer.py` | C230 #1 — `GarminActivity.start_time_local` populated from `startTimeLocal` only (additive, non-breaking). |
-| `backend/garmin/domain_adapter.py` | C230 #1/#4 — `garmin_local_start_time()`, `mongo_garmin_to_observed_activity()`, `mongo_garmin_to_observed_activities()`: the sanctioned `garmin_activities` → `ObservedActivity` boundary. |
+| `backend/garmin/domain_adapter.py` | C230 #1/#4 — `garmin_local_start_time()`, `mongo_garmin_to_observed_activity()`, `mongo_garmin_to_observed_activities()`: the sanctioned `garmin_activities` → `ObservedActivity` boundary, with `doc["user_id"]` as ownership authority. |
 | `backend/training_v2/__init__.py` | Export the PR230 public surface. |
-| `backend/tests/test_performed_workout_pr230.py` | **New** — 72 tests. |
+| `backend/tests/test_performed_workout_pr230.py` | **New** — 85 tests. |
 | `RUNINDEX_PR230_REPORT.md` | **New** — this report. |
 
 No runtime endpoint, no consumer and no legacy behaviour was modified in this PR.
@@ -316,12 +351,13 @@ No runtime endpoint, no consumer and no legacy behaviour was modified in this PR
 Commands (from `backend/`):
 
 ```
-python -m pytest tests/test_performed_workout_pr230.py -q                 → 72 passed
+python -m pytest tests/test_performed_workout_pr230.py -q                 → 85 passed
 python -m pytest tests/test_performed_workout_pr230.py \
                 tests/test_mongo_garmin_boundary_pr137.py \
                 tests/test_garmin_data_layer.py \
                 tests/test_garmin_activity_normalization_pr02.py \
-                tests/test_daily_adaptation_pr133.py -q                   → 176 passed
+                tests/test_daily_adaptation_pr133.py \
+                tests/test_garmin_deep_sync.py -q                         → 212 passed
 ```
 
 **0 FAIL, 0 SKIP** on the PR230 scope and on all replayed neighbour suites
@@ -400,7 +436,23 @@ normalisation, DomainActivity, TrainingHistory consumers, DailyAdaptation).
 | no fallback re-labels an activity as Garmin | PASS | `test_no_fallback_relabels_an_activity_as_garmin` |
 | engine drops non-Garmin ObservedActivity | PASS | `test_engine_drops_activities_whose_source_is_not_garmin` |
 
-**Totals: 72 PASS / 0 FAIL / 0 SKIP** on `test_performed_workout_pr230.py`.
+### C230 final — ownership, mandatory source, start-time code
+
+| Scenario | Status | Test |
+|---|---|---|
+| doc of user B requested by caller A → refused | PASS | `test_mongo_doc_of_another_user_is_refused` |
+| doc without `user_id` (missing / `""` / `None`) → refused | PASS | `test_mongo_doc_without_user_id_is_refused` |
+| batch A/B → only A's documents survive, none re-owned | PASS | `test_mongo_batch_keeps_only_the_caller_own_documents` |
+| real Mongo Garmin doc with the right owner → accepted | PASS | `test_mongo_doc_of_the_right_owner_is_accepted` |
+| `ObservedActivity` without `source` → `ValidationError` | PASS | `test_observed_activity_requires_an_explicit_source` |
+| non-Garmin source never used as evidence | PASS | `test_non_garmin_observed_activity_is_never_used_as_evidence` (5 params) |
+| start-time code absent with a single candidate | PASS | `test_start_time_reason_code_absent_when_only_one_candidate` |
+| start-time code absent when deviation decided | PASS | `test_start_time_reason_code_absent_when_deviation_decided_the_match` |
+| start-time code absent when gaps are equal (→ ambiguous) | PASS | `test_start_time_reason_code_absent_when_gaps_are_equal` |
+| start-time code present only when it really discriminated | PASS | `test_prescribed_start_time_is_a_legitimate_tiebreaker` |
+
+**Totals: 85 PASS / 0 FAIL / 0 SKIP** on `test_performed_workout_pr230.py`,
+**212 PASS / 0 FAIL / 0 SKIP** with the replayed neighbour suites.
 
 Runtime / E2E validation: **DEFERRED TO FINAL RUNTIME GATE**.
 
@@ -486,4 +538,7 @@ self-declared completion without any Garmin evidence.
 
 **C230** — corrections applied: real Garmin local date, ambiguity ≠ missed,
 multi-dimension adherence, guaranteed Garmin provenance, honest legacy-consumer
-reporting. 72 PASS / 0 FAIL / 0 SKIP. PR #230 updated, NOT merged.
+reporting, `doc["user_id"]` as ownership authority, mandatory explicit
+`ObservedActivity.source`, and a strictly discriminant
+`RC_RESOLVED_BY_PLANNED_START_TIME`. 85 PASS / 0 FAIL / 0 SKIP (212 with
+neighbour suites). PR #230 updated, NOT merged.

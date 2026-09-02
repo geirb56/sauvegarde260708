@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import date, datetime, time
 
 import pytest
+from pydantic import ValidationError
 
 from garmin.domain_adapter import (
     garmin_local_start_time,
@@ -82,6 +83,7 @@ def _activity(
     activity_type: str = "running",
     distance_km=10.0,
     duration_min=55.0,
+    source: str = "garmin",
 ) -> ObservedActivity:
     pace = None
     if distance_km and duration_min:
@@ -91,6 +93,7 @@ def _activity(
         user_id=user_id,
         local_date=local_date,
         start_time=start_time,
+        source=source,
         activity_type=activity_type,
         distance_km=distance_km,
         duration_min=duration_min,
@@ -719,6 +722,7 @@ def _mongo_doc(
     duration_s=3300.0,
     activity_type="running",
     source="garmin",
+    user_id=USER,
 ):
     """A realistic ``garmin_activities`` document.
 
@@ -727,6 +731,7 @@ def _mongo_doc(
     """
     doc = {
         "activity_id": activity_id,
+        "user_id": user_id,
         "source": source,
         "activity_type": activity_type,
         "start_time": start_time_local,  # ingestion contract: local first
@@ -1198,3 +1203,119 @@ def test_full_mongo_to_ledger_integration_is_deterministic():
 
     again = _build(prescriptions, list(reversed(observed)), reference_date=date(2026, 6, 11))
     assert ledger.model_dump() == again.model_dump()
+
+
+# ---------------------------------------------------------------------------
+# C230 FINAL — user_id authority, mandatory source, precise start-time code
+# ---------------------------------------------------------------------------
+
+
+def test_mongo_doc_of_another_user_is_refused():
+    doc = _mongo_doc(user_id="user-B")
+
+    assert mongo_garmin_to_observed_activity(doc, user_id="user-A") is None
+
+
+def test_mongo_doc_without_user_id_is_refused():
+    doc = _mongo_doc()
+    doc.pop("user_id")
+
+    assert mongo_garmin_to_observed_activity(doc, user_id=USER) is None
+
+    doc["user_id"] = ""
+    assert mongo_garmin_to_observed_activity(doc, user_id=USER) is None
+
+    doc["user_id"] = None
+    assert mongo_garmin_to_observed_activity(doc, user_id=USER) is None
+
+
+def test_mongo_batch_keeps_only_the_caller_own_documents():
+    docs = [
+        _mongo_doc(activity_id="own-1", user_id="user-A"),
+        _mongo_doc(activity_id="other-1", user_id="user-B"),
+        _mongo_doc(activity_id="own-2", user_id="user-A"),
+    ]
+
+    observed = mongo_garmin_to_observed_activities(docs, user_id="user-A")
+
+    assert [a.activity_id for a in observed] == ["own-1", "own-2"]
+    assert {a.user_id for a in observed} == {"user-A"}
+
+
+def test_mongo_doc_of_the_right_owner_is_accepted():
+    doc = _mongo_doc(user_id=USER)
+
+    observed = mongo_garmin_to_observed_activity(doc, user_id=USER)
+
+    assert observed is not None
+    assert observed.user_id == USER
+    assert observed.source == "garmin"
+    assert observed.local_date == date(2026, 6, 10)
+
+
+def test_observed_activity_requires_an_explicit_source():
+    with pytest.raises(ValidationError):
+        ObservedActivity(
+            activity_id="a1",
+            user_id=USER,
+            local_date=REF,
+            activity_type="running",
+        )
+
+
+@pytest.mark.parametrize("bad_source", ["legacy", "manual", "workout", "strava", ""])
+def test_non_garmin_observed_activity_is_never_used_as_evidence(bad_source):
+    prescription = _prescription(distance_km=10.0)
+    activity = _activity(source=bad_source)
+
+    ledger = _build([prescription], [activity], reference_date=date(2026, 6, 12))
+    row = _by_prescription(ledger, "p1")
+
+    assert row.matching_status is MatchingStatus.MISSED
+    assert ledger.matched_count == 0
+    assert ledger.unmatched_actual_count == 0
+
+
+def test_start_time_reason_code_absent_when_only_one_candidate():
+    prescription = _prescription(distance_km=10.0, planned_start_time=time(18, 0))
+    only = _activity(activity_id="a_only", start_time=datetime(2026, 6, 10, 18, 5, 0))
+
+    row = _by_prescription(_build([prescription], [only]), "p1")
+
+    assert row.matching_status is MatchingStatus.MATCHED
+    assert RC_RESOLVED_BY_PLANNED_START_TIME not in row.reason_codes
+
+
+def test_start_time_reason_code_absent_when_deviation_decided_the_match():
+    prescription = _prescription(distance_km=10.0, planned_start_time=time(18, 0))
+    best_distance = _activity(
+        activity_id="a_best",
+        distance_km=10.0,
+        duration_min=55.0,
+        start_time=datetime(2026, 6, 10, 7, 0, 0),
+    )
+    worse_distance = _activity(
+        activity_id="a_worse",
+        distance_km=8.0,
+        duration_min=44.0,
+        start_time=datetime(2026, 6, 10, 18, 0, 0),
+    )
+
+    row = _by_prescription(_build([prescription], [best_distance, worse_distance]), "p1")
+
+    assert row.activity_id == "a_best"
+    assert RC_RESOLVED_BY_PLANNED_START_TIME not in row.reason_codes
+
+
+def test_start_time_reason_code_absent_when_gaps_are_equal():
+    """Same deviation, same gap → ambiguous, so the code is never emitted."""
+    prescription = _prescription(distance_km=10.0, planned_start_time=time(12, 0))
+    before = _activity(
+        activity_id="a_before", start_time=datetime(2026, 6, 10, 11, 0, 0)
+    )
+    after = _activity(activity_id="a_after", start_time=datetime(2026, 6, 10, 13, 0, 0))
+
+    row = _by_prescription(_build([prescription], [before, after]), "p1")
+
+    assert row.matching_status is MatchingStatus.AMBIGUOUS
+    assert RC_RESOLVED_BY_PLANNED_START_TIME not in row.reason_codes
