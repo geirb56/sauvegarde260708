@@ -30,7 +30,7 @@ Two conversion paths are exposed:
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from .data_layer import GarminActivity, GarminCapabilities
 from training_v2.domain_capabilities import DomainCapabilities
@@ -40,6 +40,9 @@ from training_v2.domain_activity import (
     _domain_source_activity_id,
     _domain_start_time,
 )
+
+if TYPE_CHECKING:
+    from training_v2.performed_workout import ObservedActivity
 
 
 def to_domain_activity(activity: GarminActivity) -> DomainActivity:
