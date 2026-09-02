@@ -3281,45 +3281,10 @@ async def get_available_goals():
     }
 
 
-@api_router.post("/training/feedback")
-async def submit_training_feedback(
-    date: str,
-    workout_id: str,
-    status: str,
-    user: dict = Depends(auth_user)
-):
-    """
-    Store user feedback for a training session.
-
-    Args:
-        date: ISO date string (YYYY-MM-DD)
-        workout_id: Unique identifier for the workout/session
-        status: 'done' or 'missed'
-    """
-    if status not in ["done", "missed"]:
-        raise HTTPException(status_code=400, detail="Status must be 'done' or 'missed'")
-
-    feedback_doc = {
-        "user_id": user["id"],
-        "date": date,
-        "workout_id": workout_id,
-        "status": status,
-        "created_at": datetime.now(timezone.utc)
-    }
-
-    # Upsert to avoid duplicates
-    await db.training_feedback.update_one(
-        {"user_id": user["id"], "date": date, "workout_id": workout_id},
-        {"$set": feedback_doc},
-        upsert=True
-    )
-
-    logger.info(f"[Training] Feedback saved for user {user['id']}: {date} - {workout_id} - {status}")
-
-    return {
-        "status": "success",
-        "feedback": feedback_doc
-    }
+# PR232A — POST /training/feedback (manual "Réalisé / Manqué" feedback) has
+# been removed. Execution truth is now exclusively derived from Garmin via
+# the PR230 boundary (training_v2.performed_workout) and exposed on
+# GET /training/v2/week. See RUNINDEX_PR232A_REPORT.md.
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -4104,17 +4069,52 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
     _goal_type_v2_str: str = _WEEK_GOAL_NORM.get(
         resolved.goal_type.upper() if resolved.goal_type else "", resolved.goal_type
     )
+
+    # ── PR232A: factual execution — PR230 Garmin boundary, no fallback ────
+    from training_v2.week_execution import build_week_execution
+    from training_v2.training_week_response import WeekV2ActualResponse
+
+    week_start = reference_date - timedelta(days=reference_date.weekday())
+    performed_rows = build_week_execution(
+        user_id=user_id,
+        reference_date=reference_date,
+        week_start=week_start,
+        sessions=weekly_plan.sessions,
+        garmin_docs=garmin_activities_90,
+    )
+    session_rows = performed_rows[: len(weekly_plan.sessions)]
+    extra_rows = performed_rows[len(weekly_plan.sessions):]
+
+    def _actual_response(row) -> Optional[WeekV2ActualResponse]:
+        if row.activity_id is None:
+            return None
+        return WeekV2ActualResponse(
+            activity_id=row.activity_id,
+            distance_km=row.actual_distance_km,
+            duration_minutes=row.actual_duration_min,
+            pace_min_per_km=row.actual_pace_min_per_km,
+            activity_type=row.actual_activity_type,
+            start_time=row.actual_start_time.isoformat() if row.actual_start_time else None,
+        )
+
     sessions = [
         WeekV2SessionResponse(
             day=s.day,
+            planned_date=row.planned_date.isoformat() if row.planned_date else None,
             workout_type=s.workout_type,
             intensity_class=s.intensity_class,
             distance_km=s.distance_km,
             duration_minutes=s.duration_minutes,
             estimated_tss=0 if s.workout_type == "rest" else None,
             reason_codes=list(s.reason_codes),
+            matching_status=row.matching_status.value,
+            adherence_status=row.adherence_status.value,
+            actual=_actual_response(row),
         )
-        for s in weekly_plan.sessions
+        for s, row in zip(weekly_plan.sessions, session_rows)
+    ]
+    unmatched_actuals = [
+        actual for row in extra_rows if (actual := _actual_response(row)) is not None
     ]
 
     response = TrainingWeekV2Response(
@@ -4140,6 +4140,7 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
             planned_duration_minutes=weekly_plan.planned_duration_minutes,
             session_count=weekly_plan.session_count,
             sessions=sessions,
+            unmatched_actuals=unmatched_actuals,
         ),
         reconciliation_action=reconciliation_result.action.value,
         reconciliation_reason_codes=list(reconciliation_result.reason_codes),

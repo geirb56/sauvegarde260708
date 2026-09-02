@@ -14,8 +14,6 @@ import {
   CheckCircle,
   AlertTriangle,
   XCircle,
-  Check,
-  X,
   TrendingUp,
   Target,
   Info,
@@ -23,9 +21,7 @@ import {
 import { useUnitSystem } from "@/context/UnitContext";
 import { useSubscription } from "@/context/SubscriptionContext";
 import { formatDistance } from "@/utils/units";
-import { Button } from "@/components/ui/button";
 import { BrandSplash } from "@/components/LoadingSpinner";
-import { toast } from "sonner";
 import {
   Dialog,
   DialogContent,
@@ -608,8 +604,6 @@ export default function Dashboard() {
   const [cardioLoading, setCardioLoading] = useState(true);
   const [cardioError, setCardioError] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
-  const [sessionFeedback, setSessionFeedback] = useState({});
   const [infoMetric, setInfoMetric] = useState(null);
   const { t, lang } = useLanguage();
   const { unitSystem } = useUnitSystem();
@@ -671,33 +665,6 @@ export default function Dashboard() {
       console.error("Failed to fetch data:", error);
     } finally {
       setLoading(false);
-    }
-  };
-
-  const handleFeedback = async (day, status) => {
-    if (isFree) return; // FREE users must not trigger Premium training endpoints
-    setFeedbackSubmitting(true);
-    try {
-      const today = new Date().toISOString().split('T')[0];
-      await axios.post(
-        `${API}/training/feedback`,
-        null,
-        { params: { date: today, workout_id: day, status } }
-      );
-
-      setSessionFeedback(prev => ({ ...prev, [day]: status }));
-      toast.success(t("trainingPlanExtended.feedbackSaved") || "Feedback enregistré");
-      
-      // Refresh today's session
-      const todayRes = await axios.get(`${API}/training/today`);
-      if (todayRes.data?.status === "success") {
-        setTodaySession(todayRes.data);
-      }
-    } catch (err) {
-      console.error("Error submitting feedback:", err);
-      toast.error(t("common.error") || "Erreur");
-    } finally {
-      setFeedbackSubmitting(false);
     }
   };
 
@@ -1011,36 +978,6 @@ export default function Dashboard() {
             ) : (
               <SessionCard session={todaySession.planned_session} />
             )}
-
-            {/* Feedback Buttons */}
-            <div className="flex gap-2 mt-3">
-              <Button
-                size="sm"
-                onClick={() => handleFeedback(todaySession.day, "done")}
-                disabled={feedbackSubmitting || sessionFeedback[todaySession.day] === "done"}
-                className={`flex-1 ${
-                  sessionFeedback[todaySession.day] === "done"
-                    ? "bg-green-600 text-white"
-                    : "bg-slate-700 text-slate-200 hover:bg-green-600"
-                }`}
-              >
-                <Check className="w-4 h-4 mr-1" />
-                {t("trainingPlanExtended.feedbackDone") || "Réalisé"}
-              </Button>
-              <Button
-                size="sm"
-                onClick={() => handleFeedback(todaySession.day, "missed")}
-                disabled={feedbackSubmitting || sessionFeedback[todaySession.day] === "missed"}
-                className={`flex-1 ${
-                  sessionFeedback[todaySession.day] === "missed"
-                    ? "bg-red-600 text-white"
-                    : "bg-slate-700 text-slate-200 hover:bg-red-600"
-                }`}
-              >
-                <X className="w-4 h-4 mr-1" />
-                {t("trainingPlanExtended.feedbackMissed") || "Manqué"}
-              </Button>
-            </div>
           </>
         ) : (
           <>
