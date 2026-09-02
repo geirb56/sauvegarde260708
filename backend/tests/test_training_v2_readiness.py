@@ -350,6 +350,28 @@ class TestDefensive:
         )
         assert result.score != 0
 
+    def test_single_usable_subscore_forced_to_insufficient(self):
+        result = build_readiness_result(
+            sufficiency=_suf(SufficiencyLevel.SUFFICIENT),
+            physio=_physio(None),
+            sleep=_sleep(None),
+            load=_load(80),
+        )
+        assert result.score is None
+        assert result.confidence == ReadinessConfidence.NONE
+        assert result.sufficiency_level == SufficiencyLevel.INSUFFICIENT
+
+    def test_degraded_with_single_usable_subscore_forced_to_insufficient(self):
+        result = build_readiness_result(
+            sufficiency=_suf(SufficiencyLevel.DEGRADED, [ReasonCode.missing_sleep]),
+            physio=_physio(75),
+            sleep=_sleep(None),
+            load=_load(None),
+        )
+        assert result.score is None
+        assert result.confidence == ReadinessConfidence.NONE
+        assert result.sufficiency_level == SufficiencyLevel.INSUFFICIENT
+
 
 # ---------------------------------------------------------------------------
 # Architecture invariants

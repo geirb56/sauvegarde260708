@@ -264,6 +264,7 @@ def build_readiness_v2_from_garmin_data(
     activities: List[dict],
     reference_date: date,
     load_snapshot: Optional[TrainingLoadSnapshot] = None,
+    hrv_supported: Optional[bool] = None,
 ) -> ReadinessResult:
     """Build a ReadinessResult (V2) from pre-fetched Garmin/MongoDB data.
 
@@ -313,9 +314,15 @@ def build_readiness_v2_from_garmin_data(
     # ------------------------------------------------------------------
     # 4. R1 — Sufficiency classification.
     # ------------------------------------------------------------------
+    # `has_hrv=False` from observed history is not a proof of hardware
+    # incompatibility; keep capability neutral unless a dedicated provider
+    # signal for intrinsic unsupported HRV exists.
+    effective_hrv_supported = True if hrv_supported is True else None
+
     sufficiency_input = ReadinessSufficiencyInput(
         rhr=rhr_signal,
         hrv=hrv_signal,
+        hrv_supported=effective_hrv_supported,
         sleep=sleep_record,
         load=load_snapshot,
     )

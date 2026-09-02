@@ -91,6 +91,15 @@ class GarminActivity(BaseModel):
     activity_id: Optional[str] = None
     activity_type: Optional[str] = None
     start_time: Optional[str] = None
+    """Canonical model convention: GMT first, local as fallback."""
+    start_time_local: Optional[str] = None
+    """Explicit device-local start time (``startTimeLocal``), never GMT.
+
+    PR230: the performed-workout matching layer needs the REAL local calendar
+    day.  ``start_time`` cannot be used for that because it is GMT-first, so a
+    run just after local midnight would be attributed to the previous day.
+    This field is only populated when Garmin really provided ``startTimeLocal``.
+    """
     distance_m: Optional[float] = None
     duration_s: Optional[float] = None
     moving_duration_s: Optional[float] = None
@@ -143,6 +152,7 @@ class GarminActivity(BaseModel):
             activity_id=activity_id,
             activity_type=activity_type,
             start_time=_str(summary.get("startTimeGMT")) or _str(summary.get("startTimeLocal")),
+            start_time_local=_str(summary.get("startTimeLocal")),
             distance_m=_num(summary.get("distance")),
             duration_s=_num(summary.get("duration")),
             moving_duration_s=_num(summary.get("movingDuration")),

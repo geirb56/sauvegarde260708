@@ -15,6 +15,14 @@ import { useGarminSyncProgress } from "@/hooks/useGarminSyncProgress";
 const API = API_BASE_URL;
 const DONE_STEP_KEY = "done";
 
+function mapSyncErrorToMessageKey(syncError) {
+  if (syncError === "session_unavailable") return "settingsV2.garmin.reconnectRequired";
+  if (syncError === "daily_metrics_fetch_failed" || syncError === "daily_metrics_7d_failed" || syncError === "daily_metrics_enrichment_failed") {
+    return "settingsV2.garmin.dailyMetricsFetchError";
+  }
+  return "onboarding.garminSyncFailed";
+}
+
 function SelectGrid({ options, value, onSelect, testIdPrefix }) {
   return (
     <div className="grid grid-cols-2 gap-3">
@@ -110,6 +118,7 @@ export default function Onboarding() {
   const terminalError = Boolean(syncError) && !isSyncStreaming;
   const syncOutcomeKnown = runIndexReady || insufficientData || terminalError;
   const syncedCount = syncProgress?.activities_count ?? garminCount;
+  const syncErrorMessageKey = mapSyncErrorToMessageKey(syncError);
 
   const canContinue = useMemo(() => {
     if (stepKey === "welcome") return true;
@@ -333,7 +342,7 @@ export default function Onboarding() {
 
                 {syncError && (
                   <p className="text-sm text-destructive" data-testid="sync-error">
-                    {t("onboarding.garminSyncFailed")}
+                    {t(syncErrorMessageKey)}
                   </p>
                 )}
               </div>
@@ -354,7 +363,7 @@ export default function Onboarding() {
                 </div>
               ) : terminalError ? (
                 <div className="rounded-xl border border-border bg-muted/20 p-4" data-testid="runindex-terminal-error">
-                  <p className="text-sm text-destructive">{t("onboarding.garminSyncFailed")}</p>
+                  <p className="text-sm text-destructive">{t(syncErrorMessageKey)}</p>
                 </div>
               ) : insufficientData ? (
                 <div className="rounded-xl border border-border bg-muted/20 p-4" data-testid="runindex-insufficient-data">

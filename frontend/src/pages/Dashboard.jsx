@@ -364,8 +364,21 @@ function getTodayReadinessLabel(session, t) {
   return t("dashboard.runReadinessUnavailable");
 }
 
+function getRunReadinessUnavailableCauseLabel(cause, t) {
+  if (cause === "sync_in_progress") {
+    return t("dashboard.readinessUnavailableCause.syncInProgress", "Synchronization in progress.");
+  }
+  if (cause === "garmin_fetch_error") {
+    return t("dashboard.readinessUnavailableCause.garminFetchError", "Garmin retrieval error. Retry in progress.");
+  }
+  if (cause === "reconnect_required") {
+    return t("dashboard.readinessUnavailableCause.reconnectRequired", "Garmin reconnection required.");
+  }
+  return t("dashboard.readinessUnavailableCause.noDataYet", "Garmin daily metrics are not yet available.");
+}
+
 function MetricWidget({ icon: Icon, label, value, unit, status, detail }) {
-  const colors = STATUS_COLORS[status] || STATUS_COLORS.green;
+  const colors = STATUS_COLORS[status] || STATUS_COLORS.gray;
   return (
     <div
       className="flex-shrink-0 rounded-2xl p-4 flex flex-col gap-1 w-[140px] snap-start"
@@ -796,6 +809,10 @@ export default function Dashboard() {
             // run_readiness may be null when data is INSUFFICIENT — do not default to 0 or 100.
             const runReadinessScore = m.run_readiness ?? null;
             const runReadinessUnavailable = runReadinessScore === null;
+            const readinessUnavailableCause = getRunReadinessUnavailableCauseLabel(
+              cardioData?.readiness_unavailable_cause,
+              t,
+            );
             
             return (
               <>
@@ -844,14 +861,23 @@ export default function Dashboard() {
                   {/* Big score — same font as RunIndex, out of 100, white number */}
                   <div className="flex items-end gap-2">
                     {runReadinessUnavailable ? (
-                      <span
-                        className="text-2xl font-bold leading-none"
-                        style={{ color: "#6b7280" }}
-                        data-testid="run-readiness-score"
-                        aria-label={t("dashboard.runReadinessUnavailable")}
-                      >
-                        {t("dashboard.runReadinessUnavailable")}
-                      </span>
+                      <div className="space-y-2">
+                        <span
+                          className="text-2xl font-bold leading-none block"
+                          style={{ color: "#6b7280" }}
+                          data-testid="run-readiness-score"
+                          aria-label={t("dashboard.runReadinessUnavailable")}
+                        >
+                          {t("dashboard.runReadinessUnavailable")}
+                        </span>
+                        <p
+                          className="text-xs leading-tight"
+                          style={{ color: "rgba(255,255,255,0.65)" }}
+                          data-testid="run-readiness-unavailable-cause"
+                        >
+                          {readinessUnavailableCause}
+                        </p>
+                      </div>
                     ) : (
                       <>
                         <span

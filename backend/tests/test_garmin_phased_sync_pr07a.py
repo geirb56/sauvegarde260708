@@ -65,6 +65,17 @@ def _metric(day: str, *, resting_hr=48, sleep_hours=7.2, hrv=None) -> dict:
     }
 
 
+def _fetch_result(metrics: list[dict], status: str = "success") -> dict:
+    return {
+        "metrics": metrics,
+        "status": status,
+        "endpoint_success_count": 3,
+        "endpoint_failure_count": 0 if status in {"success", "success_no_data"} else 1,
+        "endpoint_total_count": 3,
+        "endpoint_failures": [],
+    }
+
+
 def _mock_db(*, deep_sync_done: bool = True):
     db = MagicMock()
     db.garmin_connections.find_one = AsyncMock(
@@ -102,9 +113,9 @@ def test_sync_orders_activities_then_today_run_index_then_metrics_windows():
     db = _mock_db()
     provider = MagicMock()
     provider.sync_activities.return_value = [_activity(1), _activity(2)]
-    provider.get_daily_metrics.side_effect = [
-        [_metric("2026-08-08", hrv=None), _metric("2026-08-07", hrv=60)],
-        [_metric("2026-07-31", hrv=58)],
+    provider.get_daily_metrics_fetch_result.side_effect = [
+        _fetch_result([_metric("2026-08-08", hrv=None), _metric("2026-08-07", hrv=60)], "success"),
+        _fetch_result([_metric("2026-07-31", hrv=58)], "success"),
     ]
     events = []
     progress_states, fake_update, fake_get = _progress_spy()
@@ -154,10 +165,10 @@ def test_sync_orders_activities_then_today_run_index_then_metrics_windows():
         "metrics_30d",
         "history_backfill",
     ]
-    assert provider.get_daily_metrics.call_args_list[0].args == ("user-1",)
-    assert provider.get_daily_metrics.call_args_list[0].kwargs == {"days": 7, "start_days_ago": 1}
-    assert provider.get_daily_metrics.call_args_list[1].args == ("user-1",)
-    assert provider.get_daily_metrics.call_args_list[1].kwargs == {"days": 23, "start_days_ago": 8}
+    assert provider.get_daily_metrics_fetch_result.call_args_list[0].args == ("user-1",)
+    assert provider.get_daily_metrics_fetch_result.call_args_list[0].kwargs == {"days": 7, "start_days_ago": 1}
+    assert provider.get_daily_metrics_fetch_result.call_args_list[1].args == ("user-1",)
+    assert provider.get_daily_metrics_fetch_result.call_args_list[1].kwargs == {"days": 23, "start_days_ago": 8}
     assert [state["phase"] for state in progress_states] == [
         "activities_fetching",
         "activities_ready",
@@ -173,9 +184,9 @@ def test_sync_without_hrv_still_marks_daily_metrics_ready():
     db = _mock_db()
     provider = MagicMock()
     provider.sync_activities.return_value = [_activity(1)]
-    provider.get_daily_metrics.side_effect = [
-        [_metric("2026-08-08", resting_hr=47, sleep_hours=7.5, hrv=None)],
-        [],
+    provider.get_daily_metrics_fetch_result.side_effect = [
+        _fetch_result([_metric("2026-08-08", resting_hr=47, sleep_hours=7.5, hrv=None)], "success"),
+        _fetch_result([], "success_no_data"),
     ]
     _, fake_update, fake_get = _progress_spy()
 
@@ -204,7 +215,10 @@ def test_sync_fetches_vo2max_once_per_new_running_date():
     db = _mock_db()
     provider = MagicMock()
     provider.sync_activities.return_value = [_activity(1), _activity(2)]
-    provider.get_daily_metrics.side_effect = [[_metric("2026-08-08", hrv=58)], []]
+    provider.get_daily_metrics_fetch_result.side_effect = [
+        _fetch_result([_metric("2026-08-08", hrv=58)], "success"),
+        _fetch_result([], "success_no_data"),
+    ]
     _, fake_update, fake_get = _progress_spy()
 
     with (
@@ -243,7 +257,10 @@ def test_sync_with_no_usable_physio_keeps_readiness_ready_when_score_present():
     db = _mock_db()
     provider = MagicMock()
     provider.sync_activities.return_value = [_activity(1)]
-    provider.get_daily_metrics.side_effect = [[], []]
+    provider.get_daily_metrics_fetch_result.side_effect = [
+        _fetch_result([], "success_no_data"),
+        _fetch_result([], "success_no_data"),
+    ]
     _, fake_update, fake_get = _progress_spy()
 
     with (
@@ -267,11 +284,11 @@ def test_sync_with_no_usable_physio_keeps_readiness_ready_when_score_present():
     assert result["readiness_status"] == "ready"
 
 
-def test_metrics_failure_after_run_index_returns_partial_success():
+def test_metrics_failure_after_run_index_returns_failed_retryable_state():
     db = _mock_db()
     provider = MagicMock()
     provider.sync_activities.return_value = [_activity(1)]
-    provider.get_daily_metrics.side_effect = RuntimeError("gccli timeout")
+    provider.get_daily_metrics_fetch_result.side_effect = RuntimeError("gccli timeout")
     progress_states, fake_update, fake_get = _progress_spy()
 
     with (
@@ -288,12 +305,13 @@ def test_metrics_failure_after_run_index_returns_partial_success():
     ):
         result = _run(svc.sync(db, "user-1"))
 
-    assert result["success"] is True
-    assert result["status"] == "partial_success"
+    assert result["success"] is False
+    assert result["status"] == "failed"
     assert result["run_index_status"] == "ready"
     assert result["daily_metrics_status"] == "failed"
     assert result["readiness_status"] == "unavailable"
-    assert progress_states[-1]["phase"] == "partial_success"
+    assert result["error"] == "daily_metrics_7d_failed"
+    assert progress_states[-1]["phase"] == "failed"
 
 
 def test_activity_failure_stays_failed_before_run_index():
@@ -319,7 +337,10 @@ def test_activity_failure_stays_failed_before_run_index():
 def test_sync_resume_retries_metrics_without_refetching_activities():
     db = _mock_db()
     provider = MagicMock()
-    provider.get_daily_metrics.side_effect = [[_metric("2026-08-08", hrv=59)], []]
+    provider.get_daily_metrics_fetch_result.side_effect = [
+        _fetch_result([_metric("2026-08-08", hrv=59)], "success"),
+        _fetch_result([], "success_no_data"),
+    ]
     _, fake_update, fake_get = _progress_spy(
         {
             "phase": "partial_success",
@@ -347,7 +368,7 @@ def test_sync_resume_retries_metrics_without_refetching_activities():
         result = _run(svc.sync(db, "user-1"))
 
     assert result["success"] is True
-    assert provider.get_daily_metrics.call_count == 2
+    assert provider.get_daily_metrics_fetch_result.call_count == 2
     mock_refresh.assert_not_called()
 
 
@@ -377,6 +398,116 @@ def test_incremental_sync_still_refreshes_run_index():
     assert result["status"] == "complete"
     mock_vo2max.assert_awaited_once_with(db, "user-1", provider, ["2026-08-09"])
     mock_caps.assert_awaited_once()
+
+
+def test_incremental_sync_daily_metrics_technical_failure_returns_failed():
+    db = _mock_db()
+    provider = MagicMock()
+    provider.sync_activities.return_value = [_activity(9)]
+    provider.get_daily_metrics_fetch_result.return_value = {
+        "metrics": [],
+        "status": "technical_failure",
+        "endpoint_success_count": 0,
+        "endpoint_failure_count": 9,
+        "endpoint_total_count": 9,
+        "endpoint_failures": [{"endpoint": "health hr", "date": "2026-08-09", "error": "timeout"}],
+    }
+    progress_states, fake_update, fake_get = _progress_spy()
+
+    with (
+        patch.object(svc.session_store, "ensure_session", new=AsyncMock(return_value=True)),
+        patch.object(svc.session_store, "save_session", new=AsyncMock(return_value=True)),
+        patch.object(svc, "get_provider_for_user", return_value=provider),
+        patch.object(svc, "_ingest_activities", new=AsyncMock(return_value={"synced": 1, "new": 1, "newest_start": "2026-08-09T08:00:00", "new_running_dates": ["2026-08-09"]})),
+        patch.object(svc, "_finalize_connection", new=AsyncMock(return_value=13)) as mock_finalize,
+        patch.object(svc, "_sync_vo2max_for_running_dates", new=AsyncMock(return_value=1)),
+        patch.object(svc, "_build_and_persist_capabilities", new=AsyncMock()),
+        patch.object(svc, "refresh_today_run_index_after_garmin_activities", new=AsyncMock(return_value={"today_snapshot": {"date": "2026-08-09"}, "workouts": []})) as mock_refresh,
+        patch.object(svc, "backfill_run_index_history_after_garmin_sync", new=AsyncMock(return_value={})) as mock_history,
+        patch.object(svc, "update_sync_progress", new=AsyncMock(side_effect=fake_update)),
+        patch.object(svc, "get_sync_progress", new=AsyncMock(side_effect=fake_get)),
+    ):
+        result = _run(svc.incremental_sync(db, "user-1"))
+
+    assert result["success"] is False
+    assert result["error"] == "daily_metrics_fetch_failed"
+    assert progress_states[-1]["phase"] == "failed"
+    assert progress_states[-1]["daily_metrics_status"] == "failed"
+    assert progress_states[-1]["daily_metrics_fetch_status"] == "technical_failure"
+    assert mock_finalize.await_count == 1
+    mock_refresh.assert_awaited_once()
+    mock_history.assert_awaited_once()
+
+
+def test_incremental_sync_partial_success_without_usable_metrics_is_failed():
+    db = _mock_db()
+    provider = MagicMock()
+    provider.sync_activities.return_value = [_activity(9)]
+    provider.get_daily_metrics_fetch_result.return_value = {
+        "metrics": [],
+        "status": "partial_success",
+        "endpoint_success_count": 1,
+        "endpoint_failure_count": 2,
+        "endpoint_total_count": 3,
+        "endpoint_failures": [{"endpoint": "health hr", "date": "2026-08-09", "error": "timeout"}],
+    }
+    progress_states, fake_update, fake_get = _progress_spy()
+
+    with (
+        patch.object(svc.session_store, "ensure_session", new=AsyncMock(return_value=True)),
+        patch.object(svc.session_store, "save_session", new=AsyncMock(return_value=True)),
+        patch.object(svc, "get_provider_for_user", return_value=provider),
+        patch.object(svc, "_ingest_activities", new=AsyncMock(return_value={"synced": 1, "new": 1, "newest_start": "2026-08-09T08:00:00", "new_running_dates": ["2026-08-09"]})),
+        patch.object(svc, "_finalize_connection", new=AsyncMock(return_value=13)) as mock_finalize,
+        patch.object(svc, "_sync_vo2max_for_running_dates", new=AsyncMock(return_value=1)),
+        patch.object(svc, "_build_and_persist_capabilities", new=AsyncMock()),
+        patch.object(svc, "refresh_today_run_index_after_garmin_activities", new=AsyncMock(return_value={"today_snapshot": {"date": "2026-08-09"}, "workouts": []})),
+        patch.object(svc, "backfill_run_index_history_after_garmin_sync", new=AsyncMock(return_value={})),
+        patch.object(svc, "update_sync_progress", new=AsyncMock(side_effect=fake_update)),
+        patch.object(svc, "get_sync_progress", new=AsyncMock(side_effect=fake_get)),
+    ):
+        result = _run(svc.incremental_sync(db, "user-1"))
+
+    assert result["success"] is False
+    assert result["error"] == "daily_metrics_fetch_failed"
+    assert progress_states[-1]["phase"] == "failed"
+    assert progress_states[-1]["daily_metrics_fetch_status"] == "technical_failure"
+    assert mock_finalize.await_count == 1
+
+
+def test_incremental_sync_true_no_data_marks_no_usable_data():
+    db = _mock_db()
+    provider = MagicMock()
+    provider.sync_activities.return_value = [_activity(9)]
+    provider.get_daily_metrics_fetch_result.return_value = {
+        "metrics": [],
+        "status": "success_no_data",
+        "endpoint_success_count": 9,
+        "endpoint_failure_count": 0,
+        "endpoint_total_count": 9,
+        "endpoint_failures": [],
+    }
+    _, fake_update, fake_get = _progress_spy()
+
+    with (
+        patch.object(svc.session_store, "ensure_session", new=AsyncMock(return_value=True)),
+        patch.object(svc.session_store, "save_session", new=AsyncMock(return_value=True)),
+        patch.object(svc, "get_provider_for_user", return_value=provider),
+        patch.object(svc, "_ingest_activities", new=AsyncMock(return_value={"synced": 1, "new": 1, "newest_start": "2026-08-09T08:00:00", "new_running_dates": ["2026-08-09"]})),
+        patch.object(svc, "_finalize_connection", new=AsyncMock(return_value=13)) as mock_finalize,
+        patch.object(svc, "_sync_vo2max_for_running_dates", new=AsyncMock(return_value=1)),
+        patch.object(svc, "_build_and_persist_capabilities", new=AsyncMock()),
+        patch.object(svc, "refresh_today_run_index_after_garmin_activities", new=AsyncMock(return_value={"today_snapshot": {"date": "2026-08-09"}, "workouts": []})),
+        patch.object(svc, "backfill_run_index_history_after_garmin_sync", new=AsyncMock(return_value={})),
+        patch.object(svc, "update_sync_progress", new=AsyncMock(side_effect=fake_update)),
+        patch.object(svc, "get_sync_progress", new=AsyncMock(side_effect=fake_get)),
+    ):
+        result = _run(svc.incremental_sync(db, "user-1"))
+
+    assert result["success"] is True
+    assert result["metrics_count"] == 0
+    assert result["status"] == "complete"
+    assert mock_finalize.await_count == 2
 
 
 class _FakeRedis:

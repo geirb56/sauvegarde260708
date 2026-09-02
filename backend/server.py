@@ -91,6 +91,7 @@ from training_v2.daily_runtime_helpers import (
 )
 from garmin.readiness_adapter import build_readiness_v2_from_garmin_data
 from garmin.domain_adapter import mongo_garmin_activities_to_domain
+from garmin.sync_progress import get_sync_progress
 from training_v2.performance_model import predict_races, activity_date  # PR185
 from training_v2.plan_goal import GoalType
 
@@ -2691,6 +2692,33 @@ async def get_run_index(user: dict = Depends(auth_user), language: str = "fr"):
             from garmin.insights import compute_run_index
             garmin_payload = await compute_run_index(db, user_id, language)
             if garmin_payload:
+                sync_status = await get_sync_progress(user_id)
+                garmin_payload["sync_status"] = sync_status
+                metrics = (garmin_payload or {}).get("metrics") or {}
+                if metrics.get("run_readiness") is None:
+                    cause = "no_data_available_yet"
+                    if isinstance(sync_status, dict):
+                        phase = sync_status.get("phase")
+                        status = sync_status.get("status")
+                        error_code = sync_status.get("error_code")
+                        dm_status = sync_status.get("daily_metrics_status")
+                        if status == "in_progress" or phase in {
+                            "activities_fetching",
+                            "activities_ready",
+                            "run_index_ready",
+                            "metrics_7d_fetching",
+                            "enriching",
+                        }:
+                            cause = "sync_in_progress"
+                        elif error_code == "session_unavailable":
+                            cause = "reconnect_required"
+                        elif error_code in {
+                            "daily_metrics_fetch_failed",
+                            "daily_metrics_7d_failed",
+                            "daily_metrics_enrichment_failed",
+                        } or dm_status == "failed":
+                            cause = "garmin_fetch_error"
+                    garmin_payload["readiness_unavailable_cause"] = cause
                 return garmin_payload
         except Exception as e:
             logger.warning(f"[run-index] Garmin computation failed, falling back: {e}")
@@ -3390,7 +3418,11 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
             # TrainingLoad and RecentTrainingResponse use the already-loaded activities.
             training_load = build_training_load(domain_activities_90, today)
             readiness_result = build_readiness_v2_from_garmin_data(
-                metrics_docs, domain_activities_90, today, load_snapshot=training_load
+                metrics_docs,
+                domain_activities_90,
+                today,
+                load_snapshot=training_load,
+                hrv_supported=None,
             )
             recent_response_for_readiness = build_recent_training_response(domain_activities_90, today)
             readiness_data_source = "garmin"

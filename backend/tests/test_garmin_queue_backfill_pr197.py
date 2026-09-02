@@ -79,3 +79,31 @@ def test_retryable_backfill_failure_is_not_acked_as_success():
 
     mock_requeue.assert_awaited_once()
     mock_ack.assert_not_awaited()
+
+
+def test_incremental_daily_metrics_failure_does_not_set_cooldown():
+    redis = _FakeRedis()
+    job = {
+        "id": "job-2",
+        "type": queue.JOB_INCREMENTAL_SYNC,
+        "user_id": "user-2",
+        "attempts": 0,
+    }
+
+    with (
+        patch.object(sync_worker.rate_limiter, "acquire_global_slot", new=AsyncMock(return_value=True)),
+        patch.object(sync_worker.rate_limiter, "release_global_slot", new=AsyncMock()),
+        patch.object(sync_worker.rate_limiter, "set_cooldown", new=AsyncMock()) as mock_set_cooldown,
+        patch.object(
+            sync_worker,
+            "_run_job",
+            new=AsyncMock(return_value={"success": False, "error": "daily_metrics_fetch_failed"}),
+        ),
+        patch.object(sync_worker, "requeue_job", new=AsyncMock()) as mock_requeue,
+        patch.object(sync_worker, "ack_job", new=AsyncMock()) as mock_ack,
+    ):
+        asyncio.run(sync_worker.process_job(None, redis, "raw-job", job))
+
+    mock_set_cooldown.assert_not_awaited()
+    mock_requeue.assert_awaited_once()
+    mock_ack.assert_not_awaited()

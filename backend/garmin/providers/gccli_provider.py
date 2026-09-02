@@ -180,6 +180,26 @@ class GccliProvider(Provider):
             account=account,
         )
 
+    def get_daily_metrics_fetch_result(
+        self,
+        user_id: str,
+        days: int = 7,
+        start_days_ago: int = 1,
+    ) -> Dict:
+        result = self._runner.fetch_daily_metrics_result(
+            days=days,
+            start_days_ago=start_days_ago,
+            account=self._account(),
+        )
+        return {
+            "metrics": result.metrics,
+            "status": result.status,
+            "endpoint_success_count": result.endpoint_success_count,
+            "endpoint_failure_count": result.endpoint_failure_count,
+            "endpoint_total_count": result.endpoint_total_count,
+            "endpoint_failures": result.endpoint_failures,
+        }
+
     def get_max_metrics(
         self,
         user_id: str,

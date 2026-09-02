@@ -128,7 +128,7 @@ def test_absent_physio_stays_none():
 
 
 def test_absent_rhr_hrv_produces_none_signals():
-    """Docs without resting_hr or hrv → no physio signals → score must be None."""
+    """No physio with sleep+load available remains calculable as DEGRADED."""
     docs = [
         {
             "date": _TODAY.isoformat(),
@@ -143,12 +143,12 @@ def test_absent_rhr_hrv_produces_none_signals():
         activities=_activities(),
         reference_date=_TODAY,
     )
-    # Without any RHR or HRV the adapter must not invent physio; the sufficiency
-    # classifier must yield INSUFFICIENT → score must be None.
-    assert result.score is None, (
-        f"Expected None score when both RHR and HRV are absent, got {result.score}. "
-        "A fabricated physio score (e.g. primary=70 fallback) would produce a non-None value."
-    )
+    # Without any RHR or HRV the adapter must not invent physio; with sleep+load
+    # available the canonical branch rule is DEGRADED (2 usable branches).
+    assert result.score is not None
+    from training_v2.readiness_sufficiency import SufficiencyLevel, ReasonCode
+    assert result.sufficiency_level == SufficiencyLevel.DEGRADED
+    assert ReasonCode.missing_physio in result.reasons
 
 
 # ---------------------------------------------------------------------------
@@ -325,7 +325,14 @@ def test_incremental_sync_fetches_daily_metrics():
 
     provider_stub = MagicMock()
     provider_stub.sync_activities.return_value = []
-    provider_stub.get_daily_metrics.return_value = fake_metrics
+    provider_stub.get_daily_metrics_fetch_result.return_value = {
+        "metrics": fake_metrics,
+        "status": "success",
+        "endpoint_success_count": 9,
+        "endpoint_failure_count": 0,
+        "endpoint_total_count": 9,
+        "endpoint_failures": [],
+    }
 
     # Minimal db stub
     async def _find_one(*a, **kw):
@@ -363,8 +370,8 @@ def test_incremental_sync_fetches_daily_metrics():
         result = asyncio.run(incremental_sync(db_stub, "user_123"))
 
     # Provider must have been asked for recent daily metrics
-    provider_stub.get_daily_metrics.assert_called_once()
-    call_kwargs = provider_stub.get_daily_metrics.call_args
+    provider_stub.get_daily_metrics_fetch_result.assert_called_once()
+    call_kwargs = provider_stub.get_daily_metrics_fetch_result.call_args
     assert call_kwargs.kwargs.get("days", call_kwargs.args[1] if len(call_kwargs.args) > 1 else None) == 3 or \
            3 in call_kwargs.args, \
            f"Expected days=3, got: {call_kwargs}"

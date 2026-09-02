@@ -41,7 +41,7 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 // Helpers
 // ---------------------------------------------------------------------------
 
-function buildCardioPayload({ run_readiness }) {
+function buildCardioPayload({ run_readiness, readiness_unavailable_cause = null }) {
   return {
     mock: false,
     source: "garmin",
@@ -73,6 +73,7 @@ function buildCardioPayload({ run_readiness }) {
       training_load_status: "green",
     },
     history: [],
+    readiness_unavailable_cause,
   };
 }
 
@@ -168,6 +169,27 @@ describe("Dashboard run_readiness null handling", () => {
     // Should contain the numeric value
     expect(scoreEl.textContent).toContain("78.5");
 
+    unmount();
+  });
+
+  it("shows explicit unavailable cause when backend provides one", async () => {
+    axios.get.mockImplementation((url) => {
+      if (url.includes("run-index")) {
+        return Promise.resolve({
+          data: buildCardioPayload({
+            run_readiness: null,
+            readiness_unavailable_cause: "garmin_fetch_error",
+          }),
+        });
+      }
+      return Promise.resolve({ data: null });
+    });
+
+    const { container, unmount } = renderDashboard();
+    await waitForCardioLoaded(container);
+    const cause = container.querySelector('[data-testid="run-readiness-unavailable-cause"]');
+    expect(cause).not.toBeNull();
+    expect(cause.textContent.toLowerCase()).toContain("garmin");
     unmount();
   });
 });
