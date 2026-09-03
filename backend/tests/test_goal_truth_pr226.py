@@ -741,6 +741,15 @@ def _make_db_with_activities(cycle, user_goal=None):
     snapshots_cursor.to_list = AsyncMock(return_value=[])
     db.training_prescription_snapshots.find = MagicMock(return_value=snapshots_cursor)
     db.training_prescription_snapshots.update_one = AsyncMock()
+
+    # C231 — item 3: /training/v2/week may fetch garmin_connections/daily_metrics
+    # for today's session before freezing its snapshot (not connected here).
+    db.garmin_connections.find_one = AsyncMock(return_value=None)
+    metrics_cursor = MagicMock()
+    metrics_cursor.sort = MagicMock(return_value=metrics_cursor)
+    metrics_cursor.limit = MagicMock(return_value=metrics_cursor)
+    metrics_cursor.to_list = AsyncMock(return_value=[])
+    db.garmin_daily_metrics.find = MagicMock(return_value=metrics_cursor)
     return db
 
 

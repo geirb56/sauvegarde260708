@@ -240,3 +240,112 @@ par comparaison avant/après sur les mêmes fichiers).
 
 Le redesign visuel #232B n'a pas été touché.
 
+---
+
+# Addendum 2 — C231 : corrections finales (même PR, non mergée)
+
+Ce second round corrige les points relevés lors de l'audit du premier
+addendum C231.
+
+## C231-bis.1 — Contrat Garmin RÉEL dans `local_reference_date.py`
+
+`_offset_minutes_from_doc()` lisait à tort `garmin_activity.start_time_gmt`
+(champ inexistant dans le sous-document moderne persisté par
+`gccli_provider.py`). Corrigé pour lire :
+- `garmin_activity.start_time` = GMT canonique (convention du modèle
+  `GarminActivity` : GMT en priorité, fallback local uniquement si le GMT
+  est absent) ;
+- `garmin_activity.start_time_local` = local explicite ;
+- fallback legacy top-level (`startTimeGMT`/`startTimeLocal`) uniquement
+  pour les documents antérieurs à la convention du sous-document.
+
+Tests : `test_pr232a_local_reference_date.py` réécrit avec la forme RÉELLE
+persistée (`garmin_activity: {start_time, start_time_local}`), +1 test pour
+le fallback legacy top-level. 7/7 verts.
+
+## C231-bis.2 — `/training/today` et `/training/v2/week` : un seul `reference_date`
+
+Nouvelle fonction `server._resolve_canonical_reference_date(now_utc,
+garmin_activities_90)` — délègue à
+`training_v2.local_reference_date.resolve_local_reference_date` — appelée
+par les DEUX endpoints. `/training/today` n'utilise plus `now_utc.date()`.
+
+Tests (`test_pr231_c231_final_corrections.py`) : déterminisme (même
+instant + mêmes activités ⇒ même date), garde AST (les deux handlers
+appellent bien le même helper, jamais `now_utc.date()`), cas limites
+UTC+/UTC- autour de minuit.
+
+## C231-bis.3 — Snapshot = prescription FINALE réellement servie (BLOCKER)
+
+Nouveau module `training_v2/today_prescription.py` —
+`resolve_today_final_prescription()` — exécute
+Readiness → ReadinessDecision → DailyAdaptation pour LE jour dont
+`planned_date == reference_date`, et retourne
+`adaptation_result.adapted_workout` (la prescription FINALE réellement
+présentée à l'utilisateur), jamais la séance brute du `WeeklyPlan`.
+
+- `/training/today` délègue désormais à ce module (au lieu de dupliquer
+  Readiness/DailyAdaptation en ligne) — comportement inchangé.
+- `/training/v2/week` : pour la SEULE session du jour (`reference_date`),
+  si aucun snapshot n'existe encore, appelle ce MÊME module (fetch
+  Garmin connections/daily_metrics dédié, coût nul les appels suivants
+  puisque le snapshot déjà gelé devient alors autoritaire) puis fige le
+  snapshot à partir de la prescription ADAPTÉE — jamais la brute.
+- Résultat : quel que soit l'endpoint appelé en premier pour "aujourd'hui",
+  le snapshot gelé est identique (calcul déterministe partagé), et n'est
+  jamais réécrit ensuite (insert-only, `$setOnInsert`).
+
+Tests (`test_pr231_c231_snapshot_adaptation.py`) : long_easy 18 km +
+SHORTEN ⇒ snapshot = distance adaptée (jamais la brute) ; VERY_LOW ⇒
+snapshot REST ; FAVORABLE ⇒ KEEP (snapshot = original) ; replay à J+3 avec
+readiness différente ⇒ snapshot Monday inchangé (immuable).
+
+## C231-bis.4 — Index Mongo UNIQUE via le mécanisme d'init existant
+
+Nouveau `services/prescription_snapshot_index.py` —
+`ensure_prescription_snapshot_unique_index(db)` — crée l'index UNIQUE
+`(user_id, prescription_id)` sur `training_prescription_snapshots`,
+suivant le même patron que `services/subscription_index.py` /
+`services/paddle_event_index.py`. Câblé dans `create_db_indexes()`
+(événement `startup`), pas de création ad-hoc dans le handler.
+
+Tests : `ensure_prescription_snapshot_unique_index` appelle bien
+`create_index([("user_id", 1), ("prescription_id", 1)], unique=True)` ;
+garde source confirmant l'absence de création ad-hoc dans
+`get_training_v2_week`.
+
+## C231-bis.5 — Fail-fast : invariant PR230 dans `build_week_execution`
+
+`build_week_execution()` lève désormais une `ValueError` explicite si une
+prescription n'a pas de ligne correspondante dans le ledger PR230 (au lieu
+de la filtrer silencieusement). `/training/v2/week` capture cette
+exception (500) et vérifie en plus
+`len(execution.sessions) == len(weekly_plan.sessions)` — sinon 500
+explicite, jamais de semaine tronquée silencieusement.
+
+## C231-bis.6 — Cleanup `WeekV2ActualResponse`
+
+Docstring précisée (représente UNE activité Garmin réelle, réutilisée pour
+`session.actual` ET `unmatched_actuals`) ; `unmatched_actuals` utilise
+désormais `Field(default_factory=list)`.
+
+## C231-bis.7 — Validation
+
+Nouveaux fichiers de tests : `test_pr231_c231_final_corrections.py` (10
+tests : reference_date unifié, index Mongo, fail-fast, cleanup) et
+`test_pr231_c231_snapshot_adaptation.py` (4 tests : SHORTEN/REST/KEEP/
+replay). Suites ciblées (`test_handlers_pr228.py`,
+`test_pr167_training_v2_week_api.py`, `test_pr232a_week_execution.py`,
+`test_pr232a_c231_week_endpoint.py`, `test_goal_truth_pr226.py`,
+`test_weekly_unification_pr228.py`, `test_pr232a_local_reference_date.py`,
+`test_performed_workout_pr230.py`, `test_daily_runtime_pr137.py`) :
+**0 échec imputable à ce round de corrections** (seul échec résiduel :
+`test_race_day_exact_phase_and_structure`, un flake de rate-limiting
+préexistant, confirmé indépendant en relançant le test isolément).
+
+Frontend `TrainingPlanV2` : contrat inchangé par ce round (aucune
+modification frontend nécessaire — la structure `planned/actual/
+matching_status/adherence_status` exposée par `/training/v2/week` reste
+identique).
+
+

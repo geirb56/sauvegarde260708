@@ -98,6 +98,13 @@ def _session_planned_date(day: str, week_start: date) -> date:
     return week_start + timedelta(days=offset)
 
 
+def prescription_id_for(user_id: str, planned_date: date, day: str) -> str:
+    """Public — the SAME ``prescription_id`` format used internally here, so
+    callers (e.g. server.py) can look up/compare against a specific
+    prescription without duplicating the format string."""
+    return _prescription_id(user_id, planned_date, day)
+
+
 def _prescription_id(user_id: str, planned_date: date, day: str) -> str:
     return f"{user_id}:{planned_date.isoformat()}:{day.lower()}"
 
@@ -245,4 +252,4 @@ def build_week_execution(
     )
 
 
-__all__ = ["build_week_execution", "WeekExecutionResult", "SessionExecution"]
+__all__ = ["build_week_execution", "WeekExecutionResult", "SessionExecution", "prescription_id_for"]

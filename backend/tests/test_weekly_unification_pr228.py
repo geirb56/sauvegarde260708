@@ -733,8 +733,16 @@ class TestArchitecture:
 
     def test_today_uses_daily_adaptation(self):
         body = self._get_today_func_body()
-        assert "build_daily_adaptation" in body, (
-            "/training/today must apply DailyAdaptation"
+        assert "resolve_today_final_prescription(" in body, (
+            "/training/today must apply DailyAdaptation via the shared "
+            "training_v2.today_prescription helper"
+        )
+        import inspect
+        from training_v2 import today_prescription
+        helper_source = inspect.getsource(today_prescription.resolve_today_final_prescription)
+        assert "build_daily_adaptation" in helper_source, (
+            "training_v2.today_prescription.resolve_today_final_prescription must "
+            "call build_daily_adaptation"
         )
 
     def test_today_does_not_call_build_weekly_plan_directly(self):

@@ -82,6 +82,7 @@ from training_v2.daily_adaptation import (
     build_daily_adaptation,
 )
 from training_v2.training_response import build_recent_training_response
+from training_v2.today_prescription import resolve_today_final_prescription
 from training_v2.workout_generator import WorkoutPrescription
 from training_v2.training_week_response import TrainingWeekV2Response  # PR167
 from training_v2.daily_runtime_helpers import (
@@ -3388,33 +3389,22 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     day_name = today.strftime("%A")
 
     # ── 3. Readiness (live data) — only when Garmin connection is active ──
-    readiness_result = None
-    training_load = None
-    recent_response_for_readiness = None
     readiness_data_source = "unavailable"
+    garmin_connected = False
+    garmin_daily_metrics_docs: list = []
 
     garmin_conn = await db.garmin_connections.find_one({"user_id": user["id"]}, {"_id": 0})
     if garmin_conn and garmin_conn.get("connected"):
         try:
-            metrics_docs = await (
+            garmin_daily_metrics_docs = await (
                 db.garmin_daily_metrics.find({"user_id": user["id"]}, {"_id": 0})
                 .sort("date", -1)
                 .limit(30)
                 .to_list(length=30)
             )
-            # TrainingLoad and RecentTrainingResponse use the already-loaded activities.
-            training_load = build_training_load(domain_activities_90, today)
-            readiness_result = build_readiness_v2_from_garmin_data(
-                metrics_docs,
-                domain_activities_90,
-                today,
-                load_snapshot=training_load,
-                hrv_supported=None,
-            )
-            recent_response_for_readiness = build_recent_training_response(domain_activities_90, today)
-            readiness_data_source = "garmin"
+            garmin_connected = True
         except Exception as exc:
-            logger.warning(f"[TrainingToday] Garmin V2 readiness build failed: {exc}")
+            logger.warning(f"[TrainingToday] Garmin daily metrics fetch failed: {exc}")
 
     # ── 4. Canonical plan — SAME pipeline as /training/v2/week (PR228) ───
     # build_canonical_weekly_plan includes WeeklyReconciliation internally.
@@ -3446,17 +3436,21 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
             "day": day_name,
         }
 
-    # ── 6. ReadinessDecision V2 — canonical translation ──────────────────
-    readiness_decision: ReadinessDecision = build_readiness_decision(readiness_result)
-
-    # ── 7. DailyAdaptation V2 — Today only (keep or reduce, never increase) ─
-    # Applied AFTER the canonical plan is built. Does NOT rebuild WeeklyPlan.
-    adaptation_result: DailyAdaptationResult = build_daily_adaptation(
-        workout=planned_prescription,
-        readiness_decision=readiness_decision,
-        training_load=training_load,
-        recent_response=recent_response_for_readiness,
+    # ── 6/7. ReadinessDecision V2 + DailyAdaptation V2 — Today only ──────
+    # C231 — delegated to training_v2.today_prescription, the SAME shared
+    # helper /training/v2/week uses to compute today's FINAL prescription
+    # before freezing a snapshot. Guarantees identical output regardless of
+    # which endpoint is hit first for a given day.
+    today_final = resolve_today_final_prescription(
+        planned_prescription=planned_prescription,
+        reference_date=today,
+        domain_activities_90=domain_activities_90,
+        garmin_daily_metrics_docs=garmin_daily_metrics_docs,
+        garmin_connected=garmin_connected,
     )
+    readiness_decision: ReadinessDecision = today_final.readiness_decision
+    adaptation_result: DailyAdaptationResult = today_final.adaptation_result
+    readiness_data_source = today_final.readiness_data_source
 
     # ── 8. Map prescription to legacy runtime dict format ─────────────────
     planned_session_runtime = prescription_to_runtime_session(planned_prescription)
@@ -4091,7 +4085,7 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
     # ── PR232A/C231: factual execution — PR230 Garmin boundary, no fallback,
     # matched against the FROZEN prescription snapshot once a session is
     # today or in the past (see training_v2/prescription_snapshot.py) ─────
-    from training_v2.week_execution import build_week_execution
+    from training_v2.week_execution import build_week_execution, prescription_id_for
     from training_v2.training_week_response import WeekV2ActualResponse
     from training_v2.prescription_snapshot import PrescriptionSnapshot
 
@@ -4115,12 +4109,56 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
             continue
         frozen_snapshots[prescription_id] = PrescriptionSnapshot(**doc)
 
+    # C231 — item 3 BLOCKER FIX: the session whose planned_date == today MUST
+    # be frozen from its FINAL post-DailyAdaptation prescription (the same one
+    # /training/today serves), never the raw WeeklyPlan session. Only compute
+    # this (extra Garmin-connection/readiness fetch) when today's session has
+    # NOT already been frozen by a prior call (from either endpoint) — once a
+    # snapshot exists it is authoritative and this branch is skipped entirely.
+    sessions_for_execution = list(weekly_plan.sessions)
+    today_day_name = reference_date.strftime("%A").lower()
+    today_index = next(
+        (i for i, s in enumerate(sessions_for_execution) if s.day.lower() == today_day_name),
+        None,
+    )
+    if today_index is not None:
+        today_prescription_id = prescription_id_for(
+            user_id, reference_date, today_day_name
+        )
+        if today_prescription_id not in frozen_snapshots:
+            garmin_conn = await db.garmin_connections.find_one(
+                {"user_id": user_id}, {"_id": 0}
+            )
+            garmin_connected = bool(garmin_conn and garmin_conn.get("connected"))
+            garmin_daily_metrics_docs: list = []
+            if garmin_connected:
+                try:
+                    garmin_daily_metrics_docs = await (
+                        db.garmin_daily_metrics.find({"user_id": user_id}, {"_id": 0})
+                        .sort("date", -1)
+                        .limit(30)
+                        .to_list(length=30)
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        f"[TrainingV2Week] Garmin daily metrics fetch failed: {exc}"
+                    )
+                    garmin_connected = False
+            today_final = resolve_today_final_prescription(
+                planned_prescription=sessions_for_execution[today_index],
+                reference_date=reference_date,
+                domain_activities_90=domain_activities_90,
+                garmin_daily_metrics_docs=garmin_daily_metrics_docs,
+                garmin_connected=garmin_connected,
+            )
+            sessions_for_execution[today_index] = today_final.adaptation_result.adapted_workout
+
     try:
         execution = build_week_execution(
             user_id=user_id,
             reference_date=reference_date,
             week_start=week_start,
-            sessions=weekly_plan.sessions,
+            sessions=sessions_for_execution,
             garmin_docs=garmin_activities_90,
             frozen_snapshots=frozen_snapshots,
         )

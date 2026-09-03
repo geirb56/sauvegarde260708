@@ -710,13 +710,17 @@ async def test_training_today_propagates_hrv_supported_to_readiness_builder():
     _seed_connected(fake_db, connected=True, has_hrv=False)
 
     captured = []
-    original_builder = server.build_readiness_v2_from_garmin_data
+    import training_v2.today_prescription as _today_prescription_mod
+    original_builder = _today_prescription_mod.build_readiness_v2_from_garmin_data
 
     def _spy_builder(*args, **kwargs):
         captured.append(kwargs.get("hrv_supported", "__missing__"))
         return original_builder(*args, **kwargs)
 
-    with patch("server.build_readiness_v2_from_garmin_data", side_effect=_spy_builder):
+    with patch(
+        "training_v2.today_prescription.build_readiness_v2_from_garmin_data",
+        side_effect=_spy_builder,
+    ):
         result = await _get_today(fake_db)
 
     assert result["status"] == 200, f"Today response failed: {result['body']}"
@@ -814,7 +818,7 @@ async def test_adaptation_isolation_caution_reduces_today_not_week():
             p.start()
             started.append(p)
         with patch(
-            "server.build_readiness_decision",
+            "training_v2.today_prescription.build_readiness_decision",
             return_value=caution_decision,
         ):
             async with httpx.AsyncClient(
