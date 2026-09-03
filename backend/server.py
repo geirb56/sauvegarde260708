@@ -3287,6 +3287,23 @@ async def get_available_goals():
 # GET /training/v2/week. See RUNINDEX_PR232A_REPORT.md.
 
 
+def _resolve_canonical_reference_date(now_utc: datetime, garmin_activities_90: list) -> date:
+    """C231 — SINGLE canonical ``reference_date`` resolver, shared by
+    ``/training/today`` and ``/training/v2/week``.
+
+    Both endpoints MUST call this (never ``now_utc.date()`` directly) so that
+    "today"/the current week are always IDENTICAL between the two endpoints
+    for the same user + call instant — the only difference between the two
+    call sites is which already-fetched ``garmin_activities_90`` list is
+    passed in (both fetch it with the identical 90-day query).
+    """
+    from training_v2.local_reference_date import resolve_local_reference_date
+
+    return resolve_local_reference_date(
+        now_utc=now_utc, garmin_activities=garmin_activities_90
+    )
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # PR137 — Daily Runtime Migration V2
 # Helper functions are in training_v2/daily_runtime_helpers.py (pure, testable).
@@ -3324,9 +3341,6 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     # Single clock — all time derivations use this single anchor.
     # No second now() call anywhere in this handler.
     now_utc = datetime.now(timezone.utc)
-    today = now_utc.date()
-    today_iso = today.isoformat()
-    day_name = today.strftime("%A")
     ninety_days_ago = now_utc - timedelta(days=90)
 
     # ── 1. Goal resolver — single source of truth (PR226) ────────────────
@@ -3364,6 +3378,14 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
             status_code=503,
             detail="Training plan temporarily unavailable: Garmin activity data could not be processed.",
         ) from exc
+
+    # C231 — "today" resolved via the SAME canonical helper used by
+    # /training/v2/week (_resolve_canonical_reference_date), never a raw
+    # ``now_utc.date()``, so both endpoints always target the identical
+    # calendar day/week for this user.
+    today = _resolve_canonical_reference_date(now_utc, garmin_activities_90)
+    today_iso = today.isoformat()
+    day_name = today.strftime("%A")
 
     # ── 3. Readiness (live data) — only when Garmin connection is active ──
     readiness_result = None
@@ -4021,8 +4043,6 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
         WeekV2TargetResponse,
     )
 
-    from training_v2.local_reference_date import resolve_local_reference_date
-
     user_id = user["id"]
 
     # ── Single clock to avoid midnight-boundary skew ──────────────────────
@@ -4036,11 +4056,10 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
     ).to_list(1000)
     domain_activities_90 = mongo_garmin_activities_to_domain(garmin_activities_90)
 
-    # ── C231 — "today" aligned with the athlete's Garmin-local clock, never
-    # a raw UTC date that can drift by up to a day around midnight ─────────
-    reference_date = resolve_local_reference_date(
-        now_utc=now_utc, garmin_activities=garmin_activities_90
-    )
+    # ── C231 — "today" resolved via the SAME canonical helper used by
+    # /training/today (_resolve_canonical_reference_date), never a raw UTC
+    # date that can drift by up to a day around midnight ──────────────────
+    reference_date = _resolve_canonical_reference_date(now_utc, garmin_activities_90)
 
     # ── PR226: canonical resolver — single source of truth ────────────────
     resolved = await _resolve_goal_v2(user_id)
@@ -4096,14 +4115,37 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
             continue
         frozen_snapshots[prescription_id] = PrescriptionSnapshot(**doc)
 
-    execution = build_week_execution(
-        user_id=user_id,
-        reference_date=reference_date,
-        week_start=week_start,
-        sessions=weekly_plan.sessions,
-        garmin_docs=garmin_activities_90,
-        frozen_snapshots=frozen_snapshots,
-    )
+    try:
+        execution = build_week_execution(
+            user_id=user_id,
+            reference_date=reference_date,
+            week_start=week_start,
+            sessions=weekly_plan.sessions,
+            garmin_docs=garmin_activities_90,
+            frozen_snapshots=frozen_snapshots,
+        )
+    except ValueError as exc:
+        logger.error(f"[TrainingV2Week] Execution invariant violated: {exc}")
+        raise HTTPException(
+            status_code=500,
+            detail="Training week execution is inconsistent (invariant violated); "
+            "refusing to return a truncated week.",
+        ) from exc
+
+    # C231 — fail-fast: the response MUST cover every WeeklyPlan session.
+    # A silently truncated week (fewer executed sessions than prescribed)
+    # is never acceptable; surface it as an explicit server error instead.
+    if len(execution.sessions) != len(weekly_plan.sessions):
+        logger.error(
+            "[TrainingV2Week] Session count mismatch: "
+            f"{len(execution.sessions)} executed vs {len(weekly_plan.sessions)} planned "
+            f"for user_id={user_id}."
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Training week execution is incomplete (session count mismatch); "
+            "refusing to return a truncated week.",
+        )
 
     # Freeze rule is insert-only: never overwrite an already-frozen snapshot.
     for snapshot in execution.snapshots_to_persist:
@@ -5516,6 +5558,12 @@ async def _ensure_paddle_events_unique_index(db_handle) -> None:
     await ensure_paddle_events_unique_index(db_handle)
 
 
+async def _ensure_prescription_snapshot_unique_index(db_handle) -> None:
+    """Thin wrapper — delegates to the testable service module."""
+    from services.prescription_snapshot_index import ensure_prescription_snapshot_unique_index
+    await ensure_prescription_snapshot_unique_index(db_handle)
+
+
 @app.on_event("startup")
 async def create_db_indexes():
     """Create MongoDB indexes for common query patterns"""
@@ -5579,6 +5627,11 @@ async def create_db_indexes():
             unique=True,
         )
         await db.auth_identities.create_index("user_id")
+        # C231 — real Mongo-level immutability guarantee for prescription
+        # snapshots: unique on (user_id, prescription_id) so a concurrent
+        # double-insert can never produce two canonical snapshots for the
+        # same key.
+        await _ensure_prescription_snapshot_unique_index(db)
         logger.info("MongoDB indexes created")
     except Exception as e:
         logger.warning(f"Could not create some MongoDB indexes: {e}")

@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import date
 from typing import List, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class WeekV2GoalResponse(BaseModel):
@@ -67,10 +67,17 @@ class WeekV2TargetResponse(BaseModel):
 
 
 class WeekV2ActualResponse(BaseModel):
-    """PR232A — Real Garmin evidence for a session (PR230 boundary).
+    """PR232A — Real Garmin evidence (PR230 boundary), for ONE activity.
 
-    Never fabricated: this model is only populated from a matched/modified
-    real activity. No calendar fallback, no None -> 0 coercion.
+    Represents a single real Garmin activity — never fabricated, never a
+    calendar guess, never None -> 0 coerced. This same model is reused for
+    two distinct positions in the week payload:
+    - ``WeekV2SessionResponse.actual``: the activity matched/attributed to
+      that specific prescribed session (when ``matching_status`` indicates
+      a match).
+    - ``WeekV2PlanResponse.unmatched_actuals``: a real Garmin activity from
+      the current week that could not be attributed to any prescribed
+      session (``matching_status == unmatched_actual``).
     """
 
     model_config = ConfigDict(frozen=True)
@@ -148,7 +155,7 @@ class WeekV2PlanResponse(BaseModel):
     sessions: List[WeekV2SessionResponse]
     """All sessions ordered Monday→Sunday."""
 
-    unmatched_actuals: List[WeekV2ActualResponse] = []
+    unmatched_actuals: List[WeekV2ActualResponse] = Field(default_factory=list)
     """PR232A — real Garmin activities of this week that could not be
     attributed to any prescription. Never dropped."""
 

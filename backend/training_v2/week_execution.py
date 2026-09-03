@@ -207,14 +207,24 @@ def build_week_execution(
         if row.prescription_id is not None
     }
 
-    session_executions: List[SessionExecution] = [
-        SessionExecution(
-            session=effective_sessions[i],
-            row=by_prescription_id[prescription.prescription_id],
+    session_executions: List[SessionExecution] = []
+    for i, prescription in enumerate(prescriptions):
+        row = by_prescription_id.get(prescription.prescription_id)
+        if row is None:
+            # C231 — fail-fast invariant: build_performed_workouts MUST emit
+            # exactly one ledger row per prescription passed in. Silently
+            # dropping a session here would truncate the week without any
+            # signal to the caller — never acceptable.
+            raise ValueError(
+                "build_week_execution invariant violated: prescription "
+                f"'{prescription.prescription_id}' has no matching row in the "
+                "PR230 ledger (by_prescription_id). Exactly one row per "
+                "prescription is required; the week must never be silently "
+                "truncated."
+            )
+        session_executions.append(
+            SessionExecution(session=effective_sessions[i], row=row)
         )
-        for i, prescription in enumerate(prescriptions)
-        if prescription.prescription_id in by_prescription_id
-    ]
 
     # C231 — unmatched_actuals are scoped to the CURRENT week only: an extra
     # Garmin activity from a previous or future week is never exposed here,
