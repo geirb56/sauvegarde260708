@@ -44,14 +44,21 @@ def _parse_naive(raw: Any) -> Optional[datetime]:
 def _offset_minutes_from_doc(doc: Dict[str, Any]) -> Optional[int]:
     """Return the (local - GMT) offset in minutes for one raw activity doc.
 
-    Mirrors the field resolution of ``garmin_local_start_time`` /
-    ``mongo_garmin_to_domain``: the ``garmin_activity`` sub-document is
-    canonical, the top-level document is the legacy fallback.
+    Mirrors the REAL persisted contract (``garmin/gccli_provider.py`` +
+    ``garmin/data_layer.py::GarminActivity``):
+
+    - ``garmin_activity.start_time`` is the canonical GMT time (model
+      convention: GMT first, local as fallback) — there is NO
+      ``garmin_activity.start_time_gmt`` field in the modern sub-document.
+    - ``garmin_activity.start_time_local`` is the explicit device-local time,
+      only populated when Garmin really provided ``startTimeLocal``.
+    - Legacy top-level ``startTimeGMT``/``startTimeLocal`` are used only as a
+      fallback for documents that pre-date the sub-document convention.
     """
     sub: Dict[str, Any] = doc.get("garmin_activity") or {}
 
-    gmt_raw = sub.get("start_time_gmt") if "start_time_gmt" in sub else doc.get("startTimeGMT")
-    local_raw = sub.get("start_time_local") or doc.get("startTimeLocal")
+    gmt_raw = sub.get("start_time") if "start_time" in sub else doc.get("startTimeGMT")
+    local_raw = sub.get("start_time_local") if "start_time_local" in sub else doc.get("startTimeLocal")
 
     gmt_dt = _parse_naive(gmt_raw)
     local_dt = _parse_naive(local_raw)
