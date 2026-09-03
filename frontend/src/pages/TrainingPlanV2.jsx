@@ -48,16 +48,40 @@ const getPrescriptionText = (session) => {
   return session.prescription || session.description || session.details || session.label || session.name || null;
 };
 
+/**
+ * PR232A/C231 — Maps the real `/training/v2/week` contract
+ * (matching_status + adherence_status from training_v2.performed_workout)
+ * to a UI-only status key. Never fabricates DONE/MISSED: everything mirrors
+ * the backend's factual PR230 execution state. No "past day => done"
+ * fallback — an unresolved session stays unresolved (null).
+ *
+ * Mapping:
+ *   workout_type === "rest"                                   -> rest
+ *   matching_status planned    (+ not_applicable)              -> planned
+ *   matching_status matched    + completed_as_planned          -> done
+ *   matching_status matched    + completed_modified            -> modified
+ *   matching_status matched    + completed_unverified          -> unverified
+ *   matching_status missed     (+ missed)                      -> missed
+ *   matching_status ambiguous  (+ ambiguous)                   -> ambiguous
+ *   anything else / unresolved                                 -> null
+ */
 const getSessionStatusKey = (session) => {
   if (!session || typeof session !== "object") return null;
-  const raw = session.status || session.state || session.completion_status || session.execution_status;
-  if (!raw || typeof raw !== "string") return null;
 
-  const normalized = raw.toLowerCase();
-  if (normalized === "done" || normalized === "completed") return "done";
-  if (normalized === "planned" || normalized === "upcoming") return "planned";
-  if (normalized === "rest") return "rest";
-  if (normalized === "missed" || normalized === "skipped") return "missed";
+  if (session.workout_type === "rest") return "rest";
+
+  const matching = typeof session.matching_status === "string" ? session.matching_status.toLowerCase() : null;
+  const adherence = typeof session.adherence_status === "string" ? session.adherence_status.toLowerCase() : null;
+
+  if (matching === "planned") return "planned";
+  if (matching === "missed") return "missed";
+  if (matching === "ambiguous") return "ambiguous";
+  if (matching === "matched") {
+    if (adherence === "completed_as_planned") return "done";
+    if (adherence === "completed_modified") return "modified";
+    if (adherence === "completed_unverified") return "unverified";
+    return "done";
+  }
   return null;
 };
 
@@ -118,6 +142,9 @@ function SessionStatePill({ t, state }) {
     planned: t("trainingV2.sessionStates.planned"),
     rest: t("trainingV2.sessionStates.rest"),
     missed: t("trainingV2.sessionStates.missed"),
+    modified: t("trainingV2.sessionStates.modified"),
+    unverified: t("trainingV2.sessionStates.unverified"),
+    ambiguous: t("trainingV2.sessionStates.ambiguous"),
   };
 
   return (
@@ -130,15 +157,17 @@ function SessionStatePill({ t, state }) {
   );
 }
 
-function WeekSessionRow({ session, day, isToday, todayIndex, unitSystem, t }) {
+function WeekSessionRow({ session, day, isToday, unitSystem, t }) {
   const workoutType = getSessionType(session);
   const isExplicitRest = workoutType === "rest" || getSessionStatusKey(session) === "rest";
   const statusKey = getSessionStatusKey(session);
-  const dayIndex = DAY_INDEX[day] ?? 1;
 
+  // C231 — no "past day => done" fallback: an unresolved status stays
+  // unresolved (null), it is never fabricated from the day's position in
+  // the calendar relative to today.
   const timelineState = !session
     ? "absent"
-    : (isToday ? "today" : (statusKey || (isExplicitRest ? "rest" : (dayIndex < todayIndex ? "done" : "planned"))));
+    : (isToday ? "today" : statusKey);
 
   const stateMarker = timelineState === "done"
     ? "✓"
@@ -146,7 +175,13 @@ function WeekSessionRow({ session, day, isToday, todayIndex, unitSystem, t }) {
       ? "●"
       : timelineState === "rest"
         ? "—"
-        : "";
+        : timelineState === "missed"
+          ? "✕"
+          : timelineState === "modified"
+            ? "△"
+            : timelineState === "ambiguous"
+              ? "?"
+              : "";
 
   const typeLabel = !session
     ? t("trainingV2.noSessionLabel")
@@ -366,8 +401,6 @@ export default function TrainingPlanV2() {
     ? getTranslatedValue(t, `trainingV2.pacesConfidence.${String(pacesData.confidence).toLowerCase()}`)
     : t("trainingV2.notAvailable");
 
-  const todayIndex = DAY_INDEX[todayKey] ?? 1;
-
   return (
     <div className="space-y-4 p-4 md:p-6" data-testid="training-v2-page">
       <Card data-testid="training-v2-plan-status">
@@ -436,7 +469,6 @@ export default function TrainingPlanV2() {
                 session={session}
                 day={day}
                 isToday={day === todayKey}
-                todayIndex={todayIndex}
                 unitSystem={unitSystem}
                 t={t}
               />

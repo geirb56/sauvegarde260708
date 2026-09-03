@@ -25,6 +25,7 @@ const FORBIDDEN_ENDPOINTS = [
   "/training/full-cycle",
   "/training/metrics",
   "/training/refresh",
+  "/training/feedback",
 ];
 
 function weekData() {
@@ -43,14 +44,42 @@ function weekData() {
       completed_duration_minutes: null,
       completed_session_count: 2,
       sessions: [
-        { day: "monday", workout_type: "easy", distance_km: 8, duration_minutes: 45, estimated_tss: null, status: "DONE", prescription: "45 min easy" },
-        { day: "tuesday", workout_type: "rest", distance_km: null, duration_minutes: null, estimated_tss: null, status: "REST" },
-        { day: "wednesday", workout_type: "quality", distance_km: 10, duration_minutes: 50, estimated_tss: null, status: "PLANNED", prescription: "3 × 10 min" },
-        { day: "thursday", workout_type: "steady", distance_km: 8, duration_minutes: 42, estimated_tss: null, status: "MISSED", prescription: "40 min steady" },
-        { day: "friday", workout_type: "easy", distance_km: 7, duration_minutes: 40, estimated_tss: null, status: "PLANNED", prescription: "40 min easy" },
-        { day: "saturday", workout_type: "rest", distance_km: null, duration_minutes: null, estimated_tss: null, status: "REST" },
-        { day: "sunday", workout_type: "long_easy", distance_km: 18, duration_minutes: 95, estimated_tss: null, status: "PLANNED", prescription: "Long run 18 km" },
+        {
+          day: "monday", workout_type: "easy", distance_km: 8, duration_minutes: 45, estimated_tss: null,
+          reason_codes: [], matching_status: "matched", adherence_status: "completed_as_planned",
+          actual: { activity_id: "a1", distance_km: 8.1, duration_minutes: 44, pace_min_per_km: 5.5, activity_type: "running", start_time: "2026-08-24T07:00:00" },
+          prescription: "45 min easy",
+        },
+        {
+          day: "tuesday", workout_type: "rest", distance_km: null, duration_minutes: null, estimated_tss: null,
+          reason_codes: [], matching_status: "planned", adherence_status: "not_applicable", actual: null,
+        },
+        {
+          day: "wednesday", workout_type: "quality", distance_km: 10, duration_minutes: 50, estimated_tss: null,
+          reason_codes: [], matching_status: "planned", adherence_status: "not_applicable", actual: null,
+          prescription: "3 × 10 min",
+        },
+        {
+          day: "thursday", workout_type: "steady", distance_km: 8, duration_minutes: 42, estimated_tss: null,
+          reason_codes: [], matching_status: "missed", adherence_status: "missed", actual: null,
+          prescription: "40 min steady",
+        },
+        {
+          day: "friday", workout_type: "easy", distance_km: 7, duration_minutes: 40, estimated_tss: null,
+          reason_codes: [], matching_status: "planned", adherence_status: "not_applicable", actual: null,
+          prescription: "40 min easy",
+        },
+        {
+          day: "saturday", workout_type: "rest", distance_km: null, duration_minutes: null, estimated_tss: null,
+          reason_codes: [], matching_status: "planned", adherence_status: "not_applicable", actual: null,
+        },
+        {
+          day: "sunday", workout_type: "long_easy", distance_km: 18, duration_minutes: 95, estimated_tss: null,
+          reason_codes: [], matching_status: "planned", adherence_status: "not_applicable", actual: null,
+          prescription: "Long run 18 km",
+        },
       ],
+      unmatched_actuals: [],
     },
   };
 }
@@ -254,7 +283,7 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     expect(within(today).getByTestId("today-session-type").textContent.toLowerCase()).toContain("rest");
   });
 
-  test("week is compact, highlights today, and distinguishes done/planned/rest/missed", async () => {
+  test("week is compact, highlights today, and distinguishes done/planned/rest/missed from the real contract", async () => {
     mockAxios();
     renderPage({ width: 390 });
 
@@ -264,6 +293,71 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     expect(within(week).getAllByTestId("session-status-planned").length).toBeGreaterThan(0);
     expect(within(week).getAllByTestId("session-status-rest").length).toBeGreaterThan(0);
     expect(within(week).getByTestId("session-status-missed")).toBeInTheDocument();
+  });
+
+  test("never calls the legacy /training/feedback endpoint", async () => {
+    mockAxios();
+    renderPage();
+    await screen.findByTestId("training-v2-page");
+
+    const calledUrls = axios.get.mock.calls.map(([url]) => url);
+    expect(calledUrls.some((url) => String(url).includes("/training/feedback"))).toBe(false);
+    expect(axios.post).not.toHaveBeenCalled();
+  });
+
+  test("maps matched + completed_modified to a modified state, never fabricated as done", async () => {
+    const modifiedWeek = weekData();
+    modifiedWeek.week.sessions[0].adherence_status = "completed_modified";
+
+    mockAxios({ week: modifiedWeek });
+    renderPage({ width: 390 });
+
+    const week = await screen.findByTestId("training-v2-week");
+    expect(within(week).getByTestId("session-status-modified")).toBeInTheDocument();
+    expect(within(week).queryByTestId("session-status-done")).not.toBeInTheDocument();
+  });
+
+  test("maps matched + completed_unverified to an unverified state", async () => {
+    const unverifiedWeek = weekData();
+    unverifiedWeek.week.sessions[0].adherence_status = "completed_unverified";
+
+    mockAxios({ week: unverifiedWeek });
+    renderPage({ width: 390 });
+
+    const week = await screen.findByTestId("training-v2-week");
+    expect(within(week).getByTestId("session-status-unverified")).toBeInTheDocument();
+  });
+
+  test("maps ambiguous matching_status to an ambiguous state, never disambiguated", async () => {
+    const ambiguousWeek = weekData();
+    ambiguousWeek.week.sessions[2].matching_status = "ambiguous";
+    ambiguousWeek.week.sessions[2].adherence_status = "ambiguous";
+
+    mockAxios({ week: ambiguousWeek });
+    renderPage({ width: 390 });
+
+    const week = await screen.findByTestId("training-v2-week");
+    expect(within(week).getByTestId("session-status-ambiguous")).toBeInTheDocument();
+  });
+
+  test("a past session without a matching_status is never fabricated as done", async () => {
+    const unresolvedWeek = weekData();
+    // C231 — a session in the past that the backend could not resolve stays
+    // unresolved. It must never fall back to "done" purely because it is a
+    // past calendar day.
+    unresolvedWeek.week.sessions[3] = {
+      day: "thursday", workout_type: "steady", distance_km: 8, duration_minutes: 42, estimated_tss: null,
+      reason_codes: [], matching_status: null, adherence_status: null, actual: null,
+      prescription: "40 min steady",
+    };
+
+    mockAxios({ week: unresolvedWeek });
+    renderPage({ width: 390 });
+
+    const week = await screen.findByTestId("training-v2-week");
+    const thursdayRow = within(week).getByTestId("training-v2-day-thursday");
+    expect(thursdayRow.getAttribute("data-day-state")).not.toBe("done");
+    expect(within(thursdayRow).queryByTestId("session-status-done")).not.toBeInTheDocument();
   });
 
   test("missing day in week payload stays neutral and is not marked REST", async () => {
