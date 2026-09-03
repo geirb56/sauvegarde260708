@@ -67,10 +67,10 @@ def _garmin_doc(
     }
 
 
-def _row_for(rows, planned_date: date):
-    for row in rows:
-        if row.planned_date == planned_date:
-            return row
+def _row_for(result, planned_date: date):
+    for session_execution in result.sessions:
+        if session_execution.row.planned_date == planned_date:
+            return session_execution.row
     raise AssertionError(f"No row for {planned_date}")
 
 
@@ -183,16 +183,14 @@ def test_extra_run_is_unmatched_actual_and_stays_visible():
         _garmin_doc(activity_id="a1", local_date="2024-06-10", distance_km=8.05, duration_min=48),
         _garmin_doc(activity_id="extra", local_date="2024-06-11", distance_km=5.0, duration_min=30),
     ]
-    rows = build_week_execution(
+    result = build_week_execution(
         user_id=USER, reference_date=date(2024, 6, 11),
         week_start=WEEK_START, sessions=sessions, garmin_docs=docs,
     )
-    # session rows (len == len(sessions)) followed by extra unmatched actuals.
-    session_rows, extra_rows = rows[: len(sessions)], rows[len(sessions):]
-    assert session_rows[0].matching_status == MatchingStatus.MATCHED
-    assert len(extra_rows) == 1
-    assert extra_rows[0].matching_status == MatchingStatus.UNMATCHED_ACTUAL
-    assert extra_rows[0].activity_id == "extra"
+    assert result.sessions[0].row.matching_status == MatchingStatus.MATCHED
+    assert len(result.extra_rows) == 1
+    assert result.extra_rows[0].matching_status == MatchingStatus.UNMATCHED_ACTUAL
+    assert result.extra_rows[0].activity_id == "extra"
 
 
 # ---------------------------------------------------------------------------
@@ -204,14 +202,15 @@ def test_multi_user_isolation():
     docs = [
         _garmin_doc(activity_id="a1", user_id="other-user", local_date="2024-06-10", distance_km=8.05),
     ]
-    rows = build_week_execution(
+    result = build_week_execution(
         user_id=USER, reference_date=date(2024, 6, 12),
         week_start=WEEK_START, sessions=sessions, garmin_docs=docs,
     )
-    row = _row_for(rows, date(2024, 6, 10))
+    row = _row_for(result, date(2024, 6, 10))
     # Another user's activity can never be attributed — session stays missed.
     assert row.matching_status == MatchingStatus.MISSED
-    assert all(r.activity_id != "a1" for r in rows)
+    assert all(se.row.activity_id != "a1" for se in result.sessions)
+    assert all(r.activity_id != "a1" for r in result.extra_rows)
 
 
 # ---------------------------------------------------------------------------
@@ -327,3 +326,139 @@ def test_week_execution_module_has_no_io_dependencies():
             assert node.module.split(".")[0] not in forbidden
     assert "datetime.now(" not in source
     assert "date.today(" not in source
+
+
+# ---------------------------------------------------------------------------
+# C231 #1 — unmatched_actuals restricted to the CURRENT week only.
+# ---------------------------------------------------------------------------
+
+def test_unmatched_actual_from_previous_week_is_not_exposed():
+    sessions = [_session("monday", distance_km=8.0)]
+    docs = [
+        # Same-week extra run: must be exposed.
+        _garmin_doc(activity_id="this-week", local_date="2024-06-12", distance_km=5.0, duration_min=30),
+        # Previous-week extra run: must NEVER be exposed as unmatched_actual.
+        _garmin_doc(activity_id="prev-week", local_date="2024-06-02", distance_km=5.0, duration_min=30),
+    ]
+    result = build_week_execution(
+        user_id=USER, reference_date=date(2024, 6, 12),
+        week_start=WEEK_START, sessions=sessions, garmin_docs=docs,
+    )
+    extra_ids = {row.activity_id for row in result.extra_rows}
+    assert extra_ids == {"this-week"}
+    assert "prev-week" not in extra_ids
+
+
+def test_unmatched_actual_from_next_week_is_not_exposed():
+    sessions = [_session("monday", distance_km=8.0)]
+    docs = [
+        _garmin_doc(activity_id="next-week", local_date="2024-06-18", distance_km=5.0, duration_min=30),
+    ]
+    result = build_week_execution(
+        user_id=USER, reference_date=date(2024, 6, 20),
+        week_start=WEEK_START, sessions=sessions, garmin_docs=docs,
+    )
+    assert result.extra_rows == []
+
+
+# ---------------------------------------------------------------------------
+# C231 #2 — Prescription snapshot: immutable once frozen.
+# ---------------------------------------------------------------------------
+
+def test_past_session_is_freezable_and_proposed_for_persistence():
+    """A past/today session with no existing snapshot is proposed to persist."""
+    sessions = [_session("monday", distance_km=8.0)]
+    result = build_week_execution(
+        user_id=USER, reference_date=date(2024, 6, 10),  # today == planned_date
+        week_start=WEEK_START, sessions=sessions, garmin_docs=[],
+    )
+    assert len(result.snapshots_to_persist) == 1
+    snap = result.snapshots_to_persist[0]
+    assert snap.distance_km == 8.0
+    assert snap.planned_date == date(2024, 6, 10)
+
+
+def test_future_session_is_never_proposed_for_persistence():
+    sessions = [_session("monday", distance_km=8.0)]
+    result = build_week_execution(
+        user_id=USER, reference_date=date(2024, 6, 5),  # strictly before Monday
+        week_start=WEEK_START, sessions=sessions, garmin_docs=[],
+    )
+    assert result.snapshots_to_persist == []
+
+
+def test_frozen_snapshot_overrides_a_recomputed_live_prescription():
+    """The BLOCKER scenario: Monday planned 8km, engine recomputes to 10km
+    later, actual = 8km. Adherence must stay compared against the frozen
+    8km snapshot, not the recomputed 10km live session.
+    """
+    from training_v2.prescription_snapshot import PrescriptionSnapshot
+
+    prescription_id = f"{USER}:2024-06-10:monday"
+    frozen_snapshots = {
+        prescription_id: PrescriptionSnapshot(
+            user_id=USER,
+            prescription_id=prescription_id,
+            planned_date=date(2024, 6, 10),
+            day="monday",
+            workout_type="easy",
+            intensity_class="low",
+            distance_km=8.0,
+            duration_minutes=None,
+        )
+    }
+    # Engine recomputed the live plan to 10km — must be ignored for matching.
+    live_sessions = [_session("monday", distance_km=10.0)]
+    docs = [_garmin_doc(activity_id="a1", local_date="2024-06-10", distance_km=8.05, duration_min=48)]
+
+    result = build_week_execution(
+        user_id=USER, reference_date=date(2024, 6, 15),
+        week_start=WEEK_START, sessions=live_sessions, garmin_docs=docs,
+        frozen_snapshots=frozen_snapshots,
+    )
+    session_execution = result.sessions[0]
+    # Displayed/effective prescription is the FROZEN 8km, not the live 10km.
+    assert session_execution.session.distance_km == 8.0
+    # Matched against 8km actual => completed_as_planned, never "modified".
+    assert session_execution.row.matching_status == MatchingStatus.MATCHED
+    assert session_execution.row.adherence_status == AdherenceStatus.COMPLETED_AS_PLANNED
+    # Already frozen: never proposed again for persistence.
+    assert result.snapshots_to_persist == []
+
+
+def test_replay_at_j_plus_n_gives_identical_result_once_frozen():
+    """Once frozen, replaying the same week at a later reference_date must
+    yield the exact same matching/adherence outcome (determinism)."""
+    from training_v2.prescription_snapshot import PrescriptionSnapshot
+
+    prescription_id = f"{USER}:2024-06-10:monday"
+    frozen_snapshots = {
+        prescription_id: PrescriptionSnapshot(
+            user_id=USER,
+            prescription_id=prescription_id,
+            planned_date=date(2024, 6, 10),
+            day="monday",
+            workout_type="easy",
+            intensity_class="low",
+            distance_km=8.0,
+            duration_minutes=None,
+        )
+    }
+    docs = [_garmin_doc(activity_id="a1", local_date="2024-06-10", distance_km=8.05, duration_min=48)]
+
+    result_j10 = build_week_execution(
+        user_id=USER, reference_date=date(2024, 6, 15),
+        week_start=WEEK_START, sessions=[_session("monday", distance_km=10.0)],
+        garmin_docs=docs, frozen_snapshots=frozen_snapshots,
+    )
+    result_j30 = build_week_execution(
+        user_id=USER, reference_date=date(2024, 7, 5),
+        week_start=WEEK_START, sessions=[_session("monday", distance_km=12.0)],
+        garmin_docs=docs, frozen_snapshots=frozen_snapshots,
+    )
+    assert result_j10.sessions[0].session.distance_km == result_j30.sessions[0].session.distance_km == 8.0
+    assert (
+        result_j10.sessions[0].row.adherence_status
+        == result_j30.sessions[0].row.adherence_status
+        == AdherenceStatus.COMPLETED_AS_PLANNED
+    )

@@ -3445,13 +3445,6 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     # ── 9. Legacy compat: recommendation / recommendation_color derived from V2 ─
     recommendation, recommendation_color = BAND_TO_RECOMMENDATION[readiness_decision.band]
 
-    # ── 10. Historical feedback (unchanged) ───────────────────────────────
-    feedback_cursor = db.training_feedback.find(
-        {"user_id": user["id"]},
-        {"_id": 0}
-    ).sort("date", -1).limit(10)
-    recent_feedback = await feedback_cursor.to_list(10)
-
     return {
         "status": "success",
         "date": today_iso,
@@ -3497,7 +3490,6 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
         # VMA is available at /run-index (canonical source) and /training/v2/week context.
         "vma": None,
         "vma_confidence": None,
-        "recent_feedback": recent_feedback,
     }
 
 
@@ -4029,14 +4021,12 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
         WeekV2TargetResponse,
     )
 
+    from training_v2.local_reference_date import resolve_local_reference_date
+
     user_id = user["id"]
 
     # ── Single clock to avoid midnight-boundary skew ──────────────────────
     now_utc = datetime.now(timezone.utc)
-    reference_date = now_utc.date()
-
-    # ── PR226: canonical resolver — single source of truth ────────────────
-    resolved = await _resolve_goal_v2(user_id)
 
     # ── Workouts — 90-day window ──────────────────────────────────────────
     ninety_days_ago = now_utc - timedelta(days=90)
@@ -4045,6 +4035,15 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
         {"_id": 0},
     ).to_list(1000)
     domain_activities_90 = mongo_garmin_activities_to_domain(garmin_activities_90)
+
+    # ── C231 — "today" aligned with the athlete's Garmin-local clock, never
+    # a raw UTC date that can drift by up to a day around midnight ─────────
+    reference_date = resolve_local_reference_date(
+        now_utc=now_utc, garmin_activities=garmin_activities_90
+    )
+
+    # ── PR226: canonical resolver — single source of truth ────────────────
+    resolved = await _resolve_goal_v2(user_id)
 
     # ── PR228: canonical builder — single call with reconciliation ────────
     canonical = build_canonical_weekly_plan(
@@ -4070,20 +4069,49 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
         resolved.goal_type.upper() if resolved.goal_type else "", resolved.goal_type
     )
 
-    # ── PR232A: factual execution — PR230 Garmin boundary, no fallback ────
+    # ── PR232A/C231: factual execution — PR230 Garmin boundary, no fallback,
+    # matched against the FROZEN prescription snapshot once a session is
+    # today or in the past (see training_v2/prescription_snapshot.py) ─────
     from training_v2.week_execution import build_week_execution
     from training_v2.training_week_response import WeekV2ActualResponse
+    from training_v2.prescription_snapshot import PrescriptionSnapshot
 
     week_start = reference_date - timedelta(days=reference_date.weekday())
-    performed_rows = build_week_execution(
+    week_end = week_start + timedelta(days=6)
+
+    existing_snapshot_docs = await db.training_prescription_snapshots.find(
+        {"user_id": user_id}, {"_id": 0}
+    ).to_list(1000)
+    frozen_snapshots: dict[str, PrescriptionSnapshot] = {}
+    for doc in existing_snapshot_docs:
+        prescription_id = doc.get("prescription_id")
+        planned_date_raw = doc.get("planned_date")
+        if not isinstance(prescription_id, str) or not isinstance(planned_date_raw, str):
+            continue
+        try:
+            snapshot_planned_date = date.fromisoformat(planned_date_raw)
+        except ValueError:
+            continue
+        if not (week_start <= snapshot_planned_date <= week_end):
+            continue
+        frozen_snapshots[prescription_id] = PrescriptionSnapshot(**doc)
+
+    execution = build_week_execution(
         user_id=user_id,
         reference_date=reference_date,
         week_start=week_start,
         sessions=weekly_plan.sessions,
         garmin_docs=garmin_activities_90,
+        frozen_snapshots=frozen_snapshots,
     )
-    session_rows = performed_rows[: len(weekly_plan.sessions)]
-    extra_rows = performed_rows[len(weekly_plan.sessions):]
+
+    # Freeze rule is insert-only: never overwrite an already-frozen snapshot.
+    for snapshot in execution.snapshots_to_persist:
+        await db.training_prescription_snapshots.update_one(
+            {"user_id": snapshot.user_id, "prescription_id": snapshot.prescription_id},
+            {"$setOnInsert": snapshot.model_dump(mode="json")},
+            upsert=True,
+        )
 
     def _actual_response(row) -> Optional[WeekV2ActualResponse]:
         if row.activity_id is None:
@@ -4099,22 +4127,24 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
 
     sessions = [
         WeekV2SessionResponse(
-            day=s.day,
-            planned_date=row.planned_date.isoformat() if row.planned_date else None,
-            workout_type=s.workout_type,
-            intensity_class=s.intensity_class,
-            distance_km=s.distance_km,
-            duration_minutes=s.duration_minutes,
-            estimated_tss=0 if s.workout_type == "rest" else None,
-            reason_codes=list(s.reason_codes),
-            matching_status=row.matching_status.value,
-            adherence_status=row.adherence_status.value,
-            actual=_actual_response(row),
+            day=se.session.day,
+            planned_date=se.row.planned_date.isoformat() if se.row.planned_date else None,
+            workout_type=se.session.workout_type,
+            intensity_class=se.session.intensity_class,
+            distance_km=se.session.distance_km,
+            duration_minutes=se.session.duration_minutes,
+            estimated_tss=0 if se.session.workout_type == "rest" else None,
+            reason_codes=list(se.session.reason_codes),
+            matching_status=se.row.matching_status.value,
+            adherence_status=se.row.adherence_status.value,
+            actual=_actual_response(se.row),
         )
-        for s, row in zip(weekly_plan.sessions, session_rows)
+        for se in execution.sessions
     ]
     unmatched_actuals = [
-        actual for row in extra_rows if (actual := _actual_response(row)) is not None
+        actual
+        for row in execution.extra_rows
+        if (actual := _actual_response(row)) is not None
     ]
 
     response = TrainingWeekV2Response(

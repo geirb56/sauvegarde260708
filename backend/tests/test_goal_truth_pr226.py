@@ -735,6 +735,12 @@ def _make_db_with_activities(cycle, user_goal=None):
     db.garmin_activities.find = MagicMock(return_value=activities_cursor)
     db.training_cycles.find_one = _cycle_find_one
     db.user_goals.find_one = _goal_find_one
+
+    # C231 — training_prescription_snapshots.find(...).to_list(N) → empty list
+    snapshots_cursor = MagicMock()
+    snapshots_cursor.to_list = AsyncMock(return_value=[])
+    db.training_prescription_snapshots.find = MagicMock(return_value=snapshots_cursor)
+    db.training_prescription_snapshots.update_one = AsyncMock()
     return db
 
 

@@ -17,12 +17,23 @@ Design rules
   ``performed_workout.build_performed_workouts``).
 - Ambiguity is preserved: an ``ambiguous`` prescription is never coerced into
   ``matched`` or ``missed``.
+- C231 — Prescription snapshot: a session whose ``planned_date`` is today or
+  in the past is matched (and displayed) against its FROZEN
+  ``PrescriptionSnapshot`` when one already exists — never against a
+  recomputed live prescription (see ``prescription_snapshot.py``). Any
+  newly-eligible session without an existing snapshot is reported back via
+  ``WeekExecutionResult.snapshots_to_persist`` for the caller to persist with
+  an insert-only write.
+- C231 — ``unmatched_actuals`` are scoped to the current week only
+  (``[week_start, week_start + 6]`` by Garmin local date); older or newer
+  unmatched Garmin activities are never exposed here.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Dict, List, Sequence
+from typing import Dict, List, Mapping, Optional, Sequence
 
 from garmin.domain_adapter import mongo_garmin_to_observed_activities
 
@@ -30,6 +41,12 @@ from .performed_workout import (
     PerformedWorkout,
     PrescribedWorkout,
     build_performed_workouts,
+)
+from .prescription_snapshot import (
+    PrescriptionSnapshot,
+    is_freezable,
+    resolve_effective_session,
+    snapshot_from_prescription,
 )
 from .workout_generator import WorkoutPrescription
 
@@ -43,6 +60,35 @@ _DAY_INDEX: Dict[str, int] = {
     "sunday": 6,
 }
 """Monday → Sunday index, mirrors workout_generator._ALL_DAYS ordering."""
+
+
+@dataclass(frozen=True)
+class SessionExecution:
+    """One WeeklyPlan session paired with its factual execution row.
+
+    ``session`` is the EFFECTIVE prescription actually used for matching and
+    display: the frozen snapshot when one exists for this ``planned_date``,
+    otherwise the live (possibly still-evolving) ``WorkoutPrescription``.
+    """
+
+    session: WorkoutPrescription
+    row: PerformedWorkout
+
+
+@dataclass(frozen=True)
+class WeekExecutionResult:
+    """Result of reconciling one week's sessions with Garmin actuals."""
+
+    sessions: List[SessionExecution]
+    """One entry per input session, same order (Monday → Sunday)."""
+
+    extra_rows: List[PerformedWorkout]
+    """Garmin activities not attributed to any session of this week,
+    already restricted to ``[week_start, week_start + 6]`` by local date."""
+
+    snapshots_to_persist: List[PrescriptionSnapshot]
+    """Newly-frozen snapshots (session is freezable and had no existing
+    snapshot yet). Callers MUST persist with an insert-only write."""
 
 
 def _session_planned_date(day: str, week_start: date) -> date:
@@ -63,7 +109,8 @@ def build_week_execution(
     week_start: date,
     sessions: Sequence[WorkoutPrescription],
     garmin_docs: Sequence[dict],
-) -> List[PerformedWorkout]:
+    frozen_snapshots: Optional[Mapping[str, PrescriptionSnapshot]] = None,
+) -> WeekExecutionResult:
     """Reconcile one week's WorkoutPrescription sessions with Garmin actuals.
 
     Parameters
@@ -80,28 +127,59 @@ def build_week_execution(
     garmin_docs
         Raw ``db.garmin_activities`` documents (already fetched by the
         caller). Only documents with ``source == "garmin"`` become evidence.
+    frozen_snapshots
+        Existing ``PrescriptionSnapshot`` rows for this user, keyed by
+        ``prescription_id``, already fetched by the caller. When a session's
+        ``prescription_id`` is present here, its snapshot is authoritative
+        for BOTH matching and display — the live session is ignored.
 
     Returns
     -------
-    One PerformedWorkout per input session (same order), followed by any
-    Garmin activity that could not be attributed to a session of this week
-    (``matching_status == unmatched_actual``) — it stays visible, never
-    dropped.
+    WeekExecutionResult
+        One ``SessionExecution`` per input session (same order), the extra
+        Garmin activities restricted to the current week
+        (``matching_status == unmatched_actual``), and any newly-frozen
+        snapshots the caller must persist.
     """
+    frozen_snapshots = frozen_snapshots or {}
+    week_end = week_start + timedelta(days=6)
+
     prescriptions: List[PrescribedWorkout] = []
+    effective_sessions: List[WorkoutPrescription] = []
+    snapshots_to_persist: List[PrescriptionSnapshot] = []
+
     for session in sessions:
         planned_date = _session_planned_date(session.day, week_start)
+        prescription_id = _prescription_id(user_id, planned_date, session.day)
+        frozen = frozen_snapshots.get(prescription_id)
+        effective = resolve_effective_session(
+            live_session=session, frozen_snapshot=frozen
+        )
+        effective_sessions.append(effective)
+
+        if frozen is None and is_freezable(
+            planned_date=planned_date, reference_date=reference_date
+        ):
+            snapshots_to_persist.append(
+                snapshot_from_prescription(
+                    user_id=user_id,
+                    prescription_id=prescription_id,
+                    planned_date=planned_date,
+                    session=session,
+                )
+            )
+
         prescriptions.append(
             PrescribedWorkout(
-                prescription_id=_prescription_id(user_id, planned_date, session.day),
+                prescription_id=prescription_id,
                 user_id=user_id,
                 planned_date=planned_date,
-                workout_type=session.workout_type,
-                intensity_class=session.intensity_class,
-                planned_distance_km=session.distance_km,
+                workout_type=effective.workout_type,
+                intensity_class=effective.intensity_class,
+                planned_distance_km=effective.distance_km,
                 planned_duration_min=(
-                    float(session.duration_minutes)
-                    if session.duration_minutes is not None
+                    float(effective.duration_minutes)
+                    if effective.duration_minutes is not None
                     else None
                 ),
                 planned_pace_min_per_km=None,
@@ -112,6 +190,9 @@ def build_week_execution(
     observed_activities = mongo_garmin_to_observed_activities(
         list(garmin_docs or []), user_id=user_id
     )
+    activity_local_dates: Dict[str, date] = {
+        activity.activity_id: activity.local_date for activity in observed_activities
+    }
 
     ledger = build_performed_workouts(
         user_id=user_id,
@@ -126,16 +207,32 @@ def build_week_execution(
         if row.prescription_id is not None
     }
 
-    ordered_rows: List[PerformedWorkout] = [
-        by_prescription_id[prescription.prescription_id]
-        for prescription in prescriptions
+    session_executions: List[SessionExecution] = [
+        SessionExecution(
+            session=effective_sessions[i],
+            row=by_prescription_id[prescription.prescription_id],
+        )
+        for i, prescription in enumerate(prescriptions)
         if prescription.prescription_id in by_prescription_id
     ]
+
+    # C231 — unmatched_actuals are scoped to the CURRENT week only: an extra
+    # Garmin activity from a previous or future week is never exposed here,
+    # even though it stays available in the ledger for matching purposes.
     extra_activities: List[PerformedWorkout] = [
-        row for row in ledger.entries if row.prescription_id is None
+        row
+        for row in ledger.entries
+        if row.prescription_id is None
+        and row.activity_id is not None
+        and activity_local_dates.get(row.activity_id) is not None
+        and week_start <= activity_local_dates[row.activity_id] <= week_end
     ]
 
-    return ordered_rows + extra_activities
+    return WeekExecutionResult(
+        sessions=session_executions,
+        extra_rows=extra_activities,
+        snapshots_to_persist=snapshots_to_persist,
+    )
 
 
-__all__ = ["build_week_execution"]
+__all__ = ["build_week_execution", "WeekExecutionResult", "SessionExecution"]
