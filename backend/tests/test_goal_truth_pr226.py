@@ -735,6 +735,38 @@ def _make_db_with_activities(cycle, user_goal=None):
     db.garmin_activities.find = MagicMock(return_value=activities_cursor)
     db.training_cycles.find_one = _cycle_find_one
     db.user_goals.find_one = _goal_find_one
+
+    # C231 — training_prescription_snapshots.find(...).to_list(N) → empty list
+    snapshots_cursor = MagicMock()
+    snapshots_cursor.to_list = AsyncMock(return_value=[])
+    db.training_prescription_snapshots.find = MagicMock(return_value=snapshots_cursor)
+
+    # C231 (item 2) — get_or_create_served_prescription() does an upsert
+    # followed by an unconditional find_one re-read; back both with a tiny
+    # in-memory store so the round-trip returns a well-formed document.
+    _snapshot_store: dict = {}
+
+    async def _snapshot_update_one(query, update, upsert=False):
+        key = (query.get("user_id"), query.get("prescription_id"))
+        if key not in _snapshot_store and upsert:
+            _snapshot_store[key] = dict(update.get("$setOnInsert", {}))
+        return MagicMock()
+
+    async def _snapshot_find_one(query, projection=None):
+        key = (query.get("user_id"), query.get("prescription_id"))
+        return _snapshot_store.get(key)
+
+    db.training_prescription_snapshots.update_one = _snapshot_update_one
+    db.training_prescription_snapshots.find_one = _snapshot_find_one
+
+    # C231 — item 3: /training/v2/week may fetch garmin_connections/daily_metrics
+    # for today's session before freezing its snapshot (not connected here).
+    db.garmin_connections.find_one = AsyncMock(return_value=None)
+    metrics_cursor = MagicMock()
+    metrics_cursor.sort = MagicMock(return_value=metrics_cursor)
+    metrics_cursor.limit = MagicMock(return_value=metrics_cursor)
+    metrics_cursor.to_list = AsyncMock(return_value=[])
+    db.garmin_daily_metrics.find = MagicMock(return_value=metrics_cursor)
     return db
 
 

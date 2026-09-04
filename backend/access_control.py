@@ -423,7 +423,6 @@ ROUTE_ACCESS_MAP: Dict[str, RouteAccess] = {
     "/api/training/refresh":          RouteAccess.PREMIUM,
     "/api/training/race-predictions": RouteAccess.PREMIUM,
     "/api/training/dynamic-plan":     RouteAccess.PREMIUM,
-    "/api/training/feedback":         RouteAccess.PREMIUM,
     "/api/training/today":            RouteAccess.PREMIUM,
     "/api/training/week-plan":        RouteAccess.PREMIUM,
     "/api/training/v2/week":          RouteAccess.PREMIUM,  # PR167 — native V2 week endpoint

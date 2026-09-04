@@ -82,6 +82,7 @@ from training_v2.daily_adaptation import (
     build_daily_adaptation,
 )
 from training_v2.training_response import build_recent_training_response
+from training_v2.today_prescription import resolve_today_final_prescription
 from training_v2.workout_generator import WorkoutPrescription
 from training_v2.training_week_response import TrainingWeekV2Response  # PR167
 from training_v2.daily_runtime_helpers import (
@@ -3281,45 +3282,27 @@ async def get_available_goals():
     }
 
 
-@api_router.post("/training/feedback")
-async def submit_training_feedback(
-    date: str,
-    workout_id: str,
-    status: str,
-    user: dict = Depends(auth_user)
-):
+# PR232A — POST /training/feedback (manual "Réalisé / Manqué" feedback) has
+# been removed. Execution truth is now exclusively derived from Garmin via
+# the PR230 boundary (training_v2.performed_workout) and exposed on
+# GET /training/v2/week. See RUNINDEX_PR232A_REPORT.md.
+
+
+def _resolve_canonical_reference_date(now_utc: datetime, garmin_activities_90: list) -> date:
+    """C231 — SINGLE canonical ``reference_date`` resolver, shared by
+    ``/training/today`` and ``/training/v2/week``.
+
+    Both endpoints MUST call this (never ``now_utc.date()`` directly) so that
+    "today"/the current week are always IDENTICAL between the two endpoints
+    for the same user + call instant — the only difference between the two
+    call sites is which already-fetched ``garmin_activities_90`` list is
+    passed in (both fetch it with the identical 90-day query).
     """
-    Store user feedback for a training session.
+    from training_v2.local_reference_date import resolve_local_reference_date
 
-    Args:
-        date: ISO date string (YYYY-MM-DD)
-        workout_id: Unique identifier for the workout/session
-        status: 'done' or 'missed'
-    """
-    if status not in ["done", "missed"]:
-        raise HTTPException(status_code=400, detail="Status must be 'done' or 'missed'")
-
-    feedback_doc = {
-        "user_id": user["id"],
-        "date": date,
-        "workout_id": workout_id,
-        "status": status,
-        "created_at": datetime.now(timezone.utc)
-    }
-
-    # Upsert to avoid duplicates
-    await db.training_feedback.update_one(
-        {"user_id": user["id"], "date": date, "workout_id": workout_id},
-        {"$set": feedback_doc},
-        upsert=True
+    return resolve_local_reference_date(
+        now_utc=now_utc, garmin_activities=garmin_activities_90
     )
-
-    logger.info(f"[Training] Feedback saved for user {user['id']}: {date} - {workout_id} - {status}")
-
-    return {
-        "status": "success",
-        "feedback": feedback_doc
-    }
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -3359,9 +3342,6 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     # Single clock — all time derivations use this single anchor.
     # No second now() call anywhere in this handler.
     now_utc = datetime.now(timezone.utc)
-    today = now_utc.date()
-    today_iso = today.isoformat()
-    day_name = today.strftime("%A")
     ninety_days_ago = now_utc - timedelta(days=90)
 
     # ── 1. Goal resolver — single source of truth (PR226) ────────────────
@@ -3400,34 +3380,31 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
             detail="Training plan temporarily unavailable: Garmin activity data could not be processed.",
         ) from exc
 
+    # C231 — "today" resolved via the SAME canonical helper used by
+    # /training/v2/week (_resolve_canonical_reference_date), never a raw
+    # ``now_utc.date()``, so both endpoints always target the identical
+    # calendar day/week for this user.
+    today = _resolve_canonical_reference_date(now_utc, garmin_activities_90)
+    today_iso = today.isoformat()
+    day_name = today.strftime("%A")
+
     # ── 3. Readiness (live data) — only when Garmin connection is active ──
-    readiness_result = None
-    training_load = None
-    recent_response_for_readiness = None
     readiness_data_source = "unavailable"
+    garmin_connected = False
+    garmin_daily_metrics_docs: list = []
 
     garmin_conn = await db.garmin_connections.find_one({"user_id": user["id"]}, {"_id": 0})
     if garmin_conn and garmin_conn.get("connected"):
         try:
-            metrics_docs = await (
+            garmin_daily_metrics_docs = await (
                 db.garmin_daily_metrics.find({"user_id": user["id"]}, {"_id": 0})
                 .sort("date", -1)
                 .limit(30)
                 .to_list(length=30)
             )
-            # TrainingLoad and RecentTrainingResponse use the already-loaded activities.
-            training_load = build_training_load(domain_activities_90, today)
-            readiness_result = build_readiness_v2_from_garmin_data(
-                metrics_docs,
-                domain_activities_90,
-                today,
-                load_snapshot=training_load,
-                hrv_supported=None,
-            )
-            recent_response_for_readiness = build_recent_training_response(domain_activities_90, today)
-            readiness_data_source = "garmin"
+            garmin_connected = True
         except Exception as exc:
-            logger.warning(f"[TrainingToday] Garmin V2 readiness build failed: {exc}")
+            logger.warning(f"[TrainingToday] Garmin daily metrics fetch failed: {exc}")
 
     # ── 4. Canonical plan — SAME pipeline as /training/v2/week (PR228) ───
     # build_canonical_weekly_plan includes WeeklyReconciliation internally.
@@ -3459,33 +3436,66 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
             "day": day_name,
         }
 
-    # ── 6. ReadinessDecision V2 — canonical translation ──────────────────
-    readiness_decision: ReadinessDecision = build_readiness_decision(readiness_result)
-
-    # ── 7. DailyAdaptation V2 — Today only (keep or reduce, never increase) ─
-    # Applied AFTER the canonical plan is built. Does NOT rebuild WeeklyPlan.
-    adaptation_result: DailyAdaptationResult = build_daily_adaptation(
-        workout=planned_prescription,
-        readiness_decision=readiness_decision,
-        training_load=training_load,
-        recent_response=recent_response_for_readiness,
+    # ── 6/7. ReadinessDecision V2 + DailyAdaptation V2 — Today only ──────
+    # C231 — delegated to training_v2.today_prescription, the SAME shared
+    # helper /training/v2/week uses to compute today's FINAL prescription
+    # before freezing a snapshot. Guarantees identical output regardless of
+    # which endpoint is hit first for a given day.
+    today_final = resolve_today_final_prescription(
+        planned_prescription=planned_prescription,
+        reference_date=today,
+        domain_activities_90=domain_activities_90,
+        garmin_daily_metrics_docs=garmin_daily_metrics_docs,
+        garmin_connected=garmin_connected,
     )
+    readiness_decision: ReadinessDecision = today_final.readiness_decision
+    adaptation_result: DailyAdaptationResult = today_final.adaptation_result
+    readiness_data_source = today_final.readiness_data_source
+
+    # C231 — item 2 BLOCKER FIX: go through the SAME atomic get-or-create
+    # snapshot service /training/v2/week uses, so both endpoints always
+    # converge on ONE canonical served prescription for today, regardless
+    # of which one is called first or concurrently.
+    from training_v2.served_prescription import get_or_create_served_prescription
+    from training_v2.week_execution import prescription_id_for
+
+    served_result = await get_or_create_served_prescription(
+        db,
+        user_id=user["id"],
+        prescription_id=prescription_id_for(user["id"], today, day_name.lower()),
+        planned_date=today,
+        served_candidate=adaptation_result.adapted_workout,
+        planned_prescription=planned_prescription,
+    )
+    served_prescription = served_result.prescription
 
     # ── 8. Map prescription to legacy runtime dict format ─────────────────
     planned_session_runtime = prescription_to_runtime_session(planned_prescription)
-    adapted_runtime = prescription_to_runtime_session(adaptation_result.adapted_workout)
+    # C231 — the canonical SERVED prescription (post get-or-create snapshot
+    # resolution), never the raw local adaptation_result, is what gets
+    # displayed — guarantees identical distance/duration as /training/v2/week.
+    served_prescription_runtime = prescription_to_runtime_session(served_prescription)
+    # Backward-compat alias — kept byte-for-byte identical to
+    # served_prescription_runtime (see "served_prescription" key below).
+    adapted_runtime = served_prescription_runtime
+    # C231 (round 2, item 1 BLOCKER FIX) — adaptation_applied is now PURELY
+    # informative: it reflects TODAY's live readiness recompute action and
+    # MUST NEVER be used (here or by any consumer) to choose which session is
+    # displayed. The canonical served_prescription (frozen once per day) is
+    # ALWAYS the one displayed, regardless of what a later recompute would
+    # decide. session_modified_from_planned (C231 micro-correction: read
+    # directly from the winning snapshot's own immutable
+    # `modified_from_planned` field, computed ONCE at snapshot-creation time
+    # — NEVER recomputed here against the current live planned_prescription,
+    # which can keep changing after the snapshot was frozen and would make
+    # the boolean flip retroactively for a served session that never
+    # actually changed).
     adaptation_applied = adaptation_result.action != DailyAdaptationAction.KEEP
+    session_modified_from_planned = served_result.modified_from_planned
     adaptation_reason = ", ".join(adaptation_result.reason_codes)
 
     # ── 9. Legacy compat: recommendation / recommendation_color derived from V2 ─
     recommendation, recommendation_color = BAND_TO_RECOMMENDATION[readiness_decision.band]
-
-    # ── 10. Historical feedback (unchanged) ───────────────────────────────
-    feedback_cursor = db.training_feedback.find(
-        {"user_id": user["id"]},
-        {"_id": 0}
-    ).sort("date", -1).limit(10)
-    recent_feedback = await feedback_cursor.to_list(10)
 
     return {
         "status": "success",
@@ -3498,12 +3508,40 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
         # original_prescription: identical to planned_session — both represent the planned
         # session before DailyAdaptation. Preserved for backward compat with existing consumers.
         "original_prescription": planned_session_runtime,
+        # served_prescription: C231 (round 2) — THE canonical session to display
+        # today. Always the frozen, get-or-create'd served prescription — never
+        # recomputed on the fly, never superseded by a later readiness change.
+        # Consumers (frontend included) MUST read this key first and MUST NOT
+        # fall back to planned_session while a served_prescription exists.
+        "served_prescription": served_prescription_runtime,
+        # adapted_prescription: kept for backward compat — always byte-for-byte
+        # identical to served_prescription (never a separate, potentially
+        # divergent, live recompute).
         "adapted_prescription": adapted_runtime,
-        # Legacy compat: adaptive_session present when adaptation changed the session
-        "adaptive_session": adapted_runtime if adaptation_applied else None,
+        # Legacy compat: adaptive_session present when the served prescription
+        # actually differed from the plan AT SNAPSHOT-CREATION TIME (immutable
+        # fact from session_modified_from_planned), not a live recompute. None
+        # (unknown, e.g. pre-migration snapshot) is treated the same as False
+        # here — falsy in Python — so no adaptive_session is fabricated.
+        "adaptive_session": adapted_runtime if session_modified_from_planned else None,
+        # adaptation_applied: INFORMATIVE ONLY (C231 round 2) — describes what
+        # today's live readiness recompute would decide right now. NEVER an
+        # authority for choosing which session to display; see
+        # served_prescription for that.
         "adaptation_applied": adaptation_applied,
         "adaptation_reason": adaptation_reason,
         "adaptation_action": adaptation_result.action.value,
+        # session_modified_from_planned: C231 (micro-correction) — the ONLY
+        # ground-truth signal for whether the "Adapté" banner should be
+        # shown. This is the WINNING SNAPSHOT's own immutable
+        # `modified_from_planned` field (computed exactly once, at
+        # snapshot-creation time) — never recomputed here against the
+        # current live planned_session, which could keep changing after the
+        # snapshot was frozen and would otherwise make this flip
+        # retroactively for a served session that never actually changed.
+        # True/False/None (unknown — old snapshot predating this field; the
+        # frontend must show no banner for None, exactly like False).
+        "session_modified_from_planned": session_modified_from_planned,
         "reason_codes": list(adaptation_result.reason_codes),
         # ReadinessDecision V2 block
         "readiness": {
@@ -3532,7 +3570,6 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
         # VMA is available at /run-index (canonical source) and /training/v2/week context.
         "vma": None,
         "vma_confidence": None,
-        "recent_feedback": recent_feedback,
     }
 
 
@@ -4068,10 +4105,6 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
 
     # ── Single clock to avoid midnight-boundary skew ──────────────────────
     now_utc = datetime.now(timezone.utc)
-    reference_date = now_utc.date()
-
-    # ── PR226: canonical resolver — single source of truth ────────────────
-    resolved = await _resolve_goal_v2(user_id)
 
     # ── Workouts — 90-day window ──────────────────────────────────────────
     ninety_days_ago = now_utc - timedelta(days=90)
@@ -4080,6 +4113,14 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
         {"_id": 0},
     ).to_list(1000)
     domain_activities_90 = mongo_garmin_activities_to_domain(garmin_activities_90)
+
+    # ── C231 — "today" resolved via the SAME canonical helper used by
+    # /training/today (_resolve_canonical_reference_date), never a raw UTC
+    # date that can drift by up to a day around midnight ──────────────────
+    reference_date = _resolve_canonical_reference_date(now_utc, garmin_activities_90)
+
+    # ── PR226: canonical resolver — single source of truth ────────────────
+    resolved = await _resolve_goal_v2(user_id)
 
     # ── PR228: canonical builder — single call with reconciliation ────────
     canonical = build_canonical_weekly_plan(
@@ -4104,17 +4145,203 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
     _goal_type_v2_str: str = _WEEK_GOAL_NORM.get(
         resolved.goal_type.upper() if resolved.goal_type else "", resolved.goal_type
     )
-    sessions = [
-        WeekV2SessionResponse(
-            day=s.day,
-            workout_type=s.workout_type,
-            intensity_class=s.intensity_class,
-            distance_km=s.distance_km,
-            duration_minutes=s.duration_minutes,
-            estimated_tss=0 if s.workout_type == "rest" else None,
-            reason_codes=list(s.reason_codes),
+
+    # ── PR232A/C231: factual execution — PR230 Garmin boundary, no fallback,
+    # matched against the FROZEN prescription snapshot once a session is
+    # today or in the past (see training_v2/prescription_snapshot.py) ─────
+    from training_v2.week_execution import (
+        EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE,
+        build_week_execution,
+        prescription_id_for,
+    )
+    from training_v2.training_week_response import WeekV2ActualResponse
+    from training_v2.prescription_snapshot import PrescriptionSnapshot, snapshot_from_prescription
+    from training_v2.served_prescription import get_or_create_served_prescription
+
+    week_start = reference_date - timedelta(days=reference_date.weekday())
+    week_end = week_start + timedelta(days=6)
+
+    existing_snapshot_docs = await db.training_prescription_snapshots.find(
+        {"user_id": user_id}, {"_id": 0}
+    ).to_list(1000)
+    frozen_snapshots: dict[str, PrescriptionSnapshot] = {}
+    for doc in existing_snapshot_docs:
+        prescription_id = doc.get("prescription_id")
+        planned_date_raw = doc.get("planned_date")
+        if not isinstance(prescription_id, str) or not isinstance(planned_date_raw, str):
+            continue
+        try:
+            snapshot_planned_date = date.fromisoformat(planned_date_raw)
+        except ValueError:
+            continue
+        if not (week_start <= snapshot_planned_date <= week_end):
+            continue
+        frozen_snapshots[prescription_id] = PrescriptionSnapshot(**doc)
+
+    # C231 — item 3 BLOCKER FIX: the session whose planned_date == today MUST
+    # be frozen from its FINAL post-DailyAdaptation prescription (the same one
+    # /training/today serves), never the raw WeeklyPlan session. Only compute
+    # this (extra Garmin-connection/readiness fetch) when today's session has
+    # NOT already been frozen by a prior call (from either endpoint) — once a
+    # snapshot exists it is authoritative and this branch is skipped entirely.
+    sessions_for_execution = list(weekly_plan.sessions)
+    today_day_name = reference_date.strftime("%A").lower()
+    today_index = next(
+        (i for i, s in enumerate(sessions_for_execution) if s.day.lower() == today_day_name),
+        None,
+    )
+    if today_index is not None:
+        today_prescription_id = prescription_id_for(
+            user_id, reference_date, today_day_name
         )
-        for s in weekly_plan.sessions
+        if today_prescription_id not in frozen_snapshots:
+            garmin_conn = await db.garmin_connections.find_one(
+                {"user_id": user_id}, {"_id": 0}
+            )
+            garmin_connected = bool(garmin_conn and garmin_conn.get("connected"))
+            garmin_daily_metrics_docs: list = []
+            if garmin_connected:
+                try:
+                    garmin_daily_metrics_docs = await (
+                        db.garmin_daily_metrics.find({"user_id": user_id}, {"_id": 0})
+                        .sort("date", -1)
+                        .limit(30)
+                        .to_list(length=30)
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        f"[TrainingV2Week] Garmin daily metrics fetch failed: {exc}"
+                    )
+                    garmin_connected = False
+            today_final = resolve_today_final_prescription(
+                planned_prescription=sessions_for_execution[today_index],
+                reference_date=reference_date,
+                domain_activities_90=domain_activities_90,
+                garmin_daily_metrics_docs=garmin_daily_metrics_docs,
+                garmin_connected=garmin_connected,
+            )
+            # C231 — item 2 BLOCKER FIX: go through the SAME atomic
+            # get-or-create used by /training/today, so a concurrent call to
+            # either endpoint always converges on one canonical Mongo
+            # snapshot instead of each endpoint writing/using its own
+            # locally computed (possibly divergent) candidate.
+            served_result = await get_or_create_served_prescription(
+                db,
+                user_id=user_id,
+                prescription_id=today_prescription_id,
+                planned_date=reference_date,
+                served_candidate=today_final.adaptation_result.adapted_workout,
+                planned_prescription=sessions_for_execution[today_index],
+            )
+            served = served_result.prescription
+            sessions_for_execution[today_index] = served
+            frozen_snapshots[today_prescription_id] = snapshot_from_prescription(
+                user_id=user_id,
+                prescription_id=today_prescription_id,
+                planned_date=reference_date,
+                session=served,
+                # C231 (micro-correction): propagate the WINNING snapshot's
+                # own modified_from_planned — never recomputed here — so
+                # this in-memory cache entry stays consistent with what
+                # /training/today would read for the exact same snapshot.
+                modified_from_planned=served_result.modified_from_planned,
+            )
+
+    try:
+        execution = build_week_execution(
+            user_id=user_id,
+            reference_date=reference_date,
+            week_start=week_start,
+            sessions=sessions_for_execution,
+            garmin_docs=garmin_activities_90,
+            frozen_snapshots=frozen_snapshots,
+        )
+    except ValueError as exc:
+        logger.error(f"[TrainingV2Week] Execution invariant violated: {exc}")
+        raise HTTPException(
+            status_code=500,
+            detail="Training week execution is inconsistent (invariant violated); "
+            "refusing to return a truncated week.",
+        ) from exc
+
+    # C231 — fail-fast: the response MUST cover every WeeklyPlan session.
+    # A silently truncated week (fewer executed sessions than prescribed)
+    # is never acceptable; surface it as an explicit server error instead.
+    if len(execution.sessions) != len(weekly_plan.sessions):
+        logger.error(
+            "[TrainingV2Week] Session count mismatch: "
+            f"{len(execution.sessions)} executed vs {len(weekly_plan.sessions)} planned "
+            f"for user_id={user_id}."
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Training week execution is incomplete (session count mismatch); "
+            "refusing to return a truncated week.",
+        )
+
+    # Freeze rule is insert-only: never overwrite an already-frozen snapshot.
+    for snapshot in execution.snapshots_to_persist:
+        await db.training_prescription_snapshots.update_one(
+            {"user_id": snapshot.user_id, "prescription_id": snapshot.prescription_id},
+            {"$setOnInsert": snapshot.model_dump(mode="json")},
+            upsert=True,
+        )
+
+    def _actual_response(row) -> Optional[WeekV2ActualResponse]:
+        if row.activity_id is None:
+            return None
+        return WeekV2ActualResponse(
+            activity_id=row.activity_id,
+            distance_km=row.actual_distance_km,
+            duration_minutes=row.actual_duration_min,
+            pace_min_per_km=row.actual_pace_min_per_km,
+            activity_type=row.actual_activity_type,
+            start_time=row.actual_start_time.isoformat() if row.actual_start_time else None,
+        )
+
+    def _session_response(se) -> WeekV2SessionResponse:
+        planned_date_iso = se.planned_date.isoformat() if se.planned_date else None
+        if se.execution_status == EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE:
+            # C231 (round 2, item 3) — this day's real historical prescription
+            # was never frozen/served while it was current: the live
+            # (recomputed today) session is NOT trusted as historical fact.
+            # None != 0: distance/duration/workout_type/matching/adherence
+            # are all left unfabricated. The real Garmin activity (if any)
+            # still surfaces separately via unmatched_actuals, never here.
+            return WeekV2SessionResponse(
+                day=se.session.day,
+                planned_date=planned_date_iso,
+                workout_type=None,
+                intensity_class=None,
+                distance_km=None,
+                duration_minutes=None,
+                estimated_tss=None,
+                reason_codes=[],
+                matching_status=None,
+                adherence_status=None,
+                actual=None,
+                execution_status=EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE,
+            )
+        return WeekV2SessionResponse(
+            day=se.session.day,
+            planned_date=planned_date_iso,
+            workout_type=se.session.workout_type,
+            intensity_class=se.session.intensity_class,
+            distance_km=se.session.distance_km,
+            duration_minutes=se.session.duration_minutes,
+            estimated_tss=0 if se.session.workout_type == "rest" else None,
+            reason_codes=list(se.session.reason_codes),
+            matching_status=se.row.matching_status.value,
+            adherence_status=se.row.adherence_status.value,
+            actual=_actual_response(se.row),
+            execution_status=None,
+        )
+
+    sessions = [_session_response(se) for se in execution.sessions]
+    unmatched_actuals = [
+        actual
+        for row in execution.extra_rows
+        if (actual := _actual_response(row)) is not None
     ]
 
     response = TrainingWeekV2Response(
@@ -4140,6 +4367,7 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
             planned_duration_minutes=weekly_plan.planned_duration_minutes,
             session_count=weekly_plan.session_count,
             sessions=sessions,
+            unmatched_actuals=unmatched_actuals,
         ),
         reconciliation_action=reconciliation_result.action.value,
         reconciliation_reason_codes=list(reconciliation_result.reason_codes),
@@ -5485,6 +5713,12 @@ async def _ensure_paddle_events_unique_index(db_handle) -> None:
     await ensure_paddle_events_unique_index(db_handle)
 
 
+async def _ensure_prescription_snapshot_unique_index(db_handle) -> None:
+    """Thin wrapper — delegates to the testable service module."""
+    from services.prescription_snapshot_index import ensure_prescription_snapshot_unique_index
+    await ensure_prescription_snapshot_unique_index(db_handle)
+
+
 @app.on_event("startup")
 async def create_db_indexes():
     """Create MongoDB indexes for common query patterns"""
@@ -5505,6 +5739,14 @@ async def create_db_indexes():
         logger.warning(f"gccli bootstrap skipped: {e}")
     # Critical Paddle idempotence index must be guaranteed before startup continues.
     await _ensure_paddle_events_unique_index(db)
+    # C231 — item 4 BLOCKER FIX: the prescription-snapshot unique index is
+    # exactly as critical as Paddle's — it is the ONLY mechanism guaranteeing
+    # a served prescription can never be silently duplicated/overwritten
+    # under concurrency (see training_v2/served_prescription.py). It must be
+    # created BEFORE the fail-open try block below: if index creation ever
+    # fails, startup must propagate the error and stop, never continue while
+    # falsely claiming immutability is guaranteed.
+    await _ensure_prescription_snapshot_unique_index(db)
     try:
         # Workouts: filter + sort by user and date
         await db.workouts.create_index([("user_id", 1), ("date", -1)])
