@@ -867,3 +867,107 @@ Checklist de non-régression demandée :
 - tests backend + frontend ciblés : 0 fail (144 backend + 52 frontend)
 
 Aucune modification du redesign visuel #232B. Aucun merge effectué.
+
+# Addendum 3 — C231-sexies : micro-correction finale (même PR, NE PAS MERGER)
+
+Dernier blocker UX/contrat : le bandeau "Adapté" du Dashboard était gated par
+`adaptation_applied`, qui décrit le recalcul readiness LIVE de l'appel en
+cours, jamais la prescription réellement servie/snapshottée. Résultat : un
+faux positif possible — `served=18, planned=18, live action=REDUCE,
+adaptation_applied=true, adaptive_session=null` affichait à tort "Adapté :
+caution" alors que la séance affichée (18 km) est strictement identique au
+plan brut.
+
+## C231-sexies.1 — P1 : bandeau "Adapté" gated par `session_modified_from_planned`, jamais `adaptation_applied`
+
+**Backend** (`backend/server.py`, endpoint `/training/today`) : le signal
+`session_modified_from_planned` (déjà calculé en interne — comparaison
+ground-truth `served_prescription_runtime != planned_session_runtime`,
+utilisé pour dériver `adaptive_session`) est désormais explicitement exposé
+dans la réponse JSON sous la clé `session_modified_from_planned`.
+
+```python
+"session_modified_from_planned": session_modified_from_planned,
+```
+
+**Frontend** (`frontend/src/pages/Dashboard.jsx`) : la condition du bandeau
+d'adaptation est remplacée :
+
+- avant : `todaySession.adaptation_applied && (...)` avec affichage de
+  `todaySession.adaptation_reason` (texte potentiellement issu d'un recalcul
+  live contradictoire, jamais persisté avec le snapshot servi)
+- après : `todaySession.session_modified_from_planned === true && (...)`
+  avec un libellé neutre fixe `"Séance adaptée"` (clé i18n
+  `trainingPlanExtended.sessionAdapted`, ajoutée EN + FR) — **aucune**
+  lecture de `adaptation_reason`, conformément à l'option "sûre" du besoin :
+  ne pas afficher une raison potentiellement fausse tant qu'elle n'est pas
+  persistée avec le snapshot.
+
+Le choix de la séance affichée (`canonicalSession`, chaîne de priorité
+`served_prescription → adapted_prescription → adaptive_session →
+planned_session → original_prescription`) est totalement inchangé — seul le
+bandeau informatif change de source de vérité.
+
+## C231-sexies.2 — Tests obligatoires (scénarios A/B/C)
+
+Ajoutés dans `frontend/src/__tests__/dashboard-training-v2.test.jsx` :
+
+- **Scénario A** — `planned=18, served=18, adaptation_applied=true,
+  live action=REDUCE, session_modified_from_planned=false` ⇒ aucun bandeau
+  `[data-testid="adaptation-notice"]` rendu, aucune trace du texte
+  `adaptation_reason` ("caution") dans le DOM.
+- **Scénario B** — `planned=18, served=12.6,
+  session_modified_from_planned=true` ⇒ bandeau `"Séance adaptée"` visible
+  (texte neutre, sans `adaptation_reason`), carte affichant `12.6 km` (jamais
+  `18 km`).
+- **Scénario C** — vérification statique : le source de `Dashboard.jsx` ne
+  contient plus aucune occurrence de `todaySession.adaptation_applied` et
+  contient bien `session_modified_from_planned === true`.
+
+Ajoutés dans `backend/tests/test_pr231_c231_corrections3.py` :
+
+- `test_today_endpoint_exposes_session_modified_from_planned_true_when_snapshot_differs`
+  — un snapshot gelé à 12.6 km (différent du plan live) ⇒
+  `session_modified_from_planned is True`.
+- `test_today_endpoint_session_modified_from_planned_false_when_served_equals_planned`
+  — premier appel du jour (snapshot gelé = résultat de CE même appel) ⇒
+  `session_modified_from_planned` est cohérent avec l'égalité
+  `served_prescription == planned_session`.
+
+## C231-sexies.3 — Validation
+
+```
+cd frontend && npx craco test --watchAll=false --forceExit \
+  src/__tests__/dashboard-training-v2.test.jsx
+# → 31 passed (3 nouveaux scénarios A/B/C + 28 pré-existants)
+
+cd backend && python3 -m pytest \
+  tests/test_pr231_c231_corrections3.py -q
+# → 11 passed (2 nouveaux + 9 pré-existants)
+
+cd backend && python3 -m pytest \
+  tests/test_pr232a_week_execution.py \
+  tests/test_pr231_c231_corrections2.py \
+  tests/test_pr231_c231_corrections3.py \
+  tests/test_pr231_c231_final_corrections.py \
+  tests/test_performed_workout_pr230.py \
+  tests/test_pr232a_c231_week_endpoint.py \
+  tests/test_pr231_served_prescription.py \
+  -q
+# → 146 passed
+```
+
+Checklist de non-régression :
+- `served_prescription` reste l'autorité Dashboard + TrainingPlanV2 : PASS
+  (chaîne de priorité inchangée, seul le bandeau informatif change de
+  source)
+- historique rest sans snapshot = `prescription_unavailable` : PASS
+  (C231-quinquies.2 inchangé dans ce round)
+- PR230 enums inchangés : PASS
+- no-lookahead : PASS
+- multi-user : PASS (isolation par `user_id` inchangée)
+- None != 0 : PASS
+- zéro `/training/feedback` : PASS
+- tests backend + frontend ciblés : 0 fail (11 + 146 backend, 31 frontend)
+
+Aucune modification du redesign visuel #232B. Aucun merge effectué.

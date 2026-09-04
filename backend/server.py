@@ -3523,6 +3523,14 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
         "adaptation_applied": adaptation_applied,
         "adaptation_reason": adaptation_reason,
         "adaptation_action": adaptation_result.action.value,
+        # session_modified_from_planned: C231 (round 3, item P1 fix) — the
+        # ONLY ground-truth signal for whether the "Adapté" banner should be
+        # shown. True iff the frozen served_prescription actually differs
+        # from planned_session. Unlike adaptation_applied (which reflects
+        # today's live readiness recompute and can be true even when the
+        # already-served snapshot equals the plan), this never produces a
+        # false-positive banner.
+        "session_modified_from_planned": session_modified_from_planned,
         "reason_codes": list(adaptation_result.reason_codes),
         # ReadinessDecision V2 block
         "readiness": {

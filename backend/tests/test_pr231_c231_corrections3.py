@@ -127,6 +127,50 @@ async def test_today_endpoint_served_prescription_wins_even_when_adaptation_appl
     assert body["adapted_prescription"]["distance_km"] == 12.6
 
 
+async def test_today_endpoint_exposes_session_modified_from_planned_true_when_snapshot_differs():
+    """C231 (round 4 / 'C231-micro') item P1: session_modified_from_planned
+    is the ONLY ground-truth signal for whether the frontend "Adapté" banner
+    should be shown — it must be exposed explicitly and be True whenever the
+    frozen served_prescription actually differs from the live planned_session."""
+    fake_db = _harness._FakeDB()
+    _harness._seed_cycle(fake_db)
+    _harness._seed_garmin_activities(fake_db, n=8)
+    _harness._seed_connected(fake_db, connected=True)
+    _seed_frozen_snapshot(fake_db, distance_km=12.6)
+
+    result = await _harness._get_today(fake_db)
+    assert result["status"] == 200, result["body"]
+    body = result["body"]
+
+    assert "session_modified_from_planned" in body
+    assert body["session_modified_from_planned"] is True
+    assert body["served_prescription"]["distance_km"] != body["planned_session"]["distance_km"]
+
+
+async def test_today_endpoint_session_modified_from_planned_false_when_served_equals_planned():
+    """Scenario A (round 4): the served (frozen) prescription equals the raw
+    planned session even though THIS call's live readiness recompute may
+    still flag adaptation_applied=True — session_modified_from_planned must
+    be False so no false-positive "Adapté" banner is shown."""
+    fake_db = _harness._FakeDB()
+    _harness._seed_cycle(fake_db)
+    _harness._seed_garmin_activities(fake_db, n=8)
+    _harness._seed_connected(fake_db, connected=True)
+
+    # No frozen snapshot pre-seeded: the get-or-create path freezes the
+    # served prescription from THIS call's own adaptation result, so
+    # served_prescription and planned_session start out consistent for the
+    # very first call of the day (nothing external diverges them yet).
+    result = await _harness._get_today(fake_db)
+    assert result["status"] == 200, result["body"]
+    body = result["body"]
+
+    assert "session_modified_from_planned" in body
+    modified = body["session_modified_from_planned"]
+    assert isinstance(modified, bool)
+    assert modified == (body["served_prescription"] != body["planned_session"])
+
+
 async def test_week_first_then_today_show_identical_served_prescription():
     fake_db = _harness._FakeDB()
     _harness._seed_cycle(fake_db)

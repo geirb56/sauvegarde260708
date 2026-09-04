@@ -958,9 +958,18 @@ export default function Dashboard() {
 
               return (
                 <>
-                  {/* Adaptation notice — informative only, never an authority
-                      on which session is displayed. */}
-                  {todaySession.adaptation_applied && (
+                  {/* Adaptation notice — C231 (round 3, P1 fix): gated ONLY by
+                      session_modified_from_planned, the ground-truth signal
+                      that the frozen served_prescription actually differs
+                      from planned_session. adaptation_applied describes
+                      today's LIVE readiness recompute and can be true even
+                      when the already-served snapshot equals the plan
+                      (e.g. served=18, planned=18, live action=REDUCE) —
+                      using it here would show a false "Adapté" banner. The
+                      banner text is a neutral label only: adaptation_reason
+                      may belong to a later, contradictory recompute and is
+                      not (yet) persisted alongside the served snapshot. */}
+                  {todaySession.session_modified_from_planned === true && (
                     <div
                       className="p-2 rounded-lg text-xs mb-3"
                       style={{
@@ -968,8 +977,9 @@ export default function Dashboard() {
                         border: "1px solid rgba(249, 115, 22, 0.3)",
                         color: "#fb923c"
                       }}
+                      data-testid="adaptation-notice"
                     >
-                      <strong>{t("trainingPlanExtended.adaptedBecause") || "Adapté :"}</strong> {todaySession.adaptation_reason}
+                      <strong>{t("trainingPlanExtended.sessionAdapted") || "Séance adaptée"}</strong>
                     </div>
                   )}
 
