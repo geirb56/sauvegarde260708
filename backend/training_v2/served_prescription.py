@@ -52,12 +52,36 @@ Design rules
 - PURE with respect to the served-prescription CANDIDATE itself: the caller
   supplies it (already computed via ``today_prescription.py``); this module
   only handles the atomic persistence + canonical read-back.
+
+C231 (micro-correction, "modified_from_planned immutability" fix)
+-------------------------------------------------------------------
+``session_modified_from_planned`` (whether the SERVED prescription actually
+differed from the raw plan) must be computed ONCE, at snapshot-creation
+time, and frozen alongside the snapshot — never recomputed against
+whatever the LIVE plan looks like on a later call. The live plan can
+legitimately keep changing (new activities, later reconciliation) even
+though the prescription that was actually served that day never changes.
+Comparing a frozen ``served_prescription`` against a moving
+``planned_session`` would make the boolean flip retroactively, which is
+incorrect: it must describe a fact about the moment the snapshot was
+created, not the current instant.
+
+Concretely: :func:`get_or_create_served_prescription` now also receives the
+caller's locally computed ``planned_prescription`` (the raw, pre-adaptation
+plan for this slot). It is used ONLY if this call is the one that creates
+the snapshot (first-ever call for this day) — to compute
+``modified_from_planned`` exactly once — and is otherwise ignored, exactly
+like ``served_candidate``. The winning (possibly pre-existing) snapshot's
+OWN ``modified_from_planned`` field is always what gets returned, never a
+value recomputed from the current caller's own candidates.
 """
 
 from __future__ import annotations
 
 from datetime import date
-from typing import Any
+from typing import Any, Optional
+
+from pydantic import BaseModel, ConfigDict
 
 from .prescription_snapshot import (
     PrescriptionSnapshot,
@@ -67,6 +91,34 @@ from .prescription_snapshot import (
 from .workout_generator import WorkoutPrescription
 
 
+class ServedPrescriptionResult(BaseModel):
+    """Result of :func:`get_or_create_served_prescription`.
+
+    Bundles the canonical effective prescription together with the
+    ``modified_from_planned`` metadata of the SAME winning snapshot — the
+    two values must never be read from different sources (e.g. prescription
+    from the snapshot but the boolean recomputed live), or Today/Week could
+    display a prescription and an adaptation-banner state that don't
+    logically belong together.
+    """
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    prescription: WorkoutPrescription
+    modified_from_planned: Optional[bool] = None
+
+
+def _prescription_core_fields(p: WorkoutPrescription) -> tuple:
+    """The subset of fields that matter for "was this actually adapted?".
+
+    Deliberately excludes ``reason_codes`` (language-neutral diagnostic
+    metadata that can differ between two structurally-identical
+    prescriptions) — mirrors exactly the fields persisted by
+    :func:`training_v2.prescription_snapshot.snapshot_from_prescription`.
+    """
+    return (p.workout_type, p.intensity_class, p.distance_km, p.duration_minutes)
+
+
 async def get_or_create_served_prescription(
     db: Any,
     *,
@@ -74,7 +126,8 @@ async def get_or_create_served_prescription(
     prescription_id: str,
     planned_date: date,
     served_candidate: WorkoutPrescription,
-) -> WorkoutPrescription:
+    planned_prescription: Optional[WorkoutPrescription] = None,
+) -> ServedPrescriptionResult:
     """Atomically get-or-create the canonical SERVED prescription for a day.
 
     Parameters
@@ -91,19 +144,37 @@ async def get_or_create_served_prescription(
         The prescription THIS caller just computed (post-DailyAdaptation)
         for this day. Used to create the snapshot ONLY if none exists yet;
         ignored (never applied) if a snapshot already exists.
+    planned_prescription
+        The RAW (pre-adaptation) plan for this same slot, as computed by
+        THIS caller. Used ONLY at snapshot-creation time to compute
+        ``modified_from_planned = served_candidate != planned_prescription``
+        (compared on ``_prescription_core_fields``) — frozen into the
+        snapshot forever. Ignored if a snapshot already exists. May be
+        omitted (``None``) by callers that cannot supply it; the resulting
+        snapshot's ``modified_from_planned`` is then left ``None`` (unknown)
+        rather than fabricated.
 
     Returns
     -------
-    WorkoutPrescription
-        The canonical, effective prescription for this day — guaranteed
+    ServedPrescriptionResult
+        The canonical, effective prescription for this day, together with
+        the winning snapshot's own ``modified_from_planned`` — both
+        guaranteed to come from the SAME underlying Mongo document,
         identical for every caller regardless of which one actually created
-        the underlying Mongo document.
+        it.
     """
+    modified_from_planned: Optional[bool] = None
+    if planned_prescription is not None:
+        modified_from_planned = _prescription_core_fields(
+            served_candidate
+        ) != _prescription_core_fields(planned_prescription)
+
     candidate_snapshot = snapshot_from_prescription(
         user_id=user_id,
         prescription_id=prescription_id,
         planned_date=planned_date,
         session=served_candidate,
+        modified_from_planned=modified_from_planned,
     )
     await db.training_prescription_snapshots.update_one(
         {"user_id": user_id, "prescription_id": prescription_id},
@@ -121,9 +192,16 @@ async def get_or_create_served_prescription(
             f"prescription_id={prescription_id!r} immediately after upsert."
         )
     winning_snapshot = PrescriptionSnapshot(**winning_doc)
-    return resolve_effective_session(
+    effective = resolve_effective_session(
         live_session=served_candidate, frozen_snapshot=winning_snapshot
+    )
+    return ServedPrescriptionResult(
+        prescription=effective,
+        # Old snapshots persisted before this field existed deserialize with
+        # modified_from_planned=None (pydantic default) — NEVER reconstructed
+        # from the live plan; see PrescriptionSnapshot.modified_from_planned.
+        modified_from_planned=winning_snapshot.modified_from_planned,
     )
 
 
-__all__ = ["get_or_create_served_prescription"]
+__all__ = ["ServedPrescriptionResult", "get_or_create_served_prescription"]

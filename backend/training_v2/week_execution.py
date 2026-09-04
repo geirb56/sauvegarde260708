@@ -230,6 +230,14 @@ def build_week_execution(
                     prescription_id=prescription_id,
                     planned_date=planned_date,
                     session=session,
+                    # This fallback path persists the RAW plan `session`
+                    # itself as-is (no adaptation candidate available here —
+                    # the normal "today" path in server.py, which does know
+                    # the adaptation candidate, freezes it earlier via
+                    # get_or_create_served_prescription and populates
+                    # frozen_snapshots before this function is even called).
+                    # served == planned by construction ⇒ never modified.
+                    modified_from_planned=False,
                 )
             )
 

@@ -616,6 +616,40 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     unmount();
   });
 
+  // C231 (round 5 / "C231-septies") scenario F: session_modified_from_planned
+  // absent/null (pre-migration snapshot without the field) must show NO
+  // banner — never fabricated True, never a crash.
+  it("C231-septies: scenario F — no banner when session_modified_from_planned is null (pre-migration snapshot)", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(
+      buildDefaultMocks({
+        today: {
+          status: "success",
+          day: "monday",
+          adaptation_applied: true,
+          adaptation_action: "REDUCE",
+          adaptation_reason: "caution",
+          session_modified_from_planned: null,
+          readiness: TODAY_PAYLOAD.readiness,
+          planned_session: { type: "endurance", duration: "18 km", details: "Original 18 km", estimated_tss: 90 },
+          original_prescription: { type: "endurance", duration: "18 km", details: "Original 18 km", estimated_tss: 90 },
+          served_prescription: { type: "endurance", duration: "12.6 km", details: "Served 12.6 km", estimated_tss: 63 },
+          adapted_prescription: { type: "endurance", duration: "12.6 km", details: "Served 12.6 km", estimated_tss: 63 },
+          adaptive_session: null,
+        },
+      })
+    );
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const todayCard = container.querySelector('[data-testid="today-workout-card"]');
+    expect(todayCard).not.toBeNull();
+    expect(todayCard.querySelector('[data-testid="adaptation-notice"]')).toBeNull();
+    expect(todayCard.textContent).toContain("12.6");
+    unmount();
+  });
+
   // C231 corrections finales (round 3, P1 fix): source check — the banner
   // must be gated by session_modified_from_planned, never adaptation_applied,
   // and never used to choose the displayed session either.

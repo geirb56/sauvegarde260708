@@ -58,7 +58,7 @@ def _prescription_id_for_monday() -> str:
     return prescription_id_for(_USER_ID, _MONDAY, "monday")
 
 
-def _seed_frozen_snapshot(fake_db, *, distance_km: float, duration_minutes=None) -> None:
+def _seed_frozen_snapshot(fake_db, *, distance_km: float, duration_minutes=None, modified_from_planned=None) -> None:
     """Pre-freeze a snapshot with a value that could NOT come from a live
     recompute of the seeded plan (e.g. a much smaller distance than the
     live plan would ever produce for this slot), so that any test assertion
@@ -73,6 +73,7 @@ def _seed_frozen_snapshot(fake_db, *, distance_km: float, duration_minutes=None)
         "intensity_class": "low",
         "distance_km": distance_km,
         "duration_minutes": duration_minutes,
+        "modified_from_planned": modified_from_planned,
     })
 
 
@@ -130,13 +131,15 @@ async def test_today_endpoint_served_prescription_wins_even_when_adaptation_appl
 async def test_today_endpoint_exposes_session_modified_from_planned_true_when_snapshot_differs():
     """C231 (round 4 / 'C231-micro') item P1: session_modified_from_planned
     is the ONLY ground-truth signal for whether the frontend "Adapté" banner
-    should be shown — it must be exposed explicitly and be True whenever the
-    frozen served_prescription actually differs from the live planned_session."""
+    should be shown — it must be exposed explicitly, read directly from the
+    winning snapshot's own immutable field (round 5 fix), and be True
+    whenever the snapshot recorded that the served prescription differed
+    from the plan at snapshot-creation time."""
     fake_db = _harness._FakeDB()
     _harness._seed_cycle(fake_db)
     _harness._seed_garmin_activities(fake_db, n=8)
     _harness._seed_connected(fake_db, connected=True)
-    _seed_frozen_snapshot(fake_db, distance_km=12.6)
+    _seed_frozen_snapshot(fake_db, distance_km=12.6, modified_from_planned=True)
 
     result = await _harness._get_today(fake_db)
     assert result["status"] == 200, result["body"]
@@ -148,7 +151,7 @@ async def test_today_endpoint_exposes_session_modified_from_planned_true_when_sn
 
 
 async def test_today_endpoint_session_modified_from_planned_false_when_served_equals_planned():
-    """Scenario A (round 4): the served (frozen) prescription equals the raw
+    """Scenario A (round 4/5): the served (frozen) prescription equals the raw
     planned session even though THIS call's live readiness recompute may
     still flag adaptation_applied=True — session_modified_from_planned must
     be False so no false-positive "Adapté" banner is shown."""
@@ -169,6 +172,91 @@ async def test_today_endpoint_session_modified_from_planned_false_when_served_eq
     modified = body["session_modified_from_planned"]
     assert isinstance(modified, bool)
     assert modified == (body["served_prescription"] != body["planned_session"])
+
+
+# ---------------------------------------------------------------------------
+# C231 (round 5 / "C231-septies") — modified_from_planned IMMUTABILITY.
+#
+# session_modified_from_planned must be computed exactly ONCE, at
+# snapshot-creation time, and frozen alongside the snapshot forever — never
+# recomputed against whatever the LIVE plan looks like on a later call.
+# ---------------------------------------------------------------------------
+
+
+async def test_snapshot_C_live_plan_changes_later_does_not_flip_unmodified_to_modified():
+    """Scenario C: snapshot was served=planned=18 (modified_from_planned=False
+    at creation time). The live plan later "moves" to 15 (simulated here by
+    directly seeding the frozen snapshot with modified_from_planned=False and
+    a distance that intentionally differs from whatever the live seeded plan
+    would recompute) — /training/today must still report False, never
+    recompute it against the (now-different) live planned_session."""
+    fake_db = _harness._FakeDB()
+    _harness._seed_cycle(fake_db)
+    _harness._seed_garmin_activities(fake_db, n=8)
+    _harness._seed_connected(fake_db, connected=True)
+    # Snapshot recorded modified_from_planned=False when served == planned at
+    # 18km — but the distance stored (18) does NOT necessarily equal what the
+    # live plan recomputes today; that mismatch (if any) must be irrelevant.
+    _seed_frozen_snapshot(fake_db, distance_km=18.0, modified_from_planned=False)
+
+    result = await _harness._get_today(fake_db)
+    assert result["status"] == 200, result["body"]
+    body = result["body"]
+
+    # However the live planned_session recomputes today, the AUTHORITATIVE
+    # answer is the frozen snapshot's own recorded fact: never modified.
+    assert body["session_modified_from_planned"] is False
+    assert body["served_prescription"]["distance_km"] == 18.0
+
+
+async def test_snapshot_D_live_plan_converges_to_served_does_not_flip_modified_to_unmodified():
+    """Scenario D: snapshot was served=12.6 while planned=18
+    (modified_from_planned=True at creation time). Even if the live plan
+    later recomputes to 12.6 (matching the served value), the snapshot's own
+    recorded fact — True — must NOT flip to False."""
+    fake_db = _harness._FakeDB()
+    _harness._seed_cycle(fake_db)
+    _harness._seed_garmin_activities(fake_db, n=8)
+    _harness._seed_connected(fake_db, connected=True)
+    _seed_frozen_snapshot(fake_db, distance_km=12.6, modified_from_planned=True)
+
+    result = await _harness._get_today(fake_db)
+    assert result["status"] == 200, result["body"]
+    body = result["body"]
+
+    assert body["session_modified_from_planned"] is True
+    assert body["served_prescription"]["distance_km"] == 12.6
+
+
+async def test_scenario_F_pre_migration_snapshot_without_field_exposes_none_never_reconstructed():
+    """Scenario F: an old snapshot persisted before modified_from_planned
+    existed has no such key at all. Must deserialize to None (unknown) —
+    never silently reconstructed by comparing against the current live plan."""
+    fake_db = _harness._FakeDB()
+    _harness._seed_cycle(fake_db)
+    _harness._seed_garmin_activities(fake_db, n=8)
+    _harness._seed_connected(fake_db, connected=True)
+    # Seed a raw doc with NO modified_from_planned key at all (pre-migration).
+    fake_db.training_prescription_snapshots._docs.append({
+        "user_id": _USER_ID,
+        "prescription_id": _prescription_id_for_monday(),
+        "planned_date": _MONDAY.isoformat(),
+        "day": "monday",
+        "workout_type": "long_easy",
+        "intensity_class": "low",
+        "distance_km": 12.6,
+        "duration_minutes": None,
+        # modified_from_planned intentionally omitted.
+    })
+
+    result = await _harness._get_today(fake_db)
+    assert result["status"] == 200, result["body"]
+    body = result["body"]
+
+    assert body["session_modified_from_planned"] is None
+    # Legacy adaptive_session must also NOT be fabricated from a None value —
+    # None is falsy, so no adaptive_session leaks through.
+    assert body["adaptive_session"] is None
 
 
 async def test_week_first_then_today_show_identical_served_prescription():

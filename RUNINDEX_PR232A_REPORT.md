@@ -971,3 +971,156 @@ Checklist de non-régression :
 - tests backend + frontend ciblés : 0 fail (11 + 146 backend, 31 frontend)
 
 Aucune modification du redesign visuel #232B. Aucun merge effectué.
+
+# Addendum 4 — C231-septies : `modified_from_planned` immuable (même PR, NE PAS MERGER)
+
+Dernier blocker : `session_modified_from_planned` était recalculé À CHAQUE
+appel de `/training/today` par comparaison `served_prescription_runtime !=
+planned_session_runtime`. Or `served_prescription` est figée (snapshot) alors
+que `planned_session` est recalculé live — le booléen pouvait donc changer
+rétroactivement pour une séance déjà servie et qui n'avait, elle, jamais
+changé (faux positif si le plan live dérive plus tard vers une autre valeur ;
+faux négatif si le plan live rejoint fortuitement la valeur servie).
+
+## C231-septies.1 — `PrescriptionSnapshot.modified_from_planned` (champ immuable)
+
+`backend/training_v2/prescription_snapshot.py` : ajout du champ
+`modified_from_planned: Optional[bool] = None` sur `PrescriptionSnapshot`.
+Représente "la prescription réellement servie différait-elle du plan brut
+AU MOMENT où le snapshot a été créé ?" — jamais recalculé après coup.
+`snapshot_from_prescription()` accepte désormais un paramètre
+`modified_from_planned: Optional[bool] = None` transmis tel quel (jamais
+dérivé en interne).
+
+Compatibilité anciens snapshots (scénario F) : un document Mongo persisté
+avant l'existence de ce champ n'a pas la clé `modified_from_planned` ;
+Pydantic le désérialise alors automatiquement en `None` (valeur par défaut)
+— jamais reconstruit à partir du plan live.
+
+## C231-septies.2 — Calcul UNE SEULE FOIS dans `get_or_create_served_prescription`
+
+`backend/training_v2/served_prescription.py` :
+
+- Nouveau paramètre `planned_prescription: Optional[WorkoutPrescription] = None`.
+- À la création du snapshot (première fois seulement — `$setOnInsert`) :
+  `modified_from_planned = _prescription_core_fields(served_candidate) !=
+  _prescription_core_fields(planned_prescription)`, où
+  `_prescription_core_fields` compare `(workout_type, intensity_class,
+  distance_km, duration_minutes)` — exactement les champs persistés par le
+  snapshot (exclut délibérément `reason_codes`, qui peut différer entre deux
+  prescriptions structurellement identiques).
+- Si un snapshot existe déjà, `planned_prescription`/`served_candidate` de
+  CET appel sont entièrement ignorés (comme avant pour la prescription
+  elle-même) — le booléen n'est JAMAIS recalculé après coup.
+- Nouveau type de retour `ServedPrescriptionResult{prescription,
+  modified_from_planned}` : les deux valeurs proviennent TOUJOURS du MÊME
+  document Mongo gagnant (jamais une prescription d'un appel combinée à un
+  booléen recalculé par un autre) — garantit la convergence Today/Week en
+  cas de concurrence (scénario E).
+
+## C231-septies.3 — `/training/today` et `/training/v2/week`
+
+`backend/server.py` :
+
+- `/training/today` : appelle `get_or_create_served_prescription(...,
+  planned_prescription=planned_prescription)` et lit directement
+  `session_modified_from_planned = served_result.modified_from_planned` —
+  suppression totale de l'ancienne comparaison
+  `served_prescription_runtime != planned_session_runtime`.
+- `/training/v2/week` : même appel enrichi pour le slot "aujourd'hui"
+  (`planned_prescription=sessions_for_execution[today_index]`, capturé
+  AVANT écrasement par la valeur servie) ; le cache local
+  `frozen_snapshots[...]` est reconstruit avec
+  `modified_from_planned=served_result.modified_from_planned` (jamais
+  recalculé) pour rester cohérent avec ce que `/training/today` lirait pour
+  le même snapshot.
+- `week_execution.py` : le chemin de repli (rarement emprunté, car
+  `server.py` traite déjà "aujourd'hui" en amont) qui gèle un snapshot à
+  partir de la session brute du `WeeklyPlan` passe désormais explicitement
+  `modified_from_planned=False` (servi == planifié par construction, aucune
+  adaptation n'a eu lieu sur ce chemin).
+
+## C231-septies.4 — Frontend
+
+Aucun changement : `Dashboard.jsx` utilisait déjà
+`todaySession.session_modified_from_planned === true` (addendum 3) — `true`
+⇒ bandeau, `false`/`null`/absent ⇒ aucun bandeau. Nouveau test ajouté pour
+couvrir explicitement le cas `null` (scénario F, snapshot pré-migration).
+
+## C231-septies.5 — Tests obligatoires (scénarios A-F)
+
+`backend/tests/test_pr231_served_prescription.py` (niveau module, bas
+niveau) :
+- `test_scenario_A_creation_unmodified_when_served_equals_planned` — plan=18,
+  served=18 ⇒ `modified_from_planned is False`.
+- `test_scenario_B_creation_modified_when_served_differs_from_planned` —
+  plan=18, served=12.6 ⇒ `modified_from_planned is True`.
+- `test_scenario_C_live_plan_change_afterwards_does_not_flip_false_to_true` —
+  snapshot créé `False` ; un appel ultérieur avec un `planned_prescription`
+  différent (15) ne change rien : reste `False`.
+- `test_scenario_D_live_plan_converges_afterwards_does_not_flip_true_to_false`
+  — snapshot créé `True` ; un appel ultérieur dont le plan live "rejoint" la
+  valeur servie (12.6) ne change rien : reste `True`.
+- `test_scenario_E_concurrent_today_week_converge_on_same_winner_and_flag` —
+  deux candidats concurrents (`asyncio.gather`) ⇒ un seul document Mongo,
+  prescription ET `modified_from_planned` des deux appelants identiques et
+  cohérents avec le document gagnant.
+- `test_scenario_F_old_snapshot_without_field_returns_none_never_reconstructed`
+  — document sans la clé ⇒ `modified_from_planned is None`, jamais recalculé.
+
+`backend/tests/test_pr231_c231_corrections3.py` (niveau endpoint HTTP) :
+- `test_today_endpoint_exposes_session_modified_from_planned_true_when_snapshot_differs`
+  (snapshot seedé avec `modified_from_planned=True` explicite).
+- `test_today_endpoint_session_modified_from_planned_false_when_served_equals_planned`.
+- `test_snapshot_C_live_plan_changes_later_does_not_flip_unmodified_to_modified`.
+- `test_snapshot_D_live_plan_converges_to_served_does_not_flip_modified_to_unmodified`.
+- `test_scenario_F_pre_migration_snapshot_without_field_exposes_none_never_reconstructed`
+  (vérifie aussi que `adaptive_session` reste `null`, jamais fabriqué depuis
+  `None`).
+
+`frontend/src/__tests__/dashboard-training-v2.test.jsx` :
+- `C231-septies: scenario F — no banner when session_modified_from_planned is
+  null (pre-migration snapshot)`.
+
+## C231-septies.6 — Validation
+
+```
+cd backend && python3 -m pytest \
+  tests/test_pr232a_week_execution.py \
+  tests/test_pr231_c231_corrections2.py \
+  tests/test_pr231_c231_corrections3.py \
+  tests/test_pr231_c231_final_corrections.py \
+  tests/test_performed_workout_pr230.py \
+  tests/test_pr232a_c231_week_endpoint.py \
+  tests/test_pr231_served_prescription.py \
+  tests/test_pr232a_prescription_snapshot.py \
+  tests/test_goal_truth_pr226.py \
+  -q
+# → 225 passed
+
+cd frontend && npx craco test --watchAll=false --forceExit \
+  src/__tests__/dashboard-training-v2.test.jsx \
+  src/__tests__/training-v2-page.test.jsx
+# → 32 + 24 = 56 passed (was 55; +1 nouveau scénario F)
+```
+
+Checklist de non-régression :
+- `served_prescription` reste l'autorité Dashboard + TrainingPlanV2 : PASS
+  (chaîne de priorité et snapshot get-or-create inchangés, seule la source
+  du booléen d'adaptation change)
+- historique passé sans snapshot = `prescription_unavailable` : PASS
+  (inchangé)
+- rest sans snapshot idem : PASS (inchangé)
+- `external_id` Garmin réel : PASS (inchangé)
+- PR230 enums inchangés : PASS
+- no-lookahead : PASS
+- multi-user : PASS (isolation par `user_id` inchangée, snapshots toujours
+  clés par `(user_id, prescription_id)`)
+- None != 0 : PASS (`modified_from_planned=None` n'est jamais traité comme
+  `False` par le backend — seul le frontend le traite comme "pas de bandeau"
+  au même titre que `False`, ce qui est le comportement demandé, pas une
+  confusion `None==0`)
+- zéro `/training/feedback` : PASS
+- tests backend + frontend ciblés : 0 fail (225 backend, 56 frontend)
+
+Aucune modification du redesign visuel #232B. Aucun merge effectué.

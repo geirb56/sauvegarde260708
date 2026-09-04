@@ -3459,13 +3459,15 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     from training_v2.served_prescription import get_or_create_served_prescription
     from training_v2.week_execution import prescription_id_for
 
-    served_prescription = await get_or_create_served_prescription(
+    served_result = await get_or_create_served_prescription(
         db,
         user_id=user["id"],
         prescription_id=prescription_id_for(user["id"], today, day_name.lower()),
         planned_date=today,
         served_candidate=adaptation_result.adapted_workout,
+        planned_prescription=planned_prescription,
     )
+    served_prescription = served_result.prescription
 
     # ── 8. Map prescription to legacy runtime dict format ─────────────────
     planned_session_runtime = prescription_to_runtime_session(planned_prescription)
@@ -3481,11 +3483,15 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     # MUST NEVER be used (here or by any consumer) to choose which session is
     # displayed. The canonical served_prescription (frozen once per day) is
     # ALWAYS the one displayed, regardless of what a later recompute would
-    # decide. session_modified_from_planned is the ground-truth signal for
-    # "did the served session actually differ from the plan" (compares the
-    # frozen served prescription, not the possibly-stale live action).
+    # decide. session_modified_from_planned (C231 micro-correction: read
+    # directly from the winning snapshot's own immutable
+    # `modified_from_planned` field, computed ONCE at snapshot-creation time
+    # — NEVER recomputed here against the current live planned_prescription,
+    # which can keep changing after the snapshot was frozen and would make
+    # the boolean flip retroactively for a served session that never
+    # actually changed).
     adaptation_applied = adaptation_result.action != DailyAdaptationAction.KEEP
-    session_modified_from_planned = served_prescription_runtime != planned_session_runtime
+    session_modified_from_planned = served_result.modified_from_planned
     adaptation_reason = ", ".join(adaptation_result.reason_codes)
 
     # ── 9. Legacy compat: recommendation / recommendation_color derived from V2 ─
@@ -3513,8 +3519,10 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
         # divergent, live recompute).
         "adapted_prescription": adapted_runtime,
         # Legacy compat: adaptive_session present when the served prescription
-        # actually differs from the plan (ground truth), not when a possibly
-        # stale live re-adaptation action says so.
+        # actually differed from the plan AT SNAPSHOT-CREATION TIME (immutable
+        # fact from session_modified_from_planned), not a live recompute. None
+        # (unknown, e.g. pre-migration snapshot) is treated the same as False
+        # here — falsy in Python — so no adaptive_session is fabricated.
         "adaptive_session": adapted_runtime if session_modified_from_planned else None,
         # adaptation_applied: INFORMATIVE ONLY (C231 round 2) — describes what
         # today's live readiness recompute would decide right now. NEVER an
@@ -3523,13 +3531,16 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
         "adaptation_applied": adaptation_applied,
         "adaptation_reason": adaptation_reason,
         "adaptation_action": adaptation_result.action.value,
-        # session_modified_from_planned: C231 (round 3, item P1 fix) — the
-        # ONLY ground-truth signal for whether the "Adapté" banner should be
-        # shown. True iff the frozen served_prescription actually differs
-        # from planned_session. Unlike adaptation_applied (which reflects
-        # today's live readiness recompute and can be true even when the
-        # already-served snapshot equals the plan), this never produces a
-        # false-positive banner.
+        # session_modified_from_planned: C231 (micro-correction) — the ONLY
+        # ground-truth signal for whether the "Adapté" banner should be
+        # shown. This is the WINNING SNAPSHOT's own immutable
+        # `modified_from_planned` field (computed exactly once, at
+        # snapshot-creation time) — never recomputed here against the
+        # current live planned_session, which could keep changing after the
+        # snapshot was frozen and would otherwise make this flip
+        # retroactively for a served session that never actually changed.
+        # True/False/None (unknown — old snapshot predating this field; the
+        # frontend must show no banner for None, exactly like False).
         "session_modified_from_planned": session_modified_from_planned,
         "reason_codes": list(adaptation_result.reason_codes),
         # ReadinessDecision V2 block
@@ -4214,19 +4225,26 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
             # either endpoint always converges on one canonical Mongo
             # snapshot instead of each endpoint writing/using its own
             # locally computed (possibly divergent) candidate.
-            served = await get_or_create_served_prescription(
+            served_result = await get_or_create_served_prescription(
                 db,
                 user_id=user_id,
                 prescription_id=today_prescription_id,
                 planned_date=reference_date,
                 served_candidate=today_final.adaptation_result.adapted_workout,
+                planned_prescription=sessions_for_execution[today_index],
             )
+            served = served_result.prescription
             sessions_for_execution[today_index] = served
             frozen_snapshots[today_prescription_id] = snapshot_from_prescription(
                 user_id=user_id,
                 prescription_id=today_prescription_id,
                 planned_date=reference_date,
                 session=served,
+                # C231 (micro-correction): propagate the WINNING snapshot's
+                # own modified_from_planned — never recomputed here — so
+                # this in-memory cache entry stays consistent with what
+                # /training/today would read for the exact same snapshot.
+                modified_from_planned=served_result.modified_from_planned,
             )
 
     try:

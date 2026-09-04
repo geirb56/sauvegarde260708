@@ -61,6 +61,20 @@ class PrescriptionSnapshot(BaseModel):
     intensity_class: str
     distance_km: Optional[float] = None
     duration_minutes: Optional[int] = None
+    modified_from_planned: Optional[bool] = None
+    """Whether the SERVED prescription differed from the raw plan AT THE
+    MOMENT this snapshot was created. Computed exactly once, at
+    snapshot-creation time (see ``served_prescription.get_or_create_served_prescription``),
+    and NEVER recomputed afterwards against a later, possibly-different
+    live plan — the live plan may keep moving, but what was actually served
+    that day is a historical fact that cannot change retroactively.
+
+    ``None`` for snapshots created before this field existed (backward
+    compatibility) — deliberately NOT reconstructed from the current live
+    plan, since that would silently invent a fact that was never recorded.
+    A consumer seeing ``None`` MUST treat it as "unknown" (e.g. the frontend
+    shows no adaptation banner), never as ``False``.
+    """
 
 
 def is_freezable(*, planned_date: date, reference_date: date) -> bool:
@@ -78,8 +92,15 @@ def snapshot_from_prescription(
     prescription_id: str,
     planned_date: date,
     session: WorkoutPrescription,
+    modified_from_planned: Optional[bool] = None,
 ) -> PrescriptionSnapshot:
-    """Build the immutable snapshot payload for a freshly-served prescription."""
+    """Build the immutable snapshot payload for a freshly-served prescription.
+
+    ``modified_from_planned`` MUST be computed by the caller exactly once
+    (see ``served_prescription.get_or_create_served_prescription``) — this
+    function never derives it itself, to avoid silently recomputing it
+    against a different/live plan than the one the caller actually compared.
+    """
     return PrescriptionSnapshot(
         user_id=user_id,
         prescription_id=prescription_id,
@@ -89,6 +110,7 @@ def snapshot_from_prescription(
         intensity_class=session.intensity_class,
         distance_km=session.distance_km,
         duration_minutes=session.duration_minutes,
+        modified_from_planned=modified_from_planned,
     )
 
 
