@@ -4154,7 +4154,13 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
         build_week_execution,
         prescription_id_for,
     )
-    from training_v2.training_week_response import WeekV2ActualResponse
+    from training_v2.training_week_response import (
+        WeekV2ActualResponse,
+        WeekV2BlockResponse,
+        WeekV2PaceRangeResponse,
+    )
+    from training_v2.session_structure import build_session_blocks
+    from training_v2.training_paces import compute_training_paces
     from training_v2.prescription_snapshot import PrescriptionSnapshot, snapshot_from_prescription
     from training_v2.served_prescription import get_or_create_served_prescription
 
@@ -4287,6 +4293,40 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
             upsert=True,
         )
 
+    # PR232 — display-only session structure (blocks/splits + primary pace).
+    # Same 90-day domain activities already loaded above; reference_date is
+    # the SAME canonical clock used everywhere else in this endpoint.
+    training_paces_v2 = compute_training_paces(domain_activities_90, reference_date, user_max_hr=None)
+
+    def _pace_range_response(pace_range) -> Optional[WeekV2PaceRangeResponse]:
+        if pace_range is None:
+            return None
+        return WeekV2PaceRangeResponse(
+            lower_min_per_km=pace_range.lower.min_per_km,
+            upper_min_per_km=pace_range.upper.min_per_km,
+        )
+
+    def _block_responses(workout_type, distance_km, duration_minutes) -> list[WeekV2BlockResponse]:
+        blocks = build_session_blocks(
+            workout_type=workout_type,
+            distance_km=distance_km,
+            duration_minutes=duration_minutes,
+            paces=training_paces_v2,
+        )
+        if not blocks:
+            return []
+        return [
+            WeekV2BlockResponse(
+                label=block.label,
+                order=block.order,
+                repetitions=block.repetitions,
+                distance_km=block.distance_km,
+                duration_minutes=block.duration_minutes,
+                pace=_pace_range_response(block.pace),
+            )
+            for block in blocks
+        ]
+
     def _actual_response(row) -> Optional[WeekV2ActualResponse]:
         if row.activity_id is None:
             return None
@@ -4321,7 +4361,18 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
                 adherence_status=None,
                 actual=None,
                 execution_status=EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE,
+                primary_pace=None,
+                blocks=[],
             )
+        blocks = _block_responses(
+            se.session.workout_type, se.session.distance_km, se.session.duration_minutes
+        )
+        main_block = (
+            next((b for b in blocks if b.label == "main"), None)
+            or next((b for b in blocks if b.label == "segment" and b.order == 1), None)
+            or next((b for b in blocks if b.pace is not None), None)
+        )
+        primary_pace = main_block.pace if main_block else None
         return WeekV2SessionResponse(
             day=se.session.day,
             planned_date=planned_date_iso,
@@ -4335,6 +4386,8 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
             adherence_status=se.row.adherence_status.value,
             actual=_actual_response(se.row),
             execution_status=None,
+            primary_pace=primary_pace,
+            blocks=blocks,
         )
 
     sessions = [_session_response(se) for se in execution.sessions]

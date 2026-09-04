@@ -91,6 +91,53 @@ class WeekV2ActualResponse(BaseModel):
     """ISO-8601 local start datetime, when known."""
 
 
+class WeekV2PaceRangeResponse(BaseModel):
+    """PR232 — display pace range for one session/block, min/km, metric.
+
+    The frontend converts to the user's unit system (km↔mi, /km↔/mile);
+    the API always transports metric min/km, never a pre-localised string.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    lower_min_per_km: float
+    upper_min_per_km: float
+
+
+class WeekV2BlockResponse(BaseModel):
+    """PR232 — one readable block/segment of a session (display-only).
+
+    Does not affect distance_km/duration_minutes on the parent session
+    (those remain the WorkoutGenerator #131 source of truth). Purely a
+    breakdown for the UI: warmup / main (interval reps) / recovery /
+    cooldown, or ordered long-run segments.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    label: str
+    """warmup | main | recovery | cooldown | segment."""
+
+    order: int
+    """0-based display order within the session."""
+
+    repetitions: Optional[int] = None
+    """Number of repeats of this block (e.g. 3 for "3 × 2 km"), or None for
+    a single continuous block."""
+
+    distance_km: Optional[float] = None
+    """Distance of ONE repetition (or of the whole block if repetitions is
+    None). None when the block is duration-based (e.g. a jog recovery)."""
+
+    duration_minutes: Optional[float] = None
+    """Duration of ONE repetition (or of the whole block if repetitions is
+    None). None when the block is distance-based."""
+
+    pace: Optional[WeekV2PaceRangeResponse] = None
+    """Target pace range for this block. None when no pace evidence exists
+    (paces confidence INSUFFICIENT) — never fabricated."""
+
+
 class WeekV2SessionResponse(BaseModel):
     """Single training session — native V2 prescription + factual execution.
 
@@ -155,6 +202,16 @@ class WeekV2SessionResponse(BaseModel):
     exists) — the real Garmin activity for that day, if any, still surfaces
     via ``WeekV2PlanResponse.unmatched_actuals``, never fabricated here.
     None for a normal, PR230-backed session."""
+
+    primary_pace: Optional[WeekV2PaceRangeResponse] = None
+    """PR232 — headline target pace for this session (the main working
+    block). None for rest, prescription_unavailable, or when paces
+    confidence is INSUFFICIENT."""
+
+    blocks: List[WeekV2BlockResponse] = Field(default_factory=list)
+    """PR232 — ordered display-only breakdown of the session (warmup / main
+    / recovery / cooldown or long-run segments). Empty for rest and
+    prescription_unavailable days."""
 
 
 class WeekV2PlanResponse(BaseModel):
