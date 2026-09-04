@@ -349,3 +349,212 @@ matching_status/adherence_status` exposée par `/training/v2/week` reste
 identique).
 
 
+
+---
+
+# C231-ter — corrections round 2 (mêmes PR/branche, NE PAS MERGER)
+
+Objectif : fermer 4 blockers restants du bridge PR230/PR231 et rendre la
+vérité Prescribed → Performed réellement fiable.
+
+## C231-ter.1 — P0 : vrai identifiant Garmin `external_id`
+
+Bug découvert : `mongo_garmin_to_domain()` résolvait l'id stable via
+`doc.get("activity_id") or doc.get("source_activity_id")` — mais le
+document RÉELLEMENT persisté par `_ingest_activities` /
+`gccli_provider._normalize()` ne porte **jamais** de champ top-level
+`activity_id`/`source_activity_id` : seul `external_id` existe au niveau
+racine (le sous-document `garmin_activity` porte sa propre copie dans son
+propre champ `activity_id`). Résultat : `source_activity_id` était
+**toujours `None`** sur des documents réels, cassant silencieusement tout
+le matching Garmin↔prescription (PR230) basé sur l'identité de l'activité.
+
+Fix (`backend/garmin/domain_adapter.py`) : nouvelle fonction
+`_resolve_stable_activity_id(doc, sub)` avec l'ordre de priorité exact
+demandé :
+1. `doc["external_id"]`
+2. `doc["activity_id"]` (legacy)
+3. `doc["source_activity_id"]` (legacy)
+4. `garmin_activity.activity_id` (sous-document normalisé)
+
+Aucune fabrication : si aucun candidat n'est une chaîne non vide (ou un
+nombre), retourne `None`.
+
+Tests (`tests/test_pr231_external_id_boundary.py`, 5 tests) : document
+construit EXACTEMENT comme `_ingest_activities` (top-level `external_id`,
+AUCUN `activity_id` top-level, `source="garmin"`, `user_id`, vrai
+`garmin_activity`) ⇒ `mongo_garmin_to_domain()`/
+`mongo_garmin_to_observed_activity()` résolvent le bon id ⇒ matching PR230
+fonctionne de bout en bout ; document legacy avec `activity_id` top-level
+toujours résolu ; absence totale d'id ⇒ `None`, jamais fabriqué.
+
+## C231-ter.2 — P0 : Served Prescription Snapshot canonique
+
+Bug découvert : `/training/today` ne lisait/écrivait JAMAIS
+`training_prescription_snapshots` — il recalculait systématiquement sa
+propre adaptation, ignorant tout snapshot déjà gelé par
+`/training/v2/week`. Et `/training/v2/week` écrivait bien un snapshot
+insert-only (`$setOnInsert`) pour "aujourd'hui" mais **ne relisait jamais**
+la valeur réellement gagnante après l'upsert — sous concurrence, le
+perdant de la course pouvait afficher une valeur différente de celle
+réellement persistée.
+
+Fix : nouveau module `backend/training_v2/served_prescription.py` —
+`get_or_create_served_prescription(db, *, user_id, prescription_id,
+planned_date, served_candidate)` :
+1. tente un upsert insert-only (`$setOnInsert`, no-op si le doc existe déjà)
+2. relit ensuite INCONDITIONNELLEMENT le document (garanti être la valeur
+   gagnante, quel que soit l'appelant qui a réellement gagné la course
+   grâce à l'atomicité Mongo par document)
+3. retourne la prescription effective (`resolve_effective_session`)
+
+Câblé dans les DEUX endpoints :
+- `/training/today` : calcule `today_final` comme avant (pour l'affichage
+  readiness), mais utilise désormais le résultat GAGNANT de
+  `get_or_create_served_prescription()` pour la prescription réellement
+  affichée (distance/durée/type).
+- `/training/v2/week` : remplace l'ancien "substitute into
+  sessions_for_execution" (écriture sans relecture) par un appel à la même
+  fonction ; le résultat alimente `sessions_for_execution` ET
+  `frozen_snapshots` avant `build_week_execution`.
+
+Tests (`tests/test_pr231_served_prescription.py`, 6 tests) : premier appel
+crée le snapshot ; snapshot existant jamais réécrit (candidat différent
+ignoré) ; Week-first→Today identique ; Today-first→Week identique ;
+appels concurrents (`asyncio.gather`) ⇒ un seul document Mongo, deux
+réponses identiques ; candidat REST préservé.
+
+## C231-ter.3 — P0 : interdiction du snapshot rétroactif inventé
+
+Bug découvert : `build_week_execution()` proposait un nouveau snapshot dès
+qu'un jour était "freezable" (`planned_date <= reference_date`), y compris
+pour un jour PASSÉ jamais réellement ouvert/servi — fabriquant alors une
+prescription à partir du plan recalculé EN DIRECT aujourd'hui, ce qui peut
+différer de ce qui aurait vraiment été prescrit à l'époque.
+
+Fix (`backend/training_v2/week_execution.py`) :
+- la condition de proposition d'un NOUVEAU snapshot est resserrée à
+  `planned_date == reference_date` (aujourd'hui uniquement) ; un jour passé
+  sans snapshot existant n'est plus jamais figé rétroactivement.
+- pour un jour passé (`planned_date < reference_date`), non-repos, sans
+  snapshot existant : exclu du matching PR230 et remplacé par une ligne
+  explicite `MatchingStatus.PRESCRIPTION_UNAVAILABLE` /
+  `AdherenceStatus.PRESCRIPTION_UNAVAILABLE` (nouveaux membres d'énum dans
+  `training_v2/performed_workout.py`) — jamais missed/matched/
+  completed_modified.
+- les jours de repos (`workout_type == "rest"`) sont exemptés : aucune
+  valeur de distance/durée à fabriquer, et PR230 gère déjà le repos de
+  façon déterministe (`PLANNED`/`NOT_APPLICABLE`) indépendamment de
+  `reference_date`.
+- PR230 continue de montrer la vraie activité Garmin (actual/unmatched)
+  selon son propre contrat — seule l'invention de ce qui aurait été
+  *prescrit* est bannie.
+
+Tests conflictuels mis à jour (6 tests dans
+`tests/test_pr232a_week_execution.py` :
+`test_past_without_garmin_is_never_done`,
+`test_no_compatible_activity_after_window_is_missed`,
+`test_two_equivalent_candidates_are_ambiguous`,
+`test_extra_run_is_unmatched_actual_and_stays_visible`,
+`test_multi_user_isolation`, plus l'invariant fail-fast dans
+`test_pr231_c231_final_corrections.py`) : ces scénarios simulent
+légitimement "ce jour a déjà été servi/gelé quand il était courant" via un
+`frozen_snapshots` explicite, préservant le test du VRAI matching PR230
+sous le contrat resserré.
+
+Nouveaux tests (`tests/test_pr231_c231_corrections2.py`, items 3) :
+lundi jamais ouvert, plan recalculé différemment mercredi ⇒ aucun
+snapshot lundi créé, `PRESCRIPTION_UNAVAILABLE` (jamais missed/matched) ;
+replay déterministe à J+8 (statut identique) ; jour de repos jamais
+ouvert exempté ; le jour "aujourd'hui" reste normalement gelable.
+
+## C231-ter.4 — P1 : index UNIQUE snapshot = prérequis critique de démarrage
+
+Bug découvert : `_ensure_prescription_snapshot_unique_index(db)` était
+appelé À L'INTÉRIEUR du gros bloc `try/except` fail-open de
+`create_db_indexes()` — contrairement à
+`_ensure_paddle_events_unique_index(db)`, appelé AVANT ce bloc (critique,
+fail-fast). Une erreur de création d'index était donc avalée en silence,
+laissant le serveur démarrer alors que l'immuabilité des snapshots n'était
+plus garantie.
+
+Fix (`backend/server.py`) : `_ensure_prescription_snapshot_unique_index(db)`
+déplacé juste après `_ensure_paddle_events_unique_index(db)`, avant le
+`try:` du bloc fail-open — exactement le même patron que Paddle.
+
+Tests (`tests/test_pr231_c231_corrections2.py`, items 4) :
+`create_db_indexes()` appelle bien le helper avec la bonne db ; une
+exception levée par le helper se propage (`pytest.raises`) et le bloc
+fail-open (`db.workouts.create_index`, etc.) n'est jamais atteint ;
+vérification par inspection de source que l'appel précède bien le `try:`.
+
+## C231-ter.5 — Frontend : ne jamais inventer "done"
+
+Bug découvert : `getSessionStatusKey()` dans
+`frontend/src/pages/TrainingPlanV2.jsx` retournait `"done"` par défaut
+quand `matching_status === "matched"` mais `adherence_status` était
+inconnu/null/invalide.
+
+Fix : le fallback devient `"unverified"` (jamais `"done"`). Mapping
+exact préservé : `completed_as_planned → done`,
+`completed_modified → modified`, `completed_unverified → unverified`,
+autre/null → `unverified` (jamais `"done"` par défaut).
+
+Tests (`frontend/src/__tests__/training-v2-page.test.jsx`, 2 nouveaux
+tests) : `matching_status="matched"` + `adherence_status` inconnu ⇒
+`session-status-unverified` affiché, jamais `session-status-done` ;
+idem avec `adherence_status = null`.
+
+## C231-ter.6 — Validation
+
+Corrections de fixtures de tests pré-existantes (non liées à un bug de
+production) : trois harnais de fausse base Mongo partagés
+(`tests/test_handlers_pr228.py`, `tests/test_training_source_of_truth_pr216.py`,
+`tests/test_goal_truth_pr226.py`) ne géraient pas l'opérateur
+`$setOnInsert` dans leur `update_one` simulé — un manque resté invisible
+tant que rien ne relisait la valeur persistée. Le nouveau chemin de
+lecture-après-écriture de `get_or_create_served_prescription()` l'a
+révélé ; corrigé en alignant ces harnais sur le patron déjà utilisé par
+`tests/test_pr232a_c231_week_endpoint.py`.
+
+Commandes exécutées :
+```
+cd backend && python3 -m pytest tests/test_pr231_external_id_boundary.py \
+  tests/test_pr231_served_prescription.py \
+  tests/test_pr231_c231_corrections2.py \
+  tests/test_pr231_c231_final_corrections.py \
+  tests/test_pr231_c231_snapshot_adaptation.py \
+  tests/test_pr232a_week_execution.py \
+  tests/test_pr232a_c231_week_endpoint.py \
+  tests/test_pr232a_local_reference_date.py \
+  tests/test_performed_workout_pr230.py \
+  tests/test_mongo_garmin_boundary_pr137.py \
+  tests/test_handlers_pr228.py \
+  tests/test_weekly_unification_pr228.py \
+  tests/test_goal_truth_pr226.py \
+  tests/test_training_source_of_truth_pr216.py \
+  tests/test_paddle_integrity_pr223.py \
+  -q -k "not test_race_day_exact_phase_and_structure"
+# → 348 passed
+cd frontend && npx craco test --watchAll=false --forceExit \
+  src/__tests__/training-v2-page.test.jsx
+# → 22 passed
+```
+
+Résultat : **0 échec imputable à ce round de corrections.** Suite complète
+(`python3 -m pytest` sans filtre) : 300 échecs pré-existants, tous
+confirmés indépendants de ce changement (comparaison différentielle avant/
+après sur la liste des tests en échec) — connexions réseau externes
+indisponibles dans le sandbox (`localhost:8001`, hostname
+`charge-load.preview.emergentagent.com`), fixture Redis manquante
+(`test_reliable_queue.py`), et un flake connu de rate-limiting
+(`test_race_day_exact_phase_and_structure`, confirmé passant isolément).
+Seul échec pré-existant et non lié : `test_g_server_uses_boundary`
+(assertion sur une fonction renommée avant ce round, vérifié identique sur
+l'état du dépôt avant modification).
+
+Limites connues : le retrait des jours de repos de la diversion
+"historique non disponible" repose sur `workout_type == "rest"` restant
+la SEULE valeur utilisée pour désigner un jour de repos dans ce pipeline ;
+si un futur type de séance neutre est introduit, ce garde devra être
+étendu explicitement.
