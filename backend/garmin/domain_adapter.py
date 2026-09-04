@@ -103,6 +103,37 @@ def _opt_float_any(value: Any) -> Optional[float]:
     return float(value)
 
 
+def _resolve_stable_activity_id(doc: Dict[str, Any], sub: Dict[str, Any]) -> Optional[str]:
+    """Resolve the stable Garmin activity id, never inventing one.
+
+    The document actually persisted by ``gccli_provider._ingest_activities``
+    carries the id as top-level ``external_id`` (see
+    ``garmin/providers/gccli_provider.py`` — the real ingestion boundary).
+    There is historically NO top-level ``activity_id``/``source_activity_id``
+    field on modern documents; those are only ever candidates for legacy rows
+    that might pre-date the ``external_id`` convention.
+
+    Resolution order (first non-empty string wins, no fabrication):
+        1. ``doc["external_id"]``            — real ingestion contract
+        2. ``doc["activity_id"]``             — legacy top-level alias
+        3. ``doc["source_activity_id"]``      — legacy top-level alias
+        4. ``garmin_activity.activity_id``    — normalised sub-document
+    """
+    for candidate in (
+        doc.get("external_id"),
+        doc.get("activity_id"),
+        doc.get("source_activity_id"),
+        sub.get("activity_id"),
+    ):
+        if isinstance(candidate, str) and candidate != "":
+            return candidate
+        if isinstance(candidate, (int, float)):
+            # Some legacy/raw payloads may carry a numeric id; preserve it as
+            # given rather than silently dropping it, but never fabricate.
+            return str(candidate)
+    return None
+
+
 def mongo_garmin_to_domain(doc: Dict[str, Any]) -> DomainActivity:
     """Convert a raw MongoDB ``garmin_activities`` document to a :class:`DomainActivity`.
 
@@ -163,7 +194,7 @@ def mongo_garmin_to_domain(doc: Dict[str, Any]) -> DomainActivity:
     # source / source_activity_id — top-level only
     source_raw = doc.get("source")
     source: Optional[str] = source_raw if isinstance(source_raw, str) else None
-    source_activity_id = _domain_source_activity_id(doc.get("activity_id") or doc.get("source_activity_id"))
+    source_activity_id = _domain_source_activity_id(_resolve_stable_activity_id(doc, sub))
 
     # moving_duration_s — subdoc field (persisted via model_dump in gccli_provider)
     moving_dur_raw = sub.get("moving_duration_s") if "moving_duration_s" in sub else doc.get("moving_duration_s")

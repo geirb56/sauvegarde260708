@@ -3452,9 +3452,27 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     adaptation_result: DailyAdaptationResult = today_final.adaptation_result
     readiness_data_source = today_final.readiness_data_source
 
+    # C231 — item 2 BLOCKER FIX: go through the SAME atomic get-or-create
+    # snapshot service /training/v2/week uses, so both endpoints always
+    # converge on ONE canonical served prescription for today, regardless
+    # of which one is called first or concurrently.
+    from training_v2.served_prescription import get_or_create_served_prescription
+    from training_v2.week_execution import prescription_id_for
+
+    served_prescription = await get_or_create_served_prescription(
+        db,
+        user_id=user["id"],
+        prescription_id=prescription_id_for(user["id"], today, day_name.lower()),
+        planned_date=today,
+        served_candidate=adaptation_result.adapted_workout,
+    )
+
     # ── 8. Map prescription to legacy runtime dict format ─────────────────
     planned_session_runtime = prescription_to_runtime_session(planned_prescription)
-    adapted_runtime = prescription_to_runtime_session(adaptation_result.adapted_workout)
+    # C231 — the canonical SERVED prescription (post get-or-create snapshot
+    # resolution), never the raw local adaptation_result, is what gets
+    # displayed — guarantees identical distance/duration as /training/v2/week.
+    adapted_runtime = prescription_to_runtime_session(served_prescription)
     adaptation_applied = adaptation_result.action != DailyAdaptationAction.KEEP
     adaptation_reason = ", ".join(adaptation_result.reason_codes)
 
@@ -4087,7 +4105,8 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
     # today or in the past (see training_v2/prescription_snapshot.py) ─────
     from training_v2.week_execution import build_week_execution, prescription_id_for
     from training_v2.training_week_response import WeekV2ActualResponse
-    from training_v2.prescription_snapshot import PrescriptionSnapshot
+    from training_v2.prescription_snapshot import PrescriptionSnapshot, snapshot_from_prescription
+    from training_v2.served_prescription import get_or_create_served_prescription
 
     week_start = reference_date - timedelta(days=reference_date.weekday())
     week_end = week_start + timedelta(days=6)
@@ -4151,7 +4170,25 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
                 garmin_daily_metrics_docs=garmin_daily_metrics_docs,
                 garmin_connected=garmin_connected,
             )
-            sessions_for_execution[today_index] = today_final.adaptation_result.adapted_workout
+            # C231 — item 2 BLOCKER FIX: go through the SAME atomic
+            # get-or-create used by /training/today, so a concurrent call to
+            # either endpoint always converges on one canonical Mongo
+            # snapshot instead of each endpoint writing/using its own
+            # locally computed (possibly divergent) candidate.
+            served = await get_or_create_served_prescription(
+                db,
+                user_id=user_id,
+                prescription_id=today_prescription_id,
+                planned_date=reference_date,
+                served_candidate=today_final.adaptation_result.adapted_workout,
+            )
+            sessions_for_execution[today_index] = served
+            frozen_snapshots[today_prescription_id] = snapshot_from_prescription(
+                user_id=user_id,
+                prescription_id=today_prescription_id,
+                planned_date=reference_date,
+                session=served,
+            )
 
     try:
         execution = build_week_execution(
@@ -5622,6 +5659,14 @@ async def create_db_indexes():
         logger.warning(f"gccli bootstrap skipped: {e}")
     # Critical Paddle idempotence index must be guaranteed before startup continues.
     await _ensure_paddle_events_unique_index(db)
+    # C231 — item 4 BLOCKER FIX: the prescription-snapshot unique index is
+    # exactly as critical as Paddle's — it is the ONLY mechanism guaranteeing
+    # a served prescription can never be silently duplicated/overwritten
+    # under concurrency (see training_v2/served_prescription.py). It must be
+    # created BEFORE the fail-open try block below: if index creation ever
+    # fails, startup must propagate the error and stop, never continue while
+    # falsely claiming immutability is guaranteed.
+    await _ensure_prescription_snapshot_unique_index(db)
     try:
         # Workouts: filter + sort by user and date
         await db.workouts.create_index([("user_id", 1), ("date", -1)])
@@ -5665,11 +5710,6 @@ async def create_db_indexes():
             unique=True,
         )
         await db.auth_identities.create_index("user_id")
-        # C231 — real Mongo-level immutability guarantee for prescription
-        # snapshots: unique on (user_id, prescription_id) so a concurrent
-        # double-insert can never produce two canonical snapshots for the
-        # same key.
-        await _ensure_prescription_snapshot_unique_index(db)
         logger.info("MongoDB indexes created")
     except Exception as e:
         logger.warning(f"Could not create some MongoDB indexes: {e}")

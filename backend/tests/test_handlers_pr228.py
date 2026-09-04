@@ -149,7 +149,9 @@ class _Collection:
                 doc.update(update.get("$set", {}))
                 return _UpdateResult()
         if upsert:
-            self._docs.append({**q, **update.get("$set", {})})
+            self._docs.append(
+                {**q, **update.get("$set", {}), **update.get("$setOnInsert", {})}
+            )
         return _UpdateResult()
 
     async def insert_one(self, doc: dict) -> None:

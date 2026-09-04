@@ -740,7 +740,24 @@ def _make_db_with_activities(cycle, user_goal=None):
     snapshots_cursor = MagicMock()
     snapshots_cursor.to_list = AsyncMock(return_value=[])
     db.training_prescription_snapshots.find = MagicMock(return_value=snapshots_cursor)
-    db.training_prescription_snapshots.update_one = AsyncMock()
+
+    # C231 (item 2) — get_or_create_served_prescription() does an upsert
+    # followed by an unconditional find_one re-read; back both with a tiny
+    # in-memory store so the round-trip returns a well-formed document.
+    _snapshot_store: dict = {}
+
+    async def _snapshot_update_one(query, update, upsert=False):
+        key = (query.get("user_id"), query.get("prescription_id"))
+        if key not in _snapshot_store and upsert:
+            _snapshot_store[key] = dict(update.get("$setOnInsert", {}))
+        return MagicMock()
+
+    async def _snapshot_find_one(query, projection=None):
+        key = (query.get("user_id"), query.get("prescription_id"))
+        return _snapshot_store.get(key)
+
+    db.training_prescription_snapshots.update_one = _snapshot_update_one
+    db.training_prescription_snapshots.find_one = _snapshot_find_one
 
     # C231 — item 3: /training/v2/week may fetch garmin_connections/daily_metrics
     # for today's session before freezing its snapshot (not connected here).

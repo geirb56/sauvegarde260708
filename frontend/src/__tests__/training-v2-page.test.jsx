@@ -360,6 +360,36 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     expect(within(thursdayRow).queryByTestId("session-status-done")).not.toBeInTheDocument();
   });
 
+  test("matched + unknown/invalid adherence_status is never fabricated as done", async () => {
+    // C231 — item 5: matching_status="matched" with an adherence_status the
+    // frontend does not recognise (unknown string, null, or missing) must
+    // never fall back to "done" — the ONLY sanctioned fallback is
+    // "unverified" (or null), never a fabricated success state.
+    const unknownAdherenceWeek = weekData();
+    unknownAdherenceWeek.week.sessions[0].matching_status = "matched";
+    unknownAdherenceWeek.week.sessions[0].adherence_status = "some_future_unrecognised_status";
+
+    mockAxios({ week: unknownAdherenceWeek });
+    renderPage({ width: 390 });
+
+    const week = await screen.findByTestId("training-v2-week");
+    expect(within(week).queryByTestId("session-status-done")).not.toBeInTheDocument();
+    expect(within(week).getByTestId("session-status-unverified")).toBeInTheDocument();
+  });
+
+  test("matched + null adherence_status is never fabricated as done", async () => {
+    const nullAdherenceWeek = weekData();
+    nullAdherenceWeek.week.sessions[0].matching_status = "matched";
+    nullAdherenceWeek.week.sessions[0].adherence_status = null;
+
+    mockAxios({ week: nullAdherenceWeek });
+    renderPage({ width: 390 });
+
+    const week = await screen.findByTestId("training-v2-week");
+    expect(within(week).queryByTestId("session-status-done")).not.toBeInTheDocument();
+    expect(within(week).getByTestId("session-status-unverified")).toBeInTheDocument();
+  });
+
   test("missing day in week payload stays neutral and is not marked REST", async () => {
     const weekWithMissingSunday = weekData();
     weekWithMissingSunday.week.sessions = weekWithMissingSunday.week.sessions.filter((session) => session.day !== "sunday");

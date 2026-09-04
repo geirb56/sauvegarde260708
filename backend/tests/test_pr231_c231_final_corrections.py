@@ -218,9 +218,28 @@ def test_build_week_execution_raises_when_ledger_row_missing():
     from unittest.mock import patch
     import training_v2.week_execution as week_execution_mod
     from training_v2.performed_workout import PerformedWorkoutLedger
+    from training_v2.prescription_snapshot import PrescriptionSnapshot
+    from training_v2.week_execution import prescription_id_for
 
     week_start = date(2024, 6, 10)  # Monday
     sessions = [_rx_session("monday"), _rx_session("tuesday")]
+
+    # Both days are already frozen (served in the past), so they remain in
+    # PR230's matching path rather than being diverted to the item-3
+    # "historical prescription unavailable" branch — keeping this test's
+    # broken-ledger-invariant scenario meaningful.
+    frozen_snapshots = {
+        prescription_id_for("u1", date(2024, 6, 10), "monday"): PrescriptionSnapshot(
+            user_id="u1", prescription_id=prescription_id_for("u1", date(2024, 6, 10), "monday"),
+            planned_date=date(2024, 6, 10), day="monday",
+            workout_type="easy", intensity_class="low", distance_km=8.0,
+        ),
+        prescription_id_for("u1", date(2024, 6, 11), "tuesday"): PrescriptionSnapshot(
+            user_id="u1", prescription_id=prescription_id_for("u1", date(2024, 6, 11), "tuesday"),
+            planned_date=date(2024, 6, 11), day="tuesday",
+            workout_type="easy", intensity_class="low", distance_km=8.0,
+        ),
+    }
 
     # Force build_performed_workouts to return an EMPTY ledger (simulating a
     # broken invariant where a prescription silently has no ledger row).
@@ -245,6 +264,7 @@ def test_build_week_execution_raises_when_ledger_row_missing():
                 week_start=week_start,
                 sessions=sessions,
                 garmin_docs=[],
+                frozen_snapshots=frozen_snapshots,
             )
 
 

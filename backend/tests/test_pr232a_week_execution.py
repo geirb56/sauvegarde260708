@@ -79,6 +79,16 @@ def _row_for(result, planned_date: date):
 # ---------------------------------------------------------------------------
 
 def test_past_without_garmin_is_never_done():
+    from training_v2.prescription_snapshot import PrescriptionSnapshot
+
+    prescription_id = f"{USER}:2024-06-10:monday"
+    frozen_snapshots = {
+        prescription_id: PrescriptionSnapshot(
+            user_id=USER, prescription_id=prescription_id,
+            planned_date=date(2024, 6, 10), day="monday",
+            workout_type="easy", intensity_class="low", distance_km=8.0,
+        )
+    }
     sessions = [_session("monday")]
     rows = build_week_execution(
         user_id=USER,
@@ -86,6 +96,7 @@ def test_past_without_garmin_is_never_done():
         week_start=WEEK_START,
         sessions=sessions,
         garmin_docs=[],
+        frozen_snapshots=frozen_snapshots,
     )
     row = _row_for(rows, date(2024, 6, 10))
     assert row.matching_status == MatchingStatus.MISSED
@@ -134,12 +145,23 @@ def test_modified_garmin_activity_is_completed_modified():
 # ---------------------------------------------------------------------------
 
 def test_no_compatible_activity_after_window_is_missed():
+    from training_v2.prescription_snapshot import PrescriptionSnapshot
+
+    prescription_id = f"{USER}:2024-06-10:monday"
+    frozen_snapshots = {
+        prescription_id: PrescriptionSnapshot(
+            user_id=USER, prescription_id=prescription_id,
+            planned_date=date(2024, 6, 10), day="monday",
+            workout_type="easy", intensity_class="low", distance_km=8.0,
+        )
+    }
     sessions = [_session("monday", distance_km=8.0)]
     # Deviation way beyond guard ratio -> rejected as incompatible.
     docs = [_garmin_doc(activity_id="a1", local_date="2024-06-10", distance_km=1.0, duration_min=6)]
     rows = build_week_execution(
         user_id=USER, reference_date=date(2024, 6, 12),
         week_start=WEEK_START, sessions=sessions, garmin_docs=docs,
+        frozen_snapshots=frozen_snapshots,
     )
     row = _row_for(rows, date(2024, 6, 10))
     assert row.matching_status == MatchingStatus.MISSED
@@ -151,6 +173,16 @@ def test_no_compatible_activity_after_window_is_missed():
 # ---------------------------------------------------------------------------
 
 def test_two_equivalent_candidates_are_ambiguous():
+    from training_v2.prescription_snapshot import PrescriptionSnapshot
+
+    prescription_id = f"{USER}:2024-06-10:monday"
+    frozen_snapshots = {
+        prescription_id: PrescriptionSnapshot(
+            user_id=USER, prescription_id=prescription_id,
+            planned_date=date(2024, 6, 10), day="monday",
+            workout_type="easy", intensity_class="low", distance_km=8.0,
+        )
+    }
     sessions = [_session("monday", distance_km=8.0)]
     docs = [
         _garmin_doc(activity_id="a1", local_date="2024-06-10", distance_km=8.05, duration_min=48),
@@ -165,9 +197,13 @@ def test_two_equivalent_candidates_are_ambiguous():
     assert row.adherence_status == AdherenceStatus.AMBIGUOUS
     assert row.actual_distance_km is None
     # Even after the window closes, ambiguity is never resolved into missed.
+    # The day was already frozen when it was current (frozen_snapshots),
+    # so it is still legitimately re-matched, not treated as historically
+    # unavailable.
     rows_later = build_week_execution(
         user_id=USER, reference_date=date(2024, 6, 15),
         week_start=WEEK_START, sessions=sessions, garmin_docs=docs,
+        frozen_snapshots=frozen_snapshots,
     )
     row_later = _row_for(rows_later, date(2024, 6, 10))
     assert row_later.matching_status == MatchingStatus.AMBIGUOUS
@@ -178,6 +214,16 @@ def test_two_equivalent_candidates_are_ambiguous():
 # ---------------------------------------------------------------------------
 
 def test_extra_run_is_unmatched_actual_and_stays_visible():
+    from training_v2.prescription_snapshot import PrescriptionSnapshot
+
+    prescription_id = f"{USER}:2024-06-10:monday"
+    frozen_snapshots = {
+        prescription_id: PrescriptionSnapshot(
+            user_id=USER, prescription_id=prescription_id,
+            planned_date=date(2024, 6, 10), day="monday",
+            workout_type="easy", intensity_class="low", distance_km=8.0,
+        )
+    }
     sessions = [_session("monday", distance_km=8.0)]
     docs = [
         _garmin_doc(activity_id="a1", local_date="2024-06-10", distance_km=8.05, duration_min=48),
@@ -186,6 +232,7 @@ def test_extra_run_is_unmatched_actual_and_stays_visible():
     result = build_week_execution(
         user_id=USER, reference_date=date(2024, 6, 11),
         week_start=WEEK_START, sessions=sessions, garmin_docs=docs,
+        frozen_snapshots=frozen_snapshots,
     )
     assert result.sessions[0].row.matching_status == MatchingStatus.MATCHED
     assert len(result.extra_rows) == 1
@@ -198,6 +245,16 @@ def test_extra_run_is_unmatched_actual_and_stays_visible():
 # ---------------------------------------------------------------------------
 
 def test_multi_user_isolation():
+    from training_v2.prescription_snapshot import PrescriptionSnapshot
+
+    prescription_id = f"{USER}:2024-06-10:monday"
+    frozen_snapshots = {
+        prescription_id: PrescriptionSnapshot(
+            user_id=USER, prescription_id=prescription_id,
+            planned_date=date(2024, 6, 10), day="monday",
+            workout_type="easy", intensity_class="low", distance_km=8.0,
+        )
+    }
     sessions = [_session("monday", distance_km=8.0)]
     docs = [
         _garmin_doc(activity_id="a1", user_id="other-user", local_date="2024-06-10", distance_km=8.05),
@@ -205,6 +262,7 @@ def test_multi_user_isolation():
     result = build_week_execution(
         user_id=USER, reference_date=date(2024, 6, 12),
         week_start=WEEK_START, sessions=sessions, garmin_docs=docs,
+        frozen_snapshots=frozen_snapshots,
     )
     row = _row_for(result, date(2024, 6, 10))
     # Another user's activity can never be attributed — session stays missed.

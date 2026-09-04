@@ -80,7 +80,9 @@ const getSessionStatusKey = (session) => {
     if (adherence === "completed_as_planned") return "done";
     if (adherence === "completed_modified") return "modified";
     if (adherence === "completed_unverified") return "unverified";
-    return "done";
+    // C231 — item 5 BLOCKER FIX: unknown/null/invalid adherence must never
+    // be fabricated into "done". Surface it as unresolved instead.
+    return "unverified";
   }
   return null;
 };
