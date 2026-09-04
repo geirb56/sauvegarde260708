@@ -334,3 +334,67 @@ async def test_today_endpoint_has_no_training_feedback_field():
     result = await _get_today(fake_db)
     assert result["status"] == 200, result["body"]
     assert "recent_feedback" not in result["body"]
+
+
+# ---------------------------------------------------------------------------
+# PR232 — session structure (blocks/splits) wiring on /training/v2/week.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_week_sessions_expose_blocks_and_primary_pace_fields():
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    _seed_garmin_activities(fake_db, n=8)
+    _seed_connected(fake_db, connected=True)
+
+    result = await _get_week(fake_db)
+    assert result["status"] == 200, result["body"]
+
+    sessions = result["body"]["week"]["sessions"]
+    assert sessions, "expected at least one session in the week"
+    for session in sessions:
+        # Every session — including rest and prescription_unavailable —
+        # exposes the two new fields (never a KeyError for a consumer).
+        assert "blocks" in session
+        assert "primary_pace" in session
+        assert isinstance(session["blocks"], list)
+
+    rest_sessions = [s for s in sessions if s["workout_type"] == "rest"]
+    for rest_session in rest_sessions:
+        # PR232 — rest days never get a fabricated block/pace breakdown.
+        assert rest_session["blocks"] == []
+        assert rest_session["primary_pace"] is None
+
+    running_sessions = [
+        s for s in sessions
+        if s["workout_type"] not in (None, "rest") and s["distance_km"] is not None
+    ]
+    assert running_sessions, "expected at least one running session"
+    for running_session in running_sessions:
+        # A running session always has at least one block describing it.
+        assert len(running_session["blocks"]) >= 1
+        first_block = running_session["blocks"][0]
+        assert "label" in first_block
+        assert "order" in first_block
+
+
+@pytest.mark.asyncio
+async def test_prescription_unavailable_session_has_no_blocks_or_pace():
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    _seed_connected(fake_db, connected=True)
+    # No garmin activities seeded -> continuity_state == no_history and no
+    # frozen snapshot exists for past days: they surface as
+    # prescription_unavailable (never a fabricated historical prescription).
+    past_reference = _MONDAY + timedelta(days=3)
+
+    result = await _get_week(fake_db, reference_date=past_reference)
+    assert result["status"] == 200, result["body"]
+
+    unavailable = [
+        s for s in result["body"]["week"]["sessions"]
+        if s.get("execution_status") == "prescription_unavailable"
+    ]
+    for session in unavailable:
+        assert session["blocks"] == []
+        assert session["primary_pace"] is None

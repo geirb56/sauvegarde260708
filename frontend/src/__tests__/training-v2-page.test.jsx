@@ -20,6 +20,8 @@ jest.mock("@/components/Paywall", () => function MockPaywall({ returnPath }) {
   return <div data-testid="paywall" data-return-path={returnPath}>Paywall</div>;
 });
 
+const DAYS_ORDER = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+
 const FORBIDDEN_ENDPOINTS = [
   "/training/plan",
   "/training/full-cycle",
@@ -43,21 +45,35 @@ function weekData() {
       completed_km: 21,
       completed_duration_minutes: null,
       completed_session_count: 2,
+      planned_km: 58,
+      planned_duration_minutes: null,
+      session_count: 5,
       sessions: [
         {
           day: "monday", workout_type: "easy", distance_km: 8, duration_minutes: 45, estimated_tss: null,
           reason_codes: [], matching_status: "matched", adherence_status: "completed_as_planned",
           actual: { activity_id: "a1", distance_km: 8.1, duration_minutes: 44, pace_min_per_km: 5.5, activity_type: "running", start_time: "2026-08-24T07:00:00" },
           prescription: "45 min easy",
+          primary_pace: { lower_min_per_km: 5.75, upper_min_per_km: 6.3 },
+          blocks: [
+            { label: "main", order: 1, distance_km: 8, duration_minutes: null, repetitions: null, pace: { lower_min_per_km: 5.75, upper_min_per_km: 6.3 } },
+          ],
         },
         {
           day: "tuesday", workout_type: "rest", distance_km: null, duration_minutes: null, estimated_tss: null,
           reason_codes: [], matching_status: "planned", adherence_status: "not_applicable", actual: null,
         },
         {
-          day: "wednesday", workout_type: "quality", distance_km: 10, duration_minutes: 50, estimated_tss: null,
+          day: "wednesday", workout_type: "quality", distance_km: 9, duration_minutes: 50, estimated_tss: null,
           reason_codes: [], matching_status: "planned", adherence_status: "not_applicable", actual: null,
           prescription: "3 × 10 min",
+          primary_pace: { lower_min_per_km: 5.17, upper_min_per_km: 5.25 },
+          blocks: [
+            { label: "warmup", order: 1, distance_km: 2, duration_minutes: null, repetitions: null, pace: { lower_min_per_km: 6.33, upper_min_per_km: 6.67 } },
+            { label: "main", order: 2, distance_km: 2, duration_minutes: null, repetitions: 3, pace: { lower_min_per_km: 5.17, upper_min_per_km: 5.25 } },
+            { label: "recovery", order: 3, distance_km: null, duration_minutes: 2, repetitions: null, pace: null },
+            { label: "cooldown", order: 4, distance_km: 1, duration_minutes: null, repetitions: null, pace: { lower_min_per_km: 6.25, upper_min_per_km: 6.67 } },
+          ],
         },
         {
           day: "thursday", workout_type: "steady", distance_km: 8, duration_minutes: 42, estimated_tss: null,
@@ -68,6 +84,10 @@ function weekData() {
           day: "friday", workout_type: "easy", distance_km: 7, duration_minutes: 40, estimated_tss: null,
           reason_codes: [], matching_status: "planned", adherence_status: "not_applicable", actual: null,
           prescription: "40 min easy",
+          primary_pace: { lower_min_per_km: 6.25, upper_min_per_km: 6.67 },
+          blocks: [
+            { label: "main", order: 1, distance_km: 7, duration_minutes: null, repetitions: null, pace: { lower_min_per_km: 6.25, upper_min_per_km: 6.67 } },
+          ],
         },
         {
           day: "saturday", workout_type: "rest", distance_km: null, duration_minutes: null, estimated_tss: null,
@@ -77,9 +97,17 @@ function weekData() {
           day: "sunday", workout_type: "long_easy", distance_km: 18, duration_minutes: 95, estimated_tss: null,
           reason_codes: [], matching_status: "planned", adherence_status: "not_applicable", actual: null,
           prescription: "Long run 18 km",
+          primary_pace: { lower_min_per_km: 5.58, upper_min_per_km: 5.75 },
+          blocks: [
+            { label: "segment", order: 1, distance_km: 11.7, duration_minutes: null, repetitions: null, pace: { lower_min_per_km: 6.25, upper_min_per_km: 6.58 } },
+            { label: "segment", order: 2, distance_km: 3.6, duration_minutes: null, repetitions: null, pace: { lower_min_per_km: 5.58, upper_min_per_km: 5.75 } },
+            { label: "segment", order: 3, distance_km: 2.7, duration_minutes: null, repetitions: null, pace: { lower_min_per_km: 6.25, upper_min_per_km: 6.58 } },
+          ],
         },
       ],
-      unmatched_actuals: [],
+      unmatched_actuals: [
+        { activity_id: "extra1", distance_km: 5.2, duration_minutes: 30, pace_min_per_km: 5.77, activity_type: "running", start_time: "2026-08-22T06:30:00" },
+      ],
     },
   };
 }
@@ -523,5 +551,152 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
 
     expect(screen.queryByText(/sessionDetailLinkAvailable/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/sessionDetailLinkUnavailable/i)).not.toBeInTheDocument();
+  });
+
+  // ---------------------------------------------------------------------
+  // PR232 — Training UX V3
+  // ---------------------------------------------------------------------
+
+  test("PR232: week summary card shows planned volume and session count without opening any session", async () => {
+    mockAxios();
+    renderPage();
+
+    const summary = await screen.findByTestId("training-v2-week-summary");
+    expect(within(summary).getByTestId("week-summary-planned")).toHaveTextContent(
+      formatDistance(58, { unitSystem: "metric" })
+    );
+    expect(within(summary).getByTestId("week-summary-session-count")).toHaveTextContent("1/5");
+    expect(within(summary).getByTestId("week-summary-day-dots")).toBeInTheDocument();
+  });
+
+  test("PR232: week summary progress is factual — only sums real actual.distance_km, never fabricated", async () => {
+    mockAxios();
+    renderPage();
+
+    const summary = await screen.findByTestId("training-v2-week-summary");
+    // Only monday has an `actual` (8.1 km); every other session is planned/
+    // missed/rest with actual=null, so the factual sum must be exactly 8.1.
+    expect(within(summary).getByTestId("week-summary-progress-value")).toHaveTextContent(
+      formatDistance(8.1, { unitSystem: "metric" })
+    );
+  });
+
+  test("PR232: a simple session card shows distance and primary pace directly, no expansion needed", async () => {
+    mockAxios();
+    renderPage({ width: 390 });
+
+    const week = await screen.findByTestId("training-v2-week");
+    const fridayRow = within(week).getByTestId("training-v2-day-friday");
+    expect(within(fridayRow).getByTestId("training-v2-day-pace-friday")).toBeInTheDocument();
+    expect(fridayRow.textContent).toMatch(formatDistance(7, { unitSystem: "metric" }));
+  });
+
+  test("PR232: expanding a structured (quality) session reveals warmup/main/recovery/cooldown blocks with per-block paces", async () => {
+    mockAxios();
+    renderPage({ width: 390 });
+
+    const week = await screen.findByTestId("training-v2-week");
+    fireEvent.click(within(week).getByTestId("training-v2-day-toggle-wednesday"));
+
+    const details = within(week).getByTestId("training-v2-day-details-wednesday");
+    const blocks = within(details).getByTestId("session-blocks-wednesday");
+    // 4 blocks: warmup, main (3x2km), recovery jog, cooldown.
+    expect(within(blocks).getByTestId("session-block-0")).toHaveTextContent("2");
+    const mainBlock = within(blocks).getByTestId("session-block-1");
+    expect(mainBlock.textContent).toMatch(/3 ×/);
+    expect(mainBlock.textContent).toMatch("5:10");
+    const recoveryBlock = within(blocks).getByTestId("session-block-2");
+    expect(recoveryBlock.textContent).toMatch(/2 min/i);
+  });
+
+  test("PR232: expanding a long-run session reveals numbered multi-block segments, not a single absurd global range", async () => {
+    mockAxios();
+    renderPage({ width: 390 });
+
+    const week = await screen.findByTestId("training-v2-week");
+    fireEvent.click(within(week).getByTestId("training-v2-day-toggle-sunday"));
+
+    const blocks = within(week).getByTestId("session-blocks-sunday");
+    expect(within(blocks).getByTestId("session-block-0")).toHaveTextContent("1.");
+    expect(within(blocks).getByTestId("session-block-1")).toHaveTextContent("2.");
+    expect(within(blocks).getByTestId("session-block-2")).toHaveTextContent("3.");
+  });
+
+  test("PR232: expanding a matched session shows the prescribed vs actually performed comparison", async () => {
+    mockAxios();
+    renderPage({ width: 390 });
+
+    const week = await screen.findByTestId("training-v2-week");
+    fireEvent.click(within(week).getByTestId("training-v2-day-toggle-monday"));
+
+    const comparison = within(week).getByTestId("session-actual-comparison");
+    expect(within(comparison).getByTestId("session-actual-distance")).toHaveTextContent(
+      formatDistance(8.1, { unitSystem: "metric" })
+    );
+    expect(within(comparison).getByTestId("session-actual-duration")).toHaveTextContent("44 min");
+  });
+
+  test("PR232: unmatched Garmin activities are shown as extra activities, never attached to a prescribed session card", async () => {
+    mockAxios();
+    renderPage();
+
+    const section = await screen.findByTestId("training-v2-unmatched-actuals");
+    expect(within(section).getByTestId("unmatched-actual-0")).toHaveTextContent(
+      formatDistance(5.2, { unitSystem: "metric" })
+    );
+    // Must not appear nested inside any day's session card.
+    const week = screen.getByTestId("training-v2-week");
+    expect(within(week).queryByTestId("unmatched-actual-0")).not.toBeInTheDocument();
+  });
+
+  test("PR232: prescription_unavailable session never renders blocks or a primary pace", async () => {
+    const unavailableWeek = weekData();
+    unavailableWeek.week.sessions[3] = {
+      day: "thursday",
+      workout_type: null,
+      distance_km: null,
+      duration_minutes: null,
+      estimated_tss: null,
+      reason_codes: [],
+      matching_status: null,
+      adherence_status: null,
+      actual: null,
+      execution_status: "prescription_unavailable",
+      blocks: [],
+      primary_pace: null,
+    };
+
+    mockAxios({ week: unavailableWeek });
+    renderPage({ width: 390 });
+
+    const week = await screen.findByTestId("training-v2-week");
+    const thursdayRow = within(week).getByTestId("training-v2-day-thursday");
+    expect(within(thursdayRow).queryByTestId(/training-v2-day-pace-/)).not.toBeInTheDocument();
+    expect(thursdayRow.querySelector('[data-testid="training-v2-day-toggle-thursday"]').getAttribute("aria-expanded")).toBeNull();
+  });
+
+  test("PR232: imperial unit system never shows a /km suffix on any pace, including splits and week paces", async () => {
+    mockAxios();
+    renderPage({ unitSystem: "imperial", width: 390 });
+
+    const week = await screen.findByTestId("training-v2-week");
+    fireEvent.click(within(week).getByTestId("training-v2-day-toggle-wednesday"));
+    expect(week.textContent).not.toMatch(/\/km/);
+    expect(week.textContent).toMatch(/\/mi/);
+
+    const paces = screen.getByTestId("training-v2-paces");
+    fireEvent.click(within(paces).getByTestId("paces-collapsible-trigger"));
+    expect(paces.textContent).not.toMatch(/\/km/);
+  });
+
+  test("PR232: narrow mobile viewport still renders the week summary and all session cards", async () => {
+    mockAxios();
+    renderPage({ width: 360 });
+
+    await screen.findByTestId("training-v2-week-summary");
+    const week = await screen.findByTestId("training-v2-week");
+    DAYS_ORDER.forEach((day) => {
+      expect(within(week).getByTestId(`training-v2-day-${day}`)).toBeInTheDocument();
+    });
   });
 });

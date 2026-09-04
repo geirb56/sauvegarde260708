@@ -12,7 +12,7 @@ import { useLanguage } from "@/context/LanguageContext";
 import { useSubscription } from "@/context/SubscriptionContext";
 import { useUnitSystem } from "@/context/UnitContext";
 import { API_BASE_URL } from "@/config";
-import { formatDistance } from "@/utils/units";
+import { formatDistance, formatPace, convertPace } from "@/utils/units";
 
 const API = API_BASE_URL;
 const DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
@@ -25,6 +25,31 @@ const DAY_INDEX = {
   thursday: 4,
   friday: 5,
   saturday: 6,
+};
+
+// PR232 — Training UX V3: semantic status color/dot classes.
+// green = completed as prescribed, orange = modified/attention,
+// red = missed, blue/neutral = planned, gray = unavailable/unknown.
+const STATUS_DOT_CLASSES = {
+  done: "bg-emerald-400",
+  modified: "bg-amber-400",
+  missed: "bg-rose-400",
+  planned: "bg-sky-400",
+  unverified: "bg-slate-400",
+  ambiguous: "bg-slate-400",
+  unavailable: "bg-slate-500",
+  rest: "bg-slate-600",
+};
+
+const STATUS_TEXT_CLASSES = {
+  done: "text-emerald-400",
+  modified: "text-amber-400",
+  missed: "text-rose-400",
+  planned: "text-sky-400",
+  unverified: "text-slate-400",
+  ambiguous: "text-slate-400",
+  unavailable: "text-slate-500",
+  rest: "text-slate-500",
 };
 
 const isKnownNumber = (value) => typeof value === "number" && Number.isFinite(value);
@@ -98,7 +123,7 @@ const getSessionStatusKey = (session) => {
 const getSessionDetailRoute = (session) => {
   if (!session || typeof session !== "object") return null;
 
-  const workoutId = session.workout_id ?? session.workoutId;
+  const workoutId = session.actual?.activity_id ?? session.workout_id ?? session.workoutId;
   if (workoutId != null && workoutId !== "") return `/workout/${workoutId}`;
 
   const sessionId = session.session_id ?? session.sessionId ?? session.id;
@@ -133,10 +158,66 @@ const getSessionPaceOrZone = (session) => {
   return null;
 };
 
+// ---------------------------------------------------------------------------
+// PR232 — pace formatting. The API always transports metric min/km; the
+// user's unit system (metric/imperial) is only applied here, at display
+// time — never on the wire. Imperial NEVER shows a "/km" suffix (#8).
+// ---------------------------------------------------------------------------
+
+const formatPaceValueLabel = (minPerKm, unitSystem) => {
+  if (!isKnownNumber(minPerKm)) return null;
+  return formatPace(minPerKm * 60, { unitSystem });
+};
+
+// Numeric-only "M:SS" portion of a pace value, with no unit suffix — used to
+// build a range label ("6:15–6:40 /km") without string-matching the suffix
+// out of formatPace's output (which would be fragile to format changes).
+const formatPaceNumericOnly = (minPerKm, unitSystem) => {
+  if (!isKnownNumber(minPerKm)) return null;
+  const convertedSeconds = convertPace(minPerKm * 60, unitSystem);
+  if (!convertedSeconds) return null;
+  const mins = Math.floor(convertedSeconds / 60);
+  const secs = Math.round(convertedSeconds - mins * 60);
+  return `${mins}:${String(secs).padStart(2, "0")}`;
+};
+
+const formatPaceRangeLabel = (paceRange, unitSystem) => {
+  if (!paceRange || !isKnownNumber(paceRange.lower_min_per_km) || !isKnownNumber(paceRange.upper_min_per_km)) {
+    return null;
+  }
+  const upperLabel = formatPaceValueLabel(paceRange.upper_min_per_km, unitSystem);
+  if (!upperLabel) return null;
+  if (Math.abs(paceRange.lower_min_per_km - paceRange.upper_min_per_km) < 0.001) {
+    return upperLabel;
+  }
+  const lowerNumeric = formatPaceNumericOnly(paceRange.lower_min_per_km, unitSystem);
+  if (!lowerNumeric) return upperLabel;
+  return `${lowerNumeric}–${upperLabel}`;
+};
+
+// PR232 — readable "N × X km @ pace" / "X min footing" line for one block.
+// Never fabricates a pace: when block.pace is null the line simply omits it
+// instead of inventing one.
+const formatBlockLine = (block, t, unitSystem) => {
+  if (!block) return null;
+  const hasDistance = isKnownNumber(block.distance_km);
+  const distanceLabel = hasDistance ? formatDistance(block.distance_km, { unitSystem }) : null;
+  const durationLabel = isKnownNumber(block.duration_minutes) ? `${block.duration_minutes} min` : null;
+  const amount = distanceLabel || durationLabel;
+  const repPrefix = isKnownNumber(block.repetitions) && block.repetitions > 1 ? `${block.repetitions} × ` : "";
+  const isJogRecovery = block.label === "recovery" && !hasDistance && durationLabel;
+  const jogSuffix = isJogRecovery ? ` ${t("trainingV2.recoveryJog")}` : "";
+  const paceLabel = formatPaceRangeLabel(block.pace, unitSystem);
+  const paceSuffix = paceLabel ? ` @ ${paceLabel}` : "";
+  const line = `${repPrefix}${amount || ""}${jogSuffix}${paceSuffix}`.trim();
+  return line || null;
+};
+
 function LoadingState() {
   return (
     <div className="p-4 md:p-6 space-y-4" data-testid="training-v2-loading">
       <Skeleton className="h-20" />
+      <Skeleton className="h-24" />
       <Skeleton className="h-44" />
       <Skeleton className="h-60" />
       <Skeleton className="h-44" />
@@ -160,15 +241,77 @@ function SessionStatePill({ t, state }) {
 
   return (
     <span
-      className="text-[10px] uppercase tracking-wide text-muted-foreground"
+      className={`inline-flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide ${STATUS_TEXT_CLASSES[state] || "text-muted-foreground"}`}
       data-testid={`session-status-${state}`}
     >
+      <span className={`h-1.5 w-1.5 rounded-full ${STATUS_DOT_CLASSES[state] || "bg-muted-foreground"}`} aria-hidden="true" />
       {labels[state]}
     </span>
   );
 }
 
-function WeekSessionRow({ session, day, isToday, unitSystem, t }) {
+// PR232 — one block/split line, with its translated heading, inside an
+// expanded session card. Long-run "segment" blocks are numbered (1., 2., 3.)
+// instead of getting a warmup/main/recovery/cooldown heading.
+function BlockLine({ block, index, t, unitSystem }) {
+  const line = formatBlockLine(block, t, unitSystem);
+  if (!line) return null;
+
+  if (block.label === "segment") {
+    return (
+      <div className="text-sm" data-testid={`session-block-${index}`}>
+        <span className="text-muted-foreground">{index + 1}. </span>
+        <span>{line}</span>
+      </div>
+    );
+  }
+
+  const heading = getTranslatedValue(t, `trainingV2.blockLabels.${block.label}`, "trainingV2.notAvailable");
+  return (
+    <div className="space-y-0.5" data-testid={`session-block-${index}`}>
+      <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{heading}</p>
+      <p className="text-sm">{line}</p>
+    </div>
+  );
+}
+
+// PR232 — compact prescribed-vs-real comparison. Only rendered once a real
+// Garmin activity has actually been matched to this session (never for
+// planned/missed/unavailable/ambiguous). unmatched_actuals are never
+// attached here — they surface separately, unlinked.
+function ActualComparison({ session, t, unitSystem }) {
+  const actual = session.actual;
+  if (!actual) return null;
+
+  const actualDistance = isKnownNumber(actual.distance_km) ? formatDistance(actual.distance_km, { unitSystem }) : null;
+  const actualDuration = isKnownNumber(actual.duration_minutes) ? `${Math.round(actual.duration_minutes)} min` : null;
+  const actualPace = isKnownNumber(actual.pace_min_per_km) ? formatPaceValueLabel(actual.pace_min_per_km, unitSystem) : null;
+
+  return (
+    <div className="rounded-md border border-border bg-muted/30 p-2 text-sm" data-testid="session-actual-comparison">
+      <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{t("trainingV2.actualTitle")}</p>
+      <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
+        {actualDistance && (
+          <span data-testid="session-actual-distance">
+            <span className="text-muted-foreground">{t("trainingV2.actualDistance")}: </span>{actualDistance}
+          </span>
+        )}
+        {actualDuration && (
+          <span data-testid="session-actual-duration">
+            <span className="text-muted-foreground">{t("trainingV2.actualDuration")}: </span>{actualDuration}
+          </span>
+        )}
+        {actualPace && (
+          <span data-testid="session-actual-pace">
+            <span className="text-muted-foreground">{t("trainingV2.actualPace")}: </span>{actualPace}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SessionCard({ session, day, isToday, unitSystem, t, locale, open, onToggle }) {
   const workoutType = getSessionType(session);
   const isExplicitRest = workoutType === "rest" || getSessionStatusKey(session) === "rest";
   const statusKey = getSessionStatusKey(session);
@@ -184,20 +327,6 @@ function WeekSessionRow({ session, day, isToday, unitSystem, t }) {
     ? "absent"
     : (isToday ? "today" : statusKey);
 
-  const stateMarker = timelineState === "done"
-    ? "✓"
-    : timelineState === "today"
-      ? "●"
-      : timelineState === "rest"
-        ? "—"
-        : timelineState === "missed"
-          ? "✕"
-          : timelineState === "modified"
-            ? "△"
-            : timelineState === "ambiguous"
-              ? "?"
-              : "";
-
   const typeLabel = !session
     ? t("trainingV2.noSessionLabel")
     : isUnavailable
@@ -206,42 +335,174 @@ function WeekSessionRow({ session, day, isToday, unitSystem, t }) {
         ? t("trainingV2.restDay")
         : getTranslatedValue(t, `trainingV2.workoutTypes.${workoutType}`, "trainingV2.noSessionType");
 
-  const prescription = getPrescriptionText(session);
   const distance = isKnownNumber(session?.distance_km) ? formatDistance(session.distance_km, { unitSystem }) : null;
   const duration = isKnownNumber(session?.duration_minutes) ? `${session.duration_minutes} min` : null;
+  const primaryPace = !isUnavailable && !isExplicitRest ? formatPaceRangeLabel(session?.primary_pace, unitSystem) : null;
   const compactMetric = isUnavailable
     ? ""
     : distance || duration || (isExplicitRest ? t("trainingV2.restDay") : (session ? "" : t("trainingV2.noSessionLabel")));
 
+  const blocks = Array.isArray(session?.blocks) ? session.blocks : [];
+  const hasExpandableDetail = Boolean(session) && !isExplicitRest && (blocks.length > 0 || session?.actual);
   const detailRoute = getSessionDetailRoute(session);
-  const Wrapper = detailRoute ? Link : "div";
+  const dateLabel = session?.planned_date ? formatDate(session.planned_date, locale) : null;
 
   return (
-    <Wrapper
-      {...(detailRoute ? { to: detailRoute } : {})}
+    <div
       data-testid={`training-v2-day-${day}`}
       data-day-state={timelineState}
-      className={`grid grid-cols-[56px_minmax(0,1fr)_auto] items-center gap-2 rounded-md border px-2 py-2 text-sm ${
+      className={`rounded-lg border px-3 py-2.5 text-sm transition-colors ${
         isToday ? "border-primary bg-primary/10" : "border-border bg-card"
-      } ${detailRoute ? "hover:brightness-110" : ""}`}
+      }`}
     >
-      <span className="text-xs text-muted-foreground">{t(`trainingPlanDays.${day}`)}</span>
-      <div className="min-w-0">
-        <p className="truncate font-medium" data-testid={`training-v2-day-type-${day}`}>{typeLabel}</p>
-        {prescription && !isExplicitRest && !isUnavailable && (
-          <p className="truncate text-xs text-muted-foreground" data-testid={`training-v2-day-prescription-${day}`}>{prescription}</p>
-        )}
-      </div>
-      <div className="text-right">
-        {isToday ? (
-          <Badge className="mb-1 text-[10px]" data-testid="today-highlight-badge">{t("trainingV2.todayBadge")}</Badge>
-        ) : (
-          <span className="block text-xs text-muted-foreground">{stateMarker}</span>
-        )}
-        <p className="text-xs text-muted-foreground">{compactMetric}</p>
-        {statusKey && <SessionStatePill t={t} state={statusKey} />}
-      </div>
-    </Wrapper>
+      <button
+        type="button"
+        onClick={hasExpandableDetail ? onToggle : undefined}
+        data-testid={`training-v2-day-toggle-${day}`}
+        aria-expanded={hasExpandableDetail ? open : undefined}
+        aria-controls={hasExpandableDetail ? `training-v2-day-details-${day}` : undefined}
+        className={`grid w-full grid-cols-[64px_minmax(0,1fr)_auto] items-center gap-2 text-left ${hasExpandableDetail ? "cursor-pointer" : "cursor-default"}`}
+      >
+        <span className="text-xs text-muted-foreground">
+          {t(`trainingPlanDays.${day}`)}
+          {dateLabel && <span className="block text-[10px] text-muted-foreground/70">{dateLabel}</span>}
+        </span>
+        <div className="min-w-0">
+          <p className="truncate font-medium" data-testid={`training-v2-day-type-${day}`}>{typeLabel}</p>
+          {primaryPace && (
+            <p className="truncate text-xs text-muted-foreground" data-testid={`training-v2-day-pace-${day}`}>{primaryPace}</p>
+          )}
+        </div>
+        <div className="text-right">
+          {isToday && (
+            <Badge className="mb-1 text-[10px]" data-testid="today-highlight-badge">{t("trainingV2.todayBadge")}</Badge>
+          )}
+          <p className="text-xs font-medium text-foreground">{compactMetric}</p>
+          {statusKey && <SessionStatePill t={t} state={statusKey} />}
+        </div>
+      </button>
+
+      {hasExpandableDetail && open && (
+        <div className="mt-3 space-y-3 border-t border-border pt-3" data-testid={`training-v2-day-details-${day}`}>
+          {blocks.length > 0 && (
+            <div className="space-y-2" data-testid={`session-blocks-${day}`}>
+              <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{t("trainingV2.splitsTitle")}</p>
+              {blocks
+                .slice()
+                .sort((a, b) => a.order - b.order)
+                .map((block, index) => (
+                  <BlockLine key={`${day}-${block.label}-${index}`} block={block} index={index} t={t} unitSystem={unitSystem} />
+                ))}
+            </div>
+          )}
+          <ActualComparison session={session} t={t} unitSystem={unitSystem} />
+          {detailRoute && (
+            <Link to={detailRoute} className="inline-block text-xs font-medium text-primary hover:underline" data-testid={`session-detail-link-${day}`}>
+              {t("trainingV2.showDetails")}
+            </Link>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// PR232 — real Garmin activities this week that could not be attributed to
+// any prescribed session. Shown as extra activities, never artificially
+// attached to a session card.
+function UnmatchedActualsSection({ unmatchedActuals, t, locale, unitSystem }) {
+  if (!Array.isArray(unmatchedActuals) || unmatchedActuals.length === 0) return null;
+
+  return (
+    <Card data-testid="training-v2-unmatched-actuals">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm">{t("trainingV2.unmatchedActualsTitle")}</CardTitle>
+        <p className="text-xs text-muted-foreground">{t("trainingV2.unmatchedActualsHint")}</p>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        {unmatchedActuals.map((actual, index) => {
+          const distance = isKnownNumber(actual.distance_km) ? formatDistance(actual.distance_km, { unitSystem }) : null;
+          const duration = isKnownNumber(actual.duration_minutes) ? `${Math.round(actual.duration_minutes)} min` : null;
+          const dateLabel = actual.start_time ? formatDate(actual.start_time.slice(0, 10), locale) : null;
+          return (
+            <div
+              key={actual.activity_id || index}
+              className="flex items-center justify-between gap-2 rounded-md border border-border bg-muted/20 px-2 py-2 text-sm"
+              data-testid={`unmatched-actual-${index}`}
+            >
+              <span className="text-xs text-muted-foreground">{dateLabel || t("trainingV2.notAvailable")}</span>
+              <span className="flex-1 truncate px-2">{actual.activity_type || t("trainingV2.notAvailable")}</span>
+              <span className="text-xs font-medium">{[distance, duration].filter(Boolean).join(" · ") || t("trainingV2.notAvailable")}</span>
+            </div>
+          );
+        })}
+      </CardContent>
+    </Card>
+  );
+}
+
+// PR232 — "Vue Semaine" synthesis: understand the week WITHOUT opening any
+// session card. Planned volume, session count and a factual (never
+// fabricated) completion progress built solely from real `actual` data.
+function WeekSummaryCard({ weekPlan, orderedSessions, todayKey, t, unitSystem }) {
+  const plannedKm = isKnownNumber(weekPlan?.planned_km) ? formatDistance(weekPlan.planned_km, { unitSystem }) : null;
+  const plannedDuration = isKnownNumber(weekPlan?.planned_duration_minutes) ? `${weekPlan.planned_duration_minutes} min` : null;
+  const sessionCount = isKnownNumber(weekPlan?.session_count) ? weekPlan.session_count : null;
+
+  const completedKmSum = orderedSessions.reduce((total, session) => {
+    const actualKm = session?.actual?.distance_km;
+    return isKnownNumber(actualKm) ? total + actualKm : total;
+  }, 0);
+  const completedSessionCount = orderedSessions.filter((session) => session?.actual != null).length;
+  const progressPct = isKnownNumber(weekPlan?.planned_km) && weekPlan.planned_km > 0
+    ? Math.max(0, Math.min(100, Math.round((completedKmSum / weekPlan.planned_km) * 100)))
+    : 0;
+
+  return (
+    <Card data-testid="training-v2-week-summary">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm">{t("trainingV2.weekSummaryTitle")}</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+          {(plannedKm || plannedDuration) && (
+            <span data-testid="week-summary-planned">
+              <span className="text-muted-foreground">{t("trainingV2.weekPlannedVolume")}: </span>
+              <span className="font-semibold">{plannedKm || plannedDuration}</span>
+            </span>
+          )}
+          {sessionCount != null && (
+            <span data-testid="week-summary-session-count">
+              <span className="text-muted-foreground">{t("trainingV2.sessionCount")}: </span>
+              <span className="font-semibold">{completedSessionCount}/{sessionCount}</span>
+            </span>
+          )}
+        </div>
+        <div>
+          <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
+            <span>{t("trainingV2.weekProgressLabel")}</span>
+            <span data-testid="week-summary-progress-value">{formatDistance(completedKmSum, { unitSystem })}</span>
+          </div>
+          <Progress value={progressPct} data-testid="week-summary-progress-bar" />
+        </div>
+        <div className="flex items-center justify-between gap-1" data-testid="week-summary-day-dots">
+          {DAYS.map((day, index) => {
+            const session = orderedSessions[index];
+            const statusKey = getSessionStatusKey(session);
+            const isToday = day === todayKey;
+            const dotClass = isToday
+              ? "bg-primary"
+              : STATUS_DOT_CLASSES[statusKey] || "bg-slate-700";
+            return (
+              <div key={day} className="flex flex-col items-center gap-1" data-testid={`week-summary-dot-${day}`}>
+                <span className={`h-2.5 w-2.5 rounded-full ${dotClass}`} aria-hidden="true" />
+                <span className="text-[9px] uppercase text-muted-foreground">{t(`trainingPlanDays.${day}`).slice(0, 1)}</span>
+              </div>
+            );
+          })}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -310,6 +571,7 @@ export default function TrainingPlanV2() {
   const [loading, setLoading] = useState(false);
   const [hasError, setHasError] = useState(false);
   const [pacesOpen, setPacesOpen] = useState(false);
+  const [openDays, setOpenDays] = useState({});
 
   useEffect(() => {
     if (subLoading || isFree) return;
@@ -354,6 +616,8 @@ export default function TrainingPlanV2() {
     const sessions = weekData?.week?.sessions ?? [];
     return DAYS.map((day) => sessions.find((session) => session.day === day) ?? null);
   }, [weekData]);
+
+  const toggleDay = (day) => setOpenDays((prev) => ({ ...prev, [day]: !prev[day] }));
 
   if (subLoading || (!isFree && (loading || (!weekData && !hasError)))) return <LoadingState />;
   if (isFree) return <Paywall returnPath="/training" />;
@@ -429,6 +693,8 @@ export default function TrainingPlanV2() {
     ? getTranslatedValue(t, `trainingV2.pacesConfidence.${String(pacesData.confidence).toLowerCase()}`)
     : t("trainingV2.notAvailable");
 
+  const unmatchedActuals = Array.isArray(weekData?.week?.unmatched_actuals) ? weekData.week.unmatched_actuals : [];
+
   return (
     <div className="space-y-4 p-4 md:p-6" data-testid="training-v2-page">
       <Card data-testid="training-v2-plan-status">
@@ -455,6 +721,14 @@ export default function TrainingPlanV2() {
           )}
         </CardContent>
       </Card>
+
+      <WeekSummaryCard
+        weekPlan={weekData?.week}
+        orderedSessions={orderedSessions}
+        todayKey={todayKey}
+        t={t}
+        unitSystem={unitSystem}
+      />
 
       <Card className="border-primary/40" data-testid="training-v2-today">
         <CardHeader className="pb-3">
@@ -492,18 +766,23 @@ export default function TrainingPlanV2() {
           {orderedSessions.map((session, index) => {
             const day = DAYS[index];
             return (
-              <WeekSessionRow
+              <SessionCard
                 key={day}
                 session={session}
                 day={day}
                 isToday={day === todayKey}
                 unitSystem={unitSystem}
                 t={t}
+                locale={locale}
+                open={Boolean(openDays[day])}
+                onToggle={() => toggleDay(day)}
               />
             );
           })}
         </CardContent>
       </Card>
+
+      <UnmatchedActualsSection unmatchedActuals={unmatchedActuals} t={t} locale={locale} unitSystem={unitSystem} />
 
       <Card data-testid="training-v2-paces">
         <CardHeader className="pb-2">
@@ -537,34 +816,44 @@ export default function TrainingPlanV2() {
               <p className="text-sm text-muted-foreground">{t("trainingV2.pacesInsufficient")}</p>
             ) : (
               <div className="space-y-2 text-sm">
-                {pacesData?.paces?.easy?.lower?.pace_str && pacesData?.paces?.easy?.upper?.pace_str && (
+                {pacesData?.paces?.easy?.lower?.min_per_km != null && pacesData?.paces?.easy?.upper?.min_per_km != null && (
                   <div className="flex items-start justify-between gap-4">
                     <span className="text-muted-foreground">{t("trainingV2.paceEasy")}</span>
-                    <span className="text-right font-medium">{`${pacesData.paces.easy.lower.pace_str} - ${pacesData.paces.easy.upper.pace_str} /km`}</span>
+                    <span className="text-right font-medium">
+                      {formatPaceRangeLabel(
+                        { lower_min_per_km: pacesData.paces.easy.lower.min_per_km, upper_min_per_km: pacesData.paces.easy.upper.min_per_km },
+                        unitSystem,
+                      )}
+                    </span>
                   </div>
                 )}
-                {pacesData?.paces?.marathon?.pace_str && (
+                {pacesData?.paces?.marathon?.min_per_km != null && (
                   <div className="flex items-start justify-between gap-4">
                     <span className="text-muted-foreground">{t("trainingV2.paceMarathon")}</span>
-                    <span className="text-right font-medium">{`${pacesData.paces.marathon.pace_str} /km`}</span>
+                    <span className="text-right font-medium">{formatPaceValueLabel(pacesData.paces.marathon.min_per_km, unitSystem)}</span>
                   </div>
                 )}
-                {pacesData?.paces?.threshold?.pace_str && (
+                {pacesData?.paces?.threshold?.min_per_km != null && (
                   <div className="flex items-start justify-between gap-4">
                     <span className="text-muted-foreground">{t("trainingV2.paceThreshold")}</span>
-                    <span className="text-right font-medium">{`${pacesData.paces.threshold.pace_str} /km`}</span>
+                    <span className="text-right font-medium">{formatPaceValueLabel(pacesData.paces.threshold.min_per_km, unitSystem)}</span>
                   </div>
                 )}
-                {pacesData?.paces?.interval?.lower?.pace_str && pacesData?.paces?.interval?.upper?.pace_str && (
+                {pacesData?.paces?.interval?.lower?.min_per_km != null && pacesData?.paces?.interval?.upper?.min_per_km != null && (
                   <div className="flex items-start justify-between gap-4">
                     <span className="text-muted-foreground">{t("trainingV2.paceInterval")}</span>
-                    <span className="text-right font-medium">{`${pacesData.paces.interval.lower.pace_str} - ${pacesData.paces.interval.upper.pace_str} /km`}</span>
+                    <span className="text-right font-medium">
+                      {formatPaceRangeLabel(
+                        { lower_min_per_km: pacesData.paces.interval.lower.min_per_km, upper_min_per_km: pacesData.paces.interval.upper.min_per_km },
+                        unitSystem,
+                      )}
+                    </span>
                   </div>
                 )}
-                {pacesData?.paces?.repetition?.pace_str && (
+                {pacesData?.paces?.repetition?.min_per_km != null && (
                   <div className="flex items-start justify-between gap-4">
                     <span className="text-muted-foreground">{t("trainingV2.paceRepetition")}</span>
-                    <span className="text-right font-medium">{`${pacesData.paces.repetition.pace_str} /km`}</span>
+                    <span className="text-right font-medium">{formatPaceValueLabel(pacesData.paces.repetition.min_per_km, unitSystem)}</span>
                   </div>
                 )}
               </div>
