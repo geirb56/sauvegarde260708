@@ -483,6 +483,187 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     unmount();
   });
 
+  // C231 corrections finales — item 1: served_prescription is canonical, never adaptation_applied
+  it("C231-final: served_prescription (12.6) wins over stale planned_session (18) even when adaptation_applied=false", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(
+      buildDefaultMocks({
+        today: {
+          status: "success",
+          day: "monday",
+          adaptation_applied: false,
+          adaptation_reason: "",
+          readiness: TODAY_PAYLOAD.readiness,
+          planned_session: { type: "endurance", duration: "18 km", details: "Original 18 km", estimated_tss: 90 },
+          original_prescription: { type: "endurance", duration: "18 km", details: "Original 18 km", estimated_tss: 90 },
+          served_prescription: { type: "endurance", duration: "12.6 km", details: "Served 12.6 km", estimated_tss: 63 },
+          adapted_prescription: { type: "endurance", duration: "12.6 km", details: "Served 12.6 km", estimated_tss: 63 },
+          adaptive_session: { type: "endurance", duration: "12.6 km", details: "Served 12.6 km", estimated_tss: 63 },
+        },
+      })
+    );
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const todayCard = container.querySelector('[data-testid="today-workout-card"]');
+    expect(todayCard).not.toBeNull();
+    expect(todayCard.textContent).toContain("12.6");
+    expect(todayCard.textContent).not.toContain("18 km");
+    unmount();
+  });
+
+  // C231 corrections finales — item 1: authoritative snapshot (18) must never
+  // crash or fall back when adaptive_session is null (session not actually
+  // modified vs. the plan), even though today's live recompute says REDUCE.
+  it("C231-final: authoritative served snapshot (18) stays displayed when adaptive_session is null, no crash", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(
+      buildDefaultMocks({
+        today: {
+          status: "success",
+          day: "monday",
+          adaptation_applied: true,
+          adaptation_action: "REDUCE",
+          adaptation_reason: "caution",
+          readiness: TODAY_PAYLOAD.readiness,
+          planned_session: { type: "endurance", duration: "18 km", details: "Plan 18 km", estimated_tss: 90 },
+          original_prescription: { type: "endurance", duration: "18 km", details: "Plan 18 km", estimated_tss: 90 },
+          served_prescription: { type: "endurance", duration: "18 km", details: "Plan 18 km", estimated_tss: 90 },
+          adapted_prescription: { type: "endurance", duration: "18 km", details: "Plan 18 km", estimated_tss: 90 },
+          adaptive_session: null,
+        },
+      })
+    );
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const todayCard = container.querySelector('[data-testid="today-workout-card"]');
+    expect(todayCard).not.toBeNull();
+    expect(todayCard.textContent).toContain("18 km");
+    unmount();
+  });
+
+  // C231 corrections finales (round 3, P1 fix) — scenario A: served == planned,
+  // adaptation_applied=true from a live REDUCE recompute, but
+  // session_modified_from_planned=false ⇒ no "Adapté" banner at all.
+  it("C231-micro: scenario A — no adaptation banner when session_modified_from_planned=false despite adaptation_applied=true", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(
+      buildDefaultMocks({
+        today: {
+          status: "success",
+          day: "monday",
+          adaptation_applied: true,
+          adaptation_action: "REDUCE",
+          adaptation_reason: "caution",
+          session_modified_from_planned: false,
+          readiness: TODAY_PAYLOAD.readiness,
+          planned_session: { type: "endurance", duration: "18 km", details: "Plan 18 km", estimated_tss: 90 },
+          original_prescription: { type: "endurance", duration: "18 km", details: "Plan 18 km", estimated_tss: 90 },
+          served_prescription: { type: "endurance", duration: "18 km", details: "Plan 18 km", estimated_tss: 90 },
+          adapted_prescription: { type: "endurance", duration: "18 km", details: "Plan 18 km", estimated_tss: 90 },
+          adaptive_session: null,
+        },
+      })
+    );
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const todayCard = container.querySelector('[data-testid="today-workout-card"]');
+    expect(todayCard).not.toBeNull();
+    expect(todayCard.querySelector('[data-testid="adaptation-notice"]')).toBeNull();
+    expect(todayCard.textContent).not.toContain("caution");
+    unmount();
+  });
+
+  // C231 corrections finales (round 3, P1 fix) — scenario B: served (12.6)
+  // differs from planned (18), session_modified_from_planned=true ⇒ neutral
+  // "Séance adaptée" banner is visible and the card shows 12.6 km.
+  it("C231-micro: scenario B — neutral 'Séance adaptée' banner shown when session_modified_from_planned=true, card shows 12.6 km", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(
+      buildDefaultMocks({
+        today: {
+          status: "success",
+          day: "monday",
+          adaptation_applied: true,
+          adaptation_action: "REDUCE",
+          adaptation_reason: "caution",
+          session_modified_from_planned: true,
+          readiness: TODAY_PAYLOAD.readiness,
+          planned_session: { type: "endurance", duration: "18 km", details: "Original 18 km", estimated_tss: 90 },
+          original_prescription: { type: "endurance", duration: "18 km", details: "Original 18 km", estimated_tss: 90 },
+          served_prescription: { type: "endurance", duration: "12.6 km", details: "Served 12.6 km", estimated_tss: 63 },
+          adapted_prescription: { type: "endurance", duration: "12.6 km", details: "Served 12.6 km", estimated_tss: 63 },
+          adaptive_session: { type: "endurance", duration: "12.6 km", details: "Served 12.6 km", estimated_tss: 63 },
+        },
+      })
+    );
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const todayCard = container.querySelector('[data-testid="today-workout-card"]');
+    expect(todayCard).not.toBeNull();
+    const notice = todayCard.querySelector('[data-testid="adaptation-notice"]');
+    expect(notice).not.toBeNull();
+    expect(notice.textContent).not.toContain("caution");
+    expect(todayCard.textContent).toContain("12.6");
+    expect(todayCard.textContent).not.toContain("18 km");
+    unmount();
+  });
+
+  // C231 (round 5 / "C231-septies") scenario F: session_modified_from_planned
+  // absent/null (pre-migration snapshot without the field) must show NO
+  // banner — never fabricated True, never a crash.
+  it("C231-septies: scenario F — no banner when session_modified_from_planned is null (pre-migration snapshot)", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(
+      buildDefaultMocks({
+        today: {
+          status: "success",
+          day: "monday",
+          adaptation_applied: true,
+          adaptation_action: "REDUCE",
+          adaptation_reason: "caution",
+          session_modified_from_planned: null,
+          readiness: TODAY_PAYLOAD.readiness,
+          planned_session: { type: "endurance", duration: "18 km", details: "Original 18 km", estimated_tss: 90 },
+          original_prescription: { type: "endurance", duration: "18 km", details: "Original 18 km", estimated_tss: 90 },
+          served_prescription: { type: "endurance", duration: "12.6 km", details: "Served 12.6 km", estimated_tss: 63 },
+          adapted_prescription: { type: "endurance", duration: "12.6 km", details: "Served 12.6 km", estimated_tss: 63 },
+          adaptive_session: null,
+        },
+      })
+    );
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const todayCard = container.querySelector('[data-testid="today-workout-card"]');
+    expect(todayCard).not.toBeNull();
+    expect(todayCard.querySelector('[data-testid="adaptation-notice"]')).toBeNull();
+    expect(todayCard.textContent).toContain("12.6");
+    unmount();
+  });
+
+  // C231 corrections finales (round 3, P1 fix): source check — the banner
+  // must be gated by session_modified_from_planned, never adaptation_applied,
+  // and never used to choose the displayed session either.
+  it("C231-micro: scenario C — source check: adaptation_applied never gates the banner nor the session selection", () => {
+    const fs = require("fs");
+    const path = require("path");
+    const src = fs.readFileSync(
+      path.resolve(__dirname, "../pages/Dashboard.jsx"),
+      "utf-8"
+    );
+    expect(src).not.toMatch(/todaySession\.adaptation_applied/);
+    expect(src).toMatch(/session_modified_from_planned\s*===\s*true/);
+  });
+
   // 12c. dashboard visible today consumer no longer depends on legacy fatigue block
   it("12c. source check: no todaySession.fatigue consumer remains", () => {
     const fs = require("fs");
@@ -503,6 +684,19 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
       "utf-8"
     );
     expect(src).not.toContain('|| "RUN HARD"');
+  });
+
+  // C231 corrections finales: source check — adaptation_applied never used
+  // to select which session is displayed (ternary/conditional rendering).
+  it("C231-final: source check — adaptation_applied is never used to select the displayed session", () => {
+    const fs = require("fs");
+    const path = require("path");
+    const src = fs.readFileSync(
+      path.resolve(__dirname, "../pages/Dashboard.jsx"),
+      "utf-8"
+    );
+    expect(src).not.toMatch(/todaySession\.adaptation_applied\s*\?/);
+    expect(src).toMatch(/served_prescription/);
   });
 
   // 13. i18n keys: weeklyTarget, weeklyDone, minutes exist in EN

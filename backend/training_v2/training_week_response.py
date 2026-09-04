@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import date
 from typing import List, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class WeekV2GoalResponse(BaseModel):
@@ -66,25 +66,65 @@ class WeekV2TargetResponse(BaseModel):
     """none | low | medium | high."""
 
 
+class WeekV2ActualResponse(BaseModel):
+    """PR232A — Real Garmin evidence (PR230 boundary), for ONE activity.
+
+    Represents a single real Garmin activity — never fabricated, never a
+    calendar guess, never None -> 0 coerced. This same model is reused for
+    two distinct positions in the week payload:
+    - ``WeekV2SessionResponse.actual``: the activity matched/attributed to
+      that specific prescribed session (when ``matching_status`` indicates
+      a match).
+    - ``WeekV2PlanResponse.unmatched_actuals``: a real Garmin activity from
+      the current week that could not be attributed to any prescribed
+      session (``matching_status == unmatched_actual``).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    activity_id: Optional[str] = None
+    distance_km: Optional[float] = None
+    duration_minutes: Optional[float] = None
+    pace_min_per_km: Optional[float] = None
+    activity_type: Optional[str] = None
+    start_time: Optional[str] = None
+    """ISO-8601 local start datetime, when known."""
+
+
 class WeekV2SessionResponse(BaseModel):
-    """Single training session — native V2 prescription fields."""
+    """Single training session — native V2 prescription + factual execution.
+
+    PR232A: planned (prescription) and actual (PR230 Garmin boundary) are
+    both exposed. matching_status / adherence_status are never fabricated
+    here — they mirror training_v2.performed_workout verbatim.
+    """
 
     model_config = ConfigDict(frozen=True)
 
     day: str
     """Day of week, e.g. 'monday'."""
 
-    workout_type: str
-    """rest | recovery | easy | steady | quality | long_easy."""
+    planned_date: Optional[str] = None
+    """PR232A — ISO-8601 date this session is scheduled for."""
 
-    intensity_class: str
-    """rest | low | moderate | high."""
+    workout_type: Optional[str] = None
+    """rest | recovery | easy | steady | quality | long_easy. C231 (round 2)
+    — None when ``execution_status == "prescription_unavailable"``: this
+    day's real historical prescription was never frozen/served, so its
+    recomputed-today workout type is not presented as historical fact."""
+
+    intensity_class: Optional[str] = None
+    """rest | low | moderate | high. None under the same
+    ``prescription_unavailable`` condition as ``workout_type`` above."""
 
     distance_km: Optional[float] = None
-    """Distance in km, or None for duration-based / rest sessions."""
+    """Distance in km. None for duration-based / rest sessions, and for a
+    ``prescription_unavailable`` day (C231 round 2 — never a fabricated
+    historical value)."""
 
     duration_minutes: Optional[int] = None
-    """Duration in minutes, or None for distance-based active sessions."""
+    """Duration in minutes. None for distance-based active sessions, and for
+    a ``prescription_unavailable`` day (C231 round 2 — same as above)."""
 
     estimated_tss: Optional[float] = None
     """Training Stress Score. None for active sessions (not yet computed).
@@ -92,6 +132,29 @@ class WeekV2SessionResponse(BaseModel):
 
     reason_codes: List[str]
     """Deterministic language-neutral diagnostic codes."""
+
+    matching_status: Optional[str] = None
+    """PR232A — planned | matched | missed | ambiguous | unmatched_actual
+    (training_v2.performed_workout, PR230's own enum verbatim). None when
+    ``execution_status`` is set instead (PR230 was never consulted for this
+    day — see ``execution_status``)."""
+
+    adherence_status: Optional[str] = None
+    """PR232A — factual adherence diagnostic from PR230. Never fabricated
+    (no DONE/MISSED invented outside the PR230 engine). None under the same
+    condition as ``matching_status`` above."""
+
+    actual: Optional[WeekV2ActualResponse] = None
+    """PR232A — real Garmin evidence for this session, or None."""
+
+    execution_status: Optional[str] = None
+    """C231 (round 2) — bridge/API-level fact, deliberately NOT a PR230
+    ``MatchingStatus``/``AdherenceStatus`` value: "prescription_unavailable"
+    when this day's real historical prescription was never frozen/served
+    while it was current (``planned_date < reference_date`` and no snapshot
+    exists) — the real Garmin activity for that day, if any, still surfaces
+    via ``WeekV2PlanResponse.unmatched_actuals``, never fabricated here.
+    None for a normal, PR230-backed session."""
 
 
 class WeekV2PlanResponse(BaseModel):
@@ -110,6 +173,10 @@ class WeekV2PlanResponse(BaseModel):
 
     sessions: List[WeekV2SessionResponse]
     """All sessions ordered Monday→Sunday."""
+
+    unmatched_actuals: List[WeekV2ActualResponse] = Field(default_factory=list)
+    """PR232A — real Garmin activities of this week that could not be
+    attributed to any prescription. Never dropped."""
 
 
 class TrainingWeekV2Response(BaseModel):
@@ -144,5 +211,6 @@ __all__ = [
     "WeekV2StateResponse",
     "WeekV2TargetResponse",
     "WeekV2SessionResponse",
+    "WeekV2ActualResponse",
     "WeekV2PlanResponse",
 ]

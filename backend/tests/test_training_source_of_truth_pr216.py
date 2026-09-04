@@ -85,6 +85,7 @@ class _Collection:
         if upsert:
             payload = dict(query)
             payload.update(update.get("$set", {}))
+            payload.update(update.get("$setOnInsert", {}))
             self._docs.append(payload)
 
     async def insert_one(self, doc: dict) -> None:

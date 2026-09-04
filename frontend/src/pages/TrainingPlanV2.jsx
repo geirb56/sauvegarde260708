@@ -48,16 +48,50 @@ const getPrescriptionText = (session) => {
   return session.prescription || session.description || session.details || session.label || session.name || null;
 };
 
+/**
+ * PR232A/C231 — Maps the real `/training/v2/week` contract
+ * (matching_status + adherence_status from training_v2.performed_workout)
+ * to a UI-only status key. Never fabricates DONE/MISSED: everything mirrors
+ * the backend's factual PR230 execution state. No "past day => done"
+ * fallback — an unresolved session stays unresolved (null).
+ *
+ * Mapping:
+ *   execution_status === "prescription_unavailable"            -> unavailable
+ *   workout_type === "rest"                                   -> rest
+ *   matching_status planned    (+ not_applicable)              -> planned
+ *   matching_status matched    + completed_as_planned          -> done
+ *   matching_status matched    + completed_modified            -> modified
+ *   matching_status matched    + completed_unverified          -> unverified
+ *   matching_status missed     (+ missed)                      -> missed
+ *   matching_status ambiguous  (+ ambiguous)                   -> ambiguous
+ *   anything else / unresolved                                 -> null
+ */
 const getSessionStatusKey = (session) => {
   if (!session || typeof session !== "object") return null;
-  const raw = session.status || session.state || session.completion_status || session.execution_status;
-  if (!raw || typeof raw !== "string") return null;
 
-  const normalized = raw.toLowerCase();
-  if (normalized === "done" || normalized === "completed") return "done";
-  if (normalized === "planned" || normalized === "upcoming") return "planned";
-  if (normalized === "rest") return "rest";
-  if (normalized === "missed" || normalized === "skipped") return "missed";
+  // C231 (round 2, item 3) — a past day whose real historical prescription
+  // was never frozen/served is neutral: never Done/Missed/Modified, never a
+  // fabricated distance/duration. Checked BEFORE the rest check since
+  // workout_type is itself None/unreliable for this state (see backend
+  // training_v2.week_execution.EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE).
+  if (session.execution_status === "prescription_unavailable") return "unavailable";
+
+  if (session.workout_type === "rest") return "rest";
+
+  const matching = typeof session.matching_status === "string" ? session.matching_status.toLowerCase() : null;
+  const adherence = typeof session.adherence_status === "string" ? session.adherence_status.toLowerCase() : null;
+
+  if (matching === "planned") return "planned";
+  if (matching === "missed") return "missed";
+  if (matching === "ambiguous") return "ambiguous";
+  if (matching === "matched") {
+    if (adherence === "completed_as_planned") return "done";
+    if (adherence === "completed_modified") return "modified";
+    if (adherence === "completed_unverified") return "unverified";
+    // C231 — item 5 BLOCKER FIX: unknown/null/invalid adherence must never
+    // be fabricated into "done". Surface it as unresolved instead.
+    return "unverified";
+  }
   return null;
 };
 
@@ -118,6 +152,10 @@ function SessionStatePill({ t, state }) {
     planned: t("trainingV2.sessionStates.planned"),
     rest: t("trainingV2.sessionStates.rest"),
     missed: t("trainingV2.sessionStates.missed"),
+    modified: t("trainingV2.sessionStates.modified"),
+    unverified: t("trainingV2.sessionStates.unverified"),
+    ambiguous: t("trainingV2.sessionStates.ambiguous"),
+    unavailable: t("trainingV2.sessionStates.unavailable"),
   };
 
   return (
@@ -130,15 +168,21 @@ function SessionStatePill({ t, state }) {
   );
 }
 
-function WeekSessionRow({ session, day, isToday, todayIndex, unitSystem, t }) {
+function WeekSessionRow({ session, day, isToday, unitSystem, t }) {
   const workoutType = getSessionType(session);
   const isExplicitRest = workoutType === "rest" || getSessionStatusKey(session) === "rest";
   const statusKey = getSessionStatusKey(session);
-  const dayIndex = DAY_INDEX[day] ?? 1;
+  // C231 (round 2, item 3) — a past day whose real historical prescription
+  // was never frozen/served: neutral display, no fabricated distance/
+  // duration/workout type, no Done/Missed/Modified badge.
+  const isUnavailable = statusKey === "unavailable";
 
+  // C231 — no "past day => done" fallback: an unresolved status stays
+  // unresolved (null), it is never fabricated from the day's position in
+  // the calendar relative to today.
   const timelineState = !session
     ? "absent"
-    : (isToday ? "today" : (statusKey || (isExplicitRest ? "rest" : (dayIndex < todayIndex ? "done" : "planned"))));
+    : (isToday ? "today" : statusKey);
 
   const stateMarker = timelineState === "done"
     ? "✓"
@@ -146,18 +190,28 @@ function WeekSessionRow({ session, day, isToday, todayIndex, unitSystem, t }) {
       ? "●"
       : timelineState === "rest"
         ? "—"
-        : "";
+        : timelineState === "missed"
+          ? "✕"
+          : timelineState === "modified"
+            ? "△"
+            : timelineState === "ambiguous"
+              ? "?"
+              : "";
 
   const typeLabel = !session
     ? t("trainingV2.noSessionLabel")
-    : isExplicitRest
-      ? t("trainingV2.restDay")
-      : getTranslatedValue(t, `trainingV2.workoutTypes.${workoutType}`, "trainingV2.noSessionType");
+    : isUnavailable
+      ? t("trainingV2.sessionStates.unavailable")
+      : isExplicitRest
+        ? t("trainingV2.restDay")
+        : getTranslatedValue(t, `trainingV2.workoutTypes.${workoutType}`, "trainingV2.noSessionType");
 
   const prescription = getPrescriptionText(session);
   const distance = isKnownNumber(session?.distance_km) ? formatDistance(session.distance_km, { unitSystem }) : null;
   const duration = isKnownNumber(session?.duration_minutes) ? `${session.duration_minutes} min` : null;
-  const compactMetric = distance || duration || (isExplicitRest ? t("trainingV2.restDay") : (session ? "" : t("trainingV2.noSessionLabel")));
+  const compactMetric = isUnavailable
+    ? ""
+    : distance || duration || (isExplicitRest ? t("trainingV2.restDay") : (session ? "" : t("trainingV2.noSessionLabel")));
 
   const detailRoute = getSessionDetailRoute(session);
   const Wrapper = detailRoute ? Link : "div";
@@ -174,7 +228,7 @@ function WeekSessionRow({ session, day, isToday, todayIndex, unitSystem, t }) {
       <span className="text-xs text-muted-foreground">{t(`trainingPlanDays.${day}`)}</span>
       <div className="min-w-0">
         <p className="truncate font-medium" data-testid={`training-v2-day-type-${day}`}>{typeLabel}</p>
-        {prescription && !isExplicitRest && (
+        {prescription && !isExplicitRest && !isUnavailable && (
           <p className="truncate text-xs text-muted-foreground" data-testid={`training-v2-day-prescription-${day}`}>{prescription}</p>
         )}
       </div>
@@ -334,9 +388,18 @@ export default function TrainingPlanV2() {
     ? getTranslatedValue(t, `trainingV2.cyclePhases.${currentCycleWeek.phase}`)
     : t("trainingV2.notAvailable");
 
-  const todaySession = todayData?.adaptation_applied
-    ? todayData?.adapted_prescription || todayData?.adaptive_session || todayData?.planned_session
-    : todayData?.planned_session || todayData?.original_prescription;
+  // C231 (round 2, item 1 BLOCKER FIX) — the served_prescription is the
+  // canonical, ALWAYS-authoritative session for today (frozen once, never
+  // superseded by a later readiness recompute). adaptation_applied is
+  // informative only and must NEVER decide which session gets displayed:
+  // planned_session is only used as a last-resort fallback when no served
+  // prescription exists yet (should not normally happen once /training/today
+  // has been called at least once for today).
+  const todaySession = todayData?.served_prescription
+    || todayData?.adapted_prescription
+    || todayData?.adaptive_session
+    || todayData?.planned_session
+    || todayData?.original_prescription;
 
   const todayType = getSessionType(todaySession);
   const todayTypeLabel = todayType
@@ -365,8 +428,6 @@ export default function TrainingPlanV2() {
   const confidenceLabel = pacesData?.confidence
     ? getTranslatedValue(t, `trainingV2.pacesConfidence.${String(pacesData.confidence).toLowerCase()}`)
     : t("trainingV2.notAvailable");
-
-  const todayIndex = DAY_INDEX[todayKey] ?? 1;
 
   return (
     <div className="space-y-4 p-4 md:p-6" data-testid="training-v2-page">
@@ -436,7 +497,6 @@ export default function TrainingPlanV2() {
                 session={session}
                 day={day}
                 isToday={day === todayKey}
-                todayIndex={todayIndex}
                 unitSystem={unitSystem}
                 t={t}
               />
