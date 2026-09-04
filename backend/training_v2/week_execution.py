@@ -35,6 +35,13 @@ Design rules
   their adherence counterparts). Such a day is excluded from PR230 matching
   entirely and reported here as ``SessionExecution(row=None,
   execution_status=EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE)``.
+- C231 (corrections finales) — this applies UNCONDITIONALLY to every
+  strictly past, un-frozen day, including one whose live recompute (today)
+  says ``rest``: without a frozen historical snapshot there is no way to
+  know whether that day really was a rest day when it should have been
+  served. The previous rest-day exemption was incorrect and has been
+  removed. A day that DOES have an existing frozen snapshot (rest or
+  active) is unaffected and still matched normally against PR230.
 """
 
 from __future__ import annotations
@@ -177,16 +184,20 @@ def build_week_execution(
 
     C231 (P0 #3) — a NEW snapshot is only ever proposed for ``planned_date ==
     reference_date`` (today, being served for the very first time). A
-    strictly past, non-rest session (``planned_date < reference_date``) with
-    no existing frozen snapshot was NEVER actually served while it was
-    current: its live (recomputed today) prescription is NOT trusted as
-    historical truth. It is excluded from PR230 matching entirely and
+    strictly past session (``planned_date < reference_date``) with no
+    existing frozen snapshot was NEVER actually served while it was current:
+    its live (recomputed today) prescription is NOT trusted as historical
+    truth — including when today's recompute says ``rest``. Without a
+    frozen historical snapshot there is no way to know whether that day
+    really was a rest day at the time it should have been served (C231
+    corrections finales — the previous ``rest``-day exemption was incorrect
+    and has been removed). It is excluded from PR230 matching entirely and
     reported as ``execution_status=EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE``
     (with ``row=None``) instead of being silently fabricated into
-    ``matched``/``missed``/``completed_modified``. Rest days are exempt —
-    there is no distance/duration to fabricate for a rest day; PR230 already
-    reports them deterministically as ``planned``/``not_applicable``
-    regardless of Garmin evidence.
+    ``matched``/``missed``/``completed_modified``/``planned``/
+    ``not_applicable``. A day WITH an existing frozen snapshot (including a
+    genuinely-frozen historical rest day) is unaffected and still goes
+    through normal PR230 matching.
     """
     frozen_snapshots = frozen_snapshots or {}
     week_end = week_start + timedelta(days=6)
@@ -205,9 +216,10 @@ def build_week_execution(
             live_session=session, frozen_snapshot=frozen
         )
 
-        is_rest = session.workout_type == "rest"
-
-        if frozen is None and not is_rest and planned_date < reference_date:
+        # C231 corrections finales — no rest-day exception: without a
+        # frozen historical snapshot, today's live recompute (rest or not)
+        # is never trusted as historical fact for a strictly past day.
+        if frozen is None and planned_date < reference_date:
             unavailable_prescription_ids.add(prescription_id)
             continue
 

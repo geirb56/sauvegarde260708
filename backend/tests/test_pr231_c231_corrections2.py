@@ -1,4 +1,4 @@
-"""C231 (corrections round 2) — tests for:
+"""C231 (corrections round 2 + corrections finales) — tests for:
 
 - item 3: no retroactively-invented prescription snapshot for a day that was
   never opened/served while it was current (Monday never opened, Wednesday
@@ -8,6 +8,10 @@
 - item 4: the prescription-snapshot unique index must be a CRITICAL
   (fail-fast) startup prerequisite, exactly like Paddle's — creation failure
   must propagate and stop startup.
+- corrections finales item 2: NO rest-day exception — a strictly past,
+  un-frozen day is prescription_unavailable regardless of whether today's
+  live recompute says 'rest'; only an EXISTING frozen snapshot (rest or
+  active) restores normal PR230 matching.
 """
 from __future__ import annotations
 
@@ -122,12 +126,17 @@ def test_monday_never_opened_replay_is_deterministic():
     assert se2.row is None
 
 
-def test_rest_day_never_opened_is_exempt_from_unavailable():
-    """Rest days carry no distance/duration to fabricate; PR230 already
-    handles them deterministically (PLANNED/NOT_APPLICABLE) regardless of
-    reference_date, so they are exempt from the historical-unavailable
-    diversion."""
-    from training_v2.week_execution import build_week_execution
+def test_past_rest_day_never_opened_is_now_prescription_unavailable():
+    """C231 (corrections finales) — the previous rest-day exemption was
+    INCORRECT and has been removed: without a frozen historical snapshot,
+    a strictly past day recomputed as 'rest' today is still
+    prescription_unavailable (we cannot know whether it really was a rest
+    day at the time it should have been served). Never
+    planned/not_applicable for this case."""
+    from training_v2.week_execution import (
+        EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE,
+        build_week_execution,
+    )
 
     sessions = [_session("monday", workout_type="rest", distance_km=None)]
     result = build_week_execution(
@@ -136,8 +145,72 @@ def test_rest_day_never_opened_is_exempt_from_unavailable():
         garmin_docs=[], frozen_snapshots={},
     )
     se = next(s for s in result.sessions if s.session.day == "monday")
+    assert se.execution_status == EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE
+    assert se.row is None
+
+
+def test_past_rest_day_with_existing_frozen_snapshot_uses_pr230_normally():
+    """A day WITH an existing frozen historical snapshot (rest included) is
+    unaffected by the prescription_unavailable diversion: PR230 matching
+    proceeds normally and may legitimately return planned/not_applicable."""
+    from training_v2.prescription_snapshot import snapshot_from_prescription
+    from training_v2.week_execution import (
+        build_week_execution,
+        prescription_id_for,
+    )
+
+    monday = date(2024, 6, 10)
+    rest_session = _session("monday", workout_type="rest", distance_km=None)
+    pid = prescription_id_for(_USER_ID, monday, "monday")
+    frozen_rest_snapshot = snapshot_from_prescription(
+        user_id=_USER_ID, prescription_id=pid, planned_date=monday, session=rest_session,
+    )
+
+    result = build_week_execution(
+        user_id=_USER_ID, reference_date=date(2024, 6, 20),
+        week_start=_WEEK_START, sessions=[rest_session],
+        garmin_docs=[], frozen_snapshots={pid: frozen_rest_snapshot},
+    )
+    se = next(s for s in result.sessions if s.session.day == "monday")
     assert se.execution_status is None
     assert se.row is not None
+    assert se.row.matching_status.value == "planned"
+    assert se.row.adherence_status.value == "not_applicable"
+
+
+def test_real_garmin_activity_on_unavailable_rest_day_still_surfaces_as_unmatched():
+    """A real Garmin activity that happened on an un-frozen past 'rest' day
+    must still surface via extra_rows (unmatched_actuals), never silently
+    dropped just because the session itself is prescription_unavailable."""
+    from training_v2.week_execution import (
+        EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE,
+        build_week_execution,
+    )
+
+    monday = date(2024, 6, 10)
+    sessions = [_session("monday", workout_type="rest", distance_km=None)]
+    garmin_docs = [{
+        "user_id": _USER_ID,
+        "source": "garmin",
+        "activity_id": "monday-real-run",
+        "activity_type": "running",
+        "start_time": monday.isoformat() + " 07:00:00",
+        "garmin_activity": {"start_time_local": monday.isoformat() + " 07:00:00"},
+        "distance_m": 6000.0,
+        "duration_s": 1800.0,
+    }]
+
+    result = build_week_execution(
+        user_id=_USER_ID, reference_date=date(2024, 6, 20),
+        week_start=_WEEK_START, sessions=sessions,
+        garmin_docs=garmin_docs, frozen_snapshots={},
+    )
+    se = next(s for s in result.sessions if s.session.day == "monday")
+    assert se.execution_status == EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE
+    assert se.row is None
+
+    extra_activity_ids = {row.activity_id for row in result.extra_rows}
+    assert "monday-real-run" in extra_activity_ids
 
 
 def test_today_session_can_still_be_frozen_normally():

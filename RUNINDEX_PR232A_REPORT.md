@@ -730,3 +730,140 @@ Checklist de validation demandée :
   C231-ter.5 toujours verts)
 
 Aucune modification du redesign visuel #232B. Aucun merge effectué.
+
+## C231-quinquies.1 — P0 : Dashboard doit afficher la `served_prescription` canonique
+
+Bug corrigé : `frontend/src/pages/Dashboard.jsx` choisissait encore la
+séance affichée via `todaySession.adaptation_applied` (`true` →
+`adaptive_session` + comparaison "originale grisée / adaptée en
+surbrillance", `false` → `planned_session`) — alors que
+`adaptation_applied` est purement informatif depuis C231-quater.1. Ce
+choix pouvait afficher le plan brut (ex. 18 km) au lieu du snapshot
+réellement servi (ex. 12,6 km), ou tenter d'afficher
+`todaySession.adaptive_session` (potentiellement `null` quand la
+séance servie ne diffère pas réellement du plan) dans le cas où
+`adaptation_applied` restait vrai suite à un recalcul live (ex.
+REDUCE) — un scénario auparavant susceptible de planter/afficher un
+état vide.
+
+Corrigé :
+- La séance affichée est désormais calculée par une chaîne de
+  priorité stricte, indépendante de `adaptation_applied` :
+  `served_prescription` → `adapted_prescription` → `adaptive_session`
+  → `planned_session` → `original_prescription`.
+- `adaptation_applied` reste utilisé UNIQUEMENT pour afficher le
+  bandeau d'information ("Adapté : …"), jamais pour choisir quelle
+  séance est rendue.
+- Suppression de l'ancienne vue comparative "séance originale grisée +
+  séance adaptative en surbrillance" pilotée par `adaptation_applied` :
+  un seul `SessionCard`, alimenté par la prescription canonique
+  ci-dessus, est désormais rendu — élimine tout risque d'afficher une
+  ancienne valeur (ex. 18 km) à côté de la valeur servie (ex. 12,6 km).
+- `TrainingPlanV2.jsx` (C231-quater.1) et `Dashboard.jsx` partagent
+  désormais exactement la même règle de priorité et affichent donc
+  toujours la même séance "aujourd'hui".
+
+Tests (`frontend/src/__tests__/dashboard-training-v2.test.jsx`, 3
+nouveaux) :
+- "C231-final: served_prescription (12.6) wins over stale
+  planned_session (18) even when adaptation_applied=false" — plan brut
+  18 km, snapshot servi 12,6 km, `adaptation_applied: false` ⇒ la
+  carte affiche "12.6" et n'affiche jamais "18 km".
+- "C231-final: authoritative served snapshot (18) stays displayed when
+  adaptive_session is null, no crash" — snapshot servi 18 km,
+  `adaptation_applied: true` (action REDUCE simulée),
+  `adaptive_session: null` ⇒ la carte affiche toujours "18 km", sans
+  plantage.
+- "C231-final: source check — adaptation_applied is never used to
+  select the displayed session" — vérifie statiquement l'absence de
+  `todaySession.adaptation_applied ?` dans `Dashboard.jsx`.
+
+## C231-quinquies.2 — P0 : aucune exception historique pour les jours de repos
+
+Bug corrigé : `training_v2/week_execution.py` n'appliquait la
+diversion `prescription_unavailable` que si le plan recalculé
+aujourd'hui n'était PAS `rest` (`frozen is None and not is_rest and
+planned_date < reference_date`). Cette exception était incorrecte :
+sans snapshot historique, il est impossible de savoir si ce jour était
+réellement un jour de repos au moment où il aurait dû être servi.
+
+Corrigé : condition simplifiée à `frozen is None and planned_date <
+reference_date` — indépendante de `workout_type`. Un jour passé sans
+snapshot est TOUJOURS `execution_status="prescription_unavailable"`
+(`workout_type=None`, `intensity_class=None`, `distance_km=None`,
+`duration_minutes=None`, `matching_status=None`,
+`adherence_status=None`, `actual=None`), y compris quand le plan
+recalculé aujourd'hui dit `rest`. PR230 n'est jamais consulté pour ce
+jour. Un jour AVEC un snapshot historique existant (repos inclus)
+continue de passer par le matching PR230 normal (`planned` /
+`not_applicable` reste un résultat légitime dans ce cas précis).
+L'activité Garmin réelle éventuelle de ce jour reste visible via
+`unmatched_actuals`.
+
+Tests (`backend/tests/test_pr231_c231_corrections2.py`, réécrits) :
+- A. `test_past_rest_day_never_opened_is_now_prescription_unavailable`
+  — lundi passé, aucun snapshot, plan recalculé aujourd'hui = REST ⇒
+  `execution_status == "prescription_unavailable"`, `row is None`
+  (jamais `planned`/`not_applicable`).
+- B. `test_past_rest_day_with_existing_frozen_snapshot_uses_pr230_normally`
+  — lundi passé avec un snapshot historique réel REST déjà figé ⇒
+  `execution_status is None`, `row.matching_status == PLANNED`,
+  `row.adherence_status == NOT_APPLICABLE` (PR230 utilisé normalement).
+- C. `test_real_garmin_activity_on_unavailable_rest_day_still_surfaces_as_unmatched`
+  — activité Garmin réelle un lundi sans snapshot ⇒
+  `execution_status == "prescription_unavailable"` côté session, mais
+  l'activité reste présente dans `extra_rows`/`unmatched_actuals`.
+
+`backend/tests/test_pr232a_week_execution.py::test_rest_day_is_not_applicable`
+mis à jour pour fournir un snapshot historique REST déjà figé
+(reproduisant le scénario B ci-dessus), au lieu de s'appuyer sur
+l'ancienne exception désormais supprimée.
+
+## C231-quinquies.3 — Validation
+
+Commandes exécutées :
+```
+cd backend && python3 -m pytest \
+  tests/test_pr232a_week_execution.py \
+  tests/test_pr231_c231_corrections2.py \
+  tests/test_pr231_c231_corrections3.py \
+  tests/test_pr231_c231_final_corrections.py \
+  tests/test_performed_workout_pr230.py \
+  tests/test_pr232a_c231_week_endpoint.py \
+  tests/test_pr231_served_prescription.py \
+  -q -p no:cacheprovider
+# → 144 passed
+
+cd frontend && npx craco test --watchAll=false --forceExit \
+  src/__tests__/dashboard-training-v2.test.jsx \
+  src/__tests__/training-v2-page.test.jsx
+# → 28 + 24 = 52 passed
+```
+
+Suite complète backend (`python3 -m pytest` sans filtre) : ré-exécutée,
+mêmes ~300 échecs pré-existants (réseau externe/Redis indisponibles
+dans le sandbox), confirmés indépendants des fichiers modifiés dans ce
+round.
+
+Checklist de non-régression demandée :
+- PR230 enums inchangés/canoniques : PASS (`MatchingStatus`/
+  `AdherenceStatus` non touchés dans ce round, tests dédiés toujours
+  verts)
+- served snapshot atomicité : PASS (`get_or_create_served_prescription`
+  inchangé)
+- external_id Garmin réel : PASS (C231-ter.1, inchangé)
+- no-lookahead : PASS (`build_performed_workouts` inchangé
+  sémantiquement)
+- multi-user isolation : PASS (isolation par `user_id` inchangée)
+- None != 0 : PASS (aucun champ `prescription_unavailable` n'est `0`)
+- aucune reconstruction rétroactive : PASS — la correction du round
+  RENFORCE cette garantie (plus aucune exception ne permet à un
+  recalcul live de fabriquer un état historique, même `rest`)
+- zéro `/training/feedback` : PASS
+- TrainingPlanV2 et Dashboard affichent la même served prescription :
+  PASS — les deux composants partagent désormais la même chaîne de
+  priorité `served_prescription → adapted_prescription →
+  adaptive_session → planned_session → original_prescription`
+- tests backend + frontend ciblés : 0 fail (144 backend + 52 frontend)
+
+Aucune modification du redesign visuel #232B. Aucun merge effectué.

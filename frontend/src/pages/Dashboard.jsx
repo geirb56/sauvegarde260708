@@ -939,45 +939,44 @@ export default function Dashboard() {
 
         {todaySession?.status === "success" ? (
           <>
-            {/* Adaptation notice */}
-            {todaySession.adaptation_applied && (
-              <div
-                className="p-2 rounded-lg text-xs mb-3"
-                style={{
-                  background: "rgba(249, 115, 22, 0.1)",
-                  border: "1px solid rgba(249, 115, 22, 0.3)",
-                  color: "#fb923c"
-                }}
-              >
-                <strong>{t("trainingPlanExtended.adaptedBecause") || "Adapté :"}</strong> {todaySession.adaptation_reason}
-              </div>
-            )}
+            {/* C231 (corrections finales) — the canonical session displayed
+                today MUST be the served prescription, never chosen via the
+                purely-informative adaptation_applied flag. Priority order:
+                served_prescription -> adapted_prescription -> adaptive_session
+                -> planned_session -> original_prescription. The served
+                prescription is the ONLY session ever rendered as "today" —
+                never shown alongside the raw planned_session, which would
+                risk surfacing a stale/superseded value (e.g. 18 km) next to
+                the canonical one (e.g. 12.6 km). */}
+            {(() => {
+              const canonicalSession =
+                todaySession.served_prescription ??
+                todaySession.adapted_prescription ??
+                todaySession.adaptive_session ??
+                todaySession.planned_session ??
+                todaySession.original_prescription;
 
-            {/* Display with SessionCard */}
-            {todaySession.adaptation_applied ? (
-              <div className="space-y-3">
-                {/* Original Session (grayed out) */}
-                <div>
-                  <div className="text-[10px] font-mono uppercase mb-1" style={{ color: "var(--text-tertiary)" }}>
-                    {t("trainingPlanExtended.originalSession") || "Séance originale"}
-                  </div>
-                  <SessionCard session={todaySession.planned_session} isGrayed={true} />
-                </div>
+              return (
+                <>
+                  {/* Adaptation notice — informative only, never an authority
+                      on which session is displayed. */}
+                  {todaySession.adaptation_applied && (
+                    <div
+                      className="p-2 rounded-lg text-xs mb-3"
+                      style={{
+                        background: "rgba(249, 115, 22, 0.1)",
+                        border: "1px solid rgba(249, 115, 22, 0.3)",
+                        color: "#fb923c"
+                      }}
+                    >
+                      <strong>{t("trainingPlanExtended.adaptedBecause") || "Adapté :"}</strong> {todaySession.adaptation_reason}
+                    </div>
+                  )}
 
-                {/* Adaptive Session (highlighted) */}
-                <div>
-                  <div className="text-[10px] font-mono uppercase mb-1" style={{ color: "var(--text-secondary)" }}>
-                    {t("trainingPlanExtended.adaptiveSession") || "Séance adaptative"}
-                  </div>
-                  <SessionCard
-                    session={todaySession.adaptive_session}
-                    fatigueColor={todayReadinessColor}
-                  />
-                </div>
-              </div>
-            ) : (
-              <SessionCard session={todaySession.planned_session} />
-            )}
+                  <SessionCard session={canonicalSession} fatigueColor={todayReadinessColor} />
+                </>
+              );
+            })()}
           </>
         ) : (
           <>

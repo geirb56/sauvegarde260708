@@ -305,10 +305,26 @@ def test_no_lookahead_future_activity_is_dropped():
 # ---------------------------------------------------------------------------
 
 def test_rest_day_is_not_applicable():
+    from training_v2.prescription_snapshot import PrescriptionSnapshot
+
+    # C231 (corrections finales) — a strictly past day is only matched
+    # normally against PR230 when a frozen historical snapshot already
+    # exists (rest included). An un-frozen past day is
+    # prescription_unavailable regardless of workout_type — see
+    # test_pr231_c231_corrections2.py for that scenario.
+    prescription_id = f"{USER}:2024-06-11:tuesday"
+    frozen_snapshots = {
+        prescription_id: PrescriptionSnapshot(
+            user_id=USER, prescription_id=prescription_id,
+            planned_date=date(2024, 6, 11), day="tuesday",
+            workout_type="rest", intensity_class="rest", distance_km=None,
+        )
+    }
     sessions = [_session("tuesday", workout_type="rest", distance_km=None)]
     rows = build_week_execution(
         user_id=USER, reference_date=date(2024, 6, 20),
         week_start=WEEK_START, sessions=sessions, garmin_docs=[],
+        frozen_snapshots=frozen_snapshots,
     )
     row = _row_for(rows, date(2024, 6, 11))
     assert row.matching_status == MatchingStatus.PLANNED
