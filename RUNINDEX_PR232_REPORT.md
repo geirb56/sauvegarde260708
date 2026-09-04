@@ -140,6 +140,150 @@ session, structured (quality) session, long-run multi-block segments,
 Dashboard polish (#233), Navigation cleanup (#234), Onboarding (#235),
 Performance Curve (#236) — not touched.
 
+## C232 — CORRECTION (this section supersedes parts of section 1/2 above)
+
+**PRESCRIPTION CANONIQUE ≠ PRÉSENTATION.** The initial #232 implementation
+(described above) violated this principle in two ways ("blockers"), both now
+corrected. The corrected contract, tests, frontend, and build have all been
+re-validated (see below). **NOT MERGED**, per explicit instruction.
+
+### BLOCKER 1 — fabricated splits removed from the display layer
+
+`backend/training_v2/session_structure.py`'s original `build_session_blocks()`
+invented a full physiological prescription — warmup/N-reps-at-threshold/
+recovery/cooldown for `quality`, a 65/20/15 marathon-pace progression for
+`long_easy` — from nothing but `workout_type` and a fixed set of UX constants
+(`_QUALITY_WARMUP_KM`, `_QUALITY_REP_LENGTH_KM`, `_QUALITY_RECOVERY_MINUTES`,
+long-run fractions, etc.). `WorkoutPrescription`'s own contract explicitly
+states quality's "exact nature is NOT decided here" and the prescription
+"does NOT include specific paces / specific intervals". Fabricating that
+structure in the API/UI layer was a hidden second prescription engine, not a
+display concern — **forbidden**, and now removed.
+
+**Fix**: `session_structure.py` was rewritten from scratch. It no longer
+defines any block/split/repetition/warmup/cooldown concept, and no longer
+contains a single calibration constant. It exports exactly one function:
+
+```
+resolve_session_pace_zone(*, workout_type, paces) -> Optional[PaceRange]
+```
+
+This returns the single, literal, whole-session Easy pace range
+(`paces.easy`) for `workout_type in {"easy", "recovery", "long_easy"}` —
+because by definition the *entire* session is run at Easy pace for those
+three types, so this is not an invented split, just naming the category's
+own meaning. For every other type — `quality`, `steady`, `rest`, unknown, or
+`None` — it returns `None`: the Training Engine has not decided the exact
+nature/pace-zone of those sessions, so the UI shows no pace zone rather than
+fabricate one (frontend renders no pace line at all for these types).
+`None` in → `None` out (no fallback, ever); `paces=None`/INSUFFICIENT
+confidence → `None` for every type.
+
+- `WeekV2BlockResponse` and the `blocks` field on `WeekV2SessionResponse`
+  (`training_week_response.py`) were removed entirely — there is no longer
+  any block/split concept anywhere in the V2 Week API.
+- `backend/server.py`'s `/training/v2/week` handler now calls
+  `resolve_session_pace_zone(...)` directly instead of decomposing a
+  prescription into blocks; `primary_pace` remains on the response (still a
+  single pace-range field), but it is honestly sourced.
+- Frontend (`TrainingPlanV2.jsx`): the `BlockLine`/`formatBlockLine`
+  components and the entire "splits" rendering section were removed (dead
+  code, since the backend never sends `blocks` any more). `primary_pace` is
+  still rendered as a single line when present; when `None` (e.g. for
+  `quality`), no pace line is shown at all — never "unspecified" text
+  invented in its place, since the spec's example ("Allure cible : non
+  spécifiée") was one option among several and showing nothing at all is at
+  least as honest and simpler.
+
+**If real splits are wanted later**: they must become a canonical output of
+the Training Engine itself (a `structure`/`blocks` field produced
+deterministically *inside* `WorkoutPrescription`, before the C231 snapshot
+freeze) — never re-derived after the fact from `workout_type` alone, and
+never added to an already-served historical `PrescriptionSnapshot` (that
+would let a historical session's structure silently change later if the
+heuristic/engine rules evolve). Out of scope for #232 per the correction's
+explicit instruction ("Si cette extension nécessite un chantier moteur trop
+important : STOP. Ne pas la faire dans #232.").
+
+### BLOCKER 2 — one canonical Training Paces loader for all V2 consumers
+
+`/training/v2/week` computed Training Paces from
+`compute_training_paces(domain_activities_90, reference_date)`, where
+`domain_activities_90` was a **90-day-windowed** Mongo query (built only to
+feed the C231 canonical reference-date resolver). `/training/v2/paces`
+loaded up to **500 most-recent** activities with **no calendar window at
+all**. `training_paces.py`'s own selection policy explicitly retains a
+HIGH-quality historical performance beyond any recent window as LOW-
+confidence fallback evidence ("HIGH_HISTORICAL_NEVER_EXPIRES = YES" — see
+that module's docstring). Truncating to 90 days could silently discard
+exactly that fallback evidence — so the two endpoints could show a pace on
+one and `None` on the other, for the same user and the same day. **Forbidden
+per #231's single-source-of-truth doctrine.**
+
+**Fix**: new module `backend/training_v2/canonical_training_paces.py`
+exposes the single function every V2 consumer must call:
+
+```
+load_canonical_training_paces(db, *, user_id, reference_date) -> TrainingPaces
+```
+
+It loads up to 500 most-recent `garmin_activities` docs (no calendar-date
+filter — matches the pre-existing `/training/v2/paces` window/depth so no
+new consumer inherits a *narrower* window than before) and calls
+`compute_training_paces(..., user_max_hr=None)` with the caller-supplied
+canonical `reference_date`. Both `/training/v2/paces` and
+`GET /training/v2/week` (in `backend/server.py`) now call this one function,
+using the **same** `_resolve_canonical_reference_date` (C231) reference
+date, so they can never disagree for the same user + day. No consumer
+re-derives its own activity window or its own reference date.
+
+### Tests added/updated for the correction
+
+- `backend/tests/test_pr232_session_structure.py` — fully rewritten (old
+  `build_session_blocks`/`SessionBlock` API tests deleted). New coverage:
+  `quality` and `long_easy` never get a fabricated split/marathon-segment
+  pace; no UX calibration constant exists in the module (explicit
+  `hasattr` check for every removed constant/class); `easy`/`recovery`/
+  `long_easy` resolve to the whole-session Easy range; `quality`/`steady`/
+  `rest`/unknown/`None` resolve to `None`; `paces=None` and INSUFFICIENT
+  confidence never fall back to a fabricated zone. **13/13 pass.**
+- `backend/tests/test_pr232a_c231_week_endpoint.py` — the 2 old
+  blocks-asserting integration tests were rewritten for the no-blocks
+  contract (`primary_pace` only; `"blocks" not in session`); 4 new
+  integration tests added covering the mandatory C232 list: paces/week
+  agreement when the last HIGH performance is >90 days old, identical
+  pace values across both endpoints for the same input, no-lookahead
+  (a future activity never changes `/training/v2/paces`'s result), and
+  INSUFFICIENT confidence → `None` pace fields with no fallback on both
+  endpoints. **13/13 pass** (9 pre-existing C231 tests unaffected + 4 new).
+- `frontend/src/__tests__/training-v2-page.test.jsx` — fixtures no longer
+  include `blocks`; the `quality` fixture now sends `primary_pace: null`
+  (matching the honest backend contract). The two blocks-rendering tests
+  were replaced with tests asserting no fabricated pace/split ever renders
+  for `quality`, and that `easy`/`long_easy` show only the honest
+  whole-session pace with no `session-blocks-*`/`session-block-*` testids
+  anywhere in the DOM. **34/34 pass** in the file, **250/250** across the
+  whole frontend suite.
+
+### Full re-validation after the correction
+
+- Backend: targeted PR232/PR231/PR230/PR228/training_paces regression run —
+  **315 passed** (the handful of failures/errors present are pre-existing,
+  environment-only: a global rate-limit hit on an unrelated race-day test,
+  a missing `_generate_fallback_week_plan` symbol in an unrelated PR153
+  test, a Redis-dependent SSE test, and a missing `REACT_APP_BACKEND_URL`
+  env var in an unrelated subscription test — none touch
+  `session_structure.py`, `canonical_training_paces.py`, or the two
+  corrected endpoints).
+- Frontend: `npx craco test --watchAll=false --forceExit` — **250/250
+  pass**. `npm run build` — **compiles successfully**.
+- `code_review`/CodeQL tools were unavailable in this session; all diffs
+  were manually re-reviewed instead (no dangling references to the removed
+  `build_session_blocks`/`SessionBlock`/`WeekV2BlockResponse` symbols remain
+  anywhere in `backend/` or `frontend/`).
+
 ## Status
 
-**NOT MERGED**, per explicit instruction.
+**NOT MERGED**, per explicit instruction. Scope strictly limited to the two
+blockers above — #233/#234/#235/#236 not touched.
+

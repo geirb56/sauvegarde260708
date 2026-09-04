@@ -209,6 +209,25 @@ async def _get_today(fake_db: _FakeDB, reference_date: date = _MONDAY) -> Dict:
             p.stop()
 
 
+async def _get_paces(fake_db: _FakeDB, reference_date: date = _MONDAY) -> Dict:
+    if httpx is None:
+        pytest.skip("httpx not installed")
+    ps = _patches(fake_db, reference_date)
+    started = []
+    try:
+        for p in ps:
+            p.start()
+            started.append(p)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=server.app), base_url="http://test",
+        ) as client:
+            r = await client.get("/api/training/v2/paces", headers=_bearer())
+            return {"status": r.status_code, "body": r.json() if r.status_code == 200 else r.text}
+    finally:
+        for p in reversed(started):
+            p.stop()
+
+
 def _seed_cycle(fake_db: _FakeDB, goal: str = "SEMI", reference_date: date = _MONDAY, race_weeks_ahead: int = 16) -> None:
     cycle_start = (reference_date - timedelta(weeks=4)).isoformat()
     fake_db.training_cycles._docs.append({
@@ -337,11 +356,12 @@ async def test_today_endpoint_has_no_training_feedback_field():
 
 
 # ---------------------------------------------------------------------------
-# PR232 — session structure (blocks/splits) wiring on /training/v2/week.
+# C232 (correction) — honest pace-zone wiring on /training/v2/week.
+# The previous "blocks" (fabricated splits) field has been removed entirely.
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_week_sessions_expose_blocks_and_primary_pace_fields():
+async def test_week_sessions_expose_primary_pace_field_without_fabricated_blocks():
     fake_db = _FakeDB()
     _seed_cycle(fake_db)
     _seed_garmin_activities(fake_db, n=8)
@@ -354,32 +374,25 @@ async def test_week_sessions_expose_blocks_and_primary_pace_fields():
     assert sessions, "expected at least one session in the week"
     for session in sessions:
         # Every session — including rest and prescription_unavailable —
-        # exposes the two new fields (never a KeyError for a consumer).
-        assert "blocks" in session
+        # exposes the field (never a KeyError for a consumer), and there is
+        # no "blocks" field at all (C232 — fabricated splits removed).
         assert "primary_pace" in session
-        assert isinstance(session["blocks"], list)
+        assert "blocks" not in session
 
     rest_sessions = [s for s in sessions if s["workout_type"] == "rest"]
     for rest_session in rest_sessions:
-        # PR232 — rest days never get a fabricated block/pace breakdown.
-        assert rest_session["blocks"] == []
+        # Rest days never get a fabricated pace zone.
         assert rest_session["primary_pace"] is None
 
-    running_sessions = [
-        s for s in sessions
-        if s["workout_type"] not in (None, "rest") and s["distance_km"] is not None
-    ]
-    assert running_sessions, "expected at least one running session"
-    for running_session in running_sessions:
-        # A running session always has at least one block describing it.
-        assert len(running_session["blocks"]) >= 1
-        first_block = running_session["blocks"][0]
-        assert "label" in first_block
-        assert "order" in first_block
+    quality_sessions = [s for s in sessions if s["workout_type"] == "quality"]
+    for quality_session in quality_sessions:
+        # C232 — "quality"'s exact nature is not decided by the Training
+        # Engine: never a fabricated (e.g. Threshold) pace zone.
+        assert quality_session["primary_pace"] is None
 
 
 @pytest.mark.asyncio
-async def test_prescription_unavailable_session_has_no_blocks_or_pace():
+async def test_prescription_unavailable_session_has_no_pace_zone():
     fake_db = _FakeDB()
     _seed_cycle(fake_db)
     _seed_connected(fake_db, connected=True)
@@ -396,5 +409,148 @@ async def test_prescription_unavailable_session_has_no_blocks_or_pace():
         if s.get("execution_status") == "prescription_unavailable"
     ]
     for session in unavailable:
-        assert session["blocks"] == []
+        assert session["primary_pace"] is None
+
+
+# ---------------------------------------------------------------------------
+# C232 (correction) — BLOCKER 2 FIX: /training/v2/paces and /training/v2/week
+# must agree, even when the last HIGH-quality performance is older than 90
+# days (previously excluded by /training/v2/week's own 90-day-windowed
+# query, but retained as fallback evidence by training_paces.py's own
+# selection policy — see canonical_training_paces.py docstring).
+# ---------------------------------------------------------------------------
+
+def _seed_benchmark_pool(fake_db: _FakeDB, ref: date, n: int = 7, speed_kmh: float = 10.0) -> None:
+    """Easy benchmark runs, all STRICTLY BEFORE the qualifying HIGH activity
+    seeded by _seed_stale_high_performance (200 days before ref), so
+    training_paces.py's speed-percentile computation (strictly-prior, 90-day
+    window before the activity's own date) has enough qualifying context."""
+    for i in range(n):
+        act_date = ref - timedelta(days=210 + i * 2)
+        dur_s = 10_000.0 / (speed_kmh * 1000.0 / 3600.0)
+        fake_db.garmin_activities._docs.append({
+            "user_id": _USER_ID,
+            "source": "garmin",
+            "activity_id": f"benchmark-{i}",
+            "activity_type": "running",
+            "start_time": act_date.isoformat() + " 07:00:00",
+            "garmin_activity": {"start_time_local": act_date.isoformat() + " 07:00:00"},
+            "distance_m": 10_000.0,
+            "duration_s": dur_s,
+            "average_hr": 140.0,
+            "max_hr": 175.0,
+        })
+
+
+def _seed_stale_high_performance(fake_db: _FakeDB, ref: date, days_ago: int = 200) -> None:
+    """A single 10 km performance, well over 90 days old, that qualifies as
+    HIGH evidence per training_paces.py (fast pace + high relative HR vs. the
+    benchmark pool seeded by _seed_benchmark_pool)."""
+    act_date = ref - timedelta(days=days_ago)
+    speed_ms = 12_000.0 / 3600.0  # 12 km/h = 5:00/km
+    dur_s = 10_000.0 / speed_ms
+    fake_db.garmin_activities._docs.append({
+        "user_id": _USER_ID,
+        "source": "garmin",
+        "activity_id": "stale-high-performance",
+        "activity_type": "running",
+        "start_time": act_date.isoformat() + " 07:00:00",
+        "garmin_activity": {"start_time_local": act_date.isoformat() + " 07:00:00"},
+        "distance_m": 10_000.0,
+        "duration_s": dur_s,
+        "average_hr": 160.0,
+        "max_hr": 175.0,
+    })
+
+
+@pytest.mark.asyncio
+async def test_paces_and_week_agree_when_last_high_performance_is_over_90_days_old():
+    # #5 of the mandatory C232 test list.
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    _seed_connected(fake_db, connected=True)
+    _seed_benchmark_pool(fake_db, _MONDAY)
+    _seed_stale_high_performance(fake_db, _MONDAY, days_ago=200)
+
+    paces_result = await _get_paces(fake_db)
+    week_result = await _get_week(fake_db)
+    assert paces_result["status"] == 200, paces_result["body"]
+    assert week_result["status"] == 200, week_result["body"]
+
+    paces_body = paces_result["body"]
+    # The stale (>90 days) HIGH performance must still be visible as
+    # evidence — /training/v2/paces must not report INSUFFICIENT.
+    assert paces_body["confidence"] != "INSUFFICIENT"
+    assert paces_body["paces"]["easy"] is not None
+
+    easy_sessions = [
+        s for s in week_result["body"]["week"]["sessions"]
+        if s["workout_type"] in ("easy", "recovery", "long_easy")
+    ]
+    assert easy_sessions, "expected at least one easy/recovery/long_easy session"
+    for session in easy_sessions:
+        # #6 — identical inputs + identical reference_date => identical
+        # pace values between endpoints (never one showing a pace and the
+        # other None for the exact same user/day).
+        assert session["primary_pace"] is not None
+        assert session["primary_pace"]["lower_min_per_km"] == pytest.approx(
+            paces_body["paces"]["easy"]["lower"]["min_per_km"]
+        )
+        assert session["primary_pace"]["upper_min_per_km"] == pytest.approx(
+            paces_body["paces"]["easy"]["upper"]["min_per_km"]
+        )
+
+
+@pytest.mark.asyncio
+async def test_paces_no_lookahead_future_activity_has_no_effect():
+    # #7 of the mandatory C232 test list.
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    _seed_connected(fake_db, connected=True)
+    _seed_benchmark_pool(fake_db, _MONDAY)
+    _seed_stale_high_performance(fake_db, _MONDAY, days_ago=200)
+
+    baseline = await _get_paces(fake_db)
+    assert baseline["status"] == 200, baseline["body"]
+
+    # A future activity (after reference_date) must never influence today's
+    # computed paces.
+    future_date = _MONDAY + timedelta(days=30)
+    fake_db.garmin_activities._docs.append({
+        "user_id": _USER_ID,
+        "source": "garmin",
+        "activity_id": "future-activity",
+        "activity_type": "running",
+        "start_time": future_date.isoformat() + " 07:00:00",
+        "garmin_activity": {"start_time_local": future_date.isoformat() + " 07:00:00"},
+        "distance_m": 10_000.0,
+        "duration_s": 30 * 60.0,
+        "average_hr": 165.0,
+        "max_hr": 175.0,
+    })
+
+    with_future = await _get_paces(fake_db)
+    assert with_future["status"] == 200, with_future["body"]
+    assert with_future["body"] == baseline["body"]
+
+
+@pytest.mark.asyncio
+async def test_insufficient_confidence_is_none_with_no_fallback():
+    # #8 of the mandatory C232 test list.
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    _seed_connected(fake_db, connected=True)
+    # No qualifying performance seeded at all -> INSUFFICIENT.
+
+    paces_result = await _get_paces(fake_db)
+    assert paces_result["status"] == 200, paces_result["body"]
+    paces_body = paces_result["body"]
+    assert paces_body["confidence"] == "INSUFFICIENT"
+    for key in ("easy", "marathon", "threshold", "interval", "repetition"):
+        assert paces_body["paces"][key] is None
+
+    week_result = await _get_week(fake_db)
+    assert week_result["status"] == 200, week_result["body"]
+    for session in week_result["body"]["week"]["sessions"]:
+        # No fallback pace zone is ever fabricated when paces are INSUFFICIENT.
         assert session["primary_pace"] is None

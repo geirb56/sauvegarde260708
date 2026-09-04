@@ -195,24 +195,6 @@ const formatPaceRangeLabel = (paceRange, unitSystem) => {
   return `${lowerNumeric}–${upperLabel}`;
 };
 
-// PR232 — readable "N × X km @ pace" / "X min footing" line for one block.
-// Never fabricates a pace: when block.pace is null the line simply omits it
-// instead of inventing one.
-const formatBlockLine = (block, t, unitSystem) => {
-  if (!block) return null;
-  const hasDistance = isKnownNumber(block.distance_km);
-  const distanceLabel = hasDistance ? formatDistance(block.distance_km, { unitSystem }) : null;
-  const durationLabel = isKnownNumber(block.duration_minutes) ? `${block.duration_minutes} min` : null;
-  const amount = distanceLabel || durationLabel;
-  const repPrefix = isKnownNumber(block.repetitions) && block.repetitions > 1 ? `${block.repetitions} × ` : "";
-  const isJogRecovery = block.label === "recovery" && !hasDistance && durationLabel;
-  const jogSuffix = isJogRecovery ? ` ${t("trainingV2.recoveryJog")}` : "";
-  const paceLabel = formatPaceRangeLabel(block.pace, unitSystem);
-  const paceSuffix = paceLabel ? ` @ ${paceLabel}` : "";
-  const line = `${repPrefix}${amount || ""}${jogSuffix}${paceSuffix}`.trim();
-  return line || null;
-};
-
 function LoadingState() {
   return (
     <div className="p-4 md:p-6 space-y-4" data-testid="training-v2-loading">
@@ -247,31 +229,6 @@ function SessionStatePill({ t, state }) {
       <span className={`h-1.5 w-1.5 rounded-full ${STATUS_DOT_CLASSES[state] || "bg-muted-foreground"}`} aria-hidden="true" />
       {labels[state]}
     </span>
-  );
-}
-
-// PR232 — one block/split line, with its translated heading, inside an
-// expanded session card. Long-run "segment" blocks are numbered (1., 2., 3.)
-// instead of getting a warmup/main/recovery/cooldown heading.
-function BlockLine({ block, index, t, unitSystem }) {
-  const line = formatBlockLine(block, t, unitSystem);
-  if (!line) return null;
-
-  if (block.label === "segment") {
-    return (
-      <div className="text-sm" data-testid={`session-block-${index}`}>
-        <span className="text-muted-foreground">{index + 1}. </span>
-        <span>{line}</span>
-      </div>
-    );
-  }
-
-  const heading = getTranslatedValue(t, `trainingV2.blockLabels.${block.label}`, "trainingV2.notAvailable");
-  return (
-    <div className="space-y-0.5" data-testid={`session-block-${index}`}>
-      <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{heading}</p>
-      <p className="text-sm">{line}</p>
-    </div>
   );
 }
 
@@ -342,9 +299,8 @@ function SessionCard({ session, day, isToday, unitSystem, t, locale, open, onTog
     ? ""
     : distance || duration || (isExplicitRest ? t("trainingV2.restDay") : (session ? "" : t("trainingV2.noSessionLabel")));
 
-  const blocks = Array.isArray(session?.blocks) ? session.blocks : [];
-  const hasExpandableDetail = Boolean(session) && !isExplicitRest && (blocks.length > 0 || session?.actual);
   const detailRoute = getSessionDetailRoute(session);
+  const hasExpandableDetail = Boolean(session) && !isExplicitRest && (Boolean(session?.actual) || Boolean(detailRoute));
   const dateLabel = session?.planned_date ? formatDate(session.planned_date, locale) : null;
 
   return (
@@ -384,17 +340,6 @@ function SessionCard({ session, day, isToday, unitSystem, t, locale, open, onTog
 
       {hasExpandableDetail && open && (
         <div className="mt-3 space-y-3 border-t border-border pt-3" data-testid={`training-v2-day-details-${day}`}>
-          {blocks.length > 0 && (
-            <div className="space-y-2" data-testid={`session-blocks-${day}`}>
-              <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{t("trainingV2.splitsTitle")}</p>
-              {blocks
-                .slice()
-                .sort((a, b) => a.order - b.order)
-                .map((block, index) => (
-                  <BlockLine key={`${day}-${block.label}-${index}`} block={block} index={index} t={t} unitSystem={unitSystem} />
-                ))}
-            </div>
-          )}
           <ActualComparison session={session} t={t} unitSystem={unitSystem} />
           {detailRoute && (
             <Link to={detailRoute} className="inline-block text-xs font-medium text-primary hover:underline" data-testid={`session-detail-link-${day}`}>

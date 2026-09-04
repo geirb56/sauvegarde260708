@@ -1,27 +1,23 @@
-"""PR232 — Training UX V3: unit tests for training_v2.session_structure.
+"""C232 (correction) — tests for training_v2.session_structure.
 
-Pure function tests (no DB, no FastAPI): build_session_blocks() must never
-fabricate a pace, must decompose quality/long_easy sessions into a readable
-warmup/main/recovery/cooldown (or segment) breakdown, and must return None
-for rest / unknown sessions.
-
-Run from the backend directory:
-    python -m pytest tests/test_pr232_session_structure.py -q
+BLOCKER FIXED: session_structure.py no longer fabricates interval/segment
+structure (warmup/reps/recovery/cooldown for "quality", a marathon-pace
+progression for "long_easy"). It only resolves a single, honest pace ZONE
+for the whole session, and only for workout_types whose Daniels mapping is
+unambiguous and literal (easy/recovery/long_easy — the entire session is,
+by definition, run at Easy pace). "quality" (exact nature undecided by the
+Training Engine) and "steady" (not in the Daniels vocabulary) never get a
+fabricated pace.
 """
+
 from __future__ import annotations
 
-import os
-import sys
 from datetime import date
 
-os.environ.setdefault("JWT_SECRET_KEY", "test-pr232-session-structure-32ch!")
+import pytest
 
-_BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _BACKEND_DIR not in sys.path:
-    sys.path.insert(0, _BACKEND_DIR)
-
-from training_v2.session_structure import build_session_blocks  # noqa: E402
-from training_v2.training_paces import (  # noqa: E402
+from training_v2.session_structure import resolve_session_pace_zone
+from training_v2.training_paces import (
     PaceRange,
     PaceValue,
     TrainingPaces,
@@ -29,149 +25,146 @@ from training_v2.training_paces import (  # noqa: E402
 )
 
 
-def _paces(confidence: str = "HIGH") -> TrainingPaces:
-    if confidence == "INSUFFICIENT":
-        vr = VdotResult(
-            reference_vdot=None, paces_confidence="INSUFFICIENT", evidence_count=0,
-            high_count=0, medium_count=0, concordant=False, reason="none",
+def _paces(*, easy=True, marathon=True, threshold=True) -> TrainingPaces:
+    easy_range = (
+        PaceRange(
+            lower=PaceValue(min_per_km=5.5, km_per_hour=10.9),
+            upper=PaceValue(min_per_km=6.2, km_per_hour=9.7),
         )
-        return TrainingPaces(
-            reference_date=date(2025, 1, 1), vdot_result=vr, confidence="INSUFFICIENT",
-            easy=None, marathon=None, threshold=None, interval=None, repetition=None,
-            reason="insufficient",
-        )
-    vr = VdotResult(
-        reference_vdot=50.0, paces_confidence=confidence, evidence_count=2,
-        high_count=2, medium_count=0, concordant=True, reason="ok",
+        if easy
+        else None
     )
-    easy = PaceRange(
-        lower=PaceValue(min_per_km=6.25, km_per_hour=9.6),
-        upper=PaceValue(min_per_km=6.6, km_per_hour=9.1),
-    )
-    marathon = PaceValue(min_per_km=5.6, km_per_hour=10.7)
-    threshold = PaceValue(min_per_km=5.15, km_per_hour=11.6)
+    marathon_value = PaceValue(min_per_km=5.0, km_per_hour=12.0) if marathon else None
+    threshold_value = PaceValue(min_per_km=4.6, km_per_hour=13.0) if threshold else None
     return TrainingPaces(
-        reference_date=date(2025, 1, 1), vdot_result=vr, confidence=confidence,
-        easy=easy, marathon=marathon, threshold=threshold, interval=None,
-        repetition=None, reason="ok",
+        reference_date=date(2026, 8, 25),
+        vdot_result=VdotResult(
+            reference_vdot=50.0,
+            paces_confidence="high",
+            evidence_count=1,
+            high_count=1,
+            medium_count=0,
+            concordant=True,
+            reason="test fixture",
+        ),
+        confidence="HIGH",
+        easy=easy_range,
+        marathon=marathon_value,
+        threshold=threshold_value,
+        interval=None,
+        repetition=None,
+        reason="test fixture",
     )
 
 
-def test_rest_session_has_no_blocks():
-    assert build_session_blocks(
-        workout_type="rest", distance_km=None, duration_minutes=None, paces=_paces(),
-    ) is None
-
-
-def test_unknown_workout_type_has_no_blocks():
-    assert build_session_blocks(
-        workout_type=None, distance_km=5.0, duration_minutes=None, paces=_paces(),
-    ) is None
-
-
-def test_simple_easy_session_is_a_single_block_with_easy_pace():
-    blocks = build_session_blocks(
-        workout_type="easy", distance_km=7.0, duration_minutes=None, paces=_paces(),
+def _insufficient_paces() -> TrainingPaces:
+    return TrainingPaces(
+        reference_date=date(2026, 8, 25),
+        vdot_result=VdotResult(
+            reference_vdot=None,
+            paces_confidence="insufficient",
+            evidence_count=0,
+            high_count=0,
+            medium_count=0,
+            concordant=False,
+            reason="test fixture",
+        ),
+        confidence="INSUFFICIENT",
+        easy=None,
+        marathon=None,
+        threshold=None,
+        interval=None,
+        repetition=None,
+        reason="test fixture",
     )
-    assert blocks is not None
-    assert len(blocks) == 1
-    block = blocks[0]
-    assert block.label == "main"
-    assert block.distance_km == 7.0
-    assert block.repetitions is None
-    assert block.pace is not None
-    assert block.pace.lower.min_per_km == 6.25
-    assert block.pace.upper.min_per_km == 6.6
 
 
-def test_quality_session_has_warmup_main_reps_recovery_cooldown():
-    blocks = build_session_blocks(
-        workout_type="quality", distance_km=9.0, duration_minutes=None, paces=_paces(),
-    )
-    assert blocks is not None
-    labels = [b.label for b in blocks]
-    assert labels == ["warmup", "main", "recovery", "cooldown"]
+class TestNoFabricatedSplits:
+    """#1/#2/#3 of the C232 mandatory test list."""
 
-    warmup, main, recovery, cooldown = blocks
-    assert warmup.distance_km == 2.0
-    assert warmup.pace is not None
+    def test_quality_never_gets_a_pace_zone_regardless_of_distance(self):
+        # #1 — quality without a canonical structure: no repetition/warmup/
+        # recovery invented, and — per the correction — no pace zone either,
+        # since the engine has not decided quality's exact nature.
+        paces = _paces()
+        for distance_km in (2.0, 9.0, 21.0, None):
+            assert resolve_session_pace_zone(workout_type="quality", paces=paces) is None
 
-    # 9 - 2 (warmup) - 1 (cooldown) = 6 km main -> 3 reps of 2 km @ threshold.
-    assert main.repetitions == 3
-    assert main.distance_km == 2.0
-    assert main.pace is not None
-    assert main.pace.lower.min_per_km == 5.15
-    assert main.pace.upper.min_per_km > main.pace.lower.min_per_km
+    def test_long_easy_never_gets_a_marathon_segment_pace(self):
+        # #2 — long_easy without a canonical structure: no marathon-pace
+        # segment invented. The zone resolved (if any) must be the Easy
+        # pace range, never the Marathon PaceValue.
+        paces = _paces()
+        zone = resolve_session_pace_zone(workout_type="long_easy", paces=paces)
+        assert zone == paces.easy
+        assert zone != paces.marathon
 
-    assert recovery.distance_km is None
-    assert recovery.duration_minutes == 2.0
-    assert recovery.pace is None
+    def test_no_ux_constant_creates_a_physiological_prescription(self):
+        # #3 — the module exposes no calibration constants for warmup
+        # length, rep length, recovery minutes, or long-run fractions.
+        import training_v2.session_structure as module
 
-    assert cooldown.distance_km == 1.0
-    assert cooldown.pace is not None
-
-
-def test_short_quality_session_falls_back_to_single_main_block():
-    blocks = build_session_blocks(
-        workout_type="quality", distance_km=3.0, duration_minutes=None, paces=_paces(),
-    )
-    assert blocks is not None
-    assert len(blocks) == 1
-    assert blocks[0].label == "main"
-    assert blocks[0].distance_km == 3.0
-
-
-def test_long_run_below_threshold_is_a_single_easy_block():
-    blocks = build_session_blocks(
-        workout_type="long_easy", distance_km=12.0, duration_minutes=None, paces=_paces(),
-    )
-    assert blocks is not None
-    assert len(blocks) == 1
-    assert blocks[0].label == "main"
-    assert blocks[0].distance_km == 12.0
-    assert blocks[0].pace is not None
+        forbidden_names = (
+            "_QUALITY_WARMUP_KM",
+            "_QUALITY_REP_LENGTH_KM",
+            "_QUALITY_RECOVERY_MINUTES",
+            "_QUALITY_COOLDOWN_KM",
+            "_QUALITY_MAX_REPS",
+            "_LONG_RUN_LEAD_FRACTION",
+            "_LONG_RUN_SUSTAINED_FRACTION",
+            "_LONG_RUN_COOLDOWN_FRACTION",
+            "SessionBlock",
+            "build_session_blocks",
+        )
+        for name in forbidden_names:
+            assert not hasattr(module, name), f"{name} must not exist (fabricated split constant)"
 
 
-def test_long_run_above_threshold_has_three_ordered_segments():
-    blocks = build_session_blocks(
-        workout_type="long_easy", distance_km=18.0, duration_minutes=None, paces=_paces(),
-    )
-    assert blocks is not None
-    assert len(blocks) == 3
-    assert [b.label for b in blocks] == ["segment", "segment", "segment"]
-    assert [b.order for b in blocks] == [0, 1, 2]
+class TestWholeSessionEasyPaceTypes:
+    def test_easy_gets_the_whole_session_easy_pace(self):
+        paces = _paces()
+        assert resolve_session_pace_zone(workout_type="easy", paces=paces) == paces.easy
 
-    lead, sustained, cooldown = blocks
-    # Sums to the total distance (within rounding).
-    assert round(lead.distance_km + sustained.distance_km + cooldown.distance_km, 1) == 18.0
-    # Middle segment is faster (marathon pace) than the lead/cooldown easy segments.
-    assert sustained.pace.lower.min_per_km < lead.pace.lower.min_per_km
-    assert sustained.pace.lower.min_per_km < cooldown.pace.lower.min_per_km
+    def test_recovery_gets_the_whole_session_easy_pace(self):
+        paces = _paces()
+        assert resolve_session_pace_zone(workout_type="recovery", paces=paces) == paces.easy
+
+    def test_long_easy_gets_the_whole_session_easy_pace(self):
+        paces = _paces()
+        assert resolve_session_pace_zone(workout_type="long_easy", paces=paces) == paces.easy
 
 
-def test_insufficient_paces_never_fabricates_a_pace():
-    blocks = build_session_blocks(
-        workout_type="quality", distance_km=9.0, duration_minutes=None, paces=_paces("INSUFFICIENT"),
-    )
-    assert blocks is not None
-    assert all(b.pace is None for b in blocks)
-    # Structure (reps, distances) is still meaningful even without a pace.
-    assert blocks[1].repetitions == 3
+class TestNoPaceZoneCategories:
+    def test_steady_has_no_pace_zone(self):
+        paces = _paces()
+        assert resolve_session_pace_zone(workout_type="steady", paces=paces) is None
+
+    def test_rest_has_no_pace_zone(self):
+        paces = _paces()
+        assert resolve_session_pace_zone(workout_type="rest", paces=paces) is None
+
+    def test_unknown_workout_type_has_no_pace_zone(self):
+        paces = _paces()
+        assert resolve_session_pace_zone(workout_type="some_future_type", paces=paces) is None
+
+    def test_none_workout_type_has_no_pace_zone(self):
+        paces = _paces()
+        assert resolve_session_pace_zone(workout_type=None, paces=paces) is None
 
 
-def test_none_paces_object_never_fabricates_a_pace():
-    blocks = build_session_blocks(
-        workout_type="easy", distance_km=7.0, duration_minutes=None, paces=None,
-    )
-    assert blocks is not None
-    assert blocks[0].pace is None
+class TestNoFallbackFabrication:
+    def test_none_paces_never_fabricates_a_zone(self):
+        # #8 — INSUFFICIENT (paces=None passed by the caller): pace stays
+        # None, no fallback invented, even for an otherwise-eligible type.
+        assert resolve_session_pace_zone(workout_type="easy", paces=None) is None
+        assert resolve_session_pace_zone(workout_type="long_easy", paces=None) is None
 
+    def test_insufficient_confidence_easy_field_is_none_so_zone_is_none(self):
+        paces = _insufficient_paces()
+        assert resolve_session_pace_zone(workout_type="easy", paces=paces) is None
+        assert resolve_session_pace_zone(workout_type="long_easy", paces=paces) is None
 
-def test_duration_based_session_without_distance_has_no_km_split():
-    blocks = build_session_blocks(
-        workout_type="easy", distance_km=None, duration_minutes=45, paces=_paces(),
-    )
-    assert blocks is not None
-    assert len(blocks) == 1
-    assert blocks[0].distance_km is None
-    assert blocks[0].duration_minutes == 45
+    def test_missing_easy_pace_field_never_falls_back_to_another_zone(self):
+        paces = _paces(easy=False)
+        assert resolve_session_pace_zone(workout_type="easy", paces=paces) is None
+        assert resolve_session_pace_zone(workout_type="long_easy", paces=paces) is None

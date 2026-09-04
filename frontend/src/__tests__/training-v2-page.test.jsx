@@ -55,9 +55,6 @@ function weekData() {
           actual: { activity_id: "a1", distance_km: 8.1, duration_minutes: 44, pace_min_per_km: 5.5, activity_type: "running", start_time: "2026-08-24T07:00:00" },
           prescription: "45 min easy",
           primary_pace: { lower_min_per_km: 5.75, upper_min_per_km: 6.3 },
-          blocks: [
-            { label: "main", order: 1, distance_km: 8, duration_minutes: null, repetitions: null, pace: { lower_min_per_km: 5.75, upper_min_per_km: 6.3 } },
-          ],
         },
         {
           day: "tuesday", workout_type: "rest", distance_km: null, duration_minutes: null, estimated_tss: null,
@@ -67,13 +64,9 @@ function weekData() {
           day: "wednesday", workout_type: "quality", distance_km: 9, duration_minutes: 50, estimated_tss: null,
           reason_codes: [], matching_status: "planned", adherence_status: "not_applicable", actual: null,
           prescription: "3 × 10 min",
-          primary_pace: { lower_min_per_km: 5.17, upper_min_per_km: 5.25 },
-          blocks: [
-            { label: "warmup", order: 1, distance_km: 2, duration_minutes: null, repetitions: null, pace: { lower_min_per_km: 6.33, upper_min_per_km: 6.67 } },
-            { label: "main", order: 2, distance_km: 2, duration_minutes: null, repetitions: 3, pace: { lower_min_per_km: 5.17, upper_min_per_km: 5.25 } },
-            { label: "recovery", order: 3, distance_km: null, duration_minutes: 2, repetitions: null, pace: null },
-            { label: "cooldown", order: 4, distance_km: 1, duration_minutes: null, repetitions: null, pace: { lower_min_per_km: 6.25, upper_min_per_km: 6.67 } },
-          ],
+          // C232 (correction) — "quality"'s exact nature is not decided by
+          // the Training Engine: never a fabricated pace zone or split.
+          primary_pace: null,
         },
         {
           day: "thursday", workout_type: "steady", distance_km: 8, duration_minutes: 42, estimated_tss: null,
@@ -85,9 +78,6 @@ function weekData() {
           reason_codes: [], matching_status: "planned", adherence_status: "not_applicable", actual: null,
           prescription: "40 min easy",
           primary_pace: { lower_min_per_km: 6.25, upper_min_per_km: 6.67 },
-          blocks: [
-            { label: "main", order: 1, distance_km: 7, duration_minutes: null, repetitions: null, pace: { lower_min_per_km: 6.25, upper_min_per_km: 6.67 } },
-          ],
         },
         {
           day: "saturday", workout_type: "rest", distance_km: null, duration_minutes: null, estimated_tss: null,
@@ -98,11 +88,6 @@ function weekData() {
           reason_codes: [], matching_status: "planned", adherence_status: "not_applicable", actual: null,
           prescription: "Long run 18 km",
           primary_pace: { lower_min_per_km: 5.58, upper_min_per_km: 5.75 },
-          blocks: [
-            { label: "segment", order: 1, distance_km: 11.7, duration_minutes: null, repetitions: null, pace: { lower_min_per_km: 6.25, upper_min_per_km: 6.58 } },
-            { label: "segment", order: 2, distance_km: 3.6, duration_minutes: null, repetitions: null, pace: { lower_min_per_km: 5.58, upper_min_per_km: 5.75 } },
-            { label: "segment", order: 3, distance_km: 2.7, duration_minutes: null, repetitions: null, pace: { lower_min_per_km: 6.25, upper_min_per_km: 6.58 } },
-          ],
         },
       ],
       unmatched_actuals: [
@@ -591,35 +576,31 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     expect(fridayRow.textContent).toMatch(formatDistance(7, { unitSystem: "metric" }));
   });
 
-  test("PR232: expanding a structured (quality) session reveals warmup/main/recovery/cooldown blocks with per-block paces", async () => {
+  test("C232 (correction): a quality session never renders a fabricated pace or split structure", async () => {
     mockAxios();
     renderPage({ width: 390 });
 
     const week = await screen.findByTestId("training-v2-week");
-    fireEvent.click(within(week).getByTestId("training-v2-day-toggle-wednesday"));
-
-    const details = within(week).getByTestId("training-v2-day-details-wednesday");
-    const blocks = within(details).getByTestId("session-blocks-wednesday");
-    // 4 blocks: warmup, main (3x2km), recovery jog, cooldown.
-    expect(within(blocks).getByTestId("session-block-0")).toHaveTextContent("2");
-    const mainBlock = within(blocks).getByTestId("session-block-1");
-    expect(mainBlock.textContent).toMatch(/3 ×/);
-    expect(mainBlock.textContent).toMatch("5:10");
-    const recoveryBlock = within(blocks).getByTestId("session-block-2");
-    expect(recoveryBlock.textContent).toMatch(/2 min/i);
+    const wednesdayRow = within(week).getByTestId("training-v2-day-wednesday");
+    // No pace line rendered for "quality" — the engine has not decided its
+    // exact nature (BLOCKER 1 fix: no fabricated Threshold zone/intervals).
+    expect(within(wednesdayRow).queryByTestId("training-v2-day-pace-wednesday")).not.toBeInTheDocument();
+    // No blocks/splits section ever rendered — the feature has been removed.
+    expect(within(week).queryByTestId("session-blocks-wednesday")).not.toBeInTheDocument();
   });
 
-  test("PR232: expanding a long-run session reveals numbered multi-block segments, not a single absurd global range", async () => {
+  test("C232 (correction): an easy/long_easy session shows only the honest whole-session pace zone, never a fabricated split", async () => {
     mockAxios();
     renderPage({ width: 390 });
 
     const week = await screen.findByTestId("training-v2-week");
     fireEvent.click(within(week).getByTestId("training-v2-day-toggle-sunday"));
 
-    const blocks = within(week).getByTestId("session-blocks-sunday");
-    expect(within(blocks).getByTestId("session-block-0")).toHaveTextContent("1.");
-    expect(within(blocks).getByTestId("session-block-1")).toHaveTextContent("2.");
-    expect(within(blocks).getByTestId("session-block-2")).toHaveTextContent("3.");
+    const sundayRow = within(week).getByTestId("training-v2-day-sunday");
+    expect(within(sundayRow).getByTestId("training-v2-day-pace-sunday")).toBeInTheDocument();
+    // No numbered/labelled split blocks exist anywhere in the week view.
+    expect(within(week).queryByTestId("session-blocks-sunday")).not.toBeInTheDocument();
+    expect(within(week).queryByTestId(/^session-block-/)).not.toBeInTheDocument();
   });
 
   test("PR232: expanding a matched session shows the prescribed vs actually performed comparison", async () => {
@@ -662,7 +643,6 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
       adherence_status: null,
       actual: null,
       execution_status: "prescription_unavailable",
-      blocks: [],
       primary_pace: null,
     };
 

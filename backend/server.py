@@ -4156,11 +4156,10 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
     )
     from training_v2.training_week_response import (
         WeekV2ActualResponse,
-        WeekV2BlockResponse,
         WeekV2PaceRangeResponse,
     )
-    from training_v2.session_structure import build_session_blocks
-    from training_v2.training_paces import compute_training_paces
+    from training_v2.session_structure import resolve_session_pace_zone
+    from training_v2.canonical_training_paces import load_canonical_training_paces
     from training_v2.prescription_snapshot import PrescriptionSnapshot, snapshot_from_prescription
     from training_v2.served_prescription import get_or_create_served_prescription
 
@@ -4293,10 +4292,14 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
             upsert=True,
         )
 
-    # PR232 — display-only session structure (blocks/splits + primary pace).
-    # Same 90-day domain activities already loaded above; reference_date is
-    # the SAME canonical clock used everywhere else in this endpoint.
-    training_paces_v2 = compute_training_paces(domain_activities_90, reference_date, user_max_hr=None)
+    # C232 (correction) — canonical Training Paces loader (BLOCKER FIX): same
+    # query/window/policy and same reference_date as /training/v2/paces, so
+    # the two endpoints can never disagree for the same user/day. No 90-day
+    # truncation: compute_training_paces' own HIGH-never-expires policy
+    # needs the fuller history loaded by the canonical loader.
+    training_paces_v2 = await load_canonical_training_paces(
+        db, user_id=user_id, reference_date=reference_date
+    )
 
     def _pace_range_response(pace_range) -> Optional[WeekV2PaceRangeResponse]:
         if pace_range is None:
@@ -4305,27 +4308,6 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
             lower_min_per_km=pace_range.lower.min_per_km,
             upper_min_per_km=pace_range.upper.min_per_km,
         )
-
-    def _block_responses(workout_type, distance_km, duration_minutes) -> list[WeekV2BlockResponse]:
-        blocks = build_session_blocks(
-            workout_type=workout_type,
-            distance_km=distance_km,
-            duration_minutes=duration_minutes,
-            paces=training_paces_v2,
-        )
-        if not blocks:
-            return []
-        return [
-            WeekV2BlockResponse(
-                label=block.label,
-                order=block.order,
-                repetitions=block.repetitions,
-                distance_km=block.distance_km,
-                duration_minutes=block.duration_minutes,
-                pace=_pace_range_response(block.pace),
-            )
-            for block in blocks
-        ]
 
     def _actual_response(row) -> Optional[WeekV2ActualResponse]:
         if row.activity_id is None:
@@ -4362,17 +4344,16 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
                 actual=None,
                 execution_status=EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE,
                 primary_pace=None,
-                blocks=[],
             )
-        blocks = _block_responses(
-            se.session.workout_type, se.session.distance_km, se.session.duration_minutes
+        # C232 (correction) — honest pace ZONE only (no fabricated splits):
+        # see training_v2/session_structure.py docstring for exactly which
+        # workout_types get a pace zone and why.
+        primary_pace = _pace_range_response(
+            resolve_session_pace_zone(
+                workout_type=se.session.workout_type,
+                paces=training_paces_v2,
+            )
         )
-        main_block = (
-            next((b for b in blocks if b.label == "main"), None)
-            or next((b for b in blocks if b.label == "segment" and b.order == 1), None)
-            or next((b for b in blocks if b.pace is not None), None)
-        )
-        primary_pace = main_block.pace if main_block else None
         return WeekV2SessionResponse(
             day=se.session.day,
             planned_date=planned_date_iso,
@@ -4387,7 +4368,6 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
             actual=_actual_response(se.row),
             execution_status=None,
             primary_pace=primary_pace,
-            blocks=blocks,
         )
 
     sessions = [_session_response(se) for se in execution.sessions]
@@ -4495,6 +4475,13 @@ async def get_training_v2_paces(user: dict = Depends(auth_user)):
     VDOT is computed exclusively from qualified running performances (#188).
     Garmin VO2max and VMA never influence the paces returned here.
 
+    C232 (correction) — BLOCKER FIX: this endpoint now goes through the
+    SAME canonical loader (`training_v2.canonical_training_paces`) and the
+    SAME canonical `reference_date` resolver as GET /training/v2/week, so
+    the two endpoints can never disagree (one showing a pace, the other
+    None) for the same user/day. No locally re-derived activity window,
+    no Garmin-connection gate that the other endpoint doesn't apply.
+
     Response:
         confidence         "HIGH" | "MEDIUM" | "LOW" | "INSUFFICIENT"
         vdot_reference     float (internal, not surfaced to runner)
@@ -4506,29 +4493,24 @@ async def get_training_v2_paces(user: dict = Depends(auth_user)):
 
     When confidence == "INSUFFICIENT", paces fields are all null.
     """
-    from training_v2.training_paces import compute_training_paces, training_paces_to_api_dict
+    from training_v2.canonical_training_paces import load_canonical_training_paces
+    from training_v2.training_paces import training_paces_to_api_dict
 
     user_id = user["id"]
     now_utc = datetime.now(timezone.utc)
-    reference_date = now_utc.date()
 
-    # ── Load garmin activities → DomainActivity boundary ─────────────────
-    domain_activities = []
-    garmin_conn = await db.garmin_connections.find_one({"user_id": user_id}, {"_id": 0})
-    if garmin_conn and garmin_conn.get("connected"):
-        try:
-            garmin_activities = await (
-                db.garmin_activities.find({"user_id": user_id}, {"_id": 0})
-                .sort("start_time", -1)
-                .limit(500)
-                .to_list(length=500)
-            )
-            domain_activities = mongo_garmin_activities_to_domain(garmin_activities)
-        except Exception as exc:
-            logger.warning(f"[TrainingPaces] Garmin activity load failed: {exc}")
+    # ── C231/C232 — SAME canonical reference_date resolver as Today/Week ──
+    ninety_days_ago = now_utc - timedelta(days=90)
+    garmin_activities_90 = await db.garmin_activities.find(
+        {"user_id": user_id, "start_time": {"$gte": ninety_days_ago.isoformat()}},
+        {"_id": 0},
+    ).to_list(1000)
+    reference_date = _resolve_canonical_reference_date(now_utc, garmin_activities_90)
 
-    # ── Compute paces — no Garmin VO2max, no VMA, no Race Predictions ──────
-    paces = compute_training_paces(domain_activities, reference_date, user_max_hr=None)
+    # ── C232 — canonical loader: same query/window/policy as /training/v2/week ─
+    paces = await load_canonical_training_paces(
+        db, user_id=user_id, reference_date=reference_date
+    )
     return training_paces_to_api_dict(paces)
 
 
