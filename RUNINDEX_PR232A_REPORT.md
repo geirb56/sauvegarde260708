@@ -558,3 +558,175 @@ Limites connues : le retrait des jours de repos de la diversion
 la SEULE valeur utilisée pour désigner un jour de repos dans ce pipeline ;
 si un futur type de séance neutre est introduit, ce garde devra être
 étendu explicitement.
+
+## C231-quater.1 — P0 : `/training/today` affiche TOUJOURS la served_prescription canonique
+
+Bug corrigé : `adaptation_applied` était calculé à partir du recalcul
+readiness **courant** (live), alors que le frontend s'en servait pour
+choisir la séance affichée (`true` → `adapted_prescription`, `false` →
+`planned_session`). Un snapshot déjà figé (ex. 12,6 km suite à une
+alerte CAUTION passée) pouvait donc être écrasé à l'affichage par le
+plan brut (18 km) dès qu'un appel ultérieur repassait en
+FAVORABLE/KEEP — alors même que la prescription réellement servie
+(`served_prescription`, issue de `get_or_create_served_prescription`)
+restait 12,6 km en base.
+
+Corrigé :
+- `backend/server.py` (`/training/today`) expose désormais
+  explicitement une clé canonique `served_prescription` (= la valeur
+  FIGÉE, atomique, déjà utilisée pour construire `adapted_prescription`
+  — celui-ci reste présent pour compatibilité et est garanti
+  strictement identique à `served_prescription`).
+- Le indicateur `adaptation_applied` reste calculé (recalcul live) mais
+  redevient **purement informatif** — il n'est plus utilisé nulle part
+  pour décider quelle séance est affichée. Le nouveau booléen
+  `session_modified_from_planned` (comparaison RÉELLE entre la
+  prescription servie et le plan brut) remplace `adaptation_applied`
+  comme condition d'exposition du champ hérité `adaptive_session`.
+- `frontend/src/pages/TrainingPlanV2.jsx` : la sélection de
+  `todaySession` priorise désormais inconditionnellement
+  `todayData.served_prescription`, avec repli sur
+  `adapted_prescription` → `adaptive_session` → `planned_session` →
+  `original_prescription`. L'ancien ternaire piloté par
+  `adaptation_applied` a été supprimé.
+
+Tests (`backend/tests/test_pr231_c231_corrections3.py`, end-to-end via
+le vrai handler FastAPI + fausse base Mongo) :
+- `test_today_endpoint_exposes_served_prescription_key_matching_frozen_snapshot`
+- `test_today_endpoint_served_prescription_wins_even_when_adaptation_applied_is_false`
+- `test_week_first_then_today_show_identical_served_prescription`
+- `test_today_first_then_week_show_identical_served_prescription`
+
+Tests (`frontend/src/__tests__/training-v2-page.test.jsx`) :
+"C231 round 2 item 1: today always shows served_prescription, never the
+stale planned_session even when adaptation_applied is false" — vérifie
+que la carte "aujourd'hui" affiche 12,6 km et n'affiche JAMAIS 18 km,
+même avec `adaptation_applied: false` dans la réponse mockée.
+
+## C231-quater.2 — P0/P1 : `prescription_unavailable` reste au niveau du bridge, jamais dans les enums PR230
+
+`MatchingStatus`/`AdherenceStatus` (PR230, `training_v2/performed_workout.py`)
+avaient été pollués par un round précédent avec une valeur
+`PRESCRIPTION_UNAVAILABLE` que `build_performed_workouts()` ne produit
+jamais réellement (elle était fabriquée artificiellement dans le
+bridge). Corrigé :
+- `MatchingStatus` restauré à exactement `planned | matched | missed |
+  ambiguous | unmatched_actual`.
+- `AdherenceStatus` restauré à exactement `pending |
+  completed_as_planned | completed_modified | completed_unverified |
+  missed | ambiguous | unmatched_actual | not_applicable`.
+- `backend/tests/test_performed_workout_pr230.py`
+  (`test_engine_never_emits_a_completed_matching_status`) restauré pour
+  vérifier exactement cet ensemble canonique (aucune modification
+  sémantique du moteur PR230).
+- `backend/training_v2/week_execution.py` réécrit : le fait "ce jour
+  n'a jamais été réellement servi/figé" vit désormais UNIQUEMENT dans
+  un champ dédié bridge/API,
+  `SessionExecution.execution_status = EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE`
+  (`row` devient `Optional[PerformedWorkout] = None` pour ce cas — plus
+  aucune ligne PR230 fabriquée). PR230 n'est simplement jamais consulté
+  pour ces prescriptions (`unavailable_prescription_ids`), au lieu de
+  recevoir une fausse ligne.
+- `backend/training_v2/training_week_response.py`
+  (`WeekV2SessionResponse`) : nouveau champ `execution_status:
+  Optional[str] = None` ; `workout_type`/`intensity_class` élargis en
+  `Optional[str]` (aucune valeur fabriquée pour un jour non fiable).
+- `backend/server.py` (`/training/v2/week`) : nouvelle fonction
+  `_session_response()` qui construit une réponse "neutre" (tous les
+  champs prévus à `None`, `execution_status` renseigné) quand
+  `execution_status == EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE`,
+  sinon la réponse normale issue de la ligne PR230.
+
+Tests :
+- `backend/tests/test_pr231_c231_corrections3.py` :
+  `test_pr230_matching_status_enum_has_no_prescription_unavailable`,
+  `test_pr230_adherence_status_enum_has_no_prescription_unavailable`,
+  `test_week_session_response_has_dedicated_execution_status_field`.
+- `backend/tests/test_pr231_c231_corrections2.py` : les 3 scénarios de
+  jour jamais ouvert ont été réécrits pour vérifier `row is None` +
+  `execution_status == EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE`
+  (import direct depuis `training_v2.week_execution`) au lieu des
+  anciennes assertions sur les enums PR230.
+
+## C231-quater.3 — P0 : aucune prescription historique reconstruite affichée comme factuelle
+
+Confirmé/étendu à l'échelle end-to-end (endpoint réel) : pour un jour
+`planned_date < reference_date` sans snapshot existant, la réponse
+`/training/v2/week` ne contient AUCUNE valeur recalculée aujourd'hui
+présentée comme un fait historique — `workout_type`, `intensity_class`,
+`distance_km`, `duration_minutes`, `matching_status`,
+`adherence_status`, `actual` sont tous `None`, et
+`execution_status = "prescription_unavailable"` signale explicitement
+l'état. Une vraie activité Garmin survenue ce jour-là continue de
+remonter dans `unmatched_actuals` (jamais perdue), sans jamais servir à
+fabriquer un faux verdict "matched"/"missed" contre une prescription
+non fiable.
+
+Frontend (déjà en place, ré-audité ce round) :
+`getSessionStatusKey()` retourne `"unavailable"` dès que
+`execution_status === "prescription_unavailable"` (vérifié AVANT le
+test "jour de repos") ; `WeekSessionRow` affiche alors le libellé
+neutre `sessionStates.unavailable` ("Prescription non enregistrée" /
+"Prescription not recorded" / "Prescripción no registrada" — FR/EN/ES
+dans `frontend/src/lib/i18n.js`), sans badge Done/Missed/Modified et
+sans distance/durée affichée.
+
+Tests (`backend/tests/test_pr231_c231_corrections3.py`, end-to-end) :
+- `test_week_endpoint_monday_never_served_reports_prescription_unavailable`
+- `test_week_endpoint_real_garmin_activity_for_unserved_monday_still_surfaces_as_unmatched`
+
+Tests (frontend) : "C231 round 2 item 3: a prescription_unavailable
+session shows a neutral state, no Done/Missed/Modified badge, no
+fabricated distance".
+
+## C231-quater.4 — Validation
+
+Commandes exécutées :
+```
+cd backend && python3 -m pytest \
+  tests/test_pr232a_week_execution.py \
+  tests/test_pr231_c231_corrections2.py \
+  tests/test_pr231_c231_corrections3.py \
+  tests/test_pr231_c231_final_corrections.py \
+  tests/test_performed_workout_pr230.py \
+  tests/test_pr232a_c231_week_endpoint.py \
+  tests/test_pr231_served_prescription.py \
+  -q -p no:cacheprovider
+# → 142 passed
+
+cd frontend && npx craco test --watchAll=false --forceExit \
+  src/__tests__/training-v2-page.test.jsx
+# → 24 passed
+```
+
+Suite complète backend (`python3 -m pytest` sans filtre) : ré-exécutée
+pour dépister une régression éventuelle liée à l'élargissement de
+`WeekV2SessionResponse.workout_type`/`intensity_class` en `Optional` et
+au changement de forme de `SessionExecution` — les échecs observés
+(mêmes ~300, réseau externe indisponible dans le sandbox, fixture Redis
+manquante `test_reliable_queue.py`, tests `test_pr175_training_v2_cycle.py`
+en 401 au lieu de 200/403) sont confirmés hors du périmètre des fichiers
+modifiés par ce round (aucun ne référence `week_execution`,
+`performed_workout`, `training_week_response`, `served_prescription`,
+ni les routes `/training/today` / `/training/v2/week`).
+
+Checklist de validation demandée :
+- external_id réel Garmin toujours PASS (C231-ter.1, inchangé)
+- served snapshot atomicité toujours PASS
+  (`test_week_first_then_today_show_identical_served_prescription`,
+  `test_today_first_then_week_show_identical_served_prescription`)
+- index UNIQUE fail-fast toujours PASS (C231-bis.4/C231-ter.4, inchangé)
+- no retroactive snapshot toujours PASS (C231-ter.3, inchangé — aucune
+  régression : `unavailable_prescription_ids` ne déclenche jamais
+  d'écriture de snapshot)
+- no-lookahead : PASS (`build_performed_workouts` inchangé sémantiquement)
+- multi-user isolation : PASS (isolation par `user_id` inchangée dans
+  `build_week_execution`)
+- None != 0 : PASS (`WeekV2SessionResponse` : tous les champs
+  "prescription_unavailable" sont `None`, jamais `0`)
+- zéro `/training/feedback` : PASS ("never calls the legacy
+  /training/feedback endpoint" toujours vert)
+- frontend n'invente jamais Done : PASS (tests dédiés item 3 + tests
+  C231-ter.5 toujours verts)
+
+Aucune modification du redesign visuel #232B. Aucun merge effectué.

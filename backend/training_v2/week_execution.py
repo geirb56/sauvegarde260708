@@ -27,6 +27,14 @@ Design rules
 - C231 — ``unmatched_actuals`` are scoped to the current week only
   (``[week_start, week_start + 6]`` by Garmin local date); older or newer
   unmatched Garmin activities are never exposed here.
+- C231 (round 2) — a past day that was never actually served/frozen has no
+  real prescription to match against. This is a BRIDGE-level fact, never a
+  PR230 ``MatchingStatus``/``AdherenceStatus`` value: PR230's own enums stay
+  limited to the states ``build_performed_workouts`` can really produce
+  (``planned``/``matched``/``missed``/``ambiguous``/``unmatched_actual`` and
+  their adherence counterparts). Such a day is excluded from PR230 matching
+  entirely and reported here as ``SessionExecution(row=None,
+  execution_status=EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE)``.
 """
 
 from __future__ import annotations
@@ -38,8 +46,6 @@ from typing import Dict, List, Mapping, Optional, Sequence
 from garmin.domain_adapter import mongo_garmin_to_observed_activities
 
 from .performed_workout import (
-    AdherenceStatus,
-    MatchingStatus,
     PerformedWorkout,
     PrescribedWorkout,
     build_performed_workouts,
@@ -62,18 +68,38 @@ _DAY_INDEX: Dict[str, int] = {
 }
 """Monday → Sunday index, mirrors workout_generator._ALL_DAYS ordering."""
 
+EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE: str = "prescription_unavailable"
+"""C231 (round 2) — bridge/API-level execution status for a past day that
+was never actually served/frozen while it was current. Deliberately NOT a
+PR230 ``MatchingStatus``/``AdherenceStatus`` value (PR230's engine never
+produces this state); it lives only in ``SessionExecution.execution_status``
+and the corresponding API response field."""
+
 
 @dataclass(frozen=True)
 class SessionExecution:
-    """One WeeklyPlan session paired with its factual execution row.
+    """One WeeklyPlan session paired with its factual execution outcome.
 
     ``session`` is the EFFECTIVE prescription actually used for matching and
     display: the frozen snapshot when one exists for this ``planned_date``,
     otherwise the live (possibly still-evolving) ``WorkoutPrescription``.
+
+    ``row`` is the PR230 reconciliation row (``planned``/``matched``/
+    ``missed``/``ambiguous``/``unmatched_actual``) — ``None`` when
+    ``execution_status`` is set instead (see below), since PR230 was never
+    consulted for that day.
+
+    ``execution_status`` is a bridge-level fact, never fabricated into a
+    PR230 state: ``EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE`` when this
+    day's real historical prescription cannot be trusted (never frozen while
+    it was current) — ``None`` otherwise (normal PR230-backed session, see
+    ``row``).
     """
 
     session: WorkoutPrescription
-    row: PerformedWorkout
+    planned_date: date
+    row: Optional[PerformedWorkout]
+    execution_status: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -108,40 +134,6 @@ def prescription_id_for(user_id: str, planned_date: date, day: str) -> str:
 
 def _prescription_id(user_id: str, planned_date: date, day: str) -> str:
     return f"{user_id}:{planned_date.isoformat()}:{day.lower()}"
-
-
-def _historical_prescription_unavailable_row(
-    *,
-    user_id: str,
-    prescription_id: str,
-    planned_date: date,
-    effective: WorkoutPrescription,
-) -> PerformedWorkout:
-    """C231 (P0 #3) — row for a past day that was NEVER served/frozen.
-
-    Never a product of PR230 matching: this day's live prescription has been
-    recomputed today and cannot be trusted as "what was actually prescribed"
-    back when this day was current. Exposing ``matched``/``missed``/
-    ``completed_modified`` here would silently fabricate history. The planned
-    fields below are informational (today's best-effort reconstruction of
-    what the plan currently looks like for this slot) — they are NEVER used
-    to assert an adherence verdict.
-    """
-    return PerformedWorkout(
-        user_id=user_id,
-        prescription_id=prescription_id,
-        planned_date=planned_date,
-        planned_workout_type=effective.workout_type,
-        planned_distance_km=effective.distance_km,
-        planned_duration_min=(
-            float(effective.duration_minutes)
-            if effective.duration_minutes is not None
-            else None
-        ),
-        planned_intensity_class=effective.intensity_class,
-        matching_status=MatchingStatus.PRESCRIPTION_UNAVAILABLE,
-        adherence_status=AdherenceStatus.PRESCRIPTION_UNAVAILABLE,
-    )
 
 
 def build_week_execution(
@@ -189,22 +181,21 @@ def build_week_execution(
     no existing frozen snapshot was NEVER actually served while it was
     current: its live (recomputed today) prescription is NOT trusted as
     historical truth. It is excluded from PR230 matching entirely and
-    reported as ``PRESCRIPTION_UNAVAILABLE`` instead of being silently
-    fabricated into ``matched``/``missed``/``completed_modified``. Rest days
-    are exempt (see ``_historical_prescription_unavailable_row`` docstring —
+    reported as ``execution_status=EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE``
+    (with ``row=None``) instead of being silently fabricated into
+    ``matched``/``missed``/``completed_modified``. Rest days are exempt —
     there is no distance/duration to fabricate for a rest day; PR230 already
     reports them deterministically as ``planned``/``not_applicable``
-    regardless of Garmin evidence).
+    regardless of Garmin evidence.
     """
     frozen_snapshots = frozen_snapshots or {}
     week_end = week_start + timedelta(days=6)
 
     prescriptions: List[PrescribedWorkout] = []
-    effective_sessions: List[WorkoutPrescription] = []
     snapshots_to_persist: List[PrescriptionSnapshot] = []
-    # prescription_id -> pre-built row, for sessions excluded from PR230
-    # matching entirely (see docstring above).
-    historical_unavailable_rows: Dict[str, PerformedWorkout] = {}
+    # prescription_ids excluded from PR230 matching entirely (see docstring
+    # above) — never given a fabricated PR230 row.
+    unavailable_prescription_ids: set = set()
 
     for session in sessions:
         planned_date = _session_planned_date(session.day, week_start)
@@ -213,19 +204,11 @@ def build_week_execution(
         effective = resolve_effective_session(
             live_session=session, frozen_snapshot=frozen
         )
-        effective_sessions.append(effective)
 
         is_rest = session.workout_type == "rest"
 
         if frozen is None and not is_rest and planned_date < reference_date:
-            historical_unavailable_rows[prescription_id] = (
-                _historical_prescription_unavailable_row(
-                    user_id=user_id,
-                    prescription_id=prescription_id,
-                    planned_date=planned_date,
-                    effective=effective,
-                )
-            )
+            unavailable_prescription_ids.add(prescription_id)
             continue
 
         if frozen is None and planned_date == reference_date:
@@ -284,10 +267,14 @@ def build_week_execution(
             live_session=session, frozen_snapshot=frozen_snapshots.get(prescription_id)
         )
 
-        historical_row = historical_unavailable_rows.get(prescription_id)
-        if historical_row is not None:
+        if prescription_id in unavailable_prescription_ids:
             session_executions.append(
-                SessionExecution(session=effective, row=historical_row)
+                SessionExecution(
+                    session=effective,
+                    planned_date=planned_date,
+                    row=None,
+                    execution_status=EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE,
+                )
             )
             continue
 
@@ -304,7 +291,9 @@ def build_week_execution(
                 "prescription is required; the week must never be silently "
                 "truncated."
             )
-        session_executions.append(SessionExecution(session=effective, row=row))
+        session_executions.append(
+            SessionExecution(session=effective, planned_date=planned_date, row=row)
+        )
 
     # C231 — unmatched_actuals are scoped to the CURRENT week only: an extra
     # Garmin activity from a previous or future week is never exposed here,
@@ -325,4 +314,10 @@ def build_week_execution(
     )
 
 
-__all__ = ["build_week_execution", "WeekExecutionResult", "SessionExecution", "prescription_id_for"]
+__all__ = [
+    "build_week_execution",
+    "WeekExecutionResult",
+    "SessionExecution",
+    "prescription_id_for",
+    "EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE",
+]

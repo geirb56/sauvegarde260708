@@ -390,6 +390,76 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     expect(within(week).getByTestId("session-status-unverified")).toBeInTheDocument();
   });
 
+  test("C231 round 2 item 1: today always shows served_prescription, never the stale planned_session even when adaptation_applied is false", async () => {
+    // Simulates: plan brut 18 km -> first call froze a CAUTION snapshot at
+    // 12.6 km -> a later call's live recompute now says FAVORABLE/KEEP
+    // (adaptation_applied=false), but the canonical frozen snapshot must
+    // still be what is displayed: 12.6 km, never the raw 18 km plan.
+    mockAxios({
+      today: {
+        status: "success",
+        readiness: { band: "EASY" },
+        planned_session: {
+          workout_type: "long_easy", duration_minutes: 95, distance_km: 18,
+          prescription: "Long run 18 km",
+        },
+        original_prescription: {
+          workout_type: "long_easy", duration_minutes: 95, distance_km: 18,
+          prescription: "Long run 18 km",
+        },
+        served_prescription: {
+          workout_type: "long_easy", duration_minutes: 66, distance_km: 12.6,
+          prescription: "Long run 12.6 km (frozen)",
+        },
+        adapted_prescription: {
+          workout_type: "long_easy", duration_minutes: 66, distance_km: 12.6,
+          prescription: "Long run 12.6 km (frozen)",
+        },
+        adaptive_session: null,
+        // KEY: adaptation_applied is FALSE (live recompute says KEEP), yet
+        // the canonical served_prescription must still win the display.
+        adaptation_applied: false,
+        adaptation_reason: "",
+      },
+    });
+    renderPage();
+
+    const today = await screen.findByTestId("training-v2-today");
+    expect(within(today).getByTestId("today-session-distance")).toHaveTextContent(
+      formatDistance(12.6, { unitSystem: "metric" })
+    );
+    expect(within(today).queryByText(formatDistance(18, { unitSystem: "metric" }))).not.toBeInTheDocument();
+  });
+
+  test("C231 round 2 item 3: a prescription_unavailable session shows a neutral state, no Done/Missed/Modified badge, no fabricated distance", async () => {
+    const unavailableWeek = weekData();
+    unavailableWeek.week.sessions[3] = {
+      day: "thursday",
+      workout_type: null,
+      intensity_class: null,
+      distance_km: null,
+      duration_minutes: null,
+      estimated_tss: null,
+      reason_codes: [],
+      matching_status: null,
+      adherence_status: null,
+      actual: null,
+      execution_status: "prescription_unavailable",
+    };
+
+    mockAxios({ week: unavailableWeek });
+    renderPage({ width: 390 });
+
+    const week = await screen.findByTestId("training-v2-week");
+    const thursdayRow = within(week).getByTestId("training-v2-day-thursday");
+    expect(within(thursdayRow).getByTestId("session-status-unavailable")).toBeInTheDocument();
+    expect(within(thursdayRow).queryByTestId("session-status-done")).not.toBeInTheDocument();
+    expect(within(thursdayRow).queryByTestId("session-status-missed")).not.toBeInTheDocument();
+    expect(within(thursdayRow).queryByTestId("session-status-modified")).not.toBeInTheDocument();
+    expect(thursdayRow.getAttribute("data-day-state")).toBe("unavailable");
+    expect(within(thursdayRow).queryByText(/8/)).not.toBeInTheDocument();
+  });
+
   test("missing day in week payload stays neutral and is not marked REST", async () => {
     const weekWithMissingSunday = weekData();
     weekWithMissingSunday.week.sessions = weekWithMissingSunday.week.sessions.filter((session) => session.day !== "sunday");

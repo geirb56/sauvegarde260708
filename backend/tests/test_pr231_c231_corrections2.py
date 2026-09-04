@@ -3,7 +3,8 @@
 - item 3: no retroactively-invented prescription snapshot for a day that was
   never opened/served while it was current (Monday never opened, Wednesday
   endpoint call, plan recomputed differently on Wednesday => no snapshot,
-  PRESCRIPTION_UNAVAILABLE, deterministic replay).
+  execution_status="prescription_unavailable" as a bridge-level fact (never
+  a PR230 MatchingStatus/AdherenceStatus value), deterministic replay).
 - item 4: the prescription-snapshot unique index must be a CRITICAL
   (fail-fast) startup prerequisite, exactly like Paddle's — creation failure
   must propagate and stop startup.
@@ -55,8 +56,10 @@ def _session(day: str, workout_type: str = "easy", distance_km=8.0):
 
 
 def test_monday_never_opened_wednesday_call_no_snapshot_created():
-    from training_v2.week_execution import build_week_execution
-    from training_v2.performed_workout import MatchingStatus, AdherenceStatus
+    from training_v2.week_execution import (
+        EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE,
+        build_week_execution,
+    )
 
     # Monday's plan when it was current would have been 8.0km, but the plan
     # is recomputed differently by the time Wednesday's call happens (10.0km)
@@ -82,24 +85,21 @@ def test_monday_never_opened_wednesday_call_no_snapshot_created():
     assert monday_pids == ["monday"]
     assert list(result.snapshots_to_persist) == []
 
-    monday_row = next(s.row for s in result.sessions if s.session.day == "monday")
-    assert monday_row.matching_status == MatchingStatus.PRESCRIPTION_UNAVAILABLE
-    assert monday_row.adherence_status == AdherenceStatus.PRESCRIPTION_UNAVAILABLE
-    # Never fabricated as missed/done/completed_modified.
-    assert monday_row.matching_status not in (
-        MatchingStatus.MISSED, MatchingStatus.MATCHED,
-    )
-    assert monday_row.adherence_status not in (
-        AdherenceStatus.MISSED, AdherenceStatus.COMPLETED_AS_PLANNED,
-        AdherenceStatus.COMPLETED_MODIFIED,
-    )
+    monday_se = next(s for s in result.sessions if s.session.day == "monday")
+    # C231 (round 2, item 2) — this is a BRIDGE-level fact, never a PR230
+    # matching_status/adherence_status value: no fabricated PR230 row at all.
+    assert monday_se.row is None
+    assert monday_se.execution_status == EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE
+    assert monday_se.execution_status == "prescription_unavailable"
 
 
 def test_monday_never_opened_replay_is_deterministic():
     """Calling the endpoint again later (plan recomputed yet again) must
-    still show PRESCRIPTION_UNAVAILABLE for Monday — never anything else."""
-    from training_v2.week_execution import build_week_execution
-    from training_v2.performed_workout import MatchingStatus
+    still show prescription_unavailable for Monday — never anything else."""
+    from training_v2.week_execution import (
+        EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE,
+        build_week_execution,
+    )
 
     sessions_first_call = [_session("monday", distance_km=10.0)]
     sessions_second_call = [_session("monday", distance_km=13.5)]  # plan changed again
@@ -114,10 +114,12 @@ def test_monday_never_opened_replay_is_deterministic():
         week_start=_WEEK_START, sessions=sessions_second_call,
         garmin_docs=[], frozen_snapshots={},
     )
-    row1 = next(s.row for s in first.sessions if s.session.day == "monday")
-    row2 = next(s.row for s in second.sessions if s.session.day == "monday")
-    assert row1.matching_status == MatchingStatus.PRESCRIPTION_UNAVAILABLE
-    assert row2.matching_status == MatchingStatus.PRESCRIPTION_UNAVAILABLE
+    se1 = next(s for s in first.sessions if s.session.day == "monday")
+    se2 = next(s for s in second.sessions if s.session.day == "monday")
+    assert se1.execution_status == EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE
+    assert se2.execution_status == EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE
+    assert se1.row is None
+    assert se2.row is None
 
 
 def test_rest_day_never_opened_is_exempt_from_unavailable():
@@ -126,7 +128,6 @@ def test_rest_day_never_opened_is_exempt_from_unavailable():
     reference_date, so they are exempt from the historical-unavailable
     diversion."""
     from training_v2.week_execution import build_week_execution
-    from training_v2.performed_workout import MatchingStatus
 
     sessions = [_session("monday", workout_type="rest", distance_km=None)]
     result = build_week_execution(
@@ -134,8 +135,9 @@ def test_rest_day_never_opened_is_exempt_from_unavailable():
         week_start=_WEEK_START, sessions=sessions,
         garmin_docs=[], frozen_snapshots={},
     )
-    row = next(s.row for s in result.sessions if s.session.day == "monday")
-    assert row.matching_status != MatchingStatus.PRESCRIPTION_UNAVAILABLE
+    se = next(s for s in result.sessions if s.session.day == "monday")
+    assert se.execution_status is None
+    assert se.row is not None
 
 
 def test_today_session_can_still_be_frozen_normally():

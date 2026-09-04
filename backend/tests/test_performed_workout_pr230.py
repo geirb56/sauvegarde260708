@@ -616,9 +616,6 @@ def test_engine_never_emits_a_completed_matching_status():
         "missed",
         "ambiguous",
         "unmatched_actual",
-        # C231 — item 3: emitted only for historical days that were never
-        # frozen/served; still never "completed".
-        "prescription_unavailable",
     }
     assert "completed" not in {s.value for s in MatchingStatus}
 

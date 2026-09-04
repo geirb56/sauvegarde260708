@@ -3472,8 +3472,20 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     # C231 — the canonical SERVED prescription (post get-or-create snapshot
     # resolution), never the raw local adaptation_result, is what gets
     # displayed — guarantees identical distance/duration as /training/v2/week.
-    adapted_runtime = prescription_to_runtime_session(served_prescription)
+    served_prescription_runtime = prescription_to_runtime_session(served_prescription)
+    # Backward-compat alias — kept byte-for-byte identical to
+    # served_prescription_runtime (see "served_prescription" key below).
+    adapted_runtime = served_prescription_runtime
+    # C231 (round 2, item 1 BLOCKER FIX) — adaptation_applied is now PURELY
+    # informative: it reflects TODAY's live readiness recompute action and
+    # MUST NEVER be used (here or by any consumer) to choose which session is
+    # displayed. The canonical served_prescription (frozen once per day) is
+    # ALWAYS the one displayed, regardless of what a later recompute would
+    # decide. session_modified_from_planned is the ground-truth signal for
+    # "did the served session actually differ from the plan" (compares the
+    # frozen served prescription, not the possibly-stale live action).
     adaptation_applied = adaptation_result.action != DailyAdaptationAction.KEEP
+    session_modified_from_planned = served_prescription_runtime != planned_session_runtime
     adaptation_reason = ", ".join(adaptation_result.reason_codes)
 
     # ── 9. Legacy compat: recommendation / recommendation_color derived from V2 ─
@@ -3490,9 +3502,24 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
         # original_prescription: identical to planned_session — both represent the planned
         # session before DailyAdaptation. Preserved for backward compat with existing consumers.
         "original_prescription": planned_session_runtime,
+        # served_prescription: C231 (round 2) — THE canonical session to display
+        # today. Always the frozen, get-or-create'd served prescription — never
+        # recomputed on the fly, never superseded by a later readiness change.
+        # Consumers (frontend included) MUST read this key first and MUST NOT
+        # fall back to planned_session while a served_prescription exists.
+        "served_prescription": served_prescription_runtime,
+        # adapted_prescription: kept for backward compat — always byte-for-byte
+        # identical to served_prescription (never a separate, potentially
+        # divergent, live recompute).
         "adapted_prescription": adapted_runtime,
-        # Legacy compat: adaptive_session present when adaptation changed the session
-        "adaptive_session": adapted_runtime if adaptation_applied else None,
+        # Legacy compat: adaptive_session present when the served prescription
+        # actually differs from the plan (ground truth), not when a possibly
+        # stale live re-adaptation action says so.
+        "adaptive_session": adapted_runtime if session_modified_from_planned else None,
+        # adaptation_applied: INFORMATIVE ONLY (C231 round 2) — describes what
+        # today's live readiness recompute would decide right now. NEVER an
+        # authority for choosing which session to display; see
+        # served_prescription for that.
         "adaptation_applied": adaptation_applied,
         "adaptation_reason": adaptation_reason,
         "adaptation_action": adaptation_result.action.value,
@@ -4103,7 +4130,11 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
     # ── PR232A/C231: factual execution — PR230 Garmin boundary, no fallback,
     # matched against the FROZEN prescription snapshot once a session is
     # today or in the past (see training_v2/prescription_snapshot.py) ─────
-    from training_v2.week_execution import build_week_execution, prescription_id_for
+    from training_v2.week_execution import (
+        EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE,
+        build_week_execution,
+        prescription_id_for,
+    )
     from training_v2.training_week_response import WeekV2ActualResponse
     from training_v2.prescription_snapshot import PrescriptionSnapshot, snapshot_from_prescription
     from training_v2.served_prescription import get_or_create_served_prescription
@@ -4242,10 +4273,32 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
             start_time=row.actual_start_time.isoformat() if row.actual_start_time else None,
         )
 
-    sessions = [
-        WeekV2SessionResponse(
+    def _session_response(se) -> WeekV2SessionResponse:
+        planned_date_iso = se.planned_date.isoformat() if se.planned_date else None
+        if se.execution_status == EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE:
+            # C231 (round 2, item 3) — this day's real historical prescription
+            # was never frozen/served while it was current: the live
+            # (recomputed today) session is NOT trusted as historical fact.
+            # None != 0: distance/duration/workout_type/matching/adherence
+            # are all left unfabricated. The real Garmin activity (if any)
+            # still surfaces separately via unmatched_actuals, never here.
+            return WeekV2SessionResponse(
+                day=se.session.day,
+                planned_date=planned_date_iso,
+                workout_type=None,
+                intensity_class=None,
+                distance_km=None,
+                duration_minutes=None,
+                estimated_tss=None,
+                reason_codes=[],
+                matching_status=None,
+                adherence_status=None,
+                actual=None,
+                execution_status=EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE,
+            )
+        return WeekV2SessionResponse(
             day=se.session.day,
-            planned_date=se.row.planned_date.isoformat() if se.row.planned_date else None,
+            planned_date=planned_date_iso,
             workout_type=se.session.workout_type,
             intensity_class=se.session.intensity_class,
             distance_km=se.session.distance_km,
@@ -4255,9 +4308,10 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
             matching_status=se.row.matching_status.value,
             adherence_status=se.row.adherence_status.value,
             actual=_actual_response(se.row),
+            execution_status=None,
         )
-        for se in execution.sessions
-    ]
+
+    sessions = [_session_response(se) for se in execution.sessions]
     unmatched_actuals = [
         actual
         for row in execution.extra_rows

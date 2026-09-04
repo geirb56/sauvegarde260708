@@ -191,11 +191,6 @@ class MatchingStatus(str, Enum):
     MISSED = "missed"
     AMBIGUOUS = "ambiguous"
     UNMATCHED_ACTUAL = "unmatched_actual"
-    PRESCRIPTION_UNAVAILABLE = "prescription_unavailable"
-    """C231 (P0 #3) — a past day that was never actually served/frozen has no
-    real prescription to match against. Set by the ``week_execution`` layer
-    BEFORE any PR230 matching is attempted for that day — never produced by
-    :func:`build_performed_workouts` itself."""
 
 
 class AdherenceStatus(str, Enum):
@@ -209,10 +204,6 @@ class AdherenceStatus(str, Enum):
     AMBIGUOUS = "ambiguous"
     UNMATCHED_ACTUAL = "unmatched_actual"
     NOT_APPLICABLE = "not_applicable"
-    PRESCRIPTION_UNAVAILABLE = "prescription_unavailable"
-    """C231 (P0 #3) — never fabricate missed/done/completed_modified for a
-    past day whose prescription was never frozen; expose this explicit,
-    non-fabricated state instead."""
 
 
 # ---------------------------------------------------------------------------

@@ -326,10 +326,21 @@ def test_engine_never_fabricates_a_completed_state_outside_pr230_vocabulary():
 
 
 def test_missing_actual_stays_none_never_zero():
+    from training_v2.prescription_snapshot import PrescriptionSnapshot
+
+    prescription_id = f"{USER}:2024-06-10:monday"
+    frozen_snapshots = {
+        prescription_id: PrescriptionSnapshot(
+            user_id=USER, prescription_id=prescription_id,
+            planned_date=date(2024, 6, 10), day="monday",
+            workout_type="easy", intensity_class="low", distance_km=8.0,
+        )
+    }
     sessions = [_session("monday", distance_km=8.0)]
     rows = build_week_execution(
         user_id=USER, reference_date=date(2024, 6, 12),
         week_start=WEEK_START, sessions=sessions, garmin_docs=[],
+        frozen_snapshots=frozen_snapshots,
     )
     row = _row_for(rows, date(2024, 6, 10))
     assert row.actual_distance_km is None
