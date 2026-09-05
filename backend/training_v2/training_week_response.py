@@ -177,7 +177,15 @@ class WeekV2SessionResponse(BaseModel):
     Training Engine), "steady" (not in the Daniels vocabulary), or when
     paces confidence is INSUFFICIENT. NEVER a fabricated interval/segment
     structure — see RUNINDEX_PR232_REPORT.md, "prescription canonique vs
-    présentation"."""
+    présentation".
+
+    C232 (correction round 2, item 4) — ALSO None for any session whose
+    ``planned_date <= reference_date`` (today or the past): such a session's
+    effective prescription is a FROZEN ``PrescriptionSnapshot``, which does
+    not persist a pace zone, so it is never reconstructed from TODAY's live
+    TrainingPaces (that would let a past session retroactively acquire a
+    pace it never had while it was current — see prescription_snapshot.py).
+    A pace zone is resolved only for a still-strictly-future session."""
 
 
 class WeekV2PlanResponse(BaseModel):

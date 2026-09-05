@@ -287,3 +287,141 @@ re-derives its own activity window or its own reference date.
 **NOT MERGED**, per explicit instruction. Scope strictly limited to the two
 blockers above — #233/#234/#235/#236 not touched.
 
+---
+
+## CORRECTION C232 — round 2 (historical immutability + real-volume audit)
+
+A second audit re-confirmed BLOCKER 1 (fabricated splits) is already fixed
+by the correction above, and raised **new** findings, all addressed in this
+round. **NOT MERGED.**
+
+### 1. Historical immutability of `primary_pace` (BLOCKER)
+
+Before this round, `GET /training/v2/week` resolved `primary_pace` for
+**every** session — including one whose `planned_date <= reference_date` —
+from `training_paces_v2`, a **live** recompute of the user's current
+TrainingPaces. Once a session's effective prescription is a FROZEN
+`PrescriptionSnapshot` (see `training_v2/prescription_snapshot.py`), that
+snapshot does **not** persist any pace field — so a past (or even today's,
+just-frozen) session's displayed pace could silently change on a later day
+if the live TrainingPaces changed in between (e.g. a Monday session
+showing a different pace on Wednesday than it showed on Monday). Forbidden
+per the new correction: *"une ancienne prescription ne doit jamais acquérir
+rétroactivement une allure... qui n'avait pas été figée avec elle."*
+
+**Fix**: `backend/server.py`'s `_session_response()` (inside
+`GET /training/v2/week`) now resolves `primary_pace` **only** for a session
+whose `planned_date` is **strictly in the future** relative to
+`reference_date` (never yet frozen — the live prescription may still
+legitimately evolve for it). Any session with `planned_date <= reference_date`
+(today or the past — i.e. matched against a frozen snapshot, or
+`prescription_unavailable`) now always gets `primary_pace = None`: unknown,
+never reconstructed from today's live paces. `None` stays `None`.
+
+`PrescriptionSnapshot` itself was deliberately **not** extended with a new
+pace field in this round — that would be introducing a new persisted
+concept without a real structured-prescription engine behind it (out of
+scope, see below). The honest answer for an already-frozen session, today,
+is "unknown", not a value invented from a field that doesn't exist yet.
+
+### 2. Single canonical Training Paces source (reconfirmed, no change needed)
+
+The prior correction round already made `canonical_training_paces.py` the
+single function called by both `/training/v2/paces` and
+`GET /training/v2/week`. With fix #1 above, `/training/v2/week` now only
+ever needs a live pace for still-future sessions — which is exactly the
+scope where using the shared canonical loader is legitimate (the plan may
+still evolve for them). No second/duplicate computation was introduced or
+remains; the same `load_canonical_training_paces()` call is kept (not
+removed), since future sessions still need it, but it is no longer
+consulted at all for frozen/past sessions.
+
+### 3. Week Summary — plan vs. real Garmin volume (BLOCKER)
+
+Before this round, `WeekSummaryCard` (frontend) computed a single
+"progress" figure by summing only `session.actual.distance_km` across
+matched sessions — silently excluding `unmatched_actuals` (real Garmin
+activities that could not be attributed to any prescribed session). A
+runner's real extra activity for the week could therefore be invisible
+from the week summary entirely.
+
+**Fix**: `WeekSummaryCard` now exposes **two distinct, clearly-labelled**
+notions, never conflated:
+- **plan progress** (`week-summary-progress-value` / `-progress-bar`):
+  matched sessions only, against the planned volume — unchanged from
+  before, still 100%-factual (no fabricated DONE/MISSED).
+- **real Garmin volume this week** (`week-summary-real-volume`, only shown
+  when non-zero): matched `actual.distance_km` **+** `unmatched_actuals`
+  distances, summed with **no double counting** — PR230's own matching
+  guarantees an activity is never simultaneously a matched `session.actual`
+  and an `unmatched_actuals` entry (mutually exclusive `matching_status`
+  values), so the two summed sets are always disjoint by construction. This
+  real-volume figure can legitimately **exceed** the planned volume; it is
+  never presented as "plan progress", and an extra activity is never
+  silently promoted into a planned session.
+
+### 4. Structured prescription — explicit architectural limit (reiterated)
+
+**Structured workout prescription is not yet available in
+`WorkoutPrescription` V2. PR232 does not fabricate it.** Training UX V3 is
+ready to *display* a structured prescription (per-block type, repetitions,
+distance/duration, recovery, E/M/T/I/R pace zone) the moment the Training
+Engine actually produces one — but that engine does not exist yet, and this
+PR does **not** build it. `session_structure.py` continues to expose only
+the single honest whole-session pace ZONE for `easy`/`recovery`/
+`long_easy`, and `None` for everything else (`quality`'s exact subtype is
+never guessed; `steady` never gets an invented zone).
+
+### Tests added for this round
+
+- `backend/tests/test_pr232a_c231_week_endpoint.py`:
+  - `test_paces_and_week_agree_when_last_high_performance_is_over_90_days_old`
+    — restricted its equivalence assertion to strictly-**future**
+    easy/recovery/long_easy sessions (the only scope where `/training/v2/week`
+    is still allowed to attach a live-resolved pace after fix #1).
+  - **new** `test_frozen_session_pace_is_never_recomputed_from_live_paces`
+    (mandatory test **C**) — Monday's session is frozen (`primary_pace`
+    already `None` on the very call that freezes it); viewing the same week
+    later, with new evidence that would change the live TrainingPaces if
+    recomputed, still shows `primary_pace = None` for Monday, and its
+    frozen `distance_km`/`workout_type` are unaffected.
+  - **new**
+    `test_unmatched_actuals_distance_is_disjoint_from_matched_sessions`
+    (mandatory test **E**) — a matched Monday activity and a genuinely
+    extra rest-day activity end up in disjoint sets (`session.actual` vs
+    `unmatched_actuals`), proving a frontend real-volume sum can never
+    double-count the same Garmin activity.
+  - **11/11 pass** in the file (9 pre-existing + 2 new).
+- `frontend/src/__tests__/training-v2-page.test.jsx` — **new**
+  `"C232 (correction round 2): week summary distinguishes plan progress
+  from real Garmin volume (matched + unmatched, no double counting)"` —
+  asserts `week-summary-progress-value` stays exactly the matched sum
+  (8.1 km) while `week-summary-real-volume` shows the combined matched +
+  unmatched total (13.3 km), using the existing fixture's unmatched extra
+  activity (5.2 km). **35/35 pass** in the file.
+
+### Full re-validation after this round
+
+- Backend: `tests/test_pr232a_c231_week_endpoint.py`,
+  `tests/test_pr232_session_structure.py`,
+  `tests/test_pr232a_week_execution.py`,
+  `tests/test_performed_workout_pr230.py` — **all pass**. Wider regression
+  sweep (`-k "pr228 or pr230 or pr232 or training_paces or week_execution or
+  readiness"`) — **580 passed**; the handful of failures are unrelated and
+  pre-existing (a rate-limited unrelated race-day test, two Redis/mock
+  environment issues in unrelated fatigue-removal tests, a missing symbol
+  in an unrelated PR153 test, an unrelated SSE import error, and a missing
+  `REACT_APP_BACKEND_URL` env var in an unrelated subscription test) — none
+  touch `server.py`'s week handler, `training_week_response.py`, or
+  `prescription_snapshot.py`.
+- Frontend: `npx craco test --watchAll=false --forceExit` — **251/251
+  pass**. `npm run build` — **compiles successfully**.
+
+### Status
+
+**NOT MERGED**, per explicit instruction. #233 not touched. No new
+structured-prescription engine was implemented in this PR.
+
+C232
+
+

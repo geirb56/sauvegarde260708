@@ -483,11 +483,19 @@ async def test_paces_and_week_agree_when_last_high_performance_is_over_90_days_o
     assert paces_body["confidence"] != "INSUFFICIENT"
     assert paces_body["paces"]["easy"] is not None
 
+    # C232 (correction round 2, item 4) — a pace zone is only ever resolved
+    # for a still-strictly-future session (today-or-past is served from a
+    # FROZEN snapshot, which never carries a pace — see
+    # test_frozen_session_pace_is_never_recomputed_from_live_paces below).
+    # Restrict this equivalence check to future easy/recovery/long_easy
+    # sessions, which is exactly the scope where /training/v2/week is
+    # allowed to attach a live-resolved pace at all.
     easy_sessions = [
         s for s in week_result["body"]["week"]["sessions"]
         if s["workout_type"] in ("easy", "recovery", "long_easy")
+        and s["planned_date"] > _MONDAY.isoformat()
     ]
-    assert easy_sessions, "expected at least one easy/recovery/long_easy session"
+    assert easy_sessions, "expected at least one future easy/recovery/long_easy session"
     for session in easy_sessions:
         # #6 — identical inputs + identical reference_date => identical
         # pace values between endpoints (never one showing a pace and the
@@ -554,3 +562,132 @@ async def test_insufficient_confidence_is_none_with_no_fallback():
     for session in week_result["body"]["week"]["sessions"]:
         # No fallback pace zone is ever fabricated when paces are INSUFFICIENT.
         assert session["primary_pace"] is None
+
+
+# ---------------------------------------------------------------------------
+# CORRECTION C232 (round 2) — historical immutability: a FROZEN prescription
+# never acquires a pace zone retroactively from TODAY's live TrainingPaces.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_frozen_session_pace_is_never_recomputed_from_live_paces():
+    # #C of the mandatory (round 2) C232 test list.
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    _seed_garmin_activities(fake_db, n=8)
+    _seed_connected(fake_db, connected=True)
+
+    first = await _get_week(fake_db, reference_date=_MONDAY)
+    assert first["status"] == 200, first["body"]
+    monday_session = next(
+        s for s in first["body"]["week"]["sessions"] if s["day"].lower() == "monday"
+    )
+    # A snapshot has just been frozen for Monday (today == planned_date, see
+    # test_week_endpoint_persists_snapshot_for_todays_session). The snapshot
+    # itself never persists a pace (prescription_snapshot.PrescriptionSnapshot
+    # has no pace field) — so it must be displayed as unknown, even for the
+    # very same call that just froze it.
+    assert monday_session["primary_pace"] is None
+
+    # Now view the SAME week later in the cycle (Monday is now strictly in
+    # the past) with DIFFERENT live evidence that would change the live
+    # TrainingPaces if it were (wrongly) recomputed for that day.
+    later_reference = _MONDAY + timedelta(days=3)
+    fake_db.garmin_activities._docs.append({
+        "user_id": _USER_ID,
+        "source": "garmin",
+        "activity_id": "much-faster-benchmark",
+        "activity_type": "running",
+        "start_time": (later_reference - timedelta(days=1)).isoformat() + " 07:00:00",
+        "garmin_activity": {
+            "start_time_local": (later_reference - timedelta(days=1)).isoformat() + " 07:00:00"
+        },
+        "distance_m": 10_000.0,
+        "duration_s": 30 * 60.0,  # much faster pace than the seeded easy runs
+        "average_hr": 178.0,
+        "max_hr": 190.0,
+    })
+
+    second = await _get_week(fake_db, reference_date=later_reference)
+    assert second["status"] == 200, second["body"]
+    monday_session_2 = next(
+        s for s in second["body"]["week"]["sessions"] if s["day"].lower() == "monday"
+    )
+    # Still None: an old, already-frozen prescription never gains a pace it
+    # never had while it was current — "None reste None".
+    assert monday_session_2["primary_pace"] is None
+    # The frozen distance/workout_type themselves are unaffected either.
+    assert monday_session_2["distance_km"] == monday_session["distance_km"]
+    assert monday_session_2["workout_type"] == monday_session["workout_type"]
+
+
+# ---------------------------------------------------------------------------
+# CORRECTION C232 (round 2) — week volume: plan vs. real Garmin volume
+# (matched + unmatched), no double counting.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_unmatched_actuals_distance_is_disjoint_from_matched_sessions():
+    # #E of the mandatory (round 2) C232 test list. The backend contract
+    # this relies on: unmatched_actuals never repeats an activity already
+    # exposed as a session's `actual` (PR230 boundary — matching_status is
+    # mutually exclusive between "matched" sessions and "unmatched_actual"
+    # extras), so a frontend real-volume sum (matched + unmatched) can never
+    # double count the same Garmin activity.
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    _seed_garmin_activities(fake_db, n=8)
+    _seed_connected(fake_db, connected=True)
+
+    # A real Garmin activity that matches Monday's prescription closely
+    # enough to be attributed to it (freezes Monday's snapshot at the same
+    # time — see test_week_endpoint_persists_snapshot_for_todays_session).
+    monday_session = next(
+        s for s in (await _get_week(fake_db, reference_date=_MONDAY))["body"]["week"]["sessions"]
+        if s["day"].lower() == "monday"
+    )
+    fake_db.garmin_activities._docs.append({
+        "user_id": _USER_ID,
+        "source": "garmin",
+        "activity_id": "monday-match",
+        "activity_type": "running",
+        "start_time": _MONDAY.isoformat() + " 07:00:00",
+        "garmin_activity": {"start_time_local": _MONDAY.isoformat() + " 07:00:00"},
+        "distance_m": (monday_session["distance_km"] or 10.0) * 1000.0,
+        "duration_s": (monday_session["distance_km"] or 10.0) * 1000.0 * 6.0,
+    })
+    first = await _get_week(fake_db, reference_date=_MONDAY)
+    assert first["status"] == 200, first["body"]
+
+    # A second, GENUINELY extra real activity this week, on a rest day (no
+    # prescribed session to attribute it to): an unplanned extra run.
+    extra_date = _MONDAY + timedelta(days=1)
+    fake_db.garmin_activities._docs.append({
+        "user_id": _USER_ID,
+        "source": "garmin",
+        "activity_id": "extra-real-run",
+        "activity_type": "running",
+        "start_time": extra_date.isoformat() + " 18:00:00",
+        "garmin_activity": {"start_time_local": extra_date.isoformat() + " 18:00:00"},
+        "distance_m": 6000.0,
+        "duration_s": 1800.0,
+    })
+
+    later_reference = _MONDAY + timedelta(days=3)
+    result = await _get_week(fake_db, reference_date=later_reference)
+    assert result["status"] == 200, result["body"]
+
+    matched_activity_ids = {
+        s["actual"]["activity_id"]
+        for s in result["body"]["week"]["sessions"]
+        if s.get("actual") is not None
+    }
+    unmatched_activity_ids = {
+        a["activity_id"] for a in result["body"]["week"]["unmatched_actuals"]
+    }
+    # No overlap: an activity can never appear as BOTH a matched session's
+    # actual AND an unmatched extra — summing both sets is never a double
+    # count of the same real Garmin activity.
+    assert matched_activity_ids.isdisjoint(unmatched_activity_ids)
+    assert "monday-match" in matched_activity_ids
+    assert "extra-real-run" in unmatched_activity_ids

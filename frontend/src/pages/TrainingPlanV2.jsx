@@ -389,11 +389,20 @@ function UnmatchedActualsSection({ unmatchedActuals, t, locale, unitSystem }) {
 // PR232 — "Vue Semaine" synthesis: understand the week WITHOUT opening any
 // session card. Planned volume, session count and a factual (never
 // fabricated) completion progress built solely from real `actual` data.
-function WeekSummaryCard({ weekPlan, orderedSessions, todayKey, t, unitSystem }) {
+//
+// C232 (correction round 2, item 6) — TWO distinct notions, never conflated:
+// - plan completion: matched sessions only, against the planned volume;
+// - real Garmin volume this week: matched actuals + unmatched_actuals, which
+//   can legitimately EXCEED the plan (an unplanned extra run is real volume,
+//   never silently promoted into a planned session).
+function WeekSummaryCard({ weekPlan, orderedSessions, unmatchedActuals, todayKey, t, unitSystem }) {
   const plannedKm = isKnownNumber(weekPlan?.planned_km) ? formatDistance(weekPlan.planned_km, { unitSystem }) : null;
   const plannedDuration = isKnownNumber(weekPlan?.planned_duration_minutes) ? `${weekPlan.planned_duration_minutes} min` : null;
   const sessionCount = isKnownNumber(weekPlan?.session_count) ? weekPlan.session_count : null;
 
+  // Plan-side progress: sessions actually matched against the prescription
+  // (PR230/#231 truth), used ONLY to show plan completion — never inflated
+  // with extra activities that were never part of the plan.
   const completedKmSum = orderedSessions.reduce((total, session) => {
     const actualKm = session?.actual?.distance_km;
     return isKnownNumber(actualKm) ? total + actualKm : total;
@@ -402,6 +411,18 @@ function WeekSummaryCard({ weekPlan, orderedSessions, todayKey, t, unitSystem })
   const progressPct = isKnownNumber(weekPlan?.planned_km) && weekPlan.planned_km > 0
     ? Math.max(0, Math.min(100, Math.round((completedKmSum / weekPlan.planned_km) * 100)))
     : 0;
+
+  // C232 (correction round 2, item 6) — real Garmin volume this week is a
+  // DISTINCT notion from plan completion: matched actuals + unmatched_actuals,
+  // never double-counted (PR230 guarantees an activity is never both a
+  // matched `session.actual` AND an `unmatched_actuals` entry — see
+  // training_v2/performed_workout.py). This can legitimately EXCEED the
+  // planned volume; it is never presented as "plan progress".
+  const unmatchedKmSum = (Array.isArray(unmatchedActuals) ? unmatchedActuals : []).reduce((total, actual) => {
+    return isKnownNumber(actual?.distance_km) ? total + actual.distance_km : total;
+  }, 0);
+  const realVolumeKmSum = completedKmSum + unmatchedKmSum;
+  const hasExtraRealVolume = unmatchedKmSum > 0;
 
   return (
     <Card data-testid="training-v2-week-summary">
@@ -430,6 +451,12 @@ function WeekSummaryCard({ weekPlan, orderedSessions, todayKey, t, unitSystem })
           </div>
           <Progress value={progressPct} data-testid="week-summary-progress-bar" />
         </div>
+        {hasExtraRealVolume && (
+          <div className="flex items-center justify-between text-xs" data-testid="week-summary-real-volume">
+            <span className="text-muted-foreground">{t("trainingV2.weekRealVolumeLabel")}</span>
+            <span className="font-semibold">{formatDistance(realVolumeKmSum, { unitSystem })}</span>
+          </div>
+        )}
         <div className="flex items-center justify-between gap-1" data-testid="week-summary-day-dots">
           {DAYS.map((day, index) => {
             const session = orderedSessions[index];
@@ -670,6 +697,7 @@ export default function TrainingPlanV2() {
       <WeekSummaryCard
         weekPlan={weekData?.week}
         orderedSessions={orderedSessions}
+        unmatchedActuals={unmatchedActuals}
         todayKey={todayKey}
         t={t}
         unitSystem={unitSystem}

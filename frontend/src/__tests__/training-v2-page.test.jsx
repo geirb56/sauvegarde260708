@@ -566,6 +566,24 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     );
   });
 
+  test("C232 (correction round 2): week summary distinguishes plan progress from real Garmin volume (matched + unmatched, no double counting)", async () => {
+    mockAxios();
+    renderPage();
+
+    const summary = await screen.findByTestId("training-v2-week-summary");
+    // Plan-side progress stays exactly the matched sum (8.1 km) — never
+    // inflated by the unrelated extra Garmin activity.
+    expect(within(summary).getByTestId("week-summary-progress-value")).toHaveTextContent(
+      formatDistance(8.1, { unitSystem: "metric" })
+    );
+    // Real Garmin volume this week = matched (8.1) + unmatched (5.2) = 13.3,
+    // shown as a DISTINCT figure, never presented as "plan progress" — it
+    // can (and here does) exceed the planned volume.
+    expect(within(summary).getByTestId("week-summary-real-volume")).toHaveTextContent(
+      formatDistance(13.3, { unitSystem: "metric" })
+    );
+  });
+
   test("PR232: a simple session card shows distance and primary pace directly, no expansion needed", async () => {
     mockAxios();
     renderPage({ width: 390 });

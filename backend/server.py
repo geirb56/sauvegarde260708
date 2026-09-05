@@ -4345,15 +4345,33 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
                 execution_status=EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE,
                 primary_pace=None,
             )
-        # C232 (correction) — honest pace ZONE only (no fabricated splits):
-        # see training_v2/session_structure.py docstring for exactly which
-        # workout_types get a pace zone and why.
-        primary_pace = _pace_range_response(
-            resolve_session_pace_zone(
-                workout_type=se.session.workout_type,
-                paces=training_paces_v2,
-            )
+        # C232 (correction round 2, item 4) — historical immutability: once
+        # planned_date <= reference_date, ``se.session`` is the EFFECTIVE
+        # prescription — the FROZEN snapshot when one exists (see
+        # prescription_snapshot.py), which does NOT persist a pace zone.
+        # Resolving a pace zone from TODAY's live TrainingPaces for an
+        # already-frozen (today-or-past) session would let it silently
+        # acquire retroactively a pace that was never fixed with it (a
+        # Monday session could show a different pace on Wednesday than it
+        # did on Monday). A pace zone is therefore only ever resolved for a
+        # STILL STRICTLY FUTURE session (never frozen yet, live prescription
+        # may still legitimately evolve until then). ``None`` stays ``None``
+        # — never reconstructed from live paces for a frozen session.
+        is_frozen_or_past = (
+            se.planned_date is not None and se.planned_date <= reference_date
         )
+        if is_frozen_or_past:
+            primary_pace = None
+        else:
+            # C232 (correction) — honest pace ZONE only (no fabricated
+            # splits): see training_v2/session_structure.py docstring for
+            # exactly which workout_types get a pace zone and why.
+            primary_pace = _pace_range_response(
+                resolve_session_pace_zone(
+                    workout_type=se.session.workout_type,
+                    paces=training_paces_v2,
+                )
+            )
         return WeekV2SessionResponse(
             day=se.session.day,
             planned_date=planned_date_iso,
