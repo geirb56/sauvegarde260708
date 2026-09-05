@@ -424,4 +424,97 @@ structured-prescription engine was implemented in this PR.
 
 C232
 
+## CORRECTION C232 — round 3 (browser clock vs. `reference_date`)
+
+Audited head: `f700f2917be9b1f517eeb7604c6d8ab9ea9955bd`.
+
+### BLOCKER 1 — fabricated splits/paces (reconfirmed, no change needed)
+
+Re-audited `backend/training_v2/session_structure.py` against this round's
+exact wording (quality → 3×2 km @ threshold, long_easy → 65/20/15 marathon
+segment). **Already fixed** by the round-1 correction (see above): the
+module only resolves a single generic pace *zone* for the whole session for
+the categories where that zone is the literal, undecomposed definition of
+the category (`easy`/`recovery`/`long_easy` → Easy pace end-to-end), and
+explicitly returns no pace zone at all for `quality` (engine has not
+decided threshold vs. interval vs. fartlek). No warmup/cooldown/repetition
+count/recovery duration/progression split is invented anywhere in the
+module or its frontend consumer. Confirmed still true — no backend changes
+were required or made in this round.
+
+### BLOCKER 2 — "Today" must come from `reference_date`, never the browser clock
+
+`frontend/src/pages/TrainingPlanV2.jsx`'s `getTodayDayKey()` previously
+called `new Date().getDay()` directly — the local device/browser wall-clock
+weekday. This violates #231: the backend already computes and returns a
+canonical `weekData.reference_date` via `_resolve_canonical_reference_date`,
+and that must be the single source of truth for "which day is today"
+everywhere in the Training UI (badge, card highlight, week dot, session
+selection). Around midnight, while travelling, or on a device with a
+different timezone than the server, the browser's guess can disagree with
+the backend and mark the wrong day as "Today".
+
+**Fix:**
+
+- Added `dayKeyFromIsoDate(isoDate)`, which parses a `"YYYY-MM-DD"` string
+  manually via `Date.UTC(year, month - 1, day).getUTCDay()` — the same
+  UTC-safe pattern already used by the pre-existing `formatDate()` helper
+  in this file — so reading the weekday out of the reference date never
+  drifts with the local timezone.
+- Replaced `getTodayDayKey()` with `getTodayDayKey(referenceDate, sessions)`:
+  1. if a session's own `planned_date` equals `referenceDate` exactly, its
+     `day` field is used (most authoritative — no weekday arithmetic
+     needed when the session list already encodes it);
+  2. otherwise, the weekday is derived straight from `referenceDate` via
+     `dayKeyFromIsoDate`;
+  3. if `referenceDate` is missing, empty, or not a string, the function
+     returns `null` immediately — "Today" highlights nothing rather than
+     falling back to the browser clock. This guard also fixes a subtle
+     bug caught while writing the regression test: without it, an absent
+     `referenceDate` (`undefined`) could spuriously match a session that
+     also has no `planned_date` (`undefined === undefined`), fabricating a
+     wrong "Today". `None` now reliably stays `None`.
+- The single call site is now
+  `getTodayDayKey(weekData?.reference_date, weekData?.week?.sessions)`; all
+  downstream consumers (`WeekSummaryCard`'s dot, `SessionCard`'s
+  `today-highlight-badge`) already treated `todayKey` as "no match" safe,
+  so no other code changed.
+- `/training/today` (the `served_prescription`-driven Today card) was
+  already backend-authoritative and untouched by this bug — only the week
+  view's day highlighting was affected.
+
+### Tests added for this round
+
+In `frontend/src/__tests__/training-v2-page.test.jsx`:
+
+1. *"backend reference_date always wins over the browser clock/timezone for
+   'Today'"* — mocks the browser clock (`jest.useFakeTimers` +
+   `jest.setSystemTime`) to Saturday 2026-09-05 while
+   `weekData.reference_date` is Friday 2026-09-04; asserts the Friday row
+   shows `today-highlight-badge` and Saturday does not.
+2. *"missing/malformed reference_date never fabricates a 'Today' via the
+   browser clock"* — same mocked browser clock, but `reference_date` is
+   deleted from the payload; asserts **no** row shows
+   `today-highlight-badge` anywhere in the week. This test is what caught
+   the `undefined === undefined` fallback bug described above.
+
+### Full re-validation after this round
+
+- Backend: no backend files changed this round.
+  `tests/test_pr232_session_structure.py`,
+  `tests/test_pr232a_c231_week_endpoint.py`,
+  `tests/test_performed_workout_pr230.py` — **109/109 pass** (re-run to
+  confirm BLOCKER 1 remains fixed and no `/training/feedback` regression).
+- Frontend: `npx craco test --watchAll=false --forceExit` —
+  **253/253 pass** (251 pre-existing + 2 new). `npm run build` —
+  **compiles successfully**.
+
+### Status
+
+**NOT MERGED**, per explicit instruction. #233/#234/#235, Readiness,
+PR230, matching, WeeklyTarget, DailyAdaptation, and Performance Curve were
+not touched. No new structured-prescription engine was implemented.
+
+C232
+
 

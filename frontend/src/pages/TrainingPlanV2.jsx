@@ -144,9 +144,42 @@ const formatDate = (value, locale) => {
   }).format(new Date(Date.UTC(year, month - 1, day)));
 };
 
-const getTodayDayKey = () => {
-  const day = new Date().getDay();
-  return Object.keys(DAY_INDEX).find((key) => DAY_INDEX[key] === day) || "monday";
+// C232 (correction round 3) — BLOCKER 2 fix: the current day must be derived
+// from the backend's canonical `reference_date` (built by
+// `_resolve_canonical_reference_date`, see #231), never from the browser's
+// clock/timezone. Around midnight, while travelling, or with a different
+// device timezone, `new Date().getDay()` could disagree with the backend
+// and mark the wrong day as "Today". Parsing the "YYYY-MM-DD" string
+// manually with `Date.UTC(...).getUTCDay()` (rather than `new Date(value)`)
+// avoids any local-timezone drift when reading the weekday out of it.
+const dayKeyFromIsoDate = (isoDate) => {
+  if (!isoDate || typeof isoDate !== "string") return null;
+  const [year, month, day] = isoDate.split("-").map(Number);
+  if (!year || !month || !day) return null;
+  const weekday = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+  return Object.keys(DAY_INDEX).find((key) => DAY_INDEX[key] === weekday) || null;
+};
+
+const getTodayDayKey = (referenceDate, sessions) => {
+  if (!referenceDate || typeof referenceDate !== "string") return null;
+
+  // Prefer matching the session whose own `planned_date` equals the
+  // backend's `reference_date` exactly — this is authoritative even if a
+  // day-name/weekday mapping ever disagreed with the session list. Only
+  // attempted once `referenceDate` is a real string, so two absent values
+  // (`undefined === undefined`) can never fabricate a false match.
+  const sessionMatch = Array.isArray(sessions)
+    ? sessions.find((session) => session?.planned_date === referenceDate)
+    : null;
+  if (sessionMatch?.day) return String(sessionMatch.day).toLowerCase();
+
+  const derived = dayKeyFromIsoDate(referenceDate);
+  if (derived) return derived;
+
+  // No backend reference_date available yet (e.g. still loading): never
+  // fall back to the browser clock — "Today" simply highlights nothing
+  // until the canonical date is known.
+  return null;
 };
 
 const getSessionPaceOrZone = (session) => {
@@ -582,7 +615,7 @@ export default function TrainingPlanV2() {
   }, [isFree, subLoading]);
 
   const locale = lang === "fr" ? "fr-FR" : lang === "es" ? "es-ES" : "en-US";
-  const todayKey = getTodayDayKey();
+  const todayKey = getTodayDayKey(weekData?.reference_date, weekData?.week?.sessions);
 
   const orderedSessions = useMemo(() => {
     const sessions = weekData?.week?.sessions ?? [];

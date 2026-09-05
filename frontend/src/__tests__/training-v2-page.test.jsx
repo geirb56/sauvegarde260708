@@ -308,6 +308,49 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     expect(within(week).getByTestId("session-status-missed")).toBeInTheDocument();
   });
 
+  test("C232 (correction round 3) BLOCKER 2: backend reference_date always wins over the browser clock/timezone for 'Today'", async () => {
+    // Backend says today is Friday 2026-09-04, while the browser's own clock
+    // is mocked to already be Saturday 2026-09-05 (e.g. a different device
+    // timezone, or just after local midnight). "Today" must stay Friday —
+    // never recomputed from `new Date().getDay()`.
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date("2026-09-05T01:30:00Z"));
+
+    const fridayWeek = weekData();
+    fridayWeek.reference_date = "2026-09-04";
+    // No session carries `planned_date` in this fixture — the fallback
+    // (ISO date → UTC weekday, no timezone drift) must still resolve
+    // 2026-09-04 to "friday".
+    mockAxios({ week: fridayWeek });
+    renderPage({ width: 390 });
+
+    const week = await screen.findByTestId("training-v2-week");
+    const fridayRow = within(week).getByTestId("training-v2-day-friday");
+    expect(within(fridayRow).getByTestId("today-highlight-badge")).toBeInTheDocument();
+    // Saturday (the browser's own idea of "today") must NOT be highlighted.
+    const saturdayRow = within(week).getByTestId("training-v2-day-saturday");
+    expect(within(saturdayRow).queryByTestId("today-highlight-badge")).not.toBeInTheDocument();
+
+    jest.useRealTimers();
+  });
+
+  test("C232 (correction round 3) BLOCKER 2: missing/malformed reference_date never fabricates a 'Today' via the browser clock", async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date("2026-09-05T01:30:00Z"));
+
+    const noRefDateWeek = weekData();
+    delete noRefDateWeek.reference_date;
+    mockAxios({ week: noRefDateWeek });
+    renderPage({ width: 390 });
+
+    const week = await screen.findByTestId("training-v2-week");
+    // No day should be highlighted as "Today" — `null` stays `null`, never
+    // falling back to the browser's own idea of the current weekday.
+    expect(within(week).queryByTestId("today-highlight-badge")).not.toBeInTheDocument();
+
+    jest.useRealTimers();
+  });
+
   test("never calls the legacy /training/feedback endpoint", async () => {
     mockAxios();
     renderPage();
