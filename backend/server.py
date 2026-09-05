@@ -4099,6 +4099,7 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
         WeekV2SessionResponse,
         WeekV2StateResponse,
         WeekV2TargetResponse,
+        WeekV2WorkoutStepResponse,
     )
 
     user_id = user["id"]
@@ -4321,6 +4322,15 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
             start_time=row.actual_start_time.isoformat() if row.actual_start_time else None,
         )
 
+    def _step_response(step) -> WeekV2WorkoutStepResponse:
+        return WeekV2WorkoutStepResponse(
+            kind=step.kind,
+            repetitions=step.repetitions,
+            distance_km=step.distance_km,
+            duration_minutes=step.duration_minutes,
+            pace_zone=step.pace_zone,
+        )
+
     def _session_response(se) -> WeekV2SessionResponse:
         planned_date_iso = se.planned_date.isoformat() if se.planned_date else None
         if se.execution_status == EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE:
@@ -4344,6 +4354,7 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
                 actual=None,
                 execution_status=EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE,
                 primary_pace=None,
+                steps=[],
             )
         # C232 (correction round 2, item 4) — historical immutability: once
         # planned_date <= reference_date, ``se.session`` is the EFFECTIVE
@@ -4386,6 +4397,7 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
             actual=_actual_response(se.row),
             execution_status=None,
             primary_pace=primary_pace,
+            steps=[_step_response(step) for step in se.session.steps],
         )
 
     sessions = [_session_response(se) for se in execution.sessions]

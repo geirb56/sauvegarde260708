@@ -517,4 +517,123 @@ not touched. No new structured-prescription engine was implemented.
 
 C232
 
+## CORRECTION C232 — round 4 (canonical WorkoutStep contract)
+
+### BLOCKER 1 — splits fabricated by the display layer (reconfirmed already fixed, contract now prepared)
+
+Re-audited `backend/training_v2/session_structure.py`: still no `_QUALITY_*`
+or `_LONG_RUN_*` constants, no warmup/reps/recovery/cooldown decomposition,
+no 65/20/15 marathon-pace progression — this remains fixed from round 1.
+
+This round adds the explicit canonical contract requested so real splits
+can be added later WITHOUT inventing anything in the UI:
+
+- `training_v2/workout_generator.py`: new `WorkoutStep` model — `kind`
+  (warmup | work | recovery | cooldown | continuous), `repetitions`,
+  `distance_km`, `duration_minutes`, `pace_zone` (all `Optional`, all
+  `None` by default). `WorkoutPrescription` gained `steps: tuple[WorkoutStep,
+  ...] = ()`. WorkoutGenerator itself does **not** populate this field —
+  every session it builds today has `steps=()`, exactly as instructed
+  ("si la logique canonique... n'existe pas encore, ne pas inventer les
+  splits ; laisser `steps=[]`").
+- `training_v2/training_week_response.py`: new
+  `WeekV2WorkoutStepResponse` + `WeekV2SessionResponse.steps` (default
+  `[]`). Pure 1:1 mirror of `WorkoutPrescription.steps` — no computation.
+- `server.py`'s `_session_response`: a new `_step_response()` helper maps
+  each `WorkoutStep` to its response model verbatim; `steps=[]` for
+  `prescription_unavailable` (same neutral-display rule as every other
+  field on that branch). For a normal session, `steps` reads straight from
+  the EFFECTIVE session (`se.session.steps`) — which is the frozen
+  snapshot-reconstructed prescription for today-or-past sessions (and
+  `PrescriptionSnapshot` has no `steps` field, so it defaults to `()`
+  automatically — the exact same immutability rule already applied to
+  `primary_pace`), or the live prescription for a strictly-future session.
+  No new branching was needed: the existing frozen/live split already
+  produces the correct answer for `steps` for free.
+- Frontend (`TrainingPlanV2.jsx`): new `SessionSteps` component renders
+  `session.steps` **verbatim** — for each step: its `kind` label, its own
+  `repetitions × distance/duration` (only ever formatting the two numbers
+  the step itself carries, never combining across steps or computing a
+  total), and its own `pace_zone` label. Renders nothing when `steps` is
+  empty (true for every session today). A session with non-empty `steps`
+  also becomes expandable (in addition to the pre-existing "has actual" /
+  "has detail route" triggers) so the structure is visible on tap, per
+  spec section 7. `formatDistance` (existing helper) is reused, so a
+  step's `distance_km` converts to miles under the imperial unit system
+  exactly like every other distance on the page — no `/km` is ever forced.
+
+### BLOCKER 2 — Training Paces consistency (reconfirmed already fixed, no change needed)
+
+Re-audited `backend/training_v2/canonical_training_paces.py`,
+`server.py`'s `get_training_v2_week` and `get_training_v2_paces`: both
+endpoints already call the same `load_canonical_training_paces(db,
+user_id=..., reference_date=...)` helper — no 90-day-windowed query
+remains in `/training/v2/week`. This was fixed by the round-2 correction
+and is unchanged this round. `tests/test_pr232a_c231_week_endpoint.py::
+test_paces_and_week_agree_when_last_high_performance_is_over_90_days_old`
+and `::test_paces_no_lookahead_future_activity_has_no_effect` continue to
+pass, confirming both endpoints still agree.
+
+### Tests added for this round
+
+In `tests/test_pr232a_c231_week_endpoint.py`:
+
+1. `test_week_sessions_have_no_fabricated_steps_today` — every session
+   (including `quality`/`long_easy`) exposes `steps == []`; test 1/2/9.
+2. `test_explicit_engine_steps_are_reproduced_verbatim_by_the_api` —
+   monkeypatches `build_canonical_weekly_plan` to inject 4 explicit
+   `WorkoutStep`s into one strictly-future session's live prescription and
+   asserts the API response reproduces them **exactly**, field-for-field,
+   with every other session still `steps == []`; test 3.
+3. `test_prescription_unavailable_session_has_no_steps` — `steps == []` for
+   a `prescription_unavailable` day too; test 9.
+
+In `frontend/src/__tests__/training-v2-page.test.jsx`:
+
+4. *"quality/long_easy/prescription_unavailable sessions never render a
+   steps section"* — test 1/2/9.
+5. *"a session with explicit engine steps renders EXACTLY those steps, no
+   recomputed total/repetition/recovery"* — injects the same 4-step
+   fixture into the mocked week payload and asserts each
+   `session-step-N-metric` shows only that step's own fields, no 5th step,
+   and every other card still has no steps section; test 3/4/5.
+6. *"imperial unit system converts step distances to miles, never forces
+   /km on a step's pace zone"* — test 10.
+
+**37 → 40** tests pass in that frontend file (3 new); **270** targeted
+backend tests pass (3 new).
+
+### Full re-validation after this round
+
+- Backend targeted sweep (`test_pr232a_c231_week_endpoint.py`,
+  `test_pr232a_week_execution.py`, `test_pr232a_prescription_snapshot.py`,
+  `test_pr232_session_structure.py`, `test_workout_generator_v2.py`,
+  `test_performed_workout_pr230.py`, `test_pr231_c231_corrections2.py`,
+  `test_pr232a_local_reference_date.py`) — **270/270 pass**.
+- A wider `-k "pr228 or pr230 or pr231 or pr232 or training_paces or
+  week_execution or workout_generator or session_structure or
+  prescription_snapshot"` sweep shows 2 unrelated pre-existing failures
+  (a rate-limited race-day test and, depending on request ordering within
+  the same 60s window, a rate-limited `test_unmatched_actuals_distance_is_
+  disjoint_from_matched_sessions`) caused by a shared in-memory rate
+  limiter with no reset between tests in the same process — confirmed to
+  reproduce identically on the pre-round-4 commit with the exact same two
+  tests, so unrelated to this round's diff (verified: running
+  `test_pr232a_c231_week_endpoint.py` alone, with no other files
+  competing for the same rate-limit budget, all 17 tests pass).
+- Frontend: `npx craco test --watchAll=false --forceExit` —
+  **256/256 pass** (253 pre-existing + 3 new). `npm run build` —
+  **compiles successfully**.
+
+### Status
+
+**NOT MERGED**, per explicit instruction. #233/#234/#235/#236, Readiness,
+PR230, matching, WeeklyTarget, DailyAdaptation, and Performance Curve were
+not touched. WorkoutGenerator was NOT extended with any new physiological
+decision logic — it still never decides "quality"'s exact nature or a
+long run's internal structure; only an empty, typed `steps` contract was
+added for a FUTURE engine to populate.
+
+C232
+
 

@@ -664,6 +664,84 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     expect(within(week).queryByTestId(/^session-block-/)).not.toBeInTheDocument();
   });
 
+  test("C232 (correction round 3, tests 1/2/9): quality/long_easy/prescription_unavailable sessions never render a steps section (steps=[] today)", async () => {
+    mockAxios();
+    renderPage({ width: 390 });
+
+    const week = await screen.findByTestId("training-v2-week");
+    for (const day of ["wednesday", "sunday"]) {
+      fireEvent.click(within(week).getByTestId(`training-v2-day-toggle-${day}`));
+      const row = within(week).getByTestId(`training-v2-day-${day}`);
+      expect(within(row).queryByTestId("session-steps")).not.toBeInTheDocument();
+    }
+  });
+
+  test("C232 (correction round 3, tests 3/4/5): a session with explicit engine steps renders EXACTLY those steps, no recomputed total/repetition/recovery", async () => {
+    const structuredWeek = weekData();
+    // Simulates a FUTURE engine capability (WorkoutGenerator does not
+    // populate this yet) — the frontend must render it verbatim, with no
+    // client-side aggregation, invented repetition count, or recovery.
+    structuredWeek.week.sessions[2] = {
+      ...structuredWeek.week.sessions[2],
+      steps: [
+        { kind: "warmup", repetitions: null, distance_km: 2, duration_minutes: null, pace_zone: "easy" },
+        { kind: "work", repetitions: 3, distance_km: 2, duration_minutes: null, pace_zone: "threshold" },
+        { kind: "recovery", repetitions: null, distance_km: null, duration_minutes: 2, pace_zone: null },
+        { kind: "cooldown", repetitions: null, distance_km: 1, duration_minutes: null, pace_zone: "easy" },
+      ],
+    };
+    mockAxios({ week: structuredWeek });
+    renderPage({ width: 390 });
+
+    const week = await screen.findByTestId("training-v2-week");
+    fireEvent.click(within(week).getByTestId("training-v2-day-toggle-wednesday"));
+    const wednesdayRow = within(week).getByTestId("training-v2-day-wednesday");
+
+    const steps = within(wednesdayRow).getByTestId("session-steps");
+    expect(steps).toBeInTheDocument();
+    // Exactly the 4 given steps — never a 5th fabricated one, never merged.
+    expect(within(steps).getByTestId("session-step-0-metric")).toHaveTextContent(
+      `${formatDistance(2, { unitSystem: "metric" })} @`
+    );
+    expect(within(steps).getByTestId("session-step-1-metric")).toHaveTextContent(
+      `3 × ${formatDistance(2, { unitSystem: "metric" })}`
+    );
+    expect(within(steps).getByTestId("session-step-2-metric")).toHaveTextContent("2 min");
+    expect(within(steps).getByTestId("session-step-3-metric")).toHaveTextContent(
+      formatDistance(1, { unitSystem: "metric" })
+    );
+    expect(within(steps).queryByTestId("session-step-4")).not.toBeInTheDocument();
+
+    // Every other session still has no steps section (nothing invented for
+    // any other card as a side effect of one session having explicit steps).
+    for (const day of ["monday", "tuesday", "thursday", "friday", "saturday", "sunday"]) {
+      const row = within(week).getByTestId(`training-v2-day-${day}`);
+      if (within(row).queryByTestId(`training-v2-day-toggle-${day}`)) {
+        fireEvent.click(within(row).getByTestId(`training-v2-day-toggle-${day}`));
+      }
+      expect(within(row).queryByTestId("session-steps")).not.toBeInTheDocument();
+    }
+  });
+
+  test("C232 (correction round 3, test 10): imperial unit system converts step distances to miles, never forces /km on a step's pace zone", async () => {
+    const structuredWeek = weekData();
+    structuredWeek.week.sessions[2] = {
+      ...structuredWeek.week.sessions[2],
+      steps: [
+        { kind: "work", repetitions: 3, distance_km: 2, duration_minutes: null, pace_zone: "threshold" },
+      ],
+    };
+    mockAxios({ week: structuredWeek });
+    renderPage({ width: 390, unitSystem: "imperial" });
+
+    const week = await screen.findByTestId("training-v2-week");
+    fireEvent.click(within(week).getByTestId("training-v2-day-toggle-wednesday"));
+    const wednesdayRow = within(week).getByTestId("training-v2-day-wednesday");
+    const stepMetric = within(wednesdayRow).getByTestId("session-step-0-metric");
+    expect(stepMetric.textContent).toContain(formatDistance(2, { unitSystem: "imperial" }));
+    expect(stepMetric.textContent).not.toMatch(/\/km/);
+  });
+
   test("PR232: expanding a matched session shows the prescribed vs actually performed comparison", async () => {
     mockAxios();
     renderPage({ width: 390 });

@@ -104,6 +104,27 @@ class WeekV2PaceRangeResponse(BaseModel):
     upper_min_per_km: float
 
 
+class WeekV2WorkoutStepResponse(BaseModel):
+    """C232 (correction) — ONE canonical structural step of a session,
+    serialized VERBATIM from ``WorkoutPrescription.steps``
+    (training_v2.workout_generator.WorkoutStep). This API layer performs NO
+    computation, aggregation, or derivation of its own: it is a pure 1:1
+    mirror of whatever the Training Engine put in ``steps``. Today that is
+    always an empty list, because WorkoutGenerator does not yet decide any
+    session's internal structure — see WorkoutPrescription.steps docstring.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: str
+    """warmup | work | recovery | cooldown | continuous."""
+
+    repetitions: Optional[int] = None
+    distance_km: Optional[float] = None
+    duration_minutes: Optional[float] = None
+    pace_zone: Optional[str] = None
+
+
 class WeekV2SessionResponse(BaseModel):
     """Single training session — native V2 prescription + factual execution.
 
@@ -187,6 +208,17 @@ class WeekV2SessionResponse(BaseModel):
     pace it never had while it was current — see prescription_snapshot.py).
     A pace zone is resolved only for a still-strictly-future session."""
 
+    steps: List[WeekV2WorkoutStepResponse] = Field(default_factory=list)
+    """C232 (correction round 3) — canonical structural steps for this
+    session, serialized VERBATIM from ``WorkoutPrescription.steps``. Always
+    ``[]`` today (WorkoutGenerator does not yet populate it — see
+    WorkoutPrescription.steps docstring), and ALSO always ``[]`` for a
+    frozen (today-or-past) session, since ``PrescriptionSnapshot`` does not
+    persist steps either (same immutability rule as ``primary_pace`` above).
+    Never derived from ``workout_type`` by this API layer — when the
+    Training Engine eventually populates ``steps``, this field starts
+    reflecting it with NO other code change required here."""
+
 
 class WeekV2PlanResponse(BaseModel):
     """Weekly plan — aggregate + individual sessions."""
@@ -244,4 +276,5 @@ __all__ = [
     "WeekV2SessionResponse",
     "WeekV2ActualResponse",
     "WeekV2PlanResponse",
+    "WeekV2WorkoutStepResponse",
 ]

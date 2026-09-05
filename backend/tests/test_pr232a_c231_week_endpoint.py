@@ -391,6 +391,129 @@ async def test_week_sessions_expose_primary_pace_field_without_fabricated_blocks
         assert quality_session["primary_pace"] is None
 
 
+# ---------------------------------------------------------------------------
+# C232 (correction round 3) — WorkoutStep contract: no fabricated splits, and
+# the API reproduces explicit engine-provided steps verbatim.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_week_sessions_have_no_fabricated_steps_today():
+    """Test 1/2/9 — generic "quality" and "long_easy" sessions get an empty
+    ``steps`` list: WorkoutGenerator does not yet decide any session's
+    internal structure, so the API must never invent one. Every session
+    still exposes the field (``[]``, never missing/None-as-list)."""
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    _seed_garmin_activities(fake_db, n=8)
+    _seed_connected(fake_db, connected=True)
+
+    result = await _get_week(fake_db)
+    assert result["status"] == 200, result["body"]
+
+    sessions = result["body"]["week"]["sessions"]
+    assert sessions, "expected at least one session in the week"
+    for session in sessions:
+        assert "steps" in session
+        # No workout_type gets a fabricated structure today — no engine
+        # populates WorkoutPrescription.steps yet.
+        assert session["steps"] == []
+
+    quality_or_long_easy = [
+        s for s in sessions if s["workout_type"] in ("quality", "long_easy")
+    ]
+    for session in quality_or_long_easy:
+        assert session["steps"] == [], (
+            f"{session['workout_type']} session must not fabricate a split "
+            "(e.g. 3 x 2 km @ threshold, or a marathon-pace segment)"
+        )
+
+
+@pytest.mark.asyncio
+async def test_explicit_engine_steps_are_reproduced_verbatim_by_the_api():
+    """Test 3/4/5 — when the live ``WorkoutPrescription`` for a strictly
+    future session DOES carry explicit ``steps`` (simulating a future
+    engine capability that does not exist yet), the API must reproduce
+    them EXACTLY: no aggregation, no recomputed repetition/recovery, no
+    dropped/renamed field.
+    """
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    _seed_garmin_activities(fake_db, n=8)
+    _seed_connected(fake_db, connected=True)
+
+    from training_v2.week_plan_bridge import build_canonical_weekly_plan as _real_build
+    from training_v2.workout_generator import WorkoutStep
+
+    injected_steps = (
+        WorkoutStep(kind="warmup", distance_km=2.0, pace_zone="easy"),
+        WorkoutStep(kind="work", repetitions=3, distance_km=2.0, pace_zone="threshold"),
+        WorkoutStep(kind="recovery", duration_minutes=2.0),
+        WorkoutStep(kind="cooldown", distance_km=1.0, pace_zone="easy"),
+    )
+
+    def _patched(**kwargs):
+        canonical = _real_build(**kwargs)
+        sessions = list(canonical.weekly_plan.sessions)
+        # Inject into the first strictly-future (day != monday, the
+        # reference_date), non-rest session — a today-or-past session would
+        # be frozen and never carry live steps (same rule as primary_pace).
+        target_idx = next(
+            i for i, s in enumerate(sessions)
+            if s.day != "monday" and s.workout_type != "rest"
+        )
+        sessions[target_idx] = sessions[target_idx].model_copy(
+            update={"steps": injected_steps}
+        )
+        new_weekly_plan = canonical.weekly_plan.model_copy(
+            update={"sessions": tuple(sessions)}
+        )
+        return type(canonical)(
+            original_target=canonical.original_target,
+            reconciliation_result=canonical.reconciliation_result,
+            reconciled_target=canonical.reconciled_target,
+            weekly_plan=new_weekly_plan,
+        )
+
+    with patch("training_v2.week_plan_bridge.build_canonical_weekly_plan", side_effect=_patched):
+        result = await _get_week(fake_db)
+
+    assert result["status"] == 200, result["body"]
+    sessions = result["body"]["week"]["sessions"]
+    target_session = next(s for s in sessions if s["day"] != "monday" and s["steps"])
+    assert target_session["steps"] == [
+        {"kind": "warmup", "repetitions": None, "distance_km": 2.0, "duration_minutes": None, "pace_zone": "easy"},
+        {"kind": "work", "repetitions": 3, "distance_km": 2.0, "duration_minutes": None, "pace_zone": "threshold"},
+        {"kind": "recovery", "repetitions": None, "distance_km": None, "duration_minutes": 2.0, "pace_zone": None},
+        {"kind": "cooldown", "repetitions": None, "distance_km": 1.0, "duration_minutes": None, "pace_zone": "easy"},
+    ]
+
+    # No other session was affected — everything else stays steps=[].
+    others = [s for s in sessions if s is not target_session]
+    for other in others:
+        assert other["steps"] == []
+
+
+@pytest.mark.asyncio
+async def test_prescription_unavailable_session_has_no_steps():
+    """Test 9 — ``None`` stays ``None`` / no fabricated steps: a
+    prescription_unavailable day never gets a steps list either."""
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    _seed_connected(fake_db, connected=True)
+    # No garmin activities seeded -> continuity_state == no_history and no
+    # frozen snapshot exists for past days: they surface as
+    # prescription_unavailable (never a fabricated historical prescription).
+    past_reference = _MONDAY + timedelta(days=3)
+
+    result = await _get_week(fake_db, reference_date=past_reference)
+    assert result["status"] == 200, result["body"]
+    sessions = result["body"]["week"]["sessions"]
+    unavailable = [s for s in sessions if s["execution_status"] == "prescription_unavailable"]
+    assert unavailable, "expected at least one prescription_unavailable session with no history"
+    for session in unavailable:
+        assert session["steps"] == []
+
+
 @pytest.mark.asyncio
 async def test_prescription_unavailable_session_has_no_pace_zone():
     fake_db = _FakeDB()

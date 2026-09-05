@@ -245,6 +245,44 @@ _RACE_WEEK_SESSIONS: int = 2
 # ---------------------------------------------------------------------------
 
 
+class WorkoutStep(BaseModel):
+    """C232 (correction) — ONE canonical structural step of a prescribed
+    session (warmup / work interval / recovery / cooldown / continuous).
+
+    This is the ONLY place a session's structure may ever be decided. It
+    exists so that a FUTURE, real structured-prescription capability in
+    WorkoutGenerator (or a dedicated module) has an explicit, typed contract
+    to populate — the API only ever serializes ``WorkoutPrescription.steps``
+    verbatim, and the frontend only ever renders it verbatim. Neither layer
+    is allowed to derive, invent, or recompute a step from ``workout_type``
+    alone (see training_v2/session_structure.py and
+    RUNINDEX_PR232_REPORT.md, "prescription canonique vs présentation").
+
+    WorkoutGenerator itself does not populate this yet — every session it
+    builds today has ``steps=()`` — so no engine or display code should
+    assume the tuple is ever non-empty.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: str
+    """warmup | work | recovery | cooldown | continuous."""
+
+    repetitions: Optional[int] = None
+    """Number of times this step repeats, or None for a single occurrence."""
+
+    distance_km: Optional[float] = None
+    """Distance of ONE occurrence of this step, in km, or None."""
+
+    duration_minutes: Optional[float] = None
+    """Duration of ONE occurrence of this step, in minutes, or None."""
+
+    pace_zone: Optional[str] = None
+    """Daniels pace-zone name this step targets (e.g. "easy", "threshold",
+    "marathon", "interval", "repetition"), or None when no pace zone is
+    prescribed for this step."""
+
+
 class WorkoutPrescription(BaseModel):
     """Immutable prescription for a single training session.
 
@@ -273,6 +311,15 @@ class WorkoutPrescription(BaseModel):
 
     reason_codes: tuple[str, ...]
     """Deterministic language-neutral reason codes for this session."""
+
+    steps: tuple[WorkoutStep, ...] = ()
+    """C232 (correction) — canonical structural steps for this session,
+    e.g. warmup / N × work @ pace_zone / recovery / cooldown. Empty tuple
+    (the default) means the Training Engine has NOT decided a structure for
+    this session — this is the honest, current state for every session
+    WorkoutGenerator builds today. Never derived from ``workout_type`` by
+    any other layer (API, frontend): "steps=()" MUST stay "steps=()" until
+    a real engine populates it here."""
 
 
 class WeeklyPlan(BaseModel):

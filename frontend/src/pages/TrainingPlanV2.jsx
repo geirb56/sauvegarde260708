@@ -228,6 +228,68 @@ const formatPaceRangeLabel = (paceRange, unitSystem) => {
   return `${lowerNumeric}–${upperLabel}`;
 };
 
+// C232 (correction round 3) — WorkoutStep rendering. This is a PURE
+// formatting layer: it only reads fields the API already sent for a step
+// (kind, repetitions, distance_km, duration_minutes, pace_zone) and never
+// derives, aggregates, or invents a value that was not present on the
+// step itself. When `session.steps` is empty (true for every session
+// today — WorkoutGenerator does not yet populate it), nothing renders.
+const STEP_PACE_ZONE_KEYS = {
+  easy: "paceEasy",
+  marathon: "paceMarathon",
+  threshold: "paceThreshold",
+  interval: "paceInterval",
+  repetition: "paceRepetition",
+};
+
+const formatStepPaceZoneLabel = (t, paceZone) => {
+  if (!paceZone || typeof paceZone !== "string") return null;
+  const key = STEP_PACE_ZONE_KEYS[paceZone];
+  return key ? t(`trainingV2.${key}`) : paceZone;
+};
+
+// Formats ONLY the distance/duration + repetitions the step itself carries
+// — e.g. "3 × 2 km" or "2 km" or "2 min". Never combines multiple steps,
+// never computes a total, never infers a repetition count that was not on
+// the step.
+const formatStepMetric = (step, unitSystem) => {
+  if (!step || typeof step !== "object") return null;
+  let base = null;
+  if (isKnownNumber(step.distance_km)) {
+    base = formatDistance(step.distance_km, { unitSystem });
+  } else if (isKnownNumber(step.duration_minutes)) {
+    base = `${step.duration_minutes} min`;
+  }
+  if (!base) return null;
+  return isKnownNumber(step.repetitions) ? `${step.repetitions} × ${base}` : base;
+};
+
+function SessionSteps({ steps, unitSystem, t }) {
+  if (!Array.isArray(steps) || steps.length === 0) return null;
+  return (
+    <div className="space-y-1.5" data-testid="session-steps">
+      {steps.map((step, index) => {
+        const kindLabel = getTranslatedValue(t, `trainingV2.stepKinds.${step?.kind}`, "trainingV2.notAvailable");
+        const metricLabel = formatStepMetric(step, unitSystem);
+        const paceZoneLabel = formatStepPaceZoneLabel(t, step?.pace_zone);
+        return (
+          <div
+            key={index}
+            className="flex items-center justify-between gap-2 text-xs"
+            data-testid={`session-step-${index}`}
+          >
+            <span className="text-muted-foreground">{kindLabel}</span>
+            <span className="font-medium text-foreground" data-testid={`session-step-${index}-metric`}>
+              {[metricLabel, paceZoneLabel].filter(Boolean).join(" @ ") || t("trainingV2.notAvailable")}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+
 function LoadingState() {
   return (
     <div className="p-4 md:p-6 space-y-4" data-testid="training-v2-loading">
@@ -333,7 +395,8 @@ function SessionCard({ session, day, isToday, unitSystem, t, locale, open, onTog
     : distance || duration || (isExplicitRest ? t("trainingV2.restDay") : (session ? "" : t("trainingV2.noSessionLabel")));
 
   const detailRoute = getSessionDetailRoute(session);
-  const hasExpandableDetail = Boolean(session) && !isExplicitRest && (Boolean(session?.actual) || Boolean(detailRoute));
+  const hasStructuredSteps = Array.isArray(session?.steps) && session.steps.length > 0;
+  const hasExpandableDetail = Boolean(session) && !isExplicitRest && (Boolean(session?.actual) || Boolean(detailRoute) || hasStructuredSteps);
   const dateLabel = session?.planned_date ? formatDate(session.planned_date, locale) : null;
 
   return (
@@ -373,6 +436,7 @@ function SessionCard({ session, day, isToday, unitSystem, t, locale, open, onTog
 
       {hasExpandableDetail && open && (
         <div className="mt-3 space-y-3 border-t border-border pt-3" data-testid={`training-v2-day-details-${day}`}>
+          <SessionSteps steps={session?.steps} unitSystem={unitSystem} t={t} />
           <ActualComparison session={session} t={t} unitSystem={unitSystem} />
           {detailRoute && (
             <Link to={detailRoute} className="inline-block text-xs font-medium text-primary hover:underline" data-testid={`session-detail-link-${day}`}>
