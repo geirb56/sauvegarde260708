@@ -1347,4 +1347,88 @@ changed this round — all three restated blockers were re-verified directly
 against current code and remain fixed from rounds 1/2/7. This round is a
 documentation-only re-confirmation.
 
+## CORRECTION C232 — round 11 (re-audit: identical three blockers restated, all reconfirmed already fixed)
+
+Audited HEAD given this round: `f700f2917be9b1f517eeb7604c6d8ab9ea9955bd`.
+Local HEAD at start of this round: `6db22c0` (round 10's report-only
+commit). This round's problem statement restates the exact same three
+blockers as round 10, worded slightly differently (e.g. proposing a
+`DetailedWorkoutPrescription` name and a 120-day HIGH-historical example
+instead of round 10's wording). Each claim was re-verified directly
+against the current code, from scratch, not against this report's prior
+text.
+
+### Blocker 1 — fabricated splits (`session_structure.py`)
+
+Re-read the full module again. Unchanged since round 1: only
+`resolve_session_pace_zone()` exists, returning a single honest
+whole-session pace zone for `easy` / `recovery` / `long_easy`
+(`paces.easy`), and `None` for `quality` / `steady` / `rest`. No warmup,
+no repetition count, no recovery duration, no `65/20/15` progression, no
+`quality → threshold` inference anywhere in this module or in
+`_session_response()`. The module's own docstring already documents this
+exact blocker as fixed and explains why (see file header). This round's
+suggestion of a `DetailedWorkoutPrescription` canonical layer is the same
+architecture already described in the report (rounds 5/8/10) as the
+correct future path if/when the Training Engine gains a real structured-
+prescription decision layer — not something this display module may
+invent on its own. `blocks=[]` (empty `steps`) continues to be rendered
+whenever no canonical structure exists, exactly as this round demands.
+
+### Blocker 2 — historical allures/blocks could change retroactively
+
+Re-read `_session_response()` (`backend/server.py`) and
+`prescription_snapshot.py` again. Confirmed unchanged:
+`is_frozen_or_past = se.planned_date <= reference_date` (server.py:4381-4384)
+→ `primary_pace = None` whenever true (never resolved from live paces for
+today-or-past); `steps` are always read from the effective/frozen session
+(`se.session.steps`, server.py:4410), which for a frozen day is the
+persisted, insert-only `PrescriptionSnapshot.steps` — never rebuilt from
+live paces or the live plan. A legacy snapshot with no recorded structure
+stays `steps=[]` / `primary_pace=None` (unknown), never backfilled. Only a
+strictly-future session (not yet served) reflects the live/current
+prescription. This is exactly the backward-compatible, freeze-on-first-
+serve contract this round asks for; already built in round 7, unchanged.
+
+### Blocker 3 — Training Paces truncated to 90 days
+
+Re-read `server.py` lines ~4296-4303 and confirmed `training_paces_v2` is
+still produced by `await load_canonical_training_paces(db, user_id=...,
+reference_date=reference_date)` — the identical call (same function, same
+arguments) used by `/training/v2/paces` (server.py:4551). `domain_activities_90`
+(the 90-day-windowed activity list) is loaded separately and used
+exclusively for weekly-plan/session-execution building
+(`build_canonical_weekly_plan`, `build_week_execution`) — it is never
+passed into the Training Paces computation. `load_canonical_training_paces`
+applies `training_paces.py`'s own HIGH-never-expires policy over its own,
+non-90-day-truncated activity window, so a HIGH-confidence performance at
+120 days (or 200 days, per the existing test fixture) remains available as
+a LOW-confidence reference in both Week and `/training/paces` — no
+`INSUFFICIENT` divergence. Fixed since round 2; unchanged this round.
+
+### Mandatory tests 1–10 — coverage re-confirmed
+
+All ten items map onto tests already verified present in round 10's
+coverage table (session A→1, B→2, E→3, F→4, G→5, C→6, D→7/"None != 0" via
+INSUFFICIENT-path assertions returning `None` not `0`, J→8, I→9, H/PR230
+untouched→10). Re-ran the full targeted suite this round; all still pass.
+No new test was needed.
+
+### Validation
+
+- Backend targeted sweep (`prescription_snapshot`, `daily_adaptation`,
+  `daily_runtime`, `week_endpoint`, `week_execution`) — **131/131 pass**, no
+  code change.
+- Frontend `training-v2-page.test.jsx` — **42/42 pass**, no code change.
+- Frontend production build (`npm run build`) — succeeds, no code change.
+
+### Status
+
+**NOT MERGED**, per explicit instruction. #233/#234/#235/#236, PR230
+matching, and manual feedback untouched. No production or test code was
+changed this round — all three blockers, restated for the third
+consecutive round in slightly different wording, were re-verified from
+scratch against current code and remain fixed (rounds 1/2/7). This round
+is a documentation-only re-confirmation.
+
 C232
