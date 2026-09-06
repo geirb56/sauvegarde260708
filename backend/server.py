@@ -4338,6 +4338,7 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
             duration_minutes=step.duration_minutes,
             pace_zone=step.pace_zone,
             pace_range=step_pace_range,
+            reason_codes=list(step.reason_codes or []),
         )
 
     def _session_response(se) -> WeekV2SessionResponse:

@@ -316,6 +316,16 @@ class WorkoutStep(BaseModel):
     ``prescription_snapshot.py``) and must never be fabricated when Training
     Paces confidence is INSUFFICIENT."""
 
+    reason_codes: tuple[str, ...] = ()
+    """C232 (correction, round 8) — optional, machine-readable reasons a
+    FUTURE structured-prescription engine may attach to explain why this
+    step exists / was sized this way (e.g. "vdot_threshold_zone",
+    "taper_reduction"). Empty for every step today (no engine populates
+    step-level structure yet — see ``session_structure.py`` and
+    RUNINDEX_PR232_REPORT.md, "Structured Workout Prescription engine
+    missing"). Never inferred or fabricated by display/API code; only ever
+    copied verbatim, exactly like the rest of this step."""
+
 
 class WorkoutPrescription(BaseModel):
     """Immutable prescription for a single training session.

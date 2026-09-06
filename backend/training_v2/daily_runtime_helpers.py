@@ -132,6 +132,7 @@ def _step_to_runtime_dict(step) -> dict:
         "duration_minutes": step.duration_minutes,
         "pace_zone": step.pace_zone,
         "pace_range": pace_range,
+        "reason_codes": list(step.reason_codes or []),
     }
 
 

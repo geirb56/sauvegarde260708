@@ -129,6 +129,11 @@ class WeekV2WorkoutStepResponse(BaseModel):
     ``WorkoutStep.pace_range``. ``None`` when no engine has resolved a
     numeric pace for this step (the case for every step today)."""
 
+    reason_codes: List[str] = []
+    """C232 (correction, round 8) — mirrored verbatim from
+    ``WorkoutStep.reason_codes``. Always empty today (see that field's
+    docstring); never derived or fabricated by this response layer."""
+
 
 class WeekV2SessionResponse(BaseModel):
     """Single training session — native V2 prescription + factual execution.
