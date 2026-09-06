@@ -386,8 +386,12 @@ async def test_week_sessions_expose_primary_pace_field_without_fabricated_blocks
 
     quality_sessions = [s for s in sessions if s["workout_type"] == "quality"]
     for quality_session in quality_sessions:
-        # C232 — "quality"'s exact nature is not decided by the Training
-        # Engine: never a fabricated (e.g. Threshold) pace zone.
+        # C232 (Structured Workout Prescription V1) — quality's engine-
+        # decided work block IS threshold pace now, but this fixture only
+        # ever seeds easy-effort activities (HR 145), so Training Paces'
+        # threshold zone stays unresolved (None) — the work step's
+        # pace_range is therefore None too, and no fabricated numeric pace
+        # ever appears. "None reste None": still no INVENTED pace.
         assert quality_session["primary_pace"] is None
 
 
@@ -398,10 +402,13 @@ async def test_week_sessions_expose_primary_pace_field_without_fabricated_blocks
 
 @pytest.mark.asyncio
 async def test_week_sessions_have_no_fabricated_steps_today():
-    """Test 1/2/9 — generic "quality" and "long_easy" sessions get an empty
-    ``steps`` list: WorkoutGenerator does not yet decide any session's
-    internal structure, so the API must never invent one. Every session
-    still exposes the field (``[]``, never missing/None-as-list)."""
+    """Test 1/2/9 (superseded by "Structured Workout Prescription V1"):
+    every session still exposes the ``steps`` field (never missing/None-as-
+    list). ``rest`` always gets ``[]``. ``quality`` and ``long_easy`` now get
+    a REAL, engine-decided structure (never a UI-fabricated one) —
+    ``quality`` is warmup/work/recovery/cooldown, ``long_easy`` is a single
+    continuous Easy block with no invented progression/marathon segment.
+    """
     fake_db = _FakeDB()
     _seed_cycle(fake_db)
     _seed_garmin_activities(fake_db, n=8)
@@ -414,18 +421,24 @@ async def test_week_sessions_have_no_fabricated_steps_today():
     assert sessions, "expected at least one session in the week"
     for session in sessions:
         assert "steps" in session
-        # No workout_type gets a fabricated structure today — no engine
-        # populates WorkoutPrescription.steps yet.
-        assert session["steps"] == []
 
-    quality_or_long_easy = [
-        s for s in sessions if s["workout_type"] in ("quality", "long_easy")
-    ]
-    for session in quality_or_long_easy:
-        assert session["steps"] == [], (
-            f"{session['workout_type']} session must not fabricate a split "
-            "(e.g. 3 x 2 km @ threshold, or a marathon-pace segment)"
-        )
+    rest_sessions = [s for s in sessions if s["workout_type"] == "rest"]
+    for rest_session in rest_sessions:
+        assert rest_session["steps"] == []
+
+    long_easy_sessions = [s for s in sessions if s["workout_type"] == "long_easy"]
+    for session in long_easy_sessions:
+        assert len(session["steps"]) == 1
+        assert session["steps"][0]["kind"] == "continuous"
+        assert session["steps"][0]["pace_zone"] == "easy"
+
+    quality_sessions = [s for s in sessions if s["workout_type"] == "quality"]
+    for session in quality_sessions:
+        kinds = [step["kind"] for step in session["steps"]]
+        # Either a real warmup/work/recovery/cooldown structure, or (for a
+        # too-short session) the same honest continuous fallback used by
+        # every other type — never anything else.
+        assert kinds == ["warmup", "work", "recovery", "cooldown"] or kinds == ["continuous"]
 
 
 @pytest.mark.asyncio
@@ -487,10 +500,14 @@ async def test_explicit_engine_steps_are_reproduced_verbatim_by_the_api():
         {"kind": "cooldown", "repetitions": None, "distance_km": 1.0, "duration_minutes": None, "pace_zone": "easy", "pace_range": None, "reason_codes": []},
     ]
 
-    # No other session was affected — everything else stays steps=[].
+    # No other session received the INJECTED steps (no duplication/copy) —
+    # any other non-rest session may still carry its OWN real V1-engine
+    # structure (unaffected by the injection), and rest days stay [].
     others = [s for s in sessions if s is not target_session]
     for other in others:
-        assert other["steps"] == []
+        assert other["steps"] != list(target_session["steps"])
+        if other["workout_type"] == "rest":
+            assert other["steps"] == []
 
 
 @pytest.mark.asyncio

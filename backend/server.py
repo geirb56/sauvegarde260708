@@ -3452,6 +3452,24 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     adaptation_result: DailyAdaptationResult = today_final.adaptation_result
     readiness_data_source = today_final.readiness_data_source
 
+    # C232 (correction, "Structured Workout Prescription V1") — the FINAL
+    # post-DailyAdaptation workout is now run through the canonical
+    # structured-prescription engine, using the SAME canonical Training
+    # Paces loader as /training/v2/week and /training/v2/paces, BEFORE it is
+    # served/frozen — so structure (blocks/reps) AND numeric pace_range are
+    # frozen together, atomically, with the rest of today's snapshot. See
+    # training_v2/structured_prescription.py for the full design rationale.
+    from training_v2.canonical_training_paces import load_canonical_training_paces
+    from training_v2.structured_prescription import build_structured_prescription
+
+    training_paces_for_today = await load_canonical_training_paces(
+        db, user_id=user["id"], reference_date=today
+    )
+    structured_served_candidate = build_structured_prescription(
+        prescription=adaptation_result.adapted_workout,
+        paces=training_paces_for_today,
+    )
+
     # C231 — item 2 BLOCKER FIX: go through the SAME atomic get-or-create
     # snapshot service /training/v2/week uses, so both endpoints always
     # converge on ONE canonical served prescription for today, regardless
@@ -3464,7 +3482,7 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
         user_id=user["id"],
         prescription_id=prescription_id_for(user["id"], today, day_name.lower()),
         planned_date=today,
-        served_candidate=adaptation_result.adapted_workout,
+        served_candidate=structured_served_candidate,
         planned_prescription=planned_prescription,
     )
     served_prescription = served_result.prescription
@@ -4159,13 +4177,23 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
         WeekV2ActualResponse,
         WeekV2PaceRangeResponse,
     )
-    from training_v2.session_structure import resolve_session_pace_zone
     from training_v2.canonical_training_paces import load_canonical_training_paces
     from training_v2.prescription_snapshot import PrescriptionSnapshot, snapshot_from_prescription
     from training_v2.served_prescription import get_or_create_served_prescription
+    from training_v2.structured_prescription import build_structured_prescription, resolve_primary_step
 
     week_start = reference_date - timedelta(days=reference_date.weekday())
     week_end = week_start + timedelta(days=6)
+
+    # C232 (correction, "Structured Workout Prescription V1") — loaded HERE,
+    # before today's session is structured/served/frozen below, so structure
+    # AND numeric pace_range are frozen together (never resolved afterwards
+    # from a possibly-different later TrainingPaces state). Same canonical
+    # loader/query/reference_date as /training/v2/paces — never a locally
+    # re-derived (e.g. 90-day-truncated) activity window.
+    training_paces_v2 = await load_canonical_training_paces(
+        db, user_id=user_id, reference_date=reference_date
+    )
 
     existing_snapshot_docs = await db.training_prescription_snapshots.find(
         {"user_id": user_id}, {"_id": 0}
@@ -4226,6 +4254,16 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
                 garmin_daily_metrics_docs=garmin_daily_metrics_docs,
                 garmin_connected=garmin_connected,
             )
+            # C232 (correction, "Structured Workout Prescription V1") — the
+            # FINAL post-DailyAdaptation workout is structured (blocks/reps/
+            # numeric pace_range) via the canonical engine BEFORE being
+            # served/frozen, using the SAME training_paces_v2 loaded above —
+            # so /training/today and /training/v2/week always agree on
+            # today's structure regardless of which one freezes it first.
+            structured_today_candidate = build_structured_prescription(
+                prescription=today_final.adaptation_result.adapted_workout,
+                paces=training_paces_v2,
+            )
             # C231 — item 2 BLOCKER FIX: go through the SAME atomic
             # get-or-create used by /training/today, so a concurrent call to
             # either endpoint always converges on one canonical Mongo
@@ -4236,7 +4274,7 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
                 user_id=user_id,
                 prescription_id=today_prescription_id,
                 planned_date=reference_date,
-                served_candidate=today_final.adaptation_result.adapted_workout,
+                served_candidate=structured_today_candidate,
                 planned_prescription=sessions_for_execution[today_index],
             )
             served = served_result.prescription
@@ -4293,15 +4331,6 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
             upsert=True,
         )
 
-    # C232 (correction) — canonical Training Paces loader (BLOCKER FIX): same
-    # query/window/policy and same reference_date as /training/v2/paces, so
-    # the two endpoints can never disagree for the same user/day. No 90-day
-    # truncation: compute_training_paces' own HIGH-never-expires policy
-    # needs the fuller history loaded by the canonical loader.
-    training_paces_v2 = await load_canonical_training_paces(
-        db, user_id=user_id, reference_date=reference_date
-    )
-
     def _pace_range_response(pace_range) -> Optional[WeekV2PaceRangeResponse]:
         if pace_range is None:
             return None
@@ -4322,15 +4351,16 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
             start_time=row.actual_start_time.isoformat() if row.actual_start_time else None,
         )
 
-    def _step_response(step) -> WeekV2WorkoutStepResponse:
-        step_pace_range = (
-            WeekV2PaceRangeResponse(
-                lower_min_per_km=step.pace_range.lower_min_per_km,
-                upper_min_per_km=step.pace_range.upper_min_per_km,
-            )
-            if step.pace_range is not None
-            else None
+    def _step_pace_range_response(step_pace_range) -> Optional[WeekV2PaceRangeResponse]:
+        if step_pace_range is None:
+            return None
+        return WeekV2PaceRangeResponse(
+            lower_min_per_km=step_pace_range.lower_min_per_km,
+            upper_min_per_km=step_pace_range.upper_min_per_km,
         )
+
+    def _step_response(step) -> WeekV2WorkoutStepResponse:
+        step_pace_range = _step_pace_range_response(step.pace_range)
         return WeekV2WorkoutStepResponse(
             kind=step.kind,
             repetitions=step.repetitions,
@@ -4383,15 +4413,26 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
         )
         if is_frozen_or_past:
             primary_pace = None
+            steps_for_response = se.session.steps
         else:
-            # C232 (correction) — honest pace ZONE only (no fabricated
-            # splits): see training_v2/session_structure.py docstring for
-            # exactly which workout_types get a pace zone and why.
-            primary_pace = _pace_range_response(
-                resolve_session_pace_zone(
-                    workout_type=se.session.workout_type,
-                    paces=training_paces_v2,
-                )
+            # C232 (correction, "Structured Workout Prescription V1") — a
+            # strictly-future session has not been served/frozen yet, so it
+            # is allowed to show its LIVE canonical structure (blocks/reps)
+            # and numeric pace, resolved from the SAME training_paces_v2
+            # used everywhere else in this response. Once this session
+            # becomes today/past, it goes through build_structured_
+            # prescription() ONCE (above, before freezing) and the result is
+            # persisted verbatim forever — this live path is never reused
+            # for an already-frozen session.
+            structured_future_session = build_structured_prescription(
+                prescription=se.session, paces=training_paces_v2
+            )
+            steps_for_response = structured_future_session.steps
+            primary_step = resolve_primary_step(steps_for_response)
+            primary_pace = (
+                _step_pace_range_response(primary_step.pace_range)
+                if primary_step is not None
+                else None
             )
         return WeekV2SessionResponse(
             day=se.session.day,
@@ -4407,7 +4448,7 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
             actual=_actual_response(se.row),
             execution_status=None,
             primary_pace=primary_pace,
-            steps=[_step_response(step) for step in se.session.steps],
+            steps=[_step_response(step) for step in steps_for_response],
         )
 
     sessions = [_session_response(se) for se in execution.sessions]
