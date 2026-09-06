@@ -1431,4 +1431,146 @@ consecutive round in slightly different wording, were re-verified from
 scratch against current code and remain fixed (rounds 1/2/7). This round
 is a documentation-only re-confirmation.
 
+## CORRECTION C232 — round 12: Structured Workout Prescription V1
+
+### Context
+
+Round 11 (and every re-audit before it) confirmed that fabricated splits
+had been correctly removed, but this left the product genuinely
+incomplete: `WorkoutPrescription.steps` existed as a typed,
+snapshot-compatible contract (round 4/7), yet no engine ever populated it
+— every session, including "quality", still only ever exposed
+`steps=()`. This round implements the missing engine, exactly as
+requested: a real, canonical, testable Structured Workout Prescription V1.
+
+### What was built
+
+**New pure engine — `backend/training_v2/structured_prescription.py`**
+
+`build_structured_prescription(*, prescription, paces) -> WorkoutPrescription`
+is the FIRST engine (besides `workout_generator.py` itself) allowed to
+decide a session's `steps`. It is pure business logic (no MongoDB, no
+HTTP, no clock, no global state) and deterministic in
+`(workout_type, distance_km, duration_minutes, paces)`:
+
+- `rest` → `steps=()`, always.
+- `easy` / `recovery` / `long_easy` → ONE `continuous` step spanning the
+  whole session, `pace_zone="easy"`. No 65/20/15 progression, no
+  marathon-pace segment: the Training Engine has not prescribed one, none
+  is fabricated here.
+- `steady` → ONE `continuous` step, `pace_zone=None` — "steady" has no
+  canonical Daniels (E/M/T/I/R) correspondence, so none is invented.
+- `quality` → a REAL threshold session: `warmup` (Easy) → `work`
+  (`repetitions=3`, Threshold) → `recovery` (2 min jog, time-only, no
+  pace) → `cooldown` (Easy). The distance/duration split is PRODUCT
+  CALIBRATION V1 (centralized constants: 20% warmup / 70% work / 10%
+  cooldown, 3 reps, 2 min recovery) — every km/minute is accounted for
+  exactly (`warmup + 3×work + cooldown == total`, cooldown absorbs the
+  exact rounding remainder; recovery is time-only and excluded from the
+  distance sum, exactly like a coach saying "2 min facile" with no fixed
+  marked distance). Sessions too short for a coherent 3-rep block
+  (< 4 km / < 24 min) fall back to a single honest `continuous` step with
+  NO pace zone — the same behaviour the old `session_structure.py` had
+  for "quality" universally.
+- Numeric pace resolution uses ONLY the supplied canonical
+  `TrainingPaces` (easy → E, threshold → T). When `paces` is `None` or
+  INSUFFICIENT, the STRUCTURE (reps/blocks) is still an engine decision
+  and is still shown, but every step's `pace_range` stays `None` — "None
+  reste None": no numeric pace is ever fabricated, only the reps/blocks
+  themselves (which are a structural decision, not a physiological
+  number).
+- **Idempotent / non-destructive**: if `prescription.steps` is already
+  non-empty (a real structure decided by ANY upstream source, including a
+  previous call to this same function), it is returned UNCHANGED — V1
+  only ever fills a gap, never overwrites an existing decision.
+- `resolve_primary_step(steps)` returns the `work` step when one exists
+  (e.g. quality's Threshold block), else the sole `continuous` step, else
+  `None` — this is what lets a compact card headline "3 × 2 km @
+  5:10–5:15/km" instead of an absurd blended warmup..cooldown range.
+
+**Wiring — freeze happens ONCE, atomically, before serving**
+
+`build_structured_prescription()` is called exactly once per served day,
+in `server.py`, on the FINAL `adapted_workout` — i.e. AFTER
+`build_daily_adaptation()` has already decided KEEP / EASY_DOWNGRADE /
+SHORTEN / REST, and BEFORE `get_or_create_served_prescription()`. Because
+the function is pure and deterministic in
+`(workout_type, distance_km, duration_minutes, paces)`, this single call
+site naturally produces the correct behaviour for every adaptation
+action without any change to `daily_adaptation.py` itself:
+  - KEEP → identical inputs → byte-identical structure.
+  - EASY_DOWNGRADE → new `workout_type="easy"` → a coherent single
+    continuous Easy step, the old quality warmup/work/recovery/cooldown
+    shape is gone (never partially reused).
+  - SHORTEN → same type, smaller total → a coherent smaller structure
+    whose steps still sum exactly to the new (shortened) total.
+  - REST → `steps=()`.
+`daily_adaptation.py` required NO changes: its pre-existing
+KEEP-preserves-identity / EASY_DOWNGRADE-and-SHORTEN-reset-steps-to-()
+behaviour (round 7) already composes correctly with a single
+post-adaptation structuring pass.
+
+Because `PrescriptionSnapshot.steps` already freezes `WorkoutStep`
+(including each step's `pace_range`) verbatim (round 7), no snapshot
+model changes were needed: populating `steps` with real numeric paces
+gets frozen atomically, for free, by the existing
+`get_or_create_served_prescription()` / snapshot machinery. A later
+Garmin activity or VDOT change can therefore never retroactively alter an
+already-served day's structure or pace — exactly the round 2 "None reste
+None" / no-lookahead guarantee, now extended to structure+pace together.
+
+`/training/v2/week`'s FUTURE (not-yet-served) sessions are allowed to
+show LIVE structure/pace, resolved with the same engine and the same
+canonical Training Paces used everywhere else in that response — never
+persisted. Frozen/past sessions keep reading `steps` verbatim from the
+effective (possibly snapshotted) session, and `primary_pace` stays
+`None` for them, unchanged — consistent with `/training/today`'s
+existing contract that a numeric pace only ever comes from a frozen
+step's `pace_range`, never a top-level field.
+
+### Tests
+
+New `backend/tests/test_pr232_structured_prescription.py` (19 tests):
+rest → no steps; easy/recovery/long_easy → one continuous Easy step, no
+invented progression; steady → continuous, no fabricated zone; quality →
+real warmup/work/recovery/cooldown on both a distance and a duration
+basis, with exact sum invariants; quality too short → honest continuous
+fallback; INSUFFICIENT paces → structure yes, pace no (for both quality
+and easy, and for `paces=None`); idempotency (including never
+overwriting an already-injected structure); `resolve_primary_step`
+(prefers `work`, falls back to `continuous`, `None` for empty);
+composition with real `build_daily_adaptation()` results for KEEP /
+EASY_DOWNGRADE / SHORTEN / REST.
+
+Pre-existing tests whose premise was superseded (they asserted "no engine
+ever populates steps" as the honest-but-incomplete round-4/7 state) were
+updated to assert the new real-structure reality instead
+(`test_week_sessions_have_no_fabricated_steps_today`,
+`test_explicit_engine_steps_are_reproduced_verbatim_by_the_api` in
+`test_pr232a_c231_week_endpoint.py`); no assertion about historical
+immutability, "None reste None", or Today/Week parity was weakened.
+
+### Validation
+
+- New engine suite — **19/19 pass**.
+- Backend targeted sweep (`prescription_snapshot`, `daily_adaptation`,
+  `daily_runtime`, `week_endpoint`, `week_execution`, `session_structure`,
+  `structured_prescription`) — **163/163 pass**.
+- Frontend `training-v2-page.test.jsx` — **42/42 pass, no code change**:
+  the existing step renderer (`SessionSteps` in `TrainingPlanV2.jsx`) was
+  already a generic, data-driven, fully-i18n'd (en/fr/es) renderer for
+  `kind`/`repetitions`/`distance_km`/`duration_minutes`/`pace_zone`/
+  `pace_range` — built in an earlier round in anticipation of a real
+  engine — so it automatically renders the new warmup/work/recovery/
+  cooldown steps correctly with no frontend change required.
+- No changes to PR230 matching, Readiness, or the manual-feedback removal
+  (round-1-ish history); #233/#234/#235/#236 untouched.
+
+### Status
+
+**NOT MERGED**, per explicit instruction. `#233` untouched. Structured
+Workout Prescription V1 is a genuine, testable, canonical engine — not a
+frontend/presenter inference — wired into the single served/freeze
+choke-point shared by Today and Week.
+
 C232
