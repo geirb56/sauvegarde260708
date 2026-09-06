@@ -25,7 +25,7 @@ from training_v2.readiness_decision import (  # noqa: E402
 from training_v2.readiness_sufficiency import SufficiencyLevel  # noqa: E402
 from training_v2.training_load import TrainingLoadSnapshot  # noqa: E402
 from training_v2.training_response import RecentTrainingResponse  # noqa: E402
-from training_v2.workout_generator import WorkoutPrescription  # noqa: E402
+from training_v2.workout_generator import WorkoutPrescription, WorkoutStep  # noqa: E402
 
 REF = date(2026, 8, 17)
 SOURCE = Path(__file__).resolve().parents[1] / "training_v2" / "daily_adaptation.py"
@@ -37,6 +37,7 @@ def _workout(
     distance_km: float | None = None,
     duration_minutes: int | None = None,
     day: str = "monday",
+    steps: tuple = (),
 ) -> WorkoutPrescription:
     intensity = {
         "rest": "rest",
@@ -53,6 +54,7 @@ def _workout(
         distance_km=distance_km,
         duration_minutes=duration_minutes,
         reason_codes=("ORIGINAL_PLAN",),
+        steps=steps,
     )
 
 
@@ -470,3 +472,85 @@ def test_Z_readiness_band_contract_is_canonical():
         "LOW",
         "VERY_LOW",
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# C232 (correction, round 7) — BLOCKER 2 FIX: KEEP preserves `steps`
+# byte-for-byte; SHORTEN / EASY_DOWNGRADE / REST must NOT blindly keep a
+# now-incoherent structure — steps=() is preferable to fabricated/wrong
+# steps.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_STEPS = (
+    WorkoutStep(kind="warmup", distance_km=2.0, pace_zone="easy"),
+    WorkoutStep(kind="work", repetitions=3, distance_km=2.0, pace_zone="threshold"),
+    WorkoutStep(kind="recovery", duration_minutes=2.0),
+    WorkoutStep(kind="cooldown", distance_km=1.0, pace_zone="easy"),
+)
+
+
+def test_AA_keep_rest_day_preserves_steps_byte_for_byte():
+    result = build_daily_adaptation(
+        workout=_workout("rest", steps=_STEPS),
+        readiness_decision=_decision(20.0),
+        training_load=_load("high", acwr=1.7),
+        recent_response=_response(volume_trend="decreasing"),
+    )
+    assert result.action == DailyAdaptationAction.KEEP
+    assert result.adapted_workout.steps == _STEPS
+
+
+def test_AB_keep_favorable_preserves_steps_byte_for_byte():
+    result = build_daily_adaptation(
+        workout=_workout("quality", distance_km=8.0, steps=_STEPS),
+        readiness_decision=_decision(85.0),
+        training_load=_load("balanced", acwr=1.0),
+        recent_response=_response(),
+    )
+    assert result.action == DailyAdaptationAction.KEEP
+    assert result.adapted_workout.steps == _STEPS
+    assert result.adapted_workout is result.original_workout
+
+
+def test_AC_easy_downgrade_clears_steps_never_fabricates():
+    result = build_daily_adaptation(
+        workout=_workout("quality", distance_km=8.0, steps=_STEPS),
+        readiness_decision=_decision(50.0),
+        training_load=_load("balanced", acwr=1.0),
+        recent_response=_response(),
+    )
+    assert result.action == DailyAdaptationAction.EASY_DOWNGRADE
+    assert result.adapted_workout.steps == ()
+
+
+def test_AD_shorten_long_easy_clears_steps_never_fabricates():
+    result = build_daily_adaptation(
+        workout=_workout("long_easy", distance_km=16.0, steps=_STEPS),
+        readiness_decision=_decision(50.0),
+        training_load=_load("balanced", acwr=1.0),
+        recent_response=_response(),
+    )
+    assert result.action == DailyAdaptationAction.SHORTEN
+    assert result.adapted_workout.steps == ()
+
+
+def test_AE_rest_action_clears_steps_never_fabricates():
+    result = build_daily_adaptation(
+        workout=_workout("easy", distance_km=8.0, steps=_STEPS),
+        readiness_decision=_decision(5.0),
+        training_load=_load("balanced", acwr=1.0),
+        recent_response=_response(),
+    )
+    assert result.action == DailyAdaptationAction.REST
+    assert result.adapted_workout.steps == ()
+
+
+def test_AF_shorten_easy_clears_steps_never_fabricates():
+    result = build_daily_adaptation(
+        workout=_workout("easy", distance_km=8.0, steps=_STEPS),
+        readiness_decision=_decision(74.9),
+        training_load=_load("balanced", acwr=1.0),
+        recent_response=_response(),
+    )
+    assert result.action == DailyAdaptationAction.SHORTEN
+    assert result.adapted_workout.steps == ()

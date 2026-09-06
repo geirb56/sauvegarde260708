@@ -816,3 +816,199 @@ Prescription layer in the Training Engine (real structure → served snapshot
 
 C232
 
+## CORRECTION C232 — round 7 (three real cross-layer blockers fixed: steps loss, DailyAdaptation, Today/Week contract parity)
+
+Unlike rounds 3, 5, and 6 (re-audits confirming already-fixed behavior with
+zero production changes), this seventh audit (HEAD `a999083`) found **3 real,
+previously-unfixed BLOCKERS** and required actual code changes.
+
+### BLOCKER 1 — `WorkoutPrescription.steps` was lost across the freeze boundary
+
+Before this round: `PrescriptionSnapshot` had no `steps` field,
+`snapshot_from_prescription()` never copied it, and `resolve_effective_session()`
+rebuilt a `WorkoutPrescription` from the snapshot without a `steps=` argument
+— defaulting back to `()`. Concretely: a future session carrying explicit
+`steps` (e.g. once a real Structured Workout Prescription engine exists)
+would silently LOSE them the instant it became "today" and got frozen.
+
+Fix (`backend/training_v2/prescription_snapshot.py`):
+- `PrescriptionSnapshot.steps: tuple[WorkoutStep, ...] = ()` — new field,
+  backward compatible (an old, pre-migration snapshot document with no
+  `steps` key deserializes to `()`, never reconstructed from the live plan).
+- `snapshot_from_prescription()` now copies `steps=session.steps` verbatim.
+- `resolve_effective_session()` now reconstructs `steps=frozen_snapshot.steps`
+  verbatim — never the live session's steps.
+
+Because `served_prescription.py` (Today) and `week_execution.py` (Week) both
+already call this SAME `resolve_effective_session()`, fixing it once
+propagates correctly to BOTH endpoints — by construction, not by separate
+plumbing per endpoint.
+
+### BLOCKER 2 — `DailyAdaptation` also destroyed `steps`, now has an explicit policy
+
+`_adapt_to_easy()`, `_shorten_workout()`, `_rest_workout()` in
+`backend/training_v2/daily_adaptation.py` all reconstructed
+`WorkoutPrescription` without a `steps=` argument. Explicit, documented
+policy now applied (never a new physiological decision — a discard policy
+only):
+- **KEEP** (rest-day early-return and the final KEEP branch): returns the
+  SAME `WorkoutPrescription` instance — `steps` preserved byte-for-byte by
+  construction (identity, not a rebuild). Unchanged code path, now
+  explicitly commented.
+- **EASY_DOWNGRADE / SHORTEN / REST**: now explicitly set `steps=()`. Once
+  the workout_type changes (→ easy) or the total distance/duration shrinks
+  by `SHORTEN_FACTOR`, any original steps' repetitions/distances/durations
+  would no longer describe what is actually prescribed — keeping them
+  verbatim would silently misrepresent the served session. `steps=()`
+  ("unknown/none prescribed") is preferable to fabricated or now-incoherent
+  steps.
+
+### BLOCKER 3 — Today/Week now transport the identical served-prescription contract
+
+`prescription_to_runtime_session()` (`daily_runtime_helpers.py`) only
+emitted legacy display keys (`type`, `duration` as a string, `intensity`,
+`distance_km`, `estimated_tss`) — never a raw `workout_type`, a raw numeric
+`duration_minutes`, or `steps`. **The frontend's Today card
+(`TrainingPlanV2.jsx`) was found to read fields that never existed in the
+real backend payload at all**: `getPrescriptionText()` read
+`session.prescription`/`.description`/`.details`, and
+`getSessionPaceOrZone()` read `session.pace_target`/`.pace`/`.pace_range`
+(as a string) — none of which `prescription_to_runtime_session()` has ever
+emitted. Additionally, `todayDuration` read a `duration_minutes` key that
+did not exist either (only a legacy `duration: "55min"` string) — meaning
+the Today duration badge was silently blank in production before this fix.
+
+Fix:
+- **Backend** (`daily_runtime_helpers.py`): `prescription_to_runtime_session()`
+  now ADDITIVELY emits `workout_type` (raw), `duration_minutes` (raw
+  numeric), `steps` (verbatim, serialized the same shape as
+  `/training/v2/week`'s `WeekV2WorkoutStepResponse`), and `primary_pace`
+  (always `None` — Today's own day is never strictly-future relative to
+  itself, exactly like Week's freeze rule). Legacy keys are UNCHANGED
+  (`Dashboard.jsx` still reads them).
+- **Frontend** (`TrainingPlanV2.jsx`): removed `getPrescriptionText()` and
+  `getSessionPaceOrZone()` entirely (the confirmed root cause). The Today
+  card now reads `todaySession.primary_pace` (via the existing
+  `formatPaceRangeLabel`) and `todaySession.steps` (via the existing
+  `<SessionSteps>`), the SAME fields and formatting Week's `SessionCard`
+  already used — Today and Week now render from one shared code path, never
+  a second frontend truth.
+- **Frontend tests**: `training-v2-page.test.jsx`'s `todayData()` mock now
+  returns a real `served_prescription` object shaped exactly like the real
+  API payload (no `prescription`/`pace_target` strings); the assertion was
+  rewritten to check the type/duration/distance badges plus the rendered
+  `steps` (including a numeric pace_range, see below) instead of the
+  fictitious fields.
+- **Integration tests** (`test_pr232a_c231_week_endpoint.py`): 4 new HTTP
+  end-to-end tests using the real FastAPI app (httpx ASGITransport) prove
+  Today ⇄ Week parity for `steps`, in both call orders, and across a J+N
+  replay:
+  - `test_today_snapshots_explicit_steps_verbatim` (test A)
+  - `test_today_then_week_expose_exactly_the_same_steps` (test B)
+  - `test_week_then_today_expose_exactly_the_same_steps` (test C)
+  - `test_replay_later_day_reproduces_exact_same_frozen_steps` (test D)
+
+### New contract — numeric `pace_range` on `WorkoutStep`
+
+`WorkoutStep.pace_zone` (a semantic label like `"threshold"`) is not enough
+for the final UX goal ("3 × 2 km @ 5:10–5:15/km", not "@ Threshold pace").
+Added `WorkoutStep.pace_range: Optional[WorkoutStepPaceRange]`
+(`lower_min_per_km`/`upper_min_per_km`, metric, mirroring
+`WeekV2PaceRangeResponse`'s shape) to `workout_generator.py`, mirrored in
+`WeekV2WorkoutStepResponse.pace_range` (`training_week_response.py`) and
+wired through `server.py`'s `_step_response()` and the new
+`_step_to_runtime_dict()` helper in `daily_runtime_helpers.py`. **No engine
+populates this field yet** — every step built today still has
+`pace_range=None` — this is purely the typed contract a future Structured
+Workout Prescription engine (see below) would need to populate. Frontend
+`SessionSteps` now prefers `formatPaceRangeLabel(step.pace_range)` (numeric)
+over `formatStepPaceZoneLabel(step.pace_zone)` (semantic) when a numeric
+pace is present, never inventing one when it is not. Critically: this pace,
+once ever populated and served, MUST be frozen with the prescription
+snapshot and never live-recomputed for an already-served day — the same
+immutability rule as `distance_km`/`duration_minutes` already follow (this
+round adds no code that resolves a live VDOT-based pace; that remains a
+future engine's responsibility, and it MUST respect this freeze rule when
+built).
+
+### Fabrication ban — reconfirmed, nothing changed
+
+Repo-wide grep for `_QUALITY_WARMUP_KM`/`_QUALITY_REP_LENGTH_KM`/
+`_QUALITY_RECOVERY_MINUTES`/`marathon_pace`-style hardcoded decomposition
+still returns zero matches. **No canonical structure-deciding authority
+exists in this repo.** Per the explicit instruction to "STOP and report"
+rather than invent one: this correction does **not** claim PR232 delivers
+real splits. A dedicated **Structured Workout Prescription V1** PR remains
+the correct place to decide warmup/blocks/repetitions/recovery/cooldown/
+pace_zone from explicit product/physiological rules, living in the Training
+Engine BEFORE snapshot/API/UI — exactly as prescribed by rounds 4–6. PR232
+stays DRAFT until that decision is made.
+
+### Training Paces — `CANONICAL_ACTIVITY_LOAD_LIMIT` honestly documented, not silently "fixed"
+
+Audited `CANONICAL_ACTIVITY_LOAD_LIMIT = 500`
+(`canonical_training_paces.py`). This is a COUNT-based (most-recent-500),
+not calendar-based, Mongo query limit — inherited UNCHANGED from the
+pre-PR232 `/training/v2/paces` endpoint, and used identically by
+`/training/v2/week` since round 1 of this correction. Per
+`training_paces.py`'s own stated policy
+("HIGH_HISTORICAL_NEVER_EXPIRES = YES"), a user who has logged 500+
+activities since their last qualifying HIGH-confidence performance could
+theoretically have that evidence fall outside this query on BOTH endpoints
+— a real (if narrow, high-volume-only) gap in the never-expires guarantee.
+There is no existing "qualifying performances only" index/store in this
+repo that could cheaply raise or bypass this limit safely, and doing so
+correctly is a Training Paces engine change, not a Training UX display
+change. Per this task's own instruction to document rather than invent a
+fix when no safe in-scope solution exists: the limitation is now explicitly
+documented in the module's own docstring/comment
+(`canonical_training_paces.py`) and here. No numeric change was made; no new
+arbitrary cutoff was introduced.
+
+### Mandatory tests (A–O) — status
+
+| # | Test | Status |
+|---|------|--------|
+| A | Future explicit steps → Today snapshot → same steps | **New** — `test_today_snapshots_explicit_steps_verbatim` |
+| B | Today → Week same steps | **New** — `test_today_then_week_expose_exactly_the_same_steps` |
+| C | Week → Today same steps | **New** — `test_week_then_today_expose_exactly_the_same_steps` |
+| D | Replay J+N same steps | **New** — `test_replay_later_day_reproduces_exact_same_frozen_steps` |
+| E | Old snapshot without steps → `[]`, never reconstructed | **New** — `test_old_snapshot_without_steps_field_defaults_to_empty_tuple`, `test_resolve_effective_session_never_reconstructs_steps_from_live_plan` |
+| F | DailyAdaptation KEEP preserves steps | **New** — `test_AA_keep_rest_day_preserves_steps_byte_for_byte`, `test_AB_keep_favorable_preserves_steps_byte_for_byte` |
+| G | Invalidating adaptation fabricates no steps | **New** — `test_AC`…`test_AF` (EASY_DOWNGRADE/SHORTEN/REST all assert `steps == ()`) |
+| H | Today frontend uses only real backend fields | **New** — rewritten `training-v2-page.test.jsx` test + removal of `getPrescriptionText`/`getSessionPaceOrZone` |
+| I | Frozen numeric pace unaffected by later VDOT change | Covered by existing immutability guarantee: `resolve_effective_session()` never re-reads live Training Paces for a frozen snapshot (no field to recompute exists in `PrescriptionSnapshot` at all); explicit test deferred to the future engine that first populates `pace_range` in a served snapshot, since no engine populates it today (nothing to regress) |
+| J | Training Paces INSUFFICIENT → no invented pace | Already covered — `training_paces.py`'s existing INSUFFICIENT-confidence tests, untouched |
+| K | metric / imperial | Already covered — existing `formatPaceRangeLabel`/imperial tests, untouched |
+| L | PR230 statuses unchanged | Already covered — `test_performed_workout_pr230.py`, untouched |
+| M | `prescription_unavailable` unchanged | Already covered — round 2/3/6 tests, untouched, re-run green |
+| N | `unmatched_actuals` unchanged | Already covered — round 2 tests, untouched, re-run green |
+| O | zero `/training/feedback` | Already covered — existing guard test, untouched |
+
+### Full validation after this round
+
+- Backend targeted sweep (`test_pr232a_prescription_snapshot.py`,
+  `test_daily_adaptation_pr133.py`, `test_daily_runtime_pr137.py`,
+  `test_pr232a_c231_week_endpoint.py`, `test_pr231_served_prescription.py`)
+  — **102/102 pass** (32 new tests added this round).
+- Broader `training_v2`/PR232-area sweep (857 tests) — all failures traced
+  and confirmed either (a) pre-existing on the unmodified baseline (same
+  commit, before this round's diff) or (b) shared-rate-limiter test-order
+  artifacts that pass individually in isolation — **zero regressions
+  attributable to this round's changes**.
+- Frontend `training-v2-page.test.jsx` — **40/40 pass** (mocks and one
+  assertion rewritten to the real contract).
+- `npm run build` — **compiles successfully**.
+
+### Status
+
+**NOT MERGED**, per explicit instruction. #233+ not touched. This round DID
+change production code (unlike rounds 3/5/6): `prescription_snapshot.py`,
+`daily_adaptation.py`, `daily_runtime_helpers.py`, `workout_generator.py`,
+`training_week_response.py`, `server.py`, and `TrainingPlanV2.jsx`. No new
+physiological/structural decision logic was added — `session_structure.py`
+is unchanged, and the new `pace_range` field remains unpopulated by any
+engine. The Structured Workout Prescription V1 gap (real splits) remains
+open and explicitly out of scope, per instruction.
+
+C232

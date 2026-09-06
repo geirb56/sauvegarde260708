@@ -38,7 +38,7 @@ from training_v2.readiness import ReadinessConfidence, ReadinessResult
 from training_v2.readiness_decision import ReadinessBand, build_readiness_decision
 from training_v2.readiness_sufficiency import SufficiencyLevel
 from training_v2.training_load import TrainingLoadSnapshot
-from training_v2.workout_generator import WorkoutPrescription
+from training_v2.workout_generator import WorkoutPrescription, WorkoutStep
 from training_v2.daily_runtime_helpers import (
     WORKOUT_TYPE_TO_INTENSITY_CLASS,
     BAND_TO_RECOMMENDATION,
@@ -55,7 +55,7 @@ REF = date(2026, 8, 17)
 # Fixtures / factories
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _wp(workout_type, *, distance_km=None, duration_minutes=None, day="monday"):
+def _wp(workout_type, *, distance_km=None, duration_minutes=None, day="monday", steps=()):
     intensity = WORKOUT_TYPE_TO_INTENSITY_CLASS.get(workout_type, "low")
     return WorkoutPrescription(
         day=day,
@@ -64,6 +64,7 @@ def _wp(workout_type, *, distance_km=None, duration_minutes=None, day="monday"):
         distance_km=distance_km,
         duration_minutes=duration_minutes,
         reason_codes=("PLAN_V2",),
+        steps=steps,
     )
 
 
@@ -426,3 +427,51 @@ def test_W_monotonicity_sweep(score, workout_type):
     )
     assert (result.adapted_workout.distance_km or 0.0) <= (workout.distance_km or 0.0)
     assert (result.adapted_workout.duration_minutes or 0) <= (workout.duration_minutes or 0)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# C232 (correction, round 7) — BLOCKER 3 FIX (backend half): the runtime
+# dict served by /training/today must carry the SAME canonical fields as
+# /training/v2/week — workout_type (raw), duration_minutes (raw numeric),
+# steps (verbatim), primary_pace (always None here, same freeze rule as
+# Week). Legacy keys (type/duration/intensity/estimated_tss) are kept
+# unchanged for Dashboard.jsx backward compatibility.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_X_runtime_session_carries_canonical_workout_type_and_duration_minutes():
+    original = _wp("quality", distance_km=9.0, duration_minutes=50)
+    runtime = prescription_to_runtime_session(original)
+    # Legacy keys unchanged (Dashboard.jsx compatibility).
+    assert runtime["type"] == "threshold"
+    assert runtime["duration"] == "50min"
+    # New canonical keys, additive.
+    assert runtime["workout_type"] == "quality"
+    assert runtime["duration_minutes"] == 50
+
+
+def test_Y_runtime_session_carries_steps_verbatim():
+    steps = (
+        WorkoutStep(kind="warmup", distance_km=2.0, pace_zone="easy"),
+        WorkoutStep(kind="work", repetitions=3, distance_km=2.0, pace_zone="threshold"),
+    )
+    original = _wp("quality", distance_km=9.0, duration_minutes=50, steps=steps)
+    runtime = prescription_to_runtime_session(original)
+    assert runtime["steps"] == [
+        {"kind": "warmup", "repetitions": None, "distance_km": 2.0, "duration_minutes": None, "pace_zone": "easy", "pace_range": None},
+        {"kind": "work", "repetitions": 3, "distance_km": 2.0, "duration_minutes": None, "pace_zone": "threshold", "pace_range": None},
+    ]
+
+
+def test_Z_runtime_session_has_no_live_primary_pace():
+    """C232 — Today's own day is never strictly-future relative to itself,
+    so, exactly like /training/v2/week's freeze rule, no live pace is ever
+    resolved for it here."""
+    original = _wp("easy", distance_km=8.0, duration_minutes=45)
+    runtime = prescription_to_runtime_session(original)
+    assert runtime["primary_pace"] is None
+
+
+def test_ZA_runtime_session_steps_default_empty_when_no_steps():
+    original = _wp("easy", distance_km=8.0, duration_minutes=45)
+    runtime = prescription_to_runtime_session(original)
+    assert runtime["steps"] == []

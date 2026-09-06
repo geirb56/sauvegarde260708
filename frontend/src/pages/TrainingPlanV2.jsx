@@ -68,11 +68,6 @@ const getTranslatedValue = (t, path, fallbackKey = "trainingV2.notAvailable") =>
 
 const getSessionType = (session) => session?.workout_type || session?.session_type || session?.type || null;
 
-const getPrescriptionText = (session) => {
-  if (!session || typeof session !== "object") return null;
-  return session.prescription || session.description || session.details || session.label || session.name || null;
-};
-
 /**
  * PR232A/C231 — Maps the real `/training/v2/week` contract
  * (matching_status + adherence_status from training_v2.performed_workout)
@@ -182,15 +177,6 @@ const getTodayDayKey = (referenceDate, sessions) => {
   return null;
 };
 
-const getSessionPaceOrZone = (session) => {
-  if (!session || typeof session !== "object") return null;
-  const pace = session.pace_target || session.pace || session.pace_range || session.target_pace || session.pace_str;
-  if (pace && typeof pace === "string") return pace;
-  const zone = session.target_zone || session.zone || session.hr_zone || session.intensity_zone;
-  if (zone && typeof zone === "string") return zone;
-  return null;
-};
-
 // ---------------------------------------------------------------------------
 // PR232 — pace formatting. The API always transports metric min/km; the
 // user's unit system (metric/imperial) is only applied here, at display
@@ -271,7 +257,11 @@ function SessionSteps({ steps, unitSystem, t }) {
       {steps.map((step, index) => {
         const kindLabel = getTranslatedValue(t, `trainingV2.stepKinds.${step?.kind}`, "trainingV2.notAvailable");
         const metricLabel = formatStepMetric(step, unitSystem);
-        const paceZoneLabel = formatStepPaceZoneLabel(t, step?.pace_zone);
+        // C232 (correction, round 7) — prefer the NUMERIC frozen pace
+        // ("5:10–5:15/km") over the semantic zone name ("Threshold pace")
+        // when the engine has resolved one; never invents a numeric value
+        // when only the zone is known.
+        const paceLabel = formatPaceRangeLabel(step?.pace_range, unitSystem) || formatStepPaceZoneLabel(t, step?.pace_zone);
         return (
           <div
             key={index}
@@ -280,7 +270,7 @@ function SessionSteps({ steps, unitSystem, t }) {
           >
             <span className="text-muted-foreground">{kindLabel}</span>
             <span className="font-medium text-foreground" data-testid={`session-step-${index}-metric`}>
-              {[metricLabel, paceZoneLabel].filter(Boolean).join(" @ ") || t("trainingV2.notAvailable")}
+              {[metricLabel, paceLabel].filter(Boolean).join(" @ ") || t("trainingV2.notAvailable")}
             </span>
           </div>
         );
@@ -739,12 +729,17 @@ export default function TrainingPlanV2() {
     ? getTranslatedValue(t, `trainingV2.workoutTypes.${todayType}`)
     : t("trainingV2.noSessionType");
 
-  const todayPrescription = getPrescriptionText(todaySession)
-    || getPrescriptionText(todayData?.adapted_prescription)
-    || getPrescriptionText(todayData?.original_prescription)
-    || null;
-
-  const todayPaceOrZone = getSessionPaceOrZone(todaySession);
+  // C232 (correction, round 7 — BLOCKER FIX): Today must read ONLY fields
+  // that actually exist in the real /training/today payload
+  // (prescription_to_runtime_session), the SAME contract Week's SessionCard
+  // already reads — never the fictitious `prescription`/`pace_target`
+  // strings that a prior round's test mocks invented but the backend never
+  // sent. `primary_pace` is always None for Today's own day (never a
+  // strictly-future session), so no numeric pace badge is expected here
+  // today; a real numeric pace, when the engine eventually resolves one,
+  // will show up per-step inside `todaySteps` via <SessionSteps>.
+  const todayPace = formatPaceRangeLabel(todaySession?.primary_pace, unitSystem);
+  const todaySteps = Array.isArray(todaySession?.steps) ? todaySession.steps : [];
   const todayDuration = isKnownNumber(todaySession?.duration_minutes) ? `${todaySession.duration_minutes} min` : null;
   const todayDistance = isKnownNumber(todaySession?.distance_km) ? formatDistance(todaySession.distance_km, { unitSystem }) : null;
   const todayIsExplicitRest = todayType === "rest" || getSessionStatusKey(todaySession) === "rest";
@@ -813,16 +808,18 @@ export default function TrainingPlanV2() {
             <>
               <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">{t("trainingV2.sessionType")}</p>
               <p className="text-lg font-semibold" data-testid="today-session-type">{todayIsExplicitRest ? t("trainingV2.restDay") : todayTypeLabel}</p>
-              {todayPrescription && !todayIsExplicitRest && (
-                <p className="text-base" data-testid="today-session-prescription">{todayPrescription}</p>
-              )}
-              {todayPaceOrZone && !todayIsExplicitRest && (
-                <p className="text-sm text-muted-foreground" data-testid="today-session-pace-zone">{todayPaceOrZone}</p>
+              {todayPace && !todayIsExplicitRest && (
+                <p className="text-sm text-muted-foreground" data-testid="today-session-pace-zone">{todayPace}</p>
               )}
               <div className="flex flex-wrap items-center gap-2 text-sm">
                 {todayDuration && <Badge variant="outline" data-testid="today-session-duration">{todayDuration}</Badge>}
                 {todayDistance && <Badge variant="outline" data-testid="today-session-distance">{todayDistance}</Badge>}
               </div>
+              {!todayIsExplicitRest && todaySteps.length > 0 && (
+                <div className="pt-1" data-testid="today-session-steps-wrapper">
+                  <SessionSteps steps={todaySteps} unitSystem={unitSystem} t={t} />
+                </div>
+              )}
             </>
           )}
         </CardContent>

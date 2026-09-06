@@ -40,7 +40,7 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict
 
-from .workout_generator import WorkoutPrescription
+from .workout_generator import WorkoutPrescription, WorkoutStep
 
 
 class PrescriptionSnapshot(BaseModel):
@@ -74,6 +74,24 @@ class PrescriptionSnapshot(BaseModel):
     plan, since that would silently invent a fact that was never recorded.
     A consumer seeing ``None`` MUST treat it as "unknown" (e.g. the frontend
     shows no adaptation banner), never as ``False``.
+    """
+
+    steps: tuple[WorkoutStep, ...] = ()
+    """C232 (correction, round 7 — BLOCKER FIX): the canonical structural
+    steps of the SERVED prescription, copied verbatim from
+    ``WorkoutPrescription.steps`` at the moment this snapshot was created
+    (see :func:`snapshot_from_prescription`). Before this field existed, a
+    future session carrying explicit ``steps`` would silently LOSE them the
+    instant it became "today" and got frozen — ``resolve_effective_session``
+    rebuilt a ``WorkoutPrescription`` from the snapshot without a ``steps``
+    field, so it always defaulted back to ``()``, even when the live session
+    that was actually served had real steps.
+
+    Defaults to ``()`` for snapshots persisted before this field existed
+    (backward compatibility) — deliberately NEVER reconstructed from the
+    current live plan; an old snapshot without steps means "unknown
+    structure", not "no structure was ever prescribed". Once frozen, a
+    snapshot's ``steps`` NEVER change, exactly like every other field here.
     """
 
 
@@ -111,6 +129,9 @@ def snapshot_from_prescription(
         distance_km=session.distance_km,
         duration_minutes=session.duration_minutes,
         modified_from_planned=modified_from_planned,
+        # C232 (correction, round 7) — copy EXACTLY, never re-derived: this
+        # is the one place a live session's structure is captured forever.
+        steps=session.steps,
     )
 
 
@@ -136,6 +157,13 @@ def resolve_effective_session(
         distance_km=frozen_snapshot.distance_km,
         duration_minutes=frozen_snapshot.duration_minutes,
         reason_codes=live_session.reason_codes,
+        # C232 (correction, round 7 — BLOCKER FIX): reconstruct EXACTLY the
+        # steps that were frozen with this snapshot — never the live
+        # session's (possibly different, possibly newly-recomputed) steps.
+        # An old snapshot persisted before this field existed deserializes
+        # with steps=() (pydantic default) — never reconstructed from the
+        # current live plan.
+        steps=frozen_snapshot.steps,
     )
 
 

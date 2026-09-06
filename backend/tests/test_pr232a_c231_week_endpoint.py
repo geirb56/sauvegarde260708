@@ -481,10 +481,10 @@ async def test_explicit_engine_steps_are_reproduced_verbatim_by_the_api():
     sessions = result["body"]["week"]["sessions"]
     target_session = next(s for s in sessions if s["day"] != "monday" and s["steps"])
     assert target_session["steps"] == [
-        {"kind": "warmup", "repetitions": None, "distance_km": 2.0, "duration_minutes": None, "pace_zone": "easy"},
-        {"kind": "work", "repetitions": 3, "distance_km": 2.0, "duration_minutes": None, "pace_zone": "threshold"},
-        {"kind": "recovery", "repetitions": None, "distance_km": None, "duration_minutes": 2.0, "pace_zone": None},
-        {"kind": "cooldown", "repetitions": None, "distance_km": 1.0, "duration_minutes": None, "pace_zone": "easy"},
+        {"kind": "warmup", "repetitions": None, "distance_km": 2.0, "duration_minutes": None, "pace_zone": "easy", "pace_range": None},
+        {"kind": "work", "repetitions": 3, "distance_km": 2.0, "duration_minutes": None, "pace_zone": "threshold", "pace_range": None},
+        {"kind": "recovery", "repetitions": None, "distance_km": None, "duration_minutes": 2.0, "pace_zone": None, "pace_range": None},
+        {"kind": "cooldown", "repetitions": None, "distance_km": 1.0, "duration_minutes": None, "pace_zone": "easy", "pace_range": None},
     ]
 
     # No other session was affected — everything else stays steps=[].
@@ -814,3 +814,164 @@ async def test_unmatched_actuals_distance_is_disjoint_from_matched_sessions():
     assert matched_activity_ids.isdisjoint(unmatched_activity_ids)
     assert "monday-match" in matched_activity_ids
     assert "extra-real-run" in unmatched_activity_ids
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# C232 (correction, round 7) — BLOCKER 1 & 3 FIX: Today and Week must
+# represent the EXACT SAME served prescription — including `steps` — for
+# today's own session, in both call orders, and that must survive a replay
+# on a later day (frozen, never recomputed).
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _patched_build_with_monday_steps(injected_steps):
+    """Returns a monkeypatch target that injects `injected_steps` into the
+    Monday (today, for _MONDAY reference_date) LIVE session, simulating a
+    future engine capability that actually decides structure."""
+    from training_v2.week_plan_bridge import build_canonical_weekly_plan as _real_build
+
+    def _patched(**kwargs):
+        canonical = _real_build(**kwargs)
+        sessions = list(canonical.weekly_plan.sessions)
+        idx = next(i for i, s in enumerate(sessions) if s.day == "monday")
+        sessions[idx] = sessions[idx].model_copy(update={"steps": injected_steps})
+        new_weekly_plan = canonical.weekly_plan.model_copy(update={"sessions": tuple(sessions)})
+        return type(canonical)(
+            original_target=canonical.original_target,
+            reconciliation_result=canonical.reconciliation_result,
+            reconciled_target=canonical.reconciled_target,
+            weekly_plan=new_weekly_plan,
+        )
+
+    return _patched
+
+
+@pytest.mark.asyncio
+async def test_today_snapshots_explicit_steps_verbatim():
+    """Test A — a future/explicit-steps prescription served via
+    /training/today gets snapshotted with EXACTLY those steps."""
+    from training_v2.workout_generator import WorkoutStep
+
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    _seed_garmin_activities(fake_db, n=8)
+    _seed_connected(fake_db, connected=True)
+
+    injected_steps = (
+        WorkoutStep(kind="warmup", distance_km=2.0, pace_zone="easy"),
+        WorkoutStep(kind="work", repetitions=3, distance_km=2.0, pace_zone="threshold"),
+        WorkoutStep(kind="cooldown", distance_km=1.0, pace_zone="easy"),
+    )
+
+    with patch(
+        "training_v2.week_plan_bridge.build_canonical_weekly_plan",
+        side_effect=_patched_build_with_monday_steps(injected_steps),
+    ):
+        result = await _get_today(fake_db, reference_date=_MONDAY)
+
+    assert result["status"] == 200, result["body"]
+    served_steps = result["body"]["served_prescription"]["steps"]
+    assert served_steps == [
+        {"kind": "warmup", "repetitions": None, "distance_km": 2.0, "duration_minutes": None, "pace_zone": "easy", "pace_range": None},
+        {"kind": "work", "repetitions": 3, "distance_km": 2.0, "duration_minutes": None, "pace_zone": "threshold", "pace_range": None},
+        {"kind": "cooldown", "repetitions": None, "distance_km": 1.0, "duration_minutes": None, "pace_zone": "easy", "pace_range": None},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_today_then_week_expose_exactly_the_same_steps():
+    """Test B — Today -> Week: once Today has served+snapshotted a
+    session's steps, /training/v2/week must expose EXACTLY the same steps
+    for that day, never a re-derived/aggregated/empty version."""
+    from training_v2.workout_generator import WorkoutStep
+
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    _seed_garmin_activities(fake_db, n=8)
+    _seed_connected(fake_db, connected=True)
+
+    injected_steps = (
+        WorkoutStep(kind="warmup", distance_km=2.0, pace_zone="easy"),
+        WorkoutStep(kind="work", repetitions=3, distance_km=2.0, pace_zone="threshold"),
+        WorkoutStep(kind="cooldown", distance_km=1.0, pace_zone="easy"),
+    )
+    patch_target = _patched_build_with_monday_steps(injected_steps)
+
+    with patch("training_v2.week_plan_bridge.build_canonical_weekly_plan", side_effect=patch_target):
+        today_result = await _get_today(fake_db, reference_date=_MONDAY)
+        assert today_result["status"] == 200, today_result["body"]
+
+        week_result = await _get_week(fake_db, reference_date=_MONDAY)
+        assert week_result["status"] == 200, week_result["body"]
+
+    monday_session = next(s for s in week_result["body"]["week"]["sessions"] if s["day"] == "monday")
+    assert monday_session["steps"] == today_result["body"]["served_prescription"]["steps"]
+    assert monday_session["steps"] != []
+
+
+@pytest.mark.asyncio
+async def test_week_then_today_expose_exactly_the_same_steps():
+    """Test C — the reverse order: Week serves+snapshots first, then Today
+    must expose EXACTLY the same steps it already froze."""
+    from training_v2.workout_generator import WorkoutStep
+
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    _seed_garmin_activities(fake_db, n=8)
+    _seed_connected(fake_db, connected=True)
+
+    injected_steps = (
+        WorkoutStep(kind="warmup", distance_km=2.0, pace_zone="easy"),
+        WorkoutStep(kind="work", repetitions=3, distance_km=2.0, pace_zone="threshold"),
+        WorkoutStep(kind="cooldown", distance_km=1.0, pace_zone="easy"),
+    )
+    patch_target = _patched_build_with_monday_steps(injected_steps)
+
+    with patch("training_v2.week_plan_bridge.build_canonical_weekly_plan", side_effect=patch_target):
+        week_result = await _get_week(fake_db, reference_date=_MONDAY)
+        assert week_result["status"] == 200, week_result["body"]
+
+        today_result = await _get_today(fake_db, reference_date=_MONDAY)
+        assert today_result["status"] == 200, today_result["body"]
+
+    monday_session = next(s for s in week_result["body"]["week"]["sessions"] if s["day"] == "monday")
+    assert today_result["body"]["served_prescription"]["steps"] == monday_session["steps"]
+    assert today_result["body"]["served_prescription"]["steps"] != []
+
+
+@pytest.mark.asyncio
+async def test_replay_later_day_reproduces_exact_same_frozen_steps():
+    """Test D — replay J+N: once Monday's session is frozen (with explicit
+    steps), calling /training/v2/week again on a LATER reference_date (with
+    the live engine now returning DIFFERENT — here, no — steps for that
+    same day) must still reproduce the ORIGINAL frozen steps verbatim."""
+    from training_v2.workout_generator import WorkoutStep
+
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    _seed_garmin_activities(fake_db, n=8)
+    _seed_connected(fake_db, connected=True)
+
+    injected_steps = (
+        WorkoutStep(kind="warmup", distance_km=2.0, pace_zone="easy"),
+        WorkoutStep(kind="work", repetitions=3, distance_km=2.0, pace_zone="threshold"),
+        WorkoutStep(kind="cooldown", distance_km=1.0, pace_zone="easy"),
+    )
+    patch_target = _patched_build_with_monday_steps(injected_steps)
+
+    with patch("training_v2.week_plan_bridge.build_canonical_weekly_plan", side_effect=patch_target):
+        first = await _get_week(fake_db, reference_date=_MONDAY)
+        assert first["status"] == 200, first["body"]
+
+    # Replay on a later day: NO patch active anymore, so the live engine
+    # would build Monday with steps=() if it were ever re-consulted for
+    # that (now past) day — but it must not be: the snapshot wins.
+    later_reference = _MONDAY + timedelta(days=3)
+    later = await _get_week(fake_db, reference_date=later_reference)
+    assert later["status"] == 200, later["body"]
+
+    monday_session = next(s for s in later["body"]["week"]["sessions"] if s["day"] == "monday")
+    assert monday_session["steps"] == [
+        {"kind": "warmup", "repetitions": None, "distance_km": 2.0, "duration_minutes": None, "pace_zone": "easy", "pace_range": None},
+        {"kind": "work", "repetitions": 3, "distance_km": 2.0, "duration_minutes": None, "pace_zone": "threshold", "pace_range": None},
+        {"kind": "cooldown", "repetitions": None, "distance_km": 1.0, "duration_minutes": None, "pace_zone": "easy", "pace_range": None},
+    ]

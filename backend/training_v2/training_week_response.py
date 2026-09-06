@@ -123,6 +123,11 @@ class WeekV2WorkoutStepResponse(BaseModel):
     distance_km: Optional[float] = None
     duration_minutes: Optional[float] = None
     pace_zone: Optional[str] = None
+    pace_range: Optional[WeekV2PaceRangeResponse] = None
+    """C232 (correction, round 7) — the NUMERIC pace (min/km) this specific
+    step targets, mirrored verbatim from
+    ``WorkoutStep.pace_range``. ``None`` when no engine has resolved a
+    numeric pace for this step (the case for every step today)."""
 
 
 class WeekV2SessionResponse(BaseModel):

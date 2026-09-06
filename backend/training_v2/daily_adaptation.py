@@ -91,6 +91,15 @@ def _recent_response_codes(recent_response: Optional[RecentTrainingResponse]) ->
 
 
 def _adapt_to_easy(workout: WorkoutPrescription) -> WorkoutPrescription:
+    # C232 (correction, round 7) — the workout_type itself changes to
+    # "easy": any structural steps the original (e.g. "quality") prescription
+    # may have carried (warmup / work intervals @ threshold / recovery /
+    # cooldown) are now PHYSIOLOGICALLY INVALID for an easy-effort session —
+    # blindly keeping them would silently misrepresent what is actually
+    # served. steps=() ("unknown/none prescribed") is preferable to a wrong,
+    # stale structure. This is a POLICY choice, not a new physiological
+    # decision: DailyAdaptation still never invents a NEW structure, it only
+    # discards one that no longer applies.
     return WorkoutPrescription(
         day=workout.day,
         workout_type="easy",
@@ -98,6 +107,7 @@ def _adapt_to_easy(workout: WorkoutPrescription) -> WorkoutPrescription:
         distance_km=workout.distance_km,
         duration_minutes=workout.duration_minutes,
         reason_codes=workout.reason_codes,
+        steps=(),
     )
 
 
@@ -116,6 +126,12 @@ def _shorten_workout(workout: WorkoutPrescription) -> WorkoutPrescription:
         else duration_minutes
     )
 
+    # C232 (correction, round 7) — the total distance/duration shrinks by
+    # SHORTEN_FACTOR: any original steps' repetitions/distances/durations
+    # would no longer sum to the new (shorter) total, so keeping them
+    # verbatim would present an internally-inconsistent, effectively
+    # fabricated structure. steps=() until a real engine can re-derive a
+    # consistent shortened structure — never invented here.
     return WorkoutPrescription(
         day=workout.day,
         workout_type=workout.workout_type,
@@ -123,10 +139,14 @@ def _shorten_workout(workout: WorkoutPrescription) -> WorkoutPrescription:
         distance_km=shortened_distance,
         duration_minutes=shortened_duration,
         reason_codes=workout.reason_codes,
+        steps=(),
     )
 
 
 def _rest_workout(workout: WorkoutPrescription) -> WorkoutPrescription:
+    # C232 (correction, round 7) — a REST day has no structure by
+    # definition: steps=() explicitly (never "whatever the original workout
+    # happened to carry").
     return WorkoutPrescription(
         day=workout.day,
         workout_type="rest",
@@ -134,6 +154,7 @@ def _rest_workout(workout: WorkoutPrescription) -> WorkoutPrescription:
         distance_km=None,
         duration_minutes=None,
         reason_codes=workout.reason_codes,
+        steps=(),
     )
 
 
@@ -164,6 +185,9 @@ def build_daily_adaptation(
     reasons: list[str] = []
     if workout.workout_type == "rest":
         reasons.extend(["PLANNED_REST_DAY", "PLAN_KEPT"])
+        # C232 (correction, round 7) — KEEP always returns the SAME
+        # WorkoutPrescription instance, so `.steps` is preserved byte-for-byte
+        # by construction (identity, not a copy) — never re-derived.
         return DailyAdaptationResult(
             action=DailyAdaptationAction.KEEP,
             original_workout=workout,
@@ -230,6 +254,8 @@ def build_daily_adaptation(
         )
 
     reasons.extend(["PLAN_KEPT", "INTENSITY_NOT_INCREASED"])
+    # C232 (correction, round 7) — KEEP: same instance, steps preserved
+    # byte-for-byte (see comment on the rest-day KEEP branch above).
     return DailyAdaptationResult(
         action=DailyAdaptationAction.KEEP,
         original_workout=workout,

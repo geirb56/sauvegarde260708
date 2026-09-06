@@ -53,7 +53,6 @@ function weekData() {
           day: "monday", workout_type: "easy", distance_km: 8, duration_minutes: 45, estimated_tss: null,
           reason_codes: [], matching_status: "matched", adherence_status: "completed_as_planned",
           actual: { activity_id: "a1", distance_km: 8.1, duration_minutes: 44, pace_min_per_km: 5.5, activity_type: "running", start_time: "2026-08-24T07:00:00" },
-          prescription: "45 min easy",
           primary_pace: { lower_min_per_km: 5.75, upper_min_per_km: 6.3 },
         },
         {
@@ -63,7 +62,6 @@ function weekData() {
         {
           day: "wednesday", workout_type: "quality", distance_km: 9, duration_minutes: 50, estimated_tss: null,
           reason_codes: [], matching_status: "planned", adherence_status: "not_applicable", actual: null,
-          prescription: "3 × 10 min",
           // C232 (correction) — "quality"'s exact nature is not decided by
           // the Training Engine: never a fabricated pace zone or split.
           primary_pace: null,
@@ -71,12 +69,10 @@ function weekData() {
         {
           day: "thursday", workout_type: "steady", distance_km: 8, duration_minutes: 42, estimated_tss: null,
           reason_codes: [], matching_status: "missed", adherence_status: "missed", actual: null,
-          prescription: "40 min steady",
         },
         {
           day: "friday", workout_type: "easy", distance_km: 7, duration_minutes: 40, estimated_tss: null,
           reason_codes: [], matching_status: "planned", adherence_status: "not_applicable", actual: null,
-          prescription: "40 min easy",
           primary_pace: { lower_min_per_km: 6.25, upper_min_per_km: 6.67 },
         },
         {
@@ -86,7 +82,6 @@ function weekData() {
         {
           day: "sunday", workout_type: "long_easy", distance_km: 18, duration_minutes: 95, estimated_tss: null,
           reason_codes: [], matching_status: "planned", adherence_status: "not_applicable", actual: null,
-          prescription: "Long run 18 km",
           primary_pace: { lower_min_per_km: 5.58, upper_min_per_km: 5.75 },
         },
       ],
@@ -135,9 +130,10 @@ function todayData({ explicitRest = false, noSession = false } = {}) {
   if (explicitRest) {
     return {
       status: "success",
-      planned_session: { workout_type: "rest", duration_minutes: null, distance_km: null, prescription: "REST" },
-      original_prescription: { workout_type: "rest", duration_minutes: null, distance_km: null, prescription: "REST" },
-      adapted_prescription: { workout_type: "rest", duration_minutes: null, distance_km: null, prescription: "REST" },
+      planned_session: { workout_type: "rest", duration_minutes: null, distance_km: null },
+      served_prescription: { workout_type: "rest", duration_minutes: null, distance_km: null, steps: [], primary_pace: null },
+      original_prescription: { workout_type: "rest", duration_minutes: null, distance_km: null },
+      adapted_prescription: { workout_type: "rest", duration_minutes: null, distance_km: null },
       adaptive_session: null,
       adaptation_applied: false,
       adaptation_reason: "",
@@ -147,26 +143,44 @@ function todayData({ explicitRest = false, noSession = false } = {}) {
   return {
     status: "success",
     readiness: { band: "EASY" },
+    // C232 (correction, round 7 — BLOCKER FIX): served_prescription is the
+    // REAL backend contract emitted by prescription_to_runtime_session() —
+    // legacy keys (type/duration/intensity/estimated_tss) alongside the
+    // canonical ones (workout_type/duration_minutes/steps/primary_pace).
+    // No `prescription`/`pace_target` string fields exist on the real
+    // payload; they must never be asserted against.
+    served_prescription: {
+      day: "wednesday",
+      type: "threshold",
+      duration: "55min",
+      intensity: "high",
+      distance_km: 10,
+      estimated_tss: null,
+      workout_type: "threshold",
+      duration_minutes: 55,
+      primary_pace: null,
+      steps: [
+        { kind: "warmup", repetitions: null, distance_km: 2, duration_minutes: null, pace_zone: "easy", pace_range: null },
+        {
+          kind: "work", repetitions: 3, distance_km: 2, duration_minutes: null, pace_zone: "threshold",
+          pace_range: { lower_min_per_km: 5.1667, upper_min_per_km: 5.25 },
+        },
+      ],
+    },
     planned_session: {
       workout_type: "threshold",
       duration_minutes: 55,
       distance_km: 10,
-      prescription: "3 × 10 min",
-      pace_target: "5:10–5:20/km",
     },
     original_prescription: {
       workout_type: "threshold",
       duration_minutes: 55,
       distance_km: 10,
-      prescription: "3 × 10 min",
-      pace_target: "5:10–5:20/km",
     },
     adapted_prescription: {
       workout_type: "threshold",
       duration_minutes: 55,
       distance_km: 10,
-      prescription: "3 × 10 min",
-      pace_target: "5:10–5:20/km",
     },
     adaptive_session: null,
     adaptation_applied: false,
@@ -265,17 +279,28 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     expect(paces.compareDocumentPosition(cycle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  test("today card shows primary workout type, prescription, pace and duration", async () => {
+  test("today card shows only real backend fields: workout type, structural steps, numeric pace and duration", async () => {
+    // C232 (correction, round 7 — BLOCKER FIX / test H): the Today card must
+    // read ONLY fields that exist in the real served_prescription payload
+    // (prescription_to_runtime_session contract) — never a fictitious
+    // `prescription`/`pace_target` string. Structural steps (warmup/work)
+    // and the work step's NUMERIC frozen pace_range render verbatim.
     mockAxios();
     renderPage();
 
     const today = await screen.findByTestId("training-v2-today");
     expect(within(today).getByTestId("today-session-type").textContent.toLowerCase()).toContain("threshold");
-    expect(within(today).getByTestId("today-session-prescription")).toHaveTextContent("3 × 10 min");
-    expect(within(today).getByTestId("today-session-pace-zone")).toHaveTextContent("5:10–5:20/km");
+    expect(within(today).queryByTestId("today-session-prescription")).not.toBeInTheDocument();
+    expect(within(today).queryByTestId("today-session-pace-zone")).not.toBeInTheDocument();
     expect(within(today).getByTestId("today-session-duration")).toHaveTextContent("55 min");
     expect(within(today).getByTestId("today-session-distance")).toHaveTextContent(formatDistance(10, { unitSystem: "metric" }));
     expect(within(today).queryByText(/TSS/i)).not.toBeInTheDocument();
+
+    // The two steps sent by the backend render verbatim, and the numeric
+    // work-step pace shows the real "5:10–5:15/km" range, not just a zone.
+    expect(within(today).getByTestId("session-step-0")).toBeInTheDocument();
+    expect(within(today).getByTestId("session-step-1-metric")).toHaveTextContent("5:10");
+    expect(within(today).getByTestId("session-step-1-metric")).toHaveTextContent("5:15");
   });
 
   test("today no-session state is not rendered as REST", async () => {
@@ -404,7 +429,6 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     unresolvedWeek.week.sessions[3] = {
       day: "thursday", workout_type: "steady", distance_km: 8, duration_minutes: 42, estimated_tss: null,
       reason_codes: [], matching_status: null, adherence_status: null, actual: null,
-      prescription: "40 min steady",
     };
 
     mockAxios({ week: unresolvedWeek });
@@ -457,19 +481,15 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
         readiness: { band: "EASY" },
         planned_session: {
           workout_type: "long_easy", duration_minutes: 95, distance_km: 18,
-          prescription: "Long run 18 km",
         },
         original_prescription: {
           workout_type: "long_easy", duration_minutes: 95, distance_km: 18,
-          prescription: "Long run 18 km",
         },
         served_prescription: {
           workout_type: "long_easy", duration_minutes: 66, distance_km: 12.6,
-          prescription: "Long run 12.6 km (frozen)",
         },
         adapted_prescription: {
           workout_type: "long_easy", duration_minutes: 66, distance_km: 12.6,
-          prescription: "Long run 12.6 km (frozen)",
         },
         adaptive_session: null,
         // KEY: adaptation_applied is FALSE (live recompute says KEEP), yet

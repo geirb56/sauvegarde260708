@@ -245,6 +245,31 @@ _RACE_WEEK_SESSIONS: int = 2
 # ---------------------------------------------------------------------------
 
 
+class WorkoutStepPaceRange(BaseModel):
+    """C232 (correction, round 7) — a NUMERIC pace range (min/km, metric),
+    frozen alongside the prescription that carries it.
+
+    ``pace_zone`` (below) is only a SEMANTIC label ("threshold", "easy", ...)
+    — it is not enough for the final runner-facing UX, which needs an actual
+    number ("5:10–5:15/km"), not just a zone name. This model is the explicit,
+    typed contract for that numeric value.
+
+    CRITICAL — no-lookahead / immutability: once a step's ``pace_range`` has
+    been attached to a prescription that gets SERVED (frozen via
+    ``PrescriptionSnapshot``), it MUST be persisted and reproduced verbatim
+    forever — never re-resolved from a later, possibly-different VDOT/Training
+    Paces state. A served numeric pace is a historical fact, exactly like
+    ``distance_km``/``duration_minutes`` already are. WorkoutGenerator does
+    not populate this yet (no engine decides a step's pace_range today), so
+    every step built today has ``pace_range=None``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    lower_min_per_km: float
+    upper_min_per_km: float
+
+
 class WorkoutStep(BaseModel):
     """C232 (correction) — ONE canonical structural step of a prescribed
     session (warmup / work interval / recovery / cooldown / continuous).
@@ -281,6 +306,15 @@ class WorkoutStep(BaseModel):
     """Daniels pace-zone name this step targets (e.g. "easy", "threshold",
     "marathon", "interval", "repetition"), or None when no pace zone is
     prescribed for this step."""
+
+    pace_range: Optional[WorkoutStepPaceRange] = None
+    """C232 (correction, round 7) — the actual NUMERIC pace (min/km) this
+    step targets, e.g. so the UI can eventually show "5:10–5:15/km" instead
+    of only "Threshold pace". None today (no engine resolves it yet); when
+    populated, it MUST be resolved and frozen AT PRESCRIPTION-SERVE-TIME
+    (never live-recomputed for an already-served/frozen session — see
+    ``prescription_snapshot.py``) and must never be fabricated when Training
+    Paces confidence is INSUFFICIENT."""
 
 
 class WorkoutPrescription(BaseModel):
@@ -1250,6 +1284,8 @@ def _route_normal(
 # ---------------------------------------------------------------------------
 
 __all__ = [
+    "WorkoutStep",
+    "WorkoutStepPaceRange",
     "WorkoutPrescription",
     "WeeklyPlan",
     "build_weekly_plan",

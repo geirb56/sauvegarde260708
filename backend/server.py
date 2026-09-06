@@ -4323,12 +4323,21 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
         )
 
     def _step_response(step) -> WeekV2WorkoutStepResponse:
+        step_pace_range = (
+            WeekV2PaceRangeResponse(
+                lower_min_per_km=step.pace_range.lower_min_per_km,
+                upper_min_per_km=step.pace_range.upper_min_per_km,
+            )
+            if step.pace_range is not None
+            else None
+        )
         return WeekV2WorkoutStepResponse(
             kind=step.kind,
             repetitions=step.repetitions,
             distance_km=step.distance_km,
             duration_minutes=step.duration_minutes,
             pace_zone=step.pace_zone,
+            pace_range=step_pace_range,
         )
 
     def _session_response(se) -> WeekV2SessionResponse:

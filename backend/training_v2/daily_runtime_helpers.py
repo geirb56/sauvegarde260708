@@ -113,6 +113,28 @@ def runtime_session_to_prescription(session: dict) -> WorkoutPrescription:
     )
 
 
+def _step_to_runtime_dict(step) -> dict:
+    """C232 (correction, round 7) — serialize ONE WorkoutStep verbatim, the
+    same shape as server.py's `_step_response` (WeekV2WorkoutStepResponse),
+    so Today and Week transport the identical structural contract."""
+    pace_range = (
+        {
+            "lower_min_per_km": step.pace_range.lower_min_per_km,
+            "upper_min_per_km": step.pace_range.upper_min_per_km,
+        }
+        if step.pace_range is not None
+        else None
+    )
+    return {
+        "kind": step.kind,
+        "repetitions": step.repetitions,
+        "distance_km": step.distance_km,
+        "duration_minutes": step.duration_minutes,
+        "pace_zone": step.pace_zone,
+        "pace_range": pace_range,
+    }
+
+
 def prescription_to_runtime_session(prescription: WorkoutPrescription) -> dict:
     """Convert a WorkoutPrescription to runtime session dict format (frontend compat).
 
@@ -120,6 +142,19 @@ def prescription_to_runtime_session(prescription: WorkoutPrescription) -> dict:
     runtime sentinel for rest / no-duration sessions), and parse_duration_minutes
     converts '0min' back to None.  The round-trip None → '0min' → None is
     intentionally symmetric.  Callers must not infer a meaningful duration from '0min'.
+
+    C232 (correction, round 7 — BLOCKER FIX): the legacy keys below
+    ("type"/"duration"/"intensity"/"distance_km"/"estimated_tss") are kept
+    UNCHANGED for backward compatibility (Dashboard.jsx still reads them).
+    New CANONICAL keys are added ADDITIVELY so /training/today serves
+    EXACTLY the same prescription contract as /training/v2/week:
+    ``workout_type`` (raw, undecorated — never the runtime-mapped "type"),
+    ``duration_minutes`` (raw numeric, never a "55min" string), and
+    ``steps`` (verbatim, never fabricated). ``primary_pace`` is always
+    ``None`` here: Today's own day is never "strictly future" relative to
+    itself, so — exactly like /training/v2/week's freeze rule — no live
+    pace is ever resolved for it; a real numeric pace can only ever come
+    from a frozen step's ``pace_range`` inside ``steps`` above.
     """
     runtime_type = WORKOUT_TYPE_TO_RUNTIME_TYPE.get(prescription.workout_type, prescription.workout_type)
     runtime_intensity = INTENSITY_CLASS_TO_RUNTIME.get(prescription.intensity_class, "easy")
@@ -135,6 +170,11 @@ def prescription_to_runtime_session(prescription: WorkoutPrescription) -> dict:
         "intensity": runtime_intensity,
         "distance_km": prescription.distance_km if prescription.distance_km is not None else 0,
         "estimated_tss": None,
+        # Canonical fields (C232 correction, round 7) — same contract as Week.
+        "workout_type": prescription.workout_type,
+        "duration_minutes": prescription.duration_minutes,
+        "steps": [_step_to_runtime_dict(step) for step in prescription.steps],
+        "primary_pace": None,
     }
 
 

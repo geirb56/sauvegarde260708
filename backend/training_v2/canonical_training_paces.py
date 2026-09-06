@@ -46,6 +46,24 @@ from training_v2.training_paces import TrainingPaces, compute_training_paces
 # Matches the activity depth previously used by GET /training/v2/paces —
 # generous enough to reach historical HIGH performances used as fallback
 # evidence, bounded to avoid unbounded memory use.
+#
+# C232 (correction, round 7) — KNOWN, HONESTLY DOCUMENTED LIMITATION: this is
+# a COUNT-based cutoff (most-recent 500 rows), not a calendar-date window,
+# but it is still a cutoff. `training_paces.py`'s own policy states
+# "HIGH_HISTORICAL_NEVER_EXPIRES = YES" with no stated volume ceiling. For a
+# very high-volume user who has logged 500+ activities since their last
+# qualifying HIGH-confidence performance, that historical evidence would fall
+# outside this query and could not be found — silently violating the
+# never-expires guarantee for that user only. This limit is INHERITED
+# UNCHANGED from the pre-PR232 `/training/v2/paces` endpoint (not introduced
+# by this correction) and both V2 consumers now agree on it, so the
+# Today/Week HIGH-never-expires guarantee is at least CONSISTENT across
+# endpoints. Actually removing this residual gap needs either loading full
+# history (memory/latency tradeoff) or a dedicated "qualifying performances"
+# index/store that survives regardless of recent volume — a Training Paces
+# engine change, out of scope for this Training UX correction. See
+# RUNINDEX_PR232_REPORT.md, "CORRECTION C232 — round 7" for the explicit
+# limitation note.
 CANONICAL_ACTIVITY_LOAD_LIMIT: int = 500
 
 
