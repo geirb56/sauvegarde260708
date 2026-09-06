@@ -736,6 +736,83 @@ segment purely from `workout_type` in the display layer, and that this logic
 has been completely removed (rounds 1–2) and stays removed (reconfirmed
 rounds 3–5).
 
-C232
+## CORRECTION C232 — round 6 (re-audit: same three blockers, reconfirmed fixed)
 
+A sixth audit pass restated, in near-identical terms to round 5, the same
+three blockers: (1) fabricated splits/paces in the display layer, (2) a
+served prescription that must stay immutable, (3) a Training Paces call
+path that must not add its own 90-day cutoff. Each was re-verified against
+the CURRENT code, not from memory or from the report itself:
+
+1. **No fabricated splits/paces.** `backend/training_v2/session_structure.py`
+   was re-read end to end and a repo-wide grep was re-run for
+   `_QUALITY_WARMUP_KM`, `_QUALITY_REP_LENGTH_KM`, `_QUALITY_RECOVERY_MINUTES`,
+   and `marathon_pace` — zero matches anywhere outside this report's own
+   historical narration of the original bug. `resolve_session_pace_zone()`
+   still only maps `easy`/`recovery`/`long_easy` to the single Easy-pace
+   zone (the literal, undisputed meaning of those categories — not an
+   invented decomposition) and returns `None` for `quality`/`steady`/`rest`.
+   `WorkoutPrescription.steps` (the round-4 contract) stays `()` for every
+   session today; no engine populates it, so the API and UI still expose
+   `steps: []` everywhere, never a fabricated `3 × 2 km` or marathon-pace
+   segment. Re-verified passing: `test_week_sessions_expose_primary_pace_
+   field_without_fabricated_blocks`, `test_week_sessions_have_no_fabricated_
+   steps_today` (mandatory tests A/B).
+
+2. **Served prescription stays immutable.** `_session_response()` in
+   `server.py` still resolves `primary_pace` only for a strictly-future
+   session (`planned_date > reference_date`); every today-or-past session is
+   backed by the frozen, insert-only `PrescriptionSnapshot`, which carries no
+   pace/blocks field, so it always renders `primary_pace=None` and
+   `steps=[]` — nothing is ever recomputed from today's Garmin data for an
+   already-served day. Re-verified passing:
+   `test_frozen_session_pace_is_never_recomputed_from_live_paces` (replays
+   the same frozen Monday session under a later `reference_date` with a
+   deliberately much-faster new Garmin activity and asserts the pace and
+   frozen fields are unchanged — mandatory test C) and
+   `test_prescription_unavailable_session_has_no_steps`/`test_prescription_
+   unavailable_session_has_no_pace_zone` (an old snapshot with no pace/blocks
+   renders as neutral/unknown, never reconstructed — mandatory test D).
+
+3. **Training Paces — single canonical call path.** `/training/v2/week` and
+   `/training/v2/paces` both still call the same
+   `training_v2.canonical_training_paces.load_canonical_training_paces(...)`
+   helper with the same `reference_date` and `user_max_hr=None`; no local
+   90-day (or any other) truncation window is layered on top by the week
+   endpoint. Re-verified passing:
+   `test_paces_and_week_agree_when_last_high_performance_is_over_90_days_old`
+   (an old HIGH-confidence performance beyond 90 days is honoured
+   identically by both endpoints — mandatory test F) and
+   `test_paces_no_lookahead_future_activity_has_no_effect` (no-lookahead
+   holds — mandatory test E).
+
+No production code was changed this round: the three blockers were already
+fixed by rounds 1, 2, and 4, and every mandatory test (A–G) already existed
+and was re-run green. Point G's full preservation checklist (week km, modern
+cards, expansion, Garmin actual, unmatched_actuals, metric/imperial with no
+forced `/km`, `prescription_unavailable`, ambiguous, `None != 0`, zero manual
+feedback) is untouched and still covered by the existing test suite.
+
+### Full re-validation after this round
+
+- Backend targeted sweep (`test_pr232a_c231_week_endpoint.py`,
+  `test_pr232a_week_execution.py`, `test_pr232a_prescription_snapshot.py`,
+  `test_pr232_session_structure.py`, `test_workout_generator_v2.py`,
+  `test_performed_workout_pr230.py`, `test_pr231_c231_corrections2.py`,
+  `test_pr232a_local_reference_date.py`) — **270/270 pass**, no changes.
+- Frontend `training-v2-page.test.jsx` — **40/40 pass**, no changes.
+- `npm run build` — **compiles successfully**, no changes.
+- 0 fail imputable to this PR's changes.
+
+### Status
+
+**NOT MERGED**, per explicit instruction. #233/#234/#235/#236 were not
+touched. No new physiological/structural decision logic was added anywhere
+to "make the visual work" — `session_structure.py` and
+`workout_generator.py` are unchanged since round 4. If/when real splits are
+needed, the documented gap remains: a dedicated Structured Workout
+Prescription layer in the Training Engine (real structure → served snapshot
+→ API → UI), not a second engine hidden inside the display layer.
+
+C232
 
