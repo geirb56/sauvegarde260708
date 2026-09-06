@@ -1158,4 +1158,99 @@ V1 gap (real quality-subtype/long-run splits) remains explicitly open and
 out of scope; it needs its own dedicated PR in the Training Engine, before
 snapshot/API/UI, per the audit's own instruction.
 
+## CORRECTION C232 — round 9 (re-audit: same two blockers, reconfirmed already fixed, no code change)
+
+A ninth audit pass restated, in near-identical terms to rounds 1/5/6/8, the
+same two blockers: (1) `session_structure.py` allegedly fabricating a
+`quality` session into `2 km warmup + 3×2 km @ threshold + 2 min recovery +
+1 km cooldown` and a `long_easy ≥15 km` into a `65/20/15` easy/marathon/easy
+split; (2) `/training/v2/week`'s Training Paces computation allegedly using
+only a 90-day-windowed activity list, silently dropping a still-valid
+LOW-fallback HIGH-historical performance older than 90 days. Both were
+re-verified against the CURRENT code, not from memory or from this report:
+
+1. **No fabricated splits.** `backend/training_v2/session_structure.py` was
+   re-read end to end (unchanged since round 1) and re-grepped repo-wide for
+   the exact patterns named in the audit — `2 km` warmup constants, a `3 ×`
+   repetition constant, a fixed `2 min`/`2 minutes` recovery constant, any
+   `0.65`/`65%`/`0.20`/`20%`/`0.15`/`15%` long-run fraction, and any
+   `marathon` pace attached inside a `long_easy` branch — zero matches
+   anywhere in production code. `resolve_session_pace_zone()` still only
+   ever returns, for `easy`/`recovery`/`long_easy`, the single literal
+   whole-session Easy pace zone, and `None` for `quality`/`steady`/`rest` —
+   never a repetition count, split, warmup/cooldown decomposition, or
+   recovery duration. `SessionSteps` in `TrainingPlanV2.jsx` still only ever
+   renders `session.steps` verbatim (empty today for every session, since
+   `WorkoutGenerator` does not populate step-level structure) and never
+   derives anything from `workout_type`. This blocker, as literally
+   described, does not exist on this HEAD.
+
+2. **Training Paces 90-day window.** Re-read `server.py`'s
+   `get_training_v2_week` handler end to end: the 90-day-windowed
+   `domain_activities_90` list (built from `ninety_days_ago = now_utc -
+   timedelta(days=90)`) is used ONLY to feed `build_canonical_weekly_plan()`
+   (plan construction / weekly reconciliation) and `resolve_today_final_
+   prescription()` (DailyAdaptation) — never to compute Training Paces. The
+   Training Paces actually returned in the Week response
+   (`training_paces_v2`) is loaded via
+   `training_v2.canonical_training_paces.load_canonical_training_paces()`,
+   the SAME function `/training/v2/paces` calls, which queries the
+   most-recent 500 `garmin_activities` rows with NO calendar-date filter at
+   all (see that module's docstring) — so a HIGH-quality performance older
+   than 90 days, still selectable as a LOW-confidence fallback per
+   `training_paces.py`'s own no-lookahead policy, is never silently dropped
+   by a 90-day cutoff. This was already fixed in round 6 (`git blame`
+   confirms `canonical_training_paces.py` and its two call sites predate
+   this round) and remains correct; the mandatory test for this exact
+   scenario (`test_paces_and_week_agree_when_last_high_performance_is_over_
+   90_days_old`, mandatory test E) already exists and passes.
+
+### Mandatory tests A–G: all already present and passing
+
+| Test | Coverage | Location |
+|---|---|---|
+| A. `quality` 9 km → no fabricated 3×2 / threshold pace | `test("C232 (correction): a quality session never renders a fabricated pace or split structure")` | `training-v2-page.test.jsx` |
+| B. `long_easy` 18 km → no 65/20/15 / marathon segment | `test("C232 (correction): an easy/long_easy session shows only the honest whole-session pace zone, never a fabricated split")` | `training-v2-page.test.jsx` |
+| C. old snapshot → no reconstructed blocks | `test_old_snapshot_without_steps_field_defaults_to_empty_tuple`, `test_resolve_effective_session_never_reconstructs_steps_from_live_plan` | `test_pr232a_prescription_snapshot.py` |
+| D. INSUFFICIENT paces → no pace | `test_paces_no_lookahead_...` family + frontend `pacesData({ confidence: "INSUFFICIENT" })` cases | `test_pr232a_c231_week_endpoint.py`, `training-v2-page.test.jsx` |
+| E. HIGH >90j still LOW fallback → Week/Paces agree | `test_paces_and_week_agree_when_last_high_performance_is_over_90_days_old` | `test_pr232a_c231_week_endpoint.py` |
+| F. imperial → no `/km` | `test("PR232: imperial unit system never shows a /km suffix on any pace, including splits and week paces")` + round-8 `pace_range` variant | `training-v2-page.test.jsx` |
+| G. PR230/#231 statuses unchanged | Full `matching_status`/`adherence_status`/`execution_status` test set (unmodified since #231) | `training-v2-page.test.jsx`, `test_pr232a_c231_week_endpoint.py` |
+
+No test or production code needed to change this round — all seven
+mandatory scenarios were already covered by rounds 1–8's test suites.
+
+### Explicit acknowledgment (per this round's instruction)
+
+Structured splits are intentionally not fabricated. Exact workout structure
+requires a dedicated canonical Structured Workout Prescription V2 engine PR.
+
+(Earlier rounds of this same report refer to the same future engine PR as
+"Structured Workout Prescription V1" — the name is free per every round's
+own instruction ["nom libre"]; both labels refer to the identical,
+still-unbuilt, dedicated Training Engine layer that must decide warmup /
+blocks / repetitions / rep distance-or-duration / recovery / cooldown /
+pace zone from explicit product/physiology rules, and whose output must
+then be part of the SERVED prescription and #231's `PrescriptionSnapshot`
+— never reconstructed after the fact from a snapshot that only recorded
+distance/type.)
+
+### Validation
+
+- Backend targeted sweep (`prescription_snapshot`, `daily_adaptation`,
+  `daily_runtime`, `week_endpoint`, `week_execution`) — **131/131 pass**, no
+  code change.
+- Frontend `training-v2-page.test.jsx` — **42/42 pass**, no code change.
+
+### Status
+
+**NOT MERGED**, per explicit instruction. #233 not started. #231
+(`training_v2/prescription_snapshot.py`) not modified this round — its
+existing `steps` freeze mechanism (round 7) already satisfies this round's
+"snapshot" requirement (item 4): a future Structured Workout Prescription
+V2 engine's blocks would flow through the SAME `WorkoutPrescription.steps`
+→ `PrescriptionSnapshot.steps` freeze path already built, with zero further
+snapshot-layer change required. No production code was changed this round;
+this is a documentation-only re-confirmation.
+
 C232
