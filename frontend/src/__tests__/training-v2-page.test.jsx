@@ -376,6 +376,29 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     jest.useRealTimers();
   });
 
+  test("C232 (correction round 8, test I): the reverse UTC direction also stays pinned to the backend reference_date — browser clock BEHIND the backend's day", async () => {
+    // Mirror of the round-3 test above, but in the OTHER direction: the
+    // browser's own clock still thinks it is Thursday 2026-09-03 (e.g. a
+    // device with a large negative UTC offset just before its own local
+    // midnight), while the backend's canonical reference_date already
+    // says Friday 2026-09-04. "Today" must be Friday, never Thursday.
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date("2026-09-03T23:45:00Z"));
+
+    const fridayWeek = weekData();
+    fridayWeek.reference_date = "2026-09-04";
+    mockAxios({ week: fridayWeek });
+    renderPage({ width: 390 });
+
+    const week = await screen.findByTestId("training-v2-week");
+    const fridayRow = within(week).getByTestId("training-v2-day-friday");
+    expect(within(fridayRow).getByTestId("today-highlight-badge")).toBeInTheDocument();
+    const thursdayRow = within(week).getByTestId("training-v2-day-thursday");
+    expect(within(thursdayRow).queryByTestId("today-highlight-badge")).not.toBeInTheDocument();
+
+    jest.useRealTimers();
+  });
+
   test("never calls the legacy /training/feedback endpoint", async () => {
     mockAxios();
     renderPage();
@@ -759,6 +782,29 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     const wednesdayRow = within(week).getByTestId("training-v2-day-wednesday");
     const stepMetric = within(wednesdayRow).getByTestId("session-step-0-metric");
     expect(stepMetric.textContent).toContain(formatDistance(2, { unitSystem: "imperial" }));
+    expect(stepMetric.textContent).not.toMatch(/\/km/);
+  });
+
+  test("C232 (correction round 8, test J): imperial unit system converts a step's NUMERIC frozen pace_range (not just the pace_zone label) to /mile, never /km", async () => {
+    const structuredWeek = weekData();
+    structuredWeek.week.sessions[2] = {
+      ...structuredWeek.week.sessions[2],
+      steps: [
+        {
+          kind: "work", repetitions: 3, distance_km: 2, duration_minutes: null,
+          pace_zone: "threshold",
+          pace_range: { lower_min_per_km: 5.1667, upper_min_per_km: 5.25 },
+        },
+      ],
+    };
+    mockAxios({ week: structuredWeek });
+    renderPage({ width: 390, unitSystem: "imperial" });
+
+    const week = await screen.findByTestId("training-v2-week");
+    fireEvent.click(within(week).getByTestId("training-v2-day-toggle-wednesday"));
+    const wednesdayRow = within(week).getByTestId("training-v2-day-wednesday");
+    const stepMetric = within(wednesdayRow).getByTestId("session-step-0-metric");
+    expect(stepMetric.textContent).toMatch(/\/mi/);
     expect(stepMetric.textContent).not.toMatch(/\/km/);
   });
 

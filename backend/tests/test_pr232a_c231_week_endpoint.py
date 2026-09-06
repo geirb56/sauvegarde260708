@@ -481,10 +481,10 @@ async def test_explicit_engine_steps_are_reproduced_verbatim_by_the_api():
     sessions = result["body"]["week"]["sessions"]
     target_session = next(s for s in sessions if s["day"] != "monday" and s["steps"])
     assert target_session["steps"] == [
-        {"kind": "warmup", "repetitions": None, "distance_km": 2.0, "duration_minutes": None, "pace_zone": "easy", "pace_range": None},
-        {"kind": "work", "repetitions": 3, "distance_km": 2.0, "duration_minutes": None, "pace_zone": "threshold", "pace_range": None},
-        {"kind": "recovery", "repetitions": None, "distance_km": None, "duration_minutes": 2.0, "pace_zone": None, "pace_range": None},
-        {"kind": "cooldown", "repetitions": None, "distance_km": 1.0, "duration_minutes": None, "pace_zone": "easy", "pace_range": None},
+        {"kind": "warmup", "repetitions": None, "distance_km": 2.0, "duration_minutes": None, "pace_zone": "easy", "pace_range": None, "reason_codes": []},
+        {"kind": "work", "repetitions": 3, "distance_km": 2.0, "duration_minutes": None, "pace_zone": "threshold", "pace_range": None, "reason_codes": []},
+        {"kind": "recovery", "repetitions": None, "distance_km": None, "duration_minutes": 2.0, "pace_zone": None, "pace_range": None, "reason_codes": []},
+        {"kind": "cooldown", "repetitions": None, "distance_km": 1.0, "duration_minutes": None, "pace_zone": "easy", "pace_range": None, "reason_codes": []},
     ]
 
     # No other session was affected — everything else stays steps=[].
@@ -629,6 +629,44 @@ async def test_paces_and_week_agree_when_last_high_performance_is_over_90_days_o
         )
         assert session["primary_pace"]["upper_min_per_km"] == pytest.approx(
             paces_body["paces"]["easy"]["upper"]["min_per_km"]
+        )
+
+
+@pytest.mark.asyncio
+async def test_paces_and_week_agree_when_garmin_temporarily_disconnected():
+    # C232 (correction, round 8) — test G of the mandatory list: a user
+    # whose Garmin account is currently marked NOT connected, but who has
+    # historical activities already persisted in `garmin_activities`, must
+    # still get Training Paces from BOTH endpoints. `load_canonical_training_
+    # paces()` never reads `garmin_connections` at all (see
+    # canonical_training_paces.py) — the live-connection flag only gates a
+    # SEPARATE daily-metrics fetch used by DailyAdaptation, never the
+    # Training Paces history query.
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    _seed_connected(fake_db, connected=False)
+    _seed_benchmark_pool(fake_db, _MONDAY)
+    _seed_stale_high_performance(fake_db, _MONDAY, days_ago=200)
+
+    paces_result = await _get_paces(fake_db)
+    week_result = await _get_week(fake_db)
+    assert paces_result["status"] == 200, paces_result["body"]
+    assert week_result["status"] == 200, week_result["body"]
+
+    paces_body = paces_result["body"]
+    assert paces_body["confidence"] != "INSUFFICIENT"
+    assert paces_body["paces"]["easy"] is not None
+
+    easy_sessions = [
+        s for s in week_result["body"]["week"]["sessions"]
+        if s["workout_type"] in ("easy", "recovery", "long_easy")
+        and s["planned_date"] > _MONDAY.isoformat()
+    ]
+    assert easy_sessions, "expected at least one future easy/recovery/long_easy session"
+    for session in easy_sessions:
+        assert session["primary_pace"] is not None
+        assert session["primary_pace"]["lower_min_per_km"] == pytest.approx(
+            paces_body["paces"]["easy"]["lower"]["min_per_km"]
         )
 
 
@@ -871,9 +909,9 @@ async def test_today_snapshots_explicit_steps_verbatim():
     assert result["status"] == 200, result["body"]
     served_steps = result["body"]["served_prescription"]["steps"]
     assert served_steps == [
-        {"kind": "warmup", "repetitions": None, "distance_km": 2.0, "duration_minutes": None, "pace_zone": "easy", "pace_range": None},
-        {"kind": "work", "repetitions": 3, "distance_km": 2.0, "duration_minutes": None, "pace_zone": "threshold", "pace_range": None},
-        {"kind": "cooldown", "repetitions": None, "distance_km": 1.0, "duration_minutes": None, "pace_zone": "easy", "pace_range": None},
+        {"kind": "warmup", "repetitions": None, "distance_km": 2.0, "duration_minutes": None, "pace_zone": "easy", "pace_range": None, "reason_codes": []},
+        {"kind": "work", "repetitions": 3, "distance_km": 2.0, "duration_minutes": None, "pace_zone": "threshold", "pace_range": None, "reason_codes": []},
+        {"kind": "cooldown", "repetitions": None, "distance_km": 1.0, "duration_minutes": None, "pace_zone": "easy", "pace_range": None, "reason_codes": []},
     ]
 
 
@@ -971,7 +1009,7 @@ async def test_replay_later_day_reproduces_exact_same_frozen_steps():
 
     monday_session = next(s for s in later["body"]["week"]["sessions"] if s["day"] == "monday")
     assert monday_session["steps"] == [
-        {"kind": "warmup", "repetitions": None, "distance_km": 2.0, "duration_minutes": None, "pace_zone": "easy", "pace_range": None},
-        {"kind": "work", "repetitions": 3, "distance_km": 2.0, "duration_minutes": None, "pace_zone": "threshold", "pace_range": None},
-        {"kind": "cooldown", "repetitions": None, "distance_km": 1.0, "duration_minutes": None, "pace_zone": "easy", "pace_range": None},
+        {"kind": "warmup", "repetitions": None, "distance_km": 2.0, "duration_minutes": None, "pace_zone": "easy", "pace_range": None, "reason_codes": []},
+        {"kind": "work", "repetitions": 3, "distance_km": 2.0, "duration_minutes": None, "pace_zone": "threshold", "pace_range": None, "reason_codes": []},
+        {"kind": "cooldown", "repetitions": None, "distance_km": 1.0, "duration_minutes": None, "pace_zone": "easy", "pace_range": None, "reason_codes": []},
     ]

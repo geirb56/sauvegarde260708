@@ -457,8 +457,8 @@ def test_Y_runtime_session_carries_steps_verbatim():
     original = _wp("quality", distance_km=9.0, duration_minutes=50, steps=steps)
     runtime = prescription_to_runtime_session(original)
     assert runtime["steps"] == [
-        {"kind": "warmup", "repetitions": None, "distance_km": 2.0, "duration_minutes": None, "pace_zone": "easy", "pace_range": None},
-        {"kind": "work", "repetitions": 3, "distance_km": 2.0, "duration_minutes": None, "pace_zone": "threshold", "pace_range": None},
+        {"kind": "warmup", "repetitions": None, "distance_km": 2.0, "duration_minutes": None, "pace_zone": "easy", "pace_range": None, "reason_codes": []},
+        {"kind": "work", "repetitions": 3, "distance_km": 2.0, "duration_minutes": None, "pace_zone": "threshold", "pace_range": None, "reason_codes": []},
     ]
 
 

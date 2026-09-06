@@ -1011,4 +1011,151 @@ is unchanged, and the new `pace_range` field remains unpopulated by any
 engine. The Structured Workout Prescription V1 gap (real splits) remains
 open and explicitly out of scope, per instruction.
 
+## CORRECTION C232 — round 8 (P0 fabrication re-audit + architecture items 1–9)
+
+An eighth audit pass restated the P0 fabrication blocker (session_structure.py
+allegedly inventing "3×2 km @ threshold" / "65/20/15 long-run" splits) and
+asked for a full architecture pass (canonical structured-prescription model,
+the quality-subtype decision, long-run structure, snapshot freeze of
+structure, old-snapshot honesty, future-mutability, `/training/v2/paces` vs
+`/training/v2/week` parity, the frontend date bug, and week-progress
+semantics), plus 11 mandatory tests (A–K).
+
+### P0 re-audit finding: NOT reproduced on the current HEAD
+
+`session_structure.py` was re-read end to end and re-grepped for the exact
+fabrication patterns named in the audit (`3 ×`/`_QUALITY_WARMUP_KM`,
+`_QUALITY_REP_LENGTH_KM`, `_QUALITY_RECOVERY_MINUTES`, `65/20/15`,
+`marathon_pace` fractions) — zero matches. That module was already
+corrected (round 1) to resolve, at most, a single whole-session pace ZONE
+for `easy`/`recovery`/`long_easy`, and to return `None` (no pace, no split)
+for `quality` — never a repetition count, warmup/cooldown decomposition, or
+recovery duration. `SessionSteps` in `TrainingPlanV2.jsx` only ever renders
+`session.steps` verbatim (always `[]` today, since no engine populates it)
+and never derives a structure from `workout_type`. This blocker, as
+literally described (splits invented "as PRESCRIBED" from `workout_type`
+alone), does not exist on this HEAD; no regression was found either.
+
+### Items 1–3 — canonical structured-prescription model / quality subtype / long run
+
+The canonical model asked for here (`kind` / `repetitions` / `distance_km` /
+`duration_minutes` / `pace_type` / resolved pace range / `reason_codes`)
+**already exists**, introduced across rounds 4 and 7:
+`training_v2.workout_generator.WorkoutStep` (`kind`, `repetitions`,
+`distance_km`, `duration_minutes`, `pace_zone` — playing the role of
+`pace_type` — and `pace_range`), attached to `WorkoutPrescription.steps`,
+frozen verbatim by `PrescriptionSnapshot.steps` (round 7), and served
+identically to Today and Week. This round adds the one genuinely missing
+field: `WorkoutStep.reason_codes: tuple[str, ...] = ()`, wired additively
+through `WeekV2WorkoutStepResponse.reason_codes` and Today's
+`_step_to_runtime_dict()` — always `[]` today, exactly like every other step
+field, since no engine populates step-level structure yet.
+
+**The quality-subtype decision (option A: threshold vs. interval vs. tempo)
+and the long-run progression are STILL NOT MADE.** This is not a new
+finding — it is the same gap already reported in round 7
+("Structured Workout Prescription engine missing") — re-verified true on
+this HEAD: `WorkoutGenerator`'s own docstring still states it does not
+decide `quality`'s exact nature, and a repo-wide grep for any deterministic
+threshold/interval/tempo classifier or a 65/20/15-style long-run split
+function again found none. Per the audit's own instruction ("SI AUCUNE
+N'EXISTE : STOP... proposer une PR dédiée : STRUCTURED WORKOUT PRESCRIPTION
+V1"), option B is reconfirmed as the only honest choice: `session_structure.py`
+keeps resolving nothing beyond the literal whole-session Easy pace zone, and
+no new physiological rule (rep length, recovery duration, warmup/cooldown
+distance, or a marathon-pace fraction of a long run) was invented in this
+round either. A real Structured Workout Prescription V1 — a dedicated
+Training Engine layer that decides these from explicit, validated
+product/physiology rules, landing BEFORE snapshot/API/UI — remains the
+correct next PR, out of scope here.
+
+### Items 4–6 — snapshot freeze / old snapshots / future mutability: already correct (round 7)
+
+- **Freeze**: `PrescriptionSnapshot.steps` persists `WorkoutPrescription.steps`
+  verbatim (`snapshot_from_prescription`); `resolve_effective_session()`
+  reconstructs `steps` ONLY from the frozen snapshot, never from the live
+  plan, once frozen (`prescription_snapshot.py`).
+- **Old snapshots**: a `PrescriptionSnapshot` built before this field existed
+  deserializes with `steps=()` (Pydantic default) — never backfilled or
+  reconstructed from today's live plan/paces
+  (`test_old_snapshot_without_steps_field_defaults_to_empty_tuple`).
+- **Future mutability**: `resolve_effective_session()` returns the live
+  session verbatim when no snapshot exists yet
+  (`test_resolve_effective_session_without_snapshot_returns_live`) — a
+  strictly-future session's structure can still change until the day it is
+  actually served and frozen.
+
+No code change was needed for items 4–6 this round; re-verified only.
+
+### Item 7 — `/training/v2/paces` vs. `/training/v2/week` parity: already correct (round 6)
+
+Both endpoints call the single `training_v2.canonical_training_paces.
+load_canonical_training_paces()` with the same canonical `reference_date`
+(`_resolve_canonical_reference_date`). That loader never reads
+`garmin_connections` at all — the connected/disconnected flag only gates a
+*different*, unrelated fetch (`garmin_daily_metrics`, used by
+`DailyAdaptation` inside the Week/Today freeze path), never the Training
+Paces activity history query. **New test this round**
+(`test_paces_and_week_agree_when_garmin_temporarily_disconnected`,
+mandatory test G) proves both endpoints still return usable paces for a
+user whose Garmin connection is currently marked `connected: false` but who
+has historical `garmin_activities` already persisted.
+
+### Item 8 — frontend date bug: already correct (round 3)
+
+`getTodayDayKey()` derives "Today" exclusively from
+`weekData.reference_date` (preferring an exact `planned_date` match, falling
+back to a UTC-safe manual ISO-date parse) and explicitly never falls back to
+`new Date().getDay()`/the browser clock — confirmed by the existing round-3
+tests plus a **new reverse-direction test this round** (mandatory test I):
+browser clock pinned to Thursday 23:45 UTC while the backend's
+`reference_date` already says Friday — "Today" stays Friday.
+
+### Item 9 — week progress semantics: already correct (round 2)
+
+`WeekSummaryCard` already computes two named, non-conflated numbers: plan
+completion (`completedKmSum`, matched sessions' `actual.distance_km` only)
+vs. real Garmin volume this week (`realVolumeKmSum` = matched + distinct
+`unmatched_actuals`, shown separately, never labelled "progress").
+
+### New tests added this round
+
+- Backend: `test_paces_and_week_agree_when_garmin_temporarily_disconnected`
+  (`test_pr232a_c231_week_endpoint.py`) — mandatory test G.
+- Backend: `WorkoutStep.reason_codes` round-trips through every existing
+  steps-copy/freeze/replay test (additive field, default `()`, so all
+  pre-existing steps tests keep proving byte-for-byte preservation without
+  modification other than updated expected-dict fixtures).
+- Frontend: reverse-direction UTC test (`training-v2-page.test.jsx`) —
+  mandatory test I (complements round 3's forward-direction test).
+- Frontend: numeric `pace_range` (not just `pace_zone`) imperial-conversion
+  test on a step — mandatory test J, closing the one sub-case (a step's
+  FROZEN numeric pace, as opposed to its semantic zone label) not
+  previously exercised in imperial mode.
+
+### Validation
+
+- Backend targeted sweep (`prescription_snapshot`, `daily_adaptation`,
+  `daily_runtime`, `week_endpoint`, `week_execution`) — **130/130 pass**.
+- Backend broader sweep (`pr228`/`pr230`/`pr231`/`pr232`/`workout_generator`/
+  `training_paces`/`canonical` keyword match) — all failures traced to
+  pre-existing shared-rate-limiter test-order artifacts (pass individually
+  in isolation) or pre-existing unrelated collection errors
+  (`test_sse.py`, `test_pr153_fallback_no_unvalidated_tss.py`,
+  `test_subscription_trial.py` — none touch `training_v2`); **zero
+  regressions attributable to this round**.
+- Frontend `training-v2-page.test.jsx` — **42/42 pass**.
+- `npm run build` — **compiles successfully**.
+
+### Status
+
+**NOT MERGED**, per explicit instruction. #233+ not touched. This round's
+only production change is the additive `WorkoutStep.reason_codes` field
+(and its plumbing into the two response layers) — no new
+physiological/structural decision logic anywhere, no change to
+`session_structure.py`'s honesty policy. The Structured Workout Prescription
+V1 gap (real quality-subtype/long-run splits) remains explicitly open and
+out of scope; it needs its own dedicated PR in the Training Engine, before
+snapshot/API/UI, per the audit's own instruction.
+
 C232
