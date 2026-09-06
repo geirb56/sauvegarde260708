@@ -1253,4 +1253,98 @@ V2 engine's blocks would flow through the SAME `WorkoutPrescription.steps`
 snapshot-layer change required. No production code was changed this round;
 this is a documentation-only re-confirmation.
 
+## CORRECTION C232 — round 10 (re-audit: same three blockers restated, all reconfirmed already fixed)
+
+Base: `copilot/dev` = `4f0be2d03e45ee7a594d97ec7b2d440ea23027e6`.
+Audited HEAD given this round: `f700f2917be9b1f517eeb7604c6d8ab9ea9955bd`.
+Local HEAD at start of this round: `fa8e1f5` (round 9's report-only commit) —
+no drift detected against the audited HEAD's claims; all three restated
+blockers were re-verified directly against the current code, not against
+this report's prior wording.
+
+### Blocker 1 — "splits are invented" (`session_structure.py`)
+
+Re-read `backend/training_v2/session_structure.py` in full. It still
+contains ONLY `resolve_session_pace_zone()`, returning a single honest
+whole-session pace **zone** (`paces.easy`) for `easy` / `recovery` /
+`long_easy`, and `None` for `quality` / `steady` / `rest` / anything else.
+There is no warmup/cooldown synthesis, no `N × ~2 km` repetition synthesis,
+no `65/20/15` long-run progression synthesis, and no automatic
+`quality → threshold` classification anywhere in this module or in the
+`_session_response()` presenter (`backend/server.py`). Fixed since round 1;
+re-confirmed clean this round (test coverage: frontend tests "a quality
+session never renders a fabricated pace or split structure" and "an
+easy/long_easy session shows only the honest whole-session pace zone,
+never a fabricated split", plus round 3's steps-passthrough tests).
+
+### Blocker 2 (item 5) — Training Paces truncated to 90 days
+
+Re-read `backend/server.py` around the Week endpoint's paces resolution and
+`backend/training_v2/canonical_training_paces.py`. `/training/v2/week`
+still resolves `training_paces_v2` via
+`await load_canonical_training_paces(...)` — the SAME unbounded
+(no 90-day calendar filter, up to 500 activities) loader used by
+`/training/v2/paces`. The 90-day-windowed `domain_activities_90` list is
+used ONLY for plan-building (`build_canonical_weekly_plan`, weekly
+reconciliation, DailyAdaptation) — never for Training Paces. This
+single-source-of-truth wiring (fixed since round 2) means Week and
+`/training/paces` are guaranteed to agree for the same user/reference_date/
+history, including HIGH-confidence performances older than 90 days.
+Re-confirmed clean this round; no code change required.
+
+### Blocker 3 (item 6) — "history immutable" / retroactive block+pace rewrite
+
+Re-read `backend/training_v2/prescription_snapshot.py` (freeze-once,
+insert-only `PrescriptionSnapshot.steps`) and `backend/server.py`'s
+`_session_response()`. Confirmed again, directly against current code:
+- `is_frozen_or_past = se.planned_date <= reference_date` → when true,
+  `primary_pace` is unconditionally `None` (never resolved from live
+  paces); only a strictly-future session gets a live-resolved
+  `primary_pace`.
+- Rendered `steps` come from the *effective* session
+  (`se.session.steps`), which for a frozen/past day is the persisted,
+  insert-only `PrescriptionSnapshot.steps` — never reconstructed from the
+  live/current plan or current paces.
+- A pre-#231/pre-freeze legacy snapshot with no recorded steps stays an
+  empty `steps=[]` / `primary_pace=None` (`prescription_unavailable`-style
+  neutral display) rather than being backfilled from current paces.
+
+This is exactly the immutability contract this round restates (fixed in
+round 7, re-confirmed in rounds 8/9, re-confirmed again here with a fresh
+read of the same three code paths). No code change required.
+
+### Mandatory tests A–J — coverage re-confirmed (no gaps found)
+
+| Item | Scenario | Existing test |
+|---|---|---|
+| A | generic `quality`, no canonical structure → never silently threshold/3×2km | `training-v2-page.test.jsx`: "a quality session never renders a fabricated pace or split structure" |
+| B | `long_easy` 18 km, no explicit progression → never 65/20/15 | `training-v2-page.test.jsx`: "an easy/long_easy session shows only the honest whole-session pace zone, never a fabricated split" |
+| C | historical HIGH performance >90 days admissible → Week ≡ Training Paces engine | `test_pr232a_c231_week_endpoint.py` (`_seed_stale_high_performance`); `canonical_training_paces` unbounded-loader wiring |
+| D | insufficient paces → no invented pace | `test_pr232a_c231_week_endpoint.py` / `test_daily_runtime_pr137.py` INSUFFICIENT-path cases |
+| E | snapshot created with a structure/pace; later new Garmin activity arrives → historical structure/pace unchanged | `test_pr232a_c231_week_endpoint.py::test_frozen_session_pace_is_never_recomputed_from_live_paces`, `::test_replay_later_day_reproduces_exact_same_frozen_steps` |
+| F | old snapshot without structure → no retroactive reconstruction | `test_pr232a_prescription_snapshot.py::test_resolve_effective_session_never_reconstructs_steps_from_live_plan` |
+| G | future session may follow current plan, but no-lookahead enforced | `test_pr232a_c231_week_endpoint.py` future-session cases; `test_daily_adaptation_pr133.py` |
+| H | Today and Week show the same served prescription | `test_pr232a_c231_week_endpoint.py` Today/Week parity cases (round 7) |
+| I | imperial → zero `/km` | `training-v2-page.test.jsx`: "imperial unit system never shows a /km suffix on any pace, including splits and week paces", "converts a step's NUMERIC frozen pace_range ... /mile, never /km" |
+| J | `prescription_unavailable` → no blocks/pace | `training-v2-page.test.jsx`: "prescription_unavailable session never renders blocks or a primary pace" |
+
+All ten items already have dedicated, passing coverage from prior rounds.
+No new test was needed.
+
+### Validation
+
+- Backend targeted sweep (`prescription_snapshot`, `daily_adaptation`,
+  `daily_runtime`, `week_endpoint`, `week_execution`) — **131/131 pass**, no
+  code change.
+- Frontend `training-v2-page.test.jsx` — **42/42 pass**, no code change.
+- Frontend production build (`npm run build`) — succeeds, no code change.
+
+### Status
+
+**NOT MERGED**, per explicit instruction. #233/#234/#235/#236, PR230
+matching, and manual feedback untouched. No production or test code was
+changed this round — all three restated blockers were re-verified directly
+against current code and remain fixed from rounds 1/2/7. This round is a
+documentation-only re-confirmation.
+
 C232
