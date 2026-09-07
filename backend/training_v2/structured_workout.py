@@ -185,6 +185,19 @@ _MIN_WORK_S_FOR_INTERVALS: float = 360.0
 
 
 class StructuredStepType(str, Enum):
+    """Step kinds required by the contract (problem statement §4).
+
+    V1 emission note: `recovery` and `rest` are part of the closed contract
+    but are never emitted as a standalone step in V1. Recovery is always
+    embedded as metadata inside the owning `work` step's `recovery` field
+    (never a sibling step — see §9/module docstring on the volume
+    invariant); a rest day short-circuits to an empty `steps` tuple on the
+    `StructuredWorkoutPrescription` rather than a single `rest`-typed step.
+    Both members are kept on the enum so the contract stays forward
+    compatible (e.g. a future multi-block race_specific_steady split that
+    needs a standalone recovery step) without a breaking schema change.
+    """
+
     warmup = "warmup"
     work = "work"
     recovery = "recovery"
@@ -911,6 +924,34 @@ def _finalize(
 # ---------------------------------------------------------------------------
 
 
+def _empty_prescription(
+    *,
+    workout_type: str,
+    total_distance_km: Optional[float],
+    total_duration_minutes: Optional[int],
+    reason_codes: Tuple[str, ...],
+) -> StructuredWorkoutPrescription:
+    """Build a structure-free prescription (no steps, invariants trivially satisfied).
+
+    Shared by the REST short-circuit and the unknown-workout_type fallback
+    so both empty-structure paths stay in lockstep if the schema changes.
+    """
+    return StructuredWorkoutPrescription(
+        workout_type=workout_type,
+        target_basis="none",
+        total_distance_km=total_distance_km,
+        total_duration_minutes=total_duration_minutes,
+        steps=(),
+        steps_distance_km_sum=None,
+        steps_duration_seconds_sum=None,
+        distance_invariant_applicable=False,
+        distance_closes_total=True,
+        duration_invariant_applicable=False,
+        duration_closes_total=True,
+        reason_codes=reason_codes,
+    )
+
+
 def build_structured_workout_prescription(
     *,
     workout: WorkoutPrescription,
@@ -925,18 +966,10 @@ def build_structured_workout_prescription(
     other day — see module docstring "Pipeline placement").
     """
     if workout.workout_type == "rest":
-        return StructuredWorkoutPrescription(
+        return _empty_prescription(
             workout_type="rest",
-            target_basis="none",
             total_distance_km=None,
             total_duration_minutes=None,
-            steps=(),
-            steps_distance_km_sum=None,
-            steps_duration_seconds_sum=None,
-            distance_invariant_applicable=False,
-            distance_closes_total=True,
-            duration_invariant_applicable=False,
-            duration_closes_total=True,
             reason_codes=("PLANNED_REST_DAY",),
         )
 
@@ -963,18 +996,10 @@ def build_structured_workout_prescription(
         )
 
     # Unknown / unsupported workout_type — never invent structure.
-    return StructuredWorkoutPrescription(
+    return _empty_prescription(
         workout_type=workout.workout_type,
-        target_basis="none",
         total_distance_km=workout.distance_km,
         total_duration_minutes=workout.duration_minutes,
-        steps=(),
-        steps_distance_km_sum=None,
-        steps_duration_seconds_sum=None,
-        distance_invariant_applicable=False,
-        distance_closes_total=True,
-        duration_invariant_applicable=False,
-        duration_closes_total=True,
         reason_codes=("STRUCTURE_UNAVAILABLE",),
     )
 

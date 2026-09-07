@@ -421,6 +421,26 @@ def test_no_negative_and_no_meaningless_zero_step():
             assert step.distance_m >= 0.0
 
 
+def test_degenerate_rep_size_falls_back_to_continuous_volume_limited():
+    # 5K/build selects vo2_intervals (rep_min=4, target=800m). At exactly
+    # 2.5km total, work_m=1100m clears the old _MIN_WORK_M_FOR_INTERVALS
+    # floor (900m) but clamping to rep_min=4 yields per_rep_m=275m, below
+    # the degenerate-rep sanity floor (300m) — the engine must fall back to
+    # a single continuous work block with VOLUME_LIMITED rather than
+    # presenting a fake, unrealistically short interval structure.
+    r = build_structured_workout_prescription(
+        workout=_workout("quality", distance_km=2.5),
+        plan_goal=_goal(GoalType.five_k),
+        periodization=_phase(PeriodizationPhase.build),
+    )
+    assert "VOLUME_LIMITED" in r.reason_codes
+    work_steps = [s for s in r.steps if s.step_type == StructuredStepType.work]
+    assert len(work_steps) == 1
+    assert work_steps[0].repetitions == 1
+    assert work_steps[0].recovery is None
+    assert r.distance_closes_total
+
+
 # ---------------------------------------------------------------------------
 # K. Missing Training Pace
 # ---------------------------------------------------------------------------
@@ -695,10 +715,10 @@ def test_goal_coverage_quality_build_phase(goal_type):
     )
     assert r.distance_closes_total
     assert any(c.startswith("QUALITY_") for c in r.reason_codes)
-    assert _GOAL_CODE_PRESENT(r, goal_type)
+    assert _goal_code_present(r, goal_type)
 
 
-def _GOAL_CODE_PRESENT(r: StructuredWorkoutPrescription, goal_type: GoalType) -> bool:
+def _goal_code_present(r: StructuredWorkoutPrescription, goal_type: GoalType) -> bool:
     mapping = {
         GoalType.five_k: "GOAL_5K",
         GoalType.ten_k: "GOAL_10K",

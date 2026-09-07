@@ -12,7 +12,7 @@
 Nouveaux fichiers uniquement (aucun fichier existant modifié) :
 
 - `backend/training_v2/structured_workout.py` — StructuredWorkoutPrescriptionEngine (nouveau moteur, ~950 lignes dont documentation extensive).
-- `backend/tests/test_structured_workout_pr234.py` — 63 tests unitaires/domain.
+- `backend/tests/test_structured_workout_pr234.py` — 64 tests unitaires/domain.
 - `RUNINDEX_PR234_REPORT.md` — ce rapport.
 
 Aucun fichier de `training_v2/` existant (`workout_generator.py`, `daily_adaptation.py`, `periodization.py`, `plan_goal.py`, `training_paces.py`, `weekly_target.py`, `week_plan_bridge.py`, `today_prescription.py`, `prescription_snapshot.py`, etc.) n'a été touché. Aucun fichier `server.py` ni frontend n'a été touché.
@@ -176,9 +176,9 @@ Tous machine-readable, déduplication déterministe (`dict.fromkeys`), aucun tex
 
 ## 16. Tests ajoutés
 
-`backend/tests/test_structured_workout_pr234.py` — **63 tests**, tous passants (`63 passed`), couvrant :
+`backend/tests/test_structured_workout_pr234.py` — **64 tests**, tous passants (`64 passed`), couvrant :
 
-A. Déterminisme (quality + continuous) — B. Easy — C. Long easy — D. Recovery — E. Quality goal-aware (5k vs ultra, 10k vs marathon) — F. Phase-aware (10k base vs build, taper conservateur tous goals) — G. Total distance (paramétré 6 valeurs + continuous) — H. Total duration (paramétré 5 valeurs + continuous) — I. Recoveries jamais hors total (distance + duration) — J. Rounding (5 distances non-rondes + 4 durées non-rondes, aucune valeur négative) — K. Pace absente (jamais de pace inventée, y compris `confidence="insufficient"` et un champ de zone malformé/inattendu — branche défensive testée explicitement) — L. Pace présente (zone et valeur correctes, dérivation durée uniquement sur zones single-value) — M/N/O/P. DailyAdaptation KEEP/SHORTEN/DOWNGRADE/REST — Q. Maintenance (6 phases, jamais race-specific/VO2) — R. Couverture 5K/10K/Half/Marathon/Ultra + non-régression "ultra jamais VO2" (3 phases) — S. Taper (volume non augmenté, aucun intervalle introduit) — T. None != 0 (pace et durée) — U. Sérialisation (round-trip `model_dump`/`model_validate`, y compris jour de repos).
+A. Déterminisme (quality + continuous) — B. Easy — C. Long easy — D. Recovery — E. Quality goal-aware (5k vs ultra, 10k vs marathon) — F. Phase-aware (10k base vs build, taper conservateur tous goals) — G. Total distance (paramétré 6 valeurs + continuous) — H. Total duration (paramétré 5 valeurs + continuous) — I. Recoveries jamais hors total (distance + duration) — J. Rounding (5 distances non-rondes + 4 durées non-rondes, aucune valeur négative) — K. Pace absente (jamais de pace inventée, y compris `confidence="insufficient"` et un champ de zone malformé/inattendu — branche défensive testée explicitement), ainsi qu'un test dédié pour la garde anti-dégénérescence des reps (VOLUME_LIMITED déclenché spécifiquement par le plancher `_MIN_PER_REP_M`, distinct du plancher de volume préexistant) — L. Pace présente (zone et valeur correctes, dérivation durée uniquement sur zones single-value) — M/N/O/P. DailyAdaptation KEEP/SHORTEN/DOWNGRADE/REST — Q. Maintenance (6 phases, jamais race-specific/VO2) — R. Couverture 5K/10K/Half/Marathon/Ultra + non-régression "ultra jamais VO2" (3 phases) — S. Taper (volume non augmenté, aucun intervalle introduit) — T. None != 0 (pace et durée) — U. Sérialisation (round-trip `model_dump`/`model_validate`, y compris jour de repos).
 
 Complété par du fuzz-testing manuel additionnel (hors suite pytest, exécuté pendant le développement) :
 - Invariant distance sur ~35 valeurs (1.0 à 40 km, pas 0.37) × 3 phases × marathon → 0 échec.
@@ -200,7 +200,7 @@ Suite complète du dossier `tests/` exécutée à titre de contrôle large (`pyt
 ## 18. Résultats exacts
 
 - Nouveau module : 953 lignes (dont documentation extensive), aucune dépendance circulaire (import uniquement `periodization`, `plan_goal`, `training_paces`, `workout_generator`).
-- Tests PR234 : **63/63 passed**.
+- Tests PR234 : **64/64 passed**.
 - Tests de régression ciblés : **175/175 passed**.
 - Aucune anomalie détectée lors de la revue finale du diff (une anomalie de calcul — récupération non budgétée dans le total en base durée — a été détectée et corrigée AVANT la version finale, voir §9 et §20).
 
