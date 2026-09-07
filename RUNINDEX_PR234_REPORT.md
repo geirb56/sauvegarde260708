@@ -319,6 +319,7 @@ Pureté/déterminisme du moteur, modèles `frozen`, sérialisation Pydantic, goa
 ## 23. C234 FINAL CLOCK ALIGNMENT
 
 - Head avant correction : `b8f8c6e3abcdd3b526f484527906318db48e9147`.
+- Nouveau head : `91b28f9`.
 - Bug : `/training/v2/paces` utilisait directement `datetime.now(timezone.utc).date()`,
   alors que Today/Week résolvaient la date depuis l'offset local Garmin observé.
 - Correction : `/training/v2/paces` charge la même preuve d'activité Garmin récente,
