@@ -45,36 +45,36 @@ function weekData() {
       session_count: 5,
       sessions: [
         {
-          day: "monday", workout_type: "easy", distance_km: 8, duration_minutes: 45, estimated_tss: null,
+          day: "monday", planned_date: "2026-08-24", workout_type: "easy", distance_km: 8, duration_minutes: 45, estimated_tss: null,
           reason_codes: [], matching_status: "matched", adherence_status: "completed_as_planned",
           actual: { activity_id: "a1", distance_km: 8.1, duration_minutes: 44, pace_min_per_km: 5.5, activity_type: "running", start_time: "2026-08-24T07:00:00" },
           prescription: "45 min easy",
         },
         {
-          day: "tuesday", workout_type: "rest", distance_km: null, duration_minutes: null, estimated_tss: null,
+          day: "tuesday", planned_date: "2026-08-25", workout_type: "rest", distance_km: null, duration_minutes: null, estimated_tss: null,
           reason_codes: [], matching_status: "planned", adherence_status: "not_applicable", actual: null,
         },
         {
-          day: "wednesday", workout_type: "quality", distance_km: 10, duration_minutes: 50, estimated_tss: null,
+          day: "wednesday", planned_date: "2026-08-26", workout_type: "quality", distance_km: 10, duration_minutes: 50, estimated_tss: null,
           reason_codes: [], matching_status: "planned", adherence_status: "not_applicable", actual: null,
           prescription: "3 × 10 min",
         },
         {
-          day: "thursday", workout_type: "steady", distance_km: 8, duration_minutes: 42, estimated_tss: null,
+          day: "thursday", planned_date: "2026-08-27", workout_type: "steady", distance_km: 8, duration_minutes: 42, estimated_tss: null,
           reason_codes: [], matching_status: "missed", adherence_status: "missed", actual: null,
           prescription: "40 min steady",
         },
         {
-          day: "friday", workout_type: "easy", distance_km: 7, duration_minutes: 40, estimated_tss: null,
+          day: "friday", planned_date: "2026-08-28", workout_type: "easy", distance_km: 7, duration_minutes: 40, estimated_tss: null,
           reason_codes: [], matching_status: "planned", adherence_status: "not_applicable", actual: null,
           prescription: "40 min easy",
         },
         {
-          day: "saturday", workout_type: "rest", distance_km: null, duration_minutes: null, estimated_tss: null,
+          day: "saturday", planned_date: "2026-08-29", workout_type: "rest", distance_km: null, duration_minutes: null, estimated_tss: null,
           reason_codes: [], matching_status: "planned", adherence_status: "not_applicable", actual: null,
         },
         {
-          day: "sunday", workout_type: "long_easy", distance_km: 18, duration_minutes: 95, estimated_tss: null,
+          day: "sunday", planned_date: "2026-08-30", workout_type: "long_easy", distance_km: 18, duration_minutes: 95, estimated_tss: null,
           reason_codes: [], matching_status: "planned", adherence_status: "not_applicable", actual: null,
           prescription: "Long run 18 km",
         },
@@ -111,6 +111,7 @@ function todayData({ explicitRest = false, noSession = false } = {}) {
       message: "No session planned for today",
       date: "2026-08-25",
       day: "Tuesday",
+      served_prescription: null,
       planned_session: null,
       original_prescription: null,
       adapted_prescription: null,
@@ -119,42 +120,32 @@ function todayData({ explicitRest = false, noSession = false } = {}) {
     };
   }
 
+  // C233 — real /training/today shape (prescription_to_runtime_session):
+  // day/type/duration ("Xmin"|"0min")/intensity/distance_km (0 sentinel)/
+  // estimated_tss. No workout_type/duration_minutes/prescription/
+  // pace_target/target_zone field exists on this object.
   if (explicitRest) {
+    const restSession = { day: "tuesday", type: "rest", duration: "0min", intensity: "rest", distance_km: 0, estimated_tss: 0 };
     return {
       status: "success",
-      planned_session: { workout_type: "rest", duration_minutes: null, distance_km: null, prescription: "REST" },
-      original_prescription: { workout_type: "rest", duration_minutes: null, distance_km: null, prescription: "REST" },
-      adapted_prescription: { workout_type: "rest", duration_minutes: null, distance_km: null, prescription: "REST" },
+      served_prescription: restSession,
+      planned_session: restSession,
+      original_prescription: restSession,
+      adapted_prescription: restSession,
       adaptive_session: null,
       adaptation_applied: false,
       adaptation_reason: "",
     };
   }
 
+  const session = { day: "tuesday", type: "threshold", duration: "55min", intensity: "hard", distance_km: 10, estimated_tss: null };
   return {
     status: "success",
     readiness: { band: "EASY" },
-    planned_session: {
-      workout_type: "threshold",
-      duration_minutes: 55,
-      distance_km: 10,
-      prescription: "3 × 10 min",
-      pace_target: "5:10–5:20/km",
-    },
-    original_prescription: {
-      workout_type: "threshold",
-      duration_minutes: 55,
-      distance_km: 10,
-      prescription: "3 × 10 min",
-      pace_target: "5:10–5:20/km",
-    },
-    adapted_prescription: {
-      workout_type: "threshold",
-      duration_minutes: 55,
-      distance_km: 10,
-      prescription: "3 × 10 min",
-      pace_target: "5:10–5:20/km",
-    },
+    served_prescription: session,
+    planned_session: session,
+    original_prescription: session,
+    adapted_prescription: session,
     adaptive_session: null,
     adaptation_applied: false,
     adaptation_reason: "",
@@ -252,16 +243,18 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     expect(paces.compareDocumentPosition(cycle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  test("today card shows primary workout type, prescription, pace and duration", async () => {
+  test("today card shows the real /training/today contract: type, duration, and distance from served_prescription", async () => {
     mockAxios();
     renderPage();
 
     const today = await screen.findByTestId("training-v2-today");
-    expect(within(today).getByTestId("today-session-type").textContent.toLowerCase()).toContain("threshold");
-    expect(within(today).getByTestId("today-session-prescription")).toHaveTextContent("3 × 10 min");
-    expect(within(today).getByTestId("today-session-pace-zone")).toHaveTextContent("5:10–5:20/km");
+    expect(within(today).getByTestId("today-session-type").textContent.toLowerCase()).toContain("quality");
     expect(within(today).getByTestId("today-session-duration")).toHaveTextContent("55 min");
     expect(within(today).getByTestId("today-session-distance")).toHaveTextContent(formatDistance(10, { unitSystem: "metric" }));
+    expect(within(today).queryByTestId("today-session-prescription")).not.toBeInTheDocument();
+    expect(within(today).queryByTestId("today-session-pace-zone")).not.toBeInTheDocument();
+    expect(within(today).queryByText(/3 × 10 min/)).not.toBeInTheDocument();
+    expect(within(today).queryByText(/5:10/)).not.toBeInTheDocument();
     expect(within(today).queryByText(/TSS/i)).not.toBeInTheDocument();
   });
 
@@ -288,7 +281,11 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     renderPage({ width: 390 });
 
     const week = await screen.findByTestId("training-v2-week");
-    expect(within(week).getByTestId("today-highlight-badge")).toBeInTheDocument();
+    // weekData(): reference_date "2026-08-25" is a Tuesday -> exactly the
+    // tuesday row (a rest day) carries the Today badge, driven purely by
+    // reference_date, never the browser clock.
+    expect(within(screen.getByTestId("training-v2-day-tuesday")).getByTestId("today-highlight-badge")).toBeInTheDocument();
+    expect(within(week).getAllByTestId("today-highlight-badge")).toHaveLength(1);
     expect(within(week).getByTestId("session-status-done")).toBeInTheDocument();
     expect(within(week).getAllByTestId("session-status-planned").length).toBeGreaterThan(0);
     expect(within(week).getAllByTestId("session-status-rest").length).toBeGreaterThan(0);
@@ -400,20 +397,16 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
         status: "success",
         readiness: { band: "EASY" },
         planned_session: {
-          workout_type: "long_easy", duration_minutes: 95, distance_km: 18,
-          prescription: "Long run 18 km",
+          day: "monday", type: "long_run", duration: "95min", intensity: "easy", distance_km: 18, estimated_tss: null,
         },
         original_prescription: {
-          workout_type: "long_easy", duration_minutes: 95, distance_km: 18,
-          prescription: "Long run 18 km",
+          day: "monday", type: "long_run", duration: "95min", intensity: "easy", distance_km: 18, estimated_tss: null,
         },
         served_prescription: {
-          workout_type: "long_easy", duration_minutes: 66, distance_km: 12.6,
-          prescription: "Long run 12.6 km (frozen)",
+          day: "monday", type: "long_run", duration: "66min", intensity: "easy", distance_km: 12.6, estimated_tss: null,
         },
         adapted_prescription: {
-          workout_type: "long_easy", duration_minutes: 66, distance_km: 12.6,
-          prescription: "Long run 12.6 km (frozen)",
+          day: "monday", type: "long_run", duration: "66min", intensity: "easy", distance_km: 12.6, estimated_tss: null,
         },
         adaptive_session: null,
         // KEY: adaptation_applied is FALSE (live recompute says KEEP), yet
@@ -603,7 +596,7 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     );
     expect(within(detail).getByTestId("session-actual-duration-monday")).toHaveTextContent("44 min");
     expect(within(detail).getByTestId("session-actual-pace-monday")).toHaveTextContent("/km");
-    expect(within(detail).getByTestId("session-analysis-link-monday")).toHaveAttribute("href", "/workout/a1");
+    expect(within(detail).getByTestId("session-analysis-link-monday")).toHaveAttribute("href", "/workout/garmin-a1");
   });
 
   test("clicking a planned (not-yet-matched) session shows no fabricated actual and no analysis link", async () => {
@@ -726,5 +719,138 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     expect(screen.queryByText(/mark as missed/i)).not.toBeInTheDocument();
     expect(screen.queryByTestId("done-button")).not.toBeInTheDocument();
     expect(screen.queryByTestId("missed-button")).not.toBeInTheDocument();
+  });
+
+  // ── C233 — correction blockers ─────────────────────────────────────────
+
+  test("C233 #1: a matched session's analysis link uses garmin-${external_id}, the id /workout/:id actually expects", async () => {
+    // Cross-layer: db.workouts.id is built by activity_to_workout() as
+    // f"garmin-{external_id}" (backend/garmin/service.py:544); actual.activity_id
+    // on WeekV2ActualResponse is the raw external_id. Garmin activity_id="12345" ->
+    // the ONLY working link is /workout/garmin-12345.
+    const week = weekData();
+    week.week.sessions[0].actual.activity_id = "12345";
+    mockAxios({ week });
+    renderPage();
+
+    await screen.findByTestId("training-v2-week");
+    fireEvent.click(screen.getByTestId("session-detail-toggle-monday"));
+    expect(screen.getByTestId("session-analysis-link-monday")).toHaveAttribute("href", "/workout/garmin-12345");
+  });
+
+  test("C233 #1: an unmatched Garmin actual's analysis link uses the same garmin-${external_id} rule", async () => {
+    const week = weekData();
+    week.week.unmatched_actuals = [
+      { activity_id: "12345", distance_km: 6.2, duration_minutes: 32, pace_min_per_km: 5.16, activity_type: "running", start_time: "2026-08-23T09:00:00" },
+    ];
+    mockAxios({ week });
+    renderPage();
+
+    const unmatched = await screen.findByTestId("training-v2-unmatched");
+    const row = within(unmatched).getByTestId("unmatched-activity-row");
+    expect(within(row).getByText(/View analysis|Voir l.analyse|Ver análisis/i)).toHaveAttribute("href", "/workout/garmin-12345");
+  });
+
+  test("C233 #2: today's real duration ('Xmin' string) is displayed, and '0min' is never shown as a real duration", async () => {
+    mockAxios({
+      today: {
+        status: "success",
+        served_prescription: { day: "tuesday", type: "rest", duration: "0min", intensity: "rest", distance_km: 0, estimated_tss: 0 },
+      },
+    });
+    renderPage();
+
+    const today = await screen.findByTestId("training-v2-today");
+    expect(within(today).queryByTestId("today-session-duration")).not.toBeInTheDocument();
+    expect(within(today).queryByText(/0min/)).not.toBeInTheDocument();
+    expect(within(today).queryByText(/0 min/)).not.toBeInTheDocument();
+  });
+
+  test("C233 #2: distance_km=0 runtime sentinel is never shown as a real '0 km' distance for a rest day", async () => {
+    mockAxios({
+      today: {
+        status: "success",
+        served_prescription: { day: "tuesday", type: "rest", duration: "0min", intensity: "rest", distance_km: 0, estimated_tss: 0 },
+      },
+    });
+    renderPage();
+
+    const today = await screen.findByTestId("training-v2-today");
+    expect(within(today).queryByTestId("today-session-distance")).not.toBeInTheDocument();
+  });
+
+  test("C233 #2: no fabricated prescription text or pace is ever shown on the Today card", async () => {
+    mockAxios();
+    renderPage();
+
+    const today = await screen.findByTestId("training-v2-today");
+    expect(within(today).queryByTestId("today-session-prescription")).not.toBeInTheDocument();
+    expect(within(today).queryByTestId("today-session-pace-zone")).not.toBeInTheDocument();
+  });
+
+  test("C233 #3: Today's badge is driven exclusively by weekData.reference_date, never by the browser's clock/timezone", async () => {
+    // Browser is mocked far away in both date AND timezone from the
+    // backend's reference_date (2026-08-25, a Tuesday). If the frontend ever
+    // fell back to `new Date()`, the badge would land on the wrong day (or
+    // no day at all).
+    const originalTZ = process.env.TZ;
+    process.env.TZ = "Pacific/Kiritimati"; // UTC+14, deliberately far from UTC
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date("2099-01-01T23:00:00Z")); // a Thursday, decades away
+
+    try {
+      mockAxios();
+      renderPage();
+
+      const week = await screen.findByTestId("training-v2-week");
+      expect(within(screen.getByTestId("training-v2-day-tuesday")).getByTestId("today-highlight-badge")).toBeInTheDocument();
+      expect(within(week).getAllByTestId("today-highlight-badge")).toHaveLength(1);
+    } finally {
+      jest.useRealTimers();
+      process.env.TZ = originalTZ;
+    }
+  });
+
+  test("C233 #3: reference_date remains the sole authority even when no session.planned_date matches it exactly", async () => {
+    const week = weekData();
+    // Remove planned_date from every session: the deterministic weekday
+    // fallback (computed from reference_date itself, not the browser clock)
+    // must still resolve Today to tuesday (2026-08-25's real weekday).
+    week.week.sessions.forEach((session) => { delete session.planned_date; });
+    mockAxios({ week });
+    renderPage();
+
+    const weekCard = await screen.findByTestId("training-v2-week");
+    expect(within(screen.getByTestId("training-v2-day-tuesday")).getByTestId("today-highlight-badge")).toBeInTheDocument();
+    expect(within(weekCard).getAllByTestId("today-highlight-badge")).toHaveLength(1);
+  });
+
+  test("C233 #4: each week card shows its real weekday + planned_date, e.g. 'Wednesday · 26 Aug'", async () => {
+    mockAxios();
+    renderPage();
+
+    await screen.findByTestId("training-v2-week");
+    expect(screen.getByTestId("training-v2-day-label-wednesday")).toHaveTextContent(/Wednesday/);
+    expect(screen.getByTestId("training-v2-day-label-wednesday")).toHaveTextContent(/26 Aug/);
+    expect(screen.getByTestId("training-v2-day-label-monday")).toHaveTextContent(/24 Aug/);
+  });
+
+  test("C233 #4: the day+date label respects the active locale (fr/es), never the browser clock", async () => {
+    mockAxios();
+    renderPage({ lang: "fr" });
+
+    await screen.findByTestId("training-v2-week");
+    expect(screen.getByTestId("training-v2-day-label-wednesday")).toHaveTextContent(/Mercredi/);
+  });
+
+  test("C233 #4: no date suffix is fabricated when a session has no real planned_date", async () => {
+    const week = weekData();
+    delete week.week.sessions[2].planned_date; // wednesday
+    mockAxios({ week });
+    renderPage();
+
+    await screen.findByTestId("training-v2-week");
+    expect(screen.getByTestId("training-v2-day-label-wednesday")).toHaveTextContent("Wednesday");
+    expect(screen.getByTestId("training-v2-day-label-wednesday").textContent).not.toContain("·");
   });
 });

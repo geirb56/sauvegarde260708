@@ -123,3 +123,76 @@ Conformément à la règle **PRESCRIPTION ≠ PRÉSENTATION**, les éléments su
 ## 7. Statut
 
 PR créée en **draft** à partir de `copilot/dev`, **non mergée**, conformément à la consigne "STOP après création de la PR et rapport de validation".
+
+---
+
+## 8. CORRECTION C233 (round de correction post-review)
+
+### 8.1 Head de départ de la correction
+
+- Commit de départ de la correction : `13bea88` (commit initial de PR #233 ci-dessus, sur la branche `copilot/training-ux-v3-reprise-propre`).
+- Aucun élargissement de scope : uniquement les 5 blockers listés ci-dessous ont été traités, dans les mêmes 2 fichiers frontend déjà touchés par #233 (`TrainingPlanV2.jsx`, `training-v2-page.test.jsx`). Aucun fichier backend modifié.
+
+### 8.2 Corrections exactes
+
+**C233 #1 — Liens analyse Garmin cassés**
+- Bug : `actual.activity_id` (et `unmatched_actuals[].activity_id`) est l'`external_id` Garmin brut, mais `db.workouts.id` est construit côté backend comme `f"garmin-{external_id}"` (`backend/garmin/service.py:544`, `activity_to_workout()`). Le frontend liait vers `/workout/${activity_id}` (sans le préfixe), donc un lien mort.
+- Correction : nouveau helper `buildWorkoutDetailPath(activityId)` construisant `/workout/garmin-${activityId}`, utilisé à la fois pour le lien d'analyse d'une séance matched et pour la ligne d'un `unmatched_actual`. Aucun nouveau contrat backend introduit — uniquement l'application de la convention `garmin-` déjà existante et stable.
+- Test cross-layer ajouté : `activity_id = "12345"` → lien attendu `/workout/garmin-12345`, pour une séance matched **et** pour un unmatched actual.
+
+**C233 #2 — Today alignée sur le vrai contrat backend**
+- Bug : les fixtures/mocks et le code de la carte Today utilisaient des champs fictifs (`workout_type`, `duration_minutes` numérique, `prescription` texte libre type "3 × 10 min", `pace_target`, `target_zone`) qui n'existent pas dans la réponse réelle de `/training/today`.
+- Réalité backend confirmée (`backend/training_v2/daily_runtime_helpers.py::prescription_to_runtime_session`, lignes 116-138, utilisée identiquement pour `served_prescription`/`adapted_prescription`/`adaptive_session`/`planned_session`/`original_prescription` dans `backend/server.py:3496-3573`) : `{day, type, duration ("Xmin" ou sentinel "0min"), intensity, distance_km (0 = sentinel "pas de distance"), estimated_tss}`.
+- Correction :
+  - `served_prescription` est désormais la clé prioritaire dans la chaîne de fallback (déjà présente, mais mal exploitée par les champs fictifs en aval).
+  - Nouveaux helpers `getTodayDurationLabel(session)` / `getTodayDistanceKm(session)` : `"0min"` n'est jamais affiché comme une vraie durée ; `distance_km === 0` n'est jamais affiché comme "0 km".
+  - Nouvelle table `RUNTIME_TYPE_TO_WORKOUT_TYPE` (copie exacte de l'enum backend `daily_runtime_helpers.py:27-34` : `rest→rest, recovery→recovery, endurance→easy, tempo→steady, threshold→quality, long_run→long_easy`) pour traduire le vocabulaire runtime de Today (`type`) vers le vocabulaire domaine de Week (`workout_type`) utilisé par les clés i18n existantes — sans quoi la plupart des types Today s'affichaient comme "type inconnu".
+  - Suppression totale de l'affichage `today-session-prescription` et `today-session-pace-zone` : aucune prescription texte ni pace/zone n'est inventée pour Today (le contrat réel n'en fournit pas).
+  - Fixtures de test (`todoData()`) réécrites intégralement sur la forme réelle, y compris pour le cas C231-round-2-item-1.
+
+**C233 #3 — Badge "Today" indépendant de l'horloge navigateur**
+- Bug : `getTodayDayKey()` utilisait `new Date().getDay()` (horloge/fuseau du navigateur), en violation de la règle "aucune dépendance timezone/clock".
+- Correction : `getTodayDayKey` supprimée, remplacée par `resolveTodayDayKey(weekData)` qui :
+  1. cherche la session dont `planned_date === weekData.reference_date` (correspondance exacte) ;
+  2. à défaut, retombe sur un calcul pur de jour de semaine à partir de `reference_date` (`Date.UTC` + `getUTCDay()`, aucune horloge locale) ;
+  3. retourne `null` si `reference_date` est absent (jamais de devinette basée sur le navigateur).
+- Tests ajoutés : un test avec `jest.useFakeTimers()` + `jest.setSystemTime()` + un fuseau navigateur simulé différent de UTC, prouvant que le badge Today reste sur le jour correspondant à `reference_date` ; un test de repli déterministe quand aucune session ne correspond exactement ; un test vérifiant qu'une seule carte reçoit le badge Today.
+
+**C233 #4 — Jour + date sur chaque carte semaine**
+- Ajout de `session.planned_date` affiché sur chaque `WeekSessionRow`, sous forme "Wednesday · 26 Aug" (jour traduit + date jour-mois, jamais reconstruite depuis l'horloge navigateur — dérivée uniquement de la chaîne ISO `planned_date`).
+- Le nom du mois est traduit via `Intl` (respecte `en`/`fr`/`es`), mais l'ordre jour-puis-mois est forcé manuellement pour éviter l'inversion "Aug 26" que produirait `Intl` par défaut en `en-US`.
+- Si `planned_date` est absent pour une séance, seul le jour de semaine est affiché (aucune date fabriquée).
+- Tests ajoutés : libellé "Wednesday · 26 Aug" correct ; traduction correcte en `fr` ("Mercredi · 26 août") ; aucune date affichée quand `planned_date` est absent.
+
+### 8.3 Distinction contrat backend réel vs. mocks précédents (fautifs)
+
+| Champ | Mock précédent (fautif, supprimé) | Réalité backend confirmée |
+|---|---|---|
+| Type de séance Today | `workout_type` (vocabulaire Week) | `type` (vocabulaire runtime distinct : `rest/recovery/endurance/tempo/threshold/long_run`), traduit via `RUNTIME_TYPE_TO_WORKOUT_TYPE` |
+| Durée Today | `duration_minutes` (nombre) | `duration` (chaîne `"Xmin"`, sentinel `"0min"` = absence) |
+| Distance Today | implicite / absente | `distance_km` (nombre, `0` = sentinel absence) |
+| Prescription texte | `prescription: "3 × 10 min"` | **n'existe pas** dans le contrat réel — supprimé |
+| Allure/zone Today | `pace_target`, `target_zone` | **n'existent pas** dans le contrat réel — supprimés |
+| Lien analyse Garmin | `/workout/${activity_id}` | `/workout/garmin-${activity_id}` (convention `activity_to_workout()`, `backend/garmin/service.py:544`) |
+| Jour "Today" | `new Date().getDay()` (navigateur) | `weekData.reference_date` (+ `sessions[].planned_date` exact match, fallback calendaire pur) |
+
+### 8.4 Tests réellement exécutés (round C233)
+
+Commandes exécutées dans `frontend/` :
+```
+npm install --legacy-peer-deps                                                    # réinstallation (node_modules absent, session fraîche)
+CI=true npx craco test --watchAll=false --forceExit training-v2-page              # ciblé Training
+CI=true npx craco test --watchAll=false --forceExit                               # suite complète
+npm run build                                                                       # build production
+```
+
+Résultats :
+- `training-v2-page.test.jsx` (ciblé) : **48/48 passés** (contre 37 avant la correction — 11 tests nouveaux/réécrits pour C233, dont les 10 tests C233 dédiés + la précision du test "highlights today").
+- Suite complète : **17 suites, 264 tests, 264 passés, 0 échec** (contre 254 avant la correction, cohérent avec les +10 nouveaux tests C233).
+- `npm run build` : **succès**, aucune erreur de compilation.
+- `runtime-tools-secret_scanning` sur les fichiers modifiés : **aucun secret détecté**.
+- `parallel_validation` (Code Review + CodeQL) : Code Review — aucun commentaire ; CodeQL (javascript) — **0 alerte**.
+
+### 8.5 Statut
+
+Corrections poussées sur la branche existante `copilot/training-ux-v3-reprise-propre` (PR #233, toujours en **draft**, base `copilot/dev`). **Aucun merge effectué.** STOP après push, conformément à la consigne.

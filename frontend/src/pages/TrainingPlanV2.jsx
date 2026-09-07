@@ -95,25 +95,60 @@ const getSessionStatusKey = (session) => {
   return null;
 };
 
+// C233 (blocker #1) — actual.activity_id (WeekV2ActualResponse, both on a
+// matched session and on unmatched_actuals) is the raw Garmin external_id.
+// But GET /workout/:id reads db.workouts.id, which the fan-out worker always
+// builds as f"garmin-{external_id}" (backend/garmin/service.py:544,
+// activity_to_workout). Linking to `/workout/${external_id}` is therefore a
+// dead link. No new backend contract is introduced here — this mirrors an
+// EXISTING, stable backend id-construction convention.
+const buildWorkoutDetailPath = (activityId) => {
+  if (activityId == null || activityId === "") return null;
+  return `/workout/garmin-${activityId}`;
+};
+
 // PR233 — the only real, non-fabricated identifier for "view analysis" is
 // the matched Garmin activity id (PR230 boundary). WeekV2SessionResponse has
 // no workout_id/session_id field — inventing one would create a dead link.
-const getSessionDetailRoute = (session) => {
-  const activityId = session?.actual?.activity_id;
-  if (activityId != null && activityId !== "") return `/workout/${activityId}`;
-  return null;
+const getSessionDetailRoute = (session) => buildWorkoutDetailPath(session?.actual?.activity_id);
+
+const parseIsoDateUTC = (isoDate) => {
+  if (typeof isoDate !== "string") return null;
+  const [year, month, day] = isoDate.split("-").map(Number);
+  if (!year || !month || !day) return null;
+  return new Date(Date.UTC(year, month - 1, day));
 };
 
 const formatDate = (value, locale) => {
-  if (!value || typeof value !== "string") return null;
-  const [year, month, day] = value.split("-").map(Number);
-  if (!year || !month || !day) return value;
+  const parsed = parseIsoDateUTC(value);
+  if (!parsed) return typeof value === "string" ? value : null;
   return new Intl.DateTimeFormat(locale, {
     day: "2-digit",
     month: "short",
     year: "numeric",
     timeZone: "UTC",
-  }).format(new Date(Date.UTC(year, month - 1, day)));
+  }).format(parsed);
+};
+
+// C233 (blocker #4) — real day + real date on each week card, e.g.
+// "Wednesday · 9 Sep". The weekday name is already locale-aware
+// (trainingPlanDays.*); the date comes ONLY from the backend's own
+// session.planned_date — never reconstructed from the browser clock. No
+// date suffix is shown when planned_date is unavailable (never fabricated).
+const formatShortDate = (isoDate, locale) => {
+  const parsed = parseIsoDateUTC(isoDate);
+  if (!parsed) return null;
+  // Day-first "9 Sep" style consistently across locales (rather than
+  // Intl's locale-default month/day order, which would render "Sep 9" for
+  // en-US) — only the month name itself is locale-translated.
+  const monthName = new Intl.DateTimeFormat(locale, { month: "short", timeZone: "UTC" }).format(parsed);
+  return `${parsed.getUTCDate()} ${monthName}`;
+};
+
+const formatDayHeading = (t, day, plannedDate, locale) => {
+  const weekday = t(`trainingPlanDays.${day}`);
+  const shortDate = formatShortDate(plannedDate, locale);
+  return shortDate ? `${weekday} · ${shortDate}` : weekday;
 };
 
 // PR233 — replaces all occurrences of each {token}, unlike String.replace
@@ -124,9 +159,32 @@ const formatTemplate = (template, values) =>
     template
   );
 
-const getTodayDayKey = () => {
-  const day = new Date().getDay();
-  return Object.keys(DAY_INDEX).find((key) => DAY_INDEX[key] === day) || "monday";
+// C233 (blocker #3) — pure calendar math on an ISO 'YYYY-MM-DD' string only:
+// never reads the browser clock/timezone. Date.UTC + getUTCDay is
+// deterministic for a given calendar date regardless of where the browser
+// runs.
+const weekdayKeyFromIsoDate = (isoDate) => {
+  const parsed = parseIsoDateUTC(isoDate);
+  if (!parsed) return null;
+  const utcDay = parsed.getUTCDay();
+  return Object.keys(DAY_INDEX).find((key) => DAY_INDEX[key] === utcDay) || null;
+};
+
+// C233 (blocker #3) — the ONLY authority for "which day is Today" is the
+// backend's own weekData.reference_date (never `new Date()`). Prefer the
+// session whose real planned_date exactly equals reference_date (exact
+// match survives any gap/reorder in the sessions array); fall back to the
+// deterministic weekday of reference_date itself when no planned_date lines
+// up (e.g. a day missing from the payload). Returns null (no badge at all)
+// when reference_date itself is unavailable — never guesses from the
+// client's clock/timezone.
+const resolveTodayDayKey = (weekData) => {
+  const referenceDate = weekData?.reference_date;
+  if (typeof referenceDate !== "string") return null;
+  const sessions = Array.isArray(weekData?.week?.sessions) ? weekData.week.sessions : [];
+  const exact = sessions.find((session) => session?.planned_date === referenceDate);
+  if (exact && typeof exact.day === "string") return exact.day.toLowerCase();
+  return weekdayKeyFromIsoDate(referenceDate);
 };
 
 const getSessionPaceOrZone = (session) => {
@@ -136,6 +194,43 @@ const getSessionPaceOrZone = (session) => {
   const zone = session.target_zone || session.zone || session.hr_zone || session.intensity_zone;
   if (zone && typeof zone === "string") return zone;
   return null;
+};
+
+// C233 (blocker #2) — mirrors backend RUNTIME_TYPE_TO_WORKOUT_TYPE
+// (backend/training_v2/daily_runtime_helpers.py) verbatim. This is the
+// REAL, stable mapping the backend itself uses between /training/today's
+// runtime `type` vocabulary and the domain `workout_type` vocabulary used
+// everywhere else (Week, i18n keys) — not a frontend invention.
+const RUNTIME_TYPE_TO_WORKOUT_TYPE = {
+  rest: "rest",
+  recovery: "recovery",
+  endurance: "easy",
+  tempo: "steady",
+  threshold: "quality",
+  long_run: "long_easy",
+};
+
+const TODAY_ZERO_DURATION_SENTINEL = "0min";
+
+// C233 (blocker #2) — /training/today's `duration` is a string ("Xmin"),
+// never a numeric duration_minutes field. "0min" is the canonical runtime
+// sentinel for "no meaningful duration" (rest / no-duration sessions) and
+// must never be displayed as a real duration.
+const getTodayDurationLabel = (session) => {
+  const raw = session?.duration;
+  if (typeof raw !== "string" || raw === TODAY_ZERO_DURATION_SENTINEL) return null;
+  const match = /^(\d+)min$/.exec(raw.trim());
+  if (!match) return null;
+  const minutes = Number(match[1]);
+  return Number.isFinite(minutes) && minutes > 0 ? `${minutes} min` : null;
+};
+
+// C233 (blocker #2) — /training/today's `distance_km` uses 0 as the runtime
+// sentinel for "no distance" (rest / duration-only sessions); 0 is never a
+// real distance and must never be displayed as "0 km".
+const getTodayDistanceKm = (session) => {
+  const value = session?.distance_km;
+  return isKnownNumber(value) && value > 0 ? value : null;
 };
 
 // PR233 — shared min/km -> unit-aware formatted pace string conversion.
@@ -215,7 +310,7 @@ function SessionStatePill({ t, state }) {
   );
 }
 
-function WeekSessionRow({ session, day, isToday, unitSystem, t }) {
+function WeekSessionRow({ session, day, isToday, unitSystem, t, locale }) {
   const [expanded, setExpanded] = useState(false);
   const workoutType = getSessionType(session);
   const isExplicitRest = workoutType === "rest" || getSessionStatusKey(session) === "rest";
@@ -295,7 +390,9 @@ function WeekSessionRow({ session, day, isToday, unitSystem, t }) {
           canExpand ? "cursor-pointer hover:brightness-110" : "cursor-default"
         }`}
       >
-        <span className="text-xs text-muted-foreground">{t(`trainingPlanDays.${day}`)}</span>
+        <span className="text-xs text-muted-foreground" data-testid={`training-v2-day-label-${day}`}>
+          {formatDayHeading(t, day, session?.planned_date, locale)}
+        </span>
         <div className="min-w-0">
           <p className="truncate font-medium" data-testid={`training-v2-day-type-${day}`}>{typeLabel}</p>
           {prescription && !isExplicitRest && !isUnavailable && (
@@ -452,7 +549,7 @@ function UnmatchedActualsSection({ t, unitSystem, unmatchedActuals, locale }) {
             const key = row?.activity_id
               ? `${row.activity_id}-${index}`
               : `unmatched-${row?.start_time || "unknown"}-${index}`;
-            const analysisRoute = row?.activity_id != null && row.activity_id !== "" ? `/workout/${row.activity_id}` : null;
+            const analysisRoute = buildWorkoutDetailPath(row?.activity_id);
             return (
               <div
                 key={key}
@@ -585,7 +682,10 @@ export default function TrainingPlanV2() {
   }, [isFree, subLoading]);
 
   const locale = lang === "fr" ? "fr-FR" : lang === "es" ? "es-ES" : "en-US";
-  const todayKey = getTodayDayKey();
+  // C233 (blocker #3) — resolveTodayDayKey derives Today exclusively from
+  // weekData.reference_date (+ sessions[].planned_date); never the browser
+  // clock/timezone.
+  const todayKey = resolveTodayDayKey(weekData);
 
   const orderedSessions = useMemo(() => {
     const sessions = weekData?.week?.sessions ?? [];
@@ -625,33 +725,43 @@ export default function TrainingPlanV2() {
     ? getTranslatedValue(t, `trainingV2.cyclePhases.${currentCycleWeek.phase}`)
     : t("trainingV2.notAvailable");
 
-  // C231 (round 2, item 1 BLOCKER FIX) — the served_prescription is the
-  // canonical, ALWAYS-authoritative session for today (frozen once, never
-  // superseded by a later readiness recompute). adaptation_applied is
-  // informative only and must NEVER decide which session gets displayed:
-  // planned_session is only used as a last-resort fallback when no served
-  // prescription exists yet (should not normally happen once /training/today
-  // has been called at least once for today).
+  // C233 (blocker #2) — /training/today's served_prescription (and its
+  // sibling keys: adapted_prescription/adaptive_session/planned_session/
+  // original_prescription) are ALL the SAME real runtime shape produced by
+  // prescription_to_runtime_session() (backend/training_v2/
+  // daily_runtime_helpers.py): { day, type, duration, intensity,
+  // distance_km, estimated_tss }. There is NO workout_type/duration_minutes/
+  // prescription/pace_target/target_zone field on this object — those
+  // belonged to a fictitious frontend mock, never to the real backend
+  // contract. served_prescription is read FIRST and is the only
+  // ALWAYS-authoritative session for today (frozen once, never superseded by
+  // a later readiness recompute); the other keys are only a last-resort
+  // fallback for the same real shape when no served prescription exists yet
+  // (should not normally happen once /training/today has been called at
+  // least once for today).
   const todaySession = todayData?.served_prescription
     || todayData?.adapted_prescription
     || todayData?.adaptive_session
     || todayData?.planned_session
     || todayData?.original_prescription;
 
-  const todayType = getSessionType(todaySession);
-  const todayTypeLabel = todayType
-    ? getTranslatedValue(t, `trainingV2.workoutTypes.${todayType}`)
+  // `type` uses the RUNTIME vocabulary (rest/recovery/endurance/tempo/
+  // threshold/long_run) — mirrors backend RUNTIME_TYPE_TO_WORKOUT_TYPE
+  // (daily_runtime_helpers.py) verbatim so the label uses the SAME domain
+  // vocabulary (rest/recovery/easy/steady/quality/long_easy) already shown
+  // by Week's workout_type, never a frontend invention.
+  const todayWorkoutTypeKey = RUNTIME_TYPE_TO_WORKOUT_TYPE[todaySession?.type] || null;
+  const todayTypeLabel = todayWorkoutTypeKey
+    ? getTranslatedValue(t, `trainingV2.workoutTypes.${todayWorkoutTypeKey}`)
     : t("trainingV2.noSessionType");
 
-  const todayPrescription = getPrescriptionText(todaySession)
-    || getPrescriptionText(todayData?.adapted_prescription)
-    || getPrescriptionText(todayData?.original_prescription)
-    || null;
-
-  const todayPaceOrZone = getSessionPaceOrZone(todaySession);
-  const todayDuration = isKnownNumber(todaySession?.duration_minutes) ? `${todaySession.duration_minutes} min` : null;
-  const todayDistance = isKnownNumber(todaySession?.distance_km) ? formatDistance(todaySession.distance_km, { unitSystem }) : null;
-  const todayIsExplicitRest = todayType === "rest" || getSessionStatusKey(todaySession) === "rest";
+  // C233 (blocker #2) — no prescription text, no pace/zone: the real
+  // /training/today contract carries neither field, so nothing is rendered
+  // for them (never invented/guessed).
+  const todayDurationLabel = getTodayDurationLabel(todaySession);
+  const todayDistanceKm = getTodayDistanceKm(todaySession);
+  const todayDistance = todayDistanceKm != null ? formatDistance(todayDistanceKm, { unitSystem }) : null;
+  const todayIsExplicitRest = todayWorkoutTypeKey === "rest";
 
   const showRaceCountdown = !isMaintenanceGoal
     && cycle?.days_to_race !== null
@@ -687,7 +797,7 @@ export default function TrainingPlanV2() {
           <Progress value={progressValue} />
           {showRaceCountdown && (
             <p className="text-xs text-muted-foreground" data-testid="header-race-countdown">
-              {t("trainingV2.raceCountdownValue").replace("{days}", String(cycle.days_to_race))}
+              {formatTemplate(t("trainingV2.raceCountdownValue"), { days: cycle.days_to_race })}
             </p>
           )}
         </CardContent>
@@ -706,14 +816,8 @@ export default function TrainingPlanV2() {
             <>
               <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">{t("trainingV2.sessionType")}</p>
               <p className="text-lg font-semibold" data-testid="today-session-type">{todayIsExplicitRest ? t("trainingV2.restDay") : todayTypeLabel}</p>
-              {todayPrescription && !todayIsExplicitRest && (
-                <p className="text-base" data-testid="today-session-prescription">{todayPrescription}</p>
-              )}
-              {todayPaceOrZone && !todayIsExplicitRest && (
-                <p className="text-sm text-muted-foreground" data-testid="today-session-pace-zone">{todayPaceOrZone}</p>
-              )}
               <div className="flex flex-wrap items-center gap-2 text-sm">
-                {todayDuration && <Badge variant="outline" data-testid="today-session-duration">{todayDuration}</Badge>}
+                {todayDurationLabel && <Badge variant="outline" data-testid="today-session-duration">{todayDurationLabel}</Badge>}
                 {todayDistance && <Badge variant="outline" data-testid="today-session-distance">{todayDistance}</Badge>}
               </div>
             </>
@@ -743,6 +847,7 @@ export default function TrainingPlanV2() {
                   isToday={day === todayKey}
                   unitSystem={unitSystem}
                   t={t}
+                  locale={locale}
                 />
               );
             })}
