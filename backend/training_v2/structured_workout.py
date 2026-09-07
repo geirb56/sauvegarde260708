@@ -746,9 +746,16 @@ def _build_quality_steps(
             if per_rep_s < _MIN_PER_REP_S[kind.value]:
                 # Same degenerate-rep guard as the distance branch (§6/§10):
                 # never present a fake interval structure for a too-short rep.
-                reps, per_rep_s, recovery_s = 0, 0, 0
+                reps, per_rep_s = 0, 0
         else:
-            reps, per_rep_s, recovery_s = 0, 0, 0
+            reps, per_rep_s = 0, 0
+
+        # `step_recovery_s` (distinct from the `recovery_s` calibration
+        # value computed above, which is only meaningful inside the
+        # interval branch) is the value actually attached to the emitted
+        # step: 0 whenever falling back to a continuous block, never reused
+        # as a fallback/continuous-block calibration value.
+        step_recovery_s = recovery_s if reps > 0 else 0
 
         if reps > 0 and per_rep_s > 0:
             steps.append(
@@ -756,12 +763,12 @@ def _build_quality_steps(
                     step_type=StructuredStepType.work,
                     repetitions=reps,
                     duration_seconds=per_rep_s,
-                    recovery=StructuredWorkoutRecovery(kind="jog", duration_seconds=recovery_s),
+                    recovery=StructuredWorkoutRecovery(kind="jog", duration_seconds=step_recovery_s),
                     pace_zone=zone,
                     reason_codes=tuple(reason_codes),
                 )
             )
-            cooldown_s_int = total_s_exact - warmup_s_int - reps * (per_rep_s + recovery_s)
+            cooldown_s_int = total_s_exact - warmup_s_int - reps * (per_rep_s + step_recovery_s)
         else:
             if kind in (QualityKind.threshold_intervals, QualityKind.vo2_intervals):
                 reason_codes.append("VOLUME_LIMITED")
