@@ -334,3 +334,71 @@ async def test_today_endpoint_has_no_training_feedback_field():
     result = await _get_today(fake_db)
     assert result["status"] == 200, result["body"]
     assert "recent_feedback" not in result["body"]
+
+
+# ── C234 — StructuredWorkoutPrescriptionEngine real pipeline wiring ────────
+
+
+@pytest.mark.asyncio
+async def test_today_endpoint_exposes_structured_prescription():
+    """C234 Blocker 1: /training/today must now transport a real structured
+    prescription built from the ATOMICALLY-SERVED session, not a module only
+    reachable in isolated unit tests."""
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    _seed_garmin_activities(fake_db, n=8)
+    _seed_connected(fake_db, connected=True)
+
+    result = await _get_today(fake_db)
+    assert result["status"] == 200, result["body"]
+    structured = result["body"]["structured_prescription"]
+    assert structured is not None
+    # served_prescription is the legacy *runtime* dict (frontend compat, uses
+    # remapped "type"/"duration" keys) — structured_prescription instead uses
+    # canonical WorkoutPrescription.workout_type values. Both must describe
+    # the exact same underlying (atomically served) session.
+    assert isinstance(structured["workout_type"], str)
+    # None != 0 — structural distance sum must not silently coerce unknowns.
+    assert isinstance(structured["steps"], list) and len(structured["steps"]) >= 1
+
+
+@pytest.mark.asyncio
+async def test_week_endpoint_exposes_structured_field_per_session():
+    """C234 Blocker 1: /training/v2/week sessions must carry a `structured`
+    field produced from the resolved/effective (never stale) prescription."""
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    _seed_garmin_activities(fake_db, n=8)
+    _seed_connected(fake_db, connected=True)
+
+    result = await _get_week(fake_db)
+    assert result["status"] == 200, result["body"]
+    sessions = result["body"]["week"]["sessions"]
+    assert any(s.get("structured") is not None for s in sessions)
+    monday_session = next(s for s in sessions if s["day"].lower() == "monday")
+    if monday_session.get("workout_type") != "rest":
+        assert monday_session["structured"] is not None
+        assert monday_session["structured"]["workout_type"] == monday_session["workout_type"]
+
+
+@pytest.mark.asyncio
+async def test_today_and_week_structured_prescription_converge_for_same_day():
+    """C234 §15 — Today/Week convergence: hitting /training/today first (which
+    freezes today's served snapshot) then /training/v2/week must yield the
+    IDENTICAL structured contract for Monday — never a divergent recompute."""
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    _seed_garmin_activities(fake_db, n=8)
+    _seed_connected(fake_db, connected=True)
+
+    today_result = await _get_today(fake_db)
+    assert today_result["status"] == 200, today_result["body"]
+    today_structured = today_result["body"]["structured_prescription"]
+
+    week_result = await _get_week(fake_db)
+    assert week_result["status"] == 200, week_result["body"]
+    monday_session = next(
+        s for s in week_result["body"]["week"]["sessions"] if s["day"].lower() == "monday"
+    )
+
+    assert monday_session["structured"] == today_structured

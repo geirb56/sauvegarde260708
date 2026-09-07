@@ -441,6 +441,15 @@ class CanonicalWeeklyPlan:
     weekly_plan: WeeklyPlan
     """WorkoutGenerator output built from reconciled_target."""
 
+    plan_goal: PlanGoal
+    """C234 — the already-computed PlanGoal, exposed (not recomputed) for
+    consumers that need to wire StructuredWorkoutPrescriptionEngine without
+    duplicating goal-mapping logic."""
+
+    periodization: PeriodizationSnapshot
+    """C234 — the already-computed PeriodizationSnapshot, exposed (not
+    recomputed) for the same reason as plan_goal above."""
+
 
 def build_canonical_weekly_plan(
     *,
@@ -495,4 +504,6 @@ def build_canonical_weekly_plan(
         reconciliation_result=ctx.reconciliation_result,
         reconciled_target=reconciled_target,
         weekly_plan=weekly_plan,
+        plan_goal=ctx.plan_goal,
+        periodization=ctx.periodization,
     )

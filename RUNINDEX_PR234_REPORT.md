@@ -126,7 +126,8 @@ Si aucune de ces structures ne peut être posée de façon fiable (volume insuff
 
 - `total_distance_km` / `total_duration_minutes` du `StructuredWorkoutPrescription` sont des **miroirs exacts** du parent `WorkoutPrescription` — jamais recalculés.
 - La récupération (`StructuredWorkoutRecovery`) est **embarquée** dans le step `work`, jamais un step frère : sa distance est **toujours `None`** (jamais fabriquée), donc elle ne peut structurellement jamais gonfler la distance totale.
-- **Base distance** : `steps_distance_km_sum` = somme de warmup + work×reps + cooldown (recovery exclue, car sans distance). Par construction, cette somme == `total_distance_km` exactement (`distance_closes_total=True`), car le "reste" (drift d'arrondi) est absorbé dans le cooldown (§10), jamais perdu ni ajouté au-delà du total.
+- **Base distance** : `steps_distance_km_sum` = somme de warmup + work×reps + cooldown (recovery exclue, car sans distance). Par construction, cette somme == `total_distance_km` exactement, car le "reste" (drift d'arrondi) est absorbé dans le cooldown (§10), jamais perdu ni ajouté au-delà du total.
+  **[CORRIGÉ EN C234 — voir §21]** : ⚠️ l'affirmation initiale ci-dessus selon laquelle `distance_closes_total=True` pouvait être déclaré même lorsqu'un step `work` porte une récupération **chronométrée** (`recovery.duration_seconds` connu, `recovery.distance_m=None`) était **fausse**. Une récupération joggée pendant N secondes parcourt une distance réelle inconnue : `steps_distance_km_sum` ne peut alors plus être présenté comme fermant exactement le total. Voir §21 pour la sémantique corrigée (`distance_invariant_applicable=False` + `DISTANCE_TOTAL_MIXED_BASIS` dans ce cas).
 - **Base duration** : la récupération EST comptée (c'est un vrai coût en temps) : `steps_duration_seconds_sum` inclut `reps × (per_rep_s + recovery_s)`. Le budget de répétitions est calculé en **réservant d'abord le temps de récupération total** (`work_budget_s = work_s - reps*recovery_s`) avant de diviser le travail — sans cela, la récupération s'ajoutait AU-DESSUS du budget (bug détecté et corrigé pendant le développement, voir §17 "anomalies corrigées"). Le cooldown absorbe le reste exact en entier (arithmétique entière, jamais de perte).
 - Champs `*_invariant_applicable` : `distance_invariant_applicable` est vrai seulement si `target_basis=="distance"` ; `duration_invariant_applicable` seulement si `target_basis=="duration"`. Quand l'un des deux n'est pas applicable, l'écart n'est jamais masqué : le champ le dit explicitement (jamais un faux `True` implicite).
 - Invariant testé exhaustivement par fuzzing manuel (voir §16) sur ~35 valeurs de distance et ~195 valeurs de durée × 3 phases × plusieurs goals : **0 échec**.
@@ -212,6 +213,105 @@ Suite complète du dossier `tests/` exécutée à titre de contrôle large (`pyt
 - Pour les prescriptions en base durée, aucune distance n'est dérivée de la pace × durée (choix délibéré, §"Target time" du docstring) — évite un second mécanisme de target implicite.
 - Snapshot complet (#235) et intégration frontend détaillée (#236) explicitement hors scope, comme demandé.
 
-## 20. Confirmation
+## 20. Confirmation (v1, PR234 initiale)
 
 **Aucun merge n'a été effectué.** La branche `copilot/pr-234-structured-workout-prescription` a été poussée avec ces changements ; une Pull Request en **DRAFT** vers `copilot/dev` doit être ouverte (ou l'est déjà) sans fusion.
+
+---
+
+## 21. C234 CORRECTIVE AUDIT
+
+Correction ciblée de la PR #234 (aucune reprise à zéro — architecture v1 conservée). Nouveau head audité au départ de cette correction : `bdce4f4f9393a48576ddb92a823d4d3ceb75e1f9`. Cette section documente **uniquement** les 5 blockers listés dans l'audit C234 et leur correction. Rien d'autre n'a été touché (pas de #235/#236, pas de frontend, pas de Training Paces/Periodization/WeeklyTarget).
+
+### 21.1 Fichiers modifiés (C234)
+
+- `backend/training_v2/structured_workout.py` — les 5 blockers corrigés (voir §21.2–21.6).
+- `backend/training_v2/today_prescription.py` — `resolve_today_final_prescription()` accepte désormais `plan_goal`/`periodization`/`training_paces` (optionnels) et expose `TodayFinalPrescription.structured_prescription`.
+- `backend/training_v2/week_execution.py` — `build_week_execution()` accepte `plan_goal`/`periodization`/`training_paces` (optionnels) ; `SessionExecution.structured` nouveau champ, construit à partir de `effective` (la session FINALE réellement résolue pour ce jour, jamais un ancien parent).
+- `backend/training_v2/week_plan_bridge.py` — `CanonicalWeeklyPlan` expose désormais `plan_goal` et `periodization` (champs additifs, recopiés depuis le contexte interne déjà calculé — aucun recalcul).
+- `backend/training_v2/training_week_response.py` — `WeekV2SessionResponse.structured: Optional[dict] = None` (champ additif).
+- `backend/server.py` — câblage réel : `/api/training/today` et `/api/training/v2/week` construisent et exposent désormais la prescription structurée (voir §21.2).
+- `backend/tests/test_structured_workout_pr234.py` — 5 tests corrigés (assertions fausses supprimées) + tests ajoutés pour les 5 blockers. **79 tests, tous passants** (était 64).
+- `backend/tests/test_pr232a_c231_week_endpoint.py` — 3 nouveaux tests end-to-end (FastAPI réel + fake DB) : présence de `structured_prescription` sur Today, présence de `structured` par session sur Week, et convergence Today/Week pour le même jour.
+
+### 21.2 BLOCKER 1 — Câblage réel dans le pipeline
+
+**Point d'intégration exact identifié par audit du code réel** :
+
+- `TODAY` (`GET /api/training/today`, `server.py`) : `WorkoutGenerator` → `DailyAdaptation` (`resolve_today_final_prescription`) → `get_or_create_served_prescription` (résolution atomique get-or-create du snapshot) → **`served_prescription`** (la session réellement servie) → `StructuredWorkoutPrescriptionEngine`. Le moteur est appelé **après** la résolution atomique, jamais avant : c'est la RÈGLE ABSOLUE du problem statement ("la structure doit toujours être produite à partir de la prescription FINALE réellement servie", jamais "parent adapté + steps construits depuis ancien parent"). Un appel local à `resolve_today_final_prescription()` peut produire un `adaptation_result.adapted_workout` différent de `served_prescription` si un appel concurrent/antérieur (Today ou Week) a déjà figé un candidat différent — construire la structure à partir de ce candidat local aurait reproduit exactement le bug interdit. `structured_prescription` est ajouté (additif) au dict de réponse de `/api/training/today`.
+- `WEEK` (`GET /api/training/v2/week`, `server.py` → `build_week_execution()`) : pour chaque jour, `structured` est construit à partir de `effective` (`resolve_effective_session`), c'est-à-dire la session FINALE déjà utilisée pour le matching/adherence — y compris pour le jour "today" de la semaine, qui est remplacé par `served` (le même candidat atomiquement résolu que Today) **avant** l'appel à `build_week_execution()`. Les jours historiques figés (snapshot) utilisent le snapshot, jamais un recalcul live — préserve l'immutabilité #231. `structured` est ajouté (additif) à `WeekV2SessionResponse`.
+- `training_paces` est **consommé, jamais recalculé** : `compute_training_paces(domain_activities_90, reference_date, user_max_hr=None)` (fonction pure déjà existante dans `training_paces.py`) est appelé une fois par requête et transmis tel quel — aucune modification du module Training Paces.
+- `DailyAdaptation` reste une couche strictement antérieure et séparée (aucune modification de `daily_adaptation.py`) : le moteur structuré consomme son résultat, il ne s'y substitue jamais.
+- Preuve de câblage réel (pas un module mort) : `test_today_endpoint_exposes_structured_prescription`, `test_week_endpoint_exposes_structured_field_per_session`, `test_today_and_week_structured_prescription_converge_for_same_day` (nouveaux, `test_pr232a_c231_week_endpoint.py`) exercent le vrai handler FastAPI via `httpx.ASGITransport` — pas seulement l'appel manuel du moteur en isolation.
+
+### 21.3 BLOCKER 2 — Distance + recovery time-only (sémantique mixed-basis)
+
+Nouvelle sémantique explicite dans `_finalize()` :
+- Chaque step est inspecté : `has_time_only_recovery = step.recovery is not None and step.recovery.duration_seconds is not None and step.recovery.distance_m is None`.
+- `distance_mixed_basis = (target_basis == "distance") and any(has_time_only_recovery pour un step)`.
+- Si `distance_mixed_basis` : `distance_invariant_applicable = False`, `distance_closes_total = False` (jamais un `True` trompeur), et le reason code `"DISTANCE_TOTAL_MIXED_BASIS"` est ajouté.
+- `steps_distance_km_sum` reste la somme des SEULES composantes de distance réellement connues (warmup/work/cooldown) — jamais supprimée, jamais gonflée : elle documente "X km de blocs prescrits + récupérations chronométrées", jamais "X km au total exactement".
+- Pour les prescriptions distance-based **sans** recovery time-only (ex. continuous long_easy) : l'invariant reste applicable et exact, inchangé.
+- Pour les prescriptions duration-based : toutes les composantes temporelles étant connues (recovery incluse), l'invariant durée ferme exactement — inchangé, non affecté par ce blocker.
+- Aucune option "recovery distance-based réservée avant le budget work" n'a été retenue (§5 du problem statement) : cela aurait exigé de dériver une distance de récupération depuis une pace, ce qui est interdit ("aucune distance de recovery ne doit être calculée depuis une pace fictive"). Le mixed-basis explicite a été préféré à une fausse précision, conformément à la recommandation du problem statement.
+
+Tests : `test_total_distance_mixed_basis_quality_with_time_only_recovery`, `test_recovery_never_inflates_distance_total`, `test_rounding_no_silent_drift_distance`, `test_goal_coverage_quality_build_phase`, `test_continuous_distance_without_recovery_still_closes_exactly` (nouveau).
+
+### 21.4 BLOCKER 3 — steady ≠ easy
+
+`_build_continuous_steps()` corrigé : `pace_zone="E"` réservé exclusivement à `easy`/`recovery`/`long_easy`. Pour `"steady"` : `pace_zone=None` + reason code `"STEADY_ZONE_UNAVAILABLE"` (aucune zone canonique Training Paces ne représente `steady` aujourd'hui ; M/T ne sont pas utilisées non plus par défaut). Test cross-layer ajouté : `test_steady_moderate_never_becomes_easy_zone` (vérifie `WorkoutPrescription.intensity_class == "moderate"` pour `steady`, et que la sortie structurée n'obtient jamais `pace_zone == "E"`), plus `test_easy_recovery_long_easy_still_use_zone_e` (non-régression).
+
+### 21.5 BLOCKER 4 — Faux race-specific
+
+`_race_specific_zone(goal_type)` retourne désormais un tuple `(zone, reason_codes)` :
+- `marathon` → `("M", [])` — acceptable, car Training Paces fournit réellement M.
+- `10k` / `half_marathon` / `ultra` → `(None, ["RACE_SPECIFIC_PACE_UNAVAILABLE"])` — **Option A retenue** (§9 du problem statement) : le type structurel reste `race_specific_steady` (nommage produit conservé, honnête sur ce qu'il représente : "le moteur a choisi une séance spécifique-course, mais aucune allure canonique dédiée n'existe"), mais `pace_zone=None` — **jamais T présenté comme "race specific"** pour ces trois goals. Aucune zone T n'est injectée implicitement nulle part dans ce chemin.
+- Pour Ultra spécifiquement : jamais T comme pseudo-allure spécifique, vérifié explicitement par test dédié.
+
+Tests : `test_quality_goal_aware_10k_vs_marathon_specific_differ_in_zone` (corrigé), `test_race_specific_never_invents_pace` (nouveau, paramétré `10k`/`half_marathon`/`ultra`), `test_marathon_race_specific_uses_zone_m` (nouveau).
+
+### 21.6 BLOCKER 5 — Nombre de recoveries
+
+Sémantique canonique retenue : la récupération documentée sur un step `work` représente la récupération **entre** répétitions → `recovery_count = max(repetitions - 1, 0)`. `StructuredWorkoutRecovery.count: int` (nouveau champ) porte cette valeur explicitement (jamais une convention implicite non snapshotable).
+- `_split_reps_duration()` réserve désormais `recovery_count * recovery_s` (au lieu de `repetitions * recovery_s`) avant de diviser le budget de travail.
+- `_finalize()` calcule la somme durée totale des recoveries via `step.recovery.count * step.recovery.duration_seconds`, jamais `step.repetitions * ...`.
+- Cas `1 rep` : `recovery_count = 0` (aucun objet recovery construit dans le chemin `VOLUME_LIMITED`, équivalent sémantique à `count=0`).
+
+Tests ajoutés : `test_recovery_count_two_reps_one_recovery`, `test_recovery_count_four_reps_three_recoveries`, `test_recovery_count_one_rep_zero_recovery` (bases distance ET duration), `test_recovery_duration_total_uses_count_not_repetitions`.
+
+### 21.7 Contrat Today / Week (résumé exécutable)
+
+```
+TODAY:  WorkoutGenerator → DailyAdaptation → get_or_create_served_prescription
+        → served_prescription (FINAL) → StructuredWorkoutPrescriptionEngine
+WEEK (hors today): WorkoutGenerator / WeeklyPlan réconcilié → resolve_effective_session
+        → effective (FINAL, respecte snapshot figé) → StructuredWorkoutPrescriptionEngine
+WEEK (jour == today): remplacé par le MÊME served_prescription que Today AVANT
+        build_week_execution() → garantit la convergence Today/Week.
+```
+
+### 21.8 Tests — résultats exacts
+
+Exécutés dans cette session (backend, `python -m pytest`, `MONGO_URL`/`DB_NAME` définis pour les suites dépendant de `server.py`) :
+
+- `tests/test_structured_workout_pr234.py` : **79 passed** (0 failed).
+- `tests/test_pr232a_week_execution.py` + `tests/test_weekly_unification_pr228.py` : **145 passed** (avec le fichier structuré ci-dessus, run combiné).
+- `tests/test_pr231_c231_corrections2.py`, `test_pr231_c231_corrections3.py`, `test_pr231_c231_final_corrections.py`, `test_pr231_c231_snapshot_adaptation.py`, `test_pr232a_c231_week_endpoint.py`, `test_pr232a_local_reference_date.py`, `test_pr232a_prescription_snapshot.py`, `test_pr167_training_v2_week_api.py` : **110 passed** (0 failed) — inclut les 3 nouveaux tests end-to-end Today/Week structurés.
+- `tests/test_pr232a_c231_week_endpoint.py` seul (avec les 3 nouveaux tests C234) : **7 passed**.
+- Suite complète `tests/` (large run de contrôle, exclusion du test flaky pré-existant `test_race_day_exact_phase_and_structure` — confirmé lié au rate-limiter partagé entre tests, PASS en isolation, non lié à cette PR) : **2759 passed, 290 failed, 1 skipped, 41 errors**. Tous les échecs restants ont été échantillonnés et confirmés préexistants et environnementaux (RAG/dashboard/paddle/mobile-analysis/garmin nécessitant réseau réel ou fixtures absentes ; ex. `test_pr155_week_plan_no_legacy.py` échoue identiquement sur le HEAD C234 non modifié, vérifié par `git stash`). **Aucun échec n'a été causé par les changements C234.**
+- Tests non exécutables : aucun dans cette session pour les fichiers directement pertinents à C234 (contrairement à la session PR234 v1 initiale, `httpx`/`fastapi`/`pymongo`/`python-dotenv`/`motor`/`redis`/`pytest-asyncio` ont pu être installés dans ce sandbox, permettant l'exécution réelle des tests end-to-end serveur).
+- CI GitHub réelle : non consultée dans cette session (aucune demande explicite, hors scope de la correction).
+
+### 21.9 Ce qui n'a pas été touché (préservé)
+
+Pureté/déterminisme du moteur, modèles `frozen`, sérialisation Pydantic, goal-aware, phase-aware, fallback `VOLUME_LIMITED`, ranges E/I sans point estimate, single-value M/T/R uniquement depuis Training Paces, missing pace → `None`, aucun Garmin VO2max/VMA/HR-speed/Race Predictions shortcut, aucun random, aucune logique frontend inventée, contrats API #233 existants (tous les nouveaux champs sont additifs/optionnels).
+
+### 21.10 Limites restantes
+
+- Le snapshot historique structuré complet (#235) n'a volontairement pas été implémenté : `structured`/`structured_prescription` ne sont PAS persistés dans `prescription_snapshot.py` — recalculés à la demande pour les jours passés à partir du snapshot figé (`effective`), jamais depuis un ancien parent, mais pas encore gelés eux-mêmes dans Mongo. C'est le sujet exact de #235.
+- Aucune UX (#236) n'a été ajoutée ni modifiée ; les champs `structured`/`structured_prescription` sont exposés en API mais aucun composant frontend ne les consomme dans cette PR.
+- `race_specific_steady` pour 10K/Half/Ultra reste un unique bloc continu sans allure numérique (Option A) — une vraie allure spécifique-course canonique nécessiterait une extension du module Training Paces, explicitement hors scope de cette correction.
+
+### 21.11 Confirmation C234
+
+**Aucun merge n'a été effectué.** Correction poussée sur la branche existante `copilot/pr-234-structured-workout-prescription`. La Pull Request reste en **DRAFT** vers `copilot/dev`.

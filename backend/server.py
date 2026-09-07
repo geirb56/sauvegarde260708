@@ -3441,6 +3441,13 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     # helper /training/v2/week uses to compute today's FINAL prescription
     # before freezing a snapshot. Guarantees identical output regardless of
     # which endpoint is hit first for a given day.
+    # C234 — plan_goal/periodization/training_paces are deliberately NOT
+    # passed here: the structured prescription must be built from the
+    # ATOMICALLY-RESOLVED served_prescription below (step 7bis), never from
+    # this local adaptation_result.adapted_workout candidate, which can
+    # differ from the winning snapshot when another concurrent/earlier call
+    # already froze a different served candidate (ABSOLUTE RULE — never
+    # "adapted parent + steps built from an old parent").
     today_final = resolve_today_final_prescription(
         planned_prescription=planned_prescription,
         reference_date=today,
@@ -3468,6 +3475,23 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
         planned_prescription=planned_prescription,
     )
     served_prescription = served_result.prescription
+
+    # ── 7bis. C234 — StructuredWorkoutPrescriptionEngine, wired in AFTER the
+    # atomic served-prescription resolution above (ABSOLUTE RULE: structure
+    # is always built from the FINAL prescription actually served, never a
+    # locally-adapted candidate that a concurrent call may have superseded).
+    # training_paces is CONSUMED (never recomputed) from the existing
+    # canonical Training Paces V2 builder, purely to thread it through.
+    from training_v2.structured_workout import build_structured_workout_prescription
+    from training_v2.training_paces import compute_training_paces
+
+    training_paces = compute_training_paces(domain_activities_90, today, user_max_hr=None)
+    structured_prescription = build_structured_workout_prescription(
+        workout=served_prescription,
+        plan_goal=canonical.plan_goal,
+        periodization=canonical.periodization,
+        training_paces=training_paces,
+    )
 
     # ── 8. Map prescription to legacy runtime dict format ─────────────────
     planned_session_runtime = prescription_to_runtime_session(planned_prescription)
@@ -3570,6 +3594,9 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
         # VMA is available at /run-index (canonical source) and /training/v2/week context.
         "vma": None,
         "vma_confidence": None,
+        # C234 — StructuredWorkoutPrescriptionEngine output for TODAY's
+        # served session (additive field, never breaking #233's contract).
+        "structured_prescription": structured_prescription.model_dump(mode="json"),
     }
 
 
@@ -4247,6 +4274,12 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
                 modified_from_planned=served_result.modified_from_planned,
             )
 
+    # C234 — training_paces CONSUMED (never recomputed/duplicated) from the
+    # existing canonical Training Paces V2 builder, threaded through so
+    # StructuredWorkoutPrescriptionEngine can use real paces when available.
+    from training_v2.training_paces import compute_training_paces
+
+    week_training_paces = compute_training_paces(domain_activities_90, reference_date, user_max_hr=None)
     try:
         execution = build_week_execution(
             user_id=user_id,
@@ -4255,6 +4288,9 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
             sessions=sessions_for_execution,
             garmin_docs=garmin_activities_90,
             frozen_snapshots=frozen_snapshots,
+            plan_goal=canonical.plan_goal,
+            periodization=canonical.periodization,
+            training_paces=week_training_paces,
         )
     except ValueError as exc:
         logger.error(f"[TrainingV2Week] Execution invariant violated: {exc}")
@@ -4335,6 +4371,11 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
             adherence_status=se.row.adherence_status.value,
             actual=_actual_response(se.row),
             execution_status=None,
+            # C234 — StructuredWorkoutPrescriptionEngine output, built from
+            # `se.session` (the resolved FINAL/"effective" prescription for
+            # this day, respecting frozen-snapshot immutability), never a
+            # stale pre-adaptation parent.
+            structured=se.structured.model_dump(mode="json") if se.structured else None,
         )
 
     sessions = [_session_response(se) for se in execution.sessions]

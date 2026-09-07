@@ -40,9 +40,13 @@ from dataclasses import dataclass
 from datetime import date
 from typing import List, Optional
 
+from .periodization import PeriodizationSnapshot
+from .plan_goal import PlanGoal
 from .readiness_decision import ReadinessDecision, build_readiness_decision
 from .daily_adaptation import DailyAdaptationResult, build_daily_adaptation
+from .structured_workout import StructuredWorkoutPrescription, build_structured_workout_prescription
 from .training_load import build_training_load
+from .training_paces import TrainingPaces
 from .training_response import build_recent_training_response
 from .workout_generator import WorkoutPrescription
 from garmin.readiness_adapter import build_readiness_v2_from_garmin_data
@@ -63,6 +67,13 @@ class TodayFinalPrescription:
     """"garmin" when a live Garmin connection provided readiness data,
     "unavailable" otherwise."""
 
+    structured_prescription: Optional[StructuredWorkoutPrescription] = None
+    """C234 — StructuredWorkoutPrescriptionEngine output built from
+    ``adaptation_result.adapted_workout`` (the FINAL prescription, never the
+    raw planned one — see ``structured_workout.py`` "Pipeline placement").
+    ``None`` only when ``plan_goal``/``periodization`` were not supplied to
+    ``resolve_today_final_prescription`` (caller opted out of structuring)."""
+
 
 def resolve_today_final_prescription(
     *,
@@ -71,6 +82,9 @@ def resolve_today_final_prescription(
     domain_activities_90: List,
     garmin_daily_metrics_docs: List[dict],
     garmin_connected: bool,
+    plan_goal: Optional[PlanGoal] = None,
+    periodization: Optional[PeriodizationSnapshot] = None,
+    training_paces: Optional[TrainingPaces] = None,
 ) -> TodayFinalPrescription:
     """Run readiness + DailyAdaptation for ONE prescription and return the
     FINAL (post-adaptation) prescription actually served to the athlete.
@@ -79,6 +93,13 @@ def resolve_today_final_prescription(
     both ``/training/today`` and ``/training/v2/week`` (for the one session
     whose ``planned_date == reference_date``) must call this instead of
     freezing the raw ``WeeklyPlan`` session.
+
+    C234 — when ``plan_goal`` and ``periodization`` are supplied, this also
+    builds the canonical ``StructuredWorkoutPrescription`` for the FINAL
+    (post-adaptation) workout, wiring ``StructuredWorkoutPrescriptionEngine``
+    into the real Today pipeline (never structuring the stale pre-adaptation
+    parent). ``training_paces`` is optional (consumed as-is, never
+    recomputed here).
     """
     training_load = None
     readiness_result = None
@@ -116,11 +137,21 @@ def resolve_today_final_prescription(
         recent_response=recent_response_for_readiness,
     )
 
+    structured_prescription: Optional[StructuredWorkoutPrescription] = None
+    if plan_goal is not None and periodization is not None:
+        structured_prescription = build_structured_workout_prescription(
+            workout=adaptation_result.adapted_workout,
+            plan_goal=plan_goal,
+            periodization=periodization,
+            training_paces=training_paces,
+        )
+
     return TodayFinalPrescription(
         planned_prescription=planned_prescription,
         adaptation_result=adaptation_result,
         readiness_decision=readiness_decision,
         readiness_data_source=readiness_data_source,
+        structured_prescription=structured_prescription,
     )
 
 

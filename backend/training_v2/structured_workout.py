@@ -59,38 +59,69 @@ Rationale — this order (adaptation BEFORE structuring), never the reverse:
      day never changes again, so calling this engine against it is
      idempotent and safe to persist as part of a future snapshot.
 
-This module does NOT decide when to call itself, and does NOT modify
-``daily_adaptation.py`` or ``today_prescription.py``. Wiring this engine
-into a specific server endpoint / API response is left to a follow-up PR
-(kept out of scope here — see RUNINDEX_PR234_REPORT.md §"Limites connues").
+C234 corrective audit — real pipeline wiring
+---------------------------------------------
+This module IS now called from the real backend pipeline consumed by the
+Training endpoints (see RUNINDEX_PR234_REPORT.md §"C234 CORRECTIVE AUDIT"):
+``today_prescription.resolve_today_final_prescription`` (TODAY) and
+``week_execution.build_week_execution`` (WEEK) both invoke
+``build_structured_workout_prescription`` against the FINAL prescription
+they already resolve — never against a stale/raw parent. It remains a pure
+post-processing layer: neither caller mutates its own totals/decisions
+based on the structured output.
 
 Contract — None != 0
 ---------------------
 A field that cannot be determined from real inputs is set to ``None``,
 never to an invented default (0, an arbitrary pace, an arbitrary rep count).
 
-Volume invariant — no hidden recovery
---------------------------------------
+Volume invariant — no hidden recovery, no false precision (C234 corrected)
+---------------------------------------------------------------------------
 Recovery between repetitions is modelled as metadata EMBEDDED in the
 enclosing ``work`` step (``StructuredWorkoutStep.recovery``), never as a
 sibling step with its own distance. Recovery is deliberately time-only
 (a jog/rest duration calibration constant — see ``_RECOVERY_SECONDS`` —
 labelled PRODUCT CALIBRATION V1, not physiological law) and its distance is
-therefore unknown. Consequently:
-  - the sum of step distances (warmup + work×reps + cooldown) is
-    *by construction* exactly equal to the parent's ``total_distance_km``
-    for distance-based prescriptions (``distance_closes_total=True``);
-    recovery contributes 0 additional km because it is never a distance
-    component.
-  - the sum of step durations similarly closes duration-based totals
-    exactly (recovery duration IS counted here, because it is a real
-    elapsed-time cost within a duration-based session).
-  - when a total cannot be closed (e.g. duration for a distance-based
-    session, because point-pace durations are only derived from single
-    valued zones — never from a pace *range*), the corresponding
-    ``*_closes_total`` flag is explicitly ``False`` and
+therefore unknown ("None != 0" — a timed jog recovery has a REAL but
+UNKNOWN distance; it is never treated as 0 km). Consequently:
+  - For a DISTANCE-based prescription whose structure embeds a time-only
+    recovery (``recovery.duration_seconds`` set, ``recovery.distance_m``
+    ``None`` — i.e. reps > 0), the exact distance invariant CANNOT be
+    asserted: the athlete runs the prescribed blocks *plus* an unknown
+    extra distance while jogging the recoveries. This is the
+    ``DISTANCE_TOTAL_MIXED_BASIS`` state — ``distance_invariant_applicable``
+    is ``False`` and ``distance_closes_total`` is explicitly ``False``
+    (never a vacuous/false ``True``). ``steps_distance_km_sum`` still
+    reports the sum of the *known* prescribed-block distances (warmup +
+    work×reps + cooldown, excluding recovery), so downstream consumers can
+    read "9 km prescribed blocks + timed jog recoveries", never "exactly
+    9 km total".
+  - For a DISTANCE-based prescription with NO time-only recovery (continuous
+    sessions, or interval sessions whose recovery is itself distance-based),
+    the sum of step distances closes the parent total exactly
+    (``distance_closes_total=True``) — recovery contributes 0 additional km
+    because it is never present, never estimated.
+  - The sum of step durations closes DURATION-based totals exactly
+    (recovery duration IS counted here, because it is a real elapsed-time
+    cost within a duration-based session) — using ``recovery.count``
+    (``max(repetitions - 1, 0)``) recovery instances, never ``repetitions``
+    (there is no recovery after the final repetition — see "Recovery count
+    contract" below).
+  - When a total cannot be closed for any other reason (e.g. duration for a
+    distance-based session, because point-pace durations are only derived
+    from single valued zones — never from a pace *range*), the
+    corresponding ``*_closes_total`` flag is explicitly ``False`` and
     ``*_invariant_applicable`` records whether the check was meaningful at
     all. The gap is never hidden.
+
+Recovery count contract (C234 corrected)
+-------------------------------------------
+``StructuredWorkoutRecovery.count`` is the number of recovery INSTANCES for
+a ``work`` step with N ``repetitions``: ``max(N - 1, 0)`` — recovery occurs
+BETWEEN repetitions, so there is one fewer recovery than reps (never a
+recovery trailing the final rep). Total recovery time contributed to a
+duration-based session is therefore ``recovery.duration_seconds *
+recovery.count``, never ``* repetitions``.
 
 Training Paces — consumption only
 -----------------------------------
@@ -283,6 +314,13 @@ class StructuredWorkoutRecovery(BaseModel):
     distance_m: Optional[float] = None
     """Always None in V1 — recovery distance is never fabricated."""
 
+    count: int = 0
+    """Number of recovery INSTANCES for the enclosing step's N repetitions:
+    ``max(N - 1, 0)`` — recovery occurs BETWEEN repetitions, never after the
+    final rep. Never equal to ``repetitions`` (C234 corrected — see module
+    docstring "Recovery count contract"). Total recovery time contributed to
+    a duration-based session is ``duration_seconds * count``."""
+
 
 class StructuredWorkoutStep(BaseModel):
     """One structural component of a StructuredWorkoutPrescription.
@@ -342,12 +380,19 @@ class StructuredWorkoutPrescription(BaseModel):
     """Sum of step durations (None if any duration-relevant step is unknown)."""
 
     distance_invariant_applicable: bool
-    """True only when target_basis == "distance" and total_distance_km is set."""
+    """True only when target_basis == "distance", total_distance_km is set,
+    AND no step embeds a time-only recovery (see "DISTANCE_TOTAL_MIXED_BASIS"
+    in the module docstring — C234 corrected). False in the mixed-basis case:
+    a timed jog recovery has a real but unknown distance, so exact distance
+    closure cannot be asserted."""
 
     distance_closes_total: bool
-    """True iff steps_distance_km_sum == total_distance_km (± rounding tolerance).
-    Meaningless (defaults True, vacuous) when not applicable — never claim a
-    false positive: check distance_invariant_applicable first."""
+    """True iff steps_distance_km_sum == total_distance_km (± rounding tolerance)
+    AND distance_invariant_applicable is True. Explicitly False (never a
+    vacuous/misleading True) in the mixed-basis case — see
+    "DISTANCE_TOTAL_MIXED_BASIS". Otherwise meaningless (defaults True,
+    vacuous) when not applicable — never claim a false positive: check
+    distance_invariant_applicable first."""
 
     duration_invariant_applicable: bool
     """True only when target_basis == "duration" and total_duration_minutes is set."""
@@ -418,18 +463,26 @@ def _split_reps_duration(
     work_s: float, per_rep_target_s: float, rep_min: int, rep_max: int, recovery_s: int
 ) -> tuple[int, int, int]:
     """Split work_s into (reps, per_rep_s, drift_s) INCLUDING recovery time
-    in the budget, so that reps*(per_rep_s + recovery_s) + drift_s == work_s
-    exactly. Recovery is a real elapsed-time cost for duration-based
-    sessions and must never push the total beyond the parent budget (§9/§10).
+    in the budget, so that
+        reps * per_rep_s + recovery_count * recovery_s + drift_s == work_s
+    exactly, where ``recovery_count = max(reps - 1, 0)`` (C234 corrected —
+    recovery occurs BETWEEN repetitions, never after the final rep; see
+    module docstring "Recovery count contract"). Recovery is a real
+    elapsed-time cost for duration-based sessions and must never push the
+    total beyond the parent budget (§9/§10).
     """
     if work_s <= 0:
         return 0, 0, 0
+    # Approximate reps assuming a trailing recovery after every rep (an
+    # upper-bound estimate); the exact reservation below then uses the true
+    # recovery_count = reps - 1, never rewidening the budget.
     reps = round(work_s / (per_rep_target_s + recovery_s))
     reps = max(rep_min, min(rep_max, reps))
     reps = max(1, reps)
-    work_budget_s = max(0.0, work_s - reps * recovery_s)
+    recovery_count = max(reps - 1, 0)
+    work_budget_s = max(0.0, work_s - recovery_count * recovery_s)
     per_rep_s = int(work_budget_s // reps)
-    drift_s = int(work_s - (per_rep_s * reps + reps * recovery_s))
+    drift_s = int(work_s - (per_rep_s * reps + recovery_count * recovery_s))
     return reps, per_rep_s, drift_s
 
 
@@ -490,8 +543,22 @@ def _single_pace_seconds_per_km(zone: Optional[str], training_paces: Optional[Tr
     return value.min_per_km * 60.0
 
 
-def _race_specific_zone(goal_type: GoalType) -> str:
-    return "M" if goal_type == GoalType.marathon else "T"
+def _race_specific_zone(goal_type: GoalType) -> tuple[Optional[str], list[str]]:
+    """Resolve the pace zone for a `race_specific_steady` quality session.
+
+    Training Paces canonically provides only E/M/T/I/R zones — it does NOT
+    provide a 5K/10K/Half/Ultra race-specific pace. Only marathon
+    legitimately maps onto a canonical zone (M — see Training Paces).
+    For every other goal (10K/Half/Ultra), returning T (or any other zone)
+    and presenting it as "race specific" would be a false precision (C234
+    corrective audit — blocker 4): the pace stays explicitly unavailable
+    instead, with reason code "RACE_SPECIFIC_PACE_UNAVAILABLE". The
+    structural kind name (``race_specific_steady``) is unaffected — only
+    the zone/pace assigned to it changes.
+    """
+    if goal_type == GoalType.marathon:
+        return "M", []
+    return None, ["RACE_SPECIFIC_PACE_UNAVAILABLE"]
 
 
 # ---------------------------------------------------------------------------
@@ -560,8 +627,18 @@ def _select_quality_kind(goal_type: GoalType, phase: PeriodizationPhase) -> tupl
 
 def _build_continuous_steps(workout: WorkoutPrescription) -> tuple[str, Tuple[StructuredWorkoutStep, ...], list[str]]:
     """Build the (target_basis, steps, reason_codes) for a continuous session."""
-    zone = "E"
     reason_codes: list[str] = [f"CONTINUOUS_{workout.workout_type.upper()}"]
+
+    if workout.workout_type in ("easy", "recovery", "long_easy"):
+        zone: Optional[str] = "E"
+    else:
+        # "steady" (WorkoutGenerator intensity_class="moderate") has no
+        # canonical Training Paces zone representing it — E/M/T/I/R do not
+        # include a "steady" pace. Never coerce it into Easy (or any other)
+        # pace (C234 corrective audit — blocker 3): the zone stays
+        # explicitly unavailable instead.
+        zone = None
+        reason_codes.append("STEADY_ZONE_UNAVAILABLE")
 
     if workout.distance_km is not None:
         target_basis = "distance"
@@ -636,7 +713,8 @@ def _build_quality_steps(
     reason_codes.append(_PHASE_CODE[periodization.phase])
 
     if kind == QualityKind.race_specific_steady:
-        zone = _race_specific_zone(plan_goal.goal_type)
+        zone, race_specific_reasons = _race_specific_zone(plan_goal.goal_type)
+        reason_codes.extend(race_specific_reasons)
     else:
         zone = _ZONE_FOR_KIND[kind]
 
@@ -674,6 +752,12 @@ def _build_quality_steps(
 
         if reps > 0:
             recovery_s = _RECOVERY_SECONDS[kind.value]
+            # Recovery occurs BETWEEN repetitions: N reps -> N-1 recoveries
+            # (C234 corrected — see module docstring "Recovery count
+            # contract"). Distance recovery arithmetic is unaffected (the
+            # recovery's own distance stays None — see "DISTANCE_TOTAL_
+            # MIXED_BASIS"); only the metadata contract changes.
+            recovery_count = max(reps - 1, 0)
             # Rounding drift (§10): reps * per_rep_m is an even, deterministic
             # split; any residual (< per-rep granularity) is absorbed by the
             # cooldown reservation below so that the parent total is closed
@@ -683,7 +767,9 @@ def _build_quality_steps(
                     step_type=StructuredStepType.work,
                     repetitions=reps,
                     distance_m=per_rep_m,
-                    recovery=StructuredWorkoutRecovery(kind="jog", duration_seconds=recovery_s),
+                    recovery=StructuredWorkoutRecovery(
+                        kind="jog", duration_seconds=recovery_s, count=recovery_count
+                    ),
                     pace_zone=zone,
                     reason_codes=tuple(reason_codes),
                 )
@@ -756,6 +842,9 @@ def _build_quality_steps(
         # step: 0 whenever falling back to a continuous block, never reused
         # as a fallback/continuous-block calibration value.
         step_recovery_s = recovery_s if reps > 0 else 0
+        # Recovery occurs BETWEEN repetitions: N reps -> N-1 recoveries
+        # (C234 corrected — see module docstring "Recovery count contract").
+        recovery_count = max(reps - 1, 0) if reps > 0 else 0
 
         if reps > 0 and per_rep_s > 0:
             steps.append(
@@ -763,12 +852,14 @@ def _build_quality_steps(
                     step_type=StructuredStepType.work,
                     repetitions=reps,
                     duration_seconds=per_rep_s,
-                    recovery=StructuredWorkoutRecovery(kind="jog", duration_seconds=step_recovery_s),
+                    recovery=StructuredWorkoutRecovery(
+                        kind="jog", duration_seconds=step_recovery_s, count=recovery_count
+                    ),
                     pace_zone=zone,
                     reason_codes=tuple(reason_codes),
                 )
             )
-            cooldown_s_int = total_s_exact - warmup_s_int - reps * (per_rep_s + step_recovery_s)
+            cooldown_s_int = total_s_exact - warmup_s_int - reps * per_rep_s - recovery_count * step_recovery_s
         else:
             if kind in (QualityKind.threshold_intervals, QualityKind.vo2_intervals):
                 reason_codes.append("VOLUME_LIMITED")
@@ -866,14 +957,25 @@ def _finalize(
 
     distance_terms: list[Optional[float]] = []
     duration_terms: list[Optional[float]] = []
+    has_time_only_recovery = False
     for step in steps:
         if step.step_type == StructuredStepType.rest:
             continue
         distance_terms.append(step.distance_m * step.repetitions if step.distance_m is not None else None)
+        if (
+            step.recovery is not None
+            and step.recovery.duration_seconds is not None
+            and step.recovery.distance_m is None
+        ):
+            # A timed jog/rest recovery has a REAL but UNKNOWN distance
+            # (None != 0) — a distance-based total embedding one can never
+            # be asserted to close exactly (C234 corrective audit —
+            # blocker 2 — see "DISTANCE_TOTAL_MIXED_BASIS").
+            has_time_only_recovery = True
         if step.duration_seconds is not None:
             work_duration = step.duration_seconds * step.repetitions
             recovery_duration = (
-                step.recovery.duration_seconds * step.repetitions
+                step.recovery.duration_seconds * step.recovery.count
                 if step.recovery is not None and step.recovery.duration_seconds is not None
                 else 0
             )
@@ -888,11 +990,20 @@ def _finalize(
         int(round(steps_duration_seconds_sum)) if steps_duration_seconds_sum is not None else None
     )
 
-    distance_invariant_applicable = target_basis == "distance" and workout.distance_km is not None
+    distance_mixed_basis = target_basis == "distance" and has_time_only_recovery
+
+    distance_invariant_applicable = (
+        target_basis == "distance" and workout.distance_km is not None and not distance_mixed_basis
+    )
     duration_invariant_applicable = target_basis == "duration" and workout.duration_minutes is not None
 
     distance_closes_total = True
-    if distance_invariant_applicable:
+    if distance_mixed_basis:
+        # Never a vacuous/misleading True: part of the session (the jog
+        # recoveries) has a real but unknown distance, so the total is NOT
+        # exactly closed by the known blocks alone.
+        distance_closes_total = False
+    elif distance_invariant_applicable:
         distance_closes_total = (
             steps_distance_km_sum is not None
             and abs(steps_distance_km_sum - workout.distance_km) <= _DISTANCE_TOLERANCE_KM
@@ -907,6 +1018,8 @@ def _finalize(
         )
 
     all_reason_codes = list(reason_codes)
+    if distance_mixed_basis:
+        all_reason_codes.append("DISTANCE_TOTAL_MIXED_BASIS")
     for step in steps:
         all_reason_codes.extend(step.reason_codes)
 

@@ -156,6 +156,14 @@ class WeekV2SessionResponse(BaseModel):
     via ``WeekV2PlanResponse.unmatched_actuals``, never fabricated here.
     None for a normal, PR230-backed session."""
 
+    structured: Optional[dict] = None
+    """C234 — StructuredWorkoutPrescriptionEngine output for this session
+    (``StructuredWorkoutPrescription.model_dump(mode="json")``), built from
+    the EFFECTIVE FINAL prescription. Additive field, never breaking #233's
+    existing contract. None when the engine was not wired for this session
+    (e.g. ``execution_status == "prescription_unavailable"``, or the
+    workout_type is not yet supported by the engine)."""
+
 
 class WeekV2PlanResponse(BaseModel):
     """Weekly plan — aggregate + individual sessions."""

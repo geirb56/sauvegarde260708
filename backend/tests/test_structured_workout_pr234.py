@@ -243,8 +243,10 @@ def test_quality_goal_aware_10k_vs_marathon_specific_differ_in_zone():
 
     work_10k = next(s for s in r_10k.steps if s.step_type == StructuredStepType.work)
     work_marathon = next(s for s in r_marathon.steps if s.step_type == StructuredStepType.work)
-    # Both select race_specific_steady, but the pace ZONE differs by goal.
-    assert work_10k.pace_zone == "T"
+    # Both select race_specific_steady, but Training Paces has no canonical
+    # 10K race-specific zone (C234 blocker 4) — never fake it with T.
+    assert work_10k.pace_zone is None
+    assert "RACE_SPECIFIC_PACE_UNAVAILABLE" in r_10k.reason_codes
     assert work_marathon.pace_zone == "M"
 
 
@@ -289,14 +291,30 @@ def test_phase_aware_taper_always_conservative_regardless_of_goal():
 
 
 @pytest.mark.parametrize("distance_km", [3.0, 6.0, 9.0, 12.0, 16.0, 21.0])
-def test_total_distance_invariant_quality(distance_km):
+def test_total_distance_mixed_basis_quality_with_time_only_recovery(distance_km):
+    """C234 blocker 2 — a distance-based quality session whose work step
+    embeds a time-only jog recovery (recovery.distance_m is None) can NEVER
+    claim exact distance closure: the athlete runs the known blocks PLUS an
+    unknown extra distance while jogging the recoveries (None != 0)."""
     r = build_structured_workout_prescription(
         workout=_workout("quality", distance_km=distance_km),
         plan_goal=_goal(GoalType.ten_k),
         periodization=_phase(PeriodizationPhase.build),
     )
-    assert r.distance_invariant_applicable
-    assert r.distance_closes_total
+    work_step = next(s for s in r.steps if s.step_type == StructuredStepType.work)
+    assert work_step.repetitions > 1
+    assert work_step.recovery is not None
+    assert work_step.recovery.duration_seconds is not None
+    assert work_step.recovery.distance_m is None  # never fabricated (None != 0)
+
+    # The invariant CANNOT be asserted exact — never a vacuous/misleading True.
+    assert not r.distance_invariant_applicable
+    assert not r.distance_closes_total
+    assert "DISTANCE_TOTAL_MIXED_BASIS" in r.reason_codes
+
+    # steps_distance_km_sum still reports the sum of KNOWN prescribed-block
+    # distances (warmup + work×reps + cooldown) — never coerced to None,
+    # never fabricated — but is no longer presented as "the exact total".
     assert r.steps_distance_km_sum == pytest.approx(distance_km, abs=0.01)
     computed = _all_step_distance_m(r)
     assert computed is not None
@@ -350,6 +368,9 @@ def test_total_duration_invariant_continuous():
 
 
 def test_recovery_never_inflates_distance_total():
+    """C234 blocker 2 — recovery never fabricates a distance (None != 0), and
+    the KNOWN block sum still equals the prescribed total exactly, but the
+    overall invariant is explicitly NOT claimed exact (mixed basis)."""
     r = build_structured_workout_prescription(
         workout=_workout("quality", distance_km=9.0),
         plan_goal=_goal(GoalType.five_k),
@@ -359,9 +380,15 @@ def test_recovery_never_inflates_distance_total():
     assert work_step.repetitions > 1
     assert work_step.recovery is not None
     assert work_step.recovery.distance_m is None
-    # Distance sum still closes exactly even though recovery exists.
-    assert r.distance_closes_total
+    # Known-block distance sum still closes exactly (recovery never adds a
+    # fabricated distance component)...
     assert r.steps_distance_km_sum == pytest.approx(9.0, abs=0.01)
+    # ...but the exact-closure claim itself is explicitly withheld because a
+    # real (unknown) recovery distance exists (never a misleading True).
+    assert not r.distance_invariant_applicable
+    assert not r.distance_closes_total
+    assert "DISTANCE_TOTAL_MIXED_BASIS" in r.reason_codes
+
 
 
 def test_recovery_included_in_duration_total_when_duration_based():
@@ -391,7 +418,13 @@ def test_rounding_no_silent_drift_distance(distance_km):
         plan_goal=_goal(GoalType.marathon),
         periodization=_phase(PeriodizationPhase.build),
     )
-    assert r.distance_closes_total
+    # These volumes select threshold_intervals with an embedded time-only
+    # recovery (mixed basis, C234 blocker 2) — the KNOWN block sum still
+    # closes exactly (no silent drift), even though the overall exact-total
+    # claim is explicitly withheld.
+    assert r.steps_distance_km_sum == pytest.approx(distance_km, abs=0.01)
+    assert not r.distance_closes_total
+    assert "DISTANCE_TOTAL_MIXED_BASIS" in r.reason_codes
     for step in r.steps:
         if step.distance_m is not None:
             assert step.distance_m >= 0.0
@@ -713,7 +746,11 @@ def test_goal_coverage_quality_build_phase(goal_type):
         plan_goal=_goal(goal_type),
         periodization=_phase(PeriodizationPhase.build),
     )
-    assert r.distance_closes_total
+    # Build-phase interval structures embed a time-only jog recovery:
+    # exact distance closure is explicitly withheld (mixed basis, C234
+    # blocker 2) — the known block sum still equals the prescribed total.
+    assert r.steps_distance_km_sum == pytest.approx(12.0, abs=0.01)
+    assert not r.distance_closes_total
     assert any(c.startswith("QUALITY_") for c in r.reason_codes)
     assert _goal_code_present(r, goal_type)
 
@@ -836,3 +873,195 @@ def test_unknown_workout_type_never_invents_structure():
     )
     assert r.steps[0].step_type == StructuredStepType.continuous
     assert r.distance_closes_total
+
+
+# ---------------------------------------------------------------------------
+# C234 corrective audit — blocker 3: steady != easy
+# ---------------------------------------------------------------------------
+
+
+def test_steady_never_defaults_to_easy_zone():
+    """C234 blocker 3 — WorkoutGenerator's "steady" has intensity_class
+    "moderate" (distinct from easy's "low"); the structured engine must
+    never coerce it into Easy pace (or any other zone) by default."""
+    workout = _workout("steady", distance_km=10.0)
+    assert workout.intensity_class == "moderate"
+    r = build_structured_workout_prescription(
+        workout=workout,
+        plan_goal=_goal(GoalType.ten_k),
+        periodization=_phase(PeriodizationPhase.base),
+    )
+    step = r.steps[0]
+    assert step.pace_zone is None
+    assert step.pace_zone != "E"
+    assert "STEADY_ZONE_UNAVAILABLE" in step.reason_codes
+    # Distance closure is unaffected (steady is still a single continuous
+    # block with no recovery — only the zone assignment changes).
+    assert r.distance_closes_total
+
+
+@pytest.mark.parametrize("workout_type", ["easy", "recovery", "long_easy"])
+def test_continuous_easy_family_still_uses_zone_e(workout_type):
+    """Confirms the corrective fix (blocker 3) is scoped to "steady" only —
+    easy / recovery / long_easy keep zone E as before."""
+    r = build_structured_workout_prescription(
+        workout=_workout(workout_type, distance_km=10.0),
+        plan_goal=_goal(GoalType.ten_k),
+        periodization=_phase(PeriodizationPhase.base),
+    )
+    assert r.steps[0].pace_zone == "E"
+
+
+# ---------------------------------------------------------------------------
+# C234 corrective audit — blocker 4: honest race-specific pace
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("goal_type", [GoalType.ten_k, GoalType.half_marathon, GoalType.ultra])
+def test_race_specific_never_invents_pace_for_non_marathon_goals(goal_type):
+    """C234 blocker 4 — Training Paces provides only E/M/T/I/R; it does NOT
+    provide a 5K/10K/Half/Ultra race-specific pace. 10K/Half/Ultra "specific"
+    quality sessions must never present T (or any other zone) as if it were
+    a genuine race-specific pace."""
+    r = build_structured_workout_prescription(
+        workout=_workout("quality", distance_km=14.0),
+        plan_goal=_goal(goal_type),
+        periodization=_phase(PeriodizationPhase.specific),
+        training_paces=_paces(),
+    )
+    assert "QUALITY_RACE_SPECIFIC_SELECTED" in r.reason_codes
+    work_step = next(s for s in r.steps if s.step_type == StructuredStepType.work)
+    assert work_step.pace_zone is None
+    assert work_step.pace_zone != "T"
+    assert work_step.pace_min_per_km is None
+    assert "RACE_SPECIFIC_PACE_UNAVAILABLE" in r.reason_codes
+
+
+def test_race_specific_marathon_uses_m_correctly():
+    """Marathon is the only goal with a legitimate canonical race-specific
+    zone (M) — this must keep working exactly as before."""
+    r = build_structured_workout_prescription(
+        workout=_workout("quality", distance_km=14.0),
+        plan_goal=_goal(GoalType.marathon),
+        periodization=_phase(PeriodizationPhase.specific),
+        training_paces=_paces(),
+    )
+    assert "QUALITY_RACE_SPECIFIC_SELECTED" in r.reason_codes
+    work_step = next(s for s in r.steps if s.step_type == StructuredStepType.work)
+    assert work_step.pace_zone == "M"
+    assert work_step.pace_min_per_km is not None
+    assert "RACE_SPECIFIC_PACE_UNAVAILABLE" not in r.reason_codes
+
+
+# ---------------------------------------------------------------------------
+# C234 corrective audit — blocker 5: recovery_count == repetitions - 1
+# ---------------------------------------------------------------------------
+
+
+def test_recovery_count_distance_based_threshold_two_reps():
+    # 3.0 km ten_k/build -> threshold_intervals, reps == 2 (see mixed-basis
+    # test above): recovery_count must be reps - 1 == 1, never reps == 2.
+    r = build_structured_workout_prescription(
+        workout=_workout("quality", distance_km=3.0),
+        plan_goal=_goal(GoalType.ten_k),
+        periodization=_phase(PeriodizationPhase.build),
+    )
+    work_step = next(s for s in r.steps if s.step_type == StructuredStepType.work)
+    assert work_step.repetitions == 2
+    assert work_step.recovery is not None
+    assert work_step.recovery.count == 1
+
+
+def test_recovery_count_distance_based_threshold_four_reps():
+    # 9.0 km ten_k/build -> threshold_intervals, reps == 4: recovery_count
+    # must be 3, never 4.
+    r = build_structured_workout_prescription(
+        workout=_workout("quality", distance_km=9.0),
+        plan_goal=_goal(GoalType.ten_k),
+        periodization=_phase(PeriodizationPhase.build),
+    )
+    work_step = next(s for s in r.steps if s.step_type == StructuredStepType.work)
+    assert work_step.repetitions == 4
+    assert work_step.recovery is not None
+    assert work_step.recovery.count == 3
+
+
+def test_recovery_count_one_rep_fallback_has_no_recovery():
+    # Degenerate/volume-limited volumes fall back to a single continuous
+    # work block (repetitions == 1) with no recovery metadata at all —
+    # equivalent to 0 recoveries, never 1.
+    r = build_structured_workout_prescription(
+        workout=_workout("quality", distance_km=2.5),
+        plan_goal=_goal(GoalType.five_k),
+        periodization=_phase(PeriodizationPhase.build),
+    )
+    work_step = next(s for s in r.steps if s.step_type == StructuredStepType.work)
+    assert work_step.repetitions == 1
+    assert work_step.recovery is None
+
+
+@pytest.mark.parametrize(
+    "duration_minutes,expected_reps,expected_recovery_count",
+    [(20, 2, 1), (45, 4, 3)],
+)
+def test_recovery_count_duration_based_matches_reps_minus_one(
+    duration_minutes, expected_reps, expected_recovery_count
+):
+    r = build_structured_workout_prescription(
+        workout=_workout("quality", duration_minutes=duration_minutes),
+        plan_goal=_goal(GoalType.ten_k),
+        periodization=_phase(PeriodizationPhase.build),
+    )
+    work_step = next(s for s in r.steps if s.step_type == StructuredStepType.work)
+    assert work_step.repetitions == expected_reps
+    assert work_step.recovery is not None
+    assert work_step.recovery.count == expected_recovery_count
+    # Duration total must still close exactly using recovery_count (not
+    # repetitions) as the recovery multiplier.
+    assert r.duration_invariant_applicable
+    assert r.duration_closes_total
+    assert r.steps_duration_seconds_sum == duration_minutes * 60
+
+
+def test_recovery_duration_total_uses_count_not_repetitions():
+    """Directly proves the blocker 5 fix: total recovery contribution to
+    steps_duration_seconds_sum is duration_seconds * count, never
+    duration_seconds * repetitions."""
+    r = build_structured_workout_prescription(
+        workout=_workout("quality", duration_minutes=45),
+        plan_goal=_goal(GoalType.ten_k),
+        periodization=_phase(PeriodizationPhase.build),
+    )
+    work_step = next(s for s in r.steps if s.step_type == StructuredStepType.work)
+    recovery = work_step.recovery
+    assert recovery is not None
+    assert recovery.count == work_step.repetitions - 1
+    warmup = next(s for s in r.steps if s.step_type == StructuredStepType.warmup)
+    cooldown = next(s for s in r.steps if s.step_type == StructuredStepType.cooldown)
+    expected_total = (
+        (warmup.duration_seconds or 0)
+        + work_step.repetitions * work_step.duration_seconds
+        + recovery.count * recovery.duration_seconds
+        + (cooldown.duration_seconds or 0)
+    )
+    assert expected_total == 45 * 60
+    assert r.steps_duration_seconds_sum == expected_total
+
+
+# ---------------------------------------------------------------------------
+# C234 corrective audit — blocker 2 companion: continuous / no-recovery
+# distance still closes exactly (not everything becomes mixed basis)
+# ---------------------------------------------------------------------------
+
+
+def test_distance_continuous_no_recovery_still_closes_exactly():
+    r = build_structured_workout_prescription(
+        workout=_workout("long_easy", distance_km=16.0),
+        plan_goal=_goal(GoalType.marathon),
+        periodization=_phase(PeriodizationPhase.base),
+    )
+    assert r.steps[0].recovery is None
+    assert r.distance_invariant_applicable
+    assert r.distance_closes_total
+    assert "DISTANCE_TOTAL_MIXED_BASIS" not in r.reason_codes
+

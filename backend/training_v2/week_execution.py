@@ -57,11 +57,15 @@ from .performed_workout import (
     PrescribedWorkout,
     build_performed_workouts,
 )
+from .periodization import PeriodizationSnapshot
+from .plan_goal import PlanGoal
 from .prescription_snapshot import (
     PrescriptionSnapshot,
     resolve_effective_session,
     snapshot_from_prescription,
 )
+from .structured_workout import StructuredWorkoutPrescription, build_structured_workout_prescription
+from .training_paces import TrainingPaces
 from .workout_generator import WorkoutPrescription
 
 _DAY_INDEX: Dict[str, int] = {
@@ -107,6 +111,15 @@ class SessionExecution:
     planned_date: date
     row: Optional[PerformedWorkout]
     execution_status: Optional[str] = None
+    structured: Optional[StructuredWorkoutPrescription] = None
+    """C234 — StructuredWorkoutPrescriptionEngine output built from
+    ``session`` (the EFFECTIVE FINAL prescription above — frozen snapshot
+    when one exists, else live — never a stale pre-adaptation parent).
+    ``None`` when ``plan_goal``/``periodization`` were not supplied to
+    ``build_week_execution``, or when this day's prescription itself is
+    untrustworthy (``execution_status ==
+    EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE``) — never structuring a
+    fact that isn't real."""
 
 
 @dataclass(frozen=True)
@@ -151,6 +164,9 @@ def build_week_execution(
     sessions: Sequence[WorkoutPrescription],
     garmin_docs: Sequence[dict],
     frozen_snapshots: Optional[Mapping[str, PrescriptionSnapshot]] = None,
+    plan_goal: Optional[PlanGoal] = None,
+    periodization: Optional[PeriodizationSnapshot] = None,
+    training_paces: Optional[TrainingPaces] = None,
 ) -> WeekExecutionResult:
     """Reconcile one week's WorkoutPrescription sessions with Garmin actuals.
 
@@ -173,6 +189,15 @@ def build_week_execution(
         ``prescription_id``, already fetched by the caller. When a session's
         ``prescription_id`` is present here, its snapshot is authoritative
         for BOTH matching and display — the live session is ignored.
+    plan_goal, periodization, training_paces
+        C234 — when ``plan_goal`` and ``periodization`` are supplied, each
+        ``SessionExecution.structured`` is populated by
+        ``StructuredWorkoutPrescriptionEngine`` from the EFFECTIVE session
+        (frozen snapshot when one exists, else live — see ``session`` above),
+        wiring the engine into the real Week pipeline. ``training_paces`` is
+        optional (consumed as-is, never recomputed here). Omitted for
+        ``EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE`` days (no trustworthy
+        prescription to structure).
 
     Returns
     -------
@@ -311,8 +336,20 @@ def build_week_execution(
                 "prescription is required; the week must never be silently "
                 "truncated."
             )
+        structured: Optional[StructuredWorkoutPrescription] = None
+        if plan_goal is not None and periodization is not None:
+            # C234 — structure the EFFECTIVE (final) session only, never the
+            # raw `session` above (see SessionExecution.structured docstring).
+            structured = build_structured_workout_prescription(
+                workout=effective,
+                plan_goal=plan_goal,
+                periodization=periodization,
+                training_paces=training_paces,
+            )
         session_executions.append(
-            SessionExecution(session=effective, planned_date=planned_date, row=row)
+            SessionExecution(
+                session=effective, planned_date=planned_date, row=row, structured=structured
+            )
         )
 
     # C231 — unmatched_actuals are scoped to the CURRENT week only: an extra
