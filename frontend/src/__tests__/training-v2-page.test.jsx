@@ -40,9 +40,9 @@ function weekData() {
       confidence: "high",
     },
     week: {
-      completed_km: 21,
-      completed_duration_minutes: null,
-      completed_session_count: 2,
+      planned_km: 50,
+      planned_duration_minutes: null,
+      session_count: 5,
       sessions: [
         {
           day: "monday", workout_type: "easy", distance_km: 8, duration_minutes: 45, estimated_tss: null,
@@ -172,9 +172,9 @@ function pacesData({ confidence = "HIGH" } = {}) {
       interval: null,
       repetition: null,
     } : {
-      easy: { lower: { pace_str: "5:10" }, upper: { pace_str: "5:55" } },
+      easy: { lower: { pace_str: "5:10", min_per_km: 5.1667 }, upper: { pace_str: "5:55", min_per_km: 5.9167 } },
       marathon: null,
-      threshold: { pace_str: "4:35" },
+      threshold: { pace_str: "4:35", min_per_km: 4.5833 },
       interval: null,
       repetition: null,
     },
@@ -523,5 +523,208 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
 
     expect(screen.queryByText(/sessionDetailLinkAvailable/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/sessionDetailLinkUnavailable/i)).not.toBeInTheDocument();
+  });
+
+  // ── PR233 — Training UX V3 ────────────────────────────────────────────
+
+  test("separates planned volume from real Garmin completed volume, and never counts an unmatched extra as a completed planned session", async () => {
+    mockAxios();
+    renderPage();
+
+    const volume = await screen.findByTestId("training-v2-week-volume");
+    // weekData(): weekly_target.target_km = 50, only session[0] (monday) is
+    // matched with actual.distance_km = 8.1 -> completed must reflect ONLY
+    // that matched activity, never the full planned 50 km.
+    expect(within(volume).getByTestId("week-volume-planned")).toHaveTextContent(
+      formatDistance(50, { unitSystem: "metric" })
+    );
+    expect(within(volume).getByTestId("week-volume-completed")).toHaveTextContent(
+      formatDistance(8.1, { unitSystem: "metric" })
+    );
+    expect(within(volume).getByTestId("week-volume-sessions")).toHaveTextContent("1/5");
+  });
+
+  test("shows a separate 'extra Garmin volume' figure driven only by unmatched_actuals, never merged into completed plan volume", async () => {
+    const week = weekData();
+    week.week.unmatched_actuals = [
+      { activity_id: "extra-1", distance_km: 6.2, duration_minutes: 32, pace_min_per_km: 5.16, activity_type: "running", start_time: "2026-08-23T09:00:00" },
+    ];
+    mockAxios({ week });
+    renderPage();
+
+    const volume = await screen.findByTestId("training-v2-week-volume");
+    expect(within(volume).getByTestId("week-volume-extra")).toHaveTextContent(
+      formatDistance(6.2, { unitSystem: "metric" })
+    );
+    // The extra Garmin activity must never inflate "completed" plan volume.
+    expect(within(volume).getByTestId("week-volume-completed")).toHaveTextContent(
+      formatDistance(8.1, { unitSystem: "metric" })
+    );
+  });
+
+  test("unmatched Garmin activities are rendered in their own section, never attached to a planned session card", async () => {
+    const week = weekData();
+    week.week.unmatched_actuals = [
+      { activity_id: "extra-1", distance_km: 6.2, duration_minutes: 32, pace_min_per_km: 5.16, activity_type: "running", start_time: "2026-08-23T09:00:00" },
+    ];
+    mockAxios({ week });
+    renderPage();
+
+    const unmatched = await screen.findByTestId("training-v2-unmatched");
+    expect(within(unmatched).getAllByTestId("unmatched-activity-row")).toHaveLength(1);
+    expect(within(unmatched).getByTestId("unmatched-activity-row")).toHaveTextContent(
+      formatDistance(6.2, { unitSystem: "metric" })
+    );
+    // Saturday/other rows must not show this unmatched activity's distance.
+    const weekCard = screen.getByTestId("training-v2-week");
+    expect(within(weekCard).queryByText(formatDistance(6.2, { unitSystem: "metric" }))).not.toBeInTheDocument();
+  });
+
+  test("unmatched section shows an explicit empty state when there is nothing extra this week", async () => {
+    mockAxios();
+    renderPage();
+
+    const unmatched = await screen.findByTestId("training-v2-unmatched");
+    expect(within(unmatched).getByTestId("unmatched-empty-state")).toBeInTheDocument();
+    expect(within(unmatched).queryByTestId("unmatched-activity-row")).not.toBeInTheDocument();
+  });
+
+  test("clicking a matched session reveals prescribed vs real Garmin actual, with real pace and a link to analysis using the real activity id", async () => {
+    mockAxios();
+    renderPage();
+
+    await screen.findByTestId("training-v2-week");
+    fireEvent.click(screen.getByTestId("session-detail-toggle-monday"));
+
+    const detail = screen.getByTestId("training-v2-day-detail-monday");
+    expect(detail).toBeVisible();
+    expect(within(detail).getByTestId("session-actual-distance-monday")).toHaveTextContent(
+      formatDistance(8.1, { unitSystem: "metric" })
+    );
+    expect(within(detail).getByTestId("session-actual-duration-monday")).toHaveTextContent("44 min");
+    expect(within(detail).getByTestId("session-actual-pace-monday")).toHaveTextContent("/km");
+    expect(within(detail).getByTestId("session-analysis-link-monday")).toHaveAttribute("href", "/workout/a1");
+  });
+
+  test("clicking a planned (not-yet-matched) session shows no fabricated actual and no analysis link", async () => {
+    mockAxios();
+    renderPage();
+
+    await screen.findByTestId("training-v2-week");
+    fireEvent.click(screen.getByTestId("session-detail-toggle-friday"));
+
+    const detail = screen.getByTestId("training-v2-day-detail-friday");
+    expect(detail).toBeVisible();
+    expect(within(detail).getByTestId("session-no-actual-friday")).toBeInTheDocument();
+    expect(within(detail).queryByTestId("session-analysis-link-friday")).not.toBeInTheDocument();
+  });
+
+  test("a prescription_unavailable session cannot be expanded (no detail toggle beyond the neutral state)", async () => {
+    const unavailableWeek = weekData();
+    unavailableWeek.week.sessions[3] = {
+      day: "thursday", workout_type: null, intensity_class: null, distance_km: null, duration_minutes: null,
+      estimated_tss: null, reason_codes: [], matching_status: null, adherence_status: null, actual: null,
+      execution_status: "prescription_unavailable",
+    };
+    mockAxios({ week: unavailableWeek });
+    renderPage();
+
+    await screen.findByTestId("training-v2-week");
+    const toggle = screen.getByTestId("session-detail-toggle-thursday");
+    expect(toggle).toBeDisabled();
+    expect(screen.queryByTestId("training-v2-day-detail-thursday")).not.toBeInTheDocument();
+  });
+
+  test("a rest day cannot be expanded (nothing real to show beyond 'rest')", async () => {
+    mockAxios();
+    renderPage();
+
+    await screen.findByTestId("training-v2-week");
+    // weekData()'s tuesday and saturday are explicit rest days.
+    expect(screen.getByTestId("session-detail-toggle-tuesday")).toBeDisabled();
+    expect(screen.queryByTestId("training-v2-day-detail-tuesday")).not.toBeInTheDocument();
+  });
+
+  test("never invents a structured workout (splits/reps/warmup) for a 'quality' session — only the raw backend prescription text is shown", async () => {
+    mockAxios();
+    renderPage();
+
+    const week = await screen.findByTestId("training-v2-week");
+    // wednesday is workout_type=quality with prescription "3 × 10 min" from
+    // the mock backend payload — this is rendered verbatim, never expanded
+    // into an invented structure like "3x2km threshold" or a warmup/cooldown.
+    expect(within(week).getByTestId("training-v2-day-prescription-wednesday")).toHaveTextContent("3 × 10 min");
+    expect(screen.queryByText(/warmup/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/cooldown/i)).not.toBeInTheDocument();
+  });
+
+  test("never invents a pace for a session whose prescription carries none", async () => {
+    mockAxios();
+    renderPage();
+
+    await screen.findByTestId("training-v2-week");
+    fireEvent.click(screen.getByTestId("session-detail-toggle-wednesday"));
+    const detail = screen.getByTestId("training-v2-day-detail-wednesday");
+    // weekData()'s quality session has no pace_target/pace/zone field at all
+    // -> no pace must appear anywhere in its prescribed block.
+    expect(within(detail).queryByText(/min\/km/i)).not.toBeInTheDocument();
+    expect(within(detail).queryByText(/\/km$/)).not.toBeInTheDocument();
+  });
+
+  test("imperial mode never shows a hardcoded /km suffix (distance, pace, and training paces)", async () => {
+    mockAxios();
+    renderPage({ unitSystem: "imperial" });
+
+    await screen.findByTestId("training-v2-week");
+    fireEvent.click(screen.getByTestId("session-detail-toggle-monday"));
+    const detail = screen.getByTestId("training-v2-day-detail-monday");
+    expect(within(detail).getByTestId("session-actual-pace-monday")).toHaveTextContent("/mi");
+    expect(within(detail).queryByText(/\/km/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("paces-collapsible-trigger"));
+    const paces = screen.getByTestId("training-v2-paces");
+    expect(within(paces).queryByText(/\/km/)).not.toBeInTheDocument();
+    expect(within(paces).getAllByText(/\/mi/).length).toBeGreaterThan(0);
+  });
+
+  test("metric mode shows /km for training paces and real activity pace", async () => {
+    mockAxios();
+    renderPage({ unitSystem: "metric" });
+
+    await screen.findByTestId("training-v2-week");
+    fireEvent.click(screen.getByTestId("session-detail-toggle-monday"));
+    expect(screen.getByTestId("session-actual-pace-monday")).toHaveTextContent("/km");
+
+    fireEvent.click(screen.getByTestId("paces-collapsible-trigger"));
+    expect(within(screen.getByTestId("training-v2-paces")).getAllByText(/\/km/).length).toBeGreaterThan(0);
+  });
+
+  test("renders correctly on a narrow mobile viewport with no horizontal session-detail overflow markers", async () => {
+    mockAxios();
+    renderPage({ width: 360 });
+
+    const page = await screen.findByTestId("training-v2-page");
+    expect(page).toBeInTheDocument();
+    expect(screen.getByTestId("training-v2-week-volume")).toBeInTheDocument();
+    expect(screen.getByTestId("training-v2-unmatched")).toBeInTheDocument();
+  });
+
+  test("no Done/Missed manual feedback button exists anywhere on the page", async () => {
+    mockAxios();
+    renderPage();
+    await screen.findByTestId("training-v2-page");
+
+    // Only the toggle buttons (session-detail-toggle-*) exist for sessions;
+    // none of them are a manual Done/Missed feedback action. A real manual
+    // feedback control would use a dedicated test id / exact button label —
+    // neither exists in this UI.
+    const allButtons = screen.getAllByRole("button");
+    allButtons.forEach((button) => {
+      expect(button.getAttribute("data-testid") || "").not.toMatch(/^(mark-)?(done|missed)-button$/i);
+    });
+    expect(screen.queryByText(/mark as done/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/mark as missed/i)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("done-button")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("missed-button")).not.toBeInTheDocument();
   });
 });
