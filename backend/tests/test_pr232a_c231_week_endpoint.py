@@ -209,6 +209,50 @@ async def _get_today(fake_db: _FakeDB, reference_date: date = _MONDAY) -> Dict:
             p.stop()
 
 
+@pytest.mark.asyncio
+async def test_c234_paces_uses_garmin_local_reference_date_at_utc_midnight():
+    """The paces endpoint must share Today/Week's local Garmin clock."""
+    fake_db = _FakeDB()
+    _seed_connected(fake_db, connected=True)
+    fake_db.garmin_activities._docs.append({
+        "user_id": _USER_ID,
+        "start_time": "2025-09-15 08:00:00",
+        "garmin_activity": {
+            "start_time": "2025-09-15 06:00:00",
+            "start_time_local": "2025-09-15 08:00:00",
+        },
+    })
+    captured = {}
+
+    async def _load(_db, *, user_id, reference_date):
+        captured["reference_date"] = reference_date
+        from training_v2.training_paces import compute_training_paces
+        return compute_training_paces([], reference_date, user_max_hr=None)
+
+    fixed_dt = datetime(2025, 9, 15, 22, 30, tzinfo=timezone.utc)
+    patches = [
+        patch.object(server, "db", fake_db),
+        patch("server.get_user_access", AsyncMock(side_effect=_user_access)),
+        patch("server.datetime", _make_fixed_datetime_class(fixed_dt)),
+        patch("training_v2.training_paces_authority.load_canonical_training_paces", _load),
+    ]
+    started = []
+    try:
+        for p in patches:
+            p.start()
+            started.append(p)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=server.app), base_url="http://test",
+        ) as client:
+            response = await client.get("/api/training/v2/paces", headers=_bearer())
+        assert response.status_code == 200, response.text
+    finally:
+        for p in reversed(started):
+            p.stop()
+
+    assert captured["reference_date"] == date(2025, 9, 16)
+
+
 def _seed_cycle(fake_db: _FakeDB, goal: str = "SEMI", reference_date: date = _MONDAY, race_weeks_ahead: int = 16) -> None:
     cycle_start = (reference_date - timedelta(weeks=4)).isoformat()
     fake_db.training_cycles._docs.append({

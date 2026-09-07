@@ -316,6 +316,27 @@ Pureté/déterminisme du moteur, modèles `frozen`, sérialisation Pydantic, goa
 
 **Aucun merge n'a été effectué.** Correction poussée sur la branche existante `copilot/pr-234-structured-workout-prescription`. La Pull Request reste en **DRAFT** vers `copilot/dev`.
 
+## 23. C234 FINAL CLOCK ALIGNMENT
+
+- Head avant correction : `b8f8c6e3abcdd3b526f484527906318db48e9147`.
+- Bug : `/training/v2/paces` utilisait directement `datetime.now(timezone.utc).date()`,
+  alors que Today/Week résolvaient la date depuis l'offset local Garmin observé.
+- Correction : `/training/v2/paces` charge la même preuve d'activité Garmin récente,
+  appelle `_resolve_canonical_reference_date`, puis transmet cette date à
+  `load_canonical_training_paces`. Les règles de qualification Training Paces et la
+  limite technique de 500 activités restent inchangées.
+- Source unique de `reference_date` : `_resolve_canonical_reference_date` →
+  `training_v2.local_reference_date.resolve_local_reference_date`.
+- Test ajouté : frontière UTC `2025-09-15 22:30Z` avec Garmin `UTC+02:00`, vérifiant
+  que l'autorité Training Paces reçoit `2025-09-16`, la même date que Today/Week.
+- Validation exécutée dans ce sandbox : `python -m pytest ...` n'a pas pu démarrer
+  (`No module named pytest`); aucune suite pytest n'est donc déclarée comme passée.
+  Le contrôle syntaxique ciblé est exécuté avant le commit.
+- Description GitHub : la mise à jour du body PR reste à appliquer via l'outil GitHub
+  d'édition de PR, indisponible dans cette session.
+- Aucune CI GitHub n'est déclarée comme exécutée ici; les runs ont été consultés.
+- Aucun merge effectué; la PR reste en DRAFT.
+
 ---
 
 ## 22. C234 FINAL CORRECTIVE AUDIT

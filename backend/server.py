@@ -4515,7 +4515,18 @@ async def get_training_v2_paces(user: dict = Depends(auth_user)):
     from training_v2.training_paces_authority import load_canonical_training_paces
 
     user_id = user["id"]
-    reference_date = datetime.now(timezone.utc).date()
+    # C234 — use the same Garmin-observed local calendar date as Today/Week.
+    # This small evidence read is intentionally separate from the authority's
+    # 500-activity pace load: it supplies the clock evidence without changing
+    # Training Paces' historical qualification policy.
+    now_utc = datetime.now(timezone.utc)
+    garmin_activities_for_clock = await db.garmin_activities.find(
+        {"user_id": user_id},
+        {"_id": 0},
+    ).sort("start_time", -1).limit(500).to_list(length=500)
+    reference_date = _resolve_canonical_reference_date(
+        now_utc, garmin_activities_for_clock
+    )
     paces = await load_canonical_training_paces(db, user_id=user_id, reference_date=reference_date)
     return training_paces_to_api_dict(paces)
 
