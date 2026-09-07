@@ -116,10 +116,33 @@ class SessionExecution:
     ``session`` (the EFFECTIVE FINAL prescription above — frozen snapshot
     when one exists, else live — never a stale pre-adaptation parent).
     ``None`` when ``plan_goal``/``periodization`` were not supplied to
-    ``build_week_execution``, or when this day's prescription itself is
+    ``build_week_execution``, when this day's prescription itself is
     untrustworthy (``execution_status ==
-    EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE``) — never structuring a
+    EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE``), OR (C234 final corrective
+    audit) when this is a STRICT HISTORICAL day (``planned_date <
+    reference_date``) — see ``structured_status`` below. Never structuring a
     fact that isn't real."""
+    structured_status: Optional[str] = None
+    """C234 (final corrective audit) — machine-readable status explaining
+    ``structured``'s value, set only when structuring was requested (i.e.
+    ``plan_goal``/``periodization`` were supplied to ``build_week_execution``):
+
+    - ``"today_served"``  — ``planned_date == reference_date``: structured
+      from the atomically-served prescription for today. Trustworthy.
+    - ``"future_live"``   — ``planned_date > reference_date``: structured
+      from a still-evolving, not-yet-served live prescription. Prospective —
+      may legitimately change before it is actually served.
+    - ``"historical_unavailable"`` — ``planned_date < reference_date`` with
+      an existing frozen ``PrescriptionSnapshot`` parent. The PARENT
+      (workout_type/distance/duration) is frozen and trustworthy, but no
+      STRUCTURED snapshot was ever frozen for it (that is #235's job).
+      Recomputing structure now from CURRENT goal/phase/paces would silently
+      rewrite history — forbidden. ``structured`` is always ``None`` here.
+    - ``"prescription_unavailable"`` — mirrors ``execution_status``: no
+      trustworthy prescription at all for this day.
+
+    ``None`` when structuring was not requested at all (``plan_goal``/
+    ``periodization`` omitted) — pre-C234 behaviour, unchanged."""
 
 
 @dataclass(frozen=True)
@@ -194,10 +217,19 @@ def build_week_execution(
         ``SessionExecution.structured`` is populated by
         ``StructuredWorkoutPrescriptionEngine`` from the EFFECTIVE session
         (frozen snapshot when one exists, else live — see ``session`` above),
-        wiring the engine into the real Week pipeline. ``training_paces`` is
-        optional (consumed as-is, never recomputed here). Omitted for
-        ``EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE`` days (no trustworthy
-        prescription to structure).
+        wiring the engine into the real Week pipeline. ``training_paces``
+        MUST come from the single canonical Training Paces authority (see
+        ``training_paces_authority.load_canonical_training_paces``), never a
+        locally recomputed value over a different activity window. Omitted
+        (``structured=None``) for ``EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE``
+        days, and — C234 (final corrective audit), BLOCKER 2 FIX — also
+        omitted for any STRICT HISTORICAL day (``planned_date <
+        reference_date``) even when a frozen parent snapshot exists: only
+        the FROZEN PARENT (workout_type/distance/duration) is trustworthy
+        history; no structured snapshot has been frozen for it (that is
+        #235's job), so recomputing structure from today's goal/phase/paces
+        would silently rewrite history. See ``SessionExecution.
+        structured_status`` for the machine-readable reason.
 
     Returns
     -------
@@ -319,6 +351,11 @@ def build_week_execution(
                     planned_date=planned_date,
                     row=None,
                     execution_status=EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE,
+                    structured_status=(
+                        EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE
+                        if (plan_goal is not None and periodization is not None)
+                        else None
+                    ),
                 )
             )
             continue
@@ -337,18 +374,41 @@ def build_week_execution(
                 "truncated."
             )
         structured: Optional[StructuredWorkoutPrescription] = None
+        structured_status: Optional[str] = None
         if plan_goal is not None and periodization is not None:
-            # C234 — structure the EFFECTIVE (final) session only, never the
-            # raw `session` above (see SessionExecution.structured docstring).
-            structured = build_structured_workout_prescription(
-                workout=effective,
-                plan_goal=plan_goal,
-                periodization=periodization,
-                training_paces=training_paces,
-            )
+            # C234 (final corrective audit) — BLOCKER 2 FIX: a STRICT
+            # historical day (planned_date < reference_date) with a frozen
+            # parent snapshot must NEVER have its structure recomputed from
+            # CURRENT goal/phase/paces — that would silently rewrite history
+            # (a session served and structured months ago could start
+            # reporting a different quality kind/zone/reps today just
+            # because the athlete's goal or fitness changed since). Only
+            # #235 (a real frozen STRUCTURED snapshot) may serve historical
+            # structure. Today (planned_date == reference_date) and future
+            # (planned_date > reference_date) sessions are live/prospective
+            # by nature and MAY be structured now.
+            if planned_date < reference_date:
+                structured_status = "historical_unavailable"
+            else:
+                # Structure the EFFECTIVE (final) session only, never the
+                # raw `session` above (see SessionExecution.structured
+                # docstring).
+                structured = build_structured_workout_prescription(
+                    workout=effective,
+                    plan_goal=plan_goal,
+                    periodization=periodization,
+                    training_paces=training_paces,
+                )
+                structured_status = (
+                    "today_served" if planned_date == reference_date else "future_live"
+                )
         session_executions.append(
             SessionExecution(
-                session=effective, planned_date=planned_date, row=row, structured=structured
+                session=effective,
+                planned_date=planned_date,
+                row=row,
+                structured=structured,
+                structured_status=structured_status,
             )
         )
 

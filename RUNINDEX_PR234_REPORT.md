@@ -240,7 +240,7 @@ Correction ciblée de la PR #234 (aucune reprise à zéro — architecture v1 co
 
 - `TODAY` (`GET /api/training/today`, `server.py`) : `WorkoutGenerator` → `DailyAdaptation` (`resolve_today_final_prescription`) → `get_or_create_served_prescription` (résolution atomique get-or-create du snapshot) → **`served_prescription`** (la session réellement servie) → `StructuredWorkoutPrescriptionEngine`. Le moteur est appelé **après** la résolution atomique, jamais avant : c'est la RÈGLE ABSOLUE du problem statement ("la structure doit toujours être produite à partir de la prescription FINALE réellement servie", jamais "parent adapté + steps construits depuis ancien parent"). Un appel local à `resolve_today_final_prescription()` peut produire un `adaptation_result.adapted_workout` différent de `served_prescription` si un appel concurrent/antérieur (Today ou Week) a déjà figé un candidat différent — construire la structure à partir de ce candidat local aurait reproduit exactement le bug interdit. `structured_prescription` est ajouté (additif) au dict de réponse de `/api/training/today`.
 - `WEEK` (`GET /api/training/v2/week`, `server.py` → `build_week_execution()`) : pour chaque jour, `structured` est construit à partir de `effective` (`resolve_effective_session`), c'est-à-dire la session FINALE déjà utilisée pour le matching/adherence — y compris pour le jour "today" de la semaine, qui est remplacé par `served` (le même candidat atomiquement résolu que Today) **avant** l'appel à `build_week_execution()`. Les jours historiques figés (snapshot) utilisent le snapshot, jamais un recalcul live — préserve l'immutabilité #231. `structured` est ajouté (additif) à `WeekV2SessionResponse`.
-- `training_paces` est **consommé, jamais recalculé** : `compute_training_paces(domain_activities_90, reference_date, user_max_hr=None)` (fonction pure déjà existante dans `training_paces.py`) est appelé une fois par requête et transmis tel quel — aucune modification du module Training Paces.
+- `training_paces` est **consommé, jamais recalculé** : `compute_training_paces(...)` (fonction pure déjà existante dans `training_paces.py`) est appelé une fois par requête et transmis tel quel — aucune modification du module Training Paces. ⚠️ **Note (corrigée au §22)** : à ce stade (head `bdce4f4`), l'appel utilisait encore `domain_activities_90` (la fenêtre 90 jours du Training Engine) pour Today/Week, ce qui créait une SECONDE autorité Training Paces différente de `/training/v2/paces` — corrigé par le Blocker 1 de l'audit final §22.
 - `DailyAdaptation` reste une couche strictement antérieure et séparée (aucune modification de `daily_adaptation.py`) : le moteur structuré consomme son résultat, il ne s'y substitue jamais.
 - Preuve de câblage réel (pas un module mort) : `test_today_endpoint_exposes_structured_prescription`, `test_week_endpoint_exposes_structured_field_per_session`, `test_today_and_week_structured_prescription_converge_for_same_day` (nouveaux, `test_pr232a_c231_week_endpoint.py`) exercent le vrai handler FastAPI via `httpx.ASGITransport` — pas seulement l'appel manuel du moteur en isolation.
 
@@ -308,10 +308,97 @@ Pureté/déterminisme du moteur, modèles `frozen`, sérialisation Pydantic, goa
 
 ### 21.10 Limites restantes
 
-- Le snapshot historique structuré complet (#235) n'a volontairement pas été implémenté : `structured`/`structured_prescription` ne sont PAS persistés dans `prescription_snapshot.py` — recalculés à la demande pour les jours passés à partir du snapshot figé (`effective`), jamais depuis un ancien parent, mais pas encore gelés eux-mêmes dans Mongo. C'est le sujet exact de #235.
+- Le snapshot historique structuré complet (#235) n'a volontairement pas été implémenté : `structured`/`structured_prescription` ne sont PAS persistés dans `prescription_snapshot.py`. ⚠️ **Corrigé au §22 (Blocker 2)** : à ce stade (head `bdce4f4`), les jours passés recalculaient encore `structured` à la demande à partir du snapshot figé (`effective`) mais avec le goal/phase/paces COURANTS — ce qui pouvait faire varier une structure historique après-coup. Depuis l'audit final §22, `structured=None` pour tout jour strictement historique tant que #235 n'a pas persisté une vraie structure figée.
 - Aucune UX (#236) n'a été ajoutée ni modifiée ; les champs `structured`/`structured_prescription` sont exposés en API mais aucun composant frontend ne les consomme dans cette PR.
 - `race_specific_steady` pour 10K/Half/Ultra reste un unique bloc continu sans allure numérique (Option A) — une vraie allure spécifique-course canonique nécessiterait une extension du module Training Paces, explicitement hors scope de cette correction.
 
 ### 21.11 Confirmation C234
+
+**Aucun merge n'a été effectué.** Correction poussée sur la branche existante `copilot/pr-234-structured-workout-prescription`. La Pull Request reste en **DRAFT** vers `copilot/dev`.
+
+---
+
+## 22. C234 FINAL CORRECTIVE AUDIT
+
+Correction finale, ciblée, de la PR #234 (aucune reprise à zéro — architecture v1/C234 conservée). Head audité au départ de cette session : `86ee2f3c386867af6f2fcb0535601c3fb079225e`. Cette section documente **uniquement** les 2 blockers C234 restants + la mise à jour de la description GitHub. Rien d'autre n'a été touché (pas de #235 complet, pas de #236 frontend, pas de Performance Curve, pas de formules Training Paces, pas de Data Moat, pas d'Adaptive Training V3).
+
+### 22.1 Fichiers modifiés (correction finale)
+
+- `backend/training_v2/training_paces_authority.py` (**nouveau fichier**) — `load_canonical_training_paces(db, *, user_id, reference_date) -> TrainingPaces`, la SEULE autorité Training Paces du backend ; `TRAINING_PACES_ACTIVITY_LIMIT = 500` (limite technique préexistante, documentée, non étendue).
+- `backend/server.py` — les 3 endpoints consommant des Training Paces (`/training/v2/paces`, `/training/today`, `/training/v2/week`) appellent désormais tous `load_canonical_training_paces` (plus aucun ne réimplémente son propre chargement Garmin, plus aucun ne réutilise `domain_activities_90`) ; `_session_response()` expose le nouveau champ `structured_status`.
+- `backend/training_v2/week_execution.py` — `SessionExecution.structured_status: Optional[str] = None` (nouveau champ additif) ; `build_week_execution()` n'appelle plus `build_structured_workout_prescription()` pour un jour strictement historique (`planned_date < reference_date`) même si un `PrescriptionSnapshot` parent existe — `structured=None` + `structured_status="historical_unavailable"` dans ce cas.
+- `backend/training_v2/training_week_response.py` — `WeekV2SessionResponse.structured_status: Optional[str] = None` (champ additif, machine-readable, sans wording UX).
+- `backend/tests/test_pr232a_c231_week_endpoint.py` — 7 nouveaux tests end-to-end (voir §22.6).
+- `RUNINDEX_PR234_REPORT.md` — cette section + correction des §21.2/§21.10 devenus contradictoires.
+
+### 22.2 BLOCKER 1 — Autorité unique Training Paces
+
+**Bug confirmé par audit du code réel (head `86ee2f3`)** : `/training/today` et `/training/v2/week` appelaient `compute_training_paces(domain_activities_90, reference_date, ...)`, où `domain_activities_90` est chargé avec un filtre explicite "activités des 90 derniers jours" — c'est la fenêtre de LOAD du Training Engine (décisions WorkoutGenerator/WeeklyTarget/periodization), **pas** une fenêtre Training Paces. `/training/v2/paces`, lui, chargeait indépendamment jusqu'à 500 activités Garmin sans aucun filtre de jours. Deux autorités différentes pouvaient donc produire des résultats différents pour le même utilisateur au même instant — en particulier, une performance HIGH qualifiée à plus de 90 jours (qui doit légitimement survivre à confiance LOW selon la politique de `training_paces.py`) pouvait être vue par `/training/v2/paces` mais invisible pour Today/Week structuré (risque de faux `PACE_UNAVAILABLE`).
+
+**Correction** : `training_v2/training_paces_authority.py::load_canonical_training_paces()` est la SEULE fonction de chargement Training Paces du backend. Elle reproduit exactement le comportement (correct) préexistant de `/training/v2/paces` — activités Garmin les plus récentes, sans filtre de jours, plafonnées à `TRAINING_PACES_ACTIVITY_LIMIT=500` (limite technique préexistante, non liée à la politique de recency de `training_paces.py`, documentée mais non supprimée dans cette PR car son extension serait un chantier disproportionné et hors scope) — puis appelle `compute_training_paces()` sans aucune modification. Les 3 endpoints (`/training/v2/paces`, `/training/today`, `/training/v2/week`) appellent désormais identiquement ce loader. `domain_activities_90` continue d'exister et d'alimenter le Training Engine (WorkoutGenerator/WeeklyTarget/periodization) — il n'est simplement plus jamais transmis à `compute_training_paces`.
+
+Différence fenêtre Training Engine vs mémoire Training Paces : la fenêtre 90 jours est une décision de LOAD/VOLUME (combien de charge récente influence le prochain bloc d'entraînement) ; la politique Training Paces (HIGH ≤21j, MEDIUM ≤56j, HIGH historique jamais expiré mais dégradé en LOW) est une décision de CONFIANCE sur une preuve de performance, indépendante et gérée exclusivement dans `training_paces.py`. Les deux ne doivent jamais être confondues — c'est exactement ce que corrige ce blocker.
+
+### 22.3 BLOCKER 2 — Historique ne doit jamais être recalculé
+
+**Bug confirmé par audit du code réel** : pour un jour dont `planned_date < reference_date` avec un `PrescriptionSnapshot` parent déjà figé, `build_week_execution()` appelait `build_structured_workout_prescription(workout=effective, plan_goal=<courant>, periodization=<courant>, training_paces=<courant>)` — le PARENT (workout_type/distance/durée) restait bien figé (immutabilité #231 préservée), mais la STRUCTURE (type précis, zone, reps, paces, reason_codes) pouvait varier après-coup si le goal, la phase, ou les Training Paces changeaient entre le jour où la session a été servie et une requête ultérieure. Ce n'est pas une vérité historique.
+
+**Correction** : dans la boucle principale de `build_week_execution()`, la condition `planned_date < reference_date` (stricte, jamais `<=`) exclut désormais tout jour strictement historique de la structuration : `structured=None`, `structured_status="historical_unavailable"`, quel que soit le goal/phase/paces courants. Le jour "aujourd'hui" (`planned_date == reference_date`), même déjà figé atomiquement, reste éligible à `structured` (`structured_status="today_served"`) — c'est la distinction demandée entre "snapshot existe" et "session historique". Un jour futur (`planned_date > reference_date`) reste `structured_status="future_live"` (prescription prospective, légitimement évolutive avant d'être servie). Le cas `prescription_unavailable` préexistant est inchangé (`structured_status="prescription_unavailable"`).
+
+Pseudo-contrat implémenté (`training_v2/week_execution.py`) :
+```
+if planned_date < reference_date:      # historical_frozen_parent
+    structured = None
+    structured_status = "historical_unavailable"
+elif prescription_unavailable:
+    structured = None
+    structured_status = "prescription_unavailable"
+else:                                   # today_served OR future_live
+    structured = build_structured_workout_prescription(...)
+    structured_status = "today_served" if planned_date == reference_date else "future_live"
+```
+
+### 22.4 API contract (additif uniquement)
+
+- `structured: Optional[dict] = None` (préexistant #233/#234) — **inchangé** en présence/absence, seule sa valeur pour l'historique change (de "recalculé" à "None").
+- `structured_status: Optional[str] = None` (**nouveau**, additif) — valeurs : `"today_served"`, `"future_live"`, `"historical_unavailable"`, `"prescription_unavailable"`, ou `None` si la structuration n'a pas été demandée du tout (compatibilité arrière pour tout appelant ne passant pas `plan_goal`/`periodization`). Purement machine-readable, aucun wording UX/marketing, i18n hors scope.
+- Aucun champ existant #233/#234 n'a été retiré ni renommé.
+
+### 22.5 Logique Today / Future / Historique — pourquoi c'est correct
+
+- **TODAY** : la prescription est résolue atomiquement (`get_or_create_served_prescription`) puis structurée à partir de ce `served_prescription` — jamais du candidat local `DailyAdaptation` perdant. `structured` non `None`, `structured_status="today_served"`. Today et Week produisent le MÊME contrat pour le même jour (test de convergence, préexistant + nouveau test explicite `structured_status`).
+- **FUTURE** : aucun snapshot n'existe encore ; `structured` reste une prescription prospective live, qui peut légitimement évoluer jusqu'à ce qu'elle soit servie. `structured_status="future_live"`.
+- **HISTORIQUE AVEC SNAPSHOT PARENT** : le parent (workout_type/distance/durée) reste la vérité figée (#231, inchangé). Mais tant que #235 n'a pas persisté une structure (steps/reps/recovery/paces/reason_codes) figée au moment où la session a été servie, il est IMPOSSIBLE de garantir qu'une structure recalculée aujourd'hui correspond à ce qui a réellement été prescrit ce jour-là. `structured=None` + `structured_status="historical_unavailable"` est donc la seule réponse honnête — jamais une fausse structure inventée.
+- **HISTORIQUE SANS SNAPSHOT PARENT** : comportement `prescription_unavailable` préexistant, inchangé.
+
+### 22.6 Tests ajoutés (correction finale)
+
+Tous dans `backend/tests/test_pr232a_c231_week_endpoint.py`, exécutés via le vrai handler FastAPI (`httpx.ASGITransport`) :
+
+1. `test_c234_training_paces_single_authority_high_historical_over_90_days` — une performance HIGH qualifiée à 100 jours (aucune meilleure preuve récente) : `/training/v2/paces` renvoie `confidence="LOW"` avec des paces non nulles (jamais `INSUFFICIENT`) ; `/training/today` et `/training/v2/week` (session du jour) exposent la MÊME structure/paces — jamais un faux `structured=None` dû à l'ancienne fenêtre 90 jours.
+2. `test_c234_historical_frozen_session_structured_is_none` — un jour figé aujourd'hui (`structured_status="today_served"`) redevient historique lors d'un appel ultérieur dans la même semaine ISO (`reference_date` avancée) : `structured` devient `None`, `structured_status="historical_unavailable"`, le parent (distance/type) reste identique.
+3. `test_c234_historical_structured_stays_none_after_goal_change` — immutabilité historique (§11) : le goal change entre le gel et la relecture ; le parent historique reste identique et `structured` reste `None`.
+4. `test_c234_historical_structured_stays_none_after_training_paces_change` — changement Training Paces (§12, "VDOT") : ajout d'une nouvelle performance HIGH récente après le gel ; la structure historique ne réapparaît/ne se recalcule jamais.
+5. `test_c234_future_session_structured_stays_live` — une session future non figée conserve un `structured` non `None`, `structured_status="future_live"` (la correction historique ne supprime pas la structure future).
+6. `test_c234_today_structured_status_is_today_served` — Today et Week exposent tous deux `structured_status="today_served"` et un `structured` identique pour le même jour.
+7. Les 3 tests C234 préexistants (`test_today_endpoint_exposes_structured_prescription`, `test_week_endpoint_exposes_structured_field_per_session`, `test_today_and_week_structured_prescription_converge_for_same_day`) restent inchangés et passants (ils exercent la branche "today", non affectée par le blocker 2).
+
+### 22.7 Résultats exacts (cette session)
+
+- `tests/test_pr232a_c231_week_endpoint.py` seul : **13 passed** (7 nouveaux + 6 préexistants), 0 failed.
+- Suite régression ciblée (`test_structured_workout_pr234.py`, `test_pr232a_c231_week_endpoint.py`, `test_pr232a_week_execution.py`, `test_pr231_c231_corrections2/3/final_corrections/snapshot_adaptation.py`, `test_pr232a_local_reference_date.py`, `test_pr232a_prescription_snapshot.py`, `test_pr167_training_v2_week_api.py`, `test_training_paces_pr194.py`, `test_weekly_unification_pr228.py`) : **316 passed**, 0 failed.
+- `test_workout_generator_v2.py` + `test_daily_adaptation_pr133.py` : **139 passed**, 0 failed.
+- Suite complète `tests/` (contrôle large) : 2756 passed / 300 failed / 41 errors — tous les échecs confirmés préexistants et environnementaux (Redis absent du sandbox pour `test_reliable_queue.py`, `REACT_APP_BACKEND_URL` absent pour des tests HTTP réels type `test_training_plan_vma.py`/`test_enhanced_goal.py`, rate-limiter partagé entre tests pour `test_race_day_exact_phase_and_structure` — reproductible à l'identique via `git stash` sur le head non modifié). **Aucun échec dans les fichiers directement liés à C234** (`training_v2/`, `structured`, `paces`, `week_execution`, `prescription`, PR234/232/231/228, `daily_adaptation`, `workout_generator`) — zéro régression.
+
+### 22.8 Limites restantes (après cette correction)
+
+- Historique — parent snapshot : fiable (#231, inchangé). Historique — structure détaillée : indisponible (`structured=None`) tant que #235 n'a pas persisté une structure figée au moment où la session a été servie.
+- Today — structure : fiable, construite depuis le served_prescription atomique.
+- Future — structure : live/prospective, peut évoluer légitimement avant d'être servie.
+- `TRAINING_PACES_ACTIVITY_LIMIT=500` reste une limite technique préexistante non levée dans cette PR (chantier disproportionné, hors scope C234) — documentée dans `training_paces_authority.py`.
+- Snapshot structuré complet persistant en Mongo (#235) et intégration UX détaillée (#236) restent explicitement hors scope.
+- CI GitHub réelle : non consultée dans cette session (aucune demande explicite).
+
+### 22.9 Confirmation finale
 
 **Aucun merge n'a été effectué.** Correction poussée sur la branche existante `copilot/pr-234-structured-workout-prescription`. La Pull Request reste en **DRAFT** vers `copilot/dev`.

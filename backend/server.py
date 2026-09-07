@@ -3480,12 +3480,18 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     # atomic served-prescription resolution above (ABSOLUTE RULE: structure
     # is always built from the FINAL prescription actually served, never a
     # locally-adapted candidate that a concurrent call may have superseded).
-    # training_paces is CONSUMED (never recomputed) from the existing
-    # canonical Training Paces V2 builder, purely to thread it through.
+    # C234 (final corrective audit) — training_paces MUST come from the ONE
+    # canonical Training Paces authority (same loader as /training/v2/paces
+    # and /training/v2/week), never from a local recompute over
+    # domain_activities_90 (the Training Engine's own 90-day LOAD window,
+    # unrelated to Training Paces' own recency policy — see
+    # training_paces_authority.py docstring).
     from training_v2.structured_workout import build_structured_workout_prescription
-    from training_v2.training_paces import compute_training_paces
+    from training_v2.training_paces_authority import load_canonical_training_paces
 
-    training_paces = compute_training_paces(domain_activities_90, today, user_max_hr=None)
+    training_paces = await load_canonical_training_paces(
+        db, user_id=user["id"], reference_date=today
+    )
     structured_prescription = build_structured_workout_prescription(
         workout=served_prescription,
         plan_goal=canonical.plan_goal,
@@ -4274,12 +4280,17 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
                 modified_from_planned=served_result.modified_from_planned,
             )
 
-    # C234 — training_paces CONSUMED (never recomputed/duplicated) from the
-    # existing canonical Training Paces V2 builder, threaded through so
-    # StructuredWorkoutPrescriptionEngine can use real paces when available.
-    from training_v2.training_paces import compute_training_paces
+    # C234 (final corrective audit) — training_paces MUST come from the ONE
+    # canonical Training Paces authority (same loader as /training/v2/paces
+    # and /training/today), never from a local recompute over
+    # domain_activities_90 (the Training Engine's own 90-day LOAD window,
+    # unrelated to Training Paces' own recency policy — see
+    # training_paces_authority.py docstring).
+    from training_v2.training_paces_authority import load_canonical_training_paces
 
-    week_training_paces = compute_training_paces(domain_activities_90, reference_date, user_max_hr=None)
+    week_training_paces = await load_canonical_training_paces(
+        db, user_id=user_id, reference_date=reference_date
+    )
     try:
         execution = build_week_execution(
             user_id=user_id,
@@ -4357,6 +4368,8 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
                 adherence_status=None,
                 actual=None,
                 execution_status=EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE,
+                structured=None,
+                structured_status=getattr(se, "structured_status", None),
             )
         return WeekV2SessionResponse(
             day=se.session.day,
@@ -4374,8 +4387,11 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
             # C234 — StructuredWorkoutPrescriptionEngine output, built from
             # `se.session` (the resolved FINAL/"effective" prescription for
             # this day, respecting frozen-snapshot immutability), never a
-            # stale pre-adaptation parent.
+            # stale pre-adaptation parent. C234 (final corrective audit) —
+            # None for strict historical days (structured_status ==
+            # "historical_unavailable") even when a frozen parent exists.
             structured=se.structured.model_dump(mode="json") if se.structured else None,
+            structured_status=getattr(se, "structured_status", None),
         )
 
     sessions = [_session_response(se) for se in execution.sessions]
@@ -4494,29 +4510,13 @@ async def get_training_v2_paces(user: dict = Depends(auth_user)):
 
     When confidence == "INSUFFICIENT", paces fields are all null.
     """
-    from training_v2.training_paces import compute_training_paces, training_paces_to_api_dict
+    # ── Compute paces — no Garmin VO2max, no VMA, no Race Predictions ──────
+    from training_v2.training_paces import training_paces_to_api_dict
+    from training_v2.training_paces_authority import load_canonical_training_paces
 
     user_id = user["id"]
-    now_utc = datetime.now(timezone.utc)
-    reference_date = now_utc.date()
-
-    # ── Load garmin activities → DomainActivity boundary ─────────────────
-    domain_activities = []
-    garmin_conn = await db.garmin_connections.find_one({"user_id": user_id}, {"_id": 0})
-    if garmin_conn and garmin_conn.get("connected"):
-        try:
-            garmin_activities = await (
-                db.garmin_activities.find({"user_id": user_id}, {"_id": 0})
-                .sort("start_time", -1)
-                .limit(500)
-                .to_list(length=500)
-            )
-            domain_activities = mongo_garmin_activities_to_domain(garmin_activities)
-        except Exception as exc:
-            logger.warning(f"[TrainingPaces] Garmin activity load failed: {exc}")
-
-    # ── Compute paces — no Garmin VO2max, no VMA, no Race Predictions ──────
-    paces = compute_training_paces(domain_activities, reference_date, user_max_hr=None)
+    reference_date = datetime.now(timezone.utc).date()
+    paces = await load_canonical_training_paces(db, user_id=user_id, reference_date=reference_date)
     return training_paces_to_api_dict(paces)
 
 
