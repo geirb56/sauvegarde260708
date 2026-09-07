@@ -12,7 +12,7 @@ import { useLanguage } from "@/context/LanguageContext";
 import { useSubscription } from "@/context/SubscriptionContext";
 import { useUnitSystem } from "@/context/UnitContext";
 import { API_BASE_URL } from "@/config";
-import { formatDistance } from "@/utils/units";
+import { formatDistance, formatPace } from "@/utils/units";
 
 const API = API_BASE_URL;
 const DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
@@ -95,33 +95,96 @@ const getSessionStatusKey = (session) => {
   return null;
 };
 
-const getSessionDetailRoute = (session) => {
-  if (!session || typeof session !== "object") return null;
+// C233 (blocker #1) — actual.activity_id (WeekV2ActualResponse, both on a
+// matched session and on unmatched_actuals) is the raw Garmin external_id.
+// But GET /workout/:id reads db.workouts.id, which the fan-out worker always
+// builds as f"garmin-{external_id}" (backend/garmin/service.py:544,
+// activity_to_workout). Linking to `/workout/${external_id}` is therefore a
+// dead link. No new backend contract is introduced here — this mirrors an
+// EXISTING, stable backend id-construction convention.
+const buildWorkoutDetailPath = (activityId) => {
+  if (activityId == null || activityId === "") return null;
+  return `/workout/garmin-${activityId}`;
+};
 
-  const workoutId = session.workout_id ?? session.workoutId;
-  if (workoutId != null && workoutId !== "") return `/workout/${workoutId}`;
+// PR233 — the only real, non-fabricated identifier for "view analysis" is
+// the matched Garmin activity id (PR230 boundary). WeekV2SessionResponse has
+// no workout_id/session_id field — inventing one would create a dead link.
+const getSessionDetailRoute = (session) => buildWorkoutDetailPath(session?.actual?.activity_id);
 
-  const sessionId = session.session_id ?? session.sessionId ?? session.id;
-  if (sessionId != null && sessionId !== "") return `/sessions/${sessionId}`;
-
-  return null;
+const parseIsoDateUTC = (isoDate) => {
+  if (typeof isoDate !== "string") return null;
+  const [year, month, day] = isoDate.split("-").map(Number);
+  if (!year || !month || !day) return null;
+  return new Date(Date.UTC(year, month - 1, day));
 };
 
 const formatDate = (value, locale) => {
-  if (!value || typeof value !== "string") return null;
-  const [year, month, day] = value.split("-").map(Number);
-  if (!year || !month || !day) return value;
+  const parsed = parseIsoDateUTC(value);
+  if (!parsed) return typeof value === "string" ? value : null;
   return new Intl.DateTimeFormat(locale, {
     day: "2-digit",
     month: "short",
     year: "numeric",
     timeZone: "UTC",
-  }).format(new Date(Date.UTC(year, month - 1, day)));
+  }).format(parsed);
 };
 
-const getTodayDayKey = () => {
-  const day = new Date().getDay();
-  return Object.keys(DAY_INDEX).find((key) => DAY_INDEX[key] === day) || "monday";
+// C233 (blocker #4) — real day + real date on each week card, e.g.
+// "Wednesday · 9 Sep". The weekday name is already locale-aware
+// (trainingPlanDays.*); the date comes ONLY from the backend's own
+// session.planned_date — never reconstructed from the browser clock. No
+// date suffix is shown when planned_date is unavailable (never fabricated).
+const formatShortDate = (isoDate, locale) => {
+  const parsed = parseIsoDateUTC(isoDate);
+  if (!parsed) return null;
+  // Day-first "9 Sep" style consistently across locales (rather than
+  // Intl's locale-default month/day order, which would render "Sep 9" for
+  // en-US) — only the month name itself is locale-translated.
+  const monthName = new Intl.DateTimeFormat(locale, { month: "short", timeZone: "UTC" }).format(parsed);
+  return `${parsed.getUTCDate()} ${monthName}`;
+};
+
+const formatDayHeading = (t, day, plannedDate, locale) => {
+  const weekday = t(`trainingPlanDays.${day}`);
+  const shortDate = formatShortDate(plannedDate, locale);
+  return shortDate ? `${weekday} · ${shortDate}` : weekday;
+};
+
+// PR233 — replaces all occurrences of each {token}, unlike String.replace
+// (which only replaces the first match).
+const formatTemplate = (template, values) =>
+  Object.entries(values).reduce(
+    (result, [token, value]) => result.split(`{${token}}`).join(String(value)),
+    template
+  );
+
+// C233 (blocker #3) — pure calendar math on an ISO 'YYYY-MM-DD' string only:
+// never reads the browser clock/timezone. Date.UTC + getUTCDay is
+// deterministic for a given calendar date regardless of where the browser
+// runs.
+const weekdayKeyFromIsoDate = (isoDate) => {
+  const parsed = parseIsoDateUTC(isoDate);
+  if (!parsed) return null;
+  const utcDay = parsed.getUTCDay();
+  return Object.keys(DAY_INDEX).find((key) => DAY_INDEX[key] === utcDay) || null;
+};
+
+// C233 (blocker #3) — the ONLY authority for "which day is Today" is the
+// backend's own weekData.reference_date (never `new Date()`). Prefer the
+// session whose real planned_date exactly equals reference_date (exact
+// match survives any gap/reorder in the sessions array); fall back to the
+// deterministic weekday of reference_date itself when no planned_date lines
+// up (e.g. a day missing from the payload). Returns null (no badge at all)
+// when reference_date itself is unavailable — never guesses from the
+// client's clock/timezone.
+const resolveTodayDayKey = (weekData) => {
+  const referenceDate = weekData?.reference_date;
+  if (typeof referenceDate !== "string") return null;
+  const sessions = Array.isArray(weekData?.week?.sessions) ? weekData.week.sessions : [];
+  const exact = sessions.find((session) => session?.planned_date === referenceDate);
+  if (exact && typeof exact.day === "string") return exact.day.toLowerCase();
+  return weekdayKeyFromIsoDate(referenceDate);
 };
 
 const getSessionPaceOrZone = (session) => {
@@ -132,6 +195,103 @@ const getSessionPaceOrZone = (session) => {
   if (zone && typeof zone === "string") return zone;
   return null;
 };
+
+// C233 (blocker #2) — mirrors backend RUNTIME_TYPE_TO_WORKOUT_TYPE
+// (backend/training_v2/daily_runtime_helpers.py) verbatim. This is the
+// REAL, stable mapping the backend itself uses between /training/today's
+// runtime `type` vocabulary and the domain `workout_type` vocabulary used
+// everywhere else (Week, i18n keys) — not a frontend invention.
+const RUNTIME_TYPE_TO_WORKOUT_TYPE = {
+  rest: "rest",
+  recovery: "recovery",
+  endurance: "easy",
+  tempo: "steady",
+  threshold: "quality",
+  long_run: "long_easy",
+};
+
+const TODAY_ZERO_DURATION_SENTINEL = "0min";
+
+// C233 (blocker #2) — /training/today's `duration` is a string ("Xmin"),
+// never a numeric duration_minutes field. "0min" is the canonical runtime
+// sentinel for "no meaningful duration" (rest / no-duration sessions) and
+// must never be displayed as a real duration.
+const getTodayDurationLabel = (session) => {
+  const raw = session?.duration;
+  if (typeof raw !== "string" || raw === TODAY_ZERO_DURATION_SENTINEL) return null;
+  const match = /^(\d+)min$/.exec(raw.trim());
+  if (!match) return null;
+  const minutes = Number(match[1]);
+  return Number.isFinite(minutes) && minutes > 0 ? `${minutes} min` : null;
+};
+
+// C233 (blocker #2) — /training/today's `distance_km` uses 0 as the runtime
+// sentinel for "no distance" (rest / duration-only sessions); 0 is never a
+// real distance and must never be displayed as "0 km".
+const getTodayDistanceKm = (session) => {
+  const value = session?.distance_km;
+  return isKnownNumber(value) && value > 0 ? value : null;
+};
+
+// PR233 — shared min/km -> unit-aware formatted pace string conversion.
+const minPerKmToFormattedPace = (minPerKm, unitSystem) => {
+  if (!isKnownNumber(minPerKm) || minPerKm <= 0) return null;
+  return formatPace(minPerKm * 60, { unitSystem });
+};
+
+// PR233 — real Garmin pace (min per km, from PR230's own actual boundary),
+// reformatted unit-aware. Never invented: null in -> null out.
+const formatActualPace = (paceMinPerKm, unitSystem) => minPerKmToFormattedPace(paceMinPerKm, unitSystem);
+
+// PR233 — /training/v2/paces already exposes a raw min_per_km alongside the
+// metric-only pace_str text. Prefer the raw value so imperial mode never
+// shows a hardcoded "/km" suffix; pace_str is only a defensive metric fallback.
+const formatVdotPace = (paceValue, unitSystem) => {
+  if (!paceValue || typeof paceValue !== "object") return null;
+  const fromMinPerKm = minPerKmToFormattedPace(paceValue.min_per_km, unitSystem);
+  if (fromMinPerKm) return fromMinPerKm;
+  if (typeof paceValue.pace_str === "string" && paceValue.pace_str) {
+    // Deliberately dropped (not shown, never converted) in imperial mode:
+    // pace_str is a metric-only "MM:SS" string with no unit metadata, so it
+    // cannot be safely converted to min/mile here. This path only exists as
+    // a defensive fallback for payloads older than the min_per_km field
+    // (training_paces_to_api_dict always emits both today) — omitting the
+    // row is preferred over ever rendering a hardcoded "/km" in imperial.
+    return unitSystem === "imperial" ? null : `${paceValue.pace_str} /km`;
+  }
+  return null;
+};
+
+// C233 — aggregates a numeric field across rows with an explicit
+// empty/complete/partial state. "None != 0": a missing value on a real row
+// must never be silently dropped and the remaining values summed as if that
+// were the whole truth — that would present a partial total as complete.
+//
+// - rows.length === 0            -> "empty"   (a real, observed zero)
+// - every row has a known value  -> "complete" (exact sum)
+// - at least one row is unknown  -> "partial"  (no safe total to show)
+export const aggregateKnownMetric = (rows, field) => {
+  const list = Array.isArray(rows) ? rows : [];
+  if (list.length === 0) {
+    return { state: "empty", value: 0 };
+  }
+  let sum = 0;
+  let hasUnknown = false;
+  for (const row of list) {
+    const value = row?.[field];
+    if (isKnownNumber(value)) {
+      sum += value;
+    } else {
+      hasUnknown = true;
+    }
+  }
+  return hasUnknown ? { state: "partial", value: null } : { state: "complete", value: sum };
+};
+
+// Defensive: PR230's WeekV2ActualResponse always has activity_id when the
+// row is a real attributed activity; treat a bare object with no id as
+// "nothing real to count" rather than fabricating a match.
+const sessionHasActivity = (actual) => Boolean(actual && actual.activity_id != null && actual.activity_id !== "");
 
 function LoadingState() {
   return (
@@ -168,7 +328,8 @@ function SessionStatePill({ t, state }) {
   );
 }
 
-function WeekSessionRow({ session, day, isToday, unitSystem, t }) {
+function WeekSessionRow({ session, day, isToday, unitSystem, t, locale }) {
+  const [expanded, setExpanded] = useState(false);
   const workoutType = getSessionType(session);
   const isExplicitRest = workoutType === "rest" || getSessionStatusKey(session) === "rest";
   const statusKey = getSessionStatusKey(session);
@@ -213,35 +374,239 @@ function WeekSessionRow({ session, day, isToday, unitSystem, t }) {
     ? ""
     : distance || duration || (isExplicitRest ? t("trainingV2.restDay") : (session ? "" : t("trainingV2.noSessionLabel")));
 
-  const detailRoute = getSessionDetailRoute(session);
-  const Wrapper = detailRoute ? Link : "div";
+  // PR233 — no invented pace/structure for "quality" (or any type): only
+  // rendered when the backend prescription itself carries it (never true
+  // today for WeekV2SessionResponse, which has no pace field at all).
+  const prescribedPaceOrZone = getSessionPaceOrZone(session);
+
+  const actual = session?.actual || null;
+  const actualDistance = isKnownNumber(actual?.distance_km) ? formatDistance(actual.distance_km, { unitSystem }) : null;
+  const actualDuration = isKnownNumber(actual?.duration_minutes) ? `${Math.round(actual.duration_minutes)} min` : null;
+  const actualPace = formatActualPace(actual?.pace_min_per_km, unitSystem);
+  const analysisRoute = getSessionDetailRoute(session);
+
+  // PR233 — rest days and prescription_unavailable days carry nothing real
+  // to expand (no prescription detail, no actual to compare): both stay
+  // collapsed/non-interactive rather than exposing an empty detail panel.
+  const canExpand = Boolean(session) && !isUnavailable && !isExplicitRest;
+  const detailId = `training-v2-day-detail-${day}`;
 
   return (
-    <Wrapper
-      {...(detailRoute ? { to: detailRoute } : {})}
+    <div
       data-testid={`training-v2-day-${day}`}
       data-day-state={timelineState}
-      className={`grid grid-cols-[56px_minmax(0,1fr)_auto] items-center gap-2 rounded-md border px-2 py-2 text-sm ${
-        isToday ? "border-primary bg-primary/10" : "border-border bg-card"
-      } ${detailRoute ? "hover:brightness-110" : ""}`}
+      className={`rounded-md border ${isToday ? "border-primary bg-primary/10" : "border-border bg-card"}`}
     >
-      <span className="text-xs text-muted-foreground">{t(`trainingPlanDays.${day}`)}</span>
-      <div className="min-w-0">
-        <p className="truncate font-medium" data-testid={`training-v2-day-type-${day}`}>{typeLabel}</p>
-        {prescription && !isExplicitRest && !isUnavailable && (
-          <p className="truncate text-xs text-muted-foreground" data-testid={`training-v2-day-prescription-${day}`}>{prescription}</p>
-        )}
+      <button
+        type="button"
+        onClick={() => canExpand && setExpanded((value) => !value)}
+        aria-expanded={expanded}
+        aria-controls={detailId}
+        data-testid={`session-detail-toggle-${day}`}
+        disabled={!canExpand}
+        className={`grid w-full grid-cols-[56px_minmax(0,1fr)_auto] items-center gap-2 px-2 py-2 text-left text-sm ${
+          canExpand ? "cursor-pointer hover:brightness-110" : "cursor-default"
+        }`}
+      >
+        <span className="text-xs text-muted-foreground" data-testid={`training-v2-day-label-${day}`}>
+          {formatDayHeading(t, day, session?.planned_date, locale)}
+        </span>
+        <div className="min-w-0">
+          <p className="truncate font-medium" data-testid={`training-v2-day-type-${day}`}>{typeLabel}</p>
+          {prescription && !isExplicitRest && !isUnavailable && (
+            <p className="truncate text-xs text-muted-foreground" data-testid={`training-v2-day-prescription-${day}`}>{prescription}</p>
+          )}
+        </div>
+        <div className="text-right">
+          {isToday ? (
+            <Badge className="mb-1 text-[10px]" data-testid="today-highlight-badge">{t("trainingV2.todayBadge")}</Badge>
+          ) : (
+            <span className="block text-xs text-muted-foreground">{stateMarker}</span>
+          )}
+          <p className="text-xs text-muted-foreground">{compactMetric}</p>
+          {statusKey && <SessionStatePill t={t} state={statusKey} />}
+        </div>
+      </button>
+      {canExpand && (
+        <div
+          id={detailId}
+          data-testid={`training-v2-day-detail-${day}`}
+          style={expanded ? undefined : { display: "none" }}
+          className="space-y-2 border-t border-border px-2 py-2 text-xs"
+        >
+          <div>
+            <p className="uppercase tracking-wide text-muted-foreground">{t("trainingV2.sessionDetailPrescribed")}</p>
+            <p className="text-foreground">{prescription || typeLabel}</p>
+            <div className="flex flex-wrap gap-x-3 text-muted-foreground">
+              {distance && <span>{distance}</span>}
+              {duration && <span>{duration}</span>}
+              {prescribedPaceOrZone && <span>{prescribedPaceOrZone}</span>}
+            </div>
+          </div>
+          <div>
+            <p className="uppercase tracking-wide text-muted-foreground">{t("trainingV2.sessionDetailActual")}</p>
+            {actual ? (
+              <>
+                <div className="flex flex-wrap gap-x-3 text-foreground">
+                  {actualDistance && <span data-testid={`session-actual-distance-${day}`}>{actualDistance}</span>}
+                  {actualDuration && <span data-testid={`session-actual-duration-${day}`}>{actualDuration}</span>}
+                  {actualPace && <span data-testid={`session-actual-pace-${day}`}>{actualPace}</span>}
+                </div>
+                {analysisRoute && (
+                  <Link
+                    to={analysisRoute}
+                    data-testid={`session-analysis-link-${day}`}
+                    className="text-primary underline"
+                  >
+                    {t("trainingV2.sessionDetailViewAnalysis")}
+                  </Link>
+                )}
+              </>
+            ) : (
+              <p className="text-muted-foreground" data-testid={`session-no-actual-${day}`}>{t("trainingV2.sessionDetailNoActual")}</p>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// PR233 — Volume summary: strictly separates plan accomplishment (matched
+// Garmin activities attributed to a prescribed session) from extra Garmin
+// volume that was never part of the plan (unmatched_actuals). An unmatched
+// activity is NEVER counted towards "completed" plan volume.
+function WeekVolumeSummary({ t, weekPlan, weeklyTarget, unitSystem }) {
+  if (!weekPlan || !weeklyTarget) return null;
+
+  const sessions = Array.isArray(weekPlan.sessions) ? weekPlan.sessions : [];
+  const unmatched = Array.isArray(weekPlan.unmatched_actuals) ? weekPlan.unmatched_actuals : [];
+  const matchedActuals = sessions
+    .map((session) => session?.actual)
+    .filter((actual) => actual && sessionHasActivity(actual));
+
+  const isDistanceBasis = weeklyTarget.target_basis === "distance";
+
+  const plannedValue = isDistanceBasis ? weekPlan.planned_km : weekPlan.planned_duration_minutes;
+  const plannedLabel = isKnownNumber(plannedValue)
+    ? (isDistanceBasis ? formatDistance(plannedValue, { unitSystem }) : `${Math.round(plannedValue)} min`)
+    : t("trainingV2.notAvailable");
+
+  const completedAgg = isDistanceBasis
+    ? aggregateKnownMetric(matchedActuals, "distance_km")
+    : aggregateKnownMetric(matchedActuals, "duration_minutes");
+  // "empty" (0 matched activities) is a real, complete zero and must render
+  // as "0 km"/"0 min", not "—". "partial" (at least one matched activity has
+  // a missing metric) must never render the sum of the known-only values as
+  // if it were the full total — C233's "None != 0" doctrine.
+  const completedLabel = completedAgg.state === "partial"
+    ? t("trainingV2.incompleteData")
+    : (isDistanceBasis
+      ? formatDistance(completedAgg.value, { unitSystem })
+      : `${Math.round(completedAgg.value)} min`);
+
+  const extraAgg = isDistanceBasis
+    ? aggregateKnownMetric(unmatched, "distance_km")
+    : aggregateKnownMetric(unmatched, "duration_minutes");
+  // Extra Garmin volume is only rendered when there is at least one
+  // unmatched row this week; a genuinely empty unmatched list keeps the
+  // existing "no extra line" behavior (unchanged), but a partial aggregate
+  // must show the incomplete-data marker rather than a partial sum.
+  const extraLabel = extraAgg.state === "empty"
+    ? null
+    : (extraAgg.state === "partial"
+      ? t("trainingV2.incompleteData")
+      : (isDistanceBasis ? formatDistance(extraAgg.value, { unitSystem }) : `${Math.round(extraAgg.value)} min`));
+
+  const completedSessionCount = matchedActuals.length;
+
+  const progressValue = isKnownNumber(plannedValue) && plannedValue > 0 && completedAgg.state === "complete"
+    ? Math.max(0, Math.min(100, Math.round((completedAgg.value / plannedValue) * 100)))
+    : 0;
+
+  return (
+    <div data-testid="training-v2-week-volume" className="space-y-2 border-b border-border pb-3">
+      <p className="text-xs uppercase tracking-wide text-muted-foreground">{t("trainingV2.volumeTitle")}</p>
+      <div className="flex flex-wrap items-baseline justify-between gap-2 text-sm">
+        <span className="text-muted-foreground">{t("trainingV2.volumePlanned")}</span>
+        <span className="font-semibold" data-testid="week-volume-planned">{plannedLabel}</span>
       </div>
-      <div className="text-right">
-        {isToday ? (
-          <Badge className="mb-1 text-[10px]" data-testid="today-highlight-badge">{t("trainingV2.todayBadge")}</Badge>
+      <div className="flex flex-wrap items-baseline justify-between gap-2 text-sm">
+        <span className="text-muted-foreground">{t("trainingV2.volumeCompleted")}</span>
+        <span className="font-semibold" data-testid="week-volume-completed">{completedLabel}</span>
+      </div>
+      <Progress value={progressValue} data-testid="week-volume-progress" />
+      <p className="text-xs text-muted-foreground" data-testid="week-volume-sessions">
+        {/* weekly_target.session_count is the recommended/prescribed target
+            (canonical source); week.session_count (sum of non-rest sessions
+            actually scheduled this week) is only a defensive fallback for
+            the rare case the target is unset. */}
+        {formatTemplate(t("trainingV2.volumeSessions"), {
+          done: completedSessionCount,
+          total: weeklyTarget.session_count ?? weekPlan.session_count ?? 0,
+        })}
+      </p>
+      {extraLabel && (
+        <div className="flex flex-wrap items-baseline justify-between gap-2 text-sm text-muted-foreground">
+          <span>{t("trainingV2.volumeExtra")}</span>
+          <span data-testid="week-volume-extra">{extraLabel} · {t("trainingV2.volumeExtraNote")}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// PR233 — real Garmin activities this week that could not be attributed to
+// any prescribed session. Rendered in a separate section and NEVER merged
+// into a planned session's card.
+function UnmatchedActualsSection({ t, unitSystem, unmatchedActuals, locale }) {
+  const rows = Array.isArray(unmatchedActuals) ? unmatchedActuals : [];
+
+  return (
+    <Card data-testid="training-v2-unmatched">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base">{t("trainingV2.unmatchedTitle")}</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        <p className="text-xs text-muted-foreground">{t("trainingV2.unmatchedNote")}</p>
+        {rows.length === 0 ? (
+          <p className="text-sm text-muted-foreground" data-testid="unmatched-empty-state">{t("trainingV2.unmatchedEmpty")}</p>
         ) : (
-          <span className="block text-xs text-muted-foreground">{stateMarker}</span>
+          rows.map((row, index) => {
+            const distance = isKnownNumber(row?.distance_km) ? formatDistance(row.distance_km, { unitSystem }) : null;
+            const duration = isKnownNumber(row?.duration_minutes) ? `${Math.round(row.duration_minutes)} min` : null;
+            const pace = formatActualPace(row?.pace_min_per_km, unitSystem);
+            const dateLabel = row?.start_time ? formatDate(row.start_time.slice(0, 10), locale) : null;
+            const key = row?.activity_id
+              ? `${row.activity_id}-${index}`
+              : `unmatched-${row?.start_time || "unknown"}-${index}`;
+            const analysisRoute = buildWorkoutDetailPath(row?.activity_id);
+            return (
+              <div
+                key={key}
+                data-testid="unmatched-activity-row"
+                className="rounded-md border border-border bg-card px-2 py-2 text-xs"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-muted-foreground">{dateLabel || t("trainingV2.notAvailable")}</span>
+                  {row?.activity_type && <Badge variant="outline">{row.activity_type}</Badge>}
+                </div>
+                <div className="mt-1 flex flex-wrap gap-x-3 text-foreground">
+                  {distance && <span>{distance}</span>}
+                  {duration && <span>{duration}</span>}
+                  {pace && <span>{pace}</span>}
+                </div>
+                {analysisRoute && (
+                  <Link to={analysisRoute} className="text-primary underline">
+                    {t("trainingV2.sessionDetailViewAnalysis")}
+                  </Link>
+                )}
+              </div>
+            );
+          })
         )}
-        <p className="text-xs text-muted-foreground">{compactMetric}</p>
-        {statusKey && <SessionStatePill t={t} state={statusKey} />}
-      </div>
-    </Wrapper>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -348,7 +713,10 @@ export default function TrainingPlanV2() {
   }, [isFree, subLoading]);
 
   const locale = lang === "fr" ? "fr-FR" : lang === "es" ? "es-ES" : "en-US";
-  const todayKey = getTodayDayKey();
+  // C233 (blocker #3) — resolveTodayDayKey derives Today exclusively from
+  // weekData.reference_date (+ sessions[].planned_date); never the browser
+  // clock/timezone.
+  const todayKey = resolveTodayDayKey(weekData);
 
   const orderedSessions = useMemo(() => {
     const sessions = weekData?.week?.sessions ?? [];
@@ -388,33 +756,43 @@ export default function TrainingPlanV2() {
     ? getTranslatedValue(t, `trainingV2.cyclePhases.${currentCycleWeek.phase}`)
     : t("trainingV2.notAvailable");
 
-  // C231 (round 2, item 1 BLOCKER FIX) — the served_prescription is the
-  // canonical, ALWAYS-authoritative session for today (frozen once, never
-  // superseded by a later readiness recompute). adaptation_applied is
-  // informative only and must NEVER decide which session gets displayed:
-  // planned_session is only used as a last-resort fallback when no served
-  // prescription exists yet (should not normally happen once /training/today
-  // has been called at least once for today).
+  // C233 (blocker #2) — /training/today's served_prescription (and its
+  // sibling keys: adapted_prescription/adaptive_session/planned_session/
+  // original_prescription) are ALL the SAME real runtime shape produced by
+  // prescription_to_runtime_session() (backend/training_v2/
+  // daily_runtime_helpers.py): { day, type, duration, intensity,
+  // distance_km, estimated_tss }. There is NO workout_type/duration_minutes/
+  // prescription/pace_target/target_zone field on this object — those
+  // belonged to a fictitious frontend mock, never to the real backend
+  // contract. served_prescription is read FIRST and is the only
+  // ALWAYS-authoritative session for today (frozen once, never superseded by
+  // a later readiness recompute); the other keys are only a last-resort
+  // fallback for the same real shape when no served prescription exists yet
+  // (should not normally happen once /training/today has been called at
+  // least once for today).
   const todaySession = todayData?.served_prescription
     || todayData?.adapted_prescription
     || todayData?.adaptive_session
     || todayData?.planned_session
     || todayData?.original_prescription;
 
-  const todayType = getSessionType(todaySession);
-  const todayTypeLabel = todayType
-    ? getTranslatedValue(t, `trainingV2.workoutTypes.${todayType}`)
+  // `type` uses the RUNTIME vocabulary (rest/recovery/endurance/tempo/
+  // threshold/long_run) — mirrors backend RUNTIME_TYPE_TO_WORKOUT_TYPE
+  // (daily_runtime_helpers.py) verbatim so the label uses the SAME domain
+  // vocabulary (rest/recovery/easy/steady/quality/long_easy) already shown
+  // by Week's workout_type, never a frontend invention.
+  const todayWorkoutTypeKey = RUNTIME_TYPE_TO_WORKOUT_TYPE[todaySession?.type] || null;
+  const todayTypeLabel = todayWorkoutTypeKey
+    ? getTranslatedValue(t, `trainingV2.workoutTypes.${todayWorkoutTypeKey}`)
     : t("trainingV2.noSessionType");
 
-  const todayPrescription = getPrescriptionText(todaySession)
-    || getPrescriptionText(todayData?.adapted_prescription)
-    || getPrescriptionText(todayData?.original_prescription)
-    || null;
-
-  const todayPaceOrZone = getSessionPaceOrZone(todaySession);
-  const todayDuration = isKnownNumber(todaySession?.duration_minutes) ? `${todaySession.duration_minutes} min` : null;
-  const todayDistance = isKnownNumber(todaySession?.distance_km) ? formatDistance(todaySession.distance_km, { unitSystem }) : null;
-  const todayIsExplicitRest = todayType === "rest" || getSessionStatusKey(todaySession) === "rest";
+  // C233 (blocker #2) — no prescription text, no pace/zone: the real
+  // /training/today contract carries neither field, so nothing is rendered
+  // for them (never invented/guessed).
+  const todayDurationLabel = getTodayDurationLabel(todaySession);
+  const todayDistanceKm = getTodayDistanceKm(todaySession);
+  const todayDistance = todayDistanceKm != null ? formatDistance(todayDistanceKm, { unitSystem }) : null;
+  const todayIsExplicitRest = todayWorkoutTypeKey === "rest";
 
   const showRaceCountdown = !isMaintenanceGoal
     && cycle?.days_to_race !== null
@@ -450,7 +828,7 @@ export default function TrainingPlanV2() {
           <Progress value={progressValue} />
           {showRaceCountdown && (
             <p className="text-xs text-muted-foreground" data-testid="header-race-countdown">
-              {t("trainingV2.raceCountdownValue").replace("{days}", String(cycle.days_to_race))}
+              {formatTemplate(t("trainingV2.raceCountdownValue"), { days: cycle.days_to_race })}
             </p>
           )}
         </CardContent>
@@ -469,14 +847,8 @@ export default function TrainingPlanV2() {
             <>
               <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">{t("trainingV2.sessionType")}</p>
               <p className="text-lg font-semibold" data-testid="today-session-type">{todayIsExplicitRest ? t("trainingV2.restDay") : todayTypeLabel}</p>
-              {todayPrescription && !todayIsExplicitRest && (
-                <p className="text-base" data-testid="today-session-prescription">{todayPrescription}</p>
-              )}
-              {todayPaceOrZone && !todayIsExplicitRest && (
-                <p className="text-sm text-muted-foreground" data-testid="today-session-pace-zone">{todayPaceOrZone}</p>
-              )}
               <div className="flex flex-wrap items-center gap-2 text-sm">
-                {todayDuration && <Badge variant="outline" data-testid="today-session-duration">{todayDuration}</Badge>}
+                {todayDurationLabel && <Badge variant="outline" data-testid="today-session-duration">{todayDurationLabel}</Badge>}
                 {todayDistance && <Badge variant="outline" data-testid="today-session-distance">{todayDistance}</Badge>}
               </div>
             </>
@@ -488,22 +860,38 @@ export default function TrainingPlanV2() {
         <CardHeader className="pb-3">
           <CardTitle className="text-base">{t("trainingV2.weekTitle")}</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-2" data-testid="week-sessions-list">
-          {orderedSessions.map((session, index) => {
-            const day = DAYS[index];
-            return (
-              <WeekSessionRow
-                key={day}
-                session={session}
-                day={day}
-                isToday={day === todayKey}
-                unitSystem={unitSystem}
-                t={t}
-              />
-            );
-          })}
+        <CardContent className="space-y-3">
+          <WeekVolumeSummary
+            t={t}
+            weekPlan={weekData?.week}
+            weeklyTarget={weekData?.weekly_target}
+            unitSystem={unitSystem}
+          />
+          <div className="space-y-2" data-testid="week-sessions-list">
+            {orderedSessions.map((session, index) => {
+              const day = DAYS[index];
+              return (
+                <WeekSessionRow
+                  key={day}
+                  session={session}
+                  day={day}
+                  isToday={day === todayKey}
+                  unitSystem={unitSystem}
+                  t={t}
+                  locale={locale}
+                />
+              );
+            })}
+          </div>
         </CardContent>
       </Card>
+
+      <UnmatchedActualsSection
+        t={t}
+        locale={locale}
+        unitSystem={unitSystem}
+        unmatchedActuals={weekData?.week?.unmatched_actuals}
+      />
 
       <Card data-testid="training-v2-paces">
         <CardHeader className="pb-2">
@@ -537,36 +925,53 @@ export default function TrainingPlanV2() {
               <p className="text-sm text-muted-foreground">{t("trainingV2.pacesInsufficient")}</p>
             ) : (
               <div className="space-y-2 text-sm">
-                {pacesData?.paces?.easy?.lower?.pace_str && pacesData?.paces?.easy?.upper?.pace_str && (
-                  <div className="flex items-start justify-between gap-4">
-                    <span className="text-muted-foreground">{t("trainingV2.paceEasy")}</span>
-                    <span className="text-right font-medium">{`${pacesData.paces.easy.lower.pace_str} - ${pacesData.paces.easy.upper.pace_str} /km`}</span>
-                  </div>
-                )}
-                {pacesData?.paces?.marathon?.pace_str && (
-                  <div className="flex items-start justify-between gap-4">
-                    <span className="text-muted-foreground">{t("trainingV2.paceMarathon")}</span>
-                    <span className="text-right font-medium">{`${pacesData.paces.marathon.pace_str} /km`}</span>
-                  </div>
-                )}
-                {pacesData?.paces?.threshold?.pace_str && (
-                  <div className="flex items-start justify-between gap-4">
-                    <span className="text-muted-foreground">{t("trainingV2.paceThreshold")}</span>
-                    <span className="text-right font-medium">{`${pacesData.paces.threshold.pace_str} /km`}</span>
-                  </div>
-                )}
-                {pacesData?.paces?.interval?.lower?.pace_str && pacesData?.paces?.interval?.upper?.pace_str && (
-                  <div className="flex items-start justify-between gap-4">
-                    <span className="text-muted-foreground">{t("trainingV2.paceInterval")}</span>
-                    <span className="text-right font-medium">{`${pacesData.paces.interval.lower.pace_str} - ${pacesData.paces.interval.upper.pace_str} /km`}</span>
-                  </div>
-                )}
-                {pacesData?.paces?.repetition?.pace_str && (
-                  <div className="flex items-start justify-between gap-4">
-                    <span className="text-muted-foreground">{t("trainingV2.paceRepetition")}</span>
-                    <span className="text-right font-medium">{`${pacesData.paces.repetition.pace_str} /km`}</span>
-                  </div>
-                )}
+                {(() => {
+                  const easyLower = formatVdotPace(pacesData?.paces?.easy?.lower, unitSystem);
+                  const easyUpper = formatVdotPace(pacesData?.paces?.easy?.upper, unitSystem);
+                  return easyLower && easyUpper ? (
+                    <div className="flex items-start justify-between gap-4">
+                      <span className="text-muted-foreground">{t("trainingV2.paceEasy")}</span>
+                      <span className="text-right font-medium">{`${easyLower} - ${easyUpper}`}</span>
+                    </div>
+                  ) : null;
+                })()}
+                {(() => {
+                  const marathon = formatVdotPace(pacesData?.paces?.marathon, unitSystem);
+                  return marathon ? (
+                    <div className="flex items-start justify-between gap-4">
+                      <span className="text-muted-foreground">{t("trainingV2.paceMarathon")}</span>
+                      <span className="text-right font-medium">{marathon}</span>
+                    </div>
+                  ) : null;
+                })()}
+                {(() => {
+                  const threshold = formatVdotPace(pacesData?.paces?.threshold, unitSystem);
+                  return threshold ? (
+                    <div className="flex items-start justify-between gap-4">
+                      <span className="text-muted-foreground">{t("trainingV2.paceThreshold")}</span>
+                      <span className="text-right font-medium">{threshold}</span>
+                    </div>
+                  ) : null;
+                })()}
+                {(() => {
+                  const intervalLower = formatVdotPace(pacesData?.paces?.interval?.lower, unitSystem);
+                  const intervalUpper = formatVdotPace(pacesData?.paces?.interval?.upper, unitSystem);
+                  return intervalLower && intervalUpper ? (
+                    <div className="flex items-start justify-between gap-4">
+                      <span className="text-muted-foreground">{t("trainingV2.paceInterval")}</span>
+                      <span className="text-right font-medium">{`${intervalLower} - ${intervalUpper}`}</span>
+                    </div>
+                  ) : null;
+                })()}
+                {(() => {
+                  const repetition = formatVdotPace(pacesData?.paces?.repetition, unitSystem);
+                  return repetition ? (
+                    <div className="flex items-start justify-between gap-4">
+                      <span className="text-muted-foreground">{t("trainingV2.paceRepetition")}</span>
+                      <span className="text-right font-medium">{repetition}</span>
+                    </div>
+                  ) : null;
+                })()}
               </div>
             )}
           </div>
