@@ -262,12 +262,30 @@ const formatVdotPace = (paceValue, unitSystem) => {
   return null;
 };
 
-// PR233 — sums a numeric field across a list of rows, ignoring null/unknown
-// values (None != 0: an entirely-empty list yields null, never a fabricated 0).
-const sumKnown = (rows, field) => {
-  const known = rows.map((row) => row?.[field]).filter(isKnownNumber);
-  if (known.length === 0) return null;
-  return known.reduce((total, value) => total + value, 0);
+// C233 — aggregates a numeric field across rows with an explicit
+// empty/complete/partial state. "None != 0": a missing value on a real row
+// must never be silently dropped and the remaining values summed as if that
+// were the whole truth — that would present a partial total as complete.
+//
+// - rows.length === 0            -> "empty"   (a real, observed zero)
+// - every row has a known value  -> "complete" (exact sum)
+// - at least one row is unknown  -> "partial"  (no safe total to show)
+export const aggregateKnownMetric = (rows, field) => {
+  const list = Array.isArray(rows) ? rows : [];
+  if (list.length === 0) {
+    return { state: "empty", value: 0 };
+  }
+  let sum = 0;
+  let hasUnknown = false;
+  for (const row of list) {
+    const value = row?.[field];
+    if (isKnownNumber(value)) {
+      sum += value;
+    } else {
+      hasUnknown = true;
+    }
+  }
+  return hasUnknown ? { state: "partial", value: null } : { state: "complete", value: sum };
 };
 
 // Defensive: PR230's WeekV2ActualResponse always has activity_id when the
@@ -474,23 +492,36 @@ function WeekVolumeSummary({ t, weekPlan, weeklyTarget, unitSystem }) {
     ? (isDistanceBasis ? formatDistance(plannedValue, { unitSystem }) : `${Math.round(plannedValue)} min`)
     : t("trainingV2.notAvailable");
 
-  const completedValue = isDistanceBasis
-    ? sumKnown(matchedActuals, "distance_km")
-    : sumKnown(matchedActuals, "duration_minutes");
-  const completedLabel = isKnownNumber(completedValue)
-    ? (isDistanceBasis ? formatDistance(completedValue, { unitSystem }) : `${Math.round(completedValue)} min`)
-    : t("trainingV2.notAvailable");
+  const completedAgg = isDistanceBasis
+    ? aggregateKnownMetric(matchedActuals, "distance_km")
+    : aggregateKnownMetric(matchedActuals, "duration_minutes");
+  // "empty" (0 matched activities) is a real, complete zero and must render
+  // as "0 km"/"0 min", not "—". "partial" (at least one matched activity has
+  // a missing metric) must never render the sum of the known-only values as
+  // if it were the full total — C233's "None != 0" doctrine.
+  const completedLabel = completedAgg.state === "partial"
+    ? t("trainingV2.incompleteData")
+    : (isDistanceBasis
+      ? formatDistance(completedAgg.value, { unitSystem })
+      : `${Math.round(completedAgg.value)} min`);
 
-  const extraDistance = sumKnown(unmatched, "distance_km");
-  const extraDuration = sumKnown(unmatched, "duration_minutes");
-  const extraLabel = isDistanceBasis
-    ? (isKnownNumber(extraDistance) ? formatDistance(extraDistance, { unitSystem }) : null)
-    : (isKnownNumber(extraDuration) ? `${Math.round(extraDuration)} min` : null);
+  const extraAgg = isDistanceBasis
+    ? aggregateKnownMetric(unmatched, "distance_km")
+    : aggregateKnownMetric(unmatched, "duration_minutes");
+  // Extra Garmin volume is only rendered when there is at least one
+  // unmatched row this week; a genuinely empty unmatched list keeps the
+  // existing "no extra line" behavior (unchanged), but a partial aggregate
+  // must show the incomplete-data marker rather than a partial sum.
+  const extraLabel = extraAgg.state === "empty"
+    ? null
+    : (extraAgg.state === "partial"
+      ? t("trainingV2.incompleteData")
+      : (isDistanceBasis ? formatDistance(extraAgg.value, { unitSystem }) : `${Math.round(extraAgg.value)} min`));
 
   const completedSessionCount = matchedActuals.length;
 
-  const progressValue = isKnownNumber(plannedValue) && plannedValue > 0 && isKnownNumber(completedValue)
-    ? Math.max(0, Math.min(100, Math.round((completedValue / plannedValue) * 100)))
+  const progressValue = isKnownNumber(plannedValue) && plannedValue > 0 && completedAgg.state === "complete"
+    ? Math.max(0, Math.min(100, Math.round((completedAgg.value / plannedValue) * 100)))
     : 0;
 
   return (

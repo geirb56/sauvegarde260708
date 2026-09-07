@@ -4,7 +4,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import axios from "axios";
 
-import TrainingPlanV2 from "@/pages/TrainingPlanV2";
+import TrainingPlanV2, { aggregateKnownMetric } from "@/pages/TrainingPlanV2";
 import { LanguageProvider } from "@/context/LanguageContext";
 import { useSubscription } from "@/context/SubscriptionContext";
 import { UnitProvider } from "@/context/UnitContext";
@@ -852,5 +852,123 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     await screen.findByTestId("training-v2-week");
     expect(screen.getByTestId("training-v2-day-label-wednesday")).toHaveTextContent("Wednesday");
     expect(screen.getByTestId("training-v2-day-label-wednesday").textContent).not.toContain("·");
+  });
+
+  // ── C233 final round — "None != 0" volume aggregate truth ─────────────
+  // A missing metric on a real activity must never be silently dropped and
+  // the remaining known values presented as a complete total. Zero matched
+  // activities is a real, complete zero and must render as "0 km"/"0 min",
+  // never as "—".
+
+  test("C233 final #1: distance basis, zero matched activities -> Completed (Garmin) = 0 km, not '—'", async () => {
+    const week = weekData();
+    week.week.sessions.forEach((session) => { session.actual = null; session.matching_status = "planned"; });
+    mockAxios({ week });
+    renderPage();
+
+    const volume = await screen.findByTestId("training-v2-week-volume");
+    expect(within(volume).getByTestId("week-volume-completed")).toHaveTextContent(
+      formatDistance(0, { unitSystem: "metric" })
+    );
+    expect(within(volume).getByTestId("week-volume-completed")).not.toHaveTextContent("—");
+  });
+
+  test("C233 final #2: duration basis, zero matched activities -> Completed (Garmin) = 0 min, not '—'", async () => {
+    const week = weekData();
+    week.weekly_target.target_basis = "duration";
+    week.week.sessions.forEach((session) => { session.actual = null; session.matching_status = "planned"; });
+    mockAxios({ week });
+    renderPage();
+
+    const volume = await screen.findByTestId("training-v2-week-volume");
+    expect(within(volume).getByTestId("week-volume-completed")).toHaveTextContent("0 min");
+    expect(within(volume).getByTestId("week-volume-completed")).not.toHaveTextContent("—");
+  });
+
+  test("C233 final #3: distance basis, two matched activities with known distances -> exact sum (8.1 + 6.2 = 14.3 km)", async () => {
+    const week = weekData();
+    week.week.sessions[3].matching_status = "matched"; // thursday
+    week.week.sessions[3].actual = {
+      activity_id: "a2", distance_km: 6.2, duration_minutes: 30, pace_min_per_km: 4.8,
+      activity_type: "running", start_time: "2026-08-27T07:00:00",
+    };
+    mockAxios({ week });
+    renderPage();
+
+    const volume = await screen.findByTestId("training-v2-week-volume");
+    expect(within(volume).getByTestId("week-volume-completed")).toHaveTextContent(
+      formatDistance(14.3, { unitSystem: "metric" })
+    );
+  });
+
+  test("C233 final #4: distance basis, two matched activities but one has a null distance_km -> never shows 8.1 km as the completed total, shows incomplete state instead", async () => {
+    const week = weekData();
+    week.week.sessions[3].matching_status = "matched"; // thursday
+    week.week.sessions[3].actual = {
+      activity_id: "a2", distance_km: null, duration_minutes: 30, pace_min_per_km: null,
+      activity_type: "running", start_time: "2026-08-27T07:00:00",
+    };
+    mockAxios({ week });
+    renderPage();
+
+    const volume = await screen.findByTestId("training-v2-week-volume");
+    const completed = within(volume).getByTestId("week-volume-completed");
+    expect(completed).not.toHaveTextContent(formatDistance(8.1, { unitSystem: "metric" }));
+    expect(completed.textContent).toMatch(/—|Incomplete data/);
+  });
+
+  test("C233 final #5: duration basis, two matched activities but one has a null duration_minutes -> never shows 44 min as a complete total", async () => {
+    const week = weekData();
+    week.weekly_target.target_basis = "duration";
+    week.week.sessions[3].matching_status = "matched"; // thursday
+    week.week.sessions[3].actual = {
+      activity_id: "a2", distance_km: 6, duration_minutes: null, pace_min_per_km: null,
+      activity_type: "running", start_time: "2026-08-27T07:00:00",
+    };
+    mockAxios({ week });
+    renderPage();
+
+    const volume = await screen.findByTestId("training-v2-week-volume");
+    const completed = within(volume).getByTestId("week-volume-completed");
+    expect(completed).not.toHaveTextContent("44 min");
+    expect(completed.textContent).toMatch(/—|Incomplete data/);
+  });
+
+  test("C233 final #6: unmatched extras with one null distance_km never show the partial sum as the complete extra total", async () => {
+    const week = weekData();
+    week.week.unmatched_actuals = [
+      { activity_id: "extra-1", distance_km: 6.2, duration_minutes: 32, pace_min_per_km: 5.16, activity_type: "running", start_time: "2026-08-23T09:00:00" },
+      { activity_id: "extra-2", distance_km: null, duration_minutes: 20, pace_min_per_km: null, activity_type: "running", start_time: "2026-08-22T09:00:00" },
+    ];
+    mockAxios({ week });
+    renderPage();
+
+    const volume = await screen.findByTestId("training-v2-week-volume");
+    const extra = within(volume).getByTestId("week-volume-extra");
+    expect(extra).not.toHaveTextContent(formatDistance(6.2, { unitSystem: "metric" }));
+    expect(extra.textContent).toMatch(/—|Incomplete data/);
+  });
+
+  test("C233 final #7: completedSessionCount stays correct (count of real matched actuals) even when a matched actual's metric is missing", async () => {
+    const week = weekData();
+    week.week.sessions[3].matching_status = "matched"; // thursday
+    week.week.sessions[3].actual = {
+      activity_id: "a2", distance_km: null, duration_minutes: 30, pace_min_per_km: null,
+      activity_type: "running", start_time: "2026-08-27T07:00:00",
+    };
+    mockAxios({ week });
+    renderPage();
+
+    const volume = await screen.findByTestId("training-v2-week-volume");
+    // monday (a1) + thursday (a2) are both real matched activities, even
+    // though thursday's distance_km is unknown -> session count is still 2.
+    expect(within(volume).getByTestId("week-volume-sessions")).toHaveTextContent("2/5");
+  });
+
+  test("C233 final #8: None != 0 — a null field on a real row is never coerced to 0, and an empty row list is a true, distinct zero", () => {
+    expect(aggregateKnownMetric([], "distance_km")).toEqual({ state: "empty", value: 0 });
+    expect(aggregateKnownMetric([{ distance_km: null }], "distance_km")).toEqual({ state: "partial", value: null });
+    expect(aggregateKnownMetric([{ distance_km: 5 }, { distance_km: null }], "distance_km").state).toBe("partial");
+    expect(aggregateKnownMetric([{ distance_km: 5 }, { distance_km: 3 }], "distance_km")).toEqual({ state: "complete", value: 8 });
   });
 });

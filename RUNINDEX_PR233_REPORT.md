@@ -196,3 +196,79 @@ Résultats :
 ### 8.5 Statut
 
 Corrections poussées sur la branche existante `copilot/training-ux-v3-reprise-propre` (PR #233, toujours en **draft**, base `copilot/dev`). **Aucun merge effectué.** STOP après push, conformément à la consigne.
+
+---
+
+## 9. CORRECTION FINALE C233 — Vérité des agrégats de volume ("None != 0")
+
+### 9.1 Head de départ de cette correction
+
+- Commit de départ : `42ff091` (dernier commit poussé par la correction C233 précédente, section 8 ci-dessus).
+
+### 9.2 Bug corrigé
+
+Le helper `sumKnown(rows, field)` filtrait les valeurs `null`/inconnues puis sommait uniquement les valeurs connues restantes. Conséquence :
+- Avec 2 activités Garmin *matched* (`distance_km = 8.1` et `distance_km = null`), l'UI affichait **"Completed (Garmin): 8.1 km"** — un total partiel présenté comme s'il était complet.
+- Avec 0 activité *matched*, l'UI affichait **"—"** au lieu du vrai zéro observé **"0 km"**.
+
+Ceci violait la doctrine **"None != 0"** : une métrique manquante ne doit jamais être silencieusement ignorée puis présentée comme si le total affiché était complet, et l'absence totale d'activités (un vrai zéro) ne doit pas être confondue avec une valeur indisponible.
+
+### 9.3 Correction implémentée
+
+Remplacement intégral de `sumKnown()` par un nouveau helper explicite `aggregateKnownMetric(rows, field)` (exporté depuis `TrainingPlanV2.jsx` pour permettre un test unitaire direct), retournant `{ state, value }` avec exactement 3 états :
+
+| Cas | `state` | `value` |
+|---|---|---|
+| `rows.length === 0` | `"empty"` | `0` (vrai zéro observé : aucune activité à sommer) |
+| ≥1 row, **toutes** les valeurs connues | `"complete"` | somme exacte |
+| ≥1 row, **au moins une** valeur `null`/`undefined`/non numérique | `"partial"` | `null` (jamais présenté comme un total) |
+
+**`WeekVolumeSummary` — "Completed (Garmin)"** (`sessions[].actual`, filtré aux activités réellement attribuées) :
+- `target_basis === "distance"` → agrège `distance_km` ; `target_basis === "duration"` → agrège `duration_minutes`.
+- `state === "empty"` → affiche `"0 km"`/`"0 min"` (plus jamais `"—"`).
+- `state === "complete"` → affiche la somme exacte.
+- `state === "partial"` → affiche la nouvelle clé i18n dédiée `trainingV2.incompleteData` ("Incomplete data" / "Données incomplètes" / "Datos incompletos"), jamais la somme des seules valeurs connues.
+
+**"Extra Garmin volume"** (`unmatched_actuals`) — même doctrine exacte appliquée à la dimension courante du plan :
+- 0 unmatched → pas de ligne extra (comportement existant conservé, `state === "empty"` → `extraLabel = null`).
+- toutes connues → somme affichée.
+- au moins une manquante → `trainingV2.incompleteData`, jamais une somme partielle silencieuse.
+
+**Progress bar** : le ratio n'est calculé que si `completedAgg.state === "complete"` (et `plannedValue` connu et positif) ; en cas d'agrégat `"empty"` ou `"partial"`, la barre affiche `0` — jamais un pourcentage calculé à partir d'une somme partielle.
+
+**Compteur de séances** : `completedSessionCount = matchedActuals.length` **inchangé** — reste indépendant des métriques distance/durée manquantes (une activité *matched* dont la distance est `null` compte toujours comme une séance accomplie).
+
+Aucun fichier backend modifié. Nouvelle clé i18n `trainingV2.incompleteData` ajoutée en `en`/`fr`/`es` dans `frontend/src/lib/i18n.js`.
+
+### 9.4 Nouveaux tests (`frontend/src/__tests__/training-v2-page.test.jsx`)
+
+- **C233 final #1** — distance basis, 0 activité matched → `"Completed (Garmin)" = 0 km` (jamais `"—"`).
+- **C233 final #2** — duration basis, 0 activité matched → `"Completed (Garmin)" = 0 min` (jamais `"—"`).
+- **C233 final #3** — distance basis, 2 matched connues (8.1 + 6.2) → total exact `14.3 km`.
+- **C233 final #4** — distance basis, 2 matched dont une `distance_km: null` → n'affiche jamais `8.1 km` comme total ; affiche l'état incomplet.
+- **C233 final #5** — duration basis, 2 matched dont une `duration_minutes: null` → n'affiche jamais `44 min` comme total complet.
+- **C233 final #6** — unmatched extras (6.2 + null) → n'affiche jamais `6.2 km` comme total extra complet.
+- **C233 final #7** — une métrique manquante sur une activité matched ne change pas `completedSessionCount` (reste `2/5` avec 2 activités réellement matched, même si l'une a une distance inconnue).
+- **C233 final #8** — test unitaire direct de `aggregateKnownMetric` : liste vide → `{state:"empty", value:0}` ; row avec champ `null` → `{state:"partial", value:null}` ; mélange connu/inconnu → `"partial"` ; toutes connues → `{state:"complete", value:somme}`. Confirme explicitement que `null` n'est jamais coercé à `0` et que l'absence de rows est un vrai zéro distinct de l'état partiel.
+
+Les deux tests PR233 existants ("separates planned volume..." et "shows a separate 'extra Garmin volume'...") restent verts sans modification : ils couvrent déjà le cas nominal "toutes les valeurs connues" (`state === "complete"`), inchangé par cette correction.
+
+### 9.5 Tests réellement exécutés
+
+Commandes exécutées dans `frontend/` (après `npm install --legacy-peer-deps`, `node_modules` absent en session fraîche) :
+```
+CI=true npx craco test --watchAll=false --forceExit training-v2-page   # ciblé Training
+CI=true npx craco test --watchAll=false --forceExit                    # suite complète
+npm run build                                                            # build production
+```
+
+Résultats :
+- `training-v2-page.test.jsx` (ciblé) : **56/56 passés** (contre 48 avant cette correction — 8 nouveaux tests C233-final).
+- Suite complète : **17 suites, 272 tests, 272 passés, 0 échec** (contre 264 avant, cohérent avec les +8 nouveaux tests).
+- `npm run build` : **succès**, aucune erreur de compilation.
+- `runtime-tools-secret_scanning` sur les fichiers modifiés : **aucun secret détecté**.
+- `parallel_validation` (Code Review + CodeQL) : Code Review — aucun commentaire ; CodeQL (javascript) — **0 alerte**.
+
+### 9.6 Statut
+
+Correction poussée sur la branche existante `copilot/training-ux-v3-reprise-propre` (PR #233, toujours en **draft**, base `copilot/dev`). **Aucun merge effectué.** STOP après push, conformément à la consigne.
