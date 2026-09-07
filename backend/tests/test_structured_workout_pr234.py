@@ -465,6 +465,34 @@ def test_insufficient_training_paces_confidence_never_invents_pace():
     assert r.steps[0].pace_min_per_km_max is None
 
 
+def test_malformed_pace_zone_value_never_invents_pace():
+    # Defensive branch: a zone field that is neither PaceRange nor PaceValue
+    # (should never happen upstream, but must never fabricate a value if it
+    # somehow did) must resolve to PACE_UNAVAILABLE, not raise or invent.
+    base = _paces()
+    malformed = TrainingPaces(
+        reference_date=base.reference_date,
+        vdot_result=base.vdot_result,
+        confidence=base.confidence,
+        easy="not-a-pace-object",  # type: ignore[arg-type]
+        marathon=base.marathon,
+        threshold=base.threshold,
+        interval=base.interval,
+        repetition=base.repetition,
+        reason=base.reason,
+    )
+    r = build_structured_workout_prescription(
+        workout=_workout("easy", distance_km=8.0),
+        plan_goal=_goal(GoalType.ten_k),
+        periodization=_phase(PeriodizationPhase.base),
+        training_paces=malformed,
+    )
+    assert r.steps[0].pace_min_per_km is None
+    assert r.steps[0].pace_min_per_km_min is None
+    assert r.steps[0].pace_min_per_km_max is None
+    assert "PACE_UNAVAILABLE" in r.reason_codes
+
+
 # ---------------------------------------------------------------------------
 # L. Training Pace present
 # ---------------------------------------------------------------------------

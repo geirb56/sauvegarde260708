@@ -12,7 +12,7 @@
 Nouveaux fichiers uniquement (aucun fichier existant modifié) :
 
 - `backend/training_v2/structured_workout.py` — StructuredWorkoutPrescriptionEngine (nouveau moteur, ~950 lignes dont documentation extensive).
-- `backend/tests/test_structured_workout_pr234.py` — 62 tests unitaires/domain.
+- `backend/tests/test_structured_workout_pr234.py` — 63 tests unitaires/domain.
 - `RUNINDEX_PR234_REPORT.md` — ce rapport.
 
 Aucun fichier de `training_v2/` existant (`workout_generator.py`, `daily_adaptation.py`, `periodization.py`, `plan_goal.py`, `training_paces.py`, `weekly_target.py`, `week_plan_bridge.py`, `today_prescription.py`, `prescription_snapshot.py`, etc.) n'a été touché. Aucun fichier `server.py` ni frontend n'a été touché.
@@ -140,6 +140,7 @@ Recovery = métadonnée du step `work` (`kind="jog"`, `duration_seconds` calibr�
 - Distance : warmup/cooldown réservés en premier (bornés min/max + fraction, jamais > 60% du total combinés), le travail prend le reste, les répétitions se répartissent uniformément (division entière), et le reste d'arrondi (`work_m - per_rep_m*reps`) est absorbé par le cooldown — jamais par un rep "plus long" arbitraire, jamais perdu.
 - Durée : warmup arrondi en premier (entier, borné à `[0, total]`), puis le cooldown est calculé comme **le reste exact** (`total - warmup - reps*(per_rep+recovery)` ou `total - warmup - work`) — ceci garantit la fermeture exacte de l'invariant en toutes circonstances (voir §9), le cooldown ne pouvant jamais devenir négatif (clampé à 0 dans le cas limite adversarial).
 - Aucune distance ni durée négative. Aucun step à zéro sauf sémantiquement (ex. `distance_m=None` si volume nul).
+- **Garde anti-dégénérescence (ajoutée après revue de code)** : le clamp `reps ∈ [rep_min, rep_max]` peut, pour un volume juste au-dessus du seuil `_MIN_WORK_*_FOR_INTERVALS`, produire un `per_rep` anormalement court une fois le nombre minimal de répétitions imposé (ex. `vo2_intervals` avec `rep_min=4` sur un volume tout juste suffisant). Le moteur vérifie explicitement `per_rep_m`/`per_rep_s` contre un plancher calibré par type (`_MIN_PER_REP_M`/`_MIN_PER_REP_S`) et **replie vers un bloc de travail continu unique + `VOLUME_LIMITED`** plutôt que de présenter une fausse structure d'intervalles dégénérée. Vérifié par fuzzing (aucune régression de l'invariant de fermeture) et par la suite de tests existante.
 
 ## 12. Interaction DailyAdaptation
 
@@ -175,9 +176,9 @@ Tous machine-readable, déduplication déterministe (`dict.fromkeys`), aucun tex
 
 ## 16. Tests ajoutés
 
-`backend/tests/test_structured_workout_pr234.py` — **62 tests**, tous passants (`62 passed`), couvrant :
+`backend/tests/test_structured_workout_pr234.py` — **63 tests**, tous passants (`63 passed`), couvrant :
 
-A. Déterminisme (quality + continuous) — B. Easy — C. Long easy — D. Recovery — E. Quality goal-aware (5k vs ultra, 10k vs marathon) — F. Phase-aware (10k base vs build, taper conservateur tous goals) — G. Total distance (paramétré 6 valeurs + continuous) — H. Total duration (paramétré 5 valeurs + continuous) — I. Recoveries jamais hors total (distance + duration) — J. Rounding (5 distances non-rondes + 4 durées non-rondes, aucune valeur négative) — K. Pace absente (jamais de pace inventée, y compris `confidence="insufficient"`) — L. Pace présente (zone et valeur correctes, dérivation durée uniquement sur zones single-value) — M/N/O/P. DailyAdaptation KEEP/SHORTEN/DOWNGRADE/REST — Q. Maintenance (6 phases, jamais race-specific/VO2) — R. Couverture 5K/10K/Half/Marathon/Ultra + non-régression "ultra jamais VO2" (3 phases) — S. Taper (volume non augmenté, aucun intervalle introduit) — T. None != 0 (pace et durée) — U. Sérialisation (round-trip `model_dump`/`model_validate`, y compris jour de repos).
+A. Déterminisme (quality + continuous) — B. Easy — C. Long easy — D. Recovery — E. Quality goal-aware (5k vs ultra, 10k vs marathon) — F. Phase-aware (10k base vs build, taper conservateur tous goals) — G. Total distance (paramétré 6 valeurs + continuous) — H. Total duration (paramétré 5 valeurs + continuous) — I. Recoveries jamais hors total (distance + duration) — J. Rounding (5 distances non-rondes + 4 durées non-rondes, aucune valeur négative) — K. Pace absente (jamais de pace inventée, y compris `confidence="insufficient"` et un champ de zone malformé/inattendu — branche défensive testée explicitement) — L. Pace présente (zone et valeur correctes, dérivation durée uniquement sur zones single-value) — M/N/O/P. DailyAdaptation KEEP/SHORTEN/DOWNGRADE/REST — Q. Maintenance (6 phases, jamais race-specific/VO2) — R. Couverture 5K/10K/Half/Marathon/Ultra + non-régression "ultra jamais VO2" (3 phases) — S. Taper (volume non augmenté, aucun intervalle introduit) — T. None != 0 (pace et durée) — U. Sérialisation (round-trip `model_dump`/`model_validate`, y compris jour de repos).
 
 Complété par du fuzz-testing manuel additionnel (hors suite pytest, exécuté pendant le développement) :
 - Invariant distance sur ~35 valeurs (1.0 à 40 km, pas 0.37) × 3 phases × marathon → 0 échec.
@@ -199,7 +200,7 @@ Suite complète du dossier `tests/` exécutée à titre de contrôle large (`pyt
 ## 18. Résultats exacts
 
 - Nouveau module : 953 lignes (dont documentation extensive), aucune dépendance circulaire (import uniquement `periodization`, `plan_goal`, `training_paces`, `workout_generator`).
-- Tests PR234 : **62/62 passed**.
+- Tests PR234 : **63/63 passed**.
 - Tests de régression ciblés : **175/175 passed**.
 - Aucune anomalie détectée lors de la revue finale du diff (une anomalie de calcul — récupération non budgétée dans le total en base durée — a été détectée et corrigée AVANT la version finale, voir §9 et §20).
 

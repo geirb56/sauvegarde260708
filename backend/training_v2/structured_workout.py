@@ -158,6 +158,14 @@ _REP_TARGET_S: dict[str, float] = {
 _REP_MIN: dict[str, int] = {"threshold_intervals": 2, "vo2_intervals": 4}
 _REP_MAX: dict[str, int] = {"threshold_intervals": 5, "vo2_intervals": 8}
 
+# Sanity floor for a single repetition once rep_min/rep_max clamping and
+# rounding have been applied. If the volume is so small that clamping to
+# rep_min would produce a degenerate (unrealistically short) rep, the
+# engine falls back to a single continuous work block (VOLUME_LIMITED)
+# instead of presenting a fake interval structure.
+_MIN_PER_REP_M: dict[str, float] = {"threshold_intervals": 600.0, "vo2_intervals": 300.0}
+_MIN_PER_REP_S: dict[str, int] = {"threshold_intervals": 120, "vo2_intervals": 45}
+
 # Recovery jog duration between repetitions, seconds. PRODUCT CALIBRATION V1.
 _RECOVERY_SECONDS: dict[str, int] = {
     "threshold_intervals": 90,
@@ -575,6 +583,34 @@ def _build_continuous_steps(workout: WorkoutPrescription) -> tuple[str, Tuple[St
 # ---------------------------------------------------------------------------
 
 
+def _reserved_edge_step(
+    step_type: StructuredStepType,
+    *,
+    basis: str,
+    value: float,
+    reason_code: str,
+) -> StructuredWorkoutStep:
+    """Build a warmup/cooldown step reserving `value` in the given basis.
+
+    `basis` is "distance" (metres) or "duration" (seconds). A reservation of
+    0 renders as None on the corresponding field (never a fake zero-size
+    step) per §10 ("no invented zero unless semantically necessary").
+    """
+    if basis == "distance":
+        distance_m = value if value > 0 else None
+        duration_seconds = None
+    else:
+        duration_seconds = int(round(value)) if value > 0 else None
+        distance_m = None
+    return StructuredWorkoutStep(
+        step_type=step_type,
+        distance_m=distance_m,
+        duration_seconds=duration_seconds,
+        pace_zone="E",
+        reason_codes=(reason_code,),
+    )
+
+
 def _build_quality_steps(
     workout: WorkoutPrescription,
     *,
@@ -607,18 +643,23 @@ def _build_quality_steps(
 
         steps: list[StructuredWorkoutStep] = []
         steps.append(
-            StructuredWorkoutStep(
-                step_type=StructuredStepType.warmup,
-                distance_m=warmup_m if warmup_m > 0 else None,
-                pace_zone="E",
-                reason_codes=("WARMUP_RESERVED",),
+            _reserved_edge_step(
+                StructuredStepType.warmup, basis="distance", value=warmup_m, reason_code="WARMUP_RESERVED"
             )
         )
 
+        reps, per_rep_m, drift_m = 0, 0.0, 0.0
         if kind in (QualityKind.threshold_intervals, QualityKind.vo2_intervals) and work_m >= _MIN_WORK_M_FOR_INTERVALS:
             reps, per_rep_m, drift_m = _split_reps_distance(
                 work_m, _REP_TARGET_M[kind.value], _REP_MIN[kind.value], _REP_MAX[kind.value]
             )
+            if per_rep_m < _MIN_PER_REP_M[kind.value]:
+                # Clamping to rep_min still produced a degenerate (too
+                # short) rep for this volume: never present a fake interval
+                # structure — fall back to continuous work instead (§6/§10).
+                reps, per_rep_m, drift_m = 0, 0.0, 0.0
+
+        if reps > 0:
             recovery_s = _RECOVERY_SECONDS[kind.value]
             # Rounding drift (§10): reps * per_rep_m is an even, deterministic
             # split; any residual (< per-rep granularity) is absorbed by the
@@ -649,11 +690,8 @@ def _build_quality_steps(
             )
 
         steps.append(
-            StructuredWorkoutStep(
-                step_type=StructuredStepType.cooldown,
-                distance_m=cooldown_m if cooldown_m > 0 else None,
-                pace_zone="E",
-                reason_codes=("COOLDOWN_RESERVED",),
+            _reserved_edge_step(
+                StructuredStepType.cooldown, basis="distance", value=cooldown_m, reason_code="COOLDOWN_RESERVED"
             )
         )
 
@@ -679,11 +717,8 @@ def _build_quality_steps(
 
         steps = []
         steps.append(
-            StructuredWorkoutStep(
-                step_type=StructuredStepType.warmup,
-                duration_seconds=warmup_s_int if warmup_s_int > 0 else None,
-                pace_zone="E",
-                reason_codes=("WARMUP_RESERVED",),
+            _reserved_edge_step(
+                StructuredStepType.warmup, basis="duration", value=warmup_s_int, reason_code="WARMUP_RESERVED"
             )
         )
 
@@ -695,6 +730,10 @@ def _build_quality_steps(
             reps, per_rep_s, _drift_s = _split_reps_duration(
                 work_s_for_calc, _REP_TARGET_S[kind.value], _REP_MIN[kind.value], _REP_MAX[kind.value], recovery_s
             )
+            if per_rep_s < _MIN_PER_REP_S[kind.value]:
+                # Same degenerate-rep guard as the distance branch (§6/§10):
+                # never present a fake interval structure for a too-short rep.
+                reps, per_rep_s, recovery_s = 0, 0, 0
         else:
             reps, per_rep_s, recovery_s = 0, 0, 0
 
@@ -731,11 +770,8 @@ def _build_quality_steps(
         cooldown_s_int = max(0, cooldown_s_int)
 
         steps.append(
-            StructuredWorkoutStep(
-                step_type=StructuredStepType.cooldown,
-                duration_seconds=cooldown_s_int if cooldown_s_int > 0 else None,
-                pace_zone="E",
-                reason_codes=("COOLDOWN_RESERVED",),
+            _reserved_edge_step(
+                StructuredStepType.cooldown, basis="duration", value=cooldown_s_int, reason_code="COOLDOWN_RESERVED"
             )
         )
     else:
