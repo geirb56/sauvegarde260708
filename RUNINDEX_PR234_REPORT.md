@@ -316,6 +316,38 @@ Pureté/déterminisme du moteur, modèles `frozen`, sérialisation Pydantic, goa
 
 **Aucun merge n'a été effectué.** Correction poussée sur la branche existante `copilot/pr-234-structured-workout-prescription`. La Pull Request reste en **DRAFT** vers `copilot/dev`.
 
+## 24. C234 ZERO SEMANTICS FINAL FIX
+
+Cette section supersède les métadonnées historiques ci-dessus pour l'état réel de
+la PR au moment de ce correctif.
+
+- Head avant correction : `934d4958340bc0cd6838d7efcb59046e154950cb`.
+- Nouveau head : à renseigner après le commit de ce correctif.
+- Bug corrigé : une réservation connue de `0 m`/`0 s` était convertie en `None`,
+  puis rendait la somme inconnue via `_sum_optional()`.
+- Correction choisie : les steps warmup, work et cooldown de taille exactement
+  zéro sont omis. Les composantes connues restantes ferment donc un total nul
+  sans jamais utiliser `None` pour représenter zéro. Les recoveries time-only
+  conservent leur sémantique mixed-basis (`DISTANCE_TOTAL_MIXED_BASIS`).
+- Tests ajoutés : qualité à `distance_km=0.0` et `duration_minutes=0`, avec
+  absence de steps zéro, somme connue égale à zéro et closure déterministe.
+- Logging : `training_paces_authority.py` utilise désormais `logger.exception`
+  afin de préserver la traceback; aucun comportement métier n'est changé.
+- Tests exécutés : Structured Workout **81 passed**; WorkoutGenerator +
+  DailyAdaptation + WeekExecution **160 passed**; Training Paces +
+  local reference date **59 passed**. Le test endpoint Today/Week n'a pas été
+  collecté, l'environnement ayant une incompatibilité Motor/PyMongo
+  (`_QUERY_OPTIONS` absent).
+- CI GitHub : les derniers runs disponibles sont passés sur l'ancien head
+  `b8f8c6e3`; aucun run n'est disponible pour ce nouveau correctif au moment du
+  rapport.
+- Body GitHub : mis à jour pour refléter l'intégration Today/Week, l'autorité
+  Training Paces et les limites historiques/futures réelles.
+- État GitHub réel : PR ouverte, `draft=false` (READY). Aucun outil disponible
+  dans cette session ne permet de la remettre en DRAFT; le rapport ne prétend
+  donc pas le contraire.
+- Aucun merge effectué.
+
 ## 23. C234 FINAL CLOCK ALIGNMENT
 
 - Head avant correction : `b8f8c6e3abcdd3b526f484527906318db48e9147`.

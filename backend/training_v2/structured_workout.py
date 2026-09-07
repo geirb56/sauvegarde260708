@@ -682,9 +682,8 @@ def _reserved_edge_step(
 ) -> StructuredWorkoutStep:
     """Build a warmup/cooldown step reserving `value` in the given basis.
 
-    `basis` is "distance" (metres) or "duration" (seconds). A reservation of
-    0 renders as None on the corresponding field (never a fake zero-size
-    step) per §10 ("no invented zero unless semantically necessary").
+    `basis` is "distance" (metres) or "duration" (seconds). Zero reservations
+    are omitted by the caller rather than encoded as unknown values.
     """
     if basis == "distance":
         distance_m = value if value > 0 else None
@@ -733,11 +732,12 @@ def _build_quality_steps(
         work_m = max(0.0, total_m - warmup_m - cooldown_m)
 
         steps: list[StructuredWorkoutStep] = []
-        steps.append(
-            _reserved_edge_step(
-                StructuredStepType.warmup, basis="distance", value=warmup_m, reason_code="WARMUP_RESERVED"
+        if warmup_m > 0:
+            steps.append(
+                _reserved_edge_step(
+                    StructuredStepType.warmup, basis="distance", value=warmup_m, reason_code="WARMUP_RESERVED"
+                )
             )
-        )
 
         reps, per_rep_m, drift_m = 0, 0.0, 0.0
         if kind in (QualityKind.threshold_intervals, QualityKind.vo2_intervals) and work_m >= _MIN_WORK_M_FOR_INTERVALS:
@@ -778,21 +778,23 @@ def _build_quality_steps(
         else:
             if kind in (QualityKind.threshold_intervals, QualityKind.vo2_intervals):
                 reason_codes.append("VOLUME_LIMITED")
+            if work_m > 0:
+                steps.append(
+                    StructuredWorkoutStep(
+                        step_type=StructuredStepType.work,
+                        repetitions=1,
+                        distance_m=work_m,
+                        pace_zone=zone,
+                        reason_codes=tuple(reason_codes),
+                    )
+                )
+
+        if cooldown_m > 0:
             steps.append(
-                StructuredWorkoutStep(
-                    step_type=StructuredStepType.work,
-                    repetitions=1,
-                    distance_m=work_m if work_m > 0 else None,
-                    pace_zone=zone,
-                    reason_codes=tuple(reason_codes),
+                _reserved_edge_step(
+                    StructuredStepType.cooldown, basis="distance", value=cooldown_m, reason_code="COOLDOWN_RESERVED"
                 )
             )
-
-        steps.append(
-            _reserved_edge_step(
-                StructuredStepType.cooldown, basis="distance", value=cooldown_m, reason_code="COOLDOWN_RESERVED"
-            )
-        )
 
     elif workout.duration_minutes is not None:
         target_basis = "duration"
@@ -815,11 +817,12 @@ def _build_quality_steps(
         work_s_for_calc = max(0.0, float(total_s_exact) - warmup_s_int - cooldown_s_raw)
 
         steps = []
-        steps.append(
-            _reserved_edge_step(
-                StructuredStepType.warmup, basis="duration", value=warmup_s_int, reason_code="WARMUP_RESERVED"
+        if warmup_s_int > 0:
+            steps.append(
+                _reserved_edge_step(
+                    StructuredStepType.warmup, basis="duration", value=warmup_s_int, reason_code="WARMUP_RESERVED"
+                )
             )
-        )
 
         if (
             kind in (QualityKind.threshold_intervals, QualityKind.vo2_intervals)
@@ -864,15 +867,16 @@ def _build_quality_steps(
             if kind in (QualityKind.threshold_intervals, QualityKind.vo2_intervals):
                 reason_codes.append("VOLUME_LIMITED")
             work_s_int = int(round(work_s_for_calc))
-            steps.append(
-                StructuredWorkoutStep(
-                    step_type=StructuredStepType.work,
-                    repetitions=1,
-                    duration_seconds=work_s_int if work_s_int > 0 else None,
-                    pace_zone=zone,
-                    reason_codes=tuple(reason_codes),
+            if work_s_int > 0:
+                steps.append(
+                    StructuredWorkoutStep(
+                        step_type=StructuredStepType.work,
+                        repetitions=1,
+                        duration_seconds=work_s_int,
+                        pace_zone=zone,
+                        reason_codes=tuple(reason_codes),
+                    )
                 )
-            )
             cooldown_s_int = total_s_exact - warmup_s_int - work_s_int
 
         # Never a negative reservation (§10) — any negative residual (only
@@ -880,11 +884,12 @@ def _build_quality_steps(
         # collapses cooldown to 0 rather than lying about the total.
         cooldown_s_int = max(0, cooldown_s_int)
 
-        steps.append(
-            _reserved_edge_step(
-                StructuredStepType.cooldown, basis="duration", value=cooldown_s_int, reason_code="COOLDOWN_RESERVED"
+        if cooldown_s_int > 0:
+            steps.append(
+                _reserved_edge_step(
+                    StructuredStepType.cooldown, basis="duration", value=cooldown_s_int, reason_code="COOLDOWN_RESERVED"
+                )
             )
-        )
     else:
         target_basis = "none"
         reason_codes.append("STRUCTURE_UNAVAILABLE")

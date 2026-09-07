@@ -157,6 +157,34 @@ def test_determinism_continuous():
     assert r1 == r2
 
 
+@pytest.mark.parametrize(
+    ("basis", "value", "sum_field"),
+    [
+        ("distance", 0.0, "steps_distance_km_sum"),
+        ("duration", 0, "steps_duration_seconds_sum"),
+    ],
+)
+def test_quality_known_zero_omits_zero_steps_without_unknown_totals(basis, value, sum_field):
+    workout = (
+        _workout("quality", distance_km=value)
+        if basis == "distance"
+        else _workout("quality", duration_minutes=value)
+    )
+    result = build_structured_workout_prescription(
+        workout=workout,
+        plan_goal=_goal(GoalType.five_k),
+        periodization=_phase(PeriodizationPhase.build),
+        training_paces=_paces(),
+    )
+
+    assert all(
+        (step.distance_m != 0 if basis == "distance" else step.duration_seconds != 0)
+        for step in result.steps
+    )
+    assert getattr(result, sum_field) == 0
+    assert result.distance_closes_total if basis == "distance" else result.duration_closes_total
+
+
 # ---------------------------------------------------------------------------
 # B. Easy
 # ---------------------------------------------------------------------------
@@ -1064,4 +1092,3 @@ def test_distance_continuous_no_recovery_still_closes_exactly():
     assert r.distance_invariant_applicable
     assert r.distance_closes_total
     assert "DISTANCE_TOTAL_MIXED_BASIS" not in r.reason_codes
-

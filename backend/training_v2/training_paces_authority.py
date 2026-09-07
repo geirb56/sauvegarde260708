@@ -95,8 +95,8 @@ async def load_canonical_training_paces(
                 .to_list(length=TRAINING_PACES_ACTIVITY_LIMIT)
             )
             domain_activities = mongo_garmin_activities_to_domain(garmin_activities)
-        except Exception as exc:
-            logger.warning(f"[TrainingPacesAuthority] Garmin activity load failed: {exc}")
+        except Exception:
+            logger.exception("[TrainingPacesAuthority] Garmin activity load failed")
     return compute_training_paces(domain_activities, reference_date, user_max_hr=None)
 
 
