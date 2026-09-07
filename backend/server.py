@@ -3441,6 +3441,13 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     # helper /training/v2/week uses to compute today's FINAL prescription
     # before freezing a snapshot. Guarantees identical output regardless of
     # which endpoint is hit first for a given day.
+    # C234 — plan_goal/periodization/training_paces are deliberately NOT
+    # passed here: the structured prescription must be built from the
+    # ATOMICALLY-RESOLVED served_prescription below (step 7bis), never from
+    # this local adaptation_result.adapted_workout candidate, which can
+    # differ from the winning snapshot when another concurrent/earlier call
+    # already froze a different served candidate (ABSOLUTE RULE — never
+    # "adapted parent + steps built from an old parent").
     today_final = resolve_today_final_prescription(
         planned_prescription=planned_prescription,
         reference_date=today,
@@ -3468,6 +3475,29 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
         planned_prescription=planned_prescription,
     )
     served_prescription = served_result.prescription
+
+    # ── 7bis. C234 — StructuredWorkoutPrescriptionEngine, wired in AFTER the
+    # atomic served-prescription resolution above (ABSOLUTE RULE: structure
+    # is always built from the FINAL prescription actually served, never a
+    # locally-adapted candidate that a concurrent call may have superseded).
+    # C234 (final corrective audit) — training_paces MUST come from the ONE
+    # canonical Training Paces authority (same loader as /training/v2/paces
+    # and /training/v2/week), never from a local recompute over
+    # domain_activities_90 (the Training Engine's own 90-day LOAD window,
+    # unrelated to Training Paces' own recency policy — see
+    # training_paces_authority.py docstring).
+    from training_v2.structured_workout import build_structured_workout_prescription
+    from training_v2.training_paces_authority import load_canonical_training_paces
+
+    training_paces = await load_canonical_training_paces(
+        db, user_id=user["id"], reference_date=today
+    )
+    structured_prescription = build_structured_workout_prescription(
+        workout=served_prescription,
+        plan_goal=canonical.plan_goal,
+        periodization=canonical.periodization,
+        training_paces=training_paces,
+    )
 
     # ── 8. Map prescription to legacy runtime dict format ─────────────────
     planned_session_runtime = prescription_to_runtime_session(planned_prescription)
@@ -3570,6 +3600,9 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
         # VMA is available at /run-index (canonical source) and /training/v2/week context.
         "vma": None,
         "vma_confidence": None,
+        # C234 — StructuredWorkoutPrescriptionEngine output for TODAY's
+        # served session (additive field, never breaking #233's contract).
+        "structured_prescription": structured_prescription.model_dump(mode="json"),
     }
 
 
@@ -4247,6 +4280,17 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
                 modified_from_planned=served_result.modified_from_planned,
             )
 
+    # C234 (final corrective audit) — training_paces MUST come from the ONE
+    # canonical Training Paces authority (same loader as /training/v2/paces
+    # and /training/today), never from a local recompute over
+    # domain_activities_90 (the Training Engine's own 90-day LOAD window,
+    # unrelated to Training Paces' own recency policy — see
+    # training_paces_authority.py docstring).
+    from training_v2.training_paces_authority import load_canonical_training_paces
+
+    week_training_paces = await load_canonical_training_paces(
+        db, user_id=user_id, reference_date=reference_date
+    )
     try:
         execution = build_week_execution(
             user_id=user_id,
@@ -4255,6 +4299,9 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
             sessions=sessions_for_execution,
             garmin_docs=garmin_activities_90,
             frozen_snapshots=frozen_snapshots,
+            plan_goal=canonical.plan_goal,
+            periodization=canonical.periodization,
+            training_paces=week_training_paces,
         )
     except ValueError as exc:
         logger.error(f"[TrainingV2Week] Execution invariant violated: {exc}")
@@ -4321,6 +4368,8 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
                 adherence_status=None,
                 actual=None,
                 execution_status=EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE,
+                structured=None,
+                structured_status=getattr(se, "structured_status", None),
             )
         return WeekV2SessionResponse(
             day=se.session.day,
@@ -4335,6 +4384,14 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
             adherence_status=se.row.adherence_status.value,
             actual=_actual_response(se.row),
             execution_status=None,
+            # C234 — StructuredWorkoutPrescriptionEngine output, built from
+            # `se.session` (the resolved FINAL/"effective" prescription for
+            # this day, respecting frozen-snapshot immutability), never a
+            # stale pre-adaptation parent. C234 (final corrective audit) —
+            # None for strict historical days (structured_status ==
+            # "historical_unavailable") even when a frozen parent exists.
+            structured=se.structured.model_dump(mode="json") if se.structured else None,
+            structured_status=getattr(se, "structured_status", None),
         )
 
     sessions = [_session_response(se) for se in execution.sessions]
@@ -4453,29 +4510,24 @@ async def get_training_v2_paces(user: dict = Depends(auth_user)):
 
     When confidence == "INSUFFICIENT", paces fields are all null.
     """
-    from training_v2.training_paces import compute_training_paces, training_paces_to_api_dict
+    # ── Compute paces — no Garmin VO2max, no VMA, no Race Predictions ──────
+    from training_v2.training_paces import training_paces_to_api_dict
+    from training_v2.training_paces_authority import load_canonical_training_paces
 
     user_id = user["id"]
+    # C234 — use the same Garmin-observed local calendar date as Today/Week.
+    # This small evidence read is intentionally separate from the authority's
+    # 500-activity pace load: it supplies the clock evidence without changing
+    # Training Paces' historical qualification policy.
     now_utc = datetime.now(timezone.utc)
-    reference_date = now_utc.date()
-
-    # ── Load garmin activities → DomainActivity boundary ─────────────────
-    domain_activities = []
-    garmin_conn = await db.garmin_connections.find_one({"user_id": user_id}, {"_id": 0})
-    if garmin_conn and garmin_conn.get("connected"):
-        try:
-            garmin_activities = await (
-                db.garmin_activities.find({"user_id": user_id}, {"_id": 0})
-                .sort("start_time", -1)
-                .limit(500)
-                .to_list(length=500)
-            )
-            domain_activities = mongo_garmin_activities_to_domain(garmin_activities)
-        except Exception as exc:
-            logger.warning(f"[TrainingPaces] Garmin activity load failed: {exc}")
-
-    # ── Compute paces — no Garmin VO2max, no VMA, no Race Predictions ──────
-    paces = compute_training_paces(domain_activities, reference_date, user_max_hr=None)
+    garmin_activities_for_clock = await db.garmin_activities.find(
+        {"user_id": user_id},
+        {"_id": 0},
+    ).sort("start_time", -1).limit(500).to_list(length=500)
+    reference_date = _resolve_canonical_reference_date(
+        now_utc, garmin_activities_for_clock
+    )
+    paces = await load_canonical_training_paces(db, user_id=user_id, reference_date=reference_date)
     return training_paces_to_api_dict(paces)
 
 
