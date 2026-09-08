@@ -33,7 +33,7 @@ from training_v2.periodization import (  # noqa: E402
     PeriodizationPhase,
     PeriodizationSnapshot,
 )
-from training_v2.plan_goal import GoalType, build_plan_goal  # noqa: E402
+from training_v2.plan_goal import GoalType, PlanGoal, build_plan_goal  # noqa: E402
 from training_v2.prescription_snapshot import (  # noqa: E402
     PrescriptionSnapshot,
     STRUCTURED_STATUS_FUTURE_LIVE,
