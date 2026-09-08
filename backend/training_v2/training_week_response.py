@@ -104,6 +104,25 @@ class WeekV2SessionResponse(BaseModel):
     day: str
     """Day of week, e.g. 'monday'."""
 
+    prescription_id: Optional[str] = None
+    """C235 (corrective audit) — the SAME canonical prescription_id
+    (``week_execution.prescription_id_for``) exposed by ``/training/today``
+    for the current day, so Today and Week can be verified to describe the
+    exact same served prescription. Never a new/artificial identifier.
+    Additive field — ``None`` only if the caller never computed one."""
+
+    session_modified_from_planned: Optional[bool] = None
+    """C235 (final correction) — the SAME field name/value
+    ``/training/today`` exposes as ``session_modified_from_planned`` for the
+    exact same day: the WINNING snapshot's own frozen
+    ``modified_from_planned`` fact. NEVER recomputed here by comparing
+    against the CURRENT live plan — ``PrescriptionSnapshot.
+    modified_from_planned`` is the sole authority, describing a fact frozen
+    at serve time that must never change retroactively. ``None`` (never
+    coerced to ``False``) when no trustworthy snapshot fact is available:
+    ``execution_status == "prescription_unavailable"``, or a legacy
+    (pre-C231) snapshot predating this field. Additive field."""
+
     planned_date: Optional[str] = None
     """PR232A — ISO-8601 date this session is scheduled for."""
 
@@ -155,6 +174,25 @@ class WeekV2SessionResponse(BaseModel):
     exists) — the real Garmin activity for that day, if any, still surfaces
     via ``WeekV2PlanResponse.unmatched_actuals``, never fabricated here.
     None for a normal, PR230-backed session."""
+
+    structured: Optional[dict] = None
+    """C234 — StructuredWorkoutPrescriptionEngine output for this session
+    (``StructuredWorkoutPrescription.model_dump(mode="json")``), built from
+    the EFFECTIVE FINAL prescription. Additive field, never breaking #233's
+    existing contract. None when the engine was not wired for this session
+    (e.g. ``execution_status == "prescription_unavailable"``, or the
+    workout_type is not yet supported by the engine), OR (C234 final
+    corrective audit) when ``structured_status ==
+    "historical_unavailable"`` — see below."""
+
+    structured_status: Optional[str] = None
+    """C234 (final corrective audit) — machine-readable reason for
+    ``structured``'s value: ``"today_served"`` | ``"future_live"`` |
+    ``"historical_unavailable"`` | ``"prescription_unavailable"`` | None
+    (structuring not requested). Mirrors
+    ``training_v2.week_execution.SessionExecution.structured_status``
+    verbatim. Additive, machine-readable only — no UX/marketing wording, no
+    i18n (out of scope here)."""
 
 
 class WeekV2PlanResponse(BaseModel):

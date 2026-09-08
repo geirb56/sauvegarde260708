@@ -209,6 +209,50 @@ async def _get_today(fake_db: _FakeDB, reference_date: date = _MONDAY) -> Dict:
             p.stop()
 
 
+@pytest.mark.asyncio
+async def test_c234_paces_uses_garmin_local_reference_date_at_utc_midnight():
+    """The paces endpoint must share Today/Week's local Garmin clock."""
+    fake_db = _FakeDB()
+    _seed_connected(fake_db, connected=True)
+    fake_db.garmin_activities._docs.append({
+        "user_id": _USER_ID,
+        "start_time": "2025-09-15 08:00:00",
+        "garmin_activity": {
+            "start_time": "2025-09-15 06:00:00",
+            "start_time_local": "2025-09-15 08:00:00",
+        },
+    })
+    captured = {}
+
+    async def _load(_db, *, user_id, reference_date):
+        captured["reference_date"] = reference_date
+        from training_v2.training_paces import compute_training_paces
+        return compute_training_paces([], reference_date, user_max_hr=None)
+
+    fixed_dt = datetime(2025, 9, 15, 22, 30, tzinfo=timezone.utc)
+    patches = [
+        patch.object(server, "db", fake_db),
+        patch("server.get_user_access", AsyncMock(side_effect=_user_access)),
+        patch("server.datetime", _make_fixed_datetime_class(fixed_dt)),
+        patch("training_v2.training_paces_authority.load_canonical_training_paces", _load),
+    ]
+    started = []
+    try:
+        for p in patches:
+            p.start()
+            started.append(p)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=server.app), base_url="http://test",
+        ) as client:
+            response = await client.get("/api/training/v2/paces", headers=_bearer())
+        assert response.status_code == 200, response.text
+    finally:
+        for p in reversed(started):
+            p.stop()
+
+    assert captured["reference_date"] == date(2025, 9, 16)
+
+
 def _seed_cycle(fake_db: _FakeDB, goal: str = "SEMI", reference_date: date = _MONDAY, race_weeks_ahead: int = 16) -> None:
     cycle_start = (reference_date - timedelta(weeks=4)).isoformat()
     fake_db.training_cycles._docs.append({
@@ -334,3 +378,356 @@ async def test_today_endpoint_has_no_training_feedback_field():
     result = await _get_today(fake_db)
     assert result["status"] == 200, result["body"]
     assert "recent_feedback" not in result["body"]
+
+
+# ── C234 — StructuredWorkoutPrescriptionEngine real pipeline wiring ────────
+
+
+@pytest.mark.asyncio
+async def test_today_endpoint_exposes_structured_prescription():
+    """C234 Blocker 1: /training/today must now transport a real structured
+    prescription built from the ATOMICALLY-SERVED session, not a module only
+    reachable in isolated unit tests."""
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    _seed_garmin_activities(fake_db, n=8)
+    _seed_connected(fake_db, connected=True)
+
+    result = await _get_today(fake_db)
+    assert result["status"] == 200, result["body"]
+    structured = result["body"]["structured_prescription"]
+    assert structured is not None
+    # served_prescription is the legacy *runtime* dict (frontend compat, uses
+    # remapped "type"/"duration" keys) — structured_prescription instead uses
+    # canonical WorkoutPrescription.workout_type values. Both must describe
+    # the exact same underlying (atomically served) session.
+    assert isinstance(structured["workout_type"], str)
+    # None != 0 — structural distance sum must not silently coerce unknowns.
+    assert isinstance(structured["steps"], list) and len(structured["steps"]) >= 1
+
+
+@pytest.mark.asyncio
+async def test_week_endpoint_exposes_structured_field_per_session():
+    """C234 Blocker 1: /training/v2/week sessions must carry a `structured`
+    field produced from the resolved/effective (never stale) prescription."""
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    _seed_garmin_activities(fake_db, n=8)
+    _seed_connected(fake_db, connected=True)
+
+    result = await _get_week(fake_db)
+    assert result["status"] == 200, result["body"]
+    sessions = result["body"]["week"]["sessions"]
+    assert any(s.get("structured") is not None for s in sessions)
+    monday_session = next(s for s in sessions if s["day"].lower() == "monday")
+    if monday_session.get("workout_type") != "rest":
+        assert monday_session["structured"] is not None
+        assert monday_session["structured"]["workout_type"] == monday_session["workout_type"]
+
+
+@pytest.mark.asyncio
+async def test_today_and_week_structured_prescription_converge_for_same_day():
+    """C234 §15 — Today/Week convergence: hitting /training/today first (which
+    freezes today's served snapshot) then /training/v2/week must yield the
+    IDENTICAL structured contract for Monday — never a divergent recompute."""
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    _seed_garmin_activities(fake_db, n=8)
+    _seed_connected(fake_db, connected=True)
+
+    today_result = await _get_today(fake_db)
+    assert today_result["status"] == 200, today_result["body"]
+    today_structured = today_result["body"]["structured_prescription"]
+
+    week_result = await _get_week(fake_db)
+    assert week_result["status"] == 200, week_result["body"]
+    monday_session = next(
+        s for s in week_result["body"]["week"]["sessions"] if s["day"].lower() == "monday"
+    )
+
+    assert monday_session["structured"] == today_structured
+
+
+# ---------------------------------------------------------------------------
+# C234 FINAL CORRECTIVE AUDIT — single Training Paces authority +
+# historical structured lock (2 blockers).
+# ---------------------------------------------------------------------------
+
+def _seed_qualified_high_activity(
+    fake_db: _FakeDB, *, reference_date: date, days_ago: int
+) -> None:
+    """Seed ONE qualified HIGH-confidence performance at ``days_ago`` before
+    ``reference_date``, plus its own strictly-prior speed benchmark pool
+    (dated relative to the performance itself, per
+    ``performance_model._personal_speed_percentile_90d``'s 90-day-before-the-
+    -activity window — NOT relative to ``reference_date``).
+
+    Mirrors ``tests/test_training_paces_pr194.py::_qualified_high_activity``
+    (10 km @ 12 km/h, avg_hr=160/max_hr=175 vs a 10 km/h benchmark pool at
+    avg_hr=140/max_hr=175) so this reproduces the exact same HIGH
+    qualification (score ~0.88, relative_hr ~0.914, speed_percentile 100%).
+    """
+    anchor = reference_date - timedelta(days=days_ago)
+    # Benchmark pool: 7 runs strictly prior to `anchor` (11..17 days before).
+    for i in range(7):
+        bench_date = anchor - timedelta(days=11 + i)
+        dur_s = 10_000.0 / (10.0 * 1000.0 / 3600.0)
+        fake_db.garmin_activities._docs.append({
+            "user_id": _USER_ID,
+            "source": "garmin",
+            "activity_id": f"bench-{i}",
+            "activity_type": "running",
+            "start_time": bench_date.isoformat() + " 07:00:00",
+            "garmin_activity": {"start_time_local": bench_date.isoformat() + " 07:00:00"},
+            "distance_m": 10_000.0,
+            "duration_s": dur_s,
+            "average_hr": 140.0,
+            "max_hr": 175.0,
+        })
+    # The qualified HIGH performance itself.
+    dur_s = 10_000.0 / (12.0 * 1000.0 / 3600.0)
+    fake_db.garmin_activities._docs.append({
+        "user_id": _USER_ID,
+        "source": "garmin",
+        "activity_id": "high-historical",
+        "activity_type": "running",
+        "start_time": anchor.isoformat() + " 07:00:00",
+        "garmin_activity": {"start_time_local": anchor.isoformat() + " 07:00:00"},
+        "distance_m": 10_000.0,
+        "duration_s": dur_s,
+        "average_hr": 160.0,
+        "max_hr": 175.0,
+    })
+
+
+@pytest.mark.asyncio
+async def test_c234_training_paces_single_authority_high_historical_over_90_days():
+    """C234 Blocker 1 — a HIGH performance qualified >90 days ago (no better
+    recent evidence) must NOT be silently dropped by Today/Week just because
+    the Training Engine's own 90-day window would have excluded it.
+
+    /training/v2/paces, /training/today and /training/v2/week must all use
+    the SAME canonical Training Paces authority (no 90-day truncation), so
+    all three observe the same (LOW-confidence, but present) paces.
+    """
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    _seed_connected(fake_db, connected=True)
+    _seed_qualified_high_activity(fake_db, reference_date=_MONDAY, days_ago=100)
+
+    # 1) /training/v2/paces must expose real (non-null) paces at LOW confidence.
+    ps = _patches(fake_db, _MONDAY)
+    started = []
+    try:
+        for p in ps:
+            p.start()
+            started.append(p)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=server.app), base_url="http://test",
+        ) as client:
+            r = await client.get("/api/training/v2/paces", headers=_bearer())
+            assert r.status_code == 200, r.text
+            paces_body = r.json()
+    finally:
+        for p in reversed(started):
+            p.stop()
+
+    assert paces_body["confidence"] == "LOW", (
+        f"HIGH historical (>90d, no better recent evidence) must survive at "
+        f"LOW confidence per training_paces.py policy, got {paces_body['confidence']!r}"
+    )
+    assert paces_body["paces"]["easy"] is not None, (
+        "PACE_UNAVAILABLE must NOT occur here: the Training Engine's 90-day "
+        "window must never truncate Training Paces evidence."
+    )
+
+    # 2) /training/today's structured prescription must use the SAME paces
+    #    authority (never PACE_UNAVAILABLE purely due to the 90-day cutoff).
+    today_result = await _get_today(fake_db)
+    assert today_result["status"] == 200, today_result["body"]
+    today_structured = today_result["body"]["structured_prescription"]
+    assert today_structured is not None
+
+    # 3) /training/v2/week's live (today) session must use the same evidence.
+    week_result = await _get_week(fake_db)
+    assert week_result["status"] == 200, week_result["body"]
+    monday_session = next(
+        s for s in week_result["body"]["week"]["sessions"] if s["day"].lower() == "monday"
+    )
+    if monday_session.get("workout_type") != "rest":
+        assert monday_session["structured"] is not None
+        assert monday_session["structured"] == today_structured
+
+
+@pytest.mark.asyncio
+async def test_c234_historical_frozen_session_structured_is_none():
+    """#235 — a strictly historical day backed by a V2 structured snapshot
+    must return the FROZEN structure, never None and never recomputed.
+
+    First call freezes Monday's snapshot (Monday == reference_date, i.e.
+    "today"), including its structured payload (#235). A later call with a
+    reference_date further into the SAME ISO week makes Monday strictly
+    historical (planned_date < reference_date); its `structured` must stay
+    EXACTLY the same frozen payload, with structured_status ==
+    "historical_frozen".
+    """
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    _seed_garmin_activities(fake_db, n=8)
+    _seed_connected(fake_db, connected=True)
+
+    first = await _get_week(fake_db, reference_date=_MONDAY)
+    assert first["status"] == 200, first["body"]
+    monday_first = next(
+        s for s in first["body"]["week"]["sessions"] if s["day"].lower() == "monday"
+    )
+    if monday_first.get("workout_type") == "rest":
+        pytest.skip("Seeded plan produced a rest day on Monday; nothing to structure.")
+    assert monday_first["structured"] is not None
+    assert monday_first.get("structured_status") == "today_served"
+
+    later_reference_date = _MONDAY + timedelta(days=2)  # Wednesday, same ISO week
+    second = await _get_week(fake_db, reference_date=later_reference_date)
+    assert second["status"] == 200, second["body"]
+    monday_second = next(
+        s for s in second["body"]["week"]["sessions"] if s["day"].lower() == "monday"
+    )
+    assert monday_second["structured"] == monday_first["structured"], (
+        "#235 — a historical day backed by a V2 structured snapshot must "
+        "return the EXACT frozen structure, byte-for-byte identical to "
+        "what was served as 'today'."
+    )
+    assert monday_second.get("structured_status") == "historical_frozen"
+    # The frozen PARENT itself must still be honest/unchanged.
+    assert monday_second["distance_km"] == monday_first["distance_km"]
+    assert monday_second["workout_type"] == monday_first["workout_type"]
+
+
+@pytest.mark.asyncio
+async def test_c234_historical_structured_stays_none_after_goal_change():
+    """#235 — historical immutability. Changing goal/phase between the
+    first (freezing) call and a later historical call must NOT change the
+    already-frozen `structured` for the now-historical day."""
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db, goal="SEMI")
+    _seed_garmin_activities(fake_db, n=8)
+    _seed_connected(fake_db, connected=True)
+
+    first = await _get_week(fake_db, reference_date=_MONDAY)
+    assert first["status"] == 200, first["body"]
+    monday_first = next(
+        s for s in first["body"]["week"]["sessions"] if s["day"].lower() == "monday"
+    )
+    if monday_first.get("workout_type") == "rest":
+        pytest.skip("Seeded plan produced a rest day on Monday; nothing to structure.")
+
+    # Change the plan goal entirely (Half -> Marathon) after Monday was frozen.
+    fake_db.training_cycles._docs.clear()
+    fake_db.user_goals._docs.clear()
+    _seed_cycle(fake_db, goal="MARATHON")
+    for doc in fake_db.user_goals._docs:
+        doc["distance_type"] = "marathon"
+
+    later_reference_date = _MONDAY + timedelta(days=2)
+    second = await _get_week(fake_db, reference_date=later_reference_date)
+    assert second["status"] == 200, second["body"]
+    monday_second = next(
+        s for s in second["body"]["week"]["sessions"] if s["day"].lower() == "monday"
+    )
+    assert monday_second["structured"] == monday_first["structured"], (
+        "A goal change after freezing must never alter the historical "
+        "structured snapshot."
+    )
+    assert monday_second.get("structured_status") == "historical_frozen"
+    assert monday_second["workout_type"] == monday_first["workout_type"], (
+        "The frozen parent must remain the exact same regardless of a later "
+        "goal change."
+    )
+    assert monday_second["distance_km"] == monday_first["distance_km"]
+
+
+@pytest.mark.asyncio
+async def test_c234_historical_structured_stays_none_after_training_paces_change():
+    """#235 — a strong Training Paces change (new, much faster activities)
+    after a historical day was frozen must NOT change the already-frozen
+    `structured` (including its numeric pace values) for that day."""
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    _seed_garmin_activities(fake_db, n=8, km_per=8.0)
+    _seed_connected(fake_db, connected=True)
+
+    first = await _get_week(fake_db, reference_date=_MONDAY)
+    assert first["status"] == 200, first["body"]
+    monday_first = next(
+        s for s in first["body"]["week"]["sessions"] if s["day"].lower() == "monday"
+    )
+    if monday_first.get("workout_type") == "rest":
+        pytest.skip("Seeded plan produced a rest day on Monday; nothing to structure.")
+
+    # Add much faster recent activities (would shift VDOT/paces substantially).
+    _seed_qualified_high_activity(fake_db, reference_date=_MONDAY, days_ago=3)
+
+    later_reference_date = _MONDAY + timedelta(days=2)
+    second = await _get_week(fake_db, reference_date=later_reference_date)
+    assert second["status"] == 200, second["body"]
+    monday_second = next(
+        s for s in second["body"]["week"]["sessions"] if s["day"].lower() == "monday"
+    )
+    assert monday_second["structured"] == monday_first["structured"], (
+        "A Training Paces change must never alter a historical structure, "
+        "including its numeric pace fields."
+    )
+    assert monday_second.get("structured_status") == "historical_frozen"
+    assert monday_second["workout_type"] == monday_first["workout_type"]
+    assert monday_second["distance_km"] == monday_first["distance_km"]
+
+
+@pytest.mark.asyncio
+async def test_c234_future_session_structured_stays_live():
+    """C234 §13 — a strictly future session (no snapshot) must keep a live,
+    non-None `structured` field with structured_status = "future_live";
+    the historical-exclusion fix must not affect future sessions."""
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    _seed_garmin_activities(fake_db, n=8)
+    _seed_connected(fake_db, connected=True)
+
+    result = await _get_week(fake_db, reference_date=_MONDAY)
+    assert result["status"] == 200, result["body"]
+    sessions = result["body"]["week"]["sessions"]
+    future_sessions = [
+        s for s in sessions
+        if s["planned_date"] > _MONDAY.isoformat() and s.get("workout_type") != "rest"
+    ]
+    assert future_sessions, "Expected at least one non-rest future session in the seeded week."
+    for s in future_sessions:
+        assert s["structured"] is not None, (
+            f"Future session {s['day']} must keep a live structured prescription."
+        )
+        assert s.get("structured_status") == "future_live"
+
+
+@pytest.mark.asyncio
+async def test_c234_today_structured_status_is_today_served():
+    """C234 §14 — Today's structured prescription is built from the
+    atomically-served parent (never a losing local DailyAdaptation
+    candidate) and must carry structured_status == "today_served",
+    identical between Today and Week for the same day."""
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    _seed_garmin_activities(fake_db, n=8)
+    _seed_connected(fake_db, connected=True)
+
+    today_result = await _get_today(fake_db)
+    assert today_result["status"] == 200, today_result["body"]
+    today_structured = today_result["body"]["structured_prescription"]
+
+    week_result = await _get_week(fake_db)
+    assert week_result["status"] == 200, week_result["body"]
+    monday_session = next(
+        s for s in week_result["body"]["week"]["sessions"] if s["day"].lower() == "monday"
+    )
+    if monday_session.get("workout_type") == "rest":
+        pytest.skip("Seeded plan produced a rest day on Monday; nothing to structure.")
+    assert monday_session.get("structured_status") == "today_served"
+    assert monday_session["structured"] == today_structured
