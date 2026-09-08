@@ -175,6 +175,7 @@ function pacesData({ confidence = "HIGH" } = {}) {
 function structuredData() {
   return {
     workout_type: "quality",
+    quality_kind: "threshold_intervals",
     target_basis: "distance",
     total_distance_km: 9,
     total_duration_minutes: null,
@@ -1000,6 +1001,7 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     expect(within(card).getByTestId("structured-workout-view")).toBeInTheDocument();
     expect(within(card).getByTestId("today-session-distance")).toHaveTextContent("9.00 km");
     expect(within(card).getByTestId("today-session-pace")).toHaveTextContent("5:08 /km");
+    expect(within(card).getByTestId("today-session-type")).toHaveTextContent("Threshold");
     expect(within(card).queryByText("18.0 km")).not.toBeInTheDocument();
   });
 
@@ -1012,6 +1014,7 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     renderPage();
 
     const row = await screen.findByTestId("training-v2-day-wednesday");
+    expect(within(row).getByTestId("training-v2-day-type-wednesday")).toHaveTextContent("Threshold");
     expect(within(row).getByTestId("structured-workout-summary")).toHaveTextContent("3 × 2.00 km");
     fireEvent.click(screen.getByTestId("session-detail-toggle-wednesday"));
     expect(within(row).getByTestId("structured-workout-view")).toBeVisible();
@@ -1033,7 +1036,7 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
 
   test("historical_unavailable renders parent facts but never invents structured details", async () => {
     const week = weekData();
-    week.week.sessions[2].structured = null;
+    week.week.sessions[2].structured = structuredData();
     week.week.sessions[2].structured_status = "historical_unavailable";
     mockAxios({ week });
     renderPage();
@@ -1042,6 +1045,19 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     expect(within(row).getByTestId("training-v2-day-type-wednesday")).toBeInTheDocument();
     expect(within(row).queryByTestId("structured-workout-summary")).not.toBeInTheDocument();
     expect(within(row).queryByText(/Warm-up|Échauffement/)).not.toBeInTheDocument();
+  });
+
+  test("legacy structured quality without quality_kind keeps the generic quality label", async () => {
+    const week = weekData();
+    week.week.sessions[2].structured = structuredData();
+    delete week.week.sessions[2].structured.quality_kind;
+    week.week.sessions[2].structured_status = "historical_frozen";
+    mockAxios({ week });
+    renderPage();
+
+    expect(within(await screen.findByTestId("training-v2-day-wednesday")).getByTestId(
+      "training-v2-day-type-wednesday"
+    )).toHaveTextContent("Quality session");
   });
 
   test.each([

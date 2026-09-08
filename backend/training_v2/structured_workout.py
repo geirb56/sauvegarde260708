@@ -362,6 +362,10 @@ class StructuredWorkoutPrescription(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     workout_type: str
+    quality_kind: Optional[QualityKind] = None
+    """Exact quality subtype selected by this engine, or None for non-quality
+    and legacy snapshot payloads. Serialized as its plain string value."""
+
     target_basis: str
     """"distance" | "duration" | "none" (rest day)."""
 
@@ -705,7 +709,7 @@ def _build_quality_steps(
     *,
     plan_goal: PlanGoal,
     periodization: PeriodizationSnapshot,
-) -> tuple[str, Tuple[StructuredWorkoutStep, ...], list[str]]:
+) -> tuple[str, Tuple[StructuredWorkoutStep, ...], list[str], QualityKind]:
     kind, kind_reasons = _select_quality_kind(plan_goal.goal_type, periodization.phase)
     reason_codes: list[str] = list(kind_reasons)
     reason_codes.append(_GOAL_CODE[plan_goal.goal_type])
@@ -901,7 +905,7 @@ def _build_quality_steps(
             )
         ]
 
-    return target_basis, tuple(steps), reason_codes
+    return target_basis, tuple(steps), reason_codes, kind
 
 
 # ---------------------------------------------------------------------------
@@ -957,6 +961,7 @@ def _finalize(
     steps: Tuple[StructuredWorkoutStep, ...],
     reason_codes: list[str],
     training_paces: Optional[TrainingPaces],
+    quality_kind: Optional[QualityKind] = None,
 ) -> StructuredWorkoutPrescription:
     steps = _attach_paces(steps, training_paces)
 
@@ -1030,6 +1035,7 @@ def _finalize(
 
     return StructuredWorkoutPrescription(
         workout_type=workout.workout_type,
+        quality_kind=quality_kind,
         target_basis=target_basis,
         total_distance_km=workout.distance_km,
         total_duration_minutes=workout.duration_minutes,
@@ -1063,6 +1069,7 @@ def _empty_prescription(
     """
     return StructuredWorkoutPrescription(
         workout_type=workout_type,
+        quality_kind=None,
         target_basis="none",
         total_distance_km=total_distance_km,
         total_duration_minutes=total_duration_minutes,
@@ -1109,7 +1116,7 @@ def build_structured_workout_prescription(
         )
 
     if workout.workout_type == "quality":
-        target_basis, steps, reason_codes = _build_quality_steps(
+        target_basis, steps, reason_codes, quality_kind = _build_quality_steps(
             workout, plan_goal=plan_goal, periodization=periodization
         )
         return _finalize(
@@ -1118,6 +1125,7 @@ def build_structured_workout_prescription(
             steps=steps,
             reason_codes=reason_codes,
             training_paces=training_paces,
+            quality_kind=quality_kind,
         )
 
     # Unknown / unsupported workout_type — never invent structure.

@@ -259,6 +259,39 @@ def test_quality_goal_aware_5k_vs_ultra_build_differ():
     quality_code_ultra = next(c for c in r_ultra.reason_codes if c.startswith("QUALITY_"))
     assert quality_code_5k != quality_code_ultra
     assert quality_code_5k == "QUALITY_VO2_SELECTED"
+    assert r_5k.quality_kind == QualityKind.vo2_intervals
+    assert r_ultra.quality_kind == QualityKind.threshold_intervals
+
+
+@pytest.mark.parametrize(
+    ("goal_type", "phase", "expected"),
+    [
+        (GoalType.ten_k, PeriodizationPhase.base, QualityKind.tempo_continuous),
+        (GoalType.ten_k, PeriodizationPhase.build, QualityKind.threshold_intervals),
+        (GoalType.five_k, PeriodizationPhase.build, QualityKind.vo2_intervals),
+        (GoalType.marathon, PeriodizationPhase.specific, QualityKind.race_specific_steady),
+    ],
+)
+def test_quality_kind_exposes_the_exact_selected_subtype(goal_type, phase, expected):
+    result = build_structured_workout_prescription(
+        workout=_workout("quality", distance_km=12.0),
+        plan_goal=_goal(goal_type),
+        periodization=_phase(phase),
+    )
+
+    assert result.quality_kind == expected
+    assert result.model_dump(mode="json")["quality_kind"] == expected.value
+
+
+@pytest.mark.parametrize("workout_type", ["rest", "easy", "recovery", "long_easy", "steady"])
+def test_non_quality_prescriptions_have_no_quality_kind(workout_type):
+    result = build_structured_workout_prescription(
+        workout=_workout(workout_type, distance_km=None if workout_type == "rest" else 8.0),
+        plan_goal=_goal(GoalType.ten_k),
+        periodization=_phase(PeriodizationPhase.build),
+    )
+
+    assert result.quality_kind is None
 
 
 def test_quality_goal_aware_10k_vs_marathon_specific_differ_in_zone():

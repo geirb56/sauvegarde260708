@@ -158,6 +158,22 @@ def test_structured_snapshot_serialization_round_trip():
     assert rebuilt.served_at == snap.served_at
 
 
+def test_legacy_structured_snapshot_without_quality_kind_defaults_to_none():
+    snap = _snapshot_for(
+        session=_workout("quality", distance_km=9.0),
+        plan_goal=_goal(GoalType.ten_k),
+        periodization=_phase(PeriodizationPhase.build),
+        training_paces=_paces(),
+    )
+    legacy_doc = snap.model_dump(mode="json")
+    legacy_doc["structured"].pop("quality_kind")
+
+    rebuilt = PrescriptionSnapshot(**legacy_doc)
+
+    assert rebuilt.structured is not None
+    assert rebuilt.structured.quality_kind is None
+
+
 def test_structured_snapshot_serialization_is_deterministic():
     snap = _snapshot_for(
         session=_workout("quality", distance_km=9.0),

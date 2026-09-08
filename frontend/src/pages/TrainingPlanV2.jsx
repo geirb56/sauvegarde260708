@@ -46,6 +46,17 @@ const getTranslatedValue = (t, path, fallbackKey = "trainingV2.notAvailable") =>
 
 const getSessionType = (session) => session?.workout_type || session?.session_type || session?.type || null;
 
+const getDisplayableStructured = (session) => {
+  if (!session || typeof session !== "object") return null;
+  if (
+    session.structured_status === "historical_unavailable"
+    || session.structured_status === "prescription_unavailable"
+  ) {
+    return null;
+  }
+  return session.structured && typeof session.structured === "object" ? session.structured : null;
+};
+
 const getPrescriptionText = (session) => {
   if (!session || typeof session !== "object") return null;
   return session.prescription || session.description || session.details || session.label || session.name || null;
@@ -347,6 +358,7 @@ function AdaptedBadge({ modified, t }) {
 function WeekSessionRow({ session, day, isToday, unitSystem, t, locale }) {
   const [expanded, setExpanded] = useState(false);
   const workoutType = getSessionType(session);
+  const structured = getDisplayableStructured(session);
   const isExplicitRest = workoutType === "rest" || getSessionStatusKey(session) === "rest";
   const statusKey = getSessionStatusKey(session);
   // C231 (round 2, item 3) — a past day whose real historical prescription
@@ -375,13 +387,14 @@ function WeekSessionRow({ session, day, isToday, unitSystem, t, locale }) {
               ? "?"
               : "";
 
+  const typeKey = structured?.quality_kind || workoutType;
   const typeLabel = !session
     ? t("trainingV2.noSessionLabel")
     : isUnavailable
       ? t("trainingV2.sessionStates.unavailable")
       : isExplicitRest
         ? t("trainingV2.restDay")
-        : getTranslatedValue(t, `trainingV2.workoutTypes.${workoutType}`, "trainingV2.noSessionType");
+        : getTranslatedValue(t, `trainingV2.workoutTypes.${typeKey}`, "trainingV2.noSessionType");
 
   const prescription = getPrescriptionText(session);
   const distance = isKnownNumber(session?.distance_km) ? formatDistance(session.distance_km, { unitSystem }) : null;
@@ -393,10 +406,10 @@ function WeekSessionRow({ session, day, isToday, unitSystem, t, locale }) {
   // PR233 — no invented pace/structure for "quality" (or any type): only
   // rendered when the backend prescription itself carries it (never true
   // today for WeekV2SessionResponse, which has no pace field at all).
-  const prescribedPaceOrZone = getPrimaryStructuredPace(session?.structured, unitSystem)
+  const prescribedPaceOrZone = getPrimaryStructuredPace(structured, unitSystem)
     || getSessionPaceOrZone(session);
-  const structuredSummary = session?.structured
-    ? <StructuredWorkoutView structured={session.structured} unitSystem={unitSystem} t={t} compact />
+  const structuredSummary = structured
+    ? <StructuredWorkoutView structured={structured} unitSystem={unitSystem} t={t} compact />
     : null;
 
   const actual = session?.actual || null;
@@ -470,9 +483,9 @@ function WeekSessionRow({ session, day, isToday, unitSystem, t, locale }) {
               {duration && <span>{duration}</span>}
               {prescribedPaceOrZone && <span>{prescribedPaceOrZone}</span>}
             </div>
-            {session?.structured && (
+            {structured && (
              <div className="mt-3">
-               <StructuredWorkoutView structured={session.structured} unitSystem={unitSystem} t={t} />
+               <StructuredWorkoutView structured={structured} unitSystem={unitSystem} t={t} />
              </div>
             )}
           </div>
@@ -816,7 +829,9 @@ export default function TrainingPlanV2() {
   // by Week's workout_type, never a frontend invention.
   const todayWorkoutTypeKey = RUNTIME_TYPE_TO_WORKOUT_TYPE[todaySession?.type] || null;
   const todayStructured = todayData?.structured_prescription || null;
-  const resolvedTodayWorkoutTypeKey = todayStructured?.workout_type || todayWorkoutTypeKey;
+  const resolvedTodayWorkoutTypeKey = todayStructured?.quality_kind
+    || todayStructured?.workout_type
+    || todayWorkoutTypeKey;
   const todayTypeLabel = resolvedTodayWorkoutTypeKey
     ? getTranslatedValue(t, `trainingV2.workoutTypes.${resolvedTodayWorkoutTypeKey}`)
     : t("trainingV2.noSessionType");

@@ -13,11 +13,21 @@ export const formatStructuredDistance = (distanceM, unitSystem) => {
 
 export const formatStructuredDuration = (durationSeconds) => {
   if (!isKnownNumber(durationSeconds) || durationSeconds < 0) return null;
-  if (durationSeconds < 60) return `${Math.round(durationSeconds)} sec`;
-  const hours = Math.floor(durationSeconds / 3600);
-  const minutes = Math.round((durationSeconds % 3600) / 60);
-  if (hours > 0) return minutes > 0 ? `${hours} h ${minutes} min` : `${hours} h`;
-  return `${minutes} min`;
+  const exactSeconds = Math.round(durationSeconds);
+  if (exactSeconds < 60) return `${exactSeconds} s`;
+
+  const hours = Math.floor(exactSeconds / 3600);
+  const remainder = exactSeconds % 3600;
+  const minutes = Math.floor(remainder / 60);
+  const seconds = remainder % 60;
+
+  if (hours > 0) {
+    const minutePart = minutes > 0 ? ` ${String(minutes).padStart(2, "0")}` : "";
+    const secondPart = seconds > 0 ? `:${String(seconds).padStart(2, "0")}` : "";
+    return `${hours} h${minutePart}${secondPart}`;
+  }
+  if (seconds === 0) return `${minutes} min`;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
 };
 
 export const formatStructuredPace = (step, unitSystem) => {

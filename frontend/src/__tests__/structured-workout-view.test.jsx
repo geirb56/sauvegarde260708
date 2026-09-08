@@ -23,6 +23,7 @@ const t = (key) => labels[key] || key;
 
 const structured = {
   workout_type: "quality",
+  quality_kind: "threshold_intervals",
   target_basis: "distance",
   total_distance_km: 9,
   total_duration_minutes: null,
@@ -104,9 +105,22 @@ describe("StructuredWorkoutView", () => {
   });
 
   test("formats seconds, minutes, and hours", () => {
-    expect(formatStructuredDuration(45)).toBe("45 sec");
+    expect(formatStructuredDuration(45)).toBe("45 s");
+    expect(formatStructuredDuration(60)).toBe("1 min");
+    expect(formatStructuredDuration(90)).toBe("1:30");
     expect(formatStructuredDuration(120)).toBe("2 min");
-    expect(formatStructuredDuration(3900)).toBe("1 h 5 min");
+    expect(formatStructuredDuration(150)).toBe("2:30");
+    expect(formatStructuredDuration(3600)).toBe("1 h");
+    expect(formatStructuredDuration(3900)).toBe("1 h 05");
+  });
+
+  test("renders the exact PR234 threshold recovery calibration without rounding", () => {
+    const value = JSON.parse(JSON.stringify(structured));
+    value.steps[1].recovery.duration_seconds = 90;
+    render(<StructuredWorkoutView structured={value} unitSystem="metric" t={t} />);
+
+    expect(screen.getByTestId("structured-recovery")).toHaveTextContent("1:30");
+    expect(screen.getByTestId("structured-recovery")).not.toHaveTextContent("2 min");
   });
 
   test("uses the work step as the primary pace", () => {
