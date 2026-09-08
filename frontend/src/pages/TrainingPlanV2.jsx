@@ -46,6 +46,14 @@ const getTranslatedValue = (t, path, fallbackKey = "trainingV2.notAvailable") =>
 
 const getSessionType = (session) => session?.workout_type || session?.session_type || session?.type || null;
 
+const getStructuredWorkoutTypeKey = (structured) => {
+  if (!structured || typeof structured !== "object") return null;
+  if (structured.workout_type === "quality" && typeof structured.quality_kind === "string") {
+    return structured.quality_kind;
+  }
+  return structured.workout_type || null;
+};
+
 const getDisplayableStructured = (session) => {
   if (!session || typeof session !== "object") return null;
   if (
@@ -387,7 +395,7 @@ function WeekSessionRow({ session, day, isToday, unitSystem, t, locale }) {
               ? "?"
               : "";
 
-  const typeKey = structured?.quality_kind || workoutType;
+  const typeKey = getStructuredWorkoutTypeKey(structured) || workoutType;
   const typeLabel = !session
     ? t("trainingV2.noSessionLabel")
     : isUnavailable
@@ -829,8 +837,7 @@ export default function TrainingPlanV2() {
   // by Week's workout_type, never a frontend invention.
   const todayWorkoutTypeKey = RUNTIME_TYPE_TO_WORKOUT_TYPE[todaySession?.type] || null;
   const todayStructured = todayData?.structured_prescription || null;
-  const resolvedTodayWorkoutTypeKey = todayStructured?.quality_kind
-    || todayStructured?.workout_type
+  const resolvedTodayWorkoutTypeKey = getStructuredWorkoutTypeKey(todayStructured)
     || todayWorkoutTypeKey;
   const todayTypeLabel = resolvedTodayWorkoutTypeKey
     ? getTranslatedValue(t, `trainingV2.workoutTypes.${resolvedTodayWorkoutTypeKey}`)

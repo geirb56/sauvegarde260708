@@ -1061,6 +1061,37 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
   });
 
   test.each([
+    ["tempo_continuous", "Tempo"],
+    ["threshold_intervals", "Threshold"],
+    ["vo2_intervals", "Intervals"],
+    ["race_specific_steady", "Race pace"],
+  ])("Today uses the backend quality_kind %s for its exact label", async (qualityKind, label) => {
+    const today = todayData();
+    today.structured_prescription = { ...structuredData(), quality_kind: qualityKind };
+    mockAxios({ today });
+    renderPage();
+
+    expect(within(await screen.findByTestId("training-v2-today")).getByTestId(
+      "today-session-type"
+    )).toHaveTextContent(label);
+  });
+
+  test("ignores quality_kind for a non-quality structured workout", async () => {
+    const today = todayData();
+    today.structured_prescription = {
+      ...structuredData(),
+      workout_type: "easy",
+      quality_kind: "vo2_intervals",
+    };
+    mockAxios({ today });
+    renderPage();
+
+    expect(within(await screen.findByTestId("training-v2-today")).getByTestId(
+      "today-session-type"
+    )).toHaveTextContent("Easy run");
+  });
+
+  test.each([
     [true, true],
     [false, false],
     [null, false],

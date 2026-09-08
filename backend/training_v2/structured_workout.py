@@ -362,7 +362,7 @@ class StructuredWorkoutPrescription(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     workout_type: str
-    quality_kind: Optional[QualityKind] = None
+    quality_kind: Optional[str] = None
     """Exact quality subtype selected by this engine, or None for non-quality
     and legacy snapshot payloads. Serialized as its plain string value."""
 
@@ -1035,7 +1035,7 @@ def _finalize(
 
     return StructuredWorkoutPrescription(
         workout_type=workout.workout_type,
-        quality_kind=quality_kind,
+        quality_kind=quality_kind.value if quality_kind is not None else None,
         target_basis=target_basis,
         total_distance_km=workout.distance_km,
         total_duration_minutes=workout.duration_minutes,

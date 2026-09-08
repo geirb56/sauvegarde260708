@@ -279,7 +279,7 @@ def test_quality_kind_exposes_the_exact_selected_subtype(goal_type, phase, expec
         periodization=_phase(phase),
     )
 
-    assert result.quality_kind == expected
+    assert result.quality_kind == expected.value
     assert result.model_dump(mode="json")["quality_kind"] == expected.value
 
 

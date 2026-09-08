@@ -154,6 +154,7 @@ def test_structured_snapshot_serialization_round_trip():
     rebuilt = PrescriptionSnapshot(**mongo_dict)
     assert rebuilt == snap
     assert rebuilt.structured == snap.structured
+    assert rebuilt.structured.quality_kind == "threshold_intervals"
     assert rebuilt.reason_codes == snap.reason_codes
     assert rebuilt.served_at == snap.served_at
 
@@ -350,6 +351,9 @@ def test_immutability_c_phase_change_never_alters_frozen_structured():
     )
     assert live_with_new_phase != frozen_structured
     assert snap.structured == frozen_structured
+    assert frozen_structured.quality_kind == "threshold_intervals"
+    assert live_with_new_phase.quality_kind == "tempo_continuous"
+    assert snap.structured.quality_kind == "threshold_intervals"
 
 
 def test_immutability_d_engine_output_change_never_rewrites_snapshot(monkeypatch):

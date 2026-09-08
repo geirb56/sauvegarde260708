@@ -188,6 +188,10 @@ async def test_today_and_week_expose_same_prescription_id_identity():
     # alongside the identity check for completeness).
     assert today_body["structured_prescription"] == monday_session["structured"]
     assert (
+        today_body["structured_prescription"].get("quality_kind")
+        == monday_session["structured"].get("quality_kind")
+    )
+    assert (
         today_body["structured_prescription"]["workout_type"]
         == monday_session["workout_type"]
     )
