@@ -305,3 +305,194 @@ documented backend test-runner convention (`python -m pytest`, `pytest.ini` enfo
 - ✅ No `GarminWorkoutCompiler` created.
 - ✅ No #236 work performed.
 - ✅ No merge performed — PR left open against `copilot/dev`, in **DRAFT**.
+
+---
+
+# C235 CORRECTIVE AUDIT
+
+Corrective pass on PR #235 fixing 4 audited blockers, without reopening or
+rearchitecting the already-validated #235 design.
+
+- **Head before correction:** `7fcee2c87a0661dc32855eef0a52ae1773d2137a`
+- **New head:** this commit (see PR diff).
+- **Scope:** `backend/server.py`, `backend/training_v2/{today_prescription,
+  served_prescription, prescription_snapshot, week_execution,
+  training_week_response}.py`, plus new/updated tests. No frontend, no #234
+  engine, no Garmin/FIT, no #236.
+
+## C1. Today fast-path (blocker #1 — idempotence)
+
+`GET /training/today` now does a cheap `find_one` on
+`(user_id, prescription_id)` **before** ever calling
+`resolve_today_final_prescription` (which bundles Readiness +
+DailyAdaptation + Structured Workout):
+
+- **Snapshot exists** → FAST PATH: read `parent` + `structured` +
+  `adaptation_action`/`adaptation_reason_codes` directly from the frozen
+  document (`PrescriptionSnapshot(**doc)` + `resolve_effective_session`).
+  `resolve_today_final_prescription` (and therefore `build_daily_adaptation`
+  and the #234 engine) is **never called**. A live readiness read
+  (`training_v2.today_prescription.resolve_live_readiness`, a new pure
+  helper factored out of `resolve_today_final_prescription`) remains
+  available for the `readiness`/`fatigue` diagnostic blocks only — it never
+  feeds into the served-prescription fields.
+- **Snapshot absent** → SLOW PATH: unchanged pipeline (readiness →
+  DailyAdaptation → Structured Workout → atomic
+  `get_or_create_served_prescription`), now additionally freezing
+  `adaptation_action`/`adaptation_reason_codes` at creation time.
+
+**Proof the second Today never re-runs DailyAdaptation:** new test
+`tests/test_pr235_c235_corrections.py::test_second_today_never_invokes_daily_adaptation`
+patches `training_v2.today_prescription.build_daily_adaptation` with a
+call-counter. First call → count == 1 (creates the snapshot). Second call →
+count **stays at 1**. This test was verified to **fail on the pre-correction
+head** (`7fcee2c`, count == 2), and **pass** on the corrected head.
+
+## C2. Frozen serve metadata (blocker #2)
+
+`PrescriptionSnapshot` gained two additive fields:
+`adaptation_action: Optional[str] = None` and
+`adaptation_reason_codes: Tuple[str, ...] = ()`, threaded through
+`snapshot_from_prescription`, `get_or_create_served_prescription` (params +
+`ServedPrescriptionResult`), and both call sites (`/training/today`,
+`/training/v2/week`'s fallback-creation branch — which honestly records
+`None`/`()` since no adaptation candidate is available there). Today's
+response now derives `adaptation_action`, `adaptation_reason`, and
+`adaptation_applied` **exclusively** from the winning snapshot's frozen
+metadata (`served_result.adaptation_action` /
+`served_result.adaptation_reason_codes`), never from a freshly recomputed
+`adaptation_result` once a snapshot exists — including on the very call
+that creates it, since a concurrent caller may have actually won the write.
+
+## C3. reason_codes convergence (blocker #3)
+
+Today's `"reason_codes"` field now reads `served_prescription.reason_codes`
+(the effective, frozen parent — identical source Week already used via
+`resolve_effective_session`), replacing the old
+`list(adaptation_result.reason_codes)` (live). This single change fixes
+convergence for both the creation call and every subsequent call.
+
+**Test:**
+`test_reason_codes_frozen_across_today_and_week_despite_live_drift` patches
+`build_daily_adaptation` so any call beyond the first would (if it ever ran)
+return a different reason code (`"LIVE_DRIFT_SHOULD_NEVER_LEAK"`). Asserts
+Today (2nd call) and Week both keep the original, frozen reason codes and
+never see the drifted value. Fails on `7fcee2c` (both leak the drift on the
+second Today call and Week already diverges from Today on the first call
+in the old code path is actually consistent then diverges after — see test
+run for the exact failure output), passes on the corrected head.
+
+## C4. Snapshot identity (prescription_id Today/Week)
+
+`/training/today` now returns `"prescription_id"` (the existing
+`week_execution.prescription_id_for(user_id, today, day_name.lower())`
+value — no new identifier). `week_execution.SessionExecution` gained a
+`prescription_id` field (populated for every session, including
+`EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE` ones), threaded additively into
+`WeekV2SessionResponse.prescription_id` via `/training/v2/week`'s
+`_session_response`.
+
+**Tests:** `test_today_and_week_expose_same_prescription_id_identity` and
+`test_week_first_then_today_still_expose_same_prescription_id` assert
+`Today.prescription_id == Week.sessions[today].prescription_id` (both
+call orders), plus parent/structured convergence. Both fail (KeyError:
+`prescription_id`) on `7fcee2c`, pass on the corrected head.
+
+## C5. Concurrency — honest claim (blocker #4/#9)
+
+The previous "structured_factory AT MOST ONCE globally per day" claim in
+`served_prescription.py`'s docstrings was **false** under genuine
+concurrency (two callers can both observe "not found" on the pre-check read
+before either wins the `$setOnInsert`). Docstrings now state the honest
+guarantee:
+
+- `structured_factory` may run more than once concurrently (pure, no side
+  effect beyond wasted CPU — a losing candidate is discarded, never
+  persisted, never observed).
+- The **final persisted document** is unique/atomic (unique index on
+  `(user_id, prescription_id)` + `$setOnInsert`).
+- Every caller (winner or loser) re-reads and converges on that **same**
+  winning document before returning.
+- Every subsequent (non-concurrent) call short-circuits on the cheap
+  pre-check and never invokes the factory again.
+
+**Test:** `test_concurrent_first_serve_converges_on_single_winning_snapshot`
+injects a real `await asyncio.sleep(0)` yield point into the fake DB's
+`find_one` (the existing fake DB has no genuine suspension points, so a
+plain `asyncio.gather` never actually interleaves two callers — this was
+verified by inspection before writing the test). With the yield point, two
+concurrent `GET /training/today` calls are scheduled via `asyncio.gather`;
+asserts: exactly one snapshot document persists, both responses' `parent` +
+`structured` + `reason_codes` + `prescription_id` converge byte-for-byte,
+and the structured-engine factory count is `>= 1` (never asserting "exactly
+1", matching the corrected, honest claim).
+
+## C6. Legacy Today (unchanged behaviour, documented)
+
+The existing legacy edge case — a pre-#235 parent-only snapshot still
+"today" — is preserved: the fast path rebuilds `structured` live,
+best-effort, without persisting over the existing insert-only document
+(mirrors `week_execution`'s identical `"today_served"` legacy handling).
+This narrow window is not fully idempotent for `structured`; it self-heals
+once the day becomes historical (`historical_unavailable`, unchanged). No
+destructive rewrite of any historical snapshot was introduced.
+
+## C7. Tests executed (this corrective pass)
+
+New (all verified to fail on `7fcee2c`, pass on the corrected head):
+- `tests/test_pr235_c235_corrections.py` (5 tests): second-Today-skips-
+  DailyAdaptation, frozen-reason_codes-convergence, snapshot-identity
+  (both call orders), concurrent-first-serve-convergence.
+
+Re-run, all passing (no regressions vs. `7fcee2c` — a full-repo diff of
+failing test names before/after this change is byte-for-byte identical,
+confirming zero newly-introduced failures):
+- `tests/test_pr235_today_idempotence.py`
+- `tests/test_prescription_snapshot_v2_pr235.py`
+- `tests/test_pr232a_c231_week_endpoint.py`
+- `tests/test_pr231_served_prescription.py`
+- `tests/test_pr232a_prescription_snapshot.py`
+- `tests/test_pr232a_week_execution.py`
+- `tests/test_pr231_c231_corrections2.py`
+- `tests/test_pr231_c231_corrections3.py`
+- `tests/test_pr231_c231_snapshot_adaptation.py`
+- `tests/test_daily_adaptation_pr133.py`
+- `tests/test_structured_workout_pr234.py`
+- `tests/test_training_paces_pr194.py`
+- `tests/test_pr232a_local_reference_date.py`
+- `tests/test_performed_workout_pr230.py`
+- `tests/test_pr231_external_id_boundary.py`
+- `tests/test_handlers_pr228.py`
+- `tests/test_workout_generator_v2.py`
+
+A full repository-wide run (`pytest tests/`, `-n 2 --dist loadscope`) was
+also performed before and after this change: **301 pre-existing failures**
+in both cases, and a name-for-name diff of the two failure lists is
+**empty** — confirming this corrective pass introduces zero regressions.
+(Two additional flaky/order-dependent failures — `test_single_clock_in_today`
+and a `test_race_day_...` rate-limit timeout — were independently reproduced
+on the unmodified `7fcee2c` head and pass in isolation; they are pre-existing
+test-infra flakiness, unrelated to this change.)
+
+## C8. CI (real)
+
+No GitHub Actions workflow run was triggered for this branch during this
+corrective pass. As with the original #235 session, no CI failure was
+reported or investigated (out of scope per task instructions — CI
+investigation is only required when failures are mentioned).
+
+## C9. Final confirmations (per corrective-audit §14)
+
+- ✅ A snapshot Today existing can be read without calling DailyAdaptation
+  (C1, test-verified).
+- ✅ Today's prescription `reason_codes` no longer come from a live
+  adaptation (C3, test-verified).
+- ✅ Today + Week both expose `prescription_id` (C4, test-verified).
+- ✅ Today + Week converge on parent + structured (C4, pre-existing +
+  new tests).
+- ✅ No historical structured snapshot is ever recomputed (unchanged from
+  original #235 — C231/#235 historical-frozen semantics untouched).
+- ✅ No Garmin-specific logic added.
+- ✅ No frontend modification.
+- ✅ No merge — PR stays in **DRAFT** against `copilot/dev`.
+

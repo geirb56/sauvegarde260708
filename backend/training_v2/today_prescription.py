@@ -32,24 +32,88 @@ Design rules
 - None != 0: absence of Garmin connection/data yields ``readiness_decision``
   with an UNAVAILABLE band, which ``build_daily_adaptation`` maps to KEEP
   (never a fabricated reduction).
+
+C235 (corrective audit) — ``resolve_live_readiness`` (below) is split out of
+``resolve_today_final_prescription`` so a caller who already has a frozen
+snapshot for today (the SERVED truth) can still obtain an informative, live
+readiness read for DISPLAY purposes only, WITHOUT ever invoking
+``build_daily_adaptation`` — see ``server.py``'s Today fast-path. Once a
+snapshot exists, DailyAdaptation MUST NOT run again to determine the served
+prescription; a live readiness read is a separate, non-authoritative signal
+that must never contaminate the served prescription's fields (workout_type,
+distance_km, duration_minutes, reason_codes, structured, ...).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from .periodization import PeriodizationSnapshot
 from .plan_goal import PlanGoal
 from .readiness_decision import ReadinessDecision, build_readiness_decision
 from .daily_adaptation import DailyAdaptationResult, build_daily_adaptation
 from .structured_workout import StructuredWorkoutPrescription, build_structured_workout_prescription
-from .training_load import build_training_load
+from .training_load import TrainingLoadSnapshot, build_training_load
 from .training_paces import TrainingPaces
-from .training_response import build_recent_training_response
+from .training_response import RecentTrainingResponse, build_recent_training_response
 from .workout_generator import WorkoutPrescription
 from garmin.readiness_adapter import build_readiness_v2_from_garmin_data
+
+
+def resolve_live_readiness(
+    *,
+    reference_date: date,
+    domain_activities_90: List,
+    garmin_daily_metrics_docs: List[dict],
+    garmin_connected: bool,
+) -> Tuple[ReadinessDecision, str, Optional[TrainingLoadSnapshot], Optional[RecentTrainingResponse]]:
+    """C235 (corrective audit) — PURE readiness-only resolution.
+
+    Deliberately does NOT call ``build_daily_adaptation`` — this is the exact
+    boundary that lets ``server.py``'s Today fast-path (an already-frozen
+    snapshot) obtain a live, informative readiness read for the diagnostic
+    ``readiness``/``fatigue`` response blocks WITHOUT ever re-running
+    DailyAdaptation, which would otherwise recompute (and risk contaminating)
+    the served prescription's fields.
+
+    Returns ``(readiness_decision, readiness_data_source, training_load,
+    recent_response_for_readiness)`` — the last two are exposed only so
+    ``resolve_today_final_prescription`` (below) can reuse this SAME
+    computation instead of duplicating it when it goes on to call
+    ``build_daily_adaptation`` itself.
+    """
+    training_load: Optional[TrainingLoadSnapshot] = None
+    readiness_result = None
+    recent_response_for_readiness: Optional[RecentTrainingResponse] = None
+    readiness_data_source = "unavailable"
+
+    if garmin_connected:
+        try:
+            training_load = build_training_load(domain_activities_90, reference_date)
+            readiness_result = build_readiness_v2_from_garmin_data(
+                garmin_daily_metrics_docs,
+                domain_activities_90,
+                reference_date,
+                load_snapshot=training_load,
+                hrv_supported=None,
+            )
+            recent_response_for_readiness = build_recent_training_response(
+                domain_activities_90, reference_date
+            )
+            readiness_data_source = "garmin"
+        except Exception:
+            # Fail-open on readiness only: an UNAVAILABLE band still yields a
+            # deterministic (KEEP) DailyAdaptation result — never a
+            # fabricated reduction, never a crash of the whole endpoint.
+            training_load = None
+            readiness_result = None
+            recent_response_for_readiness = None
+            readiness_data_source = "unavailable"
+
+    readiness_decision = build_readiness_decision(readiness_result)
+    return readiness_decision, readiness_data_source, training_load, recent_response_for_readiness
 
 
 @dataclass(frozen=True)
@@ -101,35 +165,17 @@ def resolve_today_final_prescription(
     parent). ``training_paces`` is optional (consumed as-is, never
     recomputed here).
     """
-    training_load = None
-    readiness_result = None
-    recent_response_for_readiness = None
-    readiness_data_source = "unavailable"
-
-    if garmin_connected:
-        try:
-            training_load = build_training_load(domain_activities_90, reference_date)
-            readiness_result = build_readiness_v2_from_garmin_data(
-                garmin_daily_metrics_docs,
-                domain_activities_90,
-                reference_date,
-                load_snapshot=training_load,
-                hrv_supported=None,
-            )
-            recent_response_for_readiness = build_recent_training_response(
-                domain_activities_90, reference_date
-            )
-            readiness_data_source = "garmin"
-        except Exception:
-            # Fail-open on readiness only: an UNAVAILABLE band still yields a
-            # deterministic (KEEP) DailyAdaptation result below — never a
-            # fabricated reduction, never a crash of the whole endpoint.
-            training_load = None
-            readiness_result = None
-            recent_response_for_readiness = None
-            readiness_data_source = "unavailable"
-
-    readiness_decision = build_readiness_decision(readiness_result)
+    (
+        readiness_decision,
+        readiness_data_source,
+        training_load,
+        recent_response_for_readiness,
+    ) = resolve_live_readiness(
+        reference_date=reference_date,
+        domain_activities_90=domain_activities_90,
+        garmin_daily_metrics_docs=garmin_daily_metrics_docs,
+        garmin_connected=garmin_connected,
+    )
     adaptation_result = build_daily_adaptation(
         workout=planned_prescription,
         readiness_decision=readiness_decision,
@@ -155,4 +201,8 @@ def resolve_today_final_prescription(
     )
 
 
-__all__ = ["TodayFinalPrescription", "resolve_today_final_prescription"]
+__all__ = [
+    "TodayFinalPrescription",
+    "resolve_today_final_prescription",
+    "resolve_live_readiness",
+]

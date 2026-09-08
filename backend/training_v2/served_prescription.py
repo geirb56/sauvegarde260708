@@ -79,7 +79,7 @@ value recomputed from the current caller's own candidates.
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 from pydantic import BaseModel, ConfigDict
 
@@ -106,6 +106,13 @@ class ServedPrescriptionResult(BaseModel):
     winning snapshot document) is bundled here too, for the exact same
     reason: Today/Week must never combine a frozen parent with a
     separately, freshly recomputed structure.
+
+    C235 (corrective audit) — ``adaptation_action``/``adaptation_reason_codes``
+    (the frozen DailyAdaptation decision metadata from the SAME winning
+    snapshot) are bundled here for the identical reason: once a snapshot
+    exists, these must never be recomputed from a fresh DailyAdaptation
+    call — Today must read them from here, never from a live
+    ``adaptation_result``.
     """
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
@@ -113,6 +120,8 @@ class ServedPrescriptionResult(BaseModel):
     prescription: WorkoutPrescription
     modified_from_planned: Optional[bool] = None
     structured: Optional[StructuredWorkoutPrescription] = None
+    adaptation_action: Optional[str] = None
+    adaptation_reason_codes: Tuple[str, ...] = ()
 
 
 def _prescription_core_fields(p: WorkoutPrescription) -> tuple:
@@ -136,6 +145,8 @@ async def get_or_create_served_prescription(
     planned_prescription: Optional[WorkoutPrescription] = None,
     structured_factory: Optional[Any] = None,
     served_at: Optional[datetime] = None,
+    adaptation_action: Optional[str] = None,
+    adaptation_reason_codes: Tuple[str, ...] = (),
 ) -> ServedPrescriptionResult:
     """Atomically get-or-create the canonical SERVED prescription for a day.
 
@@ -165,32 +176,66 @@ async def get_or_create_served_prescription(
     structured_factory
         #235 — a zero-argument callable returning the #234
         ``StructuredWorkoutPrescription`` built from ``served_candidate``
-        (or ``None`` if the caller does not want structuring). Called AT
-        MOST ONCE, and ONLY when this call is the one actually creating the
-        snapshot (no existing document found on the cheap pre-check read
-        below) — guaranteeing "second GET Today never re-runs the
-        Structured Workout engine" (idempotence, #235 §11/§6). Ignored
-        entirely when a snapshot already exists.
+        (or ``None`` if the caller does not want structuring). Called ONLY
+        when this call's cheap pre-check read (below) found no existing
+        document — guaranteeing "second GET Today never re-runs the
+        Structured Workout engine" (idempotence, #235 §11/§6) for the
+        common sequential case. Ignored entirely when a snapshot already
+        exists.
+
+        C235 (corrective audit) — HONEST concurrency note: this is NOT
+        "called at most once globally per day". Two genuinely concurrent
+        callers can both observe "no existing document" on their
+        respective pre-check reads and therefore BOTH invoke
+        ``structured_factory`` (and both attempt the ``$setOnInsert``
+        write) before either one wins. What IS guaranteed:
+
+        - ``structured_factory`` (and the #234 engine it wraps) is PURE —
+          a losing caller's call has no side effect beyond wasted CPU; its
+          result is discarded, never persisted, never observed by anyone.
+        - The final PERSISTED document is unique and atomic: MongoDB's
+          ``$setOnInsert`` + the unique index on
+          ``(user_id, prescription_id)`` guarantee exactly one document
+          ever exists for a given day, and every caller (including the
+          "losing" ones) re-reads and converges on that SAME winning
+          document before returning.
+        - Every subsequent (non-concurrent) call short-circuits on the
+          cheap pre-check and never calls ``structured_factory`` again.
+
+        See ``tests/test_pr235_c235_corrections.py`` for a concurrency test
+        that exercises genuine interleaving.
     served_at
         #235 — wall-clock instant supplied by the caller, frozen into the
         snapshot ONLY at creation time. Ignored if a snapshot already
         exists.
+    adaptation_action, adaptation_reason_codes
+        C235 (corrective audit) — the DailyAdaptation decision (action +
+        reason codes) THIS caller just computed, frozen into the snapshot
+        ONLY at creation time, exactly like ``structured_factory``'s
+        result. Ignored (never applied) if a snapshot already exists —
+        Today must read these back from the WINNING snapshot afterwards,
+        never from a freshly recomputed DailyAdaptation call, once a
+        snapshot exists for this day.
 
     Returns
     -------
     ServedPrescriptionResult
         The canonical, effective prescription for this day, together with
-        the winning snapshot's own ``modified_from_planned`` and
-        ``structured`` — all guaranteed to come from the SAME underlying
-        Mongo document, identical for every caller regardless of which one
-        actually created it.
+        the winning snapshot's own ``modified_from_planned``,
+        ``structured``, ``adaptation_action`` and
+        ``adaptation_reason_codes`` — all guaranteed to come from the SAME
+        underlying Mongo document, identical for every caller regardless of
+        which one actually created it.
     """
     # #235 — cheap pre-check: if a snapshot already exists, NEVER invoke
     # structured_factory (no second Structured Workout engine call) and
     # NEVER recompute modified_from_planned — just read the winning
     # document as-is. This is what makes the second (and every subsequent)
     # GET Today call for the same day a pure read, with zero adaptation
-    # and zero structuring recomputation.
+    # and zero structuring recomputation. Under genuine concurrency this
+    # pre-check does NOT prevent two callers from both missing (see the
+    # ``structured_factory`` docstring above) — only the final write+re-read
+    # below guarantees convergence.
     existing_doc = await db.training_prescription_snapshots.find_one(
         {"user_id": user_id, "prescription_id": prescription_id}, {"_id": 0}
     )
@@ -213,6 +258,8 @@ async def get_or_create_served_prescription(
             modified_from_planned=modified_from_planned,
             structured=structured_candidate,
             served_at=served_at,
+            adaptation_action=adaptation_action,
+            adaptation_reason_codes=adaptation_reason_codes,
         )
         await db.training_prescription_snapshots.update_one(
             {"user_id": user_id, "prescription_id": prescription_id},
@@ -243,6 +290,11 @@ async def get_or_create_served_prescription(
         # #235 — likewise, NEVER reconstructed: None for legacy snapshots
         # that predate structuring.
         structured=winning_snapshot.structured,
+        # C235 (corrective audit) — likewise, NEVER reconstructed from a
+        # fresh DailyAdaptation call: None/() for legacy snapshots and the
+        # Week-only fallback creation path.
+        adaptation_action=winning_snapshot.adaptation_action,
+        adaptation_reason_codes=winning_snapshot.adaptation_reason_codes,
     )
 
 

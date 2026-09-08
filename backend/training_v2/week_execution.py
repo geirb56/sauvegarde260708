@@ -116,6 +116,13 @@ class SessionExecution:
     planned_date: date
     row: Optional[PerformedWorkout]
     execution_status: Optional[str] = None
+    prescription_id: Optional[str] = None
+    """C235 (corrective audit) — the SAME canonical ``prescription_id``
+    format used by ``/training/today`` (see ``prescription_id_for`` below),
+    computed for EVERY session (including
+    ``EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE`` ones, where ``row`` is
+    ``None``) so Today and Week can be compared on a common identity for
+    the same day. Never a new/artificial identifier."""
     structured: Optional[StructuredWorkoutPrescription] = None
     """C234 — StructuredWorkoutPrescriptionEngine output built from
     ``session`` (the EFFECTIVE FINAL prescription above — frozen snapshot
@@ -319,6 +326,8 @@ def build_week_execution(
                     # served == planned by construction ⇒ never modified.
                     modified_from_planned=False,
                     structured=fallback_structured,
+                    adaptation_action=None,
+                    adaptation_reason_codes=(),
                 )
             )
 
@@ -375,6 +384,7 @@ def build_week_execution(
                     planned_date=planned_date,
                     row=None,
                     execution_status=EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE,
+                    prescription_id=prescription_id,
                     structured_status=(
                         EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE
                         if (plan_goal is not None and periodization is not None)
@@ -446,6 +456,7 @@ def build_week_execution(
                 session=effective,
                 planned_date=planned_date,
                 row=row,
+                prescription_id=prescription_id,
                 structured=structured,
                 structured_status=structured_status,
             )

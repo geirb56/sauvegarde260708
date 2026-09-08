@@ -157,6 +157,35 @@ class PrescriptionSnapshot(BaseModel):
     periodization phase, or #234 engine-rule changes — historical truth is
     the snapshot, never a live recompute (ABSOLUTE RULE, #235 §2)."""
 
+    adaptation_action: Optional[str] = None
+    """C235 (corrective audit) — the ``DailyAdaptationAction`` value (e.g.
+    ``"KEEP"``, ``"SHORTEN"``, ``"EASY_DOWNGRADE"``, ``"REST"``) that
+    produced THIS snapshot's ``session`` fields, frozen at serve-creation
+    time. Together with ``adaptation_reason_codes`` below, this is the
+    metadata boundary fix for the C235 blocker where Today combined a
+    frozen parent with freshly-recomputed live adaptation metadata: once a
+    snapshot exists, ``adaptation_action``/``adaptation_reason_codes`` MUST
+    be read from here, never recomputed from a new DailyAdaptation call.
+    ``None`` for:
+
+    - legacy (pre-C235-corrective) snapshots that predate this field;
+    - the Week-only fallback creation path (see
+      ``week_execution.build_week_execution``) which freezes the raw plan
+      session directly without ever running DailyAdaptation — there is no
+      adaptation decision to record, so ``None`` (unknown) is the honest
+      value, never a fabricated ``"KEEP"``."""
+
+    adaptation_reason_codes: Tuple[str, ...] = ()
+    """C235 (corrective audit) — the live DailyAdaptation reason codes AT
+    THE INSTANT this snapshot was created, frozen alongside
+    ``adaptation_action``. Deliberately a SEPARATE field from the parent's
+    own ``reason_codes`` (which describes the SERVED prescription itself,
+    e.g. why the plan/reconciliation produced this session) — this field is
+    purely diagnostic metadata about the ADAPTATION decision, never used to
+    describe the prescription's own identity. Defaults to ``()`` for legacy
+    snapshots and the Week-only fallback creation path (see
+    ``adaptation_action`` above)."""
+
 
 def is_freezable(*, planned_date: date, reference_date: date) -> bool:
     """A session is eligible for freezing once it is today or in the past.
@@ -176,6 +205,8 @@ def snapshot_from_prescription(
     modified_from_planned: Optional[bool] = None,
     structured: Optional[StructuredWorkoutPrescription] = None,
     served_at: Optional[datetime] = None,
+    adaptation_action: Optional[str] = None,
+    adaptation_reason_codes: Tuple[str, ...] = (),
 ) -> PrescriptionSnapshot:
     """Build the immutable snapshot payload for a freshly-served prescription.
 
@@ -193,6 +224,13 @@ def snapshot_from_prescription(
 
     ``served_at`` (#235) — wall-clock instant supplied by the caller; this
     module never reads the clock itself.
+
+    ``adaptation_action``/``adaptation_reason_codes`` (C235 corrective
+    audit) — the DailyAdaptation decision that produced this SAME
+    ``session``, computed by the caller BEFORE calling this function (this
+    module never invokes DailyAdaptation itself). ``None``/``()`` when the
+    caller has no adaptation decision to record (e.g. the Week-only
+    fallback creation path, which freezes the raw plan directly).
     """
     return PrescriptionSnapshot(
         user_id=user_id,
@@ -207,6 +245,8 @@ def snapshot_from_prescription(
         reason_codes=session.reason_codes,
         structured=structured,
         served_at=served_at,
+        adaptation_action=adaptation_action,
+        adaptation_reason_codes=adaptation_reason_codes,
     )
 
 
