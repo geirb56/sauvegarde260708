@@ -6,9 +6,12 @@
 - Verified base SHA: `d98434682b33e83f1a6e639b45e28f69a8aba30a`.
 - The verified base contains merges for PR #234 and PR #235.
 - Dedicated branch: `copilot/create-training-ux-v3-structured-sessions`.
-- Implementation head before this report commit: `b7ef15a17389d7105fc8f1501354fbe365ac8d08`.
+- Initial PR implementation head: `00e885c0e551d521e2505712caf1f0955d08fee0`.
+- C236 resumed from the existing remote branch at `eb1019a6a5291a3cfb8cfc147091456c359bf3f3`;
+  no reset or replacement branch was used.
 - No merge was performed and nothing was pushed directly to `copilot/dev`.
-- No backend or training-science code was changed.
+- The only backend change is additive structured serialization of the
+  already-selected quality subtype; no selection or training-science rule changed.
 
 ## Files changed
 
@@ -17,6 +20,10 @@
 - `frontend/src/lib/i18n.js`
 - `frontend/src/__tests__/structured-workout-view.test.jsx`
 - `frontend/src/__tests__/training-v2-page.test.jsx`
+- `backend/training_v2/structured_workout.py`
+- `backend/tests/test_structured_workout_pr234.py`
+- `backend/tests/test_prescription_snapshot_v2_pr235.py`
+- `backend/tests/test_pr235_c235_corrections.py`
 - `RUNINDEX_PR236_REPORT.md`
 
 ## Components and contracts
@@ -31,7 +38,9 @@ and rest steps when present. It does not infer structure from `workout_type`.
 - Embedded recovery uses the backend `count`; a zero count is not displayed.
 - Recovery distance and duration are rendered only when explicitly supplied.
 - Step distance uses metres/kilometres in metric and yards/miles in imperial.
-- Duration supports seconds, minutes, and hours/minutes.
+- Duration preserves exact seconds: examples include `45 s`, `1 min`, `1:30`,
+  `2 min`, `2:30`, `1 h`, and `1 h 05`. A 90-second recovery is never rounded
+  to two minutes.
 - Numeric pace uses the existing `formatPace` unit authority.
 - A single pace and a min/max range are supported.
 - A semantic `pace_zone` without numeric pace does not create a numeric value.
@@ -42,6 +51,7 @@ and rest steps when present. It does not infer structure from `workout_type`.
 - `served_prescription` remains the first parent-session source.
 - `structured_prescription` supplies all structured steps and numeric structured
   pace; the live plan is never used to replace a served structure.
+- Quality labels use the serialized `quality_kind` selected by the backend.
 - The card shows date, localized type, distance/duration, primary pace, exact
   steps, and the `Adapted` badge only when
   `session_modified_from_planned === true`.
@@ -57,6 +67,9 @@ and rest steps when present. It does not infer structure from `workout_type`.
   includes the complete structured prescription.
 - `today_served`, `future_live`, and `historical_frozen` structures are rendered
   as supplied. `historical_unavailable` never creates detail.
+- Quality labels use `structured.quality_kind` only when
+  `structured.workout_type === "quality"`; legacy snapshots without it retain
+  the generic quality label.
 - `prescription_id` is used as the preferred stable React key and is never
   displayed.
 - `session_modified_from_planned` is not recomputed.
@@ -89,10 +102,13 @@ separate unmatched section and are not included in completed planned volume.
 
 - Targeted Training tests:
   `npm test -- --watchAll=false --runTestsByPath src/__tests__/structured-workout-view.test.jsx src/__tests__/training-v2-page.test.jsx --forceExit`
-  — 83 passed.
+  — 90 passed.
 - Complete frontend suite:
   `npm test -- --watchAll=false --forceExit`
-  — 18 suites, 298 tests passed.
+  — 18 suites, 306 tests passed.
+- Structured backend regression suites:
+  `python -m pytest tests/test_structured_workout_pr234.py tests/test_prescription_snapshot_v2_pr235.py tests/test_pr235_c235_corrections.py tests/test_pr232a_c231_week_endpoint.py -q`
+  — 133 passed.
 - Production build: `npm run build` — succeeded.
 - Standalone lint attempt:
   `npx eslint ...` — unavailable because this repository has no ESLint 9 flat
@@ -117,9 +133,8 @@ yet because the draft PR had not been opened.
 - `/training/today` exposes `structured_prescription` but not
   `structured_status`; Today is therefore treated as the served structure by
   endpoint contract. Week provides the complete status state machine.
-- The structured contract does not expose the selected quality subtype as a
-  dedicated field. The UI therefore keeps the safe localized `Quality session`
-  label rather than inferring Threshold/Tempo/VO2 from reason codes.
+- Legacy snapshots without `quality_kind` remain `None`; they are neither
+  migrated nor retroactively recomputed and retain the generic quality label.
 - Today has no matched Garmin `actual` object. Prescribed-versus-actual remains
   correctly available on Week sessions, where the backend supplies both.
 
