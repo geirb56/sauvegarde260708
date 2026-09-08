@@ -22,7 +22,7 @@ export const formatStructuredDuration = (durationSeconds) => {
   const seconds = remainder % 60;
 
   if (hours > 0) {
-    const minutePart = minutes > 0 ? ` ${String(minutes).padStart(2, "0")}` : "";
+    const minutePart = minutes > 0 || seconds > 0 ? ` ${String(minutes).padStart(2, "0")}` : "";
     const secondPart = seconds > 0 ? `:${String(seconds).padStart(2, "0")}` : "";
     return `${hours} h${minutePart}${secondPart}`;
   }

@@ -111,6 +111,7 @@ describe("StructuredWorkoutView", () => {
     expect(formatStructuredDuration(120)).toBe("2 min");
     expect(formatStructuredDuration(150)).toBe("2:30");
     expect(formatStructuredDuration(3600)).toBe("1 h");
+    expect(formatStructuredDuration(3601)).toBe("1 h 00:01");
     expect(formatStructuredDuration(3900)).toBe("1 h 05");
   });
 
