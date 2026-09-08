@@ -172,6 +172,20 @@ function pacesData({ confidence = "HIGH" } = {}) {
   };
 }
 
+function structuredData() {
+  return {
+    workout_type: "quality",
+    target_basis: "distance",
+    total_distance_km: 9,
+    total_duration_minutes: null,
+    steps: [
+      { step_type: "warmup", repetitions: 1, distance_m: 1500, duration_seconds: null, recovery: null, pace_zone: "E", pace_min_per_km: null, pace_min_per_km_min: 6.1667, pace_min_per_km_max: 6.5833 },
+      { step_type: "work", repetitions: 3, distance_m: 2000, duration_seconds: null, recovery: { kind: "jog", duration_seconds: 120, distance_m: null, count: 2 }, pace_zone: "T", pace_min_per_km: 5.1333, pace_min_per_km_min: null, pace_min_per_km_max: null },
+      { step_type: "cooldown", repetitions: 1, distance_m: 1500, duration_seconds: null, recovery: null, pace_zone: "E", pace_min_per_km: null, pace_min_per_km_min: 6.1667, pace_min_per_km_max: 6.5833 },
+    ],
+  };
+}
+
 function mockAxios({ today = todayData(), paces = pacesData(), week = weekData(), cycle = cycleData() } = {}) {
   axios.get.mockImplementation((url) => {
     if (url.includes("/training/today")) return Promise.resolve({ data: today });
@@ -970,5 +984,102 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     expect(aggregateKnownMetric([{ distance_km: null }], "distance_km")).toEqual({ state: "partial", value: null });
     expect(aggregateKnownMetric([{ distance_km: 5 }, { distance_km: null }], "distance_km").state).toBe("partial");
     expect(aggregateKnownMetric([{ distance_km: 5 }, { distance_km: 3 }], "distance_km")).toEqual({ state: "complete", value: 8 });
+  });
+
+  // ── PR236 — structured sessions ────────────────────────────────────────
+
+  test("Today renders only the served structured prescription, including structure and primary pace", async () => {
+    const today = todayData();
+    today.structured_prescription = structuredData();
+    today.prescription_id = "u1:2026-08-25:tuesday";
+    today.planned_session = { ...today.served_prescription, distance_km: 18 };
+    mockAxios({ today });
+    renderPage();
+
+    const card = await screen.findByTestId("training-v2-today");
+    expect(within(card).getByTestId("structured-workout-view")).toBeInTheDocument();
+    expect(within(card).getByTestId("today-session-distance")).toHaveTextContent("9.00 km");
+    expect(within(card).getByTestId("today-session-pace")).toHaveTextContent("5:08 /km");
+    expect(within(card).queryByText("18.0 km")).not.toBeInTheDocument();
+  });
+
+  test("Week displays a structured summary before expansion and full detail after expansion", async () => {
+    const week = weekData();
+    week.week.sessions[2].structured = structuredData();
+    week.week.sessions[2].structured_status = "future_live";
+    week.week.sessions[2].prescription_id = "u1:2026-08-26:wednesday";
+    mockAxios({ week });
+    renderPage();
+
+    const row = await screen.findByTestId("training-v2-day-wednesday");
+    expect(within(row).getByTestId("structured-workout-summary")).toHaveTextContent("3 × 2.00 km");
+    fireEvent.click(screen.getByTestId("session-detail-toggle-wednesday"));
+    expect(within(row).getByTestId("structured-workout-view")).toBeVisible();
+  });
+
+  test.each(["historical_frozen", "future_live", "today_served"])(
+    "renders backend structure for structured_status=%s without exposing the technical status",
+    async (structuredStatus) => {
+      const week = weekData();
+      week.week.sessions[2].structured = structuredData();
+      week.week.sessions[2].structured_status = structuredStatus;
+      mockAxios({ week });
+      renderPage();
+      const row = await screen.findByTestId("training-v2-day-wednesday");
+      expect(within(row).getByTestId("structured-workout-summary")).toBeInTheDocument();
+      expect(within(row).queryByText(structuredStatus)).not.toBeInTheDocument();
+    }
+  );
+
+  test("historical_unavailable renders parent facts but never invents structured details", async () => {
+    const week = weekData();
+    week.week.sessions[2].structured = null;
+    week.week.sessions[2].structured_status = "historical_unavailable";
+    mockAxios({ week });
+    renderPage();
+
+    const row = await screen.findByTestId("training-v2-day-wednesday");
+    expect(within(row).getByTestId("training-v2-day-type-wednesday")).toBeInTheDocument();
+    expect(within(row).queryByTestId("structured-workout-summary")).not.toBeInTheDocument();
+    expect(within(row).queryByText(/Warm-up|Échauffement/)).not.toBeInTheDocument();
+  });
+
+  test.each([
+    [true, true],
+    [false, false],
+    [null, false],
+  ])("Today adaptation badge follows session_modified_from_planned=%s only", async (modified, visible) => {
+    const today = { ...todayData(), session_modified_from_planned: modified };
+    mockAxios({ today });
+    renderPage();
+    const card = await screen.findByTestId("training-v2-today");
+    expect(Boolean(within(card).queryByTestId("session-adapted-badge"))).toBe(visible);
+  });
+
+  test("Week adaptation badge follows backend truth and does not compare prescriptions", async () => {
+    const week = weekData();
+    week.week.sessions[2].session_modified_from_planned = true;
+    week.week.sessions[3].session_modified_from_planned = false;
+    mockAxios({ week });
+    renderPage();
+    expect(within(await screen.findByTestId("training-v2-day-wednesday")).getByTestId("session-adapted-badge")).toBeInTheDocument();
+    expect(within(screen.getByTestId("training-v2-day-thursday")).queryByTestId("session-adapted-badge")).not.toBeInTheDocument();
+  });
+
+  test("prescription_id is used as the stable React key contract", () => {
+    const source = require("fs").readFileSync(require.resolve("@/pages/TrainingPlanV2"), "utf8");
+    expect(source).toMatch(/key=\{session\?\.prescription_id \|\| day\}/);
+  });
+
+  test.each([
+    ["en", "Warm-up", "Adapted"],
+    ["fr", "Échauffement", "Adaptée"],
+  ])("structured labels and adaptation are translated in %s", async (lang, stepLabel, adaptedLabel) => {
+    const today = { ...todayData(), structured_prescription: structuredData(), session_modified_from_planned: true };
+    mockAxios({ today });
+    renderPage({ lang });
+    const card = await screen.findByTestId("training-v2-today");
+    expect(within(card).getByText(stepLabel)).toBeInTheDocument();
+    expect(within(card).getByText(adaptedLabel)).toBeInTheDocument();
   });
 });
