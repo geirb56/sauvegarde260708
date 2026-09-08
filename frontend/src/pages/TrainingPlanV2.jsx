@@ -246,6 +246,14 @@ const minPerKmToFormattedPace = (minPerKm, unitSystem) => {
 // reformatted unit-aware. Never invented: null in -> null out.
 const formatActualPace = (paceMinPerKm, unitSystem) => minPerKmToFormattedPace(paceMinPerKm, unitSystem);
 
+const formatActualDuration = (durationMinutes) => {
+  if (!isKnownNumber(durationMinutes) || durationMinutes < 0) return null;
+  const totalSeconds = Math.round(durationMinutes * 60);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return seconds > 0 ? `${minutes}:${String(seconds).padStart(2, "0")}` : `${minutes} min`;
+};
+
 // PR233 — /training/v2/paces already exposes a raw min_per_km alongside the
 // metric-only pace_str text. Prefer the raw value so imperial mode never
 // shows a hardcoded "/km" suffix; pace_str is only a defensive metric fallback.
@@ -393,7 +401,7 @@ function WeekSessionRow({ session, day, isToday, unitSystem, t, locale }) {
 
   const actual = session?.actual || null;
   const actualDistance = isKnownNumber(actual?.distance_km) ? formatDistance(actual.distance_km, { unitSystem }) : null;
-  const actualDuration = isKnownNumber(actual?.duration_minutes) ? `${Math.round(actual.duration_minutes)} min` : null;
+  const actualDuration = formatActualDuration(actual?.duration_minutes);
   const actualPace = formatActualPace(actual?.pace_min_per_km, unitSystem);
   const analysisRoute = getSessionDetailRoute(session);
 
@@ -424,19 +432,19 @@ function WeekSessionRow({ session, day, isToday, unitSystem, t, locale }) {
           {formatDayHeading(t, day, session?.planned_date, locale)}
         </span>
         <div className="min-w-0">
-         <div className="flex min-w-0 flex-wrap items-center gap-2">
-           <p className="truncate font-medium" data-testid={`training-v2-day-type-${day}`}>{typeLabel}</p>
-           <AdaptedBadge modified={session?.session_modified_from_planned} t={t} />
-         </div>
-         {(compactMetric || prescribedPaceOrZone) && (
-           <p className="text-xs text-foreground" data-testid={`training-v2-day-metrics-${day}`}>
-             {[compactMetric, prescribedPaceOrZone].filter(Boolean).join(" · ")}
-           </p>
-         )}
-         {structuredSummary}
-         {prescription && !isExplicitRest && !isUnavailable && (
-           <p className="truncate text-xs text-muted-foreground" data-testid={`training-v2-day-prescription-${day}`}>{prescription}</p>
-         )}
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <p className="truncate font-medium" data-testid={`training-v2-day-type-${day}`}>{typeLabel}</p>
+            <AdaptedBadge modified={session?.session_modified_from_planned} t={t} />
+          </div>
+          {(compactMetric || prescribedPaceOrZone) && (
+            <p className="text-xs text-foreground" data-testid={`training-v2-day-metrics-${day}`}>
+              {[compactMetric, prescribedPaceOrZone].filter(Boolean).join(" · ")}
+            </p>
+          )}
+          {structuredSummary}
+          {prescription && !isExplicitRest && !isUnavailable && (
+            <p className="truncate text-xs text-muted-foreground" data-testid={`training-v2-day-prescription-${day}`}>{prescription}</p>
+          )}
         </div>
         <div className="text-right">
           {isToday ? (
@@ -813,9 +821,8 @@ export default function TrainingPlanV2() {
     ? getTranslatedValue(t, `trainingV2.workoutTypes.${resolvedTodayWorkoutTypeKey}`)
     : t("trainingV2.noSessionType");
 
-  // C233 (blocker #2) — no prescription text, no pace/zone: the real
-  // /training/today contract carries neither field, so nothing is rendered
-  // for them (never invented/guessed).
+  // The runtime parent has no prescription text or pace. Numeric pace and
+  // step detail are rendered only from the backend's structured_prescription.
   const todayDurationLabel = isKnownNumber(todayStructured?.total_duration_minutes)
     ? `${todayStructured.total_duration_minutes} min`
     : getTodayDurationLabel(todaySession);
@@ -889,10 +896,10 @@ export default function TrainingPlanV2() {
                 {todayDistance && <Badge variant="outline" data-testid="today-session-distance">{todayDistance}</Badge>}
                {todayPace && <Badge variant="outline" data-testid="today-session-pace">{todayPace}</Badge>}
               </div>
-              {todayStructured && (
-               <div className="pt-2">
-                 <StructuredWorkoutView structured={todayStructured} unitSystem={unitSystem} t={t} />
-               </div>
+              {Array.isArray(todayStructured?.steps) && todayStructured.steps.length > 0 && (
+                <div className="pt-2">
+                  <StructuredWorkoutView structured={todayStructured} unitSystem={unitSystem} t={t} />
+                </div>
               )}
             </>
           )}

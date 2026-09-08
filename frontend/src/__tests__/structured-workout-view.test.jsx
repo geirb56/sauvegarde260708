@@ -73,6 +73,13 @@ describe("StructuredWorkoutView", () => {
     expect(screen.getByTestId("structured-recovery")).toHaveTextContent("400 m");
   });
 
+  test("does not render a recovery with a backend count of zero", () => {
+    const value = JSON.parse(JSON.stringify(structured));
+    value.steps[1].recovery.count = 0;
+    render(<StructuredWorkoutView structured={value} unitSystem="metric" t={t} />);
+    expect(screen.queryByTestId("structured-recovery")).not.toBeInTheDocument();
+  });
+
   test("formats single pace", () => {
     expect(formatStructuredPace(structured.steps[1], "metric")).toBe("5:08 /km");
   });

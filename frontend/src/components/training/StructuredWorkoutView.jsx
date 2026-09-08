@@ -41,8 +41,10 @@ const stepValue = (step, unitSystem) =>
   || formatStructuredDuration(step?.duration_seconds);
 
 const recoveryValue = (recovery, unitSystem) =>
-  formatStructuredDistance(recovery?.distance_m, unitSystem)
-  || formatStructuredDuration(recovery?.duration_seconds);
+  isKnownNumber(recovery?.count) && recovery.count > 0
+    ? formatStructuredDistance(recovery?.distance_m, unitSystem)
+      || formatStructuredDuration(recovery?.duration_seconds)
+    : null;
 
 export const getPrimaryStructuredPace = (structured, unitSystem) => {
   const steps = Array.isArray(structured?.steps) ? structured.steps : [];
