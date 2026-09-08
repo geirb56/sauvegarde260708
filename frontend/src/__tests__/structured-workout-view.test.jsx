@@ -67,7 +67,7 @@ describe("StructuredWorkoutView", () => {
   });
 
   test("renders distance recovery when supplied", () => {
-    const value = structuredClone(structured);
+    const value = JSON.parse(JSON.stringify(structured));
     value.steps[1].recovery = { kind: "jog", duration_seconds: null, distance_m: 400, count: 2 };
     render(<StructuredWorkoutView structured={value} unitSystem="metric" t={t} />);
     expect(screen.getByTestId("structured-recovery")).toHaveTextContent("400 m");
