@@ -123,6 +123,19 @@ class SessionExecution:
     ``EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE`` ones, where ``row`` is
     ``None``) so Today and Week can be compared on a common identity for
     the same day. Never a new/artificial identifier."""
+    modified_from_planned: Optional[bool] = None
+    """C235 (final correction) — the WINNING snapshot's own frozen
+    ``modified_from_planned`` fact (identical source ``/training/today``
+    reads for the exact same day), so Today and Week converge on the same
+    "was this session adapted away from the plan" truth. NEVER recomputed
+    here by comparing ``session``/``effective`` against the CURRENT live
+    plan — that comparison is exactly what C235 forbids: the value
+    describes a fact frozen at serve time and must never change
+    retroactively if the live plan later changes. ``None`` when no
+    trustworthy snapshot fact is available at all: either
+    ``EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE``, or a legacy (pre-C231)
+    snapshot that predates this field. ``None`` is never coerced to
+    ``False``."""
     structured: Optional[StructuredWorkoutPrescription] = None
     """C234 — StructuredWorkoutPrescriptionEngine output built from
     ``session`` (the EFFECTIVE FINAL prescription above — frozen snapshot
@@ -281,6 +294,14 @@ def build_week_execution(
     # prescription_ids excluded from PR230 matching entirely (see docstring
     # above) — never given a fabricated PR230 row.
     unavailable_prescription_ids: set = set()
+    # C235 (final correction) — modified_from_planned for a session frozen
+    # by THIS SAME call's own bare-Week-only fallback branch below (not yet
+    # present in `frozen_snapshots`, which was fetched by the caller BEFORE
+    # this function ran). Tracked separately so the SessionExecution built
+    # further down for that exact prescription_id reports the SAME fact
+    # (False — served == planned by construction) it is persisting, instead
+    # of falling back to None for the one call that actually creates it.
+    self_created_modified_from_planned: Dict[str, bool] = {}
 
     for session in sessions:
         planned_date = _session_planned_date(session.day, week_start)
@@ -330,6 +351,7 @@ def build_week_execution(
                     adaptation_reason_codes=(),
                 )
             )
+            self_created_modified_from_planned[prescription_id] = False
 
         prescriptions.append(
             PrescribedWorkout(
@@ -409,8 +431,8 @@ def build_week_execution(
             )
         structured: Optional[StructuredWorkoutPrescription] = None
         structured_status: Optional[str] = None
+        frozen = frozen_snapshots.get(prescription_id)
         if plan_goal is not None and periodization is not None:
-            frozen = frozen_snapshots.get(prescription_id)
             structured_status = resolve_structured_status(
                 planned_date=planned_date,
                 reference_date=reference_date,
@@ -457,6 +479,18 @@ def build_week_execution(
                 planned_date=planned_date,
                 row=row,
                 prescription_id=prescription_id,
+                # C235 (final correction) — the WINNING snapshot's own
+                # frozen fact when one exists (NEVER recomputed against
+                # `session`/`effective`'s CURRENT live plan); for the one
+                # bare-Week-only call that just created today's snapshot in
+                # the fallback branch above (not yet in `frozen_snapshots`),
+                # use the SAME value it is persisting; otherwise `None`
+                # (no trustworthy fact — e.g. legacy pre-C231 snapshot).
+                modified_from_planned=(
+                    frozen.modified_from_planned
+                    if frozen is not None
+                    else self_created_modified_from_planned.get(prescription_id)
+                ),
                 structured=structured,
                 structured_status=structured_status,
             )

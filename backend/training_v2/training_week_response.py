@@ -111,6 +111,18 @@ class WeekV2SessionResponse(BaseModel):
     exact same served prescription. Never a new/artificial identifier.
     Additive field — ``None`` only if the caller never computed one."""
 
+    session_modified_from_planned: Optional[bool] = None
+    """C235 (final correction) — the SAME field name/value
+    ``/training/today`` exposes as ``session_modified_from_planned`` for the
+    exact same day: the WINNING snapshot's own frozen
+    ``modified_from_planned`` fact. NEVER recomputed here by comparing
+    against the CURRENT live plan — ``PrescriptionSnapshot.
+    modified_from_planned`` is the sole authority, describing a fact frozen
+    at serve time that must never change retroactively. ``None`` (never
+    coerced to ``False``) when no trustworthy snapshot fact is available:
+    ``execution_status == "prescription_unavailable"``, or a legacy
+    (pre-C231) snapshot predating this field. Additive field."""
+
     planned_date: Optional[str] = None
     """PR232A — ISO-8601 date this session is scheduled for."""
 

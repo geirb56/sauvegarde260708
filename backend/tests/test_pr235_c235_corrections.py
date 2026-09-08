@@ -174,8 +174,14 @@ async def test_today_and_week_expose_same_prescription_id_identity():
     # below carries the full native V2 workout_type/distance/duration).
     assert today_body["served_prescription"]["distance_km"] == monday_session["distance_km"]
     assert today_body["reason_codes"] == monday_session["reason_codes"]
-    assert today_body["session_modified_from_planned"] == monday_session.get(
-        "session_modified_from_planned", today_body["session_modified_from_planned"]
+    # C235 (final correction) — strict assertion: Week MUST expose the
+    # field at all (a previous version of this test used `.get(key,
+    # default=today_body[key])`, which silently compared today==today and
+    # passed even when Week omitted the field entirely — never valid).
+    assert "session_modified_from_planned" in monday_session
+    assert (
+        today_body["session_modified_from_planned"]
+        == monday_session["session_modified_from_planned"]
     )
 
     # Structured convergence (already covered by C234 tests, re-asserted here
@@ -207,6 +213,11 @@ async def test_week_first_then_today_still_expose_same_prescription_id():
     today_body = today_result["body"]
 
     assert today_body["prescription_id"] == monday_session["prescription_id"]
+    assert "session_modified_from_planned" in monday_session
+    assert (
+        today_body["session_modified_from_planned"]
+        == monday_session["session_modified_from_planned"]
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -277,3 +288,126 @@ async def test_concurrent_first_serve_converges_on_single_winning_snapshot():
     # factory may run more than once (both callers' candidates are pure and
     # cheap); only the FINAL persisted document is guaranteed unique.
     assert factory_calls["n"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# C235 (final correction) — Week must expose the WINNING snapshot's own
+# frozen `modified_from_planned` fact (never recomputed against the live
+# plan), converge with Today's `session_modified_from_planned`, and report
+# `None` (never a fabricated `False`) for a legacy snapshot predating the
+# field. These are pure/direct unit tests against
+# ``training_v2.week_execution.build_week_execution`` — no HTTP harness
+# needed since this is a bridge-level fact, not an endpoint concern.
+# ---------------------------------------------------------------------------
+
+def _week_exec_session(day: str, distance_km: float = 8.0):
+    from training_v2.workout_generator import WorkoutPrescription
+
+    return WorkoutPrescription(
+        day=day,
+        workout_type="easy",
+        intensity_class="low",
+        distance_km=distance_km,
+        duration_minutes=None,
+        reason_codes=(),
+    )
+
+
+async def test_week_modified_from_planned_reads_frozen_snapshot_never_recomputed_true():
+    """C235 (final correction) test C: even if the CURRENT live session
+    differs sharply from the frozen served value, Week must report the
+    snapshot's own frozen ``modified_from_planned`` (True here) — never a
+    fresh ``served != live_planned`` comparison at read time."""
+    from datetime import date as _date
+    from training_v2.week_execution import build_week_execution
+    from training_v2.prescription_snapshot import PrescriptionSnapshot
+
+    user_id = "u-c235-final"
+    week_start = _date(2024, 6, 10)  # Monday
+    prescription_id = f"{user_id}:2024-06-10:monday"
+    frozen_snapshots = {
+        prescription_id: PrescriptionSnapshot(
+            user_id=user_id, prescription_id=prescription_id,
+            planned_date=_date(2024, 6, 10), day="monday",
+            workout_type="easy", intensity_class="low", distance_km=5.0,
+            modified_from_planned=True,
+        )
+    }
+    # The CURRENT live plan has since drifted to a very different distance —
+    # this must NEVER influence the frozen modified_from_planned fact.
+    sessions = [_week_exec_session("monday", distance_km=99.0)]
+    result = build_week_execution(
+        user_id=user_id,
+        reference_date=_date(2024, 6, 12),
+        week_start=week_start,
+        sessions=sessions,
+        garmin_docs=[],
+        frozen_snapshots=frozen_snapshots,
+    )
+    se = next(s for s in result.sessions if s.planned_date == _date(2024, 6, 10))
+    assert se.modified_from_planned is True
+
+
+async def test_week_modified_from_planned_reads_frozen_snapshot_never_recomputed_false():
+    """Mirror of the above with a frozen ``False`` — must stay False even
+    though the live plan has since drifted."""
+    from datetime import date as _date
+    from training_v2.week_execution import build_week_execution
+    from training_v2.prescription_snapshot import PrescriptionSnapshot
+
+    user_id = "u-c235-final-2"
+    week_start = _date(2024, 6, 10)
+    prescription_id = f"{user_id}:2024-06-10:monday"
+    frozen_snapshots = {
+        prescription_id: PrescriptionSnapshot(
+            user_id=user_id, prescription_id=prescription_id,
+            planned_date=_date(2024, 6, 10), day="monday",
+            workout_type="easy", intensity_class="low", distance_km=8.0,
+            modified_from_planned=False,
+        )
+    }
+    sessions = [_week_exec_session("monday", distance_km=42.0)]
+    result = build_week_execution(
+        user_id=user_id,
+        reference_date=_date(2024, 6, 12),
+        week_start=week_start,
+        sessions=sessions,
+        garmin_docs=[],
+        frozen_snapshots=frozen_snapshots,
+    )
+    se = next(s for s in result.sessions if s.planned_date == _date(2024, 6, 10))
+    assert se.modified_from_planned is False
+
+
+async def test_week_modified_from_planned_none_for_legacy_snapshot_never_false():
+    """C235 (final correction) test D: a legacy snapshot predating the
+    ``modified_from_planned`` field must yield ``None`` — never a
+    fabricated ``False``."""
+    from datetime import date as _date
+    from training_v2.week_execution import build_week_execution
+    from training_v2.prescription_snapshot import PrescriptionSnapshot
+
+    user_id = "u-c235-final-legacy"
+    week_start = _date(2024, 6, 10)
+    prescription_id = f"{user_id}:2024-06-10:monday"
+    # No modified_from_planned kwarg supplied — mirrors a legacy (pre-C231)
+    # document freshly deserialized from Mongo, defaulting to None.
+    frozen_snapshots = {
+        prescription_id: PrescriptionSnapshot(
+            user_id=user_id, prescription_id=prescription_id,
+            planned_date=_date(2024, 6, 10), day="monday",
+            workout_type="easy", intensity_class="low", distance_km=8.0,
+        )
+    }
+    sessions = [_week_exec_session("monday", distance_km=8.0)]
+    result = build_week_execution(
+        user_id=user_id,
+        reference_date=_date(2024, 6, 12),
+        week_start=week_start,
+        sessions=sessions,
+        garmin_docs=[],
+        frozen_snapshots=frozen_snapshots,
+    )
+    se = next(s for s in result.sessions if s.planned_date == _date(2024, 6, 10))
+    assert se.modified_from_planned is None
+    assert se.modified_from_planned is not False

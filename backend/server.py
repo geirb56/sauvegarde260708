@@ -3460,7 +3460,18 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     )
 
     if existing_snapshot_doc is not None:
-        # ── FAST PATH: snapshot already exists — pure read, zero adaptation ──
+        # ── FAST PATH: snapshot already exists ──────────────────────────────
+        # C235 (final correction, P2 wording) — this is NOT strictly a "pure
+        # read": the canonical WeeklyPlan/goal/Garmin-history resolution
+        # earlier in this handler still runs unconditionally to obtain
+        # `planned_prescription`/`today` (needed to compute
+        # `today_prescription_id` itself). What IS guaranteed here is the
+        # snapshot fast-path BEFORE DailyAdaptation and Structured Workout
+        # recomputation: once the snapshot is found, resolve_today_final_
+        # prescription (Readiness -> DailyAdaptation) and
+        # build_structured_workout_prescription are never invoked again —
+        # every field describing the SERVED prescription comes straight from
+        # the frozen document.
         readiness_decision, readiness_data_source, _unused_load, _unused_recent = (
             resolve_live_readiness(
                 reference_date=today,
@@ -4479,6 +4490,7 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
                 day=se.session.day,
                 planned_date=planned_date_iso,
                 prescription_id=getattr(se, "prescription_id", None),
+                session_modified_from_planned=None,
                 workout_type=None,
                 intensity_class=None,
                 distance_km=None,
@@ -4496,6 +4508,11 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
             day=se.session.day,
             planned_date=planned_date_iso,
             prescription_id=getattr(se, "prescription_id", None),
+            # C235 (final correction) — the WINNING snapshot's own frozen
+            # `modified_from_planned` fact (see week_execution.
+            # SessionExecution.modified_from_planned docstring); never
+            # recomputed here against the current live plan.
+            session_modified_from_planned=getattr(se, "modified_from_planned", None),
             workout_type=se.session.workout_type,
             intensity_class=se.session.intensity_class,
             distance_km=se.session.distance_km,

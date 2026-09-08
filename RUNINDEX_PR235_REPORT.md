@@ -496,3 +496,175 @@ investigation is only required when failures are mentioned).
 - ✅ No frontend modification.
 - ✅ No merge — PR stays in **DRAFT** against `copilot/dev`.
 
+---
+
+# C235 FINAL CORRECTION
+
+Final corrective pass fixing the one remaining functional (P1) blocker and
+one documentation wording issue (P2), preserving #235's entire existing
+architecture.
+
+- **Head before correction:** `77e9b74180ce539b4f36658e0e26a62671586fab`
+- **New head:** this commit (see PR diff).
+- **Scope:** `backend/server.py`, `backend/training_v2/week_execution.py`,
+  `backend/training_v2/training_week_response.py`, plus tests. No
+  frontend, #234 engine, Training Paces authority, Garmin/FIT, or #236
+  changes; no changes to `adaptation_action`/`adaptation_reason_codes`
+  freeze, `reason_codes` freeze, `prescription_id`, `$setOnInsert`
+  concurrency, or `historical_frozen`/`historical_unavailable`/
+  `future_live` semantics.
+
+## F1. `modified_from_planned` propagated into Week (P1)
+
+`Today` already exposed `session_modified_from_planned` sourced from the
+winning snapshot. `Week` did not expose it at all. Fixed:
+
+- `training_v2.week_execution.SessionExecution` gained a
+  `modified_from_planned: Optional[bool] = None` field.
+- For a session backed by an existing frozen snapshot: set to
+  `frozen_snapshot.modified_from_planned` — **never** recomputed by
+  comparing the effective/live session against the current live plan.
+- For the narrow "bare Week-only call is the very first caller for today"
+  fallback branch (`build_week_execution` freezes a brand-new snapshot
+  itself, before it exists in the caller-supplied `frozen_snapshots` map):
+  the SAME `False` value being persisted (`served == planned by
+  construction`) is propagated to that session's `modified_from_planned`,
+  never left as a spurious `None` for the one call that actually creates
+  it.
+- For `EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE` and any legacy (pre-C231)
+  snapshot predating the field: `None` — never coerced to `False`.
+- `training_v2.training_week_response.WeekV2SessionResponse` gained the
+  additive field `session_modified_from_planned: Optional[bool] = None`
+  (same canonical name Today already uses).
+- `server.py`'s `/training/v2/week` `_session_response` propagates
+  `session_modified_from_planned=getattr(se, "modified_from_planned",
+  None)` (normal branch) and explicit `None` (unavailable branch).
+
+## F2. Corrected the falsely-permissive test assertion
+
+`tests/test_pr235_c235_corrections.py`'s
+`test_today_and_week_expose_same_prescription_id_identity` previously
+asserted:
+
+```python
+assert today_body["session_modified_from_planned"] == monday_session.get(
+    "session_modified_from_planned", today_body["session_modified_from_planned"]
+)
+```
+
+This compared `today == today` whenever Week omitted the field, passing
+artificially. Replaced with a strict check requiring presence AND
+equality:
+
+```python
+assert "session_modified_from_planned" in monday_session
+assert (
+    today_body["session_modified_from_planned"]
+    == monday_session["session_modified_from_planned"]
+)
+```
+
+Verified this corrected assertion (and `test_week_first_then_today_...`,
+which received the same strict check) **fails** on the pre-correction head
+`77e9b741` (`AssertionError: 'session_modified_from_planned' not in
+{...}`) and **passes** on the corrected head.
+
+## F3. New tests (spec §5 A–D)
+
+- **A. Today → Week** and **B. Week → Today**: covered by the now-strict
+  `test_today_and_week_expose_same_prescription_id_identity` (Today first)
+  and `test_week_first_then_today_still_expose_same_prescription_id` (Week
+  first) — both assert strict equality of `session_modified_from_planned`
+  between the two endpoints for the same served day.
+- **C. Plan live change after snapshot** (2 new direct/pure unit tests
+  against `training_v2.week_execution.build_week_execution`, no HTTP
+  needed — this is a bridge-level fact):
+  `test_week_modified_from_planned_reads_frozen_snapshot_never_recomputed_true`
+  and `..._false` — a frozen snapshot's `modified_from_planned`
+  (`True`/`False`) is asserted to survive unchanged even when the supplied
+  *live* session for that same day has since drifted to a very different
+  distance (99.0 km / 42.0 km vs. the frozen 5.0 km / 8.0 km) — proving
+  Week never re-derives the flag from `effective != live`.
+- **D. Legacy**: new test
+  `test_week_modified_from_planned_none_for_legacy_snapshot_never_false`
+  constructs a `PrescriptionSnapshot` without `modified_from_planned` (as a
+  freshly-deserialized legacy Mongo document would look) and asserts Week
+  reports `None`, explicitly asserting `is not False` too.
+
+All 5 new/corrected tests were verified to **fail** on `77e9b741` (3 with
+`AttributeError: 'SessionExecution' object has no attribute
+'modified_from_planned'`, 2 with the strict-presence `AssertionError`
+above) and **pass** on the corrected head.
+
+## F4. P2 — fast-path wording corrected
+
+The Today fast-path comment previously called the branch a "pure read".
+Corrected to document precisely what is and is not guaranteed: the
+canonical WeeklyPlan/goal/Garmin-history resolution still runs
+unconditionally earlier in the handler (needed to compute
+`today_prescription_id` itself) — what is actually guaranteed is the
+**snapshot fast-path before DailyAdaptation and Structured Workout
+recomputation**. No endpoint re-architecture was made for this P2 item, as
+instructed.
+
+## F5. Tests executed (this final-correction pass)
+
+New/corrected (all verified to fail on `77e9b741`, pass on the corrected
+head):
+- `tests/test_pr235_c235_corrections.py`, specifically:
+  `test_today_and_week_expose_same_prescription_id_identity`,
+  `test_week_first_then_today_still_expose_same_prescription_id`,
+  `test_week_modified_from_planned_reads_frozen_snapshot_never_recomputed_true`,
+  `test_week_modified_from_planned_reads_frozen_snapshot_never_recomputed_false`,
+  `test_week_modified_from_planned_none_for_legacy_snapshot_never_false`.
+
+Re-run in full, all passing:
+- `tests/test_pr235_c235_corrections.py` (8/8)
+- `tests/test_pr235_today_idempotence.py`
+- `tests/test_prescription_snapshot_v2_pr235.py`
+- `tests/test_pr232a_c231_week_endpoint.py`
+- `tests/test_pr231_served_prescription.py`
+- `tests/test_pr232a_prescription_snapshot.py`
+- `tests/test_pr232a_week_execution.py`
+- `tests/test_pr231_c231_corrections2.py`
+- `tests/test_pr231_c231_corrections3.py`
+- `tests/test_pr231_c231_snapshot_adaptation.py`
+- `tests/test_daily_adaptation_pr133.py`
+- `tests/test_structured_workout_pr234.py`
+- `tests/test_training_paces_pr194.py`
+- `tests/test_pr232a_local_reference_date.py`
+- `tests/test_performed_workout_pr230.py`
+
+A full repository-wide run (`pytest tests/`, `-n 2 --dist loadscope`)
+produced **301 pre-existing failures**, identical in count and name to the
+baseline already established for the C235 corrective-audit pass — zero new
+regressions introduced by this final correction. (Two tests in the
+targeted-suite batch above intermittently failed with HTTP 429 from the
+in-process rate limiter when run alongside many other HTTP-harness tests
+in the same `-n 2` worker batch; both pass in isolation and are pre-existing
+test-infra flakiness, not a regression — same class of flakiness already
+documented in the C235 corrective-audit section above.)
+
+## F6. CI (real)
+
+No GitHub Actions workflow run was triggered for this branch during this
+final-correction pass; no CI failure was reported or investigated (out of
+scope per task instructions).
+
+## F7. Final confirmation
+
+- ✅ Today and Week now converge on `session_modified_from_planned` for
+  the same served day (strict test, spec §5 A/B).
+- ✅ The value is never recomputed against a changed live plan (spec §5 C).
+- ✅ A legacy snapshot missing the field reports `None`, never `False`
+  (spec §5 D).
+- ✅ The previously falsely-permissive test assertion was corrected to a
+  strict check that fails on the pre-correction head.
+- ✅ P2 fast-path wording corrected without re-architecting the endpoint.
+- ✅ No Structured Workout #234, Training Paces authority,
+  Garmin-export-ready contract, adaptation-metadata freeze, reason_codes
+  freeze, `prescription_id`, `$setOnInsert` concurrency, historical
+  status semantics, legacy snapshot policy, frontend, Garmin API/FIT, or
+  #236 code touched.
+- ✅ No merge — PR stays in **DRAFT** against `copilot/dev`.
+
