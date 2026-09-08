@@ -73,12 +73,10 @@ from training_v2.runner_profile import build_runner_profile
 from training_v2.training_state import build_training_state
 from training_v2.readiness_decision import (
     ReadinessBand,
-    ReadinessDecision,
     build_readiness_decision,
 )
 from training_v2.daily_adaptation import (
     DailyAdaptationAction,
-    DailyAdaptationResult,
     build_daily_adaptation,
 )
 from training_v2.training_response import build_recent_training_response
@@ -3436,68 +3434,167 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
             "day": day_name,
         }
 
-    # ── 6/7. ReadinessDecision V2 + DailyAdaptation V2 — Today only ──────
-    # C231 — delegated to training_v2.today_prescription, the SAME shared
-    # helper /training/v2/week uses to compute today's FINAL prescription
-    # before freezing a snapshot. Guarantees identical output regardless of
-    # which endpoint is hit first for a given day.
-    # C234 — plan_goal/periodization/training_paces are deliberately NOT
-    # passed here: the structured prescription must be built from the
-    # ATOMICALLY-RESOLVED served_prescription below (step 7bis), never from
-    # this local adaptation_result.adapted_workout candidate, which can
-    # differ from the winning snapshot when another concurrent/earlier call
-    # already froze a different served candidate (ABSOLUTE RULE — never
-    # "adapted parent + steps built from an old parent").
-    today_final = resolve_today_final_prescription(
-        planned_prescription=planned_prescription,
-        reference_date=today,
-        domain_activities_90=domain_activities_90,
-        garmin_daily_metrics_docs=garmin_daily_metrics_docs,
-        garmin_connected=garmin_connected,
+    # ── 5bis. C235 (corrective audit) — FAST PATH ─────────────────────────
+    # If a canonical snapshot already exists for (user_id, prescription_id)
+    # today, it IS the served truth. Do NOT call
+    # resolve_today_final_prescription (readiness + DailyAdaptation), do NOT
+    # build Structured Workout, do NOT recompute modified_from_planned —
+    # read everything describing the SERVED prescription from the frozen
+    # snapshot. This is what makes a second (and every subsequent) GET
+    # Today the same day genuinely idempotent (C235 blocker #1). A live
+    # readiness read remains available separately as diagnostic-only
+    # information (see resolve_live_readiness docstring) — it NEVER feeds
+    # into the fields describing the served prescription.
+    from training_v2.prescription_snapshot import (
+        PrescriptionSnapshot as _PrescriptionSnapshot,
+        resolve_effective_session as _resolve_effective_session,
     )
-    readiness_decision: ReadinessDecision = today_final.readiness_decision
-    adaptation_result: DailyAdaptationResult = today_final.adaptation_result
-    readiness_data_source = today_final.readiness_data_source
-
-    # C231 — item 2 BLOCKER FIX: go through the SAME atomic get-or-create
-    # snapshot service /training/v2/week uses, so both endpoints always
-    # converge on ONE canonical served prescription for today, regardless
-    # of which one is called first or concurrently.
-    from training_v2.served_prescription import get_or_create_served_prescription
     from training_v2.week_execution import prescription_id_for
-
-    served_result = await get_or_create_served_prescription(
-        db,
-        user_id=user["id"],
-        prescription_id=prescription_id_for(user["id"], today, day_name.lower()),
-        planned_date=today,
-        served_candidate=adaptation_result.adapted_workout,
-        planned_prescription=planned_prescription,
-    )
-    served_prescription = served_result.prescription
-
-    # ── 7bis. C234 — StructuredWorkoutPrescriptionEngine, wired in AFTER the
-    # atomic served-prescription resolution above (ABSOLUTE RULE: structure
-    # is always built from the FINAL prescription actually served, never a
-    # locally-adapted candidate that a concurrent call may have superseded).
-    # C234 (final corrective audit) — training_paces MUST come from the ONE
-    # canonical Training Paces authority (same loader as /training/v2/paces
-    # and /training/v2/week), never from a local recompute over
-    # domain_activities_90 (the Training Engine's own 90-day LOAD window,
-    # unrelated to Training Paces' own recency policy — see
-    # training_paces_authority.py docstring).
+    from training_v2.today_prescription import resolve_live_readiness
     from training_v2.structured_workout import build_structured_workout_prescription
     from training_v2.training_paces_authority import load_canonical_training_paces
 
-    training_paces = await load_canonical_training_paces(
-        db, user_id=user["id"], reference_date=today
+    today_prescription_id = prescription_id_for(user["id"], today, day_name.lower())
+    existing_snapshot_doc = await db.training_prescription_snapshots.find_one(
+        {"user_id": user["id"], "prescription_id": today_prescription_id}, {"_id": 0}
     )
-    structured_prescription = build_structured_workout_prescription(
-        workout=served_prescription,
-        plan_goal=canonical.plan_goal,
-        periodization=canonical.periodization,
-        training_paces=training_paces,
-    )
+
+    if existing_snapshot_doc is not None:
+        # ── FAST PATH: snapshot already exists ──────────────────────────────
+        # C235 (final correction, P2 wording) — this is NOT strictly a "pure
+        # read": the canonical WeeklyPlan/goal/Garmin-history resolution
+        # earlier in this handler still runs unconditionally to obtain
+        # `planned_prescription`/`today` (needed to compute
+        # `today_prescription_id` itself). What IS guaranteed here is the
+        # snapshot fast-path BEFORE DailyAdaptation and Structured Workout
+        # recomputation: once the snapshot is found, resolve_today_final_
+        # prescription (Readiness -> DailyAdaptation) and
+        # build_structured_workout_prescription are never invoked again —
+        # every field describing the SERVED prescription comes straight from
+        # the frozen document.
+        readiness_decision, readiness_data_source, _unused_load, _unused_recent = (
+            resolve_live_readiness(
+                reference_date=today,
+                domain_activities_90=domain_activities_90,
+                garmin_daily_metrics_docs=garmin_daily_metrics_docs,
+                garmin_connected=garmin_connected,
+            )
+        )
+        winning_snapshot = _PrescriptionSnapshot(**existing_snapshot_doc)
+        served_prescription = _resolve_effective_session(
+            live_session=planned_prescription, frozen_snapshot=winning_snapshot
+        )
+        session_modified_from_planned = winning_snapshot.modified_from_planned
+        structured_prescription = winning_snapshot.structured
+        if structured_prescription is None:
+            # Legacy edge case: a PARENT-only snapshot created before #235
+            # for a day that is STILL today (structured is None) — rebuild
+            # once, live, best-effort; never persisted over the existing
+            # insert-only document (mirrors week_execution's identical
+            # "today_served" legacy handling — see §10 of the C235 audit).
+            training_paces = await load_canonical_training_paces(
+                db, user_id=user["id"], reference_date=today
+            )
+            structured_prescription = build_structured_workout_prescription(
+                workout=served_prescription,
+                plan_goal=canonical.plan_goal,
+                periodization=canonical.periodization,
+                training_paces=training_paces,
+            )
+        adaptation_action_value = winning_snapshot.adaptation_action
+        adaptation_reason_codes = winning_snapshot.adaptation_reason_codes
+    else:
+        # ── SLOW PATH: first serve of the day — build, adapt, persist ────────
+        # C231 — delegated to training_v2.today_prescription, the SAME
+        # shared helper /training/v2/week uses to compute today's FINAL
+        # prescription before freezing a snapshot. Guarantees identical
+        # output regardless of which endpoint is hit first for a given day.
+        # C234 — plan_goal/periodization/training_paces are deliberately NOT
+        # passed here: the structured prescription must be built from the
+        # ATOMICALLY-RESOLVED served_prescription below, never from this
+        # local adaptation_result.adapted_workout candidate, which can
+        # differ from the winning snapshot when another concurrent/earlier
+        # call already froze a different served candidate (ABSOLUTE RULE —
+        # never "adapted parent + steps built from an old parent").
+        today_final = resolve_today_final_prescription(
+            planned_prescription=planned_prescription,
+            reference_date=today,
+            domain_activities_90=domain_activities_90,
+            garmin_daily_metrics_docs=garmin_daily_metrics_docs,
+            garmin_connected=garmin_connected,
+        )
+        readiness_decision = today_final.readiness_decision
+        adaptation_result = today_final.adaptation_result
+        readiness_data_source = today_final.readiness_data_source
+
+        # C231 — item 2 BLOCKER FIX: go through the SAME atomic
+        # get-or-create snapshot service /training/v2/week uses, so both
+        # endpoints always converge on ONE canonical served prescription for
+        # today, regardless of which one is called first or concurrently.
+        from training_v2.served_prescription import get_or_create_served_prescription
+
+        # ── C234/#235 — StructuredWorkoutPrescriptionEngine. C234 (final
+        # corrective audit) — training_paces MUST come from the ONE
+        # canonical Training Paces authority (same loader as
+        # /training/v2/paces and /training/v2/week), never from a local
+        # recompute over domain_activities_90 (the Training Engine's own
+        # 90-day LOAD window, unrelated to Training Paces' own recency
+        # policy — see training_paces_authority.py docstring).
+        # #235 — the engine itself is wrapped in a lazy factory passed to
+        # get_or_create_served_prescription: it is invoked ONLY when THIS
+        # call actually creates the snapshot (see get_or_create_served_prescription's
+        # docstring for the C235-corrected, honest concurrency guarantee —
+        # NOT a global "at most once").
+        training_paces = await load_canonical_training_paces(
+            db, user_id=user["id"], reference_date=today
+        )
+
+        def _structured_candidate_factory():
+            # ABSOLUTE RULE: structure is always built from the FINAL
+            # candidate prescription actually about to be served, never a
+            # stale pre-adaptation parent — mirrors served_candidate below.
+            return build_structured_workout_prescription(
+                workout=adaptation_result.adapted_workout,
+                plan_goal=canonical.plan_goal,
+                periodization=canonical.periodization,
+                training_paces=training_paces,
+            )
+
+        served_result = await get_or_create_served_prescription(
+            db,
+            user_id=user["id"],
+            prescription_id=today_prescription_id,
+            planned_date=today,
+            served_candidate=adaptation_result.adapted_workout,
+            planned_prescription=planned_prescription,
+            structured_factory=_structured_candidate_factory,
+            served_at=datetime.now(timezone.utc),
+            adaptation_action=adaptation_result.action.value,
+            adaptation_reason_codes=tuple(adaptation_result.reason_codes),
+        )
+        served_prescription = served_result.prescription
+        # #235 — the frozen structured view for TODAY, from the SAME
+        # winning snapshot document as served_prescription above. Legacy
+        # edge case: a PARENT-only snapshot created before #235 for a day
+        # that is STILL today (structured is None) — rebuild once, live,
+        # best-effort; never persisted over the existing insert-only
+        # document.
+        structured_prescription = served_result.structured
+        if structured_prescription is None:
+            structured_prescription = build_structured_workout_prescription(
+                workout=served_prescription,
+                plan_goal=canonical.plan_goal,
+                periodization=canonical.periodization,
+                training_paces=training_paces,
+            )
+        session_modified_from_planned = served_result.modified_from_planned
+        # C235 (corrective audit) — read the FROZEN adaptation metadata from
+        # the WINNING snapshot (served_result), never from the local
+        # adaptation_result directly: under genuine concurrency, another
+        # caller may have won the race and frozen a DIFFERENT adaptation
+        # decision than this caller's own local computation.
+        adaptation_action_value = served_result.adaptation_action
+        adaptation_reason_codes = served_result.adaptation_reason_codes
 
     # ── 8. Map prescription to legacy runtime dict format ─────────────────
     planned_session_runtime = prescription_to_runtime_session(planned_prescription)
@@ -3508,21 +3605,15 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     # Backward-compat alias — kept byte-for-byte identical to
     # served_prescription_runtime (see "served_prescription" key below).
     adapted_runtime = served_prescription_runtime
-    # C231 (round 2, item 1 BLOCKER FIX) — adaptation_applied is now PURELY
-    # informative: it reflects TODAY's live readiness recompute action and
-    # MUST NEVER be used (here or by any consumer) to choose which session is
-    # displayed. The canonical served_prescription (frozen once per day) is
-    # ALWAYS the one displayed, regardless of what a later recompute would
-    # decide. session_modified_from_planned (C231 micro-correction: read
-    # directly from the winning snapshot's own immutable
-    # `modified_from_planned` field, computed ONCE at snapshot-creation time
-    # — NEVER recomputed here against the current live planned_prescription,
-    # which can keep changing after the snapshot was frozen and would make
-    # the boolean flip retroactively for a served session that never
-    # actually changed).
-    adaptation_applied = adaptation_result.action != DailyAdaptationAction.KEEP
-    session_modified_from_planned = served_result.modified_from_planned
-    adaptation_reason = ", ".join(adaptation_result.reason_codes)
+    # C235 (corrective audit) — adaptation_action/adaptation_reason are now
+    # FROZEN metadata read from the winning snapshot (see above), never a
+    # freshly recomputed live DailyAdaptation result once a snapshot exists.
+    # adaptation_applied derives from the frozen action alone.
+    adaptation_applied = adaptation_action_value not in (
+        None,
+        DailyAdaptationAction.KEEP.value,
+    )
+    adaptation_reason = ", ".join(adaptation_reason_codes)
 
     # ── 9. Legacy compat: recommendation / recommendation_color derived from V2 ─
     recommendation, recommendation_color = BAND_TO_RECOMMENDATION[readiness_decision.band]
@@ -3531,6 +3622,10 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
         "status": "success",
         "date": today_iso,
         "day": day_name,
+        # C235 (corrective audit) — canonical snapshot identity, the SAME
+        # format /training/v2/week exposes for this same day's session
+        # (week_execution.prescription_id_for). Never a new/artificial ID.
+        "prescription_id": today_prescription_id,
         # planned_session: runtime dict of today's session from the reconciled canonical plan.
         # PR228: this is now the output of prescription_to_runtime_session(planned_prescription)
         # rather than a raw dict from generate_dynamic_training_plan.
@@ -3554,13 +3649,14 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
         # (unknown, e.g. pre-migration snapshot) is treated the same as False
         # here — falsy in Python — so no adaptive_session is fabricated.
         "adaptive_session": adapted_runtime if session_modified_from_planned else None,
-        # adaptation_applied: INFORMATIVE ONLY (C231 round 2) — describes what
-        # today's live readiness recompute would decide right now. NEVER an
-        # authority for choosing which session to display; see
-        # served_prescription for that.
+        # adaptation_applied: C235 (corrective audit) — derived from the
+        # FROZEN adaptation_action metadata (see above), describing the
+        # decision that actually produced the served prescription — NEVER a
+        # freshly recomputed live DailyAdaptation result once a snapshot
+        # exists for today.
         "adaptation_applied": adaptation_applied,
         "adaptation_reason": adaptation_reason,
-        "adaptation_action": adaptation_result.action.value,
+        "adaptation_action": adaptation_action_value,
         # session_modified_from_planned: C231 (micro-correction) — the ONLY
         # ground-truth signal for whether the "Adapté" banner should be
         # shown. This is the WINNING SNAPSHOT's own immutable
@@ -3572,7 +3668,12 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
         # True/False/None (unknown — old snapshot predating this field; the
         # frontend must show no banner for None, exactly like False).
         "session_modified_from_planned": session_modified_from_planned,
-        "reason_codes": list(adaptation_result.reason_codes),
+        # reason_codes: C235 (corrective audit) — the FROZEN parent reason
+        # codes from the served (snapshot) prescription itself, identical to
+        # what /training/v2/week exposes for the same day — NEVER the live
+        # DailyAdaptation reason codes (see adaptation_reason above for the
+        # separate, non-authoritative diagnostic field).
+        "reason_codes": list(served_prescription.reason_codes),
         # ReadinessDecision V2 block
         "readiness": {
             "band": readiness_decision.band.value,
@@ -4223,6 +4324,20 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
         (i for i, s in enumerate(sessions_for_execution) if s.day.lower() == today_day_name),
         None,
     )
+    # C234 (final corrective audit) — training_paces MUST come from the ONE
+    # canonical Training Paces authority (same loader as /training/v2/paces
+    # and /training/today), never from a local recompute over
+    # domain_activities_90 (the Training Engine's own 90-day LOAD window,
+    # unrelated to Training Paces' own recency policy — see
+    # training_paces_authority.py docstring). Loaded here (before the
+    # today-snapshot block below) so #235's structured_factory closure can
+    # use it when THIS call is the one creating today's snapshot.
+    from training_v2.training_paces_authority import load_canonical_training_paces
+    from training_v2.structured_workout import build_structured_workout_prescription
+
+    week_training_paces = await load_canonical_training_paces(
+        db, user_id=user_id, reference_date=reference_date
+    )
     if today_index is not None:
         today_prescription_id = prescription_id_for(
             user_id, reference_date, today_day_name
@@ -4253,6 +4368,19 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
                 garmin_daily_metrics_docs=garmin_daily_metrics_docs,
                 garmin_connected=garmin_connected,
             )
+
+            def _structured_candidate_factory():
+                # C235 (corrective audit) — invoked only if THIS call's own
+                # pre-check found no existing document (see
+                # get_or_create_served_prescription's docstring for the
+                # honest concurrency guarantee — NOT a global "at most once").
+                return build_structured_workout_prescription(
+                    workout=today_final.adaptation_result.adapted_workout,
+                    plan_goal=canonical.plan_goal,
+                    periodization=canonical.periodization,
+                    training_paces=week_training_paces,
+                )
+
             # C231 — item 2 BLOCKER FIX: go through the SAME atomic
             # get-or-create used by /training/today, so a concurrent call to
             # either endpoint always converges on one canonical Mongo
@@ -4265,6 +4393,10 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
                 planned_date=reference_date,
                 served_candidate=today_final.adaptation_result.adapted_workout,
                 planned_prescription=sessions_for_execution[today_index],
+                structured_factory=_structured_candidate_factory,
+                served_at=datetime.now(timezone.utc),
+                adaptation_action=today_final.adaptation_result.action.value,
+                adaptation_reason_codes=tuple(today_final.adaptation_result.reason_codes),
             )
             served = served_result.prescription
             sessions_for_execution[today_index] = served
@@ -4278,19 +4410,18 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
                 # this in-memory cache entry stays consistent with what
                 # /training/today would read for the exact same snapshot.
                 modified_from_planned=served_result.modified_from_planned,
+                # #235 — likewise propagate the WINNING snapshot's own
+                # frozen `structured` — never recomputed here — so this
+                # in-memory cache entry (consumed by build_week_execution
+                # below) is byte-for-byte what /training/today would read.
+                structured=served_result.structured,
+                # C235 (corrective audit) — likewise propagate the WINNING
+                # snapshot's own frozen adaptation metadata — never
+                # recomputed here.
+                adaptation_action=served_result.adaptation_action,
+                adaptation_reason_codes=served_result.adaptation_reason_codes,
             )
 
-    # C234 (final corrective audit) — training_paces MUST come from the ONE
-    # canonical Training Paces authority (same loader as /training/v2/paces
-    # and /training/today), never from a local recompute over
-    # domain_activities_90 (the Training Engine's own 90-day LOAD window,
-    # unrelated to Training Paces' own recency policy — see
-    # training_paces_authority.py docstring).
-    from training_v2.training_paces_authority import load_canonical_training_paces
-
-    week_training_paces = await load_canonical_training_paces(
-        db, user_id=user_id, reference_date=reference_date
-    )
     try:
         execution = build_week_execution(
             user_id=user_id,
@@ -4358,6 +4489,8 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
             return WeekV2SessionResponse(
                 day=se.session.day,
                 planned_date=planned_date_iso,
+                prescription_id=getattr(se, "prescription_id", None),
+                session_modified_from_planned=None,
                 workout_type=None,
                 intensity_class=None,
                 distance_km=None,
@@ -4374,6 +4507,12 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
         return WeekV2SessionResponse(
             day=se.session.day,
             planned_date=planned_date_iso,
+            prescription_id=getattr(se, "prescription_id", None),
+            # C235 (final correction) — the WINNING snapshot's own frozen
+            # `modified_from_planned` fact (see week_execution.
+            # SessionExecution.modified_from_planned docstring); never
+            # recomputed here against the current live plan.
+            session_modified_from_planned=getattr(se, "modified_from_planned", None),
             workout_type=se.session.workout_type,
             intensity_class=se.session.intensity_class,
             distance_km=se.session.distance_km,
