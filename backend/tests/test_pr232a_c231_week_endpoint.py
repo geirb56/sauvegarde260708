@@ -561,14 +561,15 @@ async def test_c234_training_paces_single_authority_high_historical_over_90_days
 
 @pytest.mark.asyncio
 async def test_c234_historical_frozen_session_structured_is_none():
-    """C234 Blocker 2 — a strictly historical day backed by a frozen
-    PrescriptionSnapshot PARENT must never have `structured` recomputed.
+    """#235 — a strictly historical day backed by a V2 structured snapshot
+    must return the FROZEN structure, never None and never recomputed.
 
     First call freezes Monday's snapshot (Monday == reference_date, i.e.
-    "today"). A later call with a reference_date further into the SAME
-    ISO week makes Monday strictly historical (planned_date < reference_date);
-    its `structured` must then be None with structured_status =
-    "historical_unavailable", even though the frozen parent snapshot exists.
+    "today"), including its structured payload (#235). A later call with a
+    reference_date further into the SAME ISO week makes Monday strictly
+    historical (planned_date < reference_date); its `structured` must stay
+    EXACTLY the same frozen payload, with structured_status ==
+    "historical_frozen".
     """
     fake_db = _FakeDB()
     _seed_cycle(fake_db)
@@ -591,11 +592,12 @@ async def test_c234_historical_frozen_session_structured_is_none():
     monday_second = next(
         s for s in second["body"]["week"]["sessions"] if s["day"].lower() == "monday"
     )
-    assert monday_second["structured"] is None, (
-        "A day backed only by a frozen parent snapshot (no structured "
-        "snapshot yet — #235) must never have `structured` recomputed."
+    assert monday_second["structured"] == monday_first["structured"], (
+        "#235 — a historical day backed by a V2 structured snapshot must "
+        "return the EXACT frozen structure, byte-for-byte identical to "
+        "what was served as 'today'."
     )
-    assert monday_second.get("structured_status") == "historical_unavailable"
+    assert monday_second.get("structured_status") == "historical_frozen"
     # The frozen PARENT itself must still be honest/unchanged.
     assert monday_second["distance_km"] == monday_first["distance_km"]
     assert monday_second["workout_type"] == monday_first["workout_type"]
@@ -603,9 +605,9 @@ async def test_c234_historical_frozen_session_structured_is_none():
 
 @pytest.mark.asyncio
 async def test_c234_historical_structured_stays_none_after_goal_change():
-    """C234 §11 — historical immutability. Changing goal/phase between the
-    first (freezing) call and a later historical call must NOT resurrect a
-    recomputed `structured` for the now-historical day."""
+    """#235 — historical immutability. Changing goal/phase between the
+    first (freezing) call and a later historical call must NOT change the
+    already-frozen `structured` for the now-historical day."""
     fake_db = _FakeDB()
     _seed_cycle(fake_db, goal="SEMI")
     _seed_garmin_activities(fake_db, n=8)
@@ -632,8 +634,11 @@ async def test_c234_historical_structured_stays_none_after_goal_change():
     monday_second = next(
         s for s in second["body"]["week"]["sessions"] if s["day"].lower() == "monday"
     )
-    assert monday_second["structured"] is None
-    assert monday_second.get("structured_status") == "historical_unavailable"
+    assert monday_second["structured"] == monday_first["structured"], (
+        "A goal change after freezing must never alter the historical "
+        "structured snapshot."
+    )
+    assert monday_second.get("structured_status") == "historical_frozen"
     assert monday_second["workout_type"] == monday_first["workout_type"], (
         "The frozen parent must remain the exact same regardless of a later "
         "goal change."
@@ -643,9 +648,9 @@ async def test_c234_historical_structured_stays_none_after_goal_change():
 
 @pytest.mark.asyncio
 async def test_c234_historical_structured_stays_none_after_training_paces_change():
-    """C234 §12 — a strong Training Paces change (new, much faster activities)
-    after a historical day was frozen must NOT resurrect a recomputed
-    `structured` for that historical day."""
+    """#235 — a strong Training Paces change (new, much faster activities)
+    after a historical day was frozen must NOT change the already-frozen
+    `structured` (including its numeric pace values) for that day."""
     fake_db = _FakeDB()
     _seed_cycle(fake_db)
     _seed_garmin_activities(fake_db, n=8, km_per=8.0)
@@ -668,10 +673,11 @@ async def test_c234_historical_structured_stays_none_after_training_paces_change
     monday_second = next(
         s for s in second["body"]["week"]["sessions"] if s["day"].lower() == "monday"
     )
-    assert monday_second["structured"] is None, (
-        "A Training Paces change must never resurrect a historical structure."
+    assert monday_second["structured"] == monday_first["structured"], (
+        "A Training Paces change must never alter a historical structure, "
+        "including its numeric pace fields."
     )
-    assert monday_second.get("structured_status") == "historical_unavailable"
+    assert monday_second.get("structured_status") == "historical_frozen"
     assert monday_second["workout_type"] == monday_first["workout_type"]
     assert monday_second["distance_km"] == monday_first["distance_km"]
 

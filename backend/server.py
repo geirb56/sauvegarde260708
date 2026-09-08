@@ -3466,6 +3466,37 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     from training_v2.served_prescription import get_or_create_served_prescription
     from training_v2.week_execution import prescription_id_for
 
+    # ── 7bis. C234/#235 — StructuredWorkoutPrescriptionEngine. C234 (final
+    # corrective audit) — training_paces MUST come from the ONE canonical
+    # Training Paces authority (same loader as /training/v2/paces and
+    # /training/v2/week), never from a local recompute over
+    # domain_activities_90 (the Training Engine's own 90-day LOAD window,
+    # unrelated to Training Paces' own recency policy — see
+    # training_paces_authority.py docstring).
+    # #235 — the engine itself is wrapped in a lazy factory passed to
+    # get_or_create_served_prescription: it is invoked AT MOST ONCE, only
+    # when THIS call actually creates the snapshot (first serve of the
+    # day). A second GET Today the same day never re-runs the engine and
+    # never recomputes structure from (possibly changed) Training Paces —
+    # the frozen snapshot's own `structured` is read back instead.
+    from training_v2.structured_workout import build_structured_workout_prescription
+    from training_v2.training_paces_authority import load_canonical_training_paces
+
+    training_paces = await load_canonical_training_paces(
+        db, user_id=user["id"], reference_date=today
+    )
+
+    def _structured_candidate_factory():
+        # ABSOLUTE RULE: structure is always built from the FINAL
+        # candidate prescription actually about to be served, never a
+        # stale pre-adaptation parent — mirrors served_candidate below.
+        return build_structured_workout_prescription(
+            workout=adaptation_result.adapted_workout,
+            plan_goal=canonical.plan_goal,
+            periodization=canonical.periodization,
+            training_paces=training_paces,
+        )
+
     served_result = await get_or_create_served_prescription(
         db,
         user_id=user["id"],
@@ -3473,31 +3504,23 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
         planned_date=today,
         served_candidate=adaptation_result.adapted_workout,
         planned_prescription=planned_prescription,
+        structured_factory=_structured_candidate_factory,
+        served_at=datetime.now(timezone.utc),
     )
     served_prescription = served_result.prescription
-
-    # ── 7bis. C234 — StructuredWorkoutPrescriptionEngine, wired in AFTER the
-    # atomic served-prescription resolution above (ABSOLUTE RULE: structure
-    # is always built from the FINAL prescription actually served, never a
-    # locally-adapted candidate that a concurrent call may have superseded).
-    # C234 (final corrective audit) — training_paces MUST come from the ONE
-    # canonical Training Paces authority (same loader as /training/v2/paces
-    # and /training/v2/week), never from a local recompute over
-    # domain_activities_90 (the Training Engine's own 90-day LOAD window,
-    # unrelated to Training Paces' own recency policy — see
-    # training_paces_authority.py docstring).
-    from training_v2.structured_workout import build_structured_workout_prescription
-    from training_v2.training_paces_authority import load_canonical_training_paces
-
-    training_paces = await load_canonical_training_paces(
-        db, user_id=user["id"], reference_date=today
-    )
-    structured_prescription = build_structured_workout_prescription(
-        workout=served_prescription,
-        plan_goal=canonical.plan_goal,
-        periodization=canonical.periodization,
-        training_paces=training_paces,
-    )
+    # #235 — the frozen structured view for TODAY, from the SAME winning
+    # snapshot document as served_prescription above. Legacy edge case: a
+    # PARENT-only snapshot created before #235 for a day that is STILL
+    # today (structured is None) — rebuild once, live, best-effort; never
+    # persisted over the existing insert-only document.
+    structured_prescription = served_result.structured
+    if structured_prescription is None:
+        structured_prescription = build_structured_workout_prescription(
+            workout=served_prescription,
+            plan_goal=canonical.plan_goal,
+            periodization=canonical.periodization,
+            training_paces=training_paces,
+        )
 
     # ── 8. Map prescription to legacy runtime dict format ─────────────────
     planned_session_runtime = prescription_to_runtime_session(planned_prescription)
@@ -4223,6 +4246,20 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
         (i for i, s in enumerate(sessions_for_execution) if s.day.lower() == today_day_name),
         None,
     )
+    # C234 (final corrective audit) — training_paces MUST come from the ONE
+    # canonical Training Paces authority (same loader as /training/v2/paces
+    # and /training/today), never from a local recompute over
+    # domain_activities_90 (the Training Engine's own 90-day LOAD window,
+    # unrelated to Training Paces' own recency policy — see
+    # training_paces_authority.py docstring). Loaded here (before the
+    # today-snapshot block below) so #235's structured_factory closure can
+    # use it when THIS call is the one creating today's snapshot.
+    from training_v2.training_paces_authority import load_canonical_training_paces
+    from training_v2.structured_workout import build_structured_workout_prescription
+
+    week_training_paces = await load_canonical_training_paces(
+        db, user_id=user_id, reference_date=reference_date
+    )
     if today_index is not None:
         today_prescription_id = prescription_id_for(
             user_id, reference_date, today_day_name
@@ -4253,6 +4290,17 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
                 garmin_daily_metrics_docs=garmin_daily_metrics_docs,
                 garmin_connected=garmin_connected,
             )
+
+            def _structured_candidate_factory():
+                # #235 — invoked AT MOST ONCE, only if THIS call actually
+                # creates today's snapshot (see get_or_create_served_prescription).
+                return build_structured_workout_prescription(
+                    workout=today_final.adaptation_result.adapted_workout,
+                    plan_goal=canonical.plan_goal,
+                    periodization=canonical.periodization,
+                    training_paces=week_training_paces,
+                )
+
             # C231 — item 2 BLOCKER FIX: go through the SAME atomic
             # get-or-create used by /training/today, so a concurrent call to
             # either endpoint always converges on one canonical Mongo
@@ -4265,6 +4313,8 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
                 planned_date=reference_date,
                 served_candidate=today_final.adaptation_result.adapted_workout,
                 planned_prescription=sessions_for_execution[today_index],
+                structured_factory=_structured_candidate_factory,
+                served_at=datetime.now(timezone.utc),
             )
             served = served_result.prescription
             sessions_for_execution[today_index] = served
@@ -4278,19 +4328,13 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
                 # this in-memory cache entry stays consistent with what
                 # /training/today would read for the exact same snapshot.
                 modified_from_planned=served_result.modified_from_planned,
+                # #235 — likewise propagate the WINNING snapshot's own
+                # frozen `structured` — never recomputed here — so this
+                # in-memory cache entry (consumed by build_week_execution
+                # below) is byte-for-byte what /training/today would read.
+                structured=served_result.structured,
             )
 
-    # C234 (final corrective audit) — training_paces MUST come from the ONE
-    # canonical Training Paces authority (same loader as /training/v2/paces
-    # and /training/today), never from a local recompute over
-    # domain_activities_90 (the Training Engine's own 90-day LOAD window,
-    # unrelated to Training Paces' own recency policy — see
-    # training_paces_authority.py docstring).
-    from training_v2.training_paces_authority import load_canonical_training_paces
-
-    week_training_paces = await load_canonical_training_paces(
-        db, user_id=user_id, reference_date=reference_date
-    )
     try:
         execution = build_week_execution(
             user_id=user_id,

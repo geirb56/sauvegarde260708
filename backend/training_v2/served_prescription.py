@@ -78,7 +78,7 @@ value recomputed from the current caller's own candidates.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict
@@ -88,6 +88,7 @@ from .prescription_snapshot import (
     resolve_effective_session,
     snapshot_from_prescription,
 )
+from .structured_workout import StructuredWorkoutPrescription
 from .workout_generator import WorkoutPrescription
 
 
@@ -100,12 +101,18 @@ class ServedPrescriptionResult(BaseModel):
     from the snapshot but the boolean recomputed live), or Today/Week could
     display a prescription and an adaptation-banner state that don't
     logically belong together.
+
+    #235 — ``structured`` (the frozen #234 STRUCTURED view, from the SAME
+    winning snapshot document) is bundled here too, for the exact same
+    reason: Today/Week must never combine a frozen parent with a
+    separately, freshly recomputed structure.
     """
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
     prescription: WorkoutPrescription
     modified_from_planned: Optional[bool] = None
+    structured: Optional[StructuredWorkoutPrescription] = None
 
 
 def _prescription_core_fields(p: WorkoutPrescription) -> tuple:
@@ -127,6 +134,8 @@ async def get_or_create_served_prescription(
     planned_date: date,
     served_candidate: WorkoutPrescription,
     planned_prescription: Optional[WorkoutPrescription] = None,
+    structured_factory: Optional[Any] = None,
+    served_at: Optional[datetime] = None,
 ) -> ServedPrescriptionResult:
     """Atomically get-or-create the canonical SERVED prescription for a day.
 
@@ -153,45 +162,75 @@ async def get_or_create_served_prescription(
         omitted (``None``) by callers that cannot supply it; the resulting
         snapshot's ``modified_from_planned`` is then left ``None`` (unknown)
         rather than fabricated.
+    structured_factory
+        #235 — a zero-argument callable returning the #234
+        ``StructuredWorkoutPrescription`` built from ``served_candidate``
+        (or ``None`` if the caller does not want structuring). Called AT
+        MOST ONCE, and ONLY when this call is the one actually creating the
+        snapshot (no existing document found on the cheap pre-check read
+        below) — guaranteeing "second GET Today never re-runs the
+        Structured Workout engine" (idempotence, #235 §11/§6). Ignored
+        entirely when a snapshot already exists.
+    served_at
+        #235 — wall-clock instant supplied by the caller, frozen into the
+        snapshot ONLY at creation time. Ignored if a snapshot already
+        exists.
 
     Returns
     -------
     ServedPrescriptionResult
         The canonical, effective prescription for this day, together with
-        the winning snapshot's own ``modified_from_planned`` — both
-        guaranteed to come from the SAME underlying Mongo document,
-        identical for every caller regardless of which one actually created
-        it.
+        the winning snapshot's own ``modified_from_planned`` and
+        ``structured`` — all guaranteed to come from the SAME underlying
+        Mongo document, identical for every caller regardless of which one
+        actually created it.
     """
-    modified_from_planned: Optional[bool] = None
-    if planned_prescription is not None:
-        modified_from_planned = _prescription_core_fields(
-            served_candidate
-        ) != _prescription_core_fields(planned_prescription)
-
-    candidate_snapshot = snapshot_from_prescription(
-        user_id=user_id,
-        prescription_id=prescription_id,
-        planned_date=planned_date,
-        session=served_candidate,
-        modified_from_planned=modified_from_planned,
-    )
-    await db.training_prescription_snapshots.update_one(
-        {"user_id": user_id, "prescription_id": prescription_id},
-        {"$setOnInsert": candidate_snapshot.model_dump(mode="json")},
-        upsert=True,
-    )
-    winning_doc = await db.training_prescription_snapshots.find_one(
+    # #235 — cheap pre-check: if a snapshot already exists, NEVER invoke
+    # structured_factory (no second Structured Workout engine call) and
+    # NEVER recompute modified_from_planned — just read the winning
+    # document as-is. This is what makes the second (and every subsequent)
+    # GET Today call for the same day a pure read, with zero adaptation
+    # and zero structuring recomputation.
+    existing_doc = await db.training_prescription_snapshots.find_one(
         {"user_id": user_id, "prescription_id": prescription_id}, {"_id": 0}
     )
-    if not winning_doc:
-        # Should never happen right after an upsert; never fabricate a
-        # snapshot here — surface the anomaly instead of silently guessing.
-        raise RuntimeError(
-            "get_or_create_served_prescription: no snapshot found for "
-            f"prescription_id={prescription_id!r} immediately after upsert."
+    if existing_doc:
+        winning_snapshot = PrescriptionSnapshot(**existing_doc)
+    else:
+        modified_from_planned: Optional[bool] = None
+        if planned_prescription is not None:
+            modified_from_planned = _prescription_core_fields(
+                served_candidate
+            ) != _prescription_core_fields(planned_prescription)
+
+        structured_candidate = structured_factory() if structured_factory is not None else None
+
+        candidate_snapshot = snapshot_from_prescription(
+            user_id=user_id,
+            prescription_id=prescription_id,
+            planned_date=planned_date,
+            session=served_candidate,
+            modified_from_planned=modified_from_planned,
+            structured=structured_candidate,
+            served_at=served_at,
         )
-    winning_snapshot = PrescriptionSnapshot(**winning_doc)
+        await db.training_prescription_snapshots.update_one(
+            {"user_id": user_id, "prescription_id": prescription_id},
+            {"$setOnInsert": candidate_snapshot.model_dump(mode="json")},
+            upsert=True,
+        )
+        winning_doc = await db.training_prescription_snapshots.find_one(
+            {"user_id": user_id, "prescription_id": prescription_id}, {"_id": 0}
+        )
+        if not winning_doc:
+            # Should never happen right after an upsert; never fabricate a
+            # snapshot here — surface the anomaly instead of silently guessing.
+            raise RuntimeError(
+                "get_or_create_served_prescription: no snapshot found for "
+                f"prescription_id={prescription_id!r} immediately after upsert."
+            )
+        winning_snapshot = PrescriptionSnapshot(**winning_doc)
+
     effective = resolve_effective_session(
         live_session=served_candidate, frozen_snapshot=winning_snapshot
     )
@@ -201,6 +240,9 @@ async def get_or_create_served_prescription(
         # modified_from_planned=None (pydantic default) — NEVER reconstructed
         # from the live plan; see PrescriptionSnapshot.modified_from_planned.
         modified_from_planned=winning_snapshot.modified_from_planned,
+        # #235 — likewise, NEVER reconstructed: None for legacy snapshots
+        # that predate structuring.
+        structured=winning_snapshot.structured,
     )
 
 

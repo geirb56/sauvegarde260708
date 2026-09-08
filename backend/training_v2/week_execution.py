@@ -61,7 +61,12 @@ from .periodization import PeriodizationSnapshot
 from .plan_goal import PlanGoal
 from .prescription_snapshot import (
     PrescriptionSnapshot,
+    STRUCTURED_STATUS_FUTURE_LIVE,
+    STRUCTURED_STATUS_HISTORICAL_FROZEN,
+    STRUCTURED_STATUS_HISTORICAL_UNAVAILABLE,
+    STRUCTURED_STATUS_TODAY_SERVED,
     resolve_effective_session,
+    resolve_structured_status,
     snapshot_from_prescription,
 )
 from .structured_workout import StructuredWorkoutPrescription, build_structured_workout_prescription
@@ -118,26 +123,31 @@ class SessionExecution:
     ``None`` when ``plan_goal``/``periodization`` were not supplied to
     ``build_week_execution``, when this day's prescription itself is
     untrustworthy (``execution_status ==
-    EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE``), OR (C234 final corrective
-    audit) when this is a STRICT HISTORICAL day (``planned_date <
-    reference_date``) — see ``structured_status`` below. Never structuring a
-    fact that isn't real."""
+    EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE``), OR when this is a STRICT
+    HISTORICAL day (``planned_date < reference_date``) backed ONLY by a
+    legacy (pre-#235) parent-only snapshot — see ``structured_status``
+    below. Never structuring a fact that isn't real."""
     structured_status: Optional[str] = None
-    """C234 (final corrective audit) — machine-readable status explaining
-    ``structured``'s value, set only when structuring was requested (i.e.
-    ``plan_goal``/``periodization`` were supplied to ``build_week_execution``):
+    """#235 — machine-readable status explaining ``structured``'s value,
+    set only when structuring was requested (i.e. ``plan_goal``/
+    ``periodization`` were supplied to ``build_week_execution``):
 
     - ``"today_served"``  — ``planned_date == reference_date``: structured
-      from the atomically-served prescription for today. Trustworthy.
+      from the atomically-served, frozen V2 snapshot for today. Trustworthy.
     - ``"future_live"``   — ``planned_date > reference_date``: structured
       from a still-evolving, not-yet-served live prescription. Prospective —
       may legitimately change before it is actually served.
+    - ``"historical_frozen"`` (#235) — ``planned_date < reference_date``
+      with an existing V2 ``PrescriptionSnapshot`` whose ``structured``
+      field was frozen at serve time. Read AS-IS from the snapshot, NEVER
+      recomputed from CURRENT goal/phase/paces/engine rules — historical
+      truth is the snapshot.
     - ``"historical_unavailable"`` — ``planned_date < reference_date`` with
-      an existing frozen ``PrescriptionSnapshot`` parent. The PARENT
-      (workout_type/distance/duration) is frozen and trustworthy, but no
-      STRUCTURED snapshot was ever frozen for it (that is #235's job).
-      Recomputing structure now from CURRENT goal/phase/paces would silently
-      rewrite history — forbidden. ``structured`` is always ``None`` here.
+      either no snapshot at all, or a legacy (pre-#235) snapshot whose
+      PARENT (workout_type/distance/duration) is frozen and trustworthy but
+      never captured a STRUCTURED payload. Recomputing structure now from
+      CURRENT rules would silently rewrite history — forbidden, and NEVER
+      backfilled. ``structured`` is always ``None`` here.
     - ``"prescription_unavailable"`` — mirrors ``execution_status``: no
       trustworthy prescription at all for this day.
 
@@ -281,6 +291,19 @@ def build_week_execution(
             continue
 
         if frozen is None and planned_date == reference_date:
+            # #235 — build+freeze STRUCTURED in the SAME snapshot as the
+            # PARENT, at this exact creation instant, so this fallback path
+            # (a bare Week call that is the FIRST ever caller for today,
+            # with no prior Today/Week call) never leaves structure to be
+            # recomputed later against possibly-different rules.
+            fallback_structured: Optional[StructuredWorkoutPrescription] = None
+            if plan_goal is not None and periodization is not None:
+                fallback_structured = build_structured_workout_prescription(
+                    workout=session,
+                    plan_goal=plan_goal,
+                    periodization=periodization,
+                    training_paces=training_paces,
+                )
             snapshots_to_persist.append(
                 snapshot_from_prescription(
                     user_id=user_id,
@@ -295,6 +318,7 @@ def build_week_execution(
                     # frozen_snapshots before this function is even called).
                     # served == planned by construction ⇒ never modified.
                     modified_from_planned=False,
+                    structured=fallback_structured,
                 )
             )
 
@@ -376,32 +400,47 @@ def build_week_execution(
         structured: Optional[StructuredWorkoutPrescription] = None
         structured_status: Optional[str] = None
         if plan_goal is not None and periodization is not None:
-            # C234 (final corrective audit) — BLOCKER 2 FIX: a STRICT
-            # historical day (planned_date < reference_date) with a frozen
-            # parent snapshot must NEVER have its structure recomputed from
-            # CURRENT goal/phase/paces — that would silently rewrite history
-            # (a session served and structured months ago could start
-            # reporting a different quality kind/zone/reps today just
-            # because the athlete's goal or fitness changed since). Only
-            # #235 (a real frozen STRUCTURED snapshot) may serve historical
-            # structure. Today (planned_date == reference_date) and future
-            # (planned_date > reference_date) sessions are live/prospective
-            # by nature and MAY be structured now.
-            if planned_date < reference_date:
-                structured_status = "historical_unavailable"
-            else:
-                # Structure the EFFECTIVE (final) session only, never the
-                # raw `session` above (see SessionExecution.structured
-                # docstring).
+            frozen = frozen_snapshots.get(prescription_id)
+            structured_status = resolve_structured_status(
+                planned_date=planned_date,
+                reference_date=reference_date,
+                frozen_snapshot=frozen,
+            )
+            if structured_status == STRUCTURED_STATUS_FUTURE_LIVE:
+                # Strictly future — never frozen; structure the EFFECTIVE
+                # (live) session, may still legitimately evolve before it is
+                # actually served.
                 structured = build_structured_workout_prescription(
                     workout=effective,
                     plan_goal=plan_goal,
                     periodization=periodization,
                     training_paces=training_paces,
                 )
-                structured_status = (
-                    "today_served" if planned_date == reference_date else "future_live"
-                )
+            elif structured_status == STRUCTURED_STATUS_HISTORICAL_FROZEN:
+                # #235 — a real V2 structured snapshot exists for this
+                # strictly-past day: read it AS-IS, never recomputed from
+                # today's goal/phase/paces/engine rules (ABSOLUTE RULE).
+                structured = frozen.structured if frozen is not None else None
+            elif structured_status == STRUCTURED_STATUS_TODAY_SERVED:
+                # Today: the atomically-served snapshot (created earlier by
+                # server.py's get_or_create_served_prescription, or by the
+                # fallback branch above for a bare Week-only call) already
+                # carries the frozen structure — read it, never recompute.
+                # Legacy edge case: an existing PARENT-only snapshot for
+                # TODAY predating #235 (structured is None) — rebuild once,
+                # live, best-effort; never persisted over the existing
+                # insert-only document.
+                if frozen is not None and frozen.structured is not None:
+                    structured = frozen.structured
+                else:
+                    structured = build_structured_workout_prescription(
+                        workout=effective,
+                        plan_goal=plan_goal,
+                        periodization=periodization,
+                        training_paces=training_paces,
+                    )
+            # else STRUCTURED_STATUS_HISTORICAL_UNAVAILABLE — structured
+            # stays None: no snapshot at all, or a legacy pre-#235 one.
         session_executions.append(
             SessionExecution(
                 session=effective,
