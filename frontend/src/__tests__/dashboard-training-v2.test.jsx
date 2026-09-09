@@ -86,6 +86,13 @@ const WEEK_V2_DISTANCE = {
     target_basis: "distance",
     target_km: 50,
     target_duration_minutes: null,
+    session_count: 5,
+  },
+  week: {
+    sessions: [
+      { actual: { activity_id: "a1", distance_km: 10 } },
+    ],
+    unmatched_actuals: [],
   },
 };
 
@@ -94,6 +101,14 @@ const WEEK_V2_DURATION = {
     target_basis: "duration",
     target_km: null,
     target_duration_minutes: 180,
+    session_count: 4,
+  },
+  week: {
+    sessions: [
+      { actual: { activity_id: "d1", duration_minutes: 45 } },
+      { actual: { activity_id: "d2", duration_minutes: 90 } },
+    ],
+    unmatched_actuals: [],
   },
 };
 
@@ -158,6 +173,7 @@ async function waitForRender() {
 describe("PR #174 — Dashboard Training V2 Migration", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, "en");
     // Re-initialize mock implementations after clearAllMocks
     mockUseUnitSystem.mockReturnValue({ unitSystem: "metric" });
     mockUseSubscription.mockReturnValue({ isFree: true, loading: false });
@@ -393,6 +409,200 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     const style = badge.getAttribute("style") || "";
     expect(style).toContain("rgb(107, 114, 128)");
     expect(style).not.toContain("rgb(239, 68, 68)");
+    unmount();
+  });
+
+  it("10d. high readiness + rest day is coherent: freshness state shown, rest prescription preserved, no legacy directive text", async () => {
+    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, "fr");
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(
+      buildDefaultMocks({
+        cardio: {
+          mock: false,
+          source: "garmin",
+          recommendation: "SÉANCE INTENSE",
+          recommendation_color: "green",
+          metrics: {
+            run_readiness: 85.7,
+            run_readiness_status: "green",
+            hrv_today: 45,
+            hrv_baseline: 50,
+            hrv_delta: -5,
+            hrv_status: "green",
+            hrv_available: true,
+            rhr_today: 52,
+            rhr_baseline: 51,
+            rhr_delta: 1,
+            rhr_status: "green",
+            sleep_hours: 8,
+            sleep_efficiency: 0.9,
+            sleep_score: 0.6,
+            sleep_status: "green",
+            training_load: 1.0,
+            training_load_status: "green",
+            confidence: "normal",
+            sufficiency_level: "sufficient",
+            readiness_reasons: [],
+          },
+          history: [],
+        },
+        today: {
+          ...TODAY_PAYLOAD,
+          served_prescription: {
+            type: "rest",
+            duration: "",
+            details: "Jour de repos",
+            estimated_tss: null,
+          },
+          planned_session: {
+            type: "endurance",
+            duration: "45 min",
+            details: "Easy pace",
+            estimated_tss: 55,
+          },
+        },
+      })
+    );
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const badge = container.querySelector('[data-testid="run-readiness-recommendation"]');
+    expect(badge).not.toBeNull();
+    expect(badge.textContent).toContain("Fraîcheur élevée");
+    expect(container.textContent).toContain("Jour de repos");
+    expect(container.textContent).not.toContain("SÉANCE INTENSE");
+    expect(container.textContent).not.toContain("RUN HARD");
+    unmount();
+  });
+
+  it("10e. observed bug fixture: weekly target uses training week authority, not insight rolling-7d", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(
+      buildDefaultMocks({
+        insight: {
+          ...INSIGHT_PAYLOAD,
+          week: { sessions: 3, volume_km: 28.5, actual_duration_minutes: 160 },
+        },
+        weekV2: {
+          weekly_target: {
+            target_basis: "distance",
+            target_km: 16.3,
+            target_duration_minutes: null,
+            session_count: 3,
+          },
+          week: {
+            sessions: [
+              { actual: null },
+              { actual: null },
+              { actual: null },
+            ],
+            unmatched_actuals: [
+              { distance_km: 8.69 },
+            ],
+          },
+        },
+      })
+    );
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    expect(container.querySelector('[data-testid="weekly-target-value"]').textContent).toContain("16.3");
+    expect(container.querySelector('[data-testid="weekly-volume-done"]').textContent).toContain("0");
+    expect(container.querySelector('[data-testid="weekly-volume-extra"]').textContent).toContain("8.69");
+    expect(container.querySelector('[data-testid="weekly-volume-done"]').textContent).not.toContain("28.5");
+    expect(container.querySelector('[data-testid="weekly-progress-bar"]').getAttribute("style")).toContain("0%");
+    unmount();
+  });
+
+  it("10f. matched and unmatched stay separated in progress", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(
+      buildDefaultMocks({
+        weekV2: {
+          weekly_target: {
+            target_basis: "distance",
+            target_km: 16,
+            target_duration_minutes: null,
+            session_count: 2,
+          },
+          week: {
+            sessions: [{ actual: { activity_id: "m1", distance_km: 5 } }],
+            unmatched_actuals: [{ distance_km: 8 }],
+          },
+        },
+      })
+    );
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    expect(container.querySelector('[data-testid="weekly-volume-done"]').textContent).toContain("5");
+    expect(container.querySelector('[data-testid="weekly-volume-extra"]').textContent).toContain("8");
+    expect(container.querySelector('[data-testid="weekly-progress-bar"]').getAttribute("style")).toContain("31%");
+    unmount();
+  });
+
+  it("10g. partial matched data (distance): renders incomplete data, never partial sum", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(
+      buildDefaultMocks({
+        weekV2: {
+          weekly_target: {
+            target_basis: "distance",
+            target_km: 16,
+            target_duration_minutes: null,
+            session_count: 2,
+          },
+          week: {
+            sessions: [
+              { actual: { activity_id: "m1", distance_km: 5 } },
+              { actual: { activity_id: "m2", distance_km: null } },
+            ],
+            unmatched_actuals: [],
+          },
+        },
+      })
+    );
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const done = container.querySelector('[data-testid="weekly-volume-done"]');
+    expect(done.textContent).toMatch(/incompl/i);
+    expect(done.textContent).not.toContain("5");
+    unmount();
+  });
+
+  it("10h. partial matched data (duration): renders incomplete data, never partial sum", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(
+      buildDefaultMocks({
+        weekV2: {
+          weekly_target: {
+            target_basis: "duration",
+            target_km: null,
+            target_duration_minutes: 90,
+            session_count: 2,
+          },
+          week: {
+            sessions: [
+              { actual: { activity_id: "d1", duration_minutes: 30 } },
+              { actual: { activity_id: "d2", duration_minutes: null } },
+            ],
+            unmatched_actuals: [],
+          },
+        },
+      })
+    );
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const done = container.querySelector('[data-testid="weekly-duration-done"]');
+    expect(done.textContent).toMatch(/incompl/i);
+    expect(done.textContent).not.toContain("30");
     unmount();
   });
 
@@ -686,6 +896,42 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     expect(src).not.toContain('|| "RUN HARD"');
   });
 
+  it("12e. source check: weekly target completion never uses insight.week rolling fields", () => {
+    const fs = require("fs");
+    const path = require("path");
+    const src = fs.readFileSync(
+      path.resolve(__dirname, "../pages/Dashboard.jsx"),
+      "utf-8"
+    );
+    expect(src).not.toMatch(/weekStats\.volume_km/);
+    expect(src).not.toMatch(/weekStats\.actual_duration_minutes/);
+  });
+
+  it("12f. source check: run readiness card does not display cardioData.recommendation text", () => {
+    const fs = require("fs");
+    const path = require("path");
+    const src = fs.readFileSync(
+      path.resolve(__dirname, "../pages/Dashboard.jsx"),
+      "utf-8"
+    );
+    expect(src).not.toMatch(/cardioData\?\.recommendation/);
+  });
+
+  it("12g. source check: Dashboard and TrainingPlanV2 both use shared training week progress helper", () => {
+    const fs = require("fs");
+    const path = require("path");
+    const dashboardSrc = fs.readFileSync(
+      path.resolve(__dirname, "../pages/Dashboard.jsx"),
+      "utf-8"
+    );
+    const trainingSrc = fs.readFileSync(
+      path.resolve(__dirname, "../pages/TrainingPlanV2.jsx"),
+      "utf-8"
+    );
+    expect(dashboardSrc).toMatch(/computeTrainingWeekProgress/);
+    expect(trainingSrc).toMatch(/computeTrainingWeekProgress/);
+  });
+
   // C231 corrections finales: source check — adaptation_applied never used
   // to select which session is displayed (ternary/conditional rendering).
   it("C231-final: source check — adaptation_applied is never used to select the displayed session", () => {
@@ -704,6 +950,8 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     const { translations } = require("@/lib/i18n");
     expect(translations.en.dashboard.weeklyTarget).toBeDefined();
     expect(translations.en.dashboard.weeklyDone).toBeDefined();
+    expect(translations.en.dashboard.weeklyOutsidePlan).toBeDefined();
+    expect(translations.en.dashboard.readinessStates.green).toBeDefined();
     expect(translations.en.dashboard.minutes).toBeDefined();
   });
 
@@ -712,6 +960,8 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     const { translations } = require("@/lib/i18n");
     expect(translations.fr.dashboard.weeklyTarget).toBeDefined();
     expect(translations.fr.dashboard.weeklyDone).toBeDefined();
+    expect(translations.fr.dashboard.weeklyOutsidePlan).toBeDefined();
+    expect(translations.fr.dashboard.readinessStates.green).toBeDefined();
     expect(translations.fr.dashboard.minutes).toBeDefined();
   });
 
@@ -720,6 +970,8 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     const { translations } = require("@/lib/i18n");
     expect(translations.es.dashboard.weeklyTarget).toBeDefined();
     expect(translations.es.dashboard.weeklyDone).toBeDefined();
+    expect(translations.es.dashboard.weeklyOutsidePlan).toBeDefined();
+    expect(translations.es.dashboard.readinessStates.green).toBeDefined();
     expect(translations.es.dashboard.minutes).toBeDefined();
   });
 

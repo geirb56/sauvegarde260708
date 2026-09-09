@@ -15,6 +15,7 @@ import { useLanguage } from "@/context/LanguageContext";
 import { useSubscription } from "@/context/SubscriptionContext";
 import { useUnitSystem } from "@/context/UnitContext";
 import { API_BASE_URL } from "@/config";
+import { aggregateKnownMetric, computeTrainingWeekProgress } from "@/lib/trainingWeekProgress";
 import { formatDistance, formatPace } from "@/utils/units";
 
 const API = API_BASE_URL;
@@ -292,36 +293,7 @@ const formatVdotPace = (paceValue, unitSystem) => {
   return null;
 };
 
-// C233 — aggregates a numeric field across rows with an explicit
-// empty/complete/partial state. "None != 0": a missing value on a real row
-// must never be silently dropped and the remaining values summed as if that
-// were the whole truth — that would present a partial total as complete.
-//
-// - rows.length === 0            -> "empty"   (a real, observed zero)
-// - every row has a known value  -> "complete" (exact sum)
-// - at least one row is unknown  -> "partial"  (no safe total to show)
-export const aggregateKnownMetric = (rows, field) => {
-  const list = Array.isArray(rows) ? rows : [];
-  if (list.length === 0) {
-    return { state: "empty", value: 0 };
-  }
-  let sum = 0;
-  let hasUnknown = false;
-  for (const row of list) {
-    const value = row?.[field];
-    if (isKnownNumber(value)) {
-      sum += value;
-    } else {
-      hasUnknown = true;
-    }
-  }
-  return hasUnknown ? { state: "partial", value: null } : { state: "complete", value: sum };
-};
-
-// Defensive: PR230's WeekV2ActualResponse always has activity_id when the
-// row is a real attributed activity; treat a bare object with no id as
-// "nothing real to count" rather than fabricating a match.
-const sessionHasActivity = (actual) => Boolean(actual && actual.activity_id != null && actual.activity_id !== "");
+export { aggregateKnownMetric };
 
 function LoadingState() {
   return (
@@ -533,50 +505,38 @@ function WeekSessionRow({ session, day, isToday, unitSystem, t, locale }) {
 function WeekVolumeSummary({ t, weekPlan, weeklyTarget, unitSystem }) {
   if (!weekPlan || !weeklyTarget) return null;
 
-  const sessions = Array.isArray(weekPlan.sessions) ? weekPlan.sessions : [];
-  const unmatched = Array.isArray(weekPlan.unmatched_actuals) ? weekPlan.unmatched_actuals : [];
-  const matchedActuals = sessions
-    .map((session) => session?.actual)
-    .filter((actual) => actual && sessionHasActivity(actual));
+  const weekProgress = computeTrainingWeekProgress({
+    weekly_target: weeklyTarget,
+    week: weekPlan,
+  });
+  if (!weekProgress) return null;
 
-  const isDistanceBasis = weeklyTarget.target_basis === "distance";
-
-  const plannedValue = isDistanceBasis ? weekPlan.planned_km : weekPlan.planned_duration_minutes;
+  const isDistanceBasis = weekProgress.target_basis === "distance";
+  const plannedValue = weekProgress.planned_value;
   const plannedLabel = isKnownNumber(plannedValue)
     ? (isDistanceBasis ? formatDistance(plannedValue, { unitSystem }) : `${Math.round(plannedValue)} min`)
     : t("trainingV2.notAvailable");
 
-  const completedAgg = isDistanceBasis
-    ? aggregateKnownMetric(matchedActuals, "distance_km")
-    : aggregateKnownMetric(matchedActuals, "duration_minutes");
   // "empty" (0 matched activities) is a real, complete zero and must render
   // as "0 km"/"0 min", not "—". "partial" (at least one matched activity has
   // a missing metric) must never render the sum of the known-only values as
   // if it were the full total — C233's "None != 0" doctrine.
-  const completedLabel = completedAgg.state === "partial"
+  const completedLabel = weekProgress.completed_state === "partial"
     ? t("trainingV2.incompleteData")
     : (isDistanceBasis
-      ? formatDistance(completedAgg.value, { unitSystem })
-      : `${Math.round(completedAgg.value)} min`);
-
-  const extraAgg = isDistanceBasis
-    ? aggregateKnownMetric(unmatched, "distance_km")
-    : aggregateKnownMetric(unmatched, "duration_minutes");
+      ? formatDistance(weekProgress.completed_planned_value, { unitSystem })
+      : `${Math.round(weekProgress.completed_planned_value)} min`);
   // Extra Garmin volume is only rendered when there is at least one
   // unmatched row this week; a genuinely empty unmatched list keeps the
   // existing "no extra line" behavior (unchanged), but a partial aggregate
   // must show the incomplete-data marker rather than a partial sum.
-  const extraLabel = extraAgg.state === "empty"
+  const extraLabel = weekProgress.unmatched_state === "empty"
     ? null
-    : (extraAgg.state === "partial"
+    : (weekProgress.unmatched_state === "partial"
       ? t("trainingV2.incompleteData")
-      : (isDistanceBasis ? formatDistance(extraAgg.value, { unitSystem }) : `${Math.round(extraAgg.value)} min`));
-
-  const completedSessionCount = matchedActuals.length;
-
-  const progressValue = isKnownNumber(plannedValue) && plannedValue > 0 && completedAgg.state === "complete"
-    ? Math.max(0, Math.min(100, Math.round((completedAgg.value / plannedValue) * 100)))
-    : 0;
+      : (isDistanceBasis
+        ? formatDistance(weekProgress.unmatched_value, { unitSystem })
+        : `${Math.round(weekProgress.unmatched_value)} min`));
 
   return (
     <div data-testid="training-v2-week-volume" className="space-y-2 border-b border-border pb-3">
@@ -589,15 +549,13 @@ function WeekVolumeSummary({ t, weekPlan, weeklyTarget, unitSystem }) {
         <span className="text-muted-foreground">{t("trainingV2.volumeCompleted")}</span>
         <span className="font-semibold" data-testid="week-volume-completed">{completedLabel}</span>
       </div>
-      <Progress value={progressValue} data-testid="week-volume-progress" />
+      <Progress value={weekProgress.progress_percent} data-testid="week-volume-progress" />
       <p className="text-xs text-muted-foreground" data-testid="week-volume-sessions">
-        {/* weekly_target.session_count is the recommended/prescribed target
-            (canonical source); week.session_count (sum of non-rest sessions
-            actually scheduled this week) is only a defensive fallback for
-            the rare case the target is unset. */}
+        {/* weekly_target.session_count is the canonical prescribed target;
+            fallback count is derived from week.sessions when missing. */}
         {formatTemplate(t("trainingV2.volumeSessions"), {
-          done: completedSessionCount,
-          total: weeklyTarget.session_count ?? weekPlan.session_count ?? 0,
+          done: weekProgress.completed_session_count,
+          total: weekProgress.planned_session_count ?? 0,
         })}
       </p>
       {extraLabel && (
