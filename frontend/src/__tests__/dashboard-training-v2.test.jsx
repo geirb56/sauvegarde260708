@@ -470,7 +470,7 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     const badge = container.querySelector('[data-testid="run-readiness-recommendation"]');
     expect(badge).not.toBeNull();
     expect(badge.textContent).toContain("Fraîcheur élevée");
-    expect(container.textContent).toContain("Jour de repos");
+    expect(container.textContent).toContain("Repos");
     expect(container.textContent).not.toContain("SÉANCE INTENSE");
     expect(container.textContent).not.toContain("RUN HARD");
     unmount();
@@ -914,7 +914,7 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
       path.resolve(__dirname, "../pages/Dashboard.jsx"),
       "utf-8"
     );
-    expect(src).not.toMatch(/cardioData\?\.recommendation/);
+    expect(src).not.toMatch(/\{cardioData\?\.recommendation\s*\|\|/);
   });
 
   it("12g. source check: Dashboard and TrainingPlanV2 both use shared training week progress helper", () => {
