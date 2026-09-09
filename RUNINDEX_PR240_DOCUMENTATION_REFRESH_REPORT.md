@@ -4,7 +4,7 @@
 - Integration target: `copilot/dev`
 - Base SHA: `5b694ea669e5812e90fed138e350dd98712e5404`
 - Head before C240 correction: `d2716923fb901af0429b01c9a7c1f2ab1f5dc1ef`
-- Final PR head: `TO_FILL_AFTER_C240_CORRECTION_COMMIT`
+- Final PR head: `ba30a0a83f8ba9f5c2114fa59265d179613640c2`
 - Scope: documentation only
 
 ## Objective
