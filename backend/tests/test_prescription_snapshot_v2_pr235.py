@@ -154,8 +154,25 @@ def test_structured_snapshot_serialization_round_trip():
     rebuilt = PrescriptionSnapshot(**mongo_dict)
     assert rebuilt == snap
     assert rebuilt.structured == snap.structured
+    assert rebuilt.structured.quality_kind == "threshold_intervals"
     assert rebuilt.reason_codes == snap.reason_codes
     assert rebuilt.served_at == snap.served_at
+
+
+def test_legacy_structured_snapshot_without_quality_kind_defaults_to_none():
+    snap = _snapshot_for(
+        session=_workout("quality", distance_km=9.0),
+        plan_goal=_goal(GoalType.ten_k),
+        periodization=_phase(PeriodizationPhase.build),
+        training_paces=_paces(),
+    )
+    legacy_doc = snap.model_dump(mode="json")
+    legacy_doc["structured"].pop("quality_kind")
+
+    rebuilt = PrescriptionSnapshot(**legacy_doc)
+
+    assert rebuilt.structured is not None
+    assert rebuilt.structured.quality_kind is None
 
 
 def test_structured_snapshot_serialization_is_deterministic():
@@ -334,6 +351,9 @@ def test_immutability_c_phase_change_never_alters_frozen_structured():
     )
     assert live_with_new_phase != frozen_structured
     assert snap.structured == frozen_structured
+    assert frozen_structured.quality_kind == "threshold_intervals"
+    assert live_with_new_phase.quality_kind == "tempo_continuous"
+    assert snap.structured.quality_kind == "threshold_intervals"
 
 
 def test_immutability_d_engine_output_change_never_rewrites_snapshot(monkeypatch):

@@ -8,6 +8,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import Paywall from "@/components/Paywall";
+import StructuredWorkoutView, {
+  getPrimaryStructuredPace,
+} from "@/components/training/StructuredWorkoutView";
 import { useLanguage } from "@/context/LanguageContext";
 import { useSubscription } from "@/context/SubscriptionContext";
 import { useUnitSystem } from "@/context/UnitContext";
@@ -42,6 +45,25 @@ const getTranslatedValue = (t, path, fallbackKey = "trainingV2.notAvailable") =>
 };
 
 const getSessionType = (session) => session?.workout_type || session?.session_type || session?.type || null;
+
+const getStructuredWorkoutTypeKey = (structured) => {
+  if (!structured || typeof structured !== "object") return null;
+  if (structured.workout_type === "quality" && typeof structured.quality_kind === "string") {
+    return structured.quality_kind;
+  }
+  return structured.workout_type || null;
+};
+
+const getDisplayableStructured = (session) => {
+  if (!session || typeof session !== "object") return null;
+  if (
+    session.structured_status === "historical_unavailable"
+    || session.structured_status === "prescription_unavailable"
+  ) {
+    return null;
+  }
+  return session.structured && typeof session.structured === "object" ? session.structured : null;
+};
 
 const getPrescriptionText = (session) => {
   if (!session || typeof session !== "object") return null;
@@ -243,6 +265,14 @@ const minPerKmToFormattedPace = (minPerKm, unitSystem) => {
 // reformatted unit-aware. Never invented: null in -> null out.
 const formatActualPace = (paceMinPerKm, unitSystem) => minPerKmToFormattedPace(paceMinPerKm, unitSystem);
 
+const formatActualDuration = (durationMinutes) => {
+  if (!isKnownNumber(durationMinutes) || durationMinutes < 0) return null;
+  const totalSeconds = Math.round(durationMinutes * 60);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return seconds > 0 ? `${minutes}:${String(seconds).padStart(2, "0")}` : `${minutes} min`;
+};
+
 // PR233 — /training/v2/paces already exposes a raw min_per_km alongside the
 // metric-only pace_str text. Prefer the raw value so imperial mode never
 // shows a hardcoded "/km" suffix; pace_str is only a defensive metric fallback.
@@ -328,9 +358,15 @@ function SessionStatePill({ t, state }) {
   );
 }
 
+function AdaptedBadge({ modified, t }) {
+  if (modified !== true) return null;
+  return <Badge variant="outline" className="text-[10px]" data-testid="session-adapted-badge">{t("trainingV2.adapted")}</Badge>;
+}
+
 function WeekSessionRow({ session, day, isToday, unitSystem, t, locale }) {
   const [expanded, setExpanded] = useState(false);
   const workoutType = getSessionType(session);
+  const structured = getDisplayableStructured(session);
   const isExplicitRest = workoutType === "rest" || getSessionStatusKey(session) === "rest";
   const statusKey = getSessionStatusKey(session);
   // C231 (round 2, item 3) — a past day whose real historical prescription
@@ -359,13 +395,14 @@ function WeekSessionRow({ session, day, isToday, unitSystem, t, locale }) {
               ? "?"
               : "";
 
+  const typeKey = getStructuredWorkoutTypeKey(structured) || workoutType;
   const typeLabel = !session
     ? t("trainingV2.noSessionLabel")
     : isUnavailable
       ? t("trainingV2.sessionStates.unavailable")
       : isExplicitRest
         ? t("trainingV2.restDay")
-        : getTranslatedValue(t, `trainingV2.workoutTypes.${workoutType}`, "trainingV2.noSessionType");
+        : getTranslatedValue(t, `trainingV2.workoutTypes.${typeKey}`, "trainingV2.noSessionType");
 
   const prescription = getPrescriptionText(session);
   const distance = isKnownNumber(session?.distance_km) ? formatDistance(session.distance_km, { unitSystem }) : null;
@@ -377,11 +414,15 @@ function WeekSessionRow({ session, day, isToday, unitSystem, t, locale }) {
   // PR233 — no invented pace/structure for "quality" (or any type): only
   // rendered when the backend prescription itself carries it (never true
   // today for WeekV2SessionResponse, which has no pace field at all).
-  const prescribedPaceOrZone = getSessionPaceOrZone(session);
+  const prescribedPaceOrZone = getPrimaryStructuredPace(structured, unitSystem)
+    || getSessionPaceOrZone(session);
+  const structuredSummary = structured
+    ? <StructuredWorkoutView structured={structured} unitSystem={unitSystem} t={t} compact />
+    : null;
 
   const actual = session?.actual || null;
   const actualDistance = isKnownNumber(actual?.distance_km) ? formatDistance(actual.distance_km, { unitSystem }) : null;
-  const actualDuration = isKnownNumber(actual?.duration_minutes) ? `${Math.round(actual.duration_minutes)} min` : null;
+  const actualDuration = formatActualDuration(actual?.duration_minutes);
   const actualPace = formatActualPace(actual?.pace_min_per_km, unitSystem);
   const analysisRoute = getSessionDetailRoute(session);
 
@@ -404,7 +445,7 @@ function WeekSessionRow({ session, day, isToday, unitSystem, t, locale }) {
         aria-controls={detailId}
         data-testid={`session-detail-toggle-${day}`}
         disabled={!canExpand}
-        className={`grid w-full grid-cols-[56px_minmax(0,1fr)_auto] items-center gap-2 px-2 py-2 text-left text-sm ${
+        className={`grid min-h-14 w-full grid-cols-[76px_minmax(0,1fr)_auto] items-center gap-2 px-3 py-3 text-left text-sm ${
           canExpand ? "cursor-pointer hover:brightness-110" : "cursor-default"
         }`}
       >
@@ -412,7 +453,16 @@ function WeekSessionRow({ session, day, isToday, unitSystem, t, locale }) {
           {formatDayHeading(t, day, session?.planned_date, locale)}
         </span>
         <div className="min-w-0">
-          <p className="truncate font-medium" data-testid={`training-v2-day-type-${day}`}>{typeLabel}</p>
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <p className="truncate font-medium" data-testid={`training-v2-day-type-${day}`}>{typeLabel}</p>
+            <AdaptedBadge modified={session?.session_modified_from_planned} t={t} />
+          </div>
+          {(compactMetric || prescribedPaceOrZone) && (
+            <p className="text-xs text-foreground" data-testid={`training-v2-day-metrics-${day}`}>
+              {[compactMetric, prescribedPaceOrZone].filter(Boolean).join(" · ")}
+            </p>
+          )}
+          {structuredSummary}
           {prescription && !isExplicitRest && !isUnavailable && (
             <p className="truncate text-xs text-muted-foreground" data-testid={`training-v2-day-prescription-${day}`}>{prescription}</p>
           )}
@@ -423,7 +473,6 @@ function WeekSessionRow({ session, day, isToday, unitSystem, t, locale }) {
           ) : (
             <span className="block text-xs text-muted-foreground">{stateMarker}</span>
           )}
-          <p className="text-xs text-muted-foreground">{compactMetric}</p>
           {statusKey && <SessionStatePill t={t} state={statusKey} />}
         </div>
       </button>
@@ -442,6 +491,11 @@ function WeekSessionRow({ session, day, isToday, unitSystem, t, locale }) {
               {duration && <span>{duration}</span>}
               {prescribedPaceOrZone && <span>{prescribedPaceOrZone}</span>}
             </div>
+            {structured && (
+             <div className="mt-3">
+               <StructuredWorkoutView structured={structured} unitSystem={unitSystem} t={t} />
+             </div>
+            )}
           </div>
           <div>
             <p className="uppercase tracking-wide text-muted-foreground">{t("trainingV2.sessionDetailActual")}</p>
@@ -782,17 +836,25 @@ export default function TrainingPlanV2() {
   // vocabulary (rest/recovery/easy/steady/quality/long_easy) already shown
   // by Week's workout_type, never a frontend invention.
   const todayWorkoutTypeKey = RUNTIME_TYPE_TO_WORKOUT_TYPE[todaySession?.type] || null;
-  const todayTypeLabel = todayWorkoutTypeKey
-    ? getTranslatedValue(t, `trainingV2.workoutTypes.${todayWorkoutTypeKey}`)
+  const todayStructured = todayData?.structured_prescription || null;
+  const resolvedTodayWorkoutTypeKey = getStructuredWorkoutTypeKey(todayStructured)
+    || todayWorkoutTypeKey;
+  const todayTypeLabel = resolvedTodayWorkoutTypeKey
+    ? getTranslatedValue(t, `trainingV2.workoutTypes.${resolvedTodayWorkoutTypeKey}`)
     : t("trainingV2.noSessionType");
 
-  // C233 (blocker #2) — no prescription text, no pace/zone: the real
-  // /training/today contract carries neither field, so nothing is rendered
-  // for them (never invented/guessed).
-  const todayDurationLabel = getTodayDurationLabel(todaySession);
-  const todayDistanceKm = getTodayDistanceKm(todaySession);
+  // The runtime parent has no prescription text or pace. Numeric pace and
+  // step detail are rendered only from the backend's structured_prescription.
+  const todayDurationLabel = isKnownNumber(todayStructured?.total_duration_minutes)
+    ? `${todayStructured.total_duration_minutes} min`
+    : getTodayDurationLabel(todaySession);
+  const todayDistanceKm = isKnownNumber(todayStructured?.total_distance_km)
+    ? todayStructured.total_distance_km
+    : getTodayDistanceKm(todaySession);
   const todayDistance = todayDistanceKm != null ? formatDistance(todayDistanceKm, { unitSystem }) : null;
-  const todayIsExplicitRest = todayWorkoutTypeKey === "rest";
+  const todayIsExplicitRest = resolvedTodayWorkoutTypeKey === "rest";
+  const todayPace = getPrimaryStructuredPace(todayStructured, unitSystem);
+  const todayDate = formatDate(todayData?.date || weekData?.reference_date, locale);
 
   const showRaceCountdown = !isMaintenanceGoal
     && cycle?.days_to_race !== null
@@ -836,7 +898,11 @@ export default function TrainingPlanV2() {
 
       <Card className="border-primary/40" data-testid="training-v2-today">
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">{t("trainingV2.todayTitle")}</CardTitle>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <CardTitle className="text-base">{t("trainingV2.todayTitle")}</CardTitle>
+            <AdaptedBadge modified={todayData?.session_modified_from_planned} t={t} />
+          </div>
+          {todayDate && <p className="text-xs uppercase tracking-wide text-muted-foreground">{todayDate}</p>}
         </CardHeader>
         <CardContent className="space-y-2">
           {!todaySession ? (
@@ -850,7 +916,13 @@ export default function TrainingPlanV2() {
               <div className="flex flex-wrap items-center gap-2 text-sm">
                 {todayDurationLabel && <Badge variant="outline" data-testid="today-session-duration">{todayDurationLabel}</Badge>}
                 {todayDistance && <Badge variant="outline" data-testid="today-session-distance">{todayDistance}</Badge>}
+               {todayPace && <Badge variant="outline" data-testid="today-session-pace">{todayPace}</Badge>}
               </div>
+              {Array.isArray(todayStructured?.steps) && todayStructured.steps.length > 0 && (
+                <div className="pt-2">
+                  <StructuredWorkoutView structured={todayStructured} unitSystem={unitSystem} t={t} />
+                </div>
+              )}
             </>
           )}
         </CardContent>
@@ -872,7 +944,7 @@ export default function TrainingPlanV2() {
               const day = DAYS[index];
               return (
                 <WeekSessionRow
-                  key={day}
+                  key={session?.prescription_id || day}
                   session={session}
                   day={day}
                   isToday={day === todayKey}
