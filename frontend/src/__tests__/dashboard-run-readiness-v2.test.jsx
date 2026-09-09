@@ -28,6 +28,7 @@ import path from "path";
 
 import Dashboard from "@/pages/Dashboard";
 import { LanguageProvider } from "@/context/LanguageContext";
+import { LANGUAGE_STORAGE_KEY } from "@/lib/i18n";
 
 jest.mock("axios");
 jest.mock("sonner", () => ({
@@ -48,6 +49,10 @@ jest.mock("@/context/SubscriptionContext", () => ({
 }));
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+
+beforeEach(() => {
+  window.localStorage.setItem(LANGUAGE_STORAGE_KEY, "en");
+});
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -351,6 +356,26 @@ describe("Test 9: recommendation_color known → matching accent", () => {
   });
 });
 
+describe("Test 9b: recommendation label is a freshness state, never a workout directive", () => {
+  afterEach(() => jest.clearAllMocks());
+
+  it("ignores legacy recommendation wording and shows color-based readiness state", async () => {
+    const cardio = buildCardio({ recommendation_color: "green" });
+    cardio.recommendation = "SÉANCE INTENSE";
+    setupAxios(cardio);
+    const { container, unmount } = render();
+    await wait();
+
+    const badge = container.querySelector('[data-testid="run-readiness-recommendation"]');
+    expect(badge).not.toBeNull();
+    expect(badge.textContent).toContain("High readiness");
+    expect(badge.textContent).not.toContain("SÉANCE INTENSE");
+    expect(badge.textContent).not.toContain("RUN HARD");
+
+    unmount();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Test 10 — history: null entry filtered out
 // ---------------------------------------------------------------------------
@@ -505,6 +530,17 @@ describe("Test 15: Training V2 components untouched", () => {
     );
     expect(src.length).toBeGreaterThan(100);
     expect(src).toContain("TrainingPlanV2");
+  });
+
+  describe("Test 15b: readiness zones use non-prescriptive labels", () => {
+    it("i18n readiness zone labels no longer describe workout prescriptions", () => {
+      const { translations } = require("@/lib/i18n");
+      expect(translations.en.dashboard.readinessZones.intense).toBe("High");
+      expect(translations.en.dashboard.readinessZones.easy).toBe("Moderate");
+      expect(translations.en.dashboard.readinessZones.rest).toBe("Low");
+      expect(translations.fr.dashboard.readinessZones.intense).toBe("Élevée");
+      expect(translations.es.dashboard.readinessZones.intense).toBe("Alta");
+    });
   });
 });
 
