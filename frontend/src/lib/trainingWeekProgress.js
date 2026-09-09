@@ -51,9 +51,20 @@ export function computeTrainingWeekProgress(trainingWeekV2) {
 
   const fallbackPlannedSessionCount = sessions.filter((session) => !isRestSessionType(getSessionType(session))).length;
 
-  const progressPercent = isKnownNumber(plannedValue) && plannedValue > 0 && completed.state === "complete"
-    ? Math.max(0, Math.min(100, Math.round((completed.value / plannedValue) * 100)))
-    : 0;
+  let progressState = "unavailable";
+  let progressPercent = null;
+  if (isKnownNumber(plannedValue) && plannedValue > 0) {
+    if (completed.state === "empty") {
+      progressState = "empty";
+      progressPercent = 0;
+    } else if (completed.state === "complete") {
+      progressState = "complete";
+      progressPercent = Math.max(0, Math.min(100, Math.round((completed.value / plannedValue) * 100)));
+    } else if (completed.state === "partial") {
+      progressState = "partial";
+      progressPercent = null;
+    }
+  }
 
   return {
     target_basis: targetBasis,
@@ -64,6 +75,7 @@ export function computeTrainingWeekProgress(trainingWeekV2) {
     unmatched_state: unmatchedCompleted.state,
     completed_session_count: matchedActuals.length,
     planned_session_count: weeklyTarget.session_count ?? fallbackPlannedSessionCount,
+    progress_state: progressState,
     progress_percent: progressPercent,
   };
 }

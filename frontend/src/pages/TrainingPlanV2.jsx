@@ -549,7 +549,15 @@ function WeekVolumeSummary({ t, weekPlan, weeklyTarget, unitSystem }) {
         <span className="text-muted-foreground">{t("trainingV2.volumeCompleted")}</span>
         <span className="font-semibold" data-testid="week-volume-completed">{completedLabel}</span>
       </div>
-      <Progress value={weekProgress.progress_percent} data-testid="week-volume-progress" />
+      <div className="relative h-2 w-full overflow-hidden rounded-full bg-primary/20" data-testid="week-volume-progress">
+        {weekProgress.progress_state !== "partial" && weekProgress.progress_state !== "unavailable" && (
+          <div
+            className="h-full w-full flex-1 bg-primary transition-all"
+            style={{ transform: `translateX(-${100 - weekProgress.progress_percent}%)` }}
+            data-testid="week-volume-progress-fill"
+          />
+        )}
+      </div>
       <p className="text-xs text-muted-foreground" data-testid="week-volume-sessions">
         {/* weekly_target.session_count is the canonical prescribed target;
             fallback count is derived from week.sessions when missing. */}

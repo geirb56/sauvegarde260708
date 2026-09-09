@@ -572,6 +572,7 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     const done = container.querySelector('[data-testid="weekly-volume-done"]');
     expect(done.textContent).toMatch(/incompl/i);
     expect(done.textContent).not.toContain("5");
+    expect(container.querySelector('[data-testid="weekly-progress-bar"]')).toBeNull();
     unmount();
   });
 
@@ -603,6 +604,7 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     const done = container.querySelector('[data-testid="weekly-duration-done"]');
     expect(done.textContent).toMatch(/incompl/i);
     expect(done.textContent).not.toContain("30");
+    expect(container.querySelector('[data-testid="weekly-progress-bar"]')).toBeNull();
     unmount();
   });
 

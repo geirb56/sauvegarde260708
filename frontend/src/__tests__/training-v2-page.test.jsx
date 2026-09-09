@@ -5,6 +5,7 @@ import { MemoryRouter } from "react-router-dom";
 import axios from "axios";
 
 import TrainingPlanV2, { aggregateKnownMetric } from "@/pages/TrainingPlanV2";
+import { computeTrainingWeekProgress } from "@/lib/trainingWeekProgress";
 import { LanguageProvider } from "@/context/LanguageContext";
 import { useSubscription } from "@/context/SubscriptionContext";
 import { UnitProvider } from "@/context/UnitContext";
@@ -930,6 +931,7 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     const completed = within(volume).getByTestId("week-volume-completed");
     expect(completed).not.toHaveTextContent(formatDistance(8.1, { unitSystem: "metric" }));
     expect(completed.textContent).toMatch(/—|Incomplete data/);
+    expect(within(volume).queryByTestId("week-volume-progress-fill")).not.toBeInTheDocument();
   });
 
   test("C233 final #5: duration basis, two matched activities but one has a null duration_minutes -> never shows 44 min as a complete total", async () => {
@@ -947,6 +949,7 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     const completed = within(volume).getByTestId("week-volume-completed");
     expect(completed).not.toHaveTextContent("44 min");
     expect(completed.textContent).toMatch(/—|Incomplete data/);
+    expect(within(volume).queryByTestId("week-volume-progress-fill")).not.toBeInTheDocument();
   });
 
   test("C233 final #6: unmatched extras with one null distance_km never show the partial sum as the complete extra total", async () => {
@@ -985,6 +988,37 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     expect(aggregateKnownMetric([{ distance_km: null }], "distance_km")).toEqual({ state: "partial", value: null });
     expect(aggregateKnownMetric([{ distance_km: 5 }, { distance_km: null }], "distance_km").state).toBe("partial");
     expect(aggregateKnownMetric([{ distance_km: 5 }, { distance_km: 3 }], "distance_km")).toEqual({ state: "complete", value: 8 });
+  });
+
+  test("C239: computeTrainingWeekProgress distinguishes true zero from unknown progress", () => {
+    const partial = computeTrainingWeekProgress({
+      weekly_target: { target_basis: "distance", target_km: 16, session_count: 2 },
+      week: {
+        sessions: [
+          { actual: { activity_id: "m1", distance_km: 5 } },
+          { actual: { activity_id: "m2", distance_km: null } },
+        ],
+        unmatched_actuals: [],
+      },
+    });
+    expect(partial.completed_state).toBe("partial");
+    expect(partial.progress_state).toBe("partial");
+    expect(partial.progress_percent).toBeNull();
+
+    const empty = computeTrainingWeekProgress({
+      weekly_target: { target_basis: "distance", target_km: 16, session_count: 2 },
+      week: { sessions: [], unmatched_actuals: [] },
+    });
+    expect(empty.completed_state).toBe("empty");
+    expect(empty.progress_state).toBe("empty");
+    expect(empty.progress_percent).toBe(0);
+
+    const unavailable = computeTrainingWeekProgress({
+      weekly_target: { target_basis: "distance", target_km: null, session_count: 2 },
+      week: { sessions: [{ actual: { activity_id: "m1", distance_km: 5 } }], unmatched_actuals: [] },
+    });
+    expect(unavailable.progress_state).toBe("unavailable");
+    expect(unavailable.progress_percent).toBeNull();
   });
 
   // ── PR236 — structured sessions ────────────────────────────────────────

@@ -1113,16 +1113,18 @@ export default function Dashboard() {
                 </div>
                {plannedValue > 0 && (
                   <div className="h-2 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.08)" }}>
-                    <div
-                      className="h-full rounded-full transition-all duration-700"
-                      style={{
-                       width: `${clampProgress(weekProgress.progress_percent)}%`,
-                        background: "#6EEB5A",
-                      }}
-                      data-testid="weekly-progress-bar"
-                    />
-                  </div>
-                )}
+                   {weekProgress.progress_state !== "partial" && weekProgress.progress_state !== "unavailable" && (
+                     <div
+                       className="h-full rounded-full transition-all duration-700"
+                       style={{
+                         width: `${clampProgress(weekProgress.progress_percent)}%`,
+                         background: "#6EEB5A",
+                       }}
+                       data-testid="weekly-progress-bar"
+                     />
+                   )}
+                 </div>
+               )}
                {weekProgress.unmatched_state !== "empty" && (
                  <div className="flex items-baseline justify-between text-sm" style={{ color: "var(--text-tertiary)" }}>
                    <span>{t("dashboard.weeklyOutsidePlan")}:</span>
@@ -1145,14 +1147,16 @@ export default function Dashboard() {
                </div>
                {plannedValue > 0 && (
                  <div className="h-2 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.08)" }}>
-                   <div
-                     className="h-full rounded-full transition-all duration-700"
-                     style={{
-                       width: `${clampProgress(weekProgress.progress_percent)}%`,
-                       background: "#6EEB5A",
-                     }}
-                     data-testid="weekly-progress-bar"
-                   />
+                   {weekProgress.progress_state !== "partial" && weekProgress.progress_state !== "unavailable" && (
+                     <div
+                       className="h-full rounded-full transition-all duration-700"
+                       style={{
+                         width: `${clampProgress(weekProgress.progress_percent)}%`,
+                         background: "#6EEB5A",
+                       }}
+                      data-testid="weekly-progress-bar"
+                     />
+                   )}
                   </div>
                 )}
                 {weekProgress.unmatched_state !== "empty" && (
