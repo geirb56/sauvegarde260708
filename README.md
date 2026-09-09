@@ -90,14 +90,9 @@ Backend:
 - Redis-compatible queue/cache layer
 - Paddle billing webhooks
 
-Worker entrypoint:
-- `backend/workers/run_all.py`
-
-It starts:
-- `sync_worker`
-- `event_worker`
-- `scheduler_worker`
-- `monitor_worker`
+Worker topology differs by runtime:
+- local `docker-compose.yml` starts `sync-worker`, `scheduler-worker`, and `event-worker`
+- Railway worker runtime uses `backend/workers/run_all.py` and starts `sync_worker`, `event_worker`, `scheduler_worker`, and `monitor_worker`
 
 ## 6. Frontend
 
@@ -122,7 +117,25 @@ Current rules:
 
 ## 8. Local setup
 
-### Backend
+### Backend / infra
+
+From the repository root:
+
+```bash
+docker compose up --build
+```
+
+This starts:
+- API
+- Mongo
+- Redis
+- sync worker
+- scheduler worker
+- event worker
+
+It does **not** start the frontend dev server or `monitor_worker`.
+
+### Backend Python setup
 
 ```bash
 cd backend
@@ -133,24 +146,13 @@ pip install -r requirements.txt
 
 ### Frontend
 
+Run the frontend separately in another terminal:
+
 ```bash
 cd frontend
 npm install --legacy-peer-deps
+npm start
 ```
-
-### Docker Compose
-
-```bash
-cd /home/runner/work/sauvegarde260708/sauvegarde260708
-docker compose up --build
-```
-
-Main local dependencies:
-- MongoDB
-- Redis
-- backend API
-- frontend dev server
-- workers
 
 ## 9. Tests
 

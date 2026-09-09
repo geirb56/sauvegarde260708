@@ -79,11 +79,16 @@ Current repository Docker config provides:
 - Redis container
 - healthchecks on API, Redis, and Mongo
 
+Important topology difference:
+- local Docker Compose does **not** start a frontend service
+- local Docker Compose does **not** start `monitor-worker`
+
 ### Production-style override
 `docker-compose.prod.yml` removes direct external Redis/Mongo exposure and expects runtime secret injection.
 
 ### Railway worker runtime
 `deploy/railway/Dockerfile.worker` packages the worker service that runs `python -m workers.run_all` and mounts `GCCLI_HOME` under `/data/gccli`.
+That Railway runtime starts all four worker loops, including `monitor_worker`.
 
 ---
 
@@ -132,9 +137,8 @@ Current runtime-oriented checks supported by the repository include:
 - signed Paddle webhook verification
 - Garmin session restore path across containers
 
-Useful checks:
+Useful checks from the repository root:
 ```bash
-cd /home/runner/work/sauvegarde260708/sauvegarde260708
 docker compose up --build
 curl http://localhost:8000/health
 ```

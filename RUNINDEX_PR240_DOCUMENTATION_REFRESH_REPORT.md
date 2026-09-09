@@ -2,7 +2,9 @@
 
 - Repository: `geirb56/sauvegarde260708`
 - Integration target: `copilot/dev`
-- Audited source HEAD: `5b694ea669e5812e90fed138e350dd98712e5404`
+- Base SHA: `5b694ea669e5812e90fed138e350dd98712e5404`
+- Head before C240 correction: `d2716923fb901af0429b01c9a7c1f2ab1f5dc1ef`
+- Final PR head: `TO_FILL_AFTER_C240_CORRECTION_COMMIT`
 - Scope: documentation only
 
 ## Objective
@@ -16,6 +18,7 @@ Refresh the living documentation so it matches the current verified repository s
 - `DEPLOYMENT.md`
 - `.github/copilot-instructions.md`
 - `memory/PRD.md`
+- `memory/test_credentials.md` (working-tree exposure removed from this branch)
 - `PRODUCTION_READINESS_REPORT.md`
 - `RUNINDEX_PR239_REPORT.md` (renamed from `RUNINDEX_PR238_REPORT.md`)
 - `RUNINDEX_PR236_REPORT.md`
@@ -27,12 +30,15 @@ Refresh the living documentation so it matches the current verified repository s
 - switched the canonical branch/reference from old `main` assumptions to `copilot/dev`
 - updated verified HEAD and merged PR sequence
 - separated RunIndex, Readiness, and Training authorities
-- refreshed training load, performance curve, training paces, Garmin, workers, and subscription contracts
+- corrected the Performance Curve documentation so 90-day qualification benchmark logic is distinguished from the current 730-day contributor pool
+- documented the current product/code divergence on personal-k slope-evidence learning window without changing runtime code
 - added current runtime gate, roadmap, and future product vision sections
 
 ### README
 - removed obsolete “AI score / mono-compte GCCLI” wording
-- documented the current deterministic product split and current runtime architecture
+- corrected local setup so Docker Compose is documented as backend/infra only
+- documented that the frontend runs separately with `npm start` in another terminal
+- clarified Docker Compose vs Railway worker topology
 - pointed readers to canonical docs instead of stale historical snapshots
 
 ### Deployment
@@ -45,11 +51,42 @@ Refresh the living documentation so it matches the current verified repository s
 - corrected the nonexistent PR #238 report into the real PR #239 report
 - preserved historical evidence files instead of rewriting the whole archive
 
+## P0 SECURITY — VERSIONED SECRET FOUND
+
+path:
+`memory/test_credentials.md`
+
+types:
+- test account credential
+- JWT secret
+
+values:
+REDACTED
+
+Assessment:
+- the file contains an email pattern, password labeling, `JWT_SECRET_KEY`, and a user UUID
+- no obvious placeholder markers were found
+- it must be treated as potentially real historical credential material
+- no external authentication attempt was made
+- no JWT generation or validation was attempted
+
+Working-tree action in this PR:
+- working-tree exposure removed from this branch
+- historical exposure remains in Git history and is not resolved by this PR alone
+
+SECURITY FOLLOW-UP REQUIRED:
+- rotate/revoke affected test account credential
+- rotate JWT secret if still/currently used or if provenance cannot prove it obsolete
+- assess Git history purge
+- verify no other versioned secret copies exist
+
 ## Validation performed
 
+Tests / checks for this documentation correction:
 - repository fact audit against current code and GitHub PR state
-- documentation secret scan on targeted markdown files: no secrets detected
+- redacted metadata audit of `memory/test_credentials.md`
 - `git diff --check`
+- targeted secret scanning on changed documentation files
 
 ## Constraints respected
 

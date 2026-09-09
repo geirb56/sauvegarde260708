@@ -164,26 +164,42 @@ Important rules:
 
 Canonical file: `backend/training_v2/performance_model.py`
 
-Current constants and rules:
+Current implemented facts:
 - formula: `T(D) = A × D^k`
 - `RIEGEL_K = 1.06`
-- personal speed benchmark window = 90 days
 - race predictions come from qualified observed performances only
-- qualified observations carry confidence and diagnostics
 - slope-evidence uses HIGH-confidence observations only
 - k-identifiability is checked explicitly
 - diagnostics expose `slope_evidence_count`, distance min/max, confidence and uncertainty signals
+- contributor-pool max age is currently `MAX_RIEGEL_SOURCE_AGE_DAYS = 730`
+- `PERSONAL_SPEED_WINDOW_DAYS = 90` exists, but it controls only the strictly-prior personal-speed benchmark used while qualifying each performance
+
+Explicit window distinction:
+- Qualification speed benchmark: 90 days
+- Performance-curve contributors: up to 730 days
+- Slope evidence: HIGH-confidence subset within that contributor pool
+
+Product decision:
+- personal-k / slope-evidence learning window should be 90 days
+
+Current code:
+- the performance-curve contributor pool can currently include qualified observations up to 730 days
+- the 90-day constant does not currently limit the fit contributor pool itself
+
+Status:
+- code / product divergence
+- future dedicated corrective PR required
+- do not change `performance_model.py` in this documentation PR
 
 Interpretation:
-- `A` = current recent level
-- `k` = personal curve shape / relative endurance
+- Product intent: `A` should represent current/recent level
+- Product intent: `k` should represent personal curve shape / relative endurance
+- Current implementation: `A` and `k` are fitted from the same qualified contributor pool
+- Because contributors can currently extend to 730 days, the desired “recent A / 90-day k memory” separation is not yet fully implemented
 
 Fallback rule:
 - when evidence cannot identify slope robustly, fallback to `k = 1.06`
 - this is a prior fallback, not an arbitrary uplift
-
-Do not document 28-day or 60-day personal-speed windows here.
-The current implemented window is 90 days.
 
 ---
 
