@@ -1,192 +1,185 @@
-# RunIndex — Roadmap de déploiement
+# RunIndex — Deployment Notes
 
-> Document opérationnel : phases, checklists go/no-go, points d'attention.  
-> Dernière mise à jour : 2026-08-02
-
----
-
-## Vue d'ensemble des phases
-
-| Phase | Objectif | Statut |
-|-------|----------|--------|
-| **Phase 0** | Préparation infra & documentation | ✅ En cours |
-| **Phase 1** | Staging fonctionnel (mono-compte Garmin) | 🔲 À démarrer |
-| **Phase 2** | Production (multi-utilisateurs, Garmin multi-compte) | 🔲 Bloqué Phase 1 |
-| **Phase 3** | Scale & observabilité | 🔲 Futur |
+> Current deployment-oriented reference for the repository as verified on `copilot/dev` at `5b694ea669e5812e90fed138e350dd98712e5404`.
+> This document describes the current runtime shape and the remaining final runtime gate.
 
 ---
 
-## Phase 0 — Préparation infra & documentation
+## 1. Current runtime shape
 
-### Objectifs
-- Créer la branche `release/v1.0` à partir de `main`
-- README opérationnel (stack, setup, variables)
-- `.env.example` complet et commenté
-- `docker-compose.yml` staging-ready (MongoDB, healthchecks, secrets propres)
-- Ce fichier `DEPLOYMENT.md`
+RunIndex is currently documented around these runtime components:
+- frontend runtime
+- backend FastAPI runtime
+- MongoDB
+- Redis / Upstash-compatible Redis
+- out-of-process workers
+- GCCLI per-user Garmin sessions
+- Paddle billing
 
-### Commandes
+This document does **not** claim that the full Beta runtime gate has already been completed.
 
+---
+
+## 2. Application components
+
+### Frontend
+- React frontend in `frontend/`
+- consumes backend APIs for dashboard, training, onboarding, subscriptions, and coach UX
+
+### Backend
+- FastAPI backend in `backend/server.py`
+- JWT-authenticated user identity
+- Garmin, training, RunIndex, readiness, subscription, and Paddle endpoints
+
+### Data stores
+- MongoDB for application state and Garmin-derived data
+- Redis-compatible runtime for queueing, locks, rate limiting, feed cache, and monitoring state
+
+### Workers
+Canonical worker entrypoint:
+- `backend/workers/run_all.py`
+
+It runs four workers:
+- `sync_worker`: consumes the Redis queue and executes GCCLI sync
+- `event_worker`: fans out `ACTIVITY_CREATED` into derived workouts + feed cache
+- `scheduler_worker`: schedules incremental syncs with a Redis leader lock
+- `monitor_worker`: evaluates queue health and emits alerts with a Redis leader lock
+
+Railway worker packaging exists in:
+- `deploy/railway/Dockerfile.worker`
+
+---
+
+## 3. Garmin runtime model
+
+Current Garmin integration uses GCCLI.
+
+Real current session architecture:
+- one GCCLI session per user
+- local session home under `GCCLI_HOME/{user_id}`
+- encrypted session blob persisted in Mongo collection `garmin_sessions`
+- restore-before-sync behavior when workers run in a different container/host
+- delete-on-disconnect behavior
+- strict per-user isolation
+
+Do **not** document GCCLI as a single global runtime login.
+Do **not** claim official Garmin OAuth capability unless the code actually implements it.
+
+---
+
+## 4. Current infrastructure assumptions in repo config
+
+### Local/containerized runtime
+Current repository Docker config provides:
+- API container
+- `sync-worker`
+- `scheduler-worker`
+- `event-worker`
+- MongoDB container
+- Redis container
+- healthchecks on API, Redis, and Mongo
+
+### Production-style override
+`docker-compose.prod.yml` removes direct external Redis/Mongo exposure and expects runtime secret injection.
+
+### Railway worker runtime
+`deploy/railway/Dockerfile.worker` packages the worker service that runs `python -m workers.run_all` and mounts `GCCLI_HOME` under `/data/gccli`.
+
+---
+
+## 5. Secrets and configuration
+
+Current environment/config categories include:
+- Mongo: `MONGO_URL`, `DB_NAME`
+- JWT/auth: `JWT_SECRET_KEY`, OAuth client IDs, `ADMIN_EMAILS`
+- Redis: `REDIS_URL`
+- frontend/runtime: `FRONTEND_URL`, `REACT_APP_BACKEND_URL`, `TRUSTED_PROXY_COUNT`
+- Paddle: `PADDLE_API_KEY`, `PADDLE_WEBHOOK_SECRET`, `PADDLE_ENVIRONMENT`, `PADDLE_PRICE_ID`, `PADDLE_CLIENT_TOKEN`
+- Garmin/GCCLI: `GCCLI_HOME`, optional bootstrap credentials, runtime connector settings
+- worker tuning: concurrency, watchdog, scheduler, monitor intervals
+
+Rules:
+- inject secrets at runtime
+- never commit real secrets
+- do not echo secrets in logs or reports
+
+---
+
+## 6. Subscription and billing runtime
+
+Current commercial contract:
+- FREE
+- TRIAL
+- PREMIUM
+
+Current authoritative behavior:
+- new users start FREE
+- 30-day trial is granted server-side after Garmin identity verification
+- one Garmin identity = one trial
+- Paddle is the paid subscription authority
+- access control resolves from backend JWT identity and fails closed on invalid premium state
+- Paddle webhooks are signature-verified server-side
+
+---
+
+## 7. Operational checks
+
+Current runtime-oriented checks supported by the repository include:
+- API health endpoint
+- queue health monitoring
+- worker leader locks
+- worker queue watchdog/requeue behavior
+- signed Paddle webhook verification
+- Garmin session restore path across containers
+
+Useful checks:
 ```bash
-# Créer la branche release depuis main
-git fetch origin main
-git checkout -b release/v1.0 origin/main
-
-# Vérifier l'état de l'environnement
-cp .env.example .env
-# Éditer .env — remplir les valeurs obligatoires
+cd /home/runner/work/sauvegarde260708/sauvegarde260708
 docker compose up --build
 curl http://localhost:8000/health
 ```
 
-### Checklist go/no-go Phase 0
+---
 
-- [ ] `README.md` décrit le projet, la stack et les instructions de démarrage
-- [ ] `.env.example` contient toutes les variables (JWT, Mongo, Redis, Paddle, Garmin, LLM)
-- [ ] `docker-compose.yml` : MongoDB (pas Postgres), healthchecks, volumes nommés, pas de mots de passe en dur
-- [ ] `GET /health` répond `{"status": "ok"}` après `docker compose up`
-- [ ] Aucun secret réel dans Git (`git log --all -p | grep -i "secret\|password\|key"`)
+## 8. Final runtime gate before Beta
+
+Canonical gate still to validate end-to-end:
+- Garmin real connect / reconnect
+- sync
+- workers / queues
+- RunIndex
+- Performance Curve
+- VMA history
+- Training Paces
+- Readiness
+- Training Today
+- Training Week
+- structured prescription
+- frozen snapshots
+- Daily Adaptation
+- prescribed vs performed
+- Garmin matching
+- unmatched actual
+- local dates
+- multi-user isolation
+- imperial units
+- FREE / TRIAL / PREMIUM
+- Paddle
+- trial Garmin identity
+- onboarding
+- mobile
+- network / storage errors
+
+Then:
+- Controlled Beta
 
 ---
 
-## Phase 1 — Staging fonctionnel
+## 9. Documentation authority
 
-### Objectifs
-- Déployer sur un environnement staging (VM, Railway, Render, ou VPS)
-- Valider le flux complet : inscription → connexion Garmin → sync → RunIndex
-- Activer Paddle en mode sandbox (webhooks signés)
-- Valider les tests d'authentification multi-utilisateurs
+Current canonical deployment/product references:
+- `docs/RUNINDEX_MASTER_ROADMAP_AND_DECISIONS.md`
+- `DEPLOYMENT.md`
 
-### Prérequis
-- MongoDB Atlas (M0 free tier suffisant) **ou** MongoDB auto-hébergé avec auth
-- Redis (Upstash free tier **ou** Redis Cloud)
-- Secrets injectés via Doppler / Vault (jamais en clair)
-- Domaine + TLS (Let's Encrypt ou Cloudflare)
-
-### Variables obligatoires pour le staging
-
-```
-ENVIRONMENT=production
-MONGO_URL=mongodb+srv://...
-DB_NAME=runindex_staging
-JWT_SECRET_KEY=<openssl rand -hex 32>
-REDIS_URL=redis://...
-FRONTEND_URL=https://staging.runindex.app
-TRUSTED_PROXY_COUNT=1
-PADDLE_API_KEY=...
-PADDLE_WEBHOOK_SECRET=...
-PADDLE_ENVIRONMENT=sandbox
-GARMIN_USERNAME=...
-GARMIN_PASSWORD=...
-EMERGENT_LLM_KEY=...
-```
-
-### Checklist go/no-go Phase 1
-
-- [ ] `ENVIRONMENT=production` — CORS strict, demo mode bloqué
-- [ ] Connexion MongoDB stable (ping < 100 ms)
-- [ ] Redis accessible (PING → PONG)
-- [ ] `GET /health` → 200
-- [ ] Inscription utilisateur → JWT valide
-- [ ] OAuth Google/Apple → session JWT
-- [ ] Connexion compte Garmin → gccli bootstrap OK
-- [ ] Sync manuel Garmin → activités en base MongoDB
-- [ ] Calcul RunIndex → score non-null
-- [ ] Webhook Paddle sandbox → signature vérifiée, abonnement créé
-- [ ] Frontend accessible sur HTTPS avec TLS valide
-- [ ] Logs sans credentials (grep "password\|secret" dans les logs Docker)
-
----
-
-## Phase 2 — Production multi-utilisateurs
-
-### Prérequis bloquants (voir `MULTI_USER_AUTH_MIGRATION_REPORT.md`)
-- Migration Garmin multi-compte : chaque utilisateur dispose de son propre compte Garmin Connect (gccli multi-credential vault)
-- Migration des `user_id="default"` restants en base MongoDB
-- Tests de charge (≥ 100 utilisateurs simultanés)
-
-### Points d'attention Garmin
-- **gccli est actuellement mono-compte** : `GARMIN_USERNAME` et `GARMIN_PASSWORD` sont globaux.
-- En production multi-utilisateurs, chaque utilisateur doit posséder son propre compte Garmin.
-- Le credential vault (`app/credential_vault.py`) est conçu pour le multi-compte mais gccli ne supporte pas encore le changement de session à la volée.
-- **Ne pas exposer** `GARMIN_USERNAME` / `GARMIN_PASSWORD` dans les logs ou les réponses API.
-- La rotation des credentials Garmin doit se faire hors-bande (pas d'API dédiée pour l'instant).
-
-### Checklist go/no-go Phase 2
-
-- [ ] Zéro occurrence de `user_id="default"` dans les requêtes MongoDB actives
-- [ ] gccli multi-compte validé (credential vault par utilisateur)
-- [ ] Tests de charge : 100 syncs concurrents sans dégradation
-- [ ] Backups MongoDB automatiques (Atlas ou mongodump CRON)
-- [ ] Rate limiting Garmin : max 1 sync / 10 min / utilisateur (respect ToS Garmin)
-- [ ] Alertes monitoring (uptime, latence p95, erreurs 5xx)
-
----
-
-## Phase 3 — Scale & observabilité
-
-- Kubernetes (ou Fly.io multi-region) pour API et workers
-- Prometheus + Grafana pour les métriques (endpoint `/metrics` déjà prévu)
-- Sentry pour le tracing d'erreurs backend et frontend
-- CDN pour les assets statiques React
-- Cache Redis L2 pour les calculs RunIndex (TTL 1 heure)
-
----
-
-## Gestion des secrets
-
-### Règles absolues
-1. **Jamais** de secret dans Git (même dans un commit revert).
-2. Utiliser un gestionnaire de secrets : Doppler, HashiCorp Vault, 1Password Secrets Automation, ou Docker Secrets.
-3. Le module `backend/config/secrets.py` lit exclusivement `os.environ` — zéro code spécifique au gestionnaire.
-4. Rotation : les secrets compromis doivent être révoqués **immédiatement** côté fournisseur, puis mis à jour dans le gestionnaire.
-
-### Secrets critiques
-| Variable | Rotation recommandée | Niveau de criticité |
-|----------|----------------------|---------------------|
-| `JWT_SECRET_KEY` | En cas de compromission (invalide tous les tokens) | 🔴 Critique |
-| `PADDLE_WEBHOOK_SECRET` | Depuis le dashboard Paddle | 🔴 Critique |
-| `PADDLE_API_KEY` | Depuis le dashboard Paddle | 🔴 Critique |
-| `GARMIN_PASSWORD` | Dès changement de mot de passe Garmin | 🟠 Élevé |
-| `EMERGENT_LLM_KEY` | Mensuelle (bonne pratique) | 🟠 Élevé |
-| `MONGO_URL` | En cas de compromission | 🔴 Critique |
-
----
-
-## Démarrage rapide staging (Docker Compose)
-
-```bash
-# Cloner le repo et créer la branche release
-git clone https://github.com/geirb56/sauvegarde260708.git
-cd sauvegarde260708
-git checkout release/v1.0
-
-# Configurer les secrets (jamais en clair — exemple avec Doppler)
-doppler run -- docker compose up -d
-
-# Vérifier les services
-docker compose ps
-curl http://localhost:8000/health
-
-# Voir les logs
-docker compose logs -f api
-docker compose logs -f sync-worker
-```
-
----
-
-## Commandes utiles
-
-```bash
-# Vérifier qu'aucun secret ne traine dans Git
-git log --all -p | grep -iE "(password|secret|api_key|token)" | grep -v "example\|placeholder\|VARIABLE"
-
-# Générer un JWT_SECRET_KEY solide
-openssl rand -hex 32
-
-# Tester la connexion MongoDB depuis le container API
-docker compose exec api python -c "import asyncio; from motor.motor_asyncio import AsyncIOMotorClient; ..."
-
-# Vider la queue Redis en dev
-docker compose exec redis redis-cli DEL runindex:garmin:queue
-```
+Historical reports remain historical evidence only.
+They are not by themselves proof of current readiness.

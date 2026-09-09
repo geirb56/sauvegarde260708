@@ -1,3 +1,13 @@
+# HISTORICAL / APPEND-ONLY ENGINEERING LOG
+
+> NOT THE CURRENT SOURCE OF TRUTH
+>
+> Current canonical document:
+> `docs/RUNINDEX_MASTER_ROADMAP_AND_DECISIONS.md`
+>
+> Current integration branch:
+> `copilot/dev`
+
 # RunIndex — Project Setup Record
 
 ## Problem Statement
