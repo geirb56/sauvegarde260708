@@ -1,7 +1,7 @@
 # RUNINDEX — PR #238 Report
 
 - Base SHA (copilot/dev audité): `58fe4ca860181b4e14b5341c23c9e85b0acf8ef3`
-- Head final: `cf2f9986c52a5c0c155399a5c2d8331dd5d9db9d`
+- Head final: `044a56b798e852db96cd5edc932fac3be2d7abd4`
 
 ## Fichiers modifiés
 
@@ -55,6 +55,16 @@ Sémantique conservée:
 
 Appliqué aux métriques distance et duration, pour matched et unmatched.
 
+## C239 — correction ciblée progression partielle
+
+- Nouveau contrat explicite dans `computeTrainingWeekProgress`:
+  - `progress_state=empty` => `progress_percent=0`
+  - `progress_state=complete` => pourcentage calculé
+  - `progress_state=partial` => `progress_percent=null`
+  - `progress_state=unavailable` => `progress_percent=null`
+- Une progression partielle/inconnue n’est plus affichée comme `0%`.
+- Dashboard et Training n’affichent plus de fill de barre quand `progress_state` est `partial`/`unavailable` (pas de faux 0% visuel).
+
 ## Readiness: état vs prescription
 
 - Dashboard n’affiche plus `cardioData.recommendation` comme directive de séance.
@@ -67,6 +77,7 @@ Appliqué aux métriques distance et duration, pour matched et unmatched.
 - Convergence réelle volume (28.5 rolling vs 16.3 cible, matched=0, unmatched=8.69, progress=0%).
 - Séparation matched+unmatched (5/16, hors plan 8, jamais 13/16).
 - Données partielles distance/duration => `incomplete`.
+- Régression C239: données partielles => texte incomplet + absence de fill de progression (jamais 0% simulé).
 - Cohérence high readiness + rest day (état de fraîcheur + vraie séance repos, sans `SÉANCE INTENSE`/`RUN HARD`).
 - Vérifications source anti-régression (`Dashboard.jsx`):
   - pas de `weekStats.volume_km` / `weekStats.actual_duration_minutes` pour la cible
@@ -78,11 +89,11 @@ Appliqué aux métriques distance et duration, pour matched et unmatched.
 ### Frontend ciblés
 
 Commande:
-- `npm test -- --watchAll=false --runInBand --testPathPattern='dashboard-training-v2.test.jsx|dashboard-run-readiness-v2.test.jsx|dashboard-run-readiness-null.test.jsx|training-v2-page.test.jsx'`
+- `npm test -- --watchAll=false --runInBand --testPathPattern='dashboard-training-v2.test.jsx|training-v2-page.test.jsx'`
 
 Résultat:
-- 4 suites passées / 4
-- 152 tests passés / 152
+- 2 suites passées / 2
+- 116 tests passés / 116
 
 ### Frontend complet
 
@@ -91,7 +102,7 @@ Commande:
 
 Résultat:
 - 18 suites passées / 18
-- 316 tests passés / 316
+- 317 tests passés / 317
 
 ### Build
 
