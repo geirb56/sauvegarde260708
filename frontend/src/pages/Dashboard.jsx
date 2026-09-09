@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { useUnitSystem } from "@/context/UnitContext";
 import { useSubscription } from "@/context/SubscriptionContext";
+import { computeTrainingWeekProgress } from "@/lib/trainingWeekProgress";
 import { formatDistance } from "@/utils/units";
 import { BrandSplash } from "@/components/LoadingSpinner";
 import {
@@ -373,6 +374,11 @@ function getRunReadinessUnavailableCauseLabel(cause, t) {
   return t("dashboard.readinessUnavailableCause.noDataYet", "Garmin daily metrics are not yet available.");
 }
 
+function getRunReadinessStateLabel(color, t) {
+  const key = color === "green" || color === "yellow" || color === "red" ? color : "gray";
+  return t(`dashboard.readinessStates.${key}`);
+}
+
 function MetricWidget({ icon: Icon, label, value, unit, status, detail }) {
   const colors = STATUS_COLORS[status] || STATUS_COLORS.gray;
   return (
@@ -701,8 +707,7 @@ export default function Dashboard() {
     return <BrandSplash text={t("common.loading")} />;
   }
 
-  const weekStats = insight?.week || { sessions: 0, volume_km: 0 };
-  const monthStats = insight?.month || { volume_km: 0 };
+  const weekProgress = computeTrainingWeekProgress(trainingWeekV2);
   const runIndexData = insight?.run_index;
   const runIndexNull = !runIndexData || runIndexData?.run_index === null || runIndexData?.status === "insufficient";
   const runIndexScore = runIndexData?.run_index ?? null;
@@ -769,8 +774,9 @@ export default function Dashboard() {
               );
             }
             const m = cardioData?.metrics || {};
-            const recStyle = REC_STYLES[cardioData?.recommendation_color] || REC_STYLES.gray;
-            const history = cardioData?.history || [];
+            const readinessStateColor = cardioData?.recommendation_color || m.run_readiness_status || "gray";
+            const recStyle = REC_STYLES[readinessStateColor] || REC_STYLES.gray;
+            const readinessStateLabel = getRunReadinessStateLabel(readinessStateColor, t);
             
             // Run Readiness Score — single source of truth from backend (Garmin insights)
             // run_readiness may be null when data is INSUFFICIENT — do not default to 0 or 100.
@@ -812,7 +818,7 @@ export default function Dashboard() {
                         style={{ background: `${recStyle.accent}1f`, color: recStyle.accent }}
                         data-testid="run-readiness-recommendation"
                       >
-                        {cardioData?.recommendation || "—"}
+                        {readinessStateLabel}
                       </span>
                       <button
                         onClick={fetchCardioData}
@@ -1063,9 +1069,19 @@ export default function Dashboard() {
       {/* WEEKLY TARGET — V2 authority (TRIAL/PREMIUM only); FREE sees static blur preview */}
       {isFree ? (
         <WeekPreviewFree t={t} />
-      ) : trainingWeekV2?.weekly_target && (() => {
-        const wt = trainingWeekV2.weekly_target;
-        const basis = wt.target_basis;
+      ) : weekProgress && (() => {
+        const basis = weekProgress.target_basis;
+        const plannedValue = weekProgress.planned_value;
+        const completedLabel = weekProgress.completed_state === "partial"
+          ? t("dashboard.incompleteData")
+          : (basis === "distance"
+            ? formatDistance(weekProgress.completed_planned_value, { unitSystem })
+            : `${Math.round(weekProgress.completed_planned_value)} ${t("dashboard.minutes")}`);
+        const unmatchedLabel = weekProgress.unmatched_state === "partial"
+          ? t("dashboard.incompleteData")
+          : (basis === "distance"
+            ? formatDistance(weekProgress.unmatched_value, { unitSystem })
+            : `${Math.round(weekProgress.unmatched_value)} ${t("dashboard.minutes")}`);
         return (
           <div
             className="rounded-2xl p-4 space-y-3 animate-in"
@@ -1086,52 +1102,68 @@ export default function Dashboard() {
               <div className="space-y-2" data-testid="weekly-target-distance">
                 <div className="flex items-baseline justify-between">
                   <span className="text-2xl font-black" style={{ color: "#ffffff" }} data-testid="weekly-target-value">
-                    {formatDistance(wt.target_km, { unitSystem })}
+                   {formatDistance(plannedValue, { unitSystem })}
                   </span>
                   <span className="text-sm" style={{ color: "var(--text-tertiary)" }}>
                     {t("dashboard.weeklyDone")}:{" "}
                     <span style={{ color: "#ffffff" }} data-testid="weekly-volume-done">
-                      {formatDistance(weekStats.volume_km, { unitSystem })}
+                     {completedLabel}
                     </span>
                   </span>
                 </div>
-                {wt.target_km > 0 && (
+               {plannedValue > 0 && (
                   <div className="h-2 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.08)" }}>
-                    <div
-                      className="h-full rounded-full transition-all duration-700"
-                      style={{
-                        width: `${clampProgress((weekStats.volume_km / wt.target_km) * 100)}%`,
-                        background: "#6EEB5A",
-                      }}
+                   {weekProgress.progress_state !== "partial" && weekProgress.progress_state !== "unavailable" && (
+                     <div
+                       className="h-full rounded-full transition-all duration-700"
+                       style={{
+                         width: `${clampProgress(weekProgress.progress_percent)}%`,
+                         background: "#6EEB5A",
+                       }}
+                       data-testid="weekly-progress-bar"
+                     />
+                   )}
+                 </div>
+               )}
+               {weekProgress.unmatched_state !== "empty" && (
+                 <div className="flex items-baseline justify-between text-sm" style={{ color: "var(--text-tertiary)" }}>
+                   <span>{t("dashboard.weeklyOutsidePlan")}:</span>
+                   <span style={{ color: "#ffffff" }} data-testid="weekly-volume-extra">{unmatchedLabel}</span>
+                 </div>
+               )}
+             </div>
+            ) : basis === "duration" ? (
+             <div className="space-y-2" data-testid="weekly-target-duration">
+               <div className="flex items-baseline justify-between">
+                 <span className="text-2xl font-black" style={{ color: "#ffffff" }} data-testid="weekly-target-value">
+                  {plannedValue} {t("dashboard.minutes")}
+                  </span>
+                 <span className="text-sm" style={{ color: "var(--text-tertiary)" }}>
+                  {t("dashboard.weeklyDone")}:{" "}
+                  <span style={{ color: "#ffffff" }} data-testid="weekly-duration-done">
+                    {completedLabel}
+                   </span>
+                 </span>
+               </div>
+               {plannedValue > 0 && (
+                 <div className="h-2 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.08)" }}>
+                   {weekProgress.progress_state !== "partial" && weekProgress.progress_state !== "unavailable" && (
+                     <div
+                       className="h-full rounded-full transition-all duration-700"
+                       style={{
+                         width: `${clampProgress(weekProgress.progress_percent)}%`,
+                         background: "#6EEB5A",
+                       }}
                       data-testid="weekly-progress-bar"
-                    />
+                     />
+                   )}
                   </div>
                 )}
-              </div>
-            ) : basis === "duration" ? (
-              <div className="space-y-2" data-testid="weekly-target-duration">
-                <div className="flex items-baseline justify-between">
-                  <span className="text-2xl font-black" style={{ color: "#ffffff" }} data-testid="weekly-target-value">
-                   {wt.target_duration_minutes} {t("dashboard.minutes")}
-                  </span>
-                  <span className="text-sm" style={{ color: "var(--text-tertiary)" }}>
-                   {t("dashboard.weeklyDone")}:{" "}
-                   <span style={{ color: "#ffffff" }} data-testid="weekly-duration-done">
-                     {weekStats.actual_duration_minutes ?? 0} {t("dashboard.minutes")}
-                   </span>
-                  </span>
-                </div>
-                {wt.target_duration_minutes > 0 && (
-                  <div className="h-2 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.08)" }}>
-                   <div
-                     className="h-full rounded-full transition-all duration-700"
-                     style={{
-                       width: `${clampProgress(((weekStats.actual_duration_minutes ?? 0) / wt.target_duration_minutes) * 100)}%`,
-                       background: "#6EEB5A",
-                     }}
-                     data-testid="weekly-progress-bar"
-                   />
-                  </div>
+                {weekProgress.unmatched_state !== "empty" && (
+                 <div className="flex items-baseline justify-between text-sm" style={{ color: "var(--text-tertiary)" }}>
+                   <span>{t("dashboard.weeklyOutsidePlan")}:</span>
+                   <span style={{ color: "#ffffff" }} data-testid="weekly-duration-extra">{unmatchedLabel}</span>
+                 </div>
                 )}
               </div>
             ) : null}
