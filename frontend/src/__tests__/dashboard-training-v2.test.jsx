@@ -470,7 +470,8 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     const badge = container.querySelector('[data-testid="run-readiness-recommendation"]');
     expect(badge).not.toBeNull();
     expect(badge.textContent).toContain("Fraîcheur élevée");
-    expect(container.textContent).toContain("Repos");
+    expect(container.textContent).toContain("Jour de repos");
+    expect(container.textContent).not.toContain("0 min");
     expect(container.textContent).not.toContain("SÉANCE INTENSE");
     expect(container.textContent).not.toContain("RUN HARD");
     unmount();
