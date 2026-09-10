@@ -1,3 +1,13 @@
+# HISTORICAL REPORT — SUPERSEDED
+
+This report reflects an earlier architecture and is not the current production-readiness authority.
+
+Current references:
+- `docs/RUNINDEX_MASTER_ROADMAP_AND_DECISIONS.md`
+- `DEPLOYMENT.md`
+
+---
+
 # PRODUCTION READINESS REPORT
 
 ## Changements réalisés

@@ -1,148 +1,187 @@
 # RunIndex
 
-**RunIndex** est un coach course à pied intelligent (AI-powered), multiutilisateur. Il synchronise automatiquement les activités Garmin, calcule un score RunIndex (charge, récupération, HRV), génère des plans d'entraînement personnalisés et propose un coach conversationnel LLM.
+## 1. Product
 
----
+RunIndex is a deterministic running product built around three separate concepts:
+- **RunIndex**: medium/long-term performance and potential view
+- **Readiness**: freshness / capacity state of the day
+- **Training**: prescription authority
 
-## Stack technique
+The LLM Coach is a separate explanation/conversation layer.
+It is not the scientific authority.
 
-| Couche | Technologie |
-|--------|-------------|
-| Backend API | FastAPI (Python 3.11), MongoDB (Motor async), Redis |
-| Authentification | JWT (PyJWT), OAuth Google/Apple |
-| Workers asynchrones | `workers/sync_worker.py`, `scheduler_worker.py`, `event_worker.py` (Redis queue, at-least-once) |
-| Intégration Garmin | gccli (CLI Garmin Connect, mono-compte phase actuelle) |
-| Paiements | Paddle (webhooks signés) |
-| LLM / Coach IA | OpenAI GPT via Emergent LLM Key, RAG maison |
-| Frontend | React (Create React App + Craco), Tailwind CSS |
-| Infrastructure | Docker Compose (MongoDB, Redis, API, Workers) |
+## 2. Core concepts
 
----
+### RunIndex
 
-## Prérequis
+Current RunIndex is built from four pillars:
+- Speed
+- Endurance
+- Consistency
+- Efficiency
 
-- **Docker** ≥ 24 et **Docker Compose** ≥ 2
-- **Node.js** ≥ 18 (développement frontend)
-- **Python** ≥ 3.11 (développement backend)
-- Compte **Garmin Connect** (pour la synchronisation des activités)
-- Compte **Paddle** (sandbox ou production) pour les paiements
+The global score is expressed on `/1000`.
+Missing pillars are excluded and remaining weights are renormalized.
+If sufficiency is not met, the score stays unavailable.
 
----
+### Readiness
 
-## Variables d'environnement
+Readiness describes freshness state, not workout prescription.
+Current user-facing states are:
+- High freshness
+- Moderate freshness
+- Low freshness
+- Unavailable
 
-Copier `.env.example` vers `backend/.env` (et `.env` pour Docker Compose) et remplir chaque valeur.  
-Voir `.env.example` pour la liste complète commentée.
+### Training
 
-**Variables obligatoires au démarrage :**
+Training is the prescription authority.
+Garmin activity is the performed-observation authority.
+A high-readiness day can still legitimately be a rest day.
 
-| Variable | Description |
-|----------|-------------|
-| `MONGO_URL` | URI MongoDB (`mongodb://...`) |
-| `DB_NAME` | Nom de la base de données |
-| `JWT_SECRET_KEY` | Clé secrète JWT (≥ 32 caractères aléatoires) |
-| `REDIS_URL` | URI Redis (`redis://...`) |
-| `FRONTEND_URL` | URL publique du frontend (CORS strict en production) |
-| `ENVIRONMENT` | `development` ou `production` |
+## 3. Architecture
 
----
+Current core flow:
 
-## Démarrage local (Docker Compose)
+Garmin → `DomainActivity` → Training V2 engines → weekly plan / today adaptation
+
+Current Training V2 pipeline:
+- TrainingHistory
+- TrainingLoad
+- RunnerProfile
+- TrainingState
+- PlanGoal
+- Periodization
+- WeeklyTarget
+- RecentTrainingResponse
+- WeeklyReconciliation
+- WorkoutGenerator
+- DailyAdaptation
+
+Additional current layers:
+- prescribed vs performed
+- Garmin matching
+- unmatched actuals
+- served prescription
+- structured workout
+- immutable prescription snapshot
+- Today / Week convergence
+
+## 4. Garmin
+
+RunIndex currently uses GCCLI.
+
+Current Garmin session model:
+- one GCCLI session per user
+- per-user home under `GCCLI_HOME/{user_id}`
+- Mongo persistence in `garmin_sessions`
+- encrypted at rest
+- restored before sync when needed
+- deleted on disconnect
+
+Do not describe the current implementation as a single global Garmin login.
+Do not describe official Garmin OAuth unless that flow exists in code.
+
+## 5. Backend / workers
+
+Backend:
+- FastAPI
+- MongoDB
+- Redis-compatible queue/cache layer
+- Paddle billing webhooks
+
+Worker topology differs by runtime:
+- local `docker-compose.yml` starts `sync-worker`, `scheduler-worker`, and `event-worker`
+- Railway worker runtime uses `backend/workers/run_all.py` and starts `sync_worker`, `event_worker`, `scheduler_worker`, and `monitor_worker`
+
+## 6. Frontend
+
+Frontend lives in `frontend/` and consumes the backend APIs for dashboard, training, subscriptions, onboarding, and coach flows.
+
+Shared Training/Dashboard weekly progress authority:
+- `frontend/src/lib/trainingWeekProgress.js`
+
+## 7. Subscription
+
+Current commercial states:
+- FREE
+- TRIAL
+- PREMIUM
+
+Current rules:
+- new user starts FREE
+- 30-day Premium trial is activated server-side after Garmin identity verification
+- one Garmin identity = one trial
+- Paddle is the paid subscription authority
+- invalid premium state fails closed
+
+## 8. Local setup
+
+### Backend / infra
+
+From the repository root:
 
 ```bash
-# 1. Cloner et configurer les variables d'environnement
-cp .env.example .env
-# Éditer .env et remplir les valeurs (voir section Variables ci-dessus)
-
-# 2. Lancer tous les services
 docker compose up --build
-
-# L'API est disponible sur http://localhost:8000
-# La doc Swagger est sur http://localhost:8000/docs
 ```
 
-### Développement backend (sans Docker)
+This starts:
+- API
+- Mongo
+- Redis
+- sync worker
+- scheduler worker
+- event worker
+
+It does **not** start the frontend dev server or `monitor_worker`.
+
+### Backend Python setup
 
 ```bash
 cd backend
-python -m venv .venv && source .venv/bin/activate
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
-
-# Prérequis : MongoDB et Redis locaux (ou via Docker)
-docker compose up -d mongo redis
-
-# Copier les variables d'environnement
-cp ../.env.example .env
-# Éditer backend/.env
-
-# Lancer l'API
-uvicorn server:app --reload --port 8000
-
-# Dans un autre terminal : lancer le sync worker
-python -m workers.sync_worker
 ```
 
-### Développement frontend
+### Frontend
+
+Run the frontend separately in another terminal:
 
 ```bash
 cd frontend
-npm install
+npm install --legacy-peer-deps
 npm start
-# Frontend disponible sur http://localhost:3000
 ```
 
----
+## 9. Tests
 
-## Démarrage en production
-
-Voir [DEPLOYMENT.md](./DEPLOYMENT.md) pour la roadmap complète, les checklists go/no-go et les points d'attention (Garmin, secrets, CORS).
-
-En résumé :
-
-1. Injecter tous les secrets via un gestionnaire (Doppler, Vault, Docker Secrets) — jamais dans Git.
-2. Mettre `ENVIRONMENT=production` — active le CORS strict et désactive le mode démo.
-3. Configurer `TRUSTED_PROXY_COUNT` selon le nombre de reverse proxies/load balancers devant l'API.
-4. Lancer `docker compose -f docker-compose.yml up -d`.
-5. Vérifier le healthcheck : `GET /health`.
-
----
-
-## Tests backend
-
+Backend:
 ```bash
 cd backend
-python -m pytest tests/ -v
+python -m pytest
 ```
 
----
-
-## Architecture des services
-
-```
-frontend/ (React)
-    │  HTTPS + JWT ******
-backend/server.py  (FastAPI)
-    ├── /api/auth/*          → JWT multi-user (Google/Apple OAuth)
-    ├── /api/garmin/*        → sync Garmin, queue, healthcheck
-    ├── /api/run-index       → score RunIndex (charge, récupération)
-    ├── /api/coach/*         → coach LLM + RAG
-    └── /api/webhook/paddle  → Paddle webhook (signé)
-         │
-    MongoDB (Motor async)    → activités, métriques, users, abonnements
-    Redis                    → queue jobs, rate limiter, feed cache, SSE
-         │
-    workers/
-    ├── sync_worker.py       → consomme la queue Redis, appelle gccli
-    ├── scheduler_worker.py  → déclenche les syncs périodiques
-    └── event_worker.py      → fan-out ACTIVITY_CREATED → workouts + feed
+Frontend:
+```bash
+cd frontend
+npx craco test --watchAll=false --forceExit
+npm run build
 ```
 
----
+## 10. Canonical documentation
 
-## Configuration OAuth (sans secrets dans Git)
+Current canonical references:
+- `docs/RUNINDEX_MASTER_ROADMAP_AND_DECISIONS.md`
+- `DEPLOYMENT.md`
 
-Toutes les valeurs sensibles sont injectées **uniquement** via les variables d'environnement au runtime.
+Historical PR/audit reports are evidence snapshots, not automatically updated current truth.
 
-- Ne jamais committer `GOOGLE_CLIENT_SECRET`, clés privées Apple, tokens OAuth ou credentials Garmin.
-- Les endpoints `/api/auth/google` et `/api/auth/apple` vérifient l'identité côté backend puis émettent le JWT RunIndex.
-- En production, seul `FRONTEND_URL` est autorisé en CORS (`ENVIRONMENT=production`).
+## 11. Security / secrets
+
+Rules:
+- never commit secrets
+- inject runtime secrets via environment / secret manager
+- never fabricate missing metrics (`None != 0`)
+- no fake sleep / HRV / TSS / pace values
+- deterministic science remains deterministic
