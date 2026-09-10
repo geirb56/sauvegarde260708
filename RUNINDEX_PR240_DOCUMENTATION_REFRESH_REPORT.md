@@ -57,28 +57,30 @@ path:
 `memory/test_credentials.md`
 
 types:
-- test account credential
-- JWT secret
+- versioned test account credential
+- versioned test account password
+- `JWT_SECRET_KEY` mentioned, no value exposed
 
 values:
 REDACTED
 
 Assessment:
-- the file contains an email pattern, password labeling, `JWT_SECRET_KEY`, and a user UUID
+- the deleted file version contained a versioned test-account password finding that must be treated as real historical credential exposure unless later invalidation is proven
+- `JWT_SECRET_KEY` was mentioned in the file, but this PR does not report any JWT secret value being exposed in the current redacted write-up
 - no obvious placeholder markers were found
-- it must be treated as potentially real historical credential material
 - no external authentication attempt was made
 - no JWT generation or validation was attempted
 
 Working-tree action in this PR:
-- working-tree exposure removed from this branch
-- historical exposure remains in Git history and is not resolved by this PR alone
+- `memory/test_credentials.md` was removed from this branch
+- Git history still contains the versioned test-account password exposure
+- historical exposure remains and is not resolved by this PR alone
 
 SECURITY FOLLOW-UP REQUIRED:
 - rotate/revoke affected test account credential
-- rotate JWT secret if still/currently used or if provenance cannot prove it obsolete
 - assess Git history purge
 - verify no other versioned secret copies exist
+- rotate JWT secret only if a real JWT secret value is found elsewhere or provenance proves a still-active secret was exposed
 
 ## Validation performed
 
