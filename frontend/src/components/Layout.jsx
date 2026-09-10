@@ -11,6 +11,7 @@ export const Layout = () => {
   const { user, logout } = useAuth();
   const userId = user?.id;
   const [chatOpen, setChatOpen] = useState(false);
+  const authenticatedBrandSrc = "/runindex-symbol.png";
 
   const navItems = [
     { path: "/", icon: Home, labelKey: "nav.dashboard" },
@@ -31,7 +32,7 @@ export const Layout = () => {
       <header className="header-modern">
         <div className="header-logo">
           <img
-            src="/runindex-logo.png"
+            src={authenticatedBrandSrc}
             alt="RunIndex"
             className="header-logo-img"
             data-testid="app-logo"
