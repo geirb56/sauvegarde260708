@@ -4,6 +4,7 @@ export const translations = {
   en: {
     // Navigation
     nav: {
+      home: "Home",
       dashboard: "Dashboard",
       sessions: "Sessions",
       training: "Training",
@@ -14,6 +15,7 @@ export const translations = {
       progress: "Progress",
       subscription: "Plans",
       settings: "Settings",
+      admin: "Admin",
       tagline: "Elite Endurance Analysis",
     },
     
@@ -284,9 +286,9 @@ export const translations = {
     // Coach
     coach: {
       title: "Coach",
-      subtitle: "Performance Analysis",
+      subtitle: "Explanation and advice",
       placeholder: "Ask about your training...",
-      emptyState: "Ask about your training data. Zone distribution. Pace patterns. Recovery metrics.",
+      emptyState: "Coach helps you understand today's session, recent execution, and Garmin observations without creating a second prescription.",
       you: "You",
       suggestions: {
         trainingLoad: "Analyze training load",
@@ -701,7 +703,7 @@ export const translations = {
     guidanceExtended: { generated: "Guidance generated", generationFailed: "Generation failed", refresh: "Refresh", generate: "Generate Guidance", noGuidance: "No guidance generated yet. Click Refresh to get your training suggestions." },
     paywall: { title: "Activate your running coach", subtitle: "Your personalized training plan is ready", description: "Activate your subscription to access it.", priceDisplay: "€4.99 / month", priceGuarantee: "Price guaranteed for life", feature1: "Personalized training plan", feature2: "Automatic plan adaptation", feature3: "Smart session analysis", feature4: "AI conversational coach", feature5: "Watch/app sync", feature6: "Race predictions", ctaButton: "Activate my coach", perMonth: "month", maybeLater: "Maybe later", activating: "Activating..." },
     subscription: { free: "Free", freeDesc: "Discovery", popular: "Popular", monthly: "Monthly", yearly: "Yearly", unlimitedShort: "Unlimited", messagesShort: "msg/month", included: "Included", choose: "Choose", paymentCancelled: "Payment cancelled", subscriptionActivated: "Subscription activated!", featureMessagesPerMonth: "messages coach/month", featureAnalyses: "Session analyses", featureWeeklyReview: "Weekly review", featureDetailedAnalyses: "Detailed analyses", featureLocalCoach: "Local AI coach", featureAllAnalyses: "All analyses", featurePrioritySupport: "Priority support", featureUnlimitedMessages: "Unlimited messages", featurePriorityAccess: "Priority access", featureVipSupport: "VIP support", subscriptionsTitle: "Subscriptions", choosePlan: "Choose the plan that fits your training", perYear: "year", perMonth: "month", currentPlan: "Current plan", trialActive: "Free trial active — full access", securePayment: "Secure payment by Paddle", trialStarted: "30-day free trial activated!", trialAlreadyUsed: "Free trial already used.", garminTrialUnavailable: "Garmin is connected, but this free trial is no longer available. Switch to Premium to unlock full access." },
-    coachExtended: { analysisPrompt: "Deep analysis of workout: {name}", historyCleared: "History cleared", trainingLoadSuggestion: "Analyze my recent training load and effort distribution.", heartRateSuggestion: "What patterns do you see in my heart rate data?", paceConsistencySuggestion: "How is my pace consistency across recent runs?", workoutAnalyzed: "Workout analyzed", analyzing: "Analyzing...", thinking: "Thinking..." },
+    coachExtended: { analysisPrompt: "Deep analysis of workout: {name}", historyCleared: "History cleared", trainingLoadSuggestion: "Analyze my recent training load and effort distribution.", heartRateSuggestion: "What patterns do you see in my heart rate data?", paceConsistencySuggestion: "How is my pace consistency across recent runs?", workoutAnalyzed: "Workout analyzed", analyzing: "Analyzing...", thinking: "Thinking...", authorityNote: "Training Today remains the only prescription authority. Coach explains what is planned, what happened, and what to watch next.", goToTraining: "Open today and training", goToSessions: "Review synced sessions", helpfulPrompts: "Helpful prompts" },
     ragSummary: { personalizedAnalysis: "Personalized Analysis" },
     chat: { title: "Chat Coach", unlimited: "Unlimited", instantResponsesTitle: "Instant responses (<1s)", clearHistory: "Clear history", firstQuestion: "Ask your first question!", examplePrompt: "E.g. \"How do I recover?\" or \"Analyze my week\"", personalizedResponses: "Personalized instant responses", suggestion1: "Can you make me a plan for the week?", suggestion2: "How can I recover better?", suggestion3: "Analyze my recent workouts", placeholder: "Ask your question...", connectionError: "Connection error" },
     pwa: { installTitle: "Install RunIndex", installMessage: "Tap the share icon then \"Add to Home Screen\"", close: "Close" },
@@ -834,6 +836,7 @@ export const translations = {
   fr: {
     // Navigation
     nav: {
+      home: "Accueil",
       dashboard: "Tableau de bord",
       sessions: "Séances",
       training: "Entraînement",
@@ -844,6 +847,7 @@ export const translations = {
       progress: "Progression",
       subscription: "Abonnement",
       settings: "Paramètres",
+      admin: "Admin",
       tagline: "Analyse Endurance Élite",
     },
 
@@ -1112,9 +1116,9 @@ export const translations = {
     // Coach
     coach: {
       title: "Coach",
-      subtitle: "Analyse de Performance",
+      subtitle: "Explication et conseils",
       placeholder: "Posez une question sur votre entraînement...",
-      emptyState: "Posez vos questions sur vos données. Distribution des zones. Rythmes. Récupération.",
+      emptyState: "Le Coach vous aide à comprendre la séance du jour, l'exécution récente et les observations Garmin sans créer une seconde prescription.",
       you: "Vous",
       suggestions: {
         trainingLoad: "Analyser ma charge d'entraînement",
@@ -1529,7 +1533,7 @@ export const translations = {
     guidanceExtended: { generated: "Recommandations générées", generationFailed: "Erreur de génération", refresh: "Actualiser", generate: "Générer les recommandations", noGuidance: "Aucune recommandation générée. Cliquez sur Actualiser pour obtenir vos suggestions d'entraînement." },
     paywall: { title: "Active ton coach running", subtitle: "Ton plan personnalisé est prêt", description: "Active ton abonnement pour y accéder.", priceDisplay: "4,99 € / mois", priceGuarantee: "Prix garanti à vie", feature1: "Plan d'entraînement personnalisé", feature2: "Adaptation automatique du plan", feature3: "Analyse intelligente des séances", feature4: "Coach conversationnel IA", feature5: "Sync montre/appli", feature6: "Prédictions de course", ctaButton: "Activer mon coach", perMonth: "mois", maybeLater: "Plus tard", activating: "Activation..." },
     subscription: { free: "Gratuit", freeDesc: "Découverte", popular: "Populaire", monthly: "Mensuel", yearly: "Annuel", unlimitedShort: "Illimité", messagesShort: "msg/mois", included: "Inclus", choose: "Choisir", paymentCancelled: "Paiement annulé", subscriptionActivated: "Abonnement activé !", featureMessagesPerMonth: "messages coach/mois", featureAnalyses: "Analyses de séances", featureWeeklyReview: "Bilan hebdo", featureDetailedAnalyses: "Analyses détaillées", featureLocalCoach: "Coach IA local", featureAllAnalyses: "Toutes les analyses", featurePrioritySupport: "Support prioritaire", featureUnlimitedMessages: "Messages illimités", featurePriorityAccess: "Accès prioritaire", featureVipSupport: "Support VIP", subscriptionsTitle: "Abonnement", choosePlan: "Choisis le plan qui correspond à ton entraînement", perYear: "an", perMonth: "mois", currentPlan: "Plan actuel", trialActive: "Essai gratuit actif — accès complet", securePayment: "Paiement sécurisé Paddle", trialStarted: "Essai gratuit de 30 jours activé !", trialAlreadyUsed: "Essai gratuit déjà utilisé.", garminTrialUnavailable: "Garmin est connecté, mais cet essai gratuit n'est plus disponible. Passe à Premium pour débloquer l'accès complet." },
-    coachExtended: { analysisPrompt: "Analyse approfondie de la séance : {name}", historyCleared: "Historique effacé", trainingLoadSuggestion: "Analyse ma charge d'entraînement récente et la distribution de l'effort.", heartRateSuggestion: "Quels patterns observes-tu dans mes données de fréquence cardiaque ?", paceConsistencySuggestion: "Comment est ma régularité d'allure sur les courses récentes ?", workoutAnalyzed: "Séance analysée", analyzing: "Analyse en cours...", thinking: "Réflexion..." },
+    coachExtended: { analysisPrompt: "Analyse approfondie de la séance : {name}", historyCleared: "Historique effacé", trainingLoadSuggestion: "Analyse ma charge d'entraînement récente et la distribution de l'effort.", heartRateSuggestion: "Quels patterns observes-tu dans mes données de fréquence cardiaque ?", paceConsistencySuggestion: "Comment est ma régularité d'allure sur les courses récentes ?", workoutAnalyzed: "Séance analysée", analyzing: "Analyse en cours...", thinking: "Réflexion...", authorityNote: "L'entraînement du jour reste la seule autorité de prescription. Le Coach explique ce qui est prévu, ce qui s'est passé et quoi surveiller ensuite.", goToTraining: "Ouvrir aujourd'hui et entraînement", goToSessions: "Revoir les séances synchronisées", helpfulPrompts: "Prompts utiles" },
     ragSummary: { personalizedAnalysis: "Analyse personnalisée" },
     chat: { title: "Chat Coach", unlimited: "Illimité", instantResponsesTitle: "Réponses instantanées (<1s)", clearHistory: "Effacer l'historique", firstQuestion: "Pose ta première question !", examplePrompt: "Ex. \"Comment récupérer ?\" ou \"Analyse ma semaine\"", personalizedResponses: "Réponses instantanées personnalisées", suggestion1: "Peux-tu me faire un plan pour la semaine ?", suggestion2: "Comment mieux récupérer ?", suggestion3: "Analyse mes séances récentes", placeholder: "Pose ta question...", connectionError: "Erreur de connexion" },
     pwa: { installTitle: "Installer RunIndex", installMessage: "Appuie sur … puis Sur l'écran d'accueil", close: "Fermer" },
@@ -1662,6 +1666,7 @@ export const translations = {
   // Spanish
   es: {
     nav: {
+      home: "Inicio",
       dashboard: "Panel",
       sessions: "Sesiones",
       training: "Entrenamiento",
@@ -1672,6 +1677,7 @@ export const translations = {
       progress: "Progreso",
       subscription: "Suscripción",
       settings: "Ajustes",
+      admin: "Admin",
       tagline: "Análisis de Resistencia de Élite",
     },
     dashboard: {
@@ -1912,9 +1918,9 @@ export const translations = {
     },
     coach: {
       title: "Coach",
-      subtitle: "Análisis de Rendimiento",
+      subtitle: "Explicación y consejos",
       placeholder: "Pregunta sobre tu entrenamiento...",
-      emptyState: "Pregunta sobre tus datos. Distribución de zonas. Ritmos. Recuperación.",
+      emptyState: "Coach te ayuda a entender la sesión de hoy, la ejecución reciente y las observaciones de Garmin sin crear una segunda prescripción.",
       you: "Tú",
       suggestions: {
         trainingLoad: "Analizar carga de entrenamiento",
@@ -2292,7 +2298,7 @@ export const translations = {
     guidanceExtended: { generated: "Recomendaciones generadas", generationFailed: "Error de generación", refresh: "Actualizar", generate: "Generar recomendaciones", noGuidance: "No hay recomendaciones generadas. Haz clic en Actualizar para obtener sugerencias de entrenamiento." },
     paywall: { title: "Activa tu coach de running", subtitle: "Tu plan personalizado está listo", description: "Activa tu suscripción para acceder.", priceDisplay: "4,99 € / mes", priceGuarantee: "Precio garantizado de por vida", feature1: "Plan de entrenamiento personalizado", feature2: "Adaptación automática del plan", feature3: "Análisis inteligente de sesiones", feature4: "Coach IA conversacional", feature5: "Sincronización relojes/apps", feature6: "Predicciones de carrera", ctaButton: "Activar mi coach", perMonth: "mes", maybeLater: "Quizás más tarde", activating: "Activando..." },
     subscription: { free: "Gratuito", freeDesc: "Descubrimiento", popular: "Popular", monthly: "Mensual", yearly: "Anual", unlimitedShort: "Ilimitado", messagesShort: "msg/mes", included: "Incluido", choose: "Elegir", paymentCancelled: "Pago cancelado", subscriptionActivated: "¡Suscripción activada!", featureMessagesPerMonth: "mensajes coach/mes", featureAnalyses: "Análisis de sesiones", featureWeeklyReview: "Resumen semanal", featureDetailedAnalyses: "Análisis detallados", featureLocalCoach: "Coach IA local", featureAllAnalyses: "Todos los análisis", featurePrioritySupport: "Soporte prioritario", featureUnlimitedMessages: "Mensajes ilimitados", featurePriorityAccess: "Acceso prioritario", featureVipSupport: "Soporte VIP", subscriptionsTitle: "Suscripciones", choosePlan: "Elige el plan que se adapta a tu entrenamiento", perYear: "año", perMonth: "mes", currentPlan: "Plan actual", trialActive: "Prueba gratuita activa — acceso completo", securePayment: "Pago seguro por Paddle", garminTrialUnavailable: "Garmin está conectado, pero esta prueba gratuita ya no está disponible. Pásate a Premium para desbloquear el acceso completo." },
-    coachExtended: { analysisPrompt: "Análisis profundo de la sesión: {name}", historyCleared: "Historial borrado", trainingLoadSuggestion: "Analiza mi carga de entrenamiento reciente.", heartRateSuggestion: "¿Cómo están mis zonas de frecuencia cardíaca?", paceConsistencySuggestion: "¿Mi ritmo es consistente?", workoutAnalyzed: "Sesión analizada", analyzing: "Analizando...", thinking: "Pensando..." },
+    coachExtended: { analysisPrompt: "Análisis profundo de la sesión: {name}", historyCleared: "Historial borrado", trainingLoadSuggestion: "Analiza mi carga de entrenamiento reciente.", heartRateSuggestion: "¿Cómo están mis zonas de frecuencia cardíaca?", paceConsistencySuggestion: "¿Mi ritmo es consistente?", workoutAnalyzed: "Sesión analizada", analyzing: "Analizando...", thinking: "Pensando...", authorityNote: "Training Today sigue siendo la única autoridad de prescripción. Coach explica lo previsto, lo ocurrido y lo que conviene vigilar después.", goToTraining: "Abrir hoy y entrenamiento", goToSessions: "Revisar sesiones sincronizadas", helpfulPrompts: "Prompts útiles" },
     ragSummary: { personalizedAnalysis: "Análisis personalizado" },
     chat: { title: "Chat Coach", unlimited: "Ilimitado", instantResponsesTitle: "Respuestas instantáneas (<1s)", clearHistory: "Borrar historial", firstQuestion: "¡Haz tu primera pregunta!", examplePrompt: "¿Cómo mejorar mi ritmo?", personalizedResponses: "Respuestas instantáneas personalizadas", suggestion1: "¿Puedes hacerme un plan para la semana?", suggestion2: "¿Cómo recuperarme mejor?", suggestion3: "Analiza mis sesiones recientes", placeholder: "Haz tu pregunta...", connectionError: "Error de conexión" },
     pwa: { installTitle: "Instalar RunIndex", installMessage: "Pulsa el icono de compartir y luego \"Añadir a pantalla de inicio\"", close: "Cerrar" },

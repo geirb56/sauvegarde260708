@@ -100,7 +100,8 @@ export default function Sessions() {
               <Link
                 key={workout.id}
                 to={`/workout/${workout.id}`}
-                className="workout-list-item animate-in"
+                state={{ from: "/sessions" }}
+                className="workout-list-item animate-in rounded-2xl"
                 style={{ animationDelay: `${index * 50}ms` }}
               >
                 <div
@@ -122,7 +123,7 @@ export default function Sessions() {
                     {workout.avg_heart_rate && (
                       <>
                         <span className="dot" />
-                        <span>{t("dashboard.hrLabel")} {workout.avg_heart_rate}</span>
+                        <span>{workout.avg_heart_rate} bpm</span>
                       </>
                     )}
                   </div>
