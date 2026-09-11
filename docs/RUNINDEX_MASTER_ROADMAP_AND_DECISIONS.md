@@ -189,12 +189,18 @@ Current code:
 - medium/low and HIGH older than 60 days cannot modify personal-k
 
 Status:
-- curve contract aligned with product decision for personal-k evidence window
+- personal-k contract aligned (HIGH-only, 60-day slope-evidence)
+- level-recency contract for `A` remains only partially aligned at runtime
 
 Interpretation:
-- Product intent: `A` should represent level from qualified observations at fixed chosen slope
+- Product intent: `A` should represent the runner’s current/recent level
 - Product intent: `k` should represent personal curve shape / relative endurance
-- Implementation: `k` is learned from 60-day HIGH slope-evidence only, then `A` is recalibrated independently at fixed slope from the qualified pool
+- Runtime after PR249:
+  - `k` is learned only from 60-day HIGH slope-evidence
+  - MEDIUM/LOW and HIGH older than 60 days cannot modify personal-k
+  - after final `k` selection, `A` is recalibrated at fixed slope
+  - current qualified pool for `A` calibration can still include observations up to `MAX_RIEGEL_SOURCE_AGE_DAYS = 730`
+  - therefore, recency alignment for `A` remains a dedicated follow-up corrective PR/work item
 
 Fallback rule:
 - when evidence cannot identify slope robustly, fallback to `k = 1.06`

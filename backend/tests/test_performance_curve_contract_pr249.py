@@ -142,6 +142,8 @@ def test_case_f_old_high_influential_does_not_move_k_or_slope_evidence_range():
     assert with_old.slope_evidence_distance_max == baseline.slope_evidence_distance_max
     assert with_old.k_raw == pytest.approx(baseline.k_raw, abs=0.01)
     assert with_old.k == pytest.approx(baseline.k, abs=0.01)
+    # PR249 scope boundary: old HIGH can still influence A calibration via qualified pool.
+    assert with_old.a != pytest.approx(baseline.a, rel=1e-6, abs=1e-9)
 
 
 def test_case_g_one_recent_high_plus_many_non_high_forces_fallback_but_keeps_level_curve():
