@@ -205,6 +205,7 @@ describe("PR205 onboarding sync/first-value gating", () => {
     click(container, '[data-testid="onboarding-continue"]');
 
     expect(container.querySelector('[data-testid="runindex-first-value"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="runindex-value"]').textContent).toContain("74");
     expect(continueButton(container).disabled).toBe(false);
 
     unmount();
@@ -222,6 +223,10 @@ describe("PR205 onboarding sync/first-value gating", () => {
     click(container, '[data-testid="onboarding-continue"]');
 
     expect(container.querySelector('[data-testid="runindex-insufficient-data"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="runindex-value"]')).toBeFalsy();
+    expect(container.querySelector('[data-testid="runindex-insufficient-data"]').textContent).toContain(
+      "Not enough data yet to compute RunIndex"
+    );
     expect(continueButton(container).disabled).toBe(false);
 
     unmount();
