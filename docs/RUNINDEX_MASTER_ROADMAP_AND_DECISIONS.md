@@ -173,7 +173,7 @@ Current implemented facts:
 - diagnostics expose `slope_evidence_count`, distance min/max, confidence and uncertainty signals
 - contributor-pool max age is currently `MAX_RIEGEL_SOURCE_AGE_DAYS = 730`
 - `PERSONAL_SPEED_WINDOW_DAYS = 90` exists, but it controls only the strictly-prior personal-speed benchmark used while qualifying each performance
-- `SLOPE_EVIDENCE_WINDOW_DAYS = 60` controls personal-k learning evidence only
+- `SLOPE_EVIDENCE_WINDOW_DAYS = 90` controls personal-k learning evidence only
 
 Explicit window distinction:
 - Qualification speed benchmark: 90 days
@@ -181,23 +181,23 @@ Explicit window distinction:
 - Slope evidence: HIGH-confidence subset within that contributor pool and within `SLOPE_EVIDENCE_WINDOW_DAYS`
 
 Product decision:
-- personal-k / slope-evidence learning window is 60 days
+- personal-k / slope-evidence learning window is 90 days
 
 Current code:
 - the performance-curve contributor pool can include qualified observations up to 730 days for level calibration (`A`)
-- personal-k is learned only from slope-evidence (HIGH + `days_ago <= 60`)
-- medium/low and HIGH older than 60 days cannot modify personal-k
+- personal-k is learned only from slope-evidence (HIGH + `days_ago <= 90`)
+- medium/low and HIGH older than 90 days cannot modify personal-k
 
 Status:
-- personal-k contract aligned (HIGH-only, 60-day slope-evidence)
+- personal-k contract aligned (HIGH-only, 90-day slope-evidence)
 - level-recency contract for `A` remains only partially aligned at runtime
 
 Interpretation:
 - Product intent: `A` should represent the runner’s current/recent level
 - Product intent: `k` should represent personal curve shape / relative endurance
 - Runtime after PR249:
-  - `k` is learned only from 60-day HIGH slope-evidence
-  - MEDIUM/LOW and HIGH older than 60 days cannot modify personal-k
+  - `k` is learned only from 90-day HIGH slope-evidence
+  - MEDIUM/LOW and HIGH older than 90 days cannot modify personal-k
   - after final `k` selection, `A` is recalibrated at fixed slope
   - current qualified pool for `A` calibration can still include observations up to `MAX_RIEGEL_SOURCE_AGE_DAYS = 730`
   - therefore, recency alignment for `A` remains a dedicated follow-up corrective PR/work item

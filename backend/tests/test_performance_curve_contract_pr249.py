@@ -45,8 +45,8 @@ def _dur(a: float, k: float, d_m: float) -> float:
     return a * (d_m ** k)
 
 
-def test_case_a_old_high_outside_60d_not_used_for_slope_evidence():
-    old_high = (_activity(days_ago=61, distance_m=21_097.5, duration_s=6300.0), _quality("high", 0.95))
+def test_case_a_old_high_outside_90d_not_used_for_slope_evidence():
+    old_high = (_activity(days_ago=91, distance_m=21_097.5, duration_s=6300.0), _quality("high", 0.95))
     med = (_activity(days_ago=12, distance_m=10_000.0, duration_s=2700.0), _quality("medium", 0.82))
     low = (_activity(days_ago=7, distance_m=5_000.0, duration_s=1320.0), _quality("low", 0.75))
 
@@ -146,6 +146,42 @@ def test_case_f_old_high_influential_does_not_move_k_or_slope_evidence_range():
     assert with_old.a != pytest.approx(baseline.a, rel=1e-6, abs=1e-9)
 
 
+def test_case_f_boundary_90_included_91_excluded_for_slope_evidence():
+    k_true = 1.10
+    a_true = 1210.0 / (5_000.0 ** k_true)
+    base = [
+        (_activity(days_ago=6, distance_m=5_000.0, duration_s=_dur(a_true, k_true, 5_000.0)), _quality("high", 0.97)),
+        (_activity(days_ago=8, distance_m=10_000.0, duration_s=_dur(a_true, k_true, 10_000.0)), _quality("high", 0.96)),
+        (_activity(days_ago=11, distance_m=21_097.5, duration_s=_dur(a_true, k_true, 21_097.5)), _quality("high", 0.95)),
+    ]
+    curve_base = _build(base)
+
+    high_90 = (_activity(days_ago=90, distance_m=42_195.0, duration_s=10_000.0), _quality("high", 0.99))
+    high_91 = (_activity(days_ago=91, distance_m=42_195.0, duration_s=10_000.0), _quality("high", 0.99))
+
+    curve_90 = _build(base + [high_90])
+    curve_91 = _build(base + [high_91])
+
+    assert curve_90.slope_evidence_count == curve_base.slope_evidence_count + 1
+    assert curve_91.slope_evidence_count == curve_base.slope_evidence_count
+    assert curve_90.slope_evidence_distance_max > curve_base.slope_evidence_distance_max
+    assert curve_91.slope_evidence_distance_max == curve_base.slope_evidence_distance_max
+
+
+def test_single_qualified_observation_uses_prior_with_explicit_fallback():
+    one_high = [
+        (_activity(days_ago=7, distance_m=10_000.0, duration_s=2500.0), _quality("high", 0.95)),
+    ]
+    curve = _build(one_high)
+
+    assert curve.method == "single_performance_riegel"
+    assert curve.k == pytest.approx(RIEGEL_K, rel=1e-9)
+    assert curve.k_fallback_applied is True
+    assert curve.k_identifiable is False
+    assert curve.k_raw is None
+    assert curve.slope_evidence_count == 1
+
+
 def test_case_g_one_recent_high_plus_many_non_high_forces_fallback_but_keeps_level_curve():
     pool = [
         (_activity(days_ago=7, distance_m=10_000.0, duration_s=2500.0), _quality("high", 0.95)),
@@ -195,4 +231,4 @@ def test_diagnostics_expose_slope_evidence_window_days():
     result = predict_races(benchmark + performances, TODAY)
     diag = result.race_curve_diagnostics
     assert diag.get("slope_evidence_window_days") == pm.SLOPE_EVIDENCE_WINDOW_DAYS
-    assert diag.get("slope_evidence_window_days") == 60
+    assert diag.get("slope_evidence_window_days") == 90

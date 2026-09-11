@@ -123,7 +123,7 @@ MAX_ROAD_ELEVATION_GAIN_PER_KM: float = 30.0  # m/km — above this, not road-eq
 # Performance qualification business constants
 PERSONAL_SPEED_WINDOW_DAYS: int = 90
 # Personal-k slope-evidence memory window (distinct from qualification window)
-SLOPE_EVIDENCE_WINDOW_DAYS: int = 60
+SLOPE_EVIDENCE_WINDOW_DAYS: int = 90
 MIN_SPEED_BENCHMARK_RUNS: int = 5
 PERFORMANCE_HR_WEIGHT: float = 0.55
 PERFORMANCE_SPEED_WEIGHT: float = 0.45
@@ -1126,8 +1126,8 @@ def _build_performance_curve(
             k=RIEGEL_K,
             fit_quality=1.0,
             k_conflict=False,
-            k_fallback_applied=False,
-            k_raw=RIEGEL_K,
+            k_fallback_applied=True,
+            k_raw=None,
             two_point_evidence_strength=None,
             qualified_performance_count=len(qualified_pool),
             contributors=(obs,),
@@ -1136,6 +1136,9 @@ def _build_performance_curve(
             slope_evidence_count=slope_evidence_count,
             slope_evidence_distance_min=slope_evidence_distance_min,
             slope_evidence_distance_max=slope_evidence_distance_max,
+            k_identifiable=False,
+            k_identifiability_score=0.0,
+            k_identifiability_reason="insufficient_slope_evidence_count",
         )
 
     method: str = "prior_k_low_slope_evidence_fallback"
