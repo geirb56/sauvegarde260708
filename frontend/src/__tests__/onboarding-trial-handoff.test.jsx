@@ -14,6 +14,7 @@ const mockNavigate = jest.fn();
 const mockRefreshSubscription = jest.fn(() => Promise.resolve());
 let mockSubscriptionState = {};
 let mockSyncState = {};
+const mockUseGarminSyncProgress = jest.fn();
 
 jest.mock("react-router-dom", () => {
   const actual = jest.requireActual("react-router-dom");
@@ -35,7 +36,7 @@ jest.mock("@/context/SubscriptionContext", () => ({
 }));
 
 jest.mock("@/hooks/useGarminSyncProgress", () => ({
-  useGarminSyncProgress: jest.fn(() => mockSyncState),
+  useGarminSyncProgress: (...args) => mockUseGarminSyncProgress(...args),
 }));
 
 function renderOnboarding(lang = "en") {
@@ -120,6 +121,7 @@ describe("Onboarding trial handoff", () => {
       isStreaming: false,
       error: null,
     };
+    mockUseGarminSyncProgress.mockImplementation(() => mockSyncState);
     mockSuccessfulPostFlow();
   });
 
