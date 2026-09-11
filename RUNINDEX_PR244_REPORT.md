@@ -2,8 +2,9 @@
 
 - Base branch: `copilot/dev`
 - Exact base SHA: `554ae174761b5c3d0abe010383b17230c0b8c8ec`
-- Implementation head SHA: `8f5ab2c23ed2d1bfcca2f337b2e843ee82610070`
-- Final PR head SHA: reported at handoff to avoid an impossible self-referential SHA inside this report commit
+- Implementation head before this report-only commit: `7687ec70f2e53fdc18744cb1d6fc38d57eb18b74`
+- Current PR head at validation time: `7687ec70f2e53fdc18744cb1d6fc38d57eb18b74`
+- Final PR head SHA: reported at handoff because this report-only commit changes HEAD
 - Navigation decision: mobile bottom navigation reduced to 5 primary destinations (`Home/Accueil`, `Training`, `Sessions`, `Coach`, `Progress`); Settings moved to the authenticated header and Admin remains admin-only in the header, not in the primary mobile bottom nav.
 
 ## Files changed
@@ -49,7 +50,7 @@
 
 ### Progress
 - Reduced trend-badge aggression and improved mobile chart tick density.
-- Preserved missing pillar values as `—` and added neutral truthful copy: unavailable pillars stay excluded from the RunIndex calculation instead of being treated as zero.
+- Preserved missing pillar values as `—` with no user-facing causal explanation.
 
 ## Explicit non-regression confirmation
 - No Training V2 prescription logic changes.
@@ -73,6 +74,16 @@
 - 430 px audited in rendered authenticated UI via headless Chromium + local mock API/server: Dashboard, Training, Sessions, Coach, Progress ✅
 - FR + EN mobile nav labels checked at 360 px: `Accueil`, `Entraînement`, `Séances`, `Coach`, `Progression` and `Home`, `Training`, `Sessions`, `Coach`, `Progress` ✅
 - Verified in the rendered UI: no horizontal overflow, no horizontal nav scrolling, no truncated primary nav labels, no Today badge collision, no duplicate rest text, no `0.00 km` sentinel, R-only header branding preserved, Settings accessible, Admin absent from primary bottom nav, Coach empty-state hierarchy usable, Progress x-axis labels readable.
+
+## Out-of-scope follow-up required
+- Do not explain missing current pillars causally in the UI until the backend contract bug is fixed.
+- Verified mismatch in `backend/services/run_index_history.py`:
+  - canonical current snapshot field `speed_score` is read as `_build_history_response().get("speed")`
+  - canonical current snapshot field `endurance_score` is read as `_build_history_response().get("endurance")`
+  - canonical current snapshot field `consistency_score` is read as `_build_history_response().get("consistency")`
+  - canonical current snapshot field `efficiency_score` is read as `_build_history_response().get("efficiency")`
+- Because of that mismatch, a valid current RunIndex can coexist with current pillar values exposed as `None` in the Progress payload.
+- Backend mapping fix is required in a separate follow-up PR; it is intentionally out of scope for PR244.
 
 ## Remaining P2 visual debt
 - Progress can still feel dense on long premium payloads, but hierarchy and chart readability are improved without changing data contracts.
