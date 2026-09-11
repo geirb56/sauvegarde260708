@@ -13,6 +13,13 @@
 - The only backend change is additive structured serialization of the
   already-selected quality subtype; no selection or training-science rule changed.
 
+## POST-MERGE STATUS
+
+- PR #236 subsequently merged.
+- Verified via GitHub: merged into `copilot/dev` on 2026-09-09.
+- Merge commit verified via GitHub.
+- Original report remains a pre-merge evidence snapshot.
+
 ## Files changed
 
 - `frontend/src/components/training/StructuredWorkoutView.jsx`

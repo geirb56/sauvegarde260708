@@ -127,6 +127,46 @@ const getSessionStyleKey = (type, intensity) => {
   return intensity || "endurance";
 };
 
+const isMissingValue = (value) => value === undefined || value === null;
+const ARTIFICIAL_ZERO_DURATION_RE = /^\s*0+(?:[.,]0+)?\s*(?:min|mn|m|minute|minutes)\s*$/i;
+
+function getSessionDurationDisplay(session) {
+  const duration = session?.duration;
+  if (typeof duration === "number") {
+    return duration > 0 ? `${duration} min` : null;
+  }
+  if (typeof duration !== "string") {
+    return null;
+  }
+  const trimmed = duration.trim();
+  if (!trimmed || ARTIFICIAL_ZERO_DURATION_RE.test(trimmed)) {
+    return null;
+  }
+  return trimmed;
+}
+
+function getSessionTitle(session, t, isRest) {
+  if (isRest) {
+    return t("dashboard.todayRestTitle");
+  }
+  return t(`trainingPlanSessionType.${session.type}`) || session.type;
+}
+
+function hasPartialReadinessEvidence(metrics) {
+  if (!metrics || metrics.run_readiness === null || metrics.run_readiness === undefined) {
+    return false;
+  }
+  if (metrics.sufficiency_level === "partial") {
+    return true;
+  }
+  return [
+    metrics.hrv_delta,
+    metrics.rhr_today,
+    metrics.sleep_hours,
+    metrics.training_load,
+  ].some(isMissingValue);
+}
+
 // TodayPreviewFree — static blurred card for FREE users, no Premium API calls
 function TodayPreviewFree({ t }) {
   return (
@@ -288,6 +328,11 @@ function SessionCard({ session, isGrayed = false, fatigueColor = null }) {
   const styleKey = getSessionStyleKey(session.type, session.intensity);
   const style = SESSION_STYLES[styleKey] || SESSION_STYLES.endurance;
   const isRest = styleKey === "repos";
+  const sessionTitle = getSessionTitle(session, t, isRest);
+  const sessionDuration = getSessionDurationDisplay(session);
+  const sessionDetails = !isRest && typeof session.details === "string" && session.details.trim()
+    ? session.details.trim()
+    : null;
 
   const borderColor = fatigueColor
     ? (fatigueColor === "green" ? "#10b981" : fatigueColor === "yellow" ? "#f59e0b" : fatigueColor === "red" ? "#ef4444" : "#6b7280")
@@ -295,36 +340,36 @@ function SessionCard({ session, isGrayed = false, fatigueColor = null }) {
 
   return (
     <div
-      className={`flex items-center gap-2 p-3 rounded-lg ${isGrayed ? "opacity-50" : ""}`}
+      className={`flex items-center gap-2 p-2.5 rounded-lg ${isGrayed ? "opacity-50" : ""}`}
       style={{
         background: style.bg,
         border: `2px solid ${borderColor}`
       }}
     >
       <div
-        className="w-1 h-10 rounded-full shrink-0"
+        className="w-1 h-9 rounded-full shrink-0"
         style={{ background: borderColor }}
       />
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 mb-1">
-          <span className="text-sm font-bold" style={{ color: style.text }}>
-            {t(`trainingPlanSessionType.${session.type}`) || session.type}
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mb-1">
+          <span className="text-sm font-bold leading-tight" style={{ color: style.text }}>
+            {sessionTitle}
           </span>
-          {session.duration && (
-            <span className="text-xs" style={{ color: style.text, opacity: 0.8 }}>
-              {session.duration}
+          {sessionDuration && (
+            <span className="text-xs leading-tight" style={{ color: style.text, opacity: 0.8 }}>
+              {sessionDuration}
             </span>
           )}
         </div>
-        {!isRest && session.details && (
-          <span className="text-xs block" style={{ color: style.text, opacity: 0.7 }}>
-            {session.details}
+        {sessionDetails && (
+          <span className="text-xs block leading-snug" style={{ color: style.text, opacity: 0.7 }}>
+            {sessionDetails}
           </span>
         )}
       </div>
       {session.estimated_tss != null && (
         <span
-          className="px-2 py-1 rounded-full text-xs font-bold shrink-0"
+          className="px-2 py-1 rounded-full text-[11px] font-bold shrink-0"
           style={{ background: style.badge, color: style.badgeText }}
         >
           {session.estimated_tss} TSS
@@ -483,7 +528,7 @@ function ReadinessTile({ icon: Icon, label, value, status, testId, onClick }) {
     <button
       type="button"
       onClick={onClick}
-      className="text-left rounded-2xl p-3 flex flex-col gap-2 transition-transform duration-200 hover:-translate-y-0.5 active:scale-[0.98]"
+      className="text-left rounded-2xl p-2.5 flex flex-col gap-1.5 transition-transform duration-200 hover:-translate-y-0.5 active:scale-[0.98]"
       style={{ background: `${color}12`, border: `1px solid ${color}33` }}
       data-testid={`readiness-tile-${testId}`}
     >
@@ -494,10 +539,10 @@ function ReadinessTile({ icon: Icon, label, value, status, testId, onClick }) {
           <span className="w-2 h-2 rounded-full shrink-0" style={{ background: color }} />
         </div>
       </div>
-      <span className="text-[11px] font-medium leading-tight" style={{ color: "var(--text-tertiary)" }}>
+      <span className="text-[10px] font-medium leading-tight" style={{ color: "var(--text-tertiary)" }}>
         {label}
       </span>
-      <span className="text-lg font-black leading-none" style={{ color }} data-testid={`readiness-value-${testId}`}>
+      <span className="text-base font-black leading-none" style={{ color }} data-testid={`readiness-value-${testId}`}>
         {value}
       </span>
     </button>
@@ -782,6 +827,7 @@ export default function Dashboard() {
             // run_readiness may be null when data is INSUFFICIENT — do not default to 0 or 100.
             const runReadinessScore = m.run_readiness ?? null;
             const runReadinessUnavailable = runReadinessScore === null;
+            const readinessHasPartialData = hasPartialReadinessEvidence(m);
             const readinessUnavailableCause = getRunReadinessUnavailableCauseLabel(
               cardioData?.readiness_unavailable_cause,
               t,
@@ -790,7 +836,7 @@ export default function Dashboard() {
             return (
               <>
                 <div
-                  className="rounded-3xl p-5 space-y-4 animate-in"
+                  className="rounded-3xl p-4 space-y-3.5 animate-in"
                   style={{
                     background: "linear-gradient(135deg, #0d1a10 0%, #111827 60%, #0d1a10 100%)",
                     border: "1px solid rgba(110, 235, 90, 0.22)",
@@ -799,8 +845,8 @@ export default function Dashboard() {
                   data-testid="run-readiness-card"
                 >
                   {/* Header — same structure as RunIndex */}
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
                       <p
                         className="text-xs font-semibold uppercase tracking-[0.22em]"
                         style={{ color: "#6EEB5A" }}
@@ -808,18 +854,11 @@ export default function Dashboard() {
                       >
                         {t("dashboard.runReadiness")}
                       </p>
-                      <h2 className="text-lg font-black mt-1" style={{ color: "#ffffff" }}>
+                      <h2 className="text-base sm:text-lg font-black mt-1 leading-tight max-w-[15rem] sm:max-w-none" style={{ color: "#ffffff" }}>
                         {t("dashboard.runReadinessDescription")}
                       </h2>
                     </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <span
-                        className="px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider"
-                        style={{ background: `${recStyle.accent}1f`, color: recStyle.accent }}
-                        data-testid="run-readiness-recommendation"
-                      >
-                        {readinessStateLabel}
-                      </span>
+                    <div className="shrink-0">
                       <button
                         onClick={fetchCardioData}
                         className="p-1 rounded-lg opacity-60 hover:opacity-100 transition-opacity"
@@ -829,6 +868,25 @@ export default function Dashboard() {
                         <RefreshCw size={14} style={{ color: recStyle.accent }} />
                       </button>
                     </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span
+                      className="px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider"
+                      style={{ background: `${recStyle.accent}1f`, color: recStyle.accent }}
+                      data-testid="run-readiness-recommendation"
+                    >
+                      {readinessStateLabel}
+                    </span>
+                    {readinessHasPartialData && (
+                      <span
+                        className="px-2.5 py-1 rounded-full text-[11px] font-semibold"
+                        style={{ background: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.8)" }}
+                        data-testid="run-readiness-partial-indicator"
+                      >
+                        {t("dashboard.readinessPartialData")}
+                      </span>
+                    )}
                   </div>
 
                   {/* Big score — same font as RunIndex, out of 100, white number */}
@@ -854,7 +912,7 @@ export default function Dashboard() {
                     ) : (
                       <>
                         <span
-                          className="text-6xl font-black leading-none"
+                          className="text-5xl sm:text-6xl font-black leading-none"
                           style={{ color: "#ffffff" }}
                           data-testid="run-readiness-score"
                         >
@@ -868,7 +926,7 @@ export default function Dashboard() {
                   </div>
 
                   {/* Component tiles — compact grid, tappable for info */}
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3" data-testid="run-readiness-pillars">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5" data-testid="run-readiness-pillars">
                     <ReadinessTile
                       icon={Heart}
                       label={t("dashboard.readinessPillars.hrv")}
