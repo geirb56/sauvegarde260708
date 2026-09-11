@@ -384,7 +384,7 @@ def test_o_two_point_shrinkage_varies_with_evidence_strength():
 
     k_raw = math.log(3300.0 / 1500.0) / math.log(10_000.0 / 5_000.0)
     assert strong_curve.two_point_evidence_strength is not None
-    assert weak_curve.two_point_evidence_strength is not None
+    assert weak_curve.two_point_evidence_strength is None
     # strong_curve was shrunk toward prior; weak_curve k == RIEGEL_K exactly.
     assert strong_curve.k != pm.RIEGEL_K
     assert abs(weak_curve.k - pm.RIEGEL_K) < 1e-9

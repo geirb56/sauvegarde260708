@@ -122,6 +122,8 @@ MAX_ROAD_ELEVATION_GAIN_PER_KM: float = 30.0  # m/km — above this, not road-eq
 
 # Performance qualification business constants
 PERSONAL_SPEED_WINDOW_DAYS: int = 90
+# Personal-k slope-evidence memory window (distinct from qualification window)
+SLOPE_EVIDENCE_WINDOW_DAYS: int = 60
 MIN_SPEED_BENCHMARK_RUNS: int = 5
 PERFORMANCE_HR_WEIGHT: float = 0.55
 PERFORMANCE_SPEED_WEIGHT: float = 0.45
@@ -929,6 +931,41 @@ def _fixed_slope_log_intercept(
     return intercept
 
 
+def _robust_fixed_slope_log_intercept(
+    observations: List["_CurveObservation"],
+    xs: List[float],
+    ys: List[float],
+    base_ws: List[float],
+    slope: float,
+) -> Tuple[Optional[float], List[float]]:
+    """Estimate intercept for a fixed slope with light Huber reweighting."""
+    robust_ws = list(base_ws)
+    intercept = _fixed_slope_log_intercept(xs, ys, robust_ws, slope)
+    if intercept is None:
+        return None, robust_ws
+
+    for _ in range(2):
+        residuals = [y - (intercept + slope * x) for x, y in zip(xs, ys)]
+        abs_res = sorted(abs(r) for r in residuals)
+        median_abs = abs_res[len(abs_res) // 2] if abs_res else 0.0
+        if median_abs <= 1e-9:
+            break
+
+        delta = 1.5 * median_abs
+        updated_ws = []
+        for obs, base_w, residual in zip(observations, base_ws, residuals):
+            abs_r = abs(residual)
+            huber_mult = 1.0 if abs_r <= delta else (delta / abs_r)
+            floor_mult = _huber_quality_floor(obs.quality.confidence)
+            updated_ws.append(base_w * max(huber_mult, floor_mult))
+        robust_ws = updated_ws
+        intercept = _fixed_slope_log_intercept(xs, ys, robust_ws, slope)
+        if intercept is None:
+            return None, robust_ws
+
+    return intercept, robust_ws
+
+
 def _two_point_evidence_strength(ws: List[float]) -> float:
     """Return deterministic evidence strength in [0, 1] for N==2 shrinkage."""
     if len(ws) != 2:
@@ -1063,9 +1100,18 @@ def _build_performance_curve(
         key=lambda o: (o.days_ago, o.distance_m, o.duration_s),
     )
     obs_distances = [o.distance_m for o in observations]
+    xs_all = [math.log(o.distance_m) for o in observations]
+    ys_all = [math.log(o.duration_s) for o in observations]
+    base_ws_all = [o.base_weight for o in observations]
 
-    # PR #191 — slope-evidence: only HIGH-confidence observations can authorise k.
-    slope_evidence_obs = [o for o in observations if o.quality.confidence == "high"]
+    # slope-evidence for personal-k: HIGH confidence + recency window only.
+    slope_evidence_obs = [
+        o for o in observations
+        if (
+            o.quality.confidence == "high"
+            and 0 <= o.days_ago <= SLOPE_EVIDENCE_WINDOW_DAYS
+        )
+    ]
     slope_evidence_count = len(slope_evidence_obs)
     _se_dists = [o.distance_m for o in slope_evidence_obs]
     slope_evidence_distance_min = min(_se_dists) if _se_dists else 0.0
@@ -1092,146 +1138,101 @@ def _build_performance_curve(
             slope_evidence_distance_max=slope_evidence_distance_max,
         )
 
-    xs = [math.log(o.distance_m) for o in observations]
-    ys = [math.log(o.duration_s) for o in observations]
-    base_ws = [o.base_weight for o in observations]
-    fit = _weighted_linear_fit(xs, ys, base_ws)
-    if fit is None:
-        sum_w = sum(base_ws)
-        if sum_w <= 0:
-            return None
-        representative_distance = sum(w * o.distance_m for o, w in zip(observations, base_ws)) / sum_w
-        representative_duration = sum(w * o.duration_s for o, w in zip(observations, base_ws)) / sum_w
-        if representative_distance <= 0 or representative_duration <= 0:
-            return None
-        a = representative_duration / (representative_distance ** RIEGEL_K)
-        return _CurveModel(
-            method="same_distance_prior_k_fallback",
-            a=a,
-            k=RIEGEL_K,
-            fit_quality=None,
-            k_conflict=False,
-            k_fallback_applied=False,
-            k_raw=None,
-            two_point_evidence_strength=None,
-            qualified_performance_count=len(qualified_pool),
-            contributors=tuple(observations),
-            observed_distance_min=min(obs_distances),
-            observed_distance_max=max(obs_distances),
-            slope_evidence_count=slope_evidence_count,
-            slope_evidence_distance_min=slope_evidence_distance_min,
-            slope_evidence_distance_max=slope_evidence_distance_max,
-        )
-    intercept, slope = fit
-
-    method = "weighted_log_fit"
-    robust_ws = list(base_ws)
+    method: str = "prior_k_low_slope_evidence_fallback"
     two_point_evidence_strength: Optional[float] = None
-    k_raw: Optional[float] = slope
+    k_raw: Optional[float] = None
     k_fallback_applied = False
-    if len(observations) == 2:
-        # PR #191 — N==2 slope-evidence gate.
-        # k is only personalised via shrinkage when BOTH observations are
-        # slope-evidence (confidence == "high").  A HIGH + MEDIUM, two MEDIUM,
-        # or any LOW pair cannot learn k.
-        if slope_evidence_count == 2:
-            method = "two_point_prior_shrinkage_fit"
-            two_point_evidence_strength = _two_point_evidence_strength(base_ws)
-            slope = RIEGEL_K + two_point_evidence_strength * (slope - RIEGEL_K)
-            fixed_intercept = _fixed_slope_log_intercept(xs, ys, robust_ws, slope)
-            if fixed_intercept is None:
-                return None
-            intercept = fixed_intercept
-        else:
-            # Fallback: recompute A at k=prior using all qualified observations.
-            method = "two_point_prior_k_low_slope_evidence_fallback"
-            two_point_evidence_strength = _two_point_evidence_strength(base_ws)
-            log_a_se = _fixed_slope_log_intercept(xs, ys, robust_ws, RIEGEL_K)
-            if log_a_se is None:
-                return None
-            intercept = log_a_se
-            slope = RIEGEL_K
-            k_fallback_applied = True
-    elif len(observations) >= 3:
-        method = "robust_weighted_log_fit"
-        final_robust_fit: Optional[Tuple[float, float]] = None
-        for _ in range(2):
-            robust_fit = _weighted_linear_fit(xs, ys, robust_ws)
-            if robust_fit is None:
-                break
-            r_intercept, r_slope = robust_fit
-            residuals = [y - (r_intercept + r_slope * x) for x, y in zip(xs, ys)]
-            abs_res = sorted(abs(r) for r in residuals)
-            median_abs = abs_res[len(abs_res) // 2]
-            if median_abs <= 1e-9:
-                final_robust_fit = (r_intercept, r_slope)
-                break
-            delta = 1.5 * median_abs
-            updated_ws = []
-            # PR #190 — quality-aware Huber: apply floor per observation confidence.
-            # Prevents the Huber M-estimator from zeroing out slope signal carried
-            # by a minority of high-confidence HR-supported performances when a
-            # majority of low-quality speed-only observations dominate the residual
-            # distribution.
-            for obs, base_w, residual in zip(observations, base_ws, residuals):
-                abs_r = abs(residual)
-                huber_mult = 1.0 if abs_r <= delta else (delta / abs_r)
-                floor_mult = _huber_quality_floor(obs.quality.confidence)
-                updated_ws.append(base_w * max(huber_mult, floor_mult))
-            robust_ws = updated_ws
-        if final_robust_fit is None:
-            final_robust_fit = _weighted_linear_fit(xs, ys, robust_ws)
-        if final_robust_fit is not None:
-            intercept, slope = final_robust_fit
-            k_raw = slope
-
-    # PR #190 — identifiability check for N≥3 (robust_weighted_log_fit).
-    # PR #191 — slope-evidence check: identifiability now uses HIGH-only observations.
-    # For N=1 and N=2, k is already prior or prior-shrunk/fallback, so identifiability
-    # is not applicable (k_identifiable defaults to False via _CurveModel defaults).
+    slope = RIEGEL_K
     k_identifiable = False
     k_identifiability_score = 0.0
-    k_identifiability_reason = "not_applicable"
-    if len(observations) >= 3:
+    k_identifiability_reason = "no_slope_evidence_high_observations"
+
+    if slope_evidence_count >= 2:
+        xs_se = [math.log(o.distance_m) for o in slope_evidence_obs]
+        ys_se = [math.log(o.duration_s) for o in slope_evidence_obs]
+        base_ws_se = [o.base_weight for o in slope_evidence_obs]
+        robust_ws_se = list(base_ws_se)
+
+        if slope_evidence_count >= 3:
+            for _ in range(2):
+                robust_fit_se = _weighted_linear_fit(xs_se, ys_se, robust_ws_se)
+                if robust_fit_se is None:
+                    break
+                r_intercept, r_slope = robust_fit_se
+                residuals = [y - (r_intercept + r_slope * x) for x, y in zip(xs_se, ys_se)]
+                abs_res = sorted(abs(r) for r in residuals)
+                median_abs = abs_res[len(abs_res) // 2] if abs_res else 0.0
+                if median_abs <= 1e-9:
+                    break
+                delta = 1.5 * median_abs
+                updated_ws = []
+                for obs, base_w, residual in zip(slope_evidence_obs, base_ws_se, residuals):
+                    abs_r = abs(residual)
+                    huber_mult = 1.0 if abs_r <= delta else (delta / abs_r)
+                    floor_mult = _huber_quality_floor(obs.quality.confidence)
+                    updated_ws.append(base_w * max(huber_mult, floor_mult))
+                robust_ws_se = updated_ws
+
+        slope_fit = _weighted_linear_fit(xs_se, ys_se, robust_ws_se)
+        if slope_fit is not None:
+            _, se_slope = slope_fit
+            k_raw = se_slope
+
         k_identifiable, k_identifiability_score, k_identifiability_reason = (
-            _compute_k_identifiability(observations, robust_ws)
+            _compute_k_identifiability(slope_evidence_obs, robust_ws_se)
         )
 
-    # k_conflict is evaluated from k_raw (the data-driven slope) BEFORE any fallback.
-    # For N>=3, k_raw is the robust fit slope; evaluating it before applying any
-    # identifiability fallback ensures the conflict diagnosis reflects the actual fit.
-    # For N=2, slope is already shrunk toward the prior (or set to RIEGEL_K for fallback);
-    # k_raw holds the pre-shrinkage OLS value but the shrunk slope is the N=2
-    # data-driven result, so we use slope there.
-    # k_fallback_applied may already be True from the N==2 low-slope-evidence branch.
-    _k_for_conflict = (k_raw if (len(observations) >= 3 and k_raw is not None) else slope)
+        if slope_evidence_count == 2:
+            method = "two_point_prior_k_low_slope_evidence_fallback"
+            two_point_evidence_strength = _two_point_evidence_strength(robust_ws_se)
+            if slope_fit is not None and k_identifiable:
+                method = "two_point_prior_shrinkage_fit"
+                slope = RIEGEL_K + two_point_evidence_strength * (k_raw - RIEGEL_K)
+            else:
+                slope = RIEGEL_K
+                k_fallback_applied = True
+        else:
+            method = "robust_weighted_log_fit"
+            if slope_fit is None or not k_identifiable:
+                method = "prior_k_low_slope_evidence_fallback"
+                slope = RIEGEL_K
+                k_fallback_applied = True
+            else:
+                slope = k_raw
+    else:
+        if len(observations) == 2:
+            method = "two_point_prior_k_low_slope_evidence_fallback"
+        else:
+            method = "prior_k_low_slope_evidence_fallback"
+        slope = RIEGEL_K
+        k_fallback_applied = True
+
+    _k_for_conflict = (
+        slope
+        if slope_evidence_count == 2
+        else (k_raw if k_raw is not None else slope)
+    )
     k_conflict = not (CURVE_K_MIN <= _k_for_conflict <= CURVE_K_MAX)
     if k_conflict:
-        # Contradictory observations: keep a coherent prior curve and lower trust.
-        robust_ws = [w * CURVE_K_CONFLICT_WEIGHT_PENALTY for w in robust_ws]
-        log_a = _fixed_slope_log_intercept(xs, ys, robust_ws, RIEGEL_K)
-        if log_a is None:
-            return None
-        intercept = log_a
-        slope = RIEGEL_K
         method = "prior_k_conflict_fallback"
+        slope = RIEGEL_K
         k_fallback_applied = True
-    elif len(observations) >= 3 and not k_identifiable:
-        # Insufficient slope-evidence spread to trust data-driven k.
-        # Fall back to prior k and recompute intercept from final robust weights.
-        # A uses ALL qualified observations via the final robust weights.
-        log_a_ident = _fixed_slope_log_intercept(xs, ys, robust_ws, RIEGEL_K)
-        if log_a_ident is not None:
-            intercept = log_a_ident
-            slope = RIEGEL_K
-            method = "prior_k_low_slope_evidence_fallback"
-            k_fallback_applied = True
-            # k_raw retains the data-driven slope from the robust fit (diagnostic)
-        # If log_a_ident is None (degenerate weights), retain the data-driven k.
-        # k_identifiable remains False (honest: evidence is weak), but
-        # k_fallback_applied will be False since the slope was not actually replaced.
 
-    fit_quality = _weighted_r2(xs, ys, robust_ws, intercept, slope)
+    level_base_ws = list(base_ws_all)
+    if k_conflict:
+        level_base_ws = [w * CURVE_K_CONFLICT_WEIGHT_PENALTY for w in level_base_ws]
+
+    intercept, robust_ws = _robust_fixed_slope_log_intercept(
+        observations=observations,
+        xs=xs_all,
+        ys=ys_all,
+        base_ws=level_base_ws,
+        slope=slope,
+    )
+    if intercept is None:
+        return None
+
+    fit_quality = _weighted_r2(xs_all, ys_all, robust_ws, intercept, slope)
     max_w = max(robust_ws) if robust_ws else 0.0
     contributors = tuple(
         _CurveObservation(
@@ -1660,6 +1661,7 @@ def predict_races(
             "k_identifiability_reason": curve.k_identifiability_reason if curve else None,
             # PR #191 — slope-evidence diagnostics
             "slope_evidence_count": curve.slope_evidence_count if curve else 0,
+            "slope_evidence_window_days": SLOPE_EVIDENCE_WINDOW_DAYS if curve else None,
             "slope_evidence_distance_min": (
                 curve.slope_evidence_distance_min if (curve and curve.slope_evidence_count > 0) else None
             ),

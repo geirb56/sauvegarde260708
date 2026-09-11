@@ -4007,6 +4007,7 @@ async def get_race_predictions(user: dict = Depends(auth_user)):
             "two_point_evidence_strength": curve_diag.get("two_point_evidence_strength"),
             "contributors": curve_diag.get("contributors", []),
             "slope_evidence_count": curve_diag.get("slope_evidence_count"),
+            "slope_evidence_window_days": curve_diag.get("slope_evidence_window_days"),
             "slope_evidence_distance_min": curve_diag.get("slope_evidence_distance_min"),
             "slope_evidence_distance_max": curve_diag.get("slope_evidence_distance_max"),
             "slope_evidence_distance_min_km": curve_diag.get("slope_evidence_distance_min_km"),
