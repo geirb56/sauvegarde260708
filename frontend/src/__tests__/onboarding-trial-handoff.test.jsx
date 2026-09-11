@@ -185,4 +185,22 @@ describe("Onboarding trial handoff", () => {
     expect(screen.getByTestId("onboarding-subscription-status")).toHaveTextContent("Premium");
     expect(screen.getByTestId("onboarding-subscription-status")).not.toHaveTextContent("Trial");
   });
+
+  test("final handoff surfaces refresh failure and keeps the user on onboarding", async () => {
+    mockRefreshSubscription
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("refresh failed"));
+
+    renderOnboarding();
+    await goToDoneStep();
+
+    fireEvent.click(screen.getByTestId("onboarding-dashboard-cta"));
+
+    expect(await screen.findByTestId("onboarding-finish-error")).toHaveTextContent(
+      "Unable to refresh your subscription status right now. Please try again."
+    );
+    expect(mockNavigate).not.toHaveBeenCalled();
+    expect(screen.getByTestId("onboarding-dashboard-cta")).not.toBeDisabled();
+  });
 });

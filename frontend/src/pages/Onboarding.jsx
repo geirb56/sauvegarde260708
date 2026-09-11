@@ -60,6 +60,7 @@ export default function Onboarding() {
   const [savingPlan, setSavingPlan] = useState(false);
   const [finishingOnboarding, setFinishingOnboarding] = useState(false);
   const [planError, setPlanError] = useState("");
+  const [completionError, setCompletionError] = useState("");
 
   const [garminStatus, setGarminStatus] = useState("idle"); // idle | connecting | connected | mfa_required | error
   const [garminUsername, setGarminUsername] = useState("");
@@ -196,6 +197,7 @@ export default function Onboarding() {
     if (goal === "ULTRA" && !(parseFloat(ultraDistanceKm) > 42.195)) return;
 
     setPlanError("");
+    setCompletionError("");
     setSavingPlan(true);
     try {
       const setGoalUrl =
@@ -214,10 +216,13 @@ export default function Onboarding() {
   };
 
   const finishOnboarding = async () => {
+    setCompletionError("");
     setFinishingOnboarding(true);
     try {
       await refreshSubscription();
       navigate("/");
+    } catch {
+      setCompletionError(t("onboarding.finishError"));
     } finally {
       setFinishingOnboarding(false);
     }
@@ -462,6 +467,11 @@ export default function Onboarding() {
               >
                 {finalSubscriptionStatus}
               </div>
+              {completionError ? (
+                <p className="text-sm text-destructive" data-testid="onboarding-finish-error">
+                  {completionError}
+                </p>
+              ) : null}
               <Button
                 className="w-full h-11"
                 onClick={finishOnboarding}
