@@ -2,7 +2,7 @@
 
 - Base branch: `copilot/dev`
 - Base SHA: `cf38498cfdc26053da9b6a1e8b5eadf4e653d3c6`
-- Final head SHA: `TBD (set after final commit)`
+- Final head SHA (at PR open): `0a99bd16bfa8865e1eac7108c686cd6a51129e74`
 
 ## Exact bug
 
