@@ -52,7 +52,7 @@ describe("Progress mobile UX", () => {
     });
   });
 
-  test("keeps missing pillars as em dashes and explains the nullable-pillar contract", async () => {
+  test("keeps missing pillars as em dashes without inventing a causal explanation", async () => {
     render(
       <UnitProvider>
         <LanguageProvider>
@@ -63,9 +63,11 @@ describe("Progress mobile UX", () => {
       </UnitProvider>
     );
 
-    expect(await screen.findByText(/An unavailable pillar stays excluded instead of being treated as zero/i)).toBeInTheDocument();
-    expect(screen.getAllByText("—").length).toBeGreaterThan(0);
+    const missingPillars = await screen.findAllByText("—");
+    expect(missingPillars.length).toBeGreaterThan(0);
     expect(screen.queryByText("0%")).not.toBeInTheDocument();
+    expect(screen.queryByText(/treated as zero/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/historical point/i)).not.toBeInTheDocument();
   });
 
   test("selects renderable tick density for compact and larger mobile widths", () => {

@@ -221,12 +221,6 @@ export default function Progress() {
   const garminVo2Series = Array.isArray(garminVo2maxHistory?.history) ? garminVo2maxHistory.history : [];
   const runIndexTickDates = buildVisibleChartTicks(runIndexHistory?.history, viewportBand === "compact" ? 3 : viewportBand === "mobile" ? 4 : 6);
   const vo2TickDates = buildVisibleChartTicks(garminVo2Series, viewportBand === "compact" ? 3 : viewportBand === "mobile" ? 4 : 6);
-  const hasUnavailablePillars = Boolean(
-    runIndexHistory?.current_run_index != null
-    && runIndexHistory?.pillars
-    && Object.values(runIndexHistory.pillars).some((pillar) => pillar?.current == null)
-  );
-
   return (
     <div className="p-6 md:p-8 pb-24 md:pb-8" data-testid="progress-page">
       {/* Header */}
@@ -381,14 +375,6 @@ export default function Progress() {
             )}
 
             {/* Pillar details */}
-            {hasUnavailablePillars && (
-              <div className="mb-4 rounded-xl border border-border bg-muted/20 px-3 py-2">
-                <p className="text-xs text-muted-foreground">
-                  {t("progressExtended.pillarsUnavailableNote")}
-                </p>
-              </div>
-            )}
-
             {runIndexHistory?.has_data && runIndexHistory.pillars && (
               <div className="mb-4">
                 <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground mb-3">
