@@ -2,7 +2,7 @@
 
 - Base branch: `copilot/dev`
 - Exact base SHA: `c25c795284157b6fe11a401326696a5307cc7d5d`
-- Final head SHA: `PENDING_FINAL_COMMIT`
+- Final head SHA: recorded in the PR head metadata and final task handoff response
 
 ## Root cause
 `WorkoutGenerator` scheduled abstract weekday training sessions without reserving the real `PlanGoal.race_date` inside the generated calendar week. In taper weeks before a Sunday race, the generator could still assign a normal session such as `long_easy` onto the actual race date.
@@ -46,7 +46,7 @@ No race distance is derived from `WeeklyTarget` or long-run fractions. `None` re
 
 ## Tests / results
 Backend targeted race-day regression suites:
-- `python -m pytest tests/test_workout_generator_v2.py tests/test_daily_runtime_pr137.py tests/test_pr235_c235_corrections.py` -> `176 passed`
+- `python -m pytest tests/test_workout_generator_v2.py tests/test_daily_runtime_pr137.py tests/test_pr235_c235_corrections.py` -> `177 passed`
 
 Relevant backend suites run individually:
 - `python -m pytest -n 0 tests/test_plan_goal_pr05.py tests/test_periodization_pr06.py tests/test_weekly_target_v2.py tests/test_workout_generator_v2.py tests/test_daily_runtime_pr137.py -q` -> `308 passed`

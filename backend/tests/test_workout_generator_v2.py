@@ -1445,6 +1445,22 @@ class TestRaceWeekCanonicalPrescription:
         sunday = next(s for s in plan.sessions if s.day == "sunday")
         assert sunday.workout_type == "race"
 
+    def test_C2_monday_race_drops_training_when_no_pre_race_days_exist(self):
+        ref = date(2026, 9, 7)
+        race_date = date(2026, 9, 7)
+        plan = _plan(
+            _wt_distance(18.0, sessions=4, allow_intensity=False),
+            goal="half_marathon",
+            phase="race",
+            ref=ref,
+            race_date=race_date,
+        )
+
+        monday = next(s for s in plan.sessions if s.day == "monday")
+        assert monday.workout_type == "race"
+        assert _training_sessions(plan) == []
+        assert "RACE_WEEK_CALENDAR_LIMITED" in plan.reason_codes
+
     def test_D_race_date_outside_week_keeps_existing_behavior(self):
         ref = date(2026, 9, 11)
         wt = _wt_distance(20.0, sessions=4, allow_intensity=False)

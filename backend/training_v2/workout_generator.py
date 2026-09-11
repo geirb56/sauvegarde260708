@@ -1168,14 +1168,20 @@ def build_weekly_plan(
         # Re-assign days respecting RunnerProfile constraints
         session_types = [t for _, t in skeleton if t != "rest"]
         assign_kwargs = {}
-        if race_week is not None:
+        if race_week is not None and not race_week.training_days_before_race:
+            skeleton = [(day, "race" if day == race_week.race_day else "rest") for day in _ALL_DAYS]
+            reason_codes.append("RACE_WEEK_CALENDAR_LIMITED")
+        elif race_week is not None:
             assign_kwargs = {
                 "allowed_training_days": list(race_week.training_days_before_race),
                 "reserved_day_to_type": {race_week.race_day: "race"},
                 "capacity_reason_code": "RACE_WEEK_CALENDAR_LIMITED",
             }
-        skeleton, constraint_codes = _assign_days(session_types, runner_profile, **assign_kwargs)
-        reason_codes = list(reason_codes) + constraint_codes
+            skeleton, constraint_codes = _assign_days(session_types, runner_profile, **assign_kwargs)
+            reason_codes = list(reason_codes) + constraint_codes
+        else:
+            skeleton, constraint_codes = _assign_days(session_types, runner_profile, **assign_kwargs)
+            reason_codes = list(reason_codes) + constraint_codes
         sessions, reason_codes = _route_normal(
             weekly_target, skeleton, goal_type, allow_intensity, reason_codes, phase,
             race_distance_km=race_week.race_distance_km if race_week is not None else None,
