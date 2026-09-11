@@ -397,6 +397,22 @@ body {
   letter-spacing: 0;
 }
 
+@media (max-width: 380px) {
+  .bottom-nav-modern {
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+  }
+
+  .nav-item-modern {
+    gap: 0.2rem;
+    padding: 0.45rem 0.1rem;
+  }
+
+  .nav-item-modern .nav-label {
+    font-size: 0.625rem;
+  }
+}
+
 /* ========== HEADER ========== */
 .header-modern {
   display: flex;
