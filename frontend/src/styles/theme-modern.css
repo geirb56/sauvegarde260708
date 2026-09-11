@@ -411,8 +411,8 @@ body {
 }
 
 .header-logo-img {
-  height: 72px;
-  width: auto;
+  width: 28px;
+  height: 28px;
   display: block;
   object-fit: contain;
 }
