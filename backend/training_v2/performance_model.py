@@ -1148,7 +1148,12 @@ def _build_performance_curve(
     slope = RIEGEL_K
     k_identifiable = False
     k_identifiability_score = 0.0
-    k_identifiability_reason = "no_slope_evidence_high_observations"
+    if slope_evidence_count == 0:
+        k_identifiability_reason = "no_slope_evidence_high_observations"
+    elif slope_evidence_count == 1:
+        k_identifiability_reason = "insufficient_slope_evidence_count"
+    else:
+        k_identifiability_reason = "not_applicable"
 
     if slope_evidence_count >= 2:
         xs_se = [math.log(o.distance_m) for o in slope_evidence_obs]

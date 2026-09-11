@@ -56,6 +56,7 @@ def test_case_a_old_high_outside_90d_not_used_for_slope_evidence():
     assert curve.k == pytest.approx(RIEGEL_K, rel=1e-9)
     assert curve.k_fallback_applied is True
     assert curve.method == "prior_k_low_slope_evidence_fallback"
+    assert curve.k_identifiability_reason == "no_slope_evidence_high_observations"
 
 
 def test_case_b_two_recent_high_with_spread_can_personalize_k():
@@ -196,6 +197,9 @@ def test_case_g_one_recent_high_plus_many_non_high_forces_fallback_but_keeps_lev
     assert curve.slope_evidence_count == 1
     assert curve.k == pytest.approx(RIEGEL_K, rel=1e-9)
     assert curve.k_fallback_applied is True
+    assert curve.k_identifiable is False
+    assert curve.k_raw is None
+    assert curve.k_identifiability_reason == "insufficient_slope_evidence_count"
     assert curve.a > 0
 
 
