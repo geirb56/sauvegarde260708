@@ -45,8 +45,8 @@ export function computeTrainingWeekProgress(trainingWeekV2) {
   const targetBasis = weeklyTarget.target_basis;
   const metricField = targetBasis === "duration" ? "duration_minutes" : "distance_km";
   const plannedValue = targetBasis === "duration"
-    ? weeklyTarget.target_duration_minutes
-    : weeklyTarget.target_km;
+    ? (week.planned_duration_minutes ?? weeklyTarget.target_duration_minutes)
+    : (week.planned_km ?? weeklyTarget.target_km);
 
   const matchedActuals = sessions
     .filter((session) => isTrainingSessionType(getSessionType(session)))
@@ -80,7 +80,7 @@ export function computeTrainingWeekProgress(trainingWeekV2) {
     unmatched_value: unmatchedCompleted.value,
     unmatched_state: unmatchedCompleted.state,
     completed_session_count: matchedActuals.length,
-    planned_session_count: weeklyTarget.session_count ?? fallbackPlannedSessionCount,
+    planned_session_count: week.session_count ?? weeklyTarget.session_count ?? fallbackPlannedSessionCount,
     progress_state: progressState,
     progress_percent: progressPercent,
   };

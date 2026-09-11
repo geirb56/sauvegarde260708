@@ -275,7 +275,7 @@ class WorkoutPrescription(BaseModel):
     """Session category: rest | recovery | easy | steady | quality | long_easy | race."""
 
     intensity_class: str
-    """Broad intensity bucket: rest | low | moderate | high."""
+    """Broad intensity bucket: rest | low | moderate | high | event."""
 
     distance_km: Optional[float]
     """Distance in km, or None when target_basis is duration and no pace available."""
@@ -292,11 +292,13 @@ class WeeklyPlan(BaseModel):
 
     The sum of TRAINING session distances (when target_basis == "distance")
     equals
-    weekly_target.target_km exactly (± 0.1 km).
+    weekly_target.target_km exactly (± 0.1 km), unless an explicit reduction
+    reason code removes sessions and their volume from the served week.
 
     The sum of TRAINING session durations (when target_basis == "duration")
     equals
-    weekly_target.target_duration_minutes exactly.
+    weekly_target.target_duration_minutes exactly, unless an explicit reduction
+    reason code removes sessions and their duration from the served week.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -529,6 +531,121 @@ def _correct_rounding_drift_duration(
         else:
             result.append(s)
     return result
+
+
+def _build_placeholder_skeleton(session_types: list[str]) -> list[tuple[str, str]]:
+    return [(f"slot_{index}", workout_type) for index, workout_type in enumerate(session_types)]
+
+
+def _build_intended_normal_training_sessions(
+    *,
+    weekly_target: WeeklyTarget,
+    session_types: list[str],
+    goal_type: str,
+    allow_intensity: bool,
+) -> list[WorkoutPrescription]:
+    skeleton = _build_placeholder_skeleton(session_types)
+    if weekly_target.target_basis == "distance" and weekly_target.target_km is not None:
+        return _correct_rounding_drift_distance(
+            _build_distance_sessions(
+                skeleton=skeleton,
+                target_km=weekly_target.target_km,
+                goal_type=goal_type,
+                allow_intensity=allow_intensity,
+                base_reason_codes=(),
+            ),
+            weekly_target.target_km,
+        )
+    if weekly_target.target_basis == "duration" and weekly_target.target_duration_minutes is not None:
+        return _correct_rounding_drift_duration(
+            _build_duration_sessions(
+                skeleton=skeleton,
+                total_minutes=weekly_target.target_duration_minutes,
+                goal_type=goal_type,
+                allow_intensity=allow_intensity,
+                base_reason_codes=(),
+            ),
+            weekly_target.target_duration_minutes,
+        )
+    return []
+
+
+def _build_intended_reprise_training_sessions(
+    *,
+    weekly_target: WeeklyTarget,
+    n_sessions: int,
+    allow_run_walk: bool,
+    base_reason_codes: tuple[str, ...],
+) -> list[WorkoutPrescription]:
+    if n_sessions <= 0:
+        return []
+    if weekly_target.target_basis == "duration" and weekly_target.target_duration_minutes is not None:
+        durations = _split_durations(weekly_target.target_duration_minutes, n_sessions)
+        min_dur = min(durations) if durations else 0
+        run_walk_code = ("run_walk_allowed",) if allow_run_walk else ()
+        return [
+            _make_running_session(
+                day=f"slot_{index}",
+                workout_type="recovery" if duration == min_dur else "easy",
+                duration_minutes=duration,
+                reason_codes=base_reason_codes + run_walk_code,
+            )
+            for index, duration in enumerate(durations)
+        ]
+
+    target_km = weekly_target.target_km or 0.0
+    splits_map: dict[int, list[float]] = {
+        1: [1.0],
+        2: [0.40, 0.60],
+        3: [0.28, 0.32, 0.40],
+        4: [0.20, 0.25, 0.25, 0.30],
+    }
+    splits = splits_map.get(n_sessions, splits_map.get(min(n_sessions, 4), [1.0]))
+    distances = sorted(round(target_km * split, 1) for split in splits)
+    sessions = [
+        _make_running_session(
+            day=f"slot_{index}",
+            workout_type="recovery" if distance == distances[0] else "easy",
+            distance_km=distance,
+            reason_codes=base_reason_codes,
+        )
+        for index, distance in enumerate(distances)
+    ]
+    return _correct_rounding_drift_distance(sessions, target_km)
+
+
+def _reduce_to_race_week_calendar(
+    *,
+    intended_training_sessions: list[WorkoutPrescription],
+    runner_profile: RunnerProfile,
+    race_week: _RaceWeekConfig,
+) -> tuple[list[WorkoutPrescription], list[str]]:
+    skeleton, extra_codes = _assign_days(
+        [session.workout_type for session in intended_training_sessions],
+        runner_profile,
+        allowed_training_days=list(race_week.training_days_before_race),
+        reserved_day_to_type={race_week.race_day: "race"},
+        capacity_reason_code="RACE_WEEK_CALENDAR_LIMITED",
+    )
+    active_slots = [(day, workout_type) for day, workout_type in skeleton if _is_training_workout_type(workout_type)]
+    remaining_sessions = list(intended_training_sessions[:len(active_slots)])
+    day_to_session: dict[str, WorkoutPrescription] = {}
+    for day, workout_type in active_slots:
+        match_index = next(
+            index for index, session in enumerate(remaining_sessions) if session.workout_type == workout_type
+        )
+        matched = remaining_sessions.pop(match_index)
+        day_to_session[day] = matched.model_copy(update={"day": day})
+
+    result: list[WorkoutPrescription] = []
+    for day in _ALL_DAYS:
+        if day == race_week.race_day:
+            result.append(_make_race(day, distance_km=race_week.race_distance_km))
+        elif day in day_to_session:
+            result.append(day_to_session[day])
+        else:
+            result.append(_make_rest(day))
+    return result, extra_codes
 
 
 # ---------------------------------------------------------------------------
@@ -1184,27 +1301,27 @@ def build_weekly_plan(
             )
             if target_time_reason:
                 reason_codes.append(target_time_reason)
-        # Re-assign days respecting RunnerProfile constraints
         session_types = [t for _, t in skeleton if t != "rest"]
-        assign_kwargs = {}
-        if race_week is not None and not race_week.training_days_before_race:
-            skeleton = [(day, "race" if day == race_week.race_day else "rest") for day in _ALL_DAYS]
-            reason_codes.append("RACE_WEEK_CALENDAR_LIMITED")
-        elif race_week is not None:
-            assign_kwargs = {
-                "allowed_training_days": list(race_week.training_days_before_race),
-                "reserved_day_to_type": {race_week.race_day: "race"},
-                "capacity_reason_code": "RACE_WEEK_CALENDAR_LIMITED",
-            }
-            skeleton, constraint_codes = _assign_days(session_types, runner_profile, **assign_kwargs)
+        if race_week is not None:
+            intended_training_sessions = _build_intended_normal_training_sessions(
+                weekly_target=weekly_target,
+                session_types=session_types,
+                goal_type=goal_type,
+                allow_intensity=allow_intensity,
+            )
+            sessions, constraint_codes = _reduce_to_race_week_calendar(
+                intended_training_sessions=intended_training_sessions,
+                runner_profile=runner_profile,
+                race_week=race_week,
+            )
             reason_codes = list(reason_codes) + constraint_codes
         else:
-            skeleton, constraint_codes = _assign_days(session_types, runner_profile, **assign_kwargs)
+            skeleton, constraint_codes = _assign_days(session_types, runner_profile)
             reason_codes = list(reason_codes) + constraint_codes
-        sessions, reason_codes = _route_normal(
-            weekly_target, skeleton, goal_type, allow_intensity, reason_codes, phase,
-            race_distance_km=race_week.race_distance_km if race_week is not None else None,
-        )
+            sessions, reason_codes = _route_normal(
+                weekly_target, skeleton, goal_type, allow_intensity, reason_codes, phase,
+                race_distance_km=None,
+            )
 
     # --- ensure immutability of session list --------------------------------
     immutable_sessions = tuple(sessions)
@@ -1255,28 +1372,56 @@ def _route_reprise_deep(
 
     if weekly_target.target_basis == "duration" and weekly_target.target_duration_minutes:
         total_minutes = weekly_target.target_duration_minutes
-        sessions, constraint_codes = _build_reprise_sessions_duration(
-            total_minutes=total_minutes,
-            n_sessions=min(n_sessions, 3),
-            allow_run_walk=True,
-            base_reason_codes=("reprise_easy_only",),
-            runner_profile=runner_profile,
-            race_week=race_week,
-        )
+        capped_sessions = min(n_sessions, 3)
+        if race_week is not None:
+            intended_training_sessions = _build_intended_reprise_training_sessions(
+                weekly_target=weekly_target,
+                n_sessions=capped_sessions,
+                allow_run_walk=True,
+                base_reason_codes=("reprise_easy_only",),
+            )
+            sessions, constraint_codes = _reduce_to_race_week_calendar(
+                intended_training_sessions=intended_training_sessions,
+                runner_profile=runner_profile,
+                race_week=race_week,
+            )
+        else:
+            sessions, constraint_codes = _build_reprise_sessions_duration(
+                total_minutes=total_minutes,
+                n_sessions=capped_sessions,
+                allow_run_walk=True,
+                base_reason_codes=("reprise_easy_only",),
+                runner_profile=runner_profile,
+                race_week=None,
+            )
+            sessions = _correct_rounding_drift_duration(sessions, total_minutes)
         reason_codes = reason_codes + constraint_codes
-        sessions = _correct_rounding_drift_duration(sessions, total_minutes)
     else:
         # Fallback: distance-based easy-only (no_history with distance target)
         target_km = weekly_target.target_km or 0.0
-        sessions, constraint_codes = _build_reprise_sessions_distance(
-            target_km=target_km,
-            n_sessions=min(n_sessions, 3),
-            base_reason_codes=("reprise_easy_only",),
-            runner_profile=runner_profile,
-            race_week=race_week,
-        )
+        capped_sessions = min(n_sessions, 3)
+        if race_week is not None:
+            intended_training_sessions = _build_intended_reprise_training_sessions(
+                weekly_target=weekly_target,
+                n_sessions=capped_sessions,
+                allow_run_walk=False,
+                base_reason_codes=("reprise_easy_only",),
+            )
+            sessions, constraint_codes = _reduce_to_race_week_calendar(
+                intended_training_sessions=intended_training_sessions,
+                runner_profile=runner_profile,
+                race_week=race_week,
+            )
+        else:
+            sessions, constraint_codes = _build_reprise_sessions_distance(
+                target_km=target_km,
+                n_sessions=capped_sessions,
+                base_reason_codes=("reprise_easy_only",),
+                runner_profile=runner_profile,
+                race_week=None,
+            )
+            sessions = _correct_rounding_drift_distance(sessions, target_km)
         reason_codes = reason_codes + constraint_codes
-        sessions = _correct_rounding_drift_distance(sessions, target_km)
 
     return sessions, reason_codes
 
@@ -1295,27 +1440,55 @@ def _route_partial_reprise(
 
     if weekly_target.target_basis == "duration" and weekly_target.target_duration_minutes:
         total_minutes = weekly_target.target_duration_minutes
-        sessions, constraint_codes = _build_reprise_sessions_duration(
-            total_minutes=total_minutes,
-            n_sessions=min(n_sessions, 4),
-            allow_run_walk=False,
-            base_reason_codes=("reprise_easy_only",),
-            runner_profile=runner_profile,
-            race_week=race_week,
-        )
+        capped_sessions = min(n_sessions, 4)
+        if race_week is not None:
+            intended_training_sessions = _build_intended_reprise_training_sessions(
+                weekly_target=weekly_target,
+                n_sessions=capped_sessions,
+                allow_run_walk=False,
+                base_reason_codes=("reprise_easy_only",),
+            )
+            sessions, constraint_codes = _reduce_to_race_week_calendar(
+                intended_training_sessions=intended_training_sessions,
+                runner_profile=runner_profile,
+                race_week=race_week,
+            )
+        else:
+            sessions, constraint_codes = _build_reprise_sessions_duration(
+                total_minutes=total_minutes,
+                n_sessions=capped_sessions,
+                allow_run_walk=False,
+                base_reason_codes=("reprise_easy_only",),
+                runner_profile=runner_profile,
+                race_week=None,
+            )
+            sessions = _correct_rounding_drift_duration(sessions, total_minutes)
         reason_codes = reason_codes + constraint_codes
-        sessions = _correct_rounding_drift_duration(sessions, total_minutes)
     else:
         target_km = weekly_target.target_km or 0.0
-        sessions, constraint_codes = _build_reprise_sessions_distance(
-            target_km=target_km,
-            n_sessions=min(n_sessions, 4),
-            base_reason_codes=("reprise_easy_only",),
-            runner_profile=runner_profile,
-            race_week=race_week,
-        )
+        capped_sessions = min(n_sessions, 4)
+        if race_week is not None:
+            intended_training_sessions = _build_intended_reprise_training_sessions(
+                weekly_target=weekly_target,
+                n_sessions=capped_sessions,
+                allow_run_walk=False,
+                base_reason_codes=("reprise_easy_only",),
+            )
+            sessions, constraint_codes = _reduce_to_race_week_calendar(
+                intended_training_sessions=intended_training_sessions,
+                runner_profile=runner_profile,
+                race_week=race_week,
+            )
+        else:
+            sessions, constraint_codes = _build_reprise_sessions_distance(
+                target_km=target_km,
+                n_sessions=capped_sessions,
+                base_reason_codes=("reprise_easy_only",),
+                runner_profile=runner_profile,
+                race_week=None,
+            )
+            sessions = _correct_rounding_drift_distance(sessions, target_km)
         reason_codes = reason_codes + constraint_codes
-        sessions = _correct_rounding_drift_distance(sessions, target_km)
 
     return sessions, reason_codes
 

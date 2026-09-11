@@ -1399,6 +1399,88 @@ class TestDayAssignmentFinal:
 
 class TestRaceWeekCanonicalPrescription:
 
+    def test_A_tuesday_race_reduction_only_does_not_compress_full_km_into_monday(self):
+        ref = date(2026, 9, 7)
+        race_date = date(2026, 9, 8)
+        plan = _plan(
+            _wt_distance(20.0, sessions=4, allow_intensity=False),
+            goal="half_marathon",
+            phase="taper",
+            ref=ref,
+            race_date=race_date,
+        )
+
+        monday = next(s for s in plan.sessions if s.day == "monday")
+        tuesday = next(s for s in plan.sessions if s.day == "tuesday")
+        assert monday.workout_type in {"recovery", "easy", "steady", "quality", "long_easy"}
+        assert monday.distance_km is not None
+        assert monday.distance_km < 20.0
+        assert tuesday.workout_type == "race"
+        assert all(
+            s.workout_type == "rest"
+            for s in plan.sessions
+            if s.day in {"wednesday", "thursday", "friday", "saturday", "sunday"}
+        )
+        assert "RACE_WEEK_CALENDAR_LIMITED" in plan.reason_codes
+        assert plan.planned_km is not None and plan.planned_km < 20.0
+
+    def test_B_wednesday_race_keeps_only_pre_race_sessions_without_inflation(self):
+        ref = date(2026, 9, 7)
+        target = _wt_distance(20.0, sessions=4, allow_intensity=False)
+        control = _plan(target, goal="half_marathon", phase="taper", ref=ref, race_date=None)
+        plan = _plan(
+            target,
+            goal="half_marathon",
+            phase="taper",
+            ref=ref,
+            race_date=date(2026, 9, 9),
+        )
+
+        control_training = _training_sessions(control)
+        monday = next(s for s in plan.sessions if s.day == "monday")
+        tuesday = next(s for s in plan.sessions if s.day == "tuesday")
+        assert monday.distance_km == control_training[0].distance_km
+        assert tuesday.distance_km == control_training[1].distance_km
+        assert all(
+            s.workout_type == "rest"
+            for s in plan.sessions
+            if s.day in {"thursday", "friday", "saturday", "sunday"}
+        )
+        assert plan.planned_km == pytest.approx(monday.distance_km + tuesday.distance_km)
+
+    def test_C_duration_basis_tuesday_race_reduces_served_minutes(self):
+        ref = date(2026, 9, 7)
+        plan = _plan(
+            _wt_duration(180, sessions=4, allow_intensity=False, continuity_state="partial_reprise"),
+            goal="half_marathon",
+            phase="taper",
+            ref=ref,
+            race_date=date(2026, 9, 8),
+        )
+
+        monday = next(s for s in plan.sessions if s.day == "monday")
+        tuesday = next(s for s in plan.sessions if s.day == "tuesday")
+        assert monday.duration_minutes is not None
+        assert monday.duration_minutes < 180
+        assert tuesday.workout_type == "race"
+        assert plan.planned_duration_minutes is not None and plan.planned_duration_minutes < 180
+        assert "RACE_WEEK_CALENDAR_LIMITED" in plan.reason_codes
+
+    def test_D_saturday_race_keeps_full_training_when_all_sessions_fit_before_event(self):
+        ref = date(2026, 9, 7)
+        plan = _plan(
+            _wt_distance(20.0, sessions=4, allow_intensity=False),
+            goal="half_marathon",
+            phase="taper",
+            ref=ref,
+            race_date=date(2026, 9, 12),
+        )
+
+        assert plan.planned_km == pytest.approx(20.0, abs=0.1)
+        assert len(_training_sessions(plan)) == 4
+        assert next(s for s in plan.sessions if s.day == "saturday").workout_type == "race"
+        assert next(s for s in plan.sessions if s.day == "sunday").workout_type == "rest"
+
     def test_A_half_marathon_race_date_is_reserved(self):
         ref = date(2026, 9, 11)
         race_date = date(2026, 9, 13)
@@ -1460,6 +1542,7 @@ class TestRaceWeekCanonicalPrescription:
         assert monday.workout_type == "race"
         assert _training_sessions(plan) == []
         assert "RACE_WEEK_CALENDAR_LIMITED" in plan.reason_codes
+        assert plan.planned_km == pytest.approx(0.0)
 
     def test_D_race_date_outside_week_keeps_existing_behavior(self):
         ref = date(2026, 9, 11)
