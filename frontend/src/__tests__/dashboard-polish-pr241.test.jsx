@@ -63,7 +63,7 @@ function buildCardio(metrics = {}) {
       sleep_status: "green",
       training_load: 0.92,
       training_load_status: "green",
-      sufficiency_level: "sufficient",
+      sufficiency_level: "SUFFICIENT",
       readiness_reasons: [],
       ...metrics,
     },
@@ -80,7 +80,7 @@ function buildTodayResponse(sessionOverrides = {}) {
       band: "FAVORABLE",
       score: 82,
       confidence: "high",
-      sufficiency_level: "sufficient",
+      sufficiency_level: "SUFFICIENT",
       available: true,
       data_source: "garmin",
     },
@@ -229,7 +229,7 @@ describe("PR241 dashboard polish", () => {
         hrv_delta: null,
         hrv_available: false,
         sleep_hours: null,
-        sufficiency_level: "sufficient",
+        sufficiency_level: "SUFFICIENT",
       }),
     });
     const { container, unmount } = renderDashboard();
@@ -253,13 +253,49 @@ describe("PR241 dashboard polish", () => {
         rhr_today: 50,
         sleep_hours: 8.1,
         training_load: 1.03,
-        sufficiency_level: "sufficient",
+        sufficiency_level: "SUFFICIENT",
       }),
     });
     const { container, unmount } = renderDashboard();
     await waitForRender();
 
     expect(container.querySelector('[data-testid="run-readiness-partial-indicator"]')).toBeNull();
+
+    unmount();
+  });
+
+  it("shows partial-readiness indicator for canonical DEGRADED sufficiency even with populated displayed pillars", async () => {
+    setupAxiosMocks({
+      cardio: buildCardio({
+        run_readiness: 90,
+        hrv_delta: -2,
+        hrv_available: true,
+        rhr_today: 49,
+        sleep_hours: 8.2,
+        training_load: 0.97,
+        sufficiency_level: "DEGRADED",
+      }),
+    });
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    expect(container.querySelector('[data-testid="run-readiness-partial-indicator"]')?.textContent).toContain("Données partielles");
+
+    unmount();
+  });
+
+  it("preserves unavailable behavior for INSUFFICIENT readiness payloads", async () => {
+    setupAxiosMocks({
+      cardio: buildCardio({
+        run_readiness: null,
+        sufficiency_level: "INSUFFICIENT",
+      }),
+    });
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    expect(container.querySelector('[data-testid="run-readiness-partial-indicator"]')).toBeNull();
+    expect(container.querySelector('[data-testid="run-readiness-unavailable-cause"]')).not.toBeNull();
 
     unmount();
   });
