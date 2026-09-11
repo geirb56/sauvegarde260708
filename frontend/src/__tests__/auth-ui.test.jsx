@@ -213,7 +213,7 @@ describe("auth pages and oauth UI", () => {
     expect(logoutButton).toBeTruthy();
     const appLogo = container.querySelector('[data-testid="app-logo"]');
     expect(appLogo).toBeTruthy();
-    expect(appLogo.getAttribute("src")).toBe("/runindex-symbol.png");
+    expect(appLogo.getAttribute("src")).toBe("/runindex-logo-compact.png");
     expect(appLogo.getAttribute("src")).not.toBe("/runindex-logo.png");
 
     await act(async () => {
