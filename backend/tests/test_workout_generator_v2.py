@@ -1503,6 +1503,28 @@ class TestRaceWeekCanonicalPrescription:
         assert sunday.workout_type == "race"
         assert sunday.distance_km == pytest.approx(60.0)
 
+    def test_F2_standard_goal_race_distance_falls_back_to_goal_type_truth(self):
+        ref = date(2026, 9, 11)
+        race_date = date(2026, 9, 13)
+        legacy_goal = PlanGoal.model_construct(
+            goal_type=GoalType.half_marathon,
+            target_time_seconds=None,
+            race_date=race_date,
+            target_distance_km=None,
+            created_from="user",
+        )
+        plan = build_weekly_plan(
+            weekly_target=_wt_distance(20.0, sessions=4, allow_intensity=False),
+            runner_profile=_runner_profile_minimal(ref),
+            plan_goal=legacy_goal,
+            periodization=_periodization("taper", ref),
+            reference_date=ref,
+        )
+
+        sunday = next(s for s in plan.sessions if s.day == "sunday")
+        assert sunday.workout_type == "race"
+        assert sunday.distance_km == pytest.approx(21.0975)
+
     def test_G_planned_training_km_excludes_race_distance(self):
         ref = date(2026, 9, 11)
         race_date = date(2026, 9, 13)

@@ -18,7 +18,7 @@ The `race` session distance comes from `PlanGoal` truth only:
 - `marathon` -> `42.195 km`
 - `ultra` -> explicit `target_distance_km`
 
-No race distance is derived from `WeeklyTarget` or long-run fractions. `None` remains `None` when goal truth is unavailable.
+No race distance is derived from `WeeklyTarget` or long-run fractions. Standard-goal fallback still resolves from canonical `goal_type` truth if a legacy `PlanGoal` instance arrives without `target_distance_km`. `None` remains `None` only when goal truth is genuinely unavailable.
 
 ## Weekly-target / race separation
 `race` is modeled as an event, not training load.
@@ -46,7 +46,7 @@ No race distance is derived from `WeeklyTarget` or long-run fractions. `None` re
 
 ## Tests / results
 Backend targeted race-day regression suites:
-- `python -m pytest tests/test_workout_generator_v2.py tests/test_daily_runtime_pr137.py tests/test_pr235_c235_corrections.py` -> `177 passed`
+- `python -m pytest tests/test_workout_generator_v2.py tests/test_daily_runtime_pr137.py tests/test_pr235_c235_corrections.py` -> `178 passed`
 
 Relevant backend suites run individually:
 - `python -m pytest -n 0 tests/test_plan_goal_pr05.py tests/test_periodization_pr06.py tests/test_weekly_target_v2.py tests/test_workout_generator_v2.py tests/test_daily_runtime_pr137.py -q` -> `308 passed`

@@ -103,7 +103,14 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict
 
 from .periodization import PeriodizationPhase, PeriodizationSnapshot
-from .plan_goal import GoalType, PlanGoal
+from .plan_goal import (
+    DISTANCE_10K_KM,
+    DISTANCE_5K_KM,
+    DISTANCE_HALF_MARATHON_KM,
+    DISTANCE_MARATHON_KM,
+    GoalType,
+    PlanGoal,
+)
 from .runner_profile import RunnerProfile
 from .weekly_target import WeeklyTarget
 
@@ -540,6 +547,18 @@ class _RaceWeekConfig:
     training_days_before_race: tuple[str, ...]
 
 
+def _resolve_race_distance_km(plan_goal: PlanGoal) -> Optional[float]:
+    goal_type = plan_goal.goal_type.value if hasattr(plan_goal.goal_type, "value") else str(plan_goal.goal_type)
+    if plan_goal.target_distance_km is not None:
+        return plan_goal.target_distance_km
+    return {
+        GoalType.five_k.value: DISTANCE_5K_KM,
+        GoalType.ten_k.value: DISTANCE_10K_KM,
+        GoalType.half_marathon.value: DISTANCE_HALF_MARATHON_KM,
+        GoalType.marathon.value: DISTANCE_MARATHON_KM,
+    }.get(goal_type)
+
+
 def _resolve_race_week_config(
     *,
     plan_goal: PlanGoal,
@@ -558,7 +577,7 @@ def _resolve_race_week_config(
     return _RaceWeekConfig(
         race_date=race_date,
         race_day=race_day,
-        race_distance_km=plan_goal.target_distance_km,
+        race_distance_km=_resolve_race_distance_km(plan_goal),
         training_days_before_race=tuple(
             day for day in _ALL_DAYS if _DAY_ORDER[day] < _DAY_ORDER[race_day]
         ),
