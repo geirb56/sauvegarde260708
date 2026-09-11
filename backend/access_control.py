@@ -343,6 +343,12 @@ def _resolve_access(user_id: str, subscription: dict) -> UserAccess:
     # ── TRIAL ─────────────────────────────────────────────────────────────
     if status == "trial":
         trial_end = _parse_dt(subscription.get("trial_end"))
+        if trial_end is None:
+            logger.warning(
+                f"[AccessControl] Trial subscription for '{user_id}' missing/invalid expiry "
+                "— failing closed to FREE"
+            )
+            return UserAccess(user_id=user_id, tier=Tier.FREE)
         if trial_end and now > trial_end:
             logger.info(f"[AccessControl] Trial expired for '{user_id}'")
             return UserAccess(user_id=user_id, tier=Tier.FREE, trial_end=trial_end)

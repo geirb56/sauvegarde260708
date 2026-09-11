@@ -7,6 +7,11 @@ const isRestSessionType = (value) => {
   return type === "rest" || type.includes("repos");
 };
 
+const isTrainingSessionType = (value) => {
+  const type = (typeof value === "string" ? value : "").trim().toLowerCase();
+  return type === "" || (!isRestSessionType(type) && type !== "race");
+};
+
 const hasAttributedActivity = (actual) => Boolean(actual && actual.activity_id != null && actual.activity_id !== "");
 
 export const aggregateKnownMetric = (rows, field) => {
@@ -40,16 +45,17 @@ export function computeTrainingWeekProgress(trainingWeekV2) {
   const targetBasis = weeklyTarget.target_basis;
   const metricField = targetBasis === "duration" ? "duration_minutes" : "distance_km";
   const plannedValue = targetBasis === "duration"
-    ? weeklyTarget.target_duration_minutes
-    : weeklyTarget.target_km;
+    ? (week.planned_duration_minutes ?? weeklyTarget.target_duration_minutes)
+    : (week.planned_km ?? weeklyTarget.target_km);
 
   const matchedActuals = sessions
+    .filter((session) => isTrainingSessionType(getSessionType(session)))
     .map((session) => session?.actual)
     .filter((actual) => hasAttributedActivity(actual));
   const completed = aggregateKnownMetric(matchedActuals, metricField);
   const unmatchedCompleted = aggregateKnownMetric(unmatched, metricField);
 
-  const fallbackPlannedSessionCount = sessions.filter((session) => !isRestSessionType(getSessionType(session))).length;
+  const fallbackPlannedSessionCount = sessions.filter((session) => isTrainingSessionType(getSessionType(session))).length;
 
   let progressState = "unavailable";
   let progressPercent = null;
@@ -74,7 +80,7 @@ export function computeTrainingWeekProgress(trainingWeekV2) {
     unmatched_value: unmatchedCompleted.value,
     unmatched_state: unmatchedCompleted.state,
     completed_session_count: matchedActuals.length,
-    planned_session_count: weeklyTarget.session_count ?? fallbackPlannedSessionCount,
+    planned_session_count: week.session_count ?? weeklyTarget.session_count ?? fallbackPlannedSessionCount,
     progress_state: progressState,
     progress_percent: progressPercent,
   };

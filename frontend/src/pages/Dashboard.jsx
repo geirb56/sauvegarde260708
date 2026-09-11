@@ -156,7 +156,8 @@ function hasPartialReadinessEvidence(metrics) {
   if (!metrics || metrics.run_readiness === null || metrics.run_readiness === undefined) {
     return false;
   }
-  if (metrics.sufficiency_level === "partial") {
+  const sufficiencyLevel = String(metrics.sufficiency_level || "").toUpperCase();
+  if (sufficiencyLevel === "DEGRADED") {
     return true;
   }
   return [

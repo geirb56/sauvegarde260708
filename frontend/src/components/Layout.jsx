@@ -1,33 +1,24 @@
-import { useState } from "react";
-import { Outlet, NavLink, useLocation } from "react-router-dom";
-import { Activity, Home, CalendarDays, MessageCircle, RefreshCw, Settings, TrendingUp, LogOut, Shield } from "lucide-react";
+import { Outlet, NavLink, Link, useLocation } from "react-router-dom";
+import { Activity, Home, CalendarDays, MessageCircle, Settings, TrendingUp, LogOut, Shield } from "lucide-react";
 import { useLanguage } from "@/context/LanguageContext";
 import { useAuth } from "@/context/AuthContext";
-import ChatCoach from "@/components/ChatCoach";
 
 export const Layout = () => {
   const location = useLocation();
   const { t } = useLanguage();
   const { user, logout } = useAuth();
-  const userId = user?.id;
-  const [chatOpen, setChatOpen] = useState(false);
   const authenticatedBrandSrc = "/runindex-symbol.png";
 
   const navItems = [
-    { path: "/", icon: Home, labelKey: "nav.dashboard" },
-    { path: "/sessions", icon: Activity, labelKey: "nav.sessions" },
-    { path: "/training", icon: CalendarDays, labelKey: "nav.training" },
-    { path: "/coach", icon: MessageCircle, labelKey: "nav.coach" },
-    { path: "/progress", icon: TrendingUp, labelKey: "nav.progress" },
-    { path: "/settings", icon: Settings, labelKey: "nav.settings" },
+    { path: "/", icon: Home, labelKey: "nav.home", testId: "mobile-nav-dashboard" },
+    { path: "/training", icon: CalendarDays, labelKey: "nav.training", testId: "mobile-nav-training" },
+    { path: "/sessions", icon: Activity, labelKey: "nav.sessions", testId: "mobile-nav-sessions" },
+    { path: "/coach", icon: MessageCircle, labelKey: "nav.coach", testId: "mobile-nav-coach" },
+    { path: "/progress", icon: TrendingUp, labelKey: "nav.progress", testId: "mobile-nav-progress" },
   ];
-  if (user?.is_admin) {
-    navItems.push({ path: "/admin", icon: Shield, label: "Admin" });
-  }
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: "var(--bg-primary)" }}>
-      
       {/* Mobile Header */}
       <header className="header-modern">
         <div className="header-logo">
@@ -40,14 +31,28 @@ export const Layout = () => {
         </div>
         
         <div className="header-actions">
-          <button
-            type="button"
-            aria-label="Refresh"
+          <Link
+            to="/settings"
+            aria-label={t("nav.settings")}
+            title={t("nav.settings")}
+            data-testid="header-settings-link"
             className="p-2 rounded-lg transition-colors hover:bg-white/5 min-w-[44px] min-h-[44px] flex items-center justify-center"
             style={{ color: "var(--text-tertiary)" }}
           >
-            <RefreshCw className="w-5 h-5" />
-          </button>
+            <Settings className="w-5 h-5" />
+          </Link>
+          {user?.is_admin && (
+            <Link
+              to="/admin"
+              aria-label={t("nav.admin")}
+              title={t("nav.admin")}
+              data-testid="header-admin-link"
+              className="p-2 rounded-lg transition-colors hover:bg-white/5 min-w-[44px] min-h-[44px] flex items-center justify-center"
+              style={{ color: "var(--text-tertiary)" }}
+            >
+              <Shield className="w-5 h-5" />
+            </Link>
+          )}
           <button
             type="button"
             onClick={logout}
@@ -65,12 +70,13 @@ export const Layout = () => {
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 overflow-x-hidden overflow-y-auto pb-[calc(5rem+env(safe-area-inset-bottom))]">
+      <main className="flex-1 overflow-x-hidden overflow-y-auto pb-[calc(4.75rem+env(safe-area-inset-bottom))]">
         <Outlet />
       </main>
 
       {/* Bottom Navigation */}
-      <nav className="bottom-nav-modern fixed bottom-0 left-0 right-0 flex items-stretch justify-between gap-0.5 px-2 py-2 safe-area-pb overflow-x-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+      <nav className="bottom-nav-modern fixed bottom-0 left-0 right-0 z-40 border-t border-border/80 px-3 py-2 safe-area-pb backdrop-blur" data-testid="mobile-nav">
+        <div className="mx-auto grid w-full max-w-screen-sm grid-cols-5 gap-1">
         {navItems.map((item) => {
           const isActive = item.path === "/"
             ? location.pathname === item.path
@@ -79,7 +85,8 @@ export const Layout = () => {
             <NavLink
               key={item.path}
               to={item.path}
-              className={`nav-item-modern flex-1 min-w-[48px] min-h-[44px] ${isActive ? "active" : ""}`}
+              data-testid={item.testId}
+              className={`nav-item-modern flex min-h-[56px] items-center justify-center rounded-2xl px-1.5 py-2 ${isActive ? "active" : ""}`}
             >
               <div className="relative">
                 <item.icon className="nav-icon w-5 h-5" />
@@ -90,18 +97,12 @@ export const Layout = () => {
                   />
                 )}
               </div>
-              <span className="nav-label text-[10px] leading-tight truncate max-w-full">{item.label ?? t(item.labelKey)}</span>
+              <span className="nav-label text-center text-[11px] font-medium leading-4 whitespace-nowrap">{t(item.labelKey)}</span>
             </NavLink>
           );
         })}
+        </div>
       </nav>
-
-      {/* Chat Coach Overlay */}
-      <ChatCoach 
-        isOpen={chatOpen} 
-        onClose={() => setChatOpen(false)} 
-        userId={userId}
-      />
     </div>
   );
 };

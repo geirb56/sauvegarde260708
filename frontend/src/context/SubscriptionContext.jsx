@@ -30,7 +30,7 @@ export function SubscriptionProvider({ children }) {
   const fetchSubscription = useCallback(async () => {
     if (!userId) {
       setLoading(false);
-      return;
+      return { accessRefreshSucceeded: false };
     }
     try {
       // /user/features is the canonical authority for access rights (fail closed)
@@ -38,13 +38,16 @@ export function SubscriptionProvider({ children }) {
         axios.get(`${API}/user/features`),
         axios.get(`${API}/subscription/info?language=${lang}`),
       ]);
+      const accessRefreshSucceeded = featuresRes.status === "fulfilled";
 
-      if (featuresRes.status === "fulfilled") {
+      if (accessRefreshSucceeded) {
         setFeatures(featuresRes.value.data);
+        setError(null);
       } else {
         console.error("Error fetching /user/features:", featuresRes.reason);
         // Fail closed: treat as free until backend confirms access
         setFeatures(FEATURES_FAIL_CLOSED);
+        setError(featuresRes.reason);
       }
 
       if (infoRes.status === "fulfilled") {
@@ -54,12 +57,13 @@ export function SubscriptionProvider({ children }) {
         setSubscription(null);
       }
 
-      setError(null);
+      return { accessRefreshSucceeded };
     } catch (err) {
       console.error("Error fetching subscription:", err);
       setError(err);
       setFeatures(FEATURES_FAIL_CLOSED);
       setSubscription(null);
+      return { accessRefreshSucceeded: false };
     } finally {
       setLoading(false);
     }
@@ -71,7 +75,7 @@ export function SubscriptionProvider({ children }) {
 
   const refreshSubscription = useCallback(async () => {
     setLoading(true);
-    await fetchSubscription();
+    return fetchSubscription();
   }, [fetchSubscription]);
 
   // Access authority: derived exclusively from /user/features (fail closed)
@@ -86,7 +90,7 @@ export function SubscriptionProvider({ children }) {
     return features?.feature_access?.[feature] ?? false;
   };
 
-  const trialDaysRemaining = features?.trial_days_remaining ?? subscription?.trial_days_remaining ?? null;
+  const trialDaysRemaining = features?.trial_days_remaining ?? null;
 
   const value = {
     subscription,

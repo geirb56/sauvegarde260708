@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { useSearchParams, useNavigate } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import axios from "axios";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -10,13 +10,10 @@ import { toast } from "sonner";
 import { useLanguage } from "@/context/LanguageContext";
 
 import { API_BASE_URL } from "@/config";
-import { useAuth } from "@/context/AuthContext";
 const API = API_BASE_URL;
 
 export default function Coach() {
   const [messages, setMessages] = useState([]);
-  const { user } = useAuth();
-  const userId = user?.id;
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
@@ -24,7 +21,6 @@ export default function Coach() {
   const scrollRef = useRef(null);
   const { t, lang } = useLanguage();
   const [searchParams, setSearchParams] = useSearchParams();
-  const navigate = useNavigate();
   const hasTriggeredAnalysis = useRef(false);
 
   // Load conversation history on mount
@@ -60,7 +56,7 @@ export default function Coach() {
 
   // Scroll to bottom on new messages
   useEffect(() => {
-    if (scrollRef.current) {
+    if (scrollRef.current?.scrollTo) {
       scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
     }
   }, [messages]);
@@ -209,28 +205,57 @@ export default function Coach() {
       <ScrollArea ref={scrollRef} className="flex-1 p-4 md:p-8">
         {messages.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-center py-12">
-            <div className="max-w-md">
-              <p className="font-mono text-sm text-muted-foreground mb-4">
-                {t("coach.emptyState")}
-              </p>
-              <div className="space-y-2">
-                <SuggestionButton 
-                  onClick={() => handleSuggestion("trainingLoad")}
-                  text={t("coach.suggestions.trainingLoad")}
-                  testId="suggestion-training-load"
-                />
-                <SuggestionButton 
-                  onClick={() => handleSuggestion("heartRate")}
-                  text={t("coach.suggestions.heartRate")}
-                  testId="suggestion-heart-rate"
-                />
-                <SuggestionButton 
-                  onClick={() => handleSuggestion("paceConsistency")}
-                  text={t("coach.suggestions.paceConsistency")}
-                  testId="suggestion-pace-consistency"
-                />
-              </div>
-            </div>
+            <Card className="w-full max-w-xl border-border bg-card/80 text-left shadow-sm">
+              <CardContent className="space-y-5 p-5 sm:p-6">
+                <div className="space-y-2 text-center sm:text-left">
+                  <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-primary">
+                    {t("coach.subtitle")}
+                  </p>
+                  <p className="text-sm leading-relaxed text-muted-foreground">
+                    {t("coach.emptyState")}
+                  </p>
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    {t("coachExtended.authorityNote")}
+                  </p>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <Link
+                    to="/training"
+                    className="rounded-2xl border border-border px-4 py-3 text-sm font-medium text-foreground transition-colors hover:border-primary/40 hover:bg-primary/5"
+                  >
+                    {t("coachExtended.goToTraining")}
+                  </Link>
+                  <Link
+                    to="/sessions"
+                    className="rounded-2xl border border-border px-4 py-3 text-sm font-medium text-foreground transition-colors hover:border-primary/40 hover:bg-primary/5"
+                  >
+                    {t("coachExtended.goToSessions")}
+                  </Link>
+                </div>
+                <div className="space-y-2">
+                  <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+                    {t("coachExtended.helpfulPrompts")}
+                  </p>
+                  <div className="space-y-2">
+                    <SuggestionButton
+                      onClick={() => handleSuggestion("trainingLoad")}
+                      text={t("coach.suggestions.trainingLoad")}
+                      testId="suggestion-training-load"
+                    />
+                    <SuggestionButton
+                      onClick={() => handleSuggestion("heartRate")}
+                      text={t("coach.suggestions.heartRate")}
+                      testId="suggestion-heart-rate"
+                    />
+                    <SuggestionButton
+                      onClick={() => handleSuggestion("paceConsistency")}
+                      text={t("coach.suggestions.paceConsistency")}
+                      testId="suggestion-pace-consistency"
+                    />
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
           </div>
         ) : (
           <div className="space-y-6 pb-4">

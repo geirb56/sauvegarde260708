@@ -1,7 +1,7 @@
 import React from "react";
 import "@testing-library/jest-dom";
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import axios from "axios";
 
 import TrainingPlanV2, { aggregateKnownMetric } from "@/pages/TrainingPlanV2";
@@ -213,6 +213,35 @@ function renderPage({ unitSystem = "metric", lang = "en", width = 1024 } = {}) {
   );
 }
 
+function RouterLocationProbe() {
+  const location = useLocation();
+  return (
+    <div
+      data-testid="router-location"
+      data-pathname={location.pathname}
+      data-state-from={location.state?.from || ""}
+    />
+  );
+}
+
+function renderPageWithRoutes({ unitSystem = "metric", lang = "en", width = 1024 } = {}) {
+  Object.defineProperty(window, "innerWidth", { writable: true, configurable: true, value: width });
+  window.localStorage.setItem(UNIT_SYSTEM_KEY, unitSystem);
+  window.localStorage.setItem(LANGUAGE_STORAGE_KEY, lang);
+  return render(
+    <UnitProvider>
+      <LanguageProvider>
+        <MemoryRouter initialEntries={["/training"]}>
+          <Routes>
+            <Route path="/training" element={<TrainingPlanV2 />} />
+            <Route path="/workout/:id" element={<RouterLocationProbe />} />
+          </Routes>
+        </MemoryRouter>
+      </LanguageProvider>
+    </UnitProvider>
+  );
+}
+
 describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -257,6 +286,37 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     expect(today.compareDocumentPosition(week) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(week.compareDocumentPosition(paces) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(paces.compareDocumentPosition(cycle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  test("does not duplicate rest wording or show a zero-distance sentinel", async () => {
+    const data = weekData();
+    data.week.sessions[2].distance_km = 0;
+    data.week.sessions[2].duration_minutes = null;
+    mockAxios({ week: data, today: todayData({ explicitRest: true }) });
+    renderPage({ width: 390 });
+
+    await screen.findByTestId("training-v2-page");
+
+    const restRow = screen.getByTestId("training-v2-day-tuesday");
+    expect(restRow.textContent.match(/Rest day/g)?.length ?? 0).toBe(1);
+    expect(screen.queryByText("0.00 km")).not.toBeInTheDocument();
+  });
+
+  test("keeps race labels and unmatched garmin volume separate from plan progress", async () => {
+    const data = weekData();
+    data.week.sessions[6].workout_type = "race";
+    data.week.sessions[6].prescription = "Goal race";
+    data.week.unmatched_actuals = [
+      { activity_id: "extra-1", distance_km: 5, duration_minutes: 26, pace_min_per_km: 5.2, activity_type: "running", start_time: "2026-08-28T07:00:00" },
+    ];
+    mockAxios({ week: data, cycle: cycleData({ goalType: "marathon", daysToRace: 2 }) });
+    renderPage({ lang: "fr" });
+
+    await screen.findByTestId("training-v2-page");
+
+    expect(screen.getByText("Course")).toBeInTheDocument();
+    expect(screen.getByText(/Volume Garmin supplémentaire/i)).toBeInTheDocument();
+    expect(screen.getByTestId("training-v2-unmatched")).toBeInTheDocument();
   });
 
   test("today card shows the real /training/today contract: type, duration, and distance from served_prescription", async () => {
@@ -767,6 +827,45 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     expect(within(row).getByText(/View analysis|Voir l.analyse|Ver análisis/i)).toHaveAttribute("href", "/workout/garmin-12345");
   });
 
+  test("passes '/training' return context for matched Garmin analysis links", async () => {
+    const week = weekData();
+    week.week.sessions[0].actual.activity_id = "a1";
+    mockAxios({ week });
+    renderPageWithRoutes();
+
+    await screen.findByTestId("training-v2-week");
+    fireEvent.click(screen.getByTestId("session-detail-toggle-monday"));
+    fireEvent.click(screen.getByTestId("session-analysis-link-monday"));
+
+    const location = await screen.findByTestId("router-location");
+    expect(location).toHaveAttribute("data-pathname", "/workout/garmin-a1");
+    expect(location).toHaveAttribute("data-state-from", "/training");
+  });
+
+  test("passes '/training' return context for unmatched Garmin analysis links", async () => {
+    const week = weekData();
+    week.week.unmatched_actuals = [
+      {
+        activity_id: "extra-1",
+        distance_km: 5,
+        duration_minutes: 26,
+        pace_min_per_km: 5.2,
+        activity_type: "running",
+        start_time: "2026-08-28T07:00:00",
+      },
+    ];
+    mockAxios({ week });
+    renderPageWithRoutes();
+
+    const unmatched = await screen.findByTestId("training-v2-unmatched");
+    const row = within(unmatched).getByTestId("unmatched-activity-row");
+    fireEvent.click(within(row).getByText(/View analysis|Voir l.analyse|Ver análisis/i));
+
+    const location = await screen.findByTestId("router-location");
+    expect(location).toHaveAttribute("data-pathname", "/workout/garmin-extra-1");
+    expect(location).toHaveAttribute("data-state-from", "/training");
+  });
+
   test("C233 #2: today's real duration ('Xmin' string) is displayed, and '0min' is never shown as a real duration", async () => {
     mockAxios({
       today: {
@@ -1123,6 +1222,61 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     expect(within(await screen.findByTestId("training-v2-today")).getByTestId(
       "today-session-type"
     )).toHaveTextContent("Easy run");
+  });
+
+  test.each([
+    ["en", "Race"],
+    ["fr", "Course"],
+  ])("renders workout_type race as %s label without long-run wording", async (lang, expectedLabel) => {
+    const week = weekData();
+    week.reference_date = "2026-08-30";
+    week.week.planned_km = 33;
+    week.week.session_count = 4;
+    week.week.sessions[6] = {
+      day: "sunday",
+      planned_date: "2026-08-30",
+      workout_type: "race",
+      distance_km: 21.0975,
+      duration_minutes: null,
+      estimated_tss: null,
+      reason_codes: ["RACE_DAY_RESERVED"],
+      matching_status: "planned",
+      adherence_status: "not_applicable",
+      actual: null,
+      prescription_id: "u1:2026-08-30:sunday",
+    };
+    week.week.sessions[5] = {
+      ...week.week.sessions[5],
+      workout_type: "rest",
+      planned_date: "2026-08-29",
+    };
+    const raceRuntime = {
+      day: "sunday",
+      type: "race",
+      duration: "0min",
+      intensity: "event",
+      distance_km: 21.0975,
+      estimated_tss: null,
+    };
+    const today = {
+      status: "success",
+      date: "2026-08-30",
+      served_prescription: raceRuntime,
+      planned_session: raceRuntime,
+      original_prescription: raceRuntime,
+      adapted_prescription: raceRuntime,
+      adaptive_session: null,
+      adaptation_applied: false,
+      session_modified_from_planned: false,
+    };
+    mockAxios({ today, week });
+    renderPage({ lang });
+
+    const todayCard = await screen.findByTestId("training-v2-today");
+    expect(within(todayCard).getByTestId("today-session-type")).toHaveTextContent(expectedLabel);
+    const sundayRow = await screen.findByTestId("training-v2-day-sunday");
+    expect(within(sundayRow).getByTestId("training-v2-day-type-sunday")).toHaveTextContent(expectedLabel);
+    expect(within(sundayRow).queryByText(/Sortie longue|Long run/i)).not.toBeInTheDocument();
   });
 
   test.each([

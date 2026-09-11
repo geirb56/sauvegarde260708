@@ -112,10 +112,31 @@ def _expired_trial_sub() -> dict:
         "premium_expires_at": None,
     }
 
+def _trial_missing_end_sub() -> dict:
+    return {
+        "user_id": _USER_ID,
+        "status": "trial",
+        "trial_start": (datetime.now(timezone.utc) - timedelta(days=5)).isoformat(),
+        "trial_end": None,
+        "trial_used": True,
+        "premium_expires_at": None,
+    }
+
 
 @pytest_asyncio.fixture
 async def client():
     fake_db = _FakeDB(_expired_trial_sub())
+    with patch.object(server, "db", fake_db):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=server.app),
+            base_url="http://test",
+        ) as c:
+            yield c, fake_db
+
+
+@pytest_asyncio.fixture
+async def client_trial_missing_end():
+    fake_db = _FakeDB(_trial_missing_end_sub())
     with patch.object(server, "db", fake_db):
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=server.app),
@@ -151,3 +172,24 @@ async def test_frontend_cannot_bypass_expiration(client):
         headers=headers,
     )
     assert r.status_code == 403
+
+
+async def test_missing_trial_end_fails_closed_via_source_of_truth(client_trial_missing_end):
+    """Missing trial_end must fail closed to FREE instead of granting trial access."""
+    _, fake_db = client_trial_missing_end
+    access = await get_user_access(fake_db, _USER_ID)
+    assert access.tier == Tier.FREE
+    assert access.has_premium_access is False
+    assert access.trial_days_remaining is None
+
+
+async def test_user_features_fail_closed_when_trial_end_missing(client_trial_missing_end):
+    """`/api/user/features` must not expose phantom trial access without trial_end."""
+    c, _ = client_trial_missing_end
+    r = await c.get("/api/user/features", headers=_bearer())
+    assert r.status_code == 200
+    data = r.json()
+    assert data["plan"] == "free"
+    assert data["trial_active"] is False
+    assert data["has_premium_access"] is False
+    assert data["trial_days_remaining"] is None

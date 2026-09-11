@@ -181,7 +181,11 @@ def _build_history_response(
 
     pillars = {}
     for pillar in ("speed", "endurance", "consistency", "efficiency"):
-        current_val = current_source.get(pillar)
+        current_val = (
+            current_source.get(pillar)
+            if pillar in current_source
+            else current_source.get(f"{pillar}_score")
+        )
         first_val = first.get(pillar) if first else None
         pillars[pillar] = {
             "current": current_val,

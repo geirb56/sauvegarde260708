@@ -104,6 +104,18 @@ def test_A_rest_planned_keeps():
     assert "PLANNED_REST_DAY" in result.reason_codes
 
 
+def test_A_race_planned_keeps():
+    workout = _wp("race", distance_km=21.0975)
+    decision = build_readiness_decision(_readiness(30.0))
+    result = build_daily_adaptation(
+        workout=workout, readiness_decision=decision,
+        training_load=None, recent_response=None,
+    )
+    assert result.action == DailyAdaptationAction.KEEP
+    assert result.adapted_workout.workout_type == "race"
+    assert result.adapted_workout.distance_km == pytest.approx(21.0975)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # B. Readiness UNAVAILABLE → no automatic REST
 # ─────────────────────────────────────────────────────────────────────────────
@@ -308,6 +320,22 @@ def test_N_runtime_to_prescription_threshold():
     )
     assert p.workout_type == "quality"
     assert p.intensity_class == "high"
+
+
+def test_N_runtime_to_prescription_race():
+    p = runtime_session_to_prescription(
+        {"day": "sunday", "type": "race", "duration": "0min", "distance_km": 21.0975}
+    )
+    assert p.workout_type == "race"
+    assert p.intensity_class == "event"
+    assert p.distance_km == pytest.approx(21.0975)
+
+
+def test_N_prescription_to_runtime_race():
+    runtime = prescription_to_runtime_session(_wp("race", distance_km=21.0975, day="sunday"))
+    assert runtime["type"] == "race"
+    assert runtime["intensity"] == "event"
+    assert runtime["distance_km"] == pytest.approx(21.0975)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
