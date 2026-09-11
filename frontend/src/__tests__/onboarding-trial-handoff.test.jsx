@@ -107,7 +107,7 @@ describe("Onboarding trial handoff", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockNavigate.mockReset();
-    mockRefreshSubscription.mockResolvedValue(undefined);
+    mockRefreshSubscription.mockResolvedValue({ accessRefreshSucceeded: true });
     window.localStorage.clear();
     mockSubscriptionState = {
       hasPremiumAccess: true,
@@ -186,11 +186,12 @@ describe("Onboarding trial handoff", () => {
     expect(screen.getByTestId("onboarding-subscription-status")).not.toHaveTextContent("Trial");
   });
 
-  test("final handoff surfaces refresh failure and keeps the user on onboarding", async () => {
+  test("final handoff blocks navigation when access authority refresh fails", async () => {
     mockRefreshSubscription
-      .mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(new Error("refresh failed"));
+      .mockResolvedValueOnce({ accessRefreshSucceeded: true })
+      .mockResolvedValueOnce({ accessRefreshSucceeded: true })
+      .mockResolvedValueOnce({ accessRefreshSucceeded: false })
+      .mockResolvedValueOnce({ accessRefreshSucceeded: false });
 
     renderOnboarding();
     await goToDoneStep();
@@ -202,5 +203,27 @@ describe("Onboarding trial handoff", () => {
     );
     expect(mockNavigate).not.toHaveBeenCalled();
     expect(screen.getByTestId("onboarding-dashboard-cta")).not.toBeDisabled();
+  });
+
+  test("final handoff retry can navigate after an authority refresh failure", async () => {
+    mockRefreshSubscription
+      .mockResolvedValueOnce({ accessRefreshSucceeded: true })
+      .mockResolvedValueOnce({ accessRefreshSucceeded: true })
+      .mockResolvedValueOnce({ accessRefreshSucceeded: false })
+      .mockResolvedValueOnce({ accessRefreshSucceeded: true });
+
+    renderOnboarding();
+    await goToDoneStep();
+
+    fireEvent.click(screen.getByTestId("onboarding-dashboard-cta"));
+    expect(await screen.findByTestId("onboarding-finish-error")).toHaveTextContent(
+      "Unable to refresh your subscription status right now. Please try again."
+    );
+    expect(mockNavigate).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("onboarding-dashboard-cta"));
+
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith("/"));
+    expect(screen.queryByTestId("onboarding-finish-error")).toBeNull();
   });
 });

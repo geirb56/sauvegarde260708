@@ -219,7 +219,11 @@ export default function Onboarding() {
     setCompletionError("");
     setFinishingOnboarding(true);
     try {
-      await refreshSubscription();
+      const result = await refreshSubscription();
+      if (!result?.accessRefreshSucceeded) {
+        setCompletionError(t("onboarding.finishError"));
+        return;
+      }
       navigate("/");
     } catch {
       setCompletionError(t("onboarding.finishError"));

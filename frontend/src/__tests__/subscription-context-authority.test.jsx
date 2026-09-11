@@ -63,7 +63,12 @@ describe("SubscriptionContext access authority", () => {
     const { result } = renderHook(() => useSubscription(), { wrapper });
 
     await waitFor(() => expect(result.current.loading).toBe(false));
+    let refreshResult;
+    await waitFor(async () => {
+      refreshResult = await result.current.refreshSubscription();
+    });
 
+    expect(refreshResult).toEqual({ accessRefreshSucceeded: true });
     expect(result.current.isTrial).toBe(true);
     expect(result.current.hasPremiumAccess).toBe(true);
     expect(result.current.isPremium).toBe(false);
@@ -91,11 +96,51 @@ describe("SubscriptionContext access authority", () => {
     const { result } = renderHook(() => useSubscription(), { wrapper });
 
     await waitFor(() => expect(result.current.loading).toBe(false));
+    let refreshResult;
+    await waitFor(async () => {
+      refreshResult = await result.current.refreshSubscription();
+    });
 
+    expect(refreshResult).toEqual({ accessRefreshSucceeded: false });
     expect(result.current.isFree).toBe(true);
     expect(result.current.isTrial).toBe(false);
     expect(result.current.hasPremiumAccess).toBe(false);
     expect(result.current.trialDaysRemaining).toBeNull();
     expect(result.current.statusLabel).toBe("Trial");
+  });
+
+  test("allows access refresh success when only /subscription/info fails", async () => {
+    axios.get.mockImplementation((url) => {
+      if (url.includes("/user/features")) {
+        return Promise.resolve({
+          data: {
+            plan: "premium",
+            trial_active: false,
+            has_premium_access: true,
+            trial_days_remaining: null,
+            feature_access: { training_plan: true },
+          },
+        });
+      }
+      if (url.includes("/subscription/info")) {
+        return Promise.reject(new Error("billing unavailable"));
+      }
+      return Promise.reject(new Error(`Unexpected GET ${url}`));
+    });
+
+    const { result } = renderHook(() => useSubscription(), { wrapper });
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    let refreshResult;
+    await waitFor(async () => {
+      refreshResult = await result.current.refreshSubscription();
+    });
+
+    expect(refreshResult).toEqual({ accessRefreshSucceeded: true });
+    expect(result.current.isPremium).toBe(true);
+    expect(result.current.hasPremiumAccess).toBe(true);
+    expect(result.current.isTrial).toBe(false);
+    expect(result.current.trialDaysRemaining).toBeNull();
+    expect(result.current.statusLabel).toBeUndefined();
   });
 });
