@@ -158,6 +158,7 @@ export const translations = {
       endurance: "Endurance",
       seuil: "Threshold",
       recuperation: "Recovery",
+      race: "Race",
     },
     
     // Workout detail
@@ -657,7 +658,7 @@ export const translations = {
       targetBasisValues: { distance: "Distance", duration: "Duration" },
       goalTypes: { maintenance: "Maintenance", "5k": "5 km", "10k": "10 km", semi: "Half Marathon", marathon: "Marathon", ultra: "Ultra Trail" },
       continuityStates: { no_history: "No history", deep_reprise: "Deep comeback", partial_reprise: "Partial comeback", reprise_exit: "Comeback exit", normal: "Normal" },
-      workoutTypes: { rest: "Rest", recovery: "Recovery", easy: "Easy run", steady: "Steady endurance", quality: "Quality session", threshold: "Threshold", long_easy: "Long run", tempo_continuous: "Tempo", threshold_intervals: "Threshold", vo2_intervals: "Intervals", race_specific_steady: "Race pace" },
+      workoutTypes: { rest: "Rest", recovery: "Recovery", easy: "Easy run", steady: "Steady endurance", quality: "Quality session", threshold: "Threshold", long_easy: "Long run", race: "Race", tempo_continuous: "Tempo", threshold_intervals: "Threshold", vo2_intervals: "Intervals", race_specific_steady: "Race pace" },
       adapted: "Adapted",
       structured: {
         steps: { warmup: "Warm-up", work: "Work", recovery: "Recovery", cooldown: "Cool-down", continuous: "Session", rest: "Rest" },
@@ -987,6 +988,7 @@ export const translations = {
       endurance: "Endurance",
       seuil: "Seuil",
       recuperation: "Récupération",
+      race: "Course",
     },
     workout: {
       back: "Retour",
@@ -1484,7 +1486,7 @@ export const translations = {
       targetBasisValues: { distance: "Distance", duration: "Durée" },
       goalTypes: { maintenance: "Maintenance", "5k": "5 km", "10k": "10 km", semi: "Semi-marathon", marathon: "Marathon", ultra: "Ultra Trail" },
       continuityStates: { no_history: "Aucun historique", deep_reprise: "Reprise profonde", partial_reprise: "Reprise partielle", reprise_exit: "Sortie de reprise", normal: "Normal" },
-      workoutTypes: { rest: "Repos", recovery: "Récupération", easy: "Footing facile", steady: "Endurance soutenue", quality: "Séance qualité", threshold: "Seuil", long_easy: "Sortie longue", tempo_continuous: "Tempo", threshold_intervals: "Seuil", vo2_intervals: "Intervalles", race_specific_steady: "Allure spécifique" },
+      workoutTypes: { rest: "Repos", recovery: "Récupération", easy: "Footing facile", steady: "Endurance soutenue", quality: "Séance qualité", threshold: "Seuil", long_easy: "Sortie longue", race: "Course", tempo_continuous: "Tempo", threshold_intervals: "Seuil", vo2_intervals: "Intervalles", race_specific_steady: "Allure spécifique" },
       adapted: "Adaptée",
       structured: {
         steps: { warmup: "Échauffement", work: "Travail", recovery: "Récupération", cooldown: "Retour au calme", continuous: "Séance", rest: "Repos" },
@@ -1802,6 +1804,7 @@ export const translations = {
       endurance: "Resistencia",
       seuil: "Umbral",
       recuperation: "Recuperación",
+      race: "Carrera",
     },
     workout: {
       back: "Volver",
@@ -2246,7 +2249,7 @@ export const translations = {
       targetBasisValues: { distance: "Distancia", duration: "Duración" },
       goalTypes: { maintenance: "Mantenimiento", "5k": "5 km", "10k": "10 km", semi: "Media Maratón", marathon: "Maratón", ultra: "Ultra Trail" },
       continuityStates: { no_history: "Sin historial", deep_reprise: "Retorno profundo", partial_reprise: "Retorno parcial", reprise_exit: "Salida del retorno", normal: "Normal" },
-      workoutTypes: { rest: "Descanso", recovery: "Recuperación", easy: "Rodaje fácil", steady: "Resistencia sostenida", quality: "Sesión de calidad", threshold: "Umbral", long_easy: "Tirada larga", tempo_continuous: "Tempo", threshold_intervals: "Umbral", vo2_intervals: "Intervalos", race_specific_steady: "Ritmo específico" },
+      workoutTypes: { rest: "Descanso", recovery: "Recuperación", easy: "Rodaje fácil", steady: "Resistencia sostenida", quality: "Sesión de calidad", threshold: "Umbral", long_easy: "Tirada larga", race: "Carrera", tempo_continuous: "Tempo", threshold_intervals: "Umbral", vo2_intervals: "Intervalos", race_specific_steady: "Ritmo específico" },
       adapted: "Adaptada",
       structured: {
         steps: { warmup: "Calentamiento", work: "Trabajo", recovery: "Recuperación", cooldown: "Vuelta a la calma", continuous: "Sesión", rest: "Descanso" },

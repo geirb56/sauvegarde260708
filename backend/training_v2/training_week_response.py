@@ -127,13 +127,13 @@ class WeekV2SessionResponse(BaseModel):
     """PR232A — ISO-8601 date this session is scheduled for."""
 
     workout_type: Optional[str] = None
-    """rest | recovery | easy | steady | quality | long_easy. C231 (round 2)
+    """rest | recovery | easy | steady | quality | long_easy | race. C231 (round 2)
     — None when ``execution_status == "prescription_unavailable"``: this
     day's real historical prescription was never frozen/served, so its
     recomputed-today workout type is not presented as historical fact."""
 
     intensity_class: Optional[str] = None
-    """rest | low | moderate | high. None under the same
+    """rest | low | moderate | high | event. None under the same
     ``prescription_unavailable`` condition as ``workout_type`` above."""
 
     distance_km: Optional[float] = None
@@ -201,13 +201,13 @@ class WeekV2PlanResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     planned_km: Optional[float] = None
-    """Sum of session distances. None when target_basis == "duration"."""
+    """Sum of TRAINING session distances only; race distance is excluded."""
 
     planned_duration_minutes: Optional[int] = None
     """Sum of session durations. None when target_basis == "distance"."""
 
     session_count: int
-    """Number of running sessions (excludes rest days)."""
+    """Number of TRAINING sessions (excludes rest and race)."""
 
     sessions: List[WeekV2SessionResponse]
     """All sessions ordered Monday→Sunday."""

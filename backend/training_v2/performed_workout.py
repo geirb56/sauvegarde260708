@@ -245,7 +245,7 @@ class PrescribedWorkout(BaseModel):
     user_id: str
     planned_date: date
     workout_type: str
-    """rest | recovery | easy | steady | quality | long_easy."""
+    """rest | recovery | easy | steady | quality | long_easy | race."""
 
     intensity_class: Optional[str] = None
     planned_distance_km: Optional[float] = None

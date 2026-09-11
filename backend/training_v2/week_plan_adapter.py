@@ -38,6 +38,7 @@ from .workout_generator import WeeklyPlan, WeeklyTarget
 # steady      → endurance        (comfortably steady, still aerobic — no tempo label invented)
 # quality     → tempo            (generic hard session — most neutral label; no threshold invented)
 # long_easy   → long_run         (long easy run)
+# race        → race             (canonical event day)
 #
 # If steady/quality mapping changes in future, update this table and the
 # RUNINDEX_PR165_REPORT.md mapping table — nowhere else.
@@ -48,6 +49,7 @@ _WORKOUT_TYPE_DISPLAY_MAP: dict[str, str] = {
     "steady": "endurance",
     "quality": "tempo",
     "long_easy": "long_run",
+    "race": "race",
 }
 
 # ---------------------------------------------------------------------------
@@ -110,6 +112,7 @@ def _build_details(
         "steady": "endurance soutenue",
         "quality": "travail spécifique",
         "long_easy": "sortie longue facile",
+        "race": "course",
     }
     label = label_map.get(workout_type, display)
     parts.append(label)
