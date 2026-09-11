@@ -2,7 +2,8 @@
 
 - Base branch: `copilot/dev`
 - Exact base SHA: `554ae174761b5c3d0abe010383b17230c0b8c8ec`
-- Exact final head SHA: `e44556ee40342cca951d75b8f3f18ebbc664aaf6`
+- Implementation head SHA: `8f5ab2c23ed2d1bfcca2f337b2e843ee82610070`
+- Final PR head SHA: reported at handoff to avoid an impossible self-referential SHA inside this report commit
 - Navigation decision: mobile bottom navigation reduced to 5 primary destinations (`Home/Accueil`, `Training`, `Sessions`, `Coach`, `Progress`); Settings moved to the authenticated header and Admin remains admin-only in the header, not in the primary mobile bottom nav.
 
 ## Files changed
@@ -48,7 +49,7 @@
 
 ### Progress
 - Reduced trend-badge aggression and improved mobile chart tick density.
-- Preserved missing pillar values as `—` and added explicit copy when RunIndex is available but pillar detail is not.
+- Preserved missing pillar values as `—` and added neutral truthful copy: unavailable pillars stay excluded from the RunIndex calculation instead of being treated as zero.
 
 ## Explicit non-regression confirmation
 - No Training V2 prescription logic changes.
@@ -59,17 +60,19 @@
 - No subscription or admin-guard rule changes.
 
 ## Tests / results
-- Focused suites: `CI=1 npx craco test --watchAll=false --runTestsByPath src/__tests__/layout-mobile-nav.test.jsx src/__tests__/sessions-page.test.jsx src/__tests__/coach-page.test.jsx src/__tests__/progress-mobile-ux.test.jsx src/__tests__/training-v2-page.test.jsx` ✅ (5 suites, 85 tests passed)
-- Full frontend suite: `CI=1 npx craco test --watchAll=false --forceExit` ✅ (24 suites, 340 tests passed)
+- Focused suites: `CI=1 npx craco test --watchAll=false --runTestsByPath src/__tests__/layout-mobile-nav.test.jsx src/__tests__/sessions-page.test.jsx src/__tests__/coach-page.test.jsx src/__tests__/progress-mobile-ux.test.jsx src/__tests__/training-v2-page.test.jsx` ✅ (5 suites, 87 tests passed)
+- Full frontend suite: `CI=1 npx craco test --watchAll=false --forceExit` ✅ (24 suites, 342 tests passed)
 - Diff check: `git diff --check` ✅
 
 ## Build result
 - `npm run build` ✅
 
 ## Mobile widths audited
-- 360 px targeted by responsive layout changes
-- 390 px targeted by responsive layout changes
-- 430 px targeted by responsive layout changes
+- 360 px audited in rendered authenticated UI via headless Chromium + local mock API/server: Dashboard, Training, Sessions, Coach, Progress ✅
+- 390 px audited in rendered authenticated UI via headless Chromium + local mock API/server: Dashboard, Training, Sessions, Coach, Progress ✅
+- 430 px audited in rendered authenticated UI via headless Chromium + local mock API/server: Dashboard, Training, Sessions, Coach, Progress ✅
+- FR + EN mobile nav labels checked at 360 px: `Accueil`, `Entraînement`, `Séances`, `Coach`, `Progression` and `Home`, `Training`, `Sessions`, `Coach`, `Progress` ✅
+- Verified in the rendered UI: no horizontal overflow, no horizontal nav scrolling, no truncated primary nav labels, no Today badge collision, no duplicate rest text, no `0.00 km` sentinel, R-only header branding preserved, Settings accessible, Admin absent from primary bottom nav, Coach empty-state hierarchy usable, Progress x-axis labels readable.
 
 ## Remaining P2 visual debt
 - Progress can still feel dense on long premium payloads, but hierarchy and chart readability are improved without changing data contracts.
