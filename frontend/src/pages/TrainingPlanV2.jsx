@@ -482,6 +482,7 @@ function WeekSessionRow({ session, day, isToday, unitSystem, t, locale }) {
                 {analysisRoute && (
                   <Link
                     to={analysisRoute}
+                    state={{ from: "/training" }}
                     data-testid={`session-analysis-link-${day}`}
                     className="text-primary underline"
                   >
@@ -618,7 +619,7 @@ function UnmatchedActualsSection({ t, unitSystem, unmatchedActuals, locale }) {
                   {pace && <span>{pace}</span>}
                 </div>
                 {analysisRoute && (
-                  <Link to={analysisRoute} className="text-primary underline">
+                  <Link to={analysisRoute} state={{ from: "/training" }} className="text-primary underline">
                     {t("trainingV2.sessionDetailViewAnalysis")}
                   </Link>
                 )}

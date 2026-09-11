@@ -1,7 +1,7 @@
 import React from "react";
 import "@testing-library/jest-dom";
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import axios from "axios";
 
 import TrainingPlanV2, { aggregateKnownMetric } from "@/pages/TrainingPlanV2";
@@ -207,6 +207,35 @@ function renderPage({ unitSystem = "metric", lang = "en", width = 1024 } = {}) {
       <LanguageProvider>
         <MemoryRouter>
           <TrainingPlanV2 />
+        </MemoryRouter>
+      </LanguageProvider>
+    </UnitProvider>
+  );
+}
+
+function RouterLocationProbe() {
+  const location = useLocation();
+  return (
+    <div
+      data-testid="router-location"
+      data-pathname={location.pathname}
+      data-state-from={location.state?.from || ""}
+    />
+  );
+}
+
+function renderPageWithRoutes({ unitSystem = "metric", lang = "en", width = 1024 } = {}) {
+  Object.defineProperty(window, "innerWidth", { writable: true, configurable: true, value: width });
+  window.localStorage.setItem(UNIT_SYSTEM_KEY, unitSystem);
+  window.localStorage.setItem(LANGUAGE_STORAGE_KEY, lang);
+  return render(
+    <UnitProvider>
+      <LanguageProvider>
+        <MemoryRouter initialEntries={["/training"]}>
+          <Routes>
+            <Route path="/training" element={<TrainingPlanV2 />} />
+            <Route path="/workout/:id" element={<RouterLocationProbe />} />
+          </Routes>
         </MemoryRouter>
       </LanguageProvider>
     </UnitProvider>
@@ -796,6 +825,45 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     const unmatched = await screen.findByTestId("training-v2-unmatched");
     const row = within(unmatched).getByTestId("unmatched-activity-row");
     expect(within(row).getByText(/View analysis|Voir l.analyse|Ver análisis/i)).toHaveAttribute("href", "/workout/garmin-12345");
+  });
+
+  test("passes '/training' return context for matched Garmin analysis links", async () => {
+    const week = weekData();
+    week.week.sessions[0].actual.activity_id = "a1";
+    mockAxios({ week });
+    renderPageWithRoutes();
+
+    await screen.findByTestId("training-v2-week");
+    fireEvent.click(screen.getByTestId("session-detail-toggle-monday"));
+    fireEvent.click(screen.getByTestId("session-analysis-link-monday"));
+
+    const location = await screen.findByTestId("router-location");
+    expect(location).toHaveAttribute("data-pathname", "/workout/garmin-a1");
+    expect(location).toHaveAttribute("data-state-from", "/training");
+  });
+
+  test("passes '/training' return context for unmatched Garmin analysis links", async () => {
+    const week = weekData();
+    week.week.unmatched_actuals = [
+      {
+        activity_id: "extra-1",
+        distance_km: 5,
+        duration_minutes: 26,
+        pace_min_per_km: 5.2,
+        activity_type: "running",
+        start_time: "2026-08-28T07:00:00",
+      },
+    ];
+    mockAxios({ week });
+    renderPageWithRoutes();
+
+    const unmatched = await screen.findByTestId("training-v2-unmatched");
+    const row = within(unmatched).getByTestId("unmatched-activity-row");
+    fireEvent.click(within(row).getByText(/View analysis|Voir l.analyse|Ver análisis/i));
+
+    const location = await screen.findByTestId("router-location");
+    expect(location).toHaveAttribute("data-pathname", "/workout/garmin-extra-1");
+    expect(location).toHaveAttribute("data-state-from", "/training");
   });
 
   test("C233 #2: today's real duration ('Xmin' string) is displayed, and '0min' is never shown as a real duration", async () => {
