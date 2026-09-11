@@ -9,7 +9,7 @@ const isRestSessionType = (value) => {
 
 const isTrainingSessionType = (value) => {
   const type = (typeof value === "string" ? value : "").trim().toLowerCase();
-  return type !== "" && !isRestSessionType(type) && type !== "race";
+  return type === "" || (!isRestSessionType(type) && type !== "race");
 };
 
 const hasAttributedActivity = (actual) => Boolean(actual && actual.activity_id != null && actual.activity_id !== "");

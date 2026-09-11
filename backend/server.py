@@ -4394,7 +4394,7 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
                 served_candidate=today_final.adaptation_result.adapted_workout,
                 planned_prescription=sessions_for_execution[today_index],
                 structured_factory=_structured_candidate_factory,
-                served_at=datetime.now(timezone.utc),
+                served_at=now_utc,
                 adaptation_action=today_final.adaptation_result.action.value,
                 adaptation_reason_codes=tuple(today_final.adaptation_result.reason_codes),
             )
