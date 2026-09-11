@@ -232,7 +232,7 @@ body {
   background: var(--bg-card);
   border: 2px solid var(--accent-green);
   border-radius: 16px;
-  padding: 1.25rem;
+  padding: 1rem;
   position: relative;
   box-shadow: 0 0 24px rgba(110, 235, 90, 0.10);
 }
@@ -400,20 +400,21 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 1rem;
+  padding: 0.875rem 1rem 0.75rem;
   background: var(--bg-primary);
 }
 
 .header-logo {
   display: flex;
   align-items: center;
-  gap: 10px;
+  min-height: 44px;
 }
 
 .header-logo-img {
-  height: 34px;
-  width: auto;
+  width: 28px;
+  height: 28px;
   display: block;
+  object-fit: contain;
 }
 
 @keyframes brandPulse {
@@ -463,7 +464,7 @@ body {
 .header-actions {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
 }
 
 .header-avatar {
