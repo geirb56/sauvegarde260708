@@ -33,6 +33,14 @@ import Paywall from "@/components/Paywall";
 import { API_BASE_URL } from "@/config";
 const API = API_BASE_URL;
 
+export const buildVisibleChartTicks = (points = [], maxTicks = 6) => {
+  if (!Array.isArray(points) || points.length === 0) return [];
+  if (points.length <= maxTicks) return points.map((point) => point.date);
+  const step = Math.max(1, Math.ceil((points.length - 1) / (maxTicks - 1)));
+  const ticks = points.filter((_, index) => index === 0 || index === points.length - 1 || index % step === 0).map((point) => point.date);
+  return Array.from(new Set(ticks));
+};
+
 const formatDuration = (minutes) => {
   const hrs = Math.floor(minutes / 60);
   const mins = minutes % 60;
@@ -90,6 +98,7 @@ export default function Progress() {
   const [garminVo2maxHistory, setGarminVo2maxHistory] = useState(null);
   const [runIndexHistory, setRunIndexHistory] = useState(null);
   const [runIndexPeriod, setRunIndexPeriod] = useState("6m");
+  const [viewportBand, setViewportBand] = useState(() => (window.innerWidth <= 380 ? "compact" : window.innerWidth <= 430 ? "mobile" : "desktop"));
   const [loading, setLoading] = useState(true);
   const [showPredictions, setShowPredictions] = useState(true);
   const { t, lang } = useLanguage();
@@ -152,6 +161,17 @@ export default function Progress() {
     fetchRunIndexHistory();
   }, [runIndexPeriod, lang, subLoading, isFree]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    const updateViewportBand = () => {
+      if (window.innerWidth <= 380) setViewportBand("compact");
+      else if (window.innerWidth <= 430) setViewportBand("mobile");
+      else setViewportBand("desktop");
+    };
+    updateViewportBand();
+    window.addEventListener("resize", updateViewportBand);
+    return () => window.removeEventListener("resize", updateViewportBand);
+  }, []);
+
   if (loading || subLoading) {
     return (
       <div className="p-6 md:p-8 animate-pulse">
@@ -188,7 +208,6 @@ export default function Progress() {
   const TrendIcon = runIndexTrend > 0 ? TrendingUp : runIndexTrend < 0 ? TrendingDown : Minus;
   const trendColor = runIndexTrend > 0 ? "text-emerald-500" : runIndexTrend < 0 ? "text-red-500" : "text-muted-foreground";
   const trendBg = runIndexTrend > 0 ? "bg-emerald-500/20" : runIndexTrend < 0 ? "bg-red-500/20" : "bg-muted/30";
-  const trendEmoji = runIndexTrend > 0 ? "⬆️" : runIndexTrend < 0 ? "⬇️" : "➡️";
   const historyGranularity = runIndexHistory?.granularity || "week";
 
   const periodOptions = [
@@ -200,6 +219,13 @@ export default function Progress() {
   const garminVo2CurrentValue = runIndexCurrent?.vo2max_running ?? garminVo2maxHistory?.current?.value ?? null;
   const garminVo2CurrentDate = runIndexCurrent?.vo2max_date ?? garminVo2maxHistory?.current?.date ?? null;
   const garminVo2Series = Array.isArray(garminVo2maxHistory?.history) ? garminVo2maxHistory.history : [];
+  const runIndexTickDates = buildVisibleChartTicks(runIndexHistory?.history, viewportBand === "compact" ? 3 : viewportBand === "mobile" ? 4 : 6);
+  const vo2TickDates = buildVisibleChartTicks(garminVo2Series, viewportBand === "compact" ? 3 : viewportBand === "mobile" ? 4 : 6);
+  const hasUnavailablePillars = Boolean(
+    runIndexHistory?.current_run_index != null
+    && runIndexHistory?.pillars
+    && Object.values(runIndexHistory.pillars).some((pillar) => pillar?.current == null)
+  );
 
   return (
     <div className="p-6 md:p-8 pb-24 md:pb-8" data-testid="progress-page">
@@ -226,8 +252,8 @@ export default function Progress() {
             </div>
 
             {/* Current RunIndex + Trend */}
-            <div className="flex items-center justify-between mb-5">
-              <div>
+            <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0">
                 <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
                   {t("progressExtended.runIndexCurrent")}
                 </p>
@@ -240,13 +266,13 @@ export default function Progress() {
               </div>
 
               {runIndexHistory?.has_data && (
-                <div className={`flex flex-col items-end gap-1`}>
+                <div className="flex flex-col gap-1 self-start sm:items-end">
                   <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
                     {t("progressExtended.runIndexTrend")}
                   </p>
-                  <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full ${trendBg}`}>
-                    <span className="text-base">{trendEmoji}</span>
-                    <span className={`text-sm font-bold ${trendColor}`}>
+                  <div className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs ${trendBg}`}>
+                    <TrendIcon className={`h-3.5 w-3.5 ${trendColor}`} />
+                    <span className={`font-semibold ${trendColor}`}>
                       {(() => {
                         if (runIndexTrend === 0) {
                           return t("progressExtended.runIndexTrendStablePeriod");
@@ -301,7 +327,8 @@ export default function Progress() {
                       tickLine={false}
                       tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 9, fontFamily: "JetBrains Mono" }}
                       tickFormatter={(dateStr) => formatDateLabel(dateStr, langToLocale(lang), historyGranularity)}
-                      interval="preserveStartEnd"
+                      ticks={runIndexTickDates}
+                      minTickGap={viewportBand === "compact" ? 18 : 24}
                     />
                     <YAxis
                       domain={[0, 1000]}
@@ -354,6 +381,14 @@ export default function Progress() {
             )}
 
             {/* Pillar details */}
+            {hasUnavailablePillars && (
+              <div className="mb-4 rounded-xl border border-border bg-muted/20 px-3 py-2">
+                <p className="text-xs text-muted-foreground">
+                  {t("progressExtended.pillarsUnavailableNote")}
+                </p>
+              </div>
+            )}
+
             {runIndexHistory?.has_data && runIndexHistory.pillars && (
               <div className="mb-4">
                 <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground mb-3">
@@ -601,7 +636,8 @@ export default function Progress() {
                         tickLine={false}
                         tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 9, fontFamily: "JetBrains Mono" }}
                         tickFormatter={(dateStr) => formatDateLabel(dateStr, langToLocale(lang), "month")}
-                        interval="preserveStartEnd"
+                        ticks={vo2TickDates}
+                        minTickGap={viewportBand === "compact" ? 18 : 24}
                       />
                       <YAxis
                         domain={["dataMin - 2", "dataMax + 2"]}

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useParams, Link, useNavigate } from "react-router-dom";
+import { useParams, Link, useNavigate, useLocation } from "react-router-dom";
 import axios from "axios";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -31,6 +31,7 @@ import {
 
 import { API_BASE_URL } from "@/config";
 const API = API_BASE_URL;
+const ALLOWED_BACK_ROUTES = new Set(["/sessions", "/training", "/progress"]);
 
 const getWorkoutIcon = (type) => {
   if (type === "cycle") return Bike;
@@ -330,6 +331,7 @@ const AnalysisError = ({ t }) => (
 export default function WorkoutDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const { t, lang } = useLanguage();
 
   // Workout state (loaded first)
@@ -394,6 +396,8 @@ export default function WorkoutDetail() {
   const goToAskCoach = () => {
     navigate("/coach");
   };
+
+  const backTo = ALLOWED_BACK_ROUTES.has(location.state?.from) ? location.state.from : "/sessions";
 
   if (workoutLoading) {
     return (
@@ -464,12 +468,13 @@ export default function WorkoutDetail() {
   return (
     <div className="p-4 pb-24" data-testid="workout-detail">
       {/* Header */}
-      <div className="flex items-center justify-between mb-3">
-        <Link to="/progress" className="text-muted-foreground hover:text-foreground">
-          <ArrowLeft className="w-5 h-5" />
-        </Link>
-        <div className="flex items-center gap-2">
-          <Icon className="w-4 h-4 text-muted-foreground" />
+    <div className="mb-4 flex items-center justify-between gap-3">
+      <Link to={backTo} className="inline-flex items-center gap-2 text-muted-foreground hover:text-foreground">
+        <ArrowLeft className="w-4 h-4" />
+        <span className="font-mono text-[10px] uppercase tracking-widest">{t("workout.back")}</span>
+      </Link>
+      <div className="flex items-center gap-2">
+        <Icon className="w-4 h-4 text-muted-foreground" />
           <span className="font-mono text-[10px] uppercase text-muted-foreground">{typeLabel}</span>
         </div>
         <span className="font-mono text-[10px] text-muted-foreground">{dateStr}</span>
@@ -496,7 +501,7 @@ export default function WorkoutDetail() {
       </Card>
 
       {/* 2) SNAPSHOT - 3 Cards: Intensité, Charge, Type */}
-      <div className="grid grid-cols-3 gap-2 mb-3">
+      <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
         {/* Intensité */}
         <Card className="bg-card border-border overflow-hidden">
           <CardContent className="p-2">

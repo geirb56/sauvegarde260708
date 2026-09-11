@@ -259,6 +259,37 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     expect(paces.compareDocumentPosition(cycle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  test("does not duplicate rest wording or show a zero-distance sentinel", async () => {
+    const data = weekData();
+    data.week.sessions[2].distance_km = 0;
+    data.week.sessions[2].duration_minutes = null;
+    mockAxios({ week: data, today: todayData({ explicitRest: true }) });
+    renderPage({ width: 390 });
+
+    await screen.findByTestId("training-v2-page");
+
+    const restRow = screen.getByTestId("training-v2-day-tuesday");
+    expect(restRow.textContent.match(/Rest day/g)?.length ?? 0).toBe(1);
+    expect(screen.queryByText("0.00 km")).not.toBeInTheDocument();
+  });
+
+  test("keeps race labels and unmatched garmin volume separate from plan progress", async () => {
+    const data = weekData();
+    data.week.sessions[6].workout_type = "race";
+    data.week.sessions[6].prescription = "Goal race";
+    data.week.unmatched_actuals = [
+      { activity_id: "extra-1", distance_km: 5, duration_minutes: 26, pace_min_per_km: 5.2, activity_type: "running", start_time: "2026-08-28T07:00:00" },
+    ];
+    mockAxios({ week: data, cycle: cycleData({ goalType: "marathon", daysToRace: 2 }) });
+    renderPage({ lang: "fr" });
+
+    await screen.findByTestId("training-v2-page");
+
+    expect(screen.getByText("Course")).toBeInTheDocument();
+    expect(screen.getByText(/Volume Garmin supplémentaire/i)).toBeInTheDocument();
+    expect(screen.getByTestId("training-v2-unmatched")).toBeInTheDocument();
+  });
+
   test("today card shows the real /training/today contract: type, duration, and distance from served_prescription", async () => {
     mockAxios();
     renderPage();

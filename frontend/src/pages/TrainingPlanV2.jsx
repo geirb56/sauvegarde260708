@@ -378,11 +378,11 @@ function WeekSessionRow({ session, day, isToday, unitSystem, t, locale }) {
         : getTranslatedValue(t, `trainingV2.workoutTypes.${typeKey}`, "trainingV2.noSessionType");
 
   const prescription = getPrescriptionText(session);
-  const distance = isKnownNumber(session?.distance_km) ? formatDistance(session.distance_km, { unitSystem }) : null;
-  const duration = isKnownNumber(session?.duration_minutes) ? `${session.duration_minutes} min` : null;
+  const distance = isKnownNumber(session?.distance_km) && session.distance_km > 0 ? formatDistance(session.distance_km, { unitSystem }) : null;
+  const duration = isKnownNumber(session?.duration_minutes) && session.duration_minutes > 0 ? `${session.duration_minutes} min` : null;
   const compactMetric = isUnavailable
     ? ""
-    : distance || duration || (isExplicitRest ? t("trainingV2.restDay") : (session ? "" : t("trainingV2.noSessionLabel")));
+    : distance || duration || (isExplicitRest ? "" : (session ? "" : t("trainingV2.noSessionLabel")));
 
   // PR233 — no invented pace/structure for "quality" (or any type): only
   // rendered when the backend prescription itself carries it (never true
@@ -418,14 +418,14 @@ function WeekSessionRow({ session, day, isToday, unitSystem, t, locale }) {
         aria-controls={detailId}
         data-testid={`session-detail-toggle-${day}`}
         disabled={!canExpand}
-        className={`grid min-h-14 w-full grid-cols-[76px_minmax(0,1fr)_auto] items-center gap-2 px-3 py-3 text-left text-sm ${
+        className={`grid min-h-14 w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-3 px-3 py-3 text-left text-sm ${
           canExpand ? "cursor-pointer hover:brightness-110" : "cursor-default"
         }`}
       >
-        <span className="text-xs text-muted-foreground" data-testid={`training-v2-day-label-${day}`}>
-          {formatDayHeading(t, day, session?.planned_date, locale)}
-        </span>
         <div className="min-w-0">
+          <span className="mb-1 block text-xs text-muted-foreground" data-testid={`training-v2-day-label-${day}`}>
+            {formatDayHeading(t, day, session?.planned_date, locale)}
+          </span>
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <p className="truncate font-medium" data-testid={`training-v2-day-type-${day}`}>{typeLabel}</p>
             <AdaptedBadge modified={session?.session_modified_from_planned} t={t} />
@@ -442,7 +442,7 @@ function WeekSessionRow({ session, day, isToday, unitSystem, t, locale }) {
         </div>
         <div className="text-right">
           {isToday ? (
-            <Badge className="mb-1 text-[10px]" data-testid="today-highlight-badge">{t("trainingV2.todayBadge")}</Badge>
+            <Badge className="mb-1 whitespace-nowrap px-2 py-1 text-[10px]" data-testid="today-highlight-badge">{t("trainingV2.todayBadge")}</Badge>
           ) : (
             <span className="block text-xs text-muted-foreground">{stateMarker}</span>
           )}
