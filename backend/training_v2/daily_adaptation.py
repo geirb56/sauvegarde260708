@@ -170,6 +170,14 @@ def build_daily_adaptation(
             adapted_workout=workout,
             reason_codes=_dedupe_codes(reasons),
         )
+    if workout.workout_type == "race":
+        reasons.extend(["RACE_DAY_RESERVED", "PLAN_KEPT"])
+        return DailyAdaptationResult(
+            action=DailyAdaptationAction.KEEP,
+            original_workout=workout,
+            adapted_workout=workout,
+            reason_codes=_dedupe_codes(reasons),
+        )
 
     if readiness_decision is None:
         reasons.append("READINESS_UNAVAILABLE")

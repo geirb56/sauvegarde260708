@@ -231,6 +231,7 @@ const RUNTIME_TYPE_TO_WORKOUT_TYPE = {
   tempo: "steady",
   threshold: "quality",
   long_run: "long_easy",
+  race: "race",
 };
 
 const TODAY_ZERO_DURATION_SENTINEL = "0min";

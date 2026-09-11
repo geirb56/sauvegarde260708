@@ -1126,6 +1126,61 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
   });
 
   test.each([
+    ["en", "Race"],
+    ["fr", "Course"],
+  ])("renders workout_type race as %s label without long-run wording", async (lang, expectedLabel) => {
+    const week = weekData();
+    week.reference_date = "2026-08-30";
+    week.week.planned_km = 33;
+    week.week.session_count = 4;
+    week.week.sessions[6] = {
+      day: "sunday",
+      planned_date: "2026-08-30",
+      workout_type: "race",
+      distance_km: 21.0975,
+      duration_minutes: null,
+      estimated_tss: null,
+      reason_codes: ["RACE_DAY_RESERVED"],
+      matching_status: "planned",
+      adherence_status: "not_applicable",
+      actual: null,
+      prescription_id: "u1:2026-08-30:sunday",
+    };
+    week.week.sessions[5] = {
+      ...week.week.sessions[5],
+      workout_type: "rest",
+      planned_date: "2026-08-29",
+    };
+    const raceRuntime = {
+      day: "sunday",
+      type: "race",
+      duration: "0min",
+      intensity: "event",
+      distance_km: 21.0975,
+      estimated_tss: null,
+    };
+    const today = {
+      status: "success",
+      date: "2026-08-30",
+      served_prescription: raceRuntime,
+      planned_session: raceRuntime,
+      original_prescription: raceRuntime,
+      adapted_prescription: raceRuntime,
+      adaptive_session: null,
+      adaptation_applied: false,
+      session_modified_from_planned: false,
+    };
+    mockAxios({ today, week });
+    renderPage({ lang });
+
+    const todayCard = await screen.findByTestId("training-v2-today");
+    expect(within(todayCard).getByTestId("today-session-type")).toHaveTextContent(expectedLabel);
+    const sundayRow = await screen.findByTestId("training-v2-day-sunday");
+    expect(within(sundayRow).getByTestId("training-v2-day-type-sunday")).toHaveTextContent(expectedLabel);
+    expect(within(sundayRow).queryByText(/Sortie longue|Long run/i)).not.toBeInTheDocument();
+  });
+
+  test.each([
     [true, true],
     [false, false],
     [null, false],

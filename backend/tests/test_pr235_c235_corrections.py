@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from datetime import date
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -292,6 +293,41 @@ async def test_concurrent_first_serve_converges_on_single_winning_snapshot():
     # factory may run more than once (both callers' candidates are pure and
     # cheap); only the FINAL persisted document is guaranteed unique.
     assert factory_calls["n"] >= 1
+
+
+async def test_race_day_today_and_week_share_same_prescription_identity_and_type():
+    fake_db = _harness._FakeDB()
+    race_day = date(2026, 9, 13)
+    _harness._seed_cycle(fake_db, goal="SEMI", reference_date=race_day, race_weeks_ahead=0)
+
+    today_result = await _harness._get_today(fake_db, reference_date=race_day)
+    assert today_result["status"] == 200, today_result["body"]
+    week_result = await _harness._get_week(fake_db, reference_date=race_day)
+    assert week_result["status"] == 200, week_result["body"]
+
+    sunday_session = next(
+        s for s in week_result["body"]["week"]["sessions"] if s["day"].lower() == "sunday"
+    )
+    assert today_result["body"]["prescription_id"] == sunday_session["prescription_id"]
+    assert today_result["body"]["served_prescription"]["type"] == "race"
+    assert sunday_session["workout_type"] == "race"
+
+
+async def test_race_before_event_without_garmin_stays_planned():
+    fake_db = _harness._FakeDB()
+    reference_date = date(2026, 9, 11)
+    _harness._seed_cycle(fake_db, goal="SEMI", reference_date=reference_date, race_weeks_ahead=0)
+    fake_db.user_goals._docs[0]["event_date"] = "2026-09-13"
+
+    week_result = await _harness._get_week(fake_db, reference_date=reference_date)
+    assert week_result["status"] == 200, week_result["body"]
+
+    sunday_session = next(
+        s for s in week_result["body"]["week"]["sessions"] if s["day"].lower() == "sunday"
+    )
+    assert sunday_session["workout_type"] == "race"
+    assert sunday_session["matching_status"] == "planned"
+    assert sunday_session["actual"] is None
 
 
 # ---------------------------------------------------------------------------

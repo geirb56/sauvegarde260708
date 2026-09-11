@@ -31,6 +31,7 @@ RUNTIME_TYPE_TO_WORKOUT_TYPE: dict = {
     "tempo": "steady",
     "threshold": "quality",
     "long_run": "long_easy",
+    "race": "race",
 }
 
 WORKOUT_TYPE_TO_INTENSITY_CLASS: dict = {
@@ -40,6 +41,7 @@ WORKOUT_TYPE_TO_INTENSITY_CLASS: dict = {
     "steady": "moderate",
     "quality": "high",
     "long_easy": "low",
+    "race": "event",
 }
 
 WORKOUT_TYPE_TO_RUNTIME_TYPE: dict = {
@@ -49,6 +51,7 @@ WORKOUT_TYPE_TO_RUNTIME_TYPE: dict = {
     "steady": "tempo",
     "quality": "threshold",
     "long_easy": "long_run",
+    "race": "race",
 }
 
 INTENSITY_CLASS_TO_RUNTIME: dict = {
@@ -56,6 +59,7 @@ INTENSITY_CLASS_TO_RUNTIME: dict = {
     "low": "easy",
     "moderate": "moderate",
     "high": "hard",
+    "event": "event",
 }
 
 # Canonical recommendation string + color derived from ReadinessBand (legacy compat).
