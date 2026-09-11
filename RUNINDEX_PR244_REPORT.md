@@ -2,7 +2,7 @@
 
 - Base branch: `copilot/dev`
 - Exact base SHA: `554ae174761b5c3d0abe010383b17230c0b8c8ec`
-- Exact final head SHA: `PENDING_FINAL_HEAD_SHA`
+- Exact final head SHA: `e44556ee40342cca951d75b8f3f18ebbc664aaf6`
 - Navigation decision: mobile bottom navigation reduced to 5 primary destinations (`Home/Accueil`, `Training`, `Sessions`, `Coach`, `Progress`); Settings moved to the authenticated header and Admin remains admin-only in the header, not in the primary mobile bottom nav.
 
 ## Files changed
@@ -27,6 +27,7 @@
 - Removed Settings from the primary mobile bottom nav so labels fit without truncation.
 - Kept only the primary user destinations in the bottom nav and kept Admin out of it.
 - Moved Settings to the authenticated header and kept Admin available only for admins in the header.
+- Preserved the authenticated R-only header branding from PR241.
 
 ### Training
 - Reduced week-row crowding on mobile.
@@ -58,17 +59,17 @@
 - No subscription or admin-guard rule changes.
 
 ## Tests / results
-- Focused suites: pending final run
-- Full frontend suite: pending final run
-- Diff check: pending final run
+- Focused suites: `CI=1 npx craco test --watchAll=false --runTestsByPath src/__tests__/layout-mobile-nav.test.jsx src/__tests__/sessions-page.test.jsx src/__tests__/coach-page.test.jsx src/__tests__/progress-mobile-ux.test.jsx src/__tests__/training-v2-page.test.jsx` ✅ (5 suites, 85 tests passed)
+- Full frontend suite: `CI=1 npx craco test --watchAll=false --forceExit` ✅ (24 suites, 340 tests passed)
+- Diff check: `git diff --check` ✅
 
 ## Build result
-- Pending final run
+- `npm run build` ✅
 
 ## Mobile widths audited
-- 360 px
-- 390 px
-- 430 px
+- 360 px targeted by responsive layout changes
+- 390 px targeted by responsive layout changes
+- 430 px targeted by responsive layout changes
 
 ## Remaining P2 visual debt
 - Progress can still feel dense on long premium payloads, but hierarchy and chart readability are improved without changing data contracts.
