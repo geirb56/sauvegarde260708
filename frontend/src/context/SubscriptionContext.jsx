@@ -86,7 +86,7 @@ export function SubscriptionProvider({ children }) {
     return features?.feature_access?.[feature] ?? false;
   };
 
-  const trialDaysRemaining = features?.trial_days_remaining ?? subscription?.trial_days_remaining ?? null;
+  const trialDaysRemaining = features?.trial_days_remaining ?? null;
 
   const value = {
     subscription,

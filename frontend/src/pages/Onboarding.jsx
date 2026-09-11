@@ -51,13 +51,14 @@ function SelectGrid({ options, value, onSelect, testIdPrefix }) {
 export default function Onboarding() {
   const { t } = useLanguage();
   const navigate = useNavigate();
-  const { refreshSubscription } = useSubscription();
+  const { refreshSubscription, hasPremiumAccess, isTrial, isPremium, trialDaysRemaining } = useSubscription();
 
   const [stepIndex, setStepIndex] = useState(0);
   const [goal, setGoal] = useState("");
   const [ultraDistanceKm, setUltraDistanceKm] = useState("");
   const [sessionsPerWeek, setSessionsPerWeek] = useState(null);
   const [savingPlan, setSavingPlan] = useState(false);
+  const [finishingOnboarding, setFinishingOnboarding] = useState(false);
   const [planError, setPlanError] = useState("");
 
   const [garminStatus, setGarminStatus] = useState("idle"); // idle | connecting | connected | mfa_required | error
@@ -119,6 +120,18 @@ export default function Onboarding() {
   const syncOutcomeKnown = runIndexReady || insufficientData || terminalError;
   const syncedCount = syncProgress?.activities_count ?? garminCount;
   const syncErrorMessageKey = mapSyncErrorToMessageKey(syncError);
+  const finalSubscriptionStatus = useMemo(() => {
+    if (isTrial && hasPremiumAccess) {
+      if (trialDaysRemaining !== null && trialDaysRemaining !== undefined) {
+        return t("onboarding.subscriptionStatusTrial").replace("{count}", String(trialDaysRemaining));
+      }
+      return t("onboarding.subscriptionStatusTrialGeneric");
+    }
+    if (isPremium && hasPremiumAccess) {
+      return t("onboarding.subscriptionStatusPremium");
+    }
+    return t("onboarding.subscriptionStatusFree");
+  }, [hasPremiumAccess, isPremium, isTrial, t, trialDaysRemaining]);
 
   const canContinue = useMemo(() => {
     if (stepKey === "welcome") return true;
@@ -191,11 +204,22 @@ export default function Onboarding() {
           : `${API}/training/set-goal?goal=${encodeURIComponent(goal)}`;
       await axios.post(setGoalUrl, {});
       await axios.post(`${API}/training/refresh?sessions=${sessionsPerWeek}`, {});
+      await refreshSubscription();
       setStepIndex(steps.findIndex((s) => s.key === DONE_STEP_KEY));
     } catch {
       setPlanError(t("onboarding.planError"));
     } finally {
       setSavingPlan(false);
+    }
+  };
+
+  const finishOnboarding = async () => {
+    setFinishingOnboarding(true);
+    try {
+      await refreshSubscription();
+      navigate("/");
+    } finally {
+      setFinishingOnboarding(false);
     }
   };
 
@@ -432,8 +456,20 @@ export default function Onboarding() {
             <div className="space-y-4 text-center" data-testid="onboarding-step-done">
               <h2 className="text-2xl font-black">{t("onboarding.doneTitle")}</h2>
               <p className="text-sm text-muted-foreground">{t("onboarding.doneSubtitle")}</p>
-              <Button className="w-full h-11" onClick={() => navigate("/")} data-testid="onboarding-dashboard-cta">
-                {t("onboarding.dashboardCta")}
+              <div
+                className="rounded-xl border border-border bg-muted/20 px-4 py-3 font-semibold"
+                data-testid="onboarding-subscription-status"
+              >
+                {finalSubscriptionStatus}
+              </div>
+              <Button
+                className="w-full h-11"
+                onClick={finishOnboarding}
+                disabled={finishingOnboarding}
+                data-testid="onboarding-dashboard-cta"
+              >
+                {finishingOnboarding ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                {finishingOnboarding ? t("onboarding.finishing") : t("onboarding.dashboardCta")}
               </Button>
             </div>
           )}
