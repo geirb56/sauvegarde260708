@@ -73,6 +73,7 @@ const webpackConfig = {
       moduleNameMapper: {
         "^@/(.*)$": "<rootDir>/src/$1",
         "^react-router/dom$": "<rootDir>/node_modules/react-router/dist/development/dom-export.js",
+        "^@radix-ui/primitive/is-development$": "<rootDir>/node_modules/@radix-ui/primitive/dist/internal/is-development.false.js",
       },
     },
   },
