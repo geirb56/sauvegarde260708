@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import axios from "axios";
 import { Card, CardContent } from "@/components/ui/card";
 import { useLanguage } from "@/context/LanguageContext";
@@ -142,10 +142,9 @@ export default function Progress() {
   const { isFree, loading: subLoading } = useSubscription();
   const { unitSystem } = useUnitSystem();
 
-  const fetchRacePredictions = async () => {
+  const fetchRacePredictions = useCallback(async () => {
     setPredictionsLoading(true);
     setPredictionsError(false);
-    setPredictions(null);
     try {
       const predictionsRes = await axios.get(`${API}/training/race-predictions`);
       setPredictions(predictionsRes.data);
@@ -155,7 +154,7 @@ export default function Progress() {
     } finally {
       setPredictionsLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     if (subLoading) return; // wait for subscription resolution
@@ -163,6 +162,8 @@ export default function Progress() {
       // FREE: paywall — no data fetches at all
       setLoading(false);
       setPredictionsLoading(false);
+      setPredictionsError(false);
+      setPredictions(null);
       return;
     }
     const fetchData = async () => {
@@ -184,8 +185,6 @@ export default function Progress() {
           /* Garmin not connected — section stays hidden */
         }
 
-        await fetchRacePredictions();
-
         if (cycleRes.data) setCycleV2(cycleRes.data);
         if (runIndexRes.data?.metrics) setRunIndexCurrent(runIndexRes.data.metrics);
         if (vo2HistoryRes.data) setGarminVo2maxHistory(vo2HistoryRes.data);
@@ -198,6 +197,12 @@ export default function Progress() {
     };
     fetchData();
   }, [subLoading, isFree]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (subLoading) return;
+    if (isFree) return;
+    fetchRacePredictions();
+  }, [subLoading, isFree, fetchRacePredictions]);
 
   // Fetch RunIndex history when period changes — TRIAL/PREMIUM only
   useEffect(() => {
@@ -760,7 +765,7 @@ export default function Progress() {
               {t("progressExtended.potentialGarminSource")}
             </p>
 
-            {predictionsLoading ? (
+            {predictionsLoading && !predictions ? (
               <div className="grid grid-cols-2 gap-2 sm:gap-3" data-testid="potential-loading">
                 {POTENTIAL_DISTANCES.map((distanceKey) => (
                   <div key={distanceKey} className="rounded-xl border border-white/10 bg-white/5 p-3 animate-pulse">
@@ -770,7 +775,7 @@ export default function Progress() {
                   </div>
                 ))}
               </div>
-            ) : predictionsError ? (
+            ) : predictionsError && !predictions ? (
               <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3" data-testid="potential-error">
                 <p className="text-sm text-red-200 mb-2">{t("progressExtended.potentialError")}</p>
                 <button

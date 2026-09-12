@@ -1,6 +1,6 @@
 import React from "react";
 import "@testing-library/jest-dom";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import axios from "axios";
 
@@ -54,10 +54,16 @@ const renderProgress = ({ lang = "en", width = 390 } = {}) => {
   );
 };
 
-const setupAxios = ({ predictionsData = VALID_PREDICTIONS, predictionsReject = false, keepLoading = false } = {}) => {
+const setupAxios = ({
+  predictionsData = VALID_PREDICTIONS,
+  predictionsReject = false,
+  keepLoading = false,
+  keepPredictionsLoading = false,
+} = {}) => {
   axios.get.mockImplementation((url) => {
     if (url.includes("/stats")) return keepLoading ? new Promise(() => {}) : Promise.resolve({ data: BASE_STATS });
     if (url.includes("/training/race-predictions")) {
+      if (keepPredictionsLoading) return new Promise(() => {});
       return predictionsReject
         ? Promise.reject(new Error("race predictions unavailable"))
         : Promise.resolve({ data: predictionsData });
@@ -133,6 +139,14 @@ describe("Progress potential UI", () => {
     expect(screen.queryByText("Potential")).not.toBeInTheDocument();
   });
 
+  test("potential loading skeleton is rendered while predictions request is pending", async () => {
+    setupAxios({ keepPredictionsLoading: true });
+    renderProgress();
+
+    expect(await screen.findByTestId("potential-loading")).toBeInTheDocument();
+    expect(screen.queryByText("0:00")).not.toBeInTheDocument();
+  });
+
   test("error state shows compact retry and no invented predictions", async () => {
     setupAxios({ predictionsReject: true });
     renderProgress();
@@ -140,6 +154,31 @@ describe("Progress potential UI", () => {
     expect(await screen.findByTestId("potential-error")).toBeInTheDocument();
     expect(await screen.findByText("Retry")).toBeInTheDocument();
     expect(screen.queryByText("25:00")).not.toBeInTheDocument();
+  });
+
+  test("retry recovers potential cards after an initial error", async () => {
+    let predictionCalls = 0;
+    axios.get.mockImplementation((url) => {
+      if (url.includes("/stats")) return Promise.resolve({ data: BASE_STATS });
+      if (url.includes("/training/race-predictions")) {
+        predictionCalls += 1;
+        if (predictionCalls === 1) return Promise.reject(new Error("temporary failure"));
+        return Promise.resolve({ data: VALID_PREDICTIONS });
+      }
+      if (url.includes("/training/v2/cycle")) return Promise.resolve({ data: { goal: { goal_type: "half_marathon" } } });
+      if (url.includes("/run-index/history")) return Promise.resolve({ data: BASE_HISTORY });
+      if (url.includes("/run-index")) return Promise.resolve({ data: BASE_RUN_INDEX });
+      if (url.includes("/garmin/vo2max-history")) return Promise.resolve({ data: { history: [], current: null } });
+      if (url.includes("/garmin/daily-metrics")) return Promise.reject(new Error("garmin unavailable"));
+      return Promise.resolve({ data: null });
+    });
+
+    renderProgress();
+    const retryButton = await screen.findByText("Retry");
+    fireEvent.click(retryButton);
+
+    expect(await screen.findByTestId("potential-cards-grid")).toBeInTheDocument();
+    expect(await screen.findByText("25:00")).toBeInTheDocument();
   });
 
   test("FR/EN/ES render translated potential text (no raw key)", async () => {
