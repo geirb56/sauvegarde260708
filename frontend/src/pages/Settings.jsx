@@ -427,12 +427,12 @@ export default function Settings() {
     setGoalForm((current) => ({ ...current, [key]: value }));
   };
 
-  const persistUserGoal = useCallback(async (payload, { successMessageKey, errorMessageKey }) => {
+  const persistUserGoalMutation = useCallback(async (request, { successMessageKey, errorMessageKey }) => {
     if (userGoalMutationPendingRef.current) return false;
     userGoalMutationPendingRef.current = true;
     setPlanAction({ status: "saving", message: t("settingsV2.common.saving") });
     try {
-      await axios.post(`${API}/user/goal`, payload);
+      await request();
       const reloadSucceeded = await loadPlanSettings();
       if (!reloadSucceeded) {
         setPlanAction({ status: "error", message: t("settingsV2.plan.loadError") });
@@ -452,30 +452,6 @@ export default function Settings() {
       userGoalMutationPendingRef.current = false;
     }
   }, [loadPlanSettings, t]);
-
-  const buildCurrentGoalPayload = useCallback(({ eventName, eventDate, targetTimeMinutes }) => {
-    const distanceType = userGoal?.distance_type || selectedGoalOption?.distanceType;
-    if (!distanceType) return null;
-
-    const payload = {
-      event_name: eventName,
-      event_date: eventDate,
-      distance_type: distanceType,
-      target_time_minutes: targetTimeMinutes,
-    };
-
-    if (distanceType === "ultra") {
-      const ultraDistance = Number(userGoal?.distance_km ?? goalForm.ultraDistanceKm);
-      if (!(ultraDistance > 42.195)) {
-        setPlanAction({ status: "error", message: t("settingsV2.plan.ultraDistanceError") });
-        toast.error(t("settingsV2.plan.ultraDistanceError"));
-        return null;
-      }
-      payload.distance_km = ultraDistance;
-    }
-
-    return payload;
-  }, [goalForm.ultraDistanceKm, selectedGoalOption?.distanceType, t, userGoal?.distance_km, userGoal?.distance_type]);
 
   const handleSaveRaceSettings = async () => {
     if (!selectedGoalOption?.hasRaceSettings) return;
@@ -504,7 +480,7 @@ export default function Settings() {
       payload.distance_km = parseFloat(goalForm.ultraDistanceKm);
     }
 
-    await persistUserGoal(payload, {
+    await persistUserGoalMutation(() => axios.post(`${API}/user/goal`, payload), {
       successMessageKey: "settingsV2.plan.raceSaved",
       errorMessageKey: "settingsV2.plan.raceSaveError",
     });
@@ -512,13 +488,10 @@ export default function Settings() {
 
   const handleRemoveRace = async () => {
     if (planAction.status === "saving") return;
-    const payload = buildCurrentGoalPayload({
-      eventName: null,
-      eventDate: null,
-      targetTimeMinutes: hasTargetTimeValue(userGoal?.target_time_minutes) ? Number(userGoal.target_time_minutes) : null,
-    });
-    if (!payload) return;
-    await persistUserGoal(payload, {
+    await persistUserGoalMutation(() => axios.patch(`${API}/user/goal`, {
+      event_name: null,
+      event_date: null,
+    }), {
       successMessageKey: "settingsV2.plan.removeRaceSuccess",
       errorMessageKey: "settingsV2.plan.removeRaceError",
     });
@@ -526,13 +499,9 @@ export default function Settings() {
 
   const handleRemoveTargetTime = async () => {
     if (planAction.status === "saving") return;
-    const payload = buildCurrentGoalPayload({
-      eventName: userGoal?.event_name?.trim() || null,
-      eventDate: userGoal?.event_date || null,
-      targetTimeMinutes: null,
-    });
-    if (!payload) return;
-    await persistUserGoal(payload, {
+    await persistUserGoalMutation(() => axios.patch(`${API}/user/goal`, {
+      target_time_minutes: null,
+    }), {
       successMessageKey: "settingsV2.plan.removeTargetTimeSuccess",
       errorMessageKey: "settingsV2.plan.removeTargetTimeError",
     });
