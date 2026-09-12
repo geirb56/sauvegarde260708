@@ -697,34 +697,38 @@ async def test_race_week_plan_is_valid():
 
 
 @pytest.mark.asyncio
-async def test_race_eve_rest_is_shared_between_week_and_today():
-    saturday = _MONDAY + timedelta(days=5)
-    sunday = saturday + timedelta(days=1)
+async def test_cross_week_monday_race_eve_rest_is_shared_between_week_and_today():
+    sunday = _MONDAY + timedelta(days=6)
+    monday = sunday + timedelta(days=1)
     fake_db = _FakeDB()
-    _seed_cycle(fake_db, reference_date=saturday, race_weeks_ahead=0)
+    _seed_cycle(fake_db, reference_date=sunday, race_weeks_ahead=0)
     for doc in fake_db.user_goals._docs:
         if doc.get("user_id") == _USER_ID:
-            doc["event_date"] = sunday.isoformat()
-    _seed_garmin_activities(fake_db, n=8, reference_date=saturday)
+            doc["event_date"] = monday.isoformat()
+    _seed_garmin_activities(fake_db, n=8, reference_date=sunday)
     _seed_connected(fake_db, connected=True)
 
-    week_result = await _get_week(fake_db, reference_date=saturday)
-    today_result = await _get_today(fake_db, reference_date=saturday)
+    week_result = await _get_week(fake_db, reference_date=sunday)
+    today_result = await _get_today(fake_db, reference_date=sunday)
 
     assert week_result["status"] == 200, f"Week race eve: {week_result['body']}"
     assert today_result["status"] == 200, f"Today race eve: {today_result['body']}"
 
-    saturday_week = next(
+    sunday_week = next(
         session
         for session in week_result["body"]["week"]["sessions"]
-        if session.get("planned_date") == saturday.isoformat()
+        if session.get("planned_date") == sunday.isoformat()
     )
     today_planned = today_result["body"].get("planned_session", {})
 
-    assert _week_type(saturday_week) == "rest"
-    assert saturday_week.get("reason_codes") == ["RACE_EVE_REST_RESERVED"]
+    assert _week_type(sunday_week) == "rest"
+    assert sunday_week.get("reason_codes") == ["RACE_EVE_REST_RESERVED"]
     assert _today_type(today_planned) == "rest"
-    assert _week_type(saturday_week) == _today_type(today_planned)
+    assert _week_type(sunday_week) == _today_type(today_planned)
+    assert all(
+        (session.get("workout_type") or "").lower() != "race"
+        for session in week_result["body"]["week"]["sessions"]
+    )
 
 
 @pytest.mark.asyncio

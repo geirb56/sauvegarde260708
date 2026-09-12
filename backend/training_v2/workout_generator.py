@@ -673,6 +673,12 @@ class _RaceWeekConfig:
     max_pre_race_training_sessions: int
 
 
+@dataclass(frozen=True)
+class _CrossWeekRaceEveConfig:
+    race_date: date
+    race_eve_day: str
+
+
 def _resolve_race_distance_km(plan_goal: PlanGoal) -> Optional[float]:
     goal_type = plan_goal.goal_type.value if hasattr(plan_goal.goal_type, "value") else str(plan_goal.goal_type)
     if plan_goal.target_distance_km is not None:
@@ -718,6 +724,26 @@ def _resolve_race_week_config(
             _RACE_WEEK_SESSIONS,
             len(allowed_training_days_before_race),
         ),
+    )
+
+
+def _resolve_cross_week_race_eve_config(
+    *,
+    plan_goal: PlanGoal,
+    reference_date: date,
+) -> Optional[_CrossWeekRaceEveConfig]:
+    race_date = plan_goal.race_date
+    if race_date is None:
+        return None
+
+    week_start = reference_date - timedelta(days=reference_date.weekday())
+    week_end = week_start + timedelta(days=6)
+    if race_date != week_end + timedelta(days=1):
+        return None
+
+    return _CrossWeekRaceEveConfig(
+        race_date=race_date,
+        race_eve_day="sunday",
     )
 
 
@@ -802,6 +828,28 @@ def _build_race_week_training_sessions(
     if len(constrained) > len(kept):
         codes.extend(["RACE_WEEK_SESSION_CAP", "RACE_WEEK_CALENDAR_LIMITED"])
     return kept, codes
+
+
+def _apply_cross_week_race_eve_guard(
+    *,
+    sessions: list[WorkoutPrescription],
+    cross_week_race_eve: Optional[_CrossWeekRaceEveConfig],
+) -> tuple[list[WorkoutPrescription], list[str]]:
+    if cross_week_race_eve is None:
+        return sessions, []
+
+    guarded_sessions: list[WorkoutPrescription] = []
+    changed = False
+    for session in sessions:
+        if session.day == cross_week_race_eve.race_eve_day:
+            guarded_sessions.append(
+                _make_rest(cross_week_race_eve.race_eve_day, reason_codes=("RACE_EVE_REST_RESERVED",))
+            )
+            changed = True
+        else:
+            guarded_sessions.append(session)
+
+    return guarded_sessions, (["RACE_EVE_REST_RESERVED"] if changed else [])
 
 
 def _assign_days(
@@ -1328,6 +1376,10 @@ def build_weekly_plan(
     goal_type = plan_goal.goal_type.value if hasattr(plan_goal.goal_type, "value") else str(plan_goal.goal_type)
     phase = periodization.phase
     race_week = _resolve_race_week_config(plan_goal=plan_goal, reference_date=reference_date)
+    cross_week_race_eve = _resolve_cross_week_race_eve_config(
+        plan_goal=plan_goal,
+        reference_date=reference_date,
+    )
 
     reason_codes: list[str] = list(weekly_target.reason_codes)
     if race_week is not None:
@@ -1385,6 +1437,12 @@ def build_weekly_plan(
                 weekly_target, skeleton, goal_type, allow_intensity, reason_codes, phase,
                 race_distance_km=None,
             )
+
+    sessions, cross_week_codes = _apply_cross_week_race_eve_guard(
+        sessions=sessions,
+        cross_week_race_eve=cross_week_race_eve,
+    )
+    reason_codes = _merge_reason_codes(reason_codes, cross_week_codes)
 
     # --- ensure immutability of session list --------------------------------
     immutable_sessions = tuple(sessions)
