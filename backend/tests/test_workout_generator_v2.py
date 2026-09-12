@@ -1434,6 +1434,8 @@ class TestRaceWeekCanonicalPrescription:
         eve_day = _race_eve_day_name(race_date)
         pre_race_training = _pre_race_training_sessions(plan, race_date)
 
+        for session in plan.sessions:
+            assert isinstance(session.reason_codes, tuple)
         assert _session_by_day(plan, race_day).workout_type == "race"
         if eve_day is not None:
             assert _session_by_day(plan, eve_day).workout_type == "rest"
@@ -1617,6 +1619,8 @@ class TestRaceWeekCanonicalPrescription:
 
         control_sunday = _session_by_day(control, "sunday")
         plan_sunday = _session_by_day(plan, "sunday")
+        for session in plan.sessions:
+            assert isinstance(session.reason_codes, tuple)
         assert control_sunday.workout_type != "rest"
         assert plan_sunday.workout_type == "rest"
         assert plan_sunday.intensity_class == "rest"
@@ -1656,6 +1660,8 @@ class TestRaceWeekCanonicalPrescription:
 
         control_sunday = _session_by_day(control, "sunday")
         plan_sunday = _session_by_day(plan, "sunday")
+        for session in plan.sessions:
+            assert isinstance(session.reason_codes, tuple)
         assert control_sunday.workout_type != "rest"
         assert plan_sunday.workout_type == "rest"
         assert plan_sunday.duration_minutes is None
@@ -1680,7 +1686,35 @@ class TestRaceWeekCanonicalPrescription:
         )
         assert plan.planned_duration_minutes <= (control.planned_duration_minutes or 0)
 
-    def test_J_partial_reprise_distance_path_is_also_conservative(self):
+    def test_J_race_week_downgraded_session_preserves_tuple_reason_codes_contract(self):
+        ref = date(2026, 9, 7)
+        race_date = date(2026, 9, 13)
+        target = _wt_distance(24.0, sessions=4, allow_intensity=True)
+        control = _plan(target, goal="half_marathon", phase="build", ref=ref, race_date=None)
+        plan = _plan(
+            target,
+            goal="half_marathon",
+            phase="build",
+            ref=ref,
+            race_date=race_date,
+        )
+
+        control_pre_race = _pre_race_training_sessions(control, race_date)
+        plan_pre_race = _pre_race_training_sessions(plan, race_date)
+        assert any(
+            session.workout_type not in {"easy", "recovery"} for session in control_pre_race
+        )
+        assert all(isinstance(session.reason_codes, tuple) for session in plan.sessions)
+        assert all(session.workout_type in {"easy", "recovery"} for session in plan_pre_race)
+        downgraded = [
+            session for session in plan_pre_race
+            if "RACE_WEEK_PRE_EVENT_GUARD" in session.reason_codes
+        ]
+        assert downgraded
+        assert all(session.workout_type == "easy" for session in downgraded)
+        assert all(isinstance(session.reason_codes, tuple) for session in downgraded)
+
+    def test_K_partial_reprise_distance_path_is_also_conservative(self):
         ref = date(2026, 9, 7)
         race_date = date(2026, 9, 12)
         target = _wt_distance(20.0, sessions=4, allow_intensity=False, continuity_state="partial_reprise")
@@ -1695,7 +1729,7 @@ class TestRaceWeekCanonicalPrescription:
 
         self._assert_conservative_race_week(plan, race_date=race_date, control=control)
 
-    def test_K_race_date_two_days_after_week_end_does_not_trigger_cross_week_guard(self):
+    def test_L_race_date_two_days_after_week_end_does_not_trigger_cross_week_guard(self):
         ref = date(2026, 9, 13)
         wt = _wt_distance(20.0, sessions=4, allow_intensity=False)
         control = _plan(wt, goal="half_marathon", phase="taper", ref=ref, race_date=None)
@@ -1712,7 +1746,7 @@ class TestRaceWeekCanonicalPrescription:
             (s.day, s.workout_type, s.distance_km, s.duration_minutes, s.reason_codes) for s in control.sessions
         ]
 
-    def test_L_past_race_date_does_not_trigger_cross_week_guard(self):
+    def test_M_past_race_date_does_not_trigger_cross_week_guard(self):
         ref = date(2026, 9, 13)
         wt = _wt_distance(20.0, sessions=4, allow_intensity=False)
         control = _plan(wt, goal="half_marathon", phase="taper", ref=ref, race_date=None)
@@ -1729,7 +1763,7 @@ class TestRaceWeekCanonicalPrescription:
             (s.day, s.workout_type, s.distance_km, s.duration_minutes, s.reason_codes) for s in control.sessions
         ]
 
-    def test_M_maintenance_without_race_date_has_no_race_session(self):
+    def test_N_maintenance_without_race_date_has_no_race_session(self):
         ref = date(2026, 9, 11)
         plan = _plan(
             _wt_distance(16.0, sessions=3, allow_intensity=False),
@@ -1739,7 +1773,7 @@ class TestRaceWeekCanonicalPrescription:
         )
         assert all(s.workout_type != "race" for s in plan.sessions)
 
-    def test_N_ultra_uses_explicit_target_distance(self):
+    def test_O_ultra_uses_explicit_target_distance(self):
         ref = date(2026, 9, 11)
         race_date = date(2026, 9, 13)
         plan = _plan(
@@ -1753,7 +1787,7 @@ class TestRaceWeekCanonicalPrescription:
         assert _session_by_day(plan, "sunday").workout_type == "race"
         assert _session_by_day(plan, "sunday").distance_km == pytest.approx(60.0)
 
-    def test_O_standard_goal_race_distance_falls_back_to_goal_type_truth(self):
+    def test_P_standard_goal_race_distance_falls_back_to_goal_type_truth(self):
         ref = date(2026, 9, 11)
         race_date = date(2026, 9, 13)
         legacy_goal = PlanGoal.model_construct(
@@ -1774,7 +1808,7 @@ class TestRaceWeekCanonicalPrescription:
         assert _session_by_day(plan, "sunday").workout_type == "race"
         assert _session_by_day(plan, "sunday").distance_km == pytest.approx(21.0975)
 
-    def test_P_no_normal_session_can_occupy_race_date(self):
+    def test_Q_no_normal_session_can_occupy_race_date(self):
         ref = date(2026, 9, 11)
         race_date = date(2026, 9, 12)
         profile = _rp(max_days=6, ref=ref)

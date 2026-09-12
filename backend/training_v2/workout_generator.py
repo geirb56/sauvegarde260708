@@ -619,7 +619,7 @@ def _reduce_to_race_week_calendar(
     intended_training_sessions: list[WorkoutPrescription],
     runner_profile: RunnerProfile,
     race_week: _RaceWeekConfig,
-) -> tuple[list[WorkoutPrescription], list[str]]:
+) -> tuple[list[WorkoutPrescription], tuple[str, ...]]:
     constrained_training_sessions, guard_codes = _build_race_week_training_sessions(
         intended_training_sessions=intended_training_sessions,
         race_week=race_week,
@@ -787,13 +787,13 @@ def _select_evenly(candidates: list[str], n: int) -> list[str]:
     return [candidates[i] for i in sorted(dedup[:n])]
 
 
-def _merge_reason_codes(*groups: list[str] | tuple[str, ...]) -> list[str]:
+def _merge_reason_codes(*groups: list[str] | tuple[str, ...]) -> tuple[str, ...]:
     merged: list[str] = []
     for group in groups:
         for code in group:
             if code not in merged:
                 merged.append(code)
-    return merged
+    return tuple(merged)
 
 
 def _constrain_race_week_training_session(session: WorkoutPrescription) -> WorkoutPrescription:
@@ -1429,7 +1429,7 @@ def build_weekly_plan(
                 runner_profile=runner_profile,
                 race_week=race_week,
             )
-            reason_codes = list(reason_codes) + constraint_codes
+            reason_codes = list(reason_codes) + list(constraint_codes)
         else:
             skeleton, constraint_codes = _assign_days(session_types, runner_profile)
             reason_codes = list(reason_codes) + constraint_codes
