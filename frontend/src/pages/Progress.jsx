@@ -190,7 +190,6 @@ export default function Progress() {
         if (vo2HistoryRes.data) setGarminVo2maxHistory(vo2HistoryRes.data);
       } catch (error) {
         console.error("Failed to fetch data:", error);
-        setPredictionsLoading(false);
       } finally {
         setLoading(false);
       }
@@ -298,8 +297,127 @@ export default function Progress() {
         </p>
       </div>
 
+      {/* Potential */}
+      <div className="mb-8" data-testid="potential-section">
+        <Card className="bg-card border-border overflow-hidden">
+          <CardContent className="p-4 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: "rgba(245,158,11,0.2)" }}>
+                <Timer className="w-5 h-5" style={{ color: "#f59e0b" }} />
+              </div>
+              <div>
+                <h2 className="font-heading text-lg uppercase tracking-tight font-semibold">
+                  {t("progressExtended.potentialTitle")}
+                </h2>
+                <p className="font-mono text-xs text-muted-foreground">
+                  {t("progressExtended.potentialSubtitle")}
+                </p>
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {t("progressExtended.potentialGarminSource")}
+            </p>
+
+            {predictionsLoading && !predictions ? (
+              <div className="grid grid-cols-2 gap-2 sm:gap-3" data-testid="potential-loading">
+                {POTENTIAL_DISTANCES.map((distanceKey) => (
+                  <div key={distanceKey} className="rounded-xl border border-white/10 bg-white/5 p-3 animate-pulse">
+                    <div className="h-3 w-16 bg-white/10 rounded mb-3" />
+                    <div className="h-7 w-24 bg-white/10 rounded mb-2" />
+                    <div className="h-3 w-20 bg-white/10 rounded" />
+                  </div>
+                ))}
+              </div>
+            ) : predictionsError && !predictions ? (
+              <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3" data-testid="potential-error">
+                <p className="text-sm text-red-200 mb-2">{t("progressExtended.potentialError")}</p>
+                <button
+                  type="button"
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-white/10 hover:bg-white/20 transition-colors"
+                  onClick={fetchRacePredictions}
+                >
+                  {t("progressExtended.retry")}
+                </button>
+              </div>
+            ) : predictions?.has_data ? (
+              <>
+                <div className="grid grid-cols-2 gap-2 sm:gap-3" data-testid="potential-cards-grid">
+                  {POTENTIAL_DISTANCES.map((distanceKey) => {
+                    const pred = predictionByDistance.get(distanceKey) ?? null;
+                    const confidence = normalizeConfidence(pred?.confidence);
+                    const { i18nKey: confidenceI18nKey, color: confidenceColor } = CONFIDENCE_MAP[confidence];
+                    const confidenceText = t(`progressExtended.${confidenceI18nKey}`);
+                    const isGoal = cycleGoalDist !== null && pred?.distance === cycleGoalDist;
+                    const predictedTime = formatPredictedRaceTime(pred?.predicted_time_s, pred?.predicted_time);
+                    const hasPredictedTime = predictedTime !== null;
+
+                    return (
+                      <div
+                        key={distanceKey}
+                        className="rounded-xl p-3"
+                        data-testid={`potential-card-${distanceKey.toLowerCase()}`}
+                        style={{
+                          background: isGoal ? "rgba(245,158,11,0.08)" : "rgba(255,255,255,0.03)",
+                          border: isGoal ? "2px solid rgba(245,158,11,0.5)" : "1px solid rgba(255,255,255,0.08)",
+                        }}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-xs font-mono uppercase tracking-wider text-muted-foreground">
+                            {t(`progressExtended.${DISTANCE_I18N_KEYS[distanceKey]}`)}
+                          </p>
+                          {isGoal && (
+                            <span className="px-1.5 py-0.5 rounded-full text-[8px] font-bold leading-none" style={{ background: "var(--accent-green)", color: "#0a0e1a" }}>
+                              {t("progressExtended.goalLabel")}
+                            </span>
+                          )}
+                        </div>
+
+                        {hasPredictedTime ? (
+                          <>
+                            <p className="text-2xl sm:text-3xl leading-none font-black text-white mt-2" data-testid={`potential-time-${distanceKey.toLowerCase()}`}>
+                              {predictedTime}
+                            </p>
+                            {pred?.predicted_pace ? (
+                              <p className="text-xs text-muted-foreground mt-1">{pred.predicted_pace}</p>
+                            ) : null}
+                          </>
+                        ) : (
+                          <p className="text-sm text-muted-foreground italic mt-2">
+                            {t("progressExtended.notEnoughPredictionData")}
+                          </p>
+                        )}
+
+                        <div className="mt-3">
+                          <p className="text-[10px] text-muted-foreground mb-1">
+                            {t("progressExtended.confidenceLabel")}
+                          </p>
+                          <span
+                            className="inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold"
+                            style={{ background: `${confidenceColor}20`, color: confidenceColor }}
+                          >
+                            {confidenceText}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {t("progressExtended.potentialTrainingLink")}
+                </p>
+              </>
+            ) : (
+              <div className="rounded-xl border border-white/10 bg-white/5 p-3" data-testid="potential-insufficient-data">
+                <p className="text-sm font-semibold text-white">{t("progressExtended.potentialNotEnoughDataTitle")}</p>
+                <p className="text-xs text-muted-foreground mt-1">{t("progressExtended.potentialNotEnoughDataHint")}</p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
       {/* ===== RUNINDEX EVOLUTION (top of tab) ===== */}
-      <div className="mb-8">
+      <div className="mb-8" data-testid="runindex-evolution-section">
         <Card className="bg-card border-border overflow-hidden">
           <CardContent className="p-4">
             {/* Section title */}
@@ -739,125 +857,6 @@ export default function Progress() {
               </div>
             ) : (
               <p className="text-xs text-muted-foreground mt-3">{t("progressExtended.noGarminVo2maxAvailable")}</p>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Potential */}
-      <div className="mb-8" data-testid="potential-section">
-        <Card className="bg-card border-border overflow-hidden">
-          <CardContent className="p-4 space-y-4">
-            <div className="flex items-start gap-3">
-              <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: "rgba(245,158,11,0.2)" }}>
-                <Timer className="w-5 h-5" style={{ color: "#f59e0b" }} />
-              </div>
-              <div>
-                <h2 className="font-heading text-lg uppercase tracking-tight font-semibold">
-                  {t("progressExtended.potentialTitle")}
-                </h2>
-                <p className="font-mono text-xs text-muted-foreground">
-                  {t("progressExtended.potentialSubtitle")}
-                </p>
-              </div>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              {t("progressExtended.potentialGarminSource")}
-            </p>
-
-            {predictionsLoading && !predictions ? (
-              <div className="grid grid-cols-2 gap-2 sm:gap-3" data-testid="potential-loading">
-                {POTENTIAL_DISTANCES.map((distanceKey) => (
-                  <div key={distanceKey} className="rounded-xl border border-white/10 bg-white/5 p-3 animate-pulse">
-                    <div className="h-3 w-16 bg-white/10 rounded mb-3" />
-                    <div className="h-7 w-24 bg-white/10 rounded mb-2" />
-                    <div className="h-3 w-20 bg-white/10 rounded" />
-                  </div>
-                ))}
-              </div>
-            ) : predictionsError && !predictions ? (
-              <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3" data-testid="potential-error">
-                <p className="text-sm text-red-200 mb-2">{t("progressExtended.potentialError")}</p>
-                <button
-                  type="button"
-                  className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-white/10 hover:bg-white/20 transition-colors"
-                  onClick={fetchRacePredictions}
-                >
-                  {t("progressExtended.retry")}
-                </button>
-              </div>
-            ) : predictions?.has_data ? (
-              <>
-                <div className="grid grid-cols-2 gap-2 sm:gap-3" data-testid="potential-cards-grid">
-                  {POTENTIAL_DISTANCES.map((distanceKey) => {
-                    const pred = predictionByDistance.get(distanceKey) ?? null;
-                    const confidence = normalizeConfidence(pred?.confidence);
-                    const { i18nKey: confidenceI18nKey, color: confidenceColor } = CONFIDENCE_MAP[confidence];
-                    const confidenceText = t(`progressExtended.${confidenceI18nKey}`);
-                    const isGoal = cycleGoalDist !== null && pred?.distance === cycleGoalDist;
-                    const predictedTime = formatPredictedRaceTime(pred?.predicted_time_s, pred?.predicted_time);
-                    const hasPredictedTime = predictedTime !== null;
-
-                    return (
-                      <div
-                        key={distanceKey}
-                        className="rounded-xl p-3"
-                        data-testid={`potential-card-${distanceKey.toLowerCase()}`}
-                        style={{
-                          background: isGoal ? "rgba(245,158,11,0.08)" : "rgba(255,255,255,0.03)",
-                          border: isGoal ? "2px solid rgba(245,158,11,0.5)" : "1px solid rgba(255,255,255,0.08)",
-                        }}
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="text-xs font-mono uppercase tracking-wider text-muted-foreground">
-                            {t(`progressExtended.${DISTANCE_I18N_KEYS[distanceKey]}`)}
-                          </p>
-                          {isGoal && (
-                            <span className="px-1.5 py-0.5 rounded-full text-[8px] font-bold leading-none" style={{ background: "var(--accent-green)", color: "#0a0e1a" }}>
-                              {t("progressExtended.goalLabel")}
-                            </span>
-                          )}
-                        </div>
-
-                        {hasPredictedTime ? (
-                          <>
-                            <p className="text-2xl sm:text-3xl leading-none font-black text-white mt-2" data-testid={`potential-time-${distanceKey.toLowerCase()}`}>
-                              {predictedTime}
-                            </p>
-                            {pred?.predicted_pace ? (
-                              <p className="text-xs text-muted-foreground mt-1">{pred.predicted_pace}</p>
-                            ) : null}
-                          </>
-                        ) : (
-                          <p className="text-sm text-muted-foreground italic mt-2">
-                            {t("progressExtended.notEnoughPredictionData")}
-                          </p>
-                        )}
-
-                        <div className="mt-3">
-                          <p className="text-[10px] text-muted-foreground mb-1">
-                            {t("progressExtended.confidenceLabel")}
-                          </p>
-                          <span
-                            className="inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold"
-                            style={{ background: `${confidenceColor}20`, color: confidenceColor }}
-                          >
-                            {confidenceText}
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  {t("progressExtended.potentialTrainingLink")}
-                </p>
-              </>
-            ) : (
-              <div className="rounded-xl border border-white/10 bg-white/5 p-3" data-testid="potential-insufficient-data">
-                <p className="text-sm font-semibold text-white">{t("progressExtended.potentialNotEnoughDataTitle")}</p>
-                <p className="text-xs text-muted-foreground mt-1">{t("progressExtended.potentialNotEnoughDataHint")}</p>
-              </div>
             )}
           </CardContent>
         </Card>

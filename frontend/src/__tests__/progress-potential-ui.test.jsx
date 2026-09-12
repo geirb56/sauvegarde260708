@@ -211,4 +211,30 @@ describe("Progress potential UI", () => {
     expect(await screen.findByTestId("potential-card-semi")).toBeInTheDocument();
     expect(await screen.findByTestId("potential-card-marathon")).toBeInTheDocument();
   });
+
+  test("potential section is rendered before runindex evolution section", async () => {
+    setupAxios();
+    renderProgress({ width: 390 });
+
+    const potential = await screen.findByTestId("potential-section");
+    const runIndexEvolution = await screen.findByTestId("runindex-evolution-section");
+    expect(potential.compareDocumentPosition(runIndexEvolution) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  test("stats failure does not stop predictions loading while predictions request is pending", async () => {
+    axios.get.mockImplementation((url) => {
+      if (url.includes("/stats")) return Promise.reject(new Error("stats failed"));
+      if (url.includes("/training/race-predictions")) return new Promise(() => {});
+      if (url.includes("/training/v2/cycle")) return Promise.resolve({ data: { goal: { goal_type: "half_marathon" } } });
+      if (url.includes("/run-index/history")) return Promise.resolve({ data: BASE_HISTORY });
+      if (url.includes("/run-index")) return Promise.resolve({ data: BASE_RUN_INDEX });
+      if (url.includes("/garmin/vo2max-history")) return Promise.resolve({ data: { history: [], current: null } });
+      if (url.includes("/garmin/daily-metrics")) return Promise.reject(new Error("garmin unavailable"));
+      return Promise.resolve({ data: null });
+    });
+
+    renderProgress({ width: 390 });
+    expect(await screen.findByTestId("potential-loading")).toBeInTheDocument();
+    expect(screen.queryByTestId("potential-insufficient-data")).not.toBeInTheDocument();
+  });
 });
