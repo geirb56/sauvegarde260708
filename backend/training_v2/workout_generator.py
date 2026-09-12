@@ -620,15 +620,19 @@ def _reduce_to_race_week_calendar(
     runner_profile: RunnerProfile,
     race_week: _RaceWeekConfig,
 ) -> tuple[list[WorkoutPrescription], list[str]]:
+    constrained_training_sessions, guard_codes = _build_race_week_training_sessions(
+        intended_training_sessions=intended_training_sessions,
+        race_week=race_week,
+    )
     skeleton, extra_codes = _assign_days(
-        [session.workout_type for session in intended_training_sessions],
+        [session.workout_type for session in constrained_training_sessions],
         runner_profile,
-        allowed_training_days=list(race_week.training_days_before_race),
+        allowed_training_days=list(race_week.allowed_training_days_before_race),
         reserved_day_to_type={race_week.race_day: "race"},
         capacity_reason_code="RACE_WEEK_CALENDAR_LIMITED",
     )
     active_slots = [(day, workout_type) for day, workout_type in skeleton if _is_training_workout_type(workout_type)]
-    remaining_sessions = list(intended_training_sessions[:len(active_slots)])
+    remaining_sessions = list(constrained_training_sessions[:len(active_slots)])
     day_to_session: dict[str, WorkoutPrescription] = {}
     for day, workout_type in active_slots:
         match_index = next(
@@ -641,11 +645,13 @@ def _reduce_to_race_week_calendar(
     for day in _ALL_DAYS:
         if day == race_week.race_day:
             result.append(_make_race(day, distance_km=race_week.race_distance_km))
+        elif day == race_week.race_eve_day:
+            result.append(_make_rest(day, reason_codes=("RACE_EVE_REST_RESERVED",)))
         elif day in day_to_session:
             result.append(day_to_session[day])
         else:
             result.append(_make_rest(day))
-    return result, extra_codes
+    return result, _merge_reason_codes(guard_codes, extra_codes)
 
 
 # ---------------------------------------------------------------------------
@@ -662,6 +668,9 @@ class _RaceWeekConfig:
     race_day: str
     race_distance_km: Optional[float]
     training_days_before_race: tuple[str, ...]
+    allowed_training_days_before_race: tuple[str, ...]
+    race_eve_day: Optional[str]
+    max_pre_race_training_sessions: int
 
 
 def _resolve_race_distance_km(plan_goal: PlanGoal) -> Optional[float]:
@@ -691,12 +700,23 @@ def _resolve_race_week_config(
         return None
 
     race_day = _ALL_DAYS[race_date.weekday()]
+    race_eve_day = _ALL_DAYS[race_date.weekday() - 1] if race_date.weekday() > 0 else None
+    training_days_before_race = tuple(
+        day for day in _ALL_DAYS if _DAY_ORDER[day] < _DAY_ORDER[race_day]
+    )
+    allowed_training_days_before_race = tuple(
+        day for day in training_days_before_race if day != race_eve_day
+    )
     return _RaceWeekConfig(
         race_date=race_date,
         race_day=race_day,
         race_distance_km=_resolve_race_distance_km(plan_goal),
-        training_days_before_race=tuple(
-            day for day in _ALL_DAYS if _DAY_ORDER[day] < _DAY_ORDER[race_day]
+        training_days_before_race=training_days_before_race,
+        allowed_training_days_before_race=allowed_training_days_before_race,
+        race_eve_day=race_eve_day,
+        max_pre_race_training_sessions=min(
+            _RACE_WEEK_SESSIONS,
+            len(allowed_training_days_before_race),
         ),
     )
 
@@ -739,6 +759,49 @@ def _select_evenly(candidates: list[str], n: int) -> list[str]:
             if len(dedup) >= n:
                 break
     return [candidates[i] for i in sorted(dedup[:n])]
+
+
+def _merge_reason_codes(*groups: list[str] | tuple[str, ...]) -> list[str]:
+    merged: list[str] = []
+    for group in groups:
+        for code in group:
+            if code not in merged:
+                merged.append(code)
+    return merged
+
+
+def _constrain_race_week_training_session(session: WorkoutPrescription) -> WorkoutPrescription:
+    constrained_type = session.workout_type if session.workout_type in {"easy", "recovery"} else "easy"
+    if constrained_type == session.workout_type:
+        return session
+    return session.model_copy(
+        update={
+            "workout_type": constrained_type,
+            "intensity_class": _intensity_class(constrained_type),
+            "reason_codes": _merge_reason_codes(
+                session.reason_codes,
+                ("RACE_WEEK_PRE_EVENT_GUARD",),
+            ),
+        }
+    )
+
+
+def _build_race_week_training_sessions(
+    *,
+    intended_training_sessions: list[WorkoutPrescription],
+    race_week: _RaceWeekConfig,
+) -> tuple[list[WorkoutPrescription], list[str]]:
+    constrained = [
+        _constrain_race_week_training_session(session)
+        for session in intended_training_sessions
+    ]
+    kept = constrained[:race_week.max_pre_race_training_sessions]
+    codes = ["RACE_WEEK_PRE_EVENT_GUARD"]
+    if race_week.race_eve_day is not None:
+        codes.append("RACE_EVE_REST_RESERVED")
+    if len(constrained) > len(kept):
+        codes.extend(["RACE_WEEK_SESSION_CAP", "RACE_WEEK_CALENDAR_LIMITED"])
+    return kept, codes
 
 
 def _assign_days(
@@ -910,14 +973,14 @@ def _order_session_slots(slots: list[str]) -> list[str]:
 # Session factory
 # ---------------------------------------------------------------------------
 
-def _make_rest(day: str) -> WorkoutPrescription:
+def _make_rest(day: str, reason_codes: tuple[str, ...] = ()) -> WorkoutPrescription:
     return WorkoutPrescription(
         day=day,
         workout_type="rest",
         intensity_class="rest",
         distance_km=None,
         duration_minutes=None,
-        reason_codes=(),
+        reason_codes=reason_codes,
     )
 
 

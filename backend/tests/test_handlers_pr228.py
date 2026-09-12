@@ -651,7 +651,7 @@ async def test_race_week_plan_is_valid():
 
     Asserts:
     - HTTP 200 from both handlers.
-    - Week session count is conservative (≤ 3 sessions for race week).
+    - Week training session count is conservative (≤ 2 sessions for race week).
     - Week and Today reconciliation actions are identical.
     - Week and Today planned Monday session match.
     """
@@ -674,10 +674,17 @@ async def test_race_week_plan_is_valid():
     week_sessions = week_result["body"]["week"]["sessions"]
     assert len(week_sessions) > 0, "Race week plan is empty"
 
-    # Race week: no quality/threshold sessions (conservative plan).
+    # Race week: no quality/threshold sessions and at most 2 training sessions.
+    training_sessions = [
+        session for session in week_sessions
+        if (session.get("workout_type") or "").lower() not in ("", "rest", "race")
+    ]
+    assert len(training_sessions) <= 2, (
+        f"Race week has {len(training_sessions)} training sessions; expected ≤ 2"
+    )
     for session in week_sessions:
         wt = (session.get("workout_type") or "").lower()
-        assert wt not in ("quality",), (
+        assert wt not in ("quality", "steady", "long_easy"), (
             f"Race week contains quality session: {wt!r} — race week must be conservative"
         )
 
@@ -687,6 +694,37 @@ async def test_race_week_plan_is_valid():
     assert week_action == today_action, (
         f"Race week: reconciliation action diverged: Week={week_action!r} Today={today_action!r}"
     )
+
+
+@pytest.mark.asyncio
+async def test_race_eve_rest_is_shared_between_week_and_today():
+    saturday = _MONDAY + timedelta(days=5)
+    sunday = saturday + timedelta(days=1)
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db, reference_date=saturday, race_weeks_ahead=0)
+    for doc in fake_db.user_goals._docs:
+        if doc.get("user_id") == _USER_ID:
+            doc["event_date"] = sunday.isoformat()
+    _seed_garmin_activities(fake_db, n=8, reference_date=saturday)
+    _seed_connected(fake_db, connected=True)
+
+    week_result = await _get_week(fake_db, reference_date=saturday)
+    today_result = await _get_today(fake_db, reference_date=saturday)
+
+    assert week_result["status"] == 200, f"Week race eve: {week_result['body']}"
+    assert today_result["status"] == 200, f"Today race eve: {today_result['body']}"
+
+    saturday_week = next(
+        session
+        for session in week_result["body"]["week"]["sessions"]
+        if session.get("planned_date") == saturday.isoformat()
+    )
+    today_planned = today_result["body"].get("planned_session", {})
+
+    assert _week_type(saturday_week) == "rest"
+    assert saturday_week.get("reason_codes") == ["RACE_EVE_REST_RESERVED"]
+    assert _today_type(today_planned) == "rest"
+    assert _week_type(saturday_week) == _today_type(today_planned)
 
 
 @pytest.mark.asyncio
