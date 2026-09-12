@@ -17,8 +17,6 @@ import {
 import { 
   TrendingUp, 
   Activity,
-  ChevronDown,
-  ChevronUp,
   Calendar,
   Timer,
   Zap,
@@ -87,6 +85,44 @@ const V2_GOAL_TO_PRED_DISTANCE = {
   ultra: "Ultra",
 };
 
+const POTENTIAL_DISTANCES = ["5K", "10K", "Semi", "Marathon"];
+const DISTANCE_I18N_KEYS = {
+  "5K": "distance5K",
+  "10K": "distance10K",
+  Semi: "distanceHalfMarathon",
+  Marathon: "distanceMarathon",
+};
+
+const CONFIDENCE_MAP = {
+  high: { i18nKey: "confidenceHigh", color: "#22c55e" },
+  medium: { i18nKey: "confidenceMedium", color: "#f59e0b" },
+  low: { i18nKey: "confidenceLow", color: "#f97316" },
+  insufficient: { i18nKey: "confidenceInsufficient", color: "#6b7280" },
+};
+
+const normalizeConfidence = (value) => {
+  if (typeof value !== "string") return "insufficient";
+  const normalized = value.trim().toLowerCase();
+  return CONFIDENCE_MAP[normalized] ? normalized : "insufficient";
+};
+
+const formatPredictedRaceTime = (predictedTimeSeconds, fallbackTimeString) => {
+  if (typeof predictedTimeSeconds === "number" && Number.isFinite(predictedTimeSeconds) && predictedTimeSeconds > 0) {
+    const totalSeconds = Math.round(predictedTimeSeconds);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    if (hours >= 1) {
+      return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+    }
+    return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  }
+  if (typeof fallbackTimeString === "string" && fallbackTimeString.trim()) {
+    return fallbackTimeString.trim();
+  }
+  return null;
+};
+
 export default function Progress() {
   const [stats, setStats] = useState(null);
   const [predictions, setPredictions] = useState(null);
@@ -99,24 +135,40 @@ export default function Progress() {
   const [runIndexHistory, setRunIndexHistory] = useState(null);
   const [runIndexPeriod, setRunIndexPeriod] = useState("6m");
   const [viewportBand, setViewportBand] = useState(() => (window.innerWidth <= 380 ? "compact" : window.innerWidth <= 430 ? "mobile" : "desktop"));
+  const [predictionsLoading, setPredictionsLoading] = useState(true);
+  const [predictionsError, setPredictionsError] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [showPredictions, setShowPredictions] = useState(true);
   const { t, lang } = useLanguage();
   const { isFree, loading: subLoading } = useSubscription();
   const { unitSystem } = useUnitSystem();
+
+  const fetchRacePredictions = async () => {
+    setPredictionsLoading(true);
+    setPredictionsError(false);
+    setPredictions(null);
+    try {
+      const predictionsRes = await axios.get(`${API}/training/race-predictions`);
+      setPredictions(predictionsRes.data);
+    } catch {
+      setPredictionsError(true);
+      setPredictions(null);
+    } finally {
+      setPredictionsLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (subLoading) return; // wait for subscription resolution
     if (isFree) {
       // FREE: paywall — no data fetches at all
       setLoading(false);
+      setPredictionsLoading(false);
       return;
     }
     const fetchData = async () => {
       try {
-        const [statsRes, predictionsRes, cycleRes, runIndexRes, vo2HistoryRes] = await Promise.all([
+        const [statsRes, cycleRes, runIndexRes, vo2HistoryRes] = await Promise.all([
           axios.get(`${API}/stats`),
-          axios.get(`${API}/training/race-predictions`).catch(() => ({ data: null })),
           // PR184: V2/cycle is the authority for cycle calendar (no session prescription)
           axios.get(`${API}/training/v2/cycle`).catch(() => ({ data: null })),
           axios.get(`${API}/run-index`).catch(() => ({ data: null })),
@@ -132,14 +184,14 @@ export default function Progress() {
           /* Garmin not connected — section stays hidden */
         }
 
-        let predData = predictionsRes.data;
-        if (predData) setPredictions(predData);
+        await fetchRacePredictions();
 
         if (cycleRes.data) setCycleV2(cycleRes.data);
         if (runIndexRes.data?.metrics) setRunIndexCurrent(runIndexRes.data.metrics);
         if (vo2HistoryRes.data) setGarminVo2maxHistory(vo2HistoryRes.data);
       } catch (error) {
         console.error("Failed to fetch data:", error);
+        setPredictionsLoading(false);
       } finally {
         setLoading(false);
       }
@@ -221,6 +273,14 @@ export default function Progress() {
   const garminVo2Series = Array.isArray(garminVo2maxHistory?.history) ? garminVo2maxHistory.history : [];
   const runIndexTickDates = buildVisibleChartTicks(runIndexHistory?.history, viewportBand === "compact" ? 3 : viewportBand === "mobile" ? 4 : 6);
   const vo2TickDates = buildVisibleChartTicks(garminVo2Series, viewportBand === "compact" ? 3 : viewportBand === "mobile" ? 4 : 6);
+  const cycleGoalDist = cycleV2?.goal?.goal_type
+    ? V2_GOAL_TO_PRED_DISTANCE[cycleV2.goal.goal_type] ?? null
+    : null;
+  const predictionByDistance = new Map(
+    Array.isArray(predictions?.predictions)
+      ? predictions.predictions.map((pred) => [pred.distance, pred])
+      : [],
+  );
   return (
     <div className="p-6 md:p-8 pb-24 md:pb-8" data-testid="progress-page">
       {/* Header */}
@@ -679,74 +739,74 @@ export default function Progress() {
         </Card>
       </div>
 
-      {/* Race Predictions */}
-      {predictions?.has_data && (
-        <div className="mb-8">
-          <Card className="bg-card border-border overflow-hidden">
-            <CardContent className="p-0">
-              {/* Header */}
-              <div 
-                className="flex items-center justify-between p-4 cursor-pointer"
-                onClick={() => setShowPredictions(!showPredictions)}
-                style={{ background: "linear-gradient(135deg, rgba(245,158,11,0.1) 0%, rgba(251,191,36,0.05) 100%)" }}
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: "rgba(245,158,11,0.2)" }}>
-                    <Timer className="w-5 h-5" style={{ color: "#f59e0b" }} />
+      {/* Potential */}
+      <div className="mb-8" data-testid="potential-section">
+        <Card className="bg-card border-border overflow-hidden">
+          <CardContent className="p-4 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: "rgba(245,158,11,0.2)" }}>
+                <Timer className="w-5 h-5" style={{ color: "#f59e0b" }} />
+              </div>
+              <div>
+                <h2 className="font-heading text-lg uppercase tracking-tight font-semibold">
+                  {t("progressExtended.potentialTitle")}
+                </h2>
+                <p className="font-mono text-xs text-muted-foreground">
+                  {t("progressExtended.potentialSubtitle")}
+                </p>
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {t("progressExtended.potentialGarminSource")}
+            </p>
+
+            {predictionsLoading ? (
+              <div className="grid grid-cols-2 gap-2 sm:gap-3" data-testid="potential-loading">
+                {POTENTIAL_DISTANCES.map((distanceKey) => (
+                  <div key={distanceKey} className="rounded-xl border border-white/10 bg-white/5 p-3 animate-pulse">
+                    <div className="h-3 w-16 bg-white/10 rounded mb-3" />
+                    <div className="h-7 w-24 bg-white/10 rounded mb-2" />
+                    <div className="h-3 w-20 bg-white/10 rounded" />
                   </div>
-                  <div>
-                    <h2 className="font-heading text-lg uppercase tracking-tight font-semibold">
-                      {t("progressExtended.racePredictions")}
-                    </h2>
-                    <p className="font-mono text-xs text-muted-foreground">
-                     {t("progressExtended.racePredictionBasis")}
-                    </p>
-                  </div>
-                </div>
-                <button className="p-2 rounded-lg" style={{ background: "rgba(255,255,255,0.05)" }}>
-                  {showPredictions ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                ))}
+              </div>
+            ) : predictionsError ? (
+              <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3" data-testid="potential-error">
+                <p className="text-sm text-red-200 mb-2">{t("progressExtended.potentialError")}</p>
+                <button
+                  type="button"
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-white/10 hover:bg-white/20 transition-colors"
+                  onClick={fetchRacePredictions}
+                >
+                  {t("progressExtended.retry")}
                 </button>
               </div>
+            ) : predictions?.has_data ? (
+              <>
+                <div className="grid grid-cols-2 gap-2 sm:gap-3" data-testid="potential-cards-grid">
+                  {POTENTIAL_DISTANCES.map((distanceKey) => {
+                    const pred = predictionByDistance.get(distanceKey) ?? null;
+                    const confidence = normalizeConfidence(pred?.confidence);
+                    const { i18nKey: confidenceI18nKey, color: confidenceColor } = CONFIDENCE_MAP[confidence];
+                    const confidenceText = t(`progressExtended.${confidenceI18nKey}`);
+                    const isGoal = cycleGoalDist !== null && pred?.distance === cycleGoalDist;
+                    const predictedTime = formatPredictedRaceTime(pred?.predicted_time_s, pred?.predicted_time);
+                    const hasPredictedTime = predictedTime !== null;
 
-              {showPredictions && (
-                <div className="p-4 space-y-4">
-                  {/* Predictions by distance */}
-                  <div className="space-y-2">
-                  {(() => {
-                     // PR193: single lookup table for confidence — defined once, outside the per-prediction loop
-                     const CONFIDENCE_MAP = {
-                       high:         { i18nKey: "confidenceHigh",         color: "#22c55e" },
-                       medium:       { i18nKey: "confidenceMedium",        color: "#f59e0b" },
-                       low:          { i18nKey: "confidenceLow",           color: "#f97316" },
-                       insufficient: { i18nKey: "confidenceInsufficient",  color: "#6b7280" },
-                     };
-                     const cycleGoalDist = cycleV2?.goal?.goal_type
-                       ? V2_GOAL_TO_PRED_DISTANCE[cycleV2.goal.goal_type] ?? null
-                       : null;
-                     return predictions.predictions?.map((pred) => {
-                     const isGoal = cycleGoalDist !== null && pred.distance === cycleGoalDist;
-                     // PR193: colour and label derived from pred.confidence, not readiness
-                     const { i18nKey: confidenceI18nKey, color: confidenceColor } =
-                       CONFIDENCE_MAP[pred.confidence] ?? CONFIDENCE_MAP.insufficient;
-                     const confidenceText = t(`progressExtended.${confidenceI18nKey}`);
-
-                      return (
-                      <div 
-                        key={pred.distance}
-                        className="flex items-center gap-3 p-3 rounded-xl transition-all"
-                        style={{ 
+                    return (
+                      <div
+                        key={distanceKey}
+                        className="rounded-xl p-3"
+                        data-testid={`potential-card-${distanceKey.toLowerCase()}`}
+                        style={{
                           background: isGoal ? "rgba(245,158,11,0.08)" : "rgba(255,255,255,0.03)",
-                          border: isGoal ? "2px solid rgba(245,158,11,0.5)" : "1px solid rgba(255,255,255,0.05)"
+                          border: isGoal ? "2px solid rgba(245,158,11,0.5)" : "1px solid rgba(255,255,255,0.08)",
                         }}
                       >
-                        {/* Distance badge — GOAL badge attached here (PR193) */}
-                        <div 
-                          className="shrink-0 w-14 rounded-xl flex flex-col items-center justify-center gap-1 py-2"
-                          style={{ background: `${confidenceColor}20` }}
-                        >
-                          <span className="text-sm font-bold" style={{ color: confidenceColor }}>
-                            {pred.distance}
-                          </span>
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-xs font-mono uppercase tracking-wider text-muted-foreground">
+                            {t(`progressExtended.${DISTANCE_I18N_KEYS[distanceKey]}`)}
+                          </p>
                           {isGoal && (
                             <span className="px-1.5 py-0.5 rounded-full text-[8px] font-bold leading-none" style={{ background: "var(--accent-green)", color: "#0a0e1a" }}>
                               {t("progressExtended.goalLabel")}
@@ -754,45 +814,49 @@ export default function Progress() {
                           )}
                         </div>
 
-                        {/* Predicted time */}
-                        <div className="flex-1 min-w-0">
-                          {pred.predicted_time ? (
-                            <>
-                              <span className="text-xl font-bold text-white">{pred.predicted_time}</span>
-                              <p className="text-xs text-muted-foreground">
-                                {pred.predicted_pace}
-                              </p>
-                            </>
-                          ) : (
-                            <span className="text-sm text-muted-foreground italic">
-                              {t("progressExtended.notEnoughPredictionData")}
-                            </span>
-                          )}
-                        </div>
+                        {hasPredictedTime ? (
+                          <>
+                            <p className="text-2xl sm:text-3xl leading-none font-black text-white mt-2" data-testid={`potential-time-${distanceKey.toLowerCase()}`}>
+                              {predictedTime}
+                            </p>
+                            {pred?.predicted_pace ? (
+                              <p className="text-xs text-muted-foreground mt-1">{pred.predicted_pace}</p>
+                            ) : null}
+                          </>
+                        ) : (
+                          <p className="text-sm text-muted-foreground italic mt-2">
+                            {t("progressExtended.notEnoughPredictionData")}
+                          </p>
+                        )}
 
-                        {/* Confidence — PR193: replaces readiness display */}
-                        <div className="shrink-0 text-right">
-                          <p className="text-[9px] text-muted-foreground mb-0.5">
+                        <div className="mt-3">
+                          <p className="text-[10px] text-muted-foreground mb-1">
                             {t("progressExtended.confidenceLabel")}
                           </p>
-                          <div 
-                            className="px-2 py-0.5 rounded-full text-[10px] font-bold"
+                          <span
+                            className="inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold"
                             style={{ background: `${confidenceColor}20`, color: confidenceColor }}
                           >
                             {confidenceText}
-                          </div>
+                          </span>
                         </div>
                       </div>
-                      );
-                      });
-                    })()}
-                  </div>
+                    );
+                  })}
                 </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-      )}
+                <p className="text-xs text-muted-foreground">
+                  {t("progressExtended.potentialTrainingLink")}
+                </p>
+              </>
+            ) : (
+              <div className="rounded-xl border border-white/10 bg-white/5 p-3" data-testid="potential-insufficient-data">
+                <p className="text-sm font-semibold text-white">{t("progressExtended.potentialNotEnoughDataTitle")}</p>
+                <p className="text-xs text-muted-foreground mt-1">{t("progressExtended.potentialNotEnoughDataHint")}</p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
 
     </div>
   );
