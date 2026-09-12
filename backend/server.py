@@ -1192,6 +1192,46 @@ class UserGoalCreate(BaseModel):
     distance_km: Optional[float] = None  # PR226: explicit distance for ultra (must be > 42.195)
 
 
+class UserGoalPatch(BaseModel):
+    event_name: Optional[str] = None
+    event_date: Optional[str] = None
+    target_time_minutes: Optional[int | float | str | bool] = None
+    distance_km: Optional[float] = None
+
+
+def _normalize_event_name(value: Optional[str]) -> Optional[str]:
+    event_name = value.strip() if isinstance(value, str) else None
+    return event_name or None
+
+
+def _normalize_event_date_input(value: Optional[str]) -> Optional[str]:
+    raw_event_date = value.strip() if isinstance(value, str) else None
+    return raw_event_date or None
+
+
+def _parse_goal_event_date(raw_event_date: Optional[str], *, require_future: bool) -> Optional[date]:
+    if raw_event_date is None:
+        return None
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw_event_date):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid event_date '{raw_event_date}'. Must be exactly YYYY-MM-DD.",
+        )
+    try:
+        parsed_event_date = date.fromisoformat(raw_event_date)
+    except (ValueError, TypeError):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid event_date '{raw_event_date}'. Must be ISO format YYYY-MM-DD.",
+        )
+    if require_future and parsed_event_date <= datetime.now(timezone.utc).date():
+        raise HTTPException(
+            status_code=400,
+            detail=f"event_date '{raw_event_date}' must be a future date.",
+        )
+    return parsed_event_date
+
+
 @api_router.get("/user/goal")
 async def get_user_goal(user: dict = Depends(auth_user)):
     """Get user's current goal"""
@@ -1215,35 +1255,9 @@ async def set_user_goal(goal: UserGoalCreate, user: dict = Depends(auth_user)):
 
     # ── 1. Validate inputs BEFORE touching the DB ──────────────────────────
 
-    event_name = goal.event_name.strip() if isinstance(goal.event_name, str) else None
-    if event_name == "":
-        event_name = None
-
-    raw_event_date = goal.event_date.strip() if isinstance(goal.event_date, str) else None
-    if raw_event_date == "":
-        raw_event_date = None
-
-    parsed_event_date: Optional[date] = None
-    if raw_event_date is not None:
-        # event_date: must be exactly YYYY-MM-DD — no suffixes, no trailing garbage.
-        import re as _re
-        if not _re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw_event_date):
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid event_date '{raw_event_date}'. Must be exactly YYYY-MM-DD.",
-            )
-        try:
-            parsed_event_date = date.fromisoformat(raw_event_date)
-        except (ValueError, TypeError):
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid event_date '{raw_event_date}'. Must be ISO format YYYY-MM-DD.",
-            )
-        if parsed_event_date <= datetime.now(timezone.utc).date():
-            raise HTTPException(
-                status_code=400,
-                detail=f"event_date '{raw_event_date}' must be a future date.",
-            )
+    event_name = _normalize_event_name(goal.event_name)
+    raw_event_date = _normalize_event_date_input(goal.event_date)
+    parsed_event_date = _parse_goal_event_date(raw_event_date, require_future=True)
 
     if goal.distance_type not in _VALID_DISTANCE_TYPES:
         raise HTTPException(
@@ -1311,6 +1325,109 @@ async def set_user_goal(goal: UserGoalCreate, user: dict = Depends(auth_user)):
         f"target_time_minutes={validated_target_time_minutes}"
     )
     return {"success": True, "goal": doc}
+
+
+@api_router.patch("/user/goal")
+async def patch_user_goal(goal_patch: UserGoalPatch, user: dict = Depends(auth_user)):
+    """Patch selected user goal fields without revalidating omitted fields."""
+    user_id = user["id"]
+    fields_set = set(goal_patch.model_fields_set)
+    supported_fields = {"event_name", "event_date", "target_time_minutes", "distance_km"}
+    if not (fields_set & supported_fields):
+        raise HTTPException(status_code=400, detail="No supported goal fields provided for patch.")
+
+    cycle = await db.training_cycles.find_one({"user_id": user_id}, {"_id": 0})
+    if cycle:
+        active_goal = (cycle.get("goal") or "").upper()
+        if active_goal == "MAINTENANCE":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Cannot patch race goal while training cycle is MAINTENANCE. "
+                    "Change your training cycle first via /api/training/set-goal."
+                ),
+            )
+        expected_dist_type = _GOAL_TO_DISTANCE_TYPE.get(active_goal)
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="No training goal defined. Use /api/training/set-goal first.",
+        )
+
+    existing_goal = await db.user_goals.find_one({"user_id": user_id}, {"_id": 0})
+    if not existing_goal:
+        raise HTTPException(status_code=404, detail="No user goal found to patch.")
+
+    if expected_dist_type and existing_goal.get("distance_type") != expected_dist_type:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Incoherent goal: training cycle is '{active_goal}' "
+                f"but user_goal.distance_type is '{existing_goal.get('distance_type')}' "
+                f"(expected '{expected_dist_type}'). "
+                "Change your training cycle goal first via /api/training/set-goal."
+            ),
+        )
+
+    next_event_name = existing_goal.get("event_name")
+    if "event_name" in fields_set:
+        next_event_name = _normalize_event_name(goal_patch.event_name)
+
+    next_event_date = existing_goal.get("event_date")
+    if "event_date" in fields_set:
+        raw_event_date = _normalize_event_date_input(goal_patch.event_date)
+        parsed_event_date = _parse_goal_event_date(raw_event_date, require_future=True)
+        next_event_date = parsed_event_date.isoformat() if parsed_event_date else None
+
+    distance_type = expected_dist_type or existing_goal.get("distance_type")
+    if distance_type == "ultra":
+        if "distance_km" in fields_set:
+            next_distance_km = _validate_ultra_distance_km(goal_patch.distance_km)
+        else:
+            existing_distance_km = existing_goal.get("distance_km")
+            if isinstance(existing_distance_km, (int, float)) and not isinstance(existing_distance_km, bool) and existing_distance_km > _ULTRA_MIN_DISTANCE_KM:
+                next_distance_km = float(existing_distance_km)
+            else:
+                next_distance_km = _validate_ultra_distance_km(cycle.get("ultra_distance_km"))
+    else:
+        if "distance_km" in fields_set:
+            raise HTTPException(
+                status_code=400,
+                detail="distance_km can only be patched for an ULTRA goal.",
+            )
+        next_distance_km = DISTANCE_TYPES[distance_type]
+
+    if "target_time_minutes" in fields_set:
+        next_target_time_minutes = _validate_target_time_minutes(goal_patch.target_time_minutes)
+    else:
+        existing_target_time = existing_goal.get("target_time_minutes")
+        next_target_time_minutes = int(existing_target_time) if isinstance(existing_target_time, (int, float)) and not isinstance(existing_target_time, bool) and existing_target_time > 0 else None
+
+    next_target_pace = (
+        calculate_target_pace(next_distance_km, next_target_time_minutes)
+        if next_target_time_minutes is not None
+        else None
+    )
+
+    update_fields = {
+        "event_name": next_event_name,
+        "event_date": next_event_date,
+        "distance_type": distance_type,
+        "distance_km": next_distance_km,
+        "target_time_minutes": next_target_time_minutes,
+        "target_pace": next_target_pace,
+    }
+    await db.user_goals.update_one({"user_id": user_id}, {"$set": update_fields})
+
+    patched_goal = {**existing_goal, **update_fields}
+    patched_goal.pop("_id", None)
+    logger.info(
+        f"Goal patched for user {user_id}: "
+        f"fields={sorted(fields_set)} "
+        f"event_date={patched_goal.get('event_date')} "
+        f"target_time_minutes={patched_goal.get('target_time_minutes')}"
+    )
+    return {"success": True, "goal": patched_goal}
 
 
 @api_router.delete("/user/goal")

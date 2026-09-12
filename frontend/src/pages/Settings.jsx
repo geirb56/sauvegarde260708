@@ -1,6 +1,16 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -75,6 +85,17 @@ function getTargetTimeParts(minutes) {
     hours: String(Math.floor(totalMinutes / 60)),
     minutes: String(totalMinutes % 60).padStart(2, "0"),
   };
+}
+
+function hasRaceMetadata(goal) {
+  return Boolean(
+    (typeof goal?.event_name === "string" && goal.event_name.trim())
+    || (typeof goal?.event_date === "string" && goal.event_date.trim())
+  );
+}
+
+function hasTargetTimeValue(value) {
+  return Number.isFinite(Number(value)) && Number(value) > 0;
 }
 
 function getSubscriptionCode({ subscription, isTrial, isPremium }) {
@@ -193,6 +214,8 @@ export default function Settings() {
   const [userGoal, setUserGoal] = useState(null);
   const [goalForm, setGoalForm] = useState({ eventName: "", eventDate: "", targetHours: "", targetMinutes: "", ultraDistanceKm: "" });
   const [planAction, setPlanAction] = useState({ status: "idle", message: "" });
+  const [confirmDialog, setConfirmDialog] = useState(null);
+  const userGoalMutationPendingRef = useRef(false);
   // PR226: pending ultra distance — shown when ULTRA is the current or pending goal
   const [pendingUltraDistance, setPendingUltraDistance] = useState("");
   // PR226: shown when user clicks the ULTRA button so they can enter distance first
@@ -404,6 +427,32 @@ export default function Settings() {
     setGoalForm((current) => ({ ...current, [key]: value }));
   };
 
+  const persistUserGoalMutation = useCallback(async (request, { successMessageKey, errorMessageKey }) => {
+    if (userGoalMutationPendingRef.current) return false;
+    userGoalMutationPendingRef.current = true;
+    setPlanAction({ status: "saving", message: t("settingsV2.common.saving") });
+    try {
+      await request();
+      const reloadSucceeded = await loadPlanSettings();
+      if (!reloadSucceeded) {
+        setPlanAction({ status: "error", message: t("settingsV2.plan.loadError") });
+        toast.error(t("settingsV2.plan.loadError"));
+        return false;
+      }
+      setConfirmDialog(null);
+      setPlanAction({ status: "saved", message: t(successMessageKey) });
+      toast.success(t(successMessageKey));
+      return true;
+    } catch (error) {
+      console.error("Failed to persist user goal settings:", error);
+      setPlanAction({ status: "error", message: t(errorMessageKey) });
+      toast.error(t(errorMessageKey));
+      return false;
+    } finally {
+      userGoalMutationPendingRef.current = false;
+    }
+  }, [loadPlanSettings, t]);
+
   const handleSaveRaceSettings = async () => {
     if (!selectedGoalOption?.hasRaceSettings) return;
 
@@ -431,22 +480,31 @@ export default function Settings() {
       payload.distance_km = parseFloat(goalForm.ultraDistanceKm);
     }
 
-    setPlanAction({ status: "saving", message: t("settingsV2.common.saving") });
-    try {
-      await axios.post(`${API}/user/goal`, payload);
-      const reloadSucceeded = await loadPlanSettings();
-      if (!reloadSucceeded) {
-        setPlanAction({ status: "error", message: t("settingsV2.plan.loadError") });
-        toast.error(t("settingsV2.plan.loadError"));
-        return;
-      }
-      setPlanAction({ status: "saved", message: t("settingsV2.plan.raceSaved") });
-      toast.success(t("settingsV2.plan.raceSaved"));
-    } catch (error) {
-      console.error("Failed to save race settings:", error);
-      setPlanAction({ status: "error", message: t("settingsV2.plan.raceSaveError") });
-      toast.error(t("settingsV2.plan.raceSaveError"));
-    }
+    await persistUserGoalMutation(() => axios.post(`${API}/user/goal`, payload), {
+      successMessageKey: "settingsV2.plan.raceSaved",
+      errorMessageKey: "settingsV2.plan.raceSaveError",
+    });
+  };
+
+  const handleRemoveRace = async () => {
+    if (planAction.status === "saving") return;
+    await persistUserGoalMutation(() => axios.patch(`${API}/user/goal`, {
+      event_name: null,
+      event_date: null,
+    }), {
+      successMessageKey: "settingsV2.plan.removeRaceSuccess",
+      errorMessageKey: "settingsV2.plan.removeRaceError",
+    });
+  };
+
+  const handleRemoveTargetTime = async () => {
+    if (planAction.status === "saving") return;
+    await persistUserGoalMutation(() => axios.patch(`${API}/user/goal`, {
+      target_time_minutes: null,
+    }), {
+      successMessageKey: "settingsV2.plan.removeTargetTimeSuccess",
+      errorMessageKey: "settingsV2.plan.removeTargetTimeError",
+    });
   };
 
   const handleConnectGarmin = async (event) => {
@@ -556,6 +614,14 @@ export default function Settings() {
     ? String(garminStatus.activity_count)
     : "0";
   const showRaceForm = Boolean(selectedGoalOption?.hasRaceSettings);
+  const showRemoveRaceAction = hasRaceMetadata(userGoal);
+  const showRemoveTargetTimeAction = hasTargetTimeValue(userGoal?.target_time_minutes);
+  const removeRaceDescriptionKey = showRemoveTargetTimeAction
+    ? "settingsV2.plan.removeRaceDescriptionWithTarget"
+    : "settingsV2.plan.removeRaceDescriptionGoalOnly";
+  const removeTargetTimeDescriptionKey = showRemoveRaceAction
+    ? "settingsV2.plan.removeTargetTimeDescriptionWithRace"
+    : "settingsV2.plan.removeTargetTimeDescriptionGoalOnly";
 
   return (
     <div className="p-4 pb-24 md:p-6 md:pb-8" data-testid="settings-page">
@@ -809,6 +875,36 @@ export default function Settings() {
                     {planAction.status === "saving" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                     {t("settingsV2.plan.saveRace")}
                   </Button>
+                  {showRemoveRaceAction || showRemoveTargetTimeAction ? (
+                    <div className="flex flex-col items-start gap-2">
+                      {showRemoveRaceAction ? (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-auto px-0 text-destructive hover:bg-transparent hover:text-destructive/90"
+                          disabled={planAction.status === "saving"}
+                          onClick={() => setConfirmDialog("remove-race")}
+                          data-testid="remove-race-button"
+                        >
+                          {t("settingsV2.plan.removeRace")}
+                        </Button>
+                      ) : null}
+                      {showRemoveTargetTimeAction ? (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-auto px-0 text-destructive hover:bg-transparent hover:text-destructive/90"
+                          disabled={planAction.status === "saving"}
+                          onClick={() => setConfirmDialog("remove-target-time")}
+                          data-testid="remove-target-time-button"
+                        >
+                          {t("settingsV2.plan.removeTargetTime")}
+                        </Button>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
               ) : (
                 <SettingRow
@@ -824,6 +920,66 @@ export default function Settings() {
                 message={planAction.message}
                 testId="settings-plan-feedback"
               />
+              <AlertDialog
+                open={confirmDialog === "remove-race"}
+                onOpenChange={(open) => {
+                  if (!open && planAction.status !== "saving") setConfirmDialog(null);
+                }}
+              >
+                <AlertDialogContent data-testid="remove-race-dialog">
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>{t("settingsV2.plan.removeRaceTitle")}</AlertDialogTitle>
+                    <AlertDialogDescription>{t(removeRaceDescriptionKey)}</AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel disabled={planAction.status === "saving"} data-testid="cancel-remove-race">
+                      {t("common.cancel")}
+                    </AlertDialogCancel>
+                    <AlertDialogAction asChild>
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        disabled={planAction.status === "saving"}
+                        onClick={handleRemoveRace}
+                        data-testid="confirm-remove-race"
+                      >
+                        {planAction.status === "saving" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                        {t("settingsV2.plan.removeRace")}
+                      </Button>
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+              <AlertDialog
+                open={confirmDialog === "remove-target-time"}
+                onOpenChange={(open) => {
+                  if (!open && planAction.status !== "saving") setConfirmDialog(null);
+                }}
+              >
+                <AlertDialogContent data-testid="remove-target-time-dialog">
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>{t("settingsV2.plan.removeTargetTimeTitle")}</AlertDialogTitle>
+                    <AlertDialogDescription>{t(removeTargetTimeDescriptionKey)}</AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel disabled={planAction.status === "saving"} data-testid="cancel-remove-target-time">
+                      {t("common.cancel")}
+                    </AlertDialogCancel>
+                    <AlertDialogAction asChild>
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        disabled={planAction.status === "saving"}
+                        onClick={handleRemoveTargetTime}
+                        data-testid="confirm-remove-target-time"
+                      >
+                        {planAction.status === "saving" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                        {t("settingsV2.plan.removeTargetTime")}
+                      </Button>
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
             </div>
           )}
         </SectionCard>

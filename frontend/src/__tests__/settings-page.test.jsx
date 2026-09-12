@@ -1,6 +1,6 @@
 import React from "react";
 import "@testing-library/jest-dom";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import axios from "axios";
 
@@ -61,7 +61,7 @@ function createApiState({
   return { cycle, week, userGoal, garminStatus };
 }
 
-function mockAxiosApi(state = createApiState()) {
+function mockAxiosApi(state = createApiState(), { postImplementation, patchImplementation } = {}) {
   axios.get.mockImplementation((url) => {
     if (url.includes("/training/v2/cycle")) return Promise.resolve({ data: state.cycle });
     if (url.includes("/training/v2/week")) return Promise.resolve({ data: state.week });
@@ -69,12 +69,25 @@ function mockAxiosApi(state = createApiState()) {
     if (url.includes("/garmin/status")) return Promise.resolve({ data: state.garminStatus });
     return Promise.reject(new Error(`Unexpected GET ${url}`));
   });
-  axios.post.mockImplementation((url) => {
+  axios.post.mockImplementation((url, payload) => {
+    if (postImplementation) return postImplementation(url, payload);
     if (url.includes("/training/v2/cycle/start-date")) {
       return Promise.resolve({ data: { status: "updated", cycle: { start_date: "2026-08-20" } } });
     }
     return Promise.resolve({ data: { status: "connected" } });
   });
+  axios.patch.mockImplementation((url, payload) => {
+    if (patchImplementation) return patchImplementation(url, payload);
+    return Promise.resolve({ data: { success: true } });
+  });
+}
+
+function getUserGoalPostCalls() {
+  return axios.post.mock.calls.filter(([url]) => String(url).includes("/user/goal"));
+}
+
+function getUserGoalPatchCalls() {
+  return axios.patch.mock.calls.filter(([url]) => String(url).includes("/user/goal"));
 }
 
 function renderPage({ lang = "en", unitSystem = "metric" } = {}) {
@@ -96,6 +109,9 @@ describe("Settings UX V2", () => {
     jest.clearAllMocks();
     window.localStorage.clear();
     Object.defineProperty(window, "innerWidth", { writable: true, configurable: true, value: 1024 });
+    if (!axios.delete) axios.delete = jest.fn();
+    axios.delete.mockReset();
+    axios.delete.mockResolvedValue({ data: {} });
     mockUseAuth.mockReturnValue({
       user: { id: "user-1", email: "runner@example.com", is_email_verified: true },
     });
@@ -199,14 +215,19 @@ describe("Settings UX V2", () => {
     const enView = renderPage({ lang: "en" });
 
     expect(await screen.findByText("Training Plan")).toBeInTheDocument();
+    expect(await screen.findByTestId("remove-race-button")).toHaveTextContent("Remove race");
+    expect(screen.getByTestId("remove-target-time-button")).toHaveTextContent("Remove target time");
     expect(document.body.textContent).not.toMatch(/settingsV2\.|settings\./);
     expect(document.body).not.toHaveTextContent("Backend contract");
     expect(document.body).not.toHaveTextContent("Backend unchanged");
+    expect(screen.getByTestId("settings-plan-start-date")).toHaveTextContent("Update the canonical Training V2 cycle anchor used by Settings and Training V2.");
     enView.unmount();
 
     mockAxiosApi();
     const frView = renderPage({ lang: "fr" });
     expect(await screen.findByText("Plan d'entraînement")).toBeInTheDocument();
+    expect(await screen.findByTestId("remove-race-button")).toHaveTextContent("Supprimer la course");
+    expect(screen.getByTestId("remove-target-time-button")).toHaveTextContent("Supprimer le temps cible");
     expect(document.body).not.toHaveTextContent("Contrat backend");
     expect(document.body).not.toHaveTextContent("Backend inchangé");
     expect(screen.getByTestId("settings-plan-start-date")).toHaveTextContent("Modifie l'ancre canonique du cycle Training V2 utilisée par Settings et Training V2.");
@@ -215,6 +236,8 @@ describe("Settings UX V2", () => {
     mockAxiosApi();
     renderPage({ lang: "es" });
     expect(await screen.findByText("Plan de entrenamiento")).toBeInTheDocument();
+    expect(await screen.findByTestId("remove-race-button")).toHaveTextContent("Eliminar carrera");
+    expect(screen.getByTestId("remove-target-time-button")).toHaveTextContent("Eliminar tiempo objetivo");
     expect(document.body).not.toHaveTextContent("Contrato backend");
     expect(document.body).not.toHaveTextContent("Backend sin cambios");
     expect(screen.getByTestId("settings-plan-start-date")).toHaveTextContent("Actualiza el ancla canónica del ciclo Training V2 usada por Ajustes y Training V2.");
@@ -238,12 +261,13 @@ describe("Settings UX V2", () => {
   });
 
   test("save race settings shows success feedback only after backend confirmation", async () => {
-    mockAxiosApi();
-    axios.post.mockImplementation((url) => {
-      if (url.includes("/user/goal")) {
-        return Promise.resolve({ data: { success: true } });
-      }
-      return Promise.resolve({ data: {} });
+    mockAxiosApi(createApiState(), {
+      postImplementation: (url) => {
+        if (url.includes("/user/goal")) {
+          return Promise.resolve({ data: { success: true } });
+        }
+        return Promise.resolve({ data: {} });
+      },
     });
 
     renderPage();
@@ -270,12 +294,13 @@ describe("Settings UX V2", () => {
   });
 
   test("save goal target time without race metadata sends null event fields", async () => {
-    mockAxiosApi();
-    axios.post.mockImplementation((url) => {
-      if (url.includes("/user/goal")) {
-        return Promise.resolve({ data: { success: true } });
-      }
-      return Promise.resolve({ data: {} });
+    mockAxiosApi(createApiState(), {
+      postImplementation: (url) => {
+        if (url.includes("/user/goal")) {
+          return Promise.resolve({ data: { success: true } });
+        }
+        return Promise.resolve({ data: {} });
+      },
     });
 
     renderPage();
@@ -302,12 +327,13 @@ describe("Settings UX V2", () => {
   });
 
   test("save race settings shows error feedback on backend failure", async () => {
-    mockAxiosApi();
-    axios.post.mockImplementation((url) => {
-      if (url.includes("/user/goal")) {
-        return Promise.reject(new Error("boom"));
-      }
-      return Promise.resolve({ data: {} });
+    mockAxiosApi(createApiState(), {
+      postImplementation: (url) => {
+        if (url.includes("/user/goal")) {
+          return Promise.reject(new Error("boom"));
+        }
+        return Promise.resolve({ data: {} });
+      },
     });
 
     renderPage();
@@ -321,6 +347,292 @@ describe("Settings UX V2", () => {
       expect(toast.error).toHaveBeenCalled();
     });
     expect(screen.getByTestId("settings-plan-feedback")).toHaveTextContent("Unable to save race settings");
+  });
+
+  test("shows remove race action only when race metadata is present", async () => {
+    mockAxiosApi();
+    renderPage();
+
+    expect(await screen.findByTestId("remove-race-button")).toBeInTheDocument();
+  });
+
+  test("hides remove race action when race metadata is absent", async () => {
+    mockAxiosApi(createApiState({
+      userGoal: {
+        event_name: null,
+        event_date: null,
+        distance_type: "marathon",
+        distance_km: 42.195,
+        target_time_minutes: 225,
+      },
+    }));
+    renderPage();
+
+    await screen.findByTestId("settings-race-fields");
+    expect(screen.queryByTestId("remove-race-button")).not.toBeInTheDocument();
+  });
+
+  test("shows remove target time action only when target time is present", async () => {
+    mockAxiosApi();
+    renderPage();
+
+    expect(await screen.findByTestId("remove-target-time-button")).toBeInTheDocument();
+  });
+
+  test("hides remove target time action when target time is absent", async () => {
+    mockAxiosApi(createApiState({
+      userGoal: {
+        event_name: "Berlin Marathon",
+        event_date: "2026-10-12",
+        distance_type: "marathon",
+        distance_km: 42.195,
+        target_time_minutes: null,
+      },
+    }));
+    renderPage();
+
+    await screen.findByTestId("settings-race-fields");
+    expect(screen.queryByTestId("remove-target-time-button")).not.toBeInTheDocument();
+  });
+
+  test("cancel remove race closes confirmation without calling a mutation", async () => {
+    mockAxiosApi();
+    renderPage();
+
+    fireEvent.click(await screen.findByTestId("remove-race-button"));
+    const dialog = await screen.findByTestId("remove-race-dialog");
+    fireEvent.click(within(dialog).getByTestId("cancel-remove-race"));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("remove-race-dialog")).not.toBeInTheDocument();
+    });
+    expect(getUserGoalPatchCalls()).toHaveLength(0);
+    expect(axios.delete).not.toHaveBeenCalled();
+  });
+
+  test("cancel remove target time closes confirmation without calling a mutation", async () => {
+    mockAxiosApi();
+    renderPage();
+
+    fireEvent.click(await screen.findByTestId("remove-target-time-button"));
+    const dialog = await screen.findByTestId("remove-target-time-dialog");
+    fireEvent.click(within(dialog).getByTestId("cancel-remove-target-time"));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("remove-target-time-dialog")).not.toBeInTheDocument();
+    });
+    expect(getUserGoalPatchCalls()).toHaveLength(0);
+    expect(axios.delete).not.toHaveBeenCalled();
+  });
+
+  test("confirm remove race sends minimal PATCH payload", async () => {
+    const state = createApiState();
+    mockAxiosApi(state, {
+      patchImplementation: (url, payload) => {
+        if (url.includes("/user/goal")) {
+          state.userGoal = { ...state.userGoal, ...payload };
+          return Promise.resolve({ data: { success: true } });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+
+    renderPage();
+    fireEvent.click(await screen.findByTestId("remove-race-button"));
+    fireEvent.click(within(await screen.findByTestId("remove-race-dialog")).getByTestId("confirm-remove-race"));
+
+    await waitFor(() => {
+      expect(axios.patch).toHaveBeenCalledWith(
+        expect.stringContaining("/user/goal"),
+        { event_name: null, event_date: null }
+      );
+    });
+    expect(getUserGoalPatchCalls()).toHaveLength(1);
+    expect(getUserGoalPostCalls()).toHaveLength(0);
+    expect(axios.delete).not.toHaveBeenCalled();
+  });
+
+  test("confirm remove target time sends minimal PATCH payload and reloads optional state", async () => {
+    const state = createApiState();
+    mockAxiosApi(state, {
+      patchImplementation: (url, payload) => {
+        if (url.includes("/user/goal")) {
+          state.userGoal = { ...state.userGoal, ...payload, target_pace: null };
+          return Promise.resolve({ data: { success: true } });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+
+    renderPage();
+    fireEvent.click(await screen.findByTestId("remove-target-time-button"));
+    fireEvent.click(within(await screen.findByTestId("remove-target-time-dialog")).getByTestId("confirm-remove-target-time"));
+
+    await waitFor(() => {
+      expect(axios.patch).toHaveBeenCalledWith(
+        expect.stringContaining("/user/goal"),
+        { target_time_minutes: null }
+      );
+    });
+    expect(getUserGoalPatchCalls()).toHaveLength(1);
+    expect(getUserGoalPostCalls()).toHaveLength(0);
+    expect(axios.delete).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(screen.getByTestId("settings-current-target-time")).toHaveTextContent("Current target time: Optional");
+    });
+  });
+
+  test("remove target time uses PATCH even when the stored race date is in the past", async () => {
+    const state = createApiState({
+      userGoal: {
+        event_name: "Auray-Vannes",
+        event_date: "2026-09-01",
+        distance_type: "semi",
+        distance_km: 21.0975,
+        target_time_minutes: 115,
+      },
+    });
+    mockAxiosApi(state, {
+      patchImplementation: (url, payload) => {
+        if (url.includes("/user/goal")) {
+          state.userGoal = { ...state.userGoal, ...payload, target_pace: null };
+          return Promise.resolve({ data: { success: true } });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+
+    renderPage();
+    fireEvent.click(await screen.findByTestId("remove-target-time-button"));
+    fireEvent.click(within(await screen.findByTestId("remove-target-time-dialog")).getByTestId("confirm-remove-target-time"));
+
+    await waitFor(() => {
+      expect(axios.patch).toHaveBeenCalledWith(
+        expect.stringContaining("/user/goal"),
+        { target_time_minutes: null }
+      );
+    });
+  });
+
+  test("remove race keeps working for ULTRA without sending distance fields from the client", async () => {
+    const state = createApiState({
+      cycle: {
+        goal: { goal_type: "ultra", race_date: "2026-09-13", target_time_seconds: 36000 },
+        cycle: { start_date: "2026-08-27", status: "active", days_to_race: 17 },
+        weeks: [],
+      },
+      week: {
+        goal: { goal_type: "ultra", race_date: "2026-09-13", target_time_seconds: 36000 },
+        weekly_target: { session_count: 4, target_basis: "distance", target_km: 90, target_duration_minutes: null, confidence: "high" },
+        week: { session_count: 4, planned_km: 90, planned_duration_minutes: null, sessions: [] },
+      },
+      userGoal: {
+        event_name: "Auray-Vannes",
+        event_date: "2026-09-13",
+        distance_type: "ultra",
+        distance_km: 80,
+        target_time_minutes: 600,
+      },
+    });
+    mockAxiosApi(state, {
+      patchImplementation: (url, payload) => {
+        if (url.includes("/user/goal")) {
+          state.userGoal = { ...state.userGoal, ...payload };
+          return Promise.resolve({ data: { success: true } });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+
+    renderPage();
+    fireEvent.click(await screen.findByTestId("remove-race-button"));
+    fireEvent.click(within(await screen.findByTestId("remove-race-dialog")).getByTestId("confirm-remove-race"));
+
+    await waitFor(() => {
+      expect(axios.patch).toHaveBeenCalledWith(
+        expect.stringContaining("/user/goal"),
+        { event_name: null, event_date: null }
+      );
+    });
+    expect(getUserGoalPatchCalls()[0][1]).not.toHaveProperty("distance_km");
+    expect(getUserGoalPatchCalls()[0][1]).not.toHaveProperty("distance_type");
+  });
+
+  test("remove race shows recoverable error state and keeps existing race data", async () => {
+    mockAxiosApi(createApiState(), {
+      patchImplementation: (url) => {
+        if (url.includes("/user/goal")) {
+          return Promise.reject(new Error("boom"));
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+
+    renderPage();
+    fireEvent.click(await screen.findByTestId("remove-race-button"));
+    fireEvent.click(within(await screen.findByTestId("remove-race-dialog")).getByTestId("confirm-remove-race"));
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith("Unable to remove this race.");
+    });
+    expect(screen.getByTestId("settings-race-date-current")).toHaveTextContent("Berlin Marathon");
+    expect(screen.getByTestId("settings-plan-feedback")).toHaveTextContent("Unable to remove this race.");
+  });
+
+  test("remove target time shows recoverable error state and keeps the target time", async () => {
+    mockAxiosApi(createApiState(), {
+      patchImplementation: (url) => {
+        if (url.includes("/user/goal")) {
+          return Promise.reject(new Error("boom"));
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+
+    renderPage();
+    fireEvent.click(await screen.findByTestId("remove-target-time-button"));
+    fireEvent.click(within(await screen.findByTestId("remove-target-time-dialog")).getByTestId("confirm-remove-target-time"));
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith("Unable to remove the target time.");
+    });
+    expect(screen.getByTestId("settings-current-target-time")).toHaveTextContent("3h45");
+    expect(screen.getByTestId("settings-plan-feedback")).toHaveTextContent("Unable to remove the target time.");
+  });
+
+  test("remove race prevents double-submit while saving", async () => {
+    let resolveMutation;
+    const state = createApiState();
+    const mutationPromise = new Promise((resolve) => {
+      resolveMutation = resolve;
+    });
+    mockAxiosApi(state, {
+      patchImplementation: (url, payload) => {
+        if (url.includes("/user/goal")) {
+          return mutationPromise.then(() => {
+            state.userGoal = { ...state.userGoal, ...payload };
+            return { data: { success: true } };
+          });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    });
+
+    renderPage();
+    fireEvent.click(await screen.findByTestId("remove-race-button"));
+    const confirmButton = within(await screen.findByTestId("remove-race-dialog")).getByTestId("confirm-remove-race");
+
+    fireEvent.click(confirmButton);
+    fireEvent.click(confirmButton);
+
+    await waitFor(() => {
+      expect(getUserGoalPatchCalls()).toHaveLength(1);
+    });
+
+    resolveMutation({ data: { success: true } });
+    await waitFor(() => {
+      expect(screen.queryByTestId("remove-race-dialog")).not.toBeInTheDocument();
+    });
   });
 
   test("renders on mobile width 390 without hiding core sections", async () => {
