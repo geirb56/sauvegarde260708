@@ -433,7 +433,7 @@ def test_6_n2_high_plus_medium_no_k_learned():
     )
 
     k_raw = diag.get("curve_k_raw")
-    assert k_raw is not None, "k_raw must be available as diagnostic"
+    assert k_raw is None, "k_raw must remain None when slope-evidence count < 2"
 
 
 # ---------------------------------------------------------------------------

@@ -561,21 +561,21 @@ def test_8_vma_independence():
 
 
 # ---------------------------------------------------------------------------
-# TEST 9 — k_conflict has priority over low-identifiability (C190 invariant)
+# TEST 9 — no slope-evidence ⇒ no personal k conflict evaluation
 # ---------------------------------------------------------------------------
 
 def test_9_k_conflict_has_priority_over_low_identifiability():
-    """N>=3 dataset where k_raw is out of [1.0, 1.25] AND k_identifiable is False.
+    """N>=3 dataset with no defensible slope-evidence (HIGH recent) for personal-k.
 
-    The fit produces a steep k > 1.25 from a narrow distance cluster (9–11 km).
-    Both conditions are simultaneously true, but k_conflict must take priority.
+    Under the slope-evidence contract, personal-k is learned only from HIGH recent
+    observations. Without enough slope-evidence, model must fallback directly.
 
     Expected:
-      k_conflict == True
+      k_raw absent (no personal slope fit)
+      k_conflict == False
       k_fallback_applied == True
-      curve_method == "prior_k_conflict_fallback"
+      curve_method == "prior_k_low_slope_evidence_fallback"
       curve_k == 1.06
-      k_raw preserved out of range (> 1.25)
     """
     bench = _benchmark_pool(n=7, with_hr=True)
 
@@ -593,27 +593,21 @@ def test_9_k_conflict_has_priority_over_low_identifiability():
     result = predict_races(activities, TODAY)
     diag = result.race_curve_diagnostics
 
-    # k_raw must be preserved (out of range)
+    # No personal slope fit without sufficient slope-evidence
     k_raw = diag.get("curve_k_raw")
-    assert k_raw is not None, "k_raw must be present"
-    assert k_raw > pm.CURVE_K_MAX or k_raw < pm.CURVE_K_MIN, (
-        f"Expected k_raw outside [{pm.CURVE_K_MIN}, {pm.CURVE_K_MAX}], got {k_raw:.4f}"
+    assert k_raw is None, f"Expected curve_k_raw=None, got {k_raw}"
+
+    assert diag.get("k_conflict") is False, (
+        f"Expected k_conflict=False, got {diag.get('k_conflict')}. "
+        f"curve_method={diag.get('curve_method')}"
     )
 
-    # Conflict must be detected (from k_raw, not from any replaced slope)
-    assert diag.get("k_conflict") is True, (
-        f"Expected k_conflict=True, got {diag.get('k_conflict')}. "
-        f"k_raw={k_raw:.4f}, curve_method={diag.get('curve_method')}"
-    )
-
-    # Conflict takes priority; method must be prior_k_conflict_fallback
-    assert diag.get("curve_method") == "prior_k_conflict_fallback", (
-        f"Expected prior_k_conflict_fallback, got {diag.get('curve_method')}"
+    assert diag.get("curve_method") == "prior_k_low_slope_evidence_fallback", (
+        f"Expected prior_k_low_slope_evidence_fallback, got {diag.get('curve_method')}"
     )
     assert diag.get("curve_k") == pytest.approx(pm.RIEGEL_K, rel=1e-6)
     assert diag.get("k_fallback_applied") is True
 
-    # k_identifiable may be False (observable) but must not mask the conflict
     assert diag.get("k_identifiable") is False, (
         "Expected k_identifiable=False for this narrow cluster"
     )
