@@ -1516,7 +1516,7 @@ def _route_reprise_deep(
                 race_week=None,
             )
             sessions = _correct_rounding_drift_duration(sessions, total_minutes)
-        reason_codes = reason_codes + constraint_codes
+        reason_codes = reason_codes + list(constraint_codes)
     else:
         # Fallback: distance-based easy-only (no_history with distance target)
         target_km = weekly_target.target_km or 0.0
@@ -1542,7 +1542,7 @@ def _route_reprise_deep(
                 race_week=None,
             )
             sessions = _correct_rounding_drift_distance(sessions, target_km)
-        reason_codes = reason_codes + constraint_codes
+        reason_codes = reason_codes + list(constraint_codes)
 
     return sessions, reason_codes
 
@@ -1584,7 +1584,7 @@ def _route_partial_reprise(
                 race_week=None,
             )
             sessions = _correct_rounding_drift_duration(sessions, total_minutes)
-        reason_codes = reason_codes + constraint_codes
+        reason_codes = reason_codes + list(constraint_codes)
     else:
         target_km = weekly_target.target_km or 0.0
         capped_sessions = min(n_sessions, 4)
@@ -1609,7 +1609,7 @@ def _route_partial_reprise(
                 race_week=None,
             )
             sessions = _correct_rounding_drift_distance(sessions, target_km)
-        reason_codes = reason_codes + constraint_codes
+        reason_codes = reason_codes + list(constraint_codes)
 
     return sessions, reason_codes
 
