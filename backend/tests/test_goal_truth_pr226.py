@@ -241,6 +241,32 @@ def _make_db(cycle=None, user_goal=None, activities=None):
     return db
 
 
+def _make_patchable_db(cycle=None, user_goal=None):
+    """Build mock db with mutable user_goal state for PATCH tests."""
+    db = MagicMock()
+    state = {
+        "cycle": dict(cycle) if cycle is not None else None,
+        "user_goal": dict(user_goal) if user_goal is not None else None,
+    }
+
+    async def _cycle_find_one(*args, **kwargs):
+        return dict(state["cycle"]) if state["cycle"] is not None else None
+
+    async def _goal_find_one(*args, **kwargs):
+        return dict(state["user_goal"]) if state["user_goal"] is not None else None
+
+    async def _goal_update_one(query, update):
+        if state["user_goal"] is None:
+            return MagicMock(matched_count=0, modified_count=0)
+        state["user_goal"].update(update.get("$set", {}))
+        return MagicMock(matched_count=1, modified_count=1)
+
+    db.training_cycles.find_one = _cycle_find_one
+    db.user_goals.find_one = _goal_find_one
+    db.user_goals.update_one = _goal_update_one
+    return db, state
+
+
 _CYCLE_START = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 
@@ -656,6 +682,291 @@ def test_post_user_goal_10k_target_time_without_race_date_succeeds():
     assert inserts[0]["event_name"] is None
     assert inserts[0]["event_date"] is None
     assert inserts[0]["target_time_minutes"] == 50
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Section C2 — PATCH /user/goal endpoint tests
+# ════════════════════════════════════════════════════════════════════════════
+
+def test_patch_user_goal_missing_doc_returns_404():
+    from fastapi import HTTPException
+    import server as srv
+
+    cycle = {"goal": "MARATHON", "start_date": _CYCLE_START}
+    mock_db, _ = _make_patchable_db(cycle=cycle, user_goal=None)
+
+    async def run():
+        with patch.object(srv, "db", mock_db):
+            return await srv.patch_user_goal(srv.UserGoalPatch(target_time_minutes=None), user={"id": "u1"})
+
+    with pytest.raises(HTTPException) as exc_info:
+        _run(run())
+    assert exc_info.value.status_code == 404
+
+
+def test_patch_user_goal_remove_target_time_with_future_race():
+    import server as srv
+
+    future_date = (datetime.now(timezone.utc) + timedelta(days=90)).strftime("%Y-%m-%d")
+    cycle = {"goal": "MARATHON", "start_date": _CYCLE_START}
+    user_goal = {
+        "user_id": "u1",
+        "event_name": "Berlin",
+        "event_date": future_date,
+        "distance_type": "marathon",
+        "distance_km": 42.195,
+        "target_time_minutes": 225,
+        "target_pace": "5:20",
+    }
+    mock_db, state = _make_patchable_db(cycle=cycle, user_goal=user_goal)
+
+    async def run():
+        with patch.object(srv, "db", mock_db):
+            return await srv.patch_user_goal(srv.UserGoalPatch(target_time_minutes=None), user={"id": "u1"})
+
+    result = _run(run())
+    assert result["success"] is True
+    assert state["user_goal"]["event_name"] == "Berlin"
+    assert state["user_goal"]["event_date"] == future_date
+    assert state["user_goal"]["distance_type"] == "marathon"
+    assert state["user_goal"]["distance_km"] == 42.195
+    assert state["user_goal"]["target_time_minutes"] is None
+    assert state["user_goal"]["target_pace"] is None
+
+
+def test_patch_user_goal_remove_target_time_on_race_day_succeeds():
+    import server as srv
+
+    today_str = datetime.now(timezone.utc).date().isoformat()
+    cycle = {"goal": "SEMI", "start_date": _CYCLE_START}
+    user_goal = {
+        "user_id": "u1",
+        "event_name": "Auray-Vannes",
+        "event_date": today_str,
+        "distance_type": "semi",
+        "distance_km": 21.0975,
+        "target_time_minutes": 115,
+        "target_pace": "5:27",
+    }
+    mock_db, state = _make_patchable_db(cycle=cycle, user_goal=user_goal)
+
+    async def run():
+        with patch.object(srv, "db", mock_db):
+            return await srv.patch_user_goal(srv.UserGoalPatch(target_time_minutes=None), user={"id": "u1"})
+
+    result = _run(run())
+    assert result["success"] is True
+    assert state["user_goal"]["event_date"] == today_str
+    assert state["user_goal"]["target_time_minutes"] is None
+    assert state["user_goal"]["target_pace"] is None
+
+
+def test_patch_user_goal_remove_target_time_after_race_succeeds():
+    import server as srv
+
+    past_str = (datetime.now(timezone.utc).date() - timedelta(days=7)).isoformat()
+    cycle = {"goal": "SEMI", "start_date": _CYCLE_START}
+    user_goal = {
+        "user_id": "u1",
+        "event_name": "Auray-Vannes",
+        "event_date": past_str,
+        "distance_type": "semi",
+        "distance_km": 21.0975,
+        "target_time_minutes": 115,
+        "target_pace": "5:27",
+    }
+    mock_db, state = _make_patchable_db(cycle=cycle, user_goal=user_goal)
+
+    async def run():
+        with patch.object(srv, "db", mock_db):
+            return await srv.patch_user_goal(srv.UserGoalPatch(target_time_minutes=None), user={"id": "u1"})
+
+    result = _run(run())
+    assert result["success"] is True
+    assert state["user_goal"]["event_date"] == past_str
+    assert state["user_goal"]["target_time_minutes"] is None
+
+
+def test_patch_user_goal_remove_race_preserves_target_time_and_pace():
+    import server as srv
+
+    future_date = (datetime.now(timezone.utc) + timedelta(days=90)).strftime("%Y-%m-%d")
+    cycle = {"goal": "SEMI", "start_date": _CYCLE_START}
+    user_goal = {
+        "user_id": "u1",
+        "event_name": "Auray-Vannes",
+        "event_date": future_date,
+        "distance_type": "semi",
+        "distance_km": 21.0975,
+        "target_time_minutes": 115,
+        "target_pace": "5:27",
+    }
+    mock_db, state = _make_patchable_db(cycle=cycle, user_goal=user_goal)
+
+    async def run():
+        with patch.object(srv, "db", mock_db):
+            return await srv.patch_user_goal(
+                srv.UserGoalPatch.model_construct(event_name=None, event_date=None, distance_km=None, target_time_minutes=None, _fields_set={"event_name", "event_date"}),
+                user={"id": "u1"},
+            )
+
+    result = _run(run())
+    assert result["success"] is True
+    assert state["user_goal"]["event_name"] is None
+    assert state["user_goal"]["event_date"] is None
+    assert state["user_goal"]["target_time_minutes"] == 115
+    assert state["user_goal"]["target_pace"] == srv.calculate_target_pace(21.0975, 115)
+
+
+def test_patch_user_goal_omitted_fields_are_untouched():
+    import server as srv
+
+    future_date = (datetime.now(timezone.utc) + timedelta(days=90)).strftime("%Y-%m-%d")
+    cycle = {"goal": "ULTRA", "start_date": _CYCLE_START, "ultra_distance_km": 80.0}
+    user_goal = {
+        "user_id": "u1",
+        "event_name": "Ultra Trail",
+        "event_date": future_date,
+        "distance_type": "ultra",
+        "distance_km": 80.0,
+        "target_time_minutes": 600,
+        "target_pace": "7:30",
+    }
+    mock_db, state = _make_patchable_db(cycle=cycle, user_goal=user_goal)
+
+    async def run():
+        with patch.object(srv, "db", mock_db):
+            return await srv.patch_user_goal(srv.UserGoalPatch(target_time_minutes=None), user={"id": "u1"})
+
+    _run(run())
+    assert state["user_goal"]["event_name"] == "Ultra Trail"
+    assert state["user_goal"]["event_date"] == future_date
+    assert state["user_goal"]["distance_type"] == "ultra"
+    assert state["user_goal"]["distance_km"] == 80.0
+
+
+def test_patch_user_goal_event_date_validates_only_when_explicitly_provided():
+    from fastapi import HTTPException
+    import server as srv
+
+    future_date = (datetime.now(timezone.utc) + timedelta(days=90)).strftime("%Y-%m-%d")
+    cycle = {"goal": "MARATHON", "start_date": _CYCLE_START}
+    user_goal = {
+        "user_id": "u1",
+        "event_name": "Berlin",
+        "event_date": future_date,
+        "distance_type": "marathon",
+        "distance_km": 42.195,
+        "target_time_minutes": 225,
+        "target_pace": "5:20",
+    }
+    mock_db, state = _make_patchable_db(cycle=cycle, user_goal=user_goal)
+
+    async def run_past():
+        with patch.object(srv, "db", mock_db):
+            return await srv.patch_user_goal(srv.UserGoalPatch(event_date="2020-01-01"), user={"id": "u1"})
+
+    with pytest.raises(HTTPException) as exc_info:
+        _run(run_past())
+    assert exc_info.value.status_code == 400
+
+    next_future_date = (datetime.now(timezone.utc) + timedelta(days=120)).strftime("%Y-%m-%d")
+
+    async def run_future():
+        with patch.object(srv, "db", mock_db):
+            return await srv.patch_user_goal(srv.UserGoalPatch(event_date=next_future_date), user={"id": "u1"})
+
+    result = _run(run_future())
+    assert result["success"] is True
+    assert state["user_goal"]["event_date"] == next_future_date
+
+
+def test_patch_user_goal_ultra_preserves_distance_for_remove_target_time_and_race():
+    import server as srv
+
+    future_date = (datetime.now(timezone.utc) + timedelta(days=90)).strftime("%Y-%m-%d")
+    cycle = {"goal": "ULTRA", "start_date": _CYCLE_START, "ultra_distance_km": 80.0}
+    user_goal = {
+        "user_id": "u1",
+        "event_name": "Ultra Trail",
+        "event_date": future_date,
+        "distance_type": "ultra",
+        "distance_km": 80.0,
+        "target_time_minutes": 600,
+        "target_pace": "7:30",
+    }
+    mock_db, state = _make_patchable_db(cycle=cycle, user_goal=user_goal)
+
+    async def run_remove_time():
+        with patch.object(srv, "db", mock_db):
+            return await srv.patch_user_goal(srv.UserGoalPatch(target_time_minutes=None), user={"id": "u1"})
+
+    async def run_remove_race():
+        with patch.object(srv, "db", mock_db):
+            return await srv.patch_user_goal(
+                srv.UserGoalPatch.model_construct(event_name=None, event_date=None, distance_km=None, target_time_minutes=None, _fields_set={"event_name", "event_date"}),
+                user={"id": "u1"},
+            )
+
+    _run(run_remove_time())
+    assert state["user_goal"]["distance_km"] == 80.0
+    _run(run_remove_race())
+    assert state["user_goal"]["distance_km"] == 80.0
+
+
+def test_patch_user_goal_resolve_goal_keeps_race_date_when_only_target_time_changes():
+    import server as srv
+
+    future_date = (datetime.now(timezone.utc) + timedelta(days=90)).strftime("%Y-%m-%d")
+    cycle = {"goal": "MARATHON", "start_date": _CYCLE_START}
+    user_goal = {
+        "user_id": "u1",
+        "event_name": "Berlin",
+        "event_date": future_date,
+        "distance_type": "marathon",
+        "distance_km": 42.195,
+        "target_time_minutes": 225,
+        "target_pace": "5:20",
+    }
+    mock_db, _ = _make_patchable_db(cycle=cycle, user_goal=user_goal)
+
+    async def run():
+        with patch.object(srv, "db", mock_db):
+            await srv.patch_user_goal(srv.UserGoalPatch(target_time_minutes=None), user={"id": "u1"})
+            return await srv._resolve_goal_v2("u1")
+
+    resolved = _run(run())
+    assert resolved.race_date == date.fromisoformat(future_date)
+    assert resolved.target_time_sec is None
+
+
+def test_patch_user_goal_resolve_goal_clears_race_date_when_only_race_changes():
+    import server as srv
+
+    future_date = (datetime.now(timezone.utc) + timedelta(days=90)).strftime("%Y-%m-%d")
+    cycle = {"goal": "SEMI", "start_date": _CYCLE_START}
+    user_goal = {
+        "user_id": "u1",
+        "event_name": "Auray-Vannes",
+        "event_date": future_date,
+        "distance_type": "semi",
+        "distance_km": 21.0975,
+        "target_time_minutes": 115,
+        "target_pace": "5:27",
+    }
+    mock_db, _ = _make_patchable_db(cycle=cycle, user_goal=user_goal)
+
+    async def run():
+        with patch.object(srv, "db", mock_db):
+            await srv.patch_user_goal(
+                srv.UserGoalPatch.model_construct(event_name=None, event_date=None, distance_km=None, target_time_minutes=None, _fields_set={"event_name", "event_date"}),
+                user={"id": "u1"},
+            )
+            return await srv._resolve_goal_v2("u1")
+
+    resolved = _run(run())
+    assert resolved.race_date is None
+    assert resolved.target_time_sec == 115 * 60
 
 
 # ════════════════════════════════════════════════════════════════════════════
