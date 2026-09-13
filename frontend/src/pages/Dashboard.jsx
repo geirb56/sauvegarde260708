@@ -766,10 +766,13 @@ export default function Dashboard() {
           setTodaySession(todayResult.value.data);
         } else {
           const todayErrorData = todayResult.reason?.response?.data;
+          const todayErrorMessage = typeof todayErrorData === "string"
+            ? todayErrorData
+            : todayErrorData?.message || null;
           setTodaySession({
             ...(todayErrorData && typeof todayErrorData === "object" ? todayErrorData : {}),
             status: todayErrorData?.status || "error",
-            message: todayErrorData?.message || null,
+            message: todayErrorMessage,
           });
         }
       }
