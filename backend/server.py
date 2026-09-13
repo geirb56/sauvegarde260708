@@ -3535,11 +3535,11 @@ async def set_training_plan_goal(goal: str, user: dict = Depends(auth_user)):
     """
     Set the training goal (10K, SEMI, MARATHON, etc.)
     """
-    if goal.upper() not in ["5K", "10K", "SEMI", "MARATHON", "ULTRA", "MAINTENANCE"]:
+    if goal.upper() not in ["5K", "10K", "SEMI", "MARATHON", "ULTRA"]:
         return {"error": "Invalid goal"}
     
     goal_upper = goal.upper()
-    config = GOAL_CONFIG.get(goal_upper, {"cycle_weeks": 0, "description": "Maintenance"})
+    config = GOAL_CONFIG[goal_upper]
 
     existing_cycle = await db.training_cycles.find_one({"user_id": user["id"]}, {"goal": 1})
     existing_goal = (existing_cycle or {}).get("goal")
