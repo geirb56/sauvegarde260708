@@ -269,10 +269,23 @@ def _make_patchable_db(cycle=None, user_goal=None):
 
 
 _CYCLE_START = datetime(2026, 1, 1, tzinfo=timezone.utc)
+_FROZEN_NOW_UTC = datetime(2026, 9, 13, 9, 0, tzinfo=timezone.utc)  # Sunday
+_FROZEN_TODAY = _FROZEN_NOW_UTC.date()
 
 
 def _run(coro):
     return asyncio.run(coro)
+
+
+def _freeze_server_utc_now(srv, frozen_now: datetime = _FROZEN_NOW_UTC):
+    class _FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return frozen_now.replace(tzinfo=None)
+            return frozen_now.astimezone(tz)
+
+    return patch.object(srv, "datetime", _FrozenDateTime)
 
 
 def test_resolve_goal_10k_coherent():
@@ -505,27 +518,112 @@ def test_post_user_goal_10k_incoherent_semi_blocked():
 
 
 def test_post_user_goal_past_date_rejected():
-    """event_date in the past → 400 without mutation."""
+    """event_date in the past (relative to frozen today) → 400 without mutation."""
     from fastapi import HTTPException
     import server as srv
 
     cycle = {"goal": "MARATHON", "start_date": _CYCLE_START}
     mock_db = _make_db(cycle=cycle)
+    delete_called = []
+    insert_called = []
+
+    async def fake_delete(*a, **kw):
+        delete_called.append(True)
+        return MagicMock(deleted_count=0)
+
+    async def fake_insert(doc):
+        insert_called.append(doc)
+        return MagicMock(inserted_id="x")
+
+    mock_db.user_goals.delete_many = fake_delete
+    mock_db.user_goals.insert_one = fake_insert
 
     goal_payload = srv.UserGoalCreate(
         event_name="Old Marathon",
-        event_date="2020-01-01",
+        event_date=(_FROZEN_TODAY - timedelta(days=1)).isoformat(),
         distance_type="marathon",
     )
 
     async def run():
-        with patch.object(srv, "db", mock_db):
+        with patch.object(srv, "db", mock_db), _freeze_server_utc_now(srv):
             return await srv.set_user_goal(goal_payload, user={"id": "u1"})
 
     with pytest.raises(HTTPException) as exc_info:
         _run(run())
     assert exc_info.value.status_code == 400
-    assert "future" in exc_info.value.detail.lower() or "past" in exc_info.value.detail.lower() or "event_date" in exc_info.value.detail
+    assert "must not be in the past" in exc_info.value.detail.lower()
+    assert not delete_called
+    assert not insert_called
+
+
+def test_post_user_goal_today_date_accepted_and_persisted():
+    """event_date equal to frozen today is accepted for a coherent SEMI goal."""
+    import server as srv
+
+    cycle = {"goal": "SEMI", "start_date": _CYCLE_START}
+    mock_db = _make_db(cycle=cycle)
+    inserts = []
+
+    async def fake_delete(*a, **kw):
+        return MagicMock(deleted_count=0)
+
+    async def fake_insert(doc):
+        inserts.append(doc)
+        return MagicMock(inserted_id="today")
+
+    mock_db.user_goals.delete_many = fake_delete
+    mock_db.user_goals.insert_one = fake_insert
+
+    goal_payload = srv.UserGoalCreate(
+        event_name="Course Test",
+        event_date=_FROZEN_TODAY.isoformat(),
+        distance_type="semi",
+        target_time_minutes=115,
+    )
+
+    async def run():
+        with patch.object(srv, "db", mock_db), _freeze_server_utc_now(srv):
+            return await srv.set_user_goal(goal_payload, user={"id": "u1"})
+
+    result = _run(run())
+    assert result["success"] is True
+    assert inserts[0]["event_date"] == _FROZEN_TODAY.isoformat()
+    assert inserts[0]["target_time_minutes"] == 115
+    assert inserts[0]["distance_type"] == "semi"
+    assert inserts[0]["distance_km"] == pytest.approx(21.0975, abs=1e-6)
+
+
+def test_post_user_goal_future_date_still_accepted():
+    """event_date in the future (relative to frozen today) is still accepted."""
+    import server as srv
+
+    cycle = {"goal": "MARATHON", "start_date": _CYCLE_START}
+    mock_db = _make_db(cycle=cycle)
+    inserts = []
+
+    async def fake_delete(*a, **kw):
+        return MagicMock(deleted_count=0)
+
+    async def fake_insert(doc):
+        inserts.append(doc)
+        return MagicMock(inserted_id="future")
+
+    mock_db.user_goals.delete_many = fake_delete
+    mock_db.user_goals.insert_one = fake_insert
+
+    goal_payload = srv.UserGoalCreate(
+        event_name="Future Marathon",
+        event_date=(_FROZEN_TODAY + timedelta(days=1)).isoformat(),
+        distance_type="marathon",
+    )
+
+    async def run():
+        with patch.object(srv, "db", mock_db), _freeze_server_utc_now(srv):
+            return await srv.set_user_goal(goal_payload, user={"id": "u1"})
+
+    result = _run(run())
+    assert result["success"] is True
+    assert inserts[0]["event_date"] == (_FROZEN_TODAY + timedelta(days=1)).isoformat()
 
 
 @pytest.mark.parametrize("invalid_target_time", [0, -15, True, 12.5])
@@ -683,6 +781,75 @@ def test_post_user_goal_10k_target_time_without_race_date_succeeds():
     assert inserts[0]["event_name"] is None
     assert inserts[0]["event_date"] is None
     assert inserts[0]["target_time_minutes"] == 50
+
+
+def test_race_day_chain_with_today_event_date_keeps_j0_race():
+    """race_date=today survives set_user_goal -> _resolve_goal_v2 -> canonical week (J0 race)."""
+    import server as srv
+    from training_v2.plan_goal import GoalType
+    from training_v2.week_plan_bridge import build_canonical_weekly_plan
+
+    user_id = "u-race-day"
+    cycle = {"user_id": user_id, "goal": "SEMI", "start_date": _CYCLE_START}
+    state = {"goal_doc": None}
+    mock_db = MagicMock()
+
+    async def _cycle_find_one(query, projection=None):
+        return dict(cycle) if query.get("user_id") == user_id else None
+
+    async def _goal_find_one(query, projection=None):
+        if query.get("user_id") != user_id:
+            return None
+        return dict(state["goal_doc"]) if state["goal_doc"] is not None else None
+
+    async def _goal_delete_many(query):
+        if query.get("user_id") == user_id:
+            state["goal_doc"] = None
+        return MagicMock(deleted_count=1)
+
+    async def _goal_insert_one(doc):
+        state["goal_doc"] = dict(doc)
+        return MagicMock(inserted_id="race-day")
+
+    mock_db.training_cycles.find_one = _cycle_find_one
+    mock_db.user_goals.find_one = _goal_find_one
+    mock_db.user_goals.delete_many = _goal_delete_many
+    mock_db.user_goals.insert_one = _goal_insert_one
+
+    goal_payload = srv.UserGoalCreate(
+        event_name="Course Test",
+        event_date=_FROZEN_TODAY.isoformat(),
+        distance_type="semi",
+        target_time_minutes=115,
+    )
+
+    async def run():
+        with patch.object(srv, "db", mock_db), _freeze_server_utc_now(srv):
+            set_result = await srv.set_user_goal(goal_payload, user={"id": user_id})
+            resolved = await srv._resolve_goal_v2(user_id)
+            return set_result, resolved
+
+    set_result, resolved = _run(run())
+    assert set_result["success"] is True
+    assert state["goal_doc"] is not None
+    assert state["goal_doc"]["event_date"] == _FROZEN_TODAY.isoformat()
+    assert state["goal_doc"]["target_time_minutes"] == 115
+    assert resolved.goal_type == "SEMI"
+    assert resolved.mapped_goal == GoalType.half_marathon
+    assert resolved.race_date == _FROZEN_TODAY
+
+    canonical = build_canonical_weekly_plan(
+        workouts=[],
+        goal_type=resolved.goal_type,
+        race_date=resolved.race_date,
+        cycle_start_date=resolved.cycle_start,
+        reference_date=_FROZEN_TODAY,
+        target_distance_km=resolved.target_distance_km,
+        target_time_seconds=resolved.target_time_sec,
+    )
+    by_day = {session.day.lower(): session for session in canonical.weekly_plan.sessions}
+    assert by_day["sunday"].workout_type == "race"
+    assert by_day["sunday"].distance_km == pytest.approx(21.0975, abs=1e-6)
 
 
 # ════════════════════════════════════════════════════════════════════════════

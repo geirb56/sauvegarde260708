@@ -1224,10 +1224,10 @@ def _parse_goal_event_date(raw_event_date: Optional[str], *, require_future: boo
             status_code=400,
             detail=f"Invalid event_date '{raw_event_date}'. Must be ISO format YYYY-MM-DD.",
         )
-    if require_future and parsed_event_date <= datetime.now(timezone.utc).date():
+    if require_future and parsed_event_date < datetime.now(timezone.utc).date():
         raise HTTPException(
             status_code=400,
-            detail=f"event_date '{raw_event_date}' must be a future date.",
+            detail=f"event_date '{raw_event_date}' must not be in the past.",
         )
     return parsed_event_date
 
@@ -1246,7 +1246,7 @@ async def set_user_goal(goal: UserGoalCreate, user: dict = Depends(auth_user)):
 
     PR226 rules (all checked BEFORE any DB mutation):
     - MAINTENANCE cycle → rejected (no race metadata on a maintenance cycle)
-    - event_date is optional; if provided it must be a parseable future ISO date
+    - event_date is optional; if provided it must be a parseable ISO date that is today or in the future
     - distance_type must be valid
     - ULTRA requires distance_km > 42.195
     - distance_type must match active training_cycles.goal (coherence check)
