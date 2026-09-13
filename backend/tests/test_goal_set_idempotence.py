@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import sys
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -250,3 +250,58 @@ async def test_set_training_plan_goal_ultra_distance_drives_idempotence():
     assert changed_db.training_cycles.update_calls == 1
     assert changed_db.user_goals.delete_calls == 1
     assert changed_cycle["ultra_distance_km"] == 100.0
+
+
+@pytest.mark.asyncio
+async def test_same_semi_e2e_idempotence_preserves_race_week_chain():
+    import server as srv
+    from training_v2.plan_goal import GoalType
+    from training_v2.week_plan_bridge import build_canonical_weekly_plan
+
+    user_id = "e2e-semi-idempotence-user"
+    race_day = date(2026, 9, 13)  # sunday
+    cycle_start = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    expected_goal_doc = {
+        "user_id": user_id,
+        "event_name": "Course Test",
+        "event_date": race_day.isoformat(),
+        "distance_type": "semi",
+        "distance_km": 21.0975,
+        "target_time_minutes": 115,
+        "target_pace": "5:27",
+    }
+    fake_db = _FakeDB(
+        training_cycles=[{"user_id": user_id, "goal": "SEMI", "start_date": cycle_start}],
+        user_goals=[expected_goal_doc],
+    )
+
+    with patch.object(srv, "db", fake_db):
+        set_goal_result = await srv.set_training_goal(goal="SEMI", user={"id": user_id})
+        assert set_goal_result == {"status": "unchanged", "goal": "SEMI"}
+        assert fake_db.user_goals.delete_calls == 0
+
+        persisted_goal_doc = await fake_db.user_goals.find_one({"user_id": user_id})
+        assert persisted_goal_doc == expected_goal_doc
+
+        resolved = await srv._resolve_goal_v2(user_id)
+        assert resolved.goal_type == "SEMI"
+        assert resolved.mapped_goal == GoalType.half_marathon
+        assert resolved.race_date == race_day
+        assert resolved.target_time_sec == 115 * 60
+        assert resolved.user_goal_doc is not None
+        assert resolved.user_goal_doc.get("event_name") == "Course Test"
+        assert resolved.user_goal_doc.get("distance_type") == "semi"
+
+    canonical = build_canonical_weekly_plan(
+        workouts=[],
+        goal_type=resolved.goal_type,
+        race_date=resolved.race_date,
+        cycle_start_date=resolved.cycle_start,
+        reference_date=race_day,
+        target_distance_km=resolved.target_distance_km,
+        target_time_seconds=resolved.target_time_sec,
+    )
+    by_day = {session.day.lower(): session for session in canonical.weekly_plan.sessions}
+    assert by_day["saturday"].workout_type == "rest"
+    assert by_day["sunday"].workout_type == "race"
+    assert by_day["sunday"].distance_km == pytest.approx(21.0975, abs=1e-6)
