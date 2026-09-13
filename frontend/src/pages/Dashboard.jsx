@@ -399,12 +399,59 @@ function getTodayReadinessColor(session) {
   return "gray";
 }
 
+function hasDisplayableTodayReadiness(session) {
+  const band = session?.readiness?.band;
+  return band === "FAVORABLE" || band === "CAUTION" || band === "LOW" || band === "VERY_LOW";
+}
+
 function getTodayReadinessLabel(session, t) {
   const band = session?.readiness?.band;
   if (band === "FAVORABLE") return t("trainingPlanExtended.fatigueGreen");
   if (band === "CAUTION") return t("trainingPlanExtended.fatigueOrange");
   if (band === "LOW" || band === "VERY_LOW") return t("trainingPlanExtended.fatigueRed");
   return t("dashboard.runReadinessUnavailable");
+}
+
+function getCanonicalTodaySession(todayData) {
+  return todayData?.served_prescription
+    ?? todayData?.adapted_prescription
+    ?? todayData?.adaptive_session
+    ?? todayData?.planned_session
+    ?? todayData?.original_prescription
+    ?? null;
+}
+
+function getTodayCardState(todayData, t) {
+  const session = getCanonicalTodaySession(todayData);
+  if (session) {
+    return { kind: "session", session };
+  }
+
+  const message = typeof todayData?.message === "string" && todayData.message.trim()
+    ? todayData.message
+    : null;
+
+  if (todayData?.status === "no_session") {
+    return {
+      kind: "no_session",
+      title: t("dashboard.todayNoSessionTitle"),
+      subtitle: message || t("dashboard.todayNoSessionSubtitle"),
+    };
+  }
+
+  if (todayData?.status === "error") {
+    return {
+      kind: "error",
+      title: t("dashboard.todayErrorTitle"),
+      subtitle: message || t("dashboard.todayErrorSubtitle"),
+    };
+  }
+
+  return {
+    kind: "unavailable",
+    title: t("dashboard.todayUnavailableTitle"),
+    subtitle: message || t("dashboard.todayUnavailableSubtitle"),
+  };
 }
 
 function getRunReadinessUnavailableCauseLabel(cause, t) {
@@ -702,16 +749,27 @@ export default function Dashboard() {
         const [insightRes, ragRes, todayRes] = await Promise.all([
           axios.get(`${API}/dashboard/insight?language=${lang}`),
           axios.get(`${API}/rag/dashboard`).catch(() => ({ data: null })),
-          axios.get(`${API}/training/today`).catch(() => ({ data: null })),
+          axios
+            .get(`${API}/training/today`)
+            .then((res) => ({ data: res.data, error: false }))
+            .catch((error) => ({
+              data: error?.response?.data && typeof error.response.data === "object" ? error.response.data : null,
+              error: true,
+            })),
         ]);
         setInsight(insightRes.data);
         if (ragRes.data) {
           setInsight(prev => ({ ...prev, rag: ragRes.data }));
         }
-        // Utiliser la réponse de /api/training/today (avec adaptation)
-        if (todayRes.data?.status === "success") {
-          setTodaySession(todayRes.data);
-        }
+        setTodaySession(
+          todayRes.error
+            ? {
+                ...(todayRes.data || {}),
+                status: todayRes.data?.status || "error",
+                message: todayRes.data?.message || null,
+              }
+            : todayRes.data,
+        );
       }
     } catch (error) {
       console.error("Failed to fetch data:", error);
@@ -758,6 +816,8 @@ export default function Dashboard() {
   const runIndexNull = !runIndexData || runIndexData?.run_index === null || runIndexData?.status === "insufficient";
   const runIndexScore = runIndexData?.run_index ?? null;
   const runIndexConfidence = runIndexData?.confidence_score ?? 0;
+  const todayCardState = getTodayCardState(todaySession, t);
+  const todayHasReadinessBadge = hasDisplayableTodayReadiness(todaySession);
   const todayReadinessColor = getTodayReadinessColor(todaySession);
   const todayReadinessLabel = getTodayReadinessLabel(todaySession, t);
   const todayReadinessStyle = REC_STYLES[todayReadinessColor] || REC_STYLES.gray;
@@ -982,13 +1042,13 @@ export default function Dashboard() {
         className="today-workout-card animate-in" 
         style={{ 
           animationDelay: "200ms",
-          border: todaySession?.status === "success" ? `2px solid ${todayReadinessStyle.accent}` : undefined
+          border: todayCardState.kind === "session" && todayHasReadinessBadge ? `2px solid ${todayReadinessStyle.accent}` : undefined
         }} 
         data-testid="today-workout-card"
       >
         <div className="flex items-center justify-between mb-3">
           <p className="today-label">{t("dashboard.todayLabel")}</p>
-          {todaySession?.status === "success" && (
+          {todayCardState.kind === "session" && todayHasReadinessBadge && (
             <span
               className="px-3 py-1 rounded-full text-xs font-bold"
               style={{
@@ -1002,8 +1062,17 @@ export default function Dashboard() {
           )}
         </div>
 
-        {todaySession?.status === "success" ? (
+        {todayCardState.kind === "session" ? (
           <>
+            {!todayHasReadinessBadge && (
+              <p
+                className="mb-3 text-xs font-medium"
+                style={{ color: "var(--text-tertiary)" }}
+                data-testid="today-readiness-status"
+              >
+                {t("dashboard.todayReadinessUnavailable")}
+              </p>
+            )}
             {/* C231 (corrections finales) — the canonical session displayed
                 today MUST be the served prescription, never chosen via the
                 purely-informative adaptation_applied flag. Priority order:
@@ -1014,13 +1083,6 @@ export default function Dashboard() {
                 risk surfacing a stale/superseded value (e.g. 18 km) next to
                 the canonical one (e.g. 12.6 km). */}
             {(() => {
-              const canonicalSession =
-                todaySession.served_prescription ??
-                todaySession.adapted_prescription ??
-                todaySession.adaptive_session ??
-                todaySession.planned_session ??
-                todaySession.original_prescription;
-
               return (
                 <>
                   {/* Adaptation notice — C231 (round 3, P1 fix): gated ONLY by
@@ -1048,18 +1110,18 @@ export default function Dashboard() {
                     </div>
                   )}
 
-                  <SessionCard session={canonicalSession} fatigueColor={todayReadinessColor} />
+                  <SessionCard session={todayCardState.session} fatigueColor={todayReadinessColor} />
                 </>
               );
             })()}
           </>
         ) : (
           <>
-            <h3 className="today-title" style={{ color: "var(--text-secondary)" }}>
-              {t("dashboard.todayNoSessionTitle")}
+            <h3 className="today-title" style={{ color: "var(--text-secondary)" }} data-testid="today-status-title">
+              {todayCardState.title}
             </h3>
-            <p className="today-meta" style={{ opacity: 0.7 }}>
-              {t("dashboard.todayNoSessionSubtitle")}
+            <p className="today-meta" style={{ opacity: 0.7 }} data-testid="today-status-subtitle">
+              {todayCardState.subtitle}
             </p>
           </>
         )}

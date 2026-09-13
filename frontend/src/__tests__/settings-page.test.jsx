@@ -243,6 +243,61 @@ describe("Settings UX V2", () => {
     expect(screen.getByTestId("settings-plan-start-date")).toHaveTextContent("Actualiza el ancla canónica del ciclo Training V2 usada por Ajustes y Training V2.");
   });
 
+  test("event_date without event_name does not claim race details are missing", async () => {
+    mockAxiosApi(createApiState({
+      userGoal: {
+        event_name: "",
+        event_date: "2026-10-12",
+        distance_type: "marathon",
+        distance_km: 42.195,
+        target_time_minutes: null,
+      },
+    }));
+
+    renderPage();
+
+    const raceRow = await screen.findByTestId("settings-race-date-current");
+    expect(raceRow).toHaveTextContent("Oct 12, 2026");
+    expect(raceRow).toHaveTextContent("Race date saved.");
+    expect(raceRow).not.toHaveTextContent("No race details saved yet.");
+  });
+
+  test("event_date and target_time without event_name show a truthful neutral helper", async () => {
+    mockAxiosApi(createApiState({
+      userGoal: {
+        event_name: " ",
+        event_date: "2026-10-12",
+        distance_type: "marathon",
+        distance_km: 42.195,
+        target_time_minutes: 225,
+      },
+    }));
+
+    renderPage();
+
+    const raceRow = await screen.findByTestId("settings-race-date-current");
+    expect(raceRow).toHaveTextContent("Race date and target time saved.");
+    expect(raceRow).not.toHaveTextContent("No race details saved yet.");
+    expect(screen.getByTestId("settings-current-target-time")).toHaveTextContent("3h45");
+  });
+
+  test("empty race details still allow the missing-details helper", async () => {
+    mockAxiosApi(createApiState({
+      userGoal: {
+        event_name: "",
+        event_date: null,
+        distance_type: "marathon",
+        distance_km: 42.195,
+        target_time_minutes: null,
+      },
+    }));
+
+    renderPage();
+
+    const raceRow = await screen.findByTestId("settings-race-date-current");
+    expect(raceRow).toHaveTextContent("No race details saved yet.");
+  });
+
   test("save plan start date uses canonical backend contract and reloads plan settings", async () => {
     mockAxiosApi();
     renderPage();
