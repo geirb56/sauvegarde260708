@@ -773,8 +773,7 @@ export default function Dashboard() {
               ? todayErrorObject.message
               : null;
           setTodaySession({
-            ...(typeof todayErrorObject?.status === "string" ? { status: todayErrorObject.status } : {}),
-            status: typeof todayErrorObject?.status === "string" ? todayErrorObject.status : "error",
+            status: "error",
             message: todayErrorMessage,
           });
         }
