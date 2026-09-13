@@ -88,9 +88,10 @@ def test_fallback_without_goal_is_maintenance():
         "Fallback must be MAINTENANCE not SEMI"
 
 
-def test_set_goal_deletes_user_goals():
+def test_set_goal_keeps_delete_path_for_true_changes():
     src = _src()
-    assert "user_goals.delete_many" in src, "set-goal must delete user_goals"
+    assert "_is_same_goal_selection" in src, "set-goal must support same-goal idempotence"
+    assert "user_goals.delete_many" in src, "set-goal must still delete user_goals on true changes"
 
 
 def test_ultra_without_distance_rejected():
