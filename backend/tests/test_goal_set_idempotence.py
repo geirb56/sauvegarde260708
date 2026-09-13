@@ -162,6 +162,28 @@ async def test_set_training_goal_ultra_distance_change_is_not_noop():
 
 
 @pytest.mark.asyncio
+async def test_set_training_goal_ultra_same_distance_uses_user_goal_fallback():
+    import server as srv
+
+    fake_db = _FakeDB(
+        training_cycles=[{
+            "user_id": "u1",
+            "goal": "ULTRA",
+            "start_date": datetime(2026, 8, 1, tzinfo=timezone.utc),
+            "ultra_distance_km": None,
+        }],
+        user_goals=[{"user_id": "u1", "distance_type": "ultra", "distance_km": 80.0}],
+    )
+
+    with patch.object(srv, "db", fake_db):
+        result = await srv.set_training_goal(goal="ULTRA", distance_km=80.0, user={"id": "u1"})
+
+    assert result == {"status": "unchanged", "goal": "ULTRA"}
+    assert fake_db.training_cycles.update_calls == 0
+    assert fake_db.user_goals.delete_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_set_training_plan_goal_same_goal_is_noop_and_preserves_metadata():
     import server as srv
 

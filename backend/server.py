@@ -3135,6 +3135,7 @@ def _is_same_goal_selection(
     existing_cycle: Optional[dict],
     requested_goal: str,
     requested_ultra_distance_km: Optional[float],
+    existing_user_goal: Optional[dict] = None,
 ) -> bool:
     """Return True when the requested goal selection is an idempotent no-op."""
     if not existing_cycle:
@@ -3147,8 +3148,16 @@ def _is_same_goal_selection(
     if requested_goal != "ULTRA":
         return True
 
+    if requested_ultra_distance_km is None:
+        return False
+
     existing_ultra_distance = existing_cycle.get("ultra_distance_km")
-    if existing_ultra_distance is None or requested_ultra_distance_km is None:
+    if existing_ultra_distance is None and existing_user_goal:
+        user_goal_distance_type = (existing_user_goal.get("distance_type") or "").lower()
+        if user_goal_distance_type == "ultra":
+            existing_ultra_distance = existing_user_goal.get("distance_km")
+
+    if existing_ultra_distance is None:
         return False
 
     try:
@@ -3184,7 +3193,10 @@ async def set_training_goal(
         ultra_distance_km = _validate_ultra_distance_km(distance_km)
 
     existing_cycle = await db.training_cycles.find_one({"user_id": user["id"]}, {"_id": 0})
-    if _is_same_goal_selection(existing_cycle, goal_upper, ultra_distance_km):
+    existing_user_goal = None
+    if goal_upper == "ULTRA":
+        existing_user_goal = await db.user_goals.find_one({"user_id": user["id"]}, {"_id": 0})
+    if _is_same_goal_selection(existing_cycle, goal_upper, ultra_distance_km, existing_user_goal):
         logger.info(f"[Training] Goal unchanged for user {user['id']}: {goal_upper}")
         return {"status": "unchanged", "goal": goal_upper}
 
@@ -3376,7 +3388,10 @@ async def set_training_plan_goal(
         ultra_distance_km = _validate_ultra_distance_km(distance_km)
 
     existing_cycle = await db.training_cycles.find_one({"user_id": user["id"]}, {"_id": 0})
-    if _is_same_goal_selection(existing_cycle, goal_upper, ultra_distance_km):
+    existing_user_goal = None
+    if goal_upper == "ULTRA":
+        existing_user_goal = await db.user_goals.find_one({"user_id": user["id"]}, {"_id": 0})
+    if _is_same_goal_selection(existing_cycle, goal_upper, ultra_distance_km, existing_user_goal):
         logger.info(f"[Training] Goal unchanged for user {user['id']}: {goal_upper}")
         return {
             "status": "unchanged",
