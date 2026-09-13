@@ -98,6 +98,19 @@ function hasTargetTimeValue(value) {
   return Number.isFinite(Number(value)) && Number(value) > 0;
 }
 
+function getRaceDetailsHelper(goal, t) {
+  const eventName = typeof goal?.event_name === "string" ? goal.event_name.trim() : "";
+  if (eventName) return eventName;
+
+  const hasEventDate = typeof goal?.event_date === "string" && goal.event_date.trim();
+  const hasTargetTime = hasTargetTimeValue(goal?.target_time_minutes);
+
+  if (hasEventDate && hasTargetTime) return t("settingsV2.plan.raceDetailsDateAndTarget");
+  if (hasEventDate) return t("settingsV2.plan.raceDetailsDateOnly");
+  if (hasTargetTime) return t("settingsV2.plan.raceDetailsTargetOnly");
+  return t("settingsV2.plan.raceDetailsMissing");
+}
+
 function getSubscriptionCode({ subscription, isTrial, isPremium }) {
   const raw = String(subscription?.status || "").trim().toLowerCase();
   if (raw === "premium") return "PREMIUM";
@@ -603,6 +616,7 @@ export default function Settings() {
   const raceDateLabel = userGoal?.event_date
     ? formatIsoDate(userGoal.event_date, locale)
     : t("settingsV2.common.missing");
+  const raceDetailsHelper = getRaceDetailsHelper(userGoal, t);
   const targetTimeLabel = userGoal?.target_time_minutes
     ? formatTargetTime(userGoal.target_time_minutes)
     : t("settingsV2.common.optional");
@@ -776,7 +790,7 @@ export default function Settings() {
                   <SettingRow
                     label={t("settingsV2.plan.currentRaceDate")}
                     value={raceDateLabel}
-                    helper={userGoal?.event_name || t("settingsV2.plan.raceDetailsMissing")}
+                    helper={raceDetailsHelper}
                     testId="settings-race-date-current"
                   />
 

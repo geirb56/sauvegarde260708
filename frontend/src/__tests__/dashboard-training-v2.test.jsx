@@ -357,8 +357,8 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     unmount();
   });
 
-  // 10b. today recommendation absent: never fabricated as RUN HARD
-  it("10b. today recommendation absent: never shows fabricated RUN HARD", async () => {
+  // 10b. readiness unavailable must not erase a valid served prescription
+  it("10b. valid today prescription still renders when today readiness is unavailable", async () => {
     mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
     setupAxiosMocks(
       buildDefaultMocks({
@@ -378,37 +378,36 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     const { container, unmount } = renderDashboard();
     await waitForRender();
 
-    const badge = container.querySelector('[data-testid="today-readiness-badge"]');
-    expect(badge).not.toBeNull();
-    expect(badge.textContent).not.toContain("RUN HARD");
+    const todayCard = container.querySelector('[data-testid="today-workout-card"]');
+    expect(todayCard).not.toBeNull();
+    expect(todayCard.textContent).toContain("45 min");
+    expect(todayCard.textContent).not.toContain("No session planned");
+    expect(todayCard.textContent).not.toContain("RUN HARD");
+    expect(container.querySelector('[data-testid="today-readiness-badge"]')).toBeNull();
+    expect(container.querySelector('[data-testid="today-readiness-status"]')?.textContent).toContain("Readiness unavailable");
     unmount();
   });
 
-  // 10c. today unknown readiness uses gray badge, never red by default
-  it("10c. today unknown readiness uses neutral gray", async () => {
+  // 10c. run-index failure must not erase a valid /training/today truth
+  it("10c. valid today prescription still renders when run-index request fails", async () => {
     mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
-    setupAxiosMocks(
-      buildDefaultMocks({
-        today: {
-          ...TODAY_PAYLOAD,
-          readiness: {
-            ...TODAY_PAYLOAD.readiness,
-            band: "UNAVAILABLE",
-            available: false,
-            score: null,
-          },
-        },
-      })
-    );
+    axios.get.mockImplementation((url) => {
+      if (url.includes("dashboard/insight")) return Promise.resolve({ data: INSIGHT_PAYLOAD });
+      if (url.includes("rag/dashboard")) return Promise.reject(new Error("no rag"));
+      if (url.includes("training/today")) return Promise.resolve({ data: TODAY_PAYLOAD });
+      if (url.includes("run-index")) return Promise.reject(new Error("run-index failed"));
+      if (url.includes("training/v2/week")) return Promise.reject(new Error("not available"));
+      return Promise.resolve({ data: null });
+    });
 
     const { container, unmount } = renderDashboard();
     await waitForRender();
 
-    const badge = container.querySelector('[data-testid="today-readiness-badge"]');
-    expect(badge).not.toBeNull();
-    const style = badge.getAttribute("style") || "";
-    expect(style).toContain("rgb(107, 114, 128)");
-    expect(style).not.toContain("rgb(239, 68, 68)");
+    const todayCard = container.querySelector('[data-testid="today-workout-card"]');
+    expect(todayCard).not.toBeNull();
+    expect(todayCard.textContent).toContain("45 min");
+    expect(todayCard.textContent).not.toContain("No session planned");
+    expect(container.textContent).toContain("Unable to load data.");
     unmount();
   });
 
@@ -477,7 +476,166 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     unmount();
   });
 
-  it("10e. observed bug fixture: weekly target uses training week authority, not insight rolling-7d", async () => {
+  it("10e. valid today prescription + readiness available renders the prescription truth", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(buildDefaultMocks({ today: TODAY_PAYLOAD }));
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const todayCard = container.querySelector('[data-testid="today-workout-card"]');
+    expect(todayCard).not.toBeNull();
+    expect(todayCard.textContent).toContain("45 min");
+    expect(container.querySelector('[data-testid="today-readiness-badge"]')?.textContent).toContain("Ready");
+    unmount();
+  });
+
+  it("10f. no_session from /training/today keeps the honest empty state", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(
+      buildDefaultMocks({
+        today: {
+          status: "no_session",
+          day: "monday",
+          message: "No session planned for today",
+        },
+      })
+    );
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    expect(container.querySelector('[data-testid="today-status-title"]')?.textContent).toContain("No session planned");
+    expect(container.querySelector('[data-testid="today-status-subtitle"]')?.textContent).toContain("No session planned for today");
+    unmount();
+  });
+
+  it("10g. prescription_unavailable from /training/today keeps an honest unavailable state", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(
+      buildDefaultMocks({
+        today: {
+          status: "prescription_unavailable",
+          day: "monday",
+          message: "Prescription unavailable",
+        },
+      })
+    );
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    expect(container.querySelector('[data-testid="today-status-title"]')?.textContent).toContain("Today's session unavailable");
+    expect(container.querySelector('[data-testid="today-status-subtitle"]')?.textContent).toContain("Prescription unavailable");
+    unmount();
+  });
+
+  it("10h. explicit /training/today error keeps an honest error state", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    axios.get.mockImplementation((url) => {
+      if (url.includes("dashboard/insight")) return Promise.resolve({ data: INSIGHT_PAYLOAD });
+      if (url.includes("rag/dashboard")) return Promise.reject(new Error("no rag"));
+      if (url.includes("training/today")) {
+        return Promise.reject({ response: { data: { status: "error", message: "Today backend unavailable" } } });
+      }
+      if (url.includes("run-index")) return Promise.resolve({ data: CARDIO_NO_DATA });
+      if (url.includes("training/v2/week")) return Promise.reject(new Error("not available"));
+      return Promise.resolve({ data: null });
+    });
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    expect(container.querySelector('[data-testid="today-status-title"]')?.textContent).toContain("Unable to load today's session");
+    expect(container.querySelector('[data-testid="today-status-subtitle"]')?.textContent).toContain("Today backend unavailable");
+    unmount();
+  });
+
+  it("10i. plain-string /training/today errors keep the backend message", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    axios.get.mockImplementation((url) => {
+      if (url.includes("dashboard/insight")) return Promise.resolve({ data: INSIGHT_PAYLOAD });
+      if (url.includes("rag/dashboard")) return Promise.reject(new Error("no rag"));
+      if (url.includes("training/today")) {
+        return Promise.reject({ response: { data: "Today backend unavailable" } });
+      }
+      if (url.includes("run-index")) return Promise.resolve({ data: CARDIO_NO_DATA });
+      if (url.includes("training/v2/week")) return Promise.reject(new Error("not available"));
+      return Promise.resolve({ data: null });
+    });
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    expect(container.querySelector('[data-testid="today-status-title"]')?.textContent).toContain("Unable to load today's session");
+    expect(container.querySelector('[data-testid="today-status-subtitle"]')?.textContent).toContain("Today backend unavailable");
+    unmount();
+  });
+
+  it("10j. generic object errors fall back to the default localized subtitle", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    axios.get.mockImplementation((url) => {
+      if (url.includes("dashboard/insight")) return Promise.resolve({ data: INSIGHT_PAYLOAD });
+      if (url.includes("rag/dashboard")) return Promise.reject(new Error("no rag"));
+      if (url.includes("training/today")) {
+        return Promise.reject({ response: { data: { detail: "Unauthorized" } } });
+      }
+      if (url.includes("run-index")) return Promise.resolve({ data: CARDIO_NO_DATA });
+      if (url.includes("training/v2/week")) return Promise.reject(new Error("not available"));
+      return Promise.resolve({ data: null });
+    });
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    expect(container.querySelector('[data-testid="today-status-title"]')?.textContent).toContain("Unable to load today's session");
+    expect(container.querySelector('[data-testid="today-status-subtitle"]')?.textContent).toContain("Retry in a moment to load today's prescription.");
+    unmount();
+  });
+
+  it("10k. rejected responses with a message are normalized to the Today error state", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    axios.get.mockImplementation((url) => {
+      if (url.includes("dashboard/insight")) return Promise.resolve({ data: INSIGHT_PAYLOAD });
+      if (url.includes("rag/dashboard")) return Promise.reject(new Error("no rag"));
+      if (url.includes("training/today")) {
+        return Promise.reject({ response: { data: { status: "unavailable", message: "Today backend unavailable" } } });
+      }
+      if (url.includes("run-index")) return Promise.resolve({ data: CARDIO_NO_DATA });
+      if (url.includes("training/v2/week")) return Promise.reject(new Error("not available"));
+      return Promise.resolve({ data: null });
+    });
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    expect(container.querySelector('[data-testid="today-status-title"]')?.textContent).toContain("Unable to load today's session");
+    expect(container.querySelector('[data-testid="today-status-subtitle"]')?.textContent).toContain("Today backend unavailable");
+    unmount();
+  });
+
+  it("10l. valid today prescription still renders when dashboard insight fails", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    axios.get.mockImplementation((url) => {
+      if (url.includes("dashboard/insight")) return Promise.reject(new Error("insight failed"));
+      if (url.includes("rag/dashboard")) return Promise.reject(new Error("no rag"));
+      if (url.includes("training/today")) return Promise.resolve({ data: TODAY_PAYLOAD });
+      if (url.includes("run-index")) return Promise.resolve({ data: CARDIO_NO_DATA });
+      if (url.includes("training/v2/week")) return Promise.reject(new Error("not available"));
+      return Promise.resolve({ data: null });
+    });
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const todayCard = container.querySelector('[data-testid="today-workout-card"]');
+    expect(todayCard).not.toBeNull();
+    expect(todayCard.textContent).toContain("45 min");
+    expect(container.querySelector('[data-testid="today-status-title"]')).toBeNull();
+    unmount();
+  });
+
+  it("10m. observed bug fixture: weekly target uses training week authority, not insight rolling-7d", async () => {
     mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
     setupAxiosMocks(
       buildDefaultMocks({
