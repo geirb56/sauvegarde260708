@@ -3450,10 +3450,15 @@ async def set_training_goal(
     """
     Définit l'objectif principal du cycle.
     """
-    if goal.upper() not in ["5K", "10K", "SEMI", "MARATHON", "ULTRA"]:
-        return {"error": "Invalid goal"}
-    
     goal_upper = goal.upper()
+    if goal_upper not in ["5K", "10K", "SEMI", "MARATHON", "ULTRA", "MAINTENANCE"]:
+        return {"error": "Invalid goal"}
+
+    existing_cycle = await db.training_cycles.find_one({"user_id": user["id"]}, {"goal": 1})
+    existing_goal = (existing_cycle or {}).get("goal")
+    if isinstance(existing_goal, str) and existing_goal.upper() == goal_upper:
+        logger.info(f"[Training] Goal unchanged for user {user['id']}: {goal_upper}")
+        return {"status": "unchanged", "goal": goal_upper}
     
     await db.training_cycles.update_one(
         {"user_id": user["id"]},
@@ -3535,6 +3540,17 @@ async def set_training_plan_goal(goal: str, user: dict = Depends(auth_user)):
     
     goal_upper = goal.upper()
     config = GOAL_CONFIG[goal_upper]
+
+    existing_cycle = await db.training_cycles.find_one({"user_id": user["id"]}, {"goal": 1})
+    existing_goal = (existing_cycle or {}).get("goal")
+    if isinstance(existing_goal, str) and existing_goal.upper() == goal_upper:
+        logger.info(f"[Training] Goal unchanged for user {user['id']}: {goal_upper}")
+        return {
+            "status": "unchanged",
+            "goal": goal_upper,
+            "cycle_weeks": config["cycle_weeks"],
+            "description": config["description"]
+        }
     
     await db.training_cycles.update_one(
         {"user_id": user["id"]},
