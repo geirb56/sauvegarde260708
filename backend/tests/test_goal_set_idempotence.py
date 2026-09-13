@@ -186,6 +186,8 @@ async def test_set_training_plan_goal_same_goal_is_noop_and_preserves_metadata()
 
     assert result["status"] == "unchanged"
     assert result["goal"] == "MARATHON"
+    assert result["cycle_weeks"] == 16
+    assert result["description"] == "Marathon"
     assert fake_db.training_cycles.update_calls == 0
     assert fake_db.user_goals.delete_calls == 0
     assert fake_db.training_cycles._docs[0] == before_cycle
