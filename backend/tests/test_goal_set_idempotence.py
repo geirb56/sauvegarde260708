@@ -64,12 +64,13 @@ class _FakeDB:
 
 
 @pytest.mark.asyncio
-async def test_set_training_goal_same_goal_is_noop_and_preserves_metadata():
+@pytest.mark.parametrize("stored_goal", ["SEMI", "HALF_MARATHON"])
+async def test_set_training_goal_same_goal_is_noop_and_preserves_metadata(stored_goal):
     import server as srv
 
     start_date = datetime(2026, 8, 1, tzinfo=timezone.utc)
     fake_db = _FakeDB(
-        training_cycles=[{"user_id": "u1", "goal": "SEMI", "start_date": start_date}],
+        training_cycles=[{"user_id": "u1", "goal": stored_goal, "start_date": start_date}],
         user_goals=[{
             "user_id": "u1",
             "event_name": "Auray-Vannes",
@@ -91,6 +92,16 @@ async def test_set_training_goal_same_goal_is_noop_and_preserves_metadata():
     assert fake_db.user_goals.delete_calls == 0
     assert fake_db.training_cycles._docs[0] == before_cycle
     assert fake_db.user_goals._docs[0] == before_goal
+
+
+def test_is_same_goal_selection_does_not_accept_unknown_goal_strings():
+    import server as srv
+
+    assert not srv._is_same_goal_selection(
+        existing_cycle={"user_id": "u1", "goal": "mystery_goal"},
+        requested_goal="SEMI",
+        requested_ultra_distance_km=None,
+    )
 
 
 @pytest.mark.asyncio
@@ -270,17 +281,21 @@ async def test_same_semi_e2e_idempotence_preserves_race_week_chain():
         "target_time_minutes": 115,
         "target_pace": "5:27",
     }
+    expected_cycle_doc = {"user_id": user_id, "goal": "half_marathon", "start_date": cycle_start}
     fake_db = _FakeDB(
-        training_cycles=[{"user_id": user_id, "goal": "SEMI", "start_date": cycle_start}],
+        training_cycles=[expected_cycle_doc],
         user_goals=[expected_goal_doc],
     )
 
     with patch.object(srv, "db", fake_db):
         set_goal_result = await srv.set_training_goal(goal="SEMI", user={"id": user_id})
         assert set_goal_result == {"status": "unchanged", "goal": "SEMI"}
+        assert fake_db.training_cycles.update_calls == 0
         assert fake_db.user_goals.delete_calls == 0
 
+        persisted_cycle_doc = await fake_db.training_cycles.find_one({"user_id": user_id})
         persisted_goal_doc = await fake_db.user_goals.find_one({"user_id": user_id})
+        assert persisted_cycle_doc == expected_cycle_doc
         assert persisted_goal_doc == expected_goal_doc
 
         resolved = await srv._resolve_goal_v2(user_id)
