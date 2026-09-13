@@ -178,6 +178,22 @@ async def test_same_goal_maintenance_is_idempotent(client_factory):
     assert client._fake_db.user_goals.delete_many_calls == []
 
 
+async def test_training_plan_goal_can_switch_to_maintenance(client_factory):
+    client = await client_factory("SEMI")
+
+    resp = await client.post("/api/training-plan/set-goal?goal=MAINTENANCE", headers=_bearer())
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "updated"
+    assert body["goal"] == "MAINTENANCE"
+    assert body["cycle_weeks"] == 52
+    assert body["description"] == "Maintenance"
+    assert len(client._fake_db.training_cycles.update_one_calls) == 1
+    assert client._fake_db.training_cycles.doc["goal"] == "MAINTENANCE"
+    assert client._fake_db.user_goals.delete_many_calls == []
+
+
 async def test_goal_change_updates_cycle_without_touching_user_goals(client_factory):
     client = await client_factory("SEMI")
     before_start_date = client._fake_db.training_cycles.doc["start_date"]

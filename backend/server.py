@@ -3451,7 +3451,7 @@ async def set_training_goal(
     Définit l'objectif principal du cycle.
     """
     goal_upper = goal.upper()
-    if goal_upper not in ["5K", "10K", "SEMI", "MARATHON", "ULTRA", "MAINTENANCE"]:
+    if goal_upper not in GOAL_CONFIG:
         return {"error": "Invalid goal"}
 
     existing_cycle = await db.training_cycles.find_one({"user_id": user["id"]}, {"goal": 1})
@@ -3535,7 +3535,7 @@ async def set_training_plan_goal(goal: str, user: dict = Depends(auth_user)):
     """
     Set the training goal (10K, SEMI, MARATHON, etc.)
     """
-    if goal.upper() not in ["5K", "10K", "SEMI", "MARATHON", "ULTRA"]:
+    if goal.upper() not in GOAL_CONFIG:
         return {"error": "Invalid goal"}
     
     goal_upper = goal.upper()
