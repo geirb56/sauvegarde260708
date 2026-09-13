@@ -572,7 +572,28 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     unmount();
   });
 
-  it("10j. valid today prescription still renders when dashboard insight fails", async () => {
+  it("10j. generic object errors fall back to the default localized subtitle", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    axios.get.mockImplementation((url) => {
+      if (url.includes("dashboard/insight")) return Promise.resolve({ data: INSIGHT_PAYLOAD });
+      if (url.includes("rag/dashboard")) return Promise.reject(new Error("no rag"));
+      if (url.includes("training/today")) {
+        return Promise.reject({ response: { data: { detail: "Unauthorized" } } });
+      }
+      if (url.includes("run-index")) return Promise.resolve({ data: CARDIO_NO_DATA });
+      if (url.includes("training/v2/week")) return Promise.reject(new Error("not available"));
+      return Promise.resolve({ data: null });
+    });
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    expect(container.querySelector('[data-testid="today-status-title"]')?.textContent).toContain("Unable to load today's session");
+    expect(container.querySelector('[data-testid="today-status-subtitle"]')?.textContent).toContain("Retry in a moment to load today's prescription.");
+    unmount();
+  });
+
+  it("10k. valid today prescription still renders when dashboard insight fails", async () => {
     mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
     axios.get.mockImplementation((url) => {
       if (url.includes("dashboard/insight")) return Promise.reject(new Error("insight failed"));
@@ -593,7 +614,7 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     unmount();
   });
 
-  it("10k. observed bug fixture: weekly target uses training week authority, not insight rolling-7d", async () => {
+  it("10l. observed bug fixture: weekly target uses training week authority, not insight rolling-7d", async () => {
     mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
     setupAxiosMocks(
       buildDefaultMocks({

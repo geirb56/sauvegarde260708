@@ -766,12 +766,15 @@ export default function Dashboard() {
           setTodaySession(todayResult.value.data);
         } else {
           const todayErrorData = todayResult.reason?.response?.data;
+          const todayErrorObject = todayErrorData && typeof todayErrorData === "object" ? todayErrorData : null;
           const todayErrorMessage = typeof todayErrorData === "string"
             ? todayErrorData
-            : todayErrorData?.message || null;
+            : typeof todayErrorObject?.message === "string" && todayErrorObject.message.trim()
+              ? todayErrorObject.message
+              : null;
           setTodaySession({
-            ...(todayErrorData && typeof todayErrorData === "object" ? todayErrorData : {}),
-            status: todayErrorData?.status || "error",
+            ...(typeof todayErrorObject?.status === "string" ? { status: todayErrorObject.status } : {}),
+            status: typeof todayErrorObject?.status === "string" ? todayErrorObject.status : "error",
             message: todayErrorMessage,
           });
         }
