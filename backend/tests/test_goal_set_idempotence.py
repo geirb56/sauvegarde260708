@@ -192,3 +192,39 @@ async def test_set_training_plan_goal_same_goal_is_noop_and_preserves_metadata()
     assert fake_db.user_goals.delete_calls == 0
     assert fake_db.training_cycles._docs[0] == before_cycle
     assert fake_db.user_goals._docs[0] == before_goal
+
+
+@pytest.mark.asyncio
+async def test_set_training_plan_goal_ultra_distance_drives_idempotence():
+    import server as srv
+
+    base_cycle = {
+        "user_id": "u1",
+        "goal": "ULTRA",
+        "start_date": datetime(2026, 8, 1, tzinfo=timezone.utc),
+        "ultra_distance_km": 80.0,
+    }
+
+    same_db = _FakeDB(
+        training_cycles=[base_cycle],
+        user_goals=[{"user_id": "u1", "distance_type": "ultra", "distance_km": 80.0}],
+    )
+    with patch.object(srv, "db", same_db):
+        same_result = await srv.set_training_plan_goal(goal="ULTRA", distance_km=80.0, user={"id": "u1"})
+
+    assert same_result["status"] == "unchanged"
+    assert same_db.training_cycles.update_calls == 0
+    assert same_db.user_goals.delete_calls == 0
+
+    changed_db = _FakeDB(
+        training_cycles=[base_cycle],
+        user_goals=[{"user_id": "u1", "distance_type": "ultra", "distance_km": 80.0}],
+    )
+    with patch.object(srv, "db", changed_db):
+        changed_result = await srv.set_training_plan_goal(goal="ULTRA", distance_km=100.0, user={"id": "u1"})
+
+    changed_cycle = await changed_db.training_cycles.find_one({"user_id": "u1"})
+    assert changed_result["status"] == "updated"
+    assert changed_db.training_cycles.update_calls == 1
+    assert changed_db.user_goals.delete_calls == 1
+    assert changed_cycle["ultra_distance_km"] == 100.0
