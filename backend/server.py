@@ -144,6 +144,30 @@ _LEGACY_GOAL_TO_V2: dict[str, GoalType] = {
     "MAINTENANCE": GoalType.maintenance,
 }
 
+
+def _coerce_goal_type(raw_goal: Optional[str]) -> Optional[GoalType]:
+    """Map stored/requested goal strings to the canonical GoalType enum."""
+    normalized = (raw_goal or "").strip()
+    if not normalized:
+        return None
+
+    mapped_goal = _LEGACY_GOAL_TO_V2.get(normalized.upper())
+    if mapped_goal is not None:
+        return mapped_goal
+
+    try:
+        return GoalType(normalized.lower())
+    except ValueError:
+        return None
+
+
+def _goal_type_to_config_key(goal_type: GoalType) -> str:
+    """Return the canonical GOAL_CONFIG key for a GoalType."""
+    for config_key in GOAL_CONFIG:
+        if _LEGACY_GOAL_TO_V2.get(config_key) == goal_type:
+            return config_key
+    raise ValueError(f"No GOAL_CONFIG key for GoalType '{goal_type}'.")
+
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
@@ -1047,19 +1071,15 @@ async def _resolve_goal_v2(user_id: str) -> "_ResolvedGoal":
             detail="No training goal defined. Use /api/training/set-goal first.",
         )
 
-    goal_type = (cycle.get("goal") or "").upper()
-    if not goal_type or goal_type not in GOAL_CONFIG:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unknown or missing goal type: '{goal_type}'.",
-        )
-
-    mapped_goal = _LEGACY_GOAL_TO_V2.get(goal_type)
+    raw_goal_type = cycle.get("goal")
+    mapped_goal = _coerce_goal_type(raw_goal_type)
     if mapped_goal is None:
         raise HTTPException(
             status_code=400,
-            detail=f"Cannot map goal type '{goal_type}' to V2 GoalType.",
+            detail=f"Unknown or missing goal type: '{raw_goal_type}'.",
         )
+
+    goal_type = _goal_type_to_config_key(mapped_goal)
 
     start_raw = cycle.get("start_date")
     if not start_raw:
@@ -3141,11 +3161,15 @@ def _is_same_goal_selection(
     if not existing_cycle:
         return False
 
-    existing_goal = (existing_cycle.get("goal") or "").upper()
-    if existing_goal != requested_goal:
+    existing_goal_type = _coerce_goal_type(existing_cycle.get("goal"))
+    requested_goal_type = _coerce_goal_type(requested_goal)
+    if existing_goal_type is None or requested_goal_type is None:
         return False
 
-    if requested_goal != "ULTRA":
+    if existing_goal_type != requested_goal_type:
+        return False
+
+    if requested_goal_type != GoalType.ultra:
         return True
 
     if requested_ultra_distance_km is None:
@@ -3241,7 +3265,8 @@ async def update_training_v2_cycle_start_date(
         )
 
     goal_type_raw = cycle.get("goal")
-    if not goal_type_raw or goal_type_raw not in GOAL_CONFIG:
+    mapped_goal_type = _coerce_goal_type(goal_type_raw)
+    if mapped_goal_type is None:
         raise HTTPException(
             status_code=400,
             detail=f"Unknown or missing goal type: {goal_type_raw}",
@@ -3253,13 +3278,6 @@ async def update_training_v2_cycle_start_date(
         raise HTTPException(
             status_code=400,
             detail="plan_start_date cannot be in the future.",
-        )
-
-    mapped_goal_type = _LEGACY_GOAL_TO_V2.get(goal_type_raw.upper())
-    if mapped_goal_type is None:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot map goal_type '{goal_type_raw}' to V2 GoalType.",
         )
 
     from training_v2.plan_goal import GoalType as _GoalType
