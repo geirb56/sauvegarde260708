@@ -551,7 +551,28 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     unmount();
   });
 
-  it("10i. observed bug fixture: weekly target uses training week authority, not insight rolling-7d", async () => {
+  it("10i. valid today prescription still renders when dashboard insight fails", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    axios.get.mockImplementation((url) => {
+      if (url.includes("dashboard/insight")) return Promise.reject(new Error("insight failed"));
+      if (url.includes("rag/dashboard")) return Promise.reject(new Error("no rag"));
+      if (url.includes("training/today")) return Promise.resolve({ data: TODAY_PAYLOAD });
+      if (url.includes("run-index")) return Promise.resolve({ data: CARDIO_NO_DATA });
+      if (url.includes("training/v2/week")) return Promise.reject(new Error("not available"));
+      return Promise.resolve({ data: null });
+    });
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const todayCard = container.querySelector('[data-testid="today-workout-card"]');
+    expect(todayCard).not.toBeNull();
+    expect(todayCard.textContent).toContain("45 min");
+    expect(container.querySelector('[data-testid="today-status-title"]')).toBeNull();
+    unmount();
+  });
+
+  it("10j. observed bug fixture: weekly target uses training week authority, not insight rolling-7d", async () => {
     mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
     setupAxiosMocks(
       buildDefaultMocks({

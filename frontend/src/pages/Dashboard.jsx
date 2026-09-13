@@ -745,31 +745,33 @@ export default function Dashboard() {
         const insightRes = await axios.get(`${API}/dashboard/insight?language=${lang}`);
         setInsight(insightRes.data);
       } else {
-        // TRIAL / PREMIUM: full set
-        const [insightRes, ragRes, todayRes] = await Promise.all([
+        // TRIAL / PREMIUM: fetch independent truths independently
+        const [insightResult, ragResult, todayResult] = await Promise.allSettled([
           axios.get(`${API}/dashboard/insight?language=${lang}`),
-          axios.get(`${API}/rag/dashboard`).catch(() => ({ data: null })),
-          axios
-            .get(`${API}/training/today`)
-            .then((res) => ({ data: res.data, error: false }))
-            .catch((error) => ({
-              data: error?.response?.data && typeof error.response.data === "object" ? error.response.data : null,
-              error: true,
-            })),
+          axios.get(`${API}/rag/dashboard`),
+          axios.get(`${API}/training/today`),
         ]);
-        setInsight(insightRes.data);
-        if (ragRes.data) {
-          setInsight(prev => ({ ...prev, rag: ragRes.data }));
+
+        if (insightResult.status === "fulfilled") {
+          setInsight(insightResult.value.data);
+        } else {
+          setInsight(null);
         }
-        setTodaySession(
-          todayRes.error
-            ? {
-                ...(todayRes.data || {}),
-                status: todayRes.data?.status || "error",
-                message: todayRes.data?.message || null,
-              }
-            : todayRes.data,
-        );
+
+        if (ragResult.status === "fulfilled" && ragResult.value.data) {
+          setInsight(prev => ({ ...(prev || {}), rag: ragResult.value.data }));
+        }
+
+        if (todayResult.status === "fulfilled") {
+          setTodaySession(todayResult.value.data);
+        } else {
+          const todayErrorData = todayResult.reason?.response?.data;
+          setTodaySession({
+            ...(todayErrorData && typeof todayErrorData === "object" ? todayErrorData : {}),
+            status: todayErrorData?.status || "error",
+            message: todayErrorData?.message || null,
+          });
+        }
       }
     } catch (error) {
       console.error("Failed to fetch data:", error);
