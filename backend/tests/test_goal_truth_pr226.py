@@ -824,8 +824,9 @@ def test_race_day_chain_with_today_event_date_keeps_j0_race():
     )
 
     async def run():
-        with patch.object(srv, "db", mock_db), _freeze_server_utc_now(srv):
-            set_result = await srv.set_user_goal(goal_payload, user={"id": user_id})
+        with patch.object(srv, "db", mock_db):
+            with _freeze_server_utc_now(srv):
+                set_result = await srv.set_user_goal(goal_payload, user={"id": user_id})
             resolved = await srv._resolve_goal_v2(user_id)
             return set_result, resolved
 
