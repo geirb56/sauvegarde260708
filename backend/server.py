@@ -3131,6 +3131,32 @@ def _parse_iso_date_field(value) -> Optional[date]:
     return None
 
 
+def _is_same_goal_selection(
+    existing_cycle: Optional[dict],
+    requested_goal: str,
+    requested_ultra_distance_km: Optional[float],
+) -> bool:
+    """Return True when the requested goal selection is an idempotent no-op."""
+    if not existing_cycle:
+        return False
+
+    existing_goal = (existing_cycle.get("goal") or "").upper()
+    if existing_goal != requested_goal:
+        return False
+
+    if requested_goal != "ULTRA":
+        return True
+
+    existing_ultra_distance = existing_cycle.get("ultra_distance_km")
+    if existing_ultra_distance is None or requested_ultra_distance_km is None:
+        return False
+
+    try:
+        return abs(float(existing_ultra_distance) - float(requested_ultra_distance_km)) < 1e-9
+    except (TypeError, ValueError):
+        return False
+
+
 # ========== TRAINING ENDPOINTS ==========
 
 @api_router.post("/training/set-goal")
@@ -3142,7 +3168,8 @@ async def set_training_goal(
     """
     Définit l'objectif principal du cycle.
 
-    PR226: goal change always clears stale user_goals race data.
+    Idempotent same-goal selections are no-op and preserve existing metadata.
+    True goal changes clear stale user_goals race data.
     ULTRA requires distance_km > 42.195 stored in training_cycles.ultra_distance_km.
     MAINTENANCE never inherits a race_date or target_time.
     """
@@ -3155,6 +3182,11 @@ async def set_training_goal(
     ultra_distance_km: Optional[float] = None
     if goal_upper == "ULTRA":
         ultra_distance_km = _validate_ultra_distance_km(distance_km)
+
+    existing_cycle = await db.training_cycles.find_one({"user_id": user["id"]}, {"_id": 0})
+    if _is_same_goal_selection(existing_cycle, goal_upper, ultra_distance_km):
+        logger.info(f"[Training] Goal unchanged for user {user['id']}: {goal_upper}")
+        return {"status": "unchanged", "goal": goal_upper}
 
     cycle_set: dict = {
         "goal": goal_upper,
@@ -3328,7 +3360,8 @@ async def set_training_plan_goal(
     """
     Set the training goal (10K, SEMI, MARATHON, etc.)
 
-    PR226: mirrors /training/set-goal — clears stale user_goals on any change;
+    Idempotent same-goal selections are no-op and preserve existing metadata.
+    True goal changes clear stale user_goals race data.
     ULTRA requires distance_km > 42.195.
     """
     if goal.upper() not in ["5K", "10K", "SEMI", "MARATHON", "ULTRA", "MAINTENANCE"]:
@@ -3341,6 +3374,16 @@ async def set_training_plan_goal(
     ultra_distance_km: Optional[float] = None
     if goal_upper == "ULTRA":
         ultra_distance_km = _validate_ultra_distance_km(distance_km)
+
+    existing_cycle = await db.training_cycles.find_one({"user_id": user["id"]}, {"_id": 0})
+    if _is_same_goal_selection(existing_cycle, goal_upper, ultra_distance_km):
+        logger.info(f"[Training] Goal unchanged for user {user['id']}: {goal_upper}")
+        return {
+            "status": "unchanged",
+            "goal": goal_upper,
+            "cycle_weeks": config["cycle_weeks"],
+            "description": config["description"],
+        }
 
     cycle_set: dict = {
         "goal": goal_upper,
