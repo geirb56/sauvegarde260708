@@ -818,12 +818,12 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     expect(within(paces).getByText(/3:23:05/)).toBeInTheDocument();
   });
 
-  test("does not keep old Allures d'entraînement section label duplicated", async () => {
+  test("uses the new Mes allures title and keeps training paces as a subsection", async () => {
     mockAxios();
     renderPage({ lang: "fr" });
-    await screen.findByTestId("training-v2-paces");
-    expect(screen.queryByText("Allures d'entraînement")).not.toBeInTheDocument();
-    expect(screen.getByText("Mes allures")).toBeInTheDocument();
+    const paces = await screen.findByTestId("training-v2-paces");
+    expect(within(paces).getByText("Mes allures")).toBeInTheDocument();
+    expect(within(paces).getByText("Allures canoniques")).toBeInTheDocument();
   });
 
   test("renders correctly on a narrow mobile viewport with no horizontal session-detail overflow markers", async () => {
