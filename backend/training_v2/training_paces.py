@@ -127,7 +127,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 from training_v2.domain_activity import DomainActivity
 from training_v2.performance_model import (
@@ -279,6 +279,28 @@ class TrainingPaces:
     model_version: str = "v2"
 
 
+@dataclass(frozen=True)
+class RaceReference:
+    """VDOT-equivalent race reference for a fixed race distance."""
+
+    key: str
+    distance_m: float
+    predicted_time_s: int
+    pace: PaceValue
+    method: str = "daniels_vdot_equivalent"
+    source: str = "training_paces_vdot_reference"
+
+    @property
+    def predicted_time_str(self) -> str:
+        total_seconds = int(round(self.predicted_time_s))
+        hours = total_seconds // 3600
+        minutes = (total_seconds % 3600) // 60
+        seconds = total_seconds % 60
+        if hours > 0:
+            return f"{hours}:{minutes:02d}:{seconds:02d}"
+        return f"{minutes}:{seconds:02d}"
+
+
 # ---------------------------------------------------------------------------
 # Internal: Daniels formula utilities
 # ---------------------------------------------------------------------------
@@ -323,6 +345,86 @@ def _pace_at_fraction(vdot: float, fraction: float) -> Optional[PaceValue]:
         return None
     kmh = 60.0 / pace_min_km
     return PaceValue(min_per_km=round(pace_min_km, 4), km_per_hour=round(kmh, 2))
+
+
+def _equivalent_time_seconds_from_vdot(distance_m: float, vdot: float) -> Optional[int]:
+    """Invert Daniels VDOT to equivalent performance time on target distance."""
+    if distance_m <= 0 or vdot <= 0:
+        return None
+
+    target_vdot = float(max(VDOT_MIN, min(VDOT_MAX - 1e-6, vdot)))
+    lo = MIN_VDOT_DURATION_S
+    hi = 12 * 3600.0
+
+    lo_vdot = vdot_from_performance(distance_m, lo)
+    hi_vdot = vdot_from_performance(distance_m, hi)
+    while lo_vdot is None and lo < hi:
+        lo *= 1.5
+        lo_vdot = vdot_from_performance(distance_m, lo)
+    while hi_vdot is None and hi > lo:
+        hi *= 0.8
+        hi_vdot = vdot_from_performance(distance_m, hi)
+
+    if lo_vdot is None or hi_vdot is None or lo >= hi:
+        return None
+    if not (lo_vdot >= target_vdot >= hi_vdot):
+        return None
+
+    for _ in range(40):
+        mid = (lo + hi) / 2.0
+        mid_vdot = vdot_from_performance(distance_m, mid)
+        if mid_vdot is None:
+            return None
+        if mid_vdot > target_vdot:
+            lo = mid
+        else:
+            hi = mid
+    return int(round((lo + hi) / 2.0))
+
+
+RACE_REFERENCE_DISTANCES_M: Dict[str, float] = {
+    "marathon": 42_195.0,
+    "half_marathon": 21_097.5,
+    "10k": 10_000.0,
+    "5k": 5_000.0,
+    "3k": 3_000.0,
+    "1500m": 1_500.0,
+}
+
+
+def vdot_equivalent_race_reference(key: str, distance_m: float, vdot: float) -> Optional[RaceReference]:
+    """Build a deterministic Daniels/Gilbert VDOT-equivalent race reference."""
+    if distance_m <= 0 or vdot <= 0:
+        return None
+    predicted_time_s = _equivalent_time_seconds_from_vdot(distance_m, vdot)
+    if predicted_time_s is None:
+        return None
+
+    pace_min_km = (predicted_time_s / 60.0) / (distance_m / 1000.0)
+    if not (PACE_MIN_MIN_KM <= pace_min_km <= PACE_MAX_MIN_KM):
+        return None
+    pace = PaceValue(
+        min_per_km=round(pace_min_km, 4),
+        km_per_hour=round(60.0 / pace_min_km, 2),
+        method="daniels_vdot_equivalent",
+    )
+    return RaceReference(
+        key=key,
+        distance_m=distance_m,
+        predicted_time_s=predicted_time_s,
+        pace=pace,
+    )
+
+
+def race_references_from_training_paces(paces: TrainingPaces) -> Dict[str, Optional[RaceReference]]:
+    """Build race references from the same canonical Training Paces VDOT."""
+    vdot = paces.vdot_result.reference_vdot
+    if vdot is None:
+        return {k: None for k in RACE_REFERENCE_DISTANCES_M}
+    return {
+        key: vdot_equivalent_race_reference(key, distance_m, vdot)
+        for key, distance_m in RACE_REFERENCE_DISTANCES_M.items()
+    }
 
 
 def vdot_from_performance(distance_m: float, duration_s: float) -> Optional[float]:
@@ -740,6 +842,19 @@ def training_paces_to_api_dict(paces: TrainingPaces) -> dict:
             "method": r.method,
         }
 
+    def race_reference_dict(ref: Optional[RaceReference]) -> Optional[dict]:
+        if ref is None:
+            return None
+        return {
+            "distance_m": ref.distance_m,
+            "predicted_time_seconds": ref.predicted_time_s,
+            "predicted_time_str": ref.predicted_time_str,
+            "pace": pace_value_dict(ref.pace),
+            "method": ref.method,
+            "source": ref.source,
+        }
+
+    race_references = race_references_from_training_paces(paces)
     vr = paces.vdot_result
     return {
         "reference_date": paces.reference_date.isoformat(),
@@ -756,6 +871,10 @@ def training_paces_to_api_dict(paces: TrainingPaces) -> dict:
             "threshold": pace_value_dict(paces.threshold),
             "interval": pace_range_dict(paces.interval),
             "repetition": pace_value_dict(paces.repetition),
+        },
+        "race_references": {
+            key: race_reference_dict(race_references.get(key))
+            for key in RACE_REFERENCE_DISTANCES_M
         },
         "reason": paces.reason,
         "model_version": paces.model_version,
