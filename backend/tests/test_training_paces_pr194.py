@@ -698,7 +698,7 @@ class TestRaceReferences:
 
     def test_vdot_clamp_is_respected_for_reference_builder(self):
         unclamped = vdot_equivalent_race_reference("5k", 5_000.0, 999.0)
-        clamped = vdot_equivalent_race_reference("5k", 5_000.0, VDOT_MAX)
+        clamped = vdot_equivalent_race_reference("5k", 5_000.0, VDOT_MAX - 1e-6)
         assert unclamped is not None and clamped is not None
         assert unclamped.predicted_time_s == clamped.predicted_time_s
         assert unclamped.pace.min_per_km == clamped.pace.min_per_km
