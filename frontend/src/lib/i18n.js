@@ -154,6 +154,10 @@ export const translations = {
       weekPreviewLock: "🔒 Premium Plan",
       weekPreviewDesc: "Your weekly volume and goal, tailored to your preparation.",
       weekPreviewCta: "See my full plan",
+      pacesTeaserTitle: "My paces",
+      pacesTeaserSubtitle: "Your current benchmarks",
+      pacesTeaserCta: "View all my paces",
+      pacesTeaserEmpty: "Not enough data yet to calculate your paces.",
     },
     workoutTypes: {
       run: "Run",
@@ -1031,6 +1035,10 @@ export const translations = {
       weekPreviewLock: "🔒 Plan Premium",
       weekPreviewDesc: "Ton volume et ton objectif de la semaine, adaptés à ta préparation.",
       weekPreviewCta: "Voir mon plan complet",
+      pacesTeaserTitle: "Mes allures",
+      pacesTeaserSubtitle: "Tes repères actuels",
+      pacesTeaserCta: "Voir toutes mes allures",
+      pacesTeaserEmpty: "Pas encore assez de données pour calculer tes allures.",
     },
     workoutTypes: {
       run: "Course",
@@ -1894,6 +1902,10 @@ export const translations = {
       weekPreviewLock: "🔒 Plan Premium",
       weekPreviewDesc: "Tu volumen y objetivo semanal, adaptados a tu preparación.",
       weekPreviewCta: "Ver mi plan completo",
+      pacesTeaserTitle: "Mis ritmos",
+      pacesTeaserSubtitle: "Tus referencias actuales",
+      pacesTeaserCta: "Ver todos mis ritmos",
+      pacesTeaserEmpty: "Aún no hay suficientes datos para calcular tus ritmos.",
     },
     workoutTypes: {
       run: "Carrera",
