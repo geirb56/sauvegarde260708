@@ -823,7 +823,8 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     renderPage({ lang: "fr" });
     const paces = await screen.findByTestId("training-v2-paces");
     expect(within(paces).getByText("Mes allures")).toBeInTheDocument();
-    expect(within(paces).getByText("Allures canoniques")).toBeInTheDocument();
+    expect(within(paces).getByText("Allures d'entraînement")).toBeInTheDocument();
+    expect(within(paces).queryByText("Allures canoniques")).not.toBeInTheDocument();
   });
 
   test("renders correctly on a narrow mobile viewport with no horizontal session-detail overflow markers", async () => {
