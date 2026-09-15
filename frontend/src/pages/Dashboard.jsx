@@ -21,7 +21,7 @@ import {
 import { useUnitSystem } from "@/context/UnitContext";
 import { useSubscription } from "@/context/SubscriptionContext";
 import { computeTrainingWeekProgress } from "@/lib/trainingWeekProgress";
-import { formatDistance } from "@/utils/units";
+import { formatDistance, formatPace } from "@/utils/units";
 import { BrandSplash } from "@/components/LoadingSpinner";
 import {
   Dialog,
@@ -129,6 +129,59 @@ const getSessionStyleKey = (type, intensity) => {
 
 const isMissingValue = (value) => value === undefined || value === null;
 const ARTIFICIAL_ZERO_DURATION_RE = /^\s*0+(?:[.,]0+)?\s*(?:min|mn|m|minute|minutes)\s*$/i;
+const normalizeGoalType = (goalType) => {
+  if (!goalType || typeof goalType !== "string") return null;
+  const normalized = goalType.trim().toLowerCase();
+  if (normalized === "half_marathon" || normalized === "semi_marathon") return "semi";
+  return normalized;
+};
+
+const minPerKmToFormattedPace = (minPerKm, unitSystem) => {
+  if (typeof minPerKm !== "number" || !Number.isFinite(minPerKm) || minPerKm <= 0) return null;
+  return formatPace(minPerKm * 60, { unitSystem });
+};
+
+const formatVdotPace = (paceValue, unitSystem) => {
+  if (!paceValue || typeof paceValue !== "object") return null;
+  const fromMinPerKm = minPerKmToFormattedPace(paceValue.min_per_km, unitSystem);
+  if (fromMinPerKm) return fromMinPerKm;
+  if (typeof paceValue.pace_str === "string" && paceValue.pace_str) {
+    return unitSystem === "imperial" ? null : `${paceValue.pace_str} /km`;
+  }
+  return null;
+};
+
+const formatPaceRange = (rangeValue, unitSystem) => {
+  if (!rangeValue || typeof rangeValue !== "object") return null;
+  const lower = formatVdotPace(rangeValue.lower, unitSystem);
+  const upper = formatVdotPace(rangeValue.upper, unitSystem);
+  return lower && upper ? `${lower} - ${upper}` : null;
+};
+
+const getGoalPaceReferenceRow = (goalTypeKey, pacesData, unitSystem, t) => {
+  if (!goalTypeKey) return null;
+  if (goalTypeKey === "5k") {
+    const pace = formatVdotPace(pacesData?.race_references?.["5k"]?.pace, unitSystem);
+    return pace ? { label: t("trainingV2.raceReferenceLabels.5k"), value: pace } : null;
+  }
+  if (goalTypeKey === "10k") {
+    const pace = formatVdotPace(pacesData?.race_references?.["10k"]?.pace, unitSystem);
+    return pace ? { label: t("trainingV2.raceReferenceLabels.10k"), value: pace } : null;
+  }
+  if (goalTypeKey === "semi" || goalTypeKey === "half_marathon") {
+    const pace = formatVdotPace(pacesData?.race_references?.half_marathon?.pace, unitSystem);
+    return pace ? { label: t("trainingV2.raceReferenceLabels.half_marathon"), value: pace } : null;
+  }
+  if (goalTypeKey === "marathon") {
+    const pace = formatVdotPace(pacesData?.race_references?.marathon?.pace, unitSystem);
+    return pace ? { label: t("trainingV2.raceReferenceLabels.marathon"), value: pace } : null;
+  }
+  if (goalTypeKey === "maintenance" || goalTypeKey === "ultra") {
+    const pace = formatPaceRange(pacesData?.paces?.interval, unitSystem);
+    return pace ? { label: t("trainingV2.paceInterval"), value: pace } : null;
+  }
+  return null;
+};
 
 function getSessionDurationDisplay(session) {
   const duration = session?.duration;
@@ -234,6 +287,71 @@ function TodayPreviewFree({ t }) {
           }}
         >
           {t("dashboard.todayPreviewCta")}
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+function PacesPreviewFree({ t }) {
+  return (
+    <div
+      className="rounded-2xl p-4 space-y-3 animate-in"
+      style={{ background: "var(--bg-elevated, #1a1a1f)", border: "1px solid var(--border, #2a2a30)", position: "relative", overflow: "hidden" }}
+      data-testid="paces-preview-free"
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#6EEB5A" }}>
+            {t("dashboard.pacesTeaserTitle")}
+          </p>
+          <p className="text-xs mt-1" style={{ color: "var(--text-tertiary)" }}>
+            {t("dashboard.pacesTeaserSubtitle")}
+          </p>
+        </div>
+      </div>
+      <div
+        data-testid="paces-preview-blur-content"
+        style={{ filter: "blur(6px)", opacity: 0.45, userSelect: "none", pointerEvents: "none" }}
+        aria-hidden="true"
+      >
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <div className="h-3 w-20 rounded" style={{ background: "#6ee7b7" }} />
+            <div className="h-3 w-24 rounded" style={{ background: "#6ee7b7" }} />
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <div className="h-3 w-20 rounded" style={{ background: "#6ee7b7" }} />
+            <div className="h-3 w-24 rounded" style={{ background: "#6ee7b7" }} />
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <div className="h-3 w-24 rounded" style={{ background: "#6ee7b7" }} />
+            <div className="h-3 w-24 rounded" style={{ background: "#6ee7b7" }} />
+          </div>
+        </div>
+      </div>
+      <div
+        data-testid="premium-overlay-paces"
+        style={{
+          position: "absolute",
+          inset: 0,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 8,
+          background: "rgba(10,10,15,0.55)",
+          padding: "0 16px",
+        }}
+      >
+        <span style={{ fontSize: 22 }}>🔒</span>
+        <Link
+          to="/training"
+          className="px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider"
+          style={{ background: "var(--accent-green)", color: "#0a0e1a", textDecoration: "none" }}
+          data-testid="paces-preview-cta"
+        >
+          {t("dashboard.pacesTeaserCta")}
         </Link>
       </div>
     </div>
@@ -699,6 +817,8 @@ export default function Dashboard() {
   const [insight, setInsight] = useState(null);
   const [todaySession, setTodaySession] = useState(null);
   const [trainingWeekV2, setTrainingWeekV2] = useState(null);
+  const [trainingPaces, setTrainingPaces] = useState(null);
+  const [trainingCycle, setTrainingCycle] = useState(null);
   const [cardioData, setCardioData] = useState(null);
   const [cardioLoading, setCardioLoading] = useState(true);
   const [cardioError, setCardioError] = useState(null);
@@ -716,6 +836,8 @@ export default function Dashboard() {
     if (!subLoading && isFree) {
       setTodaySession(null);
       setTrainingWeekV2(null);
+      setTrainingPaces(null);
+      setTrainingCycle(null);
       setInsight(prev => {
         if (!prev) return prev;
         const { rag: _rag, ...rest } = prev; // eslint-disable-line no-unused-vars
@@ -814,6 +936,22 @@ export default function Dashboard() {
       .catch(() => {});
   }, [lang, isFree, subLoading]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    if (subLoading || isFree) return;
+    let ignore = false;
+    Promise.allSettled([
+      axios.get(`${API}/training/v2/paces`),
+      axios.get(`${API}/training/v2/cycle`),
+    ]).then(([pacesResult, cycleResult]) => {
+      if (ignore) return;
+      if (pacesResult.status === "fulfilled") setTrainingPaces(pacesResult.value.data || null);
+      if (cycleResult.status === "fulfilled") setTrainingCycle(cycleResult.value.data || null);
+    });
+    return () => {
+      ignore = true;
+    };
+  }, [lang, isFree, subLoading]);
+
   if (loading) {
     return <BrandSplash text={t("common.loading")} />;
   }
@@ -828,6 +966,25 @@ export default function Dashboard() {
   const todayReadinessColor = getTodayReadinessColor(todaySession);
   const todayReadinessLabel = getTodayReadinessLabel(todaySession, t);
   const todayReadinessStyle = REC_STYLES[todayReadinessColor] || REC_STYLES.gray;
+  const pacesConfidenceRaw = typeof trainingPaces?.confidence === "string" ? trainingPaces.confidence : null;
+  const pacesConfidenceKey = pacesConfidenceRaw ? pacesConfidenceRaw.toLowerCase() : null;
+  const pacesConfidenceLabel = pacesConfidenceKey
+    ? t(`trainingV2.pacesConfidence.${pacesConfidenceKey}`)
+    : null;
+  const pacesConfidenceInsufficient = pacesConfidenceRaw === "INSUFFICIENT";
+  const goalTypeKey = normalizeGoalType(trainingCycle?.goal?.goal_type || trainingWeekV2?.goal?.goal_type);
+  const teaserRows = pacesConfidenceInsufficient ? [] : [
+    (() => {
+      const easyRange = formatPaceRange(trainingPaces?.paces?.easy, unitSystem);
+      return easyRange ? { label: t("trainingV2.paceEasy"), value: easyRange } : null;
+    })(),
+    (() => {
+      const threshold = formatVdotPace(trainingPaces?.paces?.threshold, unitSystem);
+      return threshold ? { label: t("trainingV2.paceThreshold"), value: threshold } : null;
+    })(),
+    getGoalPaceReferenceRow(goalTypeKey, trainingPaces, unitSystem, t),
+  ].filter(Boolean);
+  const showPacesInsufficientState = pacesConfidenceInsufficient || teaserRows.length === 0;
 
   return (
     <div className="p-4 pb-24 space-y-4" style={{ background: "var(--bg-primary)" }}>
@@ -1191,6 +1348,61 @@ export default function Dashboard() {
             <RunIndexPillar icon={TrendingUp} label={t("dashboard.runIndexPillars.consistency")} value={runIndexData?.consistency_score} color="#6EEB5A" />
             <RunIndexPillar icon={Target} label={t("dashboard.runIndexPillars.efficiency")} value={runIndexData?.efficiency_score} color="#3b82f6" />
           </div>
+        </div>
+      )}
+
+      {isFree ? (
+        <PacesPreviewFree t={t} />
+      ) : (
+        <div
+          className="rounded-2xl p-4 space-y-3 animate-in"
+          style={{
+            background: "var(--bg-elevated, #1a1a1f)",
+            border: "1px solid var(--border, #2a2a30)",
+          }}
+          data-testid="dashboard-paces-card"
+        >
+          <div className="space-y-1">
+            <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#6EEB5A" }}>
+              {t("dashboard.pacesTeaserTitle")}
+            </p>
+            <p className="text-xs" style={{ color: "var(--text-tertiary)" }}>
+              {t("dashboard.pacesTeaserSubtitle")}
+            </p>
+          </div>
+
+          {!showPacesInsufficientState && (
+            <div className="space-y-2 text-sm" data-testid="dashboard-paces-rows">
+              {teaserRows.map((row) => (
+                <div key={row.label} className="flex items-start justify-between gap-3">
+                  <span className="text-muted-foreground">{row.label}</span>
+                  <span className="text-right font-medium" data-testid={`dashboard-paces-value-${row.label}`}>{row.value}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {showPacesInsufficientState && (
+            <p className="text-sm text-muted-foreground" data-testid="dashboard-paces-empty">
+              {t("dashboard.pacesTeaserEmpty")}
+            </p>
+          )}
+
+          {pacesConfidenceLabel && (
+            <div className="flex items-start justify-between gap-3 text-sm">
+              <span className="text-muted-foreground">{t("trainingV2.confidence")}</span>
+              <span className="text-right font-medium">{pacesConfidenceLabel}</span>
+            </div>
+          )}
+
+          <Link
+            to="/training"
+            className="inline-flex items-center text-sm font-semibold"
+            style={{ color: "#6EEB5A" }}
+            data-testid="dashboard-paces-cta"
+          >
+            {t("dashboard.pacesTeaserCta")}
+          </Link>
         </div>
       )}
 
