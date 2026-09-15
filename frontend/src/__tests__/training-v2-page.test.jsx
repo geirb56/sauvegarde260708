@@ -170,6 +170,51 @@ function pacesData({ confidence = "HIGH" } = {}) {
       interval: null,
       repetition: null,
     },
+    race_references: confidence === "INSUFFICIENT" ? {
+      marathon: null,
+      half_marathon: null,
+      "10k": null,
+      "5k": null,
+      "3k": null,
+      "1500m": null,
+    } : {
+      marathon: {
+        distance_m: 42195,
+        predicted_time_seconds: 12185,
+        predicted_time_str: "3:23:05",
+        pace: { pace_str: "4:49", min_per_km: 4.8144 },
+      },
+      half_marathon: {
+        distance_m: 21097.5,
+        predicted_time_seconds: 5780,
+        predicted_time_str: "1:36:20",
+        pace: { pace_str: "4:34", min_per_km: 4.5667 },
+      },
+      "10k": {
+        distance_m: 10000,
+        predicted_time_seconds: 2640,
+        predicted_time_str: "44:00",
+        pace: { pace_str: "4:24", min_per_km: 4.4 },
+      },
+      "5k": {
+        distance_m: 5000,
+        predicted_time_seconds: 1265,
+        predicted_time_str: "21:05",
+        pace: { pace_str: "4:13", min_per_km: 4.2167 },
+      },
+      "3k": {
+        distance_m: 3000,
+        predicted_time_seconds: 737,
+        predicted_time_str: "12:17",
+        pace: { pace_str: "4:06", min_per_km: 4.0944 },
+      },
+      "1500m": {
+        distance_m: 1500,
+        predicted_time_seconds: 354,
+        predicted_time_str: "5:54",
+        pace: { pace_str: "3:56", min_per_km: 3.9333 },
+      },
+    },
   };
 }
 
@@ -272,7 +317,7 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     expect(axios.get).not.toHaveBeenCalled();
   });
 
-  test("keeps hierarchy with today as primary block", async () => {
+  test("keeps hierarchy with Mes allures right after today", async () => {
     mockAxios();
     renderPage();
 
@@ -283,8 +328,8 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     const cycle = screen.getByTestId("training-v2-cycle");
 
     expect(header.compareDocumentPosition(today) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(today.compareDocumentPosition(week) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(week.compareDocumentPosition(paces) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(today.compareDocumentPosition(paces) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(paces.compareDocumentPosition(week) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(paces.compareDocumentPosition(cycle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
@@ -543,14 +588,12 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     expect(within(sundayRow).getAllByText(/No session/i).length).toBeGreaterThan(0);
   });
 
-  test("paces section stays collapsible and closed by default", async () => {
+  test("paces section is visible by default and shows insufficient state clearly", async () => {
     mockAxios({ paces: pacesData({ confidence: "INSUFFICIENT" }) });
     renderPage({ width: 390 });
 
-    await screen.findByTestId("training-v2-paces");
-    expect(screen.getByTestId("paces-collapsible-content")).not.toBeVisible();
-    fireEvent.click(screen.getByTestId("paces-collapsible-trigger"));
-    expect(screen.getByTestId("paces-collapsible-content")).toBeVisible();
+    const paces = await screen.findByTestId("training-v2-paces");
+    expect(paces).toBeVisible();
     expect(screen.getByText(/representative performance/i)).toBeInTheDocument();
   });
 
@@ -750,7 +793,6 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     expect(within(detail).getByTestId("session-actual-pace-monday")).toHaveTextContent("/mi");
     expect(within(detail).queryByText(/\/km/)).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByTestId("paces-collapsible-trigger"));
     const paces = screen.getByTestId("training-v2-paces");
     expect(within(paces).queryByText(/\/km/)).not.toBeInTheDocument();
     expect(within(paces).getAllByText(/\/mi/).length).toBeGreaterThan(0);
@@ -764,8 +806,24 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     fireEvent.click(screen.getByTestId("session-detail-toggle-monday"));
     expect(screen.getByTestId("session-actual-pace-monday")).toHaveTextContent("/km");
 
-    fireEvent.click(screen.getByTestId("paces-collapsible-trigger"));
     expect(within(screen.getByTestId("training-v2-paces")).getAllByText(/\/km/).length).toBeGreaterThan(0);
+  });
+
+  test("shows race references when available", async () => {
+    mockAxios();
+    renderPage({ lang: "fr" });
+    const paces = await screen.findByTestId("training-v2-paces");
+    expect(within(paces).getByText("Repères course")).toBeInTheDocument();
+    expect(within(paces).getByText("Semi-marathon")).toBeInTheDocument();
+    expect(within(paces).getByText(/3:23:05/)).toBeInTheDocument();
+  });
+
+  test("does not keep old Allures d'entraînement section label duplicated", async () => {
+    mockAxios();
+    renderPage({ lang: "fr" });
+    await screen.findByTestId("training-v2-paces");
+    expect(screen.queryByText("Allures d'entraînement")).not.toBeInTheDocument();
+    expect(screen.getByText("Mes allures")).toBeInTheDocument();
   });
 
   test("renders correctly on a narrow mobile viewport with no horizontal session-detail overflow markers", async () => {

@@ -4840,6 +4840,8 @@ async def get_training_v2_paces(user: dict = Depends(auth_user)):
         paces.threshold    single pace in min/km
         paces.interval     {lower, upper} pace range in min/km
         paces.repetition   single pace in min/km
+        race_references    VDOT-equivalent references (1500m/3k/5k/10k/half/marathon)
+                           with distance_m, pace, predicted_time_seconds/str, method, source
 
     When confidence == "INSUFFICIENT", paces fields are all null.
     """

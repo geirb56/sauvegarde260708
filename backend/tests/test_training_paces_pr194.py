@@ -32,6 +32,10 @@ from training_v2.training_paces import (
     TrainingPaces,
     PaceValue,
     PaceRange,
+    RACE_REFERENCE_DISTANCES_M,
+    race_references_from_training_paces,
+    vdot_equivalent_race_reference,
+    training_paces_to_api_dict,
 )
 
 # ---------------------------------------------------------------------------
@@ -610,7 +614,7 @@ class TestApiSerialization:
         d = training_paces_to_api_dict(paces)
         required_top_level = [
             "reference_date", "confidence", "vdot_reference",
-            "paces", "reason", "model_version",
+            "paces", "race_references", "reason", "model_version",
         ]
         for k in required_top_level:
             assert k in d, f"Missing top-level key: {k}"
@@ -618,6 +622,8 @@ class TestApiSerialization:
         required_pace_keys = ["easy", "marathon", "threshold", "interval", "repetition"]
         for k in required_pace_keys:
             assert k in d["paces"], f"Missing paces key: {k}"
+        for k in RACE_REFERENCE_DISTANCES_M:
+            assert k in d["race_references"], f"Missing race reference key: {k}"
 
     def test_no_flat_pace_keys_at_top_level(self):
         """Pace fields must NOT appear at the top level (C1: paces nested under 'paces')."""
@@ -658,6 +664,51 @@ class TestApiSerialization:
         p2 = daniels_paces(45.0, reference_date=ref)
         assert p1.threshold.min_per_km == p2.threshold.min_per_km
         assert p1.reference_date == p2.reference_date
+
+
+class TestRaceReferences:
+    """Race references derived from canonical VDOT (not Race Predictions)."""
+
+    def test_all_reference_distances_are_present_with_valid_vdot(self):
+        paces = daniels_paces(50.0, reference_date=REF_DATE)
+        refs = race_references_from_training_paces(paces)
+        assert set(refs.keys()) == set(RACE_REFERENCE_DISTANCES_M.keys())
+        for key, distance_m in RACE_REFERENCE_DISTANCES_M.items():
+            ref = refs[key]
+            assert ref is not None
+            assert ref.distance_m == distance_m
+            assert ref.predicted_time_s > 0
+            assert ref.pace.min_per_km > 0
+            assert ref.method == "daniels_vdot_equivalent"
+            assert ref.source == "training_paces_vdot_reference"
+
+    def test_monotone_paces_by_distance(self):
+        paces = daniels_paces(47.0, reference_date=REF_DATE)
+        refs = race_references_from_training_paces(paces)
+        ordered = ["1500m", "3k", "5k", "10k", "half_marathon", "marathon"]
+        pace_values = [refs[key].pace.min_per_km for key in ordered if refs[key] is not None]
+        assert pace_values == sorted(pace_values), "Longer distances must not be faster per-km."
+
+    def test_insufficient_vdot_returns_no_race_reference_values(self):
+        paces = compute_training_paces([], REF_DATE)
+        assert paces.confidence == "INSUFFICIENT"
+        d = training_paces_to_api_dict(paces)
+        for value in d["race_references"].values():
+            assert value is None
+
+    def test_vdot_clamp_is_respected_for_reference_builder(self):
+        unclamped = vdot_equivalent_race_reference("5k", 5_000.0, 999.0)
+        clamped = vdot_equivalent_race_reference("5k", 5_000.0, VDOT_MAX)
+        assert unclamped is not None and clamped is not None
+        assert unclamped.predicted_time_s == clamped.predicted_time_s
+        assert unclamped.pace.min_per_km == clamped.pace.min_per_km
+
+    def test_references_are_not_built_from_race_predictions_module(self):
+        import inspect
+
+        source = inspect.getsource(vdot_equivalent_race_reference)
+        assert "predict_races" not in source
+        assert "performance_curve" not in source.lower()
 
 
 
