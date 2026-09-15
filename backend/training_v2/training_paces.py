@@ -352,7 +352,7 @@ def _equivalent_time_seconds_from_vdot(distance_m: float, vdot: float) -> Option
     if distance_m <= 0 or vdot <= 0:
         return None
 
-    target_vdot = float(max(VDOT_MIN, min(VDOT_MAX, vdot)))
+    target_vdot = float(max(VDOT_MIN, min(VDOT_MAX - 1e-6, vdot)))
     lo = MIN_VDOT_DURATION_S
     hi = 12 * 3600.0
 
