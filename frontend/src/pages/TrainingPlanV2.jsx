@@ -294,6 +294,18 @@ const formatVdotPace = (paceValue, unitSystem) => {
   return null;
 };
 
+const formatPredictedTime = (seconds, fallbackStr = null) => {
+  if (isKnownNumber(seconds) && seconds > 0) {
+    const rounded = Math.round(seconds);
+    const hours = Math.floor(rounded / 3600);
+    const minutes = Math.floor((rounded % 3600) / 60);
+    const secs = rounded % 60;
+    if (hours > 0) return `${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+    return `${minutes}:${String(secs).padStart(2, "0")}`;
+  }
+  return typeof fallbackStr === "string" && fallbackStr ? fallbackStr : null;
+};
+
 export { aggregateKnownMetric };
 
 function LoadingState() {
@@ -696,7 +708,6 @@ export default function TrainingPlanV2() {
   const [cycleData, setCycleData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [hasError, setHasError] = useState(false);
-  const [pacesOpen, setPacesOpen] = useState(false);
 
   useEffect(() => {
     if (subLoading || isFree) return;
@@ -836,6 +847,21 @@ export default function TrainingPlanV2() {
   const confidenceLabel = pacesData?.confidence
     ? getTranslatedValue(t, `trainingV2.pacesConfidence.${String(pacesData.confidence).toLowerCase()}`)
     : t("trainingV2.notAvailable");
+  const raceReferenceOrder = ["marathon", "half_marathon", "10k", "5k", "3k", "1500m"];
+  const raceReferenceRows = raceReferenceOrder
+    .map((key) => {
+      const ref = pacesData?.race_references?.[key];
+      const paceLabel = formatVdotPace(ref?.pace, unitSystem);
+      const timeLabel = formatPredictedTime(ref?.predicted_time_seconds, ref?.predicted_time_str);
+      if (!paceLabel && !timeLabel) return null;
+      return {
+        key,
+        label: t(`trainingV2.raceReferenceLabels.${key}`),
+        paceLabel,
+        timeLabel,
+      };
+    })
+    .filter(Boolean);
 
   return (
     <div className="space-y-4 p-4 md:p-6" data-testid="training-v2-page">
@@ -896,6 +922,95 @@ export default function TrainingPlanV2() {
         </CardContent>
       </Card>
 
+      <Card data-testid="training-v2-paces">
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Gauge className="h-4 w-4" />
+            {t("trainingV2.pacesTitle")}
+          </CardTitle>
+          <p className="text-xs text-muted-foreground">{t("trainingV2.pacesSubtitle")}</p>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-start justify-between gap-4 text-sm">
+            <span className="text-muted-foreground">{t("trainingV2.confidence")}</span>
+            <span className="text-right font-medium text-foreground">{confidenceLabel}</span>
+          </div>
+          {pacesData?.confidence === "INSUFFICIENT" ? (
+            <p className="text-sm text-muted-foreground">{t("trainingV2.pacesInsufficient")}</p>
+          ) : (
+            <>
+              <div className="space-y-2 text-sm">
+                <p className="text-xs uppercase tracking-[0.15em] text-muted-foreground">{t("trainingV2.trainingPacesSectionTitle")}</p>
+                {(() => {
+                  const easyLower = formatVdotPace(pacesData?.paces?.easy?.lower, unitSystem);
+                  const easyUpper = formatVdotPace(pacesData?.paces?.easy?.upper, unitSystem);
+                  return easyLower && easyUpper ? (
+                    <div className="flex items-start justify-between gap-4">
+                      <span className="text-muted-foreground">{t("trainingV2.paceEasy")}</span>
+                      <span className="text-right font-medium">{`${easyLower} - ${easyUpper}`}</span>
+                    </div>
+                  ) : null;
+                })()}
+                {(() => {
+                  const marathon = formatVdotPace(pacesData?.paces?.marathon, unitSystem);
+                  return marathon ? (
+                    <div className="flex items-start justify-between gap-4">
+                      <span className="text-muted-foreground">{t("trainingV2.paceMarathonTraining")}</span>
+                      <span className="text-right font-medium">{marathon}</span>
+                    </div>
+                  ) : null;
+                })()}
+                {(() => {
+                  const threshold = formatVdotPace(pacesData?.paces?.threshold, unitSystem);
+                  return threshold ? (
+                    <div className="flex items-start justify-between gap-4">
+                      <span className="text-muted-foreground">{t("trainingV2.paceThreshold")}</span>
+                      <span className="text-right font-medium">{threshold}</span>
+                    </div>
+                  ) : null;
+                })()}
+                {(() => {
+                  const intervalLower = formatVdotPace(pacesData?.paces?.interval?.lower, unitSystem);
+                  const intervalUpper = formatVdotPace(pacesData?.paces?.interval?.upper, unitSystem);
+                  return intervalLower && intervalUpper ? (
+                    <div className="flex items-start justify-between gap-4">
+                      <span className="text-muted-foreground">{t("trainingV2.paceInterval")}</span>
+                      <span className="text-right font-medium">{`${intervalLower} - ${intervalUpper}`}</span>
+                    </div>
+                  ) : null;
+                })()}
+                {(() => {
+                  const repetition = formatVdotPace(pacesData?.paces?.repetition, unitSystem);
+                  return repetition ? (
+                    <div className="flex items-start justify-between gap-4">
+                      <span className="text-muted-foreground">{t("trainingV2.paceRepetition")}</span>
+                      <span className="text-right font-medium">{repetition}</span>
+                    </div>
+                  ) : null;
+                })()}
+              </div>
+              <div className="space-y-2 text-sm">
+                <p className="text-xs uppercase tracking-[0.15em] text-muted-foreground">{t("trainingV2.raceReferencesTitle")}</p>
+                {raceReferenceRows.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">{t("trainingV2.raceReferencesUnavailable")}</p>
+                ) : (
+                  raceReferenceRows.map((row) => (
+                    <div key={row.key} className="flex items-start justify-between gap-4">
+                      <span className="text-muted-foreground">{row.label}</span>
+                      <span className="text-right font-medium">
+                        {row.paceLabel && row.timeLabel
+                          ? `${row.paceLabel} · ${row.timeLabel}`
+                          : (row.paceLabel || row.timeLabel)}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </>
+          )}
+        </CardContent>
+      </Card>
+
       <Card data-testid="training-v2-week">
         <CardHeader className="pb-3">
           <CardTitle className="text-base">{t("trainingV2.weekTitle")}</CardTitle>
@@ -932,91 +1047,6 @@ export default function TrainingPlanV2() {
         unitSystem={unitSystem}
         unmatchedActuals={weekData?.week?.unmatched_actuals}
       />
-
-      <Card data-testid="training-v2-paces">
-        <CardHeader className="pb-2">
-          <button
-            type="button"
-            className="flex w-full items-center justify-between text-left"
-            data-testid="paces-collapsible-trigger"
-            aria-expanded={pacesOpen}
-            aria-controls="paces-collapsible-content"
-            onClick={() => setPacesOpen((v) => !v)}
-          >
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Gauge className="h-4 w-4" />
-              {t("trainingV2.pacesTitle")}
-            </CardTitle>
-            {pacesOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-          </button>
-        </CardHeader>
-        <CardContent>
-          <div
-            id="paces-collapsible-content"
-            className="space-y-3"
-            data-testid="paces-collapsible-content"
-            style={pacesOpen ? undefined : { display: "none" }}
-          >
-            <div className="flex items-start justify-between gap-4 text-sm">
-              <span className="text-muted-foreground">{t("trainingV2.confidence")}</span>
-              <span className="text-right font-medium text-foreground">{confidenceLabel}</span>
-            </div>
-            {pacesData?.confidence === "INSUFFICIENT" ? (
-              <p className="text-sm text-muted-foreground">{t("trainingV2.pacesInsufficient")}</p>
-            ) : (
-              <div className="space-y-2 text-sm">
-                {(() => {
-                  const easyLower = formatVdotPace(pacesData?.paces?.easy?.lower, unitSystem);
-                  const easyUpper = formatVdotPace(pacesData?.paces?.easy?.upper, unitSystem);
-                  return easyLower && easyUpper ? (
-                    <div className="flex items-start justify-between gap-4">
-                      <span className="text-muted-foreground">{t("trainingV2.paceEasy")}</span>
-                      <span className="text-right font-medium">{`${easyLower} - ${easyUpper}`}</span>
-                    </div>
-                  ) : null;
-                })()}
-                {(() => {
-                  const marathon = formatVdotPace(pacesData?.paces?.marathon, unitSystem);
-                  return marathon ? (
-                    <div className="flex items-start justify-between gap-4">
-                      <span className="text-muted-foreground">{t("trainingV2.paceMarathon")}</span>
-                      <span className="text-right font-medium">{marathon}</span>
-                    </div>
-                  ) : null;
-                })()}
-                {(() => {
-                  const threshold = formatVdotPace(pacesData?.paces?.threshold, unitSystem);
-                  return threshold ? (
-                    <div className="flex items-start justify-between gap-4">
-                      <span className="text-muted-foreground">{t("trainingV2.paceThreshold")}</span>
-                      <span className="text-right font-medium">{threshold}</span>
-                    </div>
-                  ) : null;
-                })()}
-                {(() => {
-                  const intervalLower = formatVdotPace(pacesData?.paces?.interval?.lower, unitSystem);
-                  const intervalUpper = formatVdotPace(pacesData?.paces?.interval?.upper, unitSystem);
-                  return intervalLower && intervalUpper ? (
-                    <div className="flex items-start justify-between gap-4">
-                      <span className="text-muted-foreground">{t("trainingV2.paceInterval")}</span>
-                      <span className="text-right font-medium">{`${intervalLower} - ${intervalUpper}`}</span>
-                    </div>
-                  ) : null;
-                })()}
-                {(() => {
-                  const repetition = formatVdotPace(pacesData?.paces?.repetition, unitSystem);
-                  return repetition ? (
-                    <div className="flex items-start justify-between gap-4">
-                      <span className="text-muted-foreground">{t("trainingV2.paceRepetition")}</span>
-                      <span className="text-right font-medium">{repetition}</span>
-                    </div>
-                  ) : null;
-                })()}
-              </div>
-            )}
-          </div>
-        </CardContent>
-      </Card>
 
       <FullCycleSection t={t} locale={locale} weeks={cycleWeeks} />
     </div>
