@@ -60,6 +60,22 @@ const INSIGHT_PAYLOAD = {
 };
 
 const CARDIO_NO_DATA = { no_data: true, connected: false, message: "No data." };
+const CARDIO_WITH_READINESS = {
+  no_data: false,
+  connected: true,
+  recommendation_color: "green",
+  metrics: {
+    run_readiness: 72,
+    hrv_delta: -4,
+    hrv_status: "green",
+    rhr_today: 52,
+    rhr_status: "green",
+    sleep_hours: 7.5,
+    sleep_status: "green",
+    training_load: 0.9,
+    training_load_status: "green",
+  },
+};
 
 const TODAY_PAYLOAD = {
   status: "success",
@@ -112,6 +128,26 @@ const WEEK_V2_DURATION = {
   },
 };
 
+const CYCLE_SEMI = { goal: { goal_type: "SEMI" } };
+
+function pacesPayload({ confidence = "HIGH", interval = { lower: { pace_str: "4:10", min_per_km: 4.1667 }, upper: { pace_str: "4:30", min_per_km: 4.5 } }, includeThreshold = true, includeEasy = true, raceRefs = {} } = {}) {
+  return {
+    confidence,
+    paces: {
+      easy: includeEasy ? { lower: { pace_str: "5:10", min_per_km: 5.1667 }, upper: { pace_str: "5:55", min_per_km: 5.9167 } } : null,
+      threshold: includeThreshold ? { pace_str: "4:35", min_per_km: 4.5833 } : null,
+      interval,
+    },
+    race_references: {
+      marathon: { pace: { pace_str: "4:49", min_per_km: 4.8144 }, predicted_time_str: "3:23:05" },
+      half_marathon: { pace: { pace_str: "4:34", min_per_km: 4.5667 }, predicted_time_str: "1:36:20" },
+      "10k": { pace: { pace_str: "4:24", min_per_km: 4.4 }, predicted_time_str: "44:00" },
+      "5k": { pace: { pace_str: "4:13", min_per_km: 4.2167 }, predicted_time_str: "21:05" },
+      ...raceRefs,
+    },
+  };
+}
+
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
 function buildDefaultMocks(overrides = {}) {
@@ -121,6 +157,8 @@ function buildDefaultMocks(overrides = {}) {
     today: TODAY_PAYLOAD,
     cardio: CARDIO_NO_DATA,
     weekV2: null,
+    paces: null,
+    cycle: null,
   };
   return { ...defaults, ...overrides };
 }
@@ -133,6 +171,14 @@ function setupAxiosMocks(mocks) {
     if (url.includes("run-index")) return Promise.resolve({ data: mocks.cardio });
     if (url.includes("training/v2/week")) {
       if (mocks.weekV2) return Promise.resolve({ data: mocks.weekV2 });
+      return Promise.reject(new Error("not available"));
+    }
+    if (url.includes("training/v2/paces")) {
+      if (mocks.paces) return Promise.resolve({ data: mocks.paces });
+      return Promise.reject(new Error("not available"));
+    }
+    if (url.includes("training/v2/cycle")) {
+      if (mocks.cycle) return Promise.resolve({ data: mocks.cycle });
       return Promise.reject(new Error("not available"));
     }
     if (url.includes("training/metrics")) return Promise.resolve({ data: null });
@@ -807,6 +853,202 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     unmount();
   });
 
+  it("11c. TRIAL/PREMIUM: calls /training/v2/paces and renders dashboard paces card", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(buildDefaultMocks({
+      weekV2: { ...WEEK_V2_DISTANCE, goal: { goal_type: "5k" } },
+      paces: pacesPayload(),
+      cycle: CYCLE_SEMI,
+    }));
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const card = container.querySelector('[data-testid="dashboard-paces-card"]');
+    expect(card).not.toBeNull();
+    expect(axios.get.mock.calls.map(([url]) => url).some((u) => u.includes("training/v2/paces"))).toBe(true);
+    unmount();
+  });
+
+  it("11d. FREE: never calls /training/v2/paces and uses preview card", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: true, loading: false });
+    setupAxiosMocks(buildDefaultMocks());
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    expect(container.querySelector('[data-testid="paces-preview-free"]')).not.toBeNull();
+    expect(axios.get.mock.calls.map(([url]) => url).some((u) => u.includes("training/v2/paces"))).toBe(false);
+    unmount();
+  });
+
+  it("11e. paces teaser renders easy and threshold from canonical payload", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(buildDefaultMocks({
+      weekV2: { ...WEEK_V2_DISTANCE, goal: { goal_type: "5k" } },
+      paces: pacesPayload(),
+      cycle: { goal: { goal_type: "5K" } },
+    }));
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const cardText = container.querySelector('[data-testid="dashboard-paces-card"]').textContent;
+    expect(cardText).toContain("Easy");
+    expect(cardText).toContain("Threshold");
+    expect(cardText).toContain("5:10 /km - 5:55 /km");
+    expect(cardText).toContain("4:35 /km");
+    unmount();
+  });
+
+  it.each([
+    ["5k", "5 km", "4:13 /km"],
+    ["10k", "10 km", "4:24 /km"],
+    ["SEMI", "Half marathon", "4:34 /km"],
+    ["HALF_MARATHON", "Half marathon", "4:34 /km"],
+    ["semi_marathon", "Half marathon", "4:34 /km"],
+    ["marathon", "Marathon", "4:49 /km"],
+    ["maintenance", "Interval", "4:10 /km - 4:30 /km"],
+    ["ultra", "Interval", "4:10 /km - 4:30 /km"],
+  ])("11f. goal mapping (%s) picks correct teaser third row", async (goalType, expectedLabel, expectedValue) => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(buildDefaultMocks({
+      weekV2: { ...WEEK_V2_DISTANCE, goal: { goal_type: goalType } },
+      paces: pacesPayload(),
+      cycle: null,
+    }));
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const cardText = container.querySelector('[data-testid="dashboard-paces-card"]').textContent;
+    expect(cardText).toContain(expectedLabel);
+    expect(cardText).toContain(expectedValue);
+    unmount();
+  });
+
+  it("11g. missing fields never invent values and only shows available rows", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(buildDefaultMocks({
+      weekV2: { ...WEEK_V2_DISTANCE, goal: { goal_type: "marathon" } },
+      paces: pacesPayload({
+        includeThreshold: false,
+        raceRefs: { marathon: null },
+      }),
+      cycle: null,
+    }));
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const card = container.querySelector('[data-testid="dashboard-paces-card"]');
+    const rows = card.querySelectorAll('[data-testid="dashboard-paces-rows"] > div');
+    expect(rows.length).toBe(1);
+    expect(card.textContent).not.toContain("0:00");
+    expect(card.textContent).not.toContain(" 0 ");
+    expect(card.textContent).not.toContain("—");
+    unmount();
+  });
+
+  it("11h. confidence INSUFFICIENT shows explicit empty state and no pseudo paces", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(buildDefaultMocks({
+      weekV2: { ...WEEK_V2_DISTANCE, goal: { goal_type: "10k" } },
+      paces: pacesPayload({ confidence: "INSUFFICIENT", includeEasy: false, includeThreshold: false, interval: null, raceRefs: { marathon: null, half_marathon: null, "10k": null, "5k": null } }),
+      cycle: null,
+    }));
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const card = container.querySelector('[data-testid="dashboard-paces-card"]');
+    expect(card.querySelector('[data-testid="dashboard-paces-empty"]')).not.toBeNull();
+    expect(card.querySelector('[data-testid="dashboard-paces-rows"]')).toBeNull();
+    unmount();
+  });
+
+  it("11i. dashboard paces teaser never renders predicted time", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(buildDefaultMocks({
+      weekV2: { ...WEEK_V2_DISTANCE, goal: { goal_type: "5k" } },
+      paces: pacesPayload(),
+      cycle: null,
+    }));
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const cardText = container.querySelector('[data-testid="dashboard-paces-card"]').textContent;
+    expect(cardText).not.toContain("21:05");
+    expect(cardText).not.toContain("44:00");
+    unmount();
+  });
+
+  it("11j. dashboard paces CTA links to /training", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(buildDefaultMocks({
+      weekV2: { ...WEEK_V2_DISTANCE, goal: { goal_type: "5k" } },
+      paces: pacesPayload(),
+      cycle: null,
+    }));
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const cta = container.querySelector('[data-testid="dashboard-paces-cta"]');
+    expect(cta).not.toBeNull();
+    expect(cta.getAttribute("href")).toBe("/training");
+    unmount();
+  });
+
+  it("11k. paces card keeps compact mobile-safe structure", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(buildDefaultMocks({
+      weekV2: { ...WEEK_V2_DISTANCE, goal: { goal_type: "5k" } },
+      paces: pacesPayload(),
+      cycle: null,
+    }));
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+    const card = container.querySelector('[data-testid="dashboard-paces-card"]');
+    expect(card.querySelector("table")).toBeNull();
+    expect(card.className.includes("overflow-x-auto")).toBe(false);
+    unmount();
+  });
+
+  it("11l. today-first ordering preserved with paces teaser inserted before weekly target", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(buildDefaultMocks({
+      insight: {
+        ...INSIGHT_PAYLOAD,
+        run_index: { run_index: 264, confidence_score: 87, status: "ok", speed_score: 70, endurance_score: 75, consistency_score: 80, efficiency_score: 65 },
+      },
+      cardio: CARDIO_WITH_READINESS,
+      weekV2: { ...WEEK_V2_DISTANCE, goal: { goal_type: "5k" } },
+      paces: pacesPayload(),
+      cycle: null,
+    }));
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+    const readiness = container.querySelector('[data-testid="run-readiness-card"]');
+    const today = container.querySelector('[data-testid="today-workout-card"]');
+    const runIndex = container.querySelector('[data-testid="run-index-card"]');
+    const paces = container.querySelector('[data-testid="dashboard-paces-card"]');
+    const weekly = container.querySelector('[data-testid="weekly-target-card"]');
+    expect(readiness).not.toBeNull();
+    expect(today).not.toBeNull();
+    expect(runIndex).not.toBeNull();
+    expect(paces).not.toBeNull();
+    expect(weekly).not.toBeNull();
+    expect(readiness.compareDocumentPosition(today) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(today.compareDocumentPosition(runIndex) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(runIndex.compareDocumentPosition(paces) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(paces.compareDocumentPosition(weekly) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    unmount();
+  });
+
   // 12. no extra legacy endpoints
   it("12. no legacy endpoints introduced (dashboard/insight, run-index only for FREE)", async () => {
     mockUseSubscription.mockReturnValue({ isFree: true, loading: false });
@@ -1114,6 +1356,10 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     expect(translations.en.dashboard.weeklyOutsidePlan).toBeDefined();
     expect(translations.en.dashboard.readinessStates.green).toBeDefined();
     expect(translations.en.dashboard.minutes).toBeDefined();
+    expect(translations.en.dashboard.pacesTeaserTitle).toBeDefined();
+    expect(translations.en.dashboard.pacesTeaserSubtitle).toBeDefined();
+    expect(translations.en.dashboard.pacesTeaserCta).toBeDefined();
+    expect(translations.en.dashboard.pacesTeaserEmpty).toBeDefined();
   });
 
   // 14. i18n keys: weeklyTarget, weeklyDone, minutes exist in FR
@@ -1124,6 +1370,10 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     expect(translations.fr.dashboard.weeklyOutsidePlan).toBeDefined();
     expect(translations.fr.dashboard.readinessStates.green).toBeDefined();
     expect(translations.fr.dashboard.minutes).toBeDefined();
+    expect(translations.fr.dashboard.pacesTeaserTitle).toBeDefined();
+    expect(translations.fr.dashboard.pacesTeaserSubtitle).toBeDefined();
+    expect(translations.fr.dashboard.pacesTeaserCta).toBeDefined();
+    expect(translations.fr.dashboard.pacesTeaserEmpty).toBeDefined();
   });
 
   // 15. i18n keys: weeklyTarget, weeklyDone, minutes exist in ES
@@ -1134,6 +1384,10 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     expect(translations.es.dashboard.weeklyOutsidePlan).toBeDefined();
     expect(translations.es.dashboard.readinessStates.green).toBeDefined();
     expect(translations.es.dashboard.minutes).toBeDefined();
+    expect(translations.es.dashboard.pacesTeaserTitle).toBeDefined();
+    expect(translations.es.dashboard.pacesTeaserSubtitle).toBeDefined();
+    expect(translations.es.dashboard.pacesTeaserCta).toBeDefined();
+    expect(translations.es.dashboard.pacesTeaserEmpty).toBeDefined();
   });
 
   // 16. no raw i18n keys visible in rendered output (duration basis)
