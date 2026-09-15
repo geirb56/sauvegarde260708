@@ -60,6 +60,22 @@ const INSIGHT_PAYLOAD = {
 };
 
 const CARDIO_NO_DATA = { no_data: true, connected: false, message: "No data." };
+const CARDIO_WITH_READINESS = {
+  no_data: false,
+  connected: true,
+  recommendation_color: "green",
+  metrics: {
+    run_readiness: 72,
+    hrv_delta: -4,
+    hrv_status: "green",
+    rhr_today: 52,
+    rhr_status: "green",
+    sleep_hours: 7.5,
+    sleep_status: "green",
+    training_load: 0.9,
+    training_load_status: "green",
+  },
+};
 
 const TODAY_PAYLOAD = {
   status: "success",
@@ -1008,6 +1024,7 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
         ...INSIGHT_PAYLOAD,
         run_index: { run_index: 264, confidence_score: 87, status: "ok", speed_score: 70, endurance_score: 75, consistency_score: 80, efficiency_score: 65 },
       },
+      cardio: CARDIO_WITH_READINESS,
       weekV2: { ...WEEK_V2_DISTANCE, goal: { goal_type: "5k" } },
       paces: pacesPayload(),
       cycle: null,
@@ -1020,6 +1037,11 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     const runIndex = container.querySelector('[data-testid="run-index-card"]');
     const paces = container.querySelector('[data-testid="dashboard-paces-card"]');
     const weekly = container.querySelector('[data-testid="weekly-target-card"]');
+    expect(readiness).not.toBeNull();
+    expect(today).not.toBeNull();
+    expect(runIndex).not.toBeNull();
+    expect(paces).not.toBeNull();
+    expect(weekly).not.toBeNull();
     expect(readiness.compareDocumentPosition(today) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(today.compareDocumentPosition(runIndex) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(runIndex.compareDocumentPosition(paces) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
