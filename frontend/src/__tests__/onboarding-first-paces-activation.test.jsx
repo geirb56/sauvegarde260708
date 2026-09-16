@@ -248,7 +248,7 @@ describe("Onboarding first connection activation (paces + today)", () => {
     await reachFirstValueStep();
 
     expect(await screen.findByTestId("first-paces-insufficient")).toBeInTheDocument();
-    expect(screen.getByTestId("first-today-success")).toHaveTextContent("Easy run");
+    expect(screen.getByTestId("first-today-success")).toHaveTextContent("Easy");
   });
 
   test("G. today success + paces failure keeps today visible with paces technical error", async () => {
