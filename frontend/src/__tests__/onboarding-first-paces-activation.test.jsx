@@ -106,6 +106,16 @@ function endpointCalls(pathFragment) {
   return axios.get.mock.calls.filter(([url]) => String(url).includes(pathFragment)).length;
 }
 
+function createDeferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 async function connectGarminAndReachSync() {
   fireEvent.click(screen.getByTestId("onboarding-start"));
   fireEvent.change(await screen.findByTestId("garmin-email-input"), {
@@ -122,6 +132,13 @@ async function connectGarminAndReachSync() {
 
 async function reachFirstValueStep() {
   await connectGarminAndReachSync();
+  fireEvent.click(screen.getByTestId("onboarding-continue"));
+  await waitFor(() => expect(screen.getByTestId("onboarding-step-first-value")).toBeInTheDocument());
+}
+
+async function leaveAndReenterFirstValue() {
+  fireEvent.click(screen.getByRole("button", { name: "Back" }));
+  await waitFor(() => expect(screen.getByTestId("onboarding-step-sync")).toBeInTheDocument());
   fireEvent.click(screen.getByTestId("onboarding-continue"));
   await waitFor(() => expect(screen.getByTestId("onboarding-step-first-value")).toBeInTheDocument());
 }
@@ -381,5 +398,135 @@ describe("Onboarding first connection activation (paces + today)", () => {
     expect(screen.queryByText(/5k/i)).toBeNull();
     expect(screen.queryByText(/marathon/i)).toBeNull();
     expect(screen.queryByText(/internal-code/i)).toBeNull();
+  });
+
+  test("M. paces leave/re-enter during in-flight request starts fresh request and stale old response cannot overwrite", async () => {
+    const pacesFirst = createDeferred();
+    const pacesSecond = createDeferred();
+    let pacesCallCount = 0;
+    axios.get.mockImplementation((url) => {
+      if (String(url).includes("/training/v2/paces")) {
+        pacesCallCount += 1;
+        return pacesCallCount === 1 ? pacesFirst.promise : pacesSecond.promise;
+      }
+      if (String(url).includes("/training/today")) {
+        return Promise.resolve({ data: { status: "success", served_prescription: { type: "easy", duration: 30 } } });
+      }
+      return Promise.resolve({ data: {} });
+    });
+
+    renderOnboarding();
+    await reachFirstValueStep();
+    expect(screen.getByTestId("first-paces-loading")).toBeInTheDocument();
+
+    await leaveAndReenterFirstValue();
+    expect(endpointCalls("/training/v2/paces")).toBe(2);
+
+    pacesSecond.resolve({
+      data: {
+        confidence: "HIGH",
+        paces: { threshold: { min_per_km: 4.2 } },
+      },
+    });
+    await waitFor(() => expect(screen.getByTestId("first-paces-threshold")).toHaveTextContent("4:12 /km"));
+
+    pacesFirst.resolve({
+      data: {
+        confidence: "HIGH",
+        paces: { threshold: { min_per_km: 5.0 } },
+      },
+    });
+    await waitFor(() => expect(screen.getByTestId("first-paces-threshold")).toHaveTextContent("4:12 /km"));
+  });
+
+  test("N. today leave/re-enter during in-flight request starts fresh request and no permanent loading lock", async () => {
+    const todayFirst = createDeferred();
+    const todaySecond = createDeferred();
+    let todayCallCount = 0;
+    axios.get.mockImplementation((url) => {
+      if (String(url).includes("/training/today")) {
+        todayCallCount += 1;
+        return todayCallCount === 1 ? todayFirst.promise : todaySecond.promise;
+      }
+      if (String(url).includes("/training/v2/paces")) {
+        return Promise.resolve({ data: { confidence: "INSUFFICIENT", paces: {} } });
+      }
+      return Promise.resolve({ data: {} });
+    });
+
+    renderOnboarding();
+    await reachFirstValueStep();
+    expect(screen.getByTestId("first-today-loading")).toBeInTheDocument();
+
+    await leaveAndReenterFirstValue();
+    expect(endpointCalls("/training/today")).toBe(2);
+
+    todaySecond.resolve({
+      data: { status: "success", served_prescription: { type: "threshold", duration: 42 } },
+    });
+    await waitFor(() => expect(screen.getByTestId("first-today-success")).toHaveTextContent("42 min"));
+    expect(screen.queryByTestId("first-today-loading")).toBeNull();
+
+    todayFirst.resolve({
+      data: { status: "success", served_prescription: { type: "easy", duration: 99 } },
+    });
+    await waitFor(() => expect(screen.getByTestId("first-today-success")).toHaveTextContent("42 min"));
+  });
+
+  test("O. language change during in-flight today request does not refetch and result still applies in selected language", async () => {
+    const todayDeferred = createDeferred();
+    axios.get.mockImplementation((url) => {
+      if (String(url).includes("/training/today")) return todayDeferred.promise;
+      if (String(url).includes("/training/v2/paces")) {
+        return Promise.resolve({ data: { confidence: "INSUFFICIENT", paces: {} } });
+      }
+      return Promise.resolve({ data: {} });
+    });
+
+    renderOnboarding({ withLangControls: true });
+    await reachFirstValueStep();
+    expect(endpointCalls("/training/today")).toBe(1);
+    expect(screen.getByTestId("first-today-loading")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("set-lang-fr"));
+    expect(endpointCalls("/training/today")).toBe(1);
+
+    todayDeferred.resolve({
+      data: { status: "success", served_prescription: { type: "threshold", duration: 45 } },
+    });
+
+    await waitFor(() => expect(screen.getByText("Séance du jour")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId("first-today-success")).toBeInTheDocument());
+    expect(screen.queryByTestId("first-today-loading")).toBeNull();
+  });
+
+  test("P. language change during in-flight paces request does not refetch and same request resolves", async () => {
+    const pacesDeferred = createDeferred();
+    axios.get.mockImplementation((url) => {
+      if (String(url).includes("/training/v2/paces")) return pacesDeferred.promise;
+      if (String(url).includes("/training/today")) {
+        return Promise.resolve({ data: { status: "success", served_prescription: { type: "easy", duration: 25 } } });
+      }
+      return Promise.resolve({ data: {} });
+    });
+
+    renderOnboarding({ withLangControls: true });
+    await reachFirstValueStep();
+    expect(endpointCalls("/training/v2/paces")).toBe(1);
+    expect(screen.getByTestId("first-paces-loading")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("set-lang-fr"));
+    expect(endpointCalls("/training/v2/paces")).toBe(1);
+
+    pacesDeferred.resolve({
+      data: {
+        confidence: "HIGH",
+        paces: { threshold: { min_per_km: 4.2 } },
+      },
+    });
+
+    await waitFor(() => expect(screen.getByTestId("first-paces-threshold")).toBeInTheDocument());
+    expect(screen.getByTestId("first-paces-threshold")).toHaveTextContent("Seuil");
+    expect(screen.queryByTestId("first-paces-loading")).toBeNull();
   });
 });

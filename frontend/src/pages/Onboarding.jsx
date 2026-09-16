@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import { Card, CardContent } from "@/components/ui/card";
@@ -12,7 +12,7 @@ import { useLanguage } from "@/context/LanguageContext";
 import { useSubscription } from "@/context/SubscriptionContext";
 import { useUnitSystem } from "@/context/UnitContext";
 import { useGarminSyncProgress } from "@/hooks/useGarminSyncProgress";
-import { getCanonicalTodaySession, getTodayCardState } from "@/lib/todaySession";
+import { getCanonicalTodaySession, getTodayCardState, getTodayRequestStatus } from "@/lib/todaySession";
 import { formatPace } from "@/utils/units";
 
 const API = API_BASE_URL;
@@ -67,10 +67,8 @@ export default function Onboarding() {
   const [completionError, setCompletionError] = useState("");
   const [firstPacesStatus, setFirstPacesStatus] = useState("idle"); // idle | loading | success | insufficient | error
   const [firstPacesData, setFirstPacesData] = useState(null);
-  const firstPacesRequestStartedRef = useRef(false);
   const [firstTodayStatus, setFirstTodayStatus] = useState("idle"); // idle | loading | success | unavailable | error
   const [firstTodayData, setFirstTodayData] = useState(null);
-  const firstTodayRequestStartedRef = useRef(false);
 
   const [garminStatus, setGarminStatus] = useState("idle"); // idle | connecting | connected | mfa_required | error
   const [garminUsername, setGarminUsername] = useState("");
@@ -137,14 +135,14 @@ export default function Onboarding() {
   const shouldFetchFirstToday = stepKey === "firstValue" && activationDataReady && hasPremiumAccess === true;
 
   useEffect(() => {
-    if (!shouldFetchFirstPaces || firstPacesRequestStartedRef.current) return;
-    firstPacesRequestStartedRef.current = true;
+    if (!shouldFetchFirstPaces) return;
+    const controller = new AbortController();
     let isStale = false;
     setFirstPacesStatus("loading");
 
     const fetchFirstPaces = async () => {
       try {
-        const response = await axios.get(`${API}/training/v2/paces`);
+        const response = await axios.get(`${API}/training/v2/paces`, { signal: controller.signal });
         if (isStale) return;
         const payload = response?.data;
         const confidence = typeof payload?.confidence === "string" ? payload.confidence : null;
@@ -170,33 +168,28 @@ export default function Onboarding() {
 
     return () => {
       isStale = true;
+      controller.abort();
     };
   }, [shouldFetchFirstPaces]);
 
   useEffect(() => {
-    if (!shouldFetchFirstToday || firstTodayRequestStartedRef.current) return;
-    firstTodayRequestStartedRef.current = true;
+    if (!shouldFetchFirstToday) return;
+    const controller = new AbortController();
     let isStale = false;
     setFirstTodayStatus("loading");
 
     const fetchFirstToday = async () => {
       try {
-        const response = await axios.get(`${API}/training/today`);
+        const response = await axios.get(`${API}/training/today`, { signal: controller.signal });
         if (isStale) return;
         const payload = response?.data || null;
-        const cardState = getTodayCardState(payload, t);
         setFirstTodayData(payload);
-        if (cardState.kind === "session") {
-          setFirstTodayStatus("success");
-          return;
-        }
-        if (cardState.kind === "error") {
-          setFirstTodayStatus("error");
-          return;
-        }
-        setFirstTodayStatus("unavailable");
-      } catch {
+        setFirstTodayStatus(getTodayRequestStatus(payload));
+      } catch (error) {
         if (isStale) return;
+        if (error?.code === "ERR_CANCELED" || error?.name === "AbortError" || error?.name === "CanceledError") {
+          return;
+        }
         setFirstTodayData(null);
         setFirstTodayStatus("error");
       }
@@ -205,8 +198,9 @@ export default function Onboarding() {
 
     return () => {
       isStale = true;
+      controller.abort();
     };
-  }, [shouldFetchFirstToday, t]);
+  }, [shouldFetchFirstToday]);
 
   const firstPacesEasyLower = firstPacesData?.paces?.easy?.lower?.min_per_km;
   const firstPacesEasyUpper = firstPacesData?.paces?.easy?.upper?.min_per_km;

@@ -7,6 +7,12 @@ export function getCanonicalTodaySession(todayData) {
     ?? null;
 }
 
+export function getTodayRequestStatus(todayData) {
+  if (getCanonicalTodaySession(todayData)) return "success";
+  if (todayData?.status === "error") return "error";
+  return "unavailable";
+}
+
 export function getTodayCardState(todayData, t) {
   const session = getCanonicalTodaySession(todayData);
   if (session) {
