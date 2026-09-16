@@ -978,7 +978,12 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     unmount();
   });
 
-  it("11i. paces request failure shows technical error state, not insufficient", async () => {
+  it.each([
+    ["en", "Unable to load your paces.", "Insufficient data", "Unable to load this week."],
+    ["fr", "Impossible de charger vos allures.", "Données insuffisantes", "Impossible de charger cette semaine."],
+    ["es", "No se pueden cargar tus ritmos.", "Datos insuficientes", "No se puede cargar esta semana."],
+  ])("11i. paces request failure uses dedicated paces error copy in %s", async (lang, expectedPacesError, insufficientLabel, weekErrorLabel) => {
+    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, lang);
     mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
     setupAxiosMocks(buildDefaultMocks({
       weekV2: { ...WEEK_V2_DISTANCE, goal: { goal_type: "10k" } },
@@ -989,9 +994,15 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     await waitForRender();
 
     const card = container.querySelector('[data-testid="dashboard-paces-card"]');
-    expect(card.querySelector('[data-testid="dashboard-paces-error"]')).not.toBeNull();
+    const pacesError = card.querySelector('[data-testid="dashboard-paces-error"]');
+    expect(pacesError).not.toBeNull();
+    expect(pacesError.textContent).toBe(expectedPacesError);
+    expect(card.textContent).not.toContain("dashboard.pacesTeaserError");
+    expect(card.textContent).not.toContain(insufficientLabel);
+    expect(card.textContent).not.toContain(weekErrorLabel);
     expect(card.querySelector('[data-testid="dashboard-paces-empty"]')).toBeNull();
     expect(card.querySelector('[data-testid="dashboard-paces-rows"]')).toBeNull();
+    expect(axios.get.mock.calls.some(([url]) => url.includes("/training/v2/paces"))).toBe(true);
     unmount();
   });
 

@@ -157,6 +157,7 @@ export const translations = {
       pacesTeaserTitle: "My paces",
       pacesTeaserSubtitle: "Your current benchmarks",
       pacesTeaserCta: "View all my paces",
+      pacesTeaserError: "Unable to load your paces.",
       pacesTeaserEmpty: "Not enough data yet to calculate your paces.",
     },
     workoutTypes: {
@@ -1038,6 +1039,7 @@ export const translations = {
       pacesTeaserTitle: "Mes allures",
       pacesTeaserSubtitle: "Tes repères actuels",
       pacesTeaserCta: "Voir toutes mes allures",
+      pacesTeaserError: "Impossible de charger vos allures.",
       pacesTeaserEmpty: "Pas encore assez de données pour calculer tes allures.",
     },
     workoutTypes: {
@@ -1905,6 +1907,7 @@ export const translations = {
       pacesTeaserTitle: "Mis ritmos",
       pacesTeaserSubtitle: "Tus referencias actuales",
       pacesTeaserCta: "Ver todos mis ritmos",
+      pacesTeaserError: "No se pueden cargar tus ritmos.",
       pacesTeaserEmpty: "Aún no hay suficientes datos para calcular tus ritmos.",
     },
     workoutTypes: {
