@@ -123,8 +123,9 @@ export const formatPace = (secondsPerKm, options = {}) => {
   const convertedSeconds = convertPace(secondsPerKm, unitSystem);
   if (!convertedSeconds) return "--";
 
-  const mins = Math.floor(convertedSeconds / 60);
-  const secs = Math.round(convertedSeconds - mins * 60);
+  const totalRoundedSeconds = Math.round(convertedSeconds);
+  const mins = Math.floor(totalRoundedSeconds / 60);
+  const secs = totalRoundedSeconds % 60;
   const unit = unitSystem === "imperial" ? "/mi" : "/km";
   return `${mins}:${pad2(secs)} ${unit}`;
 };
@@ -146,4 +147,3 @@ export const formatElevation = (meters, options = {}) => {
   const unit = unitSystem === "imperial" ? "ft" : "m";
   return `${rounded} ${unit}`;
 };
-
