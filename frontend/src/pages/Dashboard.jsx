@@ -1392,7 +1392,7 @@ export default function Dashboard() {
 
           {showPacesErrorState && (
             <p className="text-sm text-muted-foreground" data-testid="dashboard-paces-error">
-              {t("trainingV2.loadingError")}
+              {t("dashboard.pacesTeaserError")}
             </p>
           )}
 
