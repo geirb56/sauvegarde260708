@@ -818,7 +818,7 @@ export default function Dashboard() {
   const [todaySession, setTodaySession] = useState(null);
   const [trainingWeekV2, setTrainingWeekV2] = useState(null);
   const [trainingPaces, setTrainingPaces] = useState(null);
-  const [trainingCycle, setTrainingCycle] = useState(null);
+  const [pacesRequestState, setPacesRequestState] = useState("idle");
   const [cardioData, setCardioData] = useState(null);
   const [cardioLoading, setCardioLoading] = useState(true);
   const [cardioError, setCardioError] = useState(null);
@@ -837,7 +837,7 @@ export default function Dashboard() {
       setTodaySession(null);
       setTrainingWeekV2(null);
       setTrainingPaces(null);
-      setTrainingCycle(null);
+      setPacesRequestState("idle");
       setInsight(prev => {
         if (!prev) return prev;
         const { rag: _rag, ...rest } = prev; // eslint-disable-line no-unused-vars
@@ -939,18 +939,27 @@ export default function Dashboard() {
   useEffect(() => {
     if (subLoading || isFree) return;
     let ignore = false;
-    Promise.allSettled([
-      axios.get(`${API}/training/v2/paces`),
-      axios.get(`${API}/training/v2/cycle`),
-    ]).then(([pacesResult, cycleResult]) => {
-      if (ignore) return;
-      if (pacesResult.status === "fulfilled") setTrainingPaces(pacesResult.value.data || null);
-      if (cycleResult.status === "fulfilled") setTrainingCycle(cycleResult.value.data || null);
-    });
+    setPacesRequestState("loading");
+    axios
+      .get(`${API}/training/v2/paces`)
+      .then((res) => {
+        if (ignore) return;
+        const nextPaces = res.data || null;
+        setTrainingPaces(nextPaces);
+        const confidence = typeof nextPaces?.confidence === "string"
+          ? nextPaces.confidence.toUpperCase()
+          : null;
+        setPacesRequestState(confidence === "INSUFFICIENT" ? "insufficient" : "success");
+      })
+      .catch(() => {
+        if (ignore) return;
+        setTrainingPaces(null);
+        setPacesRequestState("error");
+      });
     return () => {
       ignore = true;
     };
-  }, [lang, isFree, subLoading]);
+  }, [isFree, subLoading]);
 
   if (loading) {
     return <BrandSplash text={t("common.loading")} />;
@@ -972,7 +981,7 @@ export default function Dashboard() {
     ? t(`trainingV2.pacesConfidence.${pacesConfidenceKey}`)
     : null;
   const pacesConfidenceInsufficient = pacesConfidenceRaw === "INSUFFICIENT";
-  const goalTypeKey = normalizeGoalType(trainingCycle?.goal?.goal_type || trainingWeekV2?.goal?.goal_type);
+  const goalTypeKey = normalizeGoalType(trainingWeekV2?.goal?.goal_type);
   const teaserRows = pacesConfidenceInsufficient ? [] : [
     (() => {
       const easyRange = formatPaceRange(trainingPaces?.paces?.easy, unitSystem);
@@ -984,7 +993,11 @@ export default function Dashboard() {
     })(),
     getGoalPaceReferenceRow(goalTypeKey, trainingPaces, unitSystem, t),
   ].filter(Boolean);
-  const showPacesInsufficientState = pacesConfidenceInsufficient || teaserRows.length === 0;
+  const showPacesLoadingState = pacesRequestState === "idle" || pacesRequestState === "loading";
+  const showPacesErrorState = pacesRequestState === "error";
+  const showPacesRows = pacesRequestState === "success" && teaserRows.length > 0;
+  const showPacesInsufficientState = pacesRequestState === "insufficient"
+    || (pacesRequestState === "success" && teaserRows.length === 0);
 
   return (
     <div className="p-4 pb-24 space-y-4" style={{ background: "var(--bg-primary)" }}>
@@ -1371,7 +1384,19 @@ export default function Dashboard() {
             </p>
           </div>
 
-          {!showPacesInsufficientState && (
+          {showPacesLoadingState && (
+            <p className="text-sm text-muted-foreground" data-testid="dashboard-paces-loading">
+              {t("common.loading")}
+            </p>
+          )}
+
+          {showPacesErrorState && (
+            <p className="text-sm text-muted-foreground" data-testid="dashboard-paces-error">
+              {t("trainingV2.loadingError")}
+            </p>
+          )}
+
+          {showPacesRows && (
             <div className="space-y-2 text-sm" data-testid="dashboard-paces-rows">
               {teaserRows.map((row) => (
                 <div key={row.label} className="flex items-start justify-between gap-3">
