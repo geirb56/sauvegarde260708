@@ -16,7 +16,7 @@
  * 12. no extra legacy endpoints introduced
  */
 
-import React, { act } from "react";
+import React, { act, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { MemoryRouter } from "react-router-dom";
 import axios from "axios";
