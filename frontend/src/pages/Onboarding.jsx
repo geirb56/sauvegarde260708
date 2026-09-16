@@ -12,6 +12,7 @@ import { useLanguage } from "@/context/LanguageContext";
 import { useSubscription } from "@/context/SubscriptionContext";
 import { useUnitSystem } from "@/context/UnitContext";
 import { useGarminSyncProgress } from "@/hooks/useGarminSyncProgress";
+import { getCanonicalTodaySession, getTodayCardState } from "@/lib/todaySession";
 import { formatPace } from "@/utils/units";
 
 const API = API_BASE_URL;
@@ -67,6 +68,9 @@ export default function Onboarding() {
   const [firstPacesStatus, setFirstPacesStatus] = useState("idle"); // idle | loading | success | insufficient | error
   const [firstPacesData, setFirstPacesData] = useState(null);
   const firstPacesRequestStartedRef = useRef(false);
+  const [firstTodayStatus, setFirstTodayStatus] = useState("idle"); // idle | loading | success | unavailable | error
+  const [firstTodayData, setFirstTodayData] = useState(null);
+  const firstTodayRequestStartedRef = useRef(false);
 
   const [garminStatus, setGarminStatus] = useState("idle"); // idle | connecting | connected | mfa_required | error
   const [garminUsername, setGarminUsername] = useState("");
@@ -121,13 +125,16 @@ export default function Onboarding() {
     syncProgress?.readiness !== null;
 
   const terminalSync = syncProgress && ["complete", "partial_success", "failed"].includes(syncProgress.status);
+  const successfulTerminalSync = syncProgress && ["complete", "partial_success"].includes(syncProgress.status);
   const insufficientData =
     syncProgress?.run_index_status === "insufficient_data" || (terminalSync && !runIndexReady && !syncError);
   const terminalError = Boolean(syncError) && !isSyncStreaming;
   const syncOutcomeKnown = runIndexReady || insufficientData || terminalError;
+  const activationDataReady = Boolean(successfulTerminalSync) && !terminalError;
   const syncedCount = syncProgress?.activities_count ?? garminCount;
   const syncErrorMessageKey = mapSyncErrorToMessageKey(syncError);
-  const shouldFetchFirstPaces = stepKey === "firstValue" && syncOutcomeKnown && hasPremiumAccess === true;
+  const shouldFetchFirstPaces = stepKey === "firstValue" && activationDataReady && hasPremiumAccess === true;
+  const shouldFetchFirstToday = stepKey === "firstValue" && activationDataReady && hasPremiumAccess === true;
 
   useEffect(() => {
     if (!shouldFetchFirstPaces || firstPacesRequestStartedRef.current) return;
@@ -166,6 +173,41 @@ export default function Onboarding() {
     };
   }, [shouldFetchFirstPaces]);
 
+  useEffect(() => {
+    if (!shouldFetchFirstToday || firstTodayRequestStartedRef.current) return;
+    firstTodayRequestStartedRef.current = true;
+    let isStale = false;
+    setFirstTodayStatus("loading");
+
+    const fetchFirstToday = async () => {
+      try {
+        const response = await axios.get(`${API}/training/today`);
+        if (isStale) return;
+        const payload = response?.data || null;
+        const cardState = getTodayCardState(payload, t);
+        setFirstTodayData(payload);
+        if (cardState.kind === "session") {
+          setFirstTodayStatus("success");
+          return;
+        }
+        if (cardState.kind === "error") {
+          setFirstTodayStatus("error");
+          return;
+        }
+        setFirstTodayStatus("unavailable");
+      } catch {
+        if (isStale) return;
+        setFirstTodayData(null);
+        setFirstTodayStatus("error");
+      }
+    };
+    fetchFirstToday();
+
+    return () => {
+      isStale = true;
+    };
+  }, [shouldFetchFirstToday, t]);
+
   const firstPacesEasyLower = firstPacesData?.paces?.easy?.lower?.min_per_km;
   const firstPacesEasyUpper = firstPacesData?.paces?.easy?.upper?.min_per_km;
   const firstPacesThreshold = firstPacesData?.paces?.threshold?.min_per_km;
@@ -182,6 +224,28 @@ export default function Onboarding() {
     const value = formatPace(firstPacesThreshold * 60, { unitSystem });
     return value === "--" ? null : value;
   }, [firstPacesThreshold, unitSystem]);
+  const firstTodayCardState = useMemo(() => getTodayCardState(firstTodayData, t), [firstTodayData, t]);
+  const firstTodaySession = useMemo(() => getCanonicalTodaySession(firstTodayData), [firstTodayData]);
+  const firstTodayDuration = useMemo(() => {
+    const duration = firstTodaySession?.duration;
+    if (typeof duration === "number") return duration > 0 ? `${duration} min` : null;
+    if (typeof duration !== "string") return null;
+    const trimmed = duration.trim();
+    return trimmed ? trimmed : null;
+  }, [firstTodaySession]);
+  const firstTodayDetails = useMemo(() => {
+    if (typeof firstTodaySession?.details !== "string") return null;
+    const trimmed = firstTodaySession.details.trim();
+    return trimmed ? trimmed : null;
+  }, [firstTodaySession]);
+  const firstTodayTypeLabel = useMemo(() => {
+    if (!firstTodaySession || typeof firstTodaySession.type !== "string" || !firstTodaySession.type) {
+      return t("onboarding.firstTodayWorkoutFallback");
+    }
+    const key = `trainingPlanSessionType.${firstTodaySession.type}`;
+    const translated = t(key);
+    return translated === key ? firstTodaySession.type : translated;
+  }, [firstTodaySession, t]);
   const finalSubscriptionStatus = useMemo(() => {
     if (isTrial && hasPremiumAccess) {
       if (trialDaysRemaining !== null && trialDaysRemaining !== undefined) {
@@ -447,6 +511,93 @@ export default function Onboarding() {
             <div className="space-y-4" data-testid="onboarding-step-first-value">
               <h2 className="text-lg font-semibold">{t("onboarding.firstValueTitle")}</h2>
 
+              {hasPremiumAccess === true && activationDataReady && (
+                <>
+                  <div className="rounded-xl border border-border bg-muted/20 p-4 space-y-3" data-testid="first-paces-section">
+                    <p className="font-semibold">{t("onboarding.firstPacesTitle")}</p>
+
+                    {firstPacesStatus === "loading" && (
+                      <p className="text-sm text-muted-foreground" data-testid="first-paces-loading">
+                        {t("onboarding.firstPacesLoading")}
+                      </p>
+                    )}
+
+                    {firstPacesStatus === "insufficient" && (
+                      <p className="text-sm text-muted-foreground" data-testid="first-paces-insufficient">
+                        {t("onboarding.firstPacesInsufficient")}
+                      </p>
+                    )}
+
+                    {firstPacesStatus === "error" && (
+                      <p className="text-sm text-destructive" data-testid="first-paces-error">
+                        {t("onboarding.firstPacesError")}
+                      </p>
+                    )}
+
+                    {firstPacesStatus === "success" && (
+                      <div className="space-y-2" data-testid="first-paces-success">
+                        {firstPacesEasyRange && (
+                          <div className="flex items-center justify-between gap-3" data-testid="first-paces-easy">
+                            <p className="text-sm text-muted-foreground">{t("trainingV2.paceEasy")}</p>
+                            <p className="text-sm font-semibold">{firstPacesEasyRange}</p>
+                          </div>
+                        )}
+                        {firstPacesThresholdValue && (
+                          <div className="flex items-center justify-between gap-3" data-testid="first-paces-threshold">
+                            <p className="text-sm text-muted-foreground">{t("trainingV2.paceThreshold")}</p>
+                            <p className="text-sm font-semibold">{firstPacesThresholdValue}</p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="rounded-xl border border-border bg-muted/20 p-4 space-y-3" data-testid="first-today-section">
+                    <p className="font-semibold">{t("onboarding.firstTodayTitle")}</p>
+
+                    {firstTodayStatus === "loading" && (
+                      <p className="text-sm text-muted-foreground" data-testid="first-today-loading">
+                        {t("onboarding.firstTodayLoading")}
+                      </p>
+                    )}
+
+                    {firstTodayStatus === "success" && (
+                      <div className="space-y-2" data-testid="first-today-success">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-sm text-muted-foreground">{firstTodayTypeLabel}</p>
+                          {firstTodayDuration && <p className="text-sm font-semibold" data-testid="first-today-duration">{firstTodayDuration}</p>}
+                        </div>
+                        {firstTodayDetails && (
+                          <p className="text-sm text-muted-foreground" data-testid="first-today-details">
+                            {firstTodayDetails}
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    {firstTodayStatus === "unavailable" && (
+                      <div data-testid="first-today-unavailable">
+                        <p className="text-sm font-medium">{t("onboarding.firstTodayUnavailableTitle")}</p>
+                        <p className="text-sm text-muted-foreground">
+                          {firstTodayCardState?.subtitle || t("onboarding.firstTodayUnavailableSubtitle")}
+                        </p>
+                      </div>
+                    )}
+
+                    {firstTodayStatus === "error" && (
+                      <div data-testid="first-today-error">
+                        <p className="text-sm font-medium text-destructive">{t("onboarding.firstTodayErrorTitle")}</p>
+                        <p className="text-sm text-destructive">
+                          {firstTodayCardState?.kind === "error"
+                            ? firstTodayCardState.subtitle
+                            : t("onboarding.firstTodayErrorSubtitle")}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+
               {runIndexReady ? (
                 <div className="rounded-xl border border-border bg-muted/20 p-5 text-center space-y-2" data-testid="runindex-first-value">
                   <p className="font-mono uppercase tracking-wider text-xs text-muted-foreground">{t("onboarding.runIndexLabel")}</p>
@@ -476,47 +627,6 @@ export default function Onboarding() {
                     <p className="text-xl font-black">{syncProgress.readiness}</p>
                   </div>
                   <p className="text-sm text-muted-foreground">{t("onboarding.readinessOptional")}</p>
-                </div>
-              )}
-
-              {hasPremiumAccess === true && syncOutcomeKnown && (
-                <div className="rounded-xl border border-border bg-muted/20 p-4 space-y-3" data-testid="first-paces-section">
-                  <p className="font-semibold">{t("onboarding.firstPacesTitle")}</p>
-
-                  {firstPacesStatus === "loading" && (
-                    <p className="text-sm text-muted-foreground" data-testid="first-paces-loading">
-                      {t("onboarding.firstPacesLoading")}
-                    </p>
-                  )}
-
-                  {firstPacesStatus === "insufficient" && (
-                    <p className="text-sm text-muted-foreground" data-testid="first-paces-insufficient">
-                      {t("onboarding.firstPacesInsufficient")}
-                    </p>
-                  )}
-
-                  {firstPacesStatus === "error" && (
-                    <p className="text-sm text-destructive" data-testid="first-paces-error">
-                      {t("onboarding.firstPacesError")}
-                    </p>
-                  )}
-
-                  {firstPacesStatus === "success" && (
-                    <div className="space-y-2" data-testid="first-paces-success">
-                      {firstPacesEasyRange && (
-                        <div className="flex items-center justify-between gap-3" data-testid="first-paces-easy">
-                          <p className="text-sm text-muted-foreground">{t("trainingV2.paceEasy")}</p>
-                          <p className="text-sm font-semibold">{firstPacesEasyRange}</p>
-                        </div>
-                      )}
-                      {firstPacesThresholdValue && (
-                        <div className="flex items-center justify-between gap-3" data-testid="first-paces-threshold">
-                          <p className="text-sm text-muted-foreground">{t("trainingV2.paceThreshold")}</p>
-                          <p className="text-sm font-semibold">{firstPacesThresholdValue}</p>
-                        </div>
-                      )}
-                    </div>
-                  )}
                 </div>
               )}
             </div>

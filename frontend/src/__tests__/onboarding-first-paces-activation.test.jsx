@@ -83,6 +83,29 @@ function mockSuccessfulPostFlow() {
   });
 }
 
+function setupFirstValueGetMocks({
+  pacesData = null,
+  pacesError = null,
+  todayData = null,
+  todayError = null,
+} = {}) {
+  axios.get.mockImplementation((url) => {
+    if (String(url).includes("/training/v2/paces")) {
+      if (pacesError) return Promise.reject(pacesError);
+      return Promise.resolve({ data: pacesData });
+    }
+    if (String(url).includes("/training/today")) {
+      if (todayError) return Promise.reject(todayError);
+      return Promise.resolve({ data: todayData });
+    }
+    return Promise.resolve({ data: {} });
+  });
+}
+
+function endpointCalls(pathFragment) {
+  return axios.get.mock.calls.filter(([url]) => String(url).includes(pathFragment)).length;
+}
+
 async function connectGarminAndReachSync() {
   fireEvent.click(screen.getByTestId("onboarding-start"));
   fireEvent.change(await screen.findByTestId("garmin-email-input"), {
@@ -103,7 +126,7 @@ async function reachFirstValueStep() {
   await waitFor(() => expect(screen.getByTestId("onboarding-step-first-value")).toBeInTheDocument());
 }
 
-describe("Onboarding first paces activation", () => {
+describe("Onboarding first connection activation (paces + today)", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockNavigate.mockReset();
@@ -119,33 +142,18 @@ describe("Onboarding first paces activation", () => {
     mockSuccessfulPostFlow();
   });
 
-  test("premium known sync fetches paces once and renders easy + threshold", async () => {
-    axios.get.mockResolvedValue({
-      data: {
+  test("A. complete first value activation: paces + today workout with independent endpoint calls", async () => {
+    setupFirstValueGetMocks({
+      pacesData: {
         confidence: "HIGH",
         paces: {
           easy: { lower: { min_per_km: 5.0 }, upper: { min_per_km: 5.5 } },
           threshold: { min_per_km: 4.2 },
         },
       },
-    });
-
-    renderOnboarding();
-    await reachFirstValueStep();
-
-    await waitFor(() => expect(axios.get).toHaveBeenCalledWith(expect.stringMatching(/\/training\/v2\/paces$/)));
-    expect(axios.get).toHaveBeenCalledTimes(1);
-    expect(screen.getByTestId("first-paces-easy")).toHaveTextContent("5:00 /km - 5:30 /km");
-    expect(screen.getByTestId("first-paces-threshold")).toHaveTextContent("4:12 /km");
-  });
-
-  test("easy range uses canonical formatted lower + upper values", async () => {
-    axios.get.mockResolvedValue({
-      data: {
-        confidence: "MEDIUM",
-        paces: {
-          easy: { lower: { min_per_km: 5.05 }, upper: { min_per_km: 5.16 } },
-        },
+      todayData: {
+        status: "success",
+        served_prescription: { type: "threshold", duration: 45, details: "3 x 8 min @ threshold" },
       },
     });
 
@@ -153,18 +161,86 @@ describe("Onboarding first paces activation", () => {
     await reachFirstValueStep();
 
     await waitFor(() => expect(screen.getByTestId("first-paces-easy")).toBeInTheDocument());
-    expect(screen.getByTestId("first-paces-easy")).toHaveTextContent("5:03 /km - 5:10 /km");
-    expect(screen.queryByTestId("first-paces-threshold")).toBeNull();
+    expect(screen.getByTestId("first-paces-easy")).toHaveTextContent("5:00 /km - 5:30 /km");
+    expect(screen.getByTestId("first-paces-threshold")).toHaveTextContent("4:12 /km");
+    expect(screen.getByTestId("first-today-success")).toHaveTextContent("Threshold");
+    expect(screen.getByTestId("first-today-duration")).toHaveTextContent("45 min");
+    expect(screen.getByTestId("first-today-details")).toHaveTextContent("3 x 8 min @ threshold");
+    expect(endpointCalls("/training/v2/paces")).toBe(1);
+    expect(endpointCalls("/training/today")).toBe(1);
   });
 
-  test("confidence insufficient shows honest message and onboarding remains continuable", async () => {
-    axios.get.mockResolvedValue({
-      data: {
-        confidence: "INSUFFICIENT",
-        paces: {
-          easy: { lower: { min_per_km: 5.0 }, upper: { min_per_km: 5.5 } },
-          threshold: { min_per_km: 4.2 },
-        },
+  test("B. today rest is displayed as factual rest", async () => {
+    setupFirstValueGetMocks({
+      pacesData: { confidence: "INSUFFICIENT", paces: {} },
+      todayData: {
+        status: "success",
+        served_prescription: { type: "rest", details: "Complete rest" },
+      },
+    });
+
+    renderOnboarding();
+    await reachFirstValueStep();
+
+    expect(await screen.findByTestId("first-today-success")).toBeInTheDocument();
+    expect(screen.getByTestId("first-today-success")).toHaveTextContent("Rest");
+    expect(screen.getByTestId("first-today-success")).not.toHaveTextContent(/ready/i);
+    expect(screen.getByTestId("first-paces-insufficient")).toBeInTheDocument();
+  });
+
+  test("C. today no_session shows truthful unavailable state without fabricated workout", async () => {
+    setupFirstValueGetMocks({
+      pacesData: { confidence: "HIGH", paces: { threshold: { min_per_km: 4.2 } } },
+      todayData: {
+        status: "no_session",
+        message: "No session planned for today",
+      },
+    });
+
+    renderOnboarding();
+    await reachFirstValueStep();
+
+    expect(await screen.findByTestId("first-today-unavailable")).toBeInTheDocument();
+    expect(screen.getByTestId("first-today-unavailable")).toHaveTextContent("No session planned for today");
+    expect(screen.queryByTestId("first-today-success")).toBeNull();
+  });
+
+  test("D. today technical error shows dedicated error state and remains continuable", async () => {
+    setupFirstValueGetMocks({
+      pacesData: { confidence: "HIGH", paces: { threshold: { min_per_km: 4.2 } } },
+      todayError: new Error("network"),
+    });
+
+    renderOnboarding();
+    await reachFirstValueStep();
+
+    expect(await screen.findByTestId("first-today-error")).toBeInTheDocument();
+    expect(screen.queryByTestId("first-today-unavailable")).toBeNull();
+    expect(screen.getByTestId("onboarding-continue")).not.toBeDisabled();
+  });
+
+  test("E. paces success + today failure keeps paces visible with today technical error", async () => {
+    setupFirstValueGetMocks({
+      pacesData: {
+        confidence: "HIGH",
+        paces: { easy: { lower: { min_per_km: 5.0 }, upper: { min_per_km: 5.4 } } },
+      },
+      todayError: new Error("timeout"),
+    });
+
+    renderOnboarding();
+    await reachFirstValueStep();
+
+    expect(await screen.findByTestId("first-paces-easy")).toBeInTheDocument();
+    expect(screen.getByTestId("first-today-error")).toBeInTheDocument();
+  });
+
+  test("F. today success + paces insufficient keeps today visible", async () => {
+    setupFirstValueGetMocks({
+      pacesData: { confidence: "INSUFFICIENT", paces: {} },
+      todayData: {
+        status: "success",
+        served_prescription: { type: "easy", duration: 35 },
       },
     });
 
@@ -172,100 +248,138 @@ describe("Onboarding first paces activation", () => {
     await reachFirstValueStep();
 
     expect(await screen.findByTestId("first-paces-insufficient")).toBeInTheDocument();
-    expect(screen.queryByTestId("first-paces-easy")).toBeNull();
-    expect(screen.queryByTestId("first-paces-threshold")).toBeNull();
-    expect(screen.getByTestId("onboarding-continue")).not.toBeDisabled();
+    expect(screen.getByTestId("first-today-success")).toHaveTextContent("Easy run");
   });
 
-  test("paces http error shows technical error and not insufficient", async () => {
-    axios.get.mockRejectedValue(new Error("network"));
+  test("G. today success + paces failure keeps today visible with paces technical error", async () => {
+    setupFirstValueGetMocks({
+      pacesError: new Error("paces failed"),
+      todayData: {
+        status: "success",
+        served_prescription: { type: "threshold", duration: 50 },
+      },
+    });
 
     renderOnboarding();
     await reachFirstValueStep();
 
     expect(await screen.findByTestId("first-paces-error")).toBeInTheDocument();
-    expect(screen.queryByTestId("first-paces-insufficient")).toBeNull();
-    expect(screen.getByTestId("onboarding-continue")).not.toBeDisabled();
+    expect(screen.getByTestId("first-today-success")).toHaveTextContent("Threshold");
   });
 
-  test("partial payload shows only available easy pace without inventing threshold", async () => {
-    axios.get.mockResolvedValue({
-      data: {
-        confidence: "LOW",
-        paces: {
-          easy: { lower: { min_per_km: 5.1 }, upper: { min_per_km: 5.4 } },
-          threshold: {},
-        },
+  test("H. terminal sync error does not trigger paces/today activation fetches", async () => {
+    mockSyncState = {
+      progress: { status: "failed", run_index_status: "pending", readiness_status: "pending", activities_count: 8 },
+      isStreaming: false,
+      error: "session_unavailable",
+    };
+    mockUseGarminSyncProgress.mockImplementation(() => mockSyncState);
+    setupFirstValueGetMocks({
+      pacesData: { confidence: "HIGH", paces: { threshold: { min_per_km: 4.2 } } },
+      todayData: { status: "success", served_prescription: { type: "easy", duration: 40 } },
+    });
+
+    renderOnboarding();
+    await reachFirstValueStep();
+
+    expect(endpointCalls("/training/v2/paces")).toBe(0);
+    expect(endpointCalls("/training/today")).toBe(0);
+    expect(screen.queryByTestId("first-paces-section")).toBeNull();
+    expect(screen.queryByTestId("first-today-section")).toBeNull();
+    expect(screen.getByTestId("runindex-terminal-error")).toBeInTheDocument();
+  });
+
+  test("I. completed sync with runindex insufficient still fetches and renders activation truths", async () => {
+    mockSyncState = {
+      progress: { status: "partial_success", run_index_status: "insufficient_data", readiness_status: "insufficient_data", activities_count: 2 },
+      isStreaming: false,
+      error: null,
+    };
+    mockUseGarminSyncProgress.mockImplementation(() => mockSyncState);
+    setupFirstValueGetMocks({
+      pacesData: { confidence: "INSUFFICIENT", paces: {} },
+      todayData: {
+        status: "success",
+        served_prescription: { type: "recovery", duration: 30 },
       },
     });
 
     renderOnboarding();
     await reachFirstValueStep();
 
-    expect(await screen.findByTestId("first-paces-easy")).toBeInTheDocument();
-    expect(screen.queryByTestId("first-paces-threshold")).toBeNull();
+    expect(await screen.findByTestId("first-paces-insufficient")).toBeInTheDocument();
+    expect(screen.getByTestId("first-today-success")).toHaveTextContent("Recovery");
+    expect(screen.getByTestId("runindex-insufficient-data")).toBeInTheDocument();
+    expect(endpointCalls("/training/v2/paces")).toBe(1);
+    expect(endpointCalls("/training/today")).toBe(1);
   });
 
-  test("free users never call /training/v2/paces", async () => {
-    mockSubscriptionState = { hasPremiumAccess: false };
-    axios.get.mockResolvedValue({ data: {} });
-
-    renderOnboarding();
-    await reachFirstValueStep();
-
-    await waitFor(() => expect(screen.getByTestId("onboarding-step-first-value")).toBeInTheDocument());
-    expect(axios.get).not.toHaveBeenCalled();
-    expect(screen.queryByTestId("first-paces-section")).toBeNull();
-  });
-
-  test("language change rerenders labels without refetching /training/v2/paces", async () => {
-    axios.get.mockResolvedValue({
-      data: {
+  test("J. language change rerenders labels without refetching paces or today", async () => {
+    setupFirstValueGetMocks({
+      pacesData: {
         confidence: "HIGH",
-        paces: {
-          easy: { lower: { min_per_km: 5.0 }, upper: { min_per_km: 5.5 } },
-          threshold: { min_per_km: 4.2 },
-        },
+        paces: { threshold: { min_per_km: 4.2 } },
+      },
+      todayData: {
+        status: "success",
+        served_prescription: { type: "threshold", duration: 45 },
       },
     });
 
     renderOnboarding({ withLangControls: true });
     await reachFirstValueStep();
+    await waitFor(() => expect(screen.getByText("Today's session")).toBeInTheDocument());
 
-    await waitFor(() => expect(screen.getByText("Your first training paces")).toBeInTheDocument());
-    const callsBefore = axios.get.mock.calls.filter(([url]) => String(url).includes("/training/v2/paces")).length;
-
+    const pacesBefore = endpointCalls("/training/v2/paces");
+    const todayBefore = endpointCalls("/training/today");
     fireEvent.click(screen.getByTestId("set-lang-fr"));
 
-    await waitFor(() => expect(screen.getByText("Tes premières allures")).toBeInTheDocument());
-    const callsAfter = axios.get.mock.calls.filter(([url]) => String(url).includes("/training/v2/paces")).length;
-    expect(callsAfter).toBe(callsBefore);
+    await waitFor(() => expect(screen.getByText("Séance du jour")).toBeInTheDocument());
+    expect(endpointCalls("/training/v2/paces")).toBe(pacesBefore);
+    expect(endpointCalls("/training/today")).toBe(todayBefore);
   });
 
-  test("onboarding paces section does not leak vdot, predicted time, or race references", async () => {
-    axios.get.mockResolvedValue({
-      data: {
+  test("K. free users never call premium paces/today endpoints", async () => {
+    mockSubscriptionState = { hasPremiumAccess: false };
+    setupFirstValueGetMocks({
+      pacesData: { confidence: "HIGH", paces: { threshold: { min_per_km: 4.2 } } },
+      todayData: { status: "success", served_prescription: { type: "easy", duration: 20 } },
+    });
+
+    renderOnboarding();
+    await reachFirstValueStep();
+
+    expect(endpointCalls("/training/v2/paces")).toBe(0);
+    expect(endpointCalls("/training/today")).toBe(0);
+    expect(screen.queryByTestId("first-paces-section")).toBeNull();
+    expect(screen.queryByTestId("first-today-section")).toBeNull();
+  });
+
+  test("L. activation UI does not leak vdot, predicted time, race references, or reason codes", async () => {
+    setupFirstValueGetMocks({
+      pacesData: {
         confidence: "HIGH",
         predicted_time: { "5k": "20:00" },
         vdot: 52.4,
-        race_references: {
-          "5k": { pace: { min_per_km: 4.0 } },
-          marathon: { pace: { min_per_km: 5.1 } },
-        },
-        paces: {
-          easy: { lower: { min_per_km: 5.0 }, upper: { min_per_km: 5.4 } },
-          threshold: { min_per_km: 4.2 },
-        },
+        race_references: { marathon: { pace: { min_per_km: 5.1 } } },
+        paces: { threshold: { min_per_km: 4.2 } },
+      },
+      todayData: {
+        status: "success",
+        adaptation_reason: "internal-code",
+        adaptation_reason_codes: ["foo", "bar"],
+        served_prescription: { type: "threshold", duration: 40 },
       },
     });
 
     renderOnboarding();
     await reachFirstValueStep();
 
-    expect(await screen.findByTestId("first-paces-success")).toBeInTheDocument();
+    expect(await screen.findByTestId("first-paces-threshold")).toBeInTheDocument();
     expect(screen.queryByText(/vdot/i)).toBeNull();
     expect(screen.queryByText(/predicted/i)).toBeNull();
     expect(screen.queryByText(/5k/i)).toBeNull();
     expect(screen.queryByText(/marathon/i)).toBeNull();
+    expect(screen.queryByText(/internal-code/i)).toBeNull();
   });
 });
