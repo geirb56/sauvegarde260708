@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import { Card, CardContent } from "@/components/ui/card";
@@ -66,6 +66,7 @@ export default function Onboarding() {
   const [completionError, setCompletionError] = useState("");
   const [firstPacesStatus, setFirstPacesStatus] = useState("idle"); // idle | loading | success | insufficient | error
   const [firstPacesData, setFirstPacesData] = useState(null);
+  const firstPacesRequestStartedRef = useRef(false);
 
   const [garminStatus, setGarminStatus] = useState("idle"); // idle | connecting | connected | mfa_required | error
   const [garminUsername, setGarminUsername] = useState("");
@@ -129,13 +130,14 @@ export default function Onboarding() {
   const shouldFetchFirstPaces = stepKey === "firstValue" && syncOutcomeKnown && hasPremiumAccess === true;
 
   useEffect(() => {
-    if (!shouldFetchFirstPaces || firstPacesStatus !== "idle") return;
+    if (!shouldFetchFirstPaces || firstPacesRequestStartedRef.current) return;
+    firstPacesRequestStartedRef.current = true;
     let isStale = false;
     setFirstPacesStatus("loading");
 
-    axios
-      .get(`${API}/training/v2/paces`)
-      .then((response) => {
+    const fetchFirstPaces = async () => {
+      try {
+        const response = await axios.get(`${API}/training/v2/paces`);
         if (isStale) return;
         const payload = response?.data;
         const confidence = typeof payload?.confidence === "string" ? payload.confidence : null;
@@ -151,17 +153,18 @@ export default function Onboarding() {
           return;
         }
         setFirstPacesStatus("success");
-      })
-      .catch(() => {
+      } catch {
         if (isStale) return;
         setFirstPacesData(null);
         setFirstPacesStatus("error");
-      });
+      }
+    };
+    fetchFirstPaces();
 
     return () => {
       isStale = true;
     };
-  }, [firstPacesStatus, shouldFetchFirstPaces]);
+  }, [shouldFetchFirstPaces]);
 
   const firstPacesEasyLower = firstPacesData?.paces?.easy?.lower?.min_per_km;
   const firstPacesEasyUpper = firstPacesData?.paces?.easy?.upper?.min_per_km;
