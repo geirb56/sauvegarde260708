@@ -16,13 +16,13 @@
  * 12. no extra legacy endpoints introduced
  */
 
-import React, { act } from "react";
+import React, { act, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { MemoryRouter } from "react-router-dom";
 import axios from "axios";
 
 import Dashboard from "@/pages/Dashboard";
-import { LanguageProvider } from "@/context/LanguageContext";
+import { LanguageProvider, useLanguage } from "@/context/LanguageContext";
 import { LANGUAGE_STORAGE_KEY } from "@/lib/i18n";
 
 jest.mock("axios");
@@ -128,8 +128,6 @@ const WEEK_V2_DURATION = {
   },
 };
 
-const CYCLE_SEMI = { goal: { goal_type: "SEMI" } };
-
 function pacesPayload({ confidence = "HIGH", interval = { lower: { pace_str: "4:10", min_per_km: 4.1667 }, upper: { pace_str: "4:30", min_per_km: 4.5 } }, includeThreshold = true, includeEasy = true, raceRefs = {} } = {}) {
   return {
     confidence,
@@ -158,7 +156,6 @@ function buildDefaultMocks(overrides = {}) {
     cardio: CARDIO_NO_DATA,
     weekV2: null,
     paces: null,
-    cycle: null,
   };
   return { ...defaults, ...overrides };
 }
@@ -177,23 +174,29 @@ function setupAxiosMocks(mocks) {
       if (mocks.paces) return Promise.resolve({ data: mocks.paces });
       return Promise.reject(new Error("not available"));
     }
-    if (url.includes("training/v2/cycle")) {
-      if (mocks.cycle) return Promise.resolve({ data: mocks.cycle });
-      return Promise.reject(new Error("not available"));
-    }
     if (url.includes("training/metrics")) return Promise.resolve({ data: null });
     return Promise.resolve({ data: null });
   });
 }
 
-function renderDashboard() {
+function LanguageController({ onReady }) {
+  const { setLang } = useLanguage();
+  useEffect(() => {
+    onReady(setLang);
+  }, [onReady, setLang]);
+  return null;
+}
+
+function renderDashboard({ withLanguageController = false } = {}) {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
+  let setLangControl = null;
   act(() => {
     root.render(
       <LanguageProvider>
         <MemoryRouter>
+          {withLanguageController ? <LanguageController onReady={(setter) => { setLangControl = setter; }} /> : null}
           <Dashboard />
         </MemoryRouter>
       </LanguageProvider>
@@ -201,6 +204,12 @@ function renderDashboard() {
   });
   return {
     container,
+    setLanguage: (nextLang) => {
+      act(() => {
+        if (!setLangControl) throw new Error("language controller not ready");
+        setLangControl(nextLang);
+      });
+    },
     unmount: () => {
       act(() => root.unmount());
       container.remove();
@@ -858,7 +867,6 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     setupAxiosMocks(buildDefaultMocks({
       weekV2: { ...WEEK_V2_DISTANCE, goal: { goal_type: "5k" } },
       paces: pacesPayload(),
-      cycle: CYCLE_SEMI,
     }));
 
     const { container, unmount } = renderDashboard();
@@ -867,6 +875,7 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     const card = container.querySelector('[data-testid="dashboard-paces-card"]');
     expect(card).not.toBeNull();
     expect(axios.get.mock.calls.map(([url]) => url).some((u) => u.includes("training/v2/paces"))).toBe(true);
+    expect(axios.get.mock.calls.map(([url]) => url).some((u) => u.includes("training/v2/cycle"))).toBe(false);
     unmount();
   });
 
@@ -887,7 +896,6 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     setupAxiosMocks(buildDefaultMocks({
       weekV2: { ...WEEK_V2_DISTANCE, goal: { goal_type: "5k" } },
       paces: pacesPayload(),
-      cycle: { goal: { goal_type: "5K" } },
     }));
 
     const { container, unmount } = renderDashboard();
@@ -915,7 +923,6 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     setupAxiosMocks(buildDefaultMocks({
       weekV2: { ...WEEK_V2_DISTANCE, goal: { goal_type: goalType } },
       paces: pacesPayload(),
-      cycle: null,
     }));
 
     const { container, unmount } = renderDashboard();
@@ -935,7 +942,6 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
         includeThreshold: false,
         raceRefs: { marathon: null },
       }),
-      cycle: null,
     }));
 
     const { container, unmount } = renderDashboard();
@@ -950,12 +956,61 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     unmount();
   });
 
-  it("11h. confidence INSUFFICIENT shows explicit empty state and no pseudo paces", async () => {
+  it("11h. pending /training/v2/paces shows loading state, not insufficient", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    axios.get.mockImplementation((url) => {
+      if (url.includes("dashboard/insight")) return Promise.resolve({ data: INSIGHT_PAYLOAD });
+      if (url.includes("rag/dashboard")) return Promise.reject(new Error("no rag"));
+      if (url.includes("training/today")) return Promise.resolve({ data: TODAY_PAYLOAD });
+      if (url.includes("run-index")) return Promise.resolve({ data: CARDIO_NO_DATA });
+      if (url.includes("training/v2/week")) return Promise.resolve({ data: { ...WEEK_V2_DISTANCE, goal: { goal_type: "5k" } } });
+      if (url.includes("training/v2/paces")) return new Promise(() => {});
+      return Promise.resolve({ data: null });
+    });
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const card = container.querySelector('[data-testid="dashboard-paces-card"]');
+    expect(card.querySelector('[data-testid="dashboard-paces-loading"]')).not.toBeNull();
+    expect(card.querySelector('[data-testid="dashboard-paces-empty"]')).toBeNull();
+    expect(card.querySelector('[data-testid="dashboard-paces-error"]')).toBeNull();
+    unmount();
+  });
+
+  it.each([
+    ["en", "Unable to load your paces.", "Insufficient data", "Unable to load this week."],
+    ["fr", "Impossible de charger vos allures.", "Données insuffisantes", "Impossible de charger cette semaine."],
+    ["es", "No se pueden cargar tus ritmos.", "Datos insuficientes", "No se puede cargar esta semana."],
+  ])("11i. paces request failure uses dedicated paces error copy in %s", async (lang, expectedPacesError, insufficientLabel, weekErrorLabel) => {
+    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, lang);
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(buildDefaultMocks({
+      weekV2: { ...WEEK_V2_DISTANCE, goal: { goal_type: "10k" } },
+      paces: null,
+    }));
+
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+
+    const card = container.querySelector('[data-testid="dashboard-paces-card"]');
+    const pacesError = card.querySelector('[data-testid="dashboard-paces-error"]');
+    expect(pacesError).not.toBeNull();
+    expect(pacesError.textContent).toBe(expectedPacesError);
+    expect(card.textContent).not.toContain("dashboard.pacesTeaserError");
+    expect(card.textContent).not.toContain(insufficientLabel);
+    expect(card.textContent).not.toContain(weekErrorLabel);
+    expect(card.querySelector('[data-testid="dashboard-paces-empty"]')).toBeNull();
+    expect(card.querySelector('[data-testid="dashboard-paces-rows"]')).toBeNull();
+    expect(axios.get.mock.calls.some(([url]) => url.includes("/training/v2/paces"))).toBe(true);
+    unmount();
+  });
+
+  it("11j. confidence INSUFFICIENT shows explicit empty state and no pseudo paces", async () => {
     mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
     setupAxiosMocks(buildDefaultMocks({
       weekV2: { ...WEEK_V2_DISTANCE, goal: { goal_type: "10k" } },
       paces: pacesPayload({ confidence: "INSUFFICIENT", includeEasy: false, includeThreshold: false, interval: null, raceRefs: { marathon: null, half_marathon: null, "10k": null, "5k": null } }),
-      cycle: null,
     }));
 
     const { container, unmount } = renderDashboard();
@@ -967,12 +1022,11 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     unmount();
   });
 
-  it("11i. dashboard paces teaser never renders predicted time", async () => {
+  it("11k. dashboard paces teaser never renders predicted time", async () => {
     mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
     setupAxiosMocks(buildDefaultMocks({
       weekV2: { ...WEEK_V2_DISTANCE, goal: { goal_type: "5k" } },
       paces: pacesPayload(),
-      cycle: null,
     }));
 
     const { container, unmount } = renderDashboard();
@@ -984,12 +1038,11 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     unmount();
   });
 
-  it("11j. dashboard paces CTA links to /training", async () => {
+  it("11l. dashboard paces CTA links to /training", async () => {
     mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
     setupAxiosMocks(buildDefaultMocks({
       weekV2: { ...WEEK_V2_DISTANCE, goal: { goal_type: "5k" } },
       paces: pacesPayload(),
-      cycle: null,
     }));
 
     const { container, unmount } = renderDashboard();
@@ -1001,12 +1054,11 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     unmount();
   });
 
-  it("11k. paces card keeps compact mobile-safe structure", async () => {
+  it("11m. paces card keeps compact mobile-safe structure", async () => {
     mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
     setupAxiosMocks(buildDefaultMocks({
       weekV2: { ...WEEK_V2_DISTANCE, goal: { goal_type: "5k" } },
       paces: pacesPayload(),
-      cycle: null,
     }));
 
     const { container, unmount } = renderDashboard();
@@ -1017,7 +1069,7 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     unmount();
   });
 
-  it("11l. today-first ordering preserved with paces teaser inserted before weekly target", async () => {
+  it("11n. today-first ordering preserved with paces teaser inserted before weekly target", async () => {
     mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
     setupAxiosMocks(buildDefaultMocks({
       insight: {
@@ -1027,7 +1079,6 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
       cardio: CARDIO_WITH_READINESS,
       weekV2: { ...WEEK_V2_DISTANCE, goal: { goal_type: "5k" } },
       paces: pacesPayload(),
-      cycle: null,
     }));
 
     const { container, unmount } = renderDashboard();
@@ -1046,6 +1097,28 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     expect(today.compareDocumentPosition(runIndex) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(runIndex.compareDocumentPosition(paces) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(paces.compareDocumentPosition(weekly) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    unmount();
+  });
+
+  it("11o. language-only change rerenders labels without refetching /training/v2/paces", async () => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(buildDefaultMocks({
+      weekV2: { ...WEEK_V2_DISTANCE, goal: { goal_type: "5k" } },
+      paces: pacesPayload(),
+    }));
+
+    const { container, setLanguage, unmount } = renderDashboard({ withLanguageController: true });
+    await waitForRender();
+
+    const pacesCallsBefore = axios.get.mock.calls.filter(([url]) => url.includes("training/v2/paces")).length;
+    expect(container.textContent).toContain("My paces");
+
+    setLanguage("fr");
+    await waitForRender();
+
+    const pacesCallsAfter = axios.get.mock.calls.filter(([url]) => url.includes("training/v2/paces")).length;
+    expect(container.textContent).toContain("Mes allures");
+    expect(pacesCallsAfter).toBe(pacesCallsBefore);
     unmount();
   });
 
