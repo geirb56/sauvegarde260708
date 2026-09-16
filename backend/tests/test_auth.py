@@ -554,30 +554,94 @@ async def test_me_tampered_token(client):
 
 async def test_reset_password_flow(client, fake_db):
     email = "reset13@example.com"
-    await _register(client, email=email)
+    old_password = "Password1!"
+    new_password = "NewPassword2@"
+    await _register(client, email=email, pw=old_password)
 
-    # Trigger forgot-password
-    res_fp = await client.post("/auth/forgot-password", json={"email": email})
-    assert res_fp.status_code == 200
+    captured_tokens = []
 
-    # Find the user doc and inject a known raw token
+    def _capture_reset_email(_, raw_token):
+        captured_tokens.append(raw_token)
+
+    with patch.object(auth_router_module, "_send_reset_email", side_effect=_capture_reset_email):
+        res_fp = await client.post("/auth/forgot-password", json={"email": email})
+        assert res_fp.status_code == 200
+
+    assert len(captured_tokens) == 1
+    raw = captured_tokens[0]
+
     user_doc = None
     for doc in fake_db.users._docs:
         if doc.get("email") == email:
             user_doc = doc
             break
     assert user_doc is not None
-
-    raw = _secrets.token_urlsafe(32)
-    user_doc["reset_password_token_hash"] = hashlib.sha256(raw.encode()).hexdigest()
-    user_doc["reset_password_expires_at"] = datetime.now(timezone.utc) + timedelta(hours=1)
+    assert user_doc["reset_password_token_hash"] == hashlib.sha256(raw.encode()).hexdigest()
+    assert user_doc["reset_password_expires_at"] > datetime.now(timezone.utc)
 
     res_rp = await client.post(
         "/auth/reset-password",
-        json={"token": raw, "new_password": "NewPassword2@"},
+        json={"token": raw, "new_password": new_password},
     )
     assert res_rp.status_code == 200
     assert "reset_password_token_hash" not in user_doc
+    assert "reset_password_expires_at" not in user_doc
+
+    # Token must be single-use
+    res_reuse = await client.post(
+        "/auth/reset-password",
+        json={"token": raw, "new_password": "AnotherPass3#"},
+    )
+    assert res_reuse.status_code == 400
+
+    # Old password no longer works; new password does
+    login_old = await client.post("/auth/login", json={"email": email, "password": old_password})
+    login_new = await client.post("/auth/login", json={"email": email, "password": new_password})
+    assert login_old.status_code == 401
+    assert login_new.status_code == 200
+
+
+async def test_forgot_password_non_disclosure_same_response_for_known_and_unknown(client):
+    await _register(client, email="known-reset@example.com")
+
+    res_known = await client.post("/auth/forgot-password", json={"email": "known-reset@example.com"})
+    res_unknown = await client.post("/auth/forgot-password", json={"email": "unknown-reset@example.com"})
+
+    assert res_known.status_code == 200
+    assert res_unknown.status_code == 200
+    assert res_known.json() == res_unknown.json()
+
+
+async def test_forgot_password_new_request_invalidates_previous_token(client):
+    email = "replace-reset@example.com"
+    await _register(client, email=email)
+
+    captured_tokens = []
+
+    def _capture_reset_email(_, raw_token):
+        captured_tokens.append(raw_token)
+
+    with patch.object(auth_router_module, "_send_reset_email", side_effect=_capture_reset_email):
+        res_first = await client.post("/auth/forgot-password", json={"email": email})
+        res_second = await client.post("/auth/forgot-password", json={"email": email})
+
+    assert res_first.status_code == 200
+    assert res_second.status_code == 200
+    assert len(captured_tokens) == 2
+    old_token, new_token = captured_tokens
+    assert old_token != new_token
+
+    old_reset = await client.post(
+        "/auth/reset-password",
+        json={"token": old_token, "new_password": "BrandNew4$"},
+    )
+    new_reset = await client.post(
+        "/auth/reset-password",
+        json={"token": new_token, "new_password": "BrandNew4$"},
+    )
+
+    assert old_reset.status_code == 400
+    assert new_reset.status_code == 200
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
