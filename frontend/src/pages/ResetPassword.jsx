@@ -23,6 +23,9 @@ export default function ResetPassword() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState(false);
 
+  const meetsPasswordPolicy = (candidate) =>
+    candidate.length >= 8 && [...candidate].some((c) => !/\p{L}/u.test(c));
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
@@ -33,6 +36,10 @@ export default function ResetPassword() {
     }
     if (password.length < 8) {
       setError(t("auth.passwordTooShort"));
+      return;
+    }
+    if (!meetsPasswordPolicy(password)) {
+      setError(t("auth.passwordPolicyNotMet"));
       return;
     }
 
@@ -106,6 +113,9 @@ export default function ResetPassword() {
                     {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {t("auth.passwordHint")}
+                </p>
               </div>
 
               <div>

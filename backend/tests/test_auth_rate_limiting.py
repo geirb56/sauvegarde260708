@@ -84,14 +84,20 @@ class _FakeCollection:
         self._docs.append(candidate)
 
     async def update_one(self, query, update):
+        matched = 0
         for doc in self._docs:
             if self._match(doc, query):
+                matched = 1
                 if "$set" in update:
                     doc.update(update["$set"])
                 if "$unset" in update:
                     for k in update["$unset"]:
                         doc.pop(k, None)
                 break
+        class _UpdateResult:
+            def __init__(self, matched_count: int):
+                self.matched_count = matched_count
+        return _UpdateResult(matched)
 
     async def create_index(self, *args, **kwargs):
         pass

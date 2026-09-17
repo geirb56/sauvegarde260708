@@ -1,6 +1,7 @@
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
+import axios from "axios";
 
 import Login from "@/pages/Login";
 import Register from "@/pages/Register";
@@ -184,6 +185,20 @@ describe("auth pages and oauth UI", () => {
     expect(resetValid.container.textContent).toContain("Choisissez un nouveau mot de passe");
     expect(resetValid.container.textContent).toContain("Réinitialiser le mot de passe");
     resetValid.unmount();
+  });
+
+  test("reset password enforces client policy before API call", async () => {
+    const { container, unmount } = renderWithProviders(<ResetPassword />, { route: "/reset-password?token=test-token" });
+    setFieldValue(container.querySelector("#password"), "Password");
+    setFieldValue(container.querySelector("#confirmPassword"), "Password");
+
+    await act(async () => {
+      container.querySelector("form").dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+
+    expect(container.textContent).toContain("Password must include at least one digit or special character.");
+    expect(axios.post).not.toHaveBeenCalled();
+    unmount();
   });
 
   test("layout exposes translated logout control and calls logout", async () => {
