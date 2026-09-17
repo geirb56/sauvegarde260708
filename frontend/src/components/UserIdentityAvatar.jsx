@@ -7,7 +7,7 @@ function getUserEmail(user) {
 export function getUserIdentityInitial(user) {
   const email = getUserEmail(user);
   const localPart = email.split("@")[0] || "";
-  const firstVisibleCharacter = Array.from(localPart).find((char) => /[A-Za-z0-9]/.test(char));
+  const firstVisibleCharacter = Array.from(localPart).find((char) => /[\p{L}\p{N}]/u.test(char));
 
   return firstVisibleCharacter ? firstVisibleCharacter.toUpperCase() : "?";
 }
