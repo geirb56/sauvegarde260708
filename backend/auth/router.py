@@ -24,7 +24,7 @@ from email.message import EmailMessage
 from typing import Dict, List, Optional
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
 from auth.dependencies import get_current_user
@@ -366,7 +366,7 @@ _RESET_TOKEN_EXPIRE_MINUTES = 30
 
 
 @auth_router.post("/forgot-password", status_code=200)
-async def forgot_password(body: ForgotPasswordRequest, request: Request):
+async def forgot_password(body: ForgotPasswordRequest, request: Request, background_tasks: BackgroundTasks):
     """Request a password-reset link.
 
     Always returns 200 to prevent user enumeration — the response is identical
@@ -393,10 +393,7 @@ async def forgot_password(body: ForgotPasswordRequest, request: Request):
             }},
         )
 
-        try:
-            _send_reset_email(user["email"], raw_token)
-        except Exception:
-            logger.warning("Password reset email dispatch failed for %s", user["email"], exc_info=True)
+        background_tasks.add_task(_safe_send_reset_email, user["email"], raw_token)
 
     return {"message": "If this email is registered you will receive a reset link."}
 
@@ -412,22 +409,11 @@ async def reset_password(body: ResetPasswordRequest, request: Request):
     token_hash = _hash_token(body.token)
     now = datetime.now(timezone.utc)
 
-    user = await db.users.find_one(
+    result = await db.users.update_one(
         {
             "reset_password_token_hash": token_hash,
             "reset_password_expires_at": {"$gt": now},
         },
-        {"id": 1},
-    )
-
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid or expired reset token.",
-        )
-
-    await db.users.update_one(
-        {"id": user["id"]},
         {"$set": {
             "password_hash": hash_password(body.new_password),
             "updated_at": now,
@@ -437,8 +423,13 @@ async def reset_password(body: ResetPasswordRequest, request: Request):
              "reset_password_expires_at": "",
          }},
     )
+    if result.matched_count != 1:
+        raise HTTPException(
+           status_code=status.HTTP_400_BAD_REQUEST,
+           detail="Invalid or expired reset token.",
+        )
 
-    logger.info("Password reset for user: %s", user["id"])
+    logger.info("Password reset completed.")
     return {"message": "Password has been reset successfully."}
 
 
@@ -475,10 +466,17 @@ def _send_reset_email(email: str, raw_token: str) -> None:
         return
 
     if env != "production":
-        logger.info("[DEV] Password reset link for %s: %s", email, reset_link)
+        logger.info("[DEV] Password reset email prepared for %s", email)
         return
 
     logger.error("Password reset email not sent: configure EMAIL_PROVIDER=smtp and SMTP_* variables")
+
+
+def _safe_send_reset_email(email: str, raw_token: str) -> None:
+    try:
+        _send_reset_email(email, raw_token)
+    except Exception:
+        logger.warning("Password reset email delivery failed", exc_info=True)
 
 
 def _send_reset_email_smtp(*, email: str, subject: str, body: str) -> None:

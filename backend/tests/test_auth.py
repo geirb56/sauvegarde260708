@@ -116,14 +116,20 @@ class _FakeCollection:
             self._docs.append(candidate)
 
     async def update_one(self, query, update):
+        matched = 0
         for doc in self._docs:
             if self._match(doc, query):
+                matched = 1
                 if "$set" in update:
                     doc.update(update["$set"])
                 if "$unset" in update:
                     for k in update["$unset"]:
                         doc.pop(k, None)
                 break
+        class _UpdateResult:
+            def __init__(self, matched_count: int):
+                self.matched_count = matched_count
+        return _UpdateResult(matched)
 
     async def create_index(self, *args, **kwargs):
         pass
@@ -563,7 +569,7 @@ async def test_reset_password_flow(client, fake_db):
     def _capture_reset_email(_, raw_token):
         captured_tokens.append(raw_token)
 
-    with patch.object(auth_router_module, "_send_reset_email", side_effect=_capture_reset_email):
+    with patch.object(auth_router_module, "_safe_send_reset_email", side_effect=_capture_reset_email):
         res_fp = await client.post("/auth/forgot-password", json={"email": email})
         assert res_fp.status_code == 200
 
@@ -621,7 +627,7 @@ async def test_forgot_password_new_request_invalidates_previous_token(client):
     def _capture_reset_email(_, raw_token):
         captured_tokens.append(raw_token)
 
-    with patch.object(auth_router_module, "_send_reset_email", side_effect=_capture_reset_email):
+    with patch.object(auth_router_module, "_safe_send_reset_email", side_effect=_capture_reset_email):
         res_first = await client.post("/auth/forgot-password", json={"email": email})
         res_second = await client.post("/auth/forgot-password", json={"email": email})
 
@@ -642,6 +648,45 @@ async def test_forgot_password_new_request_invalidates_previous_token(client):
 
     assert old_reset.status_code == 400
     assert new_reset.status_code == 200
+
+
+async def test_reset_password_concurrent_single_use_atomic(client, fake_db):
+    email = "atomic-race@example.com"
+    await _register(client, email=email, pw="Password1!")
+
+    captured_tokens = []
+
+    def _capture_reset_email(_, raw_token):
+        captured_tokens.append(raw_token)
+
+    with patch.object(auth_router_module, "_safe_send_reset_email", side_effect=_capture_reset_email):
+        res_fp = await client.post("/auth/forgot-password", json={"email": email})
+        assert res_fp.status_code == 200
+
+    assert len(captured_tokens) == 1
+    shared_token = captured_tokens[0]
+
+    req1 = client.post(
+        "/auth/reset-password",
+        json={"token": shared_token, "new_password": "AtomicWinner1!"},
+    )
+    req2 = client.post(
+        "/auth/reset-password",
+        json={"token": shared_token, "new_password": "AtomicLoser2@"},
+    )
+    res1, res2 = await asyncio.gather(req1, req2)
+
+    statuses = sorted([res1.status_code, res2.status_code])
+    assert statuses == [400, 200]
+
+    login_1 = await client.post("/auth/login", json={"email": email, "password": "AtomicWinner1!"})
+    login_2 = await client.post("/auth/login", json={"email": email, "password": "AtomicLoser2@"})
+    assert sorted([login_1.status_code, login_2.status_code]) == [401, 200]
+
+    user_doc = next((d for d in fake_db.users._docs if d.get("email") == email), None)
+    assert user_doc is not None
+    assert "reset_password_token_hash" not in user_doc
+    assert "reset_password_expires_at" not in user_doc
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
