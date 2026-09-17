@@ -677,11 +677,11 @@ async def test_reset_password_concurrent_single_use_atomic(client, fake_db):
     res1, res2 = await asyncio.gather(req1, req2)
 
     statuses = sorted([res1.status_code, res2.status_code])
-    assert statuses == [400, 200]
+    assert statuses == [200, 400]
 
     login_1 = await client.post("/auth/login", json={"email": email, "password": "AtomicWinner1!"})
     login_2 = await client.post("/auth/login", json={"email": email, "password": "AtomicLoser2@"})
-    assert sorted([login_1.status_code, login_2.status_code]) == [401, 200]
+    assert sorted([login_1.status_code, login_2.status_code]) == [200, 401]
 
     user_doc = next((d for d in fake_db.users._docs if d.get("email") == email), None)
     assert user_doc is not None
