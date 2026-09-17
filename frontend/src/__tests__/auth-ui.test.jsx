@@ -106,6 +106,8 @@ describe("auth pages and oauth UI", () => {
     expect(first.container.querySelector("#email")).not.toBeNull();
     expect(first.container.querySelector("#password")).not.toBeNull();
     expect(first.container.querySelector('a[href="/forgot-password"]')).not.toBeNull();
+    expect(first.container.querySelector("h1")).not.toBeNull();
+    expect(first.container.querySelector("h1")?.textContent).toContain("Inicia sesión en tu cuenta");
 
     const loginLogo = first.container.querySelector('[data-testid="login-brand-logo"]');
     expect(loginLogo).toBeTruthy();
@@ -155,7 +157,10 @@ describe("auth pages and oauth UI", () => {
     const { container, unmount } = renderWithProviders(<Register />);
 
     const registerLogo = container.querySelector('[data-testid="register-brand-logo"]');
+    const registerHeading = container.querySelector("h1");
     expect(registerLogo).toBeTruthy();
+    expect(registerHeading).toBeTruthy();
+    expect(registerHeading.textContent).toContain("Crea tu cuenta");
     expect(registerLogo.getAttribute("src")).toBe("/runindex-logo.png");
     expect(registerLogo.getAttribute("alt")).toBe("RunIndex");
     expect(container.querySelector("#email")).not.toBeNull();

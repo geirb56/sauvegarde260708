@@ -47,8 +47,10 @@ export default function Login() {
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
+          <h1 className="sr-only">
+            {`${t("auth.title")} — ${t("auth.signIn")}`}
+          </h1>
           <CardTitle>
-            <h1 className="sr-only">{t("auth.title")}</h1>
             <AuthBrand testId="login-brand-logo" />
           </CardTitle>
           <p className="text-muted-foreground text-sm mt-1">{t("auth.signIn")}</p>
