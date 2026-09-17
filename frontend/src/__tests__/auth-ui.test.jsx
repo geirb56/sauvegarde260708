@@ -103,11 +103,24 @@ describe("auth pages and oauth UI", () => {
     expect(first.container.textContent).not.toContain("Continuar con Apple");
     expect(first.container.querySelector(".min-h-screen")).not.toBeNull();
     expect(first.container.querySelector(".max-w-sm")).not.toBeNull();
+    expect(first.container.querySelector("#email")).not.toBeNull();
+    expect(first.container.querySelector("#password")).not.toBeNull();
+    expect(first.container.querySelector('a[href="/forgot-password"]')).not.toBeNull();
+    expect(first.container.querySelector("h1")).not.toBeNull();
+    expect(first.container.querySelector("h1")?.textContent).toContain("Inicia sesión en tu cuenta");
+
+    const loginLogo = first.container.querySelector('[data-testid="login-brand-logo"]');
+    expect(loginLogo).toBeTruthy();
+    expect(loginLogo.getAttribute("src")).toBe("/runindex-logo.png");
+    expect(loginLogo.getAttribute("alt")).toBe("RunIndex");
 
     first.unmount();
 
     const second = renderWithProviders(<Login />);
     expect(second.container.textContent).toContain("Inicia sesión en tu cuenta");
+    const secondLoginLogo = second.container.querySelector('[data-testid="login-brand-logo"]');
+    expect(secondLoginLogo).toBeTruthy();
+    expect(secondLoginLogo.getAttribute("src")).toBe("/runindex-logo.png");
     second.unmount();
   });
 
@@ -142,6 +155,17 @@ describe("auth pages and oauth UI", () => {
   test("register shows translated client-side validation and responsive layout", async () => {
     window.localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
     const { container, unmount } = renderWithProviders(<Register />);
+
+    const registerLogo = container.querySelector('[data-testid="register-brand-logo"]');
+    const registerHeading = container.querySelector("h1");
+    expect(registerLogo).toBeTruthy();
+    expect(registerHeading).toBeTruthy();
+    expect(registerHeading.textContent).toContain("Crea tu cuenta");
+    expect(registerLogo.getAttribute("src")).toBe("/runindex-logo.png");
+    expect(registerLogo.getAttribute("alt")).toBe("RunIndex");
+    expect(container.querySelector("#email")).not.toBeNull();
+    expect(container.querySelector("#password")).not.toBeNull();
+    expect(container.querySelector("#confirmPassword")).not.toBeNull();
 
     setFieldValue(container.querySelector("#email"), "user@example.com");
     setFieldValue(container.querySelector("#password"), "Password1!");
