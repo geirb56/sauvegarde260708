@@ -14,8 +14,10 @@ WORKDIR /app/backend
 
 # Install Python deps first (better layer caching).
 COPY backend/requirements.txt /app/backend/requirements.txt
-RUN pip install -r /app/backend/requirements.txt \
-    && pip install "emergentintegrations" --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ || true
+RUN pip install -r /app/backend/requirements.txt
+
+RUN pip install "emergentintegrations" \
+    --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ || true
 
 # App code.
 COPY backend /app/backend
