@@ -413,6 +413,18 @@ class TestAppleNewUser:
         assert sub["status"] == "free"
         assert sub["trial_used"] is False
 
+    async def test_new_apple_user_does_not_emit_account_created_lifecycle_event(self, client):
+        claims = _make_apple_claims("apple-sub-no-brevo", "apple-no-brevo@icloud.com")
+        with patch("auth.oauth_router.verify_apple_id_token", new=AsyncMock(return_value=claims)), patch.object(
+            oauth_router_module,
+            "safe_emit_account_created_event",
+            new=AsyncMock(),
+        ) as mock_emit, patch.object(oauth_router_module.asyncio, "create_task") as mock_create_task:
+            resp = await _post_apple(client, {"id_token": "fake-token"})
+        assert resp.status_code == 200
+        mock_emit.assert_not_awaited()
+        mock_create_task.assert_not_called()
+
     async def test_apple_email_absent_still_creates_user(self, client):
         """Apple repeat-login: email may be absent from the ID token."""
         claims = _make_apple_claims("apple-sub-003", email=None, email_verified=False)

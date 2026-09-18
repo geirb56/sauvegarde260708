@@ -18,16 +18,6 @@ def _brevo_account_created_enabled() -> bool:
     return _env_flag("BREVO_ACCOUNT_CREATED_ENABLED", "false")
 
 
-def _brevo_track_event_url() -> str:
-    return str(
-        os.getenv("BREVO_TRACK_EVENT_URL", "https://in-automate.brevo.com/api/v2/trackEvent")
-    ).strip()
-
-
-def _brevo_account_created_event_name() -> str:
-    return str(os.getenv("BREVO_ACCOUNT_CREATED_EVENT_NAME", "account_created")).strip()
-
-
 def _brevo_timeout_seconds() -> float:
     raw = str(os.getenv("BREVO_TRACK_EVENT_TIMEOUT_SECONDS", "5")).strip()
     try:
@@ -54,26 +44,29 @@ async def emit_account_created_event(*, email: str, user_id: str, signup_method:
         return
 
     payload = {
-        "event": _brevo_account_created_event_name(),
-        "email": email,
-        "properties": {
+        "event_name": "account_created",
+        "identifiers": {
+            "email_id": email,
+        },
+        "event_properties": {
             "user_id": user_id,
             "signup_method": signup_method,
         },
     }
     headers = {
-        "ma-key": api_key,
+        "api-key": api_key,
         "Content-Type": "application/json",
     }
 
     client = _get_brevo_client()
     response = await client.post(
-        _brevo_track_event_url(),
+        "https://api.brevo.com/v3/events",
         headers=headers,
         json=payload,
         timeout=_brevo_timeout_seconds(),
     )
-    response.raise_for_status()
+    if response.status_code != 204:
+        raise RuntimeError(f"Brevo events API returned unexpected status: {response.status_code}")
 
 
 async def safe_emit_account_created_event(*, email: str, user_id: str, signup_method: str) -> None:

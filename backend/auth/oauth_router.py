@@ -733,22 +733,13 @@ async def auth_apple(body: AppleAuthRequest, request: Request):
             detail=str(exc),
         )
 
-    user, is_new_account = await _find_or_create_oauth_user(
+    user, _is_new_account = await _find_or_create_oauth_user(
         db=request.app.state.db,
         provider="apple",
         provider_subject=claims["sub"],
         provider_email=claims.get("email"),
         email_verified=claims.get("email_verified", False),
     )
-    if is_new_account:
-        asyncio.create_task(
-            safe_emit_account_created_event(
-                email=user["email"],
-                user_id=user["id"],
-                signup_method="oauth_apple",
-            )
-        )
-
     access_token = create_access_token(user["id"], user["email"])
     return TokenResponse(
         access_token=access_token,
