@@ -40,6 +40,7 @@ from auth.models import (
 )
 from auth.password import hash_password, verify_password
 from auth.roles import is_admin_user, resolve_user_role
+from services.lifecycle_email import safe_emit_account_created_event
 from subscription_manager import create_free_subscription
 
 logger = logging.getLogger(__name__)
@@ -274,6 +275,14 @@ async def register(body: UserCreate, request: Request):
     # BLOCKER note in subscription_manager.py.
     await create_free_subscription(db, user_id)
     logger.info("FREE subscription created for user: %s", user_id)
+    try:
+        await safe_emit_account_created_event(
+            email=user_email,
+            user_id=user_id,
+            signup_method="email",
+        )
+    except Exception:
+        logger.warning("Lifecycle email account_created dispatch failed", exc_info=True)
 
     access_token = create_access_token(user_id, user_email)
     return TokenResponse(

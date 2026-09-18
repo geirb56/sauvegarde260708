@@ -40,6 +40,7 @@ from auth.mongo_errors import DuplicateKeyError
 from auth.models import TokenResponse, UserResponse
 from auth.oauth_models import AppleAuthRequest, GoogleAuthRequest
 from auth.oauth_utils import verify_apple_id_token, verify_google_id_token
+from services.lifecycle_email import safe_emit_account_created_event
 from subscription_manager import create_free_subscription
 
 logger = logging.getLogger(__name__)
@@ -641,6 +642,14 @@ async def _find_or_create_oauth_user(
         provider_email=provider_email_normalized,
         email_verified=email_verified,
     )
+    try:
+        await safe_emit_account_created_event(
+            email=user_doc["email"],
+            user_id=user_doc["id"],
+            signup_method=f"oauth_{provider}",
+        )
+    except Exception:
+        logger.warning("Lifecycle email account_created dispatch failed", exc_info=True)
 
     return user_doc
 

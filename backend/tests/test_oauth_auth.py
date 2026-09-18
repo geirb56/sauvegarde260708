@@ -52,6 +52,7 @@ os.environ.setdefault("GOOGLE_CLIENT_ID", "test-google-client-id.apps.googleuser
 os.environ.setdefault("APPLE_CLIENT_ID", "com.runindex.app")
 
 from auth.mongo_errors import DuplicateKeyError
+import auth.oauth_router as oauth_router_module
 
 pytestmark = pytest.mark.asyncio
 
@@ -291,6 +292,22 @@ class TestGoogleNewUser:
         assert data["token_type"] == "bearer"
         assert data["user"]["email"] == "alice@gmail.com"
         assert "id" in data["user"]
+
+    async def test_new_google_user_emits_account_created_lifecycle_event(self, client):
+        claims = _make_google_claims("google-sub-event-001", "event@gmail.com")
+        with patch("auth.oauth_router.verify_google_id_token", new=AsyncMock(return_value=claims)), patch.object(
+            oauth_router_module,
+            "safe_emit_account_created_event",
+            new=AsyncMock(),
+        ) as mock_emit:
+            resp = await _post_google(client, {"id_token": "fake-google-token"})
+        assert resp.status_code == 200
+        user_id = resp.json()["user"]["id"]
+        mock_emit.assert_awaited_once_with(
+            email="event@gmail.com",
+            user_id=user_id,
+            signup_method="oauth_google",
+        )
 
     async def test_new_google_user_subscription_is_free(self, client, fake_db):
         claims = _make_google_claims("google-sub-002", "bob@gmail.com")
