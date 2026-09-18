@@ -39,6 +39,7 @@ describe("Layout mobile nav", () => {
     expect(screen.getByTestId("mobile-nav-sessions")).toBeInTheDocument();
     expect(screen.getByTestId("mobile-nav-coach")).toBeInTheDocument();
     expect(screen.getByTestId("mobile-nav-progress")).toBeInTheDocument();
+    expect(screen.getByTestId("header-user-avatar")).toHaveTextContent("R");
   });
 
   test("renders the intended full english labels in the mobile nav", () => {
@@ -75,5 +76,22 @@ describe("Layout mobile nav", () => {
     expect(within(mobileNav).getByText("Séances")).toBeInTheDocument();
     expect(within(mobileNav).getByText("Coach")).toBeInTheDocument();
     expect(within(mobileNav).getByText("Progression")).toBeInTheDocument();
+  });
+
+  test("uses a neutral avatar fallback when no factual identity is available", () => {
+    useAuth.mockReturnValue({
+      user: { is_admin: false },
+      logout: jest.fn(),
+    });
+
+    render(
+      <LanguageProvider>
+        <MemoryRouter>
+          <Layout />
+        </MemoryRouter>
+      </LanguageProvider>
+    );
+
+    expect(screen.getByTestId("header-user-avatar")).toHaveTextContent("?");
   });
 });

@@ -208,6 +208,18 @@ describe("Settings UX V2", () => {
     expect(await screen.findByTestId("settings-subscription-status")).toHaveTextContent("TRIAL");
     expect(screen.getByTestId("settings-subscription-trial")).toHaveTextContent("12 days remaining");
     expect(screen.getByTestId("settings-account-email")).toHaveTextContent("runner@example.com");
+    expect(screen.getByTestId("settings-account-avatar")).toHaveTextContent("R");
+  });
+
+  test("uses a neutral account avatar fallback when user email is unavailable", async () => {
+    mockUseAuth.mockReturnValue({
+      user: { id: "user-1", is_email_verified: false },
+    });
+    mockAxiosApi();
+    renderPage();
+
+    expect(await screen.findByTestId("settings-account-section")).toBeInTheDocument();
+    expect(screen.getByTestId("settings-account-avatar")).toHaveTextContent("?");
   });
 
   test("language renders in EN, FR and ES without raw keys", async () => {
