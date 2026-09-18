@@ -3,7 +3,6 @@ import { useSearchParams } from "react-router-dom";
 import axios from "axios";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { useLanguage } from "@/context/LanguageContext";
 import {
@@ -33,60 +32,59 @@ const API = API_BASE_URL;
 // ─── Static data ──────────────────────────────────────────────────────────────
 
 const FREE_FEATURES = [
-  "Synchronisation Garmin",
+  "Connexion Garmin",
   "Tableau de bord",
-  "Analyse automatique des séances",
-  "Revue hebdomadaire",
-  "Historique récent",
+  "RunIndex",
+  "Historique récent des activités",
+  "Statistiques de base",
   "Jusqu'à 10 questions au coach IA par mois",
 ];
 
 const PREMIUM_FEATURES = [
   "Tout le contenu Gratuit",
-  "Analyses IA avancées",
-  "Recommandations personnalisées",
+  "Plan d'entraînement",
+  "Adaptation du plan",
+  "Analyse des séances",
+  "Analyses détaillées",
+  "Bilan hebdomadaire",
   "Prévisions 5 km",
   "Prévisions 10 km",
   "Prévisions Semi-marathon",
   "Prévisions Marathon",
-  "Évolution du RunIndex",
-  "Estimation de la VMA",
-  "Analyse fatigue / récupération",
-  "Historique complet",
-  "Tendances",
-  "Coach IA prioritaire",
+  "Historique complet du RunIndex",
+  "Questions illimitées au coach IA",
 ];
 
 const WHY_FEATURES = [
   {
     icon: Activity,
-    title: "Analyse automatique",
-    desc: "Chaque séance est analysée automatiquement dès sa synchronisation Garmin.",
+    title: "Analyse des séances",
+    desc: "Selon votre abonnement, RunIndex résume vos séances Garmin et met en avant les points clés.",
   },
   {
     icon: Brain,
     title: "Coach IA",
-    desc: "Posez vos questions et obtenez des conseils personnalisés adaptés à votre état de forme.",
+    desc: "Posez vos questions sur vos données d'entraînement. Free inclut 10 questions par mois.",
   },
   {
     icon: TrendingUp,
     title: "Suivi de progression",
-    desc: "Visualisez l'évolution de votre RunIndex et de vos performances.",
+    desc: "Consultez votre RunIndex actuel et son évolution dans le temps.",
   },
   {
     icon: Target,
     title: "Prévisions de course",
-    desc: "Estimation de vos chronos sur : 5 km, 10 km, Semi-marathon, Marathon.",
+    desc: "Le mode Premium inclut des estimations sur 5 km, 10 km, semi-marathon et marathon.",
   },
   {
     icon: Heart,
     title: "Fatigue & récupération",
-    desc: "Comprenez quand pousser... et quand récupérer.",
+    desc: "Retrouvez des repères sur votre état de forme à partir de vos données Garmin.",
   },
   {
     icon: Calendar,
-    title: "Plan d'entraînement intelligent",
-    desc: "Le plan s'adapte automatiquement à votre récupération.",
+    title: "Plan d'entraînement",
+    desc: "Le plan Premium s'ajuste à votre état de forme et à vos séances.",
   },
 ];
 
@@ -94,22 +92,22 @@ const HOW_IT_WORKS = [
   {
     step: "01",
     title: "Connectez Garmin",
-    desc: "Liez votre compte Garmin en moins d'une minute via OAuth sécurisé.",
+    desc: "Reliez votre compte Garmin avec une connexion sécurisée.",
   },
   {
     step: "02",
     title: "Synchronisation automatique",
-    desc: "Vos activités, fréquence cardiaque, sommeil et charge d'entraînement sont récupérés automatiquement.",
+    desc: "Vos activités et indicateurs compatibles remontent dans RunIndex.",
   },
   {
     step: "03",
-    title: "RunIndex analyse vos données",
-    desc: "Notre IA analyse chaque séance et calcule votre RunIndex en temps réel.",
+    title: "Suivez vos données",
+    desc: "RunIndex met à jour votre tableau de bord, votre RunIndex et, selon votre abonnement, vos analyses.",
   },
   {
     step: "04",
-    title: "Recommandations personnalisées",
-    desc: "Recevez des conseils adaptés à votre état de forme actuel.",
+    title: "Activez Trial ou Premium",
+    desc: "Le Trial donne 30 jours d'accès Premium complet après une connexion Garmin éligible.",
   },
 ];
 
@@ -127,7 +125,7 @@ const FAQ_ITEMS = [
   },
   {
     q: "Mes données sont-elles sécurisées ?",
-    a: "Absolument. Vos données sont transmises via OAuth sécurisé et stockées de manière chiffrée. Nous ne partageons jamais vos données personnelles avec des tiers.",
+    a: "Oui. La connexion à Garmin se fait via un parcours sécurisé, et vos données d'entraînement restent associées à votre compte RunIndex.",
   },
   {
     q: "Puis-je annuler à tout moment ?",
@@ -135,7 +133,7 @@ const FAQ_ITEMS = [
   },
   {
     q: "Comment fonctionne l'essai gratuit ?",
-    a: "Vous bénéficiez de 30 jours d'accès Premium complet. À l'issue de l'essai, vous passez automatiquement sur le plan Gratuit sauf si vous choisissez de continuer en Premium.",
+    a: "L'essai donne 30 jours d'accès Premium complet après une connexion Garmin éligible. Un seul essai est disponible par compte Garmin. À la fin de l'essai, le compte repasse en Free sauf abonnement Premium actif.",
   },
   {
     q: "Le coach IA remplace-t-il un entraîneur ?",
@@ -198,7 +196,7 @@ export default function Subscription() {
   useEffect(() => {
     const prevTitle = document.title;
     document.title =
-      "RunIndex – Analysez vos entraînements Garmin et progressez plus vite";
+      "RunIndex – Suivez vos entraînements Garmin";
 
     loadStatus();
     loadGarminStatus();
@@ -411,14 +409,14 @@ export default function Subscription() {
           </div>
 
           <h1 className="font-heading text-4xl sm:text-5xl md:text-6xl uppercase tracking-tight font-bold text-white leading-tight">
-            Analysez vos entraînements.{" "}
-            <span className="text-primary">Progressez plus vite.</span>
+            Analysez vos entraînements Garmin.{" "}
+            <span className="text-primary">Suivez votre progression.</span>
           </h1>
 
           <p className="text-muted-foreground text-base sm:text-lg max-w-xl mx-auto leading-relaxed">
-            Connectez votre montre Garmin et laissez RunIndex analyser
-            automatiquement votre récupération, votre charge d'entraînement et
-            vos performances grâce à l'intelligence artificielle.
+            Connectez Garmin pour retrouver vos activités, votre RunIndex et,
+            selon votre abonnement, des analyses, des prévisions et un plan
+            d&apos;entraînement.
           </p>
 
           <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
@@ -441,7 +439,7 @@ export default function Subscription() {
                 }`}
                 data-testid={isInTrial ? "trial-status-pill" : "premium-status-pill"}
               >
-                {isInTrial ? "Essai Garmin actif" : "Premium actif"}
+                {isInTrial ? "Essai Premium actif" : "Premium actif"}
               </div>
             )}
             <Button
@@ -461,7 +459,7 @@ export default function Subscription() {
                   <div>
                     <p className="font-semibold">Connectez Garmin pour démarrer l'essai</p>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      L'accès Trial est décidé par le backend après authentification Garmin puis refresh réel du statut d'abonnement.
+                      L&apos;essai Premium de 30 jours démarre après une connexion Garmin éligible. Un seul essai est disponible par compte Garmin.
                     </p>
                   </div>
                   <Input
@@ -504,7 +502,7 @@ export default function Subscription() {
 
           <div className="flex flex-wrap items-center justify-center gap-4 pt-2 text-xs text-muted-foreground">
             {[
-              "30 jours gratuits",
+              "Essai Premium 30 jours si Garmin éligible",
               "Sans engagement",
               "Résiliable à tout moment",
             ].map((label) => (
@@ -518,6 +516,9 @@ export default function Subscription() {
 
         {/* Illustration cards */}
         <div className="relative mt-14 w-full max-w-lg mx-auto px-4">
+          <p className="mb-3 text-center text-xs text-muted-foreground">
+            Exemples illustratifs
+          </p>
           <div className="grid grid-cols-3 gap-2 sm:gap-3">
             {[
               { icon: Activity, label: "RunIndex", value: "87", color: "text-primary" },
@@ -544,7 +545,7 @@ export default function Subscription() {
             Pourquoi RunIndex ?
           </h2>
           <p className="text-muted-foreground text-sm max-w-lg mx-auto">
-            Une plateforme intelligente qui comprend vos entraînements en profondeur.
+            Des repères clairs pour relire vos entraînements Garmin.
           </p>
         </div>
 
@@ -577,11 +578,11 @@ export default function Subscription() {
             <h2 className="font-heading text-2xl sm:text-3xl md:text-4xl uppercase tracking-tight font-bold mb-3">
               Comment ça marche ?
             </h2>
-            <p className="text-muted-foreground text-sm">En 4 étapes simples.</p>
+            <p className="text-muted-foreground text-sm">En quelques étapes.</p>
           </div>
 
           <div className="space-y-8">
-            {HOW_IT_WORKS.map(({ step, title, desc }, idx) => (
+            {HOW_IT_WORKS.map(({ step, title, desc }) => (
               <div key={step} className="flex items-start gap-5">
                 <div
                   className="shrink-0 w-12 h-12 rounded-full flex items-center justify-center font-bold text-sm font-mono"
@@ -608,21 +609,20 @@ export default function Subscription() {
           <div className="space-y-5">
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-border bg-card text-xs font-medium text-muted-foreground">
               <Watch className="w-3 h-3" />
-              Intégration officielle
+              Connexion sécurisée
             </div>
             <h2 className="font-heading text-2xl sm:text-3xl md:text-4xl uppercase tracking-tight font-bold">
-              Connectez votre montre Garmin en moins d'une minute
+              Connectez votre compte Garmin
             </h2>
             <p className="text-sm text-muted-foreground leading-relaxed">
-              RunIndex récupère automatiquement vos activités, votre fréquence
-              cardiaque, votre sommeil, votre charge d'entraînement et vos autres
-              données afin de produire des analyses personnalisées.
+              RunIndex récupère vos activités et les indicateurs compatibles
+              nécessaires pour alimenter vos vues et vos fonctionnalités.
             </p>
             <div className="space-y-3 pt-1">
               {[
-                "Synchronisation automatique",
-                "Données sécurisées",
-                "Connexion OAuth",
+                "Connexion sécurisée",
+                "Import des activités compatibles",
+                "Essai Premium 30 jours si éligible",
               ].map((item) => (
                 <div key={item} className="flex items-center gap-3 text-sm">
                   <div className="w-5 h-5 rounded-full bg-primary/15 flex items-center justify-center shrink-0">
@@ -641,14 +641,14 @@ export default function Subscription() {
             <div>
               <p className="font-bold text-lg">Garmin Connect</p>
               <p className="text-xs text-muted-foreground mt-1">
-                Synchronisation sécurisée via OAuth 2.0
+                La connexion Garmin reste nécessaire pour importer vos données
               </p>
             </div>
             <div className="flex gap-8">
               {[
-                { value: "∞", label: "Activités" },
-                { value: "24/7", label: "Sync auto" },
-                { value: "🔒", label: "Chiffré" },
+                { value: "Activités", label: "données compatibles" },
+                { value: "Sommeil", label: "si disponible" },
+                { value: "Charge", label: "selon Garmin" },
               ].map(({ value, label }) => (
                 <div key={label} className="text-center">
                   <p className="text-primary font-bold text-lg">{value}</p>
@@ -670,15 +670,19 @@ export default function Subscription() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-10 items-center">
             <div className="space-y-4">
               <h2 className="font-heading text-2xl sm:text-3xl md:text-4xl uppercase tracking-tight font-bold">
-                Votre coach personnel disponible 24h/24
+                Posez vos questions au coach IA
               </h2>
               <p className="text-sm text-muted-foreground leading-relaxed">
-                Posez vos questions à votre coach IA qui connaît parfaitement
-                vos données Garmin et peut vous répondre à tout moment.
+                Le coach IA aide à relire vos données et vos entraînements.
+                Free inclut 10 questions par mois ; Trial et Premium donnent
+                l&apos;accès complet.
               </p>
             </div>
 
             <div className="space-y-3">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                Exemples de questions
+              </p>
               {COACH_QUESTIONS.map((question, idx) => (
                 <div
                   key={idx}
@@ -716,7 +720,15 @@ export default function Subscription() {
             Tarifs
           </h2>
           <p className="text-muted-foreground text-sm">
-            Simple, transparent, sans engagement.
+            Trois états d&apos;abonnement : FREE, TRIAL et PREMIUM.
+          </p>
+        </div>
+
+        <div className="mx-auto mb-8 max-w-3xl rounded-2xl border border-border bg-card/50 px-5 py-4 text-sm">
+          <p className="font-semibold">TRIAL</p>
+          <p className="mt-1 text-muted-foreground">
+            30 jours d&apos;accès Premium complet après une connexion Garmin éligible.
+            Un seul essai est disponible par compte Garmin.
           </p>
         </div>
 
@@ -737,7 +749,7 @@ export default function Subscription() {
           <Card className="border-border">
             <CardContent className="p-6 flex flex-col h-full">
               <div className="mb-auto">
-                <h3 className="font-bold text-lg mb-1">Gratuit</h3>
+                <h3 className="font-bold text-lg mb-1">FREE</h3>
                 <p className="text-xs text-muted-foreground mb-5">
                   Pour découvrir RunIndex
                 </p>
@@ -773,14 +785,9 @@ export default function Subscription() {
             className="border-primary/60 relative"
             style={{ boxShadow: "0 0 40px rgba(76,175,80,0.08)" }}
           >
-            <div className="absolute -top-3 left-1/2 -translate-x-1/2">
-              <Badge className="bg-amber-500 text-white text-xs px-3 py-1">
-                ⭐ Recommandé
-              </Badge>
-            </div>
             <CardContent className="p-6 flex flex-col h-full">
               <div className="mb-auto">
-                <h3 className="font-bold text-lg mb-1">Premium</h3>
+                <h3 className="font-bold text-lg mb-1">PREMIUM</h3>
                 <p className="text-xs text-muted-foreground mb-5">
                   Accès complet à RunIndex
                 </p>
@@ -791,7 +798,7 @@ export default function Subscription() {
                   </span>
                 </div>
                 <p className="text-xs text-primary mb-6">
-                  Essai Garmin après connexion · sans engagement
+                  TRIAL : 30 jours Premium après connexion Garmin éligible
                 </p>
                 <ul className="space-y-2 mb-6">
                   {PREMIUM_FEATURES.map((f) => (
@@ -827,10 +834,10 @@ export default function Subscription() {
 
         <div className="mt-6 text-center space-y-1">
           <p className="text-xs text-muted-foreground">
-            Aucun paiement pendant les 30 premiers jours.
+            Le plan TRIAL donne 30 jours Premium après connexion Garmin éligible.
           </p>
           <p className="text-xs text-muted-foreground">
-            Résiliable à tout moment.
+            Un seul essai est disponible par compte Garmin.
           </p>
         </div>
       </section>
@@ -884,11 +891,11 @@ export default function Subscription() {
       {/* ── CTA FINAL ─────────────────────────────────────────────────────── */}
       <section id="cta" className="px-4 py-20 max-w-2xl mx-auto text-center">
         <h2 className="font-heading text-2xl sm:text-3xl md:text-4xl uppercase tracking-tight font-bold mb-4">
-          Prêt à progresser plus intelligemment ?
+          Prêt à voir vos données Garmin dans RunIndex ?
         </h2>
         <p className="text-muted-foreground text-sm mb-8 max-w-md mx-auto leading-relaxed">
-          Rejoignez les coureurs qui utilisent déjà RunIndex pour mieux
-          comprendre leurs entraînements et atteindre leurs objectifs.
+          Connectez Garmin pour activer votre espace RunIndex et, si votre
+          compte est éligible, l&apos;essai Premium de 30 jours.
         </p>
         {showTrialCta ? (
           <Button
@@ -908,7 +915,7 @@ export default function Subscription() {
           </span>
           <span className="flex items-center gap-1">
             <Check className="w-3 h-3" />
-            30 jours gratuits
+            Essai 30 jours si éligible
           </span>
         </div>
       </section>
