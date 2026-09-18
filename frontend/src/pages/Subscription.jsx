@@ -646,13 +646,13 @@ export default function Subscription() {
             </div>
             <div className="flex gap-8">
               {[
-                { value: "Activités", label: "données compatibles" },
-                { value: "Sommeil", label: "si disponible" },
-                { value: "Charge", label: "selon Garmin" },
-              ].map(({ value, label }) => (
-                <div key={label} className="text-center">
-                  <p className="text-primary font-bold text-lg">{value}</p>
-                  <p className="text-xs text-muted-foreground">{label}</p>
+                { title: "Activités", subtitle: "données compatibles" },
+                { title: "Sommeil", subtitle: "si disponible" },
+                { title: "Charge", subtitle: "selon Garmin" },
+              ].map(({ title, subtitle }) => (
+                <div key={title} className="text-center">
+                  <p className="text-primary font-bold text-lg">{title}</p>
+                  <p className="text-xs text-muted-foreground">{subtitle}</p>
                 </div>
               ))}
             </div>
