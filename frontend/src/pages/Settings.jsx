@@ -16,13 +16,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import UserIdentityAvatar from "@/components/UserIdentityAvatar";
 import { useAuth } from "@/context/AuthContext";
 import { useLanguage } from "@/context/LanguageContext";
 import { useSubscription } from "@/context/SubscriptionContext";
 import { useUnitSystem } from "@/context/UnitContext";
 import { useGarminSyncProgress } from "@/hooks/useGarminSyncProgress";
 import { API_BASE_URL } from "@/config";
-import { CheckCircle2, Crown, Dumbbell, Globe, Loader2, Mail, Route, ShieldCheck, Watch } from "lucide-react";
+import { CheckCircle2, Crown, Dumbbell, Globe, Loader2, Route, ShieldCheck, Watch } from "lucide-react";
 import { toast } from "sonner";
 
 const API = API_BASE_URL;
@@ -1194,7 +1195,7 @@ export default function Settings() {
             <SettingRow
               label={t("settingsV2.account.email")}
               value={user?.email || t("settingsV2.common.missing")}
-              action={<Mail className="h-4 w-4 text-muted-foreground" />}
+              action={<UserIdentityAvatar user={user} className="h-10 w-10 text-sm" testId="settings-account-avatar" />}
               testId="settings-account-email"
             />
             <SettingRow

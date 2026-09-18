@@ -16,16 +16,19 @@ import hashlib
 import logging
 import os
 import secrets
+import smtplib
 import time
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
+from email.message import EmailMessage
 from typing import Dict, List, Optional
+from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
 from auth.dependencies import get_current_user
-from auth.jwt_utils import create_access_token, create_short_lived_token, decode_short_lived_token
+from auth.jwt_utils import create_access_token
 from auth.mongo_errors import DuplicateKeyError
 from auth.models import (
     ForgotPasswordRequest,
@@ -185,6 +188,16 @@ def _user_to_response(user: dict) -> UserResponse:
 def _hash_token(token: str) -> str:
     """Store a SHA-256 hash of a token, never the raw value."""
     return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _frontend_base_url() -> str:
+    base = str(os.getenv("FRONTEND_URL", "https://runindex.app")).strip()
+    return (base.rstrip("/") or "https://runindex.app")
+
+
+def _build_reset_link(raw_token: str) -> str:
+    query = urlencode({"token": raw_token})
+    return f"{_frontend_base_url()}/reset-password?{query}"
 
 
 async def _enqueue_post_login_garmin_sync(user_id: str) -> None:
@@ -353,7 +366,7 @@ _RESET_TOKEN_EXPIRE_MINUTES = 30
 
 
 @auth_router.post("/forgot-password", status_code=200)
-async def forgot_password(body: ForgotPasswordRequest, request: Request):
+async def forgot_password(body: ForgotPasswordRequest, request: Request, background_tasks: BackgroundTasks):
     """Request a password-reset link.
 
     Always returns 200 to prevent user enumeration — the response is identical
@@ -368,21 +381,19 @@ async def forgot_password(body: ForgotPasswordRequest, request: Request):
     if user:
         raw_token = secrets.token_urlsafe(32)
         token_hash = _hash_token(raw_token)
-        expires_at = datetime.now(timezone.utc) + timedelta(minutes=_RESET_TOKEN_EXPIRE_MINUTES)
+        now = datetime.now(timezone.utc)
+        expires_at = now + timedelta(minutes=_RESET_TOKEN_EXPIRE_MINUTES)
 
         await db.users.update_one(
             {"id": user["id"]},
             {"$set": {
                 "reset_password_token_hash": token_hash,
                 "reset_password_expires_at": expires_at,
-                "updated_at": datetime.now(timezone.utc),
+                "updated_at": now,
             }},
         )
 
-        # Email delivery: log token in dev; wire a real provider in prod.
-        # The token is safe to transmit via email link since it is single-use
-        # and expires in 30 minutes.
-        _send_reset_email(user["email"], raw_token)
+        background_tasks.add_task(_safe_send_reset_email, user["email"], raw_token)
 
     return {"message": "If this email is registered you will receive a reset link."}
 
@@ -398,22 +409,11 @@ async def reset_password(body: ResetPasswordRequest, request: Request):
     token_hash = _hash_token(body.token)
     now = datetime.now(timezone.utc)
 
-    user = await db.users.find_one(
+    result = await db.users.update_one(
         {
             "reset_password_token_hash": token_hash,
             "reset_password_expires_at": {"$gt": now},
         },
-        {"id": 1},
-    )
-
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid or expired reset token.",
-        )
-
-    await db.users.update_one(
-        {"id": user["id"]},
         {"$set": {
             "password_hash": hash_password(body.new_password),
             "updated_at": now,
@@ -423,8 +423,13 @@ async def reset_password(body: ResetPasswordRequest, request: Request):
              "reset_password_expires_at": "",
          }},
     )
+    if result.matched_count != 1:
+        raise HTTPException(
+           status_code=status.HTTP_400_BAD_REQUEST,
+           detail="Invalid or expired reset token.",
+        )
 
-    logger.info("Password reset for user: %s", user["id"])
+    logger.info("Password reset completed.")
     return {"message": "Password has been reset successfully."}
 
 
@@ -444,8 +449,59 @@ def _send_reset_email(email: str, raw_token: str) -> None:
         FRONTEND_URL            Base URL for the reset link
     """
     env = os.getenv("ENVIRONMENT", "development").lower()
+    provider = str(os.getenv("EMAIL_PROVIDER", "")).strip().lower()
+    reset_link = _build_reset_link(raw_token)
+    subject = "RunIndex password reset"
+    body = (
+        "You requested a password reset for your RunIndex account.\n\n"
+        "Use the link below to choose a new password:\n"
+        f"{reset_link}\n\n"
+        f"This link expires in {_RESET_TOKEN_EXPIRE_MINUTES} minutes. "
+        "If you did not request this, you can ignore this email.\n"
+    )
+
+    if provider == "smtp":
+        _send_reset_email_smtp(email=email, subject=subject, body=body)
+        logger.info("Password reset email dispatched to %s via smtp", email)
+        return
+
     if env != "production":
-        logger.info("[DEV] Password reset email would be sent to %s", email)
-    else:
-        logger.info("Password reset email dispatched to %s", email)
-        # TODO: integrate a transactional email provider here
+        logger.info("[DEV] Password reset email prepared for %s", email)
+        return
+
+    logger.error("Password reset email not sent: configure EMAIL_PROVIDER=smtp and SMTP_* variables")
+
+
+def _safe_send_reset_email(email: str, raw_token: str) -> None:
+    try:
+        _send_reset_email(email, raw_token)
+    except Exception:
+        logger.warning("Password reset email delivery failed", exc_info=True)
+
+
+def _send_reset_email_smtp(*, email: str, subject: str, body: str) -> None:
+    host = str(os.getenv("SMTP_HOST", "")).strip()
+    from_addr = str(os.getenv("EMAIL_FROM", "")).strip()
+    username = str(os.getenv("SMTP_USERNAME", "")).strip()
+    password = str(os.getenv("SMTP_PASSWORD", ""))
+    port = int(os.getenv("SMTP_PORT", "587"))
+    timeout = int(os.getenv("SMTP_TIMEOUT_SECONDS", "10"))
+    use_tls = str(os.getenv("SMTP_USE_TLS", "true")).strip().lower() not in {"0", "false", "no"}
+
+    if not host or not from_addr:
+        raise RuntimeError("SMTP_HOST and EMAIL_FROM are required when EMAIL_PROVIDER=smtp")
+
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = from_addr
+    message["To"] = email
+    message.set_content(body)
+
+    with smtplib.SMTP(host, port, timeout=timeout) as smtp:
+        smtp.ehlo()
+        if use_tls:
+            smtp.starttls()
+            smtp.ehlo()
+        if username and password:
+            smtp.login(username, password)
+        smtp.send_message(message)

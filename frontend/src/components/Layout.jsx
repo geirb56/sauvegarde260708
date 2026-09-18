@@ -2,6 +2,7 @@ import { Outlet, NavLink, Link, useLocation } from "react-router-dom";
 import { Activity, Home, CalendarDays, MessageCircle, Settings, TrendingUp, LogOut, Shield } from "lucide-react";
 import { useLanguage } from "@/context/LanguageContext";
 import { useAuth } from "@/context/AuthContext";
+import UserIdentityAvatar from "@/components/UserIdentityAvatar";
 
 export const Layout = () => {
   const location = useLocation();
@@ -63,9 +64,7 @@ export const Layout = () => {
           >
             <LogOut className="w-5 h-5" />
           </button>
-          <div className="header-avatar">
-            {user?.email ? user.email[0].toUpperCase() : "?"}
-          </div>
+          <UserIdentityAvatar user={user} className="header-avatar" testId="header-user-avatar" />
         </div>
       </header>
 
