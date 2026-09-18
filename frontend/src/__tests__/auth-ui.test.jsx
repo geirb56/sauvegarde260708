@@ -113,6 +113,11 @@ describe("auth pages and oauth UI", () => {
     expect(loginLogo).toBeTruthy();
     expect(loginLogo.getAttribute("src")).toBe("/runindex-logo.png");
     expect(loginLogo.getAttribute("alt")).toBe("RunIndex");
+    expect(loginLogo.className).toContain("h-auto");
+    expect(loginLogo.className).toContain("w-full");
+    expect(loginLogo.className).toContain("max-w-[280px]");
+    expect(loginLogo.className).not.toContain("h-12");
+    expect(loginLogo.className).not.toContain("max-w-[220px]");
 
     first.unmount();
 
@@ -163,6 +168,11 @@ describe("auth pages and oauth UI", () => {
     expect(registerHeading.textContent).toContain("Crea tu cuenta");
     expect(registerLogo.getAttribute("src")).toBe("/runindex-logo.png");
     expect(registerLogo.getAttribute("alt")).toBe("RunIndex");
+    expect(registerLogo.className).toContain("h-auto");
+    expect(registerLogo.className).toContain("w-full");
+    expect(registerLogo.className).toContain("max-w-[280px]");
+    expect(registerLogo.className).not.toContain("h-12");
+    expect(registerLogo.className).not.toContain("max-w-[220px]");
     expect(container.querySelector("#email")).not.toBeNull();
     expect(container.querySelector("#password")).not.toBeNull();
     expect(container.querySelector("#confirmPassword")).not.toBeNull();
@@ -254,6 +264,8 @@ describe("auth pages and oauth UI", () => {
     expect(appLogo).toBeTruthy();
     expect(appLogo.getAttribute("src")).toBe("/runindex-symbol.png");
     expect(appLogo.getAttribute("src")).not.toBe("/runindex-logo.png");
+    expect(container.querySelector('[data-testid="header-user-avatar"]')).toBeNull();
+    expect(container.querySelector('[data-testid="header-settings-link"]')).not.toBeNull();
 
     await act(async () => {
       logoutButton.click();

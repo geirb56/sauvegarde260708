@@ -7,7 +7,7 @@ export default function AuthBrand({
     <img
       src="/runindex-logo.png"
       alt={altText}
-      className={`mx-auto h-12 w-auto max-w-[220px] ${className}`.trim()}
+      className={`mx-auto h-auto w-full max-w-[280px] ${className}`.trim()}
       data-testid={testId}
     />
   );
