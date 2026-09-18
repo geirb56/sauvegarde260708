@@ -33,6 +33,7 @@ const API = API_BASE_URL;
 
 const FREE_FEATURES = [
   "Connexion Garmin",
+  "Synchronisation automatique",
   "Tableau de bord",
   "RunIndex",
   "Historique récent des activités",
