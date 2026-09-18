@@ -750,7 +750,7 @@ export default function Subscription() {
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-3xl mx-auto">
           {/* Free */}
-          <Card className="border-border">
+          <Card className="border-border" data-testid="subscription-free-card">
             <CardContent className="p-6 flex flex-col h-full">
               <div className="mb-auto">
                 <h3 className="font-bold text-lg mb-1">FREE</h3>

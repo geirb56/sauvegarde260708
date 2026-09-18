@@ -69,7 +69,8 @@ describe("Subscription page product-truth copy", () => {
     renderPage();
 
     expect(await screen.findByText("FREE")).toBeInTheDocument();
-    expect(screen.getByText("Synchronisation automatique")).toBeInTheDocument();
+    const freeCard = screen.getByTestId("subscription-free-card");
+    expect(within(freeCard).getByText("Synchronisation automatique")).toBeInTheDocument();
     expect(screen.queryByText("Analyse automatique des séances")).not.toBeInTheDocument();
     expect(screen.queryByText("Revue hebdomadaire")).not.toBeInTheDocument();
     expect(screen.queryByText("Coach IA prioritaire")).not.toBeInTheDocument();
