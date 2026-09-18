@@ -724,7 +724,10 @@ export default function Subscription() {
           </p>
         </div>
 
-        <div className="mx-auto mb-8 max-w-3xl rounded-2xl border border-border bg-card/50 px-5 py-4 text-sm">
+        <div
+          className="mx-auto mb-8 max-w-3xl rounded-2xl border border-border bg-card/50 px-5 py-4 text-sm"
+          data-testid="subscription-trial-info"
+        >
           <p className="font-semibold">TRIAL</p>
           <p className="mt-1 text-muted-foreground">
             30 jours d&apos;accès Premium complet après une connexion Garmin éligible.

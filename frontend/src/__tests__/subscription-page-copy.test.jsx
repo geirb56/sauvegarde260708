@@ -1,6 +1,6 @@
 import React from "react";
 import "@testing-library/jest-dom";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import axios from "axios";
 
@@ -52,8 +52,10 @@ describe("Subscription page product-truth copy", () => {
     renderPage();
 
     expect(await screen.findByText("Tarifs")).toBeInTheDocument();
-    expect(screen.getAllByText(/30 jours d'accès Premium complet après une connexion Garmin éligible/i).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/Un seul essai est disponible par compte Garmin/i).length).toBeGreaterThan(0);
+    const trialInfo = screen.getByTestId("subscription-trial-info");
+    expect(within(trialInfo).getByText("TRIAL")).toBeInTheDocument();
+    expect(within(trialInfo).getByText(/30 jours d'accès Premium complet après une connexion Garmin éligible/i)).toBeInTheDocument();
+    expect(within(trialInfo).getByText(/Un seul essai est disponible par compte Garmin/i)).toBeInTheDocument();
     expect(screen.getByText("Exemples illustratifs")).toBeInTheDocument();
     expect(screen.getByText("Exemples de questions")).toBeInTheDocument();
     expect(screen.getByText("Essai Premium 30 jours si Garmin éligible")).toBeInTheDocument();
