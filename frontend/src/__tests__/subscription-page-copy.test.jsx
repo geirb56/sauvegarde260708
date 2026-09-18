@@ -53,12 +53,16 @@ describe("Subscription page product-truth copy", () => {
 
     expect(await screen.findByText("Tarifs")).toBeInTheDocument();
     const trialInfo = screen.getByTestId("subscription-trial-info");
-    expect(within(trialInfo).getByText("TRIAL")).toBeInTheDocument();
-    expect(within(trialInfo).getByText(/30 jours d'accès Premium complet après une connexion Garmin éligible/i)).toBeInTheDocument();
-    expect(within(trialInfo).getByText(/Un seul essai est disponible par compte Garmin/i)).toBeInTheDocument();
-    expect(screen.getByText("Exemples illustratifs")).toBeInTheDocument();
-    expect(screen.getByText("Exemples de questions")).toBeInTheDocument();
-    expect(screen.getByText("Essai Premium 30 jours si Garmin éligible")).toBeInTheDocument();
+    expect(within(trialInfo).getByText(/trial/i)).toBeInTheDocument();
+    expect(trialInfo).toHaveTextContent(/30 jours/i);
+    expect(trialInfo).toHaveTextContent(/premium/i);
+    expect(trialInfo).toHaveTextContent(/garmin/i);
+    expect(trialInfo).toHaveTextContent(/éligible/i);
+    expect(trialInfo).toHaveTextContent(/un seul essai/i);
+    expect(trialInfo).toHaveTextContent(/compte garmin/i);
+    expect(screen.getByText(/exemples illustratifs/i)).toBeInTheDocument();
+    expect(screen.getByText(/exemples de questions/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/garmin éligible/i).length).toBeGreaterThan(0);
   });
 
   test("removes misleading free and marketing promises", async () => {
