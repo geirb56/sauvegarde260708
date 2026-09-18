@@ -275,14 +275,13 @@ async def register(body: UserCreate, request: Request):
     # BLOCKER note in subscription_manager.py.
     await create_free_subscription(db, user_id)
     logger.info("FREE subscription created for user: %s", user_id)
-    try:
-        await safe_emit_account_created_event(
+    asyncio.create_task(
+        safe_emit_account_created_event(
             email=user_email,
             user_id=user_id,
             signup_method="email",
         )
-    except Exception:
-        logger.warning("Lifecycle email account_created dispatch failed", exc_info=True)
+    )
 
     access_token = create_access_token(user_id, user_email)
     return TokenResponse(

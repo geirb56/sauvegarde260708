@@ -261,6 +261,23 @@ def _auth(token: str) -> dict:
     return {"Authorization": "Bearer " + token}
 
 
+async def _drain(tasks):
+    if tasks:
+        await asyncio.gather(*tasks)
+
+
+def _capture_background_tasks():
+    tasks = []
+    original_create_task = oauth_router_module.asyncio.create_task
+
+    def _schedule(coro):
+        task = original_create_task(coro)
+        tasks.append(task)
+        return task
+
+    return tasks, _schedule
+
+
 async def _post_google(client, payload: dict) -> httpx.Response:
     challenge = await client.post("/auth/oauth/challenge/google")
     assert challenge.status_code == 200
@@ -295,12 +312,14 @@ class TestGoogleNewUser:
 
     async def test_new_google_user_emits_account_created_lifecycle_event(self, client):
         claims = _make_google_claims("google-sub-event-001", "event@gmail.com")
+        tasks, schedule = _capture_background_tasks()
         with patch("auth.oauth_router.verify_google_id_token", new=AsyncMock(return_value=claims)), patch.object(
             oauth_router_module,
             "safe_emit_account_created_event",
             new=AsyncMock(),
-        ) as mock_emit:
+        ) as mock_emit, patch.object(oauth_router_module.asyncio, "create_task", side_effect=schedule):
             resp = await _post_google(client, {"id_token": "fake-google-token"})
+            await _drain(tasks)
         assert resp.status_code == 200
         user_id = resp.json()["user"]["id"]
         mock_emit.assert_awaited_once_with(

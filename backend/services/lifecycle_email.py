@@ -6,6 +6,7 @@ import os
 import httpx
 
 logger = logging.getLogger(__name__)
+_brevo_client: httpx.AsyncClient | None = None
 
 
 def _env_flag(name: str, default: str = "false") -> bool:
@@ -36,6 +37,13 @@ def _brevo_timeout_seconds() -> float:
     return max(timeout, 0.1)
 
 
+def _get_brevo_client() -> httpx.AsyncClient:
+    global _brevo_client
+    if _brevo_client is None:
+        _brevo_client = httpx.AsyncClient()
+    return _brevo_client
+
+
 async def emit_account_created_event(*, email: str, user_id: str, signup_method: str) -> None:
     if not _brevo_account_created_enabled():
         return
@@ -58,9 +66,14 @@ async def emit_account_created_event(*, email: str, user_id: str, signup_method:
         "Content-Type": "application/json",
     }
 
-    async with httpx.AsyncClient(timeout=_brevo_timeout_seconds()) as client:
-        response = await client.post(_brevo_track_event_url(), headers=headers, json=payload)
-        response.raise_for_status()
+    client = _get_brevo_client()
+    response = await client.post(
+        _brevo_track_event_url(),
+        headers=headers,
+        json=payload,
+        timeout=_brevo_timeout_seconds(),
+    )
+    response.raise_for_status()
 
 
 async def safe_emit_account_created_event(*, email: str, user_id: str, signup_method: str) -> None:

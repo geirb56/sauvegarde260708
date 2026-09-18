@@ -30,6 +30,7 @@ from __future__ import annotations
 import logging
 import secrets
 import uuid
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -452,7 +453,7 @@ async def _find_or_create_oauth_user(
     provider_subject: str,
     provider_email: Optional[str],
     email_verified: bool,
-) -> dict:
+) -> tuple[dict, bool]:
     """Return the RunIndex user for this OAuth identity, creating one if needed.
 
     Lookup is performed exclusively on (provider, provider_subject) — never
@@ -521,7 +522,7 @@ async def _find_or_create_oauth_user(
         if email_verified:
             user["is_email_verified"] = True
         logger.info("OAuth login completed for provider=%s", provider)
-        return user
+        return user, False
 
     # 2) Unknown identity + verified email: reuse existing RunIndex user by email.
     if provider_email_normalized and email_verified:
@@ -543,7 +544,7 @@ async def _find_or_create_oauth_user(
                 "OAuth identity linked to an existing user for provider=%s",
                 provider,
             )
-            return existing_user
+            return existing_user, False
 
     # 3) Unknown identity: create a new RunIndex user.
     if provider_email_normalized and email_verified:
@@ -568,7 +569,7 @@ async def _find_or_create_oauth_user(
     try:
         await db.users.insert_one(user_doc)
     except DuplicateKeyError:
-        return await _resolve_user_insert_collision(
+        resolved_user = await _resolve_user_insert_collision(
             db,
             provider=provider,
             provider_subject=provider_subject,
@@ -577,6 +578,7 @@ async def _find_or_create_oauth_user(
             email_verified=email_verified,
             display_email=display_email,
         )
+        return resolved_user, False
 
     logger.info("New OAuth user created: user=%s provider=%s", new_user_id, provider)
 
@@ -632,7 +634,7 @@ async def _find_or_create_oauth_user(
         existing_user["last_login_at"] = now
         if email_verified:
             existing_user["is_email_verified"] = True
-        return existing_user
+        return existing_user, False
 
     await _record_identity_metadata(
         db,
@@ -642,16 +644,7 @@ async def _find_or_create_oauth_user(
         provider_email=provider_email_normalized,
         email_verified=email_verified,
     )
-    try:
-        await safe_emit_account_created_event(
-            email=user_doc["email"],
-            user_id=user_doc["id"],
-            signup_method=f"oauth_{provider}",
-        )
-    except Exception:
-        logger.warning("Lifecycle email account_created dispatch failed", exc_info=True)
-
-    return user_doc
+    return user_doc, True
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
@@ -691,13 +684,21 @@ async def auth_google(body: GoogleAuthRequest, request: Request):
             detail=str(exc),
         )
 
-    user = await _find_or_create_oauth_user(
+    user, is_new_account = await _find_or_create_oauth_user(
         db=request.app.state.db,
         provider="google",
         provider_subject=claims["sub"],
         provider_email=claims.get("email"),
         email_verified=claims.get("email_verified", False),
     )
+    if is_new_account:
+        asyncio.create_task(
+            safe_emit_account_created_event(
+                email=user["email"],
+                user_id=user["id"],
+                signup_method="oauth_google",
+            )
+        )
 
     access_token = create_access_token(user["id"], user["email"])
     return TokenResponse(
@@ -732,13 +733,21 @@ async def auth_apple(body: AppleAuthRequest, request: Request):
             detail=str(exc),
         )
 
-    user = await _find_or_create_oauth_user(
+    user, is_new_account = await _find_or_create_oauth_user(
         db=request.app.state.db,
         provider="apple",
         provider_subject=claims["sub"],
         provider_email=claims.get("email"),
         email_verified=claims.get("email_verified", False),
     )
+    if is_new_account:
+        asyncio.create_task(
+            safe_emit_account_created_event(
+                email=user["email"],
+                user_id=user["id"],
+                signup_method="oauth_apple",
+            )
+        )
 
     access_token = create_access_token(user["id"], user["email"])
     return TokenResponse(
