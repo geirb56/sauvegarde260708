@@ -211,6 +211,7 @@ export default function Settings() {
     subscription,
     isTrial,
     isPremium,
+    isFree,
     trialDaysRemaining,
     loading: subscriptionLoading,
     statusLabel,
@@ -1042,16 +1043,18 @@ export default function Settings() {
               <div className="flex flex-col gap-2 sm:flex-row">
                 {garminConnected ? (
                   <>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={handleSyncGarmin}
-                      disabled={garminBusyAction !== ""}
-                      data-testid="settings-garmin-sync"
-                    >
-                      {garminBusyAction === "sync" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                      {t("settingsV2.garmin.sync")}
-                    </Button>
+                    {!isFree ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={handleSyncGarmin}
+                        disabled={garminBusyAction !== ""}
+                        data-testid="settings-garmin-sync"
+                      >
+                        {garminBusyAction === "sync" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                        {t("settingsV2.garmin.sync")}
+                      </Button>
+                    ) : null}
                     <Button
                       type="button"
                       variant="outline"
