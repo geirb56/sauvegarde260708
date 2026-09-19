@@ -151,28 +151,35 @@ export default function Subscription() {
   const { t, lang } = useLanguage();
   const { refreshSubscription } = useSubscription();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [currentTier, setCurrentTier] = useState("free");
+  const [currentTier, setCurrentTier] = useState(null);
   const [loading, setLoading] = useState(true);
   const [subscribing, setSubscribing] = useState(false);
   const [trialBusy, setTrialBusy] = useState(false);
   const [openFaq, setOpenFaq] = useState(null);
   const [garminLoading, setGarminLoading] = useState(true);
   const [garminStatus, setGarminStatus] = useState(null);
+  const [subscriptionStatusError, setSubscriptionStatusError] = useState(false);
+  const [garminStatusError, setGarminStatusError] = useState(false);
   const [showGarminConnect, setShowGarminConnect] = useState(false);
   const [garminUsername, setGarminUsername] = useState("");
   const [garminPassword, setGarminPassword] = useState("");
   const [trialMessage, setTrialMessage] = useState({ status: "idle", message: "" });
 
-  const loadStatus = useCallback(async () => {
+  const loadStatus = useCallback(async ({ showLoader = false } = {}) => {
+    if (showLoader) {
+      setLoading(true);
+    }
     try {
       const res = await axios.get(`${API}/subscription/info?language=${lang}`);
       const nextTier = res.data.status || "free";
       setCurrentTier(nextTier);
-      return nextTier;
+      setSubscriptionStatusError(false);
+      return { ok: true, tier: nextTier };
     } catch (e) {
       console.error(e);
-      setCurrentTier("free");
-      return "free";
+      setCurrentTier(null);
+      setSubscriptionStatusError(true);
+      return { ok: false, tier: null };
     } finally {
       setLoading(false);
     }
@@ -184,11 +191,14 @@ export default function Subscription() {
       const res = await axios.get(`${API}/garmin/status`);
       const nextStatus = res.data || null;
       setGarminStatus(nextStatus);
-      return nextStatus;
+      setGarminStatusError(false);
+      return { ok: true, status: nextStatus };
     } catch (error) {
       console.error("Failed to load Garmin status:", error);
       setGarminStatus(null);
-      return null;
+      setGarminStatusError(true);
+      setShowGarminConnect(false);
+      return { ok: false, status: null };
     } finally {
       setGarminLoading(false);
     }
@@ -215,23 +225,45 @@ export default function Subscription() {
   }, [loadGarminStatus, loadStatus, searchParams, setSearchParams]);
 
   const syncSubscriptionState = useCallback(async () => {
-    const [nextTier] = await Promise.all([
+    const [subscriptionResult, garminResult] = await Promise.all([
       loadStatus(),
       loadGarminStatus(),
       refreshSubscription(),
     ]);
-    return nextTier;
+    return {
+      tier: subscriptionResult.tier,
+      subscriptionOk: subscriptionResult.ok,
+      garminOk: garminResult.ok,
+    };
   }, [loadGarminStatus, loadStatus, refreshSubscription]);
 
-  const handlePostGarminRefresh = useCallback((nextTier) => {
-    if (nextTier === "trial") {
+  const handlePostGarminRefresh = useCallback(({ tier, subscriptionOk, garminOk }) => {
+    if (!subscriptionOk) {
+      setTrialMessage({
+        status: "error",
+        message: t("subscription.subscriptionStatusError")
+          || "Impossible de vérifier votre abonnement pour le moment. Réessayez.",
+      });
+      return;
+    }
+
+    if (!garminOk) {
+      setTrialMessage({
+        status: "error",
+        message: t("subscription.garminStatusError")
+          || "Impossible de vérifier la connexion Garmin pour le moment. Réessayez.",
+      });
+      return;
+    }
+
+    if (tier === "trial") {
       setTrialMessage({ status: "success", message: t("subscription.trialStarted") || "Essai gratuit de 30 jours activé !" });
       setShowGarminConnect(false);
       toast.success(t("subscription.trialStarted") || "Essai gratuit de 30 jours activé !");
       return;
     }
 
-    if (PREMIUM_TIERS.has(nextTier)) {
+    if (PREMIUM_TIERS.has(tier)) {
       setTrialMessage({ status: "success", message: t("subscription.subscriptionActivated") || "Abonnement activé !" });
       setShowGarminConnect(false);
       toast.success(t("subscription.subscriptionActivated") || "Abonnement activé !");
@@ -250,7 +282,32 @@ export default function Subscription() {
   const handleStartTrial = useCallback(async () => {
     setTrialMessage({ status: "idle", message: "" });
 
-    const effectiveGarminStatus = garminStatus || (garminLoading ? await loadGarminStatus() : null);
+    if (garminStatusError) {
+      setShowGarminConnect(false);
+      setTrialMessage({
+        status: "error",
+        message: t("subscription.garminStatusError")
+          || "Impossible de vérifier la connexion Garmin pour le moment. Réessayez.",
+      });
+      return;
+    }
+
+    const garminResult = garminStatus
+      ? { ok: true, status: garminStatus }
+      : garminLoading
+        ? await loadGarminStatus()
+        : { ok: true, status: null };
+    if (!garminResult.ok) {
+      setShowGarminConnect(false);
+      setTrialMessage({
+        status: "error",
+        message: t("subscription.garminStatusError")
+          || "Impossible de vérifier la connexion Garmin pour le moment. Réessayez.",
+      });
+      return;
+    }
+
+    const effectiveGarminStatus = garminResult.status;
     if (!effectiveGarminStatus?.connected) {
       setShowGarminConnect(true);
       return;
@@ -263,7 +320,7 @@ export default function Subscription() {
     } finally {
       setTrialBusy(false);
     }
-  }, [garminLoading, garminStatus, handlePostGarminRefresh, loadGarminStatus, syncSubscriptionState]);
+  }, [garminLoading, garminStatus, garminStatusError, handlePostGarminRefresh, loadGarminStatus, syncSubscriptionState, t]);
 
   const handleGarminTrialConnect = useCallback(async (event) => {
     event.preventDefault();
@@ -371,12 +428,17 @@ export default function Subscription() {
 
   const isCurrentlyPremium = PREMIUM_TIERS.has(currentTier);
   const isInTrial = currentTier === "trial";
+  const isTierKnown = typeof currentTier === "string";
   const showTrialCta = currentTier === "free";
   const trialMessageClass = trialMessage.status === "error"
     ? "border-destructive/40 bg-destructive/10 text-destructive"
     : trialMessage.status === "success"
       ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
       : "border-amber-500/40 bg-amber-500/10 text-amber-200";
+  const garminMessage = garminStatusError
+    ? t("subscription.garminStatusError")
+      || "Impossible de vérifier la connexion Garmin pour le moment. Réessayez."
+    : trialMessage.message;
 
   if (loading) {
     return (
@@ -421,7 +483,23 @@ export default function Subscription() {
           </p>
 
           <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
-            {showTrialCta ? (
+            {subscriptionStatusError ? (
+              <div className="w-full max-w-md rounded-2xl border border-destructive/40 bg-destructive/10 p-4 text-left" data-testid="subscription-status-error">
+                <p className="text-sm text-destructive">
+                  {t("subscription.subscriptionStatusError")
+                    || "Impossible de vérifier votre abonnement pour le moment. Réessayez."}
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="mt-3"
+                  onClick={() => loadStatus({ showLoader: true })}
+                  data-testid="subscription-status-retry-btn"
+                >
+                  {t("subscription.retry") || "Réessayer"}
+                </Button>
+              </div>
+            ) : showTrialCta ? (
               <Button
                 onClick={handleStartTrial}
                 disabled={trialBusy}
@@ -453,9 +531,9 @@ export default function Subscription() {
             </Button>
           </div>
 
-          {showTrialCta && (showGarminConnect || trialMessage.message) && (
+          {showTrialCta && isTierKnown && (showGarminConnect || garminMessage) && (
             <div className="mx-auto max-w-md space-y-3 rounded-2xl border border-border bg-card/80 p-4 text-left" data-testid="trial-garmin-panel">
-              {showGarminConnect && (
+              {showGarminConnect && !garminStatusError && (
                 <form className="space-y-3" onSubmit={handleGarminTrialConnect} data-testid="trial-garmin-connect-form">
                   <div>
                     <p className="font-semibold">Connectez Garmin pour démarrer l'essai</p>
@@ -493,10 +571,22 @@ export default function Subscription() {
                 </form>
               )}
 
-              {trialMessage.message ? (
+              {garminMessage ? (
                 <div className={`rounded-xl border px-3 py-2 text-sm ${trialMessageClass}`} data-testid="trial-garmin-status-message">
-                  {trialMessage.message}
+                  {garminMessage}
                 </div>
+              ) : null}
+              {garminStatusError ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => loadGarminStatus()}
+                  disabled={garminLoading}
+                  data-testid="garmin-status-retry-btn"
+                >
+                  {garminLoading && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
+                  {t("subscription.retry") || "Réessayer"}
+                </Button>
               ) : null}
             </div>
           )}
@@ -725,116 +815,130 @@ export default function Subscription() {
           </p>
         </div>
 
-        <div
-          className="mx-auto mb-8 max-w-3xl rounded-2xl border border-border bg-card/50 px-5 py-4 text-sm"
-          data-testid="subscription-trial-info"
-        >
-          <p className="font-semibold">TRIAL</p>
-          <p className="mt-1 text-muted-foreground">
-            30 jours d&apos;accès Premium complet après une connexion Garmin éligible.
-            Un seul essai est disponible par compte Garmin.
-          </p>
-        </div>
-
-        {/* Trial banner (preserved) */}
-        {isInTrial && (
+        {subscriptionStatusError ? (
           <div
-            className="mx-auto mb-8 max-w-2xl rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-center"
-            data-testid="trial-active-banner"
+            className="mx-auto max-w-3xl rounded-2xl border border-destructive/40 bg-destructive/10 px-5 py-4 text-sm"
+            data-testid="subscription-status-error-pricing"
           >
-            <p className="font-mono text-xs uppercase tracking-widest text-emerald-400">
-              {t("subscription.trialActive") || "Essai gratuit actif — accès complet"}
+            <p className="text-destructive">
+              {t("subscription.subscriptionStatusError")
+                || "Impossible de vérifier votre abonnement pour le moment. Réessayez."}
             </p>
           </div>
-        )}
+        ) : (
+          <>
+            <div
+              className="mx-auto mb-8 max-w-3xl rounded-2xl border border-border bg-card/50 px-5 py-4 text-sm"
+              data-testid="subscription-trial-info"
+            >
+              <p className="font-semibold">TRIAL</p>
+              <p className="mt-1 text-muted-foreground">
+                30 jours d&apos;accès Premium complet après une connexion Garmin éligible.
+                Un seul essai est disponible par compte Garmin.
+              </p>
+            </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-3xl mx-auto">
-          {/* Free */}
-          <Card className="border-border" data-testid="subscription-free-card">
-            <CardContent className="p-6 flex flex-col h-full">
-              <div className="mb-auto">
-                <h3 className="font-bold text-lg mb-1">FREE</h3>
-                <p className="text-xs text-muted-foreground mb-5">
-                  Pour découvrir RunIndex
-                </p>
-                <div className="mb-6">
-                  <span className="text-3xl font-bold">0 €</span>
-                  <span className="text-xs text-muted-foreground ml-2">
-                    / toujours gratuit
-                  </span>
-                </div>
-                <ul className="space-y-2 mb-6">
-                  {FREE_FEATURES.map((f) => (
-                    <li key={f} className="flex items-start gap-2 text-xs">
-                      <Check className="w-3 h-3 text-primary mt-0.5 shrink-0" />
-                      <span>{f}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-              <Button
-                variant="outline"
-                className="w-full mt-4"
-                disabled={currentTier === "free"}
+            {/* Trial banner (preserved) */}
+            {isInTrial && (
+              <div
+                className="mx-auto mb-8 max-w-2xl rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-center"
+                data-testid="trial-active-banner"
               >
-                {currentTier === "free"
-                  ? t("subscription.currentPlan")
-                  : "Commencer gratuitement"}
-              </Button>
-            </CardContent>
-          </Card>
-
-          {/* Premium */}
-          <Card
-            className="border-primary/60 relative"
-            style={{ boxShadow: "0 0 40px rgba(76,175,80,0.08)" }}
-          >
-            <CardContent className="p-6 flex flex-col h-full">
-              <div className="mb-auto">
-                <h3 className="font-bold text-lg mb-1">PREMIUM</h3>
-                <p className="text-xs text-muted-foreground mb-5">
-                  Accès complet à RunIndex
+                <p className="font-mono text-xs uppercase tracking-widest text-emerald-400">
+                  {t("subscription.trialActive") || "Essai gratuit actif — accès complet"}
                 </p>
-                <div className="mb-1">
-                  <span className="text-3xl font-bold">4,99 €</span>
-                  <span className="text-xs text-muted-foreground ml-2">
-                    / mois
-                  </span>
-                </div>
-                <p className="text-xs text-primary mb-6">
-                  TRIAL : 30 jours Premium après connexion Garmin éligible
-                </p>
-                <ul className="space-y-2 mb-6">
-                  {PREMIUM_FEATURES.map((f) => (
-                    <li key={f} className="flex items-start gap-2 text-xs">
-                      <Check className="w-3 h-3 text-primary mt-0.5 shrink-0" />
-                      <span>{f}</span>
-                    </li>
-                  ))}
-                </ul>
               </div>
-              {isCurrentlyPremium ? (
-                <Button disabled className="w-full mt-4">
-                  {t("subscription.currentPlan")}
-                </Button>
-              ) : (
-                <Button
-                  onClick={handleSubscribe}
-                  disabled={subscribing}
-                  className="w-full mt-4"
-                  data-testid="premium-subscribe-btn"
-                >
-                  {subscribing ? (
-                    <Loader2 className="w-4 h-4 animate-spin mr-2" />
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-3xl mx-auto">
+          {/* Free */}
+              <Card className="border-border" data-testid="subscription-free-card">
+                <CardContent className="p-6 flex flex-col h-full">
+                  <div className="mb-auto">
+                    <h3 className="font-bold text-lg mb-1">FREE</h3>
+                    <p className="text-xs text-muted-foreground mb-5">
+                      Pour découvrir RunIndex
+                    </p>
+                    <div className="mb-6">
+                      <span className="text-3xl font-bold">0 €</span>
+                      <span className="text-xs text-muted-foreground ml-2">
+                        / toujours gratuit
+                      </span>
+                    </div>
+                    <ul className="space-y-2 mb-6">
+                      {FREE_FEATURES.map((f) => (
+                        <li key={f} className="flex items-start gap-2 text-xs">
+                          <Check className="w-3 h-3 text-primary mt-0.5 shrink-0" />
+                          <span>{f}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <Button
+                    variant="outline"
+                    className="w-full mt-4"
+                    disabled={currentTier === "free"}
+                  >
+                    {currentTier === "free"
+                      ? t("subscription.currentPlan")
+                      : "Commencer gratuitement"}
+                  </Button>
+                </CardContent>
+              </Card>
+
+              {/* Premium */}
+              <Card
+                className="border-primary/60 relative"
+                style={{ boxShadow: "0 0 40px rgba(76,175,80,0.08)" }}
+              >
+                <CardContent className="p-6 flex flex-col h-full">
+                  <div className="mb-auto">
+                    <h3 className="font-bold text-lg mb-1">PREMIUM</h3>
+                    <p className="text-xs text-muted-foreground mb-5">
+                      Accès complet à RunIndex
+                    </p>
+                    <div className="mb-1">
+                      <span className="text-3xl font-bold">4,99 €</span>
+                      <span className="text-xs text-muted-foreground ml-2">
+                        / mois
+                      </span>
+                    </div>
+                    <p className="text-xs text-primary mb-6">
+                      TRIAL : 30 jours Premium après connexion Garmin éligible
+                    </p>
+                    <ul className="space-y-2 mb-6">
+                      {PREMIUM_FEATURES.map((f) => (
+                        <li key={f} className="flex items-start gap-2 text-xs">
+                          <Check className="w-3 h-3 text-primary mt-0.5 shrink-0" />
+                          <span>{f}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  {isCurrentlyPremium ? (
+                    <Button disabled className="w-full mt-4">
+                      {t("subscription.currentPlan")}
+                    </Button>
                   ) : (
-                    <Zap className="w-4 h-4 mr-2" />
+                    <Button
+                      onClick={handleSubscribe}
+                      disabled={subscribing}
+                      className="w-full mt-4"
+                      data-testid="premium-subscribe-btn"
+                    >
+                      {subscribing ? (
+                        <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                      ) : (
+                        <Zap className="w-4 h-4 mr-2" />
+                      )}
+                      Activer Premium
+                    </Button>
                   )}
-                  Activer Premium
-                </Button>
-              )}
-            </CardContent>
-          </Card>
-        </div>
+                </CardContent>
+              </Card>
+            </div>
+          </>
+        )}
 
         <div className="mt-6 text-center space-y-1">
           <p className="text-xs text-muted-foreground">
@@ -901,7 +1005,7 @@ export default function Subscription() {
           Connectez Garmin pour activer votre espace RunIndex et, si votre
           compte est éligible, l&apos;essai Premium de 30 jours.
         </p>
-        {showTrialCta ? (
+        {showTrialCta && isTierKnown ? (
           <Button
             onClick={handleStartTrial}
             disabled={trialBusy}
