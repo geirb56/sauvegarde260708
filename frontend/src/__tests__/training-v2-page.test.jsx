@@ -769,7 +769,16 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
 
   test("never invents a pace for a structured session whose prescription carries none", async () => {
     const week = weekData();
-    week.week.sessions[2].structured = structuredData();
+    week.week.sessions[2].structured = {
+      ...structuredData(),
+      steps: structuredData().steps.map((step) => ({
+        ...step,
+        pace_zone: null,
+        pace_min_per_km: null,
+        pace_min_per_km_min: null,
+        pace_min_per_km_max: null,
+      })),
+    };
     week.week.sessions[2].structured_status = "future_live";
     mockAxios({ week });
     renderPage();
