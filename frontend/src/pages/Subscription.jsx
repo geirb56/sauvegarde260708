@@ -240,6 +240,9 @@ export default function Subscription() {
 
   const handlePostGarminRefresh = useCallback(({ tier, subscriptionOk, garminOk, accessOk }) => {
     if (!subscriptionOk || !accessOk) {
+      setCurrentTier(null);
+      setSubscriptionStatusError(true);
+      setShowGarminConnect(false);
       setTrialMessage({
         status: "error",
         message: t("subscription.subscriptionStatusError")
