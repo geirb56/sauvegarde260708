@@ -254,6 +254,7 @@ async def _call_gpt(
         return None, False, metadata
     
     try:
+        session_id = f"runindex_{context_type}_{user_id}_{int(time.time())}"
         response = await asyncio.wait_for(
             _get_llm_client().chat.completions.create(
                 model=LLM_MODEL,
@@ -261,6 +262,7 @@ async def _call_gpt(
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
+                extra_headers={"X-Session-ID": session_id},
             ),
             timeout=LLM_TIMEOUT,
         )
