@@ -248,20 +248,22 @@ async def _call_gpt(
         "success": False
     }
 
-    if not EMERGENT_LLM_KEY or not EMERGENT_LLM_KEY.startswith("sk-emergent"):
+    if not EMERGENT_LLM_KEY:
         logger.warning("[LLM] Emergent LLM Key not configured")
         return None, False, metadata
     
     try:
         session_id = f"runindex_{context_type}_{user_id}_{int(time.time())}"
+        request_headers = {"X-Session-ID": session_id}
+        if APP_URL:
+            request_headers["X-App-ID"] = APP_URL
         response = await asyncio.wait_for(
-            _get_llm_client().chat.completions.create(
+            _get_llm_client().with_options(default_headers=request_headers).chat.completions.create(
                 model=LLM_MODEL,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                extra_headers={"X-Session-ID": session_id},
             ),
             timeout=LLM_TIMEOUT,
         )
@@ -336,7 +338,7 @@ def _clean_response(response: str) -> str:
 
 def _build_llm_client() -> Optional[AsyncOpenAI]:
     """Create the shared OpenAI-compatible client for Emergent proxy calls."""
-    if not EMERGENT_LLM_KEY or not EMERGENT_LLM_KEY.startswith("sk-emergent"):
+    if not EMERGENT_LLM_KEY:
         return None
     headers = {"X-App-ID": APP_URL} if APP_URL else None
     return AsyncOpenAI(
