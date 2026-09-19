@@ -53,6 +53,7 @@ os.environ.setdefault("DB_NAME", "test_db")
 import jwt
 
 import auth.router as auth_router_module
+import services.lifecycle_email as lifecycle_email_module
 from auth.password import hash_password, verify_password
 from auth.jwt_utils import create_access_token, decode_access_token
 from auth.mongo_errors import DuplicateKeyError
@@ -290,6 +291,21 @@ async def test_register_creates_paddle_compatible_free_subscription(client, fake
     assert subscription["premium_expires_at"] is None
 
 
+async def test_register_emits_account_created_lifecycle_event(client):
+    tasks, schedule = _capture_background_tasks()
+    with patch.object(auth_router_module, "safe_emit_account_created_event", new=AsyncMock()) as mock_emit, \
+         patch.object(auth_router_module.asyncio, "create_task", side_effect=schedule):
+        res = await _register(client, email="lifecycle-register@example.com")
+        await _drain(tasks)
+    assert res.status_code == 201
+    payload = res.json()
+    mock_emit.assert_awaited_once_with(
+        email="lifecycle-register@example.com",
+        user_id=payload["user"]["id"],
+        signup_method="email",
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Test 2 — Register duplicate email
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -354,6 +370,30 @@ async def test_login_success(client):
     await _register(client, email="login4@example.com")
     res = await client.post("/auth/login", json={"email": "login4@example.com", "password": "Password1!"})
     assert res.status_code == 200
+    assert "access_token" in res.json()
+
+
+async def test_login_existing_user_does_not_emit_account_created_lifecycle_event(client):
+    await _register(client, email="existing-login@example.com")
+    with patch.object(auth_router_module, "safe_emit_account_created_event", new=AsyncMock()) as mock_emit:
+        res = await client.post(
+            "/auth/login",
+            json={"email": "existing-login@example.com", "password": "Password1!"},
+        )
+    assert res.status_code == 200
+    mock_emit.assert_not_awaited()
+
+
+async def test_register_succeeds_when_account_created_lifecycle_event_fails(client):
+    tasks, schedule = _capture_background_tasks()
+    with patch.object(
+        lifecycle_email_module,
+        "emit_account_created_event",
+        new=AsyncMock(side_effect=RuntimeError("brevo unavailable")),
+    ), patch.object(auth_router_module.asyncio, "create_task", side_effect=schedule):
+        res = await _register(client, email="brevo-fail-register@example.com")
+        await _drain(tasks)
+    assert res.status_code == 201
     assert "access_token" in res.json()
 
 

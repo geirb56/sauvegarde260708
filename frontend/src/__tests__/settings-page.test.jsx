@@ -201,6 +201,33 @@ describe("Settings UX V2", () => {
     expect(screen.getByTestId("settings-no-password-note")).toHaveTextContent("never shows a saved Garmin password");
   });
 
+  test("hides manual Garmin sync action for FREE while keeping reconnect and disconnect", async () => {
+    mockUseSubscription.mockReturnValue({
+      subscription: { status: "free" },
+      isTrial: false,
+      isPremium: false,
+      isFree: true,
+      trialDaysRemaining: null,
+      loading: false,
+      statusLabel: "Free",
+      refreshSubscription: jest.fn(() => Promise.resolve()),
+    });
+    mockAxiosApi(createApiState({
+      garminStatus: {
+        connected: true,
+        last_sync: "2026-08-26T09:30:00Z",
+        activity_count: 18,
+        sync_status: { status: "complete", activities_count: 18 },
+      },
+    }));
+    renderPage();
+
+    expect(await screen.findByTestId("settings-garmin-status")).toHaveTextContent("Connected");
+    expect(screen.queryByTestId("settings-garmin-sync")).not.toBeInTheDocument();
+    expect(screen.getByTestId("settings-garmin-reconnect-toggle")).toBeInTheDocument();
+    expect(screen.getByTestId("settings-garmin-disconnect")).toBeInTheDocument();
+  });
+
   test("shows subscription status from existing context", async () => {
     mockAxiosApi();
     renderPage();
