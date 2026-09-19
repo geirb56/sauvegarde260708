@@ -28,6 +28,7 @@ APP_URL = os.environ.get("APP_URL", "").strip()
 LLM_MODEL = "gpt-4.1-mini"
 LLM_PROVIDER = "openai"
 LLM_TIMEOUT = 15
+_LLM_CLIENT: Optional[AsyncOpenAI] = None
 
 
 # ============================================================
@@ -253,15 +254,8 @@ async def _call_gpt(
         return None, False, metadata
     
     try:
-        headers = {"X-App-ID": APP_URL} if APP_URL else None
-        client = AsyncOpenAI(
-            api_key=EMERGENT_LLM_KEY,
-            base_url=EMERGENT_LLM_BASE_URL,
-            default_headers=headers,
-        )
-
         response = await asyncio.wait_for(
-            client.chat.completions.create(
+            _get_llm_client().chat.completions.create(
                 model=LLM_MODEL,
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -339,6 +333,38 @@ def _clean_response(response: str) -> str:
     return response.strip()
 
 
+def _get_llm_client() -> AsyncOpenAI:
+    """Reuse one OpenAI-compatible client for Emergent proxy calls."""
+    global _LLM_CLIENT
+    if _LLM_CLIENT is None:
+        headers = {"X-App-ID": APP_URL} if APP_URL else None
+        _LLM_CLIENT = AsyncOpenAI(
+            api_key=EMERGENT_LLM_KEY,
+            base_url=EMERGENT_LLM_BASE_URL,
+            default_headers=headers,
+        )
+    return _LLM_CLIENT
+
+
+def _extract_content_part_text(item) -> Optional[str]:
+    """Extract plain text from one structured message part."""
+    if isinstance(item, dict):
+        part_type = item.get("type")
+        text = item.get("text")
+    else:
+        part_type = getattr(item, "type", None)
+        text = getattr(item, "text", None)
+
+    if isinstance(text, dict):
+        text = text.get("value") or text.get("text")
+    elif not isinstance(text, str) and text is not None:
+        text = getattr(text, "value", None) or getattr(text, "text", None)
+
+    if part_type in (None, "text", "output_text") and isinstance(text, str):
+        return text
+    return None
+
+
 def _extract_message_content(message_content) -> str:
     """Normalize OpenAI SDK message content to plain text."""
     if isinstance(message_content, str):
@@ -346,10 +372,7 @@ def _extract_message_content(message_content) -> str:
     if isinstance(message_content, list):
         parts = []
         for item in message_content:
-            if isinstance(item, dict):
-                text = item.get("text")
-            else:
-                text = getattr(item, "text", None)
+            text = _extract_content_part_text(item)
             if text:
                 parts.append(text)
         return "\n".join(parts)
