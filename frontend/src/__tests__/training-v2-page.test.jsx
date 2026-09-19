@@ -718,17 +718,14 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     expect(within(detail).getByTestId("session-analysis-link-monday")).toHaveAttribute("href", "/workout/garmin-a1");
   });
 
-  test("clicking a planned (not-yet-matched) session shows no fabricated actual and no analysis link", async () => {
+  test("a future simple session without extra detail cannot be expanded", async () => {
     mockAxios();
     renderPage();
 
     await screen.findByTestId("training-v2-week");
-    fireEvent.click(screen.getByTestId("session-detail-toggle-friday"));
-
-    const detail = screen.getByTestId("training-v2-day-detail-friday");
-    expect(detail).toBeVisible();
-    expect(within(detail).getByTestId("session-no-actual-friday")).toBeInTheDocument();
-    expect(within(detail).queryByTestId("session-analysis-link-friday")).not.toBeInTheDocument();
+    const toggle = screen.getByTestId("session-detail-toggle-friday");
+    expect(toggle).toBeDisabled();
+    expect(screen.queryByTestId("training-v2-day-detail-friday")).not.toBeInTheDocument();
   });
 
   test("a prescription_unavailable session cannot be expanded (no detail toggle beyond the neutral state)", async () => {
@@ -770,8 +767,20 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     expect(screen.queryByText(/cooldown/i)).not.toBeInTheDocument();
   });
 
-  test("never invents a pace for a session whose prescription carries none", async () => {
-    mockAxios();
+  test("never invents a pace for a structured session whose prescription carries none", async () => {
+    const week = weekData();
+    week.week.sessions[2].structured = {
+      ...structuredData(),
+      steps: structuredData().steps.map((step) => ({
+        ...step,
+        pace_zone: null,
+        pace_min_per_km: null,
+        pace_min_per_km_min: null,
+        pace_min_per_km_max: null,
+      })),
+    };
+    week.week.sessions[2].structured_status = "future_live";
+    mockAxios({ week });
     renderPage();
 
     await screen.findByTestId("training-v2-week");
