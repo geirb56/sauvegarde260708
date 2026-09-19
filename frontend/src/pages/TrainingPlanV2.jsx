@@ -411,10 +411,11 @@ function WeekSessionRow({ session, day, isToday, unitSystem, t, locale }) {
   const actualPace = formatActualPace(actual?.pace_min_per_km, unitSystem);
   const analysisRoute = getSessionDetailRoute(session);
 
-  // PR233 — rest days and prescription_unavailable days carry nothing real
-  // to expand (no prescription detail, no actual to compare): both stay
-  // collapsed/non-interactive rather than exposing an empty detail panel.
-  const canExpand = Boolean(session) && !isUnavailable && !isExplicitRest;
+  // Only expose a detail panel when it adds real information beyond the row
+  // summary itself: detailed structure, a matched Garmin activity, or an
+  // available analysis route. Simple future sessions stay non-interactive.
+  const hasExpandableDetail = Boolean(structured || actual || analysisRoute);
+  const canExpand = Boolean(session) && !isUnavailable && !isExplicitRest && hasExpandableDetail;
   const detailId = `training-v2-day-detail-${day}`;
 
   return (
