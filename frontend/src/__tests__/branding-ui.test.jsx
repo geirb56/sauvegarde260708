@@ -3,8 +3,6 @@ import { createRoot } from "react-dom/client";
 import { MemoryRouter } from "react-router-dom";
 import axios from "axios";
 
-import Onboarding from "@/pages/Onboarding";
-import { BrandSplash } from "@/components/LoadingSpinner";
 import { LanguageProvider } from "@/context/LanguageContext";
 
 jest.mock("axios");
@@ -29,8 +27,12 @@ jest.mock("@/context/SubscriptionContext", () => ({
 }));
 
 jest.mock("@/hooks/useGarminSyncProgress", () => ({
-  useGarminSyncProgress: jest.fn(() => ({ progress: null, isStreaming: false, error: null })),
+  useGarminSyncProgress: jest.fn(),
 }));
+
+import { useGarminSyncProgress } from "@/hooks/useGarminSyncProgress";
+import Onboarding from "@/pages/Onboarding";
+import { BrandSplash } from "@/components/LoadingSpinner";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -63,6 +65,7 @@ describe("branding asset wiring", () => {
     jest.clearAllMocks();
     axios.get.mockResolvedValue({ data: {} });
     axios.post.mockResolvedValue({ data: {} });
+    useGarminSyncProgress.mockReturnValue({ progress: null, isStreaming: false, error: null });
     window.localStorage.clear();
   });
 
