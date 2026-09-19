@@ -15,7 +15,6 @@ WORKDIR /app/backend
 # Install Python deps first (better layer caching).
 COPY backend/requirements.txt /app/backend/requirements.txt
 RUN python -m pip install \
-    --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ \
     -r /app/backend/requirements.txt \
     && python -c "import dotenv; print(dotenv.__file__)"
 

@@ -12,6 +12,7 @@ import asyncio
 import logging
 from typing import Dict, List, Optional, Tuple
 from dotenv import load_dotenv
+from openai import AsyncOpenAI
 
 load_dotenv()
 
@@ -19,6 +20,11 @@ logger = logging.getLogger(__name__)
 
 # Configuration
 EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
+EMERGENT_LLM_BASE_URL = os.environ.get(
+    "INTEGRATION_PROXY_URL",
+    "https://integrations.emergentagent.com/llm",
+)
+APP_URL = os.environ.get("APP_URL", "").strip()
 LLM_MODEL = "gpt-4.1-mini"
 LLM_PROVIDER = "openai"
 LLM_TIMEOUT = 15
@@ -247,25 +253,31 @@ async def _call_gpt(
         return None, False, metadata
     
     try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
-        
-        session_id = f"runindex_{context_type}_{user_id}_{int(time.time())}"
-        
-        chat = LlmChat(
+        headers = {"X-App-ID": APP_URL} if APP_URL else None
+        client = AsyncOpenAI(
             api_key=EMERGENT_LLM_KEY,
-            session_id=session_id,
-            system_message=system_prompt
-        ).with_model(LLM_PROVIDER, LLM_MODEL)
-        
+            base_url=EMERGENT_LLM_BASE_URL,
+            default_headers=headers,
+        )
+
         response = await asyncio.wait_for(
-            chat.send_message(UserMessage(text=user_prompt)),
-            timeout=LLM_TIMEOUT
+            client.chat.completions.create(
+                model=LLM_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+            ),
+            timeout=LLM_TIMEOUT,
         )
         
         elapsed = time.time() - start_time
         metadata["duration_sec"] = round(elapsed, 2)
         metadata["success"] = True
-        response_text = _clean_response(str(response))
+        content = ""
+        if response.choices:
+            content = _extract_message_content(response.choices[0].message.content)
+        response_text = _clean_response(content)
 
         if response_text:
             logger.info(f"[LLM] ✅ {context_type} enriched in {elapsed:.2f}s")
@@ -325,6 +337,23 @@ def _clean_response(response: str) -> str:
             response = response[:last_period + 1]
 
     return response.strip()
+
+
+def _extract_message_content(message_content) -> str:
+    """Normalize OpenAI SDK message content to plain text."""
+    if isinstance(message_content, str):
+        return message_content
+    if isinstance(message_content, list):
+        parts = []
+        for item in message_content:
+            if isinstance(item, dict):
+                text = item.get("text")
+            else:
+                text = getattr(item, "text", None)
+            if text:
+                parts.append(text)
+        return "\n".join(parts)
+    return str(message_content or "")
 
 
 # ============================================================
