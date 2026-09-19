@@ -28,7 +28,6 @@ APP_URL = os.environ.get("APP_URL", "").strip()
 LLM_MODEL = "gpt-4.1-mini"
 LLM_PROVIDER = "openai"
 LLM_TIMEOUT = 15
-_LLM_CLIENT: Optional[AsyncOpenAI] = None
 
 
 # ============================================================
@@ -335,16 +334,25 @@ def _clean_response(response: str) -> str:
     return response.strip()
 
 
+def _build_llm_client() -> Optional[AsyncOpenAI]:
+    """Create the shared OpenAI-compatible client for Emergent proxy calls."""
+    if not EMERGENT_LLM_KEY or not EMERGENT_LLM_KEY.startswith("sk-emergent"):
+        return None
+    headers = {"X-App-ID": APP_URL} if APP_URL else None
+    return AsyncOpenAI(
+        api_key=EMERGENT_LLM_KEY,
+        base_url=EMERGENT_LLM_BASE_URL,
+        default_headers=headers,
+    )
+
+
+_LLM_CLIENT = _build_llm_client()
+
+
 def _get_llm_client() -> AsyncOpenAI:
-    """Reuse one OpenAI-compatible client for Emergent proxy calls."""
-    global _LLM_CLIENT
+    """Return the shared OpenAI-compatible client for Emergent proxy calls."""
     if _LLM_CLIENT is None:
-        headers = {"X-App-ID": APP_URL} if APP_URL else None
-        _LLM_CLIENT = AsyncOpenAI(
-            api_key=EMERGENT_LLM_KEY,
-            base_url=EMERGENT_LLM_BASE_URL,
-            default_headers=headers,
-        )
+        raise RuntimeError("Emergent LLM client is not configured")
     return _LLM_CLIENT
 
 
