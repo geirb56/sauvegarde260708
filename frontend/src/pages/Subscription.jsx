@@ -225,7 +225,7 @@ export default function Subscription() {
   }, [loadGarminStatus, loadStatus, searchParams, setSearchParams]);
 
   const syncSubscriptionState = useCallback(async () => {
-    const [subscriptionResult, garminResult] = await Promise.all([
+    const [subscriptionResult, garminResult, accessResult] = await Promise.all([
       loadStatus(),
       loadGarminStatus(),
       refreshSubscription(),
@@ -234,11 +234,12 @@ export default function Subscription() {
       tier: subscriptionResult.tier,
       subscriptionOk: subscriptionResult.ok,
       garminOk: garminResult.ok,
+      accessOk: accessResult?.accessRefreshSucceeded === true,
     };
   }, [loadGarminStatus, loadStatus, refreshSubscription]);
 
-  const handlePostGarminRefresh = useCallback(({ tier, subscriptionOk, garminOk }) => {
-    if (!subscriptionOk) {
+  const handlePostGarminRefresh = useCallback(({ tier, subscriptionOk, garminOk, accessOk }) => {
+    if (!subscriptionOk || !accessOk) {
       setTrialMessage({
         status: "error",
         message: t("subscription.subscriptionStatusError")
@@ -430,7 +431,7 @@ export default function Subscription() {
   const isInTrial = currentTier === "trial";
   const isTierKnown = typeof currentTier === "string";
   const showTrialCta = currentTier === "free";
-  const trialMessageClass = trialMessage.status === "error"
+  const trialMessageClass = (garminStatusError || trialMessage.status === "error")
     ? "border-destructive/40 bg-destructive/10 text-destructive"
     : trialMessage.status === "success"
       ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"

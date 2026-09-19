@@ -10,7 +10,7 @@ import { LANGUAGE_STORAGE_KEY } from "@/lib/i18n";
 
 jest.mock("axios");
 
-const mockRefreshSubscription = jest.fn(() => Promise.resolve());
+const mockRefreshSubscription = jest.fn(() => Promise.resolve({ accessRefreshSucceeded: true }));
 
 jest.mock("sonner", () => ({
   toast: {
@@ -83,7 +83,7 @@ describe("PR222 trial Garmin handoff", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     window.localStorage.clear();
-    mockRefreshSubscription.mockResolvedValue(undefined);
+    mockRefreshSubscription.mockResolvedValue({ accessRefreshSucceeded: true });
   });
 
   test("free CTA opens Garmin connect form and never calls /subscription/start-trial", async () => {
@@ -220,6 +220,26 @@ describe("PR222 trial Garmin handoff", () => {
     fireEvent.click(screen.getByTestId("trial-garmin-connect-btn"));
 
     expect(await screen.findByTestId("subscription-status-error")).toBeInTheDocument();
+    expect(screen.queryByText("no longer available")).not.toBeInTheDocument();
+  });
+
+  test("trial status with failed access refresh never shows false trial activated", async () => {
+    mockSubscriptionApi({
+      subscriptionStatuses: ["free", "trial"],
+      garminStatuses: [{ connected: false }, { connected: true }],
+      garminConnect: { status: "connected" },
+    });
+    mockRefreshSubscription.mockResolvedValue({ accessRefreshSucceeded: false });
+    renderPage();
+
+    fireEvent.click(await screen.findByTestId("start-free-trial-btn"));
+    fireEvent.change(await screen.findByTestId("garmin-email-input"), { target: { value: "runner@example.com" } });
+    fireEvent.change(screen.getByTestId("garmin-password-input"), { target: { value: "Password123!" } });
+    fireEvent.click(screen.getByTestId("trial-garmin-connect-btn"));
+
+    expect(await screen.findByTestId("subscription-status-error")).toBeInTheDocument();
+    expect(screen.queryByTestId("trial-active-banner")).not.toBeInTheDocument();
+    expect(screen.queryByText("30-day free trial activated")).not.toBeInTheDocument();
     expect(screen.queryByText("no longer available")).not.toBeInTheDocument();
   });
 });
