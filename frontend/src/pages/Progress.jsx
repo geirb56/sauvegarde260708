@@ -368,7 +368,11 @@ export default function Progress() {
                         data-testid={`potential-card-${distanceKey.toLowerCase()}`}
                         style={{
                           background: isGoal ? "rgba(249, 115, 22, 0.14)" : SEMANTIC_SURFACES.predictions.background,
-                          border: `${isGoal ? "2px" : "1px"} solid ${isGoal ? "rgba(249, 115, 22, 0.55)" : SEMANTIC_SURFACES.predictions.border}`,
+                          borderStyle: "solid",
+                          borderTopWidth: `${isGoal ? 2 : 1}px`,
+                          borderRightWidth: `${isGoal ? 2 : 1}px`,
+                          borderBottomWidth: `${isGoal ? 2 : 1}px`,
+                          borderColor: isGoal ? "rgba(249, 115, 22, 0.55)" : SEMANTIC_SURFACES.predictions.border,
                           borderLeftColor: SEMANTIC_SURFACES.predictions.accent,
                           borderLeftWidth: "3px",
                         }}
@@ -706,7 +710,14 @@ export default function Progress() {
             <Card
               className="bg-card border-border"
               data-testid="garmin-hrv"
-              style={{ background: SEMANTIC_SURFACES.hrv.background, borderColor: SEMANTIC_SURFACES.hrv.border, borderLeftColor: SEMANTIC_SURFACES.hrv.accent, borderLeftWidth: "3px" }}
+              style={{
+                background: SEMANTIC_SURFACES.hrv.background,
+                borderStyle: "solid",
+                borderWidth: "1px",
+                borderColor: SEMANTIC_SURFACES.hrv.border,
+                borderLeftColor: SEMANTIC_SURFACES.hrv.accent,
+                borderLeftWidth: "3px",
+              }}
             >
               <CardContent className="p-4">
                 <div className="flex items-center gap-2 mb-2">
@@ -732,7 +743,14 @@ export default function Progress() {
             <Card
               className="bg-card border-border"
               data-testid="garmin-resting-hr"
-              style={{ background: SEMANTIC_SURFACES.restingHr.background, borderColor: SEMANTIC_SURFACES.restingHr.border, borderLeftColor: SEMANTIC_SURFACES.restingHr.accent, borderLeftWidth: "3px" }}
+              style={{
+                background: SEMANTIC_SURFACES.restingHr.background,
+                borderStyle: "solid",
+                borderWidth: "1px",
+                borderColor: SEMANTIC_SURFACES.restingHr.border,
+                borderLeftColor: SEMANTIC_SURFACES.restingHr.accent,
+                borderLeftWidth: "3px",
+              }}
             >
               <CardContent className="p-4">
                 <div className="flex items-center gap-2 mb-2">
@@ -758,7 +776,14 @@ export default function Progress() {
             <Card
               className="bg-card border-border"
               data-testid="garmin-sleep"
-              style={{ background: SEMANTIC_SURFACES.sleep.background, borderColor: SEMANTIC_SURFACES.sleep.border, borderLeftColor: SEMANTIC_SURFACES.sleep.accent, borderLeftWidth: "3px" }}
+              style={{
+                background: SEMANTIC_SURFACES.sleep.background,
+                borderStyle: "solid",
+                borderWidth: "1px",
+                borderColor: SEMANTIC_SURFACES.sleep.border,
+                borderLeftColor: SEMANTIC_SURFACES.sleep.accent,
+                borderLeftWidth: "3px",
+              }}
             >
               <CardContent className="p-4">
                 <div className="flex items-center gap-2 mb-2">
@@ -788,7 +813,14 @@ export default function Progress() {
       <div className="mb-6">
         <Card
           className="bg-card border-border overflow-hidden"
-          style={{ background: SEMANTIC_SURFACES.vo2.background, borderColor: SEMANTIC_SURFACES.vo2.border, borderLeftColor: SEMANTIC_SURFACES.vo2.accent, borderLeftWidth: "3px" }}
+          style={{
+            background: SEMANTIC_SURFACES.vo2.background,
+            borderStyle: "solid",
+            borderWidth: "1px",
+            borderColor: SEMANTIC_SURFACES.vo2.border,
+            borderLeftColor: SEMANTIC_SURFACES.vo2.accent,
+            borderLeftWidth: "3px",
+          }}
         >
           <CardContent className="p-4">
             <div className="flex items-center justify-between mb-4">
