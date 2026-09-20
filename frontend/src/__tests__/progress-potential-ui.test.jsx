@@ -236,9 +236,13 @@ describe("Progress potential UI", () => {
     const sleep = await screen.findByTestId("garmin-sleep");
 
     expect(potential.getAttribute("style")).toContain("border-left-width: 3px");
+    expect(potential.getAttribute("style")).toContain("border-color: rgba(249, 115, 22, 0.30)");
     expect(hrv.getAttribute("style")).toContain("border-left-width: 3px");
+    expect(hrv.getAttribute("style")).toContain("background: rgba(34, 211, 238, 0.06)");
     expect(restingHr.getAttribute("style")).toContain("border-left-width: 3px");
+    expect(restingHr.getAttribute("style")).toContain("background: rgba(244, 63, 94, 0.08)");
     expect(sleep.getAttribute("style")).toContain("border-left-width: 3px");
+    expect(sleep.getAttribute("style")).toContain("background: rgba(96, 165, 250, 0.08)");
   });
 
   test("potential section is rendered before runindex evolution section", async () => {

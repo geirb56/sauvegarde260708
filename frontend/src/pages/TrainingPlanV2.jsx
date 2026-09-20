@@ -775,7 +775,7 @@ function FullCycleSection({ t, locale, weeks }) {
                   week.is_current
                     ? {
                       borderColor: "rgba(110, 235, 90, 0.46)",
-                      borderLeftColor: "var(--accent-green)",
+                      borderLeftColor: "rgb(110, 235, 90)",
                       borderLeftWidth: "3px",
                       background: "rgba(110, 235, 90, 0.10)",
                     }

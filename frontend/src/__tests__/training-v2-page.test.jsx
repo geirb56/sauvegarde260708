@@ -380,6 +380,7 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     expect(screen.getByTestId("training-v2-day-sunday").getAttribute("data-session-tone")).toBe("race");
     expect(screen.queryByTestId("training-v2-day-accent-thursday")).not.toBeInTheDocument();
     expect(screen.getByTestId("cycle-week-12").getAttribute("style")).toContain("border-left-width: 3px");
+    expect(screen.getByTestId("cycle-week-12").getAttribute("style")).toContain("border-left-color: rgb(110, 235, 90)");
     expect(screen.getByTestId("cycle-week-12").getAttribute("style")).toContain("background: rgba(110, 235, 90, 0.1)");
   });
 
