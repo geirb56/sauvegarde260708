@@ -567,7 +567,7 @@ def _current_week_from_dates(start_date, reference_date, total_weeks: int) -> in
 
 def _apply_sessions_preference_cap(weekly_target, sessions_preference: Optional[int]):
     """Runtime preference cap only: never increase WeeklyTarget V2 prescription."""
-    if sessions_preference not in (3, 4, 5, 6):
+    if sessions_preference not in (2, 3, 4, 5, 6):
         return weekly_target
     effective_sessions = min(weekly_target.target_sessions, sessions_preference)
     if effective_sessions == weekly_target.target_sessions:

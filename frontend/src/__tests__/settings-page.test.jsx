@@ -43,6 +43,7 @@ function createApiState({
     goal: { goal_type: "marathon", race_date: "2026-10-12", target_time_seconds: 13500 },
     weekly_target: { session_count: 4, target_basis: "distance", target_km: 52, target_duration_minutes: null, confidence: "high" },
     week: { session_count: 4, planned_km: 52, planned_duration_minutes: null, sessions: [] },
+    training_prefs: { sessions_per_week: 4 },
   },
   userGoal = {
     event_name: "Berlin Marathon",
@@ -143,9 +144,24 @@ describe("Settings UX V2", () => {
     ["5K", "10K", "SEMI", "MARATHON", "ULTRA", "MAINTENANCE"].forEach((goal) => {
       expect(screen.getByTestId(`training-goal-btn-${goal}`)).toBeInTheDocument();
     });
-    [3, 4, 5, 6].forEach((value) => {
+    [2, 3, 4, 5, 6].forEach((value) => {
       expect(screen.getByTestId(`sessions-per-week-btn-${value}`)).toBeInTheDocument();
     });
+  });
+
+  test("shows stored sessions preference even when effective weekly target differs", async () => {
+    mockAxiosApi(createApiState({
+      week: {
+        goal: { goal_type: "marathon", race_date: "2026-10-12", target_time_seconds: 13500 },
+        weekly_target: { session_count: 3, target_basis: "distance", target_km: 40, target_duration_minutes: null, confidence: "high" },
+        week: { session_count: 3, planned_km: 40, planned_duration_minutes: null, sessions: [] },
+        training_prefs: { sessions_per_week: 5 },
+      },
+    }));
+
+    renderPage();
+
+    expect(await screen.findByTestId("settings-sessions-current")).toHaveTextContent("5 sessions/week");
   });
 
   test("loads plan settings from v2 endpoints only", async () => {

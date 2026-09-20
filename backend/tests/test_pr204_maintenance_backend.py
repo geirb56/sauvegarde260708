@@ -259,7 +259,7 @@ def test_maintenance_week_generation_ignores_race_date():
 # (sessions_per_week parameter flows through; we test the bridge accepts MAINTENANCE)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("sessions", [3, 4, 5, 6])
+@pytest.mark.parametrize("sessions", [2, 3, 4, 5, 6])
 def test_maintenance_week_generation_sessions(sessions):
     """MAINTENANCE_REFRESH_SESSIONS_{N} = PASS
 
@@ -464,7 +464,7 @@ def test_real_handler_set_goal_invalid_rejected():
 # REAL_REFRESH_HANDLER_EXECUTED = YES
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("sessions", [3, 4, 5, 6])
+@pytest.mark.parametrize("sessions", [2, 3, 4, 5, 6])
 def test_real_handler_refresh_maintenance(sessions: int):
     """
     REAL_REFRESH_HANDLER_EXECUTED = YES

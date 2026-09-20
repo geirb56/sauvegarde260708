@@ -3339,7 +3339,7 @@ async def get_training_plan_v2(user: dict = Depends(auth_user)):
 async def refresh_training_plan(sessions: int = None, user: dict = Depends(auth_user)):
     """
     Force complete plan recalculation.
-    sessions: number of desired sessions (3, 4, 5, 6)
+    sessions: number of desired sessions (2, 3, 4, 5, 6)
     """
     # Clear cache for this user
     from coach_service import _plan_cache
@@ -3348,7 +3348,7 @@ async def refresh_training_plan(sessions: int = None, user: dict = Depends(auth_
         del _plan_cache[k]
 
     # Save number of sessions if specified
-    if sessions and sessions in [3, 4, 5, 6]:
+    if sessions and sessions in [2, 3, 4, 5, 6]:
         await db.training_prefs.update_one(
             {"user_id": user["id"]},
             {"$set": {"sessions_per_week": sessions}},
@@ -3601,6 +3601,13 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     # build_canonical_weekly_plan includes WeeklyReconciliation internally.
     # Today's session comes from this reconciled plan — no second WorkoutGenerator,
     # no second WeeklyReconciliation.
+    prefs_doc = await db.training_prefs.find_one({"user_id": user["id"]}, {"_id": 0})
+    sessions_preference = (
+        prefs_doc.get("sessions_per_week")
+        if isinstance(prefs_doc, dict)
+        else None
+    )
+
     canonical = build_canonical_weekly_plan(
         workouts=domain_activities_90,
         goal_type=resolved.goal_type,
@@ -3609,6 +3616,7 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
         reference_date=today,
         target_distance_km=resolved.target_distance_km,
         target_time_seconds=resolved.target_time_sec,
+        sessions_preference=sessions_preference,
     )
     weekly_plan = canonical.weekly_plan
 
@@ -4426,6 +4434,7 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
         WeekV2PlanResponse,
         WeekV2SessionResponse,
         WeekV2StateResponse,
+        WeekV2TrainingPrefsResponse,
         WeekV2TargetResponse,
     )
 
@@ -4450,6 +4459,13 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
     # ── PR226: canonical resolver — single source of truth ────────────────
     resolved = await _resolve_goal_v2(user_id)
 
+    prefs_doc = await db.training_prefs.find_one({"user_id": user_id}, {"_id": 0})
+    sessions_preference = (
+        prefs_doc.get("sessions_per_week")
+        if isinstance(prefs_doc, dict)
+        else None
+    )
+
     # ── PR228: canonical builder — single call with reconciliation ────────
     canonical = build_canonical_weekly_plan(
         workouts=domain_activities_90,
@@ -4459,6 +4475,7 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
         reference_date=reference_date,
         target_distance_km=resolved.target_distance_km,
         target_time_seconds=resolved.target_time_sec,
+        sessions_preference=sessions_preference,
     )
     weekly_target = canonical.reconciled_target
     weekly_plan = canonical.weekly_plan
@@ -4758,6 +4775,11 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
             session_count=weekly_plan.session_count,
             sessions=sessions,
             unmatched_actuals=unmatched_actuals,
+        ),
+        training_prefs=WeekV2TrainingPrefsResponse(
+            sessions_per_week=sessions_preference
+            if isinstance(sessions_preference, int)
+            else None
         ),
         reconciliation_action=reconciliation_result.action.value,
         reconciliation_reason_codes=list(reconciliation_result.reason_codes),

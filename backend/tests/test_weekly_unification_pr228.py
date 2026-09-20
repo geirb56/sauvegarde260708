@@ -85,6 +85,7 @@ def _build_canonical(
     reference_date: date = _REFERENCE_DATE,
     race_date: Optional[date] = None,
     target_time_seconds: Optional[int] = None,
+    sessions_preference: Optional[int] = None,
 ) -> CanonicalWeeklyPlan:
     activities = _make_activities(n_activities, km_per)
     rd = race_date or (reference_date + timedelta(weeks=16))
@@ -95,6 +96,7 @@ def _build_canonical(
         cycle_start_date=reference_date - timedelta(weeks=4),
         reference_date=reference_date,
         target_time_seconds=target_time_seconds,
+        sessions_preference=sessions_preference,
     )
 
 
@@ -234,6 +236,78 @@ class TestSharedSessionSource:
         )
         assert reconciled_target.target_sessions == canonical.reconciled_target.target_sessions
         assert reconciled_target.target_km == canonical.reconciled_target.target_km
+
+
+class TestSessionsPreferenceCap:
+    @pytest.mark.parametrize(
+        ("preferred_sessions", "recommended_sessions", "expected_sessions"),
+        [
+            (3, 4, 3),
+            (3, 2, 2),
+            (5, 3, 3),
+        ],
+    )
+    def test_effective_sessions_min_rule(
+        self,
+        monkeypatch,
+        preferred_sessions: int,
+        recommended_sessions: int,
+        expected_sessions: int,
+    ) -> None:
+        def _forced_reconciliation(*, proposed_target, recent_response):
+            reconciled_target = proposed_target.model_copy(
+                update={"target_sessions": recommended_sessions}
+            )
+            return WeeklyReconciliationResult(
+                action=WeeklyReconciliationAction.KEEP,
+                original_target=proposed_target,
+                reconciled_target=reconciled_target,
+                reason_codes=("TEST_FORCED_RECOMMENDED_SESSIONS",),
+                observed_runs_per_week=None,
+                observed_distance_km=None,
+                observed_duration_minutes=None,
+                response_status="unavailable",
+                confidence="none",
+            )
+
+        monkeypatch.setattr(
+            "training_v2.week_plan_bridge.build_weekly_reconciliation",
+            _forced_reconciliation,
+        )
+
+        canonical = _build_canonical(
+            n_activities=8,
+            sessions_preference=preferred_sessions,
+        )
+        assert canonical.reconciled_target.target_sessions == expected_sessions
+        assert canonical.weekly_plan.session_count == expected_sessions
+
+    def test_sessions_preference_two_is_accepted(self, monkeypatch) -> None:
+        def _forced_reconciliation(*, proposed_target, recent_response):
+            reconciled_target = proposed_target.model_copy(update={"target_sessions": 4})
+            return WeeklyReconciliationResult(
+                action=WeeklyReconciliationAction.KEEP,
+                original_target=proposed_target,
+                reconciled_target=reconciled_target,
+                reason_codes=("TEST_FORCE_FOUR",),
+                observed_runs_per_week=None,
+                observed_distance_km=None,
+                observed_duration_minutes=None,
+                response_status="unavailable",
+                confidence="none",
+            )
+
+        monkeypatch.setattr(
+            "training_v2.week_plan_bridge.build_weekly_reconciliation",
+            _forced_reconciliation,
+        )
+
+        canonical = _build_canonical(
+            n_activities=8,
+            sessions_preference=2,
+        )
+        assert canonical.reconciled_target.target_sessions == 2
+        assert canonical.weekly_plan.session_count == 2
 
 
 # ---------------------------------------------------------------------------
