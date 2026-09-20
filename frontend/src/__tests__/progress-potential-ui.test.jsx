@@ -234,6 +234,7 @@ describe("Progress potential UI", () => {
     const hrv = await screen.findByTestId("garmin-hrv");
     const restingHr = await screen.findByTestId("garmin-resting-hr");
     const sleep = await screen.findByTestId("garmin-sleep");
+    const vo2 = await screen.findByTestId("garmin-vo2-card");
 
     expect(potential.getAttribute("style")).toContain("border-left-width: 3px");
     expect(potential.getAttribute("style")).toContain("border-color: rgba(249, 115, 22, 0.30)");
@@ -243,6 +244,9 @@ describe("Progress potential UI", () => {
     expect(restingHr.getAttribute("style")).toContain("background: rgba(244, 63, 94, 0.08)");
     expect(sleep.getAttribute("style")).toContain("border-left-width: 3px");
     expect(sleep.getAttribute("style")).toContain("background: rgba(96, 165, 250, 0.08)");
+    expect(vo2.getAttribute("style")).toContain("background: rgba(16, 185, 129, 0.08)");
+    expect(vo2.getAttribute("style")).toContain("border-left-color: rgb(16, 185, 129)");
+    expect(vo2.getAttribute("style")).not.toContain("110, 235, 90");
   });
 
   test("potential section is rendered before runindex evolution section", async () => {

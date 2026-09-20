@@ -105,7 +105,7 @@ const SEMANTIC_SURFACES = {
   hrv: { background: "rgba(34, 211, 238, 0.06)", border: "rgba(34, 211, 238, 0.30)", accent: "var(--accent-cyan)" },
   restingHr: { background: "rgba(244, 63, 94, 0.08)", border: "rgba(244, 63, 94, 0.32)", accent: "rgb(244, 63, 94)" },
   sleep: { background: "rgba(96, 165, 250, 0.08)", border: "rgba(96, 165, 250, 0.30)", accent: "rgb(96, 165, 250)" },
-  vo2: { background: "rgba(110, 235, 90, 0.08)", border: "rgba(110, 235, 90, 0.34)", accent: "var(--accent-green)" },
+  vo2: { background: "rgba(16, 185, 129, 0.08)", border: "rgba(16, 185, 129, 0.34)", accent: "rgb(16, 185, 129)" },
   danger: { background: "rgba(239, 68, 68, 0.14)", border: "rgba(239, 68, 68, 0.34)", accent: "var(--status-danger)" },
   neutral: { background: "rgba(148, 163, 184, 0.08)", border: "rgba(148, 163, 184, 0.24)", accent: "rgb(148, 163, 184)" },
 };
@@ -813,6 +813,7 @@ export default function Progress() {
       <div className="mb-6">
         <Card
           className="bg-card border-border overflow-hidden"
+          data-testid="garmin-vo2-card"
           style={{
             background: SEMANTIC_SURFACES.vo2.background,
             borderStyle: "solid",
@@ -825,9 +826,9 @@ export default function Progress() {
           <CardContent className="p-4">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-4">
-                <div className="w-14 h-14 rounded-xl flex flex-col items-center justify-center" style={{ background: "rgba(110, 235, 90, 0.12)", border: "1px solid rgba(110, 235, 90, 0.25)" }}>
-                  <Zap className="w-5 h-5" style={{ color: "#6EEB5A" }} />
-                  <span className="text-[7px] font-mono uppercase mt-0.5" style={{ color: "rgba(110, 235, 90, 0.8)" }}>VO2MAX</span>
+                <div className="w-14 h-14 rounded-xl flex flex-col items-center justify-center" style={{ background: "rgba(16, 185, 129, 0.12)", border: "1px solid rgba(16, 185, 129, 0.25)" }}>
+                  <Zap className="w-5 h-5" style={{ color: "rgb(16, 185, 129)" }} />
+                  <span className="text-[7px] font-mono uppercase mt-0.5" style={{ color: "rgba(16, 185, 129, 0.82)" }}>VO2MAX</span>
                 </div>
                 <div>
                   <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">{t("progressExtended.garminVo2maxLabel")}</p>

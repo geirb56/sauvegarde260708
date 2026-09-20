@@ -227,10 +227,10 @@ const SESSION_VISUAL_TONES = {
     todayBackground: "hsl(var(--primary) / 0.10)",
   },
   endurance: {
-    accent: "var(--accent-green)",
-    border: "rgba(110, 235, 90, 0.32)",
-    background: "rgba(110, 235, 90, 0.06)",
-    todayBackground: "rgba(110, 235, 90, 0.12)",
+    accent: "rgb(16, 185, 129)",
+    border: "rgba(16, 185, 129, 0.34)",
+    background: "rgba(16, 185, 129, 0.08)",
+    todayBackground: "rgba(16, 185, 129, 0.14)",
   },
   recovery: {
     accent: "var(--accent-cyan)",
@@ -252,28 +252,24 @@ const SESSION_VISUAL_TONES = {
   },
 };
 
-const resolveSessionVisualTone = ({ session, typeKey, isExplicitRest, isUnavailable }) => {
-  if (!session || isUnavailable) return SESSION_VISUAL_TONES.neutral;
-  if (isExplicitRest) return SESSION_VISUAL_TONES.rest;
-  const normalized = typeof typeKey === "string" ? typeKey.toLowerCase() : null;
-  if (normalized === "race" || session?.intensity_class === "event" || session?.session_type === "competition") {
-    return SESSION_VISUAL_TONES.race;
+const resolveSessionVisual = ({ session, typeKey, isExplicitRest, isUnavailable }) => {
+  let key = "neutral";
+  if (!session || isUnavailable) {
+    key = "neutral";
+  } else if (isExplicitRest) {
+    key = "rest";
+  } else {
+    const normalized = typeof typeKey === "string" ? typeKey.toLowerCase() : null;
+    if (normalized === "race" || session?.intensity_class === "event" || session?.session_type === "competition") {
+      key = "race";
+    } else if (normalized === "recovery") {
+      key = "recovery";
+    } else if (normalized === "easy" || normalized === "long_easy" || normalized === "endurance") {
+      key = "endurance";
+    }
   }
-  if (normalized === "recovery") return SESSION_VISUAL_TONES.recovery;
-  if (normalized === "easy" || normalized === "long_easy" || normalized === "endurance") {
-    return SESSION_VISUAL_TONES.endurance;
-  }
-  return SESSION_VISUAL_TONES.neutral;
-};
 
-const resolveSessionVisualToneKey = ({ session, typeKey, isExplicitRest, isUnavailable }) => {
-  if (!session || isUnavailable) return "neutral";
-  if (isExplicitRest) return "rest";
-  const normalized = typeof typeKey === "string" ? typeKey.toLowerCase() : null;
-  if (normalized === "race" || session?.intensity_class === "event" || session?.session_type === "competition") return "race";
-  if (normalized === "recovery") return "recovery";
-  if (normalized === "easy" || normalized === "long_easy" || normalized === "endurance") return "endurance";
-  return "neutral";
+  return { key, tone: SESSION_VISUAL_TONES[key] };
 };
 
 // C233 (blocker #2) — mirrors backend RUNTIME_TYPE_TO_WORKOUT_TYPE
@@ -474,13 +470,7 @@ function WeekSessionRow({ session, day, isToday, unitSystem, t, locale }) {
   const hasExpandableDetail = Boolean(structured || actual || analysisRoute);
   const canExpand = Boolean(session) && !isUnavailable && !isExplicitRest && hasExpandableDetail;
   const detailId = `training-v2-day-detail-${day}`;
-  const toneKey = resolveSessionVisualToneKey({
-    session,
-    typeKey,
-    isExplicitRest,
-    isUnavailable,
-  });
-  const tone = resolveSessionVisualTone({
+  const { key: toneKey, tone } = resolveSessionVisual({
     session,
     typeKey,
     isExplicitRest,
