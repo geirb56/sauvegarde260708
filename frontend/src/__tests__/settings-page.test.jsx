@@ -135,6 +135,8 @@ describe("Settings UX V2", () => {
 
     expect(await screen.findByTestId("settings-current-goal")).toHaveTextContent("Marathon");
     expect(screen.getByTestId("settings-sessions-current")).toHaveTextContent("4 sessions/week");
+    expect(screen.getByTestId("settings-sessions-current")).toHaveTextContent("Maximum sessions per week");
+    expect(screen.getByTestId("settings-sessions-current")).toHaveTextContent("RunIndex may schedule fewer sessions based on training state and plan safeguards.");
     expect(screen.getByTestId("settings-plan-start-date")).toHaveTextContent("Aug 27, 2026");
     expect(screen.getByTestId("settings-plan-start-date")).toHaveTextContent("Update the canonical Training V2 cycle anchor used by Settings and Training V2.");
     expect(screen.getByTestId("plan-start-date-input")).toHaveValue("2026-08-27");
@@ -270,6 +272,8 @@ describe("Settings UX V2", () => {
     const enView = renderPage({ lang: "en" });
 
     expect(await screen.findByText("Training Plan")).toBeInTheDocument();
+    expect(screen.getByTestId("settings-sessions-current")).toHaveTextContent("Maximum sessions per week");
+    expect(screen.getByTestId("settings-sessions-current")).toHaveTextContent("RunIndex may schedule fewer sessions based on training state and plan safeguards.");
     expect(await screen.findByTestId("remove-race-button")).toHaveTextContent("Remove race");
     expect(screen.getByTestId("remove-target-time-button")).toHaveTextContent("Remove target time");
     expect(document.body.textContent).not.toMatch(/settingsV2\.|settings\./);
@@ -281,6 +285,9 @@ describe("Settings UX V2", () => {
     mockAxiosApi();
     const frView = renderPage({ lang: "fr" });
     expect(await screen.findByText("Plan d'entraînement")).toBeInTheDocument();
+    const sessionsFr = await screen.findByTestId("settings-sessions-current");
+    expect(sessionsFr).toHaveTextContent("Nombre maximum de séances par semaine");
+    expect(sessionsFr).toHaveTextContent("RunIndex peut en prévoir moins selon l’état d’entraînement et les garde-fous du plan.");
     expect(await screen.findByTestId("remove-race-button")).toHaveTextContent("Supprimer la course");
     expect(screen.getByTestId("remove-target-time-button")).toHaveTextContent("Supprimer le temps cible");
     expect(document.body).not.toHaveTextContent("Contrat backend");
@@ -291,6 +298,9 @@ describe("Settings UX V2", () => {
     mockAxiosApi();
     renderPage({ lang: "es" });
     expect(await screen.findByText("Plan de entrenamiento")).toBeInTheDocument();
+    const sessionsEs = await screen.findByTestId("settings-sessions-current");
+    expect(sessionsEs).toHaveTextContent("Número máximo de sesiones por semana");
+    expect(sessionsEs).toHaveTextContent("RunIndex puede programar menos según el estado de entrenamiento y los guardarraíles del plan.");
     expect(await screen.findByTestId("remove-race-button")).toHaveTextContent("Eliminar carrera");
     expect(screen.getByTestId("remove-target-time-button")).toHaveTextContent("Eliminar tiempo objetivo");
     expect(document.body).not.toHaveTextContent("Contrato backend");
@@ -401,6 +411,24 @@ describe("Settings UX V2", () => {
       );
     });
     expect(toast.success).toHaveBeenCalled();
+  });
+
+  test("saving sessions preference uses max wording and keeps 5-column selector layout", async () => {
+    mockAxiosApi();
+    renderPage({ lang: "fr" });
+
+    await screen.findByTestId("settings-sessions-current");
+    expect(screen.getByTestId("settings-sessions-grid").className).toContain("grid-cols-5");
+
+    fireEvent.click(screen.getByTestId("sessions-per-week-btn-5"));
+
+    await waitFor(() => {
+      expect(axios.post).toHaveBeenCalledWith(
+        expect.stringContaining("/training/refresh?sessions=5"),
+        {}
+      );
+      expect(toast.success).toHaveBeenCalledWith("Maximum de 5 séances/semaine enregistré");
+    });
   });
 
   test("save goal target time without race metadata sends null event fields", async () => {

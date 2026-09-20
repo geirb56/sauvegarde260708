@@ -725,7 +725,7 @@ export default function Settings() {
               />
 
               <div className="rounded-xl border border-border bg-muted/30 p-4" data-testid="settings-sessions-options">
-                <div className="grid grid-cols-4 gap-2">
+                <div className="grid grid-cols-5 gap-2" data-testid="settings-sessions-grid">
                   {SUPPORTED_SESSION_VALUES.map((value) => (
                     <button
                       key={value}
