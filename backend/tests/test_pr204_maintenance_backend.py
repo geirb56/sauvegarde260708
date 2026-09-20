@@ -255,7 +255,7 @@ def test_maintenance_week_generation_ignores_race_date():
 
 
 # ---------------------------------------------------------------------------
-# MAINTENANCE_REFRESH_SESSIONS_3..6 = PASS
+# MAINTENANCE_REFRESH_SESSIONS_2..6 = PASS
 # (sessions_per_week parameter flows through; we test the bridge accepts MAINTENANCE)
 # ---------------------------------------------------------------------------
 
@@ -269,7 +269,7 @@ def test_maintenance_week_generation_sessions(sessions):
     verifies (a) the valid session counts are recognised and (b) the bridge
     produces a valid plan for MAINTENANCE with no workouts.
     """
-    valid_session_counts = {3, 4, 5, 6}
+    valid_session_counts = {2, 3, 4, 5, 6}
     assert sessions in valid_session_counts, f"sessions={sessions} must be a supported count"
 
     today = date.today()
@@ -462,12 +462,13 @@ def test_real_handler_set_goal_invalid_rejected():
     fake_db = _SimpleDB()
     fake_user = {"id": "real-handler-test-user-2"}
 
-    with patch.object(_srv, "db", fake_db):
-        result = asyncio.get_event_loop().run_until_complete(
+    with patch.object(_srv, "db", fake_db), pytest.raises(_srv.HTTPException) as exc_info:
+        asyncio.get_event_loop().run_until_complete(
             _srv.set_training_goal(goal="INVALID_GOAL", user=fake_user)
         )
 
-    assert result.get("error") == "Invalid goal", f"Expected error, got: {result}"
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "Invalid goal"
 
 
 # ---------------------------------------------------------------------------
