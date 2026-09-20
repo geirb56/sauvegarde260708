@@ -230,10 +230,15 @@ describe("Progress potential UI", () => {
     });
     renderProgress({ width: 390, lang: "en" });
 
-    expect(await screen.findByTestId("potential-card-5k").getAttribute("style")).toContain("border-left-width: 3px");
-    expect(await screen.findByTestId("garmin-hrv").getAttribute("style")).toContain("border-left-width: 3px");
-    expect(await screen.findByTestId("garmin-resting-hr").getAttribute("style")).toContain("border-left-width: 3px");
-    expect(await screen.findByTestId("garmin-sleep").getAttribute("style")).toContain("border-left-width: 3px");
+    const potential = await screen.findByTestId("potential-card-5k");
+    const hrv = await screen.findByTestId("garmin-hrv");
+    const restingHr = await screen.findByTestId("garmin-resting-hr");
+    const sleep = await screen.findByTestId("garmin-sleep");
+
+    expect(potential.getAttribute("style")).toContain("border-left-width: 3px");
+    expect(hrv.getAttribute("style")).toContain("border-left-width: 3px");
+    expect(restingHr.getAttribute("style")).toContain("border-left-width: 3px");
+    expect(sleep.getAttribute("style")).toContain("border-left-width: 3px");
   });
 
   test("potential section is rendered before runindex evolution section", async () => {

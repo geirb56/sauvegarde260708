@@ -266,6 +266,16 @@ const resolveSessionVisualTone = ({ session, typeKey, isExplicitRest, isUnavaila
   return SESSION_VISUAL_TONES.neutral;
 };
 
+const resolveSessionVisualToneKey = ({ session, typeKey, isExplicitRest, isUnavailable }) => {
+  if (!session || isUnavailable) return "neutral";
+  if (isExplicitRest) return "rest";
+  const normalized = typeof typeKey === "string" ? typeKey.toLowerCase() : null;
+  if (normalized === "race" || session?.intensity_class === "event" || session?.session_type === "competition") return "race";
+  if (normalized === "recovery") return "recovery";
+  if (normalized === "easy" || normalized === "long_easy" || normalized === "endurance") return "endurance";
+  return "neutral";
+};
+
 // C233 (blocker #2) — mirrors backend RUNTIME_TYPE_TO_WORKOUT_TYPE
 // (backend/training_v2/daily_runtime_helpers.py) verbatim. This is the
 // REAL, stable mapping the backend itself uses between /training/today's
@@ -464,6 +474,12 @@ function WeekSessionRow({ session, day, isToday, unitSystem, t, locale }) {
   const hasExpandableDetail = Boolean(structured || actual || analysisRoute);
   const canExpand = Boolean(session) && !isUnavailable && !isExplicitRest && hasExpandableDetail;
   const detailId = `training-v2-day-detail-${day}`;
+  const toneKey = resolveSessionVisualToneKey({
+    session,
+    typeKey,
+    isExplicitRest,
+    isUnavailable,
+  });
   const tone = resolveSessionVisualTone({
     session,
     typeKey,
@@ -481,6 +497,7 @@ function WeekSessionRow({ session, day, isToday, unitSystem, t, locale }) {
     <div
       data-testid={`training-v2-day-${day}`}
       data-day-state={timelineState}
+      data-session-tone={toneKey}
       className="rounded-md border"
       style={rowContainerStyle}
     >
@@ -504,6 +521,7 @@ function WeekSessionRow({ session, day, isToday, unitSystem, t, locale }) {
               <span
                 className="inline-flex h-2 w-2 rounded-full"
                 data-testid={`training-v2-day-accent-${day}`}
+                data-tone={toneKey}
                 style={{ background: tone.accent }}
               />
             )}

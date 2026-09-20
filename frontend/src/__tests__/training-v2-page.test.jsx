@@ -374,12 +374,13 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
 
     await screen.findByTestId("training-v2-page");
 
-    expect(screen.getByTestId("training-v2-day-accent-monday").getAttribute("style")).toContain("var(--accent-green)");
-    expect(screen.getByTestId("training-v2-day-accent-tuesday").getAttribute("style")).toContain("var(--accent-violet)");
-    expect(screen.getByTestId("training-v2-day-accent-wednesday").getAttribute("style")).toContain("var(--accent-cyan)");
-    expect(screen.getByTestId("training-v2-day-accent-sunday").getAttribute("style")).toContain("var(--status-danger)");
+    expect(screen.getByTestId("training-v2-day-monday").getAttribute("data-session-tone")).toBe("endurance");
+    expect(screen.getByTestId("training-v2-day-tuesday").getAttribute("data-session-tone")).toBe("rest");
+    expect(screen.getByTestId("training-v2-day-wednesday").getAttribute("data-session-tone")).toBe("recovery");
+    expect(screen.getByTestId("training-v2-day-sunday").getAttribute("data-session-tone")).toBe("race");
     expect(screen.queryByTestId("training-v2-day-accent-thursday")).not.toBeInTheDocument();
-    expect(screen.getByTestId("cycle-week-12").getAttribute("style")).toContain("var(--accent-green)");
+    expect(screen.getByTestId("cycle-week-12").getAttribute("style")).toContain("border-left-width: 3px");
+    expect(screen.getByTestId("cycle-week-12").getAttribute("style")).toContain("background: rgba(110, 235, 90, 0.1)");
   });
 
   test("today card shows the real /training/today contract: type, duration, and distance from served_prescription", async () => {
