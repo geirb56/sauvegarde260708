@@ -487,10 +487,11 @@ function WeekSessionRow({ session, day, isToday, unitSystem, t, locale }) {
     isUnavailable,
   });
   const rowContainerStyle = {
-    borderColor: tone.border,
+    borderColor: isToday ? "hsl(var(--primary))" : tone.border,
     borderLeftColor: tone.accent,
     borderLeftWidth: "3px",
     background: isToday ? tone.todayBackground : tone.background,
+    boxShadow: isToday ? "0 0 0 1px hsl(var(--primary) / 0.35)" : "none",
   };
 
   return (
