@@ -364,6 +364,24 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     expect(screen.getByTestId("training-v2-unmatched")).toBeInTheDocument();
   });
 
+  test("restores semantic accents for endurance, recovery, rest, race and active cycle week", async () => {
+    const data = weekData();
+    data.week.sessions[2].workout_type = "recovery";
+    data.week.sessions[6].workout_type = "race";
+    data.week.sessions[6].intensity_class = "event";
+    mockAxios({ week: data, cycle: cycleData() });
+    renderPage({ lang: "en" });
+
+    await screen.findByTestId("training-v2-page");
+
+    expect(screen.getByTestId("training-v2-day-accent-monday").getAttribute("style")).toContain("var(--accent-green)");
+    expect(screen.getByTestId("training-v2-day-accent-tuesday").getAttribute("style")).toContain("var(--accent-violet)");
+    expect(screen.getByTestId("training-v2-day-accent-wednesday").getAttribute("style")).toContain("var(--accent-cyan)");
+    expect(screen.getByTestId("training-v2-day-accent-sunday").getAttribute("style")).toContain("var(--status-danger)");
+    expect(screen.queryByTestId("training-v2-day-accent-thursday")).not.toBeInTheDocument();
+    expect(screen.getByTestId("cycle-week-12").getAttribute("style")).toContain("var(--accent-green)");
+  });
+
   test("today card shows the real /training/today contract: type, duration, and distance from served_prescription", async () => {
     mockAxios();
     renderPage();

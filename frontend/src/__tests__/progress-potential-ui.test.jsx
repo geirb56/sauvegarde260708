@@ -59,6 +59,7 @@ const setupAxios = ({
   predictionsReject = false,
   keepLoading = false,
   keepPredictionsLoading = false,
+  garminData = null,
 } = {}) => {
   axios.get.mockImplementation((url) => {
     if (url.includes("/stats")) return keepLoading ? new Promise(() => {}) : Promise.resolve({ data: BASE_STATS });
@@ -72,7 +73,9 @@ const setupAxios = ({
     if (url.includes("/run-index/history")) return Promise.resolve({ data: BASE_HISTORY });
     if (url.includes("/run-index")) return Promise.resolve({ data: BASE_RUN_INDEX });
     if (url.includes("/garmin/vo2max-history")) return Promise.resolve({ data: { history: [], current: null } });
-    if (url.includes("/garmin/daily-metrics")) return Promise.reject(new Error("garmin unavailable"));
+    if (url.includes("/garmin/daily-metrics")) {
+      return garminData ? Promise.resolve({ data: garminData }) : Promise.reject(new Error("garmin unavailable"));
+    }
     return Promise.resolve({ data: null });
   });
 };
@@ -210,6 +213,27 @@ describe("Progress potential UI", () => {
     expect(await screen.findByTestId("potential-card-10k")).toBeInTheDocument();
     expect(await screen.findByTestId("potential-card-semi")).toBeInTheDocument();
     expect(await screen.findByTestId("potential-card-marathon")).toBeInTheDocument();
+  });
+
+  test("applies semantic accent styles to prediction and garmin health cards", async () => {
+    setupAxios({
+      garminData: {
+        count: 1,
+        latest: {
+          is_current: true,
+          hrv: 57,
+          resting_hr: 48,
+          sleep_hours: 7.5,
+          measurement_date: "2026-09-19",
+        },
+      },
+    });
+    renderProgress({ width: 390, lang: "en" });
+
+    expect(await screen.findByTestId("potential-card-5k").getAttribute("style")).toContain("border-left-width: 3px");
+    expect(await screen.findByTestId("garmin-hrv").getAttribute("style")).toContain("border-left-width: 3px");
+    expect(await screen.findByTestId("garmin-resting-hr").getAttribute("style")).toContain("border-left-width: 3px");
+    expect(await screen.findByTestId("garmin-sleep").getAttribute("style")).toContain("border-left-width: 3px");
   });
 
   test("potential section is rendered before runindex evolution section", async () => {
