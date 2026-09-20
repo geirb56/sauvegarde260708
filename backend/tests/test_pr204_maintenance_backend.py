@@ -380,6 +380,17 @@ class _SimpleCollection:
     async def insert_one(self, doc):
         self._docs.append(dict(doc))
 
+    async def delete_many(self, query):
+        kept_docs = []
+        deleted = 0
+        for doc in self._docs:
+            if self._match(doc, query):
+                deleted += 1
+            else:
+                kept_docs.append(doc)
+        self._docs = kept_docs
+        return MagicMock(deleted_count=deleted)
+
 
 class _SimpleDB:
     """Minimal fake DB for real handler tests."""
