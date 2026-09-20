@@ -368,7 +368,7 @@ export default function Progress() {
                         data-testid={`potential-card-${distanceKey.toLowerCase()}`}
                         style={{
                           background: isGoal ? "rgba(249, 115, 22, 0.14)" : SEMANTIC_SURFACES.predictions.background,
-                          border: `1px solid ${isGoal ? "rgba(249, 115, 22, 0.55)" : SEMANTIC_SURFACES.predictions.border}`,
+                          border: `${isGoal ? "2px" : "1px"} solid ${isGoal ? "rgba(249, 115, 22, 0.55)" : SEMANTIC_SURFACES.predictions.border}`,
                           borderLeftColor: SEMANTIC_SURFACES.predictions.accent,
                           borderLeftWidth: "3px",
                         }}
