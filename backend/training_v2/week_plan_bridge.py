@@ -48,6 +48,8 @@ _GOAL_MAP: dict[str, GoalType] = {
     "MAINTENANCE": GoalType.maintenance,
 }
 
+_SUPPORTED_SESSION_PREFERENCES: set[int] = {2, 3, 4, 5, 6}
+
 
 class UnknownGoalTypeError(ValueError):
     """Raised when a goal string cannot be mapped to a known GoalType."""
@@ -320,6 +322,18 @@ def workouts_to_domain_activities(workouts: List[dict]) -> List[DomainActivity]:
     return activities
 
 
+def _apply_sessions_preference_cap(
+    weekly_target: WeeklyTarget, sessions_preference: Optional[int]
+) -> WeeklyTarget:
+    """Apply user sessions/week preference as a hard cap, never an increase."""
+    if sessions_preference not in _SUPPORTED_SESSION_PREFERENCES:
+        return weekly_target
+    effective_sessions = min(weekly_target.target_sessions, sessions_preference)
+    if effective_sessions == weekly_target.target_sessions:
+        return weekly_target
+    return weekly_target.model_copy(update={"target_sessions": effective_sessions})
+
+
 def build_weekly_target_from_workouts(
     *,
     workouts: List[dict],
@@ -372,6 +386,7 @@ def build_weekly_plan_from_workouts(
     user_profile: Optional[dict] = None,
     target_distance_km: Optional[float] = None,
     target_time_seconds: Optional[int] = None,
+    sessions_preference: Optional[int] = None,
 ) -> tuple[WeeklyTarget, WeeklyPlan]:
     """Build WeeklyTarget V2 + WeeklyPlan V2 from raw workout documents.
 
@@ -405,7 +420,10 @@ def build_weekly_plan_from_workouts(
 
     # PR228 — use the RECONCILED target as the plan authority.
     # reconciliation_result.reconciled_target == ctx.weekly_target when KEEP action.
-    reconciled_target = ctx.reconciliation_result.reconciled_target
+    reconciled_target = _apply_sessions_preference_cap(
+        ctx.reconciliation_result.reconciled_target,
+        sessions_preference,
+    )
 
     weekly_plan = build_weekly_plan(
         weekly_target=reconciled_target,
@@ -461,6 +479,7 @@ def build_canonical_weekly_plan(
     user_profile: Optional[dict] = None,
     target_distance_km: Optional[float] = None,
     target_time_seconds: Optional[int] = None,
+    sessions_preference: Optional[int] = None,
 ) -> CanonicalWeeklyPlan:
     """PR228 — Build the full canonical weekly plan including reconciliation audit.
 
@@ -488,7 +507,10 @@ def build_canonical_weekly_plan(
         target_time_seconds=target_time_seconds,
     )
 
-    reconciled_target = ctx.reconciliation_result.reconciled_target
+    reconciled_target = _apply_sessions_preference_cap(
+        ctx.reconciliation_result.reconciled_target,
+        sessions_preference,
+    )
 
     weekly_plan = build_weekly_plan(
         weekly_target=reconciled_target,

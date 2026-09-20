@@ -217,6 +217,15 @@ class WeekV2PlanResponse(BaseModel):
     attributed to any prescription. Never dropped."""
 
 
+class WeekV2TrainingPrefsResponse(BaseModel):
+    """Stored user training preferences relevant to weekly planning."""
+
+    model_config = ConfigDict(frozen=True)
+
+    sessions_per_week: Optional[int] = None
+    """Stored user preference for sessions/week (if set)."""
+
+
 class TrainingWeekV2Response(BaseModel):
     """Top-level response for GET /training/v2/week.
 
@@ -235,6 +244,7 @@ class TrainingWeekV2Response(BaseModel):
     state: WeekV2StateResponse
     weekly_target: WeekV2TargetResponse
     week: WeekV2PlanResponse
+    training_prefs: WeekV2TrainingPrefsResponse = Field(default_factory=WeekV2TrainingPrefsResponse)
 
     reconciliation_action: Optional[str] = None
     """PR228 — WeeklyReconciliation action: KEEP | REDUCE_VOLUME | REDUCE_FREQUENCY | REDUCE_BOTH."""
@@ -251,4 +261,5 @@ __all__ = [
     "WeekV2SessionResponse",
     "WeekV2ActualResponse",
     "WeekV2PlanResponse",
+    "WeekV2TrainingPrefsResponse",
 ]

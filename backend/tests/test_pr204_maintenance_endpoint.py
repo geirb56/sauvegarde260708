@@ -13,10 +13,10 @@ SET_GOAL_ENDPOINT  — POST /training/set-goal?goal=MAINTENANCE
     • training_cycles persisted with goal=MAINTENANCE
     • start_date persisted (today)
 
-REFRESH_ENDPOINT   — POST /training/refresh?sessions={3,4,5,6} with MAINTENANCE cycle
+REFRESH_ENDPOINT   — POST /training/refresh?sessions={2,3,4,5,6} with MAINTENANCE cycle
     • HTTP 200 for each session count
     • no crash with goal=MAINTENANCE
-    • sessions_per_week stored in training_prefs (sessions in [3,4,5,6])
+    • sessions_per_week stored in training_prefs (sessions in [2,3,4,5,6])
     • plan payload returned
 """
 
@@ -328,7 +328,7 @@ def _make_db_with_maintenance_cycle(user_id: str = _USER_ID) -> _FakeDB:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("sessions", [3, 4, 5, 6])
+@pytest.mark.parametrize("sessions", [2, 3, 4, 5, 6])
 async def test_refresh_maintenance_sessions(sessions: int):
     """POST /training/refresh?sessions={sessions} with MAINTENANCE cycle → 200, no crash.
 
@@ -363,9 +363,9 @@ async def test_refresh_maintenance_sessions(sessions: int):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("sessions", [3, 4, 5, 6])
+@pytest.mark.parametrize("sessions", [2, 3, 4, 5, 6])
 async def test_refresh_maintenance_sessions_stored(sessions: int):
-    """sessions_per_week is stored in training_prefs when sessions is in [3,4,5,6]."""
+    """sessions_per_week is stored in training_prefs when sessions is in [2,3,4,5,6]."""
     fake_db = _make_db_with_maintenance_cycle()
 
     with patch("server.generate_dynamic_training_plan", new=AsyncMock(return_value={"goal": "MAINTENANCE"})):
@@ -385,7 +385,7 @@ async def test_refresh_maintenance_sessions_stored(sessions: int):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("sessions", [3, 4, 5, 6])
+@pytest.mark.parametrize("sessions", [2, 3, 4, 5, 6])
 async def test_refresh_maintenance_sessions_passed_to_generator(sessions: int):
     """The refresh handler passes sessions_override=N to generate_dynamic_training_plan.
 

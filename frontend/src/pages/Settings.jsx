@@ -37,7 +37,7 @@ const GOAL_OPTIONS = [
   { value: "MAINTENANCE", translationKey: "onboarding.goalLabels.MAINTENANCE", cycleValue: "maintenance", distanceType: null, hasRaceSettings: false },
 ];
 
-const SUPPORTED_SESSION_VALUES = [3, 4, 5, 6];
+const SUPPORTED_SESSION_VALUES = [2, 3, 4, 5, 6];
 const TERMINAL_SYNC_STATUSES = new Set(["complete", "partial_success", "failed"]);
 const SUPPORTED_CYCLE_STATUSES = new Set(["active", "upcoming", "completed"]);
 
@@ -292,7 +292,7 @@ export default function Settings() {
     }
 
     if (weekV2Result.status === "fulfilled") {
-      const sessionCount = weekV2Result.value.data?.weekly_target?.session_count;
+      const sessionCount = weekV2Result.value.data?.training_prefs?.sessions_per_week;
       setSessionsPerWeek(SUPPORTED_SESSION_VALUES.includes(sessionCount) ? sessionCount : null);
     } else {
       setSessionsPerWeek(null);
@@ -725,7 +725,7 @@ export default function Settings() {
               />
 
               <div className="rounded-xl border border-border bg-muted/30 p-4" data-testid="settings-sessions-options">
-                <div className="grid grid-cols-4 gap-2">
+                <div className="grid grid-cols-5 gap-2" data-testid="settings-sessions-grid">
                   {SUPPORTED_SESSION_VALUES.map((value) => (
                     <button
                       key={value}
