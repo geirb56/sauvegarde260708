@@ -364,6 +364,31 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     expect(screen.getByTestId("training-v2-unmatched")).toBeInTheDocument();
   });
 
+  test("restores semantic accents for endurance, recovery, rest, race and active cycle week", async () => {
+    const data = weekData();
+    data.week.sessions[2].workout_type = "recovery";
+    data.week.sessions[6].workout_type = "race";
+    data.week.sessions[6].intensity_class = "event";
+    mockAxios({ week: data, cycle: cycleData() });
+    renderPage({ lang: "en" });
+
+    await screen.findByTestId("training-v2-page");
+
+    expect(screen.getByTestId("training-v2-day-monday").getAttribute("data-session-tone")).toBe("endurance");
+    expect(screen.getByTestId("training-v2-day-tuesday").getAttribute("data-session-tone")).toBe("rest");
+    expect(screen.getByTestId("training-v2-day-wednesday").getAttribute("data-session-tone")).toBe("recovery");
+    expect(screen.getByTestId("training-v2-day-sunday").getAttribute("data-session-tone")).toBe("race");
+    expect(screen.queryByTestId("training-v2-day-accent-thursday")).not.toBeInTheDocument();
+    const enduranceAccentStyle = screen.getByTestId("training-v2-day-accent-monday").getAttribute("style");
+    const activeWeekStyle = screen.getByTestId("cycle-week-12").getAttribute("style");
+    expect(enduranceAccentStyle).toContain("rgb(16, 185, 129)");
+    expect(enduranceAccentStyle).not.toContain("110, 235, 90");
+    expect(screen.getByTestId("cycle-week-12").getAttribute("style")).toContain("border-left-width: 3px");
+    expect(screen.getByTestId("cycle-week-12").getAttribute("style")).toContain("border-left-color: rgb(110, 235, 90)");
+    expect(screen.getByTestId("cycle-week-12").getAttribute("style")).toContain("background: rgba(110, 235, 90, 0.1)");
+    expect(activeWeekStyle).not.toContain("16, 185, 129");
+  });
+
   test("today card shows the real /training/today contract: type, duration, and distance from served_prescription", async () => {
     mockAxios();
     renderPage();

@@ -59,6 +59,7 @@ const setupAxios = ({
   predictionsReject = false,
   keepLoading = false,
   keepPredictionsLoading = false,
+  garminData = null,
 } = {}) => {
   axios.get.mockImplementation((url) => {
     if (url.includes("/stats")) return keepLoading ? new Promise(() => {}) : Promise.resolve({ data: BASE_STATS });
@@ -72,7 +73,9 @@ const setupAxios = ({
     if (url.includes("/run-index/history")) return Promise.resolve({ data: BASE_HISTORY });
     if (url.includes("/run-index")) return Promise.resolve({ data: BASE_RUN_INDEX });
     if (url.includes("/garmin/vo2max-history")) return Promise.resolve({ data: { history: [], current: null } });
-    if (url.includes("/garmin/daily-metrics")) return Promise.reject(new Error("garmin unavailable"));
+    if (url.includes("/garmin/daily-metrics")) {
+      return garminData ? Promise.resolve({ data: garminData }) : Promise.reject(new Error("garmin unavailable"));
+    }
     return Promise.resolve({ data: null });
   });
 };
@@ -210,6 +213,40 @@ describe("Progress potential UI", () => {
     expect(await screen.findByTestId("potential-card-10k")).toBeInTheDocument();
     expect(await screen.findByTestId("potential-card-semi")).toBeInTheDocument();
     expect(await screen.findByTestId("potential-card-marathon")).toBeInTheDocument();
+  });
+
+  test("applies semantic accent styles to prediction and garmin health cards", async () => {
+    setupAxios({
+      garminData: {
+        count: 1,
+        latest: {
+          is_current: true,
+          hrv: 57,
+          resting_hr: 48,
+          sleep_hours: 7.5,
+          measurement_date: "2026-09-19",
+        },
+      },
+    });
+    renderProgress({ width: 390, lang: "en" });
+
+    const potential = await screen.findByTestId("potential-card-5k");
+    const hrv = await screen.findByTestId("garmin-hrv");
+    const restingHr = await screen.findByTestId("garmin-resting-hr");
+    const sleep = await screen.findByTestId("garmin-sleep");
+    const vo2 = await screen.findByTestId("garmin-vo2-card");
+
+    expect(potential.getAttribute("style")).toContain("border-left-width: 3px");
+    expect(potential.getAttribute("style")).toContain("border-color: rgba(249, 115, 22, 0.30)");
+    expect(hrv.getAttribute("style")).toContain("border-left-width: 3px");
+    expect(hrv.getAttribute("style")).toContain("background: rgba(34, 211, 238, 0.06)");
+    expect(restingHr.getAttribute("style")).toContain("border-left-width: 3px");
+    expect(restingHr.getAttribute("style")).toContain("background: rgba(244, 63, 94, 0.08)");
+    expect(sleep.getAttribute("style")).toContain("border-left-width: 3px");
+    expect(sleep.getAttribute("style")).toContain("background: rgba(96, 165, 250, 0.08)");
+    expect(vo2.getAttribute("style")).toContain("background: rgba(16, 185, 129, 0.08)");
+    expect(vo2.getAttribute("style")).toContain("border-left-color: rgb(16, 185, 129)");
+    expect(vo2.getAttribute("style")).not.toContain("110, 235, 90");
   });
 
   test("potential section is rendered before runindex evolution section", async () => {
