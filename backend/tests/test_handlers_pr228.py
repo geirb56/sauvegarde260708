@@ -412,6 +412,23 @@ async def test_week_and_today_same_session_source():
 
 
 @pytest.mark.asyncio
+async def test_week_response_exposes_training_prefs_sessions_per_week():
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    _seed_garmin_activities(fake_db, n=8)
+    _seed_connected(fake_db, connected=True)
+    fake_db.training_prefs._docs.append(
+        {"user_id": _USER_ID, "sessions_per_week": 5}
+    )
+
+    week_result = await _get_week(fake_db)
+    assert week_result["status"] == 200, f"Week HTTP error: {week_result['body']}"
+    assert (
+        week_result["body"]["training_prefs"]["sessions_per_week"] == 5
+    ), week_result["body"]
+
+
+@pytest.mark.asyncio
 async def test_connected_false_history_present_same_plan():
     """connected=false + history in DB → same plan source as connected=true."""
     # connected=true run
