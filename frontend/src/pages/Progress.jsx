@@ -100,6 +100,16 @@ const CONFIDENCE_MAP = {
   insufficient: { i18nKey: "confidenceInsufficient", color: "#6b7280" },
 };
 
+const SEMANTIC_SURFACES = {
+  predictions: { background: "rgba(249, 115, 22, 0.06)", border: "rgba(249, 115, 22, 0.30)", accent: "var(--accent-orange)" },
+  hrv: { background: "rgba(34, 211, 238, 0.06)", border: "rgba(34, 211, 238, 0.30)", accent: "var(--accent-cyan)" },
+  restingHr: { background: "rgba(244, 63, 94, 0.08)", border: "rgba(244, 63, 94, 0.32)", accent: "rgb(244, 63, 94)" },
+  sleep: { background: "rgba(96, 165, 250, 0.08)", border: "rgba(96, 165, 250, 0.30)", accent: "rgb(96, 165, 250)" },
+  vo2: { background: "rgba(16, 185, 129, 0.08)", border: "rgba(16, 185, 129, 0.34)", accent: "rgb(16, 185, 129)" },
+  danger: { background: "rgba(239, 68, 68, 0.14)", border: "rgba(239, 68, 68, 0.34)", accent: "var(--status-danger)" },
+  neutral: { background: "rgba(148, 163, 184, 0.08)", border: "rgba(148, 163, 184, 0.24)", accent: "rgb(148, 163, 184)" },
+};
+
 const normalizeConfidence = (value) => {
   if (typeof value !== "string") return "insufficient";
   const normalized = value.trim().toLowerCase();
@@ -263,7 +273,7 @@ export default function Progress() {
   const runIndexTrend = runIndexHistory?.trend ?? 0;
   const TrendIcon = runIndexTrend > 0 ? TrendingUp : runIndexTrend < 0 ? TrendingDown : Minus;
   const trendColor = runIndexTrend > 0 ? "text-emerald-500" : runIndexTrend < 0 ? "text-red-500" : "text-muted-foreground";
-  const trendBg = runIndexTrend > 0 ? "bg-emerald-500/20" : runIndexTrend < 0 ? "bg-red-500/20" : "bg-muted/30";
+  const trendTone = runIndexTrend > 0 ? SEMANTIC_SURFACES.vo2 : runIndexTrend < 0 ? SEMANTIC_SURFACES.danger : SEMANTIC_SURFACES.neutral;
   const historyGranularity = runIndexHistory?.granularity || "week";
 
   const periodOptions = [
@@ -357,8 +367,14 @@ export default function Progress() {
                         className="rounded-xl p-3"
                         data-testid={`potential-card-${distanceKey.toLowerCase()}`}
                         style={{
-                          background: isGoal ? "rgba(245,158,11,0.08)" : "rgba(255,255,255,0.03)",
-                          border: isGoal ? "2px solid rgba(245,158,11,0.5)" : "1px solid rgba(255,255,255,0.08)",
+                          background: isGoal ? "rgba(249, 115, 22, 0.14)" : SEMANTIC_SURFACES.predictions.background,
+                          borderStyle: "solid",
+                          borderTopWidth: `${isGoal ? 2 : 1}px`,
+                          borderRightWidth: `${isGoal ? 2 : 1}px`,
+                          borderBottomWidth: `${isGoal ? 2 : 1}px`,
+                          borderColor: isGoal ? "rgba(249, 115, 22, 0.55)" : SEMANTIC_SURFACES.predictions.border,
+                          borderLeftColor: SEMANTIC_SURFACES.predictions.accent,
+                          borderLeftWidth: "3px",
                         }}
                       >
                         <div className="flex items-center justify-between gap-2">
@@ -447,7 +463,10 @@ export default function Progress() {
                   <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
                     {t("progressExtended.runIndexTrend")}
                   </p>
-                  <div className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs ${trendBg}`}>
+                  <div
+                    className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs"
+                    style={{ background: trendTone.background, border: `1px solid ${trendTone.border}` }}
+                  >
                     <TrendIcon className={`h-3.5 w-3.5 ${trendColor}`} />
                     <span className={`font-semibold ${trendColor}`}>
                       {(() => {
@@ -688,7 +707,18 @@ export default function Progress() {
             )}
           </div>
           <div className="grid grid-cols-3 gap-2 sm:gap-3">
-            <Card className="bg-card border-border" data-testid="garmin-hrv">
+            <Card
+              className="bg-card border-border"
+              data-testid="garmin-hrv"
+              style={{
+                background: SEMANTIC_SURFACES.hrv.background,
+                borderStyle: "solid",
+                borderWidth: "1px",
+                borderColor: SEMANTIC_SURFACES.hrv.border,
+                borderLeftColor: SEMANTIC_SURFACES.hrv.accent,
+                borderLeftWidth: "3px",
+              }}
+            >
               <CardContent className="p-4">
                 <div className="flex items-center gap-2 mb-2">
                   <Activity className="w-4 h-4 text-emerald-500" />
@@ -710,7 +740,18 @@ export default function Progress() {
               </CardContent>
             </Card>
 
-            <Card className="bg-card border-border" data-testid="garmin-resting-hr">
+            <Card
+              className="bg-card border-border"
+              data-testid="garmin-resting-hr"
+              style={{
+                background: SEMANTIC_SURFACES.restingHr.background,
+                borderStyle: "solid",
+                borderWidth: "1px",
+                borderColor: SEMANTIC_SURFACES.restingHr.border,
+                borderLeftColor: SEMANTIC_SURFACES.restingHr.accent,
+                borderLeftWidth: "3px",
+              }}
+            >
               <CardContent className="p-4">
                 <div className="flex items-center gap-2 mb-2">
                   <Heart className="w-4 h-4 text-rose-500" />
@@ -732,7 +773,18 @@ export default function Progress() {
               </CardContent>
             </Card>
 
-            <Card className="bg-card border-border" data-testid="garmin-sleep">
+            <Card
+              className="bg-card border-border"
+              data-testid="garmin-sleep"
+              style={{
+                background: SEMANTIC_SURFACES.sleep.background,
+                borderStyle: "solid",
+                borderWidth: "1px",
+                borderColor: SEMANTIC_SURFACES.sleep.border,
+                borderLeftColor: SEMANTIC_SURFACES.sleep.accent,
+                borderLeftWidth: "3px",
+              }}
+            >
               <CardContent className="p-4">
                 <div className="flex items-center gap-2 mb-2">
                   <Moon className="w-4 h-4 text-blue-400" />
@@ -759,13 +811,24 @@ export default function Progress() {
 
       {/* Garmin native VO2MAX Section with sparse history */}
       <div className="mb-6">
-        <Card className="bg-card border-border overflow-hidden">
+        <Card
+          className="bg-card border-border overflow-hidden"
+          data-testid="garmin-vo2-card"
+          style={{
+            background: SEMANTIC_SURFACES.vo2.background,
+            borderStyle: "solid",
+            borderWidth: "1px",
+            borderColor: SEMANTIC_SURFACES.vo2.border,
+            borderLeftColor: SEMANTIC_SURFACES.vo2.accent,
+            borderLeftWidth: "3px",
+          }}
+        >
           <CardContent className="p-4">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-4">
-                <div className="w-14 h-14 rounded-xl flex flex-col items-center justify-center" style={{ background: "rgba(110, 235, 90, 0.12)", border: "1px solid rgba(110, 235, 90, 0.25)" }}>
-                  <Zap className="w-5 h-5" style={{ color: "#6EEB5A" }} />
-                  <span className="text-[7px] font-mono uppercase mt-0.5" style={{ color: "rgba(110, 235, 90, 0.8)" }}>VO2MAX</span>
+                <div className="w-14 h-14 rounded-xl flex flex-col items-center justify-center" style={{ background: "rgba(16, 185, 129, 0.12)", border: "1px solid rgba(16, 185, 129, 0.25)" }}>
+                  <Zap className="w-5 h-5" style={{ color: "rgb(16, 185, 129)" }} />
+                  <span className="text-[7px] font-mono uppercase mt-0.5" style={{ color: "rgba(16, 185, 129, 0.82)" }}>VO2MAX</span>
                 </div>
                 <div>
                   <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">{t("progressExtended.garminVo2maxLabel")}</p>

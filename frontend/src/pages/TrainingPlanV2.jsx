@@ -219,6 +219,59 @@ const getSessionPaceOrZone = (session) => {
   return null;
 };
 
+const SESSION_VISUAL_TONES = {
+  neutral: {
+    accent: "transparent",
+    border: "hsl(var(--border))",
+    background: "hsl(var(--card))",
+    todayBackground: "hsl(var(--primary) / 0.10)",
+  },
+  endurance: {
+    accent: "rgb(16, 185, 129)",
+    border: "rgba(16, 185, 129, 0.34)",
+    background: "rgba(16, 185, 129, 0.08)",
+    todayBackground: "rgba(16, 185, 129, 0.14)",
+  },
+  recovery: {
+    accent: "var(--accent-cyan)",
+    border: "rgba(34, 211, 238, 0.34)",
+    background: "rgba(34, 211, 238, 0.07)",
+    todayBackground: "rgba(34, 211, 238, 0.13)",
+  },
+  rest: {
+    accent: "var(--accent-violet)",
+    border: "rgba(139, 92, 246, 0.34)",
+    background: "rgba(139, 92, 246, 0.08)",
+    todayBackground: "rgba(139, 92, 246, 0.14)",
+  },
+  race: {
+    accent: "var(--status-danger)",
+    border: "rgba(239, 68, 68, 0.35)",
+    background: "rgba(239, 68, 68, 0.08)",
+    todayBackground: "rgba(239, 68, 68, 0.15)",
+  },
+};
+
+const resolveSessionVisual = ({ session, typeKey, isExplicitRest, isUnavailable }) => {
+  let key = "neutral";
+  if (!session || isUnavailable) {
+    key = "neutral";
+  } else if (isExplicitRest) {
+    key = "rest";
+  } else {
+    const normalized = typeof typeKey === "string" ? typeKey.toLowerCase() : null;
+    if (normalized === "race" || session?.intensity_class === "event" || session?.session_type === "competition") {
+      key = "race";
+    } else if (normalized === "recovery") {
+      key = "recovery";
+    } else if (normalized === "easy" || normalized === "long_easy" || normalized === "endurance") {
+      key = "endurance";
+    }
+  }
+
+  return { key, tone: SESSION_VISUAL_TONES[key] };
+};
+
 // C233 (blocker #2) — mirrors backend RUNTIME_TYPE_TO_WORKOUT_TYPE
 // (backend/training_v2/daily_runtime_helpers.py) verbatim. This is the
 // REAL, stable mapping the backend itself uses between /training/today's
@@ -417,12 +470,27 @@ function WeekSessionRow({ session, day, isToday, unitSystem, t, locale }) {
   const hasExpandableDetail = Boolean(structured || actual || analysisRoute);
   const canExpand = Boolean(session) && !isUnavailable && !isExplicitRest && hasExpandableDetail;
   const detailId = `training-v2-day-detail-${day}`;
+  const { key: toneKey, tone } = resolveSessionVisual({
+    session,
+    typeKey,
+    isExplicitRest,
+    isUnavailable,
+  });
+  const rowContainerStyle = {
+    borderColor: isToday ? "hsl(var(--primary))" : tone.border,
+    borderLeftColor: tone.accent,
+    borderLeftWidth: "3px",
+    background: isToday ? tone.todayBackground : tone.background,
+    boxShadow: isToday ? "0 0 0 1px hsl(var(--primary) / 0.35)" : "none",
+  };
 
   return (
     <div
       data-testid={`training-v2-day-${day}`}
       data-day-state={timelineState}
-      className={`rounded-md border ${isToday ? "border-primary bg-primary/10" : "border-border bg-card"}`}
+      data-session-tone={toneKey}
+      className="rounded-md border"
+      style={rowContainerStyle}
     >
       <button
         type="button"
@@ -440,6 +508,14 @@ function WeekSessionRow({ session, day, isToday, unitSystem, t, locale }) {
             {formatDayHeading(t, day, session?.planned_date, locale)}
           </span>
           <div className="flex min-w-0 flex-wrap items-center gap-2">
+            {tone.accent !== "transparent" && (
+              <span
+                className="inline-flex h-2 w-2 rounded-full"
+                data-testid={`training-v2-day-accent-${day}`}
+                data-tone={toneKey}
+                style={{ background: tone.accent }}
+              />
+            )}
             <p className="truncate font-medium" data-testid={`training-v2-day-type-${day}`}>{typeLabel}</p>
             <AdaptedBadge modified={session?.session_modified_from_planned} t={t} />
           </div>
@@ -684,7 +760,22 @@ function FullCycleSection({ t, locale, weeks }) {
               <div
                 key={week.week_number}
                 data-testid={`cycle-week-${week.week_number}`}
-                className={`grid grid-cols-[auto_1fr_auto] items-center gap-2 rounded-md border px-2 py-2 text-xs ${week.is_current ? "border-primary bg-primary/10" : "border-border bg-card"}`}
+                className="grid grid-cols-[auto_1fr_auto] items-center gap-2 rounded-md border px-2 py-2 text-xs"
+                style={
+                  week.is_current
+                    ? {
+                      borderColor: "rgba(110, 235, 90, 0.46)",
+                      borderLeftColor: "rgb(110, 235, 90)",
+                      borderLeftWidth: "3px",
+                      background: "rgba(110, 235, 90, 0.10)",
+                    }
+                    : {
+                      borderColor: "hsl(var(--border))",
+                      borderLeftColor: "transparent",
+                      borderLeftWidth: "3px",
+                      background: "hsl(var(--card))",
+                    }
+                }
               >
                 <span className="font-semibold">{t("trainingV2.cycleWeekShort")} {week.week_number}</span>
                 <span className="truncate text-muted-foreground">{phaseLabel}</span>
