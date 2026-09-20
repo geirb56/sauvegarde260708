@@ -3348,7 +3348,7 @@ async def refresh_training_plan(sessions: int = None, user: dict = Depends(auth_
         del _plan_cache[k]
 
     # Save number of sessions if specified
-    if sessions and sessions in [2, 3, 4, 5, 6]:
+    if sessions is not None and sessions in [2, 3, 4, 5, 6]:
         await db.training_prefs.update_one(
             {"user_id": user["id"]},
             {"$set": {"sessions_per_week": sessions}},
