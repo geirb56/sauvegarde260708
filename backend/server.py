@@ -4769,6 +4769,8 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
                     "day": session.day.lower(),
                 },
                 "$set": {
+                    "planned_date": session_planned_date.isoformat(),
+                    "day": session.day.lower(),
                     "workout_type": session.workout_type,
                     "intensity_class": session.intensity_class,
                     "distance_km": session.distance_km,
