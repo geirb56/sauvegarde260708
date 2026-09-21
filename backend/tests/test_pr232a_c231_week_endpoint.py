@@ -65,6 +65,7 @@ class _UpdateResult:
 class _Collection:
     def __init__(self, docs: Optional[List[dict]] = None) -> None:
         self._docs: List[dict] = list(docs or [])
+        self.update_one_calls: List[dict] = []
 
     def _match(self, doc: dict, query: dict) -> bool:
         for k, v in query.items():
@@ -103,6 +104,11 @@ class _Collection:
         return self._Cursor(results)
 
     async def update_one(self, query: dict, update: dict, upsert: bool = False) -> _UpdateResult:
+        self.update_one_calls.append({
+            "query": dict(query),
+            "update": dict(update),
+            "upsert": upsert,
+        })
         q = {k: v for k, v in query.items() if not isinstance(v, dict)}
         for doc in self._docs:
             if self._match(doc, q):
@@ -471,6 +477,70 @@ async def test_goal_change_keeps_past_fixed_and_future_recomputed():
     assert monday_second["workout_type"] == monday_first["workout_type"]
     assert saturday_second["distance_km"] != 777.0
     assert saturday_second["planned_date"] == saturday_first["planned_date"]
+
+
+@pytest.mark.asyncio
+async def test_planned_memory_upsert_uses_day_date_only_in_set():
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    _seed_garmin_activities(fake_db, n=8)
+    _seed_connected(fake_db, connected=True)
+
+    result = await _get_week(fake_db, reference_date=_MONDAY)
+    assert result["status"] == 200, result["body"]
+
+    calls = fake_db.training_planned_prescription_memory.update_one_calls
+    assert calls, "Expected planned-memory upsert calls for future sessions."
+    for call in calls:
+        update = call["update"]
+        assert "planned_date" in update.get("$set", {})
+        assert "day" in update.get("$set", {})
+        assert "planned_date" not in update.get("$setOnInsert", {})
+        assert "day" not in update.get("$setOnInsert", {})
+
+
+@pytest.mark.asyncio
+async def test_future_structured_memory_is_restored_identically_once_past():
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    _seed_garmin_activities(fake_db, n=8)
+    _seed_connected(fake_db, connected=True)
+
+    first = await _get_week(fake_db, reference_date=_MONDAY)
+    assert first["status"] == 200, first["body"]
+    sessions_first = first["body"]["week"]["sessions"]
+
+    future_candidate = next(
+        (
+            s for s in sessions_first
+            if s["planned_date"] > _MONDAY.isoformat()
+            and s["planned_date"] <= (_MONDAY + timedelta(days=5)).isoformat()
+            and s.get("workout_type") != "rest"
+            and s.get("structured") is not None
+        ),
+        None,
+    )
+    if future_candidate is None:
+        pytest.skip("No non-rest future structured session candidate found.")
+
+    planned_date = date.fromisoformat(future_candidate["planned_date"])
+    prescription_id = f"{_USER_ID}:{future_candidate['planned_date']}:{future_candidate['day'].lower()}"
+    stored_doc = next(
+        (d for d in fake_db.training_planned_prescription_memory._docs if d.get("prescription_id") == prescription_id),
+        None,
+    )
+    assert stored_doc is not None
+    assert stored_doc.get("structured") == future_candidate["structured"]
+
+    second = await _get_week(fake_db, reference_date=planned_date + timedelta(days=1))
+    assert second["status"] == 200, second["body"]
+    restored = next(
+        s for s in second["body"]["week"]["sessions"]
+        if s["planned_date"] == future_candidate["planned_date"]
+    )
+    assert restored["execution_status"] is None
+    assert restored["structured"] == future_candidate["structured"]
+    assert restored.get("structured_status") == "historical_frozen"
 
 
 @pytest.mark.asyncio

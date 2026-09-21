@@ -4582,6 +4582,7 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
             distance_km=doc.get("distance_km"),
             duration_minutes=doc.get("duration_minutes"),
             reason_codes=tuple(doc.get("reason_codes") or ()),
+            structured=doc.get("structured"),
         )
 
     # C231 — item 3 BLOCKER FIX: the session whose planned_date == today MUST
@@ -4753,20 +4754,25 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
 
     # Persist/update planned-memory for strictly future days of THIS week only.
     # Never backfill/overwrite past days.
+    execution_by_prescription_id = {
+        getattr(se, "prescription_id", None): se for se in execution.sessions
+    }
     planned_memory_writes: list[tuple[dict, dict]] = []
     for session in sessions_for_execution:
         session_planned_date = _planned_date_for_day(session.day)
         if session_planned_date <= reference_date:
             continue
         prescription_id = prescription_id_for(user_id, session_planned_date, session.day)
+        execution_session = execution_by_prescription_id.get(prescription_id)
+        structured_payload = None
+        if execution_session is not None and getattr(execution_session, "structured", None) is not None:
+            structured_payload = execution_session.structured.model_dump(mode="json")
         planned_memory_writes.append((
             {"user_id": user_id, "prescription_id": prescription_id},
             {
                 "$setOnInsert": {
                     "user_id": user_id,
                     "prescription_id": prescription_id,
-                    "planned_date": session_planned_date.isoformat(),
-                    "day": session.day.lower(),
                 },
                 "$set": {
                     "planned_date": session_planned_date.isoformat(),
@@ -4776,6 +4782,7 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
                     "distance_km": session.distance_km,
                     "duration_minutes": session.duration_minutes,
                     "reason_codes": list(session.reason_codes),
+                    "structured": structured_payload,
                     "updated_at": now_utc.isoformat(),
                 },
             },
@@ -6248,6 +6255,14 @@ async def _ensure_prescription_snapshot_unique_index(db_handle) -> None:
     await ensure_prescription_snapshot_unique_index(db_handle)
 
 
+async def _ensure_training_planned_prescription_memory_unique_index(db_handle) -> None:
+    """Thin wrapper — delegates to the testable service module."""
+    from services.training_planned_prescription_memory_index import (
+        ensure_training_planned_prescription_memory_unique_index,
+    )
+    await ensure_training_planned_prescription_memory_unique_index(db_handle)
+
+
 @app.on_event("startup")
 async def create_db_indexes():
     """Create MongoDB indexes for common query patterns"""
@@ -6276,6 +6291,9 @@ async def create_db_indexes():
     # fails, startup must propagate the error and stop, never continue while
     # falsely claiming immutability is guaranteed.
     await _ensure_prescription_snapshot_unique_index(db)
+    # PR284 follow-up — planned-memory fallback must also be protected at the
+    # Mongo layer against duplicate (user_id, prescription_id) rows.
+    await _ensure_training_planned_prescription_memory_unique_index(db)
     try:
         # Workouts: filter + sort by user and date
         await db.workouts.create_index([("user_id", 1), ("date", -1)])
