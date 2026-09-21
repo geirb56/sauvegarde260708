@@ -20,9 +20,11 @@ os.environ.setdefault("MONGO_URL", "mongodb://localhost:27017/testdb")
 os.environ.setdefault("DB_NAME", "testdb")
 
 import server  # noqa: E402
+import coach_context_v2  # noqa: E402
 from access_control import Tier, UserAccess  # noqa: E402
 from auth.jwt_utils import create_access_token  # noqa: E402
-from training_v2.plan_goal import GoalType  # noqa: E402
+from training_v2.plan_goal import GoalType, build_plan_goal  # noqa: E402
+from training_v2.training_cycle_response import build_cycle_calendar_response  # noqa: E402
 
 
 _USER_ID = "coach-user"
@@ -79,17 +81,38 @@ class _Collection:
     def __init__(self, docs=None):
         self._docs = [dict(doc) for doc in (docs or [])]
         self.find_one_calls: list[dict] = []
+        self.find_projections: list[dict | None] = []
+
+    @staticmethod
+    def _apply_projection(doc: dict, projection):
+        if not projection:
+            return dict(doc)
+        include_keys = {key for key, value in projection.items() if key != "_id" and value}
+        if include_keys:
+            projected = {key: doc.get(key) for key in include_keys if key in doc}
+            if projection.get("_id", 1):
+                projected["_id"] = doc.get("_id")
+            return projected
+        if projection.get("_id") == 0:
+            return {key: value for key, value in doc.items() if key != "_id"}
+        return dict(doc)
 
     async def find_one(self, query, projection=None, sort=None):
         self.find_one_calls.append(dict(query))
+        self.find_projections.append(dict(projection) if isinstance(projection, dict) else projection)
         docs = [dict(doc) for doc in self._docs if _matches(doc, query)]
         if sort:
             for key, direction in reversed(sort):
                 docs.sort(key=lambda doc: doc.get(key), reverse=direction == -1)
-        return docs[0] if docs else None
+        return self._apply_projection(docs[0], projection) if docs else None
 
     def find(self, query=None, projection=None):
-        return _Cursor(dict(doc) for doc in self._docs if _matches(doc, query or {}))
+        self.find_projections.append(dict(projection) if isinstance(projection, dict) else projection)
+        return _Cursor(
+            self._apply_projection(dict(doc), projection)
+            for doc in self._docs
+            if _matches(doc, query or {})
+        )
 
     async def insert_one(self, doc):
         self._docs.append(dict(doc))
@@ -375,6 +398,7 @@ async def _call_coach(
     training_paces=None,
     readiness_result=object(),
     workout_id: str | None = None,
+    resolved_goal=None,
 ) -> tuple[httpx.Response, dict]:
     captured: dict = {}
 
@@ -388,7 +412,7 @@ async def _call_coach(
     if hasattr(server.rate_limiter, "requests"):
         server.rate_limiter.requests.clear()
 
-    resolved_goal = SimpleNamespace(
+    resolved_goal = resolved_goal or SimpleNamespace(
         goal_type="MARATHON",
         mapped_goal=GoalType.marathon,
         cycle_start=date(2026, 8, 1),
@@ -443,6 +467,8 @@ async def test_coach_context_v2_uses_canonical_authorities_and_prescription_prec
     assert response.status_code == 200
     assert fake_db.training_plans.find_one_called is False
     assert context["goal"]["objective"] == "Autumn Marathon"
+    assert fake_db.training_prescription_snapshots.find_projections[0] == {"_id": 0}
+    assert fake_db.training_planned_prescription_memory.find_projections[0] == {"_id": 0}
     assert context["today"]["prescription_source"] == "served_snapshot"
     assert context["today"]["served_prescription"]["distance_km"] == 6.4
     assert context["today"]["served_prescription"]["reason_codes"] == ["SNAPSHOT_TODAY"]
@@ -452,8 +478,14 @@ async def test_coach_context_v2_uses_canonical_authorities_and_prescription_prec
 
     sessions = {session["day"]: session for session in context["current_week_sessions"]}
     assert sessions["Monday"]["prescription_source"] == "served_snapshot"
+    assert sessions["Monday"]["workout_type"] == "easy_run"
+    assert sessions["Monday"]["duration_minutes"] == 60
+    assert sessions["Monday"]["reason_codes"] == ["SNAPSHOT_MON"]
+    assert sessions["Monday"]["structured"] == {"kind": "structured-mon"}
     assert sessions["Tuesday"]["prescription_source"] == "planned_memory"
+    assert sessions["Tuesday"]["workout_type"] == "steady"
     assert sessions["Tuesday"]["distance_km"] == 7.5
+    assert sessions["Tuesday"]["duration_minutes"] == 42
     assert sessions["Tuesday"]["reason_codes"] == ["MEMORY_TUE"]
     assert sessions["Tuesday"]["structured"] == {"kind": "memory-structured"}
     assert sessions["Wednesday"]["prescription_source"] == "unavailable"
@@ -477,6 +509,22 @@ async def test_coach_context_v2_uses_canonical_authorities_and_prescription_prec
     assert context["performance"]["predictions"][0]["confidence"] == "medium"
     assert context["performance"]["predictions"][0]["extrapolation_ratio"] == 5.2
     assert context["performance"]["predictions"][0]["is_strong_extrapolation"] is True
+    expected_cycle = build_cycle_calendar_response(
+        build_plan_goal(
+            goal_type=GoalType.marathon,
+            race_date=date(2026, 11, 1),
+            target_distance_km=None,
+            target_time_seconds=12600,
+            created_from="user",
+        ),
+        _REFERENCE_DATE,
+        race_plan_start_date=date(2026, 8, 1),
+        target_time_seconds=12600,
+    )
+    current_week = next(week for week in expected_cycle.weeks if week.is_current)
+    assert context["training_state"]["current_week"] == expected_cycle.cycle.current_week
+    assert context["training_state"]["total_weeks"] == expected_cycle.cycle.total_weeks
+    assert context["training_state"]["phase"] == current_week.phase
 
 
 @pytest.mark.asyncio
@@ -537,13 +585,85 @@ async def test_coach_context_v2_enforces_workout_user_isolation():
     assert {"id": "foreign-workout", "user_id": _USER_ID} in fake_db.workouts.find_one_calls
 
 
+@pytest.mark.asyncio
+async def test_coach_context_v2_cycle_calendar_matches_race_cycle_authority():
+    fake_db = _FakeDB()
+    resolved_goal = SimpleNamespace(
+        goal_type="MARATHON",
+        mapped_goal=GoalType.marathon,
+        cycle_start=date(2026, 9, 1),
+        race_date=date(2026, 11, 1),
+        target_time_sec=12600,
+        target_distance_km=None,
+        user_goal_doc={"event_name": "Compressed Marathon"},
+    )
+    response, context = await _call_coach(fake_db, resolved_goal=resolved_goal)
+
+    assert response.status_code == 200
+    expected_cycle = build_cycle_calendar_response(
+        build_plan_goal(
+            goal_type=GoalType.marathon,
+            race_date=date(2026, 11, 1),
+            target_distance_km=None,
+            target_time_seconds=12600,
+            created_from="user",
+        ),
+        _REFERENCE_DATE,
+        race_plan_start_date=date(2026, 9, 1),
+        target_time_seconds=12600,
+    )
+    current_week = next(week for week in expected_cycle.weeks if week.is_current)
+    assert context["training_state"]["current_week"] == expected_cycle.cycle.current_week
+    assert context["training_state"]["total_weeks"] == expected_cycle.cycle.total_weeks
+    assert context["training_state"]["phase"] == current_week.phase
+
+
+@pytest.mark.asyncio
+async def test_coach_context_v2_cycle_calendar_matches_maintenance_continuous_authority():
+    fake_db = _FakeDB()
+    resolved_goal = SimpleNamespace(
+        goal_type="MAINTENANCE",
+        mapped_goal=GoalType.maintenance,
+        cycle_start=date(2026, 9, 3),
+        race_date=None,
+        target_time_sec=None,
+        target_distance_km=None,
+        user_goal_doc={},
+    )
+    response, context = await _call_coach(fake_db, resolved_goal=resolved_goal)
+
+    assert response.status_code == 200
+    expected_cycle = build_cycle_calendar_response(
+        build_plan_goal(
+            goal_type=GoalType.maintenance,
+            race_date=None,
+            target_distance_km=None,
+            target_time_seconds=None,
+            created_from="user",
+        ),
+        _REFERENCE_DATE,
+        cycle_anchor_date=date(2026, 9, 3),
+        target_time_seconds=None,
+    )
+    current_week = next(week for week in expected_cycle.weeks if week.is_current)
+    assert context["training_state"]["current_week"] == expected_cycle.cycle.current_week
+    assert context["training_state"]["total_weeks"] == expected_cycle.cycle.total_weeks
+    assert context["training_state"]["phase"] == current_week.phase
+
+
 def test_analyze_with_coach_source_uses_v2_authorities_only():
     source = inspect.getsource(server.analyze_with_coach)
+    context_source = inspect.getsource(server.build_coach_context_v2)
+    cycle_source = inspect.getsource(coach_context_v2._build_cycle_response)
 
     assert "db.training_plans" not in source
     assert 'db.workouts.find_one({"id": request.workout_id, "user_id": user_id})' in source
     assert "load_canonical_training_paces" in source
     assert "compute_training_paces" not in source
+    assert "build_cycle_calendar_response" in cycle_source
+    assert "GOAL_CONFIG" not in context_source
+    assert "_current_week_index" not in context_source
+    assert "_phase_value" not in context_source
 
 
 def test_system_prompt_coach_declares_v2_authority_rules():

@@ -1,18 +1,17 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from config.training_goals import GOAL_CONFIG
 from training_v2.performance_model import (
     CURVE_NULL_CONFIDENCE_EXTRAPOLATION_RATIO,
     PerformanceEstimate,
 )
-from training_v2.periodization import build_periodization
 from training_v2.plan_goal import PlanGoal, build_plan_goal
 from training_v2.readiness_decision import ReadinessDecision
+from training_v2.training_cycle_response import build_cycle_calendar_response
 from training_v2.training_load import TrainingLoadSnapshot
 from training_v2.training_paces import TrainingPaces, training_paces_to_api_dict
 
@@ -51,7 +50,7 @@ class CoachTrainingStateContext(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     phase: Optional[str] = None
-    current_week: int
+    current_week: Optional[int] = None
     total_weeks: int
     continuity_state: Optional[str] = None
     allow_intensity: Optional[bool] = None
@@ -235,29 +234,6 @@ def _count_recent_stats(
     return CoachActivityStats(km=round(km_total, 1), sessions=sessions)
 
 
-def _current_week_index(
-    *,
-    reference_date: date,
-    cycle_start: date,
-    total_weeks: int,
-) -> int:
-    cycle_start_dt = datetime(
-        cycle_start.year,
-        cycle_start.month,
-        cycle_start.day,
-        tzinfo=timezone.utc,
-    )
-    reference_dt = datetime(
-        reference_date.year,
-        reference_date.month,
-        reference_date.day,
-        tzinfo=timezone.utc,
-    )
-    if reference_dt < cycle_start_dt:
-        return 0
-    return min(((reference_dt - cycle_start_dt).days // 7) + 1, total_weeks + 1)
-
-
 def _build_plan_goal(resolved_goal: Any) -> PlanGoal:
     return build_plan_goal(
         goal_type=resolved_goal.mapped_goal,
@@ -268,19 +244,21 @@ def _build_plan_goal(resolved_goal: Any) -> PlanGoal:
     )
 
 
-def _phase_value(*, resolved_goal: Any, reference_date: date) -> str:
+def _build_cycle_response(*, resolved_goal: Any, reference_date: date):
     plan_goal = _build_plan_goal(resolved_goal)
     if plan_goal.race_date is not None:
-        return build_periodization(
+        return build_cycle_calendar_response(
             plan_goal=plan_goal,
             reference_date=reference_date,
             race_plan_start_date=resolved_goal.cycle_start,
-        ).phase.value
-    return build_periodization(
+            target_time_seconds=resolved_goal.target_time_sec,
+        )
+    return build_cycle_calendar_response(
         plan_goal=plan_goal,
         reference_date=reference_date,
         cycle_anchor_date=resolved_goal.cycle_start,
-    ).phase.value
+        target_time_seconds=resolved_goal.target_time_sec,
+    )
 
 
 async def _week_prescription_authorities(
@@ -298,14 +276,14 @@ async def _week_prescription_authorities(
             "user_id": user_id,
             "planned_date": {"$gte": week_start.isoformat(), "$lte": week_end.isoformat()},
         },
-        {"_id": 0, "prescription_id": 1},
+        {"_id": 0},
     ).to_list(1000)
     memory_docs = await db.training_planned_prescription_memory.find(
         {
             "user_id": user_id,
             "planned_date": {"$gte": week_start.isoformat(), "$lte": week_end.isoformat()},
         },
-        {"_id": 0, "prescription_id": 1},
+        {"_id": 0},
     ).to_list(1000)
 
     snapshot_ids = {
@@ -458,7 +436,11 @@ async def build_coach_context_v2(
     performance: PerformanceEstimate,
     workout: Optional[dict[str, Any]] = None,
 ) -> CoachContextV2:
-    total_weeks = GOAL_CONFIG[resolved_goal.goal_type]["cycle_weeks"]
+    cycle_response = _build_cycle_response(
+        resolved_goal=resolved_goal,
+        reference_date=reference_date,
+    )
+    current_cycle_week = next((week for week in cycle_response.weeks if week.is_current), None)
     week_sessions = list(((week_payload.get("week") or {}).get("sessions") or []))
     sources_by_id, snapshot_by_id, memory_by_id = await _week_prescription_authorities(
         db=db,
@@ -534,13 +516,9 @@ async def build_coach_context_v2(
             target_distance_km=resolved_goal.target_distance_km,
         ),
         training_state=CoachTrainingStateContext(
-            phase=_phase_value(resolved_goal=resolved_goal, reference_date=reference_date),
-            current_week=_current_week_index(
-                reference_date=reference_date,
-                cycle_start=resolved_goal.cycle_start,
-                total_weeks=total_weeks,
-            ),
-            total_weeks=total_weeks,
+            phase=current_cycle_week.phase if current_cycle_week is not None else None,
+            current_week=cycle_response.cycle.current_week,
+            total_weeks=cycle_response.cycle.total_weeks,
             continuity_state=(week_payload.get("state") or {}).get("continuity_state"),
             allow_intensity=(week_payload.get("state") or {}).get("allow_intensity"),
         ),
