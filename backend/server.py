@@ -4505,6 +4505,18 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
 
     week_start = reference_date - timedelta(days=reference_date.weekday())
     week_end = week_start + timedelta(days=6)
+    _week_day_offsets: dict[str, int] = {
+        "monday": 0,
+        "tuesday": 1,
+        "wednesday": 2,
+        "thursday": 3,
+        "friday": 4,
+        "saturday": 5,
+        "sunday": 6,
+    }
+
+    def _planned_date_for_day(day_name: str) -> date:
+        return week_start + timedelta(days=_week_day_offsets[day_name.lower()])
 
     existing_snapshot_docs = await db.training_prescription_snapshots.find(
         {"user_id": user_id}, {"_id": 0}
@@ -4522,6 +4534,48 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
         if not (week_start <= snapshot_planned_date <= week_end):
             continue
         frozen_snapshots[prescription_id] = PrescriptionSnapshot(**doc)
+
+    # Training V2 planned-memory (current week): per-day last known PLANNED
+    # prescription used as fallback for past days lacking a served snapshot.
+    # Rules:
+    # - future day (planned_date > reference_date): mutable (latest planned wins)
+    # - past day  (planned_date < reference_date): immutable (never rewritten)
+    # - today: served snapshot remains the only authoritative source
+    existing_planned_memory_docs = await db.training_planned_prescription_memory.find(
+        {"user_id": user_id}, {"_id": 0}
+    ).to_list(1000)
+    planned_memory_by_prescription_id: dict[str, PrescriptionSnapshot] = {}
+    for doc in existing_planned_memory_docs:
+        prescription_id = doc.get("prescription_id")
+        planned_date_raw = doc.get("planned_date")
+        day = doc.get("day")
+        workout_type = doc.get("workout_type")
+        intensity_class = doc.get("intensity_class")
+        if (
+            not isinstance(prescription_id, str)
+            or not isinstance(planned_date_raw, str)
+            or not isinstance(day, str)
+            or not isinstance(workout_type, str)
+            or not isinstance(intensity_class, str)
+        ):
+            continue
+        try:
+            memory_planned_date = date.fromisoformat(planned_date_raw)
+        except ValueError:
+            continue
+        if not (week_start <= memory_planned_date <= week_end):
+            continue
+        planned_memory_by_prescription_id[prescription_id] = PrescriptionSnapshot(
+            user_id=user_id,
+            prescription_id=prescription_id,
+            planned_date=memory_planned_date,
+            day=day,
+            workout_type=workout_type,
+            intensity_class=intensity_class,
+            distance_km=doc.get("distance_km"),
+            duration_minutes=doc.get("duration_minutes"),
+            reason_codes=tuple(doc.get("reason_codes") or ()),
+        )
 
     # C231 — item 3 BLOCKER FIX: the session whose planned_date == today MUST
     # be frozen from its FINAL post-DailyAdaptation prescription (the same one
@@ -4633,6 +4687,20 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
                 adaptation_reason_codes=served_result.adaptation_reason_codes,
             )
 
+    # Merge fallback planned-memory for strictly past days only, while keeping
+    # served snapshots as absolute priority when both exist.
+    merged_frozen_snapshots: dict[str, PrescriptionSnapshot] = dict(frozen_snapshots)
+    for session in sessions_for_execution:
+        session_planned_date = _planned_date_for_day(session.day)
+        if session_planned_date >= reference_date:
+            continue
+        prescription_id = prescription_id_for(user_id, session_planned_date, session.day)
+        if prescription_id in merged_frozen_snapshots:
+            continue
+        planned_memory_snapshot = planned_memory_by_prescription_id.get(prescription_id)
+        if planned_memory_snapshot is not None:
+            merged_frozen_snapshots[prescription_id] = planned_memory_snapshot
+
     try:
         execution = build_week_execution(
             user_id=user_id,
@@ -4640,7 +4708,7 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
             week_start=week_start,
             sessions=sessions_for_execution,
             garmin_docs=garmin_activities_90,
-            frozen_snapshots=frozen_snapshots,
+            frozen_snapshots=merged_frozen_snapshots,
             plan_goal=canonical.plan_goal,
             periodization=canonical.periodization,
             training_paces=week_training_paces,
@@ -4673,6 +4741,34 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
         await db.training_prescription_snapshots.update_one(
             {"user_id": snapshot.user_id, "prescription_id": snapshot.prescription_id},
             {"$setOnInsert": snapshot.model_dump(mode="json")},
+            upsert=True,
+        )
+
+    # Persist/update planned-memory for strictly future days of THIS week only.
+    # Never backfill/overwrite past days.
+    for session in sessions_for_execution:
+        session_planned_date = _planned_date_for_day(session.day)
+        if session_planned_date <= reference_date:
+            continue
+        prescription_id = prescription_id_for(user_id, session_planned_date, session.day)
+        await db.training_planned_prescription_memory.update_one(
+            {"user_id": user_id, "prescription_id": prescription_id},
+            {
+                "$setOnInsert": {
+                    "user_id": user_id,
+                    "prescription_id": prescription_id,
+                    "planned_date": session_planned_date.isoformat(),
+                    "day": session.day.lower(),
+                },
+                "$set": {
+                    "workout_type": session.workout_type,
+                    "intensity_class": session.intensity_class,
+                    "distance_km": session.distance_km,
+                    "duration_minutes": session.duration_minutes,
+                    "reason_codes": list(session.reason_codes),
+                    "updated_at": now_utc.isoformat(),
+                },
+            },
             upsert=True,
         )
 

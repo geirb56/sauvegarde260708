@@ -340,6 +340,140 @@ async def test_week_endpoint_reuses_existing_snapshot_never_overwritten():
 
 
 @pytest.mark.asyncio
+async def test_past_day_uses_planned_memory_when_served_snapshot_missing():
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    _seed_garmin_activities(fake_db, n=8)
+    _seed_connected(fake_db, connected=True)
+
+    monday_pid = f"{_USER_ID}:{_MONDAY.isoformat()}:monday"
+    fake_db.training_planned_prescription_memory._docs.append({
+        "user_id": _USER_ID,
+        "prescription_id": monday_pid,
+        "planned_date": _MONDAY.isoformat(),
+        "day": "monday",
+        "workout_type": "easy",
+        "intensity_class": "low",
+        "distance_km": 12.5,
+        "duration_minutes": None,
+        "reason_codes": ["MEMORY_PLANNED"],
+    })
+
+    result = await _get_week(fake_db, reference_date=_MONDAY + timedelta(days=2))
+    assert result["status"] == 200, result["body"]
+    monday_session = next(
+        s for s in result["body"]["week"]["sessions"] if s["day"].lower() == "monday"
+    )
+    assert monday_session["execution_status"] is None
+    assert monday_session["distance_km"] == 12.5
+    assert monday_session["workout_type"] == "easy"
+
+
+@pytest.mark.asyncio
+async def test_past_day_without_memory_stays_unavailable_and_no_backfill():
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    _seed_garmin_activities(fake_db, n=8)
+    _seed_connected(fake_db, connected=True)
+
+    result = await _get_week(fake_db, reference_date=_MONDAY + timedelta(days=2))
+    assert result["status"] == 200, result["body"]
+    monday_session = next(
+        s for s in result["body"]["week"]["sessions"] if s["day"].lower() == "monday"
+    )
+    assert monday_session["execution_status"] == "prescription_unavailable"
+
+    monday_memory = [
+        d
+        for d in fake_db.training_planned_prescription_memory._docs
+        if d.get("planned_date") == _MONDAY.isoformat()
+    ]
+    assert monday_memory == []
+
+
+@pytest.mark.asyncio
+async def test_served_snapshot_has_priority_over_planned_memory():
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    _seed_garmin_activities(fake_db, n=8)
+    _seed_connected(fake_db, connected=True)
+
+    monday_pid = f"{_USER_ID}:{_MONDAY.isoformat()}:monday"
+    fake_db.training_prescription_snapshots._docs.append({
+        "user_id": _USER_ID,
+        "prescription_id": monday_pid,
+        "planned_date": _MONDAY.isoformat(),
+        "day": "monday",
+        "workout_type": "easy",
+        "intensity_class": "low",
+        "distance_km": 8.0,
+        "duration_minutes": None,
+        "reason_codes": [],
+    })
+    fake_db.training_planned_prescription_memory._docs.append({
+        "user_id": _USER_ID,
+        "prescription_id": monday_pid,
+        "planned_date": _MONDAY.isoformat(),
+        "day": "monday",
+        "workout_type": "easy",
+        "intensity_class": "low",
+        "distance_km": 99.0,
+        "duration_minutes": None,
+        "reason_codes": ["PLANNED_ONLY"],
+    })
+
+    result = await _get_week(fake_db, reference_date=_MONDAY + timedelta(days=2))
+    assert result["status"] == 200, result["body"]
+    monday_session = next(
+        s for s in result["body"]["week"]["sessions"] if s["day"].lower() == "monday"
+    )
+    assert monday_session["distance_km"] == 8.0
+
+
+@pytest.mark.asyncio
+async def test_goal_change_keeps_past_fixed_and_future_recomputed():
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db, goal="SEMI")
+    _seed_garmin_activities(fake_db, n=8)
+    _seed_connected(fake_db, connected=True)
+
+    first = await _get_week(fake_db, reference_date=_MONDAY)
+    assert first["status"] == 200, first["body"]
+    monday_first = next(
+        s for s in first["body"]["week"]["sessions"] if s["day"].lower() == "monday"
+    )
+    saturday_first = next(
+        s for s in first["body"]["week"]["sessions"] if s["day"].lower() == "saturday"
+    )
+
+    saturday_date = (_MONDAY + timedelta(days=5)).isoformat()
+    saturday_pid = f"{_USER_ID}:{saturday_date}:saturday"
+    for doc in fake_db.training_planned_prescription_memory._docs:
+        if doc.get("prescription_id") == saturday_pid:
+            doc["distance_km"] = 777.0
+
+    fake_db.training_cycles._docs.clear()
+    fake_db.user_goals._docs.clear()
+    _seed_cycle(fake_db, goal="MARATHON")
+    for doc in fake_db.user_goals._docs:
+        doc["distance_type"] = "marathon"
+
+    second = await _get_week(fake_db, reference_date=_MONDAY + timedelta(days=4))
+    assert second["status"] == 200, second["body"]
+    monday_second = next(
+        s for s in second["body"]["week"]["sessions"] if s["day"].lower() == "monday"
+    )
+    saturday_second = next(
+        s for s in second["body"]["week"]["sessions"] if s["day"].lower() == "saturday"
+    )
+
+    assert monday_second["distance_km"] == monday_first["distance_km"]
+    assert monday_second["workout_type"] == monday_first["workout_type"]
+    assert saturday_second["distance_km"] != 777.0
+    assert saturday_second["planned_date"] == saturday_first["planned_date"]
+
+
+@pytest.mark.asyncio
 async def test_unmatched_actuals_excludes_previous_week_activity():
     fake_db = _FakeDB()
     _seed_cycle(fake_db)
