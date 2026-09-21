@@ -4746,12 +4746,13 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
 
     # Persist/update planned-memory for strictly future days of THIS week only.
     # Never backfill/overwrite past days.
+    planned_memory_writes: list[tuple[dict, dict]] = []
     for session in sessions_for_execution:
         session_planned_date = _planned_date_for_day(session.day)
         if session_planned_date <= reference_date:
             continue
         prescription_id = prescription_id_for(user_id, session_planned_date, session.day)
-        await db.training_planned_prescription_memory.update_one(
+        planned_memory_writes.append((
             {"user_id": user_id, "prescription_id": prescription_id},
             {
                 "$setOnInsert": {
@@ -4769,8 +4770,22 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
                     "updated_at": now_utc.isoformat(),
                 },
             },
-            upsert=True,
-        )
+        ))
+    if planned_memory_writes:
+        collection = db.training_planned_prescription_memory
+        if hasattr(collection, "bulk_write"):
+            from pymongo import UpdateOne
+
+            await collection.bulk_write(
+                [UpdateOne(query, update, upsert=True) for query, update in planned_memory_writes]
+            )
+        else:
+            for query, update in planned_memory_writes:
+                await collection.update_one(
+                    query,
+                    update,
+                    upsert=True,
+                )
 
     def _actual_response(row) -> Optional[WeekV2ActualResponse]:
         if row.activity_id is None:
