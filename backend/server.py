@@ -93,6 +93,8 @@ from garmin.domain_adapter import mongo_garmin_activities_to_domain
 from garmin.sync_progress import get_sync_progress
 from training_v2.performance_model import predict_races, activity_date  # PR185
 from training_v2.plan_goal import GoalType
+from training_v2.training_paces_authority import load_canonical_training_paces
+from coach_context_v2 import build_coach_context_v2
 
 from config.training_goals import GOAL_CONFIG  # noqa: E402  # PR145: single source
 
@@ -1747,12 +1749,7 @@ async def get_stats(user: dict = Depends(auth_user)):
 async def analyze_with_coach(request: CoachRequest, user: dict = Depends(auth_user)):
     """Conversational chat coach with server-side LLM enrichment.
 
-    The coach has access to:
-    - Conversation history
-    - Training data (workouts, stats)
-    - Fitness context (ACWR, TSB, volume)
-
-    It can respond to open-ended questions about training.
+    Training V2 decides. The coach explains the canonical context.
     """
     from llm_coach import enrich_chat_response
     
@@ -1766,175 +1763,85 @@ async def analyze_with_coach(request: CoachRequest, user: dict = Depends(auth_us
     ).sort("timestamp", -1).limit(5).to_list(5)
     conversation_history = list(reversed(conversation_history))  # Chronological order
 
-    # 2. Retrieve training data
-    today = datetime.now(timezone.utc)
-    seven_days_ago = today - timedelta(days=7)
-    twenty_eight_days_ago = today - timedelta(days=28)
-    
-    # Training activities
-    recent_activities = await db.workouts.find({
-        "user_id": user_id,
-        "date": {"$gte": seven_days_ago.isoformat()}
-    }).sort("date", -1).to_list(20)
-    
-    all_activities = await db.workouts.find({
-        "user_id": user_id,
-        "date": {"$gte": twenty_eight_days_ago.isoformat()}
-    }).sort("date", -1).to_list(100)
-    
-    # 3. Calculer les métriques de contexte
-    def get_distance_km(w):
-        dist = w.get("distance", 0)
-        if dist > 1000:
-            return dist / 1000
-        return w.get("distance_km", dist) or 0
-    
-    km_7 = sum(get_distance_km(w) for w in recent_activities)
-    km_28 = sum(get_distance_km(w) for w in all_activities)
-    
-    acwr: Optional[float] = None
+    now_utc = datetime.now(timezone.utc)
+    ninety_days_ago = now_utc - timedelta(days=90)
 
-    # 4. Prepare summary of ALL sessions (not just 5)
-    all_sessions_summary = []
-    for act in all_activities:
-        name = act.get("name", "Session")
-        dist = get_distance_km(act)
-        duration = act.get("moving_time", act.get("duration_minutes", 0) * 60)
-        if duration > 100:
-            duration = duration / 60  # Convertir secondes en minutes
-        avg_hr = act.get("average_heartrate", act.get("avg_heart_rate"))
-        date_str = act.get("start_date_local", act.get("date", ""))[:10]
-        avg_pace = ""
-        if dist > 0 and duration > 0:
-            pace_sec = (duration * 60) / dist
-            pace_min = int(pace_sec // 60)
-            pace_sec_rem = int(pace_sec % 60)
-            avg_pace = f"{pace_min}:{pace_sec_rem:02d}/km"
-        
-        session_info = f"- {date_str}: {name}, {dist:.1f}km"
-        if duration:
-            session_info += f", {int(duration)}min"
-        if avg_pace:
-            session_info += f", {avg_pace}"
-        if avg_hr:
-            session_info += f", FC {int(avg_hr)}bpm"
-        all_sessions_summary.append(session_info)
-    
-    # 5. Récupérer le plan d'entraînement actuel
-    training_plan_summary = ""
-    current_goal = "Non défini"
-    sessions_per_week = 4
-    try:
-        plan_data = await db.training_plans.find_one(
-            {"user_id": user_id},
-            sort=[("created_at", -1)]
-        )
-        if plan_data:
-            current_goal = plan_data.get("goal", "MAINTENANCE")
-            sessions_per_week = plan_data.get("sessions_per_week", 4)
-            sessions = plan_data.get("sessions", [])
-            if sessions:
-                training_plan_summary = f"Goal: {current_goal} | {sessions_per_week} sessions/week\n"
-                training_plan_summary += "Week schedule:\n"
-                for s in sessions:
-                    day = s.get("day", "")
-                    stype = s.get("type", "")
-                    details = s.get("details", "")
-                    dist = s.get("distance_km", 0)
-                    training_plan_summary += f"  • {day}: {stype}"
-                    if dist > 0:
-                        training_plan_summary += f" ({dist}km)"
-                    if details and stype != "Rest":
-                        training_plan_summary += f" - {details[:60]}"
-                    training_plan_summary += "\n"
-    except Exception as e:
-        logger.warning(f"Could not fetch training plan for coach context: {e}")
-    
-    # 6. Récupérer les signaux physiologiques depuis les sources canoniques V2
-    vma_info = None
-    predictions_summary = ""
-    vo2max_value: Optional[float] = None
-    paces_summary = ""
-    try:
-        from training_v2.training_paces import compute_training_paces, training_paces_to_api_dict
+    garmin_activities_all = await db.garmin_activities.find(
+        {"user_id": user_id},
+        {"_id": 0},
+    ).to_list(2000)
+    garmin_activities_90 = [
+        doc for doc in garmin_activities_all
+        if isinstance(doc.get("start_time"), str)
+        and doc.get("start_time") >= ninety_days_ago.isoformat()
+    ]
+    domain_activities_90 = mongo_garmin_activities_to_domain(garmin_activities_90)
+    domain_activities_all = mongo_garmin_activities_to_domain(garmin_activities_all)
+    reference_date = _resolve_canonical_reference_date(now_utc, garmin_activities_90)
+    resolved_goal = await _resolve_goal_v2(user_id)
 
-        garmin_raw = await db.garmin_activities.find({"user_id": user_id}, {"_id": 0}).to_list(2000)
-        domain_activities = mongo_garmin_activities_to_domain(garmin_raw)
-        if domain_activities:
-            acwr = build_training_load(domain_activities, today.date()).acwr
-            perf = predict_races(domain_activities, today.date())
-            predictions = [
-                f"{pred.distance_label}: {pred.predicted_time_str}"
-                for pred in perf.predictions
-                if pred.predicted_time_str
-            ]
-            predictions_summary = " | ".join(predictions)
-
-            paces_v2 = training_paces_to_api_dict(
-                compute_training_paces(domain_activities, today.date(), user_max_hr=None)
+    garmin_conn = await db.garmin_connections.find_one({"user_id": user_id}, {"_id": 0})
+    garmin_connected = bool(garmin_conn and garmin_conn.get("connected"))
+    garmin_daily_metrics_docs: list = []
+    if garmin_connected:
+        try:
+            garmin_daily_metrics_docs = await (
+                db.garmin_daily_metrics.find({"user_id": user_id}, {"_id": 0})
+                .sort("date", -1)
+                .limit(30)
+                .to_list(length=30)
             )
-            easy = ((paces_v2.get("paces") or {}).get("easy") or {})
-            threshold = ((paces_v2.get("paces") or {}).get("threshold") or {})
-            easy_text = f"{easy.get('lower_str')}-{easy.get('upper_str')}" if easy.get("lower_str") and easy.get("upper_str") else None
-            threshold_text = threshold.get("pace_str")
-            pace_parts = [p for p in [easy_text, threshold_text] if p]
-            paces_summary = " | ".join(pace_parts)
+        except Exception as exc:
+            logger.warning(f"[CoachAnalyze] Garmin daily metrics fetch failed: {exc}")
+            garmin_connected = False
 
-        latest_vo2 = await db.garmin_vo2max.find_one(
-            {"user_id": user_id, "vo2max_running": {"$ne": None}},
-            {"_id": 0, "vo2max_running": 1},
-            sort=[("date", -1)],
-        )
-        if latest_vo2:
-            vo2max_value = latest_vo2.get("vo2max_running")
-    except Exception as e:
-        logger.warning(f"Could not load canonical performance context: {e}")
-        vma_info = None
-    
-    # 7. Construire le contexte complet
-    context = {
-        "language": language,
-        "stats_7j": {
-            "km": round(km_7, 1),
-            "sessions": len(recent_activities)
-        },
-        "stats_28j": {
-            "km": round(km_28, 1),
-            "sessions": len(all_activities)
-        },
-        "fitness": {
-            "acwr": acwr,
-            "acwr_status": (
-                "unavailable" if acwr is None
-                else ("optimal" if 0.8 <= acwr <= 1.3 else "attention")
-            ),
-            # TSB removed (PR #127): no V2 equivalent; use None.
-            "tsb": None,
-            "tsb_status": "unavailable",
-        },
-        "all_sessions": "\n".join(all_sessions_summary) if all_sessions_summary else "No recorded sessions",
-        "training_plan": training_plan_summary if training_plan_summary else "No active training plan",
-        "current_goal": current_goal,
-        "vma": vma_info,
-        "vo2max": vo2max_value,
-        "predictions": predictions_summary,
-        "paces": paces_summary,
-    }
+    training_load = build_training_load(domain_activities_90, reference_date)
+    readiness_result = None
+    readiness_data_source = "unavailable"
+    if garmin_connected:
+        try:
+            readiness_result = build_readiness_v2_from_garmin_data(
+                garmin_daily_metrics_docs,
+                domain_activities_90,
+                reference_date,
+                load_snapshot=training_load,
+                hrv_supported=None,
+            )
+            if readiness_result is not None:
+                readiness_data_source = "garmin"
+        except Exception as exc:
+            logger.warning(f"[CoachAnalyze] Readiness resolution failed: {exc}")
+    readiness_decision = build_readiness_decision(readiness_result)
 
-    # 5. If workout_id specified, enrich context with session details
+    performance = predict_races(domain_activities_all, reference_date)
+    training_paces = await load_canonical_training_paces(
+        db,
+        user_id=user_id,
+        reference_date=reference_date,
+    )
+    week_payload = await get_training_v2_week(user=user)
+    today_payload = await get_today_adaptive_session(user=user)
+
+    workout = None
     if request.workout_id:
         workout = await db.workouts.find_one({"id": request.workout_id, "user_id": user_id})
-        
-        if workout:
-            context["workout_detail"] = {
-                "name": workout.get("name"),
-                "distance_km": get_distance_km(workout),
-                "duration_min": workout.get("moving_time", workout.get("duration_minutes", 0) * 60) / 60 if workout.get("moving_time", 0) > 100 else workout.get("duration_minutes", 0),
-                "avg_hr": workout.get("average_heartrate", workout.get("avg_heart_rate")),
-                "max_hr": workout.get("max_heartrate", workout.get("max_heart_rate")),
-                "zones": workout.get("effort_zone_distribution"),
-                "km_splits": workout.get("km_splits", [])[:5]  # 5 premiers km
-            }
+
+    context = (await build_coach_context_v2(
+        db=db,
+        user_id=user_id,
+        language=language,
+        reference_date=reference_date,
+        resolved_goal=resolved_goal,
+        domain_activities_90=domain_activities_90,
+        week_payload=week_payload,
+        today_payload=today_payload,
+        training_load=training_load,
+        readiness_decision=readiness_decision,
+        readiness_data_source=readiness_data_source,
+        training_paces=training_paces,
+        performance=performance,
+        workout=workout,
+    )).model_dump(mode="json")
     
     # 6. Stocker le message utilisateur
     user_msg_id = str(uuid.uuid4())
