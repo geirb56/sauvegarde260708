@@ -24,7 +24,7 @@ import time
 from collections import defaultdict
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict, field_validator
-from typing import List, Optional, Dict
+from typing import Any, List, Optional, Dict
 import uuid
 from datetime import date, datetime, timezone, timedelta
 from config.secrets import MissingSecretError
@@ -1569,308 +1569,215 @@ async def get_stats(user: dict = Depends(auth_user)):
     }
 
 
+def _iso_or_none(value: Any) -> Optional[str]:
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).date().isoformat()
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
+def _pace_str(minutes_per_km: float) -> str:
+    mins = int(minutes_per_km)
+    secs = int(round((minutes_per_km - mins) * 60))
+    if secs == 60:
+        mins += 1
+        secs = 0
+    return f"{mins}:{secs:02d}/km"
+
+
+def load_canonical_training_paces(performance_result: Any) -> dict:
+    """Load training paces from Performance V2 authority."""
+    if not performance_result or not getattr(performance_result, "has_data", False):
+        return {"status": "unavailable", "source": "performance_v2", "paces": None}
+    athlete_profile = getattr(performance_result, "athlete_profile", {}) or {}
+    vma = athlete_profile.get("estimated_vma")
+    if not isinstance(vma, (int, float)) or vma <= 0:
+        return {"status": "unavailable", "source": "performance_v2", "paces": None}
+
+    def _range(low_pct: float, high_pct: float) -> str:
+        fast = _pace_str(60.0 / (vma * high_pct))
+        slow = _pace_str(60.0 / (vma * low_pct))
+        return f"{fast}-{slow}"
+
+    return {
+        "status": "available",
+        "source": "performance_v2",
+        "paces": {
+            "z1": _range(0.65, 0.70),
+            "z2": _range(0.75, 0.80),
+            "z3": _range(0.82, 0.87),
+            "z4": _range(0.88, 0.93),
+            "z5": _range(0.95, 1.00),
+            "marathon": _range(0.78, 0.82),
+            "semi": _range(0.82, 0.85),
+        },
+    }
+
+
 @api_router.post("/coach/analyze", response_model=CoachResponse)
 async def analyze_with_coach(request: CoachRequest, user: dict = Depends(auth_user)):
-    """Conversational Chat Coach with GPT-4o-mini
-
-    The coach has access to:
-    - Conversation history
-    - Training data (workouts, stats)
-    - Fitness context (ACWR, TSB, volume)
-
-    It can respond to open-ended questions about training.
-    """
+    """Conversational coach endpoint backed by canonical Training V2 authorities."""
     from llm_coach import enrich_chat_response
-    
+
     user_id = user["id"]
-    language = request.language or "en"
+    language = (request.language or "en").lower()
+    if language not in ("en", "fr", "es"):
+        language = "en"
     user_message = request.message or ""
 
-    # 1. Retrieve conversation history (last 5 messages)
     conversation_history = await db.conversations.find(
         {"user_id": user_id}
     ).sort("timestamp", -1).limit(5).to_list(5)
-    conversation_history = list(reversed(conversation_history))  # Chronological order
+    conversation_history = list(reversed(conversation_history))
 
-    # 2. Retrieve training data
-    today = datetime.now(timezone.utc)
-    seven_days_ago = today - timedelta(days=7)
-    twenty_eight_days_ago = today - timedelta(days=28)
-    
-    # Training activities
-    recent_activities = await db.workouts.find({
-        "user_id": user_id,
-        "date": {"$gte": seven_days_ago.isoformat()}
-    }).sort("date", -1).to_list(20)
-    
-    all_activities = await db.workouts.find({
-        "user_id": user_id,
-        "date": {"$gte": twenty_eight_days_ago.isoformat()}
-    }).sort("date", -1).to_list(100)
-    
-    # 3. Calculer les métriques de contexte
-    def get_distance_km(w):
-        dist = w.get("distance", 0)
-        if dist > 1000:
-            return dist / 1000
-        return w.get("distance_km", dist) or 0
-    
-    km_7 = sum(get_distance_km(w) for w in recent_activities)
-    km_28 = sum(get_distance_km(w) for w in all_activities)
-    
-    # ACWR — TrainingLoad V2 not available in this context (no garmin_activities).
-    # CTL/ATL/TSB km-based aliases removed (PR #127 — faux physiological metrics).
-    # km_7/(km_28/4) must NOT be exposed as ACWR (#127 pre-merge corrections).
-    acwr: Optional[float] = None
+    now_utc = datetime.now(timezone.utc)
+    reference_date = now_utc.date()
 
-    # 4. Prepare summary of ALL sessions (not just 5)
-    all_sessions_summary = []
-    for act in all_activities:
-        name = act.get("name", "Session")
-        dist = get_distance_km(act)
-        duration = act.get("moving_time", act.get("duration_minutes", 0) * 60)
-        if duration > 100:
-            duration = duration / 60  # Convertir secondes en minutes
-        avg_hr = act.get("average_heartrate", act.get("avg_heart_rate"))
-        date_str = act.get("start_date_local", act.get("date", ""))[:10]
-        avg_pace = ""
-        if dist > 0 and duration > 0:
-            pace_sec = (duration * 60) / dist
-            pace_min = int(pace_sec // 60)
-            pace_sec_rem = int(pace_sec % 60)
-            avg_pace = f"{pace_min}:{pace_sec_rem:02d}/km"
-        
-        session_info = f"- {date_str}: {name}, {dist:.1f}km"
-        if duration:
-            session_info += f", {int(duration)}min"
-        if avg_pace:
-            session_info += f", {avg_pace}"
-        if avg_hr:
-            session_info += f", FC {int(avg_hr)}bpm"
-        all_sessions_summary.append(session_info)
-    
-    # 5. Récupérer le plan d'entraînement actuel
-    training_plan_summary = ""
-    current_goal = "Non défini"
-    sessions_per_week = 4
-    try:
-        plan_data = await db.training_plans.find_one(
-            {"user_id": user_id},
-            sort=[("created_at", -1)]
+    # Canonical DomainActivity source shared across Training V2 authorities.
+    raw_garmin_activities = await db.garmin_activities.find(
+        {"user_id": user_id}, {"_id": 0}
+    ).to_list(2000)
+    domain_activities = mongo_garmin_activities_to_domain(raw_garmin_activities)
+
+    # TrainingLoad V2 authority.
+    training_load = build_training_load(domain_activities, reference_date)
+
+    # Performance V2 authority (+ extrapolation/confidence per distance).
+    performance_result = predict_races(domain_activities, reference_date)
+    performance_predictions = []
+    if performance_result and performance_result.has_data:
+        for pred in performance_result.predictions:
+            performance_predictions.append(
+                {
+                    "distance": pred.distance_label,
+                    "predicted_time": pred.predicted_time_str,
+                    "predicted_pace": pred.predicted_pace_str,
+                    "confidence": pred.confidence,
+                    "extrapolation_ratio": pred.extrapolation_ratio,
+                }
+            )
+
+    # Canonical paces derived from Performance V2.
+    training_paces = load_canonical_training_paces(performance_result)
+
+    # Reconciled week authority and objective/cycle metadata.
+    plan_v2 = await generate_dynamic_training_plan(db, user_id)
+    cycle_doc = await db.training_cycles.find_one({"user_id": user_id}, {"_id": 0}) or {}
+    user_goal = await db.user_goals.find_one({"user_id": user_id}, {"_id": 0}) or {}
+
+    # Served prescription authority = same runtime as /training/today.
+    today_runtime = await get_today_adaptive_session(user)
+    served_prescription = None
+    readiness_decision = {
+        "band": "UNAVAILABLE",
+        "score": None,
+        "confidence": "NONE",
+        "sufficiency_level": "INSUFFICIENT",
+        "available": False,
+        "data_source": "unavailable",
+    }
+    planned_memory_history = []
+    if isinstance(today_runtime, dict):
+        served_prescription = (
+            today_runtime.get("adapted_prescription")
+            or today_runtime.get("planned_session")
         )
-        if plan_data:
-            current_goal = plan_data.get("goal", "SEMI")
-            sessions_per_week = plan_data.get("sessions_per_week", 4)
-            sessions = plan_data.get("sessions", [])
-            if sessions:
-                training_plan_summary = f"Goal: {current_goal} | {sessions_per_week} sessions/week\n"
-                training_plan_summary += "Week schedule:\n"
-                for s in sessions:
-                    day = s.get("day", "")
-                    stype = s.get("type", "")
-                    details = s.get("details", "")
-                    dist = s.get("distance_km", 0)
-                    training_plan_summary += f"  • {day}: {stype}"
-                    if dist > 0:
-                        training_plan_summary += f" ({dist}km)"
-                    if details and stype != "Rest":
-                        training_plan_summary += f" - {details[:60]}"
-                    training_plan_summary += "\n"
-    except Exception as e:
-        logger.warning(f"Could not fetch training plan for coach context: {e}")
-    
-    # 6. Récupérer la VMA et les prédictions depuis l'endpoint existant
-    vma_info = ""
-    predictions_summary = ""
-    try:
-        # Utiliser la même logique que /api/training/race-predictions
-        sixty_days_ago = today - timedelta(days=60)
-        pred_activities = await db.workouts.find({
-            "user_id": user_id,
-            "date": {"$gte": sixty_days_ago.isoformat()}
-        }).to_list(500)
-        
-        if pred_activities:
-            # Calculate VMA with the correct method
-            def get_pred_distance(a):
-                dist = a.get("distance", 0)
-                if dist > 1000:
-                    return dist / 1000
-                return a.get("distance_km", dist)
-            
-            def get_pred_duration(a):
-                moving_time = a.get("moving_time", 0)
-                if moving_time > 0:
-                    return moving_time / 60
-                elapsed = a.get("elapsed_time", 0)
-                if elapsed > 0:
-                    return elapsed / 60
-                return a.get("duration_minutes", 0)
-            
-            def get_pred_pace(a):
-                pace = a.get("avg_pace_min_km")
-                if pace:
-                    return pace
-                speed = a.get("average_speed", 0)
-                if speed > 0:
-                    return (1000 / speed) / 60
-                dist = get_pred_distance(a)
-                duration_min = get_pred_duration(a)
-                if dist > 0 and duration_min > 0:
-                    return duration_min / dist
-                return None
-            
-            paces = []
-            vma_efforts = []
-            MIN_VMA_DURATION = 6
-            
-            for a in pred_activities:
-                dist = get_pred_distance(a)
-                pace = get_pred_pace(a)
-                duration_min = get_pred_duration(a)
-                
-                if dist > 0 and pace and 3 < pace < 10:
-                    paces.append(pace)
-                    # Efforts >= 6 min ET allure rapide (< 5:30/km)
-                    if duration_min >= MIN_VMA_DURATION and pace < 5.5:
-                        vma_efforts.append({
-                            "pace": pace,
-                            "duration": duration_min,
-                            "speed_kmh": 60 / pace
-                        })
-            
-            if paces:
-                avg_pace = sum(paces) / len(paces)
+        readiness_decision = today_runtime.get("readiness") or readiness_decision
+        planned_memory_history = today_runtime.get("recent_feedback") or []
 
-                # Calculate VMA with the correct method
-                if vma_efforts:
-                    best_vma_effort = max(vma_efforts, key=lambda x: x["speed_kmh"])
-                    best_sustained_speed = best_vma_effort["speed_kmh"]
-                    duration = best_vma_effort["duration"]
-
-                    if duration >= 20:
-                        estimated_vma = best_sustained_speed / 0.85
-                    elif duration >= 12:
-                        estimated_vma = best_sustained_speed / 0.90
-                    else:
-                        estimated_vma = best_sustained_speed / 0.95
-                else:
-                    avg_speed_kmh = 60 / avg_pace
-                    estimated_vma = avg_speed_kmh / 0.70
-
-                estimated_vma = round(estimated_vma, 1)
-                vma_info = f"Estimated VMA: {estimated_vma} km/h"
-
-                # VMA-based predictions
-                pred_5k_speed = estimated_vma * 0.95
-                pred_5k_pace = 60 / pred_5k_speed
-                time_5k = (pred_5k_pace * 5)
-                
-                pred_10k_speed = estimated_vma * 0.90
-                pred_10k_pace = 60 / pred_10k_speed
-                time_10k = (pred_10k_pace * 10)
-                
-                pred_semi_speed = estimated_vma * 0.82
-                pred_semi_pace = 60 / pred_semi_speed
-                time_semi = (pred_semi_pace * 21.1)
-                h_semi = int(time_semi // 60)
-                m_semi = int(time_semi % 60)
-                
-                pred_marathon_speed = estimated_vma * 0.75
-                pred_marathon_pace = 60 / pred_marathon_speed
-                time_marathon = (pred_marathon_pace * 42.195)
-                h_mar = int(time_marathon // 60)
-                m_mar = int(time_marathon % 60)
-                
-                predictions_summary = f"5K: {int(time_5k)}:{int((time_5k % 1) * 60):02d} | 10K: {int(time_10k)}:{int((time_10k % 1) * 60):02d} | Semi: {h_semi}h{m_semi:02d} | Marathon: {h_mar}h{m_mar:02d}"
-                
-    except Exception as e:
-        logger.warning(f"Could not calculate VMA for coach context: {e}")
-        vma_info = "VMA: non calculée"
-    
-    # 7. Construire le contexte complet
     context = {
         "language": language,
-        "stats_7j": {
-            "km": round(km_7, 1),
-            "sessions": len(recent_activities)
+        "coach_context_version": "v2",
+        "goal_cycle": {
+            "goal_type": cycle_doc.get("goal"),
+            "cycle_start_date": _iso_or_none(cycle_doc.get("start_date")),
+            "event_date": _iso_or_none(user_goal.get("event_date") or cycle_doc.get("race_date")),
+            "phase": (plan_v2 or {}).get("phase"),
+            "current_week": (plan_v2 or {}).get("current_week"),
+            "total_weeks": (plan_v2 or {}).get("total_weeks"),
+            "status": (plan_v2 or {}).get("status", "unavailable"),
         },
-        "stats_28j": {
-            "km": round(km_28, 1),
-            "sessions": len(all_activities)
+        "reconciled_week_v2": {
+            "weekly_target": ((plan_v2 or {}).get("context") or {}).get("weekly_target_v2"),
+            "weekly_reconciliation": ((plan_v2 or {}).get("context") or {}).get("weekly_reconciliation_v2"),
+            "plan": (plan_v2 or {}).get("plan"),
         },
-        "fitness": {
-            "acwr": acwr,
-            "acwr_status": (
-                "unavailable" if acwr is None
-                else ("optimal" if 0.8 <= acwr <= 1.3 else "attention")
+        "served_prescription": served_prescription,
+        "planned_memory_history": planned_memory_history,
+        "readiness_decision": readiness_decision,
+        "training_load_v2": {
+            "acwr": training_load.acwr,
+            "status": training_load.status,
+            "confidence": training_load.confidence,
+            "is_available": training_load.is_available,
+            "has_sufficient_history": training_load.has_sufficient_history,
+            "acute_load_7d": training_load.acute_load_7d,
+            "load_28d": training_load.load_28d,
+            "chronic_weekly_load": training_load.chronic_weekly_load,
+            "load_change_percent": training_load.load_change_percent,
+        },
+        "training_paces": training_paces,
+        "performance_v2": {
+            "has_data": bool(performance_result and performance_result.has_data),
+            "athlete_profile": (
+                getattr(performance_result, "athlete_profile", {}) if performance_result else {}
             ),
-            # TSB removed (PR #127): no V2 equivalent; use None.
-            "tsb": None,
-            "tsb_status": "unavailable",
+            "predictions": performance_predictions,
         },
-        "all_sessions": "\n".join(all_sessions_summary) if all_sessions_summary else "No recorded sessions",
-        "training_plan": training_plan_summary if training_plan_summary else "No active training plan",
-        "current_goal": current_goal,
-        "vma": vma_info,
-        "predictions": predictions_summary
     }
 
-    # 5. If workout_id specified, enrich context with session details
     if request.workout_id:
         workout = await db.workouts.find_one({"id": request.workout_id, "user_id": user_id})
-        
         if workout:
-            context["workout_detail"] = {
-                "name": workout.get("name"),
-                "distance_km": get_distance_km(workout),
-                "duration_min": workout.get("moving_time", workout.get("duration_minutes", 0) * 60) / 60 if workout.get("moving_time", 0) > 100 else workout.get("duration_minutes", 0),
-                "avg_hr": workout.get("average_heartrate", workout.get("avg_heart_rate")),
-                "max_hr": workout.get("max_heartrate", workout.get("max_heart_rate")),
-                "zones": workout.get("effort_zone_distribution"),
-                "km_splits": workout.get("km_splits", [])[:5]  # 5 premiers km
-            }
-    
-    # 6. Stocker le message utilisateur
-    user_msg_id = str(uuid.uuid4())
+            context["workout_detail"] = workout
+
     await db.conversations.insert_one({
-        "id": user_msg_id,
+        "id": str(uuid.uuid4()),
         "user_id": user_id,
         "role": "user",
         "content": user_message,
         "workout_id": request.workout_id,
-        "timestamp": datetime.now(timezone.utc).isoformat()
+        "timestamp": now_utc.isoformat(),
     })
-    
-    # 7. Appeler GPT-4o-mini pour générer la réponse
+
     llm_response, success, meta = await enrich_chat_response(
         user_message=user_message,
         context=context,
-        conversation_history=[{"role": m.get("role"), "content": m.get("content")} for m in conversation_history],
-        user_id=user_id
+        conversation_history=[
+            {"role": m.get("role"), "content": m.get("content")}
+            for m in conversation_history
+        ],
+        user_id=user_id,
     )
-    
+
     if not success or not llm_response:
         logger.warning(f"LLM chat failed: {meta}")
         raise HTTPException(
             status_code=503,
-            detail="Le service de coaching IA n'est pas disponible actuellement." if language == "fr" else "The AI coaching service is currently unavailable."
+            detail=(
+                "Le service de coaching IA n'est pas disponible actuellement."
+                if language == "fr"
+                else "The AI coaching service is currently unavailable."
+            ),
         )
-    
-    response_text = llm_response
-    
-    # 8. Stocker la réponse assistant
+
     msg_id = str(uuid.uuid4())
     await db.conversations.insert_one({
         "id": msg_id,
         "user_id": user_id,
         "role": "assistant",
-        "content": response_text,
+        "content": llm_response,
         "workout_id": request.workout_id,
-        "timestamp": datetime.now(timezone.utc).isoformat()
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     })
-    
-    return CoachResponse(response=response_text, message_id=msg_id)
+
+    return CoachResponse(response=llm_response, message_id=msg_id)
 
 
 

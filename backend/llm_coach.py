@@ -46,38 +46,16 @@ LLM_TIMEOUT = 15
 
 SYSTEM_PROMPT_COACH = """You are RunIndex, an expert and caring personal running coach.
 
-🎯 YOUR ROLE:
-You answer the athlete's questions about their training like a real personal coach.
-You have access to ALL their real training data: complete session history, training plan, VO2max, race predictions, fitness metrics.
+Your job is to EXPLAIN the canonical training data provided in context.
 
-📊 AVAILABLE DATA:
-- COMPLETE session history (last 28 days with distance, duration, pace, HR)
-- Weekly training plan (goal, planned sessions)
-- Estimated VO2max and race time predictions
-- Fitness metrics: ACWR (acute/chronic workload ratio), TSB (freshness)
-- Current goal (5K, 10K, Half, Marathon, Ultra)
-
-💬 RESPONSE STYLE:
-1. Be direct and concise (3-5 sentences max unless detailed analysis requested)
-2. Use real data to personalize your response
-3. Give actionable advice based on past sessions
-4. Stay motivating and positive, even for critiques
-5. If you don't know, say so honestly
-
-🏃 EXPERTISE:
-- Training plans (5K, 10K, half, marathon, ultra)
-- Load management and recovery
-- Heart rate zones and target paces
-- Injury prevention
-- Basic nutrition and hydration
-- Progression and periodization
-- Performance analysis and predictions
-
-⚠️ IMPORTANT:
-- ALWAYS respond in the user's language (FR, EN or ES)
-- Don't use bullet points unless requested
-- Speak like a human coach, not like a report
-- Refer to specific sessions when relevant"""
+Hard rules:
+- Never invent, replace, or modify a prescription.
+- If a field is unavailable/null, explicitly say it is unavailable.
+- Do not claim access to data that is not present in the context.
+- Treat the served prescription as the source of truth for "today's session".
+- Keep answers concise, practical, and motivational.
+- No bullet points unless the athlete asks for them.
+- Always respond in the athlete's requested language."""
 
 SYSTEM_PROMPT_BILAN = """You are a running coach providing a weekly review.
 
@@ -139,18 +117,70 @@ async def enrich_chat_response(
     """
     language = context.get("language", "fr")
 
-    # Format context in readable format
-    stats_7 = context.get("stats_7j", {})
-    stats_28 = context.get("stats_28j", {})
-    fitness = context.get("fitness", {})
-    all_sessions = context.get("all_sessions", "")
-    training_plan = context.get("training_plan", "")
-    current_goal = context.get("current_goal", "Not set")
-    vma = context.get("vma", "")
-    predictions = context.get("predictions", "")
+    def _fmt_unavailable(value, default="unavailable"):
+        if value is None:
+            return default
+        if isinstance(value, str) and not value.strip():
+            return default
+        return value
+
     workout = context.get("workout_detail")
 
-    context_text = f"""📊 COMPLETE ATHLETE DATA:
+    if context.get("coach_context_version") == "v2":
+        goal_cycle = context.get("goal_cycle", {}) or {}
+        reconciled_week = context.get("reconciled_week_v2", {}) or {}
+        training_load_v2 = context.get("training_load_v2", {}) or {}
+        readiness_decision = context.get("readiness_decision", {}) or {}
+        training_paces = context.get("training_paces", {}) or {}
+        performance_v2 = context.get("performance_v2", {}) or {}
+        served_prescription = context.get("served_prescription")
+        planned_memory_history = context.get("planned_memory_history") or []
+
+        context_text = f"""📊 CANONICAL TRAINING V2 CONTEXT
+
+🎯 GOAL / CYCLE:
+- Goal: {_fmt_unavailable(goal_cycle.get('goal_type'))}
+- Phase: {_fmt_unavailable(goal_cycle.get('phase'))}
+- Current week: {_fmt_unavailable(goal_cycle.get('current_week'))}
+- Total weeks: {_fmt_unavailable(goal_cycle.get('total_weeks'))}
+- Event date: {_fmt_unavailable(goal_cycle.get('event_date'))}
+
+📅 RECONCILED WEEK V2:
+{json.dumps(reconciled_week, ensure_ascii=False, indent=2)}
+
+🏃 SERVED PRESCRIPTION (SOURCE OF TRUTH):
+{json.dumps(served_prescription, ensure_ascii=False, indent=2) if served_prescription else "unavailable"}
+
+🧠 PLANNED-MEMORY HISTORY:
+{json.dumps(planned_memory_history, ensure_ascii=False, indent=2) if planned_memory_history else "[]"}
+
+⚖️ READINESS DECISION (CANONICAL):
+{json.dumps(readiness_decision, ensure_ascii=False, indent=2)}
+
+📈 TRAINING LOAD V2:
+- ACWR: {_fmt_unavailable(training_load_v2.get('acwr'))}
+- Status: {_fmt_unavailable(training_load_v2.get('status'))}
+- Confidence: {_fmt_unavailable(training_load_v2.get('confidence'))}
+- Available: {_fmt_unavailable(training_load_v2.get('is_available'))}
+
+🏁 TRAINING PACES (CANONICAL):
+{json.dumps(training_paces, ensure_ascii=False, indent=2)}
+
+⚡ PERFORMANCE V2:
+{json.dumps(performance_v2, ensure_ascii=False, indent=2)}
+"""
+    else:
+        # Legacy context path used by /chat/send.
+        stats_7 = context.get("stats_7j", {})
+        stats_28 = context.get("stats_28j", {})
+        fitness = context.get("fitness", {})
+        all_sessions = context.get("all_sessions", "")
+        training_plan = context.get("training_plan", "")
+        current_goal = context.get("current_goal", "Not set")
+        vma = context.get("vma", "")
+        predictions = context.get("predictions", "")
+
+        context_text = f"""📊 COMPLETE ATHLETE DATA:
 
 🎯 CURRENT GOAL: {current_goal}
 
@@ -208,7 +238,7 @@ async def enrich_chat_response(
 
 ❓ ATHLETE'S QUESTION: {user_message}
 
-Respond in {language.upper()} as a caring and expert personal coach. Use the data above to personalize your response.{_lang_directive(language)}"""
+Respond in {language.upper()} as a caring and expert personal coach. Explain only what is present above, never invent missing values, and never replace today's served prescription.{_lang_directive(language)}"""
 
     return await _call_gpt(SYSTEM_PROMPT_COACH + _lang_directive(language), prompt, user_id, "chat")
 

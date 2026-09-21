@@ -332,22 +332,24 @@ def test_i_coach_analyze_no_km_based_acwr():
     )
 
 
-def test_i_coach_analyze_acwr_none():
-    """I. /coach/analyze acwr is set to None (TrainingLoad V2 unavailable in this context)."""
+def test_i_coach_analyze_uses_training_load_v2_authority():
+    """I. /coach/analyze must use TrainingLoad V2 authority (not local ACWR fallback)."""
     server_path = _BACKEND / "server.py"
     source = server_path.read_text()
-    # The explicit None assignment must be present in the coach/analyze context
-    assert "ACWR (#127 pre-merge corrections)" in source, (
-        "/coach/analyze must set acwr=None with the #127 comment"
+    assert '"training_load_v2"' in source, (
+        "/coach/analyze context must expose training_load_v2 authority"
+    )
+    assert "build_training_load(domain_activities, reference_date)" in source, (
+        "/coach/analyze must compute ACWR from build_training_load on DomainActivity"
     )
 
 
-def test_i_coach_analyze_acwr_status_unavailable():
-    """I. /coach/analyze acwr_status is 'unavailable' when acwr is None."""
+def test_i_coach_analyze_no_training_plans_access():
+    """I. /coach/analyze must not depend on db.training_plans."""
     server_path = _BACKEND / "server.py"
     source = server_path.read_text()
-    assert '"unavailable" if acwr is None' in source, (
-        "/coach/analyze must set acwr_status='unavailable' when acwr is None"
+    assert "db.training_plans" not in source, (
+        "/coach/analyze must not read legacy training_plans collection"
     )
 
 
