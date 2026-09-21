@@ -4542,7 +4542,14 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
     # - past day  (planned_date < reference_date): immutable (never rewritten)
     # - today: served snapshot remains the only authoritative source
     existing_planned_memory_docs = await db.training_planned_prescription_memory.find(
-        {"user_id": user_id}, {"_id": 0}
+        {
+            "user_id": user_id,
+            "planned_date": {
+                "$gte": week_start.isoformat(),
+                "$lte": week_end.isoformat(),
+            },
+        },
+        {"_id": 0},
     ).to_list(1000)
     planned_memory_by_prescription_id: dict[str, PrescriptionSnapshot] = {}
     for doc in existing_planned_memory_docs:
