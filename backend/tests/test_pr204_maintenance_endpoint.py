@@ -157,6 +157,20 @@ class _Collection:
                 return r
         return _DeleteResult()
 
+    async def delete_many(self, query: dict) -> _DeleteResult:
+        q = {k: v for k, v in query.items() if not isinstance(v, dict)}
+        kept_docs = []
+        deleted = 0
+        for doc in self._docs:
+            if self._match(doc, q):
+                deleted += 1
+            else:
+                kept_docs.append(doc)
+        self._docs = kept_docs
+        result = _DeleteResult()
+        result.deleted_count = deleted
+        return result
+
     async def count_documents(self, query: dict) -> int:
         q = {k: v for k, v in query.items() if not isinstance(v, dict)}
         return sum(1 for d in self._docs if self._match(d, q))
