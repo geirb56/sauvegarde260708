@@ -3676,7 +3676,7 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
             served_candidate=adaptation_result.adapted_workout,
             planned_prescription=planned_prescription,
             structured_factory=_structured_candidate_factory,
-            served_at=datetime.now(timezone.utc),
+            served_at=now_utc,
             adaptation_action=adaptation_result.action.value,
             adaptation_reason_codes=tuple(adaptation_result.reason_codes),
         )

@@ -16,6 +16,8 @@ os.environ.setdefault("JWT_SECRET_KEY", "test-secret-for-coach-context-v2!!")
 os.environ.setdefault("JWT_ALGORITHM", "HS256")
 os.environ.setdefault("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "60")
 os.environ.setdefault("ENVIRONMENT", "test")
+os.environ.setdefault("MONGO_URL", "mongodb://localhost:27017/testdb")
+os.environ.setdefault("DB_NAME", "testdb")
 
 import server  # noqa: E402
 from access_control import Tier, UserAccess  # noqa: E402
@@ -343,7 +345,7 @@ def _training_paces(confidence="HIGH"):
     return SimpleNamespace(confidence=confidence)
 
 
-def _performance(has_data=True, extrapolation_ratio=1.32, confidence="medium"):
+def _performance(has_data=True, extrapolation_ratio=5.2, confidence="medium"):
     return SimpleNamespace(
         has_data=has_data,
         predictions=[
@@ -473,7 +475,7 @@ async def test_coach_context_v2_uses_canonical_authorities_and_prescription_prec
     assert context["training_paces"]["confidence"] == "HIGH"
     assert context["training_paces"]["is_available"] is True
     assert context["performance"]["predictions"][0]["confidence"] == "medium"
-    assert context["performance"]["predictions"][0]["extrapolation_ratio"] == 1.32
+    assert context["performance"]["predictions"][0]["extrapolation_ratio"] == 5.2
     assert context["performance"]["predictions"][0]["is_strong_extrapolation"] is True
 
 
