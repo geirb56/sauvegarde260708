@@ -153,13 +153,13 @@ class _FakeDB:
                 "prescription_id": "mon-id",
                 "planned_date": "2026-09-14",
                 "day": "monday",
-                "workout_type": "easy_run",
-                "intensity_class": "easy",
-                "distance_km": 10.5,
-                "duration_minutes": 60,
+                "workout_type": "recovery_run",
+                "intensity_class": "recovery",
+                "distance_km": 4.0,
+                "duration_minutes": 28,
                 "reason_codes": ["SNAPSHOT_MON"],
                 "structured": {"kind": "structured-mon"},
-                "modified_from_planned": False,
+                "modified_from_planned": True,
                 "adaptation_action": "KEEP",
                 "adaptation_reason_codes": [],
             },
@@ -168,15 +168,15 @@ class _FakeDB:
                 "prescription_id": "thu-id",
                 "planned_date": "2026-09-17",
                 "day": "thursday",
-                "workout_type": "tempo",
+                "workout_type": "intervals",
                 "intensity_class": "quality",
-                "distance_km": 6.4,
-                "duration_minutes": 35,
+                "distance_km": 11.2,
+                "duration_minutes": 64,
                 "reason_codes": ["SNAPSHOT_TODAY"],
                 "structured": {"kind": "structured-today"},
-                "modified_from_planned": True,
-                "adaptation_action": "SHORTEN",
-                "adaptation_reason_codes": ["READINESS_CAUTION"],
+                "modified_from_planned": False,
+                "adaptation_action": "KEEP",
+                "adaptation_reason_codes": ["SNAPSHOT_ONLY"],
             },
         ])
         self.training_planned_prescription_memory = _Collection([
@@ -185,10 +185,10 @@ class _FakeDB:
                 "prescription_id": "tue-id",
                 "planned_date": "2026-09-15",
                 "day": "tuesday",
-                "workout_type": "steady",
-                "intensity_class": "aerobic",
-                "distance_km": 7.5,
-                "duration_minutes": 42,
+                "workout_type": "hill_repeats",
+                "intensity_class": "quality",
+                "distance_km": 5.0,
+                "duration_minutes": 31,
                 "reason_codes": ["MEMORY_TUE"],
                 "structured": {"kind": "memory-structured"},
             }
@@ -239,7 +239,7 @@ def _week_payload() -> dict:
                     "matching_status": "matched",
                     "adherence_status": "completed_as_planned",
                     "execution_status": "executed",
-                    "structured_status": "served_snapshot",
+                    "structured_status": "historical_frozen",
                     "session_modified_from_planned": False,
                     "structured": {"kind": "week-mon"},
                 },
@@ -255,7 +255,7 @@ def _week_payload() -> dict:
                     "matching_status": None,
                     "adherence_status": None,
                     "execution_status": "executed",
-                    "structured_status": "planned_memory",
+                    "structured_status": "historical_frozen",
                     "session_modified_from_planned": None,
                     "structured": {"kind": "week-tue"},
                 },
@@ -271,7 +271,7 @@ def _week_payload() -> dict:
                     "matching_status": None,
                     "adherence_status": None,
                     "execution_status": "prescription_unavailable",
-                    "structured_status": "unavailable",
+                    "structured_status": "prescription_unavailable",
                     "session_modified_from_planned": None,
                     "structured": None,
                 },
@@ -303,7 +303,7 @@ def _week_payload() -> dict:
                     "matching_status": None,
                     "adherence_status": None,
                     "execution_status": "planned",
-                    "structured_status": "planned",
+                    "structured_status": "future_live",
                     "session_modified_from_planned": None,
                     "structured": {"kind": "week-fri"},
                 },
@@ -335,7 +335,7 @@ def _today_payload() -> dict:
         "adaptation_action": "SHORTEN",
         "adaptation_reason": "READINESS_CAUTION",
         "reason_codes": ["TODAY_PAYLOAD"],
-        "structured_workout": {"kind": "today-payload"},
+        "structured_prescription": {"kind": "today-payload"},
         "structured_status": "today_served",
     }
 
@@ -473,26 +473,49 @@ async def test_coach_context_v2_uses_canonical_authorities_and_prescription_prec
     assert fake_db.training_prescription_snapshots.find_projections[0] == {"_id": 0}
     assert fake_db.training_planned_prescription_memory.find_projections[0] == {"_id": 0}
     assert context["today"]["prescription_source"] == "served_snapshot"
-    assert context["today"]["served_prescription"]["distance_km"] == 6.4
-    assert context["today"]["served_prescription"]["reason_codes"] == ["SNAPSHOT_TODAY"]
+    assert context["today"]["served_prescription"] == _today_payload()["served_prescription"]
     assert context["today"]["planned_session"]["distance_km"] == 8.0
     assert context["today"]["adaptation_action"] == "SHORTEN"
-    assert context["today"]["structured_workout"] == {"kind": "structured-today"}
+    assert context["today"]["reason_codes"] == ["TODAY_PAYLOAD"]
+    assert context["today"]["structured_prescription"] == {"kind": "today-payload"}
+    assert context["today"]["structured_status"] == "today_served"
 
     sessions = {session["day"]: session for session in context["current_week_sessions"]}
     assert sessions["Monday"]["prescription_source"] == "served_snapshot"
     assert sessions["Monday"]["workout_type"] == "easy_run"
     assert sessions["Monday"]["duration_minutes"] == 60
-    assert sessions["Monday"]["reason_codes"] == ["SNAPSHOT_MON"]
-    assert sessions["Monday"]["structured"] == {"kind": "structured-mon"}
+    assert sessions["Monday"]["reason_codes"] == ["PLAN_MON"]
+    assert sessions["Monday"]["structured"] == {"kind": "week-mon"}
+    assert sessions["Monday"]["structured_status"] == "historical_frozen"
     assert sessions["Tuesday"]["prescription_source"] == "planned_memory"
     assert sessions["Tuesday"]["workout_type"] == "steady"
-    assert sessions["Tuesday"]["distance_km"] == 7.5
-    assert sessions["Tuesday"]["duration_minutes"] == 42
-    assert sessions["Tuesday"]["reason_codes"] == ["MEMORY_TUE"]
-    assert sessions["Tuesday"]["structured"] == {"kind": "memory-structured"}
+    assert sessions["Tuesday"]["distance_km"] == 9.0
+    assert sessions["Tuesday"]["duration_minutes"] == 50
+    assert sessions["Tuesday"]["reason_codes"] == ["PLAN_TUE_NEW_GOAL"]
+    assert sessions["Tuesday"]["structured"] == {"kind": "week-tue"}
+    assert sessions["Tuesday"]["structured_status"] == "historical_frozen"
     assert sessions["Wednesday"]["prescription_source"] == "unavailable"
+    assert sessions["Wednesday"]["structured_status"] == "prescription_unavailable"
+    assert sessions["Wednesday"]["workout_type"] is None
     assert sessions["Friday"]["prescription_source"] == "live_planned"
+    assert sessions["Friday"]["structured_status"] == "future_live"
+
+    for day, expected_session in {session["day"]: session for session in _week_payload()["week"]["sessions"]}.items():
+        actual_session = sessions[day]
+        for field in (
+            "workout_type",
+            "intensity_class",
+            "distance_km",
+            "duration_minutes",
+            "reason_codes",
+            "structured",
+            "structured_status",
+            "session_modified_from_planned",
+            "execution_status",
+            "matching_status",
+            "adherence_status",
+        ):
+            assert actual_session[field] == expected_session[field]
 
     assert context["training_load"] == {
         "acute_load_7d": 210.0,
@@ -765,6 +788,9 @@ def test_analyze_with_coach_source_uses_v2_authorities_only():
     assert "build_training_history" in context_source
     assert "_count_recent_stats" not in context_source
     assert "stats_28d" not in context_source
+    assert "_snapshot_prescription" not in context_source
+    assert "_session_view_from_authority" not in context_source
+    assert 'served_prescription=today_payload.get("served_prescription")' in context_source
 
 
 def test_system_prompt_coach_declares_v2_authority_rules():

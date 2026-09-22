@@ -110,7 +110,7 @@ class CoachTodayContext(BaseModel):
     adaptation_action: Optional[str] = None
     adaptation_reason: Optional[str] = None
     reason_codes: list[str] = Field(default_factory=list)
-    structured_workout: Optional[dict[str, Any]] = None
+    structured_prescription: Optional[dict[str, Any]] = None
     structured_status: Optional[str] = None
 
 
@@ -329,45 +329,6 @@ async def _today_snapshot_doc(
     )
 
 
-def _snapshot_prescription(snapshot_doc: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
-    if not snapshot_doc:
-        return None
-    return {
-        "day": snapshot_doc.get("day"),
-        "workout_type": snapshot_doc.get("workout_type"),
-        "intensity_class": snapshot_doc.get("intensity_class"),
-        "distance_km": snapshot_doc.get("distance_km"),
-        "duration_minutes": snapshot_doc.get("duration_minutes"),
-        "reason_codes": list(snapshot_doc.get("reason_codes") or []),
-    }
-
-
-def _session_view_from_authority(
-    session: dict[str, Any],
-    *,
-    source: str,
-    snapshot_doc: Optional[dict[str, Any]],
-    memory_doc: Optional[dict[str, Any]],
-) -> dict[str, Any]:
-    authority = snapshot_doc if source == "served_snapshot" else memory_doc if source == "planned_memory" else None
-    if authority is None:
-        return dict(session)
-
-    merged = dict(session)
-    merged["workout_type"] = authority.get("workout_type")
-    merged["intensity_class"] = authority.get("intensity_class")
-    merged["distance_km"] = authority.get("distance_km")
-    merged["duration_minutes"] = authority.get("duration_minutes")
-    merged["reason_codes"] = list(authority.get("reason_codes") or [])
-    merged["structured"] = authority.get("structured")
-    if source == "served_snapshot":
-        merged["session_modified_from_planned"] = authority.get("modified_from_planned")
-        merged["structured_status"] = "served_snapshot"
-    elif source == "planned_memory":
-        merged["structured_status"] = "planned_memory"
-    return merged
-
-
 def _normalize_workout_detail(workout: Optional[dict[str, Any]]) -> Optional[CoachWorkoutDetail]:
     if not workout:
         return None
@@ -423,10 +384,9 @@ async def build_coach_context_v2(
         resolved_goal=resolved_goal,
         reference_date=reference_date,
     )
-    current_cycle_week = next((week for week in cycle_response.weeks if week.is_current), None)
     training_history = build_training_history(domain_activities_90, reference_date)
     week_sessions = list(((week_payload.get("week") or {}).get("sessions") or []))
-    sources_by_id, snapshot_by_id, memory_by_id = await _week_prescription_authorities(
+    sources_by_id, _snapshot_by_id, _memory_by_id = await _week_prescription_authorities(
         db=db,
         user_id=user_id,
         week_sessions=week_sessions,
@@ -447,30 +407,24 @@ async def build_coach_context_v2(
 
     current_week_sessions = [
         CoachWeekSessionContext(
-            day=str(materialized_session.get("day")),
-            planned_date=materialized_session.get("planned_date"),
-            prescription_id=materialized_session.get("prescription_id"),
+            day=str(session.get("day")),
+            planned_date=session.get("planned_date"),
+            prescription_id=session.get("prescription_id"),
             prescription_source=source,
-            workout_type=materialized_session.get("workout_type"),
-            intensity_class=materialized_session.get("intensity_class"),
-            distance_km=materialized_session.get("distance_km"),
-            duration_minutes=materialized_session.get("duration_minutes"),
-            reason_codes=list(materialized_session.get("reason_codes") or []),
-            matching_status=materialized_session.get("matching_status"),
-            adherence_status=materialized_session.get("adherence_status"),
-            execution_status=materialized_session.get("execution_status"),
-            structured_status=materialized_session.get("structured_status"),
-            session_modified_from_planned=materialized_session.get("session_modified_from_planned"),
-            structured=materialized_session.get("structured"),
+            workout_type=session.get("workout_type"),
+            intensity_class=session.get("intensity_class"),
+            distance_km=session.get("distance_km"),
+            duration_minutes=session.get("duration_minutes"),
+            reason_codes=list(session.get("reason_codes") or []),
+            matching_status=session.get("matching_status"),
+            adherence_status=session.get("adherence_status"),
+            execution_status=session.get("execution_status"),
+            structured_status=session.get("structured_status"),
+            session_modified_from_planned=session.get("session_modified_from_planned"),
+            structured=session.get("structured"),
         )
         for session in week_sessions
         for source in [sources_by_id.get(session.get("prescription_id"), "live_planned")]
-        for materialized_session in [_session_view_from_authority(
-            session,
-            source=source,
-            snapshot_doc=snapshot_by_id.get(session.get("prescription_id")),
-            memory_doc=memory_by_id.get(session.get("prescription_id")),
-        )]
     ]
 
     training_paces_payload = training_paces_to_api_dict(training_paces)
@@ -533,42 +487,14 @@ async def build_coach_context_v2(
             prescription_id=today_payload.get("prescription_id"),
             prescription_source=today_source,
             planned_session=today_payload.get("planned_session"),
-            served_prescription=(
-                _snapshot_prescription(today_snapshot)
-                if today_snapshot is not None
-                else today_payload.get("served_prescription")
-            ),
-            session_modified_from_planned=(
-                today_snapshot.get("modified_from_planned")
-                if today_snapshot is not None
-                else today_payload.get("session_modified_from_planned")
-            ),
-            adaptation_applied=(
-                (today_snapshot.get("adaptation_action") not in (None, "KEEP"))
-                if today_snapshot is not None
-                else today_payload.get("adaptation_applied")
-            ),
-            adaptation_action=(
-                today_snapshot.get("adaptation_action")
-                if today_snapshot is not None
-                else today_payload.get("adaptation_action")
-            ),
-            adaptation_reason=(
-                ", ".join(today_snapshot.get("adaptation_reason_codes") or [])
-                if today_snapshot is not None
-                else today_payload.get("adaptation_reason")
-            ),
-            reason_codes=(
-                list(today_snapshot.get("reason_codes") or [])
-                if today_snapshot is not None
-                else list(today_payload.get("reason_codes") or [])
-            ),
-            structured_workout=(
-                today_snapshot.get("structured")
-                if today_snapshot is not None
-                else today_payload.get("structured_workout")
-            ),
-            structured_status=("today_served" if today_snapshot is not None else today_payload.get("structured_status")),
+            served_prescription=today_payload.get("served_prescription"),
+            session_modified_from_planned=today_payload.get("session_modified_from_planned"),
+            adaptation_applied=today_payload.get("adaptation_applied"),
+            adaptation_action=today_payload.get("adaptation_action"),
+            adaptation_reason=today_payload.get("adaptation_reason"),
+            reason_codes=list(today_payload.get("reason_codes") or []),
+            structured_prescription=today_payload.get("structured_prescription"),
+            structured_status=today_payload.get("structured_status"),
         ),
         readiness=CoachReadinessContext(
             band=readiness_decision.band.value,
