@@ -9,9 +9,11 @@ from training_v2.performance_model import (
     CURVE_NULL_CONFIDENCE_EXTRAPOLATION_RATIO,
     PerformanceEstimate,
 )
+from training_v2.periodization import build_periodization
 from training_v2.plan_goal import PlanGoal, build_plan_goal
 from training_v2.readiness_decision import ReadinessDecision
 from training_v2.training_cycle_response import build_cycle_calendar_response
+from training_v2.training_history import build_training_history
 from training_v2.training_load import TrainingLoadSnapshot
 from training_v2.training_paces import TrainingPaces, training_paces_to_api_dict
 
@@ -172,7 +174,7 @@ class CoachContextV2(BaseModel):
     goal: CoachGoalContext
     training_state: CoachTrainingStateContext
     stats_7d: CoachActivityStats
-    stats_28d: CoachActivityStats
+    stats_30d: CoachActivityStats
     weekly_target: CoachWeeklyTargetContext
     weekly_reconciliation: CoachWeeklyReconciliationContext
     current_week_sessions: list[CoachWeekSessionContext] = Field(default_factory=list)
@@ -182,20 +184,6 @@ class CoachContextV2(BaseModel):
     training_paces: CoachTrainingPacesContext
     performance: CoachPerformanceContext
     workout_detail: Optional[CoachWorkoutDetail] = None
-
-
-def _activity_date(activity: Any) -> Optional[date]:
-    start_time = getattr(activity, "start_time", None)
-    if isinstance(start_time, datetime):
-        return start_time.date()
-    if isinstance(start_time, date):
-        return start_time
-    if isinstance(start_time, str):
-        try:
-            return datetime.fromisoformat(start_time.replace("Z", "+00:00")).date()
-        except ValueError:
-            return None
-    return None
 
 
 def _parse_iso_date(value: Any) -> Optional[date]:
@@ -212,26 +200,6 @@ def _parse_iso_date(value: Any) -> Optional[date]:
             except ValueError:
                 return None
     return None
-
-
-def _count_recent_stats(
-    activities: list[Any],
-    *,
-    reference_date: date,
-    days: int,
-) -> CoachActivityStats:
-    start_date = reference_date - timedelta(days=days - 1)
-    km_total = 0.0
-    sessions = 0
-    for activity in activities:
-        if (getattr(activity, "activity_type", None) or "").strip().lower() != "running":
-            continue
-        activity_date = _activity_date(activity)
-        if activity_date is None or activity_date < start_date or activity_date > reference_date:
-            continue
-        km_total += (getattr(activity, "distance_m", None) or 0.0) / 1000.0
-        sessions += 1
-    return CoachActivityStats(km=round(km_total, 1), sessions=sessions)
 
 
 def _build_plan_goal(resolved_goal: Any) -> PlanGoal:
@@ -259,6 +227,21 @@ def _build_cycle_response(*, resolved_goal: Any, reference_date: date):
         cycle_anchor_date=resolved_goal.cycle_start,
         target_time_seconds=resolved_goal.target_time_sec,
     )
+
+
+def _build_phase_value(*, resolved_goal: Any, reference_date: date) -> str:
+    plan_goal = _build_plan_goal(resolved_goal)
+    if plan_goal.race_date is not None:
+        return build_periodization(
+            plan_goal=plan_goal,
+            reference_date=reference_date,
+            race_plan_start_date=resolved_goal.cycle_start,
+        ).phase.value
+    return build_periodization(
+        plan_goal=plan_goal,
+        reference_date=reference_date,
+        cycle_anchor_date=resolved_goal.cycle_start,
+    ).phase.value
 
 
 async def _week_prescription_authorities(
@@ -441,6 +424,7 @@ async def build_coach_context_v2(
         reference_date=reference_date,
     )
     current_cycle_week = next((week for week in cycle_response.weeks if week.is_current), None)
+    training_history = build_training_history(domain_activities_90, reference_date)
     week_sessions = list(((week_payload.get("week") or {}).get("sessions") or []))
     sources_by_id, snapshot_by_id, memory_by_id = await _week_prescription_authorities(
         db=db,
@@ -516,14 +500,20 @@ async def build_coach_context_v2(
             target_distance_km=resolved_goal.target_distance_km,
         ),
         training_state=CoachTrainingStateContext(
-            phase=current_cycle_week.phase if current_cycle_week is not None else None,
+            phase=_build_phase_value(resolved_goal=resolved_goal, reference_date=reference_date),
             current_week=cycle_response.cycle.current_week,
             total_weeks=cycle_response.cycle.total_weeks,
             continuity_state=(week_payload.get("state") or {}).get("continuity_state"),
             allow_intensity=(week_payload.get("state") or {}).get("allow_intensity"),
         ),
-        stats_7d=_count_recent_stats(domain_activities_90, reference_date=reference_date, days=7),
-        stats_28d=_count_recent_stats(domain_activities_90, reference_date=reference_date, days=28),
+        stats_7d=CoachActivityStats(
+            km=training_history.window_7d.distance_km,
+            sessions=training_history.window_7d.activity_count,
+        ),
+        stats_30d=CoachActivityStats(
+            km=training_history.window_30d.distance_km,
+            sessions=training_history.window_30d.activity_count,
+        ),
         weekly_target=CoachWeeklyTargetContext(
             target_basis=((week_payload.get("weekly_target") or {}).get("target_basis") or "distance"),
             target_km=(week_payload.get("weekly_target") or {}).get("target_km"),

@@ -23,8 +23,10 @@ import server  # noqa: E402
 import coach_context_v2  # noqa: E402
 from access_control import Tier, UserAccess  # noqa: E402
 from auth.jwt_utils import create_access_token  # noqa: E402
+from training_v2.periodization import build_periodization  # noqa: E402
 from training_v2.plan_goal import GoalType, build_plan_goal  # noqa: E402
 from training_v2.training_cycle_response import build_cycle_calendar_response  # noqa: E402
+from training_v2.training_history import build_training_history  # noqa: E402
 
 
 _USER_ID = "coach-user"
@@ -399,6 +401,7 @@ async def _call_coach(
     readiness_result=object(),
     workout_id: str | None = None,
     resolved_goal=None,
+    domain_activities=None,
 ) -> tuple[httpx.Response, dict]:
     captured: dict = {}
 
@@ -421,7 +424,7 @@ async def _call_coach(
         target_distance_km=None,
         user_goal_doc={"event_name": "Autumn Marathon"},
     )
-    domain_activities = [
+    domain_activities = domain_activities or [
         SimpleNamespace(activity_type="running", start_time=datetime(2026, 9, 16, 6, 0, tzinfo=timezone.utc), distance_m=12000.0),
         SimpleNamespace(activity_type="running", start_time=datetime(2026, 9, 12, 6, 0, tzinfo=timezone.utc), distance_m=8000.0),
         SimpleNamespace(activity_type="running", start_time=datetime(2026, 8, 28, 6, 0, tzinfo=timezone.utc), distance_m=14000.0),
@@ -522,9 +525,22 @@ async def test_coach_context_v2_uses_canonical_authorities_and_prescription_prec
         target_time_seconds=12600,
     )
     current_week = next(week for week in expected_cycle.weeks if week.is_current)
+    expected_phase = build_periodization(
+        build_plan_goal(
+            goal_type=GoalType.marathon,
+            race_date=date(2026, 11, 1),
+            target_distance_km=None,
+            target_time_seconds=12600,
+            created_from="user",
+        ),
+        _REFERENCE_DATE,
+        race_plan_start_date=date(2026, 8, 1),
+    )
     assert context["training_state"]["current_week"] == expected_cycle.cycle.current_week
     assert context["training_state"]["total_weeks"] == expected_cycle.cycle.total_weeks
-    assert context["training_state"]["phase"] == current_week.phase
+    assert context["training_state"]["phase"] == expected_phase.phase.value
+    assert context["stats_7d"] == {"km": 20.0, "sessions": 2}
+    assert context["stats_30d"] == {"km": 34.0, "sessions": 3}
 
 
 @pytest.mark.asyncio
@@ -613,9 +629,20 @@ async def test_coach_context_v2_cycle_calendar_matches_race_cycle_authority():
         target_time_seconds=12600,
     )
     current_week = next(week for week in expected_cycle.weeks if week.is_current)
+    expected_phase = build_periodization(
+        build_plan_goal(
+            goal_type=GoalType.marathon,
+            race_date=date(2026, 11, 1),
+            target_distance_km=None,
+            target_time_seconds=12600,
+            created_from="user",
+        ),
+        _REFERENCE_DATE,
+        race_plan_start_date=date(2026, 9, 1),
+    )
     assert context["training_state"]["current_week"] == expected_cycle.cycle.current_week
     assert context["training_state"]["total_weeks"] == expected_cycle.cycle.total_weeks
-    assert context["training_state"]["phase"] == current_week.phase
+    assert context["training_state"]["phase"] == expected_phase.phase.value
 
 
 @pytest.mark.asyncio
@@ -646,24 +673,98 @@ async def test_coach_context_v2_cycle_calendar_matches_maintenance_continuous_au
         target_time_seconds=None,
     )
     current_week = next(week for week in expected_cycle.weeks if week.is_current)
+    expected_phase = build_periodization(
+        build_plan_goal(
+            goal_type=GoalType.maintenance,
+            race_date=None,
+            target_distance_km=None,
+            target_time_seconds=None,
+            created_from="user",
+        ),
+        _REFERENCE_DATE,
+        cycle_anchor_date=date(2026, 9, 3),
+    )
     assert context["training_state"]["current_week"] == expected_cycle.cycle.current_week
     assert context["training_state"]["total_weeks"] == expected_cycle.cycle.total_weeks
-    assert context["training_state"]["phase"] == current_week.phase
+    assert context["training_state"]["phase"] == expected_phase.phase.value
+
+
+@pytest.mark.asyncio
+async def test_coach_context_v2_uses_periodization_phase_during_midweek_transition():
+    fake_db = _FakeDB()
+    cycle_start = date(2026, 8, 1)
+    reference_date = date(2026, 9, 17)
+    cycle_response = SimpleNamespace(
+        cycle=SimpleNamespace(current_week=7, total_weeks=14),
+        weeks=[
+            SimpleNamespace(week_number=7, start_date="2026-09-14", end_date="2026-09-20", phase="specific", is_current=True),
+        ],
+    )
+    periodization_snapshot = SimpleNamespace(phase=SimpleNamespace(value="build"))
+
+    with (
+        patch("coach_context_v2.build_cycle_calendar_response", return_value=cycle_response),
+        patch("coach_context_v2.build_periodization", return_value=periodization_snapshot) as periodization_mock,
+        patch("server._resolve_canonical_reference_date", return_value=reference_date),
+    ):
+        response, context = await _call_coach(
+            fake_db,
+            resolved_goal=SimpleNamespace(
+                goal_type="MARATHON",
+                mapped_goal=GoalType.marathon,
+                cycle_start=cycle_start,
+                race_date=date(2026, 11, 1),
+                target_time_sec=12600,
+                target_distance_km=None,
+                user_goal_doc={"event_name": "Transition Marathon"},
+            ),
+        )
+
+    assert response.status_code == 200
+    assert context["training_state"]["phase"] == "build"
+    periodization_mock.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_coach_context_v2_stats_match_training_history_v2_running_types():
+    fake_db = _FakeDB()
+    domain_activities = [
+        SimpleNamespace(activity_type="running", start_time=datetime(2026, 9, 16, 6, 0, tzinfo=timezone.utc), distance_m=10000.0, duration_s=3000.0),
+        SimpleNamespace(activity_type="trail_running", start_time=datetime(2026, 9, 15, 6, 0, tzinfo=timezone.utc), distance_m=12000.0, duration_s=4200.0),
+        SimpleNamespace(activity_type="treadmill_running", start_time=datetime(2026, 8, 25, 6, 0, tzinfo=timezone.utc), distance_m=8000.0, duration_s=2800.0),
+        SimpleNamespace(activity_type="cycling", start_time=datetime(2026, 9, 14, 6, 0, tzinfo=timezone.utc), distance_m=50000.0, duration_s=5400.0),
+    ]
+    response, context = await _call_coach(fake_db, domain_activities=domain_activities)
+
+    assert response.status_code == 200
+    expected_history = build_training_history(domain_activities, _REFERENCE_DATE)
+    assert context["stats_7d"] == {
+        "km": expected_history.window_7d.distance_km,
+        "sessions": expected_history.window_7d.activity_count,
+    }
+    assert context["stats_30d"] == {
+        "km": expected_history.window_30d.distance_km,
+        "sessions": expected_history.window_30d.activity_count,
+    }
+    assert context["stats_7d"] == {"km": 22.0, "sessions": 2}
+    assert context["stats_30d"] == {"km": 30.0, "sessions": 3}
 
 
 def test_analyze_with_coach_source_uses_v2_authorities_only():
     source = inspect.getsource(server.analyze_with_coach)
     context_source = inspect.getsource(server.build_coach_context_v2)
     cycle_source = inspect.getsource(coach_context_v2._build_cycle_response)
+    phase_source = inspect.getsource(coach_context_v2._build_phase_value)
 
     assert "db.training_plans" not in source
     assert 'db.workouts.find_one({"id": request.workout_id, "user_id": user_id})' in source
     assert "load_canonical_training_paces" in source
     assert "compute_training_paces" not in source
     assert "build_cycle_calendar_response" in cycle_source
-    assert "GOAL_CONFIG" not in context_source
-    assert "_current_week_index" not in context_source
-    assert "_phase_value" not in context_source
+    assert "build_periodization" in phase_source
+    assert "build_training_history" in context_source
+    assert "_count_recent_stats" not in context_source
+    assert "stats_28d" not in context_source
 
 
 def test_system_prompt_coach_declares_v2_authority_rules():
