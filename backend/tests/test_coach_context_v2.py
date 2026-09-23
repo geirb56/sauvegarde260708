@@ -242,6 +242,8 @@ def _week_payload() -> dict:
                     "structured_status": "historical_frozen",
                     "session_modified_from_planned": False,
                     "structured": {"kind": "week-mon"},
+                    "actual": {"distance_km": 10.6, "duration_minutes": 61},
+                    "estimated_tss": 47.5,
                 },
                 {
                     "day": "Tuesday",
@@ -258,6 +260,8 @@ def _week_payload() -> dict:
                     "structured_status": "historical_frozen",
                     "session_modified_from_planned": None,
                     "structured": {"kind": "week-tue"},
+                    "actual": None,
+                    "estimated_tss": 39.0,
                 },
                 {
                     "day": "Wednesday",
@@ -274,6 +278,8 @@ def _week_payload() -> dict:
                     "structured_status": "prescription_unavailable",
                     "session_modified_from_planned": None,
                     "structured": None,
+                    "actual": None,
+                    "estimated_tss": None,
                 },
                 {
                     "day": "Thursday",
@@ -290,6 +296,8 @@ def _week_payload() -> dict:
                     "structured_status": "today_served",
                     "session_modified_from_planned": True,
                     "structured": {"kind": "week-thu"},
+                    "actual": {"distance_km": 6.4, "duration_minutes": 35},
+                    "estimated_tss": 52.0,
                 },
                 {
                     "day": "Friday",
@@ -306,6 +314,9 @@ def _week_payload() -> dict:
                     "structured_status": "future_live",
                     "session_modified_from_planned": None,
                     "structured": {"kind": "week-fri"},
+                    "actual": None,
+                    "estimated_tss": 71.0,
+                    "future_field": {"preserve": True},
                 },
             ]
         },
@@ -337,6 +348,8 @@ def _today_payload() -> dict:
         "reason_codes": ["TODAY_PAYLOAD"],
         "structured_prescription": {"kind": "today-payload"},
         "structured_status": "today_served",
+        "readiness": {"band": "CAUTION", "score": 62.0},
+        "future_today_field": {"preserve": True},
     }
 
 
@@ -473,49 +486,26 @@ async def test_coach_context_v2_uses_canonical_authorities_and_prescription_prec
     assert fake_db.training_prescription_snapshots.find_projections[0] == {"_id": 0}
     assert fake_db.training_planned_prescription_memory.find_projections[0] == {"_id": 0}
     assert context["today"]["prescription_source"] == "served_snapshot"
-    assert context["today"]["served_prescription"] == _today_payload()["served_prescription"]
-    assert context["today"]["planned_session"]["distance_km"] == 8.0
-    assert context["today"]["adaptation_action"] == "SHORTEN"
-    assert context["today"]["reason_codes"] == ["TODAY_PAYLOAD"]
-    assert context["today"]["structured_prescription"] == {"kind": "today-payload"}
-    assert context["today"]["structured_status"] == "today_served"
+    assert context["today"]["canonical"] == _today_payload()
+    assert context["today"]["canonical"]["served_prescription"] == _today_payload()["served_prescription"]
+    assert context["today"]["canonical"]["structured_prescription"] == {"kind": "today-payload"}
+    assert context["today"]["canonical"]["future_today_field"] == {"preserve": True}
 
-    sessions = {session["day"]: session for session in context["current_week_sessions"]}
+    sessions = {session["canonical"]["day"]: session for session in context["current_week_sessions"]}
     assert sessions["Monday"]["prescription_source"] == "served_snapshot"
-    assert sessions["Monday"]["workout_type"] == "easy_run"
-    assert sessions["Monday"]["duration_minutes"] == 60
-    assert sessions["Monday"]["reason_codes"] == ["PLAN_MON"]
-    assert sessions["Monday"]["structured"] == {"kind": "week-mon"}
-    assert sessions["Monday"]["structured_status"] == "historical_frozen"
     assert sessions["Tuesday"]["prescription_source"] == "planned_memory"
-    assert sessions["Tuesday"]["workout_type"] == "steady"
-    assert sessions["Tuesday"]["distance_km"] == 9.0
-    assert sessions["Tuesday"]["duration_minutes"] == 50
-    assert sessions["Tuesday"]["reason_codes"] == ["PLAN_TUE_NEW_GOAL"]
-    assert sessions["Tuesday"]["structured"] == {"kind": "week-tue"}
-    assert sessions["Tuesday"]["structured_status"] == "historical_frozen"
     assert sessions["Wednesday"]["prescription_source"] == "unavailable"
-    assert sessions["Wednesday"]["structured_status"] == "prescription_unavailable"
-    assert sessions["Wednesday"]["workout_type"] is None
     assert sessions["Friday"]["prescription_source"] == "live_planned"
-    assert sessions["Friday"]["structured_status"] == "future_live"
+    assert sessions["Monday"]["canonical"]["structured_status"] == "historical_frozen"
+    assert sessions["Wednesday"]["canonical"]["structured_status"] == "prescription_unavailable"
+    assert sessions["Friday"]["canonical"]["structured_status"] == "future_live"
+    assert sessions["Monday"]["canonical"]["actual"] == {"distance_km": 10.6, "duration_minutes": 61}
+    assert sessions["Friday"]["canonical"]["estimated_tss"] == 71.0
+    assert sessions["Friday"]["canonical"]["future_field"] == {"preserve": True}
 
-    for day, expected_session in {session["day"]: session for session in _week_payload()["week"]["sessions"]}.items():
-        actual_session = sessions[day]
-        for field in (
-            "workout_type",
-            "intensity_class",
-            "distance_km",
-            "duration_minutes",
-            "reason_codes",
-            "structured",
-            "structured_status",
-            "session_modified_from_planned",
-            "execution_status",
-            "matching_status",
-            "adherence_status",
-        ):
-            assert actual_session[field] == expected_session[field]
+    expected_sessions = {session["day"]: session for session in _week_payload()["week"]["sessions"]}
+    for day, expected_session in expected_sessions.items():
+        assert sessions[day]["canonical"] == expected_session
 
     assert context["training_load"] == {
         "acute_load_7d": 210.0,
@@ -598,7 +588,7 @@ async def test_coach_context_v2_leaves_missing_data_unavailable():
 
     assert response.status_code == 200
     assert context["today"]["prescription_source"] == "unavailable"
-    assert context["today"]["served_prescription"] is None
+    assert context["today"]["canonical"] == {"status": "no_session", "date": "2026-09-17", "day": "Thursday"}
     assert context["readiness"] == {
         "band": "UNAVAILABLE",
         "score": None,
@@ -788,9 +778,9 @@ def test_analyze_with_coach_source_uses_v2_authorities_only():
     assert "build_training_history" in context_source
     assert "_count_recent_stats" not in context_source
     assert "stats_28d" not in context_source
-    assert "_snapshot_prescription" not in context_source
     assert "_session_view_from_authority" not in context_source
-    assert 'served_prescription=today_payload.get("served_prescription")' in context_source
+    assert 'canonical=dict(session)' in context_source
+    assert 'canonical=dict(today_payload)' in context_source
 
 
 def test_system_prompt_coach_declares_v2_authority_rules():

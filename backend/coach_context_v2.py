@@ -78,40 +78,15 @@ class CoachWeeklyReconciliationContext(BaseModel):
 class CoachWeekSessionContext(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    day: str
-    planned_date: Optional[str] = None
-    prescription_id: Optional[str] = None
+    canonical: dict[str, Any]
     prescription_source: str
-    workout_type: Optional[str] = None
-    intensity_class: Optional[str] = None
-    distance_km: Optional[float] = None
-    duration_minutes: Optional[int] = None
-    reason_codes: list[str] = Field(default_factory=list)
-    matching_status: Optional[str] = None
-    adherence_status: Optional[str] = None
-    execution_status: Optional[str] = None
-    structured_status: Optional[str] = None
-    session_modified_from_planned: Optional[bool] = None
-    structured: Optional[dict[str, Any]] = None
 
 
 class CoachTodayContext(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    status: str
-    date: Optional[str] = None
-    day: Optional[str] = None
-    prescription_id: Optional[str] = None
+    canonical: dict[str, Any]
     prescription_source: str
-    planned_session: Optional[dict[str, Any]] = None
-    served_prescription: Optional[dict[str, Any]] = None
-    session_modified_from_planned: Optional[bool] = None
-    adaptation_applied: Optional[bool] = None
-    adaptation_action: Optional[str] = None
-    adaptation_reason: Optional[str] = None
-    reason_codes: list[str] = Field(default_factory=list)
-    structured_prescription: Optional[dict[str, Any]] = None
-    structured_status: Optional[str] = None
 
 
 class CoachReadinessContext(BaseModel):
@@ -250,7 +225,7 @@ async def _week_prescription_authorities(
     user_id: str,
     week_sessions: list[dict[str, Any]],
     reference_date: date,
-) -> tuple[dict[str, str], dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+) -> dict[str, str]:
     week_start = reference_date - timedelta(days=reference_date.weekday())
     week_end = week_start + timedelta(days=6)
 
@@ -280,17 +255,6 @@ async def _week_prescription_authorities(
         if isinstance(doc.get("prescription_id"), str)
     }
 
-    snapshot_by_id = {
-        doc["prescription_id"]: doc
-        for doc in snapshot_docs
-        if isinstance(doc.get("prescription_id"), str)
-    }
-    memory_by_id = {
-        doc["prescription_id"]: doc
-        for doc in memory_docs
-        if isinstance(doc.get("prescription_id"), str)
-    }
-
     sources: dict[str, str] = {}
     for session in week_sessions:
         prescription_id = session.get("prescription_id")
@@ -311,7 +275,7 @@ async def _week_prescription_authorities(
             sources[prescription_id] = "live_planned"
         else:
             sources[prescription_id] = "unavailable"
-    return sources, snapshot_by_id, memory_by_id
+    return sources
 
 
 async def _today_snapshot_doc(
@@ -386,7 +350,7 @@ async def build_coach_context_v2(
     )
     training_history = build_training_history(domain_activities_90, reference_date)
     week_sessions = list(((week_payload.get("week") or {}).get("sessions") or []))
-    sources_by_id, _snapshot_by_id, _memory_by_id = await _week_prescription_authorities(
+    sources_by_id = await _week_prescription_authorities(
         db=db,
         user_id=user_id,
         week_sessions=week_sessions,
@@ -407,21 +371,8 @@ async def build_coach_context_v2(
 
     current_week_sessions = [
         CoachWeekSessionContext(
-            day=str(session.get("day")),
-            planned_date=session.get("planned_date"),
-            prescription_id=session.get("prescription_id"),
+            canonical=dict(session),
             prescription_source=source,
-            workout_type=session.get("workout_type"),
-            intensity_class=session.get("intensity_class"),
-            distance_km=session.get("distance_km"),
-            duration_minutes=session.get("duration_minutes"),
-            reason_codes=list(session.get("reason_codes") or []),
-            matching_status=session.get("matching_status"),
-            adherence_status=session.get("adherence_status"),
-            execution_status=session.get("execution_status"),
-            structured_status=session.get("structured_status"),
-            session_modified_from_planned=session.get("session_modified_from_planned"),
-            structured=session.get("structured"),
         )
         for session in week_sessions
         for source in [sources_by_id.get(session.get("prescription_id"), "live_planned")]
@@ -481,20 +432,8 @@ async def build_coach_context_v2(
         ),
         current_week_sessions=current_week_sessions,
         today=CoachTodayContext(
-            status=str(today_payload.get("status") or "success"),
-            date=today_payload.get("date"),
-            day=today_payload.get("day"),
-            prescription_id=today_payload.get("prescription_id"),
+            canonical=dict(today_payload),
             prescription_source=today_source,
-            planned_session=today_payload.get("planned_session"),
-            served_prescription=today_payload.get("served_prescription"),
-            session_modified_from_planned=today_payload.get("session_modified_from_planned"),
-            adaptation_applied=today_payload.get("adaptation_applied"),
-            adaptation_action=today_payload.get("adaptation_action"),
-            adaptation_reason=today_payload.get("adaptation_reason"),
-            reason_codes=list(today_payload.get("reason_codes") or []),
-            structured_prescription=today_payload.get("structured_prescription"),
-            structured_status=today_payload.get("structured_status"),
         ),
         readiness=CoachReadinessContext(
             band=readiness_decision.band.value,
