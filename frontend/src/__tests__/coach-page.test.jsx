@@ -36,4 +36,19 @@ describe("Coach page", () => {
     expect(screen.getByText(/Open today and training/i)).toBeInTheDocument();
     expect(screen.queryByText(/Tempo|Intervals|Long run/i)).not.toBeInTheDocument();
   });
+
+  test("history load failure renders explicit unavailable state instead of successful empty state", async () => {
+    axios.get.mockRejectedValueOnce(new Error("network"));
+
+    render(
+      <LanguageProvider>
+        <MemoryRouter>
+          <Coach />
+        </MemoryRouter>
+      </LanguageProvider>
+    );
+
+    expect(await screen.findByTestId("coach-history-load-error")).toBeInTheDocument();
+    expect(screen.queryByText(/only prescription authority/i)).not.toBeInTheDocument();
+  });
 });

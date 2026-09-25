@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 from datetime import datetime, timezone, timedelta
@@ -69,6 +70,9 @@ class _Collection:
                 if "$gte" in value:
                     if doc.get(key) is None or doc.get(key) < value["$gte"]:
                         return False
+                if "$lt" in value:
+                    if doc.get(key) is None or doc.get(key) >= value["$lt"]:
+                        return False
             elif doc.get(key) != value:
                 return False
         return True
@@ -101,6 +105,67 @@ class _Collection:
         self._docs.append(dict(doc))
         return SimpleNamespace(inserted_id=doc.get("id"))
 
+    async def find_one_and_update(
+        self,
+        query: dict,
+        update: dict,
+        upsert: bool = False,
+        return_document=None,
+    ) -> dict | None:
+        idx = None
+        for i, d in enumerate(self._docs):
+            if self._matches(d, query):
+                idx = i
+                break
+
+        created = False
+        if idx is None:
+            if not upsert:
+                return None
+            base_doc: dict = {}
+            for k, v in query.items():
+                if not isinstance(v, dict):
+                    base_doc[k] = v
+            set_on_insert = update.get("$setOnInsert", {})
+            base_doc.update(set_on_insert)
+            self._docs.append(base_doc)
+            idx = len(self._docs) - 1
+            created = True
+
+        target = dict(self._docs[idx])
+        if "$inc" in update:
+            for k, inc_value in update["$inc"].items():
+                target[k] = int(target.get(k, 0)) + int(inc_value)
+        if "$set" in update:
+            for k, set_value in update["$set"].items():
+                target[k] = set_value
+        if "$setOnInsert" in update and created:
+            for k, set_value in update["$setOnInsert"].items():
+                if k not in target:
+                    target[k] = set_value
+
+        self._docs[idx] = target
+        return dict(target)
+
+    async def update_one(self, query: dict, update: dict):
+        idx = None
+        for i, d in enumerate(self._docs):
+            if self._matches(d, query):
+                idx = i
+                break
+        if idx is None:
+            return SimpleNamespace(matched_count=0, modified_count=0)
+
+        target = dict(self._docs[idx])
+        if "$inc" in update:
+            for k, inc_value in update["$inc"].items():
+                target[k] = int(target.get(k, 0)) + int(inc_value)
+        if "$set" in update:
+            for k, set_value in update["$set"].items():
+                target[k] = set_value
+        self._docs[idx] = target
+        return SimpleNamespace(matched_count=1, modified_count=1)
+
     async def delete_many(self, query: dict):
         before = len(self._docs)
         self._docs = [d for d in self._docs if not self._matches(d, query)]
@@ -113,7 +178,7 @@ class _Collection:
 class _FakeDB:
     def __init__(self, conversations: list[dict] | None = None):
         self.conversations = _Collection(conversations or [])
-        self.chat_messages = _Collection([])
+        self.coach_quota_counters = _Collection([])
         self.garmin_activities = _Collection([])
         self.garmin_connections = _Collection([])
         self.garmin_daily_metrics = _Collection([])
@@ -291,7 +356,7 @@ async def test_new_coach_messages_write_only_to_conversations_not_chat_messages(
     assert resp.status_code == 200
 
     assert len(fake_db.conversations._docs) == 2
-    assert len(fake_db.chat_messages._docs) == 0
+    assert len(fake_db.coach_quota_counters._docs) == 1
 
 
 async def test_coach_analyze_route_uses_canonical_service_function():
@@ -348,7 +413,7 @@ async def test_legacy_chat_send_endpoint_is_absent():
     with (
         patch.object(server, "db", fake_db),
         patch.object(server.app.state, "db", fake_db, create=True),
-        patch("server.get_user_access", AsyncMock(side_effect=_free_access)),
+        patch("server.get_user_access", AsyncMock(side_effect=_premium_access)),
     ):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://test") as client:
             r = await client.post(
@@ -356,5 +421,178 @@ async def test_legacy_chat_send_endpoint_is_absent():
                 headers=_bearer("user-a", "a@test.com"),
                 json={"message": "legacy"},
             )
+            r_history = await client.get("/api/chat/history", headers=_bearer("user-a", "a@test.com"))
+            r_store = await client.post(
+                "/api/chat/store-response?message_id=x&response=y",
+                headers=_bearer("user-a", "a@test.com"),
+            )
 
-    assert r.status_code in (403, 404)
+    assert r.status_code == 404
+    assert r_history.status_code == 404
+    assert r_store.status_code == 404
+
+
+async def test_route_registry_has_no_legacy_chat_routes():
+    route_signatures = {
+        (getattr(route, "path", None), tuple(sorted(getattr(route, "methods", set()) or set())))
+        for route in server.app.routes
+    }
+    assert ("/api/chat/send", ("POST",)) not in route_signatures
+    assert ("/api/chat/history", ("GET",)) not in route_signatures
+    assert ("/api/chat/history", ("DELETE",)) not in route_signatures
+    assert ("/api/chat/store-response", ("POST",)) not in route_signatures
+
+
+async def test_free_counter_bootstrap_uses_existing_conversations():
+    now = datetime.now(timezone.utc)
+    docs = [
+        {
+            "id": f"b{i}",
+            "user_id": "user-a",
+            "role": "user",
+            "content": "old",
+            "timestamp": (now - timedelta(minutes=10 - i)).isoformat(),
+        }
+        for i in range(7)
+    ]
+    fake_db = _FakeDB(conversations=docs)
+
+    resp = await _run_analyze(fake_db, _free_access, message="bootstrap")
+    assert resp.status_code == 200
+    assert len(fake_db.coach_quota_counters._docs) == 1
+    counter = fake_db.coach_quota_counters._docs[0]
+    assert counter["baseline"] == 7
+    assert counter["count"] == 8
+
+
+async def test_free_concurrency_allows_only_one_when_at_9_of_10():
+    now = datetime.now(timezone.utc)
+    docs = [
+        {
+            "id": f"c{i}",
+            "user_id": "user-a",
+            "role": "user",
+            "content": f"m{i}",
+            "timestamp": (now - timedelta(minutes=20 - i)).isoformat(),
+        }
+        for i in range(9)
+    ]
+    fake_db = _FakeDB(conversations=docs)
+
+    r1, r2 = await asyncio.gather(
+        _run_analyze(fake_db, _free_access, message="concurrent-1"),
+        _run_analyze(fake_db, _free_access, message="concurrent-2"),
+    )
+    statuses = sorted([r1.status_code, r2.status_code])
+    assert statuses == [200, 429]
+
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+    user_count = await fake_db.conversations.count_documents(
+        {"user_id": "user-a", "role": "user", "timestamp": {"$gte": month_start}}
+    )
+    assert user_count == 10
+    assert len(fake_db.coach_quota_counters._docs) == 1
+    assert fake_db.coach_quota_counters._docs[0]["count"] == 10
+
+
+async def test_concurrent_first_use_initialization_creates_single_counter_document():
+    fake_db = _FakeDB(conversations=[])
+    r1, r2 = await asyncio.gather(
+        _run_analyze(fake_db, _free_access, message="first-1"),
+        _run_analyze(fake_db, _free_access, message="first-2"),
+    )
+    assert r1.status_code == 200
+    assert r2.status_code == 200
+    assert len(fake_db.coach_quota_counters._docs) == 1
+    assert fake_db.coach_quota_counters._docs[0]["count"] == 2
+
+
+async def test_previous_month_usage_does_not_consume_current_month_quota():
+    now = datetime.now(timezone.utc)
+    prev_month = (now.replace(day=1) - timedelta(days=1)).replace(day=15)
+    docs = [
+        {
+            "id": f"p{i}",
+            "user_id": "user-a",
+            "role": "user",
+            "content": "old",
+            "timestamp": prev_month.isoformat(),
+        }
+        for i in range(10)
+    ]
+    fake_db = _FakeDB(conversations=docs)
+
+    resp = await _run_analyze(fake_db, _free_access, message="new-month")
+    assert resp.status_code == 200
+    assert len(fake_db.coach_quota_counters._docs) == 1
+    assert fake_db.coach_quota_counters._docs[0]["count"] == 1
+
+
+async def test_free_reservation_rolls_back_when_failure_occurs_before_user_message_write():
+    fake_db = _FakeDB()
+
+    with (
+        patch.object(server, "db", fake_db),
+        patch.object(server.app.state, "db", fake_db, create=True),
+        patch("server.get_user_access", AsyncMock(side_effect=_free_access)),
+        patch("server._resolve_goal_v2", AsyncMock(return_value=SimpleNamespace())),
+        patch("server._resolve_canonical_reference_date", return_value=datetime(2026, 1, 15, tzinfo=timezone.utc).date()),
+        patch("server.mongo_garmin_activities_to_domain", side_effect=lambda docs: []),
+        patch("server.build_training_load", return_value=SimpleNamespace()),
+        patch("server.build_readiness_v2_from_garmin_data", return_value=None),
+        patch("server.build_readiness_decision", return_value=SimpleNamespace()),
+        patch("server.predict_races", return_value=SimpleNamespace()),
+        patch("server.load_canonical_training_paces", AsyncMock(return_value=SimpleNamespace())),
+        patch("server.get_training_v2_week", AsyncMock(return_value={})),
+        patch("server.get_today_adaptive_session", AsyncMock(return_value={})),
+        patch("server.build_coach_context_v2", AsyncMock(side_effect=RuntimeError("boom-before-user-save"))),
+    ):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://test") as client:
+            resp = await client.post(
+                "/api/coach/analyze",
+                headers=_bearer("user-a", "a@test.com"),
+                json={"message": "rollback-check", "language": "en"},
+            )
+
+    assert resp.status_code == 500
+    assert len(fake_db.conversations._docs) == 0
+    assert len(fake_db.coach_quota_counters._docs) == 1
+    assert fake_db.coach_quota_counters._docs[0]["count"] == 0
+
+
+async def test_user_message_persisted_then_llm_failure_still_consumes_free_slot():
+    fake_db = _FakeDB()
+
+    async def _llm_fail(**_kwargs):
+        return "", False, {"provider": "test"}
+
+    with (
+        patch.object(server, "db", fake_db),
+        patch.object(server.app.state, "db", fake_db, create=True),
+        patch("server.get_user_access", AsyncMock(side_effect=_free_access)),
+        patch("server._resolve_goal_v2", AsyncMock(return_value=SimpleNamespace())),
+        patch("server._resolve_canonical_reference_date", return_value=datetime(2026, 1, 15, tzinfo=timezone.utc).date()),
+        patch("server.mongo_garmin_activities_to_domain", side_effect=lambda docs: []),
+        patch("server.build_training_load", return_value=SimpleNamespace()),
+        patch("server.build_readiness_v2_from_garmin_data", return_value=None),
+        patch("server.build_readiness_decision", return_value=SimpleNamespace()),
+        patch("server.predict_races", return_value=SimpleNamespace()),
+        patch("server.load_canonical_training_paces", AsyncMock(return_value=SimpleNamespace())),
+        patch("server.get_training_v2_week", AsyncMock(return_value={})),
+        patch("server.get_today_adaptive_session", AsyncMock(return_value={})),
+        patch("server.build_coach_context_v2", AsyncMock(return_value=_ContextPayload())),
+        patch("server.llm_coach.enrich_chat_response", AsyncMock(side_effect=_llm_fail)),
+    ):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://test") as client:
+            resp = await client.post(
+                "/api/coach/analyze",
+                headers=_bearer("user-a", "a@test.com"),
+                json={"message": "llm-failure", "language": "en"},
+            )
+
+    assert resp.status_code == 503
+    user_messages = [m for m in fake_db.conversations._docs if m.get("role") == "user"]
+    assistant_messages = [m for m in fake_db.conversations._docs if m.get("role") == "assistant"]
+    assert len(user_messages) == 1
+    assert len(assistant_messages) == 0
+    assert fake_db.coach_quota_counters._docs[0]["count"] == 1

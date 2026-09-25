@@ -398,4 +398,19 @@ class TestLegacyChatEndpointRemoval:
             json={"message": "Hello", "use_local_llm": True},
             headers=_bearer("user-a", "a@test.com"),
         )
-        assert r.status_code in (403, 404)
+        assert r.status_code == 404
+
+    async def test_chat_history_routes_are_removed(self, real_client):
+        client, _ = real_client
+        get_resp = await client.get("/api/chat/history", headers=_bearer("user-a", "a@test.com"))
+        del_resp = await client.delete("/api/chat/history", headers=_bearer("user-a", "a@test.com"))
+        assert get_resp.status_code == 404
+        assert del_resp.status_code == 404
+
+    async def test_chat_store_response_route_is_removed(self, real_client):
+        client, _ = real_client
+        r = await client.post(
+            "/api/chat/store-response?message_id=legacy&response=x",
+            headers=_bearer("user-a", "a@test.com"),
+        )
+        assert r.status_code == 404
