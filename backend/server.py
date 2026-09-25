@@ -46,13 +46,12 @@ from analysis_engine import (
 )
 
 # Import LLM coach module
-from llm_coach import LLM_MODEL
+from llm_coach import enrich_chat_response
 
 # Import coach service (cascade strategy)
 from coach_service import (
     analyze_workout as coach_analyze_workout,
     weekly_review as coach_weekly_review,
-    chat_response as coach_chat_response,
     generate_dynamic_training_plan,
     get_cache_stats,
     clear_cache,
@@ -209,7 +208,16 @@ SUBSCRIPTION_TIERS = {
         "name": "Premium",
         "price_monthly": 4.99,
         "price_annual": 49.99,
-        "messages_limit": 25,
+        "messages_limit": 999,
+        "unlimited": True,
+        "description": "Full access"
+    },
+    "trial": {
+        "name": "Trial",
+        "price_monthly": 0,
+        "price_annual": 0,
+        "messages_limit": 999,
+        "unlimited": True,
         "description": "Full access"
     }
 }
@@ -1751,11 +1759,37 @@ async def analyze_with_coach(request: CoachRequest, user: dict = Depends(auth_us
 
     Training V2 decides. The coach explains the canonical context.
     """
-    from llm_coach import enrich_chat_response
-    
+    return await process_coach_message(request=request, user=user)
+
+
+async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachResponse:
+    """Canonical Coach processing contract shared by Coach runtime endpoints."""
     user_id = user["id"]
     language = request.language or "en"
     user_message = request.message or ""
+    now_utc = datetime.now(timezone.utc)
+
+    user_access = await get_user_access(db, user_id)
+    is_unlimited = user_access.is_unlimited_chat
+    commercial_limit = user_access.chat_monthly_quota or CHAT_QUOTA_FREE
+    month_start = now_utc.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    message_count = await db.conversations.count_documents({
+        "user_id": user_id,
+        "role": "user",
+        "timestamp": {"$gte": month_start.isoformat()},
+    })
+
+    if is_unlimited:
+        if message_count >= CHAT_ANTIABUSE_CAP:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many coach messages this month. Please try again later.",
+            )
+    elif message_count >= commercial_limit:
+        raise HTTPException(
+            status_code=429,
+            detail=f"You've reached your monthly coach limit of {commercial_limit} messages.",
+        )
 
     # 1. Retrieve conversation history (last 5 messages)
     conversation_history = await db.conversations.find(
@@ -1763,7 +1797,6 @@ async def analyze_with_coach(request: CoachRequest, user: dict = Depends(auth_us
     ).sort("timestamp", -1).limit(5).to_list(5)
     conversation_history = list(reversed(conversation_history))  # Chronological order
 
-    now_utc = datetime.now(timezone.utc)
     ninety_days_ago = now_utc - timedelta(days=90)
 
     garmin_activities_all = await db.garmin_activities.find(
@@ -1896,11 +1929,13 @@ async def analyze_with_coach(request: CoachRequest, user: dict = Depends(auth_us
 async def get_conversation_history(user: dict = Depends(auth_user), limit: int = 50):
     """Get conversation history for a user"""
     user_id = user["id"]
-    messages = await db.conversations.find(
+    safe_limit = max(1, min(limit, 50))
+    recent_messages = await db.conversations.find(
         {"user_id": user_id},
         {"_id": 0}
-    ).sort("timestamp", 1).to_list(limit)
-    return messages
+    ).sort("timestamp", -1).limit(safe_limit).to_list(safe_limit)
+    recent_messages.reverse()
+    return recent_messages
 
 
 @api_router.delete("/coach/history")
@@ -2970,22 +3005,6 @@ class SubscriptionStatusResponse(BaseModel):
     messages_limit: int = 10
     messages_remaining: int = 10
     is_unlimited: bool = False
-
-
-class ChatRequest(BaseModel):
-    message: str
-    use_local_llm: bool = False  # True if using WebLLM on client
-    language: Optional[str] = "en"  # Response language: "en" or "fr"
-
-
-class ChatResponse(BaseModel):
-    response: str
-    message_id: str
-    messages_remaining: int
-    messages_limit: int
-    is_unlimited: bool = False
-    suggestions: List[str] = []  # Suggested follow-up questions
-    category: str = ""  # Detected intent category
 
 
 class ChatHistoryItem(BaseModel):
@@ -4966,7 +4985,7 @@ async def get_subscription_status(user: dict = Depends(auth_user)):
     # Message count for current month
     now = datetime.now(timezone.utc)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    message_count = await db.chat_messages.count_documents({
+    message_count = await db.conversations.count_documents({
         "user_id": user_id,
         "role": "user",
         "timestamp": {"$gte": month_start.isoformat()},
@@ -5040,290 +5059,6 @@ async def get_user_features(user: dict = Depends(auth_user)):
 
 
 # ========== CHAT COACH (PREMIUM ONLY) ==========
-
-def build_chat_context(workouts: list, user_goal: dict = None) -> dict:
-    """
-    Construit le contexte utilisateur pour le chat coach (LLM ou templates).
-    # LLM serveur uniquement – pas d'exécution client-side
-    """
-    from datetime import timedelta
-    
-    context = {
-        "km_semaine": 0,
-        "nb_seances": 0,
-        "allure": "N/A",
-        "cadence": 0,
-        "zones": {},
-        "ratio": 1.0,
-        "recent_workouts": [],
-        "rag_tips": [],
-    }
-    
-    if not workouts:
-        return context
-    
-    # Filtrer les workouts de la semaine
-    today = datetime.now(timezone.utc).date()
-    week_start = today - timedelta(days=today.weekday())
-    
-    week_workouts = []
-    for w in workouts:
-        try:
-            w_date = datetime.fromisoformat(w.get("date", "").replace("Z", "+00:00")).date()
-            if w_date >= week_start:
-                week_workouts.append(w)
-        except (ValueError, TypeError, AttributeError):
-            pass
-    
-    # Stats de la semaine
-    context["km_semaine"] = round(sum(w.get("distance_km", 0) for w in week_workouts), 1)
-    context["nb_seances"] = len(week_workouts)
-    
-    # Allure moyenne
-    total_time = sum(w.get("duration_minutes", 0) for w in week_workouts)
-    total_km = context["km_semaine"]
-    if total_km > 0 and total_time > 0:
-        pace_min = total_time / total_km
-        context["allure"] = f"{int(pace_min)}:{int((pace_min % 1) * 60):02d}"
-    
-    # Cadence moyenne
-    cadences = [w.get("average_cadence", 0) for w in week_workouts if w.get("average_cadence")]
-    if cadences:
-        context["cadence"] = round(sum(cadences) / len(cadences))
-    
-    # Zones moyennes
-    zone_totals = {"z1": 0, "z2": 0, "z3": 0, "z4": 0, "z5": 0}
-    zone_count = 0
-    for w in week_workouts:
-        zones = w.get("effort_zone_distribution", {})
-        if zones:
-            for z, pct in zones.items():
-                if z in zone_totals:
-                    zone_totals[z] += pct
-            zone_count += 1
-    
-    if zone_count > 0:
-        context["zones"] = {z: round(v / zone_count) for z, v in zone_totals.items()}
-    
-    # Ratio charge (simplifié)
-    prev_week_km = sum(
-        w.get("distance_km", 0) for w in workouts
-        if (datetime.fromisoformat(w.get("date", "2000-01-01").replace("Z", "+00:00")).date() 
-            >= week_start - timedelta(days=7))
-        and (datetime.fromisoformat(w.get("date", "2000-01-01").replace("Z", "+00:00")).date() 
-             < week_start)
-    )
-    if prev_week_km > 0:
-        context["ratio"] = round(context["km_semaine"] / prev_week_km, 2)
-    
-    # Workouts récents (5 derniers)
-    context["recent_workouts"] = [
-        {
-            "name": w.get("name", "Run"),
-            "distance_km": w.get("distance_km", 0),
-            "duration_min": w.get("duration_minutes", 0),
-            "date": w.get("date", ""),
-        }
-        for w in workouts[:5]
-    ]
-    
-    # Goal
-    if user_goal:
-        context["objectif_nom"] = user_goal.get("race_name", "")
-        context["jours_course"] = user_goal.get("days_until", None)
-    
-    return context
-
-@api_router.post("/chat/send", response_model=ChatResponse)
-async def send_chat_message(request: ChatRequest, user: dict = Depends(auth_user)):
-    """Send a message to the chat coach (with tier-based limits)"""
-    user_id = user["id"]
-
-    # ── Access control via the single source of truth ────────────────────────
-    # access_control.get_user_access() handles all legacy statuses, expiration
-    # checks, DEMO_MODE, DB errors (fail-closed), and the canonical tier model.
-    user_access = await get_user_access(db, user_id)
-    tier = user_access.tier
-
-    is_unlimited = user_access.is_unlimited_chat
-    messages_limit = user_access.chat_monthly_quota or CHAT_QUOTA_FREE  # int for FREE tier
-
-    # Get message count for current month
-    now = datetime.now(timezone.utc)
-    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-
-    message_count = await db.chat_messages.count_documents({
-        "user_id": user_id,
-        "role": "user",
-        "timestamp": {"$gte": month_start.isoformat()}
-    })
-
-    # Check limit; apply anti-abuse hard cap for unlimited tiers
-    if message_count >= messages_limit:
-        if is_unlimited and message_count < CHAT_ANTIABUSE_CAP:
-            pass  # Unlimited tier — allow but anti-abuse cap still active
-        else:
-            raise HTTPException(
-                status_code=429,
-                detail=(
-                    f"You've reached your monthly limit of {messages_limit} messages. "
-                    "Upgrade to Premium to continue."
-                ),
-            )
-
-    # Get user's recent workouts for context
-    workouts = await db.workouts.find({"user_id": user_id}, {"_id": 0}).sort("date", -1).to_list(50)
-    
-    # Get user goal
-    user_goal = await db.user_goals.find_one({"user_id": user_id}, {"_id": 0})
-    
-    # Generate response using local chat engine (NO LLM) - fallback mode
-    # Note: If client uses WebLLM, it sends use_local_llm=True and we just store the message
-    # Server-side LLM only – no client-side execution
-    response_text = ""
-    suggestions = []
-    category = ""
-    used_llm = False
-    llm_metadata = {}
-    
-    if request.use_local_llm:
-        # Client is using WebLLM, we just need to store messages and track count
-        response_text = ""  # Client will generate this
-    else:
-        # Construire le contexte pour le LLM/RAG
-        language = (request.language or "en").lower()
-        if language not in ("en", "fr"):
-            language = "en"
-        context = build_chat_context(workouts, user_goal)
-        context["language"] = language
-        
-        # Récupérer l'historique de conversation récent
-        recent_messages = await db.chat_messages.find(
-            {"user_id": user_id},
-            {"_id": 0, "role": 1, "content": 1}
-        ).sort("timestamp", -1).limit(8).to_list(8)
-        recent_messages.reverse()  # Ordre chronologique
-        
-        # Cascade LLM → Templates via coach_service
-        response_text, used_llm, llm_metadata = await coach_chat_response(
-            message=request.message,
-            context=context,
-            history=recent_messages,
-            user_id=user_id,
-            workouts=workouts,
-            user_goal=user_goal
-        )
-        
-        if isinstance(llm_metadata, dict):
-            suggestions = llm_metadata.get("suggestions", [])
-        
-        # Fallback suggestions in user language if LLM gave none
-        if used_llm and not suggestions:
-            allure = context.get("allure", "6:00")
-            if language == "fr":
-                suggestions = [
-                    "Comment équilibrer mes zones d'entraînement ?",
-                    f"Comment améliorer mon allure de {allure}/km ?",
-                    "Quels exercices de renforcement faire ?",
-                    "Comment travailler plus en endurance fondamentale ?",
-                ]
-            else:
-                suggestions = [
-                    "How do I balance my training zones?",
-                    f"How can I improve my {allure}/km pace?",
-                    "What strength exercises should I do?",
-                    "How to train more in base endurance?",
-                ]
-    
-    # Store user message
-    user_msg_id = str(uuid.uuid4())
-    await db.chat_messages.insert_one({
-        "id": user_msg_id,
-        "user_id": user_id,
-        "role": "user",
-        "content": request.message,
-        "timestamp": now.isoformat()
-    })
-    
-    # Store assistant response only if generated server-side
-    assistant_msg_id = str(uuid.uuid4())
-    if response_text:
-        await db.chat_messages.insert_one({
-            "id": assistant_msg_id,
-            "user_id": user_id,
-            "role": "assistant",
-            "content": response_text,
-            "suggestions": suggestions,  # Store suggestions too
-            "timestamp": now.isoformat()
-        })
-    
-    messages_remaining = max(0, messages_limit - message_count - 1) if not is_unlimited else 999
-    
-    source = f"Emergent LLM ({LLM_MODEL})" if used_llm else "Templates Python"
-    duration_info = f" en {llm_metadata.get('duration_sec', 0)}s" if used_llm else ""
-    logger.info(f"Chat message processed for user {user_id} (tier={tier}, source={source}{duration_info}). Remaining: {messages_remaining}")
-    
-    return ChatResponse(
-        response=response_text,
-        message_id=assistant_msg_id,
-        messages_remaining=messages_remaining,
-        messages_limit=messages_limit,
-        is_unlimited=is_unlimited,
-        suggestions=suggestions,
-        category=category
-    )
-
-
-@api_router.post("/chat/store-response")
-async def store_chat_response(
-    message_id: str,
-    response: str,
-    user: dict = Depends(auth_user),
-):
-    """Store a response generated by client-side WebLLM.
-
-    The owning user_id is resolved exclusively from the authenticated JWT;
-    any client-supplied user_id is not accepted (A35 — P0 security fix).
-    """
-    user_id = user["id"]
-    await db.chat_messages.insert_one({
-        "id": message_id,
-        "user_id": user_id,
-        "role": "assistant",
-        "content": response,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "source": "webllm"
-    })
-    return {"success": True}
-
-
-@api_router.get("/chat/history")
-async def get_chat_history(user: dict = Depends(auth_user), limit: int = 50):
-    """Get chat history for a user"""
-    
-    user_id = user["id"]
-    messages = await db.chat_messages.find(
-        {"user_id": user_id},
-        {"_id": 0}
-    ).sort("timestamp", -1).limit(limit).to_list(limit)
-    
-    # Reverse to chronological order
-    messages.reverse()
-    
-    return messages
-
-
-@api_router.delete("/chat/history")
-async def clear_chat_history(user: dict = Depends(auth_user)):
-    """Clear chat history for a user"""
-    
-    user_id = user["id"]
-    result = await db.chat_messages.delete_many({"user_id": user_id})
-    
-    logger.info(f"Chat history cleared for user {user_id}: {result.deleted_count} messages")
-    
-    return {"success": True, "deleted_count": result.deleted_count}
-
 
 @api_router.get("/cache/stats")
 async def get_coach_cache_stats():
@@ -6205,9 +5940,8 @@ async def create_db_indexes():
         # Workouts: filter + sort by user and date
         await db.workouts.create_index([("user_id", 1), ("date", -1)])
         await db.workouts.create_index([("id", 1)], sparse=True)
-        # Conversations / chat messages
+        # Canonical coach conversations
         await db.conversations.create_index([("user_id", 1), ("timestamp", 1)])
-        await db.chat_messages.create_index([("user_id", 1), ("timestamp", 1)])
         # OAuth state store: auto-expire after TTL (expires_at stored as datetime)
         await db.oauth_states.create_index("state", unique=True)
         await db.oauth_states.create_index("expires_at", expireAfterSeconds=0)
