@@ -30,7 +30,6 @@ from typing import List, Optional, Dict
 import uuid
 from datetime import date, datetime, timezone, timedelta
 from config.secrets import MissingSecretError
-import localization
 try:
     from pymongo import ReturnDocument
 except Exception:  # pragma: no cover - lightweight fallback
@@ -40,7 +39,6 @@ except Exception:  # pragma: no cover - lightweight fallback
 
 # Import the analysis engine (NO LLM dependencies)
 from analysis_engine import (
-    generate_session_analysis,
     generate_weekly_review,
     generate_dashboard_insight,
 )
@@ -50,7 +48,6 @@ import llm_coach
 
 # Import coach service (cascade strategy)
 from coach_service import (
-    analyze_workout as coach_analyze_workout,
     weekly_review as coach_weekly_review,
     generate_dynamic_training_plan,
     get_cache_stats,
@@ -63,8 +60,8 @@ from coach_service import (
 from rag_engine import (
     generate_dashboard_rag,
     generate_weekly_review_rag,
-    generate_workout_analysis_rag
 )
+from workout_analysis_v2 import WorkoutAnalysisV2Response, build_workout_analysis_v2
 
 from training_v2.training_load import build_training_load
 from training_v2.training_history import RUNNING_TYPES, build_training_history
@@ -2522,367 +2519,15 @@ async def get_rag_weekly_review(user: dict = Depends(auth_user), language: str =
     }
 
 
-@api_router.get("/rag/workout/{workout_id}")
-async def get_rag_workout_analysis(workout_id: str, user: dict = Depends(auth_user), language: str = "fr"):
-    """Get RAG-enriched workout analysis with server-side LLM enhancement."""
+@api_router.get("/coach/workout-analysis/{workout_id}", response_model=WorkoutAnalysisV2Response)
+async def get_workout_analysis_v2(workout_id: str, language: str = "en", user: dict = Depends(auth_user)):
+    """Return the canonical deterministic workout analysis payload."""
     user_id = user["id"]
-    # Fetch the workout
-    workout = await db.workouts.find_one(
-        {"id": workout_id, "user_id": user_id},
-        {"_id": 0}
-    )
-    
+    all_workouts = await db.workouts.find({"user_id": user_id}, {"_id": 0}).sort("date", -1).to_list(200)
+    workout = next((candidate for candidate in all_workouts if candidate.get("id") == workout_id), None)
     if not workout:
         raise HTTPException(status_code=404, detail="Workout not found")
-    
-    all_workouts = await db.workouts.find(
-        {"user_id": user_id},
-        {"_id": 0}
-    ).sort("date", -1).limit(100).to_list(length=100)
-    
-    user_goal = await db.user_goals.find_one({"user_id": user_id}, {"_id": 0})
-    
-    # Generate RAG-enriched analysis (calculs 100% Python local)
-    result = generate_workout_analysis_rag(workout, all_workouts, user_goal)
-    
-    # Enrichissement via coach_service (cascade LLM → déterministe)
-    enriched_summary, used_llm = await coach_analyze_workout(
-        workout=workout,
-        rag_result=result,
-        user_id=user_id,
-        language=language
-    )
-    
-    comparison = result["comparison"]
-    points_forts = result["points_forts"]
-    points_ameliorer = result["points_ameliorer"]
-
-    # Localize the engine's structured English tokens (progression, strengths,
-    # areas to improve) into the user's language (cached; EN = no-op).
-    if (language or "en").lower() != "en":
-        to_loc = {"progression": comparison.get("progression") or ""}
-        for i, v in enumerate(points_forts):
-            to_loc[f"pf_{i}"] = v
-        for i, v in enumerate(points_ameliorer):
-            to_loc[f"pa_{i}"] = v
-        loc = await localization.localize_fields(to_loc, language, user_id)
-        comparison = {**comparison, "progression": loc.get("progression") or comparison.get("progression")}
-        points_forts = [loc.get(f"pf_{i}", v) for i, v in enumerate(points_forts)]
-        points_ameliorer = [loc.get(f"pa_{i}", v) for i, v in enumerate(points_ameliorer)]
-
-    return {
-        "rag_summary": enriched_summary,
-        "workout": result["workout"],
-        "comparison": comparison,
-        "points_forts": points_forts,
-        "points_ameliorer": points_ameliorer,
-        "tips": result["tips"],
-        "rag_sources": result.get("rag_sources", {}),
-        "enriched_by_llm": used_llm,
-        "generated_at": datetime.now(timezone.utc).isoformat()
-    }
-
-
-
-class MobileAnalysisResponse(BaseModel):
-    workout_id: str
-    coach_summary: str
-    intensity: dict
-    load: dict
-    session_type: dict
-    insight: Optional[str] = None
-    guidance: Optional[str] = None
-
-
-def calculate_mobile_signals(workout: dict, baseline: dict) -> dict:
-    """Calculate signal cards for mobile workout analysis"""
-    w_type = workout.get("type", "run")
-    
-    # Intensity card
-    intensity = {
-        "pace": None,
-        "avg_hr": workout.get("avg_heart_rate"),
-        "label": "normal"
-    }
-    
-    if w_type == "run":
-        pace = workout.get("avg_pace_min_km")
-        if pace:
-            mins = int(pace)
-            secs = int((pace - mins) * 60)
-            intensity["pace"] = f"{mins}:{str(secs).zfill(2)}/km"
-    else:
-        speed = workout.get("avg_speed_kmh")
-        if speed:
-            intensity["pace"] = f"{speed:.1f} km/h"
-    
-    # Compare HR to baseline for intensity label
-    hr_score = 0
-    if baseline and baseline.get("avg_heart_rate") and workout.get("avg_heart_rate"):
-        hr_diff_pct = (workout["avg_heart_rate"] - baseline["avg_heart_rate"]) / baseline["avg_heart_rate"] * 100
-        if hr_diff_pct > 5:
-            intensity["label"] = "above_usual"
-            hr_score = 1
-        elif hr_diff_pct < -5:
-            intensity["label"] = "below_usual"
-            hr_score = -1
-    
-    # Load card
-    distance = workout.get("distance_km", 0)
-    duration = workout.get("duration_minutes", 0)
-    
-    load = {
-        "distance_km": round(distance, 1),
-        "duration_min": duration,
-        "direction": "stable"
-    }
-    
-    load_score = 0
-    if baseline and baseline.get("avg_distance_km"):
-        dist_diff = (distance - baseline["avg_distance_km"]) / baseline["avg_distance_km"] * 100
-        if dist_diff > 15:
-            load["direction"] = "up"
-            load_score = 1
-        elif dist_diff < -15:
-            load["direction"] = "down"
-            load_score = -1
-    
-    # Session Type card (Easy / Sustained / Hard)
-    # Based on HR intensity + load combined
-    combined_score = hr_score + load_score
-    
-    if combined_score >= 2:
-        session_type_label = "hard"
-    elif combined_score <= -1:
-        session_type_label = "easy"
-    elif hr_score == 1 or load_score == 1:
-        session_type_label = "sustained"
-    else:
-        session_type_label = "easy" if hr_score == -1 else "sustained"
-    
-    # Also check zone distribution if available
-    zones = workout.get("effort_zone_distribution", {})
-    if zones:
-        hard_zones = (zones.get("z4", 0) or 0) + (zones.get("z5", 0) or 0)
-        easy_zones = (zones.get("z1", 0) or 0) + (zones.get("z2", 0) or 0)
-        
-        if hard_zones > 30:
-            session_type_label = "hard"
-        elif easy_zones > 80:
-            session_type_label = "easy"
-    
-    session_type = {
-        "label": session_type_label
-    }
-    
-    return {
-        "intensity": intensity,
-        "load": load,
-        "session_type": session_type
-    }
-
-
-@api_router.get("/coach/workout-analysis/{workout_id}")
-async def get_mobile_workout_analysis(workout_id: str, language: str = "en", user: dict = Depends(auth_user)):
-    """Get mobile-first workout analysis with coach summary and signals - 100% LOCAL ENGINE"""
-    
-    user_id = user["id"]
-    all_workouts = await db.workouts.find({"user_id": user_id}, {"_id": 0}).sort("date", -1).to_list(100)
-    
-    # Find the workout (only within user's own workouts to prevent IDOR)
-    workout = next((w for w in all_workouts if w["id"] == workout_id), None)
-    
-    if not workout:
-        raise HTTPException(status_code=404, detail="Workout not found")
-    
-    # Calculate baseline
-    baseline = calculate_baseline_metrics(all_workouts, workout, days=14)
-    
-    # Calculate signal cards
-    signals = calculate_mobile_signals(workout, baseline)
-    
-    # Build workout summary for AI with enriched data
-    workout_summary = {
-        "type": workout.get("type"),
-        "distance_km": workout.get("distance_km"),
-        "duration_min": workout.get("duration_minutes"),
-        "moving_time_min": workout.get("moving_time_minutes"),
-        "avg_hr": workout.get("avg_heart_rate"),
-        "max_hr": workout.get("max_heart_rate"),
-        "hr_zones": workout.get("effort_zone_distribution"),
-        "avg_pace_min_km": workout.get("avg_pace_min_km"),
-        "best_pace_min_km": workout.get("best_pace_min_km"),
-        "pace_variability": workout.get("pace_stats", {}).get("pace_variability") if workout.get("pace_stats") else None,
-        "avg_cadence_spm": workout.get("avg_cadence_spm"),
-        "avg_speed_kmh": workout.get("avg_speed_kmh"),
-        "max_speed_kmh": workout.get("max_speed_kmh"),
-        "elevation_m": workout.get("elevation_gain_m")
-    }
-    
-    baseline_summary = {
-        "sessions": baseline.get("workout_count", 0) if baseline else 0,
-        "avg_distance": baseline.get("avg_distance_km") if baseline else None,
-        "avg_duration": baseline.get("avg_duration_min") if baseline else None,
-        "avg_hr": baseline.get("avg_heart_rate") if baseline else None,
-        "avg_pace": baseline.get("avg_pace") if baseline else None,
-        "avg_cadence": baseline.get("avg_cadence") if baseline else None
-    } if baseline else {}
-    
-    # Generate analysis using LOCAL ENGINE (NO LLM)
-    analysis = generate_session_analysis(workout, baseline, language)
-
-    # Localize the free-text fields into the user's language (cached, EN=no-op).
-    _loc = await localization.localize_fields(
-        {"summary": analysis["summary"], "meaning": analysis["meaning"], "advice": analysis["advice"]},
-        language, user_id,
-    )
-    coach_summary = _loc["summary"]
-    insight = _loc["meaning"]
-    guidance = _loc["advice"]
-    
-    return MobileAnalysisResponse(
-        workout_id=workout_id,
-        coach_summary=coach_summary,
-        intensity=signals["intensity"],
-        load=signals["load"],
-        session_type=signals["session_type"],
-        insight=insight,
-        guidance=guidance
-    )
-
-
-
-class DetailedAnalysisResponse(BaseModel):
-    workout_id: str
-    workout_name: str
-    workout_date: str
-    workout_type: str
-    header: dict
-    execution: dict
-    meaning: dict
-    recovery: dict
-    advice: dict
-    advanced: Optional[dict] = None
-
-
-@api_router.get("/coach/detailed-analysis/{workout_id}")
-async def get_detailed_analysis(workout_id: str, language: str = "en", user: dict = Depends(auth_user)):
-    """Get card-based detailed analysis for mobile view - 100% LOCAL ENGINE"""
-    
-    user_id = user["id"]
-    all_workouts = await db.workouts.find({"user_id": user_id}, {"_id": 0}).sort("date", -1).to_list(100)
-    
-    # Find the workout (only within user's own workouts to prevent IDOR)
-    workout = next((w for w in all_workouts if w["id"] == workout_id), None)
-    
-    if not workout:
-        raise HTTPException(status_code=404, detail="Workout not found")
-    
-    # Calculate baseline
-    baseline = calculate_baseline_metrics(all_workouts, workout, days=14)
-    
-    # Generate analysis using LOCAL ENGINE (NO LLM)
-    analysis = generate_session_analysis(workout, baseline, language)
-
-    # Localize the free-text fields into the user's language (cached, EN=no-op).
-    _loc = await localization.localize_fields(
-        {"summary": analysis["summary"], "meaning": analysis["meaning"],
-         "recovery": analysis["recovery"], "advice": analysis["advice"]},
-        language, user_id,
-    )
-    analysis["summary"] = _loc["summary"]
-    analysis["meaning"] = _loc["meaning"]
-    analysis["recovery"] = _loc["recovery"]
-    analysis["advice"] = _loc["advice"]
-    
-    # Build header
-    session_type = analysis.get("metrics", {}).get("session_type", "moderate")
-    intensity_level = analysis.get("metrics", {}).get("intensity_level", "moderate")
-    
-    session_names = {
-        "easy": "Sortie facile" if language == "fr" else "Easy Run",
-        "moderate": "Sortie modérée" if language == "fr" else "Moderate Run",
-        "hard": "Séance intense" if language == "fr" else "Hard Session",
-        "very_hard": "Séance très intense" if language == "fr" else "Very Hard Session",
-        "long": "Sortie longue" if language == "fr" else "Long Run",
-        "short": "Sortie courte" if language == "fr" else "Short Run"
-    }
-    
-    intensity_labels = {
-        "easy": "Facile" if language == "fr" else "Easy",
-        "moderate": "Modérée" if language == "fr" else "Moderate",
-        "hard": "Soutenue" if language == "fr" else "Sustained",
-        "very_hard": "Haute" if language == "fr" else "High"
-    }
-    
-    # Calculate volume comparison
-    distance = workout.get("distance_km", 0)
-    avg_distance = baseline.get("avg_distance_km", distance) if baseline else distance
-    
-    if distance > avg_distance * 1.2:
-        volume = "Plus long" if language == "fr" else "Longer"
-    elif distance < avg_distance * 0.8:
-        volume = "Plus court" if language == "fr" else "Shorter"
-    else:
-        volume = "Habituel" if language == "fr" else "Usual"
-    
-    # Check pace regularity
-    pace_stats = workout.get("pace_stats", {})
-    variability = pace_stats.get("pace_variability", 0) if pace_stats else 0
-    regularity = "Variable" if variability > 0.5 else "Stable"
-    
-    header = {
-        "context": analysis["summary"],
-        "session_name": session_names.get(session_type, workout.get("name", "Séance"))
-    }
-    
-    execution = {
-        "intensity": intensity_labels.get(intensity_level, intensity_labels["moderate"]),
-        "volume": volume,
-        "regularity": regularity
-    }
-    
-    meaning = {"text": analysis["meaning"]}
-    recovery = {"text": analysis["recovery"]}
-    advice = {"text": analysis["advice"]}
-    
-    # Build advanced comparisons
-    comparison_parts = []
-    zones = analysis.get("metrics", {}).get("zones", {})
-    if zones:
-        easy_pct = zones.get("easy", 0)
-        hard_pct = zones.get("hard", 0)
-        if language == "fr":
-            comparison_parts.append(f"{easy_pct}% du temps en zone facile, {hard_pct}% en zone intense.")
-        else:
-            comparison_parts.append(f"{easy_pct}% time in easy zone, {hard_pct}% in hard zone.")
-    
-    if baseline and baseline.get("comparison"):
-        hr_comp = baseline["comparison"].get("heart_rate_vs_baseline", {})
-        if hr_comp:
-            diff = hr_comp.get("difference_bpm", 0)
-            if abs(diff) > 3:
-                if language == "fr":
-                    comparison_parts.append(f"FC {'+' if diff > 0 else ''}{diff:.0f} bpm vs baseline.")
-                else:
-                    comparison_parts.append(f"HR {'+' if diff > 0 else ''}{diff:.0f} bpm vs baseline.")
-    
-    advanced = {"comparisons": " ".join(comparison_parts) if comparison_parts else ""}
-    
-    logger.info(f"Detailed analysis generated (LOCAL) for workout {workout_id}")
-    
-    return DetailedAnalysisResponse(
-        workout_id=workout_id,
-        workout_name=workout.get("name", ""),
-        workout_date=workout.get("date", ""),
-        workout_type=workout.get("type", ""),
-        header=header,
-        execution=execution,
-        meaning=meaning,
-        recovery=recovery,
-        advice=advice,
-        advanced=advanced
-    )
+    return build_workout_analysis_v2(workout=workout, historical_workouts=all_workouts, language=language)
 
 
 # ========== CARDIO COACH RUNNING SCREEN ==========
