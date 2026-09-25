@@ -46,12 +46,13 @@ from analysis_engine import (
 )
 
 # Import LLM coach module
-from llm_coach import enrich_chat_response
+import llm_coach
 
 # Import coach service (cascade strategy)
 from coach_service import (
     analyze_workout as coach_analyze_workout,
     weekly_review as coach_weekly_review,
+    chat_response as coach_chat_response,
     generate_dynamic_training_plan,
     get_cache_stats,
     clear_cache,
@@ -1888,7 +1889,7 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
     })
     
     # 7. Appeler le modèle LLM serveur configuré pour générer la réponse
-    llm_response, success, meta = await enrich_chat_response(
+    llm_response, success, meta = await llm_coach.enrich_chat_response(
         user_message=user_message,
         context=context,
         conversation_history=[{"role": m.get("role"), "content": m.get("content")} for m in conversation_history],

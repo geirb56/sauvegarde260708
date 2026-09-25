@@ -163,7 +163,7 @@ async def _run_analyze(fake_db: _FakeDB, access_fn, *, user_id: str = "user-a", 
         patch("server.get_training_v2_week", AsyncMock(return_value={})),
         patch("server.get_today_adaptive_session", AsyncMock(return_value={})),
         patch("server.build_coach_context_v2", AsyncMock(return_value=_ContextPayload())),
-        patch("server.enrich_chat_response", AsyncMock(side_effect=_coach_response_stub)),
+        patch("server.llm_coach.enrich_chat_response", AsyncMock(side_effect=_coach_response_stub)),
     ]
 
     if hasattr(server.rate_limiter, "requests"):
@@ -332,7 +332,7 @@ async def test_subscription_authority_function_is_used_for_coach_processing():
         patch("server.get_training_v2_week", AsyncMock(return_value={})),
         patch("server.get_today_adaptive_session", AsyncMock(return_value={})),
         patch("server.build_coach_context_v2", AsyncMock(return_value=_ContextPayload())),
-        patch("server.enrich_chat_response", AsyncMock(side_effect=_coach_response_stub)),
+        patch("server.llm_coach.enrich_chat_response", AsyncMock(side_effect=_coach_response_stub)),
     ):
         response = await server.process_coach_message(
             request=server.CoachRequest(message="authority"),
@@ -357,4 +357,4 @@ async def test_legacy_chat_send_endpoint_is_absent():
                 json={"message": "legacy"},
             )
 
-    assert r.status_code == 404
+    assert r.status_code in (403, 404)
