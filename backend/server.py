@@ -1862,6 +1862,22 @@ async def _reserve_free_coach_quota_slot(
     }
 
 
+async def _get_or_bootstrap_free_coach_quota_count(
+    *,
+    user_id: str,
+    now_utc: datetime,
+) -> int:
+    month_key, month_start_iso, next_month_start_iso = _coach_month_window(now_utc)
+    counter_doc = await _ensure_free_coach_quota_counter(
+        user_id=user_id,
+        month_key=month_key,
+        month_start_iso=month_start_iso,
+        next_month_start_iso=next_month_start_iso,
+        now_iso=now_utc.isoformat(),
+    )
+    return int(counter_doc.get("count", 0))
+
+
 async def _release_free_coach_quota_slot(reservation: dict) -> None:
     await db.coach_quota_counters.update_one(
         {
@@ -2063,8 +2079,14 @@ async def get_conversation_history(user: dict = Depends(auth_user), limit: int =
 
 @api_router.delete("/coach/history")
 async def clear_conversation_history(user: dict = Depends(auth_user)):
-    """Clear conversation history for a user"""
+    """Clear conversation content for a user without resetting monthly coach quota."""
     user_id = user["id"]
+    user_access = await get_user_access(db, user_id)
+    if not user_access.is_unlimited_chat:
+        await _get_or_bootstrap_free_coach_quota_count(
+            user_id=user_id,
+            now_utc=datetime.now(timezone.utc),
+        )
     result = await db.conversations.delete_many({"user_id": user_id})
     return {"deleted_count": result.deleted_count}
 
@@ -5105,17 +5127,23 @@ async def get_subscription_status(user: dict = Depends(auth_user)):
     elif user_access.trial_end and user_access.is_trial:
         expires_at = user_access.trial_end.isoformat()
 
-    # Message count for current month
+    # Message usage for current month
     now = datetime.now(timezone.utc)
-    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    message_count = await db.conversations.count_documents({
-        "user_id": user_id,
-        "role": "user",
-        "timestamp": {"$gte": month_start.isoformat()},
-    })
-
-    messages_limit = user_access.chat_monthly_quota if user_access.chat_monthly_quota is not None else 999
     is_unlimited = user_access.is_unlimited_chat
+    if is_unlimited:
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        message_count = await db.conversations.count_documents({
+            "user_id": user_id,
+            "role": "user",
+            "timestamp": {"$gte": month_start.isoformat()},
+        })
+        messages_limit = 999
+    else:
+        message_count = await _get_or_bootstrap_free_coach_quota_count(
+            user_id=user_id,
+            now_utc=now,
+        )
+        messages_limit = CHAT_QUOTA_FREE
 
     return SubscriptionStatusResponse(
         tier=user_access.tier.value,

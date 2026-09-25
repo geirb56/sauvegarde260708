@@ -62,6 +62,8 @@ class _Cursor:
 class _Collection:
     def __init__(self, docs: list[dict] | None = None) -> None:
         self._docs = list(docs or [])
+        self._duplicate_upsert_once: set[tuple[str, str]] = set()
+        self._duplicate_upsert_raised: set[tuple[str, str]] = set()
 
     @staticmethod
     def _matches(doc: dict, query: dict) -> bool:
@@ -112,6 +114,7 @@ class _Collection:
         upsert: bool = False,
         return_document=None,
     ) -> dict | None:
+        key_tuple = (str(query.get("user_id", "")), str(query.get("month_key", "")))
         idx = None
         for i, d in enumerate(self._docs):
             if self._matches(d, query):
@@ -122,6 +125,18 @@ class _Collection:
         if idx is None:
             if not upsert:
                 return None
+            if (
+                key_tuple in self._duplicate_upsert_once
+                and key_tuple not in self._duplicate_upsert_raised
+            ):
+                self._duplicate_upsert_raised.add(key_tuple)
+                winner_doc: dict = {}
+                for k, v in query.items():
+                    if not isinstance(v, dict):
+                        winner_doc[k] = v
+                winner_doc.update(update.get("$setOnInsert", {}))
+                self._docs.append(winner_doc)
+                raise server.DuplicateKeyError("simulated duplicate key race")
             base_doc: dict = {}
             for k, v in query.items():
                 if not isinstance(v, dict):
@@ -189,6 +204,19 @@ class _FakeDB:
         col = _Collection([])
         object.__setattr__(self, name, col)
         return col
+
+
+def _current_month_key() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m")
+
+
+def _month_start_iso() -> str:
+    return datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+
+
+def _month_ts(offset_minutes: int = 0) -> str:
+    start = datetime.now(timezone.utc).replace(day=1, hour=12, minute=0, second=0, microsecond=0)
+    return (start + timedelta(minutes=offset_minutes)).isoformat()
 
 
 class _ContextPayload:
@@ -335,7 +363,6 @@ async def test_user_isolation_for_history_and_quota():
 
     with (
         patch.object(server, "db", fake_db),
-        patch.object(server.app.state, "db", fake_db, create=True),
         patch("server.get_user_access", AsyncMock(side_effect=_free_access)),
     ):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://test") as client:
@@ -503,6 +530,17 @@ async def test_concurrent_first_use_initialization_creates_single_counter_docume
     assert fake_db.coach_quota_counters._docs[0]["count"] == 2
 
 
+async def test_duplicate_key_retry_during_counter_initialization_uses_winner_document():
+    fake_db = _FakeDB(conversations=[])
+    key = ("user-a", _current_month_key())
+    fake_db.coach_quota_counters._duplicate_upsert_once.add(key)
+
+    resp = await _run_analyze(fake_db, _free_access, message="dup-retry")
+    assert resp.status_code == 200
+    assert len(fake_db.coach_quota_counters._docs) == 1
+    assert fake_db.coach_quota_counters._docs[0]["count"] == 1
+
+
 async def test_previous_month_usage_does_not_consume_current_month_quota():
     now = datetime.now(timezone.utc)
     prev_month = (now.replace(day=1) - timedelta(days=1)).replace(day=15)
@@ -522,6 +560,192 @@ async def test_previous_month_usage_does_not_consume_current_month_quota():
     assert resp.status_code == 200
     assert len(fake_db.coach_quota_counters._docs) == 1
     assert fake_db.coach_quota_counters._docs[0]["count"] == 1
+
+
+async def test_history_clear_bootstraps_counter_before_delete_for_10_used_and_blocks_next():
+    docs = [
+        {"id": f"h{i}", "user_id": "user-a", "role": "user", "content": "x", "timestamp": _month_ts(i)}
+        for i in range(10)
+    ] + [
+        {"id": "ha", "user_id": "user-a", "role": "assistant", "content": "a", "timestamp": _month_ts(20)}
+    ]
+    fake_db = _FakeDB(conversations=docs)
+
+    with (
+        patch.object(server, "db", fake_db),
+        patch("server.get_user_access", AsyncMock(side_effect=_free_access)),
+    ):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://test") as client:
+            clear_resp = await client.delete("/api/coach/history", headers=_bearer("user-a", "a@test.com"))
+            assert clear_resp.status_code == 200
+
+    assert len(fake_db.conversations._docs) == 0
+    assert len(fake_db.coach_quota_counters._docs) == 1
+    assert fake_db.coach_quota_counters._docs[0]["count"] == 10
+
+    blocked = await _run_analyze(fake_db, _free_access, message="after-clear-10")
+    assert blocked.status_code == 429
+
+
+async def test_history_clear_preserves_partial_usage_counter_for_7_used():
+    docs = [
+        {"id": f"p{i}", "user_id": "user-a", "role": "user", "content": "x", "timestamp": _month_ts(i)}
+        for i in range(7)
+    ]
+    fake_db = _FakeDB(conversations=docs)
+
+    with (
+        patch.object(server, "db", fake_db),
+        patch("server.get_user_access", AsyncMock(side_effect=_free_access)),
+    ):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://test") as client:
+            clear_resp = await client.delete("/api/coach/history", headers=_bearer("user-a", "a@test.com"))
+            assert clear_resp.status_code == 200
+
+    assert len(fake_db.conversations._docs) == 0
+    assert fake_db.coach_quota_counters._docs[0]["count"] == 7
+
+    for i in range(3):
+        ok = await _run_analyze(fake_db, _free_access, message=f"after-clear-7-{i}")
+        assert ok.status_code == 200
+    blocked = await _run_analyze(fake_db, _free_access, message="after-clear-7-block")
+    assert blocked.status_code == 429
+
+
+async def test_history_clear_keeps_existing_counter_unchanged():
+    docs = [{"id": "u1", "user_id": "user-a", "role": "user", "content": "x", "timestamp": _month_ts(1)}]
+    fake_db = _FakeDB(conversations=docs)
+    fake_db.coach_quota_counters._docs.append({
+        "user_id": "user-a",
+        "month_key": _current_month_key(),
+        "count": 8,
+        "baseline": 8,
+        "created_at": _month_ts(0),
+        "updated_at": _month_ts(0),
+    })
+
+    with (
+        patch.object(server, "db", fake_db),
+        patch("server.get_user_access", AsyncMock(side_effect=_free_access)),
+    ):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://test") as client:
+            clear_resp = await client.delete("/api/coach/history", headers=_bearer("user-a", "a@test.com"))
+            assert clear_resp.status_code == 200
+
+    assert len(fake_db.conversations._docs) == 0
+    assert len(fake_db.coach_quota_counters._docs) == 1
+    assert fake_db.coach_quota_counters._docs[0]["count"] == 8
+
+
+async def test_subscription_status_uses_free_counter_after_history_clear():
+    fake_db = _FakeDB(conversations=[])
+    fake_db.coach_quota_counters._docs.append({
+        "user_id": "user-a",
+        "month_key": _current_month_key(),
+        "count": 8,
+        "baseline": 8,
+        "created_at": _month_ts(0),
+        "updated_at": _month_ts(0),
+    })
+
+    with (
+        patch.object(server, "db", fake_db),
+        patch("server.get_user_access", AsyncMock(side_effect=_free_access)),
+    ):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://test") as client:
+            resp = await client.get("/api/subscription/status", headers=_bearer("user-a", "a@test.com"))
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["messages_used"] == 8
+    assert data["messages_limit"] == 10
+    assert data["messages_remaining"] == 2
+    assert data["is_unlimited"] is False
+
+
+async def test_subscription_status_bootstraps_counter_from_conversations_when_missing():
+    docs = [
+        {"id": f"s{i}", "user_id": "user-a", "role": "user", "content": "x", "timestamp": _month_ts(i)}
+        for i in range(6)
+    ]
+    fake_db = _FakeDB(conversations=docs)
+
+    with (
+        patch.object(server, "db", fake_db),
+        patch("server.get_user_access", AsyncMock(side_effect=_free_access)),
+    ):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://test") as client:
+            resp = await client.get("/api/subscription/status", headers=_bearer("user-a", "a@test.com"))
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["messages_used"] == 6
+    assert data["messages_limit"] == 10
+    assert data["messages_remaining"] == 4
+    assert len(fake_db.coach_quota_counters._docs) == 1
+    assert fake_db.coach_quota_counters._docs[0]["count"] == 6
+
+
+async def test_subscription_status_month_isolation_for_free_counter():
+    now = datetime.now(timezone.utc)
+    prev_month = (now.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+    fake_db = _FakeDB(conversations=[])
+    fake_db.coach_quota_counters._docs.append({
+        "user_id": "user-a",
+        "month_key": prev_month,
+        "count": 10,
+        "baseline": 10,
+        "created_at": _month_ts(-10000),
+        "updated_at": _month_ts(-10000),
+    })
+
+    with (
+        patch.object(server, "db", fake_db),
+        patch("server.get_user_access", AsyncMock(side_effect=_free_access)),
+    ):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://test") as client:
+            resp = await client.get("/api/subscription/status", headers=_bearer("user-a", "a@test.com"))
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["messages_used"] == 0
+    assert data["messages_remaining"] == 10
+    month_docs = [d for d in fake_db.coach_quota_counters._docs if d["month_key"] == _current_month_key()]
+    assert len(month_docs) == 1
+    assert month_docs[0]["count"] == 0
+
+
+async def test_history_clear_and_status_are_user_isolated():
+    docs = [
+        {"id": "a1", "user_id": "user-a", "role": "user", "content": "a", "timestamp": _month_ts(1)},
+        {"id": "b1", "user_id": "user-b", "role": "user", "content": "b", "timestamp": _month_ts(2)},
+    ]
+    fake_db = _FakeDB(conversations=docs)
+    fake_db.coach_quota_counters._docs.append({
+        "user_id": "user-b",
+        "month_key": _current_month_key(),
+        "count": 9,
+        "baseline": 9,
+        "created_at": _month_ts(0),
+        "updated_at": _month_ts(0),
+    })
+
+    with (
+        patch.object(server, "db", fake_db),
+        patch("server.get_user_access", AsyncMock(side_effect=_free_access)),
+    ):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://test") as client:
+            clear_a = await client.delete("/api/coach/history", headers=_bearer("user-a", "a@test.com"))
+            status_b = await client.get("/api/subscription/status", headers=_bearer("user-b", "b@test.com"))
+
+    assert clear_a.status_code == 200
+    assert status_b.status_code == 200
+    data_b = status_b.json()
+    assert data_b["messages_used"] == 9
+    assert data_b["messages_remaining"] == 1
+    b_counter = [
+        d for d in fake_db.coach_quota_counters._docs
+        if d["user_id"] == "user-b" and d["month_key"] == _current_month_key()
+    ]
+    assert len(b_counter) == 1
+    assert b_counter[0]["count"] == 9
 
 
 async def test_free_reservation_rolls_back_when_failure_occurs_before_user_message_write():
