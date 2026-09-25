@@ -46,13 +46,12 @@ from analysis_engine import (
 )
 
 # Import LLM coach module
-from llm_coach import LLM_MODEL
+import llm_coach
 
 # Import coach service (cascade strategy)
 from coach_service import (
     analyze_workout as coach_analyze_workout,
     weekly_review as coach_weekly_review,
-    chat_response as coach_chat_response,
     generate_dynamic_training_plan,
     get_cache_stats,
     clear_cache,
@@ -209,7 +208,16 @@ SUBSCRIPTION_TIERS = {
         "name": "Premium",
         "price_monthly": 4.99,
         "price_annual": 49.99,
-        "messages_limit": 25,
+        "messages_limit": 999,
+        "unlimited": True,
+        "description": "Full access"
+    },
+    "trial": {
+        "name": "Trial",
+        "price_monthly": 0,
+        "price_annual": 0,
+        "messages_limit": 999,
+        "unlimited": True,
         "description": "Full access"
     }
 }
@@ -1751,144 +1759,308 @@ async def analyze_with_coach(request: CoachRequest, user: dict = Depends(auth_us
 
     Training V2 decides. The coach explains the canonical context.
     """
-    from llm_coach import enrich_chat_response
-    
+    return await process_coach_message(request=request, user=user)
+
+
+def _coach_month_window(now_utc: datetime) -> tuple[str, str, str]:
+    month_start = now_utc.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    if month_start.month == 12:
+        next_month_start = month_start.replace(year=month_start.year + 1, month=1)
+    else:
+        next_month_start = month_start.replace(month=month_start.month + 1)
+    return month_start.strftime("%Y-%m"), month_start.isoformat(), next_month_start.isoformat()
+
+
+async def _ensure_free_coach_quota_counter(
+    *,
+    user_id: str,
+    month_key: str,
+    month_start_iso: str,
+    next_month_start_iso: str,
+    now_iso: str,
+) -> dict:
+    baseline_count = await db.conversations.count_documents({
+        "user_id": user_id,
+        "role": "user",
+        "timestamp": {"$gte": month_start_iso, "$lt": next_month_start_iso},
+    })
+
+    for _ in range(3):
+        try:
+            counter_doc = await db.coach_quota_counters.find_one_and_update(
+                {"user_id": user_id, "month_key": month_key},
+                {
+                    "$setOnInsert": {
+                        "user_id": user_id,
+                        "month_key": month_key,
+                        "count": baseline_count,
+                        "baseline": baseline_count,
+                        "created_at": now_iso,
+                    },
+                    "$set": {
+                        "updated_at": now_iso,
+                    },
+                },
+                upsert=True,
+                return_document=ReturnDocument.AFTER,
+            )
+            if counter_doc is not None:
+                if "baseline" not in counter_doc:
+                    counter_doc["baseline"] = min(int(counter_doc.get("count", 0)), CHAT_QUOTA_FREE)
+                return counter_doc
+        except DuplicateKeyError:
+            # A concurrent initializer won the unique (user_id, month_key) upsert.
+            continue
+
+    existing = await db.coach_quota_counters.find_one(
+        {"user_id": user_id, "month_key": month_key},
+        {"_id": 0},
+    )
+    if existing is not None:
+        if "baseline" not in existing:
+            existing["baseline"] = min(int(existing.get("count", 0)), CHAT_QUOTA_FREE)
+        return existing
+
+    raise HTTPException(status_code=503, detail="Coach quota initialization failed.")
+
+
+async def _reserve_free_coach_quota_slot(
+    *,
+    user_id: str,
+    now_utc: datetime,
+) -> Optional[dict]:
+    month_key, month_start_iso, next_month_start_iso = _coach_month_window(now_utc)
+    now_iso = now_utc.isoformat()
+    counter_doc = await _ensure_free_coach_quota_counter(
+        user_id=user_id,
+        month_key=month_key,
+        month_start_iso=month_start_iso,
+        next_month_start_iso=next_month_start_iso,
+        now_iso=now_iso,
+    )
+    baseline = int(counter_doc.get("baseline", min(int(counter_doc.get("count", 0)), CHAT_QUOTA_FREE)))
+
+    reserved = await db.coach_quota_counters.find_one_and_update(
+        {
+            "user_id": user_id,
+            "month_key": month_key,
+            "count": {"$lt": CHAT_QUOTA_FREE},
+        },
+        {
+            "$inc": {"count": 1},
+            "$set": {"updated_at": now_iso},
+        },
+        return_document=ReturnDocument.AFTER,
+    )
+    if reserved is None:
+        return None
+
+    return {
+        "user_id": user_id,
+        "month_key": month_key,
+        "baseline": baseline,
+    }
+
+
+async def _get_or_bootstrap_free_coach_quota_count(
+    *,
+    user_id: str,
+    now_utc: datetime,
+) -> int:
+    month_key, month_start_iso, next_month_start_iso = _coach_month_window(now_utc)
+    counter_doc = await _ensure_free_coach_quota_counter(
+        user_id=user_id,
+        month_key=month_key,
+        month_start_iso=month_start_iso,
+        next_month_start_iso=next_month_start_iso,
+        now_iso=now_utc.isoformat(),
+    )
+    return int(counter_doc.get("count", 0))
+
+
+async def _release_free_coach_quota_slot(reservation: dict) -> None:
+    await db.coach_quota_counters.update_one(
+        {
+            "user_id": reservation["user_id"],
+            "month_key": reservation["month_key"],
+            "count": {"$gt": max(0, int(reservation.get("baseline", 0)))},
+        },
+        {
+            "$inc": {"count": -1},
+            "$set": {"updated_at": datetime.now(timezone.utc).isoformat()},
+        },
+    )
+
+
+async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachResponse:
+    """Canonical Coach processing contract shared by Coach runtime endpoints."""
     user_id = user["id"]
     language = request.language or "en"
     user_message = request.message or ""
-
-    # 1. Retrieve conversation history (last 5 messages)
-    conversation_history = await db.conversations.find(
-        {"user_id": user_id}
-    ).sort("timestamp", -1).limit(5).to_list(5)
-    conversation_history = list(reversed(conversation_history))  # Chronological order
-
     now_utc = datetime.now(timezone.utc)
-    ninety_days_ago = now_utc - timedelta(days=90)
 
-    garmin_activities_all = await db.garmin_activities.find(
-        {"user_id": user_id},
-        {"_id": 0},
-    ).to_list(2000)
-    garmin_activities_90 = [
-        doc for doc in garmin_activities_all
-        if isinstance(doc.get("start_time"), str)
-        and doc.get("start_time") >= ninety_days_ago.isoformat()
-    ]
-    domain_activities_90 = mongo_garmin_activities_to_domain(garmin_activities_90)
-    domain_activities_all = mongo_garmin_activities_to_domain(garmin_activities_all)
-    reference_date = _resolve_canonical_reference_date(now_utc, garmin_activities_90)
-    resolved_goal = await _resolve_goal_v2(user_id)
+    user_access = await get_user_access(db, user_id)
+    is_unlimited = user_access.is_unlimited_chat
+    reservation: Optional[dict] = None
+    user_message_persisted = False
 
-    garmin_conn = await db.garmin_connections.find_one({"user_id": user_id}, {"_id": 0})
-    garmin_connected = bool(garmin_conn and garmin_conn.get("connected"))
-    garmin_daily_metrics_docs: list = []
-    if garmin_connected:
-        try:
-            garmin_daily_metrics_docs = await (
-                db.garmin_daily_metrics.find({"user_id": user_id}, {"_id": 0})
-                .sort("date", -1)
-                .limit(30)
-                .to_list(length=30)
+    if is_unlimited:
+        month_start = now_utc.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        message_count = await db.conversations.count_documents({
+            "user_id": user_id,
+            "role": "user",
+            "timestamp": {"$gte": month_start.isoformat()},
+        })
+        if message_count >= CHAT_ANTIABUSE_CAP:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many coach messages this month. Please try again later.",
             )
-        except Exception as exc:
-            logger.warning(f"[CoachAnalyze] Garmin daily metrics fetch failed: {exc}")
-            garmin_connected = False
-
-    training_load = build_training_load(domain_activities_90, reference_date)
-    readiness_result = None
-    readiness_data_source = "unavailable"
-    if garmin_connected:
-        try:
-            readiness_result = build_readiness_v2_from_garmin_data(
-                garmin_daily_metrics_docs,
-                domain_activities_90,
-                reference_date,
-                load_snapshot=training_load,
-                hrv_supported=None,
+    else:
+        reservation = await _reserve_free_coach_quota_slot(user_id=user_id, now_utc=now_utc)
+        if reservation is None:
+            raise HTTPException(
+                status_code=429,
+                detail=f"You've reached your monthly coach limit of {CHAT_QUOTA_FREE} messages.",
             )
-            if readiness_result is not None:
-                readiness_data_source = "garmin"
-        except Exception as exc:
-            logger.warning(f"[CoachAnalyze] Readiness resolution failed: {exc}")
-    readiness_decision = build_readiness_decision(readiness_result)
 
-    performance = predict_races(domain_activities_all, reference_date)
-    training_paces = await load_canonical_training_paces(
-        db,
-        user_id=user_id,
-        reference_date=reference_date,
-    )
-    week_payload = await get_training_v2_week(user=user)
-    today_payload = await get_today_adaptive_session(user=user)
+    try:
+        # 1. Retrieve conversation history (last 5 messages)
+        conversation_history = await db.conversations.find(
+            {"user_id": user_id}
+        ).sort("timestamp", -1).limit(5).to_list(5)
+        conversation_history = list(reversed(conversation_history))  # Chronological order
 
-    workout = None
-    if request.workout_id:
-        workout = await db.workouts.find_one({"id": request.workout_id, "user_id": user_id})
+        ninety_days_ago = now_utc - timedelta(days=90)
 
-    context = (await build_coach_context_v2(
-        db=db,
-        user_id=user_id,
-        language=language,
-        reference_date=reference_date,
-        resolved_goal=resolved_goal,
-        domain_activities_90=domain_activities_90,
-        week_payload=week_payload,
-        today_payload=today_payload,
-        training_load=training_load,
-        readiness_decision=readiness_decision,
-        readiness_data_source=readiness_data_source,
-        training_paces=training_paces,
-        performance=performance,
-        workout=workout,
-    )).model_dump(mode="json")
-    
-    # 6. Stocker le message utilisateur
-    user_msg_id = str(uuid.uuid4())
-    await db.conversations.insert_one({
-        "id": user_msg_id,
-        "user_id": user_id,
-        "role": "user",
-        "content": user_message,
-        "workout_id": request.workout_id,
-        "timestamp": datetime.now(timezone.utc).isoformat()
-    })
-    
-    # 7. Appeler le modèle LLM serveur configuré pour générer la réponse
-    llm_response, success, meta = await enrich_chat_response(
-        user_message=user_message,
-        context=context,
-        conversation_history=[{"role": m.get("role"), "content": m.get("content")} for m in conversation_history],
-        user_id=user_id
-    )
-    
-    if not success or not llm_response:
-        logger.warning(f"LLM chat failed: {meta}")
-        if language == "fr":
-            message = "Le service de coaching IA n'est pas disponible actuellement."
-        elif language == "es":
-            message = "El servicio de coaching con IA no está disponible actualmente."
-        else:
-            message = "The AI coaching service is currently unavailable."
-        raise HTTPException(
-            status_code=503,
-            detail=message,
+        garmin_activities_all = await db.garmin_activities.find(
+            {"user_id": user_id},
+            {"_id": 0},
+        ).to_list(2000)
+        garmin_activities_90 = [
+            doc for doc in garmin_activities_all
+            if isinstance(doc.get("start_time"), str)
+            and doc.get("start_time") >= ninety_days_ago.isoformat()
+        ]
+        domain_activities_90 = mongo_garmin_activities_to_domain(garmin_activities_90)
+        domain_activities_all = mongo_garmin_activities_to_domain(garmin_activities_all)
+        reference_date = _resolve_canonical_reference_date(now_utc, garmin_activities_90)
+        resolved_goal = await _resolve_goal_v2(user_id)
+
+        garmin_conn = await db.garmin_connections.find_one({"user_id": user_id}, {"_id": 0})
+        garmin_connected = bool(garmin_conn and garmin_conn.get("connected"))
+        garmin_daily_metrics_docs: list = []
+        if garmin_connected:
+            try:
+                garmin_daily_metrics_docs = await (
+                    db.garmin_daily_metrics.find({"user_id": user_id}, {"_id": 0})
+                    .sort("date", -1)
+                    .limit(30)
+                    .to_list(length=30)
+                )
+            except Exception as exc:
+                logger.warning(f"[CoachAnalyze] Garmin daily metrics fetch failed: {exc}")
+                garmin_connected = False
+
+        training_load = build_training_load(domain_activities_90, reference_date)
+        readiness_result = None
+        readiness_data_source = "unavailable"
+        if garmin_connected:
+            try:
+                readiness_result = build_readiness_v2_from_garmin_data(
+                    garmin_daily_metrics_docs,
+                    domain_activities_90,
+                    reference_date,
+                    load_snapshot=training_load,
+                    hrv_supported=None,
+                )
+                if readiness_result is not None:
+                    readiness_data_source = "garmin"
+            except Exception as exc:
+                logger.warning(f"[CoachAnalyze] Readiness resolution failed: {exc}")
+        readiness_decision = build_readiness_decision(readiness_result)
+
+        performance = predict_races(domain_activities_all, reference_date)
+        training_paces = await load_canonical_training_paces(
+            db,
+            user_id=user_id,
+            reference_date=reference_date,
         )
-    
-    response_text = llm_response
-    
-    # 8. Stocker la réponse assistant
-    msg_id = str(uuid.uuid4())
-    await db.conversations.insert_one({
-        "id": msg_id,
-        "user_id": user_id,
-        "role": "assistant",
-        "content": response_text,
-        "workout_id": request.workout_id,
-        "timestamp": datetime.now(timezone.utc).isoformat()
-    })
-    
-    return CoachResponse(response=response_text, message_id=msg_id)
+        week_payload = await get_training_v2_week(user=user)
+        today_payload = await get_today_adaptive_session(user=user)
+
+        workout = None
+        if request.workout_id:
+            workout = await db.workouts.find_one({"id": request.workout_id, "user_id": user_id})
+
+        context = (await build_coach_context_v2(
+            db=db,
+            user_id=user_id,
+            language=language,
+            reference_date=reference_date,
+            resolved_goal=resolved_goal,
+            domain_activities_90=domain_activities_90,
+            week_payload=week_payload,
+            today_payload=today_payload,
+            training_load=training_load,
+            readiness_decision=readiness_decision,
+            readiness_data_source=readiness_data_source,
+            training_paces=training_paces,
+            performance=performance,
+            workout=workout,
+        )).model_dump(mode="json")
+
+        # 6. Stocker le message utilisateur
+        user_msg_id = str(uuid.uuid4())
+        await db.conversations.insert_one({
+            "id": user_msg_id,
+            "user_id": user_id,
+            "role": "user",
+            "content": user_message,
+            "workout_id": request.workout_id,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        })
+        user_message_persisted = True
+
+        # 7. Appeler le modèle LLM serveur configuré pour générer la réponse
+        llm_response, success, meta = await llm_coach.enrich_chat_response(
+            user_message=user_message,
+            context=context,
+            conversation_history=[{"role": m.get("role"), "content": m.get("content")} for m in conversation_history],
+            user_id=user_id
+        )
+
+        if not success or not llm_response:
+            logger.warning(f"LLM chat failed: {meta}")
+            if language == "fr":
+                message = "Le service de coaching IA n'est pas disponible actuellement."
+            elif language == "es":
+                message = "El servicio de coaching con IA no está disponible actualmente."
+            else:
+                message = "The AI coaching service is currently unavailable."
+            raise HTTPException(
+                status_code=503,
+                detail=message,
+            )
+
+        response_text = llm_response
+
+        # 8. Stocker la réponse assistant
+        msg_id = str(uuid.uuid4())
+        await db.conversations.insert_one({
+            "id": msg_id,
+            "user_id": user_id,
+            "role": "assistant",
+            "content": response_text,
+            "workout_id": request.workout_id,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        })
+
+        return CoachResponse(response=response_text, message_id=msg_id)
+    except Exception:
+        if reservation is not None and not user_message_persisted:
+            await _release_free_coach_quota_slot(reservation)
+        raise
 
 
 
@@ -1896,17 +2068,25 @@ async def analyze_with_coach(request: CoachRequest, user: dict = Depends(auth_us
 async def get_conversation_history(user: dict = Depends(auth_user), limit: int = 50):
     """Get conversation history for a user"""
     user_id = user["id"]
-    messages = await db.conversations.find(
+    safe_limit = max(1, min(limit, 50))
+    recent_messages = await db.conversations.find(
         {"user_id": user_id},
         {"_id": 0}
-    ).sort("timestamp", 1).to_list(limit)
-    return messages
+    ).sort("timestamp", -1).limit(safe_limit).to_list(safe_limit)
+    recent_messages.reverse()
+    return recent_messages
 
 
 @api_router.delete("/coach/history")
 async def clear_conversation_history(user: dict = Depends(auth_user)):
-    """Clear conversation history for a user"""
+    """Clear conversation content for a user without resetting monthly coach quota."""
     user_id = user["id"]
+    user_access = await get_user_access(db, user_id)
+    if not user_access.is_unlimited_chat:
+        await _get_or_bootstrap_free_coach_quota_count(
+            user_id=user_id,
+            now_utc=datetime.now(timezone.utc),
+        )
     result = await db.conversations.delete_many({"user_id": user_id})
     return {"deleted_count": result.deleted_count}
 
@@ -2970,22 +3150,6 @@ class SubscriptionStatusResponse(BaseModel):
     messages_limit: int = 10
     messages_remaining: int = 10
     is_unlimited: bool = False
-
-
-class ChatRequest(BaseModel):
-    message: str
-    use_local_llm: bool = False  # True if using WebLLM on client
-    language: Optional[str] = "en"  # Response language: "en" or "fr"
-
-
-class ChatResponse(BaseModel):
-    response: str
-    message_id: str
-    messages_remaining: int
-    messages_limit: int
-    is_unlimited: bool = False
-    suggestions: List[str] = []  # Suggested follow-up questions
-    category: str = ""  # Detected intent category
 
 
 class ChatHistoryItem(BaseModel):
@@ -4963,17 +5127,23 @@ async def get_subscription_status(user: dict = Depends(auth_user)):
     elif user_access.trial_end and user_access.is_trial:
         expires_at = user_access.trial_end.isoformat()
 
-    # Message count for current month
+    # Message usage for current month
     now = datetime.now(timezone.utc)
-    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    message_count = await db.chat_messages.count_documents({
-        "user_id": user_id,
-        "role": "user",
-        "timestamp": {"$gte": month_start.isoformat()},
-    })
-
-    messages_limit = user_access.chat_monthly_quota if user_access.chat_monthly_quota is not None else 999
     is_unlimited = user_access.is_unlimited_chat
+    if is_unlimited:
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        message_count = await db.conversations.count_documents({
+            "user_id": user_id,
+            "role": "user",
+            "timestamp": {"$gte": month_start.isoformat()},
+        })
+        messages_limit = 999
+    else:
+        message_count = await _get_or_bootstrap_free_coach_quota_count(
+            user_id=user_id,
+            now_utc=now,
+        )
+        messages_limit = CHAT_QUOTA_FREE
 
     return SubscriptionStatusResponse(
         tier=user_access.tier.value,
@@ -5040,290 +5210,6 @@ async def get_user_features(user: dict = Depends(auth_user)):
 
 
 # ========== CHAT COACH (PREMIUM ONLY) ==========
-
-def build_chat_context(workouts: list, user_goal: dict = None) -> dict:
-    """
-    Construit le contexte utilisateur pour le chat coach (LLM ou templates).
-    # LLM serveur uniquement – pas d'exécution client-side
-    """
-    from datetime import timedelta
-    
-    context = {
-        "km_semaine": 0,
-        "nb_seances": 0,
-        "allure": "N/A",
-        "cadence": 0,
-        "zones": {},
-        "ratio": 1.0,
-        "recent_workouts": [],
-        "rag_tips": [],
-    }
-    
-    if not workouts:
-        return context
-    
-    # Filtrer les workouts de la semaine
-    today = datetime.now(timezone.utc).date()
-    week_start = today - timedelta(days=today.weekday())
-    
-    week_workouts = []
-    for w in workouts:
-        try:
-            w_date = datetime.fromisoformat(w.get("date", "").replace("Z", "+00:00")).date()
-            if w_date >= week_start:
-                week_workouts.append(w)
-        except (ValueError, TypeError, AttributeError):
-            pass
-    
-    # Stats de la semaine
-    context["km_semaine"] = round(sum(w.get("distance_km", 0) for w in week_workouts), 1)
-    context["nb_seances"] = len(week_workouts)
-    
-    # Allure moyenne
-    total_time = sum(w.get("duration_minutes", 0) for w in week_workouts)
-    total_km = context["km_semaine"]
-    if total_km > 0 and total_time > 0:
-        pace_min = total_time / total_km
-        context["allure"] = f"{int(pace_min)}:{int((pace_min % 1) * 60):02d}"
-    
-    # Cadence moyenne
-    cadences = [w.get("average_cadence", 0) for w in week_workouts if w.get("average_cadence")]
-    if cadences:
-        context["cadence"] = round(sum(cadences) / len(cadences))
-    
-    # Zones moyennes
-    zone_totals = {"z1": 0, "z2": 0, "z3": 0, "z4": 0, "z5": 0}
-    zone_count = 0
-    for w in week_workouts:
-        zones = w.get("effort_zone_distribution", {})
-        if zones:
-            for z, pct in zones.items():
-                if z in zone_totals:
-                    zone_totals[z] += pct
-            zone_count += 1
-    
-    if zone_count > 0:
-        context["zones"] = {z: round(v / zone_count) for z, v in zone_totals.items()}
-    
-    # Ratio charge (simplifié)
-    prev_week_km = sum(
-        w.get("distance_km", 0) for w in workouts
-        if (datetime.fromisoformat(w.get("date", "2000-01-01").replace("Z", "+00:00")).date() 
-            >= week_start - timedelta(days=7))
-        and (datetime.fromisoformat(w.get("date", "2000-01-01").replace("Z", "+00:00")).date() 
-             < week_start)
-    )
-    if prev_week_km > 0:
-        context["ratio"] = round(context["km_semaine"] / prev_week_km, 2)
-    
-    # Workouts récents (5 derniers)
-    context["recent_workouts"] = [
-        {
-            "name": w.get("name", "Run"),
-            "distance_km": w.get("distance_km", 0),
-            "duration_min": w.get("duration_minutes", 0),
-            "date": w.get("date", ""),
-        }
-        for w in workouts[:5]
-    ]
-    
-    # Goal
-    if user_goal:
-        context["objectif_nom"] = user_goal.get("race_name", "")
-        context["jours_course"] = user_goal.get("days_until", None)
-    
-    return context
-
-@api_router.post("/chat/send", response_model=ChatResponse)
-async def send_chat_message(request: ChatRequest, user: dict = Depends(auth_user)):
-    """Send a message to the chat coach (with tier-based limits)"""
-    user_id = user["id"]
-
-    # ── Access control via the single source of truth ────────────────────────
-    # access_control.get_user_access() handles all legacy statuses, expiration
-    # checks, DEMO_MODE, DB errors (fail-closed), and the canonical tier model.
-    user_access = await get_user_access(db, user_id)
-    tier = user_access.tier
-
-    is_unlimited = user_access.is_unlimited_chat
-    messages_limit = user_access.chat_monthly_quota or CHAT_QUOTA_FREE  # int for FREE tier
-
-    # Get message count for current month
-    now = datetime.now(timezone.utc)
-    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-
-    message_count = await db.chat_messages.count_documents({
-        "user_id": user_id,
-        "role": "user",
-        "timestamp": {"$gte": month_start.isoformat()}
-    })
-
-    # Check limit; apply anti-abuse hard cap for unlimited tiers
-    if message_count >= messages_limit:
-        if is_unlimited and message_count < CHAT_ANTIABUSE_CAP:
-            pass  # Unlimited tier — allow but anti-abuse cap still active
-        else:
-            raise HTTPException(
-                status_code=429,
-                detail=(
-                    f"You've reached your monthly limit of {messages_limit} messages. "
-                    "Upgrade to Premium to continue."
-                ),
-            )
-
-    # Get user's recent workouts for context
-    workouts = await db.workouts.find({"user_id": user_id}, {"_id": 0}).sort("date", -1).to_list(50)
-    
-    # Get user goal
-    user_goal = await db.user_goals.find_one({"user_id": user_id}, {"_id": 0})
-    
-    # Generate response using local chat engine (NO LLM) - fallback mode
-    # Note: If client uses WebLLM, it sends use_local_llm=True and we just store the message
-    # Server-side LLM only – no client-side execution
-    response_text = ""
-    suggestions = []
-    category = ""
-    used_llm = False
-    llm_metadata = {}
-    
-    if request.use_local_llm:
-        # Client is using WebLLM, we just need to store messages and track count
-        response_text = ""  # Client will generate this
-    else:
-        # Construire le contexte pour le LLM/RAG
-        language = (request.language or "en").lower()
-        if language not in ("en", "fr"):
-            language = "en"
-        context = build_chat_context(workouts, user_goal)
-        context["language"] = language
-        
-        # Récupérer l'historique de conversation récent
-        recent_messages = await db.chat_messages.find(
-            {"user_id": user_id},
-            {"_id": 0, "role": 1, "content": 1}
-        ).sort("timestamp", -1).limit(8).to_list(8)
-        recent_messages.reverse()  # Ordre chronologique
-        
-        # Cascade LLM → Templates via coach_service
-        response_text, used_llm, llm_metadata = await coach_chat_response(
-            message=request.message,
-            context=context,
-            history=recent_messages,
-            user_id=user_id,
-            workouts=workouts,
-            user_goal=user_goal
-        )
-        
-        if isinstance(llm_metadata, dict):
-            suggestions = llm_metadata.get("suggestions", [])
-        
-        # Fallback suggestions in user language if LLM gave none
-        if used_llm and not suggestions:
-            allure = context.get("allure", "6:00")
-            if language == "fr":
-                suggestions = [
-                    "Comment équilibrer mes zones d'entraînement ?",
-                    f"Comment améliorer mon allure de {allure}/km ?",
-                    "Quels exercices de renforcement faire ?",
-                    "Comment travailler plus en endurance fondamentale ?",
-                ]
-            else:
-                suggestions = [
-                    "How do I balance my training zones?",
-                    f"How can I improve my {allure}/km pace?",
-                    "What strength exercises should I do?",
-                    "How to train more in base endurance?",
-                ]
-    
-    # Store user message
-    user_msg_id = str(uuid.uuid4())
-    await db.chat_messages.insert_one({
-        "id": user_msg_id,
-        "user_id": user_id,
-        "role": "user",
-        "content": request.message,
-        "timestamp": now.isoformat()
-    })
-    
-    # Store assistant response only if generated server-side
-    assistant_msg_id = str(uuid.uuid4())
-    if response_text:
-        await db.chat_messages.insert_one({
-            "id": assistant_msg_id,
-            "user_id": user_id,
-            "role": "assistant",
-            "content": response_text,
-            "suggestions": suggestions,  # Store suggestions too
-            "timestamp": now.isoformat()
-        })
-    
-    messages_remaining = max(0, messages_limit - message_count - 1) if not is_unlimited else 999
-    
-    source = f"Emergent LLM ({LLM_MODEL})" if used_llm else "Templates Python"
-    duration_info = f" en {llm_metadata.get('duration_sec', 0)}s" if used_llm else ""
-    logger.info(f"Chat message processed for user {user_id} (tier={tier}, source={source}{duration_info}). Remaining: {messages_remaining}")
-    
-    return ChatResponse(
-        response=response_text,
-        message_id=assistant_msg_id,
-        messages_remaining=messages_remaining,
-        messages_limit=messages_limit,
-        is_unlimited=is_unlimited,
-        suggestions=suggestions,
-        category=category
-    )
-
-
-@api_router.post("/chat/store-response")
-async def store_chat_response(
-    message_id: str,
-    response: str,
-    user: dict = Depends(auth_user),
-):
-    """Store a response generated by client-side WebLLM.
-
-    The owning user_id is resolved exclusively from the authenticated JWT;
-    any client-supplied user_id is not accepted (A35 — P0 security fix).
-    """
-    user_id = user["id"]
-    await db.chat_messages.insert_one({
-        "id": message_id,
-        "user_id": user_id,
-        "role": "assistant",
-        "content": response,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "source": "webllm"
-    })
-    return {"success": True}
-
-
-@api_router.get("/chat/history")
-async def get_chat_history(user: dict = Depends(auth_user), limit: int = 50):
-    """Get chat history for a user"""
-    
-    user_id = user["id"]
-    messages = await db.chat_messages.find(
-        {"user_id": user_id},
-        {"_id": 0}
-    ).sort("timestamp", -1).limit(limit).to_list(limit)
-    
-    # Reverse to chronological order
-    messages.reverse()
-    
-    return messages
-
-
-@api_router.delete("/chat/history")
-async def clear_chat_history(user: dict = Depends(auth_user)):
-    """Clear chat history for a user"""
-    
-    user_id = user["id"]
-    result = await db.chat_messages.delete_many({"user_id": user_id})
-    
-    logger.info(f"Chat history cleared for user {user_id}: {result.deleted_count} messages")
-    
-    return {"success": True, "deleted_count": result.deleted_count}
-
 
 @api_router.get("/cache/stats")
 async def get_coach_cache_stats():
@@ -6205,9 +6091,12 @@ async def create_db_indexes():
         # Workouts: filter + sort by user and date
         await db.workouts.create_index([("user_id", 1), ("date", -1)])
         await db.workouts.create_index([("id", 1)], sparse=True)
-        # Conversations / chat messages
+        # Canonical coach conversations
         await db.conversations.create_index([("user_id", 1), ("timestamp", 1)])
-        await db.chat_messages.create_index([("user_id", 1), ("timestamp", 1)])
+        await db.coach_quota_counters.create_index(
+            [("user_id", 1), ("month_key", 1)],
+            unique=True,
+        )
         # OAuth state store: auto-expire after TTL (expires_at stored as datetime)
         await db.oauth_states.create_index("state", unique=True)
         await db.oauth_states.create_index("expires_at", expireAfterSeconds=0)

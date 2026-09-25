@@ -415,10 +415,8 @@ ROUTE_ACCESS_MAP: Dict[str, RouteAccess] = {
     # enforced by `Depends(require_admin)` on every /api/admin/* endpoint
     # (returns 403 for non-admins, 401 for unauthenticated).
     "/api/admin/":              RouteAccess.FREE,
-    # Chat history is free; send is handled separately (quota enforcement)
-    "/api/chat/history":        RouteAccess.FREE,
-    "/api/chat/store-response": RouteAccess.FREE,
-    "/api/chat/send":           RouteAccess.FREE,     # quota enforced inside the handler
+    "/api/coach/analyze":       RouteAccess.FREE,     # quota enforced in canonical coach service
+    "/api/coach/history":       RouteAccess.FREE,
     # Garmin onboarding funnel endpoints must stay reachable for FREE users.
     "/api/garmin/connect":      RouteAccess.FREE,
     "/api/garmin/status":       RouteAccess.FREE,
@@ -439,7 +437,6 @@ ROUTE_ACCESS_MAP: Dict[str, RouteAccess] = {
     "/api/training/goals":            RouteAccess.PREMIUM,
     "/api/training/":                 RouteAccess.PREMIUM,
     "/api/training-plan":             RouteAccess.PREMIUM,
-    "/api/coach/analyze":             RouteAccess.PREMIUM,
     "/api/coach/workout-analysis":    RouteAccess.PREMIUM,
     "/api/coach/detailed-analysis":   RouteAccess.PREMIUM,
     "/api/coach/guidance":            RouteAccess.PREMIUM,

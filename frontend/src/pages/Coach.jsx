@@ -17,6 +17,7 @@ export default function Coach() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
+  const [historyLoadError, setHistoryLoadError] = useState(false);
   const [analyzingWorkout, setAnalyzingWorkout] = useState(null);
   const scrollRef = useRef(null);
   const { t, lang } = useLanguage();
@@ -28,6 +29,7 @@ export default function Coach() {
     const loadHistory = async () => {
       try {
         const res = await axios.get(`${API}/coach/history?limit=50`);
+        setHistoryLoadError(false);
         setMessages(res.data.map(msg => ({
           role: msg.role,
           content: msg.content,
@@ -36,6 +38,7 @@ export default function Coach() {
         })));
       } catch (error) {
         console.error("Failed to load history:", error);
+        setHistoryLoadError(true);
       } finally {
         setInitialLoading(false);
       }
@@ -139,6 +142,7 @@ export default function Coach() {
     try {
       await axios.delete(`${API}/coach/history`);
       setMessages([]);
+      setHistoryLoadError(false);
       toast.success(t("coachExtended.historyCleared"));
     } catch (error) {
       toast.error(t("common.error"));
@@ -203,7 +207,20 @@ export default function Coach() {
 
       {/* Messages Area */}
       <ScrollArea ref={scrollRef} className="flex-1 p-4 md:p-8">
-        {messages.length === 0 ? (
+        {historyLoadError && messages.length === 0 ? (
+          <div className="h-full flex flex-col items-center justify-center text-center py-12" data-testid="coach-history-load-error">
+            <Card className="w-full max-w-xl border-border bg-card/80 text-left shadow-sm">
+              <CardContent className="space-y-3 p-5 sm:p-6">
+                <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-primary">
+                  {t("coach.subtitle")}
+                </p>
+                <p className="text-sm leading-relaxed text-muted-foreground">
+                  {t("coach.unavailable")}
+                </p>
+              </CardContent>
+            </Card>
+          </div>
+        ) : messages.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-center py-12">
             <Card className="w-full max-w-xl border-border bg-card/80 text-left shadow-sm">
               <CardContent className="space-y-5 p-5 sm:p-6">

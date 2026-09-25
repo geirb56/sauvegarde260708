@@ -119,6 +119,9 @@ class _Collection:
     async def insert_one(self, doc):
         self._docs.append(dict(doc))
 
+    async def count_documents(self, query):
+        return sum(1 for doc in self._docs if _matches(doc, query))
+
 
 class _ExplodingTrainingPlansCollection:
     def __init__(self):
@@ -764,7 +767,7 @@ async def test_coach_context_v2_stats_match_training_history_v2_running_types():
 
 
 def test_analyze_with_coach_source_uses_v2_authorities_only():
-    source = inspect.getsource(server.analyze_with_coach)
+    source = inspect.getsource(server.process_coach_message)
     context_source = inspect.getsource(server.build_coach_context_v2)
     cycle_source = inspect.getsource(coach_context_v2._build_cycle_response)
     phase_source = inspect.getsource(coach_context_v2._build_phase_value)
