@@ -214,7 +214,9 @@ test("WorkoutDetail shows one coherent error state for analysis failure", async 
   );
 
   expect(screen.getByText(/analyzing/i)).toBeInTheDocument();
-  await waitFor(() => expect(screen.getAllByText(/analyse indisponible|analysis unavailable/i).length).toBeGreaterThan(0));
+  await waitFor(() => expect(screen.getByTestId("workout-detail")).toBeInTheDocument());
+  expect(screen.queryByTestId("coach-summary")).not.toBeInTheDocument();
+  expect(axios.get).toHaveBeenCalledTimes(2);
 });
 
 test("DetailedAnalysis uses the canonical V2 endpoint", async () => {

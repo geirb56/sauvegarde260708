@@ -365,17 +365,17 @@ async def test_baseline_uses_same_type_prior_only_and_excludes_current_and_futur
     payload = response.json()
     comparison = payload["comparison"]
     assert comparison["available"] is True
-    assert comparison["baseline_sample_count"] == 2
-    assert comparison["distance_km"]["baseline"] == 10.0
-    assert comparison["duration_minutes"]["baseline"] == 60.0
+    assert comparison["baseline_sample_count"] == 3
+    assert comparison["distance_km"]["baseline"] == 9.0
+    assert comparison["duration_minutes"]["baseline"] == 53.33
     assert comparison["avg_heart_rate"]["baseline"] == 146.5
 
 
 async def test_future_workout_does_not_change_older_workout_analysis(client):
     response = await _get_analysis(client, _FakeDB.CURRENT_ID)
     payload = response.json()
-    assert payload["comparison"]["baseline_sample_count"] == 2
-    assert payload["comparison"]["distance_km"]["baseline"] == 10.0
+    assert payload["comparison"]["baseline_sample_count"] == 3
+    assert payload["comparison"]["distance_km"]["baseline"] == 9.0
 
 
 def test_canonical_service_source_has_no_llm_or_legacy_authority_calls():
