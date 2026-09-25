@@ -215,7 +215,6 @@ async def _premium_access(_db, user_id: str):
 async def _run_analyze(fake_db: _FakeDB, access_fn, *, user_id: str = "user-a", message: str = "hello"):
     patches = [
         patch.object(server, "db", fake_db),
-        patch.object(server.app.state, "db", fake_db, create=True),
         patch("server.get_user_access", AsyncMock(side_effect=access_fn)),
         patch("server._resolve_goal_v2", AsyncMock(return_value=SimpleNamespace())),
         patch("server._resolve_canonical_reference_date", return_value=datetime(2026, 1, 15, tzinfo=timezone.utc).date()),
@@ -237,7 +236,7 @@ async def _run_analyze(fake_db: _FakeDB, access_fn, *, user_id: str = "user-a", 
     with (
         patches[0], patches[1], patches[2], patches[3], patches[4],
         patches[5], patches[6], patches[7], patches[8], patches[9],
-        patches[10], patches[11], patches[12], patches[13], patches[14],
+        patches[10], patches[11], patches[12], patches[13],
     ):
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=server.app),
@@ -312,7 +311,6 @@ async def test_history_returns_last_50_in_chronological_order():
 
     with (
         patch.object(server, "db", fake_db),
-        patch.object(server.app.state, "db", fake_db, create=True),
         patch("server.get_user_access", AsyncMock(side_effect=_free_access)),
     ):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://test") as client:
@@ -364,7 +362,6 @@ async def test_coach_analyze_route_uses_canonical_service_function():
     service_mock = AsyncMock(return_value=server.CoachResponse(response="ok", message_id="m1"))
     with (
         patch.object(server, "db", fake_db),
-        patch.object(server.app.state, "db", fake_db, create=True),
         patch("server.get_user_access", AsyncMock(side_effect=_free_access)),
         patch("server.process_coach_message", service_mock),
     ):
@@ -412,7 +409,6 @@ async def test_legacy_chat_send_endpoint_is_absent():
     fake_db = _FakeDB()
     with (
         patch.object(server, "db", fake_db),
-        patch.object(server.app.state, "db", fake_db, create=True),
         patch("server.get_user_access", AsyncMock(side_effect=_premium_access)),
     ):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://test") as client:
@@ -533,7 +529,6 @@ async def test_free_reservation_rolls_back_when_failure_occurs_before_user_messa
 
     with (
         patch.object(server, "db", fake_db),
-        patch.object(server.app.state, "db", fake_db, create=True),
         patch("server.get_user_access", AsyncMock(side_effect=_free_access)),
         patch("server._resolve_goal_v2", AsyncMock(return_value=SimpleNamespace())),
         patch("server._resolve_canonical_reference_date", return_value=datetime(2026, 1, 15, tzinfo=timezone.utc).date()),
@@ -547,7 +542,10 @@ async def test_free_reservation_rolls_back_when_failure_occurs_before_user_messa
         patch("server.get_today_adaptive_session", AsyncMock(return_value={})),
         patch("server.build_coach_context_v2", AsyncMock(side_effect=RuntimeError("boom-before-user-save"))),
     ):
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://test") as client:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=server.app, raise_app_exceptions=False),
+            base_url="http://test",
+        ) as client:
             resp = await client.post(
                 "/api/coach/analyze",
                 headers=_bearer("user-a", "a@test.com"),
@@ -568,7 +566,6 @@ async def test_user_message_persisted_then_llm_failure_still_consumes_free_slot(
 
     with (
         patch.object(server, "db", fake_db),
-        patch.object(server.app.state, "db", fake_db, create=True),
         patch("server.get_user_access", AsyncMock(side_effect=_free_access)),
         patch("server._resolve_goal_v2", AsyncMock(return_value=SimpleNamespace())),
         patch("server._resolve_canonical_reference_date", return_value=datetime(2026, 1, 15, tzinfo=timezone.utc).date()),
