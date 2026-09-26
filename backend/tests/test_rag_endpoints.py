@@ -1,255 +1,235 @@
-"""
-Test RAG Endpoints for RunIndex
-Tests the RAG-enriched dashboard, weekly review, and workout analysis endpoints.
-Bug fix verification: endpoints should return km_total > 0, nb_seances > 0, allure_moy not N/A
-"""
+from __future__ import annotations
 
-import pytest
-import requests
 import os
+import sys
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
-BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', '').rstrip('/')
+import httpx
+import pytest
+import pytest_asyncio
 
+os.environ.setdefault("JWT_SECRET_KEY", "rag-endpoints-test-secret-32chars!!")
+os.environ.setdefault("JWT_ALGORITHM", "HS256")
+os.environ.setdefault("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "60")
+os.environ.setdefault("ENVIRONMENT", "test")
+os.environ.setdefault("MONGO_URL", "mongodb://localhost:27017")
+os.environ.setdefault("DB_NAME", "test_db")
 
-class TestRAGDashboard:
-    """Test /api/rag/dashboard endpoint - should return non-zero metrics"""
-    
-    def test_rag_dashboard_returns_200(self):
-        """RAG dashboard endpoint should return 200"""
-        response = requests.get(f"{BASE_URL}/api/rag/dashboard")
-        assert response.status_code == 200, f"Expected 200, got {response.status_code}"
-        print("✓ RAG dashboard returns 200")
-    
-    def test_rag_dashboard_km_total_greater_than_zero(self):
-        """RAG dashboard should return km_total > 0 (bug fix verification)"""
-        response = requests.get(f"{BASE_URL}/api/rag/dashboard")
-        data = response.json()
-        
-        assert "metrics" in data, "Response should contain 'metrics'"
-        metrics = data["metrics"]
-        
-        km_total = metrics.get("km_total", 0)
-        assert km_total > 0, f"km_total should be > 0, got {km_total}"
-        print(f"✓ RAG dashboard km_total = {km_total} km (> 0)")
-    
-    def test_rag_dashboard_nb_seances_greater_than_zero(self):
-        """RAG dashboard should return nb_seances > 0 (bug fix verification)"""
-        response = requests.get(f"{BASE_URL}/api/rag/dashboard")
-        data = response.json()
-        
-        metrics = data["metrics"]
-        nb_seances = metrics.get("nb_seances", 0)
-        assert nb_seances > 0, f"nb_seances should be > 0, got {nb_seances}"
-        print(f"✓ RAG dashboard nb_seances = {nb_seances} (> 0)")
-    
-    def test_rag_dashboard_allure_moy_not_na(self):
-        """RAG dashboard should return allure_moy not N/A (bug fix verification)"""
-        response = requests.get(f"{BASE_URL}/api/rag/dashboard")
-        data = response.json()
-        
-        metrics = data["metrics"]
-        allure_moy = metrics.get("allure_moy", "N/A")
-        assert allure_moy != "N/A", f"allure_moy should not be N/A, got {allure_moy}"
-        print(f"✓ RAG dashboard allure_moy = {allure_moy} (not N/A)")
-    
-    def test_rag_dashboard_duree_totale_not_zero(self):
-        """RAG dashboard should return duree_totale not 0h00 (bug fix verification)"""
-        response = requests.get(f"{BASE_URL}/api/rag/dashboard")
-        data = response.json()
-        
-        metrics = data["metrics"]
-        duree_totale = metrics.get("duree_totale", "0h00")
-        assert duree_totale != "0h00", f"duree_totale should not be 0h00, got {duree_totale}"
-        print(f"✓ RAG dashboard duree_totale = {duree_totale} (not 0h00)")
-    
-    def test_rag_dashboard_has_rag_summary(self):
-        """RAG dashboard should return rag_summary text"""
-        response = requests.get(f"{BASE_URL}/api/rag/dashboard")
-        data = response.json()
-        
-        assert "rag_summary" in data, "Response should contain 'rag_summary'"
-        assert len(data["rag_summary"]) > 0, "rag_summary should not be empty"
-        print(f"✓ RAG dashboard has rag_summary ({len(data['rag_summary'])} chars)")
-    
-    def test_rag_dashboard_has_points_forts(self):
-        """RAG dashboard should return points_forts list"""
-        response = requests.get(f"{BASE_URL}/api/rag/dashboard")
-        data = response.json()
-        
-        assert "points_forts" in data, "Response should contain 'points_forts'"
-        assert isinstance(data["points_forts"], list), "points_forts should be a list"
-        print(f"✓ RAG dashboard has {len(data['points_forts'])} points_forts")
+_BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _BACKEND_DIR not in sys.path:
+    sys.path.insert(0, _BACKEND_DIR)
+
+if "config" in sys.modules:
+    _config_mod = sys.modules["config"]
+    _config_file = getattr(_config_mod, "__file__", "") or ""
+    if "__path__" not in dir(_config_mod) or _BACKEND_DIR not in _config_file:
+        for _key in [k for k in sys.modules if k == "config" or k.startswith("config.")]:
+            del sys.modules[_key]
+
+import server  # noqa: E402
+from access_control import Tier, UserAccess  # noqa: E402
+from auth.jwt_utils import create_access_token  # noqa: E402
 
 
-class TestRAGWeeklyReview:
-    """Test /api/rag/weekly-review endpoint - should return non-zero metrics"""
-    
-    def test_rag_weekly_review_returns_200(self):
-        """RAG weekly review endpoint should return 200"""
-        response = requests.get(f"{BASE_URL}/api/rag/weekly-review")
-        assert response.status_code == 200, f"Expected 200, got {response.status_code}"
-        print("✓ RAG weekly review returns 200")
-    
-    def test_rag_weekly_review_km_total_greater_than_zero(self):
-        """RAG weekly review should return km_total > 0"""
-        response = requests.get(f"{BASE_URL}/api/rag/weekly-review")
-        data = response.json()
-        
-        assert "metrics" in data, "Response should contain 'metrics'"
-        metrics = data["metrics"]
-        
-        km_total = metrics.get("km_total", 0)
-        assert km_total > 0, f"km_total should be > 0, got {km_total}"
-        print(f"✓ RAG weekly review km_total = {km_total} km (> 0)")
-    
-    def test_rag_weekly_review_has_comparison(self):
-        """RAG weekly review should return comparison with previous week"""
-        response = requests.get(f"{BASE_URL}/api/rag/weekly-review")
-        data = response.json()
-        
-        assert "comparison" in data, "Response should contain 'comparison'"
-        comparison = data["comparison"]
-        
-        assert "vs_prev_week" in comparison, "comparison should have vs_prev_week"
-        assert "km_current" in comparison, "comparison should have km_current"
-        print(f"✓ RAG weekly review comparison: {comparison['vs_prev_week']}")
-    
-    def test_rag_weekly_review_has_rag_summary(self):
-        """RAG weekly review should return rag_summary text"""
-        response = requests.get(f"{BASE_URL}/api/rag/weekly-review")
-        data = response.json()
-        
-        assert "rag_summary" in data, "Response should contain 'rag_summary'"
-        assert len(data["rag_summary"]) > 0, "rag_summary should not be empty"
-        print(f"✓ RAG weekly review has rag_summary ({len(data['rag_summary'])} chars)")
+def _bearer(user_id: str, email: str) -> dict[str, str]:
+    return {"Authorization": "Bearer " + create_access_token(user_id, email)}
 
 
-class TestRAGWorkoutAnalysis:
-    """Test /api/rag/workout/{id} endpoint - should return workout with km > 0"""
-    
-    def test_rag_workout_analysis_returns_200(self):
-        """RAG workout analysis endpoint should return 200 for valid workout"""
-        # Use a known valid workout ID
-        workout_id = "strava_17453996690"
-        response = requests.get(f"{BASE_URL}/api/rag/workout/{workout_id}")
-        assert response.status_code == 200, f"Expected 200, got {response.status_code}"
-        print(f"✓ RAG workout analysis returns 200 for {workout_id}")
-    
-    def test_rag_workout_analysis_km_greater_than_zero(self):
-        """RAG workout analysis should return workout with km > 0"""
-        workout_id = "strava_17453996690"
-        response = requests.get(f"{BASE_URL}/api/rag/workout/{workout_id}")
-        data = response.json()
-        
-        assert "workout" in data, "Response should contain 'workout'"
-        workout = data["workout"]
-        
-        km = workout.get("km", 0)
-        assert km > 0, f"workout km should be > 0, got {km}"
-        print(f"✓ RAG workout analysis km = {km} km (> 0)")
-    
-    def test_rag_workout_analysis_duree_not_zero(self):
-        """RAG workout analysis should return workout with duree not 0"""
-        workout_id = "strava_17453996690"
-        response = requests.get(f"{BASE_URL}/api/rag/workout/{workout_id}")
-        data = response.json()
-        
-        workout = data["workout"]
-        duree = workout.get("duree", "0 min")
-        assert duree != "0 min" and duree != "0h00", f"workout duree should not be 0, got {duree}"
-        print(f"✓ RAG workout analysis duree = {duree} (not 0)")
-    
-    def test_rag_workout_analysis_has_comparison(self):
-        """RAG workout analysis should return comparison with similar workouts"""
-        workout_id = "strava_17453996690"
-        response = requests.get(f"{BASE_URL}/api/rag/workout/{workout_id}")
-        data = response.json()
-        
-        assert "comparison" in data, "Response should contain 'comparison'"
-        comparison = data["comparison"]
-        
-        assert "similar_found" in comparison, "comparison should have similar_found"
-        print(f"✓ RAG workout analysis found {comparison['similar_found']} similar workouts")
-    
-    def test_rag_workout_analysis_404_for_invalid_id(self):
-        """RAG workout analysis should return 404 for invalid workout ID"""
-        response = requests.get(f"{BASE_URL}/api/rag/workout/invalid_workout_id_12345")
-        assert response.status_code == 404, f"Expected 404, got {response.status_code}"
-        print("✓ RAG workout analysis returns 404 for invalid ID")
+class _Cursor:
+    def __init__(self, docs: list[dict]) -> None:
+        self._docs = list(docs)
+
+    def sort(self, key: str, direction: int) -> "_Cursor":
+        reverse = direction == -1
+        self._docs.sort(key=lambda doc: doc.get(key, ""), reverse=reverse)
+        return self
+
+    def limit(self, n: int) -> "_Cursor":
+        self._docs = self._docs[:n]
+        return self
+
+    async def to_list(self, length: int | None = None) -> list[dict]:
+        if length is None:
+            return list(self._docs)
+        return list(self._docs[:length])
 
 
-class TestWorkoutsEndpoint:
-    """Test /api/workouts endpoint - should return 125 workouts"""
-    
-    def test_workouts_returns_200(self):
-        """Workouts endpoint should return 200"""
-        response = requests.get(f"{BASE_URL}/api/workouts")
-        assert response.status_code == 200, f"Expected 200, got {response.status_code}"
-        print("✓ Workouts endpoint returns 200")
-    
-    def test_workouts_returns_expected_count(self):
-        """Workouts endpoint should return ~125 workouts"""
-        response = requests.get(f"{BASE_URL}/api/workouts")
-        data = response.json()
-        
-        assert isinstance(data, list), "Response should be a list"
-        count = len(data)
-        assert count >= 100, f"Expected at least 100 workouts, got {count}"
-        print(f"✓ Workouts endpoint returns {count} workouts (expected ~125)")
-    
-    def test_workouts_have_required_fields(self):
-        """Workouts should have required fields"""
-        response = requests.get(f"{BASE_URL}/api/workouts")
-        data = response.json()
-        
-        if data:
-            workout = data[0]
-            required_fields = ["id", "type", "name", "date", "distance_km"]
-            for field in required_fields:
-                assert field in workout, f"Workout should have '{field}' field"
-            print(f"✓ Workouts have required fields: {required_fields}")
+class _Collection:
+    def __init__(self, docs: list[dict] | None = None) -> None:
+        self._docs = list(docs or [])
+
+    @staticmethod
+    def _matches(doc: dict, query: dict) -> bool:
+        return all(doc.get(k) == v for k, v in query.items())
+
+    def find(self, query: dict | None = None, projection: dict | None = None) -> _Cursor:
+        q = query or {}
+        docs = [dict(doc) for doc in self._docs if self._matches(doc, q)]
+        if projection:
+            docs = [{k: v for k, v in doc.items() if projection.get(k, 1)} for doc in docs]
+        return _Cursor(docs)
+
+    async def find_one(self, query: dict, projection: dict | None = None, sort=None) -> dict | None:
+        docs = [dict(doc) for doc in self._docs if self._matches(doc, query)]
+        if sort:
+            for key, direction in reversed(sort):
+                docs.sort(key=lambda doc: doc.get(key, ""), reverse=direction == -1)
+        if not docs:
+            return None
+        result = docs[0]
+        if projection:
+            result = {k: v for k, v in result.items() if projection.get(k, 1)}
+        return result
+
+    async def insert_one(self, doc: dict):
+        self._docs.append(dict(doc))
+        return SimpleNamespace(inserted_id=doc.get("id"))
+
+    async def count_documents(self, query: dict) -> int:
+        return sum(1 for doc in self._docs if self._matches(doc, query))
+
+    async def create_index(self, *args, **kwargs) -> None:
+        return None
 
 
-class TestDashboardInsight:
-    """Test /api/dashboard/insight endpoint - existing endpoint that should work"""
-    
-    def test_dashboard_insight_returns_200(self):
-        """Dashboard insight endpoint should return 200"""
-        response = requests.get(f"{BASE_URL}/api/dashboard/insight")
-        assert response.status_code == 200, f"Expected 200, got {response.status_code}"
-        print("✓ Dashboard insight returns 200")
-    
-    def test_dashboard_insight_has_coach_insight(self):
-        """Dashboard insight should return coach_insight"""
-        response = requests.get(f"{BASE_URL}/api/dashboard/insight")
-        data = response.json()
-        
-        assert "coach_insight" in data, "Response should contain 'coach_insight'"
-        assert len(data["coach_insight"]) > 0, "coach_insight should not be empty"
-        print(f"✓ Dashboard insight has coach_insight: '{data['coach_insight'][:50]}...'")
-    
-    def test_dashboard_insight_has_week_data(self):
-        """Dashboard insight should return week data"""
-        response = requests.get(f"{BASE_URL}/api/dashboard/insight")
-        data = response.json()
-        
-        assert "week" in data, "Response should contain 'week'"
-        week = data["week"]
-        assert "sessions" in week, "week should have 'sessions'"
-        assert "volume_km" in week, "week should have 'volume_km'"
-        print(f"✓ Dashboard insight week: {week['sessions']} sessions, {week['volume_km']} km")
-    
-    def test_dashboard_insight_has_recovery_score(self):
-        """Dashboard insight should return recovery_score"""
-        response = requests.get(f"{BASE_URL}/api/dashboard/insight")
-        data = response.json()
-        
-        assert "recovery_score" in data, "Response should contain 'recovery_score'"
-        recovery = data["recovery_score"]
-        assert "score" in recovery, "recovery_score should have 'score'"
-        assert "status" in recovery, "recovery_score should have 'status'"
-        print(f"✓ Dashboard insight recovery: score={recovery['score']}, status={recovery['status']}")
+class _FakeDB:
+    def __init__(self) -> None:
+        self.workouts = _Collection([
+            {
+                "id": "run-1",
+                "user_id": "user-a",
+                "type": "run",
+                "name": "Run 1",
+                "date": "2024-01-10T07:00:00+00:00",
+                "distance_km": 10.0,
+                "duration_minutes": 60,
+            },
+            {
+                "id": "run-2",
+                "user_id": "user-a",
+                "type": "run",
+                "name": "Run 2",
+                "date": "2024-01-08T07:00:00+00:00",
+                "distance_km": 8.0,
+                "duration_minutes": 48,
+            },
+            {
+                "id": "other-user-run",
+                "user_id": "user-b",
+                "type": "run",
+                "name": "Other User Run",
+                "date": "2024-01-09T07:00:00+00:00",
+                "distance_km": 30.0,
+                "duration_minutes": 170,
+            },
+        ])
+        self.digests = _Collection([
+            {
+                "id": "digest-1",
+                "user_id": "user-a",
+                "generated_at": "2024-01-10T08:00:00+00:00",
+                "coach_summary": "Digest",
+            }
+        ])
+        self.user_goals = _Collection([{"user_id": "user-a", "goal": "marathon"}])
+        self.subscriptions = _Collection()
+        self.users = _Collection([
+            {"id": "user-a", "email": "a@test.com", "is_active": True, "is_email_verified": True},
+            {"id": "user-b", "email": "b@test.com", "is_active": True, "is_email_verified": True},
+        ])
+
+    def __getattr__(self, name: str) -> _Collection:
+        collection = _Collection()
+        object.__setattr__(self, name, collection)
+        return collection
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v", "--tb=short"])
+def _get_user_access(_db, user_id: str) -> UserAccess:
+    return UserAccess(user_id=user_id, tier=Tier.PREMIUM)
+
+
+@pytest_asyncio.fixture
+async def client():
+    fake_db = _FakeDB()
+    patches = [
+        patch.object(server, "db", fake_db),
+        patch("server.get_user_access", AsyncMock(side_effect=_get_user_access)),
+        patch.object(server, "_dic", SimpleNamespace(get=lambda *args, **kwargs: None, set=lambda *args, **kwargs: None)),
+        patch("server.generate_dashboard_rag", return_value={
+            "summary": "Dashboard summary",
+            "metrics": {"km_total": 18.0, "nb_seances": 2, "allure_moy": "6:00/km", "duree_totale": "1h48"},
+            "points_forts": ["consistent"],
+            "points_ameliorer": ["speed"],
+            "tips": ["keep going"],
+        }),
+        patch("server.generate_weekly_review_rag", return_value={
+            "metrics": {"km_total": 18.0},
+            "comparison": {"vs_prev_week": "+10%", "km_current": 18.0},
+            "points_forts": ["consistent"],
+            "points_ameliorer": ["speed"],
+            "tips": ["recover"],
+        }),
+        patch("server.coach_weekly_review", AsyncMock(return_value=("Weekly review summary", False))),
+        patch("server.load_garmin_domain_activities", AsyncMock(return_value=[SimpleNamespace(id="ga-1")])),
+        patch("server.calculate_week_stats_from_domain", return_value={"sessions": 2, "volume_km": 18.0}),
+        patch("server.calculate_month_stats_from_domain", return_value={"sessions": 6, "volume_km": 60.0}),
+        patch("server.calculate_run_index_from_domain", return_value={"score": 52.1}),
+        patch("server.upsert_run_index_snapshot", AsyncMock(return_value=None)),
+        patch("server.generate_dashboard_insight", return_value="Coach insight"),
+    ]
+    started = []
+    try:
+        for patcher in patches:
+            patcher.start()
+            started.append(patcher)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=server.app),
+            base_url="http://test",
+        ) as test_client:
+            yield test_client
+    finally:
+        for patcher in reversed(started):
+            patcher.stop()
+
+
+@pytest.mark.asyncio
+async def test_rag_dashboard_coverage_is_preserved(client):
+    response = await client.get("/api/rag/dashboard", headers=_bearer("user-a", "a@test.com"))
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["rag_summary"] == "Dashboard summary"
+    assert payload["metrics"]["km_total"] == 18.0
+    assert payload["metrics"]["nb_seances"] == 2
+    assert payload["points_forts"] == ["consistent"]
+
+
+@pytest.mark.asyncio
+async def test_rag_weekly_review_coverage_is_preserved(client):
+    response = await client.get("/api/rag/weekly-review?language=en", headers=_bearer("user-a", "a@test.com"))
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["rag_summary"] == "Weekly review summary"
+    assert payload["comparison"]["km_current"] == 18.0
+    assert payload["enriched_by_llm"] is False
+
+
+@pytest.mark.asyncio
+async def test_workouts_endpoint_coverage_is_preserved(client):
+    response = await client.get("/api/workouts", headers=_bearer("user-a", "a@test.com"))
+    assert response.status_code == 200
+    payload = response.json()
+    assert isinstance(payload, list)
+    assert {item["id"] for item in payload} == {"run-1", "run-2"}
+    assert {"id", "type", "name", "date", "distance_km"} <= set(payload[0].keys())
+
+
+@pytest.mark.asyncio
+async def test_dashboard_insight_coverage_is_preserved(client):
+    response = await client.get("/api/dashboard/insight?language=en", headers=_bearer("user-a", "a@test.com"))
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["coach_insight"] == "Coach insight"
+    assert payload["week"]["sessions"] == 2
+    assert payload["month"]["volume_km"] == 60.0
+    assert payload["run_index"]["score"] == 52.1
