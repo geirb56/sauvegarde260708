@@ -1,11 +1,10 @@
-"""PR #128 — /api/dashboard must use Training Load V2."""
+"""PR #128 — exact /api/dashboard legacy prescription route must be removed."""
 
 from __future__ import annotations
 
 import os
 import sys
-from datetime import date, timedelta
-from typing import Any, List, Optional
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -30,182 +29,63 @@ if "config" in sys.modules:
             del sys.modules[_key]
 
 import server  # noqa: E402
-from api.dashboard import get_current_user  # noqa: E402
 from access_control import Tier, UserAccess  # noqa: E402
 from auth.jwt_utils import create_access_token  # noqa: E402
-from training_v2.training_load import build_training_load  # noqa: E402
 
 
-class _Cursor:
-    def __init__(self, docs: List[dict]) -> None:
-        self._docs = list(docs)
-
-    def sort(self, field: str, direction: int) -> "_Cursor":
-        reverse = direction < 0
-        self._docs.sort(key=lambda d: d.get(field) or "", reverse=reverse)
-        return self
-
-    def limit(self, n: int) -> "_Cursor":
-        self._docs = self._docs[:n]
-        return self
-
-    async def to_list(self, length: Optional[int] = None) -> List[dict]:
-        if length is None:
-            return list(self._docs)
-        return list(self._docs[:length])
-
-
-class _Collection:
-    def __init__(self, docs: Optional[List[dict]] = None) -> None:
-        self._docs = list(docs or [])
-
-    def find(self, query: Optional[dict] = None, projection: Optional[dict] = None) -> _Cursor:
-        def _match(doc: dict) -> bool:
-            for key, value in (query or {}).items():
-                if isinstance(value, dict):
-                    continue
-                if doc.get(key) != value:
-                    return False
-            return True
-
-        return _Cursor([dict(doc) for doc in self._docs if _match(doc)])
-
-    async def find_one(self, query: dict, projection: Optional[dict] = None) -> Optional[dict]:
-        for doc in (await self.find(query, projection).to_list(length=None)):
-            return doc
-        return None
-
-
-class _FakeDB:
-    def __init__(
-        self,
-        *,
-        workouts: Optional[List[dict]] = None,
-        garmin_activities: Optional[List[dict]] = None,
-        garmin_daily_metrics: Optional[List[dict]] = None,
-    ) -> None:
-        self.workouts = _Collection(workouts)
-        self.garmin_activities = _Collection(garmin_activities)
-        self.garmin_daily_metrics = _Collection(garmin_daily_metrics)
-
-    def __getattr__(self, name: str) -> _Collection:
-        col = _Collection()
-        object.__setattr__(self, name, col)
-        return col
-
-
-def _bearer(user_id: str, email: str = "test@example.com") -> dict:
+def _bearer(user_id: str, email: str = "test@example.com") -> dict[str, str]:
     return {"Authorization": "Bearer " + create_access_token(user_id, email)}
 
 
-def _get_user_access(_db: Any, user_id: str) -> UserAccess:
+def _get_user_access(_db, user_id: str) -> UserAccess:
     return UserAccess(user_id=user_id, tier=Tier.PREMIUM)
 
 
-def _override_user(user_id: str):
-    async def _inner():
-        return {"id": user_id}
-
-    return _inner
-
-
-def _garmin_act(user_id: str, days_ago: int, duration_s: Optional[float]) -> dict:
-    act_date = date.today() - timedelta(days=days_ago)
-    doc = {
-        "user_id": user_id,
-        "activity_type": "running",
-        "start_time": act_date.isoformat() + "T08:00:00",
-    }
-    if duration_s is not None:
-        doc["duration"] = duration_s
-    return doc
+def _runtime_python_sources() -> list[Path]:
+    backend_root = Path(_BACKEND_DIR)
+    excluded_parts = {"tests", "__pycache__"}
+    return [
+        path
+        for path in backend_root.rglob("*.py")
+        if not excluded_parts.intersection(path.relative_to(backend_root).parts)
+    ]
 
 
-def _metrics_doc(user_id: str, days_ago: int) -> dict:
-    metric_date = date.today() - timedelta(days=days_ago)
-    return {
-        "user_id": user_id,
-        "date": metric_date.isoformat(),
-        "resting_hr": 52.0,
-        "hrv": 64.0,
-        "sleep_hours": 7.5,
-        "sleep_score": 80.0,
-    }
+def test_exact_dashboard_route_absent_from_route_table():
+    route_paths = {getattr(route, "path", None) for route in server.app.routes}
+    assert "/api/dashboard" not in route_paths
+    assert "/api/dashboard/insight" in route_paths
 
 
 @pytest.mark.asyncio
-async def test_dashboard_acwr_matches_training_load_v2():
-    user_id = "dashboard-user-a"
-    acts = [_garmin_act(user_id, d, 1800.0) for d in range(28)]
-    metrics = [_metrics_doc(user_id, d) for d in range(14)]
-    workouts = [{"user_id": user_id, "date": date.today().isoformat(), "distance_km": 10.0}]
-    fake_db = _FakeDB(workouts=workouts, garmin_activities=acts, garmin_daily_metrics=metrics)
-
-    server.app.dependency_overrides[get_current_user] = _override_user(user_id)
-    with (
-        patch.object(server.app.state, "db", fake_db, create=True),
-        patch("server.get_user_access", AsyncMock(side_effect=_get_user_access)),
-    ):
+async def test_exact_dashboard_returns_404_for_authenticated_premium():
+    with patch("server.get_user_access", AsyncMock(side_effect=_get_user_access)):
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=server.app),
             base_url="http://test",
         ) as client:
-            response = await client.get("/api/dashboard", headers=_bearer(user_id))
-    server.app.dependency_overrides.clear()
+            response = await client.get("/api/dashboard", headers=_bearer("premium-user"))
 
-    assert response.status_code == 200, response.text
-    payload = response.json()
-    assert payload["acwr"] == build_training_load(acts, date.today()).acwr
+    assert response.status_code == 404, response.text
 
 
-@pytest.mark.asyncio
-async def test_dashboard_no_history_returns_acwr_none():
-    user_id = "dashboard-user-empty"
-    fake_db = _FakeDB()
-
-    server.app.dependency_overrides[get_current_user] = _override_user(user_id)
-    with (
-        patch.object(server.app.state, "db", fake_db, create=True),
-        patch("server.get_user_access", AsyncMock(side_effect=_get_user_access)),
-    ):
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=server.app),
-            base_url="http://test",
-        ) as client:
-            response = await client.get("/api/dashboard", headers=_bearer(user_id))
-    server.app.dependency_overrides.clear()
-
-    assert response.status_code == 200, response.text
-    payload = response.json()
-    assert payload["acwr"] is None
-    assert payload["status"] == "unavailable"
+def test_server_no_longer_imports_or_registers_dashboard_router():
+    source = Path(os.path.join(_BACKEND_DIR, "server.py")).read_text(encoding="utf-8")
+    assert "from api.dashboard import dashboard_router" not in source
+    assert "include_router(dashboard_router" not in source
 
 
-@pytest.mark.asyncio
-async def test_dashboard_multi_user_uses_only_request_user():
-    user_a = "dashboard-user-a"
-    user_b = "dashboard-user-b"
-    acts_a = [_garmin_act(user_a, d, 1800.0) for d in range(28)]
-    acts_b = [_garmin_act(user_b, d, 3600.0) for d in range(28)]
-    metrics_a = [_metrics_doc(user_a, d) for d in range(14)]
-    metrics_b = [_metrics_doc(user_b, d) for d in range(14)]
-    fake_db = _FakeDB(
-        garmin_activities=acts_a + acts_b,
-        garmin_daily_metrics=metrics_a + metrics_b,
-    )
+def test_legacy_dashboard_authority_modules_are_deleted():
+    assert not Path(os.path.join(_BACKEND_DIR, "api", "dashboard.py")).exists()
+    assert not Path(os.path.join(_BACKEND_DIR, "services", "dashboard_service.py")).exists()
+    assert not Path(os.path.join(_BACKEND_DIR, "engine", "workout_selector.py")).exists()
 
-    server.app.dependency_overrides[get_current_user] = _override_user(user_b)
-    with (
-        patch.object(server.app.state, "db", fake_db, create=True),
-        patch("server.get_user_access", AsyncMock(side_effect=_get_user_access)),
-    ):
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=server.app),
-            base_url="http://test",
-        ) as client:
-            response = await client.get("/api/dashboard", headers=_bearer(user_b, "b@example.com"))
-    server.app.dependency_overrides.clear()
 
-    assert response.status_code == 200, response.text
-    payload = response.json()
-    assert payload["acwr"] == build_training_load(acts_b, date.today()).acwr
+def test_runtime_sources_have_no_legacy_dashboard_prescription_symbols():
+    runtime_files = _runtime_python_sources()
+    runtime_text = "\n".join(path.read_text(encoding="utf-8") for path in runtime_files)
+
+    assert "dashboard_router" not in runtime_text
+    assert "services.dashboard_service" not in runtime_text
+    assert "select_workout(" not in runtime_text
+    assert "today_workout" not in runtime_text
