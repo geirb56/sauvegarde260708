@@ -61,7 +61,11 @@ from rag_engine import (
     generate_dashboard_rag,
     generate_weekly_review_rag,
 )
-from workout_analysis_v2 import WorkoutAnalysisV2Response, build_workout_analysis_v2
+from workout_analysis_v2 import (
+    WorkoutAnalysisV2Response,
+    build_workout_analysis_v2,
+    workout_analysis_candidate_date_bounds,
+)
 
 from training_v2.training_load import build_training_load
 from training_v2.training_history import RUNNING_TYPES, build_training_history
@@ -2526,10 +2530,15 @@ async def get_workout_analysis_v2(workout_id: str, language: str = "en", user: d
     workout = await db.workouts.find_one({"id": workout_id, "user_id": user_id}, {"_id": 0})
     if not workout:
         raise HTTPException(status_code=404, detail="Workout not found")
+    lower_bound, upper_bound = workout_analysis_candidate_date_bounds(workout.get("date", ""), days=14)
     historical_workouts = await db.workouts.find(
-        {"user_id": user_id, "type": workout.get("type")},
+        {
+            "user_id": user_id,
+            "type": workout.get("type"),
+            "date": {"$gte": lower_bound, "$lt": upper_bound},
+        },
         {"_id": 0},
-    ).sort("date", -1).to_list(length=None)
+    ).sort("date", -1).to_list(length=200)
     return build_workout_analysis_v2(workout=workout, historical_workouts=historical_workouts, language=language)
 
 

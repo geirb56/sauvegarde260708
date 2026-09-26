@@ -39,8 +39,9 @@ def _bearer(user_id: str, email: str) -> dict[str, str]:
 
 
 class _Cursor:
-    def __init__(self, docs: list[dict]) -> None:
+    def __init__(self, docs: list[dict], collection=None) -> None:
         self._docs = list(docs)
+        self._collection = collection
 
     def sort(self, key: str, direction: int) -> "_Cursor":
         reverse = direction == -1
@@ -56,6 +57,8 @@ class _Cursor:
         return self
 
     async def to_list(self, length: int | None = None) -> list[dict]:
+        if self._collection is not None:
+            self._collection.to_list_lengths.append(length)
         if length is None:
             return list(self._docs)
         return list(self._docs[:length])
@@ -64,17 +67,34 @@ class _Cursor:
 class _Collection:
     def __init__(self, docs: list[dict] | None = None) -> None:
         self._docs = list(docs or [])
+        self.find_queries: list[dict] = []
+        self.to_list_lengths: list[int | None] = []
 
     @staticmethod
     def _matches(doc: dict, query: dict) -> bool:
-        return all(doc.get(k) == v for k, v in query.items())
+        for key, expected in query.items():
+            actual = doc.get(key)
+            if isinstance(expected, dict):
+                for operator, operator_value in expected.items():
+                    if operator == "$gte":
+                        if actual is None or actual < operator_value:
+                            return False
+                    elif operator == "$lt":
+                        if actual is None or actual >= operator_value:
+                            return False
+                    else:
+                        raise AssertionError(f"Unsupported operator {operator}")
+            elif actual != expected:
+                return False
+        return True
 
     def find(self, query: dict | None = None, projection: dict | None = None) -> _Cursor:
         q = query or {}
+        self.find_queries.append(dict(q))
         docs = [dict(doc) for doc in self._docs if self._matches(doc, q)]
         if projection:
             docs = [{k: v for k, v in doc.items() if projection.get(k, 1)} for doc in docs]
-        return _Cursor(docs)
+        return _Cursor(docs, collection=self)
 
     async def find_one(self, query: dict, projection: dict | None = None, sort=None) -> dict | None:
         docs = [dict(doc) for doc in self._docs if self._matches(doc, query)]
@@ -148,6 +168,12 @@ class _FakeDB:
     EASY_ZONES_ID = "run-easy-zones"
     SHORT_STRUCTURAL_ID = "run-short-structural"
     LONG_STRUCTURAL_ID = "run-long-structural"
+    RUN_DISTANCE_LONG_ID = "run-distance-long"
+    CYCLE_STANDARD_ID = "cycle-standard"
+    CYCLE_LONG_ID = "cycle-long"
+    SWIM_STANDARD_ID = "swim-standard"
+    SWIM_SHORT_ID = "swim-short"
+    UNKNOWN_STANDARD_ID = "row-standard"
     NO_BASELINE_ID = "swim-no-baseline"
     ISOLATED_ID = "run-isolated"
     OTHER_USER_ID = "user-b-run"
@@ -268,6 +294,56 @@ class _FakeDB:
                 avg_heart_rate=155,
             ),
             _workout(
+                self.RUN_DISTANCE_LONG_ID,
+                user_id="user-a",
+                date="2024-04-16T07:00:00+00:00",
+                distance_km=16.0,
+                duration_minutes=70,
+                avg_pace_min_km=4.38,
+            ),
+            _workout(
+                self.CYCLE_STANDARD_ID,
+                user_id="user-a",
+                date="2024-04-17T07:00:00+00:00",
+                workout_type="cycle",
+                distance_km=20.0,
+                duration_minutes=40,
+                avg_speed_kmh=30.0,
+            ),
+            _workout(
+                self.CYCLE_LONG_ID,
+                user_id="user-a",
+                date="2024-05-18T07:00:00+00:00",
+                workout_type="cycle",
+                distance_km=35.0,
+                duration_minutes=100,
+                avg_speed_kmh=21.0,
+            ),
+            _workout(
+                self.SWIM_STANDARD_ID,
+                user_id="user-a",
+                date="2024-04-19T07:00:00+00:00",
+                workout_type="swim",
+                distance_km=2.0,
+                duration_minutes=45,
+            ),
+            _workout(
+                self.SWIM_SHORT_ID,
+                user_id="user-a",
+                date="2024-05-20T07:00:00+00:00",
+                workout_type="swim",
+                distance_km=1.5,
+                duration_minutes=20,
+            ),
+            _workout(
+                self.UNKNOWN_STANDARD_ID,
+                user_id="user-a",
+                date="2024-04-21T07:00:00+00:00",
+                workout_type="row",
+                distance_km=20.0,
+                duration_minutes=40,
+            ),
+            _workout(
                 self.NO_BASELINE_ID,
                 user_id="user-a",
                 date="2024-01-15T07:00:00+00:00",
@@ -323,6 +399,14 @@ class _FakeDB:
                 distance_km=14.0,
                 duration_minutes=82,
                 avg_pace_min_km=5.8,
+            ),
+            _workout(
+                "run-old-outside-window",
+                user_id="user-a",
+                date="2026-08-01T07:00:00+00:00",
+                distance_km=30.0,
+                duration_minutes=180,
+                avg_pace_min_km=6.0,
             ),
             _workout(
                 self.OLD_TARGET_ID,
@@ -398,6 +482,7 @@ async def client():
     patches = [
         patch.object(server, "db", fake_db),
         patch("server.get_user_access", AsyncMock(side_effect=_get_user_access)),
+        patch.object(server, "rate_limiter", server.RateLimiter(requests_per_minute=1000, burst_limit=1000)),
     ]
     started = []
     try:
@@ -408,6 +493,7 @@ async def client():
             transport=httpx.ASGITransport(app=server.app),
             base_url="http://test",
         ) as test_client:
+            test_client.fake_db = fake_db  # type: ignore[attr-defined]
             yield test_client
     finally:
         for patcher in reversed(started):
@@ -573,6 +659,59 @@ async def test_long_structural_session_is_allowed_without_intensity_evidence(cli
 
 
 @pytest.mark.asyncio
+async def test_running_distance_threshold_can_make_structural_session_long(client):
+    response = await _get_analysis(client, _FakeDB.RUN_DISTANCE_LONG_ID)
+    payload = response.json()
+    assert payload["signals"]["session_type"]["code"] == "long"
+    assert payload["signals"]["volume"]["code"] == "long_volume"
+    assert payload["summary"]["code"] == "summary.long_structural"
+
+
+@pytest.mark.asyncio
+async def test_cycle_distance_does_not_trigger_running_long_thresholds(client):
+    response = await _get_analysis(client, _FakeDB.CYCLE_STANDARD_ID)
+    payload = response.json()
+    assert payload["signals"]["session_type"]["code"] == "standard"
+    assert payload["signals"]["volume"]["code"] == "medium_volume"
+    assert payload["summary"]["code"] == "summary.standard_structural"
+    assert "long" not in payload["summary"]["text"].lower()
+
+
+@pytest.mark.asyncio
+async def test_swim_distance_does_not_trigger_running_short_thresholds(client):
+    response = await _get_analysis(client, _FakeDB.SWIM_STANDARD_ID)
+    payload = response.json()
+    assert payload["signals"]["session_type"]["code"] == "standard"
+    assert payload["signals"]["volume"]["code"] == "medium_volume"
+    assert payload["summary"]["code"] == "summary.standard_structural"
+    assert "short" not in payload["summary"]["text"].lower()
+
+
+@pytest.mark.asyncio
+async def test_cycle_long_by_duration_is_allowed(client):
+    response = await _get_analysis(client, _FakeDB.CYCLE_LONG_ID)
+    payload = response.json()
+    assert payload["signals"]["session_type"]["code"] == "long"
+    assert payload["signals"]["volume"]["code"] == "long_volume"
+
+
+@pytest.mark.asyncio
+async def test_swim_short_by_duration_is_allowed(client):
+    response = await _get_analysis(client, _FakeDB.SWIM_SHORT_ID)
+    payload = response.json()
+    assert payload["signals"]["session_type"]["code"] == "short"
+    assert payload["signals"]["volume"]["code"] == "short_volume"
+
+
+@pytest.mark.asyncio
+async def test_unknown_type_uses_duration_only_structural_logic(client):
+    response = await _get_analysis(client, _FakeDB.UNKNOWN_STANDARD_ID)
+    payload = response.json()
+    assert payload["signals"]["session_type"]["code"] == "standard"
+    assert payload["signals"]["volume"]["code"] == "medium_volume"
+
+
+@pytest.mark.asyncio
 async def test_baseline_present_allows_relative_volume_language(client):
     response = await _get_analysis(client, _FakeDB.CURRENT_ID)
     payload = response.json()
@@ -599,10 +738,58 @@ async def test_old_owned_target_beyond_latest_200_is_found_directly(client):
 
 
 @pytest.mark.asyncio
+async def test_history_query_is_bounded_to_candidate_date_window(client):
+    client.fake_db.workouts.find_queries.clear()
+    client.fake_db.workouts.to_list_lengths.clear()
+    response = await _get_analysis(client, _FakeDB.MIXED_DATE_ID)
+    assert response.status_code == 200
+    history_query = client.fake_db.workouts.find_queries[-1]
+    assert history_query["user_id"] == "user-a"
+    assert history_query["type"] == "run"
+    assert history_query["date"] == {"$gte": "2026-08-27", "$lt": "2026-09-11"}
+    assert client.fake_db.workouts.to_list_lengths[-1] == 200
+
+
+@pytest.mark.asyncio
+async def test_endpoint_candidate_query_does_not_require_old_same_type_history(client):
+    client.fake_db.workouts.find_queries.clear()
+    response = await _get_analysis(client, _FakeDB.MIXED_DATE_ID)
+    assert response.status_code == 200
+    candidate_docs = [
+        doc for doc in client.fake_db.workouts._docs
+        if client.fake_db.workouts._matches(doc, client.fake_db.workouts.find_queries[-1])
+    ]
+    candidate_ids = {doc["id"] for doc in candidate_docs}
+    assert "run-old-outside-window" not in candidate_ids
+    assert {"run-mixed-prev-z", "run-mixed-prev-offset"} <= candidate_ids
+    assert "run-mixed-future" not in candidate_ids
+
+
+@pytest.mark.asyncio
 async def test_future_workout_does_not_change_older_workout_analysis(client):
     response = await _get_analysis(client, _FakeDB.CURRENT_ID)
     payload = response.json()
     assert payload["comparison"]["baseline_sample_count"] == 4
+
+
+@pytest.mark.asyncio
+async def test_api_ignores_malformed_zone_values_without_crashing(client):
+    malformed = _workout(
+        "run-malformed-zones",
+        user_id="user-a",
+        date="2024-03-22T07:00:00+00:00",
+        distance_km=10.0,
+        duration_minutes=60,
+        avg_heart_rate=150,
+        effort_zone_distribution={"z1": "abc", "z2": None, "z3": [], "z4": {}, "zone6": 50},
+    )
+    await client.fake_db.workouts.insert_one(malformed)
+    response = await _get_analysis(client, "run-malformed-zones")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["evidence"]["has_hr_zones"] is False
+    assert payload["physiology"]["zone_distribution"] is None
+    assert payload["signals"]["intensity"]["available"] is False
 
 
 @pytest.mark.asyncio

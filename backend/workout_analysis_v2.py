@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from datetime import datetime, timedelta, timezone
 from statistics import mean
 from typing import Dict, List, Optional
@@ -118,6 +119,13 @@ def _parse_workout_date(raw: str) -> datetime:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def workout_analysis_candidate_date_bounds(workout_date: str, days: int = 14) -> tuple[str, str]:
+    current_date = _parse_workout_date(workout_date)
+    cutoff_date = (current_date - timedelta(days=days)).date().isoformat()
+    upper_bound = (current_date.date() + timedelta(days=1)).isoformat()
+    return cutoff_date, upper_bound
 
 
 def _template(language: str, key: str, **params) -> str:
@@ -352,12 +360,31 @@ def _build_pacing(workout: dict, language: str) -> WorkoutAnalysisPacing:
     )
 
 
+def _normalize_zone_distribution(raw_zones: dict | None) -> Optional[Dict[str, float]]:
+    if not isinstance(raw_zones, dict):
+        return None
+
+    normalized: Dict[str, float] = {}
+    for key in ("z1", "z2", "z3", "z4", "z5"):
+        value = raw_zones.get(key)
+        if value is None:
+            continue
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(numeric) or numeric < 0 or numeric > 100:
+            continue
+        normalized[key] = numeric
+
+    return normalized or None
+
+
 def _build_physiology(workout: dict, language: str) -> WorkoutAnalysisPhysiology:
     hr_analysis = workout.get("hr_analysis") or {}
     avg_hr = workout.get("avg_heart_rate")
     max_hr = workout.get("max_heart_rate")
-    zones = workout.get("effort_zone_distribution") or {}
-    zone_distribution = {key: float(value) for key, value in zones.items() if value is not None} or None
+    zone_distribution = _normalize_zone_distribution(workout.get("effort_zone_distribution"))
     hr_drift = hr_analysis.get("hr_drift")
     available = any(value is not None for value in [avg_hr, max_hr, hr_drift]) or bool(zone_distribution)
 
@@ -408,6 +435,25 @@ def _intensity_code(workout: dict, physiology: WorkoutAnalysisPhysiology) -> Opt
     return "moderate"
 
 
+def _structural_size_code(workout: dict) -> str:
+    duration = workout.get("duration_minutes") or 0
+    distance = workout.get("distance_km") or 0
+    workout_type = (workout.get("type") or "").lower()
+
+    if workout_type == "run":
+        if duration >= 90 or distance >= 15:
+            return "long"
+        if duration <= 25 or distance <= 4:
+            return "short"
+        return "standard"
+
+    if duration >= 90:
+        return "long"
+    if duration <= 25:
+        return "short"
+    return "standard"
+
+
 def _volume_code(workout: dict, comparison: WorkoutAnalysisComparison) -> str:
     if comparison.available and comparison.distance_km and comparison.distance_km.percent_change is not None:
         pct = comparison.distance_km.percent_change
@@ -417,27 +463,20 @@ def _volume_code(workout: dict, comparison: WorkoutAnalysisComparison) -> str:
             return "below_recent"
         return "usual_recent"
 
-    duration = workout.get("duration_minutes") or 0
-    distance = workout.get("distance_km") or 0
-    if duration >= 90 or distance >= 15:
+    structural_size = _structural_size_code(workout)
+    if structural_size == "long":
         return "long_volume"
-    if duration <= 25 or distance <= 4:
+    if structural_size == "short":
         return "short_volume"
     return "medium_volume"
 
 
 def _session_type_code(workout: dict, intensity_code: Optional[str]) -> str:
-    duration = workout.get("duration_minutes") or 0
-    distance = workout.get("distance_km") or 0
-    if duration >= 90 or distance >= 15:
-        return "long"
-    if duration <= 25 or distance <= 4:
-        return "short"
     if intensity_code in {"high", "very_high"}:
         return "hard"
     if intensity_code == "low":
         return "easy"
-    return "standard"
+    return _structural_size_code(workout)
 
 
 def _build_signals(workout: dict, comparison: WorkoutAnalysisComparison, physiology: WorkoutAnalysisPhysiology, language: str) -> WorkoutAnalysisSignals:

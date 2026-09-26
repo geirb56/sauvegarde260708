@@ -75,6 +75,32 @@ def test_v2_replacement_treats_zone_distribution_as_non_authoritative_without_pr
     assert analysis.signals.session_type.code == "standard"
 
 
+def test_v2_replacement_preserves_only_valid_zone_entries_from_mixed_malformed_input():
+    analysis = build_workout_analysis_v2(
+        workout=_workout(
+            avg_heart_rate=166,
+            effort_zone_distribution={"z1": 20, "z2": "30", "z3": None, "z4": [], "z5": 10},
+        ),
+        historical_workouts=[],
+    )
+    assert analysis.physiology.zone_distribution == {"z1": 20.0, "z2": 30.0, "z5": 10.0}
+    assert analysis.evidence.has_hr_zones is True
+    assert analysis.signals.intensity.available is False
+
+
+def test_v2_replacement_ignores_out_of_range_nonfinite_and_unknown_zone_values():
+    analysis = build_workout_analysis_v2(
+        workout=_workout(
+            avg_heart_rate=166,
+            effort_zone_distribution={"z1": -5, "z2": 120, "z3": float("nan"), "z4": float("inf"), "foo": 10},
+        ),
+        historical_workouts=[],
+    )
+    assert analysis.physiology.zone_distribution is None
+    assert analysis.evidence.has_hr_zones is False
+    assert analysis.signals.intensity.available is False
+
+
 def test_v2_replacement_preserves_cadence_evidence():
     analysis = build_workout_analysis_v2(
         workout=_workout(avg_cadence_spm=176),
