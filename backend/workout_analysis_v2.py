@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from statistics import mean
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 SUPPORTED_LANGUAGES = {"en", "fr", "es"}
@@ -16,8 +16,10 @@ class AnalysisText(BaseModel):
 
 
 class WorkoutAnalysisSignal(BaseModel):
-    code: str
-    text: str
+    available: bool
+    code: Optional[str] = None
+    text: Optional[str] = None
+    reason_unavailable: Optional[str] = None
 
 
 class WorkoutAnalysisWorkout(BaseModel):
@@ -102,11 +104,20 @@ def _lang(language: str) -> str:
 
 
 def _parse_workout_date(raw: str) -> datetime:
-    value = (raw or "").replace("Z", "+00:00")
+    value = (raw or "").strip()
+    if not value:
+        raise ValueError("Workout date is required")
+
+    normalized = value.replace("Z", "+00:00")
+    parsed: datetime
     try:
-        return datetime.fromisoformat(value)
+        parsed = datetime.fromisoformat(normalized)
     except ValueError:
-        return datetime.fromisoformat(value.split("T")[0])
+        parsed = datetime.fromisoformat(normalized.split("T")[0])
+
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _template(language: str, key: str, **params) -> str:
@@ -123,9 +134,12 @@ def _template(language: str, key: str, **params) -> str:
             "signal.intensity.moderate": "Moderate intensity",
             "signal.intensity.high": "High intensity",
             "signal.intensity.very_high": "Very high intensity",
-            "signal.volume.low": "Below recent volume",
-            "signal.volume.usual": "Close to recent volume",
-            "signal.volume.high": "Above recent volume",
+            "signal.volume.below_recent": "Below recent volume",
+            "signal.volume.usual_recent": "Close to recent volume",
+            "signal.volume.above_recent": "Above recent volume",
+            "signal.volume.short_volume": "Short session volume",
+            "signal.volume.medium_volume": "Moderate session volume",
+            "signal.volume.long_volume": "Long session volume",
             "signal.session_type.easy": "Easy session",
             "signal.session_type.steady": "Steady session",
             "signal.session_type.hard": "Hard session",
@@ -134,13 +148,17 @@ def _template(language: str, key: str, **params) -> str:
             "meaning.with_hr_easy": "Heart-rate evidence points to a controlled aerobic session rather than a high-stress effort.",
             "meaning.with_hr_moderate": "Heart-rate evidence points to a balanced aerobic load with meaningful work but no clear overload signal.",
             "meaning.with_hr_high": "Heart-rate evidence points to a demanding session with substantial cardiovascular stress.",
+            "meaning.hr_without_intensity_with_pacing": "Heart-rate facts are available, but intensity classification is unavailable without trustworthy zone evidence, so this session is interpreted structurally.",
+            "meaning.hr_without_intensity_no_pacing": "Heart-rate facts are available, but intensity classification is unavailable without trustworthy zone evidence, so only structural volume can be interpreted.",
             "meaning.no_hr_with_pacing": "The workout can be described structurally from pace and volume, but not physiologically because heart-rate evidence is missing.",
             "meaning.no_hr_no_pacing": "The workout can be described structurally from duration and distance, but not physiologically because heart-rate evidence is missing.",
             "advice.recover_after_hard": "Keep the next session easy unless new evidence supports another hard effort.",
             "advice.maintain_easy": "You can continue with normal aerobic training if overall fatigue signs remain stable elsewhere.",
             "advice.build_progressively": "Progress volume gradually and use heart-rate evidence on future sessions before drawing stronger conclusions.",
+            "advice.hr_without_intensity": "Use individualized heart-rate zones on future sessions before treating raw heart-rate values as intensity evidence.",
             "advice.no_hr": "Use heart-rate recording on future sessions if you want physiological interpretation, and avoid over-interpreting this workout.",
             "unavailable.hr": "Heart-rate evidence is unavailable.",
+            "unavailable.intensity": "Intensity classification is unavailable without individualized physiological evidence.",
             "unavailable.pacing": "Pacing evidence is unavailable.",
             "unavailable.baseline": "No prior same-type workouts in the last {days} days.",
         },
@@ -155,9 +173,12 @@ def _template(language: str, key: str, **params) -> str:
             "signal.intensity.moderate": "Intensité modérée",
             "signal.intensity.high": "Intensité élevée",
             "signal.intensity.very_high": "Intensité très élevée",
-            "signal.volume.low": "Volume inférieur au récent",
-            "signal.volume.usual": "Volume proche du récent",
-            "signal.volume.high": "Volume supérieur au récent",
+            "signal.volume.below_recent": "Volume inférieur au récent",
+            "signal.volume.usual_recent": "Volume proche du récent",
+            "signal.volume.above_recent": "Volume supérieur au récent",
+            "signal.volume.short_volume": "Volume de séance court",
+            "signal.volume.medium_volume": "Volume de séance modéré",
+            "signal.volume.long_volume": "Volume de séance long",
             "signal.session_type.easy": "Séance facile",
             "signal.session_type.steady": "Séance régulière",
             "signal.session_type.hard": "Séance intense",
@@ -166,13 +187,17 @@ def _template(language: str, key: str, **params) -> str:
             "meaning.with_hr_easy": "Les données cardiaques indiquent une séance aérobie contrôlée plutôt qu'un effort très contraignant.",
             "meaning.with_hr_moderate": "Les données cardiaques indiquent une charge aérobie équilibrée sans signe clair de surcharge.",
             "meaning.with_hr_high": "Les données cardiaques indiquent une séance exigeante avec un stress cardiovasculaire marqué.",
+            "meaning.hr_without_intensity_with_pacing": "Des données cardiaques existent, mais l'intensité ne peut pas être classée sans zones fiables; la séance est donc interprétée de façon structurelle.",
+            "meaning.hr_without_intensity_no_pacing": "Des données cardiaques existent, mais l'intensité ne peut pas être classée sans zones fiables; seul le volume structurel peut être interprété.",
             "meaning.no_hr_with_pacing": "La séance peut être décrite sur le plan structurel grâce à l'allure et au volume, mais pas sur le plan physiologique faute de données cardiaques.",
             "meaning.no_hr_no_pacing": "La séance peut être décrite sur le plan structurel grâce à la durée et à la distance, mais pas sur le plan physiologique faute de données cardiaques.",
             "advice.recover_after_hard": "Garde la prochaine séance facile sauf si de nouvelles données justifient un autre effort intense.",
             "advice.maintain_easy": "Tu peux poursuivre l'entraînement aérobie normal si les autres signes de fatigue restent stables.",
             "advice.build_progressively": "Fais progresser le volume progressivement et appuie-toi sur la fréquence cardiaque lors des prochaines séances avant d'en tirer des conclusions plus fortes.",
+            "advice.hr_without_intensity": "Utilise des zones cardiaques individualisées lors des prochaines séances avant d'interpréter la fréquence cardiaque brute comme une preuve d'intensité.",
             "advice.no_hr": "Enregistre la fréquence cardiaque lors des prochaines séances si tu veux une lecture physiologique, et évite de sur-interpréter cette séance.",
             "unavailable.hr": "Les données cardiaques sont indisponibles.",
+            "unavailable.intensity": "La classification d'intensité est indisponible sans preuve physiologique individualisée.",
             "unavailable.pacing": "Les données d'allure sont indisponibles.",
             "unavailable.baseline": "Aucune séance antérieure du même type sur les {days} derniers jours.",
         },
@@ -187,9 +212,12 @@ def _template(language: str, key: str, **params) -> str:
             "signal.intensity.moderate": "Intensidad moderada",
             "signal.intensity.high": "Intensidad alta",
             "signal.intensity.very_high": "Intensidad muy alta",
-            "signal.volume.low": "Volumen por debajo de lo reciente",
-            "signal.volume.usual": "Volumen cercano a lo reciente",
-            "signal.volume.high": "Volumen por encima de lo reciente",
+            "signal.volume.below_recent": "Volumen por debajo de lo reciente",
+            "signal.volume.usual_recent": "Volumen cercano a lo reciente",
+            "signal.volume.above_recent": "Volumen por encima de lo reciente",
+            "signal.volume.short_volume": "Volumen de sesión corto",
+            "signal.volume.medium_volume": "Volumen de sesión moderado",
+            "signal.volume.long_volume": "Volumen de sesión largo",
             "signal.session_type.easy": "Sesión fácil",
             "signal.session_type.steady": "Sesión estable",
             "signal.session_type.hard": "Sesión intensa",
@@ -198,13 +226,17 @@ def _template(language: str, key: str, **params) -> str:
             "meaning.with_hr_easy": "La evidencia de frecuencia cardíaca apunta a una sesión aeróbica controlada, no a un esfuerzo de alto estrés.",
             "meaning.with_hr_moderate": "La evidencia de frecuencia cardíaca apunta a una carga aeróbica equilibrada sin una señal clara de sobrecarga.",
             "meaning.with_hr_high": "La evidencia de frecuencia cardíaca apunta a una sesión exigente con un estrés cardiovascular importante.",
+            "meaning.hr_without_intensity_with_pacing": "Hay datos de frecuencia cardíaca, pero la intensidad no puede clasificarse sin evidencia fiable de zonas, así que la sesión se interpreta de forma estructural.",
+            "meaning.hr_without_intensity_no_pacing": "Hay datos de frecuencia cardíaca, pero la intensidad no puede clasificarse sin evidencia fiable de zonas, así que solo puede interpretarse el volumen estructural.",
             "meaning.no_hr_with_pacing": "La sesión puede describirse de forma estructural con ritmo y volumen, pero no fisiológicamente porque faltan datos de frecuencia cardíaca.",
             "meaning.no_hr_no_pacing": "La sesión puede describirse de forma estructural con duración y distancia, pero no fisiológicamente porque faltan datos de frecuencia cardíaca.",
             "advice.recover_after_hard": "Mantén la próxima sesión fácil salvo que nueva evidencia justifique otro esfuerzo intenso.",
             "advice.maintain_easy": "Puedes continuar con el entrenamiento aeróbico normal si el resto de señales de fatiga siguen estables.",
             "advice.build_progressively": "Aumenta el volumen de forma progresiva y usa datos de frecuencia cardíaca en futuras sesiones antes de sacar conclusiones más fuertes.",
+            "advice.hr_without_intensity": "Usa zonas de frecuencia cardíaca individualizadas en futuras sesiones antes de tratar la frecuencia cardíaca bruta como evidencia de intensidad.",
             "advice.no_hr": "Registra la frecuencia cardíaca en futuras sesiones si quieres interpretación fisiológica y evita sobreinterpretar esta sesión.",
             "unavailable.hr": "No hay datos de frecuencia cardíaca disponibles.",
+            "unavailable.intensity": "La clasificación de intensidad no está disponible sin evidencia fisiológica individualizada.",
             "unavailable.pacing": "No hay datos de ritmo disponibles.",
             "unavailable.baseline": "No hay sesiones previas del mismo tipo en los últimos {days} días.",
         },
@@ -271,7 +303,7 @@ def _build_baseline(workouts: List[dict], current_workout: dict, days: int = 14)
             "workouts": [],
         }
 
-    baseline = {
+    return {
         "period_days": days,
         "sample_count": len(prior_same_type),
         "workouts": prior_same_type,
@@ -281,7 +313,6 @@ def _build_baseline(workouts: List[dict], current_workout: dict, days: int = 14)
         "avg_pace_min_km": _safe_avg([workout.get("avg_pace_min_km") for workout in prior_same_type]),
         "avg_speed_kmh": _safe_avg([workout.get("avg_speed_kmh") for workout in prior_same_type]),
     }
-    return baseline
 
 
 def _build_pacing(workout: dict, language: str) -> WorkoutAnalysisPacing:
@@ -299,9 +330,6 @@ def _build_pacing(workout: dict, language: str) -> WorkoutAnalysisPacing:
         slowest_split = max(split_paces)
 
     pace_drop = split_analysis.get("pace_drop")
-    if pace_drop is None and fastest_split is not None and slowest_split is not None:
-        pace_drop = slowest_split - fastest_split
-
     variability = pace_stats.get("pace_variability")
     consistency = split_analysis.get("consistency_score")
     if consistency is None and split_paces:
@@ -343,23 +371,35 @@ def _build_physiology(workout: dict, language: str) -> WorkoutAnalysisPhysiology
     )
 
 
-def _intensity_code(physiology: WorkoutAnalysisPhysiology) -> str:
-    if physiology.available and physiology.zone_distribution:
-        hard = (physiology.zone_distribution.get("z4", 0) or 0) + (physiology.zone_distribution.get("z5", 0) or 0)
-        easy = (physiology.zone_distribution.get("z1", 0) or 0) + (physiology.zone_distribution.get("z2", 0) or 0)
-        if hard >= 35:
-            return "very_high"
-        if hard >= 20:
-            return "high"
-        if easy >= 70:
-            return "low"
-        return "moderate"
-    avg_hr = physiology.avg_hr
-    if avg_hr is None:
-        return "moderate"
-    if avg_hr >= 165:
+def _available_signal(language: str, key: str, code: str) -> WorkoutAnalysisSignal:
+    return WorkoutAnalysisSignal(
+        available=True,
+        code=code,
+        text=_template(language, f"{key}.{code}"),
+        reason_unavailable=None,
+    )
+
+
+def _unavailable_signal(reason: str) -> WorkoutAnalysisSignal:
+    return WorkoutAnalysisSignal(
+        available=False,
+        code=None,
+        text=None,
+        reason_unavailable=reason,
+    )
+
+
+def _intensity_code(physiology: WorkoutAnalysisPhysiology) -> Optional[str]:
+    if not physiology.zone_distribution:
+        return None
+
+    hard = (physiology.zone_distribution.get("z4", 0) or 0) + (physiology.zone_distribution.get("z5", 0) or 0)
+    easy = (physiology.zone_distribution.get("z1", 0) or 0) + (physiology.zone_distribution.get("z2", 0) or 0)
+    if hard >= 35:
+        return "very_high"
+    if hard >= 20:
         return "high"
-    if avg_hr <= 135:
+    if easy >= 70:
         return "low"
     return "moderate"
 
@@ -368,20 +408,21 @@ def _volume_code(workout: dict, comparison: WorkoutAnalysisComparison) -> str:
     if comparison.available and comparison.distance_km and comparison.distance_km.percent_change is not None:
         pct = comparison.distance_km.percent_change
         if pct >= 15:
-            return "high"
+            return "above_recent"
         if pct <= -15:
-            return "low"
-        return "usual"
+            return "below_recent"
+        return "usual_recent"
+
     duration = workout.get("duration_minutes") or 0
     distance = workout.get("distance_km") or 0
     if duration >= 90 or distance >= 15:
-        return "high"
+        return "long_volume"
     if duration <= 25 or distance <= 4:
-        return "low"
-    return "usual"
+        return "short_volume"
+    return "medium_volume"
 
 
-def _session_type_code(workout: dict, intensity_code: str) -> str:
+def _session_type_code(workout: dict, intensity_code: Optional[str]) -> str:
     duration = workout.get("duration_minutes") or 0
     distance = workout.get("distance_km") or 0
     if duration >= 90 or distance >= 15:
@@ -397,12 +438,17 @@ def _session_type_code(workout: dict, intensity_code: str) -> str:
 
 def _build_signals(workout: dict, comparison: WorkoutAnalysisComparison, physiology: WorkoutAnalysisPhysiology, language: str) -> WorkoutAnalysisSignals:
     intensity_code = _intensity_code(physiology)
+    intensity = (
+        _available_signal(language, "signal.intensity", intensity_code)
+        if intensity_code
+        else _unavailable_signal(_template(language, "unavailable.intensity"))
+    )
     volume_code = _volume_code(workout, comparison)
-    session_type_code = _session_type_code(workout, intensity_code)
+    session_type_code = _session_type_code(workout, intensity.code)
     return WorkoutAnalysisSignals(
-        intensity=WorkoutAnalysisSignal(code=intensity_code, text=_template(language, f"signal.intensity.{intensity_code}")),
-        volume=WorkoutAnalysisSignal(code=volume_code, text=_template(language, f"signal.volume.{volume_code}")),
-        session_type=WorkoutAnalysisSignal(code=session_type_code, text=_template(language, f"signal.session_type.{session_type_code}")),
+        intensity=intensity,
+        volume=_available_signal(language, "signal.volume", volume_code),
+        session_type=_available_signal(language, "signal.session_type", session_type_code),
     )
 
 
@@ -430,8 +476,8 @@ def _localized_comparison(workout: dict, workouts: List[dict], language: str) ->
     return comparison
 
 
-def _build_summary(signals: WorkoutAnalysisSignals, physiology: WorkoutAnalysisPhysiology, language: str) -> AnalysisText:
-    if physiology.available:
+def _build_summary(signals: WorkoutAnalysisSignals, language: str) -> AnalysisText:
+    if signals.intensity.available and signals.intensity.code:
         key = {
             "very_high": "summary.high_with_hr",
             "high": "summary.high_with_hr",
@@ -447,8 +493,13 @@ def _build_summary(signals: WorkoutAnalysisSignals, physiology: WorkoutAnalysisP
     return AnalysisText(code=key, text=_template(language, key))
 
 
-def _build_meaning(physiology: WorkoutAnalysisPhysiology, pacing: WorkoutAnalysisPacing, signals: WorkoutAnalysisSignals, language: str) -> AnalysisText:
-    if physiology.available:
+def _build_meaning(
+    physiology: WorkoutAnalysisPhysiology,
+    pacing: WorkoutAnalysisPacing,
+    signals: WorkoutAnalysisSignals,
+    language: str,
+) -> AnalysisText:
+    if signals.intensity.available and signals.intensity.code:
         if signals.intensity.code in {"high", "very_high"}:
             code = "meaning.with_hr_high"
         elif signals.intensity.code == "low":
@@ -457,19 +508,23 @@ def _build_meaning(physiology: WorkoutAnalysisPhysiology, pacing: WorkoutAnalysi
             code = "meaning.with_hr_moderate"
         return AnalysisText(code=code, text=_template(language, code))
 
+    if physiology.available:
+        code = "meaning.hr_without_intensity_with_pacing" if pacing.available else "meaning.hr_without_intensity_no_pacing"
+        return AnalysisText(code=code, text=_template(language, code))
+
     code = "meaning.no_hr_with_pacing" if pacing.available else "meaning.no_hr_no_pacing"
     return AnalysisText(code=code, text=_template(language, code))
 
 
 def _build_advice(physiology: WorkoutAnalysisPhysiology, signals: WorkoutAnalysisSignals, language: str) -> AnalysisText:
-    if not physiology.available:
-        code = "advice.no_hr"
-    elif signals.intensity.code in {"high", "very_high"}:
+    if signals.intensity.available and signals.intensity.code in {"high", "very_high"}:
         code = "advice.recover_after_hard"
-    elif signals.intensity.code == "low":
+    elif signals.intensity.available and signals.intensity.code == "low":
         code = "advice.maintain_easy"
+    elif physiology.available:
+        code = "advice.hr_without_intensity"
     else:
-        code = "advice.build_progressively"
+        code = "advice.no_hr"
     return AnalysisText(code=code, text=_template(language, code))
 
 
@@ -478,7 +533,7 @@ def build_workout_analysis_v2(workout: dict, historical_workouts: List[dict], la
     physiology = _build_physiology(workout, language)
     pacing = _build_pacing(workout, language)
     signals = _build_signals(workout, comparison, physiology, language)
-    summary = _build_summary(signals, physiology, language)
+    summary = _build_summary(signals, language)
     meaning = _build_meaning(physiology, pacing, signals, language)
     advice = _build_advice(physiology, signals, language)
     evidence = WorkoutAnalysisEvidence(

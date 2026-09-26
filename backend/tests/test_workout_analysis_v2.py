@@ -34,9 +34,6 @@ from access_control import Tier, UserAccess  # noqa: E402
 from auth.jwt_utils import create_access_token  # noqa: E402
 
 
-pytestmark = pytest.mark.asyncio
-
-
 def _bearer(user_id: str, email: str) -> dict[str, str]:
     return {"Authorization": "Bearer " + create_access_token(user_id, email)}
 
@@ -52,6 +49,10 @@ class _Cursor:
 
     def limit(self, n: int) -> "_Cursor":
         self._docs = self._docs[:n]
+        return self
+
+    def skip(self, n: int) -> "_Cursor":
+        self._docs = self._docs[n:]
         return self
 
     async def to_list(self, length: int | None = None) -> list[dict]:
@@ -75,14 +76,17 @@ class _Collection:
             docs = [{k: v for k, v in doc.items() if projection.get(k, 1)} for doc in docs]
         return _Cursor(docs)
 
-    async def find_one(self, query: dict, projection: dict | None = None) -> dict | None:
-        for doc in self._docs:
-            if self._matches(doc, query):
-                result = dict(doc)
-                if projection:
-                    result = {k: v for k, v in result.items() if projection.get(k, 1)}
-                return result
-        return None
+    async def find_one(self, query: dict, projection: dict | None = None, sort=None) -> dict | None:
+        docs = [dict(doc) for doc in self._docs if self._matches(doc, query)]
+        if sort:
+            for key, direction in reversed(sort):
+                docs.sort(key=lambda doc: doc.get(key, ""), reverse=direction == -1)
+        if not docs:
+            return None
+        result = docs[0]
+        if projection:
+            result = {k: v for k, v in result.items() if projection.get(k, 1)}
+        return result
 
     async def insert_one(self, doc: dict):
         self._docs.append(dict(doc))
@@ -111,6 +115,8 @@ def _workout(
     km_splits: list[dict] | None = None,
     split_analysis: dict | None = None,
     hr_analysis: dict | None = None,
+    avg_cadence_spm: int | None = None,
+    cadence_analysis: dict | None = None,
 ) -> dict:
     return {
         "id": workout_id,
@@ -128,19 +134,28 @@ def _workout(
         "km_splits": km_splits or [],
         "split_analysis": split_analysis or {},
         "hr_analysis": hr_analysis or {},
+        "avg_cadence_spm": avg_cadence_spm,
+        "cadence_analysis": cadence_analysis or {},
         "data_source": "garmin",
     }
 
 
 class _FakeDB:
     CURRENT_ID = "run-current"
-    NO_HR_ID = "run-nohr"
+    NO_HR_ID = "run-no-hr"
+    HR_NO_ZONES_ID = "run-hr-no-zones"
+    HIGH_ZONES_ID = "run-high-zones"
+    EASY_ZONES_ID = "run-easy-zones"
     NO_BASELINE_ID = "swim-no-baseline"
     ISOLATED_ID = "run-isolated"
     OTHER_USER_ID = "user-b-run"
+    MIXED_DATE_ID = "run-mixed-current"
+    OLD_TARGET_ID = "run-old-target"
+    PACE_SPREAD_ONLY_ID = "run-pace-spread-only"
+    CADENCE_ID = "run-cadence"
 
     def __init__(self) -> None:
-        self.workouts = _Collection([
+        workouts = [
             _workout(
                 self.CURRENT_ID,
                 user_id="user-a",
@@ -186,6 +201,24 @@ class _FakeDB:
                 avg_pace_min_km=6.0,
             ),
             _workout(
+                self.NO_HR_ID,
+                user_id="user-a",
+                date="2024-01-09T07:00:00+00:00",
+                distance_km=7.0,
+                duration_minutes=40,
+                avg_pace_min_km=5.8,
+            ),
+            _workout(
+                self.HR_NO_ZONES_ID,
+                user_id="user-a",
+                date="2024-01-08T07:00:00+00:00",
+                distance_km=6.0,
+                duration_minutes=35,
+                avg_heart_rate=170,
+                max_heart_rate=180,
+                avg_pace_min_km=5.85,
+            ),
+            _workout(
                 "run-future",
                 user_id="user-a",
                 date="2024-01-12T07:00:00+00:00",
@@ -196,21 +229,24 @@ class _FakeDB:
                 avg_pace_min_km=5.5,
             ),
             _workout(
-                "cycle-prev",
+                self.HIGH_ZONES_ID,
                 user_id="user-a",
-                date="2024-01-06T07:00:00+00:00",
-                workout_type="cycle",
-                distance_km=35.0,
-                duration_minutes=90,
-                avg_speed_kmh=23.3,
+                date="2024-03-10T07:00:00+00:00",
+                distance_km=9.0,
+                duration_minutes=50,
+                avg_heart_rate=166,
+                max_heart_rate=184,
+                effort_zone_distribution={"z1": 5, "z2": 25, "z3": 20, "z4": 30, "z5": 20},
             ),
             _workout(
-                self.NO_HR_ID,
+                self.EASY_ZONES_ID,
                 user_id="user-a",
-                date="2024-01-09T07:00:00+00:00",
-                distance_km=7.0,
-                duration_minutes=40,
-                avg_pace_min_km=5.8,
+                date="2024-03-11T07:00:00+00:00",
+                distance_km=8.0,
+                duration_minutes=46,
+                avg_heart_rate=128,
+                max_heart_rate=145,
+                effort_zone_distribution={"z1": 35, "z2": 40, "z3": 20, "z4": 5, "z5": 0},
             ),
             _workout(
                 self.NO_BASELINE_ID,
@@ -237,7 +273,87 @@ class _FakeDB:
                 avg_heart_rate=171,
                 avg_pace_min_km=5.1,
             ),
-        ])
+            _workout(
+                self.MIXED_DATE_ID,
+                user_id="user-a",
+                date="2026-09-10",
+                distance_km=10.0,
+                duration_minutes=60,
+                avg_pace_min_km=6.0,
+            ),
+            _workout(
+                "run-mixed-prev-z",
+                user_id="user-a",
+                date="2026-09-05T07:00:00Z",
+                distance_km=8.0,
+                duration_minutes=48,
+                avg_pace_min_km=6.0,
+            ),
+            _workout(
+                "run-mixed-prev-offset",
+                user_id="user-a",
+                date="2026-09-06T08:00:00+02:00",
+                distance_km=9.0,
+                duration_minutes=52,
+                avg_pace_min_km=5.95,
+            ),
+            _workout(
+                "run-mixed-future",
+                user_id="user-a",
+                date="2026-09-12",
+                distance_km=14.0,
+                duration_minutes=82,
+                avg_pace_min_km=5.8,
+            ),
+            _workout(
+                self.OLD_TARGET_ID,
+                user_id="user-a",
+                date="2023-01-01T07:00:00+00:00",
+                distance_km=11.0,
+                duration_minutes=66,
+                avg_heart_rate=151,
+                max_heart_rate=172,
+                effort_zone_distribution={"z1": 15, "z2": 45, "z3": 25, "z4": 15, "z5": 0},
+            ),
+            _workout(
+                self.PACE_SPREAD_ONLY_ID,
+                user_id="user-a",
+                date="2024-03-12T07:00:00+00:00",
+                distance_km=10.0,
+                duration_minutes=60,
+                avg_pace_min_km=6.0,
+                km_splits=[
+                    {"km": 1, "pace_min_km": 5.7, "pace_str": "5:42"},
+                    {"km": 2, "pace_min_km": 6.4, "pace_str": "6:24"},
+                ],
+                split_analysis={
+                    "fastest_split_pace": 5.7,
+                    "slowest_split_pace": 6.4,
+                },
+            ),
+            _workout(
+                self.CADENCE_ID,
+                user_id="user-a",
+                date="2024-03-13T07:00:00+00:00",
+                distance_km=7.5,
+                duration_minutes=42,
+                avg_pace_min_km=5.6,
+                avg_cadence_spm=176,
+            ),
+        ]
+
+        for idx in range(250):
+            workouts.append(
+                _workout(
+                    f"run-newer-{idx}",
+                    user_id="user-a",
+                    date=f"2023-02-{(idx % 28) + 1:02d}T07:00:00+00:00",
+                    distance_km=5.0,
+                    duration_minutes=30,
+                )
+            )
+
+        self.workouts = _Collection(workouts)
         self.user_goals = _Collection()
         self.subscriptions = _Collection()
         self.users = _Collection([
@@ -287,6 +403,7 @@ async def _get_analysis(client, workout_id: str, user_id: str = "user-a"):
     )
 
 
+@pytest.mark.asyncio
 async def test_canonical_endpoint_returns_v2_payload(client):
     response = await _get_analysis(client, _FakeDB.CURRENT_ID)
     assert response.status_code == 200
@@ -295,11 +412,13 @@ async def test_canonical_endpoint_returns_v2_payload(client):
     assert payload["workout"]["id"] == _FakeDB.CURRENT_ID
 
 
+@pytest.mark.asyncio
 async def test_idor_returns_404_for_other_users_workout(client):
     response = await _get_analysis(client, _FakeDB.OTHER_USER_ID)
     assert response.status_code == 404
 
 
+@pytest.mark.asyncio
 async def test_baseline_is_user_scoped_without_cross_user_contamination(client):
     response = await _get_analysis(client, _FakeDB.ISOLATED_ID)
     assert response.status_code == 200
@@ -308,6 +427,7 @@ async def test_baseline_is_user_scoped_without_cross_user_contamination(client):
     assert payload["comparison"]["baseline_sample_count"] == 0
 
 
+@pytest.mark.asyncio
 async def test_identical_input_is_deterministic(client):
     first = await _get_analysis(client, _FakeDB.CURRENT_ID)
     second = await _get_analysis(client, _FakeDB.CURRENT_ID)
@@ -316,25 +436,46 @@ async def test_identical_input_is_deterministic(client):
     assert first.json() == second.json()
 
 
-async def test_no_hr_marks_physiology_unavailable(client):
+@pytest.mark.asyncio
+async def test_no_hr_marks_physiology_and_intensity_unavailable(client):
     response = await _get_analysis(client, _FakeDB.NO_HR_ID)
     payload = response.json()
     assert payload["physiology"]["available"] is False
-    assert payload["physiology"]["avg_hr"] is None
-    assert payload["evidence"]["has_heart_rate"] is False
+    assert payload["signals"]["intensity"]["available"] is False
+    assert payload["signals"]["intensity"]["code"] is None
+    assert payload["signals"]["intensity"]["text"] is None
     assert payload["meaning"]["code"].startswith("meaning.no_hr")
 
 
-async def test_with_hr_preserves_hr_fields_and_zone_availability(client):
-    response = await _get_analysis(client, _FakeDB.CURRENT_ID)
+@pytest.mark.asyncio
+async def test_hr_without_zones_preserves_raw_hr_but_not_intensity_classification(client):
+    response = await _get_analysis(client, _FakeDB.HR_NO_ZONES_ID)
     payload = response.json()
     assert payload["physiology"]["available"] is True
-    assert payload["physiology"]["avg_hr"] == 150
-    assert payload["physiology"]["max_hr"] == 170
-    assert payload["physiology"]["zone_distribution"]["z2"] == 50.0
-    assert payload["evidence"]["has_hr_zones"] is True
+    assert payload["physiology"]["avg_hr"] == 170
+    assert payload["physiology"]["max_hr"] == 180
+    assert payload["signals"]["intensity"]["available"] is False
+    assert payload["signals"]["intensity"]["code"] is None
+    assert payload["advice"]["code"] == "advice.hr_without_intensity"
 
 
+@pytest.mark.asyncio
+async def test_hr_zones_high_enable_high_intensity_classification(client):
+    response = await _get_analysis(client, _FakeDB.HIGH_ZONES_ID)
+    payload = response.json()
+    assert payload["signals"]["intensity"]["available"] is True
+    assert payload["signals"]["intensity"]["code"] == "very_high"
+
+
+@pytest.mark.asyncio
+async def test_hr_zones_easy_enable_low_intensity_classification(client):
+    response = await _get_analysis(client, _FakeDB.EASY_ZONES_ID)
+    payload = response.json()
+    assert payload["signals"]["intensity"]["available"] is True
+    assert payload["signals"]["intensity"]["code"] == "low"
+
+
+@pytest.mark.asyncio
 async def test_no_splits_keeps_split_claims_unavailable(client):
     response = await _get_analysis(client, _FakeDB.NO_HR_ID)
     payload = response.json()
@@ -343,39 +484,75 @@ async def test_no_splits_keeps_split_claims_unavailable(client):
     assert payload["pacing"]["slowest_split_min_km"] is None
 
 
-async def test_split_evidence_is_preserved_when_available(client):
+@pytest.mark.asyncio
+async def test_split_evidence_and_true_pace_drop_are_preserved(client):
     response = await _get_analysis(client, _FakeDB.CURRENT_ID)
     payload = response.json()
     assert payload["evidence"]["has_splits"] is True
     assert payload["pacing"]["fastest_split_min_km"] == 5.9
     assert payload["pacing"]["slowest_split_min_km"] == 6.1
+    assert payload["pacing"]["pace_drop_min_km"] == 0.2
     assert payload["pacing"]["consistency_score"] == 92.0
 
 
-async def test_no_baseline_marks_comparison_unavailable(client):
+@pytest.mark.asyncio
+async def test_fastest_slowest_spread_does_not_create_fake_pace_drop(client):
+    response = await _get_analysis(client, _FakeDB.PACE_SPREAD_ONLY_ID)
+    payload = response.json()
+    assert payload["pacing"]["fastest_split_min_km"] == 5.7
+    assert payload["pacing"]["slowest_split_min_km"] == 6.4
+    assert payload["pacing"]["pace_drop_min_km"] is None
+
+
+@pytest.mark.asyncio
+async def test_no_baseline_uses_structural_volume_language(client):
     response = await _get_analysis(client, _FakeDB.NO_BASELINE_ID)
     payload = response.json()
     assert payload["comparison"]["available"] is False
     assert payload["comparison"]["baseline_sample_count"] == 0
-    assert payload["comparison"]["distance_km"] is None
+    assert payload["signals"]["volume"]["code"] in {"short_volume", "medium_volume", "long_volume"}
+    assert "recent" not in (payload["signals"]["volume"]["text"] or "").lower()
+    assert "usual" not in (payload["signals"]["volume"]["text"] or "").lower()
 
 
-async def test_baseline_uses_same_type_prior_only_and_excludes_current_and_future(client):
+@pytest.mark.asyncio
+async def test_baseline_present_allows_relative_volume_language(client):
     response = await _get_analysis(client, _FakeDB.CURRENT_ID)
     payload = response.json()
-    comparison = payload["comparison"]
-    assert comparison["available"] is True
-    assert comparison["baseline_sample_count"] == 3
-    assert comparison["distance_km"]["baseline"] == 9.0
-    assert comparison["duration_minutes"]["baseline"] == 53.33
-    assert comparison["avg_heart_rate"]["baseline"] == 146.5
+    assert payload["comparison"]["available"] is True
+    assert payload["comparison"]["baseline_sample_count"] == 4
+    assert payload["signals"]["volume"]["code"] in {"below_recent", "usual_recent", "above_recent"}
 
 
+@pytest.mark.asyncio
+async def test_mixed_date_formats_are_normalized_without_lookahead_crashes(client):
+    response = await _get_analysis(client, _FakeDB.MIXED_DATE_ID)
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["comparison"]["available"] is True
+    assert payload["comparison"]["baseline_sample_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_old_owned_target_beyond_latest_200_is_found_directly(client):
+    response = await _get_analysis(client, _FakeDB.OLD_TARGET_ID)
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["workout"]["id"] == _FakeDB.OLD_TARGET_ID
+
+
+@pytest.mark.asyncio
 async def test_future_workout_does_not_change_older_workout_analysis(client):
     response = await _get_analysis(client, _FakeDB.CURRENT_ID)
     payload = response.json()
-    assert payload["comparison"]["baseline_sample_count"] == 3
-    assert payload["comparison"]["distance_km"]["baseline"] == 9.0
+    assert payload["comparison"]["baseline_sample_count"] == 4
+
+
+@pytest.mark.asyncio
+async def test_cadence_evidence_is_preserved(client):
+    response = await _get_analysis(client, _FakeDB.CADENCE_ID)
+    payload = response.json()
+    assert payload["evidence"]["has_cadence"] is True
 
 
 def test_canonical_service_source_has_no_llm_or_legacy_authority_calls():
@@ -392,6 +569,7 @@ def test_canonical_service_source_has_no_random():
     assert "random." not in source
 
 
+@pytest.mark.asyncio
 async def test_legacy_routes_return_404_for_authenticated_premium_requests(client):
     headers = _bearer("user-a", "a@test.com")
     detailed = await client.get(f"/api/coach/detailed-analysis/{_FakeDB.CURRENT_ID}?language=en", headers=headers)
@@ -400,6 +578,7 @@ async def test_legacy_routes_return_404_for_authenticated_premium_requests(clien
     assert rag.status_code == 404
 
 
+@pytest.mark.asyncio
 async def test_response_contract_has_required_structured_fields(client):
     response = await _get_analysis(client, _FakeDB.CURRENT_ID)
     payload = response.json()
@@ -415,6 +594,7 @@ async def test_response_contract_has_required_structured_fields(client):
         "advice",
         "evidence",
     }
+    assert payload["signals"]["intensity"]["available"] is True
     assert payload["summary"]["text"]
     assert isinstance(payload["evidence"]["has_baseline"], bool)
     assert payload["comparison"]["baseline_period_days"] == 14

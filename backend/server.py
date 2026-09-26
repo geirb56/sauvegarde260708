@@ -2523,11 +2523,14 @@ async def get_rag_weekly_review(user: dict = Depends(auth_user), language: str =
 async def get_workout_analysis_v2(workout_id: str, language: str = "en", user: dict = Depends(auth_user)):
     """Return the canonical deterministic workout analysis payload."""
     user_id = user["id"]
-    all_workouts = await db.workouts.find({"user_id": user_id}, {"_id": 0}).sort("date", -1).to_list(200)
-    workout = next((candidate for candidate in all_workouts if candidate.get("id") == workout_id), None)
+    workout = await db.workouts.find_one({"id": workout_id, "user_id": user_id}, {"_id": 0})
     if not workout:
         raise HTTPException(status_code=404, detail="Workout not found")
-    return build_workout_analysis_v2(workout=workout, historical_workouts=all_workouts, language=language)
+    historical_workouts = await db.workouts.find(
+        {"user_id": user_id, "type": workout.get("type")},
+        {"_id": 0},
+    ).sort("date", -1).to_list(length=None)
+    return build_workout_analysis_v2(workout=workout, historical_workouts=historical_workouts, language=language)
 
 
 # ========== CARDIO COACH RUNNING SCREEN ==========

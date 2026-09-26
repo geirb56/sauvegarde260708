@@ -120,7 +120,7 @@ export default function DetailedAnalysis() {
           <div className="grid grid-cols-3 gap-2">
             <div>
               <p className="font-mono text-[9px] uppercase text-muted-foreground mb-1">{t("detailedAnalysis.intensity")}</p>
-              <p className="font-mono text-xs">{analysis.signals?.intensity?.text || "--"}</p>
+              <p className="font-mono text-xs">{analysis.signals?.intensity?.available ? analysis.signals.intensity.text : "--"}</p>
             </div>
             <div>
               <p className="font-mono text-[9px] uppercase text-muted-foreground mb-1">{t("detailedAnalysis.volume")}</p>

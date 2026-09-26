@@ -170,7 +170,11 @@ export default function SessionDetail() {
       key: "strengths",
       title: t("sessions.strengths"),
       icon: Scale,
-      content: [analysis?.signals?.intensity?.text, analysis?.signals?.volume?.text, analysis?.signals?.session_type?.text].filter(Boolean).join(" • "),
+      content: [
+        analysis?.signals?.intensity?.available ? analysis?.signals?.intensity?.text : null,
+        analysis?.signals?.volume?.text,
+        analysis?.signals?.session_type?.text,
+      ].filter(Boolean).join(" • "),
       tone: "border-emerald-500/20 bg-emerald-500/5",
     },
     {

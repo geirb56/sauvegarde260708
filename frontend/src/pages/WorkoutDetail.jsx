@@ -398,7 +398,7 @@ export default function WorkoutDetail() {
             </div>
             {analysisLoading ? (
               <Skeleton className="h-5 w-full" />
-            ) : analysis?.signals?.intensity ? (
+            ) : analysis?.signals?.intensity?.available ? (
               <>
                 <span className={`inline-block px-2 py-0.5 rounded-sm font-mono text-xs ${getSessionTypeStyle(analysis.signals.intensity.code)}`}>
                   {analysis.signals.intensity.text}
@@ -410,6 +410,21 @@ export default function WorkoutDetail() {
                   </p>
                 )}
               </>
+            ) : analysis?.signals?.intensity ? (
+              <div data-testid="intensity-card-unavailable">
+                <span className="inline-block px-2 py-0.5 rounded-sm font-mono text-xs bg-muted text-muted-foreground">--</span>
+                {analysis.signals.intensity.reason_unavailable && (
+                  <p className="font-mono text-[10px] text-muted-foreground leading-relaxed mt-1">
+                    {analysis.signals.intensity.reason_unavailable}
+                  </p>
+                )}
+                {physiology?.avg_hr != null && (
+                  <p className="font-mono text-[10px] text-muted-foreground flex items-center gap-1 mt-1">
+                    <Heart className="w-2.5 h-2.5" />
+                    {physiology.avg_hr} bpm
+                  </p>
+                )}
+              </div>
             ) : (
               <span className="font-mono text-xs text-muted-foreground">--</span>
             )}

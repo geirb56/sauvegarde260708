@@ -33,9 +33,9 @@ const analysis = {
   workout: { id: "w1", name: "Morning Run", date: "2024-01-10T07:00:00Z", type: "run" },
   summary: { code: "summary.moderate_with_hr", text: "Moderate aerobic session with controlled cardiovascular load." },
   signals: {
-    intensity: { code: "moderate", text: "Moderate intensity" },
-    volume: { code: "usual", text: "Close to recent volume" },
-    session_type: { code: "steady", text: "Steady session" },
+    intensity: { available: true, code: "moderate", text: "Moderate intensity", reason_unavailable: null },
+    volume: { available: true, code: "usual_recent", text: "Close to recent volume", reason_unavailable: null },
+    session_type: { available: true, code: "steady", text: "Steady session", reason_unavailable: null },
   },
   physiology: {
     available: true,
@@ -82,6 +82,26 @@ const analysis = {
 
 const analysisMissingEvidence = {
   ...analysis,
+  signals: {
+    intensity: {
+      available: false,
+      code: null,
+      text: null,
+      reason_unavailable: "Intensity classification is unavailable without individualized physiological evidence.",
+    },
+    volume: {
+      available: true,
+      code: "medium_volume",
+      text: "Moderate session volume",
+      reason_unavailable: null,
+    },
+    session_type: {
+      available: true,
+      code: "steady",
+      text: "Steady session",
+      reason_unavailable: null,
+    },
+  },
   physiology: {
     available: false,
     avg_hr: null,
@@ -196,6 +216,9 @@ test("WorkoutDetail hides physiology and pacing cards when evidence is unavailab
   expect(screen.queryByTestId("hr-zones-card")).not.toBeInTheDocument();
   expect(screen.queryByTestId("pacing-summary-card")).not.toBeInTheDocument();
   expect(screen.queryByTestId("comparison-card")).not.toBeInTheDocument();
+  expect(screen.getByTestId("intensity-card-unavailable")).toHaveTextContent("--");
+  expect(screen.getByTestId("intensity-card-unavailable")).not.toHaveTextContent("Moderate intensity");
+  expect(screen.getByText("Moderate session volume")).toBeInTheDocument();
 });
 
 test("WorkoutDetail shows one coherent error state for analysis failure", async () => {
