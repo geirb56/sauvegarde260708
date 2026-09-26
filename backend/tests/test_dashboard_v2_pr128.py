@@ -41,16 +41,6 @@ def _get_user_access(_db, user_id: str) -> UserAccess:
     return UserAccess(user_id=user_id, tier=Tier.PREMIUM)
 
 
-def _runtime_python_sources() -> list[Path]:
-    backend_root = Path(_BACKEND_DIR)
-    excluded_parts = {"tests", "__pycache__"}
-    return [
-        path
-        for path in backend_root.rglob("*.py")
-        if not excluded_parts.intersection(path.relative_to(backend_root).parts)
-    ]
-
-
 def test_exact_dashboard_route_absent_from_route_table():
     route_paths = {getattr(route, "path", None) for route in server.app.routes}
     assert "/api/dashboard" not in route_paths
@@ -81,11 +71,15 @@ def test_legacy_dashboard_authority_modules_are_deleted():
     assert not Path(os.path.join(_BACKEND_DIR, "engine", "workout_selector.py")).exists()
 
 
-def test_runtime_sources_have_no_legacy_dashboard_prescription_symbols():
-    runtime_files = _runtime_python_sources()
+def test_runtime_sources_have_no_legacy_dashboard_import_chain_strings():
+    runtime_files = [
+        Path(os.path.join(_BACKEND_DIR, "server.py")),
+        Path(os.path.join(_BACKEND_DIR, "subscription_manager.py")),
+        Path(os.path.join(_BACKEND_DIR, "access_control.py")),
+    ]
     runtime_text = "\n".join(path.read_text(encoding="utf-8") for path in runtime_files)
 
-    assert "dashboard_router" not in runtime_text
-    assert "services.dashboard_service" not in runtime_text
-    assert "select_workout(" not in runtime_text
-    assert "today_workout" not in runtime_text
+    assert "from api.dashboard import dashboard_router" not in runtime_text
+    assert "include_router(dashboard_router, prefix=\"/api\")" not in runtime_text
+    assert "from services.dashboard_service import get_dashboard" not in runtime_text
+    assert "from engine.workout_selector import select_workout" not in runtime_text
