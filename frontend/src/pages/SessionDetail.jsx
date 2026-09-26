@@ -77,12 +77,11 @@ export default function SessionDetail() {
       try {
         const [sessionRes, analysisRes] = await Promise.all([
           axios.get(`${API}/workouts/${id}`),
-          axios.get(`${API}/coach/detailed-analysis/${id}?language=${lang}`).catch(() => ({ data: null })),
+          axios.get(`${API}/coach/workout-analysis/${id}?language=${lang}`).catch(() => ({ data: null })),
         ]);
         setSession(sessionRes.data);
         setAnalysis(analysisRes.data);
       } catch (error) {
-        console.error("Failed to load session:", error);
         setSession(null);
         setAnalysis(null);
       } finally {
@@ -98,7 +97,6 @@ export default function SessionDetail() {
 
   const primaryMetrics = useMemo(() => {
     if (!session) return [];
-
     return [
       { label: t("sessions.columns.distance"), value: formatDistance(session.distance_km || 0, { unitSystem }) },
       { label: t("sessions.columns.duration"), value: formatDuration(session.duration_minutes) },
@@ -120,7 +118,6 @@ export default function SessionDetail() {
 
   const extraMetrics = useMemo(() => {
     if (!session) return [];
-
     return Object.entries(session).filter(([key, value]) => {
       if (KNOWN_METRIC_KEYS.has(key)) return false;
       if ([
@@ -143,14 +140,11 @@ export default function SessionDetail() {
       ].includes(key)) {
         return false;
       }
-
       return value != null && value !== "";
     });
   }, [session]);
 
-  if (loading) {
-    return <DetailSkeleton />;
-  }
+  if (loading) return <DetailSkeleton />;
 
   if (!session) {
     return (
@@ -169,27 +163,42 @@ export default function SessionDetail() {
       key: "summary",
       title: t("sessions.summary"),
       icon: Sparkles,
-      content: analysis?.header?.context,
+      content: analysis?.summary?.text,
       tone: "border-primary/20 bg-primary/5",
     },
     {
       key: "strengths",
       title: t("sessions.strengths"),
       icon: Scale,
-      content: [analysis?.execution?.intensity, analysis?.execution?.volume, analysis?.execution?.regularity].filter(Boolean).join(" • "),
+      content: [
+        analysis?.signals?.intensity?.available ? analysis?.signals?.intensity?.text : null,
+        analysis?.signals?.volume?.text,
+        analysis?.signals?.session_type?.text,
+      ].filter(Boolean).join(" • "),
       tone: "border-emerald-500/20 bg-emerald-500/5",
     },
     {
       key: "improvements",
       title: t("sessions.improvements"),
       icon: Activity,
-      content: analysis?.advanced?.comparisons,
+      content: analysis?.comparison?.available
+        ? `baseline ${analysis.comparison.baseline_sample_count}`
+        : analysis?.comparison?.reason_unavailable,
       tone: "border-amber-500/20 bg-amber-500/5",
     },
     {
       key: "physiology",
       title: t("sessions.physiology"),
       icon: HeartPulse,
+      content: analysis?.physiology?.available
+        ? `HR ${analysis.physiology.avg_hr ?? "--"} / ${analysis.physiology.max_hr ?? "--"}`
+        : analysis?.physiology?.reason_unavailable,
+      tone: "border-border bg-card/40",
+    },
+    {
+      key: "meaning",
+      title: t("workoutDetailExtended.meaning"),
+      icon: Activity,
       content: analysis?.meaning?.text,
       tone: "border-border bg-card/40",
     },

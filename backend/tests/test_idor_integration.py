@@ -9,14 +9,14 @@ in-memory fake database and thin service mocks so that:
 
 Scenarios covered for each endpoint:
   1. Anonymous request (no JWT)            → 4xx (401 on FREE routes, 401/403 on PREMIUM routes)
-  2. Owner (PREMIUM user, JWT matches)     → 200
+  2. Owner (PREMIUM user, JWT matches)     → 200 on canonical route, 404 on removed legacy routes
   3. Non-owner (PREMIUM user, other user)  → 404 / empty list
 
 Routes under test:
   GET  /api/messages
-  GET  /api/rag/workout/{workout_id}
   GET  /api/coach/workout-analysis/{workout_id}
-  GET  /api/coach/detailed-analysis/{workout_id}
+  GET  /api/rag/workout/{workout_id}           (removed → 404 expected)
+  GET  /api/coach/detailed-analysis/{workout_id} (removed → 404 expected)
   POST /api/chat/send (legacy removed → 404 expected)
 """
 from __future__ import annotations
@@ -25,7 +25,7 @@ import os
 import sys
 import uuid
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -167,48 +167,6 @@ class _FakeDB:
         return col
 
 
-# ---------------------------------------------------------------------------
-# Service stubs (avoid LLM / external I/O)
-# ---------------------------------------------------------------------------
-
-def _stub_session_analysis(*_a: Any, **_kw: Any) -> dict:
-    return {
-        "summary": "Good run",
-        "meaning": "Solid effort",
-        "advice": "Keep it up",
-        "recovery": "Easy tomorrow",
-        "metrics": {
-            "session_type": "moderate",
-            "intensity_level": "moderate",
-            "training_load": 50,
-        },
-    }
-
-
-async def _stub_localize(fields: dict, *_a: Any, **_kw: Any) -> dict:
-    return dict(fields)
-
-
-def _stub_rag_analysis(*_a: Any, **_kw: Any) -> dict:
-    """generate_workout_analysis_rag is a sync function — must not be AsyncMock."""
-    return {
-        "comparison": {"progression": "stable"},
-        "points_forts": ["Consistent pace"],
-        "points_ameliorer": ["Cadence"],
-        "tips": ["Hydrate well"],
-        "rag_sources": {},
-        "workout": {"km": 10},
-    }
-
-
-async def _stub_coach_analyze(*_a: Any, **_kw: Any) -> tuple:
-    return "Great workout!", False
-
-
-async def _stub_coach_chat(*_a: Any, **_kw: Any) -> tuple:
-    return "Training tip here", False, {}
-
-
 def _get_user_access(db: Any, user_id: str) -> UserAccess:
     """
     Grant PREMIUM to the two test users; FREE to anything else
@@ -228,21 +186,12 @@ async def real_client():
     """
     httpx.AsyncClient backed by the real server.app with:
       - server.db replaced by an in-memory fake
-      - heavy service functions stubbed out
       - test users granted PREMIUM access; anonymous callers stay FREE
     """
     fake_db = _FakeDB()
 
     patches = [
         patch.object(server, "db", fake_db),
-        patch("server.generate_session_analysis", _stub_session_analysis),
-        patch("server.localization", MagicMock(
-            localize_fields=AsyncMock(side_effect=_stub_localize)
-        )),
-        patch("server.generate_workout_analysis_rag", _stub_rag_analysis),
-        patch("server.coach_analyze_workout", AsyncMock(
-            side_effect=_stub_coach_analyze
-        )),
         # get_user_access is called by the subscription middleware and by chat/send.
         # Give test users PREMIUM access so they can reach the route handlers;
         # all other callers (e.g. anonymous with IP as user_id) remain FREE.
@@ -311,13 +260,13 @@ class TestRagWorkoutIntegration:
         r = await client.get(f"/api/rag/workout/{_FakeDB.WORKOUT_A_ID}")
         assert r.status_code in (401, 403)
 
-    async def test_owner_gets_200(self, real_client):
+    async def test_owner_gets_404(self, real_client):
         client, _ = real_client
         r = await client.get(
             f"/api/rag/workout/{_FakeDB.WORKOUT_A_ID}",
             headers=_bearer("user-a", "a@test.com"),
         )
-        assert r.status_code == 200
+        assert r.status_code == 404
 
     async def test_non_owner_gets_404(self, real_client):
         client, _ = real_client
@@ -369,13 +318,13 @@ class TestCoachDetailedAnalysisIntegration:
         )
         assert r.status_code in (401, 403)
 
-    async def test_owner_gets_200(self, real_client):
+    async def test_owner_gets_404(self, real_client):
         client, _ = real_client
         r = await client.get(
             f"/api/coach/detailed-analysis/{_FakeDB.WORKOUT_A_ID}",
             headers=_bearer("user-a", "a@test.com"),
         )
-        assert r.status_code == 200
+        assert r.status_code == 404
 
     async def test_non_owner_gets_404(self, real_client):
         client, _ = real_client
