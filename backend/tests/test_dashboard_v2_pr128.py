@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
-from pathlib import Path
+import importlib
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -59,27 +59,11 @@ async def test_exact_dashboard_returns_404_for_authenticated_premium():
     assert response.status_code == 404, response.text
 
 
-def test_server_no_longer_imports_or_registers_dashboard_router():
-    source = Path(os.path.join(_BACKEND_DIR, "server.py")).read_text(encoding="utf-8")
-    assert "from api.dashboard import dashboard_router" not in source
-    assert "include_router(dashboard_router" not in source
-
-
-def test_legacy_dashboard_authority_modules_are_deleted():
-    assert not Path(os.path.join(_BACKEND_DIR, "api", "dashboard.py")).exists()
-    assert not Path(os.path.join(_BACKEND_DIR, "services", "dashboard_service.py")).exists()
-    assert not Path(os.path.join(_BACKEND_DIR, "engine", "workout_selector.py")).exists()
-
-
-def test_runtime_sources_have_no_legacy_dashboard_import_chain_strings():
-    runtime_files = [
-        Path(os.path.join(_BACKEND_DIR, "server.py")),
-        Path(os.path.join(_BACKEND_DIR, "subscription_manager.py")),
-        Path(os.path.join(_BACKEND_DIR, "access_control.py")),
-    ]
-    runtime_text = "\n".join(path.read_text(encoding="utf-8") for path in runtime_files)
-
-    assert "from api.dashboard import dashboard_router" not in runtime_text
-    assert "include_router(dashboard_router, prefix=\"/api\")" not in runtime_text
-    assert "from services.dashboard_service import get_dashboard" not in runtime_text
-    assert "from engine.workout_selector import select_workout" not in runtime_text
+def test_legacy_dashboard_modules_are_no_longer_importable():
+    for module_name in (
+        "api.dashboard",
+        "services.dashboard_service",
+        "engine.workout_selector",
+    ):
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module(module_name)
