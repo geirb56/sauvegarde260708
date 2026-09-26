@@ -127,7 +127,7 @@ export default function DetailedAnalysis() {
               <p className="font-mono text-xs">{analysis.signals?.volume?.text || "--"}</p>
             </div>
             <div>
-              <p className="font-mono text-[9px] uppercase text-muted-foreground mb-1">{t("detailedAnalysis.regularity")}</p>
+              <p className="font-mono text-[9px] uppercase text-muted-foreground mb-1">{t("analysis.type")}</p>
               <p className="font-mono text-xs">{analysis.signals?.session_type?.text || "--"}</p>
             </div>
           </div>

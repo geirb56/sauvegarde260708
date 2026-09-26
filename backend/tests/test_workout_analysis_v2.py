@@ -146,6 +146,8 @@ class _FakeDB:
     HR_NO_ZONES_ID = "run-hr-no-zones"
     HIGH_ZONES_ID = "run-high-zones"
     EASY_ZONES_ID = "run-easy-zones"
+    SHORT_STRUCTURAL_ID = "run-short-structural"
+    LONG_STRUCTURAL_ID = "run-long-structural"
     NO_BASELINE_ID = "swim-no-baseline"
     ISOLATED_ID = "run-isolated"
     OTHER_USER_ID = "user-b-run"
@@ -247,6 +249,23 @@ class _FakeDB:
                 avg_heart_rate=128,
                 max_heart_rate=145,
                 effort_zone_distribution={"z1": 35, "z2": 40, "z3": 20, "z4": 5, "z5": 0},
+            ),
+            _workout(
+                self.SHORT_STRUCTURAL_ID,
+                user_id="user-a",
+                date="2024-03-14T07:00:00+00:00",
+                distance_km=3.5,
+                duration_minutes=22,
+                avg_pace_min_km=6.2,
+            ),
+            _workout(
+                self.LONG_STRUCTURAL_ID,
+                user_id="user-a",
+                date="2024-03-15T07:00:00+00:00",
+                distance_km=18.0,
+                duration_minutes=105,
+                avg_pace_min_km=5.9,
+                avg_heart_rate=155,
             ),
             _workout(
                 self.NO_BASELINE_ID,
@@ -444,6 +463,9 @@ async def test_no_hr_marks_physiology_and_intensity_unavailable(client):
     assert payload["signals"]["intensity"]["available"] is False
     assert payload["signals"]["intensity"]["code"] is None
     assert payload["signals"]["intensity"]["text"] is None
+    assert payload["signals"]["session_type"]["code"] == "standard"
+    assert "steady" not in payload["signals"]["session_type"]["text"].lower()
+    assert "consistent" not in payload["summary"]["text"].lower()
     assert payload["meaning"]["code"].startswith("meaning.no_hr")
 
 
@@ -460,19 +482,26 @@ async def test_hr_without_zones_preserves_raw_hr_but_not_intensity_classificatio
 
 
 @pytest.mark.asyncio
-async def test_hr_zones_high_enable_high_intensity_classification(client):
+async def test_zone_distribution_presence_does_not_unlock_intensity_without_trusted_provenance(client):
     response = await _get_analysis(client, _FakeDB.HIGH_ZONES_ID)
     payload = response.json()
-    assert payload["signals"]["intensity"]["available"] is True
-    assert payload["signals"]["intensity"]["code"] == "very_high"
+    assert payload["evidence"]["has_hr_zones"] is True
+    assert payload["physiology"]["zone_distribution"]["z5"] == 20.0
+    assert payload["signals"]["intensity"]["available"] is False
+    assert payload["signals"]["intensity"]["code"] is None
+    assert payload["signals"]["session_type"]["code"] == "standard"
+    assert "hard" not in payload["summary"]["text"].lower()
 
 
 @pytest.mark.asyncio
-async def test_hr_zones_easy_enable_low_intensity_classification(client):
+async def test_easy_looking_zone_distribution_still_remains_non_authoritative_without_provenance(client):
     response = await _get_analysis(client, _FakeDB.EASY_ZONES_ID)
     payload = response.json()
-    assert payload["signals"]["intensity"]["available"] is True
-    assert payload["signals"]["intensity"]["code"] == "low"
+    assert payload["evidence"]["has_hr_zones"] is True
+    assert payload["physiology"]["zone_distribution"]["z1"] == 35.0
+    assert payload["signals"]["intensity"]["available"] is False
+    assert payload["signals"]["session_type"]["code"] == "standard"
+    assert "easy" not in payload["summary"]["text"].lower()
 
 
 @pytest.mark.asyncio
@@ -513,6 +542,34 @@ async def test_no_baseline_uses_structural_volume_language(client):
     assert payload["signals"]["volume"]["code"] in {"short_volume", "medium_volume", "long_volume"}
     assert "recent" not in (payload["signals"]["volume"]["text"] or "").lower()
     assert "usual" not in (payload["signals"]["volume"]["text"] or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_structural_standard_session_uses_neutral_structural_wording(client):
+    response = await _get_analysis(client, _FakeDB.HR_NO_ZONES_ID)
+    payload = response.json()
+    assert payload["signals"]["session_type"]["code"] == "standard"
+    assert payload["signals"]["session_type"]["text"] == "Standard session"
+    lowered_summary = payload["summary"]["text"].lower()
+    assert lowered_summary == "standard-duration session completed."
+    for forbidden in ("steady", "consistent", "regular"):
+        assert forbidden not in lowered_summary
+
+
+@pytest.mark.asyncio
+async def test_short_structural_session_is_allowed_without_intensity_evidence(client):
+    response = await _get_analysis(client, _FakeDB.SHORT_STRUCTURAL_ID)
+    payload = response.json()
+    assert payload["signals"]["intensity"]["available"] is False
+    assert payload["signals"]["session_type"]["code"] == "short"
+
+
+@pytest.mark.asyncio
+async def test_long_structural_session_is_allowed_without_intensity_evidence(client):
+    response = await _get_analysis(client, _FakeDB.LONG_STRUCTURAL_ID)
+    payload = response.json()
+    assert payload["signals"]["intensity"]["available"] is False
+    assert payload["signals"]["session_type"]["code"] == "long"
 
 
 @pytest.mark.asyncio
@@ -594,7 +651,7 @@ async def test_response_contract_has_required_structured_fields(client):
         "advice",
         "evidence",
     }
-    assert payload["signals"]["intensity"]["available"] is True
+    assert payload["signals"]["intensity"]["available"] is False
     assert payload["summary"]["text"]
     assert isinstance(payload["evidence"]["has_baseline"], bool)
     assert payload["comparison"]["baseline_period_days"] == 14

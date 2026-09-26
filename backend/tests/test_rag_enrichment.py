@@ -60,6 +60,21 @@ def test_v2_replacement_preserves_hr_facts_without_intensity_classification():
     assert analysis.signals.intensity.code is None
 
 
+def test_v2_replacement_treats_zone_distribution_as_non_authoritative_without_provenance():
+    analysis = build_workout_analysis_v2(
+        workout=_workout(
+            avg_heart_rate=166,
+            max_heart_rate=184,
+            effort_zone_distribution={"z1": 5, "z2": 25, "z3": 20, "z4": 30, "z5": 20},
+        ),
+        historical_workouts=[],
+    )
+    assert analysis.evidence.has_hr_zones is True
+    assert analysis.physiology.zone_distribution["z5"] == 20.0
+    assert analysis.signals.intensity.available is False
+    assert analysis.signals.session_type.code == "standard"
+
+
 def test_v2_replacement_preserves_cadence_evidence():
     analysis = build_workout_analysis_v2(
         workout=_workout(avg_cadence_spm=176),

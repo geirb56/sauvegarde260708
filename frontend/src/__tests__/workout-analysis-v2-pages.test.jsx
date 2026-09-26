@@ -31,11 +31,16 @@ const workout = {
 const analysis = {
   version: "v2",
   workout: { id: "w1", name: "Morning Run", date: "2024-01-10T07:00:00Z", type: "run" },
-  summary: { code: "summary.moderate_with_hr", text: "Moderate aerobic session with controlled cardiovascular load." },
+  summary: { code: "summary.standard_structural", text: "Standard-duration session completed." },
   signals: {
-    intensity: { available: true, code: "moderate", text: "Moderate intensity", reason_unavailable: null },
+    intensity: {
+      available: false,
+      code: null,
+      text: null,
+      reason_unavailable: "Intensity classification is unavailable without individualized physiological evidence.",
+    },
     volume: { available: true, code: "usual_recent", text: "Close to recent volume", reason_unavailable: null },
-    session_type: { available: true, code: "steady", text: "Steady session", reason_unavailable: null },
+    session_type: { available: true, code: "standard", text: "Standard session", reason_unavailable: null },
   },
   physiology: {
     available: true,
@@ -68,8 +73,8 @@ const analysis = {
     avg_speed_kmh: null,
     reason_unavailable: null,
   },
-  meaning: { code: "meaning.with_hr_moderate", text: "Heart-rate evidence points to a balanced aerobic load with meaningful work but no clear overload signal." },
-  advice: { code: "advice.build_progressively", text: "Progress volume gradually and use heart-rate evidence on future sessions before drawing stronger conclusions." },
+  meaning: { code: "meaning.hr_without_intensity_with_pacing", text: "Heart-rate facts are available, but intensity classification is unavailable without trustworthy zone evidence, so this session is interpreted structurally." },
+  advice: { code: "advice.hr_without_intensity", text: "Use individualized heart-rate zones on future sessions before treating raw heart-rate values as intensity evidence." },
   evidence: {
     has_heart_rate: true,
     has_hr_zones: true,
@@ -97,8 +102,8 @@ const analysisMissingEvidence = {
     },
     session_type: {
       available: true,
-      code: "steady",
-      text: "Steady session",
+      code: "standard",
+      text: "Standard session",
       reason_unavailable: null,
     },
   },
@@ -189,7 +194,7 @@ test("WorkoutDetail makes only one canonical analysis request", async () => {
   );
 
   expect(screen.getByText(/analyzing/i)).toBeInTheDocument();
-  expect(await screen.findByTestId("coach-summary")).toHaveTextContent("Moderate aerobic session");
+  expect(await screen.findByTestId("coach-summary")).toHaveTextContent("Standard-duration session completed.");
 
   const analysisCalls = axios.get.mock.calls
     .map(([url]) => url)
@@ -219,6 +224,7 @@ test("WorkoutDetail hides physiology and pacing cards when evidence is unavailab
   expect(screen.getByTestId("intensity-card-unavailable")).toHaveTextContent("--");
   expect(screen.getByTestId("intensity-card-unavailable")).not.toHaveTextContent("Moderate intensity");
   expect(screen.getByText("Moderate session volume")).toBeInTheDocument();
+  expect(screen.getByText("Standard session")).toBeInTheDocument();
 });
 
 test("WorkoutDetail shows one coherent error state for analysis failure", async () => {
@@ -252,9 +258,11 @@ test("DetailedAnalysis uses the canonical V2 endpoint", async () => {
     "/workout/w1/analysis",
   );
 
-  expect(await screen.findByTestId("header-context")).toHaveTextContent("Moderate aerobic session");
+  expect(await screen.findByTestId("header-context")).toHaveTextContent("Standard-duration session completed.");
   const urls = axios.get.mock.calls.map(([url]) => url);
   expect(urls).toEqual([expect.stringContaining("/coach/workout-analysis/w1")]);
+  expect(screen.getByText("Type")).toBeInTheDocument();
+  expect(screen.queryByText("Regularity")).not.toBeInTheDocument();
 });
 
 test("SessionDetail uses the canonical V2 endpoint", async () => {

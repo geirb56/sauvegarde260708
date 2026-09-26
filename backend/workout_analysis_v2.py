@@ -127,9 +127,9 @@ def _template(language: str, key: str, **params) -> str:
             "summary.high_with_hr": "High-intensity session with strong cardiovascular demand.",
             "summary.moderate_with_hr": "Moderate aerobic session with controlled cardiovascular load.",
             "summary.easy_with_hr": "Easy cardiovascular session with controlled effort.",
-            "summary.long_structural": "Long-duration session completed with a sustained structural load.",
-            "summary.short_structural": "Short session completed with a light structural load.",
-            "summary.steady_structural": "Steady session completed with consistent structural load.",
+            "summary.long_structural": "Long-duration session completed.",
+            "summary.short_structural": "Short-duration session completed.",
+            "summary.standard_structural": "Standard-duration session completed.",
             "signal.intensity.low": "Low intensity",
             "signal.intensity.moderate": "Moderate intensity",
             "signal.intensity.high": "High intensity",
@@ -141,7 +141,7 @@ def _template(language: str, key: str, **params) -> str:
             "signal.volume.medium_volume": "Moderate session volume",
             "signal.volume.long_volume": "Long session volume",
             "signal.session_type.easy": "Easy session",
-            "signal.session_type.steady": "Steady session",
+            "signal.session_type.standard": "Standard session",
             "signal.session_type.hard": "Hard session",
             "signal.session_type.long": "Long session",
             "signal.session_type.short": "Short session",
@@ -166,9 +166,9 @@ def _template(language: str, key: str, **params) -> str:
             "summary.high_with_hr": "Séance intense avec une forte demande cardiovasculaire.",
             "summary.moderate_with_hr": "Séance aérobie modérée avec une charge cardiovasculaire contrôlée.",
             "summary.easy_with_hr": "Séance facile avec un effort cardiovasculaire maîtrisé.",
-            "summary.long_structural": "Séance longue réalisée avec une charge structurelle soutenue.",
-            "summary.short_structural": "Séance courte réalisée avec une charge structurelle légère.",
-            "summary.steady_structural": "Séance régulière réalisée avec une charge structurelle stable.",
+            "summary.long_structural": "Séance longue réalisée.",
+            "summary.short_structural": "Séance courte réalisée.",
+            "summary.standard_structural": "Séance de durée standard réalisée.",
             "signal.intensity.low": "Intensité basse",
             "signal.intensity.moderate": "Intensité modérée",
             "signal.intensity.high": "Intensité élevée",
@@ -180,7 +180,7 @@ def _template(language: str, key: str, **params) -> str:
             "signal.volume.medium_volume": "Volume de séance modéré",
             "signal.volume.long_volume": "Volume de séance long",
             "signal.session_type.easy": "Séance facile",
-            "signal.session_type.steady": "Séance régulière",
+            "signal.session_type.standard": "Séance standard",
             "signal.session_type.hard": "Séance intense",
             "signal.session_type.long": "Séance longue",
             "signal.session_type.short": "Séance courte",
@@ -205,9 +205,9 @@ def _template(language: str, key: str, **params) -> str:
             "summary.high_with_hr": "Sesión intensa con una alta demanda cardiovascular.",
             "summary.moderate_with_hr": "Sesión aeróbica moderada con una carga cardiovascular controlada.",
             "summary.easy_with_hr": "Sesión fácil con un esfuerzo cardiovascular controlado.",
-            "summary.long_structural": "Sesión larga completada con una carga estructural sostenida.",
-            "summary.short_structural": "Sesión corta completada con una carga estructural ligera.",
-            "summary.steady_structural": "Sesión estable completada con una carga estructural constante.",
+            "summary.long_structural": "Sesión larga completada.",
+            "summary.short_structural": "Sesión corta completada.",
+            "summary.standard_structural": "Sesión de duración estándar completada.",
             "signal.intensity.low": "Intensidad baja",
             "signal.intensity.moderate": "Intensidad moderada",
             "signal.intensity.high": "Intensidad alta",
@@ -219,7 +219,7 @@ def _template(language: str, key: str, **params) -> str:
             "signal.volume.medium_volume": "Volumen de sesión moderado",
             "signal.volume.long_volume": "Volumen de sesión largo",
             "signal.session_type.easy": "Sesión fácil",
-            "signal.session_type.steady": "Sesión estable",
+            "signal.session_type.standard": "Sesión estándar",
             "signal.session_type.hard": "Sesión intensa",
             "signal.session_type.long": "Sesión larga",
             "signal.session_type.short": "Sesión corta",
@@ -389,8 +389,12 @@ def _unavailable_signal(reason: str) -> WorkoutAnalysisSignal:
     )
 
 
-def _intensity_code(physiology: WorkoutAnalysisPhysiology) -> Optional[str]:
-    if not physiology.zone_distribution:
+def _has_trusted_zone_provenance(workout: dict) -> bool:
+    return False
+
+
+def _intensity_code(workout: dict, physiology: WorkoutAnalysisPhysiology) -> Optional[str]:
+    if not physiology.zone_distribution or not _has_trusted_zone_provenance(workout):
         return None
 
     hard = (physiology.zone_distribution.get("z4", 0) or 0) + (physiology.zone_distribution.get("z5", 0) or 0)
@@ -433,11 +437,11 @@ def _session_type_code(workout: dict, intensity_code: Optional[str]) -> str:
         return "hard"
     if intensity_code == "low":
         return "easy"
-    return "steady"
+    return "standard"
 
 
 def _build_signals(workout: dict, comparison: WorkoutAnalysisComparison, physiology: WorkoutAnalysisPhysiology, language: str) -> WorkoutAnalysisSignals:
-    intensity_code = _intensity_code(physiology)
+    intensity_code = _intensity_code(workout, physiology)
     intensity = (
         _available_signal(language, "signal.intensity", intensity_code)
         if intensity_code
@@ -489,7 +493,7 @@ def _build_summary(signals: WorkoutAnalysisSignals, language: str) -> AnalysisTe
     key = {
         "long": "summary.long_structural",
         "short": "summary.short_structural",
-    }.get(signals.session_type.code, "summary.steady_structural")
+    }.get(signals.session_type.code, "summary.standard_structural")
     return AnalysisText(code=key, text=_template(language, key))
 
 
