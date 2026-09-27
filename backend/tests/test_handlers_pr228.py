@@ -238,6 +238,8 @@ def _patches(fake_db: _FakeDB, reference_date: date = _MONDAY) -> list:
         patch.object(server, "db", fake_db),
         patch("server.get_user_access", AsyncMock(side_effect=_user_access)),
         patch("server.datetime", _make_fixed_datetime_class(fixed_dt)),
+        patch.object(server.rate_limiter, "is_limited", return_value=False),
+        patch.object(server.rate_limiter, "record", return_value=None),
     ]
 
 
