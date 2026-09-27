@@ -423,20 +423,17 @@ ROUTE_ACCESS_MAP: Dict[str, RouteAccess] = {
     "/api/garmin/disconnect":   RouteAccess.FREE,
 
     # ── Premium (TRIAL or PREMIUM required) ──────────────────────────────
-    "/api/training/plan":             RouteAccess.PREMIUM,
-    "/api/training/refresh":          RouteAccess.PREMIUM,
     "/api/training/race-predictions": RouteAccess.PREMIUM,
-    "/api/training/dynamic-plan":     RouteAccess.PREMIUM,
     "/api/training/today":            RouteAccess.PREMIUM,
     "/api/training/week-plan":        RouteAccess.PREMIUM,
     "/api/training/v2/week":          RouteAccess.PREMIUM,  # PR167 — native V2 week endpoint
     "/api/training/v2/cycle":         RouteAccess.PREMIUM,  # PR175 — native V2 cycle calendar endpoint
+    "/api/training/v2/preferences":   RouteAccess.PREMIUM,
     "/api/training/v2/cycle/start-date": RouteAccess.PREMIUM,
     "/api/training/metrics":          RouteAccess.PREMIUM,
     "/api/training/set-goal":         RouteAccess.PREMIUM,
     "/api/training/goals":            RouteAccess.PREMIUM,
     "/api/training/":                 RouteAccess.PREMIUM,
-    "/api/training-plan":             RouteAccess.PREMIUM,
     "/api/coach/workout-analysis":    RouteAccess.PREMIUM,
     "/api/coach/detailed-analysis":   RouteAccess.PREMIUM,
     "/api/coach/guidance":            RouteAccess.PREMIUM,

@@ -93,7 +93,7 @@ def get_jwt_user_id_from_request(request: Request) -> Optional[str]:
 # Minimal test app — reproduces subscription_middleware logic from server.py
 # ---------------------------------------------------------------------------
 
-PREMIUM_PATH = "/api/training/plan"
+PREMIUM_PATH = "/api/training/v2/week"
 FREE_PATH = "/api/subscription/status"
 
 # Injected by tests via module-level variable

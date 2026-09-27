@@ -49,7 +49,6 @@ import llm_coach
 # Import coach service (cascade strategy)
 from coach_service import (
     weekly_review as coach_weekly_review,
-    generate_dynamic_training_plan,
     get_cache_stats,
     clear_cache,
     get_metrics as get_coach_metrics,
@@ -2843,6 +2842,24 @@ class TrainingCycleStartDateUpdateRequest(BaseModel):
             raise ValueError("start_date must use YYYY-MM-DD format.") from exc
         return value
 
+
+class TrainingPreferencesPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sessions_per_week: int = Field(..., description="Preferred sessions per week (2-6).")
+
+    @field_validator("sessions_per_week")
+    @classmethod
+    def validate_sessions_per_week(cls, value: int) -> int:
+        if isinstance(value, bool) or value not in {2, 3, 4, 5, 6}:
+            raise ValueError("sessions_per_week must be one of: 2, 3, 4, 5, 6.")
+        return value
+
+
+class TrainingPreferencesResponse(BaseModel):
+    status: str
+    training_prefs: dict
+
 class TrainingGoalResponse(BaseModel):
     success: bool
     goal_type: str
@@ -3052,36 +3069,25 @@ async def update_training_v2_cycle_start_date(
     }
 
 
-@api_router.get("/training/plan")
-async def get_training_plan_v2(user: dict = Depends(auth_user)):
-    """
-    Generate or update the dynamic training plan
-    based on latest fitness data.
-    """
-    return await generate_dynamic_training_plan(db, user["id"])
-
-
-@api_router.post("/training/refresh")
-async def refresh_training_plan(sessions: int = None, user: dict = Depends(auth_user)):
-    """
-    Force complete plan recalculation.
-    sessions: number of desired sessions (2, 3, 4, 5, 6)
-    """
-    # Clear cache for this user
-    from coach_service import _plan_cache
-    keys_to_remove = [k for k in _plan_cache if user["id"] in k]
-    for k in keys_to_remove:
-        del _plan_cache[k]
-
-    # Save number of sessions if specified
-    if sessions is not None and sessions in [2, 3, 4, 5, 6]:
-        await db.training_prefs.update_one(
-            {"user_id": user["id"]},
-            {"$set": {"sessions_per_week": sessions}},
-            upsert=True
-        )
-    
-    return await generate_dynamic_training_plan(db, user["id"], sessions_override=sessions)
+@api_router.patch(
+    "/training/v2/preferences",
+    response_model=TrainingPreferencesResponse,
+)
+async def update_training_v2_preferences(
+    payload: TrainingPreferencesPayload,
+    user: dict = Depends(auth_user),
+):
+    await db.training_prefs.update_one(
+        {"user_id": user["id"]},
+        {"$set": {"sessions_per_week": payload.sessions_per_week}},
+        upsert=True,
+    )
+    return {
+        "status": "updated",
+        "training_prefs": {
+            "sessions_per_week": payload.sessions_per_week,
+        },
+    }
 
 
 @api_router.delete("/training/goal")
@@ -3096,15 +3102,6 @@ async def delete_training_goal(user: dict = Depends(auth_user)):
         "success": deleted > 0,
         "message": "Goal deleted" if deleted > 0 else "No goal found"
     }
-
-
-@api_router.get("/training-plan")
-async def get_training_plan(user: dict = Depends(auth_user)):
-    """
-    Retrieve the dynamic training plan for the user.
-    Automatically generates sessions via LLM based on the cycle.
-    """
-    return await generate_dynamic_training_plan(db, user["id"])
 
 
 @api_router.post("/training-plan/set-goal")
@@ -3167,15 +3164,6 @@ async def set_training_plan_goal(
         "cycle_weeks": config["cycle_weeks"],
         "description": config["description"],
     }
-
-
-# Garder l'ancien endpoint pour compatibilité
-@api_router.get("/training/dynamic-plan")
-async def get_dynamic_training_plan_legacy(user: dict = Depends(auth_user)):
-    """Legacy endpoint - utiliser /training-plan à la place"""
-    user_id = user["id"]
-    return await generate_dynamic_training_plan(db, user_id)
-
 
 @api_router.get("/training/goals")
 async def get_available_goals():
@@ -3553,9 +3541,8 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
         # format /training/v2/week exposes for this same day's session
         # (week_execution.prescription_id_for). Never a new/artificial ID.
         "prescription_id": today_prescription_id,
-        # planned_session: runtime dict of today's session from the reconciled canonical plan.
-        # PR228: this is now the output of prescription_to_runtime_session(planned_prescription)
-        # rather than a raw dict from generate_dynamic_training_plan.
+        # planned_session: runtime dict of today's session from the reconciled
+        # canonical plan, via prescription_to_runtime_session(planned_prescription).
         "planned_session": planned_session_runtime,
         # original_prescription: identical to planned_session — both represent the planned
         # session before DailyAdaptation. Preserved for backward compat with existing consumers.
@@ -3623,8 +3610,7 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
             "reason_codes": list(canonical.reconciliation_result.reason_codes),
         },
         # vma / vma_confidence: PR228 — no longer computed in /training/today.
-        # These fields were supplied by generate_dynamic_training_plan (coach_service path)
-        # which has been removed. Verified: frontend does not consume vma from this endpoint.
+        # Verified: frontend does not consume vma from this endpoint.
         # VMA is available at /run-index (canonical source) and /training/v2/week context.
         "vma": None,
         "vma_confidence": None,

@@ -579,10 +579,10 @@ class TestArchitecture:
             "/training/week-plan was removed — PR167 must be additive only"
         )
 
-    def test_legacy_endpoint_plan_still_exists(self):
+    def test_legacy_endpoint_plan_removed(self):
         with open(self._SERVER_PATH) as f:
             source = f.read()
-        assert '"/training/plan"' in source
+        assert '"/training/plan"' not in source
 
     def test_legacy_endpoint_full_cycle_removed(self):
         with open(self._SERVER_PATH) as f:
