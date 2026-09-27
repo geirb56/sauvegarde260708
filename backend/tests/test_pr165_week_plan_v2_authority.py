@@ -119,7 +119,7 @@ def test_partial_reprise_distance_prescription_is_conserved():
 def test_no_history_remains_duration_based_and_low_intensity():
     wt, wp = _run_bridge([])
 
-    assert wt.continuity_state in ("no_history", "deep_reprise")
+    assert wt.continuity_state == "no_history"
     assert wt.target_basis == "duration"
     assert wt.target_km is None
     assert wt.allow_intensity is False
