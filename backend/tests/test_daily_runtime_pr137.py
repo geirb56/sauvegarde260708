@@ -425,6 +425,7 @@ def test_Q_today_endpoint_source_has_no_legacy_recommendation_adapter():
     endpoint_keys = _string_keys_in(endpoint)
     assert "BAND_TO_RECOMMENDATION" not in _identifier_names_in(endpoint)
     assert "fatigue" not in endpoint_keys
+    assert "recommendation" not in endpoint_keys
     assert "recommendation_color" not in endpoint_keys
     assert "readiness" in endpoint_keys
 
