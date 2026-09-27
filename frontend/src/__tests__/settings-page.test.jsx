@@ -179,6 +179,19 @@ describe("Settings UX V2", () => {
     expect(calledUrls.some((url) => url.includes("/training/full-cycle"))).toBe(false);
   });
 
+  test("goal update uses canonical set-goal endpoint and never legacy route", async () => {
+    mockAxiosApi();
+    renderPage();
+
+    await screen.findByTestId("settings-current-goal");
+    fireEvent.click(screen.getByTestId("training-goal-btn-10K"));
+
+    await waitFor(() => {
+      expect(axios.post.mock.calls.some(([url]) => String(url).includes("/training/set-goal?goal=10K"))).toBe(true);
+    });
+    expect(axios.post.mock.calls.some(([url]) => String(url).includes("/training-plan/set-goal"))).toBe(false);
+  });
+
   test("maintenance hides race-only fields", async () => {
     mockAxiosApi(createApiState({
       cycle: {
