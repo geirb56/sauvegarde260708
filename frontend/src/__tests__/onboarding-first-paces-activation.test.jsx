@@ -147,6 +147,18 @@ async function leaveAndReenterFirstValue() {
   await waitFor(() => expect(screen.getByTestId("onboarding-step-first-value")).toBeInTheDocument());
 }
 
+async function completeOnboardingPlanSelection() {
+  await reachFirstValueStep();
+  fireEvent.click(screen.getByTestId("onboarding-continue"));
+  await waitFor(() => expect(screen.getByTestId("onboarding-step-goal")).toBeInTheDocument());
+  fireEvent.click(screen.getByTestId("onboarding-goal-5k"));
+  fireEvent.click(screen.getByTestId("onboarding-continue"));
+  await waitFor(() => expect(screen.getByTestId("onboarding-step-sessions")).toBeInTheDocument());
+  fireEvent.click(screen.getByTestId("onboarding-sessions-3"));
+  fireEvent.click(screen.getByTestId("onboarding-continue"));
+  await waitFor(() => expect(screen.getByTestId("onboarding-step-done")).toBeInTheDocument());
+}
+
 describe("Onboarding first connection activation (paces + today)", () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -532,5 +544,21 @@ describe("Onboarding first connection activation (paces + today)", () => {
     await waitFor(() => expect(screen.getByTestId("first-paces-threshold")).toBeInTheDocument());
     expect(screen.getByTestId("first-paces-threshold")).toHaveTextContent("Seuil");
     expect(screen.queryByTestId("first-paces-loading")).toBeNull();
+  });
+
+  test("Q. onboarding plan setup persists sessions via v2 preferences and never calls refresh", async () => {
+    setupFirstValueGetMocks({
+      pacesData: { confidence: "INSUFFICIENT", paces: {} },
+      todayData: { status: "no_session", message: "No session planned for today" },
+    });
+
+    renderOnboarding();
+    await completeOnboardingPlanSelection();
+
+    expect(axios.patch).toHaveBeenCalledWith(
+      expect.stringContaining("/training/v2/preferences"),
+      { sessions_per_week: 3 }
+    );
+    expect(axios.post.mock.calls.some(([url]) => String(url).includes("/training/refresh"))).toBe(false);
   });
 });
