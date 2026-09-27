@@ -290,8 +290,13 @@ async def test_preferences_patch_accepts_supported_session_counts(value: int):
         {"sessions_per_week": 7},
         {"sessions_per_week": 0},
         {"sessions_per_week": -1},
+        {"sessions_per_week": "3"},
+        {"sessions_per_week": "5"},
+        {"sessions_per_week": 3.0},
+        {"sessions_per_week": 5.0},
         {"sessions_per_week": 3.5},
         {"sessions_per_week": True},
+        {"sessions_per_week": False},
         {"sessions_per_week": None},
         {},
     ],
@@ -309,6 +314,17 @@ async def test_preferences_patch_rejects_invalid_values(payload: dict):
 
     assert response.status_code == 422, response.text
     assert fake_db.training_prefs._docs == []
+
+
+async def test_coach_metrics_excludes_plan_requests_field():
+    previous = coach_service.reset_metrics()
+
+    try:
+        current = coach_service.get_metrics()
+        assert "plan_requests" not in current
+        assert "plan_requests" not in previous
+    finally:
+        coach_service.reset_metrics()
 
 
 async def test_preferences_patch_is_user_isolated():

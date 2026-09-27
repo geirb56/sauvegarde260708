@@ -25,7 +25,7 @@ import httpx
 import time
 from collections import defaultdict
 from pathlib import Path
-from pydantic import BaseModel, Field, ConfigDict, field_validator
+from pydantic import BaseModel, Field, ConfigDict, StrictInt, field_validator
 from typing import List, Optional, Dict
 import uuid
 from datetime import date, datetime, timezone, timedelta
@@ -2846,12 +2846,12 @@ class TrainingCycleStartDateUpdateRequest(BaseModel):
 class TrainingPreferencesPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    sessions_per_week: int = Field(..., description="Preferred sessions per week (2-6).")
+    sessions_per_week: StrictInt = Field(..., description="Preferred sessions per week (2-6).")
 
     @field_validator("sessions_per_week")
     @classmethod
     def validate_sessions_per_week(cls, value: int) -> int:
-        if isinstance(value, bool) or value not in {2, 3, 4, 5, 6}:
+        if value not in {2, 3, 4, 5, 6}:
             raise ValueError("sessions_per_week must be one of: 2, 3, 4, 5, 6.")
         return value
 

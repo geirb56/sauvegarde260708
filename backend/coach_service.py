@@ -42,7 +42,6 @@ class CoachMetrics:
     workout_requests: int = 0
     weekly_requests: int = 0
     chat_requests: int = 0
-    plan_requests: int = 0
 
 
 metrics = CoachMetrics()
