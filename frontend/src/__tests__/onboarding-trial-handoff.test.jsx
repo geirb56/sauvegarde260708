@@ -134,6 +134,8 @@ describe("Onboarding trial handoff", () => {
 
     await goToDoneStep();
 
+    expect(axios.post.mock.calls.some(([url]) => String(url).includes("/training/set-goal"))).toBe(true);
+    expect(axios.post.mock.calls.some(([url]) => String(url).includes("/training-plan/set-goal"))).toBe(false);
     expect(axios.patch).toHaveBeenCalledWith(
       expect.stringContaining("/training/v2/preferences"),
       { sessions_per_week: 3 }

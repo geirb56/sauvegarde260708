@@ -2647,67 +2647,6 @@ async def delete_training_goal(user: dict = Depends(auth_user)):
     }
 
 
-@api_router.post("/training-plan/set-goal")
-async def set_training_plan_goal(
-    goal: str,
-    distance_km: Optional[float] = Query(None, description="Required for ULTRA: target distance in km (> 42.195)"),
-    user: dict = Depends(auth_user),
-):
-    """
-    Set the training goal (10K, SEMI, MARATHON, etc.)
-
-    Idempotent same-goal selections are no-op and preserve existing metadata.
-    True goal changes clear stale user_goals race data.
-    ULTRA requires distance_km > 42.195.
-    """
-    if goal.upper() not in ["5K", "10K", "SEMI", "MARATHON", "ULTRA", "MAINTENANCE"]:
-        raise HTTPException(status_code=400, detail="Invalid goal")
-
-    goal_upper = goal.upper()
-    config = GOAL_CONFIG[goal_upper]
-
-    # PR226: ULTRA requires an explicit distance > 42.195 km.
-    ultra_distance_km: Optional[float] = None
-    if goal_upper == "ULTRA":
-        ultra_distance_km = _validate_ultra_distance_km(distance_km)
-
-    existing_cycle = await db.training_cycles.find_one({"user_id": user["id"]}, {"_id": 0})
-    existing_user_goal = None
-    if goal_upper == "ULTRA":
-        existing_user_goal = await db.user_goals.find_one({"user_id": user["id"]}, {"_id": 0})
-    if _is_same_goal_selection(existing_cycle, goal_upper, ultra_distance_km, existing_user_goal):
-        logger.info(f"[Training] Goal unchanged for user {user['id']}: {goal_upper}")
-        return {
-            "status": "unchanged",
-            "goal": goal_upper,
-            "cycle_weeks": config["cycle_weeks"],
-            "description": config["description"],
-        }
-
-    cycle_set: dict = {
-        "goal": goal_upper,
-        "updated_at": datetime.now(timezone.utc),
-        "ultra_distance_km": ultra_distance_km,
-    }
-
-    await db.training_cycles.update_one(
-        {"user_id": user["id"]},
-        {"$set": cycle_set},
-        upsert=True,
-    )
-
-    # PR226: any goal change invalidates the previous race metadata.
-    await db.user_goals.delete_many({"user_id": user["id"]})
-
-    logger.info(f"[Training] Goal updated for user {user['id']}: {goal_upper}")
-
-    return {
-        "status": "updated",
-        "goal": goal_upper,
-        "cycle_weeks": config["cycle_weeks"],
-        "description": config["description"],
-    }
-
 @api_router.get("/training/goals")
 async def get_available_goals():
     """Liste les types d'objectifs disponibles"""
