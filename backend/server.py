@@ -128,8 +128,6 @@ from access_control import (
 )
 from services.paddle_webhook_security import verify_and_parse_paddle_event, PaddleWebhookError
 
-# Import physiological engine dashboard router
-from api.dashboard import dashboard_router
 from engine.run_index_engine import calculate_run_index, calculate_run_index_from_domain
 
 
@@ -5674,9 +5672,6 @@ api_router.include_router(admin_router)
 
 # Include the router
 app.include_router(api_router)
-
-# Include the physiological engine dashboard router
-app.include_router(dashboard_router, prefix="/api")
 
 app.add_middleware(
     CORSMiddleware,
