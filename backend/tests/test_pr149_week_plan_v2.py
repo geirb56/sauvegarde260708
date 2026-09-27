@@ -1,4 +1,4 @@
-"""PR149 — Architecture tests: WeeklyTarget V2 as prescription source in /training/week-plan.
+"""PR149 — Architecture tests: WeeklyTarget V2 canonical prescription behavior.
 
 These tests prove the architectural invariants of PR149:
 1. target_km_protected comes from WeeklyTarget V2 (not determine_target_load).
