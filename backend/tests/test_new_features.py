@@ -208,84 +208,16 @@ class TestUserGoal:
         assert goal["event_date"] == "2026-06-15"
 
 
-class TestWeeklyReviewWithGoal:
-    """Test Weekly Review with user goal context and recommendations followup"""
-    
-    def test_digest_returns_user_goal(self):
-        """GET /api/coach/digest should return user_goal if set"""
-        # First ensure a goal exists for default user
-        goal_data = {
-            "event_name": "Marathon de Paris",
-            "event_date": "2026-04-05"
-        }
-        requests.post(f"{BASE_URL}/api/user/goal", json=goal_data)
-        
-        response = requests.get(f"{BASE_URL}/api/coach/digest?language=en")
-        assert response.status_code == 200, f"Expected 200, got {response.status_code}"
-        
-        data = response.json()
-        assert "user_goal" in data, "Response should contain user_goal field"
-        
-    def test_digest_user_goal_has_correct_fields(self):
-        """user_goal in digest should have event_name and event_date"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?language=en")
-        assert response.status_code == 200
-        
-        user_goal = response.json().get("user_goal")
-        if user_goal:  # Only test if goal exists
-            assert "event_name" in user_goal, "user_goal should have event_name"
-            assert "event_date" in user_goal, "user_goal should have event_date"
-            
-    def test_digest_returns_recommendations_followup(self):
-        """GET /api/coach/digest should return recommendations_followup field"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?language=en")
-        assert response.status_code == 200
-        
-        data = response.json()
-        assert "recommendations_followup" in data, "Response should contain recommendations_followup field"
-        
-    def test_digest_recommendations_followup_is_string(self):
-        """recommendations_followup should be a string (can be empty)"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?language=en")
-        assert response.status_code == 200
-        
-        followup = response.json().get("recommendations_followup")
-        assert isinstance(followup, str), f"recommendations_followup should be string, got {type(followup)}"
-        
-    def test_digest_french_with_goal(self):
-        """French digest should also include user_goal and recommendations_followup"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?language=fr")
-        assert response.status_code == 200
-        
-        data = response.json()
-        assert "user_goal" in data, "French response should contain user_goal"
-        assert "recommendations_followup" in data, "French response should contain recommendations_followup"
-        
-    def test_digest_still_has_core_fields(self):
-        """Digest should still have all core fields (coach_summary, signals, metrics, etc.)"""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?language=en")
-        assert response.status_code == 200
-        
-        data = response.json()
-        # Core fields from previous implementation
-        assert "coach_summary" in data, "Should have coach_summary"
-        assert "signals" in data, "Should have signals"
-        assert "metrics" in data, "Should have metrics"
-        assert "recommendations" in data, "Should have recommendations"
-        assert "period_start" in data, "Should have period_start"
-        assert "period_end" in data, "Should have period_end"
-
-
 class TestDashboardInsightComplete:
     """Test complete dashboard insight response"""
     
     def test_dashboard_insight_has_all_fields(self):
-        """Dashboard insight should have coach_insight, week, month, and recovery_score"""
+        """Dashboard insight should have factual fields only."""
         response = requests.get(f"{BASE_URL}/api/dashboard/insight?language=en")
         assert response.status_code == 200
         
         data = response.json()
-        assert "coach_insight" in data, "Should have coach_insight"
+        assert "coach_insight" not in data, "Should not have coach_insight"
         assert "week" in data, "Should have week stats"
         assert "month" in data, "Should have month stats"
         assert "recovery_score" in data, "Should have recovery_score"

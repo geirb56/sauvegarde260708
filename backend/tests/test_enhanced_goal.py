@@ -215,8 +215,8 @@ class TestEnhancedGoalAPI:
         assert get_response.json() is None
 
 
-class TestGoalInDigest:
-    """Test goal display in weekly digest/review"""
+class TestGoalInRemovedDigestEndpoint:
+    """Legacy digest endpoint must be removed."""
     
     @pytest.fixture(autouse=True)
     def setup_goal(self):
@@ -231,26 +231,10 @@ class TestGoalInDigest:
         yield
         requests.delete(f"{BASE_URL}/api/user/goal")
     
-    def test_digest_includes_goal_with_pace(self):
-        """Test weekly digest includes goal with target_pace"""
+    def test_digest_endpoint_is_removed(self):
+        """GET /api/coach/digest now returns 404."""
         response = requests.get(f"{BASE_URL}/api/coach/digest?language=en")
-        assert response.status_code == 200
-        data = response.json()
-        
-        # Check user_goal is present
-        assert "user_goal" in data
-        user_goal = data["user_goal"]
-        
-        if user_goal:  # Goal should be present
-            assert user_goal["event_name"] == "TEST_Marathon Test"
-            assert user_goal["distance_type"] == "marathon"
-            assert user_goal["distance_km"] == 42.195
-            assert user_goal["target_time_minutes"] == 210
-            # 210min / 42.195km = 4.98 min/km = 4:58/km
-            assert user_goal["target_pace"] is not None
-            pace_parts = user_goal["target_pace"].split(":")
-            assert int(pace_parts[0]) == 4
-            assert 55 <= int(pace_parts[1]) <= 59
+        assert response.status_code == 404
 
 
 class TestPaceCalculation:

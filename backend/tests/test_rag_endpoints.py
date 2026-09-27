@@ -124,15 +124,6 @@ class _FakeDB:
                 "duration_minutes": 170,
             },
         ])
-        self.digests = _Collection([
-            {
-                "id": "digest-1",
-                "user_id": "user-a",
-                "generated_at": "2024-01-10T08:00:00+00:00",
-                "coach_summary": "Digest",
-            }
-        ])
-        self.user_goals = _Collection([{"user_id": "user-a", "goal": "marathon"}])
         self.subscriptions = _Collection()
         self.users = _Collection([
             {"id": "user-a", "email": "a@test.com", "is_active": True, "is_email_verified": True},
@@ -156,27 +147,11 @@ async def client():
         patch.object(server, "db", fake_db),
         patch("server.get_user_access", AsyncMock(side_effect=_get_user_access)),
         patch.object(server, "_dic", SimpleNamespace(get=lambda *args, **kwargs: None, set=lambda *args, **kwargs: None)),
-        patch("server.generate_dashboard_rag", return_value={
-            "summary": "Dashboard summary",
-            "metrics": {"km_total": 18.0, "nb_seances": 2, "allure_moy": "6:00/km", "duree_totale": "1h48"},
-            "points_forts": ["consistent"],
-            "points_ameliorer": ["speed"],
-            "tips": ["keep going"],
-        }),
-        patch("server.generate_weekly_review_rag", return_value={
-            "metrics": {"km_total": 18.0},
-            "comparison": {"vs_prev_week": "+10%", "km_current": 18.0},
-            "points_forts": ["consistent"],
-            "points_ameliorer": ["speed"],
-            "tips": ["recover"],
-        }),
-        patch("server.coach_weekly_review", AsyncMock(return_value=("Weekly review summary", False))),
         patch("server.load_garmin_domain_activities", AsyncMock(return_value=[SimpleNamespace(id="ga-1")])),
         patch("server.calculate_week_stats_from_domain", return_value={"sessions": 2, "volume_km": 18.0}),
         patch("server.calculate_month_stats_from_domain", return_value={"sessions": 6, "volume_km": 60.0}),
         patch("server.calculate_run_index_from_domain", return_value={"score": 52.1}),
         patch("server.upsert_run_index_snapshot", AsyncMock(return_value=None)),
-        patch("server.generate_dashboard_insight", return_value="Coach insight"),
     ]
     started = []
     try:
@@ -194,24 +169,15 @@ async def client():
 
 
 @pytest.mark.asyncio
-async def test_rag_dashboard_coverage_is_preserved(client):
+async def test_rag_dashboard_endpoint_removed_returns_404(client):
     response = await client.get("/api/rag/dashboard", headers=_bearer("user-a", "a@test.com"))
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["rag_summary"] == "Dashboard summary"
-    assert payload["metrics"]["km_total"] == 18.0
-    assert payload["metrics"]["nb_seances"] == 2
-    assert payload["points_forts"] == ["consistent"]
+    assert response.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_rag_weekly_review_coverage_is_preserved(client):
+async def test_rag_weekly_review_endpoint_removed_returns_404(client):
     response = await client.get("/api/rag/weekly-review?language=en", headers=_bearer("user-a", "a@test.com"))
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["rag_summary"] == "Weekly review summary"
-    assert payload["comparison"]["km_current"] == 18.0
-    assert payload["enriched_by_llm"] is False
+    assert response.status_code == 404
 
 
 @pytest.mark.asyncio
@@ -225,11 +191,11 @@ async def test_workouts_endpoint_coverage_is_preserved(client):
 
 
 @pytest.mark.asyncio
-async def test_dashboard_insight_coverage_is_preserved(client):
+async def test_dashboard_insight_coverage_is_preserved_without_coach_insight(client):
     response = await client.get("/api/dashboard/insight?language=en", headers=_bearer("user-a", "a@test.com"))
     assert response.status_code == 200
     payload = response.json()
-    assert payload["coach_insight"] == "Coach insight"
+    assert "coach_insight" not in payload
     assert payload["week"]["sessions"] == 2
     assert payload["month"]["volume_km"] == 60.0
     assert payload["run_index"]["score"] == 52.1

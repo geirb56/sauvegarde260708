@@ -436,10 +436,7 @@ ROUTE_ACCESS_MAP: Dict[str, RouteAccess] = {
     "/api/training/":                 RouteAccess.PREMIUM,
     "/api/coach/workout-analysis":    RouteAccess.PREMIUM,
     "/api/coach/detailed-analysis":   RouteAccess.PREMIUM,
-    "/api/coach/guidance":            RouteAccess.PREMIUM,
-    "/api/coach/digest":              RouteAccess.PREMIUM,
     "/api/coach/":                    RouteAccess.PREMIUM,
-    "/api/rag/":                      RouteAccess.PREMIUM,
     "/api/garmin/":                   RouteAccess.PREMIUM,
     "/api/sync/":                     RouteAccess.PREMIUM,
 }

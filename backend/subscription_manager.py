@@ -190,7 +190,6 @@ PROTECTED_ROUTES = [
     "/api/coach/analyze",
     "/api/coach/workout-analysis",
     "/api/coach/detailed-analysis",
-    "/api/rag/",
 ]
 
 PUBLIC_ROUTES = [
