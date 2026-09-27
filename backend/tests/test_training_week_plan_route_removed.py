@@ -48,7 +48,7 @@ async def test_legacy_week_plan_route_is_removed_and_access_fallback_is_premium(
 
     assert response.status_code == 404
 
-    route_paths = {route.path for route in server.api_router.routes if hasattr(route, "path")}
+    route_paths = set(server.app.openapi().get("paths", {}).keys())
     assert "/api/training/week-plan" not in route_paths
     assert "/api/training/v2/week" in route_paths
 
