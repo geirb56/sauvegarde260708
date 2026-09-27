@@ -94,6 +94,9 @@ def test_deep_reprise_stays_duration_based_without_invented_km():
     assert wp.target_basis == "duration"
     assert wp.planned_km is None
     assert wp.planned_duration_minutes == wt.target_duration_minutes
+    active_sessions = [s for s in wp.sessions if s.workout_type != "rest"]
+    assert active_sessions
+    assert all(s.distance_km is None for s in active_sessions)
 
 
 def test_partial_reprise_distance_prescription_is_conserved():
@@ -104,6 +107,12 @@ def test_partial_reprise_distance_prescription_is_conserved():
     assert wt.target_km is not None
     assert wp.target_basis == "distance"
     assert wp.planned_km is not None
+    planned_from_sessions = round(
+        sum((s.distance_km or 0.0) for s in wp.sessions if s.workout_type != "rest"),
+        1,
+    )
+    assert abs(planned_from_sessions - (wp.planned_km or 0.0)) <= 0.15
+    assert abs(planned_from_sessions - (wt.target_km or 0.0)) <= 0.15
     assert abs((wp.planned_km or 0) - (wt.target_km or 0)) <= 0.15
 
 
@@ -116,3 +125,5 @@ def test_no_history_remains_duration_based_and_low_intensity():
     assert wt.allow_intensity is False
     assert wp.target_basis == "duration"
     assert wp.allow_intensity is False
+    active_sessions = [s for s in wp.sessions if s.workout_type != "rest"]
+    assert all(s.distance_km is None for s in active_sessions)

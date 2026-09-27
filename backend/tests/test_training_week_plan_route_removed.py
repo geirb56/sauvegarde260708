@@ -11,6 +11,7 @@ import httpx
 import pytest
 
 os.environ.setdefault("JWT_SECRET", "test-secret-route-removed")
+os.environ.setdefault("JWT_SECRET_KEY", "test-secret-route-removed")
 os.environ.setdefault("JWT_ALGORITHM", "HS256")
 os.environ.setdefault("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "60")
 os.environ.setdefault("ENVIRONMENT", "test")
@@ -52,4 +53,5 @@ async def test_legacy_week_plan_route_is_removed_and_access_fallback_is_premium(
     assert "/api/training/v2/week" in route_paths
 
     assert "/api/training/week-plan" not in ROUTE_ACCESS_MAP
+    assert ROUTE_ACCESS_MAP["/api/training/"] == RouteAccess.PREMIUM
     assert get_route_access("/api/training/week-plan") == RouteAccess.PREMIUM
