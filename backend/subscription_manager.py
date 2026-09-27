@@ -95,7 +95,6 @@ def _premium_features(enabled: bool) -> dict:
         "api_access":        enabled,
         "llm_access":        enabled,
         "full_access":       enabled,
-        "rag_access":        enabled,
         "coach_detailed":    enabled,
         "race_predictions":  enabled,
     }
@@ -190,7 +189,6 @@ PROTECTED_ROUTES = [
     "/api/coach/analyze",
     "/api/coach/workout-analysis",
     "/api/coach/detailed-analysis",
-    "/api/rag/",
 ]
 
 PUBLIC_ROUTES = [

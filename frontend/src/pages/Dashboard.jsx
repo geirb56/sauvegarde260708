@@ -797,11 +797,6 @@ export default function Dashboard() {
       setTrainingWeekV2(null);
       setTrainingPaces(null);
       setPacesRequestState("idle");
-      setInsight(prev => {
-        if (!prev) return prev;
-        const { rag: _rag, ...rest } = prev; // eslint-disable-line no-unused-vars
-        return rest;
-      });
     }
   }, [isFree, subLoading]);
 
@@ -827,9 +822,8 @@ export default function Dashboard() {
         setInsight(insightRes.data);
       } else {
         // TRIAL / PREMIUM: fetch independent truths independently
-        const [insightResult, ragResult, todayResult] = await Promise.allSettled([
+        const [insightResult, todayResult] = await Promise.allSettled([
           axios.get(`${API}/dashboard/insight?language=${lang}`),
-          axios.get(`${API}/rag/dashboard`),
           axios.get(`${API}/training/today`),
         ]);
 
@@ -837,10 +831,6 @@ export default function Dashboard() {
           setInsight(insightResult.value.data);
         } else {
           setInsight(null);
-        }
-
-        if (ragResult.status === "fulfilled" && ragResult.value.data) {
-          setInsight(prev => ({ ...(prev || {}), rag: ragResult.value.data }));
         }
 
         if (todayResult.status === "fulfilled") {

@@ -66,18 +66,6 @@ The Training V2 engine decides the prescription. The Coach only explains it.
 - Never fabricate missing metrics, readiness scores, paces, or performance certainty
 - Respect readiness confidence/sufficiency and performance extrapolation metadata"""
 
-SYSTEM_PROMPT_BILAN = """You are a running coach providing a weekly review.
-
-Review structure:
-1. Positive intro (congratulate consistency or effort)
-2. Analysis of key metrics (explain simply)
-3. Strengths (max 2)
-4. Area to improve (max 1, framed positively)
-5. Advice for next week
-6. Motivating follow-up question
-
-Be encouraging even if stats are average. Max 6-8 sentences."""
-
 SYSTEM_PROMPT_SEANCE = """You are a running coach analyzing a session.
 
 Structure:
@@ -144,20 +132,6 @@ If a field is unavailable or low-confidence, say so plainly.
 Do not invent a new prescription or alter the served prescription.{_lang_directive(language)}"""
 
     return await _call_gpt(SYSTEM_PROMPT_COACH + _lang_directive(language), prompt, user_id, "chat")
-
-
-async def enrich_weekly_review(
-    stats: Dict,
-    user_id: str = "unknown",
-    language: str = "fr"
-) -> Tuple[Optional[str], bool, Dict]:
-    """Enriches weekly review with the configured LLM model."""
-    prompt = f"""WEEKLY STATS:
-{_format_context(stats)}
-
-Generate a motivating and personalized weekly review based on this data.{_lang_directive(language)}"""
-
-    return await _call_gpt(SYSTEM_PROMPT_BILAN + _lang_directive(language), prompt, user_id, "bilan")
 
 
 async def enrich_workout_analysis(
@@ -282,7 +256,6 @@ def _clean_response(response: str) -> str:
 
 __all__ = [
     "enrich_chat_response",
-    "enrich_weekly_review", 
     "enrich_workout_analysis",
     "LLM_MODEL",
     "LLM_PROVIDER"

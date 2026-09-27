@@ -124,15 +124,6 @@ class _FakeDB:
                 "duration_minutes": 170,
             },
         ])
-        self.digests = _Collection([
-            {
-                "id": "digest-1",
-                "user_id": "user-a",
-                "generated_at": "2024-01-10T08:00:00+00:00",
-                "coach_summary": "Digest",
-            }
-        ])
-        self.user_goals = _Collection([{"user_id": "user-a", "goal": "marathon"}])
         self.subscriptions = _Collection()
         self.users = _Collection([
             {"id": "user-a", "email": "a@test.com", "is_active": True, "is_email_verified": True},
@@ -152,31 +143,16 @@ def _get_user_access(_db, user_id: str) -> UserAccess:
 @pytest_asyncio.fixture
 async def client():
     fake_db = _FakeDB()
+    access_mock = AsyncMock(side_effect=_get_user_access)
     patches = [
         patch.object(server, "db", fake_db),
-        patch("server.get_user_access", AsyncMock(side_effect=_get_user_access)),
+        patch("server.get_user_access", access_mock),
         patch.object(server, "_dic", SimpleNamespace(get=lambda *args, **kwargs: None, set=lambda *args, **kwargs: None)),
-        patch("server.generate_dashboard_rag", return_value={
-            "summary": "Dashboard summary",
-            "metrics": {"km_total": 18.0, "nb_seances": 2, "allure_moy": "6:00/km", "duree_totale": "1h48"},
-            "points_forts": ["consistent"],
-            "points_ameliorer": ["speed"],
-            "tips": ["keep going"],
-        }),
-        patch("server.generate_weekly_review_rag", return_value={
-            "metrics": {"km_total": 18.0},
-            "comparison": {"vs_prev_week": "+10%", "km_current": 18.0},
-            "points_forts": ["consistent"],
-            "points_ameliorer": ["speed"],
-            "tips": ["recover"],
-        }),
-        patch("server.coach_weekly_review", AsyncMock(return_value=("Weekly review summary", False))),
         patch("server.load_garmin_domain_activities", AsyncMock(return_value=[SimpleNamespace(id="ga-1")])),
         patch("server.calculate_week_stats_from_domain", return_value={"sessions": 2, "volume_km": 18.0}),
         patch("server.calculate_month_stats_from_domain", return_value={"sessions": 6, "volume_km": 60.0}),
         patch("server.calculate_run_index_from_domain", return_value={"score": 52.1}),
         patch("server.upsert_run_index_snapshot", AsyncMock(return_value=None)),
-        patch("server.generate_dashboard_insight", return_value="Coach insight"),
     ]
     started = []
     try:
@@ -187,36 +163,37 @@ async def client():
             transport=httpx.ASGITransport(app=server.app),
             base_url="http://test",
         ) as test_client:
-            yield test_client
+            yield test_client, access_mock
     finally:
         for patcher in reversed(started):
             patcher.stop()
 
 
 @pytest.mark.asyncio
-async def test_rag_dashboard_coverage_is_preserved(client):
-    response = await client.get("/api/rag/dashboard", headers=_bearer("user-a", "a@test.com"))
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["rag_summary"] == "Dashboard summary"
-    assert payload["metrics"]["km_total"] == 18.0
-    assert payload["metrics"]["nb_seances"] == 2
-    assert payload["points_forts"] == ["consistent"]
-
-
-@pytest.mark.asyncio
-async def test_rag_weekly_review_coverage_is_preserved(client):
-    response = await client.get("/api/rag/weekly-review?language=en", headers=_bearer("user-a", "a@test.com"))
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["rag_summary"] == "Weekly review summary"
-    assert payload["comparison"]["km_current"] == 18.0
-    assert payload["enriched_by_llm"] is False
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("post", "/api/coach/guidance"),
+        ("get", "/api/coach/guidance/latest"),
+        ("get", "/api/coach/digest"),
+        ("get", "/api/coach/digest/latest"),
+        ("get", "/api/coach/digest/history"),
+        ("get", "/api/rag/dashboard"),
+        ("get", "/api/rag/weekly-review"),
+    ],
+)
+async def test_removed_legacy_endpoints_return_404_for_premium_user(client, method, path):
+    test_client, access_mock = client
+    access_mock.reset_mock()
+    response = await test_client.request(method, path, headers=_bearer("user-a", "a@test.com"))
+    assert access_mock.await_count >= 1, f"subscription middleware should resolve access for {path}"
+    assert response.status_code == 404
 
 
 @pytest.mark.asyncio
 async def test_workouts_endpoint_coverage_is_preserved(client):
-    response = await client.get("/api/workouts", headers=_bearer("user-a", "a@test.com"))
+    test_client, _ = client
+    response = await test_client.get("/api/workouts", headers=_bearer("user-a", "a@test.com"))
     assert response.status_code == 200
     payload = response.json()
     assert isinstance(payload, list)
@@ -225,11 +202,42 @@ async def test_workouts_endpoint_coverage_is_preserved(client):
 
 
 @pytest.mark.asyncio
-async def test_dashboard_insight_coverage_is_preserved(client):
-    response = await client.get("/api/dashboard/insight?language=en", headers=_bearer("user-a", "a@test.com"))
+async def test_dashboard_insight_coverage_is_preserved_without_coach_insight(client):
+    test_client, _ = client
+    response = await test_client.get("/api/dashboard/insight?language=en", headers=_bearer("user-a", "a@test.com"))
     assert response.status_code == 200
     payload = response.json()
-    assert payload["coach_insight"] == "Coach insight"
+    assert "coach_insight" not in payload
     assert payload["week"]["sessions"] == 2
     assert payload["month"]["volume_km"] == 60.0
     assert payload["run_index"]["score"] == 52.1
+
+
+def test_route_table_absence_and_presence_invariants():
+    route_paths = {route.path for route in server.app.routes if hasattr(route, "path")}
+    route_paths.update(
+        route.path for route in getattr(server, "api_router").routes if hasattr(route, "path")
+    )
+
+    removed_paths = {
+        "/api/coach/guidance",
+        "/api/coach/guidance/latest",
+        "/api/coach/digest",
+        "/api/coach/digest/latest",
+        "/api/coach/digest/history",
+        "/api/rag/dashboard",
+        "/api/rag/weekly-review",
+    }
+    for path in removed_paths:
+        assert path not in route_paths
+
+    live_paths = {
+        "/api/coach/analyze",
+        "/api/coach/history",
+        "/api/coach/workout-analysis/{workout_id}",
+        "/api/dashboard/insight",
+        "/api/training/today",
+        "/api/training/v2/week",
+    }
+    for path in live_paths:
+        assert path in route_paths

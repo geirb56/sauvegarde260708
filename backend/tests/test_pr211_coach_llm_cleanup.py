@@ -177,9 +177,7 @@ async def test_enrichment_functions_work_without_real_network(monkeypatch):
         conversation_history=[],
         user_id="u1",
     )
-    weekly, ok_weekly, _ = await llm_coach.enrich_weekly_review({"weekly_km": 20}, user_id="u1", language="fr")
     workout, ok_workout, _ = await llm_coach.enrich_workout_analysis({"distance_km": 8}, user_id="u1", language="fr")
 
     assert ok_chat and chat == "ok"
-    assert ok_weekly and weekly == "ok"
     assert ok_workout and workout == "ok"

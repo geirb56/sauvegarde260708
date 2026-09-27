@@ -3,12 +3,11 @@ RunIndex - Cascade Coaching Service with Cache and Metrics
 
 Strategy:
 1. Check cache (0ms)
-2. Deterministic analysis (instant) via rag_engine
-3. LLM enrichment (~500ms) if available
-4. Store in cache + metrics
+2. LLM enrichment (~500ms) when available
+3. Store in cache + metrics
 
 Usage:
-    from coach_service import analyze_workout, weekly_review, chat_response, get_metrics
+    from coach_service import analyze_workout, chat_response, get_metrics
 """
 
 import hashlib
@@ -19,7 +18,6 @@ from typing import Dict, List, Tuple, Optional
 
 from llm_coach import (
     enrich_chat_response,
-    enrich_weekly_review,
     enrich_workout_analysis,
 )
 logger = logging.getLogger(__name__)
@@ -40,7 +38,6 @@ class CoachMetrics:
     llm_avg_latency_ms: float = 0.0
     cache_avg_latency_ms: float = 0.0
     workout_requests: int = 0
-    weekly_requests: int = 0
     chat_requests: int = 0
 
 
@@ -82,7 +79,6 @@ CACHE_TTL_SECONDS = 3600
 MAX_CACHE_SIZE = 500
 
 _workout_cache: Dict[str, Tuple[dict, float]] = {}
-_weekly_cache: Dict[str, Tuple[dict, float]] = {}
 
 
 def _cache_key(data: dict, prefix: str = "") -> str:
@@ -174,72 +170,6 @@ async def analyze_workout(
     return deterministic_summary, False
 
 
-async def weekly_review(
-    rag_result: dict,
-    user_id: Optional[str] = None,
-    language: str = "fr"
-) -> Tuple[str, bool]:
-    """Weekly review with cache + metrics + cascade strategy."""
-    start = time.time()
-    metrics.total_requests += 1
-    metrics.weekly_requests += 1
-    
-    m = rag_result.get("metrics", {})
-    cache_data = {
-        "id": f"weekly_{language}_{m.get('nb_seances', 0)}_{m.get('km_total', 0)}",
-        "distance_km": m.get("km_total", 0),
-        "duration_minutes": m.get("duree_totale", 0),
-    }
-    cache_key = _cache_key(cache_data, "weekly")
-    
-    if cache_key in _weekly_cache:
-        cached_result, timestamp = _weekly_cache[cache_key]
-        if _is_cache_valid(timestamp):
-            metrics.cache_hits += 1
-            latency = (time.time() - start) * 1000
-            _update_latency(latency, is_cache=True)
-            return cached_result["summary"], cached_result["used_llm"]
-    
-    deterministic_summary = rag_result.get("summary", "")
-    
-    try:
-        weekly_stats = {
-            "weekly_km": m.get("km_total", 0),
-            "num_sessions": m.get("nb_seances", 0),
-            "avg_pace": m.get("allure_moyenne", "N/A"),
-            "avg_cadence": m.get("cadence_moyenne", 0),
-            "zones": m.get("zones", {}),
-            "load_ratio": m.get("ratio", 1.0),
-            "strengths": rag_result.get("points_forts", []),
-            "areas_to_improve": rag_result.get("points_ameliorer", []),
-            "trend": rag_result.get("comparison", {}).get("evolution", "stable"),
-        }
-        
-        enriched, success, meta = await enrich_weekly_review(
-            stats=weekly_stats,
-            user_id=user_id,
-            language=language
-        )
-        
-        if success and enriched:
-            metrics.llm_success += 1
-            latency = (time.time() - start) * 1000
-            _update_latency(latency, is_llm=True)
-            _weekly_cache[cache_key] = ({"summary": enriched, "used_llm": True}, time.time())
-            _cleanup_cache(_weekly_cache)
-            return enriched, True
-            
-    except Exception as e:
-        logger.warning(f"[Coach] Review fallback: {e}")
-    
-    metrics.llm_fallback += 1
-    latency = (time.time() - start) * 1000
-    _update_latency(latency)
-    _weekly_cache[cache_key] = ({"summary": deterministic_summary, "used_llm": False}, time.time())
-    _cleanup_cache(_weekly_cache)
-    return deterministic_summary, False
-
-
 async def chat_response(
     message: str,
     context: dict,
@@ -287,13 +217,11 @@ async def chat_response(
 
 def clear_cache() -> dict:
     """Clears caches."""
-    global _workout_cache, _weekly_cache
+    global _workout_cache
     result = {
         "cleared_workout": len(_workout_cache),
-        "cleared_weekly": len(_weekly_cache),
     }
     _workout_cache = {}
-    _weekly_cache = {}
     return result
 
 
@@ -301,7 +229,6 @@ def get_cache_stats() -> dict:
     """Returns cache statistics."""
     return {
         "workout_cache_size": len(_workout_cache),
-        "weekly_cache_size": len(_weekly_cache),
         "max_size": MAX_CACHE_SIZE,
         "ttl_seconds": CACHE_TTL_SECONDS
     }
@@ -313,7 +240,6 @@ def get_cache_stats() -> dict:
 
 __all__ = [
     "analyze_workout",
-    "weekly_review", 
     "chat_response",
     "clear_cache",
     "get_cache_stats",
