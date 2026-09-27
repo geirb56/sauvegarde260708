@@ -215,28 +215,6 @@ class TestEnhancedGoalAPI:
         assert get_response.json() is None
 
 
-class TestGoalInRemovedDigestEndpoint:
-    """Legacy digest endpoint must be removed."""
-    
-    @pytest.fixture(autouse=True)
-    def setup_goal(self):
-        """Set up a goal for digest tests"""
-        requests.delete(f"{BASE_URL}/api/user/goal")
-        requests.post(f"{BASE_URL}/api/user/goal", json={
-            "event_name": "TEST_Marathon Test",
-            "event_date": "2026-06-01",
-            "distance_type": "marathon",
-            "target_time_minutes": 210  # 3h30 = 210 minutes
-        })
-        yield
-        requests.delete(f"{BASE_URL}/api/user/goal")
-    
-    def test_digest_endpoint_is_removed(self):
-        """GET /api/coach/digest now returns 404."""
-        response = requests.get(f"{BASE_URL}/api/coach/digest?language=en")
-        assert response.status_code == 404
-
-
 class TestPaceCalculation:
     """Test pace calculation accuracy for different scenarios"""
     

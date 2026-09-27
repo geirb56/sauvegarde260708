@@ -143,9 +143,10 @@ def _get_user_access(_db, user_id: str) -> UserAccess:
 @pytest_asyncio.fixture
 async def client():
     fake_db = _FakeDB()
+    access_mock = AsyncMock(side_effect=_get_user_access)
     patches = [
         patch.object(server, "db", fake_db),
-        patch("server.get_user_access", AsyncMock(side_effect=_get_user_access)),
+        patch("server.get_user_access", access_mock),
         patch.object(server, "_dic", SimpleNamespace(get=lambda *args, **kwargs: None, set=lambda *args, **kwargs: None)),
         patch("server.load_garmin_domain_activities", AsyncMock(return_value=[SimpleNamespace(id="ga-1")])),
         patch("server.calculate_week_stats_from_domain", return_value={"sessions": 2, "volume_km": 18.0}),
@@ -162,27 +163,37 @@ async def client():
             transport=httpx.ASGITransport(app=server.app),
             base_url="http://test",
         ) as test_client:
-            yield test_client
+            yield test_client, access_mock
     finally:
         for patcher in reversed(started):
             patcher.stop()
 
 
 @pytest.mark.asyncio
-async def test_rag_dashboard_endpoint_removed_returns_404(client):
-    response = await client.get("/api/rag/dashboard", headers=_bearer("user-a", "a@test.com"))
-    assert response.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_rag_weekly_review_endpoint_removed_returns_404(client):
-    response = await client.get("/api/rag/weekly-review?language=en", headers=_bearer("user-a", "a@test.com"))
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("post", "/api/coach/guidance"),
+        ("get", "/api/coach/guidance/latest"),
+        ("get", "/api/coach/digest"),
+        ("get", "/api/coach/digest/latest"),
+        ("get", "/api/coach/digest/history"),
+        ("get", "/api/rag/dashboard"),
+        ("get", "/api/rag/weekly-review"),
+    ],
+)
+async def test_removed_legacy_endpoints_return_404_for_premium_user(client, method, path):
+    test_client, access_mock = client
+    access_mock.reset_mock()
+    response = await test_client.request(method, path, headers=_bearer("user-a", "a@test.com"))
+    assert access_mock.await_count >= 1, f"subscription middleware should resolve access for {path}"
     assert response.status_code == 404
 
 
 @pytest.mark.asyncio
 async def test_workouts_endpoint_coverage_is_preserved(client):
-    response = await client.get("/api/workouts", headers=_bearer("user-a", "a@test.com"))
+    test_client, _ = client
+    response = await test_client.get("/api/workouts", headers=_bearer("user-a", "a@test.com"))
     assert response.status_code == 200
     payload = response.json()
     assert isinstance(payload, list)
@@ -192,10 +203,41 @@ async def test_workouts_endpoint_coverage_is_preserved(client):
 
 @pytest.mark.asyncio
 async def test_dashboard_insight_coverage_is_preserved_without_coach_insight(client):
-    response = await client.get("/api/dashboard/insight?language=en", headers=_bearer("user-a", "a@test.com"))
+    test_client, _ = client
+    response = await test_client.get("/api/dashboard/insight?language=en", headers=_bearer("user-a", "a@test.com"))
     assert response.status_code == 200
     payload = response.json()
     assert "coach_insight" not in payload
     assert payload["week"]["sessions"] == 2
     assert payload["month"]["volume_km"] == 60.0
     assert payload["run_index"]["score"] == 52.1
+
+
+def test_route_table_absence_and_presence_invariants():
+    route_paths = {route.path for route in server.app.routes if hasattr(route, "path")}
+    route_paths.update(
+        route.path for route in getattr(server, "api_router").routes if hasattr(route, "path")
+    )
+
+    removed_paths = {
+        "/api/coach/guidance",
+        "/api/coach/guidance/latest",
+        "/api/coach/digest",
+        "/api/coach/digest/latest",
+        "/api/coach/digest/history",
+        "/api/rag/dashboard",
+        "/api/rag/weekly-review",
+    }
+    for path in removed_paths:
+        assert path not in route_paths
+
+    live_paths = {
+        "/api/coach/analyze",
+        "/api/coach/history",
+        "/api/coach/workout-analysis/{workout_id}",
+        "/api/dashboard/insight",
+        "/api/training/today",
+        "/api/training/v2/week",
+    }
+    for path in live_paths:
+        assert path in route_paths
