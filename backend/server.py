@@ -70,7 +70,6 @@ from training_v2.today_prescription import resolve_today_final_prescription
 from training_v2.workout_generator import WorkoutPrescription
 from training_v2.training_week_response import TrainingWeekV2Response  # PR167
 from training_v2.daily_runtime_helpers import (
-    BAND_TO_RECOMMENDATION,
     runtime_session_to_prescription,
     prescription_to_runtime_session,
 )
@@ -3074,9 +3073,6 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     )
     adaptation_reason = ", ".join(adaptation_reason_codes)
 
-    # ── 9. Legacy compat: recommendation / recommendation_color derived from V2 ─
-    recommendation, recommendation_color = BAND_TO_RECOMMENDATION[readiness_decision.band]
-
     return {
         "status": "success",
         "date": today_iso,
@@ -3139,13 +3135,6 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
             "confidence": readiness_decision.confidence.value,
             "sufficiency_level": readiness_decision.sufficiency_level.value,
             "available": readiness_decision.band != ReadinessBand.UNAVAILABLE,
-            "data_source": readiness_data_source,
-        },
-        # Legacy compat: fatigue block derived from V2
-        "fatigue": {
-            "run_readiness": readiness_decision.score,
-            "recommendation": recommendation,
-            "recommendation_color": recommendation_color,
             "data_source": readiness_data_source,
         },
         # PR228: reconciliation audit (same reconciliation applied to /training/v2/week)
