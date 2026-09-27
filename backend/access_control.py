@@ -421,6 +421,7 @@ ROUTE_ACCESS_MAP: Dict[str, RouteAccess] = {
     "/api/garmin/connect":      RouteAccess.FREE,
     "/api/garmin/status":       RouteAccess.FREE,
     "/api/garmin/disconnect":   RouteAccess.FREE,
+    "/api/training/v2/preferences": RouteAccess.FREE,  # onboarding preference capture must stay reachable pre-handoff
 
     # ── Premium (TRIAL or PREMIUM required) ──────────────────────────────
     "/api/training/race-predictions": RouteAccess.PREMIUM,
@@ -428,7 +429,6 @@ ROUTE_ACCESS_MAP: Dict[str, RouteAccess] = {
     "/api/training/week-plan":        RouteAccess.PREMIUM,
     "/api/training/v2/week":          RouteAccess.PREMIUM,  # PR167 — native V2 week endpoint
     "/api/training/v2/cycle":         RouteAccess.PREMIUM,  # PR175 — native V2 cycle calendar endpoint
-    "/api/training/v2/preferences":   RouteAccess.PREMIUM,
     "/api/training/v2/cycle/start-date": RouteAccess.PREMIUM,
     "/api/training/metrics":          RouteAccess.PREMIUM,
     "/api/training/set-goal":         RouteAccess.PREMIUM,
