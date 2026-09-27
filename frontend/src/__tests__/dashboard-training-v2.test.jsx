@@ -431,7 +431,6 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
       buildDefaultMocks({
         today: {
           ...TODAY_PAYLOAD,
-          fatigue: null,
           readiness: {
             ...TODAY_PAYLOAD.readiness,
             band: "UNAVAILABLE",

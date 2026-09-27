@@ -41,7 +41,6 @@ from training_v2.training_load import TrainingLoadSnapshot
 from training_v2.workout_generator import WorkoutPrescription
 from training_v2.daily_runtime_helpers import (
     WORKOUT_TYPE_TO_INTENSITY_CLASS,
-    BAND_TO_RECOMMENDATION,
     parse_duration_minutes,
     runtime_session_to_prescription,
     prescription_to_runtime_session,
@@ -354,31 +353,26 @@ def test_O_no_score_thresholds_in_server_endpoint():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# P–R. Recommendation mapping
+# P. Today endpoint must expose only canonical readiness, not legacy recommendations
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_P_band_to_recommendation_complete():
-    for band in ReadinessBand:
-        assert band in BAND_TO_RECOMMENDATION
-
-
-def test_Q_unavailable_maps_gray():
-    rec, color = BAND_TO_RECOMMENDATION[ReadinessBand.UNAVAILABLE]
-    assert rec == "UNAVAILABLE"
-    assert color == "gray"
-
-
-def test_R_favorable_maps_green():
-    rec, color = BAND_TO_RECOMMENDATION[ReadinessBand.FAVORABLE]
-    assert rec == "RUN HARD"
-    assert color == "green"
+def test_P_today_endpoint_omits_legacy_recommendation_fields_but_keeps_readiness():
+    server_src = _SERVER_PATH.read_text()
+    start = server_src.find("async def get_today_adaptive_session")
+    end = server_src.find("\n@api_router.", start + 1)
+    assert start != -1
+    body = server_src[start:end] if end != -1 else server_src[start:]
+    assert "BAND_TO_RECOMMENDATION" not in body
+    assert '"fatigue"' not in body and "'fatigue'" not in body
+    assert '"recommendation_color"' not in body and "'recommendation_color'" not in body
+    assert '"readiness"' in body or "'readiness'" in body
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# S. No fatigue_ratio/fatigue_status/fatigue_physio in payload
+# Q. No fatigue_ratio/fatigue_status/fatigue_physio in payload
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_S_no_legacy_fatigue_fields():
+def test_Q_no_legacy_fatigue_fields():
     server_src = _SERVER_PATH.read_text()
     start = server_src.find("async def get_today_adaptive_session")
     end = server_src.find("\n@api_router.", start + 1)
@@ -392,7 +386,7 @@ def test_S_no_legacy_fatigue_fields():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# T. No adapt_session_to_readiness call in endpoint
+# R. No adapt_session_to_readiness call in endpoint
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_T_no_legacy_adapt_call():
