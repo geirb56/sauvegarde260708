@@ -51,6 +51,7 @@ function renderOnboarding(lang = "en") {
 }
 
 function mockSuccessfulPostFlow() {
+  if (!axios.patch) axios.patch = jest.fn();
   axios.post.mockImplementation((url) => {
     if (url.includes("/garmin/connect")) {
       return Promise.resolve({ data: { status: "connected" } });
@@ -61,10 +62,13 @@ function mockSuccessfulPostFlow() {
     if (url.includes("/training/set-goal")) {
       return Promise.resolve({ data: { ok: true } });
     }
-    if (url.includes("/training/refresh")) {
-      return Promise.resolve({ data: { ok: true } });
-    }
     return Promise.reject(new Error(`Unexpected POST ${url}`));
+  });
+  axios.patch.mockImplementation((url, payload) => {
+    if (url.includes("/training/v2/preferences")) {
+      return Promise.resolve({ data: { status: "updated", training_prefs: payload } });
+    }
+    return Promise.reject(new Error(`Unexpected PATCH ${url}`));
   });
 }
 
@@ -130,6 +134,12 @@ describe("Onboarding trial handoff", () => {
 
     await goToDoneStep();
 
+    expect(axios.patch).toHaveBeenCalledWith(
+      expect.stringContaining("/training/v2/preferences"),
+      { sessions_per_week: 3 }
+    );
+    expect(axios.post.mock.calls.some(([url]) => String(url).includes("/training/refresh"))).toBe(false);
+    expect(axios.post.mock.calls.some(([url]) => String(url).includes("/training/plan"))).toBe(false);
     expect(screen.getByTestId("onboarding-subscription-status")).toHaveTextContent("Premium Trial — 30 days left");
     expect(axios.post.mock.calls.some(([url]) => String(url).includes("/subscription/start-trial"))).toBe(false);
 
