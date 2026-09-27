@@ -417,6 +417,18 @@ ROUTE_ACCESS_MAP: Dict[str, RouteAccess] = {
     "/api/admin/":              RouteAccess.FREE,
     "/api/coach/analyze":       RouteAccess.FREE,     # quota enforced in canonical coach service
     "/api/coach/history":       RouteAccess.FREE,
+    # Removed legacy endpoints kept explicit so they resolve to router 404,
+    # not premium-tier gating from broader "/api/coach/" or "/api/rag/" prefixes.
+    "/api/coach/guidance":      RouteAccess.FREE,
+    "/api/coach/guidance/":     RouteAccess.FREE,
+    "/api/coach/guidance/latest": RouteAccess.FREE,
+    "/api/coach/digest":        RouteAccess.FREE,
+    "/api/coach/digest/":       RouteAccess.FREE,
+    "/api/coach/digest/latest": RouteAccess.FREE,
+    "/api/coach/digest/history": RouteAccess.FREE,
+    "/api/rag/dashboard":       RouteAccess.FREE,
+    "/api/rag/weekly-review":   RouteAccess.FREE,
+    "/api/rag/":                RouteAccess.FREE,
     # Garmin onboarding funnel endpoints must stay reachable for FREE users.
     "/api/garmin/connect":      RouteAccess.FREE,
     "/api/garmin/status":       RouteAccess.FREE,
