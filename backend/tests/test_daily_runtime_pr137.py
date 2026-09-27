@@ -20,6 +20,7 @@ Run from the backend directory:
 
 from __future__ import annotations
 
+import ast
 import sys
 from datetime import date
 from pathlib import Path
@@ -48,6 +49,45 @@ from training_v2.daily_runtime_helpers import (
 
 _SERVER_PATH = Path(__file__).resolve().parents[1] / "server.py"
 REF = date(2026, 8, 17)
+
+
+def _today_endpoint_ast() -> ast.AsyncFunctionDef:
+    tree = ast.parse(_SERVER_PATH.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "get_today_adaptive_session":
+            return node
+    pytest.fail("get_today_adaptive_session not found in server.py")
+
+
+def _string_keys_in(node: ast.AST) -> set[str]:
+    keys: set[str] = set()
+    for subnode in ast.walk(node):
+        if not isinstance(subnode, ast.Dict):
+            continue
+        for key in subnode.keys:
+            if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                keys.add(key.value)
+    return keys
+
+
+def _called_names_in(node: ast.AST) -> set[str]:
+    names: set[str] = set()
+    for subnode in ast.walk(node):
+        if not isinstance(subnode, ast.Call):
+            continue
+        if isinstance(subnode.func, ast.Name):
+            names.add(subnode.func.id)
+        elif isinstance(subnode.func, ast.Attribute):
+            names.add(subnode.func.attr)
+    return names
+
+
+def _identifier_names_in(node: ast.AST) -> set[str]:
+    return {
+        subnode.id
+        for subnode in ast.walk(node)
+        if isinstance(subnode, ast.Name)
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -381,15 +421,12 @@ async def test_P_today_endpoint_omits_legacy_recommendation_fields_but_keeps_rea
 
 
 def test_Q_today_endpoint_source_has_no_legacy_recommendation_adapter():
-    server_src = _SERVER_PATH.read_text()
-    start = server_src.find("async def get_today_adaptive_session")
-    end = server_src.find("\n@api_router.", start + 1)
-    assert start != -1
-    body = server_src[start:end] if end != -1 else server_src[start:]
-    assert "BAND_TO_RECOMMENDATION" not in body
-    assert '"fatigue"' not in body and "'fatigue'" not in body
-    assert '"recommendation_color"' not in body and "'recommendation_color'" not in body
-    assert '"readiness"' in body or "'readiness'" in body
+    endpoint = _today_endpoint_ast()
+    endpoint_keys = _string_keys_in(endpoint)
+    assert "BAND_TO_RECOMMENDATION" not in _identifier_names_in(endpoint)
+    assert "fatigue" not in endpoint_keys
+    assert "recommendation_color" not in endpoint_keys
+    assert "readiness" in endpoint_keys
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -397,16 +434,9 @@ def test_Q_today_endpoint_source_has_no_legacy_recommendation_adapter():
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_R_no_legacy_fatigue_fields():
-    server_src = _SERVER_PATH.read_text()
-    start = server_src.find("async def get_today_adaptive_session")
-    end = server_src.find("\n@api_router.", start + 1)
-    assert start != -1
-    body = server_src[start:end] if end != -1 else server_src[start:]
-    # Check that these keys are not used as actual dict keys in the payload
+    endpoint_keys = _string_keys_in(_today_endpoint_ast())
     for field in ("fatigue_ratio", "fatigue_status", "fatigue_physio"):
-        # A dict key would appear as "field": or 'field':
-        assert f'"{field}"' not in body and f"'{field}'" not in body, \
-            f"Legacy key '{field}' found in endpoint payload"
+        assert field not in endpoint_keys, f"Legacy key '{field}' found in endpoint payload"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -414,12 +444,7 @@ def test_R_no_legacy_fatigue_fields():
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_S_no_legacy_adapt_call():
-    server_src = _SERVER_PATH.read_text()
-    start = server_src.find("async def get_today_adaptive_session")
-    end = server_src.find("\n@api_router.", start + 1)
-    assert start != -1
-    body = server_src[start:end] if end != -1 else server_src[start:]
-    assert "adapt_session_to_readiness" not in body
+    assert "adapt_session_to_readiness" not in _called_names_in(_today_endpoint_ast())
 
 
 # ─────────────────────────────────────────────────────────────────────────────
