@@ -6,7 +6,6 @@
  * FREE DASHBOARD:
  *   - dashboard/insight appelé
  *   - run-index appelé
- *   - rag/dashboard = 0
  *   - training/today = 0
  *   - training/v2/week = 0
  *
@@ -83,7 +82,6 @@ function setupAxiosDefault() {
     if (url.includes("dashboard/insight")) return Promise.resolve({ data: INSIGHT_DATA });
     if (url.includes("run-index/history")) return Promise.resolve({ data: { history: [] } });
     if (url.includes("run-index")) return Promise.resolve({ data: RUN_INDEX_DATA });
-    if (url.includes("rag/dashboard")) return Promise.resolve({ data: { rag: "data" } });
     if (url.includes("training/today")) return Promise.resolve({ data: { status: "success", session: null } });
     if (url.includes("training/v2/week")) return Promise.resolve({ data: { sessions: [] } });
     if (url.includes("stats")) return Promise.resolve({ data: STATS_DATA });
@@ -167,13 +165,6 @@ describe("FREE Dashboard — access control", () => {
     unmount();
   });
 
-  it("does NOT call rag/dashboard", async () => {
-    const { unmount } = renderDashboard();
-    await wait();
-    expect(countCalls("rag/dashboard")).toBe(0);
-    unmount();
-  });
-
   it("does NOT call training/today", async () => {
     const { unmount } = renderDashboard();
     await wait();
@@ -238,7 +229,6 @@ describe("FAIL CLOSED — loading subscription", () => {
   it("Dashboard does NOT call Premium endpoints while subscription is loading", async () => {
     const { unmount } = renderDashboard();
     await wait();
-    expect(countCalls("rag/dashboard")).toBe(0);
     expect(countCalls("training/today")).toBe(0);
     expect(countCalls("training/v2/week")).toBe(0);
     unmount();
@@ -272,13 +262,6 @@ describe("TRIAL — Dashboard calls Premium endpoints", () => {
     const { unmount } = renderDashboard();
     await wait();
     expect(countCalls("dashboard/insight")).toBe(1);
-    unmount();
-  });
-
-  it("calls rag/dashboard", async () => {
-    const { unmount } = renderDashboard();
-    await wait();
-    expect(countCalls("rag/dashboard")).toBe(1);
     unmount();
   });
 
@@ -328,13 +311,6 @@ describe("PREMIUM — same functional behavior as TRIAL", () => {
     jest.clearAllMocks();
     mockSubState = { isFree: false, loading: false, hasPremiumAccess: true, isTrial: false, isPremium: true };
     setupAxiosDefault();
-  });
-
-  it("Dashboard calls rag/dashboard", async () => {
-    const { unmount } = renderDashboard();
-    await wait();
-    expect(countCalls("rag/dashboard")).toBe(1);
-    unmount();
   });
 
   it("Dashboard calls training/today", async () => {
@@ -398,7 +374,6 @@ describe("FREE → TRIAL live transition — Dashboard refetches Premium endpoin
     });
     await wait();
 
-    expect(countCalls("rag/dashboard")).toBe(0);
     expect(countCalls("training/today")).toBe(0);
     expect(countCalls("training/v2/week")).toBe(0);
   });
@@ -424,7 +399,6 @@ describe("FREE → TRIAL live transition — Dashboard refetches Premium endpoin
     });
     await wait();
 
-    expect(countCalls("rag/dashboard")).toBeGreaterThan(0);
     expect(countCalls("training/today")).toBeGreaterThan(0);
     expect(countCalls("training/v2/week")).toBeGreaterThan(0);
   });
@@ -522,7 +496,6 @@ describe("PREMIUM → FREE downgrade — Premium data purged, no new Premium cal
     });
     await wait();
 
-    expect(countCalls("rag/dashboard")).toBe(0);
     expect(countCalls("training/today")).toBe(0);
     expect(countCalls("training/v2/week")).toBe(0);
     expect(axios.post.mock.calls.filter(([url]) => url.includes("training/feedback")).length).toBe(0);
@@ -548,10 +521,9 @@ describe("PREMIUM → FREE downgrade — Premium data purged, no new Premium cal
     await wait();
 
     // RunIndex card (run-readiness) should remain — not a Premium-only block
-    // cardioData is not purged; only todaySession/trainingWeekV2/insight.rag are cleared
+    // cardioData is not purged; only premium blocks are cleared
     const readinessCard = container.querySelector("[data-testid='run-readiness-card']");
     // May be null if cardio data not in fixture; key assertion: no crash and no Premium calls
-    expect(countCalls("rag/dashboard")).toBe(0);
     expect(countCalls("training/today")).toBe(0);
   });
 });

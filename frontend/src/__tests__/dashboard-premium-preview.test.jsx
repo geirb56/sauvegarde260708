@@ -91,7 +91,6 @@ function setupAxiosFree() {
     if (url.includes("dashboard/insight")) return Promise.resolve({ data: INSIGHT_PAYLOAD });
     if (url.includes("run-index")) return Promise.resolve({ data: CARDIO_NO_DATA });
     // Premium endpoints must never be reached for FREE
-    if (url.includes("rag/dashboard")) return Promise.reject(new Error("FORBIDDEN for FREE"));
     if (url.includes("training/today")) return Promise.reject(new Error("FORBIDDEN for FREE"));
     if (url.includes("training/v2/week")) return Promise.reject(new Error("FORBIDDEN for FREE"));
     return Promise.resolve({ data: null });
@@ -102,7 +101,6 @@ function setupAxiosPremium() {
   axios.get.mockImplementation((url) => {
     if (url.includes("dashboard/insight")) return Promise.resolve({ data: INSIGHT_PAYLOAD });
     if (url.includes("run-index")) return Promise.resolve({ data: CARDIO_NO_DATA });
-    if (url.includes("rag/dashboard")) return Promise.resolve({ data: null });
     if (url.includes("training/today")) return Promise.resolve({ data: TODAY_PREMIUM_PAYLOAD });
     if (url.includes("training/v2/week")) return Promise.resolve({ data: WEEK_PREMIUM_PAYLOAD });
     return Promise.resolve({ data: null });
@@ -360,7 +358,6 @@ function setupAxiosFreeWithReadiness() {
   axios.get.mockImplementation((url) => {
     if (url.includes("dashboard/insight")) return Promise.resolve({ data: INSIGHT_WITH_RUNINDEX });
     if (url.includes("run-index")) return Promise.resolve({ data: CARDIO_WITH_READINESS });
-    if (url.includes("rag/dashboard")) return Promise.reject(new Error("FORBIDDEN for FREE"));
     if (url.includes("training/today")) return Promise.reject(new Error("FORBIDDEN for FREE"));
     if (url.includes("training/v2/week")) return Promise.reject(new Error("FORBIDDEN for FREE"));
     return Promise.resolve({ data: null });
@@ -371,7 +368,6 @@ function setupAxiosPremiumWithReadiness() {
   axios.get.mockImplementation((url) => {
     if (url.includes("dashboard/insight")) return Promise.resolve({ data: INSIGHT_WITH_RUNINDEX });
     if (url.includes("run-index")) return Promise.resolve({ data: CARDIO_WITH_READINESS });
-    if (url.includes("rag/dashboard")) return Promise.resolve({ data: null });
     if (url.includes("training/today")) return Promise.resolve({ data: TODAY_PREMIUM_PAYLOAD });
     if (url.includes("training/v2/week")) return Promise.resolve({ data: WEEK_PREMIUM_PAYLOAD });
     return Promise.resolve({ data: null });

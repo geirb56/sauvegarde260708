@@ -37,28 +37,15 @@ except Exception:  # pragma: no cover - lightweight fallback
         BEFORE = "before"
         AFTER = "after"
 
-# Import the analysis engine (NO LLM dependencies)
-from analysis_engine import (
-    generate_weekly_review,
-    generate_dashboard_insight,
-)
-
 # Import LLM coach module
 import llm_coach
 
 # Import coach service (cascade strategy)
 from coach_service import (
-    weekly_review as coach_weekly_review,
     get_cache_stats,
     clear_cache,
     get_metrics as get_coach_metrics,
     reset_metrics as reset_coach_metrics
-)
-
-# Import RAG engine for enriched analyses
-from rag_engine import (
-    generate_dashboard_rag,
-    generate_weekly_review_rag,
 )
 from workout_analysis_v2 import (
     WorkoutAnalysisV2Response,
@@ -639,16 +626,6 @@ class CoachResponse(BaseModel):
     message_id: str
 
 
-class GuidanceRequest(BaseModel):
-    language: Optional[str] = "en"
-
-
-class GuidanceResponse(BaseModel):
-    status: str  # "maintain", "adjust", "hold_steady"
-    guidance: str
-    generated_at: str
-
-
 class ConversationMessage(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -820,7 +797,6 @@ async def create_workout(workout: WorkoutCreate, user: dict = Depends(auth_user)
 
 
 class DashboardInsightResponse(BaseModel):
-    coach_insight: str
     week: dict
     month: dict
     recovery_score: Optional[dict] = None  # New: recovery score
@@ -1642,7 +1618,7 @@ DASHBOARD_CACHE_TTL = _dic.TTL_SECONDS
 
 @api_router.get("/dashboard/insight")
 async def get_dashboard_insight(language: str = "en", user: dict = Depends(auth_user)):
-    """Get dashboard coach insight with week and month summaries and recovery score - NO LLM"""
+    """Get factual dashboard insight with week/month summaries and recovery score."""
     
     user_id = user["id"]
     now = datetime.now(timezone.utc).timestamp()
@@ -1661,16 +1637,7 @@ async def get_dashboard_insight(language: str = "en", user: dict = Depends(auth_
     run_index = calculate_run_index_from_domain(garmin_domain_activities)
     await upsert_run_index_snapshot(db, user_id, activities=garmin_domain_activities)
     
-    # Generate insight using local engine (NO LLM)
-    coach_insight = generate_dashboard_insight(
-        week_stats=week_stats,
-        month_stats=month_stats,
-        recovery_score=None,
-        language=language
-    )
-    
     result = DashboardInsightResponse(
-        coach_insight=coach_insight,
         week=week_stats,
         month=month_stats,
         recovery_score=None,
@@ -2095,429 +2062,6 @@ async def get_messages(user: dict = Depends(auth_user), limit: int = 20):
     user_id = user["id"]
     messages = await db.conversations.find({"user_id": user_id}, {"_id": 0}).sort("timestamp", -1).to_list(limit)
     return messages
-
-
-@api_router.post("/coach/guidance", response_model=GuidanceResponse)
-async def get_adaptive_guidance(request: GuidanceRequest, user: dict = Depends(auth_user)):
-    """Generate adaptive training guidance based on recent workouts - 100% LOCAL ENGINE"""
-    
-    language = request.language or "en"
-    user_id = user["id"]
-    
-    # Get recent workouts (last 14 days)
-    all_workouts = await db.workouts.find({"user_id": user_id}, {"_id": 0}).sort("date", -1).to_list(100)
-    
-    # Calculate training summary
-    today = datetime.now(timezone.utc).date()
-    cutoff_14d = today - timedelta(days=14)
-    cutoff_7d = today - timedelta(days=7)
-    
-    recent_14d = []
-    recent_7d = []
-    
-    for w in all_workouts:
-        try:
-            w_date = datetime.fromisoformat(w["date"].replace("Z", "+00:00").split("T")[0]).date()
-            if w_date >= cutoff_14d:
-                recent_14d.append(w)
-            if w_date >= cutoff_7d:
-                recent_7d.append(w)
-        except (ValueError, TypeError, KeyError):
-            continue
-    
-    # Use local engine for weekly review
-    review = generate_weekly_review(
-        workouts=recent_7d,
-        previous_week_workouts=[w for w in recent_14d if w not in recent_7d],
-        user_goal=None,
-        language=language
-    )
-    
-    # Determine status from metrics
-    metrics = review.get("metrics", {})
-    volume_change = metrics.get("volume_change_pct", 0)
-    total_sessions = metrics.get("total_sessions", 0)
-    
-    # Calculate zone distribution
-    zone_totals = {"z1": 0, "z2": 0, "z3": 0, "z4": 0, "z5": 0}
-    zone_count = 0
-    for w in recent_7d:
-        zones = w.get("effort_zone_distribution", {})
-        if zones:
-            for z, pct in zones.items():
-                if z in zone_totals:
-                    zone_totals[z] += (pct or 0)
-            zone_count += 1
-    
-    z4_z5_avg = 0
-    if zone_count > 0:
-        z4_z5_avg = (zone_totals["z4"] + zone_totals["z5"]) / zone_count
-    
-    # Determine status
-    if total_sessions == 0:
-        status = "hold_steady"
-    elif volume_change > 20 or z4_z5_avg > 35:
-        status = "adjust"  # Need to recover
-    elif volume_change < -20 or total_sessions < 2:
-        status = "hold_steady"  # Build back up
-    else:
-        status = "maintain"
-    
-    # Build guidance text
-    guidance_parts = [review["summary"]]
-    guidance_parts.append(review["meaning"])
-    guidance_parts.append(review["advice"])
-    
-    guidance = "\n\n".join(guidance_parts)
-    
-    # Store guidance in DB
-    await db.guidance.insert_one({
-        "id": str(uuid.uuid4()),
-        "user_id": user_id,
-        "status": status,
-        "guidance": guidance,
-        "language": language,
-        "training_summary": {
-            "last_7d": {
-                "count": len(recent_7d),
-                "total_km": round(sum(w.get("distance_km", 0) for w in recent_7d), 1)
-            },
-            "last_14d": {
-                "count": len(recent_14d),
-                "total_km": round(sum(w.get("distance_km", 0) for w in recent_14d), 1)
-            }
-        },
-        "generated_at": datetime.now(timezone.utc).isoformat()
-    })
-    
-    logger.info(f"Guidance generated (LOCAL): status={status}, user={user_id}")
-    
-    return GuidanceResponse(
-        status=status,
-        guidance=guidance,
-        generated_at=datetime.now(timezone.utc).isoformat()
-    )
-
-
-@api_router.get("/coach/guidance/latest")
-async def get_latest_guidance(user: dict = Depends(auth_user)):
-    """Get the most recent guidance for a user"""
-    user_id = user["id"]
-    guidance = await db.guidance.find_one(
-        {"user_id": user_id},
-        {"_id": 0},
-        sort=[("generated_at", -1)]
-    )
-    if not guidance:
-        return None
-    return guidance
-
-
-# ========== WEEKLY REVIEW (BILAN DE LA SEMAINE) ==========
-
-class WeeklyReviewResponse(BaseModel):
-    period_start: str
-    period_end: str
-    coach_summary: str  # 1 phrase max - CARTE 1
-    coach_reading: str  # 2-3 phrases - CARTE 4
-    recommendations: List[str]  # 1-2 actions - CARTE 5
-    recommendations_followup: Optional[str] = None  # Feedback on last week's recommendations
-    metrics: dict  # CARTE 3
-    comparison: dict  # vs semaine precedente
-    signals: List[dict]  # CARTE 2
-    user_goal: Optional[dict] = None  # User's event goal
-    generated_at: str
-
-
-def calculate_review_metrics(workouts: List[dict], baseline_workouts: List[dict]) -> tuple:
-    """Calculate metrics and comparison for weekly review"""
-    if not workouts:
-        metrics = {
-            "total_sessions": 0,
-            "total_distance_km": 0,
-            "total_duration_min": 0,
-        }
-        comparison = {
-            "sessions_diff": 0,
-            "distance_diff_km": 0,
-            "distance_diff_pct": 0,
-            "duration_diff_min": 0,
-        }
-        return metrics, comparison
-    
-    # Current week metrics
-    total_distance = sum(w.get("distance_km", 0) for w in workouts)
-    total_duration = sum(w.get("duration_minutes", 0) for w in workouts)
-    
-    metrics = {
-        "total_sessions": len(workouts),
-        "total_distance_km": round(total_distance, 1),
-        "total_duration_min": total_duration,
-    }
-    
-    # Baseline comparison
-    baseline_sessions = len(baseline_workouts) if baseline_workouts else 0
-    baseline_distance = sum(w.get("distance_km", 0) for w in baseline_workouts) if baseline_workouts else 0
-    baseline_duration = sum(w.get("duration_minutes", 0) for w in baseline_workouts) if baseline_workouts else 0
-    
-    # Calculate differences
-    distance_diff_pct = 0
-    if baseline_distance > 0:
-        distance_diff_pct = round(((total_distance - baseline_distance) / baseline_distance) * 100)
-    elif total_distance > 0:
-        distance_diff_pct = 100
-    
-    comparison = {
-        "sessions_diff": len(workouts) - baseline_sessions,
-        "distance_diff_km": round(total_distance - baseline_distance, 1),
-        "distance_diff_pct": distance_diff_pct,
-        "duration_diff_min": total_duration - baseline_duration,
-    }
-    
-    return metrics, comparison
-
-
-def generate_review_signals(workouts: List[dict], baseline_workouts: List[dict]) -> List[dict]:
-    """Generate visual signal indicators for weekly review - CARTE 2"""
-    signals = []
-    
-    # Calculate volume change
-    current_km = sum(w.get("distance_km", 0) for w in workouts)
-    baseline_km = sum(w.get("distance_km", 0) for w in baseline_workouts) if baseline_workouts else 0
-    
-    if baseline_km > 0:
-        volume_change = round(((current_km - baseline_km) / baseline_km) * 100)
-    else:
-        volume_change = 100 if current_km > 0 else 0
-    
-    # Volume signal
-    if volume_change > 15:
-        signals.append({"key": "load", "status": "up", "value": f"+{volume_change}%"})
-    elif volume_change < -15:
-        signals.append({"key": "load", "status": "down", "value": f"{volume_change}%"})
-    else:
-        signals.append({"key": "load", "status": "stable", "value": f"{volume_change:+}%" if volume_change != 0 else "="})
-    
-    # Intensity signal based on zone distribution
-    zone_totals = {"z1": 0, "z2": 0, "z3": 0, "z4": 0, "z5": 0}
-    zone_count = 0
-    for w in workouts:
-        zones = w.get("effort_zone_distribution", {})
-        if zones:
-            for z, pct in zones.items():
-                if z in zone_totals:
-                    zone_totals[z] += pct
-            zone_count += 1
-    
-    if zone_count > 0:
-        avg_zones = {z: v / zone_count for z, v in zone_totals.items()}
-        easy_pct = avg_zones.get("z1", 0) + avg_zones.get("z2", 0)
-        hard_pct = avg_zones.get("z4", 0) + avg_zones.get("z5", 0)
-        
-        if easy_pct >= 70:
-            signals.append({"key": "intensity", "status": "easy", "value": None})
-        elif hard_pct >= 30:
-            signals.append({"key": "intensity", "status": "hard", "value": None})
-        else:
-            signals.append({"key": "intensity", "status": "balanced", "value": None})
-    else:
-        signals.append({"key": "intensity", "status": "balanced", "value": None})
-    
-    # Regularity signal (sessions spread across days)
-    unique_days = len(set(w.get("date", "")[:10] for w in workouts))
-    regularity_pct = min(100, round((unique_days / 7) * 100)) if workouts else 0
-    
-    if regularity_pct >= 60:
-        signals.append({"key": "consistency", "status": "high", "value": f"{regularity_pct}%"})
-    elif regularity_pct >= 30:
-        signals.append({"key": "consistency", "status": "moderate", "value": f"{regularity_pct}%"})
-    else:
-        signals.append({"key": "consistency", "status": "low", "value": f"{regularity_pct}%"})
-    
-    return signals
-
-
-@api_router.get("/coach/digest")
-async def get_weekly_review(user: dict = Depends(auth_user), language: str = "en"):
-    """Generate weekly training review (Bilan de la semaine) - 100% LOCAL ENGINE, NO LLM"""
-    
-    user_id = user["id"]
-    all_workouts = await db.workouts.find({"user_id": user_id}, {"_id": 0}).sort("date", -1).to_list(200)
-    
-    # Calculate date ranges
-    today = datetime.now(timezone.utc).date()
-    week_start = today - timedelta(days=7)
-    baseline_start = today - timedelta(days=14)
-    
-    # Filter workouts for current week and baseline
-    current_week = []
-    baseline_week = []
-    
-    for w in all_workouts:
-        try:
-            w_date = datetime.fromisoformat(w["date"].replace("Z", "+00:00").split("T")[0]).date()
-            if week_start <= w_date <= today:
-                current_week.append(w)
-            elif baseline_start <= w_date < week_start:
-                baseline_week.append(w)
-        except (ValueError, TypeError, KeyError):
-            continue
-    
-    # Calculate metrics and comparison (CARTE 3)
-    metrics, comparison = calculate_review_metrics(current_week, baseline_week)
-    
-    # Generate signals (CARTE 2)
-    signals = generate_review_signals(current_week, baseline_week)
-    
-    # Get user goal for context
-    user_goal = await db.user_goals.find_one({"user_id": user_id}, {"_id": 0})
-    
-    # Generate review content using LOCAL ENGINE (NO LLM)
-    review = generate_weekly_review(
-        workouts=current_week,
-        previous_week_workouts=baseline_week,
-        user_goal=user_goal,
-        language=language
-    )
-    
-    coach_summary = review["summary"]
-    coach_reading = review["meaning"]
-    recommendations = [review["advice"]]
-    recommendations_followup = review.get("recovery", "")
-    
-    # Store review
-    review_id = str(uuid.uuid4())
-    await db.digests.insert_one({
-        "id": review_id,
-        "user_id": user_id,
-        "period_start": week_start.isoformat(),
-        "period_end": today.isoformat(),
-        "coach_summary": coach_summary,
-        "coach_reading": coach_reading,
-        "recommendations": recommendations,
-        "recommendations_followup": recommendations_followup,
-        "metrics": metrics,
-        "comparison": comparison,
-        "signals": signals,
-        "user_goal": user_goal,
-        "language": language,
-        "generated_at": datetime.now(timezone.utc).isoformat()
-    })
-    
-    logger.info(f"Weekly review generated for user {user_id}: {len(current_week)} workouts (LOCAL ENGINE)")
-    
-    return WeeklyReviewResponse(
-        period_start=week_start.isoformat(),
-        period_end=today.isoformat(),
-        coach_summary=coach_summary,
-        coach_reading=coach_reading,
-        recommendations=recommendations,
-        recommendations_followup=recommendations_followup,
-        metrics=metrics,
-        comparison=comparison,
-        signals=signals,
-        user_goal=user_goal,
-        generated_at=datetime.now(timezone.utc).isoformat()
-    )
-
-
-@api_router.get("/coach/digest/latest")
-async def get_latest_digest(user: dict = Depends(auth_user)):
-    """Get the most recent digest for a user"""
-    user_id = user["id"]
-    digest = await db.digests.find_one(
-        {"user_id": user_id},
-        {"_id": 0},
-        sort=[("generated_at", -1)]
-    )
-    return digest
-
-
-@api_router.get("/coach/digest/history")
-async def get_digest_history(user: dict = Depends(auth_user), limit: int = 10, skip: int = 0):
-    """Get history of weekly digests for a user"""
-    user_id = user["id"]
-    digests = await db.digests.find(
-        {"user_id": user_id},
-        {"_id": 0}
-    ).sort("generated_at", -1).skip(skip).limit(limit).to_list(length=limit)
-    
-    total = await db.digests.count_documents({"user_id": user_id})
-    
-    return {
-        "digests": digests,
-        "total": total,
-        "has_more": skip + len(digests) < total
-    }
-
-
-# ========== RAG-ENRICHED ENDPOINTS ==========
-
-@api_router.get("/rag/dashboard")
-async def get_rag_dashboard(user: dict = Depends(auth_user)):
-    """Get RAG-enriched dashboard summary"""
-    user_id = user["id"]
-    workouts = await db.workouts.find(
-        {"user_id": user_id},
-        {"_id": 0}
-    ).sort("date", -1).limit(100).to_list(length=100)
-    
-    bilans = await db.digests.find(
-        {"user_id": user_id},
-        {"_id": 0}
-    ).sort("generated_at", -1).limit(8).to_list(length=8)
-    
-    user_goal = await db.user_goals.find_one({"user_id": user_id}, {"_id": 0})
-    
-    # Generate RAG-enriched summary
-    result = generate_dashboard_rag(workouts, bilans, user_goal)
-    
-    return {
-        "rag_summary": result["summary"],
-        "metrics": result["metrics"],
-        "points_forts": result["points_forts"],
-        "points_ameliorer": result["points_ameliorer"],
-        "tips": result["tips"],
-        "generated_at": datetime.now(timezone.utc).isoformat()
-    }
-
-
-@api_router.get("/rag/weekly-review")
-async def get_rag_weekly_review(user: dict = Depends(auth_user), language: str = "fr"):
-    """Get RAG-enriched weekly review with server-side LLM enhancement."""
-    user_id = user["id"]
-    workouts = await db.workouts.find(
-        {"user_id": user_id},
-        {"_id": 0}
-    ).sort("date", -1).limit(50).to_list(length=50)
-    
-    bilans = await db.digests.find(
-        {"user_id": user_id},
-        {"_id": 0}
-    ).sort("generated_at", -1).limit(8).to_list(length=8)
-    
-    user_goal = await db.user_goals.find_one({"user_id": user_id}, {"_id": 0})
-    
-    # Generate RAG-enriched review (calculs 100% Python local)
-    result = generate_weekly_review_rag(workouts, bilans, user_goal)
-    
-    # Enrichissement via coach_service (cascade LLM → déterministe)
-    enriched_summary, used_llm = await coach_weekly_review(
-        rag_result=result,
-        user_id=user_id,
-        language=language
-    )
-    
-    return {
-        "rag_summary": enriched_summary,
-        "metrics": result["metrics"],
-        "comparison": result["comparison"],
-        "points_forts": result["points_forts"],
-        "points_ameliorer": result["points_ameliorer"],
-        "tips": result["tips"],
-        "enriched_by_llm": used_llm,
-        "generated_at": datetime.now(timezone.utc).isoformat()
-    }
 
 
 @api_router.get("/coach/workout-analysis/{workout_id}", response_model=WorkoutAnalysisV2Response)

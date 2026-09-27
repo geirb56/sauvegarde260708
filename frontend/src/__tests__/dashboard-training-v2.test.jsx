@@ -151,7 +151,6 @@ function pacesPayload({ confidence = "HIGH", interval = { lower: { pace_str: "4:
 function buildDefaultMocks(overrides = {}) {
   const defaults = {
     insight: INSIGHT_PAYLOAD,
-    rag: null,
     today: TODAY_PAYLOAD,
     cardio: CARDIO_NO_DATA,
     weekV2: null,
@@ -163,7 +162,6 @@ function buildDefaultMocks(overrides = {}) {
 function setupAxiosMocks(mocks) {
   axios.get.mockImplementation((url) => {
     if (url.includes("dashboard/insight")) return Promise.resolve({ data: mocks.insight });
-    if (url.includes("rag/dashboard")) return mocks.rag ? Promise.resolve({ data: mocks.rag }) : Promise.reject(new Error("no rag"));
     if (url.includes("training/today")) return Promise.resolve({ data: mocks.today });
     if (url.includes("run-index")) return Promise.resolve({ data: mocks.cardio });
     if (url.includes("training/v2/week")) {
@@ -247,7 +245,10 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     await waitForRender();
 
     const calls = axios.get.mock.calls.map(([url]) => url);
+    expect(calls.some((u) => u.includes("dashboard/insight"))).toBe(true);
+    expect(calls.some((u) => u.includes("training/today"))).toBe(true);
     expect(calls.some((u) => u.includes("training/v2/week"))).toBe(true);
+    expect(calls.some((u) => u.includes("rag/dashboard"))).toBe(false);
     expect(getCalledApiPaths()).not.toContain("/api/dashboard");
     unmount();
   });
@@ -261,7 +262,10 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     await waitForRender();
 
     const calls = axios.get.mock.calls.map(([url]) => url);
+    expect(calls.some((u) => u.includes("dashboard/insight"))).toBe(true);
+    expect(calls.some((u) => u.includes("training/today"))).toBe(false);
     expect(calls.some((u) => u.includes("training/v2/week"))).toBe(false);
+    expect(calls.some((u) => u.includes("rag/dashboard"))).toBe(false);
     expect(getCalledApiPaths()).not.toContain("/api/dashboard");
     unmount();
   });
@@ -456,7 +460,6 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
     axios.get.mockImplementation((url) => {
       if (url.includes("dashboard/insight")) return Promise.resolve({ data: INSIGHT_PAYLOAD });
-      if (url.includes("rag/dashboard")) return Promise.reject(new Error("no rag"));
       if (url.includes("training/today")) return Promise.resolve({ data: TODAY_PAYLOAD });
       if (url.includes("run-index")) return Promise.reject(new Error("run-index failed"));
       if (url.includes("training/v2/week")) return Promise.reject(new Error("not available"));
@@ -597,7 +600,6 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
     axios.get.mockImplementation((url) => {
       if (url.includes("dashboard/insight")) return Promise.resolve({ data: INSIGHT_PAYLOAD });
-      if (url.includes("rag/dashboard")) return Promise.reject(new Error("no rag"));
       if (url.includes("training/today")) {
         return Promise.reject({ response: { data: { status: "error", message: "Today backend unavailable" } } });
       }
@@ -618,7 +620,6 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
     axios.get.mockImplementation((url) => {
       if (url.includes("dashboard/insight")) return Promise.resolve({ data: INSIGHT_PAYLOAD });
-      if (url.includes("rag/dashboard")) return Promise.reject(new Error("no rag"));
       if (url.includes("training/today")) {
         return Promise.reject({ response: { data: "Today backend unavailable" } });
       }
@@ -639,7 +640,6 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
     axios.get.mockImplementation((url) => {
       if (url.includes("dashboard/insight")) return Promise.resolve({ data: INSIGHT_PAYLOAD });
-      if (url.includes("rag/dashboard")) return Promise.reject(new Error("no rag"));
       if (url.includes("training/today")) {
         return Promise.reject({ response: { data: { detail: "Unauthorized" } } });
       }
@@ -660,7 +660,6 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
     axios.get.mockImplementation((url) => {
       if (url.includes("dashboard/insight")) return Promise.resolve({ data: INSIGHT_PAYLOAD });
-      if (url.includes("rag/dashboard")) return Promise.reject(new Error("no rag"));
       if (url.includes("training/today")) {
         return Promise.reject({ response: { data: { status: "unavailable", message: "Today backend unavailable" } } });
       }
@@ -681,7 +680,6 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
     axios.get.mockImplementation((url) => {
       if (url.includes("dashboard/insight")) return Promise.reject(new Error("insight failed"));
-      if (url.includes("rag/dashboard")) return Promise.reject(new Error("no rag"));
       if (url.includes("training/today")) return Promise.resolve({ data: TODAY_PAYLOAD });
       if (url.includes("run-index")) return Promise.resolve({ data: CARDIO_NO_DATA });
       if (url.includes("training/v2/week")) return Promise.reject(new Error("not available"));
@@ -968,7 +966,6 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
     axios.get.mockImplementation((url) => {
       if (url.includes("dashboard/insight")) return Promise.resolve({ data: INSIGHT_PAYLOAD });
-      if (url.includes("rag/dashboard")) return Promise.reject(new Error("no rag"));
       if (url.includes("training/today")) return Promise.resolve({ data: TODAY_PAYLOAD });
       if (url.includes("run-index")) return Promise.resolve({ data: CARDIO_NO_DATA });
       if (url.includes("training/v2/week")) return Promise.resolve({ data: { ...WEEK_V2_DISTANCE, goal: { goal_type: "5k" } } });

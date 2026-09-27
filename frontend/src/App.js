@@ -12,8 +12,6 @@ import DetailedAnalysis from "@/pages/DetailedAnalysis";
 import Sessions from "@/pages/Sessions";
 import SessionDetail from "@/pages/SessionDetail";
 import Progress from "@/pages/Progress";
-import Guidance from "@/pages/Guidance";
-import Digest from "@/pages/Digest";
 import Settings from "@/pages/Settings";
 import Subscription from "@/pages/Subscription";
 import TrainingPlanV2 from "@/pages/TrainingPlanV2";
@@ -83,8 +81,8 @@ function App() {
                     <Route path="workout/:id/analysis" element={<DetailedAnalysis />} />
                     <Route path="progress" element={<Progress />} />
                     <Route path="coach" element={<Coach />} />
-                    <Route path="guidance" element={<Guidance />} />
-                    <Route path="digest" element={<Digest />} />
+                    <Route path="guidance" element={<Navigate to="/coach" replace />} />
+                    <Route path="digest" element={<Navigate to="/progress" replace />} />
                     <Route path="training" element={<TrainingPlanV2 />} />
                     <Route path="training-v2" element={<Navigate to="/training" replace />} />
                     <Route path="onboarding" element={<Onboarding />} />

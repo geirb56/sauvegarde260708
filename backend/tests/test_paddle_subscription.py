@@ -129,6 +129,9 @@ from access_control import (
     Tier,
     UserAccess,
     _resolve_access,
+    get_route_access,
+    RouteAccess,
+    ROUTE_ACCESS_MAP,
     CHAT_QUOTA_FREE,
     CHAT_ANTIABUSE_CAP,
 )
@@ -178,7 +181,7 @@ class TestAccessControlResolve:
 
     def test_free_cannot_access_premium_features(self):
         access = _resolve_access("u1", self._sub(status="free"))
-        for feat in ["training_plan", "llm_access", "rag_access", "coach_detailed"]:
+        for feat in ["training_plan", "llm_access", "coach_detailed"]:
             assert not access.can(feat)
 
     def test_free_can_access_free_features(self):
@@ -211,7 +214,7 @@ class TestAccessControlResolve:
     def test_premium_can_all_features(self):
         future = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
         access = _resolve_access("u1", self._sub(status="premium", premium_expires_at=future))
-        for feat in ["training_plan", "llm_access", "rag_access", "coach_detailed"]:
+        for feat in ["training_plan", "llm_access", "coach_detailed"]:
             assert access.can(feat)
 
     # ── Fail-closed defaults ──────────────────────────────────────────────
@@ -261,6 +264,28 @@ class TestAccessControlResolve:
         assert not free_access.can("training_plan")
         assert prem_access.can("training_plan")
         assert free_access.user_id != prem_access.user_id
+
+
+class TestRemovedLegacyRoutesAccessMap:
+    def test_removed_legacy_route_keys_absent_from_route_access_map(self):
+        removed_keys = [
+            "/api/coach/guidance",
+            "/api/coach/guidance/latest",
+            "/api/coach/digest",
+            "/api/coach/digest/latest",
+            "/api/coach/digest/history",
+            "/api/rag/dashboard",
+            "/api/rag/weekly-review",
+            "/api/rag/",
+        ]
+        for key in removed_keys:
+            assert key not in ROUTE_ACCESS_MAP
+
+    def test_removed_coach_guidance_path_still_classified_premium_via_coach_prefix(self):
+        assert get_route_access("/api/coach/guidance") == RouteAccess.PREMIUM
+
+    def test_removed_rag_dashboard_path_still_fails_closed_to_premium(self):
+        assert get_route_access("/api/rag/dashboard") == RouteAccess.PREMIUM
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
