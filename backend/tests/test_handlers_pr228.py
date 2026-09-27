@@ -238,6 +238,8 @@ def _patches(fake_db: _FakeDB, reference_date: date = _MONDAY) -> list:
         patch.object(server, "db", fake_db),
         patch("server.get_user_access", AsyncMock(side_effect=_user_access)),
         patch("server.datetime", _make_fixed_datetime_class(fixed_dt)),
+        patch.object(server.rate_limiter, "is_limited", return_value=False),
+        patch.object(server.rate_limiter, "record", return_value=None),
     ]
 
 
@@ -277,6 +279,35 @@ async def _get_today(fake_db: _FakeDB, reference_date: date = _MONDAY) -> Dict:
             base_url="http://test",
         ) as client:
             r = await client.get("/api/training/today", headers=_bearer())
+            return {"status": r.status_code, "body": r.json() if r.status_code == 200 else r.text}
+    finally:
+        for p in reversed(started):
+            p.stop()
+
+
+async def _patch_preferences(
+    fake_db: _FakeDB,
+    sessions_per_week: int,
+    reference_date: date = _MONDAY,
+) -> Dict:
+    """Call PATCH /training/v2/preferences with the given fake DB."""
+    if httpx is None:
+        pytest.skip("httpx not installed")
+    ps = _patches(fake_db, reference_date)
+    started = []
+    try:
+        for p in ps:
+            p.start()
+            started.append(p)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=server.app),
+            base_url="http://test",
+        ) as client:
+            r = await client.patch(
+                "/api/training/v2/preferences",
+                headers=_bearer(),
+                json={"sessions_per_week": sessions_per_week},
+            )
             return {"status": r.status_code, "body": r.json() if r.status_code == 200 else r.text}
     finally:
         for p in reversed(started):
@@ -426,6 +457,17 @@ async def test_week_response_exposes_training_prefs_sessions_per_week():
     assert (
         week_result["body"]["training_prefs"]["sessions_per_week"] == 5
     ), week_result["body"]
+
+
+@pytest.mark.asyncio
+async def test_preferences_handler_updates_sessions_with_rate_limiter_patched():
+    fake_db = _FakeDB()
+
+    response = await _patch_preferences(fake_db, sessions_per_week=4)
+
+    assert response["status"] == 200
+    assert response["body"]["training_prefs"]["sessions_per_week"] == 4
+    assert fake_db.training_prefs._docs == [{"user_id": _USER_ID, "sessions_per_week": 4}]
 
 
 @pytest.mark.asyncio

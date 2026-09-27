@@ -9,6 +9,7 @@ before being passed to this module.
 import os
 import time
 import asyncio
+import json
 import logging
 from typing import Dict, List, Optional, Tuple
 from dotenv import load_dotenv
@@ -32,19 +33,17 @@ SYSTEM_PROMPT_COACH = """You are RunIndex, an expert and caring personal running
 
 🎯 YOUR ROLE:
 You answer the athlete's questions about their training like a real personal coach.
-You have access to ALL their real training data: complete session history, training plan, VO2max, race predictions, fitness metrics.
+The Training V2 engine decides the prescription. The Coach only explains it.
 
 📊 AVAILABLE DATA:
-- COMPLETE session history (last 28 days with distance, duration, pace, HR)
-- Weekly training plan (goal, planned sessions)
-- Estimated VO2max and race time predictions
-- Fitness metrics: ACWR (acute/chronic workload ratio), TSB (freshness)
-- Current goal (5K, 10K, Half, Marathon, Ultra, MAINTENANCE)
+- Canonical Training V2 goal, current week, today prescription, readiness, load, paces and performance context
+- Some fields can be unavailable; unavailable data must stay unavailable
+- Confidence, sufficiency and extrapolation metadata are authoritative and must be respected
 
 💬 RESPONSE STYLE:
 1. Be direct and concise (3-5 sentences max unless detailed analysis requested)
 2. Use real data to personalize your response
-3. Give actionable advice based on past sessions
+3. Explain the current prescription and recent training context without inventing new data
 4. Stay motivating and positive, even for critiques
 5. If you don't know, say so honestly
 
@@ -61,7 +60,11 @@ You have access to ALL their real training data: complete session history, train
 - ALWAYS respond in the user's language (FR, EN or ES)
 - Don't use bullet points unless requested
 - Speak like a human coach, not like a report
-- Refer to specific sessions when relevant"""
+- Refer to specific sessions when relevant
+- Never create a new prescription
+- Never modify or replace the served prescription
+- Never fabricate missing metrics, readiness scores, paces, or performance certainty
+- Respect readiness confidence/sufficiency and performance extrapolation metadata"""
 
 SYSTEM_PROMPT_BILAN = """You are a running coach providing a weekly review.
 
@@ -113,69 +116,11 @@ async def enrich_chat_response(
 ) -> Tuple[Optional[str], bool, Dict]:
     """Enriches chat response with the configured LLM model.
 
-    Context includes:
-    - 7-day and 28-day stats (km, sessions)
-    - Fitness metrics (ACWR, TSB)
-    - ALL sessions from last 28 days
-    - Current training plan
-    - Estimated VO2max and race predictions
-    - Current goal
+    Context is a serialized Coach Context V2 payload built from canonical
+    Training V2 authorities.
     """
     language = context.get("language", "fr")
-
-    # Format context in readable format
-    stats_7 = context.get("stats_7j", {})
-    stats_28 = context.get("stats_28j", {})
-    fitness = context.get("fitness", {})
-    all_sessions = context.get("all_sessions", "")
-    training_plan = context.get("training_plan", "")
-    current_goal = context.get("current_goal", "Not set")
-    vma = context.get("vma", "")
-    predictions = context.get("predictions", "")
-    workout = context.get("workout_detail")
-
-    context_text = f"""📊 COMPLETE ATHLETE DATA:
-
-🎯 CURRENT GOAL: {current_goal}
-
-⚡ PERFORMANCE:
-- {vma}
-- Predictions: {predictions}
-
-📈 THIS WEEK (7d):
-- Volume: {stats_7.get('km', 0)} km
-- Sessions: {stats_7.get('sessions', 0)}
-
-📅 THIS MONTH (28d):
-- Volume: {stats_28.get('km', 0)} km
-- Sessions: {stats_28.get('sessions', 0)}
-
-💪 FITNESS STATUS:
-- ACWR: {fitness.get('acwr') if fitness.get('acwr') is not None else 'N/A'} ({fitness.get('acwr_status', 'unavailable')})
-- TSB: {fitness.get('tsb') if fitness.get('tsb') is not None else 'N/A'} ({fitness.get('tsb_status', 'unavailable')})
-
-📋 TRAINING PLAN:
-{training_plan if training_plan else "No active plan"}
-
-🏃 COMPLETE SESSION HISTORY (last 28 days):
-{all_sessions}"""
-
-    # Add workout details if available
-    if workout:
-        zones = workout.get('zones', {})
-        zones_str = ""
-        if zones:
-            zones_str = f"Z1:{zones.get('z1',0)}% Z2:{zones.get('z2',0)}% Z3:{zones.get('z3',0)}% Z4:{zones.get('z4',0)}% Z5:{zones.get('z5',0)}%"
-
-        context_text += f"""
-
-🔍 SESSION BEING ANALYZED:
-- Name: {workout.get('name', 'N/A')}
-- Distance: {workout.get('distance_km', 0):.1f} km
-- Duration: {workout.get('duration_min', 0):.0f} min
-- Avg HR: {workout.get('avg_hr', 'N/A')} bpm
-- Max HR: {workout.get('max_hr', 'N/A')} bpm
-- Zones: {zones_str}"""
+    context_text = json.dumps(context, ensure_ascii=False, separators=(",", ":"))
 
     # Format conversation history
     history_text = ""
@@ -185,14 +130,18 @@ async def enrich_chat_response(
             content = msg.get("content", "")[:200]  # Truncate if too long
             history_text += f"{role}: {content}\n"
 
-    prompt = f"""{context_text}
+    prompt = f"""COACH CONTEXT V2 JSON:
+{context_text}
 
 💬 CONVERSATION HISTORY:
 {history_text if history_text else "(New conversation)"}
 
 ❓ ATHLETE'S QUESTION: {user_message}
 
-Respond in {language.upper()} as a caring and expert personal coach. Use the data above to personalize your response.{_lang_directive(language)}"""
+Respond in {language.upper()} as a caring and expert personal coach.
+Explain only the authoritative data provided above.
+If a field is unavailable or low-confidence, say so plainly.
+Do not invent a new prescription or alter the served prescription.{_lang_directive(language)}"""
 
     return await _call_gpt(SYSTEM_PROMPT_COACH + _lang_directive(language), prompt, user_id, "chat")
 

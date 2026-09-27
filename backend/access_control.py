@@ -415,20 +415,16 @@ ROUTE_ACCESS_MAP: Dict[str, RouteAccess] = {
     # enforced by `Depends(require_admin)` on every /api/admin/* endpoint
     # (returns 403 for non-admins, 401 for unauthenticated).
     "/api/admin/":              RouteAccess.FREE,
-    # Chat history is free; send is handled separately (quota enforcement)
-    "/api/chat/history":        RouteAccess.FREE,
-    "/api/chat/store-response": RouteAccess.FREE,
-    "/api/chat/send":           RouteAccess.FREE,     # quota enforced inside the handler
+    "/api/coach/analyze":       RouteAccess.FREE,     # quota enforced in canonical coach service
+    "/api/coach/history":       RouteAccess.FREE,
     # Garmin onboarding funnel endpoints must stay reachable for FREE users.
     "/api/garmin/connect":      RouteAccess.FREE,
     "/api/garmin/status":       RouteAccess.FREE,
     "/api/garmin/disconnect":   RouteAccess.FREE,
+    "/api/training/v2/preferences": RouteAccess.FREE,  # onboarding preference capture must stay reachable pre-handoff
 
     # ── Premium (TRIAL or PREMIUM required) ──────────────────────────────
-    "/api/training/plan":             RouteAccess.PREMIUM,
-    "/api/training/refresh":          RouteAccess.PREMIUM,
     "/api/training/race-predictions": RouteAccess.PREMIUM,
-    "/api/training/dynamic-plan":     RouteAccess.PREMIUM,
     "/api/training/today":            RouteAccess.PREMIUM,
     "/api/training/week-plan":        RouteAccess.PREMIUM,
     "/api/training/v2/week":          RouteAccess.PREMIUM,  # PR167 — native V2 week endpoint
@@ -438,8 +434,6 @@ ROUTE_ACCESS_MAP: Dict[str, RouteAccess] = {
     "/api/training/set-goal":         RouteAccess.PREMIUM,
     "/api/training/goals":            RouteAccess.PREMIUM,
     "/api/training/":                 RouteAccess.PREMIUM,
-    "/api/training-plan":             RouteAccess.PREMIUM,
-    "/api/coach/analyze":             RouteAccess.PREMIUM,
     "/api/coach/workout-analysis":    RouteAccess.PREMIUM,
     "/api/coach/detailed-analysis":   RouteAccess.PREMIUM,
     "/api/coach/guidance":            RouteAccess.PREMIUM,

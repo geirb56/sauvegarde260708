@@ -324,7 +324,9 @@ export default function Onboarding() {
           ? `${API}/training/set-goal?goal=${encodeURIComponent(goal)}&distance_km=${encodeURIComponent(ultraDistanceKm)}`
           : `${API}/training/set-goal?goal=${encodeURIComponent(goal)}`;
       await axios.post(setGoalUrl, {});
-      await axios.post(`${API}/training/refresh?sessions=${sessionsPerWeek}`, {});
+      await axios.patch(`${API}/training/v2/preferences`, {
+        sessions_per_week: sessionsPerWeek,
+      });
       await refreshSubscription();
       setStepIndex(steps.findIndex((s) => s.key === DONE_STEP_KEY));
     } catch {

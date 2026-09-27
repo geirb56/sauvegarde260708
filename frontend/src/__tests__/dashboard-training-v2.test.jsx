@@ -179,6 +179,10 @@ function setupAxiosMocks(mocks) {
   });
 }
 
+function getCalledApiPaths() {
+  return axios.get.mock.calls.map(([url]) => new URL(String(url), "http://localhost").pathname);
+}
+
 function LanguageController({ onReady }) {
   const { setLang } = useLanguage();
   useEffect(() => {
@@ -244,6 +248,7 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
 
     const calls = axios.get.mock.calls.map(([url]) => url);
     expect(calls.some((u) => u.includes("training/v2/week"))).toBe(true);
+    expect(getCalledApiPaths()).not.toContain("/api/dashboard");
     unmount();
   });
 
@@ -257,6 +262,7 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
 
     const calls = axios.get.mock.calls.map(([url]) => url);
     expect(calls.some((u) => u.includes("training/v2/week"))).toBe(false);
+    expect(getCalledApiPaths()).not.toContain("/api/dashboard");
     unmount();
   });
 
@@ -363,6 +369,8 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
 
     const calls = axios.get.mock.calls.map(([url]) => url);
     expect(calls.some((u) => u.includes("training/today"))).toBe(true);
+    expect(getCalledApiPaths()).toContain("/api/training/today");
+    expect(getCalledApiPaths()).not.toContain("/api/dashboard");
 
     // Today card must be rendered (from /training/today response)
     const todayCard = container.querySelector('[data-testid="today-workout-card"]');
@@ -1140,6 +1148,7 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
       const isAllowed = allowedPatterns.some((p) => url.includes(p));
       expect(isAllowed).toBe(true);
     }
+    expect(getCalledApiPaths()).not.toContain("/api/dashboard");
     unmount();
   });
 

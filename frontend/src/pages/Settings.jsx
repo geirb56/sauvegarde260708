@@ -389,7 +389,9 @@ export default function Settings() {
   const handleSetSessions = async (value) => {
     setPlanAction({ status: "saving", message: t("settingsV2.common.saving") });
     try {
-      await axios.post(`${API}/training/refresh?sessions=${encodeURIComponent(value)}`, {});
+      await axios.patch(`${API}/training/v2/preferences`, {
+        sessions_per_week: value,
+      });
       const reloadSucceeded = await loadPlanSettings();
       if (!reloadSucceeded) {
         setPlanAction({ status: "error", message: t("settingsV2.plan.loadError") });

@@ -186,8 +186,6 @@ async def _apply_paddle_event_ordered_update(
 # ---------------------------------------------------------------------------
 
 PROTECTED_ROUTES = [
-    "/api/training/plan",
-    "/api/training/refresh",
     "/api/training/race-predictions",
     "/api/coach/analyze",
     "/api/coach/workout-analysis",

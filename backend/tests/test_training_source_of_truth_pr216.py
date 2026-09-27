@@ -22,7 +22,6 @@ _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _BACKEND_DIR not in sys.path:
     sys.path.insert(0, _BACKEND_DIR)
 
-import coach_service  # noqa: E402
 import server  # noqa: E402
 from access_control import Tier, UserAccess  # noqa: E402
 from auth.jwt_utils import create_access_token  # noqa: E402
@@ -227,25 +226,3 @@ async def test_training_v2_week_uses_canonical_garmin_source_when_workouts_diver
     assert response["weekly_target"]["target_basis"] != expected_b.target_basis
     assert response["weekly_target"]["target_km"] == expected_a.target_km
     assert response["week"]["planned_km"] == plan_a.planned_km
-
-
-async def test_dynamic_training_plan_uses_canonical_garmin_source_when_workouts_diverge():
-    coach_service.clear_cache()
-    garmin_a = _canonical_dataset_a()
-    workouts_b = _divergent_dataset_b()
-    fake_db = _FakeDB(garmin_activities=garmin_a, workouts=workouts_b)
-
-    result = await coach_service.generate_dynamic_training_plan(fake_db, "u1")
-    expected_a, _ = _expected_from_garmin_dataset(garmin_a)
-    expected_b, _ = build_weekly_plan_from_workouts(
-        workouts=workouts_b,
-        goal_type="MARATHON",
-        race_date=None,
-        cycle_start_date=(datetime.now(timezone.utc).date() - timedelta(days=21)),
-        reference_date=datetime.now(timezone.utc).date(),
-    )
-
-    assert result["context"]["training_state"] == expected_a.continuity_state
-    assert result["context"]["training_state"] != expected_b.continuity_state
-    assert result["debug_volume"]["target_basis"] == expected_a.target_basis
-    assert result["debug_volume"]["target_basis"] != expected_b.target_basis

@@ -23,6 +23,8 @@ jest.mock("@/components/Paywall", () => function MockPaywall({ returnPath }) {
 
 const FORBIDDEN_ENDPOINTS = [
   "/training/plan",
+  "/training-plan",
+  "/training/dynamic-plan",
   "/training/full-cycle",
   "/training/metrics",
   "/training/refresh",

@@ -63,6 +63,7 @@ function createApiState({
 }
 
 function mockAxiosApi(state = createApiState(), { postImplementation, patchImplementation } = {}) {
+  if (!axios.patch) axios.patch = jest.fn();
   axios.get.mockImplementation((url) => {
     if (url.includes("/training/v2/cycle")) return Promise.resolve({ data: state.cycle });
     if (url.includes("/training/v2/week")) return Promise.resolve({ data: state.week });
@@ -423,10 +424,11 @@ describe("Settings UX V2", () => {
     fireEvent.click(screen.getByTestId("sessions-per-week-btn-5"));
 
     await waitFor(() => {
-      expect(axios.post).toHaveBeenCalledWith(
-        expect.stringContaining("/training/refresh?sessions=5"),
-        {}
+      expect(axios.patch).toHaveBeenCalledWith(
+        expect.stringContaining("/training/v2/preferences"),
+        { sessions_per_week: 5 }
       );
+      expect(axios.post.mock.calls.some(([url]) => String(url).includes("/training/refresh"))).toBe(false);
       expect(toast.success).toHaveBeenCalledWith("Maximum de 5 séances/semaine enregistré");
     });
   });
