@@ -381,15 +381,18 @@ def get_jwt_user_id_from_request(request: Request) -> Optional[str]:
 security = HTTPBearer(auto_error=False)
 
 
-def _bearer_credentials_from_request(
+def _runtime_auth_credentials(
     request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = None,
 ) -> Optional[HTTPAuthorizationCredentials]:
+    if credentials and credentials.credentials is not None:
+        return credentials
+
     auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
+    if not auth_header:
         return None
-    token = auth_header[len("Bearer "):].strip()
-    if not token:
-        return None
+
+    token = auth_header[len("Bearer "):] if auth_header.startswith("Bearer ") else auth_header
     return HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
 
 async def auth_user(
@@ -403,7 +406,7 @@ async def auth_user(
 
     Returns dict with at least {"id": "<user_id>", "authenticated": True}.
     """
-    return await get_current_user(request, credentials)
+    return await get_current_user(request, _runtime_auth_credentials(request, credentials))
 
 
 @app.middleware("http")
@@ -461,14 +464,15 @@ async def subscription_middleware(request: Request, call_next):
     # Premium route — verify user's subscription tier.
     # Identity MUST come from canonical active-user validation; an IP address is
     # never a user identity.
-    credentials = _bearer_credentials_from_request(request)
-    if not credentials:
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header:
         logger.info(f"[Subscription] Unauthenticated request to premium route '{path}' — 401")
         return JSONResponse(
             status_code=401,
             content={"detail": "Authentication required"},
             headers={"WWW-Authenticate": "Bearer"},
         )
+    credentials = _runtime_auth_credentials(request)
 
     try:
         current_user = await get_current_user(request, credentials)
