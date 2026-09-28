@@ -395,6 +395,21 @@ def _runtime_auth_credentials(
     token = auth_header[len("Bearer "):]
     return HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
 
+
+def _premium_auth_401_response(
+    detail: str = "Authentication required",
+    headers: Optional[dict] = None,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=401,
+        content={
+            "error": "authentication_required",
+            "message": detail,
+            "detail": detail,
+        },
+        headers=headers or {"WWW-Authenticate": "Bearer"},
+    )
+
 async def auth_user(
     request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(security),
@@ -467,19 +482,11 @@ async def subscription_middleware(request: Request, call_next):
     auth_header = request.headers.get("Authorization", "")
     if not auth_header:
         logger.info(f"[Subscription] Unauthenticated request to premium route '{path}' — 401")
-        return JSONResponse(
-            status_code=401,
-            content={"detail": "Authentication required"},
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        return _premium_auth_401_response()
     credentials = _runtime_auth_credentials(request)
     if not credentials:
         logger.info(f"[Subscription] Non-bearer auth rejected for premium route '{path}' — 401")
-        return JSONResponse(
-            status_code=401,
-            content={"detail": "Authentication required"},
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        return _premium_auth_401_response()
 
     try:
         current_user = await get_current_user(request, credentials)
@@ -488,11 +495,7 @@ async def subscription_middleware(request: Request, call_next):
             raise
         logger.info(f"[Subscription] Rejected runtime auth for premium route '{path}' — 401")
         message = exc.detail if isinstance(exc.detail, str) and exc.detail else "Authentication required"
-        return JSONResponse(
-            status_code=401,
-            content={"detail": message},
-            headers=exc.headers or {"WWW-Authenticate": "Bearer"},
-        )
+        return _premium_auth_401_response(message, headers=exc.headers)
 
     user_id = current_user["id"]
 

@@ -118,7 +118,11 @@ def _make_test_app() -> FastAPI:
         if not user_id:
             return JSONResponse(
                 status_code=401,
-                content={"detail": "Authentication required"},
+                content={
+                    "error": "authentication_required",
+                    "message": "Authentication required",
+                    "detail": "Authentication required",
+                },
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
@@ -260,6 +264,8 @@ async def test_premium_no_auth_returns_401(client):
 @pytest.mark.asyncio
 async def test_premium_no_auth_response_body(client):
     resp = await client.get(PREMIUM_PATH)
+    assert resp.json()["error"] == "authentication_required"
+    assert resp.json()["message"] == "Authentication required"
     assert resp.json()["detail"] == "Authentication required"
     client._spy.assert_not_awaited()
 

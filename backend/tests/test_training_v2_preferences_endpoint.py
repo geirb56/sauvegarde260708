@@ -137,6 +137,10 @@ class _FakeDB:
         self.training_prescription_snapshots = _Collection()
         self.training_planned_prescription_memory = _Collection()
         self.garmin_vo2max = _Collection()
+        self.users = _Collection([
+            {"id": _USER_A, "email": f"{_USER_A}@example.com", "is_active": True, "is_email_verified": True},
+            {"id": _USER_B, "email": f"{_USER_B}@example.com", "is_active": True, "is_email_verified": True},
+        ])
 
     def __getattr__(self, name: str) -> _Collection:
         collection = _Collection()
@@ -173,6 +177,7 @@ def _patches(fake_db: _FakeDB, reference_date: date = _MONDAY) -> list:
     )
     return [
         patch.object(server, "db", fake_db),
+        patch.object(server.app.state, "db", fake_db),
         patch("server.get_user_access", AsyncMock(side_effect=_user_access)),
         patch("server.datetime", _make_fixed_datetime_class(fixed_dt)),
     ]
@@ -453,7 +458,10 @@ async def test_removed_legacy_dynamic_plan_routes_return_404(method: str, path: 
 
 
 def test_route_table_absent_for_removed_routes_and_present_for_canonical_routes():
-    route_paths = {route.path for route in server.app.routes}
+    route_paths = {route.path for route in server.app.routes if hasattr(route, "path")}
+    route_paths.update(
+        route.path for route in getattr(server, "api_router").routes if hasattr(route, "path")
+    )
 
     assert "/api/training/plan" not in route_paths
     assert "/api/training/refresh" not in route_paths
