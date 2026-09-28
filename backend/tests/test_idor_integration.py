@@ -13,7 +13,8 @@ Scenarios covered for each endpoint:
   3. Non-owner (PREMIUM user, other user)  → 404 / empty list
 
 Routes under test:
-  GET  /api/messages
+  GET  /api/coach/history
+  GET  /api/messages (removed → 404 expected)
   GET  /api/coach/workout-analysis/{workout_id}
   GET  /api/rag/workout/{workout_id}           (removed → 404 expected)
   GET  /api/coach/detailed-analysis/{workout_id} (removed → 404 expected)
@@ -217,21 +218,21 @@ async def real_client():
 
 
 # ---------------------------------------------------------------------------
-# 1. GET /api/messages
+# 1. GET /api/coach/history + removed /api/messages
 # ---------------------------------------------------------------------------
 
-class TestMessagesIntegration:
+class TestCoachHistoryIntegration:
     async def test_anonymous_denied(self, real_client):
         """Unauthenticated request to a premium route must be denied (4xx)."""
         client, _ = real_client
-        r = await client.get("/api/messages")
+        r = await client.get("/api/coach/history")
         assert r.status_code in (401, 403)
 
     async def test_owner_sees_own_messages(self, real_client):
         client, fake_db = real_client
         conv_a_id = fake_db.conversations._docs[0]["id"]
         r = await client.get(
-            "/api/messages",
+            "/api/coach/history",
             headers=_bearer("user-a", "a@test.com"),
         )
         assert r.status_code == 200
@@ -242,12 +243,20 @@ class TestMessagesIntegration:
         client, fake_db = real_client
         conv_a_id = fake_db.conversations._docs[0]["id"]
         r = await client.get(
-            "/api/messages",
+            "/api/coach/history",
             headers=_bearer("user-b", "b@test.com"),
         )
         assert r.status_code == 200
         ids = [m["id"] for m in r.json()]
         assert conv_a_id not in ids
+
+    async def test_removed_legacy_messages_returns_404_even_when_authenticated(self, real_client):
+        client, _ = real_client
+        r = await client.get(
+            "/api/messages",
+            headers=_bearer("user-a", "a@test.com"),
+        )
+        assert r.status_code == 404
 
 
 # ---------------------------------------------------------------------------

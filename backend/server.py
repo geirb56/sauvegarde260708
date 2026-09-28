@@ -2055,14 +2055,6 @@ async def clear_conversation_history(user: dict = Depends(auth_user)):
     return {"deleted_count": result.deleted_count}
 
 
-@api_router.get("/messages")
-async def get_messages(user: dict = Depends(auth_user), limit: int = 20):
-    """Get recent coach messages (legacy endpoint)"""
-    user_id = user["id"]
-    messages = await db.conversations.find({"user_id": user_id}, {"_id": 0}).sort("timestamp", -1).to_list(limit)
-    return messages
-
-
 @api_router.get("/coach/workout-analysis/{workout_id}", response_model=WorkoutAnalysisV2Response)
 async def get_workout_analysis_v2(workout_id: str, language: str = "en", user: dict = Depends(auth_user)):
     """Return the canonical deterministic workout analysis payload."""
