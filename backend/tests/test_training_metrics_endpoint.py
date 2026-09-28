@@ -119,6 +119,10 @@ class _FakeDB:
     ) -> None:
         self.garmin_activities = _Collection(garmin_activities or [])
         self.workouts = _Collection(workouts or [])
+        self.users = _Collection([
+            {"id": _USER_A, "email": "a@test.com", "is_active": True, "is_email_verified": True},
+            {"id": _USER_B, "email": "b@test.com", "is_active": True, "is_email_verified": True},
+        ])
 
     def __getattr__(self, name: str) -> _Collection:
         col: _Collection = _Collection()
@@ -175,6 +179,7 @@ def _make_client(fake_db: _FakeDB):
     """
     patches = [
         patch.object(server, "db", fake_db),
+        patch.object(server.app.state, "db", fake_db),
         patch("server.get_user_access", AsyncMock(side_effect=_get_user_access)),
     ]
     return patches

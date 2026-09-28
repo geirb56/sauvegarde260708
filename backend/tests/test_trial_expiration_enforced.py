@@ -94,6 +94,14 @@ class _Collection:
 class _FakeDB:
     def __init__(self, subscription: dict) -> None:
         self.subscriptions = _Collection([subscription])
+        self.users = _Collection([
+            {
+                "id": _USER_ID,
+                "email": _EMAIL,
+                "is_active": True,
+                "is_email_verified": True,
+            }
+        ])
 
     def __getattr__(self, name: str) -> _Collection:
         col = _Collection()
@@ -126,7 +134,7 @@ def _trial_missing_end_sub() -> dict:
 @pytest_asyncio.fixture
 async def client():
     fake_db = _FakeDB(_expired_trial_sub())
-    with patch.object(server, "db", fake_db):
+    with patch.object(server, "db", fake_db), patch.object(server.app.state, "db", fake_db):
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=server.app),
             base_url="http://test",
@@ -137,7 +145,7 @@ async def client():
 @pytest_asyncio.fixture
 async def client_trial_missing_end():
     fake_db = _FakeDB(_trial_missing_end_sub())
-    with patch.object(server, "db", fake_db):
+    with patch.object(server, "db", fake_db), patch.object(server.app.state, "db", fake_db):
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=server.app),
             base_url="http://test",
