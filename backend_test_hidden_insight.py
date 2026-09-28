@@ -197,7 +197,7 @@ class RunIndexHiddenInsightTester:
         
         # Test French analysis
         success, response = self.run_test(
-            "French deep analysis",
+            "French coach workout analysis",
             "POST",
             "coach/analyze",
             200,
@@ -205,7 +205,6 @@ class RunIndexHiddenInsightTester:
                 "message": "Analyse approfondie de cette séance",
                 "workout_id": workout_id,
                 "language": "fr",
-                "deep_analysis": True,
                 "user_id": "test_french"
             }
         )

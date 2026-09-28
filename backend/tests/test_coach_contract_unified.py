@@ -403,7 +403,7 @@ async def test_coach_analyze_route_uses_canonical_service_function():
     assert service_mock.await_count == 1
 
 
-def test_coach_request_contract_no_longer_exposes_deep_analysis_and_response_is_unchanged():
+async def test_coach_request_contract_no_longer_exposes_deep_analysis_and_response_is_unchanged():
     request_fields = set(server.CoachRequest.model_fields)
     assert request_fields == {"message", "workout_id", "context", "language"}
     assert "deep_analysis" not in server.CoachRequest.model_json_schema().get("properties", {})
