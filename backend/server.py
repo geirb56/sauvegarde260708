@@ -70,7 +70,6 @@ from training_v2.today_prescription import resolve_today_final_prescription
 from training_v2.workout_generator import WorkoutPrescription
 from training_v2.training_week_response import TrainingWeekV2Response  # PR167
 from training_v2.daily_runtime_helpers import (
-    BAND_TO_RECOMMENDATION,
     runtime_session_to_prescription,
     prescription_to_runtime_session,
 )
@@ -618,7 +617,6 @@ class CoachRequest(BaseModel):
     workout_id: Optional[str] = None
     context: Optional[str] = None  # Additional context like recent stats
     language: Optional[str] = "en"  # "en" or "fr"
-    deep_analysis: Optional[bool] = False  # Trigger deep workout analysis
 
 
 class CoachResponse(BaseModel):
@@ -1009,7 +1007,7 @@ def _validate_ultra_distance_km(distance_km: Optional[float]) -> float:
 # ---------------------------------------------------------------------------
 # PR226 — Canonical goal resolver
 # Single function that reads training_cycles + user_goals and returns all
-# fields needed by /training/v2/week, /training/v2/cycle, /training/week-plan.
+# fields needed by /training/v2/week and /training/v2/cycle.
 # Incoherent legacy data → explicit 400, never silently combined.
 # ---------------------------------------------------------------------------
 
@@ -2056,14 +2054,6 @@ async def clear_conversation_history(user: dict = Depends(auth_user)):
     return {"deleted_count": result.deleted_count}
 
 
-@api_router.get("/messages")
-async def get_messages(user: dict = Depends(auth_user), limit: int = 20):
-    """Get recent coach messages (legacy endpoint)"""
-    user_id = user["id"]
-    messages = await db.conversations.find({"user_id": user_id}, {"_id": 0}).sort("timestamp", -1).to_list(limit)
-    return messages
-
-
 @api_router.get("/coach/workout-analysis/{workout_id}", response_model=WorkoutAnalysisV2Response)
 async def get_workout_analysis_v2(workout_id: str, language: str = "en", user: dict = Depends(auth_user)):
     """Return the canonical deterministic workout analysis payload."""
@@ -2648,67 +2638,6 @@ async def delete_training_goal(user: dict = Depends(auth_user)):
     }
 
 
-@api_router.post("/training-plan/set-goal")
-async def set_training_plan_goal(
-    goal: str,
-    distance_km: Optional[float] = Query(None, description="Required for ULTRA: target distance in km (> 42.195)"),
-    user: dict = Depends(auth_user),
-):
-    """
-    Set the training goal (10K, SEMI, MARATHON, etc.)
-
-    Idempotent same-goal selections are no-op and preserve existing metadata.
-    True goal changes clear stale user_goals race data.
-    ULTRA requires distance_km > 42.195.
-    """
-    if goal.upper() not in ["5K", "10K", "SEMI", "MARATHON", "ULTRA", "MAINTENANCE"]:
-        raise HTTPException(status_code=400, detail="Invalid goal")
-
-    goal_upper = goal.upper()
-    config = GOAL_CONFIG[goal_upper]
-
-    # PR226: ULTRA requires an explicit distance > 42.195 km.
-    ultra_distance_km: Optional[float] = None
-    if goal_upper == "ULTRA":
-        ultra_distance_km = _validate_ultra_distance_km(distance_km)
-
-    existing_cycle = await db.training_cycles.find_one({"user_id": user["id"]}, {"_id": 0})
-    existing_user_goal = None
-    if goal_upper == "ULTRA":
-        existing_user_goal = await db.user_goals.find_one({"user_id": user["id"]}, {"_id": 0})
-    if _is_same_goal_selection(existing_cycle, goal_upper, ultra_distance_km, existing_user_goal):
-        logger.info(f"[Training] Goal unchanged for user {user['id']}: {goal_upper}")
-        return {
-            "status": "unchanged",
-            "goal": goal_upper,
-            "cycle_weeks": config["cycle_weeks"],
-            "description": config["description"],
-        }
-
-    cycle_set: dict = {
-        "goal": goal_upper,
-        "updated_at": datetime.now(timezone.utc),
-        "ultra_distance_km": ultra_distance_km,
-    }
-
-    await db.training_cycles.update_one(
-        {"user_id": user["id"]},
-        {"$set": cycle_set},
-        upsert=True,
-    )
-
-    # PR226: any goal change invalidates the previous race metadata.
-    await db.user_goals.delete_many({"user_id": user["id"]})
-
-    logger.info(f"[Training] Goal updated for user {user['id']}: {goal_upper}")
-
-    return {
-        "status": "updated",
-        "goal": goal_upper,
-        "cycle_weeks": config["cycle_weeks"],
-        "description": config["description"],
-    }
-
 @api_router.get("/training/goals")
 async def get_available_goals():
     """Liste les types d'objectifs disponibles"""
@@ -3074,9 +3003,6 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     )
     adaptation_reason = ", ".join(adaptation_reason_codes)
 
-    # ── 9. Legacy compat: recommendation / recommendation_color derived from V2 ─
-    recommendation, recommendation_color = BAND_TO_RECOMMENDATION[readiness_decision.band]
-
     return {
         "status": "success",
         "date": today_iso,
@@ -3139,13 +3065,6 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
             "confidence": readiness_decision.confidence.value,
             "sufficiency_level": readiness_decision.sufficiency_level.value,
             "available": readiness_decision.band != ReadinessBand.UNAVAILABLE,
-            "data_source": readiness_data_source,
-        },
-        # Legacy compat: fatigue block derived from V2
-        "fatigue": {
-            "run_readiness": readiness_decision.score,
-            "recommendation": recommendation,
-            "recommendation_color": recommendation_color,
             "data_source": readiness_data_source,
         },
         # PR228: reconciliation audit (same reconciliation applied to /training/v2/week)
@@ -3477,199 +3396,10 @@ async def get_race_predictions(user: dict = Depends(auth_user)):
             "model_version": "v2",
         },
     }
-@api_router.get("/training/week-plan")
-async def get_week_plan(user: dict = Depends(auth_user)):
-    """
-    Génère un plan d'entraînement détaillé pour la semaine via LLM.
-    Utilise le contexte d'entraînement et l'objectif défini.
-
-    PR149: Weekly prescription is now sourced from WeeklyTarget V2.
-    PR157: determine_target_load removed from this path (display context only).
-    """
-    user_id = user["id"]
-
-    # ── Single clock ──────────────────────────────────────────────────────
-    today = datetime.now(timezone.utc)
-    seven_days_ago = today - timedelta(days=7)
-    twenty_eight_days_ago = today - timedelta(days=28)
-    ninety_days_ago = today - timedelta(days=90)
-
-    # ── PR226: canonical resolver — single source of truth ────────────────
-    from training_v2.periodization import build_periodization
-    from training_v2.plan_goal import build_plan_goal
-    from training_v2.week_plan_bridge import (
-        build_weekly_plan_from_workouts,
-        workouts_to_domain_activities,
-    )
-
-    resolved = await _resolve_goal_v2(user_id)
-    goal_type = resolved.goal_type
-
-    # event_name for display context (not used by V2 builder)
-    event_name = resolved.user_goal_doc.get("event_name") if resolved.user_goal_doc else None
-
-    # ── Workouts — 90-day window ──────────────────────────────────────────
-    garmin_activities_90 = await db.garmin_activities.find({
-        "user_id": user_id,
-        "start_time": {"$gte": ninety_days_ago.isoformat()}
-    }, {"_id": 0}).to_list(1000)
-    domain_activities_90 = mongo_garmin_activities_to_domain(garmin_activities_90)
-
-    cycle_start_v2 = resolved.cycle_start
-    race_date_v2 = resolved.race_date
-
-    plan_goal_v2 = build_plan_goal(
-        goal_type=resolved.mapped_goal,
-        race_date=race_date_v2,  # already None for MAINTENANCE
-        target_distance_km=resolved.target_distance_km,
-        target_time_seconds=resolved.target_time_sec,
-        created_from="user",
-    )
-
-    if plan_goal_v2.race_date is not None:
-        periodization = build_periodization(
-            plan_goal=plan_goal_v2,
-            reference_date=today.date(),
-            race_plan_start_date=cycle_start_v2,
-        )
-    else:
-        periodization = build_periodization(
-            plan_goal=plan_goal_v2,
-            reference_date=today.date(),
-            cycle_anchor_date=cycle_start_v2,
-        )
-
-    weekly_target, weekly_plan_v2 = build_weekly_plan_from_workouts(
-        workouts=domain_activities_90,
-        goal_type=goal_type,
-        race_date=race_date_v2,
-        cycle_start_date=cycle_start_v2,
-        reference_date=today.date(),
-        target_distance_km=resolved.target_distance_km,
-        target_time_seconds=resolved.target_time_sec,
-    )
-
-    # PR149: V2 prescription → target_km_protected (distance-based only).
-    # When duration-based: target_km_protected = None (no invented km).
-    if weekly_target.target_basis == "distance" and weekly_target.target_km is not None:
-        target_km_protected = weekly_target.target_km
-    else:
-        target_km_protected = None
-
-    # PR163: extract long_easy distance from WorkoutGenerator V2 — single authority.
-    # None for duration-based weeks (no artificial km injected).
-    long_run_km_v2 = next(
-        (s.distance_km for s in weekly_plan_v2.sessions if s.workout_type == "long_easy"),
-        None,
-    )
-
-    running_activities_7 = [
-        a for a in domain_activities_90
-        if (a.activity_type or "").lower() in RUNNING_TYPES
-        and activity_date(a) is not None
-        and activity_date(a) >= seven_days_ago.date()
-    ]
-    running_activities_28 = [
-        a for a in domain_activities_90
-        if (a.activity_type or "").lower() in RUNNING_TYPES
-        and activity_date(a) is not None
-        and activity_date(a) >= twenty_eight_days_ago.date()
-    ]
-    km_7_running = sum((a.distance_m or 0.0) / 1000.0 for a in running_activities_7)
-    km_28_running = sum((a.distance_m or 0.0) / 1000.0 for a in running_activities_28)
-    load_7 = km_7_running
-    load_28 = km_28_running
-
-    cycle_weeks = GOAL_CONFIG[goal_type]["cycle_weeks"]
-    # resolved.cycle_start is already validated — never None after _resolve_goal_v2.
-    cycle_start_dt = datetime(
-        resolved.cycle_start.year,
-        resolved.cycle_start.month,
-        resolved.cycle_start.day,
-        tzinfo=timezone.utc,
-    )
-    if today < cycle_start_dt:
-        current_week = 0
-    else:
-        delta_days = (today - cycle_start_dt).days
-        current_week = min(delta_days // 7 + 1, cycle_weeks + 1)
-    phase = periodization.phase.value
-
-    # ── Legacy compat context (LLM) ─────────────────────────────────────────
-    # ctl/atl/tsb km-based aliases removed (PR #127 — faux physiological metrics).
-    # load_7/load_28 kept for context transparency; no longer consumed by
-    # determine_target_load (PR #157 — removed from this path).
-    # acwr=None — km_7/(km_28/4) must NOT be exposed as ACWR (#127 pre-merge corrections).
-    context = {
-        "ctl": None,
-        "atl": None,
-        "tsb": None,
-        "acwr": None,
-        "weekly_km": km_28_running / 4.0,
-        "load_7": load_7,
-        "load_28": load_28,
-    }
-
-    # PR157: determine_target_load removed — target_load is display context only,
-    # never drives distances / durations / intensity.  planned_load → None.
-
-    # PR149: V2 decides the prescription; legacy compat projects from V2.
-    # target_km_protected is from WeeklyTarget V2 (or None for duration-based).
-    context["target_km_protected"] = target_km_protected
-    context["km_7"] = round(km_7_running, 1)
-    context["training_state"] = weekly_target.continuity_state
-    # PR149: transport V2 duration target for duration-based states.
-    if weekly_target.target_basis == "duration":
-        context["target_duration_minutes"] = weekly_target.target_duration_minutes
-    # PR163: pass WorkoutGenerator V2 long_easy distance — display context only.
-    if long_run_km_v2 is not None:
-        context["long_run_km_v2"] = long_run_km_v2
-
-    # PR165: WeeklyPlan V2 is the single prescription authority.
-    # The adapter converts V2 sessions to the legacy JSON contract.
-    # generate_cycle_week is NO LONGER called in this path.
-    from training_v2.week_plan_adapter import adapt_weekly_plan_to_legacy
-    plan = adapt_weekly_plan_to_legacy(weekly_plan_v2, weekly_target, phase)
-    metadata = {
-        "model": "deterministic_v2",
-        "provider": "WeeklyPlan_V2",
-        "context_type": "cycle_week",
-        "duration_sec": 0,
-        "success": True,
-    }
-
-    return {
-        "goal": {
-            "type": goal_type,
-            "name": event_name,
-            "event_date": resolved.race_date.isoformat() if resolved.race_date else None,
-        },
-        "current_week": current_week,
-        "total_weeks": cycle_weeks,
-        "phase": phase,
-        "context": context,
-        "debug_volume": {
-            "km_7": round(km_7_running, 1),
-            "km_28": round(km_28_running, 1),
-            "current_weekly_km": round(km_28_running / 4.0, 1),
-            "target_km": target_km_protected,
-            "target_basis": weekly_target.target_basis,
-            "target_duration_minutes": weekly_target.target_duration_minutes,
-            "continuity_state": weekly_target.continuity_state,
-            "phase": phase,
-            "prescription_source": "WeeklyPlan_V2",
-        },
-        "plan": plan,
-        "generated_by": "weekly_plan_v2",
-        "metadata": metadata
-    }
-
-
 # ---------------------------------------------------------------------------
 # PR167 — GET /training/v2/week
 # Native V2 endpoint: returns WeeklyTarget + WeeklyPlan without any legacy
-# adapter. Uses the same canonical builder as /training/week-plan so that
-# WeeklyTarget and WeeklyPlan are computed exactly once and never duplicated.
+# adapter.
 # ---------------------------------------------------------------------------
 
 @api_router.get("/training/v2/week", response_model=TrainingWeekV2Response)

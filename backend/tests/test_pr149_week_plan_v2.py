@@ -1,4 +1,4 @@
-"""PR149 — Architecture tests: WeeklyTarget V2 as prescription source in /training/week-plan.
+"""PR149 — Architecture tests: WeeklyTarget V2 canonical prescription behavior.
 
 These tests prove the architectural invariants of PR149:
 1. target_km_protected comes from WeeklyTarget V2 (not determine_target_load).
@@ -11,10 +11,9 @@ These tests prove the architectural invariants of PR149:
 8. build_weekly_target_from_workouts is deterministic and pure.
 
 Blocker regressions:
-B1. duration-based + LLM failure → fallback produces no km.
-B2. reference_date is mandatory — omitting it fails explicitly.
-B3. Unknown goal → explicit error, not silent half_marathon.
-B4. DomainActivity boundary uses canonical to_domain_activity adapter.
+B1. reference_date is mandatory — omitting it fails explicitly.
+B2. Unknown goal → explicit error, not silent half_marathon.
+B3. DomainActivity boundary uses canonical to_domain_activity adapter.
 """
 
 import pytest
@@ -274,62 +273,10 @@ class TestWeeklyTargetFormulaUnchanged:
 
 
 # ---------------------------------------------------------------------------
-# BLOCKER 1: duration-based + LLM failure → fallback produces no km
+# BLOCKER 1: reference_date mandatory — no implicit today
 # ---------------------------------------------------------------------------
 
-class TestBlocker1DurationFallbackNoKm:
-    """When V2 prescribes duration-based and LLM fails, fallback must not invent km."""
-
-    def test_fallback_duration_based_no_km(self):
-        """Simulate: deep_reprise + duration-based → fallback → no distance_km.
-
-        We inline the fallback logic test since server.py requires fastapi.
-        The invariant: when target_km_protected=None and target_duration_minutes is set,
-        the fallback MUST produce weekly_km=None and no session distance_km.
-        """
-        # Replicate the duration-based branch of _generate_fallback_week_plan
-        target_km_protected = None
-        target_duration_minutes = 105
-        context = {
-            "weekly_km": 20.0,  # legacy — must NOT be used
-            "target_duration_minutes": target_duration_minutes,
-        }
-
-        # The invariant: if target_km_protected is None and duration is set,
-        # the plan must NOT contain any distance
-        if target_km_protected is None and target_duration_minutes is not None:
-            sessions_count = 3
-            per_session = target_duration_minutes // sessions_count
-            remainder = target_duration_minutes - per_session * sessions_count
-            plan = {
-                "weekly_km": None,
-                "target_basis": "duration",
-                "target_duration_minutes": target_duration_minutes,
-                "total_tss": None,
-                "sessions": [
-                    {"day": "tuesday", "duration": f"{per_session}min", "distance_km": None, "estimated_tss": None},
-                    {"day": "thursday", "duration": f"{per_session}min", "distance_km": None, "estimated_tss": None},
-                    {"day": "saturday", "duration": f"{per_session + remainder}min", "distance_km": None, "estimated_tss": None},
-                ],
-            }
-        else:
-            pytest.fail("Should have entered duration-based branch")
-
-        assert plan["weekly_km"] is None
-        assert plan["target_basis"] == "duration"
-        assert plan["target_duration_minutes"] == 105
-        assert plan["total_tss"] is None
-        assert plan["total_tss"] != 0  # None != 0
-        for session in plan["sessions"]:
-            assert session.get("distance_km") is None
-            assert session.get("estimated_tss") is None
-            assert session.get("estimated_tss") != 0  # None != 0
-
-# ---------------------------------------------------------------------------
-# BLOCKER 2: reference_date mandatory — no implicit today
-# ---------------------------------------------------------------------------
-
-class TestBlocker2ReferenceDateMandatory:
+class TestBlocker1ReferenceDateMandatory:
     """reference_date must be explicit; omitting it must fail."""
 
     def test_reference_date_required(self):
@@ -365,10 +312,10 @@ class TestBlocker2ReferenceDateMandatory:
 
 
 # ---------------------------------------------------------------------------
-# BLOCKER 3: Unknown goal → explicit error, not silent half_marathon
+# BLOCKER 2: Unknown goal → explicit error, not silent half_marathon
 # ---------------------------------------------------------------------------
 
-class TestBlocker3UnknownGoalExplicitError:
+class TestBlocker2UnknownGoalExplicitError:
     """Unknown goal must raise, never silently become half_marathon."""
 
     def test_unknown_goal_raises(self):
@@ -416,10 +363,10 @@ class TestBlocker3UnknownGoalExplicitError:
 
 
 # ---------------------------------------------------------------------------
-# BLOCKER 4: DomainActivity boundary — canonical adapter used
+# BLOCKER 3: DomainActivity boundary — canonical adapter used
 # ---------------------------------------------------------------------------
 
-class TestBlocker4DomainActivityBoundary:
+class TestBlocker3DomainActivityBoundary:
     """Bridge must use canonical to_domain_activity, producing DomainActivity instances."""
 
     def test_canonical_adapter_produces_domain_activity(self):

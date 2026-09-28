@@ -220,6 +220,7 @@ def test_route_table_absence_and_presence_invariants():
     )
 
     removed_paths = {
+        "/api/messages",
         "/api/coach/guidance",
         "/api/coach/guidance/latest",
         "/api/coach/digest",

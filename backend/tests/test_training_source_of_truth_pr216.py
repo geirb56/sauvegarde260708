@@ -184,28 +184,6 @@ async def _call(path: str, fake_db: _FakeDB) -> dict:
     return response.json()
 
 
-async def test_training_week_plan_uses_canonical_garmin_source_when_workouts_diverge():
-    garmin_a = _canonical_dataset_a()
-    workouts_b = _divergent_dataset_b()
-    fake_db = _FakeDB(garmin_activities=garmin_a, workouts=workouts_b)
-
-    response = await _call("/api/training/week-plan", fake_db)
-    expected_a, plan_a = _expected_from_garmin_dataset(garmin_a)
-    expected_b, _ = build_weekly_plan_from_workouts(
-        workouts=workouts_b,
-        goal_type="MARATHON",
-        race_date=None,
-        cycle_start_date=(datetime.now(timezone.utc).date() - timedelta(days=21)),
-        reference_date=datetime.now(timezone.utc).date(),
-    )
-
-    assert response["context"]["training_state"] == expected_a.continuity_state
-    assert response["debug_volume"]["target_basis"] == expected_a.target_basis
-    assert response["debug_volume"]["target_basis"] != expected_b.target_basis
-    assert response["debug_volume"]["target_km"] == expected_a.target_km
-    assert response["plan"]["weekly_km"] == plan_a.planned_km
-
-
 async def test_training_v2_week_uses_canonical_garmin_source_when_workouts_diverge():
     garmin_a = _canonical_dataset_a()
     workouts_b = _divergent_dataset_b()

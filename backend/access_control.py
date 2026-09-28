@@ -425,7 +425,6 @@ ROUTE_ACCESS_MAP: Dict[str, RouteAccess] = {
     # ── Premium (TRIAL or PREMIUM required) ──────────────────────────────
     "/api/training/race-predictions": RouteAccess.PREMIUM,
     "/api/training/today":            RouteAccess.PREMIUM,
-    "/api/training/week-plan":        RouteAccess.PREMIUM,
     "/api/training/v2/week":          RouteAccess.PREMIUM,  # PR167 — native V2 week endpoint
     "/api/training/v2/cycle":         RouteAccess.PREMIUM,  # PR175 — native V2 cycle calendar endpoint
     "/api/training/v2/cycle/start-date": RouteAccess.PREMIUM,

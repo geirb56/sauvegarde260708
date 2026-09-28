@@ -352,31 +352,6 @@ def test_i_coach_analyze_acwr_status_unavailable():
 
 
 # ---------------------------------------------------------------------------
-# J. /training/week-plan must NOT expose km-based ACWR
-# ---------------------------------------------------------------------------
-
-
-def test_j_week_plan_no_km_based_acwr():
-    """J. /training/week-plan context must not compute km-based ACWR."""
-    server_path = _BACKEND / "server.py"
-    source = server_path.read_text()
-    # The specific formula (load_7 / (load_28 / 4)) used in week-plan must be gone
-    assert "load_7 / (load_28 / 4)" not in source, (
-        "/training/week-plan must not compute load_7/(load_28/4) as ACWR"
-    )
-
-
-def test_j_week_plan_acwr_none_in_context():
-    """J. /training/week-plan context dict must set acwr=None."""
-    server_path = _BACKEND / "server.py"
-    source = server_path.read_text()
-    # The context must contain "acwr": None
-    assert '"acwr": None,' in source or "'acwr': None," in source, (
-        "/training/week-plan context must set acwr=None"
-    )
-
-
-# ---------------------------------------------------------------------------
 # K. /run-index legacy fallback removed (Garmin-only runtime)
 # ---------------------------------------------------------------------------
 
@@ -472,4 +447,3 @@ def test_m_training_metrics_acwr_matches_v2():
         "/training/metrics acwr must match TrainingLoad V2"
     )
     assert result["acwr_status"] != "unavailable" or expected_snap.acwr is None
-

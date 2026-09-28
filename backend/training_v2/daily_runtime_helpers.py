@@ -17,7 +17,6 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from .readiness_decision import ReadinessBand
 from .workout_generator import WorkoutPrescription
 
 # ---------------------------------------------------------------------------
@@ -61,17 +60,6 @@ INTENSITY_CLASS_TO_RUNTIME: dict = {
     "high": "hard",
     "event": "event",
 }
-
-# Canonical recommendation string + color derived from ReadinessBand (legacy compat).
-# Direction: V2 ReadinessDecision → compatibility adapter.  Never legacy → V2.
-BAND_TO_RECOMMENDATION: dict = {
-    ReadinessBand.FAVORABLE: ("RUN HARD", "green"),
-    ReadinessBand.CAUTION: ("EASY RUN", "yellow"),
-    ReadinessBand.LOW: ("EASY RUN", "yellow"),
-    ReadinessBand.VERY_LOW: ("REST", "red"),
-    ReadinessBand.UNAVAILABLE: ("UNAVAILABLE", "gray"),
-}
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -147,7 +135,6 @@ __all__ = [
     "WORKOUT_TYPE_TO_INTENSITY_CLASS",
     "WORKOUT_TYPE_TO_RUNTIME_TYPE",
     "INTENSITY_CLASS_TO_RUNTIME",
-    "BAND_TO_RECOMMENDATION",
     "parse_duration_minutes",
     "runtime_session_to_prescription",
     "prescription_to_runtime_session",

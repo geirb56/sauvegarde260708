@@ -571,14 +571,6 @@ class TestArchitecture:
             "get_training_v2_week must not use training_engine"
         )
 
-    def test_legacy_endpoint_week_plan_still_exists(self):
-        """/training/week-plan must not be removed (additive only)."""
-        with open(self._SERVER_PATH) as f:
-            source = f.read()
-        assert '"/training/week-plan"' in source, (
-            "/training/week-plan was removed — PR167 must be additive only"
-        )
-
     def test_legacy_endpoint_plan_removed(self):
         with open(self._SERVER_PATH) as f:
             source = f.read()
@@ -596,15 +588,11 @@ class TestArchitecture:
 
 
 # ===========================================================================
-# Parity test — same builder → same WeeklyTarget and WeeklyPlan
+# Determinism tests — canonical builder invariants
 # ===========================================================================
 
 class TestParity:
-    """Both /training/week-plan and /training/v2/week share the canonical builder.
-
-    Parity is trivially guaranteed because both call build_weekly_plan_from_workouts.
-    This test verifies the builder is deterministic for identical inputs.
-    """
+    """Canonical builder remains deterministic for identical inputs."""
 
     def test_builder_is_deterministic(self):
         workouts = _make_workouts(n=8, km_per_session=10.0)
