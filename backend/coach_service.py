@@ -1,24 +1,17 @@
 """
-RunIndex - Cascade Coaching Service with Cache and Metrics
-
-Strategy:
-1. Check cache (0ms)
-2. LLM enrichment (~500ms) when available
-3. Store in cache + metrics
+RunIndex - Coaching Service metrics and chat LLM bridge
 
 Usage:
-    from coach_service import analyze_workout, chat_response, get_metrics
+    from coach_service import chat_response, get_metrics
 """
 
-import hashlib
 import logging
 import time
 from dataclasses import dataclass, asdict
-from typing import Dict, List, Tuple, Optional
+from typing import List, Tuple
 
 from llm_coach import (
     enrich_chat_response,
-    enrich_workout_analysis,
 )
 logger = logging.getLogger(__name__)
 
@@ -37,7 +30,6 @@ class CoachMetrics:
     avg_latency_ms: float = 0.0
     llm_avg_latency_ms: float = 0.0
     cache_avg_latency_ms: float = 0.0
-    workout_requests: int = 0
     chat_requests: int = 0
 
 
@@ -69,105 +61,6 @@ def _update_latency(latency_ms: float, is_llm: bool = False, is_cache: bool = Fa
         metrics.llm_avg_latency_ms = (metrics.llm_avg_latency_ms * (1 - alpha)) + (latency_ms * alpha)
     if is_cache:
         metrics.cache_avg_latency_ms = (metrics.cache_avg_latency_ms * (1 - alpha)) + (latency_ms * alpha)
-
-
-# ============================================================
-# CACHE CONFIGURATION
-# ============================================================
-
-CACHE_TTL_SECONDS = 3600
-MAX_CACHE_SIZE = 500
-
-_workout_cache: Dict[str, Tuple[dict, float]] = {}
-
-
-def _cache_key(data: dict, prefix: str = "") -> str:
-    key_parts = [prefix]
-    for field in ["id", "distance_km", "duration_minutes", "avg_heart_rate", "type"]:
-        key_parts.append(str(data.get(field, "")))
-    return hashlib.md5("_".join(key_parts).encode()).hexdigest()
-
-
-def _is_cache_valid(timestamp: float) -> bool:
-    return (time.time() - timestamp) < CACHE_TTL_SECONDS
-
-
-def _cleanup_cache(cache: dict) -> None:
-    if len(cache) > MAX_CACHE_SIZE:
-        expired_keys = [k for k, (_, ts) in cache.items() if not _is_cache_valid(ts)]
-        for k in expired_keys:
-            del cache[k]
-        if len(cache) > MAX_CACHE_SIZE:
-            sorted_items = sorted(cache.items(), key=lambda x: x[1][1])
-            for k, _ in sorted_items[:len(cache) - MAX_CACHE_SIZE]:
-                del cache[k]
-
-
-# ============================================================
-# MAIN FUNCTIONS
-# ============================================================
-
-async def analyze_workout(
-    workout: dict,
-    rag_result: dict,
-    user_id: Optional[str] = None,
-    language: str = "fr"
-) -> Tuple[str, bool]:
-    """Session analysis with cache + metrics + cascade strategy."""
-    start = time.time()
-    metrics.total_requests += 1
-    metrics.workout_requests += 1
-    
-    cache_key = _cache_key(workout, f"workout_{language}")
-    if cache_key in _workout_cache:
-        cached_result, timestamp = _workout_cache[cache_key]
-        if _is_cache_valid(timestamp):
-            metrics.cache_hits += 1
-            latency = (time.time() - start) * 1000
-            _update_latency(latency, is_cache=True)
-            return cached_result["summary"], cached_result["used_llm"]
-    
-    deterministic_summary = rag_result.get("summary", "")
-    
-    try:
-        workout_stats = {
-            "distance_km": workout.get("distance_km", 0),
-            "duration_min": workout.get("duration_minutes", 0),
-            "pace": rag_result.get("pace_str", "N/A"),
-            "avg_hr": workout.get("avg_heart_rate"),
-            "max_hr": workout.get("max_heart_rate"),
-            "elevation": workout.get("elevation_gain_m"),
-            "type": workout.get("type"),
-            "zones": workout.get("effort_zone_distribution", {}),
-            "splits": rag_result.get("splits_analysis", {}),
-            "comparison": rag_result.get("comparison", {}).get("progression", ""),
-            "strengths": rag_result.get("points_forts", []),
-            "areas_to_improve": rag_result.get("points_ameliorer", []),
-        }
-        
-        enriched, success, meta = await enrich_workout_analysis(
-            workout=workout_stats,
-            user_id=user_id,
-            language=language
-        )
-        
-        if success and enriched:
-            metrics.llm_success += 1
-            latency = (time.time() - start) * 1000
-            _update_latency(latency, is_llm=True)
-            _workout_cache[cache_key] = ({"summary": enriched, "used_llm": True}, time.time())
-            _cleanup_cache(_workout_cache)
-            return enriched, True
-            
-    except Exception as e:
-        logger.warning(f"[Coach] Session fallback: {e}")
-    
-    metrics.llm_fallback += 1
-    latency = (time.time() - start) * 1000
-    _update_latency(latency)
-    _workout_cache[cache_key] = ({"summary": deterministic_summary, "used_llm": False}, time.time())
-    _cleanup_cache(_workout_cache)
-    return deterministic_summary, False
 
 
 async def chat_response(
@@ -217,20 +110,18 @@ async def chat_response(
 
 def clear_cache() -> dict:
     """Clears caches."""
-    global _workout_cache
     result = {
-        "cleared_workout": len(_workout_cache),
+        "cleared_workout": 0,
     }
-    _workout_cache = {}
     return result
 
 
 def get_cache_stats() -> dict:
     """Returns cache statistics."""
     return {
-        "workout_cache_size": len(_workout_cache),
-        "max_size": MAX_CACHE_SIZE,
-        "ttl_seconds": CACHE_TTL_SECONDS
+        "workout_cache_size": 0,
+        "max_size": 0,
+        "ttl_seconds": 0
     }
 
 
@@ -239,7 +130,6 @@ def get_cache_stats() -> dict:
 # ============================================================
 
 __all__ = [
-    "analyze_workout",
     "chat_response",
     "clear_cache",
     "get_cache_stats",

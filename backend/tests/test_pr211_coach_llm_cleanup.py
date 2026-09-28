@@ -177,7 +177,6 @@ async def test_enrichment_functions_work_without_real_network(monkeypatch):
         conversation_history=[],
         user_id="u1",
     )
-    workout, ok_workout, _ = await llm_coach.enrich_workout_analysis({"distance_km": 8}, user_id="u1", language="fr")
 
     assert ok_chat and chat == "ok"
-    assert ok_workout and workout == "ok"
+    assert not hasattr(llm_coach, "enrich_workout_analysis")

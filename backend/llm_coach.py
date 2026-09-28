@@ -66,17 +66,6 @@ The Training V2 engine decides the prescription. The Coach only explains it.
 - Never fabricate missing metrics, readiness scores, paces, or performance certainty
 - Respect readiness confidence/sufficiency and performance extrapolation metadata"""
 
-SYSTEM_PROMPT_SEANCE = """You are a running coach analyzing a session.
-
-Structure:
-1. Positive reaction to the effort
-2. Simple data analysis (pace, HR, consistency)
-3. Session highlight
-4. Advice for next run
-5. Motivating follow-up (optional)
-
-Be concrete and encouraging. Max 4-5 sentences."""
-
 SYSTEM_PROMPT_PLAN = """You are an elite running coach specialized in periodization.
 Respond ONLY in valid JSON, without text before or after."""
 
@@ -132,20 +121,6 @@ If a field is unavailable or low-confidence, say so plainly.
 Do not invent a new prescription or alter the served prescription.{_lang_directive(language)}"""
 
     return await _call_gpt(SYSTEM_PROMPT_COACH + _lang_directive(language), prompt, user_id, "chat")
-
-
-async def enrich_workout_analysis(
-    workout: Dict,
-    user_id: str = "unknown",
-    language: str = "fr"
-) -> Tuple[Optional[str], bool, Dict]:
-    """Enriches workout analysis with the configured LLM model."""
-    prompt = f"""SESSION DATA:
-{_format_context(workout)}
-
-Analyze this session as a caring running coach.{_lang_directive(language)}"""
-
-    return await _call_gpt(SYSTEM_PROMPT_SEANCE + _lang_directive(language), prompt, user_id, "seance")
 
 
 async def _call_gpt(
@@ -210,15 +185,6 @@ async def _call_gpt(
         return None, False, metadata
 
 
-def _format_context(data: Dict) -> str:
-    """Formats data into readable text for LLM"""
-    lines = []
-    for key, value in data.items():
-        if value is not None and value != "" and value != {} and value != []:
-            lines.append(f"- {key}: {value}")
-    return "\n".join(lines) if lines else "No data"
-
-
 def _format_history(history: List[Dict]) -> str:
     """Formats conversation history"""
     if not history:
@@ -256,7 +222,6 @@ def _clean_response(response: str) -> str:
 
 __all__ = [
     "enrich_chat_response",
-    "enrich_workout_analysis",
     "LLM_MODEL",
     "LLM_PROVIDER"
 ]
