@@ -111,7 +111,6 @@ async def chat_response(
 def clear_cache() -> dict:
     """Compatibility shim: workout analysis cache was removed."""
     result = {
-        "cache_enabled": False,
         "cleared_workout": 0,
     }
     return result
@@ -120,7 +119,6 @@ def clear_cache() -> dict:
 def get_cache_stats() -> dict:
     """Compatibility shim stats after workout analysis cache removal."""
     return {
-        "cache_enabled": False,
         "workout_cache_size": 0,
         "max_size": 0,
         "ttl_seconds": 0
