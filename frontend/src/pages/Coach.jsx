@@ -85,8 +85,7 @@ export default function Coach() {
       const response = await axios.post(`${API}/coach/analyze`, {
         message: analysisMessage,
         workout_id: workoutId,
-        language: lang,
-        deep_analysis: true
+        language: lang
       });
 
       setMessages(prev => [...prev, { 

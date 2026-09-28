@@ -76,18 +76,17 @@ class RunIndexHiddenInsightTester:
         hidden_insight_count = 0
         
         for i in range(num_tests):
-            print(f"\nTest {i+1}/{num_tests}: Deep analysis request")
+            print(f"\nTest {i+1}/{num_tests}: Coach workout request")
             
             success, response = self.run_test(
-                f"Deep analysis {i+1}",
+                f"Coach workout request {i+1}",
                 "POST",
                 "coach/analyze",
                 200,
                 data={
-                    "message": f"Deep analysis of workout: {test_workout.get('name', 'Test Workout')}",
+                    "message": f"Coach analysis of workout: {test_workout.get('name', 'Test Workout')}",
                     "workout_id": workout_id,
                     "language": "en",
-                    "deep_analysis": True,
                     "user_id": f"test_user_{i}"
                 }
             )
@@ -198,7 +197,7 @@ class RunIndexHiddenInsightTester:
         
         # Test French analysis
         success, response = self.run_test(
-            "French deep analysis",
+            "French coach workout analysis",
             "POST",
             "coach/analyze",
             200,
@@ -206,7 +205,6 @@ class RunIndexHiddenInsightTester:
                 "message": "Analyse approfondie de cette séance",
                 "workout_id": workout_id,
                 "language": "fr",
-                "deep_analysis": True,
                 "user_id": "test_french"
             }
         )
