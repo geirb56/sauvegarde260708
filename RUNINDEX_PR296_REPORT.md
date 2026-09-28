@@ -2,7 +2,7 @@
 
 - Base branch: `copilot/dev`
 - Base SHA used: `f971a696eef302d36f1fad6d32c4fd7ae14b76aa`
-- Head SHA: `PENDING_FINAL_COMMIT`
+- Head SHA: `ba8ae66b3394af6fa256e478c307b5af025db08f`
 
 ## Files modified
 
@@ -67,6 +67,5 @@ These remaining references are historical evidence snapshots only and were inten
 
 ## PR publication
 
-- PR number: `PENDING_PR_NUMBER`
-- PR URL: `PENDING_PR_URL`
-
+- PR number: `296`
+- PR URL: `https://github.com/geirb56/sauvegarde260708/pull/296`
