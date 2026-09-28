@@ -479,11 +479,12 @@ async def subscription_middleware(request: Request, call_next):
         if exc.status_code != 401:
             raise
         logger.info(f"[Subscription] Rejected runtime auth for premium route '{path}' — 401")
+        message = exc.detail if isinstance(exc.detail, str) and exc.detail else "Authentication required"
         return JSONResponse(
             status_code=401,
             content={
                 "error": "authentication_required",
-                "message": "Authentication required",
+                "message": message,
             },
             headers=exc.headers or {"WWW-Authenticate": "Bearer"},
         )
