@@ -389,10 +389,10 @@ def _runtime_auth_credentials(
         return credentials
 
     auth_header = request.headers.get("Authorization", "")
-    if not auth_header:
+    if not auth_header.startswith("Bearer "):
         return None
 
-    token = auth_header[len("Bearer "):] if auth_header.startswith("Bearer ") else auth_header
+    token = auth_header[len("Bearer "):]
     return HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
 
 async def auth_user(
@@ -473,6 +473,13 @@ async def subscription_middleware(request: Request, call_next):
             headers={"WWW-Authenticate": "Bearer"},
         )
     credentials = _runtime_auth_credentials(request)
+    if not credentials:
+        logger.info(f"[Subscription] Non-bearer auth rejected for premium route '{path}' — 401")
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Authentication required"},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     try:
         current_user = await get_current_user(request, credentials)
