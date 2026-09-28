@@ -403,6 +403,55 @@ async def test_coach_analyze_route_uses_canonical_service_function():
     assert service_mock.await_count == 1
 
 
+def test_coach_request_contract_no_longer_exposes_deep_analysis_and_response_is_unchanged():
+    request_fields = set(server.CoachRequest.model_fields)
+    assert request_fields == {"message", "workout_id", "context", "language"}
+    assert "deep_analysis" not in server.CoachRequest.model_json_schema().get("properties", {})
+    assert set(server.CoachResponse.model_fields) == {"response", "message_id"}
+
+
+async def test_coach_analyze_preserves_workout_context_without_deep_analysis():
+    fake_db = _FakeDB()
+    fake_db.workouts._docs.append({
+        "id": "workout-42",
+        "user_id": "user-a",
+        "name": "Tempo Run",
+        "distance_km": 12.4,
+    })
+    context_mock = AsyncMock(return_value=_ContextPayload())
+
+    with (
+        patch.object(server, "db", fake_db),
+        patch("server.get_user_access", AsyncMock(side_effect=_premium_access)),
+        patch("server._resolve_goal_v2", AsyncMock(return_value=SimpleNamespace())),
+        patch("server._resolve_canonical_reference_date", return_value=datetime(2026, 1, 15, tzinfo=timezone.utc).date()),
+        patch("server.mongo_garmin_activities_to_domain", side_effect=lambda docs: []),
+        patch("server.build_training_load", return_value=SimpleNamespace()),
+        patch("server.build_readiness_v2_from_garmin_data", return_value=None),
+        patch("server.build_readiness_decision", return_value=SimpleNamespace()),
+        patch("server.predict_races", return_value=SimpleNamespace()),
+        patch("server.load_canonical_training_paces", AsyncMock(return_value=SimpleNamespace())),
+        patch("server.get_training_v2_week", AsyncMock(return_value={})),
+        patch("server.get_today_adaptive_session", AsyncMock(return_value={})),
+        patch("server.build_coach_context_v2", context_mock),
+        patch("server.llm_coach.enrich_chat_response", AsyncMock(side_effect=_coach_response_stub)),
+    ):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://test") as client:
+            response = await client.post(
+                "/api/coach/analyze",
+                headers=_bearer("user-a", "a@test.com"),
+                json={"message": "analyze this workout", "language": "en", "workout_id": "workout-42"},
+            )
+
+    assert response.status_code == 200
+    assert context_mock.await_count == 1
+    assert context_mock.await_args.kwargs["workout"]["id"] == "workout-42"
+    assert context_mock.await_args.kwargs["workout"]["user_id"] == "user-a"
+    persisted = [doc for doc in fake_db.conversations._docs if doc.get("workout_id") == "workout-42"]
+    assert len(persisted) == 2
+    assert [doc["role"] for doc in persisted] == ["user", "assistant"]
+
+
 async def test_subscription_authority_function_is_used_for_coach_processing():
     fake_db = _FakeDB()
     access_mock = AsyncMock(side_effect=_premium_access)

@@ -617,7 +617,6 @@ class CoachRequest(BaseModel):
     workout_id: Optional[str] = None
     context: Optional[str] = None  # Additional context like recent stats
     language: Optional[str] = "en"  # "en" or "fr"
-    deep_analysis: Optional[bool] = False  # Trigger deep workout analysis
 
 
 class CoachResponse(BaseModel):
