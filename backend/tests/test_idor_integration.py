@@ -159,6 +159,31 @@ class _Collection:
     async def insert_one(self, doc: dict) -> None:
         self._docs.append(dict(doc))
 
+    async def find_one_and_update(
+        self,
+        query: dict,
+        update: dict,
+        upsert: bool = False,
+        return_document=None,
+    ) -> dict | None:
+        for index, doc in enumerate(self._docs):
+            if all(doc.get(k) == v for k, v in query.items()):
+                updated = dict(doc)
+                updated.update(update.get("$set", {}))
+                self._docs[index] = updated
+                return dict(updated)
+        if not upsert:
+            return None
+        new_doc = {
+            key: value
+            for key, value in query.items()
+            if not isinstance(value, dict)
+        }
+        new_doc.update(update.get("$setOnInsert", {}))
+        new_doc.update(update.get("$set", {}))
+        self._docs.append(new_doc)
+        return dict(new_doc)
+
     async def create_index(self, *a, **kw) -> None:
         pass
 
