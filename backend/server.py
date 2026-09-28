@@ -466,10 +466,7 @@ async def subscription_middleware(request: Request, call_next):
         logger.info(f"[Subscription] Unauthenticated request to premium route '{path}' — 401")
         return JSONResponse(
             status_code=401,
-            content={
-                "error": "authentication_required",
-                "message": "Authentication required",
-            },
+            content={"detail": "Authentication required"},
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -482,10 +479,7 @@ async def subscription_middleware(request: Request, call_next):
         message = exc.detail if isinstance(exc.detail, str) and exc.detail else "Authentication required"
         return JSONResponse(
             status_code=401,
-            content={
-                "error": "authentication_required",
-                "message": message,
-            },
+            content={"detail": message},
             headers=exc.headers or {"WWW-Authenticate": "Bearer"},
         )
 
