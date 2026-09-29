@@ -20,6 +20,7 @@ _OBSERVATION_LABELS = {
         "distance": "distance: {value} km",
         "duration": "duration: {value} min",
         "pace": "average pace: {value}/km",
+        "speed": "average speed: {value} km/h",
         "avg_hr": "average HR: {value} bpm",
         "max_hr": "maximum HR: {value} bpm",
         "fastest_split": "fastest split: {value}/km",
@@ -36,6 +37,7 @@ _OBSERVATION_LABELS = {
         "distance": "distance : {value} km",
         "duration": "durée : {value} min",
         "pace": "allure moyenne : {value}/km",
+        "speed": "vitesse moyenne : {value} km/h",
         "avg_hr": "FC moyenne : {value} bpm",
         "max_hr": "FC maximale : {value} bpm",
         "fastest_split": "fraction la plus rapide : {value}/km",
@@ -52,6 +54,7 @@ _OBSERVATION_LABELS = {
         "distance": "distancia: {value} km",
         "duration": "duración: {value} min",
         "pace": "ritmo medio: {value}/km",
+        "speed": "velocidad media: {value} km/h",
         "avg_hr": "FC media: {value} bpm",
         "max_hr": "FC máxima: {value} bpm",
         "fastest_split": "fracción más rápida: {value}/km",
@@ -389,6 +392,8 @@ def _workout_average_pace(workout: dict) -> Optional[float]:
     recorded_pace = _positive_number(workout.get("avg_pace_min_km"))
     if recorded_pace is not None:
         return recorded_pace
+    if workout.get("type") != "run":
+        return None
     distance = _positive_number(workout.get("distance_km"))
     duration = _positive_number(workout.get("duration_minutes"))
     if distance is None or duration is None:
@@ -419,6 +424,13 @@ def _observation(language: str, key: str, value: object, digits: int = 1) -> Opt
         return None
     text = _OBSERVATION_LABELS[_lang(language)][key]
     return text.format(value=_format_number(numeric, digits, language))
+
+
+def _pace_observation(language: str, key: str, value: Optional[float]) -> Optional[str]:
+    pace = _format_pace(value)
+    if pace is None:
+        return None
+    return _OBSERVATION_LABELS[_lang(language)][key].format(value=pace)
 
 
 def _safe_avg(values: List[Optional[float]]) -> Optional[float]:
@@ -534,7 +546,11 @@ def _build_pacing(workout: dict, language: str) -> WorkoutAnalysisPacing:
 
     pace_drop = _finite_number(split_analysis.get("pace_drop"))
     variability = _finite_number(pace_stats.get("pace_variability"))
+    if variability is not None and variability < 0:
+        variability = None
     consistency = _finite_number(split_analysis.get("consistency_score"))
+    if consistency is not None and not 0 <= consistency <= 100:
+        consistency = None
     if consistency is None and split_paces:
         avg_split = mean(split_paces)
         max_dev = max(abs(pace - avg_split) for pace in split_paces)
@@ -741,7 +757,8 @@ def _build_summary(
     facts = [
         _observation(language, "distance", workout.get("distance_km"), digits=2),
         _observation(language, "duration", workout.get("duration_minutes"), digits=0),
-        _observation(language, "pace", pacing.average_pace_min_km, digits=2),
+        _pace_observation(language, "pace", pacing.average_pace_min_km),
+        _observation(language, "speed", pacing.average_speed_kmh, digits=2),
         _observation(language, "avg_hr", physiology.avg_hr, digits=0),
         _observation(language, "max_hr", physiology.max_hr, digits=0),
     ]
@@ -756,6 +773,7 @@ def _comparison_observation(comparison: WorkoutAnalysisComparison, language: str
     labels = {
         "en": {
             "pace": "average pace",
+            "speed": "average speed",
             "hr": "average HR",
             "distance": "distance",
             "duration": "duration",
@@ -763,6 +781,7 @@ def _comparison_observation(comparison: WorkoutAnalysisComparison, language: str
         },
         "fr": {
             "pace": "allure moyenne",
+            "speed": "vitesse moyenne",
             "hr": "FC moyenne",
             "distance": "distance",
             "duration": "durée",
@@ -770,6 +789,7 @@ def _comparison_observation(comparison: WorkoutAnalysisComparison, language: str
         },
         "es": {
             "pace": "ritmo medio",
+            "speed": "velocidad media",
             "hr": "FC media",
             "distance": "distancia",
             "duration": "duración",
@@ -778,6 +798,7 @@ def _comparison_observation(comparison: WorkoutAnalysisComparison, language: str
     }[_lang(language)]
     metrics = (
         ("pace", comparison.avg_pace_min_km, True, "/km"),
+        ("speed", comparison.avg_speed_kmh, False, " km/h"),
         ("hr", comparison.avg_heart_rate, False, " bpm"),
         ("distance", comparison.distance_km, False, " km"),
         ("duration", comparison.duration_minutes, False, " min"),
@@ -833,15 +854,17 @@ def _build_meaning(
     facts = [
         _observation(language, "avg_hr", physiology.avg_hr, digits=0),
         _observation(language, "max_hr", physiology.max_hr, digits=0),
-        _observation(language, "fastest_split", pacing.fastest_split_min_km, digits=2),
-        _observation(language, "slowest_split", pacing.slowest_split_min_km, digits=2),
+        _pace_observation(language, "fastest_split", pacing.fastest_split_min_km),
+        _pace_observation(language, "slowest_split", pacing.slowest_split_min_km),
         _observation(language, "pace_drop", pacing.pace_drop_min_km, digits=3),
         _observation(language, "consistency", pacing.consistency_score, digits=1),
         _observation(language, "variability", pacing.variability, digits=3),
         _observation(language, "hr_drift", physiology.hr_drift, digits=1),
-        _observation(language, "cadence", workout.get("avg_cadence_spm"), digits=0),
-        _observation(language, "elevation", workout.get("elevation_gain_m"), digits=0),
+        _observation(language, "cadence", _positive_number(workout.get("avg_cadence_spm")), digits=0),
     ]
+    elevation_gain = _finite_number(workout.get("elevation_gain_m"))
+    if elevation_gain is not None and elevation_gain >= 0:
+        facts.append(_observation(language, "elevation", elevation_gain, digits=0))
     if pacing.negative_split is True:
         facts.append(_OBSERVATION_LABELS[_lang(language)]["negative_split"])
     comparison_fact = _comparison_observation(comparison, language)

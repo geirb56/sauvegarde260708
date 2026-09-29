@@ -389,7 +389,7 @@ class _FakeDB:
             _workout(
                 self.ISOLATED_ID,
                 user_id="user-a",
-                date="2024-02-10T07:00:00+00:00",
+                date="2026-01-20T07:00:00+00:00",
                 distance_km=9.0,
                 duration_minutes=50,
                 avg_pace_min_km=5.55,
@@ -402,6 +402,14 @@ class _FakeDB:
                 duration_minutes=170,
                 avg_heart_rate=171,
                 avg_pace_min_km=5.1,
+            ),
+            _workout(
+                "user-b-nearby-run",
+                user_id="user-b",
+                date="2026-01-15T07:00:00+00:00",
+                distance_km=9.0,
+                duration_minutes=50,
+                avg_pace_min_km=5.55,
             ),
             _workout(
                 self.MIXED_DATE_ID,
@@ -745,7 +753,7 @@ def test_history_comparison_uses_prior_similar_distance_sessions_without_claimin
     assert result.comparison.available is True
     assert result.comparison.baseline_sample_count == 2
     assert result.comparison.baseline_period_days == 90
-    assert "2 prior comparable sessions in the last 90 days" in result.meaning.text
+    assert "2 selected prior comparable sessions (maximum 3) in the last 90 days" in result.meaning.text
     assert "reference average 5:57/km" in result.meaning.text
     assert "not evidence by itself of progression" in result.meaning.text
 
