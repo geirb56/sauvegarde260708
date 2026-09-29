@@ -184,25 +184,30 @@ SUBSCRIPTION_TIERS = {
     "free": {
         "name": "Free",
         "price_monthly": 0,
-        "price_annual": 0,
-        "messages_limit": 10,
-        "description": "Discovery"
-    },
-    "premium": {
-        "name": "Premium",
-        "price_monthly": 4.99,
-        "price_annual": 49.99,
-        "messages_limit": 999,
-        "unlimited": True,
-        "description": "Full access"
+        "messages_limit": CHAT_QUOTA_FREE,
+        "unlimited": False,
+        "description": "Free access with a limit of 10 Coach messages per month."
     },
     "trial": {
         "name": "Trial",
         "price_monthly": 0,
-        "price_annual": 0,
-        "messages_limit": 999,
+        "messages_limit": None,
         "unlimited": True,
-        "description": "Full access"
+        "description": (
+            "30 days of Premium access after connecting an eligible Garmin account; "
+            "no card required. Unlimited commercial access remains subject to "
+            "technical anti-abuse protections."
+        )
+    },
+    "premium": {
+        "name": "Premium",
+        "price_monthly": 4.99,
+        "messages_limit": None,
+        "unlimited": True,
+        "description": (
+            "Monthly Premium access. Unlimited commercial access remains subject "
+            "to technical anti-abuse protections."
+        )
     }
 }
 
@@ -2358,8 +2363,7 @@ class SubscriptionTierInfo(BaseModel):
     id: str
     name: str
     price_monthly: float
-    price_annual: float
-    messages_limit: int
+    messages_limit: Optional[int] = None
     unlimited: bool = False
     description: str
 
@@ -4017,7 +4021,6 @@ async def get_subscription_tiers():
             id=tier_id,
             name=config["name"],
             price_monthly=config["price_monthly"],
-            price_annual=config["price_annual"],
             messages_limit=config["messages_limit"],
             unlimited=config.get("unlimited", False),
             description=config["description"]
