@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from auth.dependencies import get_current_user
+from auth.dependencies import get_current_user, require_admin
 from auth.roles import is_admin_user
 from garmin import service as garmin_service
 from garmin import backfill as garmin_backfill
@@ -317,7 +317,7 @@ async def garmin_vo2max_history(
 
 
 @garmin_router.get("/queue/health")
-async def garmin_queue_health():
+async def garmin_queue_health(_admin: dict = Depends(require_admin)):
     """Lightweight, READ-ONLY Redis health snapshot of the sync queue.
 
     Response JSON:
