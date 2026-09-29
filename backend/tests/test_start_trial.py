@@ -77,6 +77,7 @@ class _Collection:
 class _FakeDB:
     def __init__(self) -> None:
         self.subscriptions = _Collection()
+        self.users = _Collection()
 
     def __getattr__(self, name: str) -> _Collection:
         col = _Collection()
@@ -91,8 +92,17 @@ def _free_access(db: Any, user_id: str) -> UserAccess:
 @pytest_asyncio.fixture
 async def client():
     fake_db = _FakeDB()
+    await fake_db.users.insert_one(
+        {
+            "id": "u-trial",
+            "email": "u@test.com",
+            "is_active": True,
+            "is_email_verified": True,
+        }
+    )
     patches = [
         patch.object(server, "db", fake_db),
+        patch.object(server.app.state, "db", fake_db),
         patch("server.get_user_access", AsyncMock(side_effect=_free_access)),
     ]
     started = []

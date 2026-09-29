@@ -190,6 +190,9 @@ class _FakeDB:
         self.garmin_activities: _Collection = _Collection()
         self.user_profiles: _Collection = _Collection()
         self.training_context: _Collection = _Collection()
+        self.users: _Collection = _Collection([
+            {"id": _USER_ID, "email": _USER_EMAIL, "is_active": True, "is_email_verified": True}
+        ])
 
     def __getattr__(self, name: str) -> _Collection:
         col: _Collection = _Collection()
@@ -213,6 +216,7 @@ def _user_access(_db: Any, user_id: str) -> UserAccess:
 def _patches(fake_db: _FakeDB) -> list:
     return [
         patch.object(server, "db", fake_db),
+        patch.object(server.app.state, "db", fake_db),
         patch("server.get_user_access", AsyncMock(side_effect=_user_access)),
     ]
 
@@ -339,4 +343,3 @@ def _make_db_with_maintenance_cycle(user_id: str = _USER_ID) -> _FakeDB:
         "updated_at": datetime.now(timezone.utc),
     })
     return fake_db
-

@@ -481,6 +481,7 @@ async def client():
     fake_db = _FakeDB()
     patches = [
         patch.object(server, "db", fake_db),
+        patch.object(server.app.state, "db", fake_db),
         patch("server.get_user_access", AsyncMock(side_effect=_get_user_access)),
         patch.object(server, "rate_limiter", server.RateLimiter(requests_per_minute=1000, burst_limit=1000)),
     ]

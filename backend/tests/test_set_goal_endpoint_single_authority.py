@@ -86,6 +86,14 @@ class _FakeDB:
     def __init__(self, training_cycles=None, user_goals=None):
         self.training_cycles = _Collection(training_cycles)
         self.user_goals = _Collection(user_goals)
+        self.users = _Collection([
+            {
+                "id": "goal-test-user",
+                "email": "goal-test-user@example.com",
+                "is_active": True,
+                "is_email_verified": True,
+            }
+        ])
 
 
 def _auth_headers(user_id: str = "goal-test-user") -> dict[str, str]:
@@ -98,7 +106,7 @@ def _premium_access(_db: Any, user_id: str) -> UserAccess:
 
 
 async def _post(path: str, fake_db: _FakeDB, user_id: str = "goal-test-user") -> httpx.Response:
-    with patch.object(server, "db", fake_db), patch(
+    with patch.object(server, "db", fake_db), patch.object(server.app.state, "db", fake_db), patch(
         "server.get_user_access", AsyncMock(side_effect=_premium_access)
     ):
         async with httpx.AsyncClient(

@@ -111,6 +111,9 @@ class _FakeDB:
         self.training_prefs = _Collection([{"user_id": "u1", "sessions_per_week": 4}])
         self.user_profiles = _Collection([])
         self.garmin_vo2max = _Collection([])
+        self.users = _Collection([
+            {"id": "u1", "email": "u1@example.com", "is_active": True, "is_email_verified": True}
+        ])
 
     def __getattr__(self, name: str) -> _Collection:
         col = _Collection([])
@@ -173,6 +176,7 @@ def _expected_from_garmin_dataset(garmin_dataset: List[dict]) -> tuple[Any, Any]
 async def _call(path: str, fake_db: _FakeDB) -> dict:
     with (
         patch.object(server, "db", fake_db),
+        patch.object(server.app.state, "db", fake_db),
         patch("server.get_user_access", AsyncMock(side_effect=_mock_get_user_access)),
     ):
         async with httpx.AsyncClient(

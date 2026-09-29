@@ -232,6 +232,7 @@ def _compute_cors_origins() -> List[str]:
 
 # Create the main app
 app = FastAPI()
+app.state.db = db
 
 # GZip compression for responses > 1KB — SSE (text/event-stream) is exempt.
 app.add_middleware(SSEAwareGZipMiddleware, minimum_size=1000)
@@ -379,6 +380,36 @@ def get_jwt_user_id_from_request(request: Request) -> Optional[str]:
 
 security = HTTPBearer(auto_error=False)
 
+
+def _runtime_auth_credentials(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = None,
+) -> Optional[HTTPAuthorizationCredentials]:
+    if credentials and credentials.credentials is not None:
+        return credentials
+
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return None
+
+    token = auth_header[len("Bearer "):]
+    return HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
+
+
+def _premium_auth_401_response(
+    detail: str = "Authentication required",
+    headers: Optional[dict] = None,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=401,
+        content={
+            "error": "authentication_required",
+            "message": detail,
+            "detail": detail,
+        },
+        headers=headers or {"WWW-Authenticate": "Bearer"},
+    )
+
 async def auth_user(
     request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(security),
@@ -390,37 +421,7 @@ async def auth_user(
 
     Returns dict with at least {"id": "<user_id>", "authenticated": True}.
     """
-    import jwt as _jwt
-    from auth.jwt_utils import decode_access_token
-
-    _raise_401 = HTTPException(
-        status_code=401,
-        detail="Authentication required",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-
-    if not credentials or not credentials.credentials:
-        raise _raise_401
-
-    try:
-        payload = decode_access_token(credentials.credentials)
-        user_id = payload.get("sub")
-        if not user_id:
-            raise _raise_401
-    except _jwt.ExpiredSignatureError:
-        raise HTTPException(
-            status_code=401,
-            detail="Token has expired",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    except _jwt.InvalidTokenError:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid authentication token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    return {"id": user_id, "authenticated": True}
+    return await get_current_user(request, _runtime_auth_credentials(request, credentials))
 
 
 @app.middleware("http")
@@ -476,24 +477,30 @@ async def subscription_middleware(request: Request, call_next):
         return await call_next(request)
 
     # Premium route — verify user's subscription tier.
-    # Identity MUST come from a valid JWT; an IP address is never a user identity.
-    user_id = get_jwt_user_id_from_request(request)
-
-    if not user_id:
-        # No valid JWT (absent, expired, or invalid) → 401 before any DB access.
-        # get_user_access() is NOT called, so no subscription document is created.
+    # Identity MUST come from canonical active-user validation; an IP address is
+    # never a user identity.
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header:
         logger.info(f"[Subscription] Unauthenticated request to premium route '{path}' — 401")
-        return JSONResponse(
-            status_code=401,
-            content={
-                "error": "authentication_required",
-                "message": "Authentication required",
-            },
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        return _premium_auth_401_response()
+    credentials = _runtime_auth_credentials(request)
+    if not credentials:
+        logger.info(f"[Subscription] Non-bearer auth rejected for premium route '{path}' — 401")
+        return _premium_auth_401_response()
 
     try:
-        user_access = await get_user_access(db, user_id)
+        current_user = await get_current_user(request, credentials)
+    except HTTPException as exc:
+        if exc.status_code != 401:
+            raise
+        logger.info(f"[Subscription] Rejected runtime auth for premium route '{path}' — 401")
+        message = exc.detail if isinstance(exc.detail, str) and exc.detail else "Authentication required"
+        return _premium_auth_401_response(message, headers=exc.headers)
+
+    user_id = current_user["id"]
+
+    try:
+        user_access = await get_user_access(request.app.state.db, user_id)
 
         if not user_access.has_premium_access:
             logger.info(f"[Subscription] Blocked {path} for FREE user '{user_id}'")

@@ -140,6 +140,9 @@ class _FakeDB:
         self.user_profiles: _Collection = _Collection()
         self.training_feedback: _Collection = _Collection()
         self.training_prescription_snapshots: _Collection = _Collection()
+        self.users: _Collection = _Collection([
+            {"id": _USER_ID, "email": _USER_EMAIL, "is_active": True, "is_email_verified": True}
+        ])
 
     def __getattr__(self, name: str) -> _Collection:
         col: _Collection = _Collection()
@@ -172,6 +175,7 @@ def _patches(fake_db: _FakeDB, reference_date: date = _MONDAY) -> list:
     )
     return [
         patch.object(server, "db", fake_db),
+        patch.object(server.app.state, "db", fake_db),
         patch("server.get_user_access", AsyncMock(side_effect=_user_access)),
         patch("server.datetime", _make_fixed_datetime_class(fixed_dt)),
     ]
@@ -238,6 +242,7 @@ async def test_c234_paces_uses_garmin_local_reference_date_at_utc_midnight():
     fixed_dt = datetime(2025, 9, 15, 22, 30, tzinfo=timezone.utc)
     patches = [
         patch.object(server, "db", fake_db),
+        patch.object(server.app.state, "db", fake_db),
         patch("server.get_user_access", AsyncMock(side_effect=_user_access)),
         patch("server.datetime", _make_fixed_datetime_class(fixed_dt)),
         patch("training_v2.training_paces_authority.load_canonical_training_paces", _load),
