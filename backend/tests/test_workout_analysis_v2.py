@@ -82,6 +82,9 @@ class _Collection:
                     elif operator == "$lt":
                         if actual is None or actual >= operator_value:
                             return False
+                    elif operator == "$lte":
+                        if actual is None or actual > operator_value:
+                            return False
                     else:
                         raise AssertionError(f"Unsupported operator {operator}")
             elif actual != expected:
@@ -135,8 +138,10 @@ def _workout(
     km_splits: list[dict] | None = None,
     split_analysis: dict | None = None,
     hr_analysis: dict | None = None,
+    pace_stats: dict | None = None,
     avg_cadence_spm: int | None = None,
     cadence_analysis: dict | None = None,
+    elevation_gain_m: int | None = None,
 ) -> dict:
     return {
         "id": workout_id,
@@ -154,10 +159,40 @@ def _workout(
         "km_splits": km_splits or [],
         "split_analysis": split_analysis or {},
         "hr_analysis": hr_analysis or {},
+        "pace_stats": pace_stats or {},
         "avg_cadence_spm": avg_cadence_spm,
         "cadence_analysis": cadence_analysis or {},
+        "elevation_gain_m": elevation_gain_m,
         "data_source": "garmin",
     }
+
+
+@pytest.fixture
+def workout_a() -> dict:
+    return _workout(
+        "run-half-distance",
+        user_id="user-a",
+        date="2026-09-20T07:00:00+00:00",
+        distance_km=21.27,
+        duration_minutes=122,
+        avg_heart_rate=160,
+        max_heart_rate=178,
+        avg_pace_min_km=5.72,
+    )
+
+
+@pytest.fixture
+def workout_b() -> dict:
+    return _workout(
+        "run-short-distance",
+        user_id="user-a",
+        date="2026-09-20T07:00:00+00:00",
+        distance_km=10.18,
+        duration_minutes=71,
+        avg_heart_rate=127,
+        max_heart_rate=145,
+        avg_pace_min_km=6.98,
+    )
 
 
 class _FakeDB:
@@ -401,7 +436,7 @@ class _FakeDB:
                 avg_pace_min_km=5.8,
             ),
             _workout(
-                "run-old-outside-window",
+                "run-outside-distance",
                 user_id="user-a",
                 date="2026-08-01T07:00:00+00:00",
                 distance_km=30.0,
@@ -568,6 +603,177 @@ async def test_hr_without_zones_preserves_raw_hr_but_not_intensity_classificatio
     assert payload["advice"]["code"] == "advice.hr_without_intensity"
 
 
+def test_required_run_fixtures_produce_distinct_fact_based_analysis(workout_a, workout_b):
+    analysis_a = workout_analysis_v2.build_workout_analysis_v2(workout_a, [], "en")
+    analysis_b = workout_analysis_v2.build_workout_analysis_v2(workout_b, [], "en")
+
+    assert analysis_a.summary.text != analysis_b.summary.text
+    assert analysis_a.meaning.text != analysis_b.meaning.text
+    assert analysis_a.advice.text != analysis_b.advice.text
+    assert "21.27 km" in analysis_a.summary.text
+    assert "122 min" in analysis_a.summary.text
+    assert "5:43/km" in analysis_a.summary.text
+    assert "160 bpm" in analysis_a.summary.text
+    assert "10.18 km" in analysis_b.summary.text
+    assert "71 min" in analysis_b.summary.text
+    assert "6:59/km" in analysis_b.summary.text
+    assert "127 bpm" in analysis_b.summary.text
+    for result in (analysis_a, analysis_b):
+        assert result.evidence.has_hr_zones is False
+        assert result.signals.intensity.available is False
+        assert result.pacing.fastest_split_min_km is None
+        assert "fastest split" not in result.meaning.text.lower()
+        assert "individualized heart-rate zones" not in result.advice.text.lower()
+
+
+def test_fact_based_analysis_is_localized_to_supported_languages(workout_a):
+    analyses = {
+        language: workout_analysis_v2.build_workout_analysis_v2(workout_a, [], language)
+        for language in ("fr", "en", "es")
+    }
+
+    assert "distance : 21,27 km" in analyses["fr"].summary.text
+    assert "allure moyenne : 5:43/km" in analyses["fr"].summary.text
+    assert "distance: 21.27 km" in analyses["en"].summary.text
+    assert "distancia: 21,27 km" in analyses["es"].summary.text
+    assert len({result.advice.text for result in analyses.values()}) == 3
+
+
+def test_missing_session_values_remain_unknown():
+    workout = _workout(
+        "run-incomplete",
+        user_id="user-a",
+        date="2026-09-20T07:00:00+00:00",
+        distance_km=None,
+        duration_minutes=None,
+    )
+    workout["avg_heart_rate"] = None
+    workout["max_heart_rate"] = None
+    workout["avg_pace_min_km"] = None
+
+    result = workout_analysis_v2.build_workout_analysis_v2(workout, [], "en")
+
+    assert result.pacing.average_pace_min_km is None
+    assert result.physiology.avg_hr is None
+    assert result.comparison.available is False
+    assert result.comparison.baseline_sample_count == 0
+    assert "0 km" not in result.summary.text
+    assert "0 min" not in result.summary.text
+
+
+def test_split_hr_drift_cadence_and_elevation_are_reported_without_causal_claims():
+    workout = _workout(
+        "run-with-observations",
+        user_id="user-a",
+        date="2026-09-20T07:00:00+00:00",
+        distance_km=10.0,
+        duration_minutes=60,
+        avg_heart_rate=150,
+        max_heart_rate=170,
+        avg_pace_min_km=6.0,
+        km_splits=[
+            {"km": 1, "pace_min_km": 5.5},
+            {"km": 2, "pace_min_km": 6.2},
+        ],
+        split_analysis={
+            "fastest_split_pace": 5.5,
+            "slowest_split_pace": 6.2,
+            "pace_drop": 0.3,
+            "negative_split": True,
+            "consistency_score": 91,
+        },
+        pace_stats={"pace_variability": 0.2},
+        hr_analysis={"hr_drift": 6},
+        avg_cadence_spm=176,
+        elevation_gain_m=120,
+    )
+
+    result = workout_analysis_v2.build_workout_analysis_v2(workout, [], "en")
+
+    assert "fastest split: 5:30/km" in result.meaning.text
+    assert "slowest split: 6:12/km" in result.meaning.text
+    assert "a negative split was recorded" in result.meaning.text
+    assert "recorded HR drift: 6 bpm" in result.meaning.text
+    assert "average cadence: 176 spm" in result.meaning.text
+    assert "elevation gain: 120 m" in result.meaning.text
+    assert "dehydrat" not in result.meaning.text.lower()
+    assert "fatigue" not in result.meaning.text.lower()
+    assert "170-180" not in result.advice.text
+
+
+def test_history_comparison_uses_prior_similar_distance_sessions_without_claiming_progress():
+    current = _workout(
+        "run-current",
+        user_id="user-a",
+        date="2026-09-20T07:00:00+00:00",
+        distance_km=10.0,
+        duration_minutes=60,
+        avg_heart_rate=150,
+        avg_pace_min_km=5.8,
+    )
+    history = [
+        _workout(
+            "run-prior-1",
+            user_id="user-a",
+            date="2026-09-10T07:00:00+00:00",
+            distance_km=9.0,
+            duration_minutes=55,
+            avg_heart_rate=145,
+            avg_pace_min_km=6.0,
+        ),
+        _workout(
+            "run-prior-2",
+            user_id="user-a",
+            date="2026-09-01T07:00:00+00:00",
+            distance_km=11.0,
+            duration_minutes=65,
+            avg_heart_rate=148,
+            avg_pace_min_km=5.9,
+        ),
+        _workout(
+            "run-future-similar",
+            user_id="user-a",
+            date="2026-09-21T07:00:00+00:00",
+            distance_km=10.0,
+            duration_minutes=60,
+            avg_pace_min_km=5.5,
+        ),
+    ]
+
+    result = workout_analysis_v2.build_workout_analysis_v2(current, history, "en")
+
+    assert result.comparison.available is True
+    assert result.comparison.baseline_sample_count == 2
+    assert result.comparison.baseline_period_days == 90
+    assert "2 prior comparable sessions in the last 90 days" in result.meaning.text
+    assert "reference average 5:57/km" in result.meaning.text
+    assert "not evidence by itself of progression" in result.meaning.text
+
+
+def test_one_comparable_session_is_not_enough_for_a_baseline():
+    current = _workout(
+        "run-current",
+        user_id="user-a",
+        date="2026-09-20T07:00:00+00:00",
+        distance_km=10.0,
+        duration_minutes=60,
+    )
+    prior = _workout(
+        "run-prior",
+        user_id="user-a",
+        date="2026-09-10T07:00:00+00:00",
+        distance_km=9.0,
+        duration_minutes=55,
+    )
+
+    result = workout_analysis_v2.build_workout_analysis_v2(current, [prior], "en")
+
+    assert result.comparison.available is False
+    assert result.comparison.baseline_sample_count == 1
+    assert result.comparison.distance_km is None
+    assert "at least 2" in result.comparison.reason_unavailable
+
+
 @pytest.mark.asyncio
 async def test_zone_distribution_presence_does_not_unlock_intensity_without_trusted_provenance(client):
     response = await _get_analysis(client, _FakeDB.HIGH_ZONES_ID)
@@ -638,7 +844,7 @@ async def test_structural_standard_session_uses_neutral_structural_wording(clien
     assert payload["signals"]["session_type"]["code"] == "standard"
     assert payload["signals"]["session_type"]["text"] == "Standard session"
     lowered_summary = payload["summary"]["text"].lower()
-    assert lowered_summary == "standard-duration session completed."
+    assert lowered_summary.startswith("standard-duration session completed.")
     for forbidden in ("steady", "consistent", "regular"):
         assert forbidden not in lowered_summary
 
@@ -717,7 +923,7 @@ async def test_baseline_present_allows_relative_volume_language(client):
     response = await _get_analysis(client, _FakeDB.CURRENT_ID)
     payload = response.json()
     assert payload["comparison"]["available"] is True
-    assert payload["comparison"]["baseline_sample_count"] == 4
+    assert payload["comparison"]["baseline_sample_count"] == 3
     assert payload["signals"]["volume"]["code"] in {"below_recent", "usual_recent", "above_recent"}
 
 
@@ -747,7 +953,8 @@ async def test_history_query_is_bounded_to_candidate_date_window(client):
     history_query = client.fake_db.workouts.find_queries[-1]
     assert history_query["user_id"] == "user-a"
     assert history_query["type"] == "run"
-    assert history_query["date"] == {"$gte": "2026-08-27", "$lt": "2026-09-11"}
+    assert history_query["date"] == {"$gte": "2026-06-12", "$lt": "2026-09-10"}
+    assert history_query["distance_km"] == {"$gte": 7.0, "$lte": 13.0}
     assert client.fake_db.workouts.to_list_lengths[-1] == 200
 
 
@@ -761,7 +968,7 @@ async def test_endpoint_candidate_query_does_not_require_old_same_type_history(c
         if client.fake_db.workouts._matches(doc, client.fake_db.workouts.find_queries[-1])
     ]
     candidate_ids = {doc["id"] for doc in candidate_docs}
-    assert "run-old-outside-window" not in candidate_ids
+    assert "run-outside-distance" not in candidate_ids
     assert {"run-mixed-prev-z", "run-mixed-prev-offset"} <= candidate_ids
     assert "run-mixed-future" not in candidate_ids
 
@@ -770,7 +977,7 @@ async def test_endpoint_candidate_query_does_not_require_old_same_type_history(c
 async def test_future_workout_does_not_change_older_workout_analysis(client):
     response = await _get_analysis(client, _FakeDB.CURRENT_ID)
     payload = response.json()
-    assert payload["comparison"]["baseline_sample_count"] == 4
+    assert payload["comparison"]["baseline_sample_count"] == 3
 
 
 @pytest.mark.asyncio
@@ -842,4 +1049,4 @@ async def test_response_contract_has_required_structured_fields(client):
     assert payload["signals"]["intensity"]["available"] is False
     assert payload["summary"]["text"]
     assert isinstance(payload["evidence"]["has_baseline"], bool)
-    assert payload["comparison"]["baseline_period_days"] == 14
+    assert payload["comparison"]["baseline_period_days"] == 90

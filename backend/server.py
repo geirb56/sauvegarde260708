@@ -48,9 +48,12 @@ from coach_service import (
     reset_metrics as reset_coach_metrics
 )
 from workout_analysis_v2 import (
+    HISTORY_CANDIDATE_LIMIT,
+    HISTORY_WINDOW_DAYS,
     WorkoutAnalysisV2Response,
     build_workout_analysis_v2,
     workout_analysis_candidate_date_bounds,
+    workout_analysis_candidate_distance_bounds,
 )
 
 from training_v2.training_load import build_training_load
@@ -2073,15 +2076,23 @@ async def get_workout_analysis_v2(workout_id: str, language: str = "en", user: d
     workout = await db.workouts.find_one({"id": workout_id, "user_id": user_id}, {"_id": 0})
     if not workout:
         raise HTTPException(status_code=404, detail="Workout not found")
-    lower_bound, upper_bound = workout_analysis_candidate_date_bounds(workout.get("date", ""), days=14)
-    historical_workouts = await db.workouts.find(
-        {
-            "user_id": user_id,
-            "type": workout.get("type"),
-            "date": {"$gte": lower_bound, "$lt": upper_bound},
-        },
-        {"_id": 0},
-    ).sort("date", -1).to_list(length=200)
+    lower_bound, upper_bound = workout_analysis_candidate_date_bounds(
+        workout.get("date", ""),
+        days=HISTORY_WINDOW_DAYS,
+    )
+    distance_bounds = workout_analysis_candidate_distance_bounds(workout.get("distance_km"))
+    historical_workouts = []
+    workout_type = workout.get("type")
+    if distance_bounds is not None and isinstance(workout_type, str) and workout_type.strip():
+        historical_workouts = await db.workouts.find(
+            {
+                "user_id": user_id,
+                "type": workout_type,
+                "date": {"$gte": lower_bound, "$lt": upper_bound},
+                "distance_km": {"$gte": distance_bounds[0], "$lte": distance_bounds[1]},
+            },
+            {"_id": 0},
+        ).sort("date", -1).to_list(length=HISTORY_CANDIDATE_LIMIT)
     return build_workout_analysis_v2(workout=workout, historical_workouts=historical_workouts, language=language)
 
 

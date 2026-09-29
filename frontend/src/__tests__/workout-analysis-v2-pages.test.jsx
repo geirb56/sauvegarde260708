@@ -207,6 +207,37 @@ test("WorkoutDetail makes only one canonical analysis request", async () => {
   expect(screen.getByTestId("advice-text")).toBeInTheDocument();
 });
 
+test("WorkoutDetail renders the factual V2 narrative without rewriting it", async () => {
+  mockAxios({
+    analysisPayload: {
+      ...analysis,
+      summary: {
+        code: "summary.long_structural",
+        text: "Long-duration session completed. Distance: 21.27 km; duration: 122 min; average pace: 5:43/km; average HR: 160 bpm.",
+      },
+      meaning: {
+        code: "meaning.hr_without_intensity_with_pacing",
+        text: "Recorded session observations: average HR: 160 bpm; fastest split: 5:30/km.",
+      },
+      advice: {
+        code: "advice.hr_without_intensity",
+        text: "Treat the recorded heart-rate values (160 bpm average) as observations; no zone was assigned.",
+      },
+    },
+  });
+
+  renderWithProviders(
+    <Routes>
+      <Route path="/workout/:id" element={<WorkoutDetail />} />
+    </Routes>,
+    "/workout/w1",
+  );
+
+  expect(await screen.findByTestId("coach-summary")).toHaveTextContent("21.27 km");
+  expect(screen.getByTestId("meaning-text")).toHaveTextContent("fastest split: 5:30/km");
+  expect(screen.getByTestId("advice-text")).toHaveTextContent("160 bpm average");
+});
+
 test("WorkoutDetail hides physiology and pacing cards when evidence is unavailable", async () => {
   mockAxios({ analysisPayload: analysisMissingEvidence });
 

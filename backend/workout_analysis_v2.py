@@ -9,6 +9,107 @@ from pydantic import BaseModel
 
 
 SUPPORTED_LANGUAGES = {"en", "fr", "es"}
+HISTORY_WINDOW_DAYS = 90
+HISTORY_CANDIDATE_LIMIT = 200
+COMPARISON_SAMPLE_LIMIT = 3
+MIN_COMPARISON_SAMPLE = 2
+SIMILAR_DISTANCE_TOLERANCE = 0.30
+
+_OBSERVATION_LABELS = {
+    "en": {
+        "distance": "distance: {value} km",
+        "duration": "duration: {value} min",
+        "pace": "average pace: {value}/km",
+        "avg_hr": "average HR: {value} bpm",
+        "max_hr": "maximum HR: {value} bpm",
+        "fastest_split": "fastest split: {value}/km",
+        "slowest_split": "slowest split: {value}/km",
+        "pace_drop": "recorded pace drop: {value} min/km",
+        "consistency": "pacing consistency score: {value}/100",
+        "variability": "pace variability: {value} min/km",
+        "hr_drift": "recorded HR drift: {value} bpm",
+        "cadence": "average cadence: {value} spm",
+        "elevation": "elevation gain: {value} m",
+        "negative_split": "a negative split was recorded",
+    },
+    "fr": {
+        "distance": "distance : {value} km",
+        "duration": "durée : {value} min",
+        "pace": "allure moyenne : {value}/km",
+        "avg_hr": "FC moyenne : {value} bpm",
+        "max_hr": "FC maximale : {value} bpm",
+        "fastest_split": "fraction la plus rapide : {value}/km",
+        "slowest_split": "fraction la plus lente : {value}/km",
+        "pace_drop": "baisse d’allure enregistrée : {value} min/km",
+        "consistency": "score de régularité de l’allure : {value}/100",
+        "variability": "variabilité de l’allure : {value} min/km",
+        "hr_drift": "dérive cardiaque enregistrée : {value} bpm",
+        "cadence": "cadence moyenne : {value} pas/min",
+        "elevation": "dénivelé positif : {value} m",
+        "negative_split": "un negative split a été enregistré",
+    },
+    "es": {
+        "distance": "distancia: {value} km",
+        "duration": "duración: {value} min",
+        "pace": "ritmo medio: {value}/km",
+        "avg_hr": "FC media: {value} bpm",
+        "max_hr": "FC máxima: {value} bpm",
+        "fastest_split": "fracción más rápida: {value}/km",
+        "slowest_split": "fracción más lenta: {value}/km",
+        "pace_drop": "descenso de ritmo registrado: {value} min/km",
+        "consistency": "puntuación de regularidad del ritmo: {value}/100",
+        "variability": "variabilidad del ritmo: {value} min/km",
+        "hr_drift": "deriva cardíaca registrada: {value} bpm",
+        "cadence": "cadencia media: {value} pasos/min",
+        "elevation": "desnivel positivo: {value} m",
+        "negative_split": "se registró un negative split",
+    },
+}
+
+_COMPARISON_TEXT = {
+    "en": "Among {count} selected prior comparable sessions (maximum {limit}) in the last {days} days (distance within ±30%), {metric}; this is a comparison, not evidence by itself of progression.",
+    "fr": "Parmi {count} séances antérieures comparables retenues (maximum {limit}) sur les {days} derniers jours (distance à ±30 %), {metric} ; cette comparaison ne suffit pas à établir une progression.",
+    "es": "Entre {count} sesiones anteriores comparables seleccionadas (máximo {limit}) de los últimos {days} días (distancia dentro de ±30 %), {metric}; esta comparación por sí sola no demuestra una progresión.",
+}
+
+_COMPARISON_UNAVAILABLE = {
+    "en": {
+        "none": "No prior same-sport sessions within ±30% of this distance in the last {days} days.",
+        "insufficient": "Only {count} prior comparable session was found in the last {days} days; at least {minimum} are needed for a baseline.",
+    },
+    "fr": {
+        "none": "Aucune séance antérieure du même sport et à ±30 % de cette distance sur les {days} derniers jours.",
+        "insufficient": "Une seule séance antérieure comparable a été trouvée sur les {days} derniers jours ; au moins {minimum} sont nécessaires pour établir une référence.",
+    },
+    "es": {
+        "none": "No hay sesiones anteriores del mismo deporte y dentro de ±30 % de esta distancia en los últimos {days} días.",
+        "insufficient": "Solo se encontró una sesión comparable en los últimos {days} días; se necesitan al menos {minimum} para establecer una referencia.",
+    },
+}
+
+_ADVICE_TEXT = {
+    "en": {
+        "comparison": "Use the comparison with {count} similar-distance sessions as context only; it does not establish a training progression.",
+        "splits": "Use the recorded split pattern ({fastest}–{slowest}/km) to describe execution; it does not establish physiological intensity.",
+        "hr": "Treat the recorded heart-rate values ({avg_hr} bpm average{max_hr}) as observations; this analysis does not assign an intensity zone.",
+        "structure": "Use the recorded distance and duration as the available session evidence; missing measures remain unknown.",
+        "none": "Only limited session data are available, so no further interpretation is supported.",
+    },
+    "fr": {
+        "comparison": "Utilise la comparaison avec {count} séances de distance similaire comme contexte uniquement ; elle n’établit pas une progression d’entraînement.",
+        "splits": "Utilise les fractions enregistrées ({fastest}–{slowest}/km) pour décrire l’exécution ; elles ne déterminent pas l’intensité physiologique.",
+        "hr": "Considère la fréquence cardiaque enregistrée (moyenne : {avg_hr} bpm{max_hr}) comme une observation ; cette analyse n’attribue pas de zone d’intensité.",
+        "structure": "Appuie-toi sur la distance et la durée enregistrées ; les mesures absentes restent inconnues.",
+        "none": "Les données disponibles sont limitées et ne permettent pas d’interprétation supplémentaire.",
+    },
+    "es": {
+        "comparison": "Usa la comparación con {count} sesiones de distancia similar solo como contexto; no demuestra una progresión de entrenamiento.",
+        "splits": "Usa las fracciones registradas ({fastest}–{slowest}/km) para describir la ejecución; no determinan la intensidad fisiológica.",
+        "hr": "Considera los valores de frecuencia cardíaca registrados (media: {avg_hr} bpm{max_hr}) como observaciones; este análisis no asigna una zona de intensidad.",
+        "structure": "Usa la distancia y duración registradas como evidencia disponible; las medidas ausentes siguen siendo desconocidas.",
+        "none": "Los datos disponibles son limitados y no permiten una interpretación adicional.",
+    },
+}
 
 
 class AnalysisText(BaseModel):
@@ -121,11 +222,21 @@ def _parse_workout_date(raw: str) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
-def workout_analysis_candidate_date_bounds(workout_date: str, days: int = 14) -> tuple[str, str]:
+def workout_analysis_candidate_date_bounds(workout_date: str, days: int = HISTORY_WINDOW_DAYS) -> tuple[str, str]:
     current_date = _parse_workout_date(workout_date)
     cutoff_date = (current_date - timedelta(days=days)).date().isoformat()
-    upper_bound = (current_date.date() + timedelta(days=1)).isoformat()
+    upper_bound = current_date.date().isoformat()
     return cutoff_date, upper_bound
+
+
+def workout_analysis_candidate_distance_bounds(distance_km: object) -> Optional[tuple[float, float]]:
+    distance = _finite_number(distance_km)
+    if distance is None or distance <= 0:
+        return None
+    return (
+        distance * (1 - SIMILAR_DISTANCE_TOLERANCE),
+        distance * (1 + SIMILAR_DISTANCE_TOLERANCE),
+    )
 
 
 def _template(language: str, key: str, **params) -> str:
@@ -253,24 +364,78 @@ def _template(language: str, key: str, **params) -> str:
 
 
 def _safe_round(value: Optional[float], digits: int = 2) -> Optional[float]:
-    if value is None:
+    numeric = _finite_number(value)
+    if numeric is None:
         return None
-    return round(float(value), digits)
+    return round(numeric, digits)
+
+
+def _finite_number(value: object) -> Optional[float]:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if math.isfinite(numeric) else None
+
+
+def _positive_number(value: object) -> Optional[float]:
+    numeric = _finite_number(value)
+    return numeric if numeric is not None and numeric > 0 else None
+
+
+def _workout_average_pace(workout: dict) -> Optional[float]:
+    recorded_pace = _positive_number(workout.get("avg_pace_min_km"))
+    if recorded_pace is not None:
+        return recorded_pace
+    distance = _positive_number(workout.get("distance_km"))
+    duration = _positive_number(workout.get("duration_minutes"))
+    if distance is None or duration is None:
+        return None
+    return duration / distance
+
+
+def _format_number(value: float, digits: int, language: str) -> str:
+    formatted = f"{value:.{digits}f}"
+    if digits:
+        formatted = formatted.rstrip("0").rstrip(".")
+    if _lang(language) in {"fr", "es"}:
+        formatted = formatted.replace(".", ",")
+    return formatted
+
+
+def _format_pace(value: Optional[float]) -> Optional[str]:
+    if value is None or value <= 0:
+        return None
+    total_seconds = round(value * 60)
+    minutes, seconds = divmod(total_seconds, 60)
+    return f"{minutes}:{seconds:02d}"
+
+
+def _observation(language: str, key: str, value: object, digits: int = 1) -> Optional[str]:
+    numeric = _finite_number(value)
+    if numeric is None:
+        return None
+    text = _OBSERVATION_LABELS[_lang(language)][key]
+    return text.format(value=_format_number(numeric, digits, language))
 
 
 def _safe_avg(values: List[Optional[float]]) -> Optional[float]:
-    valid = [float(value) for value in values if value is not None]
+    valid = [numeric for value in values if (numeric := _finite_number(value)) is not None]
     return _safe_round(sum(valid) / len(valid), 2) if valid else None
 
 
 def _comparison_metric(current: Optional[float], baseline: Optional[float], digits: int = 2) -> Optional[WorkoutAnalysisComparisonMetric]:
-    if current is None or baseline is None:
+    current_value = _finite_number(current)
+    baseline_value = _finite_number(baseline)
+    if current_value is None or baseline_value is None:
         return None
-    difference = current - baseline
-    percent_change = (difference / baseline * 100) if baseline else None
+    difference = current_value - baseline_value
+    percent_change = (difference / baseline_value * 100) if baseline_value else None
     return WorkoutAnalysisComparisonMetric(
-        current=_safe_round(current, digits),
-        baseline=_safe_round(baseline, digits),
+        current=_safe_round(current_value, digits),
+        baseline=_safe_round(baseline_value, digits),
         difference=_safe_round(difference, digits),
         percent_change=_safe_round(percent_change, 1) if percent_change is not None else None,
     )
@@ -279,17 +444,29 @@ def _comparison_metric(current: Optional[float], baseline: Optional[float], digi
 def _extract_split_paces(workout: dict) -> List[float]:
     paces: List[float] = []
     for split in workout.get("km_splits") or []:
+        if not isinstance(split, dict):
+            continue
         pace = split.get("pace_min_km")
-        if pace is not None:
-            paces.append(float(pace))
+        numeric = _positive_number(pace)
+        if numeric is not None:
+            paces.append(numeric)
     return paces
 
 
-def _build_baseline(workouts: List[dict], current_workout: dict, days: int = 14) -> dict:
+def _build_baseline(
+    workouts: List[dict],
+    current_workout: dict,
+    days: int = HISTORY_WINDOW_DAYS,
+) -> dict:
     current_date = _parse_workout_date(current_workout.get("date", ""))
     cutoff_date = current_date - timedelta(days=days)
     current_type = current_workout.get("type")
-
+    if not isinstance(current_type, str) or not current_type.strip():
+        return {"period_days": days, "sample_count": 0, "workouts": []}
+    distance_bounds = workout_analysis_candidate_distance_bounds(current_workout.get("distance_km"))
+    if distance_bounds is None:
+        return {"period_days": days, "sample_count": 0, "workouts": []}
+    min_distance, max_distance = distance_bounds
     prior_same_type = []
     for workout in workouts:
         if workout.get("type") != current_type or workout.get("id") == current_workout.get("id"):
@@ -301,45 +478,63 @@ def _build_baseline(workouts: List[dict], current_workout: dict, days: int = 14)
             workout_date = _parse_workout_date(raw_date)
         except ValueError:
             continue
-        if cutoff_date <= workout_date < current_date:
+        distance = _positive_number(workout.get("distance_km"))
+        if (
+            cutoff_date <= workout_date < current_date
+            and distance is not None
+            and min_distance <= distance <= max_distance
+        ):
             prior_same_type.append(workout)
 
-    if not prior_same_type:
+    prior_same_type.sort(key=lambda workout: _parse_workout_date(workout["date"]), reverse=True)
+    prior_same_type = prior_same_type[:COMPARISON_SAMPLE_LIMIT]
+    sample_count = len(prior_same_type)
+    if sample_count < MIN_COMPARISON_SAMPLE:
         return {
             "period_days": days,
-            "sample_count": 0,
-            "workouts": [],
+            "sample_count": sample_count,
+            "workouts": prior_same_type,
         }
+
+    def comparable_average(field: str) -> Optional[float]:
+        if field == "avg_pace_min_km":
+            values = [_workout_average_pace(workout) for workout in prior_same_type]
+        else:
+            values = [_finite_number(workout.get(field)) for workout in prior_same_type]
+        valid = [value for value in values if value is not None]
+        return _safe_avg(valid) if len(valid) >= MIN_COMPARISON_SAMPLE else None
 
     return {
         "period_days": days,
-        "sample_count": len(prior_same_type),
+        "sample_count": sample_count,
         "workouts": prior_same_type,
-        "avg_distance_km": _safe_avg([workout.get("distance_km") for workout in prior_same_type]),
-        "avg_duration_minutes": _safe_avg([workout.get("duration_minutes") for workout in prior_same_type]),
-        "avg_heart_rate": _safe_avg([workout.get("avg_heart_rate") for workout in prior_same_type]),
-        "avg_pace_min_km": _safe_avg([workout.get("avg_pace_min_km") for workout in prior_same_type]),
-        "avg_speed_kmh": _safe_avg([workout.get("avg_speed_kmh") for workout in prior_same_type]),
+        "avg_distance_km": comparable_average("distance_km"),
+        "avg_duration_minutes": comparable_average("duration_minutes"),
+        "avg_heart_rate": comparable_average("avg_heart_rate"),
+        "avg_pace_min_km": comparable_average("avg_pace_min_km"),
+        "avg_speed_kmh": comparable_average("avg_speed_kmh"),
     }
 
 
 def _build_pacing(workout: dict, language: str) -> WorkoutAnalysisPacing:
-    avg_pace = workout.get("avg_pace_min_km")
-    avg_speed = workout.get("avg_speed_kmh")
-    split_analysis = workout.get("split_analysis") or {}
-    pace_stats = workout.get("pace_stats") or {}
+    avg_pace = _workout_average_pace(workout)
+    avg_speed = _positive_number(workout.get("avg_speed_kmh"))
+    split_analysis = workout.get("split_analysis")
+    split_analysis = split_analysis if isinstance(split_analysis, dict) else {}
+    pace_stats = workout.get("pace_stats")
+    pace_stats = pace_stats if isinstance(pace_stats, dict) else {}
     split_paces = _extract_split_paces(workout)
 
-    fastest_split = split_analysis.get("fastest_split_pace")
-    slowest_split = split_analysis.get("slowest_split_pace")
+    fastest_split = _positive_number(split_analysis.get("fastest_split_pace"))
+    slowest_split = _positive_number(split_analysis.get("slowest_split_pace"))
     if fastest_split is None and split_paces:
         fastest_split = min(split_paces)
     if slowest_split is None and split_paces:
         slowest_split = max(split_paces)
 
-    pace_drop = split_analysis.get("pace_drop")
-    variability = pace_stats.get("pace_variability")
-    consistency = split_analysis.get("consistency_score")
+    pace_drop = _finite_number(split_analysis.get("pace_drop"))
+    variability = _finite_number(pace_stats.get("pace_variability"))
+    consistency = _finite_number(split_analysis.get("consistency_score"))
     if consistency is None and split_paces:
         avg_split = mean(split_paces)
         max_dev = max(abs(pace - avg_split) for pace in split_paces)
@@ -353,7 +548,11 @@ def _build_pacing(workout: dict, language: str) -> WorkoutAnalysisPacing:
         fastest_split_min_km=_safe_round(fastest_split, 3),
         slowest_split_min_km=_safe_round(slowest_split, 3),
         pace_drop_min_km=_safe_round(pace_drop, 3),
-        negative_split=split_analysis.get("negative_split"),
+        negative_split=(
+            split_analysis.get("negative_split")
+            if isinstance(split_analysis.get("negative_split"), bool)
+            else None
+        ),
         consistency_score=_safe_round(consistency, 1),
         variability=_safe_round(variability, 3),
         reason_unavailable=None if available else _template(language, "unavailable.pacing"),
@@ -381,11 +580,14 @@ def _normalize_zone_distribution(raw_zones: dict | None) -> Optional[Dict[str, f
 
 
 def _build_physiology(workout: dict, language: str) -> WorkoutAnalysisPhysiology:
-    hr_analysis = workout.get("hr_analysis") or {}
-    avg_hr = workout.get("avg_heart_rate")
-    max_hr = workout.get("max_heart_rate")
+    hr_analysis = workout.get("hr_analysis")
+    hr_analysis = hr_analysis if isinstance(hr_analysis, dict) else {}
+    avg_hr_value = _positive_number(workout.get("avg_heart_rate"))
+    max_hr_value = _positive_number(workout.get("max_heart_rate"))
+    avg_hr = int(round(avg_hr_value)) if avg_hr_value is not None else None
+    max_hr = int(round(max_hr_value)) if max_hr_value is not None else None
     zone_distribution = _normalize_zone_distribution(workout.get("effort_zone_distribution"))
-    hr_drift = hr_analysis.get("hr_drift")
+    hr_drift = _finite_number(hr_analysis.get("hr_drift"))
     available = any(value is not None for value in [avg_hr, max_hr, hr_drift]) or bool(zone_distribution)
 
     return WorkoutAnalysisPhysiology(
@@ -436,20 +638,20 @@ def _intensity_code(workout: dict, physiology: WorkoutAnalysisPhysiology) -> Opt
 
 
 def _structural_size_code(workout: dict) -> str:
-    duration = workout.get("duration_minutes") or 0
-    distance = workout.get("distance_km") or 0
+    duration = _positive_number(workout.get("duration_minutes"))
+    distance = _positive_number(workout.get("distance_km"))
     workout_type = (workout.get("type") or "").lower()
 
     if workout_type == "run":
-        if duration >= 90 or distance >= 15:
+        if (duration is not None and duration >= 90) or (distance is not None and distance >= 15):
             return "long"
-        if duration <= 25 or distance <= 4:
+        if (duration is not None and duration <= 25) or (distance is not None and distance <= 4):
             return "short"
         return "standard"
 
-    if duration >= 90:
+    if duration is not None and duration >= 90:
         return "long"
-    if duration <= 25:
+    if duration is not None and duration <= 25:
         return "short"
     return "standard"
 
@@ -496,9 +698,9 @@ def _build_signals(workout: dict, comparison: WorkoutAnalysisComparison, physiol
 
 
 def _build_comparison(workout: dict, workouts: List[dict]) -> WorkoutAnalysisComparison:
-    baseline = _build_baseline(workouts, workout, days=14)
+    baseline = _build_baseline(workouts, workout, days=HISTORY_WINDOW_DAYS)
     sample_count = baseline["sample_count"]
-    available = sample_count > 0
+    available = sample_count >= MIN_COMPARISON_SAMPLE
     return WorkoutAnalysisComparison(
         available=available,
         baseline_period_days=baseline["period_days"],
@@ -506,40 +708,108 @@ def _build_comparison(workout: dict, workouts: List[dict]) -> WorkoutAnalysisCom
         distance_km=_comparison_metric(workout.get("distance_km"), baseline.get("avg_distance_km")),
         duration_minutes=_comparison_metric(workout.get("duration_minutes"), baseline.get("avg_duration_minutes")),
         avg_heart_rate=_comparison_metric(workout.get("avg_heart_rate"), baseline.get("avg_heart_rate")),
-        avg_pace_min_km=_comparison_metric(workout.get("avg_pace_min_km"), baseline.get("avg_pace_min_km"), digits=3),
+        avg_pace_min_km=_comparison_metric(_workout_average_pace(workout), baseline.get("avg_pace_min_km"), digits=3),
         avg_speed_kmh=_comparison_metric(workout.get("avg_speed_kmh"), baseline.get("avg_speed_kmh")),
-        reason_unavailable=None if available else _template("en", "unavailable.baseline", days=baseline["period_days"]),
+        reason_unavailable=None,
     )
 
 
 def _localized_comparison(workout: dict, workouts: List[dict], language: str) -> WorkoutAnalysisComparison:
     comparison = _build_comparison(workout, workouts)
-    if not comparison.available:
-        comparison.reason_unavailable = _template(language, "unavailable.baseline", days=comparison.baseline_period_days)
+    if comparison.baseline_sample_count < MIN_COMPARISON_SAMPLE:
+        lang = _lang(language)
+        reason_key = "insufficient" if comparison.baseline_sample_count else "none"
+        comparison.reason_unavailable = _COMPARISON_UNAVAILABLE[lang][reason_key].format(
+            count=comparison.baseline_sample_count,
+            days=comparison.baseline_period_days,
+            minimum=MIN_COMPARISON_SAMPLE,
+        )
     return comparison
 
 
-def _build_summary(signals: WorkoutAnalysisSignals, language: str) -> AnalysisText:
-    if signals.intensity.available and signals.intensity.code:
-        key = {
-            "very_high": "summary.high_with_hr",
-            "high": "summary.high_with_hr",
-            "moderate": "summary.moderate_with_hr",
-            "low": "summary.easy_with_hr",
-        }[signals.intensity.code]
-        return AnalysisText(code=key, text=_template(language, key))
-
+def _build_summary(
+    workout: dict,
+    pacing: WorkoutAnalysisPacing,
+    physiology: WorkoutAnalysisPhysiology,
+    signals: WorkoutAnalysisSignals,
+    language: str,
+) -> AnalysisText:
     key = {
         "long": "summary.long_structural",
         "short": "summary.short_structural",
     }.get(signals.session_type.code, "summary.standard_structural")
-    return AnalysisText(code=key, text=_template(language, key))
+    facts = [
+        _observation(language, "distance", workout.get("distance_km"), digits=2),
+        _observation(language, "duration", workout.get("duration_minutes"), digits=0),
+        _observation(language, "pace", pacing.average_pace_min_km, digits=2),
+        _observation(language, "avg_hr", physiology.avg_hr, digits=0),
+        _observation(language, "max_hr", physiology.max_hr, digits=0),
+    ]
+    details = "; ".join(fact for fact in facts if fact)
+    text = _template(language, key)
+    return AnalysisText(code=key, text=f"{text} {details}".strip())
+
+
+def _comparison_observation(comparison: WorkoutAnalysisComparison, language: str) -> Optional[str]:
+    if not comparison.available:
+        return None
+    labels = {
+        "en": {
+            "pace": "average pace",
+            "hr": "average HR",
+            "distance": "distance",
+            "duration": "duration",
+            "reference": "reference average",
+        },
+        "fr": {
+            "pace": "allure moyenne",
+            "hr": "FC moyenne",
+            "distance": "distance",
+            "duration": "durée",
+            "reference": "moyenne de référence",
+        },
+        "es": {
+            "pace": "ritmo medio",
+            "hr": "FC media",
+            "distance": "distancia",
+            "duration": "duración",
+            "reference": "promedio de referencia",
+        },
+    }[_lang(language)]
+    metrics = (
+        ("pace", comparison.avg_pace_min_km, True, "/km"),
+        ("hr", comparison.avg_heart_rate, False, " bpm"),
+        ("distance", comparison.distance_km, False, " km"),
+        ("duration", comparison.duration_minutes, False, " min"),
+    )
+    details = []
+    for label_key, metric, is_pace, suffix in metrics:
+        if metric is None:
+            continue
+        if is_pace:
+            current = _format_pace(metric.current)
+            baseline = _format_pace(metric.baseline)
+        else:
+            current = _format_number(metric.current, 1, language) if metric.current is not None else None
+            baseline = _format_number(metric.baseline, 1, language) if metric.baseline is not None else None
+        if current is not None and baseline is not None:
+            details.append(f"{labels[label_key]}: {current}{suffix} ({labels['reference']} {baseline}{suffix})")
+    if not details:
+        return None
+    return _COMPARISON_TEXT[_lang(language)].format(
+        count=comparison.baseline_sample_count,
+        limit=COMPARISON_SAMPLE_LIMIT,
+        days=comparison.baseline_period_days,
+        metric="; ".join(details),
+    )
 
 
 def _build_meaning(
+    workout: dict,
     physiology: WorkoutAnalysisPhysiology,
     pacing: WorkoutAnalysisPacing,
     signals: WorkoutAnalysisSignals,
+    comparison: WorkoutAnalysisComparison,
     language: str,
 ) -> AnalysisText:
     if signals.intensity.available and signals.intensity.code:
@@ -551,24 +821,75 @@ def _build_meaning(
             code = "meaning.with_hr_moderate"
         return AnalysisText(code=code, text=_template(language, code))
 
-    if physiology.available:
-        code = "meaning.hr_without_intensity_with_pacing" if pacing.available else "meaning.hr_without_intensity_no_pacing"
-        return AnalysisText(code=code, text=_template(language, code))
+    code = (
+        "meaning.hr_without_intensity_with_pacing"
+        if physiology.available and pacing.available
+        else "meaning.hr_without_intensity_no_pacing"
+        if physiology.available
+        else "meaning.no_hr_with_pacing"
+        if pacing.available
+        else "meaning.no_hr_no_pacing"
+    )
+    facts = [
+        _observation(language, "avg_hr", physiology.avg_hr, digits=0),
+        _observation(language, "max_hr", physiology.max_hr, digits=0),
+        _observation(language, "fastest_split", pacing.fastest_split_min_km, digits=2),
+        _observation(language, "slowest_split", pacing.slowest_split_min_km, digits=2),
+        _observation(language, "pace_drop", pacing.pace_drop_min_km, digits=3),
+        _observation(language, "consistency", pacing.consistency_score, digits=1),
+        _observation(language, "variability", pacing.variability, digits=3),
+        _observation(language, "hr_drift", physiology.hr_drift, digits=1),
+        _observation(language, "cadence", workout.get("avg_cadence_spm"), digits=0),
+        _observation(language, "elevation", workout.get("elevation_gain_m"), digits=0),
+    ]
+    if pacing.negative_split is True:
+        facts.append(_OBSERVATION_LABELS[_lang(language)]["negative_split"])
+    comparison_fact = _comparison_observation(comparison, language)
+    if comparison_fact:
+        facts.append(comparison_fact)
+    detail = "; ".join(fact for fact in facts if fact)
+    intro = {
+        "en": "Recorded session observations:",
+        "fr": "Observations enregistrées de la séance :",
+        "es": "Observaciones registradas de la sesión:",
+    }[_lang(language)]
+    fallback = {
+        "en": "No split-based, heart-rate, or comparable-history observations are available.",
+        "fr": "Aucune observation exploitable sur les fractions, la fréquence cardiaque ou l’historique comparable n’est disponible.",
+        "es": "No hay observaciones disponibles sobre fracciones, frecuencia cardíaca o historial comparable.",
+    }[_lang(language)]
+    return AnalysisText(code=code, text=f"{intro} {detail}" if detail else fallback)
 
-    code = "meaning.no_hr_with_pacing" if pacing.available else "meaning.no_hr_no_pacing"
-    return AnalysisText(code=code, text=_template(language, code))
 
-
-def _build_advice(physiology: WorkoutAnalysisPhysiology, signals: WorkoutAnalysisSignals, language: str) -> AnalysisText:
-    if signals.intensity.available and signals.intensity.code in {"high", "very_high"}:
-        code = "advice.recover_after_hard"
-    elif signals.intensity.available and signals.intensity.code == "low":
-        code = "advice.maintain_easy"
-    elif physiology.available:
-        code = "advice.hr_without_intensity"
+def _build_advice(
+    workout: dict,
+    physiology: WorkoutAnalysisPhysiology,
+    pacing: WorkoutAnalysisPacing,
+    comparison: WorkoutAnalysisComparison,
+    language: str,
+) -> AnalysisText:
+    lang = _lang(language)
+    if comparison.available:
+        advice_key = "comparison"
+        params = {"count": comparison.baseline_sample_count}
+    elif pacing.fastest_split_min_km is not None and pacing.slowest_split_min_km is not None:
+        advice_key = "splits"
+        params = {
+            "fastest": _format_pace(pacing.fastest_split_min_km),
+            "slowest": _format_pace(pacing.slowest_split_min_km),
+        }
+    elif physiology.avg_hr is not None:
+        advice_key = "hr"
+        max_hr_text = f", maximum {physiology.max_hr}" if physiology.max_hr is not None else ""
+        params = {"avg_hr": physiology.avg_hr, "max_hr": max_hr_text}
+    elif _positive_number(workout.get("distance_km")) is not None or _positive_number(workout.get("duration_minutes")) is not None:
+        advice_key = "structure"
+        params = {}
     else:
-        code = "advice.no_hr"
-    return AnalysisText(code=code, text=_template(language, code))
+        advice_key = "none"
+        params = {}
+    code = "advice.hr_without_intensity" if physiology.available else "advice.no_hr"
+    return AnalysisText(code=code, text=_ADVICE_TEXT[lang][advice_key].format(**params))
 
 
 def build_workout_analysis_v2(workout: dict, historical_workouts: List[dict], language: str = "en") -> WorkoutAnalysisV2Response:
@@ -576,9 +897,9 @@ def build_workout_analysis_v2(workout: dict, historical_workouts: List[dict], la
     physiology = _build_physiology(workout, language)
     pacing = _build_pacing(workout, language)
     signals = _build_signals(workout, comparison, physiology, language)
-    summary = _build_summary(signals, language)
-    meaning = _build_meaning(physiology, pacing, signals, language)
-    advice = _build_advice(physiology, signals, language)
+    summary = _build_summary(workout, pacing, physiology, signals, language)
+    meaning = _build_meaning(workout, physiology, pacing, signals, comparison, language)
+    advice = _build_advice(workout, physiology, pacing, comparison, language)
     evidence = WorkoutAnalysisEvidence(
         has_heart_rate=physiology.available,
         has_hr_zones=bool(physiology.zone_distribution),
