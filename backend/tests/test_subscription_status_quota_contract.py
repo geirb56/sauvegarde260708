@@ -22,6 +22,7 @@ _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _BACKEND_DIR not in sys.path:
     sys.path.insert(0, _BACKEND_DIR)
 
+import access_control  # noqa: E402
 import server  # noqa: E402
 from auth.jwt_utils import create_access_token  # noqa: E402
 
@@ -116,6 +117,11 @@ def isolated_db(monkeypatch):
     monkeypatch.setattr(server, "db", db)
     monkeypatch.setattr(server.app.state, "db", db)
     return db
+
+
+@pytest.fixture(autouse=True)
+def use_canonical_entitlements(monkeypatch):
+    monkeypatch.setattr(access_control, "DEMO_MODE", False)
 
 
 def _auth(user_id="subject"):
