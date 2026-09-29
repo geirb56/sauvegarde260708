@@ -32,6 +32,7 @@ import server  # noqa: E402
 import workout_analysis_v2  # noqa: E402
 from access_control import Tier, UserAccess  # noqa: E402
 from auth.jwt_utils import create_access_token  # noqa: E402
+from garmin.service import activity_to_workout  # noqa: E402
 
 
 def _bearer(user_id: str, email: str) -> dict[str, str]:
@@ -707,6 +708,35 @@ def test_split_hr_drift_cadence_and_elevation_are_reported_without_causal_claims
     assert "dehydrat" not in result.meaning.text.lower()
     assert "fatigue" not in result.meaning.text.lower()
     assert "170-180" not in result.advice.text
+
+
+def test_garmin_derived_workout_preserves_available_analysis_observations():
+    workout = activity_to_workout(
+        {
+            "external_id": "garmin-activity",
+            "activity_type": "running",
+            "start_time": "2026-09-20T07:00:00+00:00",
+            "distance": 21_270,
+            "duration": 7_320,
+            "pace_seconds_per_km": 343.2,
+            "avg_hr": 160,
+            "garmin_activity": {
+                "max_hr": 178,
+                "average_run_cadence": 176,
+                "elevation_gain": 120,
+            },
+        },
+        "user-a",
+    )
+
+    result = workout_analysis_v2.build_workout_analysis_v2(workout, [], "en")
+
+    assert workout["max_heart_rate"] == 178
+    assert workout["avg_cadence_spm"] == 176
+    assert workout["elevation_gain_m"] == 120
+    assert "maximum HR: 178 bpm" in result.summary.text
+    assert "average cadence: 176 spm" in result.meaning.text
+    assert "elevation gain: 120 m" in result.meaning.text
 
 
 def test_history_comparison_uses_prior_similar_distance_sessions_without_claiming_progress():

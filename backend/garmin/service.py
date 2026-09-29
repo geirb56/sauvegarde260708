@@ -540,6 +540,19 @@ def activity_to_workout(act: dict, user_id: str) -> Optional[dict]:
     avg_pace_min_km = round(pace_spk / 60.0, 3) if pace_spk else None
     atype = (act.get("activity_type") or "running").lower()
     wtype = _ACTIVITY_TYPE_TO_WORKOUT.get(atype, "run")
+    garmin_activity = act.get("garmin_activity")
+    garmin_activity = garmin_activity if isinstance(garmin_activity, dict) else {}
+    max_hr = act.get("max_heart_rate")
+    if max_hr is None:
+        max_hr = act.get("max_hr")
+    if max_hr is None:
+        max_hr = garmin_activity.get("max_hr")
+    avg_cadence = act.get("avg_cadence_spm")
+    if avg_cadence is None:
+        avg_cadence = garmin_activity.get("average_run_cadence")
+    elevation_gain = act.get("elevation_gain_m")
+    if elevation_gain is None:
+        elevation_gain = garmin_activity.get("elevation_gain")
     return {
         "id": f"garmin-{ext_id}",
         "type": wtype,
@@ -548,7 +561,10 @@ def activity_to_workout(act: dict, user_id: str) -> Optional[dict]:
         "duration_minutes": duration_minutes,
         "distance_km": distance_km,
         "avg_heart_rate": act.get("avg_hr"),
+        "max_heart_rate": max_hr,
         "avg_pace_min_km": avg_pace_min_km,
+        "avg_cadence_spm": avg_cadence,
+        "elevation_gain_m": elevation_gain,
         "data_source": "garmin",
         "user_id": user_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
