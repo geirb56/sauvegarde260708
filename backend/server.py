@@ -318,7 +318,7 @@ class RateLimiter:
 rate_limiter = RateLimiter(requests_per_minute=120, burst_limit=30)
 
 # Endpoints exempt from rate limiting
-RATE_LIMIT_EXEMPT = {"/api/cache/stats"}
+RATE_LIMIT_EXEMPT = set()
 
 
 def get_rate_limit_key_from_request(request: Request) -> str:
@@ -4134,7 +4134,7 @@ async def get_user_features(user: dict = Depends(auth_user)):
 # ========== CHAT COACH (PREMIUM ONLY) ==========
 
 @api_router.get("/cache/stats")
-async def get_coach_cache_stats():
+async def get_coach_cache_stats(_admin: dict = Depends(require_admin)):
     """Get coach service cache statistics"""
     return get_cache_stats()
 
@@ -4148,7 +4148,7 @@ async def clear_coach_cache(_admin: dict = Depends(require_admin)):
 
 
 @api_router.get("/metrics")
-async def get_service_metrics():
+async def get_service_metrics(_admin: dict = Depends(require_admin)):
     """Get coach service metrics (LLM success rate, latency, etc.)"""
     return {
         "coach": get_coach_metrics(),
