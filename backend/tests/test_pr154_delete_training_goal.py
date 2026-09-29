@@ -106,6 +106,10 @@ class _FakeDB:
         self.training_cycles = _TrackedCollection(
             "training_cycles", [{"user_id": _USER_ID, "goal": "10K"}]
         )
+        self.users = _TrackedCollection(
+            "users",
+            [{"id": _USER_ID, "email": "test@pr154.com", "is_active": True, "is_email_verified": True}],
+        )
         # Legacy collection — should NEVER be accessed
         self.training_goals = _TrackedCollection("training_goals", [])
         self._accessed_attrs: List[str] = []
@@ -135,6 +139,7 @@ async def client():
     fake_db = _FakeDB()
     patches = [
         patch.object(server, "db", fake_db),
+        patch.object(server.app.state, "db", fake_db),
         patch("server.get_user_access", AsyncMock(side_effect=_mock_get_user_access)),
     ]
     started = []

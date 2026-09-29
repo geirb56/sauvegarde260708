@@ -25,10 +25,12 @@ from __future__ import annotations
 import os
 import sys
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import httpx
+import jwt
 import pytest
 import pytest_asyncio
 
@@ -70,6 +72,33 @@ pytestmark = pytest.mark.asyncio
 
 def _bearer(user_id: str, email: str) -> dict[str, str]:
     return {"Authorization": "Bearer " + create_access_token(user_id, email)}
+
+
+def _expired_bearer(user_id: str, email: str) -> dict[str, str]:
+    token = jwt.encode(
+        {
+            "sub": user_id,
+            "email": email,
+            "iat": datetime.now(timezone.utc) - timedelta(hours=2),
+            "exp": datetime.now(timezone.utc) - timedelta(hours=1),
+        },
+        os.environ["JWT_SECRET_KEY"],
+        algorithm=os.environ["JWT_ALGORITHM"],
+    )
+    return {"Authorization": "Bearer " + token}
+
+
+def _missing_sub_bearer(email: str) -> dict[str, str]:
+    token = jwt.encode(
+        {
+            "email": email,
+            "iat": datetime.now(timezone.utc),
+            "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+        },
+        os.environ["JWT_SECRET_KEY"],
+        algorithm=os.environ["JWT_ALGORITHM"],
+    )
+    return {"Authorization": "Bearer " + token}
 
 
 def _workout(user_id: str, workout_id: str) -> dict:
@@ -130,6 +159,31 @@ class _Collection:
     async def insert_one(self, doc: dict) -> None:
         self._docs.append(dict(doc))
 
+    async def find_one_and_update(
+        self,
+        query: dict,
+        update: dict,
+        upsert: bool = False,
+        return_document=None,
+    ) -> dict | None:
+        for index, doc in enumerate(self._docs):
+            if all(doc.get(k) == v for k, v in query.items()):
+                updated = dict(doc)
+                updated.update(update.get("$set", {}))
+                self._docs[index] = updated
+                return dict(updated)
+        if not upsert:
+            return None
+        new_doc = {
+            key: value
+            for key, value in query.items()
+            if not isinstance(value, dict)
+        }
+        new_doc.update(update.get("$setOnInsert", {}))
+        new_doc.update(update.get("$set", {}))
+        self._docs.append(new_doc)
+        return dict(new_doc)
+
     async def create_index(self, *a, **kw) -> None:
         pass
 
@@ -158,6 +212,10 @@ class _FakeDB:
             {"id": "user-a", "email": "a@test.com", "is_active": True,
              "is_email_verified": True},
             {"id": "user-b", "email": "b@test.com", "is_active": True,
+             "is_email_verified": True},
+            {"id": "user-disabled", "email": "disabled@test.com", "is_active": False,
+             "is_email_verified": True},
+            {"id": "user-free", "email": "free@test.com", "is_active": True,
              "is_email_verified": True},
         ])
 
@@ -193,6 +251,7 @@ async def real_client():
 
     patches = [
         patch.object(server, "db", fake_db),
+        patch.object(server.app.state, "db", fake_db),
         # get_user_access is called by the subscription middleware and by chat/send.
         # Give test users PREMIUM access so they can reach the route handlers;
         # all other callers (e.g. anonymous with IP as user_id) remain FREE.
@@ -258,6 +317,23 @@ class TestCoachHistoryIntegration:
         )
         assert r.status_code == 404
 
+    async def test_disabled_user_is_rejected_before_premium_access_check(self, real_client):
+        client, _ = real_client
+        r = await client.get(
+            "/api/coach/history",
+            headers=_bearer("user-disabled", "disabled@test.com"),
+        )
+        assert r.status_code == 401
+
+    async def test_deleted_user_is_rejected_before_premium_access_check(self, real_client):
+        client, fake_db = real_client
+        fake_db.users._docs = [u for u in fake_db.users._docs if u["id"] != "user-a"]
+        r = await client.get(
+            "/api/coach/history",
+            headers=_bearer("user-a", "a@test.com"),
+        )
+        assert r.status_code == 401
+
 
 # ---------------------------------------------------------------------------
 # 2. GET /api/rag/workout/{workout_id}
@@ -313,6 +389,102 @@ class TestCoachWorkoutAnalysisIntegration:
             headers=_bearer("user-b", "b@test.com"),
         )
         assert r.status_code == 404
+
+
+class TestRuntimeAuthValidation:
+    async def test_subscription_status_allows_active_free_user(self, real_client):
+        client, _ = real_client
+        r = await client.get(
+            "/api/subscription/status",
+            headers=_bearer("user-free", "free@test.com"),
+        )
+        assert r.status_code == 200
+        assert r.json()["tier"] == "free"
+
+    async def test_user_features_allows_active_free_user(self, real_client):
+        client, _ = real_client
+        r = await client.get(
+            "/api/user/features",
+            headers=_bearer("user-free", "free@test.com"),
+        )
+        assert r.status_code == 200
+        payload = r.json()
+        assert payload["plan"] == "free"
+        assert payload["has_premium_access"] is False
+
+    async def test_subscription_status_rejects_invalid_token(self, real_client):
+        client, _ = real_client
+        r = await client.get(
+            "/api/subscription/status",
+            headers={"Authorization": "******"},
+        )
+        assert r.status_code == 401
+
+    async def test_subscription_status_rejects_expired_token(self, real_client):
+        client, _ = real_client
+        r = await client.get(
+            "/api/subscription/status",
+            headers=_expired_bearer("user-a", "a@test.com"),
+        )
+        assert r.status_code == 401
+
+    async def test_subscription_status_rejects_missing_sub_claim(self, real_client):
+        client, _ = real_client
+        r = await client.get(
+            "/api/subscription/status",
+            headers=_missing_sub_bearer("a@test.com"),
+        )
+        assert r.status_code == 401
+
+    async def test_subscription_status_rejects_anonymous_requests(self, real_client):
+        client, _ = real_client
+        r = await client.get("/api/subscription/status")
+        assert r.status_code == 401
+
+    async def test_training_v2_week_rejects_disabled_user(self, real_client):
+        client, _ = real_client
+        r = await client.get(
+            "/api/training/v2/week",
+            headers=_bearer("user-disabled", "disabled@test.com"),
+        )
+        assert r.status_code == 401
+
+    async def test_training_v2_week_rejects_deleted_user(self, real_client):
+        client, fake_db = real_client
+        fake_db.users._docs = [u for u in fake_db.users._docs if u["id"] != "user-b"]
+        r = await client.get(
+            "/api/training/v2/week",
+            headers=_bearer("user-b", "b@test.com"),
+        )
+        assert r.status_code == 401
+
+    async def test_disabled_premium_candidate_never_reaches_subscription_lookup(self):
+        fake_db = _FakeDB()
+        access_spy = AsyncMock(side_effect=_get_user_access)
+        patches = [
+            patch.object(server, "db", fake_db),
+            patch.object(server.app.state, "db", fake_db),
+            patch("server.get_user_access", access_spy),
+        ]
+        started = []
+        try:
+            for p in patches:
+                p.start()
+                started.append(p)
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=server.app),
+                base_url="http://test",
+            ) as client:
+                r = await client.get(
+                    "/api/coach/history",
+                    headers=_bearer("user-disabled", "disabled@test.com"),
+                )
+        finally:
+            for p in reversed(started):
+                p.stop()
+
+        assert r.status_code == 401
+        access_spy.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -199,11 +200,28 @@ class _FakeDB:
         self.garmin_daily_metrics = _Collection([])
         self.workouts = _Collection([])
         self.user_goals = _Collection([])
+        self.users = _Collection([
+            {"id": "user-a", "email": "a@test.com", "is_active": True, "is_email_verified": True},
+            {"id": "user-b", "email": "b@test.com", "is_active": True, "is_email_verified": True},
+        ])
 
     def __getattr__(self, name: str):
         col = _Collection([])
         object.__setattr__(self, name, col)
         return col
+
+
+def _server_db_patches(fake_db: _FakeDB):
+    return [
+        patch.object(server, "db", fake_db),
+        patch.object(server.app.state, "db", fake_db),
+    ]
+
+
+@contextmanager
+def _patch_server_db(fake_db: _FakeDB):
+    with patch.object(server, "db", fake_db), patch.object(server.app.state, "db", fake_db):
+        yield
 
 
 def _current_month_key() -> str:
@@ -242,7 +260,7 @@ async def _premium_access(_db, user_id: str):
 
 async def _run_analyze(fake_db: _FakeDB, access_fn, *, user_id: str = "user-a", message: str = "hello"):
     patches = [
-        patch.object(server, "db", fake_db),
+        *_server_db_patches(fake_db),
         patch("server.get_user_access", AsyncMock(side_effect=access_fn)),
         patch("server._resolve_goal_v2", AsyncMock(return_value=SimpleNamespace())),
         patch("server._resolve_canonical_reference_date", return_value=datetime(2026, 1, 15, tzinfo=timezone.utc).date()),
@@ -264,7 +282,7 @@ async def _run_analyze(fake_db: _FakeDB, access_fn, *, user_id: str = "user-a", 
     with (
         patches[0], patches[1], patches[2], patches[3], patches[4],
         patches[5], patches[6], patches[7], patches[8], patches[9],
-        patches[10], patches[11], patches[12], patches[13],
+        patches[10], patches[11], patches[12], patches[13], patches[14],
     ):
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=server.app),
@@ -338,7 +356,7 @@ async def test_history_returns_last_50_in_chronological_order():
     fake_db = _FakeDB(conversations=docs)
 
     with (
-        patch.object(server, "db", fake_db),
+        _patch_server_db(fake_db),
         patch("server.get_user_access", AsyncMock(side_effect=_free_access)),
     ):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://test") as client:
@@ -362,7 +380,7 @@ async def test_user_isolation_for_history_and_quota():
     fake_db = _FakeDB(conversations=docs)
 
     with (
-        patch.object(server, "db", fake_db),
+        _patch_server_db(fake_db),
         patch("server.get_user_access", AsyncMock(side_effect=_free_access)),
     ):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://test") as client:
@@ -388,7 +406,7 @@ async def test_coach_analyze_route_uses_canonical_service_function():
     fake_db = _FakeDB()
     service_mock = AsyncMock(return_value=server.CoachResponse(response="ok", message_id="m1"))
     with (
-        patch.object(server, "db", fake_db),
+        _patch_server_db(fake_db),
         patch("server.get_user_access", AsyncMock(side_effect=_free_access)),
         patch("server.process_coach_message", service_mock),
     ):
@@ -421,7 +439,7 @@ async def test_coach_analyze_preserves_workout_context_without_deep_analysis():
     context_mock = AsyncMock(return_value=_ContextPayload())
 
     with (
-        patch.object(server, "db", fake_db),
+        _patch_server_db(fake_db),
         patch("server.get_user_access", AsyncMock(side_effect=_premium_access)),
         patch("server._resolve_goal_v2", AsyncMock(return_value=SimpleNamespace())),
         patch("server._resolve_canonical_reference_date", return_value=datetime(2026, 1, 15, tzinfo=timezone.utc).date()),
@@ -457,7 +475,7 @@ async def test_subscription_authority_function_is_used_for_coach_processing():
     access_mock = AsyncMock(side_effect=_premium_access)
 
     with (
-        patch.object(server, "db", fake_db),
+        _patch_server_db(fake_db),
         patch("server.get_user_access", access_mock),
         patch("server._resolve_goal_v2", AsyncMock(return_value=SimpleNamespace())),
         patch("server._resolve_canonical_reference_date", return_value=datetime(2026, 1, 15, tzinfo=timezone.utc).date()),
@@ -484,7 +502,7 @@ async def test_subscription_authority_function_is_used_for_coach_processing():
 async def test_legacy_chat_send_endpoint_is_absent():
     fake_db = _FakeDB()
     with (
-        patch.object(server, "db", fake_db),
+        _patch_server_db(fake_db),
         patch("server.get_user_access", AsyncMock(side_effect=_premium_access)),
     ):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://test") as client:
@@ -621,7 +639,7 @@ async def test_history_clear_bootstraps_counter_before_delete_for_10_used_and_bl
     fake_db = _FakeDB(conversations=docs)
 
     with (
-        patch.object(server, "db", fake_db),
+        _patch_server_db(fake_db),
         patch("server.get_user_access", AsyncMock(side_effect=_free_access)),
     ):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://test") as client:
@@ -644,7 +662,7 @@ async def test_history_clear_preserves_partial_usage_counter_for_7_used():
     fake_db = _FakeDB(conversations=docs)
 
     with (
-        patch.object(server, "db", fake_db),
+        _patch_server_db(fake_db),
         patch("server.get_user_access", AsyncMock(side_effect=_free_access)),
     ):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://test") as client:
@@ -674,7 +692,7 @@ async def test_history_clear_keeps_existing_counter_unchanged():
     })
 
     with (
-        patch.object(server, "db", fake_db),
+        _patch_server_db(fake_db),
         patch("server.get_user_access", AsyncMock(side_effect=_free_access)),
     ):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://test") as client:
@@ -698,7 +716,7 @@ async def test_subscription_status_uses_free_counter_after_history_clear():
     })
 
     with (
-        patch.object(server, "db", fake_db),
+        _patch_server_db(fake_db),
         patch("server.get_user_access", AsyncMock(side_effect=_free_access)),
     ):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://test") as client:
@@ -719,7 +737,7 @@ async def test_subscription_status_bootstraps_counter_from_conversations_when_mi
     fake_db = _FakeDB(conversations=docs)
 
     with (
-        patch.object(server, "db", fake_db),
+        _patch_server_db(fake_db),
         patch("server.get_user_access", AsyncMock(side_effect=_free_access)),
     ):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://test") as client:
@@ -747,7 +765,7 @@ async def test_subscription_status_month_isolation_for_free_counter():
     })
 
     with (
-        patch.object(server, "db", fake_db),
+        _patch_server_db(fake_db),
         patch("server.get_user_access", AsyncMock(side_effect=_free_access)),
     ):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://test") as client:
@@ -777,7 +795,7 @@ async def test_history_clear_and_status_are_user_isolated():
     })
 
     with (
-        patch.object(server, "db", fake_db),
+        _patch_server_db(fake_db),
         patch("server.get_user_access", AsyncMock(side_effect=_free_access)),
     ):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://test") as client:
@@ -801,7 +819,7 @@ async def test_free_reservation_rolls_back_when_failure_occurs_before_user_messa
     fake_db = _FakeDB()
 
     with (
-        patch.object(server, "db", fake_db),
+        _patch_server_db(fake_db),
         patch("server.get_user_access", AsyncMock(side_effect=_free_access)),
         patch("server._resolve_goal_v2", AsyncMock(return_value=SimpleNamespace())),
         patch("server._resolve_canonical_reference_date", return_value=datetime(2026, 1, 15, tzinfo=timezone.utc).date()),
@@ -838,7 +856,7 @@ async def test_user_message_persisted_then_llm_failure_still_consumes_free_slot(
         return "", False, {"provider": "test"}
 
     with (
-        patch.object(server, "db", fake_db),
+        _patch_server_db(fake_db),
         patch("server.get_user_access", AsyncMock(side_effect=_free_access)),
         patch("server._resolve_goal_v2", AsyncMock(return_value=SimpleNamespace())),
         patch("server._resolve_canonical_reference_date", return_value=datetime(2026, 1, 15, tzinfo=timezone.utc).date()),

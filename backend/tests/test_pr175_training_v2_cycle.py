@@ -32,6 +32,7 @@ from datetime import date, timedelta
 from typing import Optional
 
 import pytest
+from auth.jwt_utils import create_access_token  # noqa: E402
 
 os.environ.setdefault("JWT_SECRET", "test-secret-pr175")
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret-pr175")
@@ -541,13 +542,22 @@ def _make_cycle_doc(goal: str = "MARATHON", start_date: str = "2024-01-01"):
     return {"goal": goal, "start_date": start_date, "user_id": "test-uid"}
 
 
-def _make_goal_doc(event_date: str = "2025-06-01", target_time_minutes: int = 240):
+def _make_goal_doc(
+    event_date: str = "2025-06-01",
+    target_time_minutes: int = 240,
+    distance_type: str = "marathon",
+):
     return {
         "user_id": "test-uid",
         "event_date": event_date,
+        "distance_type": distance_type,
         "distance_km": 42.195,
         "target_time_minutes": target_time_minutes,
     }
+
+
+def _auth_headers(user_id: str = "test-uid", email: str = "test-uid@example.com") -> dict[str, str]:
+    return {"Authorization": "Bearer " + create_access_token(user_id, email)}
 
 
 def _mock_db_for_cycle(cycle_doc, goal_doc):
@@ -555,6 +565,14 @@ def _mock_db_for_cycle(cycle_doc, goal_doc):
     mock_db = MagicMock()
     mock_db.training_cycles.find_one = AsyncMock(return_value=cycle_doc)
     mock_db.user_goals.find_one = AsyncMock(return_value=goal_doc)
+    mock_db.users.find_one = AsyncMock(
+        return_value={
+            "id": "test-uid",
+            "email": "test-uid@example.com",
+            "is_active": True,
+            "is_email_verified": True,
+        }
+    )
     return mock_db
 
 
@@ -569,7 +587,6 @@ def test_20_endpoint_premium_http200():
     with payload containing reference_date, goal, cycle, weeks."""
     from fastapi.testclient import TestClient
     app = _server_module.app
-    auth_dep = _server_module.auth_user
 
     cycle_doc = _make_cycle_doc("MARATHON", "2024-01-01")
     goal_doc = _make_goal_doc("2025-06-01", 240)
@@ -577,16 +594,12 @@ def test_20_endpoint_premium_http200():
     user_access = _make_user_access("premium")
 
     with _patch("server.get_user_access", new=AsyncMock(return_value=user_access)):
-        with _patch("server.db", mock_db):
-            app.dependency_overrides[auth_dep] = lambda: {"id": "test-uid", "authenticated": True}
-            try:
-                client = TestClient(app, raise_server_exceptions=True)
-                resp = client.get(
-                    "/api/training/v2/cycle",
-                    headers={"Authorization": "******"},
-                )
-            finally:
-                app.dependency_overrides.pop(auth_dep, None)
+        with _patch("server.db", mock_db), _patch.object(app.state, "db", mock_db):
+            client = TestClient(app, raise_server_exceptions=True)
+            resp = client.get(
+                "/api/training/v2/cycle",
+                headers=_auth_headers(),
+            )
 
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
     data = resp.json()
@@ -602,7 +615,6 @@ def test_20b_endpoint_trial_http200():
     """BLOCKER 4 — TRIAL user → GET /api/training/v2/cycle returns HTTP 200."""
     from fastapi.testclient import TestClient
     app = _server_module.app
-    auth_dep = _server_module.auth_user
 
     cycle_doc = _make_cycle_doc("MARATHON", "2024-01-01")
     goal_doc = _make_goal_doc("2025-06-01", 240)
@@ -610,16 +622,12 @@ def test_20b_endpoint_trial_http200():
     user_access = _make_user_access("trial")
 
     with _patch("server.get_user_access", new=AsyncMock(return_value=user_access)):
-        with _patch("server.db", mock_db):
-            app.dependency_overrides[auth_dep] = lambda: {"id": "test-uid", "authenticated": True}
-            try:
-                client = TestClient(app, raise_server_exceptions=True)
-                resp = client.get(
-                    "/api/training/v2/cycle",
-                    headers={"Authorization": "******"},
-                )
-            finally:
-                app.dependency_overrides.pop(auth_dep, None)
+        with _patch("server.db", mock_db), _patch.object(app.state, "db", mock_db):
+            client = TestClient(app, raise_server_exceptions=True)
+            resp = client.get(
+                "/api/training/v2/cycle",
+                headers=_auth_headers(),
+            )
 
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
     data = resp.json()
@@ -634,22 +642,17 @@ def test_20c_endpoint_free_blocked():
     """BLOCKER 4 — FREE user → GET /api/training/v2/cycle is blocked (no premium access)."""
     from fastapi.testclient import TestClient
     app = _server_module.app
-    auth_dep = _server_module.auth_user
 
     mock_db = _mock_db_for_cycle({}, {})
     user_access = _make_user_access("free")
 
     with _patch("server.get_user_access", new=AsyncMock(return_value=user_access)):
-        with _patch("server.db", mock_db):
-            app.dependency_overrides[auth_dep] = lambda: {"id": "test-uid", "authenticated": True}
-            try:
-                client = TestClient(app, raise_server_exceptions=False)
-                resp = client.get(
-                    "/api/training/v2/cycle",
-                    headers={"Authorization": "******"},
-                )
-            finally:
-                app.dependency_overrides.pop(auth_dep, None)
+        with _patch("server.db", mock_db), _patch.object(app.state, "db", mock_db):
+            client = TestClient(app, raise_server_exceptions=False)
+            resp = client.get(
+                "/api/training/v2/cycle",
+                headers=_auth_headers(),
+            )
 
     # FREE users must be blocked — 403 from subscription middleware
     assert resp.status_code == 403, (

@@ -70,6 +70,10 @@ class _FakeDB:
     def __init__(self, *, training_cycles: Optional[List[dict]] = None, user_goals: Optional[List[dict]] = None) -> None:
         self.training_cycles = _Collection(training_cycles)
         self.user_goals = _Collection(user_goals)
+        self.users = _Collection([
+            {"id": "pr216-user", "email": "pr216@example.com", "is_active": True, "is_email_verified": True},
+            {"id": "other-user", "email": "other@example.com", "is_active": True, "is_email_verified": True},
+        ])
 
     def __getattr__(self, name: str) -> _Collection:
         col = _Collection()
@@ -88,6 +92,7 @@ def _user_access(_db: Any, user_id: str) -> UserAccess:
 async def _post(fake_db: _FakeDB, user_id: str, payload: dict) -> httpx.Response:
     with (
         patch.object(server, "db", fake_db),
+        patch.object(server.app.state, "db", fake_db),
         patch("server.get_user_access", AsyncMock(side_effect=_user_access)),
     ):
         async with httpx.AsyncClient(
