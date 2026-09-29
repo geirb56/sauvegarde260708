@@ -2347,8 +2347,8 @@ class SubscriptionStatusResponse(BaseModel):
     billing_period: Optional[str] = None  # "monthly" or "annual"
     expires_at: Optional[str] = None
     messages_used: int = 0
-    messages_limit: int = 10
-    messages_remaining: int = 10
+    messages_limit: Optional[int] = 10
+    messages_remaining: Optional[int] = 10
     is_unlimited: bool = False
 
 
@@ -4055,6 +4055,7 @@ async def get_subscription_status(user: dict = Depends(auth_user)):
     # Message usage for current month
     now = datetime.now(timezone.utc)
     is_unlimited = user_access.is_unlimited_chat
+    messages_limit = user_access.chat_monthly_quota
     if is_unlimited:
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         message_count = await db.conversations.count_documents({
@@ -4062,13 +4063,11 @@ async def get_subscription_status(user: dict = Depends(auth_user)):
             "role": "user",
             "timestamp": {"$gte": month_start.isoformat()},
         })
-        messages_limit = 999
     else:
         message_count = await _get_or_bootstrap_free_coach_quota_count(
             user_id=user_id,
             now_utc=now,
         )
-        messages_limit = CHAT_QUOTA_FREE
 
     return SubscriptionStatusResponse(
         tier=user_access.tier.value,
@@ -4078,7 +4077,11 @@ async def get_subscription_status(user: dict = Depends(auth_user)):
         expires_at=expires_at,
         messages_used=message_count,
         messages_limit=messages_limit,
-        messages_remaining=max(0, messages_limit - message_count) if not is_unlimited else 999,
+        messages_remaining=(
+            max(0, messages_limit - message_count)
+            if messages_limit is not None
+            else None
+        ),
         is_unlimited=is_unlimited,
     )
 
@@ -4090,7 +4093,7 @@ async def get_premium_status(user: dict = Depends(auth_user)):
     user_id = user["id"]
     status = await get_subscription_status(user)
     return {
-        "is_premium": status.is_premium or status.tier != "free",
+        "is_premium": status.is_premium,
         "subscription_id": status.subscription_id,
         "expires_at": status.expires_at,
         "messages_used": status.messages_used,
