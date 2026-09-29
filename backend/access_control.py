@@ -420,6 +420,7 @@ ROUTE_ACCESS_MAP: Dict[str, RouteAccess] = {
     "/api/garmin/connect":      RouteAccess.FREE,
     "/api/garmin/status":       RouteAccess.FREE,
     "/api/garmin/disconnect":   RouteAccess.FREE,
+    "/api/garmin/queue/health": RouteAccess.FREE,
     "/api/training/v2/preferences": RouteAccess.FREE,  # onboarding preference capture must stay reachable pre-handoff
 
     # ── Premium (TRIAL or PREMIUM required) ──────────────────────────────
