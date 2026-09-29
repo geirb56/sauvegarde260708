@@ -204,8 +204,40 @@ async def test_status_endpoints_serialize_canonical_quota(
     assert data["messages_used"] == expected_used
     assert data["messages_limit"] == (None if is_unlimited else 10)
     assert data["messages_remaining"] == expected_remaining
+    assert data["tier_name"] == {
+        "free": "Gratuit",
+        "trial": "Essai gratuit",
+        "premium": "Premium",
+    }[expected_tier]
+    if tier == "trial" and not expired:
+        assert data["expires_at"] == db.status["trial_end"]
+    if tier == "premium" and not expired:
+        assert data["expires_at"] == db.status["premium_expires_at"]
+        assert data["subscription_id"] == "paddle-test-id"
     assert db.subscriptions.write_count == 0
     assert db.conversations.write_count == 0
+
+
+@pytest.mark.parametrize("tier", ("free", "trial", "premium"))
+@pytest.mark.asyncio
+async def test_status_endpoints_return_coherent_quota_for_the_same_user(tier, monkeypatch):
+    db = _FakeDB(tier=tier, usage=3)
+    monkeypatch.setattr(server, "db", db)
+    monkeypatch.setattr(server.app.state, "db", db)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=server.app), base_url="http://test"
+    ) as client:
+        subscription = await client.get(
+            ENDPOINTS[0], headers=_auth()
+        )
+        premium = await client.get(ENDPOINTS[1], headers=_auth())
+
+    assert subscription.status_code == premium.status_code == 200
+    fields = ("tier", "is_premium", "is_unlimited", "messages_used", "messages_limit", "messages_remaining")
+    assert {field: subscription.json()[field] for field in fields} == {
+        field: premium.json()[field] for field in fields
+    }
 
 
 @pytest.mark.parametrize("endpoint", ENDPOINTS)

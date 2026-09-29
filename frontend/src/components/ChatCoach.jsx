@@ -158,7 +158,11 @@ const ChatCoach = ({ isOpen, onClose }) => {
 
   const isStatusValid = Boolean(
     subscriptionStatus &&
+    ["free", "trial", "premium"].includes(subscriptionStatus.tier) &&
     typeof subscriptionStatus.is_unlimited === "boolean" &&
+    subscriptionStatus.is_unlimited === (subscriptionStatus.tier !== "free") &&
+    typeof subscriptionStatus.is_premium === "boolean" &&
+    subscriptionStatus.is_premium === (subscriptionStatus.tier !== "free") &&
     (subscriptionStatus.is_unlimited
       ? subscriptionStatus.messages_remaining === null
       : Number.isFinite(subscriptionStatus.messages_remaining) &&
