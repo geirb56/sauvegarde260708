@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import sys
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import ANY, AsyncMock, Mock
 
 import httpx
 import jwt
@@ -246,11 +246,17 @@ async def test_existing_delete_diagnostics_remain_admin_only(
 async def test_public_auth_login_is_not_blocked_by_diagnostics_auth(client, monkeypatch):
     import auth.router
 
-    monkeypatch.setattr(auth.router, "_check_rate_limit", AsyncMock())
+    check_rate_limit = AsyncMock()
+    record_attempt = AsyncMock()
+    monkeypatch.setattr(auth.router, "_check_rate_limit", check_rate_limit)
+    monkeypatch.setattr(auth.router._auth_limiter, "record", record_attempt)
     response = await client.post(
         "/api/auth/login",
         json={"email": "missing@example.com", "password": "NotARealPassword123!"},
     )
+    check_rate_limit.assert_awaited_once()
+    record_attempt.assert_awaited_once_with(ANY, "missing@example.com")
+    assert record_attempt.await_args.args[0].url.path == "/api/auth/login"
     assert response.status_code == 401
     assert response.json()["detail"] == "Invalid email or password."
 
