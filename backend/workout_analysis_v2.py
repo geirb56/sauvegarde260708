@@ -10,6 +10,22 @@ from pydantic import BaseModel
 
 SUPPORTED_LANGUAGES = {"en", "fr", "es"}
 
+# Baseline window kept identical to the V2 contract (comparison.baseline_period_days).
+BASELINE_PERIOD_DAYS = 14
+
+# Bounded historical search restored from the legacy retrieve_similar_workouts()
+# capability, without restoring rag_engine.py itself.
+SIMILAR_HISTORY_WINDOW_DAYS = 180
+SIMILAR_DISTANCE_TOLERANCE_PCT = 30.0
+SIMILAR_MAX_RESULTS = 5
+SIMILAR_MIN_COMPARABLE_SAMPLE = 2
+
+# Explicit metadata keys that may carry a real training/competition distinction.
+# Nothing is ever inferred from the session name or from its distance.
+_RACE_METADATA_KEYS = ("is_race", "race", "event_type", "workout_type", "activity_category")
+_RACE_METADATA_VALUES = {"race", "competition", "event", "compétition", "carrera"}
+_TRAINING_METADATA_VALUES = {"training", "workout", "entrainement", "entraînement", "entrenamiento"}
+
 
 class AnalysisText(BaseModel):
     code: str
@@ -65,6 +81,23 @@ class WorkoutAnalysisComparisonMetric(BaseModel):
     percent_change: Optional[float] = None
 
 
+class WorkoutAnalysisSimilarReference(BaseModel):
+    available: bool
+    comparable: bool = False
+    sample_count: int = 0
+    period_days: int = SIMILAR_HISTORY_WINDOW_DAYS
+    distance_tolerance_pct: float = SIMILAR_DISTANCE_TOLERANCE_PCT
+    min_comparable_sample: int = SIMILAR_MIN_COMPARABLE_SAMPLE
+    workout_ids: List[str] = []
+    avg_distance_km: Optional[float] = None
+    avg_pace_min_km: Optional[float] = None
+    avg_heart_rate: Optional[float] = None
+    pace_difference_min_km: Optional[float] = None
+    heart_rate_difference_bpm: Optional[float] = None
+    limitations: List[str] = []
+    reason_unavailable: Optional[str] = None
+
+
 class WorkoutAnalysisComparison(BaseModel):
     available: bool
     baseline_period_days: int
@@ -74,6 +107,7 @@ class WorkoutAnalysisComparison(BaseModel):
     avg_heart_rate: Optional[WorkoutAnalysisComparisonMetric] = None
     avg_pace_min_km: Optional[WorkoutAnalysisComparisonMetric] = None
     avg_speed_kmh: Optional[WorkoutAnalysisComparisonMetric] = None
+    similar: Optional[WorkoutAnalysisSimilarReference] = None
     reason_unavailable: Optional[str] = None
 
 
@@ -121,7 +155,7 @@ def _parse_workout_date(raw: str) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
-def workout_analysis_candidate_date_bounds(workout_date: str, days: int = 14) -> tuple[str, str]:
+def workout_analysis_candidate_date_bounds(workout_date: str, days: int = SIMILAR_HISTORY_WINDOW_DAYS) -> tuple[str, str]:
     current_date = _parse_workout_date(workout_date)
     cutoff_date = (current_date - timedelta(days=days)).date().isoformat()
     upper_bound = (current_date.date() + timedelta(days=1)).isoformat()
@@ -169,6 +203,37 @@ def _template(language: str, key: str, **params) -> str:
             "unavailable.intensity": "Intensity classification is unavailable without individualized physiological evidence.",
             "unavailable.pacing": "Pacing evidence is unavailable.",
             "unavailable.baseline": "No prior same-type workouts in the last {days} days.",
+            "fact.distance_duration": "{distance} km covered in {duration}.",
+            "fact.distance_duration_pace": "{distance} km covered in {duration} at {pace}.",
+            "fact.distance_duration_speed": "{distance} km covered in {duration} at {speed} km/h.",
+            "fact.duration_only": "{duration} of recorded activity.",
+            "fact.hr_avg": "Average heart rate {avg_hr} bpm.",
+            "fact.hr_avg_max": "Average heart rate {avg_hr} bpm, peak {max_hr} bpm.",
+            "fact.hr_max_only": "Peak heart rate {max_hr} bpm.",
+            "fact.splits_range": "Kilometre splits ran from {fastest} to {slowest} ({count} splits recorded).",
+            "fact.pace_drop": "Recorded pace drop of {drop} across the session.",
+            "fact.negative_split": "The recorded split data confirms a negative split.",
+            "fact.consistency": "Split consistency score: {score}/100.",
+            "fact.variability": "Recorded pace variability: {variability}.",
+            "fact.hr_drift": "Heart-rate drift measured at {drift} bpm between the start and the end; this measurement alone does not establish its cause.",
+            "fact.elevation": "Elevation gain: {elevation} m.",
+            "fact.cadence": "Average cadence: {cadence} spm, reported as recorded and not compared with any universal target.",
+            "fact.baseline_distance": "Distance is {delta} ({percent}) against the {count}-session average of the last {days} days ({baseline} km).",
+            "fact.baseline_pace": "Average pace is {delta} against that {count}-session average of {baseline}.",
+            "fact.baseline_hr": "Average heart rate is {delta} bpm against that {count}-session average of {baseline} bpm.",
+            "fact.similar_pace": "Across {count} earlier sessions of comparable distance (±{tolerance}% over {days} days, average {avg_distance} km), average pace was {baseline}; this session is {delta}.",
+            "fact.similar_hr": "Average heart rate across those {count} comparable sessions was {baseline} bpm; this session is {delta} bpm.",
+            "fact.similar_sample_small": "Only {count} comparable earlier session(s) were found, which is below the {minimum} needed to read any difference as progression.",
+            "fact.similar_unavailable": "No earlier session of comparable distance (±{tolerance}%) was found within {days} days, so no historical comparison is available.",
+            "fact.similar_nature_unknown": "The training-versus-race nature of these sessions is not recorded, which limits the comparison.",
+            "advice.even_pacing": "Target a more even pace distribution: start slightly more conservatively so the recorded pace drop shrinks on the next session of this distance.",
+            "advice.negative_split_confirmed": "The negative split shows controlled effort distribution; reuse this progressive start on comparable sessions.",
+            "advice.maintain_consistency": "Pace regularity was high here; keep this control as your reference for sessions of similar distance.",
+            "advice.monitor_hr_drift": "Record the measured heart-rate drift and compare it on the next comparable sessions before concluding anything about its cause.",
+            "advice.recover_after_long": "After a session of this duration, plan an easy or rest day and check how you tolerate the next one.",
+            "advice.complement.record_splits": "Recording kilometre splits would also let the pace distribution of this session be analysed.",
+            "advice.complement.build_history": "Repeating this distance will also build the comparable history this analysis currently lacks.",
+            "advice.complement.use_hr": "Recording heart rate on comparable sessions would also add a physiological reading to these facts.",
         },
         "fr": {
             "summary.high_with_hr": "Séance intense avec une forte demande cardiovasculaire.",
@@ -208,6 +273,37 @@ def _template(language: str, key: str, **params) -> str:
             "unavailable.intensity": "La classification d'intensité est indisponible sans preuve physiologique individualisée.",
             "unavailable.pacing": "Les données d'allure sont indisponibles.",
             "unavailable.baseline": "Aucune séance antérieure du même type sur les {days} derniers jours.",
+            "fact.distance_duration": "{distance} km parcourus en {duration}.",
+            "fact.distance_duration_pace": "{distance} km parcourus en {duration} à {pace}.",
+            "fact.distance_duration_speed": "{distance} km parcourus en {duration} à {speed} km/h.",
+            "fact.duration_only": "{duration} d'activité enregistrée.",
+            "fact.hr_avg": "Fréquence cardiaque moyenne {avg_hr} bpm.",
+            "fact.hr_avg_max": "Fréquence cardiaque moyenne {avg_hr} bpm, maximale {max_hr} bpm.",
+            "fact.hr_max_only": "Fréquence cardiaque maximale {max_hr} bpm.",
+            "fact.splits_range": "Les fractions kilométriques vont de {fastest} à {slowest} ({count} fractions enregistrées).",
+            "fact.pace_drop": "Perte d'allure enregistrée de {drop} sur la séance.",
+            "fact.negative_split": "Les fractions enregistrées confirment un negative split.",
+            "fact.consistency": "Score de régularité des fractions : {score}/100.",
+            "fact.variability": "Variabilité d'allure enregistrée : {variability}.",
+            "fact.hr_drift": "Dérive cardiaque mesurée à {drift} bpm entre le début et la fin ; cette mesure seule n'en établit pas la cause.",
+            "fact.elevation": "Dénivelé positif : {elevation} m.",
+            "fact.cadence": "Cadence moyenne : {cadence} ppm, rapportée telle qu'enregistrée et sans référence à une cadence universelle.",
+            "fact.baseline_distance": "La distance est {delta} ({percent}) par rapport à la moyenne des {count} séances des {days} derniers jours ({baseline} km).",
+            "fact.baseline_pace": "L'allure moyenne est {delta} par rapport à cette moyenne de {count} séances ({baseline}).",
+            "fact.baseline_hr": "La fréquence cardiaque moyenne est {delta} bpm par rapport à cette moyenne de {count} séances ({baseline} bpm).",
+            "fact.similar_pace": "Sur {count} séances antérieures de distance comparable (±{tolerance} % sur {days} jours, moyenne {avg_distance} km), l'allure moyenne était de {baseline} ; cette séance est {delta}.",
+            "fact.similar_hr": "La fréquence cardiaque moyenne de ces {count} séances comparables était de {baseline} bpm ; cette séance est {delta} bpm.",
+            "fact.similar_sample_small": "Seulement {count} séance(s) comparable(s) antérieure(s) trouvée(s), soit moins que les {minimum} nécessaires pour lire une différence comme une progression.",
+            "fact.similar_unavailable": "Aucune séance antérieure de distance comparable (±{tolerance} %) n'a été trouvée sur {days} jours ; la comparaison historique est donc indisponible.",
+            "fact.similar_nature_unknown": "La nature entraînement ou compétition de ces séances n'est pas enregistrée, ce qui limite la comparaison.",
+            "advice.even_pacing": "Vise une répartition d'allure plus régulière : pars un peu plus prudemment pour réduire la perte d'allure enregistrée sur la prochaine séance de cette distance.",
+            "advice.negative_split_confirmed": "Le negative split montre une gestion d'effort maîtrisée ; réutilise ce départ progressif sur les séances comparables.",
+            "advice.maintain_consistency": "La régularité d'allure a été élevée ici ; garde ce contrôle comme référence pour les séances de distance similaire.",
+            "advice.monitor_hr_drift": "Note la dérive cardiaque mesurée et compare-la sur les prochaines séances comparables avant d'en conclure quoi que ce soit sur sa cause.",
+            "advice.recover_after_long": "Après une séance de cette durée, prévois une journée facile ou de repos et observe ta tolérance sur la suivante.",
+            "advice.complement.record_splits": "Enregistrer les fractions kilométriques permettrait aussi d'analyser la répartition d'allure de cette séance.",
+            "advice.complement.build_history": "Répéter cette distance construira aussi l'historique comparable qui manque actuellement à cette analyse.",
+            "advice.complement.use_hr": "Enregistrer la fréquence cardiaque sur des séances comparables ajouterait aussi une lecture physiologique à ces faits.",
         },
         "es": {
             "summary.high_with_hr": "Sesión intensa con una alta demanda cardiovascular.",
@@ -247,6 +343,37 @@ def _template(language: str, key: str, **params) -> str:
             "unavailable.intensity": "La clasificación de intensidad no está disponible sin evidencia fisiológica individualizada.",
             "unavailable.pacing": "No hay datos de ritmo disponibles.",
             "unavailable.baseline": "No hay sesiones previas del mismo tipo en los últimos {days} días.",
+            "fact.distance_duration": "{distance} km recorridos en {duration}.",
+            "fact.distance_duration_pace": "{distance} km recorridos en {duration} a {pace}.",
+            "fact.distance_duration_speed": "{distance} km recorridos en {duration} a {speed} km/h.",
+            "fact.duration_only": "{duration} de actividad registrada.",
+            "fact.hr_avg": "Frecuencia cardíaca media {avg_hr} bpm.",
+            "fact.hr_avg_max": "Frecuencia cardíaca media {avg_hr} bpm, máxima {max_hr} bpm.",
+            "fact.hr_max_only": "Frecuencia cardíaca máxima {max_hr} bpm.",
+            "fact.splits_range": "Los parciales por kilómetro van de {fastest} a {slowest} ({count} parciales registrados).",
+            "fact.pace_drop": "Pérdida de ritmo registrada de {drop} en la sesión.",
+            "fact.negative_split": "Los parciales registrados confirman un negative split.",
+            "fact.consistency": "Puntuación de regularidad de los parciales: {score}/100.",
+            "fact.variability": "Variabilidad de ritmo registrada: {variability}.",
+            "fact.hr_drift": "Deriva cardíaca medida en {drift} bpm entre el inicio y el final; esta medición por sí sola no establece su causa.",
+            "fact.elevation": "Desnivel positivo: {elevation} m.",
+            "fact.cadence": "Cadencia media: {cadence} ppm, indicada tal como se registró y sin referencia a una cadencia universal.",
+            "fact.baseline_distance": "La distancia es {delta} ({percent}) frente a la media de las {count} sesiones de los últimos {days} días ({baseline} km).",
+            "fact.baseline_pace": "El ritmo medio es {delta} frente a esa media de {count} sesiones ({baseline}).",
+            "fact.baseline_hr": "La frecuencia cardíaca media es {delta} bpm frente a esa media de {count} sesiones ({baseline} bpm).",
+            "fact.similar_pace": "En {count} sesiones anteriores de distancia comparable (±{tolerance} % en {days} días, media {avg_distance} km), el ritmo medio fue {baseline}; esta sesión es {delta}.",
+            "fact.similar_hr": "La frecuencia cardíaca media de esas {count} sesiones comparables fue {baseline} bpm; esta sesión es {delta} bpm.",
+            "fact.similar_sample_small": "Solo se encontraron {count} sesión(es) comparable(s) anterior(es), por debajo de las {minimum} necesarias para leer una diferencia como progresión.",
+            "fact.similar_unavailable": "No se encontró ninguna sesión anterior de distancia comparable (±{tolerance} %) en {days} días, así que no hay comparación histórica disponible.",
+            "fact.similar_nature_unknown": "La naturaleza de entrenamiento o competición de estas sesiones no está registrada, lo que limita la comparación.",
+            "advice.even_pacing": "Busca una distribución de ritmo más regular: empieza algo más conservador para reducir la pérdida de ritmo registrada en la próxima sesión de esta distancia.",
+            "advice.negative_split_confirmed": "El negative split muestra una gestión del esfuerzo controlada; reutiliza esa salida progresiva en sesiones comparables.",
+            "advice.maintain_consistency": "La regularidad de ritmo fue alta aquí; mantén ese control como referencia para sesiones de distancia similar.",
+            "advice.monitor_hr_drift": "Anota la deriva cardíaca medida y compárala en las próximas sesiones comparables antes de concluir nada sobre su causa.",
+            "advice.recover_after_long": "Tras una sesión de esta duración, planifica un día suave o de descanso y observa tu tolerancia en la siguiente.",
+            "advice.complement.record_splits": "Registrar los parciales por kilómetro también permitiría analizar la distribución de ritmo de esta sesión.",
+            "advice.complement.build_history": "Repetir esta distancia también construirá el historial comparable que ahora falta en este análisis.",
+            "advice.complement.use_hr": "Registrar la frecuencia cardíaca en sesiones comparables también añadiría una lectura fisiológica a estos datos.",
         },
     }
     return templates[lang][key].format(**params)
@@ -261,6 +388,59 @@ def _safe_round(value: Optional[float], digits: int = 2) -> Optional[float]:
 def _safe_avg(values: List[Optional[float]]) -> Optional[float]:
     valid = [float(value) for value in values if value is not None]
     return _safe_round(sum(valid) / len(valid), 2) if valid else None
+
+
+def _fmt_number(value: float, digits: int = 2) -> str:
+    text = f"{float(value):.{digits}f}"
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def _fmt_distance(distance_km: Optional[float]) -> Optional[str]:
+    if distance_km is None:
+        return None
+    return _fmt_number(distance_km, 2)
+
+
+def _fmt_duration(duration_minutes: Optional[float]) -> Optional[str]:
+    if duration_minutes is None:
+        return None
+    total_minutes = int(round(float(duration_minutes)))
+    if total_minutes >= 60:
+        return f"{total_minutes // 60}h{total_minutes % 60:02d}"
+    return f"{total_minutes} min"
+
+
+def _fmt_pace(pace_min_km: Optional[float]) -> Optional[str]:
+    if pace_min_km is None or pace_min_km <= 0:
+        return None
+    total_seconds = int(round(float(pace_min_km) * 60))
+    return f"{total_seconds // 60}:{total_seconds % 60:02d}/km"
+
+
+def _fmt_pace_delta(delta_min_km: Optional[float]) -> Optional[str]:
+    if delta_min_km is None:
+        return None
+    total_seconds = int(round(abs(float(delta_min_km)) * 60))
+    sign = "+" if delta_min_km > 0 else ("-" if delta_min_km < 0 else "+")
+    return f"{sign}{total_seconds // 60}:{total_seconds % 60:02d}/km"
+
+
+def _fmt_signed(value: Optional[float], digits: int = 2) -> Optional[str]:
+    if value is None:
+        return None
+    return f"{'+' if value >= 0 else '-'}{_fmt_number(abs(value), digits)}"
+
+
+def _fmt_signed_percent(value: Optional[float]) -> Optional[str]:
+    if value is None:
+        return None
+    return f"{'+' if value >= 0 else '-'}{_fmt_number(abs(value), 1)}%"
+
+
+def _join_sentences(sentences: List[Optional[str]]) -> str:
+    return " ".join(sentence for sentence in sentences if sentence)
 
 
 def _comparison_metric(current: Optional[float], baseline: Optional[float], digits: int = 2) -> Optional[WorkoutAnalysisComparisonMetric]:
@@ -285,7 +465,7 @@ def _extract_split_paces(workout: dict) -> List[float]:
     return paces
 
 
-def _build_baseline(workouts: List[dict], current_workout: dict, days: int = 14) -> dict:
+def _build_baseline(workouts: List[dict], current_workout: dict, days: int = BASELINE_PERIOD_DAYS) -> dict:
     current_date = _parse_workout_date(current_workout.get("date", ""))
     cutoff_date = current_date - timedelta(days=days)
     current_type = current_workout.get("type")
@@ -321,6 +501,142 @@ def _build_baseline(workouts: List[dict], current_workout: dict, days: int = 14)
         "avg_pace_min_km": _safe_avg([workout.get("avg_pace_min_km") for workout in prior_same_type]),
         "avg_speed_kmh": _safe_avg([workout.get("avg_speed_kmh") for workout in prior_same_type]),
     }
+
+
+def _competition_flag(workout: dict) -> Optional[bool]:
+    """Return True/False only when real metadata states it, None otherwise.
+
+    Nothing is ever inferred from the session name or from its distance.
+    """
+    for key in _RACE_METADATA_KEYS:
+        value = workout.get(key)
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in _RACE_METADATA_VALUES:
+                return True
+            if normalized in _TRAINING_METADATA_VALUES:
+                return False
+    return None
+
+
+def retrieve_similar_workouts(
+    current_workout: dict,
+    candidate_workouts: List[dict],
+    *,
+    window_days: int = SIMILAR_HISTORY_WINDOW_DAYS,
+    tolerance_pct: float = SIMILAR_DISTANCE_TOLERANCE_PCT,
+    limit: int = SIMILAR_MAX_RESULTS,
+) -> List[dict]:
+    """Bounded historical retrieval restored from the legacy RAG capability.
+
+    Same user scope is guaranteed by the caller's query. Only the same sport,
+    strictly earlier sessions and comparable distances are retained.
+    """
+    current_distance = current_workout.get("distance_km")
+    if current_distance is None or float(current_distance) <= 0:
+        return []
+
+    try:
+        current_date = _parse_workout_date(current_workout.get("date", ""))
+    except ValueError:
+        return []
+
+    current_type = (current_workout.get("type") or "").lower()
+    cutoff = current_date - timedelta(days=window_days)
+    tolerance = float(current_distance) * (tolerance_pct / 100.0)
+    current_competition = _competition_flag(current_workout)
+
+    matches: List[dict] = []
+    for candidate in candidate_workouts:
+        if candidate.get("id") == current_workout.get("id"):
+            continue
+        if (candidate.get("type") or "").lower() != current_type:
+            continue
+        candidate_distance = candidate.get("distance_km")
+        if candidate_distance is None:
+            continue
+        try:
+            candidate_date = _parse_workout_date(candidate.get("date", ""))
+        except ValueError:
+            continue
+        if not (cutoff <= candidate_date < current_date):
+            continue
+        if abs(float(candidate_distance) - float(current_distance)) > tolerance:
+            continue
+        candidate_competition = _competition_flag(candidate)
+        if (
+            current_competition is not None
+            and candidate_competition is not None
+            and candidate_competition != current_competition
+        ):
+            continue
+        matches.append(candidate)
+
+    matches.sort(key=lambda item: (item.get("date", ""), item.get("id", "")), reverse=True)
+    return matches[:limit]
+
+
+def _build_similar_reference(
+    workout: dict,
+    candidate_workouts: List[dict],
+    language: str,
+) -> WorkoutAnalysisSimilarReference:
+    matches = retrieve_similar_workouts(workout, candidate_workouts)
+    if not matches:
+        return WorkoutAnalysisSimilarReference(
+            available=False,
+            comparable=False,
+            sample_count=0,
+            limitations=["no_comparable_reference"],
+            reason_unavailable=_template(
+                language,
+                "fact.similar_unavailable",
+                tolerance=_fmt_number(SIMILAR_DISTANCE_TOLERANCE_PCT, 0),
+                days=SIMILAR_HISTORY_WINDOW_DAYS,
+            ),
+        )
+
+    avg_pace = _safe_avg([match.get("avg_pace_min_km") for match in matches])
+    avg_hr = _safe_avg([match.get("avg_heart_rate") for match in matches])
+    avg_distance = _safe_avg([match.get("distance_km") for match in matches])
+
+    current_pace = workout.get("avg_pace_min_km")
+    current_hr = workout.get("avg_heart_rate")
+    pace_difference = (
+        _safe_round(float(current_pace) - avg_pace, 3)
+        if current_pace is not None and avg_pace is not None
+        else None
+    )
+    hr_difference = (
+        _safe_round(float(current_hr) - avg_hr, 1)
+        if current_hr is not None and avg_hr is not None
+        else None
+    )
+
+    limitations: List[str] = []
+    comparable = len(matches) >= SIMILAR_MIN_COMPARABLE_SAMPLE
+    if not comparable:
+        limitations.append("sample_too_small")
+    if _competition_flag(workout) is None or any(_competition_flag(match) is None for match in matches):
+        limitations.append("session_nature_unknown")
+
+    return WorkoutAnalysisSimilarReference(
+        available=True,
+        comparable=comparable,
+        sample_count=len(matches),
+        workout_ids=[str(match.get("id", "")) for match in matches],
+        avg_distance_km=avg_distance,
+        avg_pace_min_km=avg_pace,
+        avg_heart_rate=avg_hr,
+        pace_difference_min_km=pace_difference,
+        heart_rate_difference_bpm=hr_difference,
+        limitations=limitations,
+        reason_unavailable=None,
+    )
 
 
 def _build_pacing(workout: dict, language: str) -> WorkoutAnalysisPacing:
@@ -496,7 +812,7 @@ def _build_signals(workout: dict, comparison: WorkoutAnalysisComparison, physiol
 
 
 def _build_comparison(workout: dict, workouts: List[dict]) -> WorkoutAnalysisComparison:
-    baseline = _build_baseline(workouts, workout, days=14)
+    baseline = _build_baseline(workouts, workout, days=BASELINE_PERIOD_DAYS)
     sample_count = baseline["sample_count"]
     available = sample_count > 0
     return WorkoutAnalysisComparison(
@@ -516,10 +832,175 @@ def _localized_comparison(workout: dict, workouts: List[dict], language: str) ->
     comparison = _build_comparison(workout, workouts)
     if not comparison.available:
         comparison.reason_unavailable = _template(language, "unavailable.baseline", days=comparison.baseline_period_days)
+    comparison.similar = _build_similar_reference(workout, workouts, language)
     return comparison
 
 
-def _build_summary(signals: WorkoutAnalysisSignals, language: str) -> AnalysisText:
+def _structural_observations(workout: dict, physiology: WorkoutAnalysisPhysiology, pacing: WorkoutAnalysisPacing, language: str) -> List[str]:
+    """Factual, session-specific observations that do not depend on intensity classification."""
+    sentences: List[str] = []
+
+    distance = _fmt_distance(workout.get("distance_km"))
+    duration = _fmt_duration(workout.get("duration_minutes"))
+    pace = _fmt_pace(pacing.average_pace_min_km)
+    speed = pacing.average_speed_kmh
+
+    if distance and duration and pace:
+        sentences.append(_template(language, "fact.distance_duration_pace", distance=distance, duration=duration, pace=pace))
+    elif distance and duration and speed is not None:
+        sentences.append(
+            _template(language, "fact.distance_duration_speed", distance=distance, duration=duration, speed=_fmt_number(speed, 1))
+        )
+    elif distance and duration:
+        sentences.append(_template(language, "fact.distance_duration", distance=distance, duration=duration))
+    elif duration:
+        sentences.append(_template(language, "fact.duration_only", duration=duration))
+
+    if physiology.avg_hr is not None and physiology.max_hr is not None:
+        sentences.append(_template(language, "fact.hr_avg_max", avg_hr=physiology.avg_hr, max_hr=physiology.max_hr))
+    elif physiology.avg_hr is not None:
+        sentences.append(_template(language, "fact.hr_avg", avg_hr=physiology.avg_hr))
+    elif physiology.max_hr is not None:
+        sentences.append(_template(language, "fact.hr_max_only", max_hr=physiology.max_hr))
+
+    return sentences
+
+
+def _pacing_observations(workout: dict, pacing: WorkoutAnalysisPacing, language: str) -> List[str]:
+    sentences: List[str] = []
+    fastest = _fmt_pace(pacing.fastest_split_min_km)
+    slowest = _fmt_pace(pacing.slowest_split_min_km)
+    split_count = len(workout.get("km_splits") or [])
+    if fastest and slowest and split_count:
+        sentences.append(_template(language, "fact.splits_range", fastest=fastest, slowest=slowest, count=split_count))
+
+    if pacing.negative_split is True:
+        sentences.append(_template(language, "fact.negative_split"))
+
+    if pacing.pace_drop_min_km is not None:
+        drop = _fmt_pace(abs(pacing.pace_drop_min_km))
+        if drop:
+            sentences.append(_template(language, "fact.pace_drop", drop=drop))
+
+    if pacing.consistency_score is not None:
+        sentences.append(_template(language, "fact.consistency", score=_fmt_number(pacing.consistency_score, 1)))
+    elif pacing.variability is not None:
+        sentences.append(_template(language, "fact.variability", variability=_fmt_number(pacing.variability, 3)))
+
+    return sentences
+
+
+def _physiology_observations(physiology: WorkoutAnalysisPhysiology, language: str) -> List[str]:
+    if physiology.hr_drift is None:
+        return []
+    return [_template(language, "fact.hr_drift", drift=_fmt_number(physiology.hr_drift, 1))]
+
+
+def _terrain_observations(workout: dict, language: str) -> List[str]:
+    sentences: List[str] = []
+    elevation = workout.get("elevation_gain_m")
+    if elevation is not None:
+        sentences.append(_template(language, "fact.elevation", elevation=_fmt_number(elevation, 0)))
+    cadence = workout.get("avg_cadence_spm")
+    if cadence is not None:
+        sentences.append(_template(language, "fact.cadence", cadence=_fmt_number(cadence, 0)))
+    return sentences
+
+
+def _comparison_observations(comparison: WorkoutAnalysisComparison, language: str) -> List[str]:
+    sentences: List[str] = []
+    count = comparison.baseline_sample_count
+    if comparison.available and count > 0:
+        distance = comparison.distance_km
+        if distance and distance.difference is not None and distance.percent_change is not None:
+            sentences.append(
+                _template(
+                    language,
+                    "fact.baseline_distance",
+                    delta=f"{_fmt_signed(distance.difference, 2)} km",
+                    percent=_fmt_signed_percent(distance.percent_change),
+                    count=count,
+                    days=comparison.baseline_period_days,
+                    baseline=_fmt_number(distance.baseline or 0, 2),
+                )
+            )
+        pace = comparison.avg_pace_min_km
+        if pace and pace.difference is not None and pace.baseline is not None:
+            sentences.append(
+                _template(
+                    language,
+                    "fact.baseline_pace",
+                    delta=_fmt_pace_delta(pace.difference),
+                    count=count,
+                    baseline=_fmt_pace(pace.baseline),
+                )
+            )
+        heart_rate = comparison.avg_heart_rate
+        if heart_rate and heart_rate.difference is not None and heart_rate.baseline is not None:
+            sentences.append(
+                _template(
+                    language,
+                    "fact.baseline_hr",
+                    delta=_fmt_signed(heart_rate.difference, 1),
+                    count=count,
+                    baseline=_fmt_number(heart_rate.baseline, 1),
+                )
+            )
+
+    similar = comparison.similar
+    if similar is None:
+        return sentences
+
+    if not similar.available:
+        if similar.reason_unavailable:
+            sentences.append(similar.reason_unavailable)
+        return sentences
+
+    if similar.avg_pace_min_km is not None and similar.pace_difference_min_km is not None:
+        sentences.append(
+            _template(
+                language,
+                "fact.similar_pace",
+                count=similar.sample_count,
+                tolerance=_fmt_number(similar.distance_tolerance_pct, 0),
+                days=similar.period_days,
+                avg_distance=_fmt_number(similar.avg_distance_km or 0, 2),
+                baseline=_fmt_pace(similar.avg_pace_min_km),
+                delta=_fmt_pace_delta(similar.pace_difference_min_km),
+            )
+        )
+    if similar.avg_heart_rate is not None and similar.heart_rate_difference_bpm is not None:
+        sentences.append(
+            _template(
+                language,
+                "fact.similar_hr",
+                count=similar.sample_count,
+                baseline=_fmt_number(similar.avg_heart_rate, 1),
+                delta=_fmt_signed(similar.heart_rate_difference_bpm, 1),
+            )
+        )
+    if "sample_too_small" in similar.limitations:
+        sentences.append(
+            _template(
+                language,
+                "fact.similar_sample_small",
+                count=similar.sample_count,
+                minimum=similar.min_comparable_sample,
+            )
+        )
+    if "session_nature_unknown" in similar.limitations:
+        sentences.append(_template(language, "fact.similar_nature_unknown"))
+
+    return sentences
+
+
+def _build_summary(
+    workout: dict,
+    physiology: WorkoutAnalysisPhysiology,
+    pacing: WorkoutAnalysisPacing,
+    signals: WorkoutAnalysisSignals,
+    language: str,
+) -> AnalysisText:
     if signals.intensity.available and signals.intensity.code:
         key = {
             "very_high": "summary.high_with_hr",
@@ -527,18 +1008,23 @@ def _build_summary(signals: WorkoutAnalysisSignals, language: str) -> AnalysisTe
             "moderate": "summary.moderate_with_hr",
             "low": "summary.easy_with_hr",
         }[signals.intensity.code]
-        return AnalysisText(code=key, text=_template(language, key))
+    else:
+        key = {
+            "long": "summary.long_structural",
+            "short": "summary.short_structural",
+        }.get(signals.session_type.code, "summary.standard_structural")
 
-    key = {
-        "long": "summary.long_structural",
-        "short": "summary.short_structural",
-    }.get(signals.session_type.code, "summary.standard_structural")
-    return AnalysisText(code=key, text=_template(language, key))
+    text = _join_sentences(
+        [_template(language, key)] + _structural_observations(workout, physiology, pacing, language)
+    )
+    return AnalysisText(code=key, text=text)
 
 
 def _build_meaning(
+    workout: dict,
     physiology: WorkoutAnalysisPhysiology,
     pacing: WorkoutAnalysisPacing,
+    comparison: WorkoutAnalysisComparison,
     signals: WorkoutAnalysisSignals,
     language: str,
 ) -> AnalysisText:
@@ -549,26 +1035,75 @@ def _build_meaning(
             code = "meaning.with_hr_easy"
         else:
             code = "meaning.with_hr_moderate"
-        return AnalysisText(code=code, text=_template(language, code))
-
-    if physiology.available:
-        code = "meaning.hr_without_intensity_with_pacing" if pacing.available else "meaning.hr_without_intensity_no_pacing"
-        return AnalysisText(code=code, text=_template(language, code))
-
-    code = "meaning.no_hr_with_pacing" if pacing.available else "meaning.no_hr_no_pacing"
-    return AnalysisText(code=code, text=_template(language, code))
-
-
-def _build_advice(physiology: WorkoutAnalysisPhysiology, signals: WorkoutAnalysisSignals, language: str) -> AnalysisText:
-    if signals.intensity.available and signals.intensity.code in {"high", "very_high"}:
-        code = "advice.recover_after_hard"
-    elif signals.intensity.available and signals.intensity.code == "low":
-        code = "advice.maintain_easy"
     elif physiology.available:
-        code = "advice.hr_without_intensity"
+        code = "meaning.hr_without_intensity_with_pacing" if pacing.available else "meaning.hr_without_intensity_no_pacing"
     else:
-        code = "advice.no_hr"
-    return AnalysisText(code=code, text=_template(language, code))
+        code = "meaning.no_hr_with_pacing" if pacing.available else "meaning.no_hr_no_pacing"
+
+    # Facts first: the missing intensity classification is only a closing caveat,
+    # never the principal explanation of the session.
+    observations = (
+        _pacing_observations(workout, pacing, language)
+        + _physiology_observations(physiology, language)
+        + _terrain_observations(workout, language)
+        + _comparison_observations(comparison, language)
+    )
+    return AnalysisText(code=code, text=_join_sentences(observations + [_template(language, code)]))
+
+
+def _advice_primary_code(
+    physiology: WorkoutAnalysisPhysiology,
+    pacing: WorkoutAnalysisPacing,
+    signals: WorkoutAnalysisSignals,
+) -> str:
+    if signals.intensity.available and signals.intensity.code in {"high", "very_high"}:
+        return "advice.recover_after_hard"
+    if signals.intensity.available and signals.intensity.code == "low":
+        return "advice.maintain_easy"
+    if pacing.pace_drop_min_km is not None and abs(pacing.pace_drop_min_km) >= 0.4:
+        return "advice.even_pacing"
+    if pacing.negative_split is True:
+        return "advice.negative_split_confirmed"
+    if pacing.consistency_score is not None and pacing.consistency_score >= 90:
+        return "advice.maintain_consistency"
+    if physiology.hr_drift is not None and abs(physiology.hr_drift) >= 8:
+        return "advice.monitor_hr_drift"
+    if signals.session_type.code == "long":
+        return "advice.recover_after_long"
+    if physiology.available:
+        return "advice.hr_without_intensity"
+    return "advice.no_hr"
+
+
+def _advice_complement_code(
+    workout: dict,
+    physiology: WorkoutAnalysisPhysiology,
+    comparison: WorkoutAnalysisComparison,
+) -> Optional[str]:
+    if not (workout.get("km_splits") or workout.get("split_analysis")):
+        return "advice.complement.record_splits"
+    similar = comparison.similar
+    if similar is not None and not similar.available:
+        return "advice.complement.build_history"
+    if not physiology.available:
+        return "advice.complement.use_hr"
+    return None
+
+
+def _build_advice(
+    workout: dict,
+    physiology: WorkoutAnalysisPhysiology,
+    pacing: WorkoutAnalysisPacing,
+    comparison: WorkoutAnalysisComparison,
+    signals: WorkoutAnalysisSignals,
+    language: str,
+) -> AnalysisText:
+    code = _advice_primary_code(physiology, pacing, signals)
+    complement_code = _advice_complement_code(workout, physiology, comparison)
+    texts = [_template(language, code)]
+    if complement_code and complement_code != code:
+        texts.append(_template(language, complement_code))
+    return AnalysisText(code=code, text=_join_sentences(texts))
 
 
 def build_workout_analysis_v2(workout: dict, historical_workouts: List[dict], language: str = "en") -> WorkoutAnalysisV2Response:
@@ -576,9 +1111,9 @@ def build_workout_analysis_v2(workout: dict, historical_workouts: List[dict], la
     physiology = _build_physiology(workout, language)
     pacing = _build_pacing(workout, language)
     signals = _build_signals(workout, comparison, physiology, language)
-    summary = _build_summary(signals, language)
-    meaning = _build_meaning(physiology, pacing, signals, language)
-    advice = _build_advice(physiology, signals, language)
+    summary = _build_summary(workout, physiology, pacing, signals, language)
+    meaning = _build_meaning(workout, physiology, pacing, comparison, signals, language)
+    advice = _build_advice(workout, physiology, pacing, comparison, signals, language)
     evidence = WorkoutAnalysisEvidence(
         has_heart_rate=physiology.available,
         has_hr_zones=bool(physiology.zone_distribution),

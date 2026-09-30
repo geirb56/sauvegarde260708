@@ -48,6 +48,7 @@ from coach_service import (
     reset_metrics as reset_coach_metrics
 )
 from workout_analysis_v2 import (
+    SIMILAR_HISTORY_WINDOW_DAYS as WORKOUT_ANALYSIS_HISTORY_WINDOW_DAYS,
     WorkoutAnalysisV2Response,
     build_workout_analysis_v2,
     workout_analysis_candidate_date_bounds,
@@ -2073,7 +2074,9 @@ async def get_workout_analysis_v2(workout_id: str, language: str = "en", user: d
     workout = await db.workouts.find_one({"id": workout_id, "user_id": user_id}, {"_id": 0})
     if not workout:
         raise HTTPException(status_code=404, detail="Workout not found")
-    lower_bound, upper_bound = workout_analysis_candidate_date_bounds(workout.get("date", ""), days=14)
+    lower_bound, upper_bound = workout_analysis_candidate_date_bounds(
+        workout.get("date", ""), days=WORKOUT_ANALYSIS_HISTORY_WINDOW_DAYS
+    )
     historical_workouts = await db.workouts.find(
         {
             "user_id": user_id,

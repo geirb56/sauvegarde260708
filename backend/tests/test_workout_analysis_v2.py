@@ -638,7 +638,10 @@ async def test_structural_standard_session_uses_neutral_structural_wording(clien
     assert payload["signals"]["session_type"]["code"] == "standard"
     assert payload["signals"]["session_type"]["text"] == "Standard session"
     lowered_summary = payload["summary"]["text"].lower()
-    assert lowered_summary == "standard-duration session completed."
+    assert lowered_summary.startswith("standard-duration session completed.")
+    # The structural wording is now followed by factual, session-specific observations.
+    assert "6 km covered in 35 min at 5:51/km." in lowered_summary
+    assert "average heart rate 170 bpm, peak 180 bpm." in lowered_summary
     for forbidden in ("steady", "consistent", "regular"):
         assert forbidden not in lowered_summary
 
@@ -747,12 +750,14 @@ async def test_history_query_is_bounded_to_candidate_date_window(client):
     history_query = client.fake_db.workouts.find_queries[-1]
     assert history_query["user_id"] == "user-a"
     assert history_query["type"] == "run"
-    assert history_query["date"] == {"$gte": "2026-08-27", "$lt": "2026-09-11"}
+    # The window covers the bounded similar-workout search (180 days) and still
+    # excludes anything at or after the current workout date.
+    assert history_query["date"] == {"$gte": "2026-03-14", "$lt": "2026-09-11"}
     assert client.fake_db.workouts.to_list_lengths[-1] == 200
 
 
 @pytest.mark.asyncio
-async def test_endpoint_candidate_query_does_not_require_old_same_type_history(client):
+async def test_endpoint_candidate_query_stays_bounded_and_excludes_future_activities(client):
     client.fake_db.workouts.find_queries.clear()
     response = await _get_analysis(client, _FakeDB.MIXED_DATE_ID)
     assert response.status_code == 200
@@ -761,9 +766,11 @@ async def test_endpoint_candidate_query_does_not_require_old_same_type_history(c
         if client.fake_db.workouts._matches(doc, client.fake_db.workouts.find_queries[-1])
     ]
     candidate_ids = {doc["id"] for doc in candidate_docs}
-    assert "run-old-outside-window" not in candidate_ids
     assert {"run-mixed-prev-z", "run-mixed-prev-offset"} <= candidate_ids
     assert "run-mixed-future" not in candidate_ids
+    # Anything older than the bounded history window stays out of the query.
+    assert "run-newer-0" not in candidate_ids
+    assert "user-b-run" not in candidate_ids
 
 
 @pytest.mark.asyncio
