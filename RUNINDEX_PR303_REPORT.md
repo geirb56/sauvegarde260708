@@ -257,3 +257,110 @@ n'a été exécuté.
 - **Le Coach n'est pas réparé** : la restauration du contexte conversationnel
   appartient à la PR suivante. La validation finale doit être faite par Emergent
   sur de véritables séances Garmin.
+
+---
+
+# PATCH DE LA PR #304 — Workout Analysis V2 redevient strictement factuelle
+
+Base : `copilot/dev`. HEAD audité : `e46651b72ac58800770d1e81e1546ecd21f03798`.
+Ce patch est appliqué **sur la branche existante de la PR #304**. Aucune nouvelle PR, aucun merge.
+
+## A. Ce que #304 avait initialement ajouté
+
+1. Des observations réellement spécifiques à la séance dans `summary` / `meaning` :
+   distance, durée, allure moyenne, fractions kilométriques (plus rapide / plus lente /
+   perte d'allure), régularité, negative split quand il est établi, FC moyenne et max,
+   dérive cardiaque, dénivelé et cadence.
+2. La restauration, à l'intérieur de `workout_analysis_v2.py`, de la capacité de recherche
+   historique de l'ancien `retrieve_similar_workouts()` : même utilisateur, même sport,
+   séance courante exclue, antériorité stricte, tolérance de distance ±30 %, fenêtre bornée
+   à 180 jours, nombre de résultats borné, filtrage entraînement/compétition uniquement sur
+   métadonnées explicites.
+3. L'exposition additive de `comparison.similar` dans le contrat V2.
+4. Environ 25 tests couvrant les deux fixtures, le déterminisme, FR/EN/ES, l'isolation
+   `user_id`, l'absence de lookahead et l'IDOR.
+
+## B. P1 trouvés par l'audit indépendant
+
+- **P1 n°1 — Workout Analysis prescrivait.** `_advice_primary_code()` et les templates
+  `advice.*` produisaient des instructions d'entraînement : « garde la prochaine séance
+  facile », « pars un peu plus prudemment », « réutilise ce départ progressif », « prévois
+  une journée facile ou de repos », « répéter cette distance », « utilise des zones
+  individualisées ». Training Today/Week V2 sont les seules autorités de prescription.
+- **P1 n°2 — La baseline générique 14 jours était interprétée.** `_comparison_observations()`
+  verbalisait `fact.baseline_pace` et `fact.baseline_hr` alors que cette baseline mélange
+  footings courts, sorties longues et séances de nature différente : elle n'est pas
+  suffisamment comparable pour interpréter allure, FC ou progression.
+- **P2 — Sémantique `comparable` malhonnête.** `similar.comparable` pouvait valoir `True`
+  alors que `limitations` contenait `session_nature_unknown`.
+
+## C. Patch appliqué
+
+| Correctif | Fichier | Changement |
+|---|---|---|
+| P1-1 | `backend/workout_analysis_v2.py` | Tous les templates `advice.*` réécrits en EN/FR/ES en formulations strictement descriptives ou analytiques. Les codes `advice.recover_after_hard` / `advice.maintain_easy` / `advice.build_progressively` sont supprimés et remplacés par `advice.high_intensity_observation` / `advice.low_intensity_observation`. `advice.hr_without_intensity` et `advice.no_hr` sont reformulés en **limites de l'analyse** (« Limite de cette analyse : … ») et non en consignes d'entraînement. `advice.recover_after_long` renvoie désormais explicitement la récupération à Training Today/Week. |
+| P1-2 | `backend/workout_analysis_v2.py` | `fact.baseline_pace` et `fact.baseline_hr` retirés de `_comparison_observations()` et supprimés des trois dictionnaires de templates. La baseline 14 jours reste sérialisée dans `comparison` pour compatibilité. `fact.baseline_distance` est conservé mais reformulé pour dire explicitement que cette moyenne mélange des distances différentes et ne constitue pas une comparaison de performance. Les libellés `signal.volume.*` deviennent « Distance supérieure/proche/inférieure à la moyenne récente ». Seul `comparison.similar` alimente une comparaison interprétée. |
+| P2 | `backend/workout_analysis_v2.py` | `_build_similar_reference()` : `comparable = not limitations`. Toute limitation, y compris `session_nature_unknown`, empêche d'affirmer une comparabilité forte. L'écart factuel de distance, d'allure et de FC reste exposé, accompagné de la limite explicite. |
+| Tests | `backend/tests/test_workout_analysis_v2.py` | `test_fixture_a_advice_is_actionable_and_not_only_about_zones` renommé en `test_fixture_a_advice_is_specific_useful_and_non_prescriptive`. `test_fixture_b_advice_adds_a_second_actionable_recommendation` renommé en `test_fixture_b_advice_states_analysis_limits_without_prescribing`. Ajout d'un garde-fou `_assert_not_prescriptive()` couvrant EN/FR/ES, d'une liste blanche `ALLOWED_ADVICE_CODES`, d'un test de source interdisant la réapparition des anciens codes prescriptifs, de deux cas baseline (séance longue face à un historique de distances mélangées ; aucune séance comparable) et de deux cas de nature de séance (métadonnées absentes ; `race` courant vs `training` historique exclu). |
+
+`backend/server.py` et `frontend/src/pages/WorkoutDetail.jsx` ne sont **pas** touchés par ce patch.
+
+## D. Comportements désormais interdits et verrouillés par les tests
+
+Workout Analysis V2 ne peut plus, dans aucune des trois langues :
+
+- planifier la séance suivante ;
+- recommander repos, séance facile ou séance intense ;
+- modifier une stratégie d'allure future ;
+- prescrire un volume ;
+- décider d'une récupération ;
+- recommander de répéter une distance ou de réutiliser une stratégie ;
+- exiger l'usage de zones individualisées comme conseil ;
+- présenter l'écart d'allure ou de FC de la baseline générique 14 jours comme une
+  comparaison pertinente, une progression, une meilleure séance ou un effort supérieur ;
+- affirmer une comparabilité forte quand la nature entraînement/compétition est inconnue.
+
+Restent également interdits, comme dans #304 : LLM dans l'endpoint déterministe,
+`random`, `rag_engine.py`, `/api/rag/workout`, classification d'intensité depuis la seule
+FC moyenne, invention de fractions, de zones ou de type de séance, attribution automatique
+d'une cause à la dérive cardiaque, cadence universelle, `_has_trusted_zone_provenance()`
+forcé à `True`.
+
+## E. Validation exécutée
+
+| Suite | Commande | Résultat |
+|---|---|---|
+| Workout Analysis V2 | `python -m pytest tests/test_workout_analysis_v2.py -q` | **76 passed, 0 failed** |
+| RAG / LLM cleanup / IDOR | `python -m pytest tests/test_rag_endpoints.py tests/test_pr211_coach_llm_cleanup.py tests/test_idor_integration.py -q` | **42 passed, 1 failed** |
+
+L'unique échec est `test_pr211_coach_llm_cleanup.py::test_server_coach_analyze_no_hr_speed_vma_exposure`.
+Il a été vérifié comme **préexistant sur `copilot/dev`** lors de la PR #304 (échec identique
+sans aucune modification appliquée) et sort du périmètre de ce patch.
+
+Tests **non exécutés** : la suite backend complète. `backend/requirements.txt` référence
+`litellm` et `emergentintegrations`, hébergés sur un domaine inaccessible depuis
+l'environnement d'exécution ; les modules qui en dépendent ne peuvent pas être importés.
+Aucun test susceptible d'utiliser un Redis ou un worker réel n'a été lancé.
+Aucune CI backend n'est affirmée : ce dépôt n'en expose pas pour ces suites.
+
+## F. Limites restantes et validation Emergent encore nécessaire
+
+- Aucune activité Garmin réelle ne porte aujourd'hui de métadonnée explicite
+  entraînement/compétition. En pratique, `session_nature_unknown` sera presque toujours
+  présent et `comparable` vaudra donc `False`. C'est volontaire : l'écart factuel reste
+  affiché, la limite est explicite, et aucune conclusion de performance n'est produite.
+  Le jour où une métadonnée de nature fiable existera, `comparable` pourra devenir `True`
+  sans changement de contrat.
+- `_has_trusted_zone_provenance()` reste `False` : aucune intensité physiologique n'est
+  classifiée, et `advice.high_intensity_observation` / `advice.low_intensity_observation`
+  sont inatteignables tant qu'aucune provenance de zones individualisées n'existe.
+- La tolérance ±30 %, la fenêtre de 180 jours et le seuil de 2 séances comparables sont des
+  points de départ repris de l'ancien RAG ; leur pertinence doit être mesurée sur de vraies
+  séances.
+- Validation Emergent encore nécessaire sur de vraies séances Garmin : vérifier sur des
+  comptes réels que les textes restent factuels et spécifiques, que la recherche comparable
+  ramène des références pertinentes sur des historiques réels, que l'affichage de
+  `WorkoutDetail` reste correct avec des textes plus longs, et que les trois langues rendent
+  correctement.
+- Cette PR répare **uniquement Workout Analysis V2**. Le contexte du Coach IA
+  conversationnel n'est pas traité ici et fera l'objet d'une PR distincte.

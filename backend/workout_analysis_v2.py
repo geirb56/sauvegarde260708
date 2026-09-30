@@ -176,9 +176,9 @@ def _template(language: str, key: str, **params) -> str:
             "signal.intensity.moderate": "Moderate intensity",
             "signal.intensity.high": "High intensity",
             "signal.intensity.very_high": "Very high intensity",
-            "signal.volume.below_recent": "Below recent volume",
-            "signal.volume.usual_recent": "Close to recent volume",
-            "signal.volume.above_recent": "Above recent volume",
+            "signal.volume.below_recent": "Distance below the recent average",
+            "signal.volume.usual_recent": "Distance close to the recent average",
+            "signal.volume.above_recent": "Distance above the recent average",
             "signal.volume.short_volume": "Short session volume",
             "signal.volume.medium_volume": "Moderate session volume",
             "signal.volume.long_volume": "Long session volume",
@@ -194,11 +194,10 @@ def _template(language: str, key: str, **params) -> str:
             "meaning.hr_without_intensity_no_pacing": "Heart-rate facts are available, but intensity classification is unavailable without trustworthy zone evidence, so only structural volume can be interpreted.",
             "meaning.no_hr_with_pacing": "The workout can be described structurally from pace and volume, but not physiologically because heart-rate evidence is missing.",
             "meaning.no_hr_no_pacing": "The workout can be described structurally from duration and distance, but not physiologically because heart-rate evidence is missing.",
-            "advice.recover_after_hard": "Keep the next session easy unless new evidence supports another hard effort.",
-            "advice.maintain_easy": "You can continue with normal aerobic training if overall fatigue signs remain stable elsewhere.",
-            "advice.build_progressively": "Progress volume gradually and use heart-rate evidence on future sessions before drawing stronger conclusions.",
-            "advice.hr_without_intensity": "Use individualized heart-rate zones on future sessions before treating raw heart-rate values as intensity evidence.",
-            "advice.no_hr": "Use heart-rate recording on future sessions if you want physiological interpretation, and avoid over-interpreting this workout.",
+            "advice.high_intensity_observation": "The zone evidence places this session in the demanding range; what follows it is determined by Training Today/Week, not by this analysis.",
+            "advice.low_intensity_observation": "The zone evidence places this session in the controlled aerobic range; what follows it is determined by Training Today/Week, not by this analysis.",
+            "advice.hr_without_intensity": "Limit of this analysis: without individualized heart-rate zones, the recorded heart-rate values cannot be read as intensity evidence.",
+            "advice.no_hr": "Limit of this analysis: no heart-rate data was recorded, so no physiological reading of this session is possible.",
             "unavailable.hr": "Heart-rate evidence is unavailable.",
             "unavailable.intensity": "Intensity classification is unavailable without individualized physiological evidence.",
             "unavailable.pacing": "Pacing evidence is unavailable.",
@@ -218,22 +217,20 @@ def _template(language: str, key: str, **params) -> str:
             "fact.hr_drift": "Heart-rate drift measured at {drift} bpm between the start and the end; this measurement alone does not establish its cause.",
             "fact.elevation": "Elevation gain: {elevation} m.",
             "fact.cadence": "Average cadence: {cadence} spm, reported as recorded and not compared with any universal target.",
-            "fact.baseline_distance": "Distance is {delta} ({percent}) against the {count}-session average of the last {days} days ({baseline} km).",
-            "fact.baseline_pace": "Average pace is {delta} against that {count}-session average of {baseline}.",
-            "fact.baseline_hr": "Average heart rate is {delta} bpm against that {count}-session average of {baseline} bpm.",
+            "fact.baseline_distance": "Distance is {delta} ({percent}) against the raw {count}-session average of the last {days} days ({baseline} km); that average mixes sessions of different distances and is not a performance comparison.",
             "fact.similar_pace": "Across {count} earlier sessions of comparable distance (±{tolerance}% over {days} days, average {avg_distance} km), average pace was {baseline}; this session is {delta}.",
-            "fact.similar_hr": "Average heart rate across those {count} comparable sessions was {baseline} bpm; this session is {delta} bpm.",
-            "fact.similar_sample_small": "Only {count} comparable earlier session(s) were found, which is below the {minimum} needed to read any difference as progression.",
+            "fact.similar_hr": "Average heart rate across those {count} earlier sessions of comparable distance was {baseline} bpm; this session is {delta} bpm.",
+            "fact.similar_sample_small": "Only {count} earlier session(s) of comparable distance were found, below the {minimum} this analysis requires before any difference is read as more than a raw gap.",
             "fact.similar_unavailable": "No earlier session of comparable distance (±{tolerance}%) was found within {days} days, so no historical comparison is available.",
-            "fact.similar_nature_unknown": "The training-versus-race nature of these sessions is not recorded, which limits the comparison.",
-            "advice.even_pacing": "Target a more even pace distribution: start slightly more conservatively so the recorded pace drop shrinks on the next session of this distance.",
-            "advice.negative_split_confirmed": "The negative split shows controlled effort distribution; reuse this progressive start on comparable sessions.",
-            "advice.maintain_consistency": "Pace regularity was high here; keep this control as your reference for sessions of similar distance.",
-            "advice.monitor_hr_drift": "Record the measured heart-rate drift and compare it on the next comparable sessions before concluding anything about its cause.",
-            "advice.recover_after_long": "After a session of this duration, plan an easy or rest day and check how you tolerate the next one.",
-            "advice.complement.record_splits": "Recording kilometre splits would also let the pace distribution of this session be analysed.",
-            "advice.complement.build_history": "Repeating this distance will also build the comparable history this analysis currently lacks.",
-            "advice.complement.use_hr": "Recording heart rate on comparable sessions would also add a physiological reading to these facts.",
+            "fact.similar_nature_unknown": "The training-versus-race nature of these sessions is not recorded, so their comparability stays limited and the difference above is a raw gap, not a performance conclusion.",
+            "advice.even_pacing": "The recorded pace drop is a useful data point to compare with future sessions of similar distance.",
+            "advice.negative_split_confirmed": "A negative split is observed on this session; this profile can serve as a comparison point with similar sessions.",
+            "advice.maintain_consistency": "Pace regularity was high on this session, which makes it a clear reference point when comparing sessions of similar distance.",
+            "advice.monitor_hr_drift": "The measured heart-rate drift is a data point to compare across comparable sessions; this analysis does not establish its cause.",
+            "advice.recover_after_long": "This session is structurally classified as long; recovery and what follows remain determined by Training Today/Week.",
+            "advice.complement.record_splits": "Limit of this analysis: no kilometre splits are recorded for this session, so its pace distribution cannot be described.",
+            "advice.complement.build_history": "Limit of this analysis: no earlier session of comparable distance is available as a reference point.",
+            "advice.complement.use_hr": "Limit of this analysis: no heart-rate data accompanies these facts.",
         },
         "fr": {
             "summary.high_with_hr": "Séance intense avec une forte demande cardiovasculaire.",
@@ -246,9 +243,9 @@ def _template(language: str, key: str, **params) -> str:
             "signal.intensity.moderate": "Intensité modérée",
             "signal.intensity.high": "Intensité élevée",
             "signal.intensity.very_high": "Intensité très élevée",
-            "signal.volume.below_recent": "Volume inférieur au récent",
-            "signal.volume.usual_recent": "Volume proche du récent",
-            "signal.volume.above_recent": "Volume supérieur au récent",
+            "signal.volume.below_recent": "Distance inférieure à la moyenne récente",
+            "signal.volume.usual_recent": "Distance proche de la moyenne récente",
+            "signal.volume.above_recent": "Distance supérieure à la moyenne récente",
             "signal.volume.short_volume": "Volume de séance court",
             "signal.volume.medium_volume": "Volume de séance modéré",
             "signal.volume.long_volume": "Volume de séance long",
@@ -264,11 +261,10 @@ def _template(language: str, key: str, **params) -> str:
             "meaning.hr_without_intensity_no_pacing": "Des données cardiaques existent, mais l'intensité ne peut pas être classée sans zones fiables; seul le volume structurel peut être interprété.",
             "meaning.no_hr_with_pacing": "La séance peut être décrite sur le plan structurel grâce à l'allure et au volume, mais pas sur le plan physiologique faute de données cardiaques.",
             "meaning.no_hr_no_pacing": "La séance peut être décrite sur le plan structurel grâce à la durée et à la distance, mais pas sur le plan physiologique faute de données cardiaques.",
-            "advice.recover_after_hard": "Garde la prochaine séance facile sauf si de nouvelles données justifient un autre effort intense.",
-            "advice.maintain_easy": "Tu peux poursuivre l'entraînement aérobie normal si les autres signes de fatigue restent stables.",
-            "advice.build_progressively": "Fais progresser le volume progressivement et appuie-toi sur la fréquence cardiaque lors des prochaines séances avant d'en tirer des conclusions plus fortes.",
-            "advice.hr_without_intensity": "Utilise des zones cardiaques individualisées lors des prochaines séances avant d'interpréter la fréquence cardiaque brute comme une preuve d'intensité.",
-            "advice.no_hr": "Enregistre la fréquence cardiaque lors des prochaines séances si tu veux une lecture physiologique, et évite de sur-interpréter cette séance.",
+            "advice.high_intensity_observation": "Les zones placent cette séance dans la plage exigeante ; ce qui suit est déterminé par Training Today/Week, pas par cette analyse.",
+            "advice.low_intensity_observation": "Les zones placent cette séance dans la plage aérobie contrôlée ; ce qui suit est déterminé par Training Today/Week, pas par cette analyse.",
+            "advice.hr_without_intensity": "Limite de cette analyse : sans zones cardiaques individualisées, les valeurs de fréquence cardiaque enregistrées ne peuvent pas être lues comme une preuve d'intensité.",
+            "advice.no_hr": "Limite de cette analyse : aucune donnée cardiaque n'a été enregistrée, donc aucune lecture physiologique de cette séance n'est possible.",
             "unavailable.hr": "Les données cardiaques sont indisponibles.",
             "unavailable.intensity": "La classification d'intensité est indisponible sans preuve physiologique individualisée.",
             "unavailable.pacing": "Les données d'allure sont indisponibles.",
@@ -288,22 +284,20 @@ def _template(language: str, key: str, **params) -> str:
             "fact.hr_drift": "Dérive cardiaque mesurée à {drift} bpm entre le début et la fin ; cette mesure seule n'en établit pas la cause.",
             "fact.elevation": "Dénivelé positif : {elevation} m.",
             "fact.cadence": "Cadence moyenne : {cadence} ppm, rapportée telle qu'enregistrée et sans référence à une cadence universelle.",
-            "fact.baseline_distance": "La distance est {delta} ({percent}) par rapport à la moyenne des {count} séances des {days} derniers jours ({baseline} km).",
-            "fact.baseline_pace": "L'allure moyenne est {delta} par rapport à cette moyenne de {count} séances ({baseline}).",
-            "fact.baseline_hr": "La fréquence cardiaque moyenne est {delta} bpm par rapport à cette moyenne de {count} séances ({baseline} bpm).",
+            "fact.baseline_distance": "La distance est {delta} ({percent}) par rapport à la moyenne brute des {count} séances des {days} derniers jours ({baseline} km) ; cette moyenne mélange des séances de distances différentes et ne constitue pas une comparaison de performance.",
             "fact.similar_pace": "Sur {count} séances antérieures de distance comparable (±{tolerance} % sur {days} jours, moyenne {avg_distance} km), l'allure moyenne était de {baseline} ; cette séance est {delta}.",
-            "fact.similar_hr": "La fréquence cardiaque moyenne de ces {count} séances comparables était de {baseline} bpm ; cette séance est {delta} bpm.",
-            "fact.similar_sample_small": "Seulement {count} séance(s) comparable(s) antérieure(s) trouvée(s), soit moins que les {minimum} nécessaires pour lire une différence comme une progression.",
+            "fact.similar_hr": "La fréquence cardiaque moyenne de ces {count} séances antérieures de distance comparable était de {baseline} bpm ; cette séance est {delta} bpm.",
+            "fact.similar_sample_small": "Seulement {count} séance(s) antérieure(s) de distance comparable trouvée(s), soit moins que les {minimum} exigées par cette analyse avant de lire une différence autrement que comme un écart brut.",
             "fact.similar_unavailable": "Aucune séance antérieure de distance comparable (±{tolerance} %) n'a été trouvée sur {days} jours ; la comparaison historique est donc indisponible.",
-            "fact.similar_nature_unknown": "La nature entraînement ou compétition de ces séances n'est pas enregistrée, ce qui limite la comparaison.",
-            "advice.even_pacing": "Vise une répartition d'allure plus régulière : pars un peu plus prudemment pour réduire la perte d'allure enregistrée sur la prochaine séance de cette distance.",
-            "advice.negative_split_confirmed": "Le negative split montre une gestion d'effort maîtrisée ; réutilise ce départ progressif sur les séances comparables.",
-            "advice.maintain_consistency": "La régularité d'allure a été élevée ici ; garde ce contrôle comme référence pour les séances de distance similaire.",
-            "advice.monitor_hr_drift": "Note la dérive cardiaque mesurée et compare-la sur les prochaines séances comparables avant d'en conclure quoi que ce soit sur sa cause.",
-            "advice.recover_after_long": "Après une séance de cette durée, prévois une journée facile ou de repos et observe ta tolérance sur la suivante.",
-            "advice.complement.record_splits": "Enregistrer les fractions kilométriques permettrait aussi d'analyser la répartition d'allure de cette séance.",
-            "advice.complement.build_history": "Répéter cette distance construira aussi l'historique comparable qui manque actuellement à cette analyse.",
-            "advice.complement.use_hr": "Enregistrer la fréquence cardiaque sur des séances comparables ajouterait aussi une lecture physiologique à ces faits.",
+            "fact.similar_nature_unknown": "La nature entraînement ou compétition de ces séances n'est pas enregistrée ; leur comparabilité reste donc limitée et l'écart ci-dessus est un écart brut, pas une conclusion de performance.",
+            "advice.even_pacing": "La perte d'allure observée est un point utile à comparer avec les prochaines séances de distance similaire.",
+            "advice.negative_split_confirmed": "Un negative split est observé sur cette séance ; ce profil peut servir de point de comparaison avec des séances similaires.",
+            "advice.maintain_consistency": "La régularité d'allure a été élevée sur cette séance, ce qui en fait un point de repère net pour comparer des séances de distance similaire.",
+            "advice.monitor_hr_drift": "La dérive cardiaque mesurée est une donnée à comparer entre séances comparables ; cette analyse n'en établit pas la cause.",
+            "advice.recover_after_long": "Cette séance est classée structurellement comme longue ; la récupération ou ce qui suit reste déterminé par Training Today/Week.",
+            "advice.complement.record_splits": "Limite de cette analyse : aucune fraction kilométrique n'est enregistrée pour cette séance, sa répartition d'allure ne peut donc pas être décrite.",
+            "advice.complement.build_history": "Limite de cette analyse : aucune séance antérieure de distance comparable n'est disponible comme point de repère.",
+            "advice.complement.use_hr": "Limite de cette analyse : aucune donnée cardiaque n'accompagne ces faits.",
         },
         "es": {
             "summary.high_with_hr": "Sesión intensa con una alta demanda cardiovascular.",
@@ -316,9 +310,9 @@ def _template(language: str, key: str, **params) -> str:
             "signal.intensity.moderate": "Intensidad moderada",
             "signal.intensity.high": "Intensidad alta",
             "signal.intensity.very_high": "Intensidad muy alta",
-            "signal.volume.below_recent": "Volumen por debajo de lo reciente",
-            "signal.volume.usual_recent": "Volumen cercano a lo reciente",
-            "signal.volume.above_recent": "Volumen por encima de lo reciente",
+            "signal.volume.below_recent": "Distancia por debajo de la media reciente",
+            "signal.volume.usual_recent": "Distancia cercana a la media reciente",
+            "signal.volume.above_recent": "Distancia por encima de la media reciente",
             "signal.volume.short_volume": "Volumen de sesión corto",
             "signal.volume.medium_volume": "Volumen de sesión moderado",
             "signal.volume.long_volume": "Volumen de sesión largo",
@@ -334,11 +328,10 @@ def _template(language: str, key: str, **params) -> str:
             "meaning.hr_without_intensity_no_pacing": "Hay datos de frecuencia cardíaca, pero la intensidad no puede clasificarse sin evidencia fiable de zonas, así que solo puede interpretarse el volumen estructural.",
             "meaning.no_hr_with_pacing": "La sesión puede describirse de forma estructural con ritmo y volumen, pero no fisiológicamente porque faltan datos de frecuencia cardíaca.",
             "meaning.no_hr_no_pacing": "La sesión puede describirse de forma estructural con duración y distancia, pero no fisiológicamente porque faltan datos de frecuencia cardíaca.",
-            "advice.recover_after_hard": "Mantén la próxima sesión fácil salvo que nueva evidencia justifique otro esfuerzo intenso.",
-            "advice.maintain_easy": "Puedes continuar con el entrenamiento aeróbico normal si el resto de señales de fatiga siguen estables.",
-            "advice.build_progressively": "Aumenta el volumen de forma progresiva y usa datos de frecuencia cardíaca en futuras sesiones antes de sacar conclusiones más fuertes.",
-            "advice.hr_without_intensity": "Usa zonas de frecuencia cardíaca individualizadas en futuras sesiones antes de tratar la frecuencia cardíaca bruta como evidencia de intensidad.",
-            "advice.no_hr": "Registra la frecuencia cardíaca en futuras sesiones si quieres interpretación fisiológica y evita sobreinterpretar esta sesión.",
+            "advice.high_intensity_observation": "Las zonas sitúan esta sesión en el rango exigente; lo que venga después lo determina Training Today/Week, no este análisis.",
+            "advice.low_intensity_observation": "Las zonas sitúan esta sesión en el rango aeróbico controlado; lo que venga después lo determina Training Today/Week, no este análisis.",
+            "advice.hr_without_intensity": "Límite de este análisis: sin zonas de frecuencia cardíaca individualizadas, los valores registrados no pueden leerse como evidencia de intensidad.",
+            "advice.no_hr": "Límite de este análisis: no se registró ningún dato de frecuencia cardíaca, así que no es posible ninguna lectura fisiológica de esta sesión.",
             "unavailable.hr": "No hay datos de frecuencia cardíaca disponibles.",
             "unavailable.intensity": "La clasificación de intensidad no está disponible sin evidencia fisiológica individualizada.",
             "unavailable.pacing": "No hay datos de ritmo disponibles.",
@@ -358,22 +351,20 @@ def _template(language: str, key: str, **params) -> str:
             "fact.hr_drift": "Deriva cardíaca medida en {drift} bpm entre el inicio y el final; esta medición por sí sola no establece su causa.",
             "fact.elevation": "Desnivel positivo: {elevation} m.",
             "fact.cadence": "Cadencia media: {cadence} ppm, indicada tal como se registró y sin referencia a una cadencia universal.",
-            "fact.baseline_distance": "La distancia es {delta} ({percent}) frente a la media de las {count} sesiones de los últimos {days} días ({baseline} km).",
-            "fact.baseline_pace": "El ritmo medio es {delta} frente a esa media de {count} sesiones ({baseline}).",
-            "fact.baseline_hr": "La frecuencia cardíaca media es {delta} bpm frente a esa media de {count} sesiones ({baseline} bpm).",
+            "fact.baseline_distance": "La distancia es {delta} ({percent}) frente a la media bruta de las {count} sesiones de los últimos {days} días ({baseline} km); esa media mezcla sesiones de distancias diferentes y no constituye una comparación de rendimiento.",
             "fact.similar_pace": "En {count} sesiones anteriores de distancia comparable (±{tolerance} % en {days} días, media {avg_distance} km), el ritmo medio fue {baseline}; esta sesión es {delta}.",
-            "fact.similar_hr": "La frecuencia cardíaca media de esas {count} sesiones comparables fue {baseline} bpm; esta sesión es {delta} bpm.",
-            "fact.similar_sample_small": "Solo se encontraron {count} sesión(es) comparable(s) anterior(es), por debajo de las {minimum} necesarias para leer una diferencia como progresión.",
+            "fact.similar_hr": "La frecuencia cardíaca media de esas {count} sesiones anteriores de distancia comparable fue {baseline} bpm; esta sesión es {delta} bpm.",
+            "fact.similar_sample_small": "Solo se encontraron {count} sesión(es) anterior(es) de distancia comparable, por debajo de las {minimum} que exige este análisis antes de leer una diferencia como algo más que una brecha bruta.",
             "fact.similar_unavailable": "No se encontró ninguna sesión anterior de distancia comparable (±{tolerance} %) en {days} días, así que no hay comparación histórica disponible.",
-            "fact.similar_nature_unknown": "La naturaleza de entrenamiento o competición de estas sesiones no está registrada, lo que limita la comparación.",
-            "advice.even_pacing": "Busca una distribución de ritmo más regular: empieza algo más conservador para reducir la pérdida de ritmo registrada en la próxima sesión de esta distancia.",
-            "advice.negative_split_confirmed": "El negative split muestra una gestión del esfuerzo controlada; reutiliza esa salida progresiva en sesiones comparables.",
-            "advice.maintain_consistency": "La regularidad de ritmo fue alta aquí; mantén ese control como referencia para sesiones de distancia similar.",
-            "advice.monitor_hr_drift": "Anota la deriva cardíaca medida y compárala en las próximas sesiones comparables antes de concluir nada sobre su causa.",
-            "advice.recover_after_long": "Tras una sesión de esta duración, planifica un día suave o de descanso y observa tu tolerancia en la siguiente.",
-            "advice.complement.record_splits": "Registrar los parciales por kilómetro también permitiría analizar la distribución de ritmo de esta sesión.",
-            "advice.complement.build_history": "Repetir esta distancia también construirá el historial comparable que ahora falta en este análisis.",
-            "advice.complement.use_hr": "Registrar la frecuencia cardíaca en sesiones comparables también añadiría una lectura fisiológica a estos datos.",
+            "fact.similar_nature_unknown": "La naturaleza de entrenamiento o competición de estas sesiones no está registrada; su comparabilidad sigue siendo limitada y la diferencia anterior es una brecha bruta, no una conclusión de rendimiento.",
+            "advice.even_pacing": "La pérdida de ritmo observada es un dato útil para comparar con las próximas sesiones de distancia similar.",
+            "advice.negative_split_confirmed": "Se observa un negative split en esta sesión; este perfil puede servir como punto de comparación con sesiones similares.",
+            "advice.maintain_consistency": "La regularidad de ritmo fue alta en esta sesión, lo que la convierte en un punto de referencia claro para comparar sesiones de distancia similar.",
+            "advice.monitor_hr_drift": "La deriva cardíaca medida es un dato para comparar entre sesiones comparables; este análisis no establece su causa.",
+            "advice.recover_after_long": "Esta sesión se clasifica estructuralmente como larga; la recuperación o lo que venga después sigue determinada por Training Today/Week.",
+            "advice.complement.record_splits": "Límite de este análisis: no hay parciales por kilómetro registrados para esta sesión, así que no se puede describir su distribución de ritmo.",
+            "advice.complement.build_history": "Límite de este análisis: no hay ninguna sesión anterior de distancia comparable disponible como punto de referencia.",
+            "advice.complement.use_hr": "Límite de este análisis: ningún dato de frecuencia cardíaca acompaña a estos hechos.",
         },
     }
     return templates[lang][key].format(**params)
@@ -618,11 +609,14 @@ def _build_similar_reference(
     )
 
     limitations: List[str] = []
-    comparable = len(matches) >= SIMILAR_MIN_COMPARABLE_SAMPLE
-    if not comparable:
+    if len(matches) < SIMILAR_MIN_COMPARABLE_SAMPLE:
         limitations.append("sample_too_small")
     if _competition_flag(workout) is None or any(_competition_flag(match) is None for match in matches):
         limitations.append("session_nature_unknown")
+    # P2: comparable stays False as soon as any limitation is recorded. An unknown
+    # training/race nature is not enough to assert strong comparability; the factual
+    # distance/pace gap is still exposed alongside the explicit limitation.
+    comparable = not limitations
 
     return WorkoutAnalysisSimilarReference(
         available=True,
@@ -924,28 +918,10 @@ def _comparison_observations(comparison: WorkoutAnalysisComparison, language: st
                     baseline=_fmt_number(distance.baseline or 0, 2),
                 )
             )
-        pace = comparison.avg_pace_min_km
-        if pace and pace.difference is not None and pace.baseline is not None:
-            sentences.append(
-                _template(
-                    language,
-                    "fact.baseline_pace",
-                    delta=_fmt_pace_delta(pace.difference),
-                    count=count,
-                    baseline=_fmt_pace(pace.baseline),
-                )
-            )
-        heart_rate = comparison.avg_heart_rate
-        if heart_rate and heart_rate.difference is not None and heart_rate.baseline is not None:
-            sentences.append(
-                _template(
-                    language,
-                    "fact.baseline_hr",
-                    delta=_fmt_signed(heart_rate.difference, 1),
-                    count=count,
-                    baseline=_fmt_number(heart_rate.baseline, 1),
-                )
-            )
+        # P1-2: the generic 14-day baseline mixes sessions of different distances and
+        # natures. Its pace and heart-rate deltas stay in the serialized contract for
+        # compatibility but are deliberately NOT verbalized here: only comparison.similar
+        # backs an interpreted pace/heart-rate comparison.
 
     similar = comparison.similar
     if similar is None:
@@ -1057,9 +1033,9 @@ def _advice_primary_code(
     signals: WorkoutAnalysisSignals,
 ) -> str:
     if signals.intensity.available and signals.intensity.code in {"high", "very_high"}:
-        return "advice.recover_after_hard"
+        return "advice.high_intensity_observation"
     if signals.intensity.available and signals.intensity.code == "low":
-        return "advice.maintain_easy"
+        return "advice.low_intensity_observation"
     if pacing.pace_drop_min_km is not None and abs(pacing.pace_drop_min_km) >= 0.4:
         return "advice.even_pacing"
     if pacing.negative_split is True:

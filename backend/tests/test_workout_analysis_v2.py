@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import os
 import sys
 from pathlib import Path
@@ -961,6 +962,69 @@ async def _get_analysis_lang(client, workout_id: str, language: str, user_id: st
     )
 
 
+# Workout Analysis V2 describes and compares; Training Today/Week V2 remain the only
+# prescription authorities. These phrasings decide what the athlete should do next and
+# are therefore forbidden in every supported language.
+PRESCRIPTIVE_PHRASES_EN = (
+    "next session",
+    "easy day",
+    "rest day",
+    "more conservatively",
+    "repeat this distance",
+    "repeating this distance",
+    "reuse this",
+    "keep this control",
+    "plan an easy",
+    "use individualized",
+    "use heart-rate recording",
+)
+PRESCRIPTIVE_PHRASES_FR = (
+    "prochaine séance",
+    "journée facile",
+    "journée de repos",
+    "plus prudemment",
+    "répéter cette distance",
+    "réutilise",
+    "prévois",
+    "garde la prochaine",
+    "utilise des zones",
+    "fais progresser",
+)
+PRESCRIPTIVE_PHRASES_ES = (
+    "próxima sesión",
+    "día suave",
+    "día de descanso",
+    "más conservador",
+    "repetir esta distancia",
+    "reutiliza",
+    "planifica",
+    "usa zonas",
+    "mantén ese control",
+)
+PRESCRIPTIVE_PHRASES = (
+    PRESCRIPTIVE_PHRASES_EN + PRESCRIPTIVE_PHRASES_FR + PRESCRIPTIVE_PHRASES_ES
+)
+
+# Advice codes are observation/limit codes only. Any prescription-shaped code is banned.
+ALLOWED_ADVICE_CODES = {
+    "advice.high_intensity_observation",
+    "advice.low_intensity_observation",
+    "advice.even_pacing",
+    "advice.negative_split_confirmed",
+    "advice.maintain_consistency",
+    "advice.monitor_hr_drift",
+    "advice.recover_after_long",
+    "advice.hr_without_intensity",
+    "advice.no_hr",
+}
+
+
+def _assert_not_prescriptive(text: str) -> None:
+    lowered = text.lower()
+    for phrase in PRESCRIPTIVE_PHRASES:
+        assert phrase not in lowered, f"prescriptive phrasing found: {phrase!r} in {text!r}"
+
+
 @pytest.mark.asyncio
 async def test_fixture_a_summary_reports_its_own_distance_duration_pace_and_hr(client):
     payload = (await _get_analysis(client, _FakeDB.FIXTURE_A_ID)).json()
@@ -992,10 +1056,14 @@ async def test_fixture_a_meaning_uses_provided_splits_drift_elevation_and_cadenc
 
 
 @pytest.mark.asyncio
-async def test_fixture_a_advice_is_actionable_and_not_only_about_zones(client):
+async def test_fixture_a_advice_is_specific_useful_and_non_prescriptive(client):
     payload = (await _get_analysis(client, _FakeDB.FIXTURE_A_ID)).json()
     assert payload["advice"]["code"] == "advice.even_pacing"
     assert "individualized heart-rate zones" not in payload["advice"]["text"]
+    text = payload["advice"]["text"]
+    # Specific to the observed pacing fact, not a generic fallback.
+    assert "pace drop" in text
+    _assert_not_prescriptive(text)
 
 
 @pytest.mark.asyncio
@@ -1038,11 +1106,15 @@ async def test_fixtures_never_infer_intensity_from_average_heart_rate(client):
 
 
 @pytest.mark.asyncio
-async def test_fixture_b_advice_adds_a_second_actionable_recommendation(client):
+async def test_fixture_b_advice_states_analysis_limits_without_prescribing(client):
     payload = (await _get_analysis(client, _FakeDB.FIXTURE_B_ID)).json()
     assert payload["advice"]["code"] == "advice.hr_without_intensity"
-    # The zone recommendation is never the only advice given.
-    assert "Recording kilometre splits" in payload["advice"]["text"]
+    text = payload["advice"]["text"]
+    # Missing zone provenance is presented as a limit of the analysis, never as a
+    # training instruction, and it is never the only statement made.
+    assert "Limit of this analysis" in text
+    assert "no kilometre splits are recorded" in text
+    _assert_not_prescriptive(text)
 
 
 @pytest.mark.asyncio
@@ -1050,8 +1122,9 @@ async def test_similar_history_uses_comparable_prior_sessions_only(client):
     payload = (await _get_analysis(client, _FakeDB.FIXTURE_A_ID)).json()
     similar = payload["comparison"]["similar"]
     assert similar["available"] is True
-    assert similar["comparable"] is True
     assert similar["sample_count"] == 2
+    # P2: an unrecorded training/race nature forbids asserting strong comparability.
+    assert similar["comparable"] is False
     assert set(similar["workout_ids"]) == {"run-fixture-a-prev-1", "run-fixture-a-prev-2"}
     assert similar["distance_tolerance_pct"] == 30.0
     assert similar["period_days"] == 180
@@ -1096,8 +1169,9 @@ async def test_insufficient_similar_sample_is_not_presented_as_progression(clien
     assert similar["sample_count"] == 1
     assert "sample_too_small" in similar["limitations"]
     meaning = payload["meaning"]["text"]
-    assert "below the 2 needed to read any difference as progression" in meaning
-    assert "progress" not in meaning.replace("progression", "")
+    assert "below the 2 this analysis requires" in meaning
+    assert "raw gap, not a performance conclusion" in meaning
+    assert "progress" not in meaning
 
 
 @pytest.mark.asyncio
@@ -1237,3 +1311,134 @@ def test_similar_search_constants_are_bounded():
     assert workout_analysis_v2.SIMILAR_HISTORY_WINDOW_DAYS == 180
     assert workout_analysis_v2.SIMILAR_MAX_RESULTS == 5
     assert workout_analysis_v2.SIMILAR_MIN_COMPARABLE_SAMPLE == 2
+
+
+# ============================================================
+# PR303 patch — factual-only analysis (no prescription, no generic baseline reading)
+# ============================================================
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("language", ["en", "fr", "es"])
+@pytest.mark.parametrize("workout_id", [_FakeDB.FIXTURE_A_ID, _FakeDB.FIXTURE_B_ID, _FakeDB.NO_REFERENCE_ID])
+async def test_analysis_never_prescribes_a_future_session(client, workout_id, language):
+    payload = (await _get_analysis_lang(client, workout_id, language)).json()
+    assert payload["advice"]["code"] in ALLOWED_ADVICE_CODES
+    for block in ("summary", "meaning", "advice"):
+        _assert_not_prescriptive(payload[block]["text"])
+
+
+def test_no_advice_template_key_is_prescription_shaped():
+    source = inspect.getsource(workout_analysis_v2)
+    for banned in ("advice.recover_after_hard", "advice.maintain_easy", "advice.build_progressively"):
+        assert banned not in source
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("language", ["en", "fr", "es"])
+async def test_advice_selection_is_driven_by_observed_facts_not_by_zone_absence(client, language):
+    # Fixture A has a measured pace drop: the observation code wins over the zone limit.
+    payload_a = (await _get_analysis_lang(client, _FakeDB.FIXTURE_A_ID, language)).json()
+    assert payload_a["advice"]["code"] == "advice.even_pacing"
+    # Fixture B has no split/drift/long signal: only then is the zone limit stated,
+    # and it is stated as a limit of the analysis, never as an instruction.
+    payload_b = (await _get_analysis_lang(client, _FakeDB.FIXTURE_B_ID, language)).json()
+    assert payload_b["advice"]["code"] == "advice.hr_without_intensity"
+    assert payload_a["advice"]["text"] != payload_b["advice"]["text"]
+
+
+@pytest.mark.asyncio
+async def test_generic_14_day_baseline_pace_and_hr_are_not_verbalized_in_meaning(client):
+    # Fixture A's 14-day history mixes a 21 km session with much shorter runs.
+    payload = (await _get_analysis(client, _FakeDB.FIXTURE_A_ID)).json()
+    comparison = payload["comparison"]
+    # The baseline stays in the contract for compatibility...
+    assert comparison["available"] is True
+    assert comparison["avg_pace_min_km"]["baseline"] is not None
+    meaning = payload["meaning"]["text"]
+    # ...but its pace/HR deltas are never read as a performance comparison.
+    assert "against that" not in meaning
+    baseline_hr = comparison["avg_heart_rate"]["baseline"]
+    if baseline_hr is not None:
+        assert f"{baseline_hr}" not in meaning
+    for banned in ("progression", "better session", "improved", "superior effort"):
+        assert banned not in meaning.lower()
+
+
+@pytest.mark.asyncio
+async def test_baseline_distance_wording_stays_descriptive_and_flags_its_mixing(client):
+    payload = (await _get_analysis(client, _FakeDB.FIXTURE_A_ID)).json()
+    meaning = payload["meaning"]["text"]
+    assert "raw 2-session average of the last 14 days" in meaning
+    assert "mixes sessions of different distances and is not a performance comparison" in meaning
+    assert payload["signals"]["volume"]["code"] == "above_recent"
+    assert payload["signals"]["volume"]["text"] == "Distance above the recent average"
+
+
+@pytest.mark.asyncio
+async def test_baseline_without_any_comparable_session_yields_no_performance_claim(client):
+    # NO_REFERENCE_ID has recent activity of very different distances but nothing comparable.
+    payload = (await _get_analysis(client, _FakeDB.NO_REFERENCE_ID)).json()
+    similar = payload["comparison"]["similar"]
+    assert similar["available"] is False
+    assert similar["comparable"] is False
+    meaning = payload["meaning"]["text"]
+    assert "no historical comparison is available" in meaning
+    for banned in ("faster than", "slower than", "progression", "improved"):
+        assert banned not in meaning.lower()
+    _assert_not_prescriptive(meaning)
+
+
+@pytest.mark.asyncio
+async def test_unknown_session_nature_is_reported_and_blocks_strong_comparability(client):
+    payload = (await _get_analysis(client, _FakeDB.FIXTURE_A_ID)).json()
+    similar = payload["comparison"]["similar"]
+    assert similar["sample_count"] == 2
+    assert "session_nature_unknown" in similar["limitations"]
+    assert similar["comparable"] is False
+    meaning = payload["meaning"]["text"]
+    # The factual distance/pace gap is still exposed, with the limitation spelled out.
+    assert "earlier sessions of comparable distance" in meaning
+    assert "raw gap, not a performance conclusion" in meaning
+
+
+def test_explicit_race_metadata_excludes_incompatible_history():
+    current = {
+        "id": "current-race",
+        "type": "run",
+        "date": "2025-06-15T07:00:00+00:00",
+        "distance_km": 10.0,
+        "is_race": True,
+    }
+    candidates = [
+        {"id": "hist-training", "type": "run", "date": "2025-06-10T07:00:00+00:00", "distance_km": 10.0, "is_race": False},
+        {"id": "hist-race", "type": "run", "date": "2025-06-09T07:00:00+00:00", "distance_km": 10.0, "is_race": True},
+    ]
+    ids = [item["id"] for item in workout_analysis_v2.retrieve_similar_workouts(current, candidates)]
+    assert ids == ["hist-race"]
+
+
+def test_similar_reference_is_comparable_only_when_no_limitation_remains():
+    current = {
+        "id": "current",
+        "type": "run",
+        "date": "2025-06-15T07:00:00+00:00",
+        "distance_km": 10.0,
+        "avg_pace_min_km": 5.5,
+        "is_race": False,
+    }
+    candidates = [
+        {"id": "h1", "type": "run", "date": "2025-06-10T07:00:00+00:00", "distance_km": 10.0, "avg_pace_min_km": 5.6, "is_race": False},
+        {"id": "h2", "type": "run", "date": "2025-06-09T07:00:00+00:00", "distance_km": 10.2, "avg_pace_min_km": 5.4, "is_race": False},
+    ]
+    reference = workout_analysis_v2._build_similar_reference(current, candidates, "en")
+    assert reference.available is True
+    assert reference.sample_count == 2
+    assert reference.limitations == []
+    assert reference.comparable is True
+
+    # Drop the explicit nature of one reference: comparability must fall back to False.
+    candidates[1].pop("is_race")
+    degraded = workout_analysis_v2._build_similar_reference(current, candidates, "en")
+    assert degraded.limitations == ["session_nature_unknown"]
+    assert degraded.comparable is False
