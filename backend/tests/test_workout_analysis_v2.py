@@ -1366,11 +1366,11 @@ async def test_generic_14_day_baseline_pace_and_hr_are_not_verbalized_in_meaning
 
 
 @pytest.mark.asyncio
-async def test_baseline_distance_wording_stays_descriptive_and_flags_its_mixing(client):
+async def test_baseline_distance_wording_stays_descriptive_and_only_claims_what_is_verified(client):
     payload = (await _get_analysis(client, _FakeDB.FIXTURE_A_ID)).json()
     meaning = payload["meaning"]["text"]
     assert "raw 2-session average of the last 14 days" in meaning
-    assert "mixes sessions of different distances and is not a performance comparison" in meaning
+    assert "may include sessions of different distances or natures and is not a performance comparison" in meaning
     assert payload["signals"]["volume"]["code"] == "above_recent"
     assert payload["signals"]["volume"]["text"] == "Distance above the recent average"
 
@@ -1398,7 +1398,7 @@ async def test_unknown_session_nature_is_reported_and_blocks_strong_comparabilit
     assert similar["comparable"] is False
     meaning = payload["meaning"]["text"]
     # The factual distance/pace gap is still exposed, with the limitation spelled out.
-    assert "earlier sessions of comparable distance" in meaning
+    assert "earlier session(s) of comparable distance carrying a usable pace" in meaning
     assert "raw gap, not a performance conclusion" in meaning
 
 
@@ -1425,11 +1425,12 @@ def test_similar_reference_is_comparable_only_when_no_limitation_remains():
         "date": "2025-06-15T07:00:00+00:00",
         "distance_km": 10.0,
         "avg_pace_min_km": 5.5,
+        "avg_heart_rate": 151,
         "is_race": False,
     }
     candidates = [
-        {"id": "h1", "type": "run", "date": "2025-06-10T07:00:00+00:00", "distance_km": 10.0, "avg_pace_min_km": 5.6, "is_race": False},
-        {"id": "h2", "type": "run", "date": "2025-06-09T07:00:00+00:00", "distance_km": 10.2, "avg_pace_min_km": 5.4, "is_race": False},
+        {"id": "h1", "type": "run", "date": "2025-06-10T07:00:00+00:00", "distance_km": 10.0, "avg_pace_min_km": 5.6, "avg_heart_rate": 150, "is_race": False},
+        {"id": "h2", "type": "run", "date": "2025-06-09T07:00:00+00:00", "distance_km": 10.2, "avg_pace_min_km": 5.4, "avg_heart_rate": 152, "is_race": False},
     ]
     reference = workout_analysis_v2._build_similar_reference(current, candidates, "en")
     assert reference.available is True
@@ -1442,3 +1443,194 @@ def test_similar_reference_is_comparable_only_when_no_limitation_remains():
     degraded = workout_analysis_v2._build_similar_reference(current, candidates, "en")
     assert degraded.limitations == ["session_nature_unknown"]
     assert degraded.comparable is False
+
+
+# ============================================================
+# PR303 final patch — per-metric coverage and verified baseline wording
+# ============================================================
+
+
+def _similar_candidate(workout_id: str, date: str, distance_km: float, **extra) -> dict:
+    candidate = {
+        "id": workout_id,
+        "type": "run",
+        "date": date,
+        "distance_km": distance_km,
+    }
+    candidate.update(extra)
+    return candidate
+
+
+_CURRENT_FOR_COVERAGE = {
+    "id": "coverage-current",
+    "type": "run",
+    "date": "2025-06-15T07:00:00+00:00",
+    "distance_km": 10.0,
+    "avg_pace_min_km": 5.5,
+    "avg_heart_rate": 150,
+}
+
+
+def test_partial_pace_coverage_is_reported_with_its_own_sample_count():
+    # 5 comparable sessions, only 2 of them carry a usable pace.
+    candidates = [
+        _similar_candidate("p1", "2025-06-10T07:00:00+00:00", 10.0, avg_pace_min_km=5.8),
+        _similar_candidate("p2", "2025-06-09T07:00:00+00:00", 10.1, avg_pace_min_km=5.6),
+        _similar_candidate("p3", "2025-06-08T07:00:00+00:00", 10.2),
+        _similar_candidate("p4", "2025-06-07T07:00:00+00:00", 9.9),
+        _similar_candidate("p5", "2025-06-06T07:00:00+00:00", 10.3),
+    ]
+    reference = workout_analysis_v2._build_similar_reference(_CURRENT_FOR_COVERAGE, candidates, "en")
+    assert reference.sample_count == 5
+    assert reference.pace_sample_count == 2
+    assert reference.hr_sample_count == 0
+    assert reference.avg_pace_min_km == pytest.approx((5.8 + 5.6) / 2, abs=0.01)
+    assert "pace_sample_too_small" not in reference.limitations
+    assert "hr_sample_too_small" in reference.limitations
+
+    comparison = workout_analysis_v2.WorkoutAnalysisComparison(
+        available=False,
+        baseline_period_days=14,
+        baseline_sample_count=0,
+        similar=reference,
+    )
+    text = " ".join(workout_analysis_v2._comparison_observations(comparison, "en"))
+    # The pace sentence quotes the pace coverage, never the 5 sessions found.
+    assert "Across 2 earlier session(s) of comparable distance carrying a usable pace" in text
+    assert "Across 5 earlier session" not in text
+    # No heart-rate claim can be made at all.
+    assert "heart rate" not in text.lower()
+
+
+def test_partial_hr_coverage_is_reported_and_flagged_as_insufficient():
+    # 4 comparable sessions, only 1 of them carries a usable heart rate.
+    candidates = [
+        _similar_candidate("h1", "2025-06-10T07:00:00+00:00", 10.0, avg_pace_min_km=5.8, avg_heart_rate=145),
+        _similar_candidate("h2", "2025-06-09T07:00:00+00:00", 10.1, avg_pace_min_km=5.6),
+        _similar_candidate("h3", "2025-06-08T07:00:00+00:00", 10.2, avg_pace_min_km=5.7),
+        _similar_candidate("h4", "2025-06-07T07:00:00+00:00", 9.9, avg_pace_min_km=5.5),
+    ]
+    reference = workout_analysis_v2._build_similar_reference(_CURRENT_FOR_COVERAGE, candidates, "en")
+    assert reference.sample_count == 4
+    assert reference.pace_sample_count == 4
+    assert reference.hr_sample_count == 1
+    assert reference.avg_heart_rate == pytest.approx(145.0, abs=0.01)
+    assert "hr_sample_too_small" in reference.limitations
+    assert "pace_sample_too_small" not in reference.limitations
+
+    comparison = workout_analysis_v2.WorkoutAnalysisComparison(
+        available=False,
+        baseline_period_days=14,
+        baseline_sample_count=0,
+        similar=reference,
+    )
+    text = " ".join(workout_analysis_v2._comparison_observations(comparison, "en"))
+    assert "Average heart rate across 1 earlier session(s) of comparable distance carrying a usable heart rate" in text
+    assert "Average heart rate across 4 earlier session" not in text
+    # The insufficient heart-rate coverage is stated explicitly.
+    assert "That heart-rate average rests on 1 of the 4 earlier session(s) found" in text
+
+
+def test_comparable_history_without_any_pace_or_hr_invents_nothing():
+    candidates = [
+        _similar_candidate("n1", "2025-06-10T07:00:00+00:00", 10.0),
+        _similar_candidate("n2", "2025-06-09T07:00:00+00:00", 10.1),
+    ]
+    reference = workout_analysis_v2._build_similar_reference(_CURRENT_FOR_COVERAGE, candidates, "en")
+    assert reference.available is True
+    assert reference.sample_count == 2
+    assert reference.pace_sample_count == 0
+    assert reference.hr_sample_count == 0
+    assert reference.avg_pace_min_km is None
+    assert reference.avg_heart_rate is None
+    assert reference.pace_difference_min_km is None
+    assert reference.heart_rate_difference_bpm is None
+
+    comparison = workout_analysis_v2.WorkoutAnalysisComparison(
+        available=False,
+        baseline_period_days=14,
+        baseline_sample_count=0,
+        similar=reference,
+    )
+    text = " ".join(workout_analysis_v2._comparison_observations(comparison, "en")).lower()
+    assert "average pace was" not in text
+    assert "bpm" not in text
+
+
+def test_distance_sample_count_tracks_real_distance_coverage():
+    candidates = [
+        _similar_candidate("d1", "2025-06-10T07:00:00+00:00", 10.0, avg_pace_min_km=5.6),
+        _similar_candidate("d2", "2025-06-09T07:00:00+00:00", 10.1, avg_pace_min_km=5.7),
+    ]
+    reference = workout_analysis_v2._build_similar_reference(_CURRENT_FOR_COVERAGE, candidates, "en")
+    assert reference.distance_sample_count == 2
+    assert reference.avg_distance_km == pytest.approx(10.05, abs=0.01)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("language", ["en", "fr", "es"])
+async def test_baseline_wording_never_asserts_unverified_distance_mixing(client, language):
+    payload = (await _get_analysis_lang(client, _FakeDB.FIXTURE_A_ID, language)).json()
+    meaning = payload["meaning"]["text"]
+    hedged = {
+        "en": "may include sessions of different distances or natures",
+        "fr": "peut inclure des séances de distances ou de nature différentes",
+        "es": "puede incluir sesiones de distancias o naturalezas diferentes",
+    }[language]
+    asserted = {
+        "en": "mixes sessions of different distances",
+        "fr": "mélange des séances de distances différentes",
+        "es": "mezcla sesiones de distancias diferentes",
+    }[language]
+    assert hedged in meaning
+    assert asserted not in meaning
+
+
+@pytest.mark.asyncio
+async def test_identical_distance_baseline_is_not_described_as_mixed(client):
+    # A 14-day history made only of identical distances must not be claimed as mixed.
+    for index in range(2):
+        await client.fake_db.workouts.insert_one(
+            _workout(
+                f"run-uniform-{index}",
+                user_id="user-a",
+                date=f"2025-06-1{index}T07:00:00+00:00",
+                distance_km=12.0,
+                duration_minutes=70,
+                avg_pace_min_km=5.8,
+            )
+        )
+    await client.fake_db.workouts.insert_one(
+        _workout(
+            "run-uniform-current",
+            user_id="user-a",
+            date="2025-06-14T07:00:00+00:00",
+            distance_km=12.0,
+            duration_minutes=70,
+            avg_pace_min_km=5.8,
+        )
+    )
+    payload = (await _get_analysis(client, "run-uniform-current")).json()
+    meaning = payload["meaning"]["text"]
+    assert "mixes sessions of different distances" not in meaning
+    if "average of the last" in meaning:
+        assert "may include sessions of different distances or natures" in meaning
+    # Still no performance reading from the generic baseline.
+    for banned in ("progression", "better session", "improved"):
+        assert banned not in meaning.lower()
+
+
+@pytest.mark.asyncio
+async def test_mixed_distance_baseline_stays_descriptive_without_pace_or_hr_claims(client):
+    payload = (await _get_analysis(client, _FakeDB.FIXTURE_A_ID)).json()
+    comparison = payload["comparison"]
+    assert comparison["available"] is True
+    meaning = payload["meaning"]["text"]
+    assert "may include sessions of different distances or natures" in meaning
+    # The generic baseline never returns as a pace/HR comparison.
+    assert "against that" not in meaning
+    baseline_hr = comparison["avg_heart_rate"]["baseline"]
+    if baseline_hr is not None:
+        assert f"{baseline_hr}" not in meaning
+    for banned in ("progression", "better session", "improved", "superior effort"):
+        assert banned not in meaning.lower()

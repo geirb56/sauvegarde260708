@@ -364,3 +364,104 @@ Aucune CI backend n'est affirmée : ce dépôt n'en expose pas pour ces suites.
   correctement.
 - Cette PR répare **uniquement Workout Analysis V2**. Le contexte du Coach IA
   conversationnel n'est pas traité ici et fera l'objet d'une PR distincte.
+
+---
+
+# Patch final de fiabilité factuelle
+
+Base : `copilot/dev`. HEAD audité : `3f11f5d5c401a591bc264530b5a92aead043162c`.
+Appliqué sur la branche existante de la PR #304. Aucune nouvelle PR, aucun merge.
+
+## 1. Bug de couverture de métrique (P1)
+
+`_build_similar_reference()` construisait ses moyennes avec `_safe_avg()`, qui ignore
+silencieusement les valeurs `None`, mais verbalisait ensuite `sample_count = len(matches)`.
+
+Une référence de 5 séances comparables dont 2 seulement portaient une allure et 1 seule une
+FC produisait donc des phrases factuellement fausses du type « Sur 5 séances comparables, la
+FC moyenne était 145 bpm », alors que cette moyenne ne reposait que sur une seule valeur.
+
+## 2. Ajout des compteurs de couverture
+
+`WorkoutAnalysisSimilarReference` expose trois compteurs additifs :
+
+- `pace_sample_count` — nombre de séances comparables portant réellement une allure ;
+- `hr_sample_count` — nombre de séances comparables portant réellement une FC ;
+- `distance_sample_count` — idem pour la distance.
+
+Chaque moyenne est désormais calculée à partir de la liste filtrée correspondante, et
+`_comparison_observations()` verbalise le compteur **de la métrique concernée**, jamais
+`sample_count`. `sample_count` est conservé : il reste l'indicateur du nombre total de
+séances retrouvées.
+
+Deux limitations explicites sont ajoutées lorsque la couverture d'une métrique n'atteint pas
+`SIMILAR_MIN_COMPARABLE_SAMPLE` :
+
+- `pace_sample_too_small` ;
+- `hr_sample_too_small`.
+
+Quand l'une d'elles est présente, une phrase supplémentaire indique sur combien de séances
+la moyenne repose réellement, et que l'écart correspondant ne doit pas être lu autrement que
+comme une différence brute. Comme `comparable = not limitations`, une couverture métrique
+insuffisante suffit désormais à interdire toute affirmation de comparabilité forte.
+
+## 3. Correctif du wording baseline (P1)
+
+`_build_baseline()` ne vérifie pas que les distances des 14 derniers jours diffèrent
+réellement. Le template affirmait pourtant que la moyenne « mélange des séances de distances
+différentes », ce qui peut être faux sur un historique homogène.
+
+Option A retenue (minimale, aucune logique supplémentaire) — la limite réelle est exprimée
+sans rien inventer, dans les trois langues :
+
+- FR : « cette moyenne peut inclure des séances de distances ou de nature différentes et ne
+  constitue pas une comparaison de performance. »
+- EN : « that average may include sessions of different distances or natures and is not a
+  performance comparison. »
+- ES : « esa media puede incluir sesiones de distancias o naturalezas diferentes y no
+  constituye una comparación de rendimiento. »
+
+La baseline générique reste non verbalisée pour l'allure et la FC, et son seul usage textuel
+reste strictement descriptif sur la distance.
+
+## 4. Tests ajoutés
+
+| Cas | Test |
+|---|---|
+| 1 — couverture allure partielle (5 séances, 2 allures) | `test_partial_pace_coverage_is_reported_with_its_own_sample_count` |
+| 2 — couverture FC partielle (4 séances, 1 FC) | `test_partial_hr_coverage_is_reported_and_flagged_as_insufficient` |
+| 3 — aucune allure ni FC dans l'historique comparable | `test_comparable_history_without_any_pace_or_hr_invents_nothing` |
+| — couverture distance | `test_distance_sample_count_tracks_real_distance_coverage` |
+| 4 — baseline de distances identiques | `test_identical_distance_baseline_is_not_described_as_mixed` |
+| 5 — baseline de distances différentes | `test_mixed_distance_baseline_stays_descriptive_without_pace_or_hr_claims` |
+| 4/5 — wording FR/EN/ES | `test_baseline_wording_never_asserts_unverified_distance_mixing` |
+
+Trois assertions existantes ont été mises à jour pour suivre le nouveau wording et la
+nouvelle sémantique de couverture ; aucune garantie n'a été retirée.
+
+## 5. Résultats exacts
+
+| Suite | Commande | Résultat |
+|---|---|---|
+| Workout Analysis V2 | `python -m pytest tests/test_workout_analysis_v2.py -q` | **85 passed, 0 failed** |
+| RAG / LLM cleanup / IDOR | `python -m pytest tests/test_rag_endpoints.py tests/test_pr211_coach_llm_cleanup.py tests/test_idor_integration.py -q` | **42 passed, 1 failed** |
+
+L'unique échec reste `test_pr211_coach_llm_cleanup.py::test_server_coach_analyze_no_hr_speed_vma_exposure`,
+vérifié préexistant sur `copilot/dev` et hors périmètre.
+
+Suites **non exécutées** : la suite backend complète. `backend/requirements.txt` référence
+`litellm` et `emergentintegrations`, hébergés sur un domaine inaccessible depuis cet
+environnement ; les modules qui en dépendent ne peuvent pas être importés. Aucun test
+susceptible d'utiliser un Redis ou un worker réel n'a été lancé. Aucune CI backend n'est
+affirmée : ce dépôt n'en expose pas pour ces suites. Aucun déploiement Netlify n'est
+présenté comme preuve backend.
+
+## 6. Limites restantes
+
+- Le seuil de couverture par métrique réutilise `SIMILAR_MIN_COMPARABLE_SAMPLE = 2` ; sa
+  pertinence doit être mesurée sur de vrais historiques Garmin.
+- La nature entraînement/compétition reste absente des activités réelles, donc
+  `session_nature_unknown` et `comparable == False` resteront la norme en pratique.
+- Validation Emergent encore nécessaire sur de vraies séances Garmin : vérifier que les
+  compteurs de couverture correspondent aux données réellement synchronisées et que les
+  textes restent lisibles dans `WorkoutDetail` dans les trois langues.

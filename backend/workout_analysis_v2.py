@@ -92,6 +92,9 @@ class WorkoutAnalysisSimilarReference(BaseModel):
     avg_distance_km: Optional[float] = None
     avg_pace_min_km: Optional[float] = None
     avg_heart_rate: Optional[float] = None
+    distance_sample_count: int = 0
+    pace_sample_count: int = 0
+    hr_sample_count: int = 0
     pace_difference_min_km: Optional[float] = None
     heart_rate_difference_bpm: Optional[float] = None
     limitations: List[str] = []
@@ -217,9 +220,11 @@ def _template(language: str, key: str, **params) -> str:
             "fact.hr_drift": "Heart-rate drift measured at {drift} bpm between the start and the end; this measurement alone does not establish its cause.",
             "fact.elevation": "Elevation gain: {elevation} m.",
             "fact.cadence": "Average cadence: {cadence} spm, reported as recorded and not compared with any universal target.",
-            "fact.baseline_distance": "Distance is {delta} ({percent}) against the raw {count}-session average of the last {days} days ({baseline} km); that average mixes sessions of different distances and is not a performance comparison.",
-            "fact.similar_pace": "Across {count} earlier sessions of comparable distance (±{tolerance}% over {days} days, average {avg_distance} km), average pace was {baseline}; this session is {delta}.",
-            "fact.similar_hr": "Average heart rate across those {count} earlier sessions of comparable distance was {baseline} bpm; this session is {delta} bpm.",
+            "fact.baseline_distance": "Distance is {delta} ({percent}) against the raw {count}-session average of the last {days} days ({baseline} km); that average may include sessions of different distances or natures and is not a performance comparison.",
+            "fact.similar_pace": "Across {count} earlier session(s) of comparable distance carrying a usable pace (±{tolerance}% over {days} days, average {avg_distance} km), average pace was {baseline}; this session is {delta}.",
+            "fact.similar_pace_coverage_small": "That pace average rests on {count} of the {total} earlier session(s) found, below the {minimum} this analysis requires before reading the pace gap as anything more than a raw difference.",
+            "fact.similar_hr": "Average heart rate across {count} earlier session(s) of comparable distance carrying a usable heart rate was {baseline} bpm; this session is {delta} bpm.",
+            "fact.similar_hr_coverage_small": "That heart-rate average rests on {count} of the {total} earlier session(s) found, below the {minimum} this analysis requires before reading the heart-rate gap as anything more than a raw difference.",
             "fact.similar_sample_small": "Only {count} earlier session(s) of comparable distance were found, below the {minimum} this analysis requires before any difference is read as more than a raw gap.",
             "fact.similar_unavailable": "No earlier session of comparable distance (±{tolerance}%) was found within {days} days, so no historical comparison is available.",
             "fact.similar_nature_unknown": "The training-versus-race nature of these sessions is not recorded, so their comparability stays limited and the difference above is a raw gap, not a performance conclusion.",
@@ -284,9 +289,11 @@ def _template(language: str, key: str, **params) -> str:
             "fact.hr_drift": "Dérive cardiaque mesurée à {drift} bpm entre le début et la fin ; cette mesure seule n'en établit pas la cause.",
             "fact.elevation": "Dénivelé positif : {elevation} m.",
             "fact.cadence": "Cadence moyenne : {cadence} ppm, rapportée telle qu'enregistrée et sans référence à une cadence universelle.",
-            "fact.baseline_distance": "La distance est {delta} ({percent}) par rapport à la moyenne brute des {count} séances des {days} derniers jours ({baseline} km) ; cette moyenne mélange des séances de distances différentes et ne constitue pas une comparaison de performance.",
-            "fact.similar_pace": "Sur {count} séances antérieures de distance comparable (±{tolerance} % sur {days} jours, moyenne {avg_distance} km), l'allure moyenne était de {baseline} ; cette séance est {delta}.",
-            "fact.similar_hr": "La fréquence cardiaque moyenne de ces {count} séances antérieures de distance comparable était de {baseline} bpm ; cette séance est {delta} bpm.",
+            "fact.baseline_distance": "La distance est {delta} ({percent}) par rapport à la moyenne brute des {count} séances des {days} derniers jours ({baseline} km) ; cette moyenne peut inclure des séances de distances ou de nature différentes et ne constitue pas une comparaison de performance.",
+            "fact.similar_pace": "Sur {count} séance(s) antérieure(s) de distance comparable disposant d'une allure exploitable (±{tolerance} % sur {days} jours, moyenne {avg_distance} km), l'allure moyenne était de {baseline} ; cette séance est {delta}.",
+            "fact.similar_pace_coverage_small": "Cette moyenne d'allure repose sur {count} des {total} séance(s) antérieure(s) trouvée(s), soit moins que les {minimum} exigées par cette analyse avant de lire l'écart d'allure autrement que comme une différence brute.",
+            "fact.similar_hr": "Sur {count} séance(s) antérieure(s) de distance comparable disposant d'une FC exploitable, la fréquence cardiaque moyenne était de {baseline} bpm ; cette séance est {delta} bpm.",
+            "fact.similar_hr_coverage_small": "Cette moyenne de FC repose sur {count} des {total} séance(s) antérieure(s) trouvée(s), soit moins que les {minimum} exigées par cette analyse avant de lire l'écart de FC autrement que comme une différence brute.",
             "fact.similar_sample_small": "Seulement {count} séance(s) antérieure(s) de distance comparable trouvée(s), soit moins que les {minimum} exigées par cette analyse avant de lire une différence autrement que comme un écart brut.",
             "fact.similar_unavailable": "Aucune séance antérieure de distance comparable (±{tolerance} %) n'a été trouvée sur {days} jours ; la comparaison historique est donc indisponible.",
             "fact.similar_nature_unknown": "La nature entraînement ou compétition de ces séances n'est pas enregistrée ; leur comparabilité reste donc limitée et l'écart ci-dessus est un écart brut, pas une conclusion de performance.",
@@ -351,9 +358,11 @@ def _template(language: str, key: str, **params) -> str:
             "fact.hr_drift": "Deriva cardíaca medida en {drift} bpm entre el inicio y el final; esta medición por sí sola no establece su causa.",
             "fact.elevation": "Desnivel positivo: {elevation} m.",
             "fact.cadence": "Cadencia media: {cadence} ppm, indicada tal como se registró y sin referencia a una cadencia universal.",
-            "fact.baseline_distance": "La distancia es {delta} ({percent}) frente a la media bruta de las {count} sesiones de los últimos {days} días ({baseline} km); esa media mezcla sesiones de distancias diferentes y no constituye una comparación de rendimiento.",
-            "fact.similar_pace": "En {count} sesiones anteriores de distancia comparable (±{tolerance} % en {days} días, media {avg_distance} km), el ritmo medio fue {baseline}; esta sesión es {delta}.",
-            "fact.similar_hr": "La frecuencia cardíaca media de esas {count} sesiones anteriores de distancia comparable fue {baseline} bpm; esta sesión es {delta} bpm.",
+            "fact.baseline_distance": "La distancia es {delta} ({percent}) frente a la media bruta de las {count} sesiones de los últimos {days} días ({baseline} km); esa media puede incluir sesiones de distancias o naturalezas diferentes y no constituye una comparación de rendimiento.",
+            "fact.similar_pace": "En {count} sesión(es) anterior(es) de distancia comparable con un ritmo utilizable (±{tolerance} % en {days} días, media {avg_distance} km), el ritmo medio fue {baseline}; esta sesión es {delta}.",
+            "fact.similar_pace_coverage_small": "Esa media de ritmo se apoya en {count} de las {total} sesión(es) anterior(es) encontradas, por debajo de las {minimum} que exige este análisis antes de leer la diferencia de ritmo como algo más que una brecha bruta.",
+            "fact.similar_hr": "En {count} sesión(es) anterior(es) de distancia comparable con una frecuencia cardíaca utilizable, la frecuencia cardíaca media fue {baseline} bpm; esta sesión es {delta} bpm.",
+            "fact.similar_hr_coverage_small": "Esa media de frecuencia cardíaca se apoya en {count} de las {total} sesión(es) anterior(es) encontradas, por debajo de las {minimum} que exige este análisis antes de leer la diferencia de frecuencia cardíaca como algo más que una brecha bruta.",
             "fact.similar_sample_small": "Solo se encontraron {count} sesión(es) anterior(es) de distancia comparable, por debajo de las {minimum} que exige este análisis antes de leer una diferencia como algo más que una brecha bruta.",
             "fact.similar_unavailable": "No se encontró ninguna sesión anterior de distancia comparable (±{tolerance} %) en {days} días, así que no hay comparación histórica disponible.",
             "fact.similar_nature_unknown": "La naturaleza de entrenamiento o competición de estas sesiones no está registrada; su comparabilidad sigue siendo limitada y la diferencia anterior es una brecha bruta, no una conclusión de rendimiento.",
@@ -591,9 +600,16 @@ def _build_similar_reference(
             ),
         )
 
-    avg_pace = _safe_avg([match.get("avg_pace_min_km") for match in matches])
-    avg_hr = _safe_avg([match.get("avg_heart_rate") for match in matches])
-    avg_distance = _safe_avg([match.get("distance_km") for match in matches])
+    # Each average is built only from the matches that actually carry the metric.
+    # The counters below record that real coverage so no text can quote a sample
+    # size the average does not rest on.
+    pace_values = [match.get("avg_pace_min_km") for match in matches if match.get("avg_pace_min_km") is not None]
+    hr_values = [match.get("avg_heart_rate") for match in matches if match.get("avg_heart_rate") is not None]
+    distance_values = [match.get("distance_km") for match in matches if match.get("distance_km") is not None]
+
+    avg_pace = _safe_avg(pace_values)
+    avg_hr = _safe_avg(hr_values)
+    avg_distance = _safe_avg(distance_values)
 
     current_pace = workout.get("avg_pace_min_km")
     current_hr = workout.get("avg_heart_rate")
@@ -611,6 +627,10 @@ def _build_similar_reference(
     limitations: List[str] = []
     if len(matches) < SIMILAR_MIN_COMPARABLE_SAMPLE:
         limitations.append("sample_too_small")
+    if len(pace_values) < SIMILAR_MIN_COMPARABLE_SAMPLE:
+        limitations.append("pace_sample_too_small")
+    if len(hr_values) < SIMILAR_MIN_COMPARABLE_SAMPLE:
+        limitations.append("hr_sample_too_small")
     if _competition_flag(workout) is None or any(_competition_flag(match) is None for match in matches):
         limitations.append("session_nature_unknown")
     # P2: comparable stays False as soon as any limitation is recorded. An unknown
@@ -626,6 +646,9 @@ def _build_similar_reference(
         avg_distance_km=avg_distance,
         avg_pace_min_km=avg_pace,
         avg_heart_rate=avg_hr,
+        distance_sample_count=len(distance_values),
+        pace_sample_count=len(pace_values),
+        hr_sample_count=len(hr_values),
         pace_difference_min_km=pace_difference,
         heart_rate_difference_bpm=hr_difference,
         limitations=limitations,
@@ -933,11 +956,12 @@ def _comparison_observations(comparison: WorkoutAnalysisComparison, language: st
         return sentences
 
     if similar.avg_pace_min_km is not None and similar.pace_difference_min_km is not None:
+        # The pace average rests on pace_sample_count sessions, never on the total.
         sentences.append(
             _template(
                 language,
                 "fact.similar_pace",
-                count=similar.sample_count,
+                count=similar.pace_sample_count,
                 tolerance=_fmt_number(similar.distance_tolerance_pct, 0),
                 days=similar.period_days,
                 avg_distance=_fmt_number(similar.avg_distance_km or 0, 2),
@@ -945,16 +969,37 @@ def _comparison_observations(comparison: WorkoutAnalysisComparison, language: st
                 delta=_fmt_pace_delta(similar.pace_difference_min_km),
             )
         )
+        if "pace_sample_too_small" in similar.limitations:
+            sentences.append(
+                _template(
+                    language,
+                    "fact.similar_pace_coverage_small",
+                    count=similar.pace_sample_count,
+                    total=similar.sample_count,
+                    minimum=similar.min_comparable_sample,
+                )
+            )
     if similar.avg_heart_rate is not None and similar.heart_rate_difference_bpm is not None:
+        # The heart-rate average rests on hr_sample_count sessions, never on the total.
         sentences.append(
             _template(
                 language,
                 "fact.similar_hr",
-                count=similar.sample_count,
+                count=similar.hr_sample_count,
                 baseline=_fmt_number(similar.avg_heart_rate, 1),
                 delta=_fmt_signed(similar.heart_rate_difference_bpm, 1),
             )
         )
+        if "hr_sample_too_small" in similar.limitations:
+            sentences.append(
+                _template(
+                    language,
+                    "fact.similar_hr_coverage_small",
+                    count=similar.hr_sample_count,
+                    total=similar.sample_count,
+                    minimum=similar.min_comparable_sample,
+                )
+            )
     if "sample_too_small" in similar.limitations:
         sentences.append(
             _template(
