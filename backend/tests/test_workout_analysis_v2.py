@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import os
 import sys
 from pathlib import Path
@@ -137,6 +138,7 @@ def _workout(
     hr_analysis: dict | None = None,
     avg_cadence_spm: int | None = None,
     cadence_analysis: dict | None = None,
+    elevation_gain_m: int | None = None,
 ) -> dict:
     return {
         "id": workout_id,
@@ -156,6 +158,7 @@ def _workout(
         "hr_analysis": hr_analysis or {},
         "avg_cadence_spm": avg_cadence_spm,
         "cadence_analysis": cadence_analysis or {},
+        "elevation_gain_m": elevation_gain_m,
         "data_source": "garmin",
     }
 
@@ -181,6 +184,9 @@ class _FakeDB:
     OLD_TARGET_ID = "run-old-target"
     PACE_SPREAD_ONLY_ID = "run-pace-spread-only"
     CADENCE_ID = "run-cadence"
+    FIXTURE_A_ID = "run-fixture-a"
+    FIXTURE_B_ID = "run-fixture-b"
+    NO_REFERENCE_ID = "run-fixture-no-reference"
 
     def __init__(self) -> None:
         workouts = [
@@ -443,6 +449,97 @@ class _FakeDB:
                 avg_pace_min_km=5.6,
                 avg_cadence_spm=176,
             ),
+            # ---- PR303 representative fixtures -------------------------------
+            # Session A: half-marathon distance run, splits available,
+            # no validated heart-rate zone provenance.
+            _workout(
+                self.FIXTURE_A_ID,
+                user_id="user-a",
+                date="2025-06-15T07:00:00+00:00",
+                distance_km=21.27,
+                duration_minutes=122,
+                avg_heart_rate=160,
+                max_heart_rate=174,
+                avg_pace_min_km=5.7167,
+                km_splits=[
+                    {"km": index + 1, "pace_min_km": pace}
+                    for index, pace in enumerate([5.4, 5.5, 5.6, 5.6, 5.7, 5.7, 5.8, 5.8, 5.9, 6.0])
+                ],
+                split_analysis={
+                    "fastest_split_pace": 5.4,
+                    "slowest_split_pace": 6.0,
+                    "pace_drop": 0.6,
+                    "negative_split": False,
+                    "consistency_score": 88,
+                },
+                hr_analysis={"hr_drift": 9},
+                avg_cadence_spm=172,
+                elevation_gain_m=210,
+            ),
+            _workout(
+                "run-fixture-a-prev-1",
+                user_id="user-a",
+                date="2025-06-01T07:00:00+00:00",
+                distance_km=20.5,
+                duration_minutes=120,
+                avg_heart_rate=158,
+                avg_pace_min_km=5.85,
+            ),
+            _workout(
+                "run-fixture-a-prev-2",
+                user_id="user-a",
+                date="2025-05-18T07:00:00+00:00",
+                distance_km=22.0,
+                duration_minutes=131,
+                avg_heart_rate=162,
+                avg_pace_min_km=5.95,
+            ),
+            _workout(
+                "run-fixture-a-future",
+                user_id="user-a",
+                date="2025-06-20T07:00:00+00:00",
+                distance_km=21.0,
+                duration_minutes=115,
+                avg_heart_rate=159,
+                avg_pace_min_km=5.48,
+            ),
+            _workout(
+                "run-fixture-a-too-short",
+                user_id="user-a",
+                date="2025-06-05T07:00:00+00:00",
+                distance_km=8.0,
+                duration_minutes=47,
+                avg_pace_min_km=5.9,
+            ),
+            # Session B: easy-distance run, no splits, no validated zone provenance,
+            # and a single comparable earlier session (insufficient sample).
+            _workout(
+                self.FIXTURE_B_ID,
+                user_id="user-a",
+                date="2025-12-10T07:00:00+00:00",
+                distance_km=10.18,
+                duration_minutes=71,
+                avg_heart_rate=127,
+                avg_pace_min_km=6.9833,
+            ),
+            _workout(
+                "run-fixture-b-prev-1",
+                user_id="user-a",
+                date="2025-12-01T07:00:00+00:00",
+                distance_km=10.0,
+                duration_minutes=70,
+                avg_heart_rate=130,
+                avg_pace_min_km=7.05,
+            ),
+            # Session with pacing facts but no comparable earlier distance at all.
+            _workout(
+                self.NO_REFERENCE_ID,
+                user_id="user-a",
+                date="2025-11-20T07:00:00+00:00",
+                distance_km=32.0,
+                duration_minutes=205,
+                avg_pace_min_km=6.4,
+            ),
         ]
 
         for idx in range(250):
@@ -638,7 +735,10 @@ async def test_structural_standard_session_uses_neutral_structural_wording(clien
     assert payload["signals"]["session_type"]["code"] == "standard"
     assert payload["signals"]["session_type"]["text"] == "Standard session"
     lowered_summary = payload["summary"]["text"].lower()
-    assert lowered_summary == "standard-duration session completed."
+    assert lowered_summary.startswith("standard-duration session completed.")
+    # The structural wording is now followed by factual, session-specific observations.
+    assert "6 km covered in 35 min at 5:51/km." in lowered_summary
+    assert "average heart rate 170 bpm, peak 180 bpm." in lowered_summary
     for forbidden in ("steady", "consistent", "regular"):
         assert forbidden not in lowered_summary
 
@@ -747,12 +847,14 @@ async def test_history_query_is_bounded_to_candidate_date_window(client):
     history_query = client.fake_db.workouts.find_queries[-1]
     assert history_query["user_id"] == "user-a"
     assert history_query["type"] == "run"
-    assert history_query["date"] == {"$gte": "2026-08-27", "$lt": "2026-09-11"}
+    # The window covers the bounded similar-workout search (180 days) and still
+    # excludes anything at or after the current workout date.
+    assert history_query["date"] == {"$gte": "2026-03-14", "$lt": "2026-09-11"}
     assert client.fake_db.workouts.to_list_lengths[-1] == 200
 
 
 @pytest.mark.asyncio
-async def test_endpoint_candidate_query_does_not_require_old_same_type_history(client):
+async def test_endpoint_candidate_query_stays_bounded_and_excludes_future_activities(client):
     client.fake_db.workouts.find_queries.clear()
     response = await _get_analysis(client, _FakeDB.MIXED_DATE_ID)
     assert response.status_code == 200
@@ -761,9 +863,11 @@ async def test_endpoint_candidate_query_does_not_require_old_same_type_history(c
         if client.fake_db.workouts._matches(doc, client.fake_db.workouts.find_queries[-1])
     ]
     candidate_ids = {doc["id"] for doc in candidate_docs}
-    assert "run-old-outside-window" not in candidate_ids
     assert {"run-mixed-prev-z", "run-mixed-prev-offset"} <= candidate_ids
     assert "run-mixed-future" not in candidate_ids
+    # Anything older than the bounded history window stays out of the query.
+    assert "run-newer-0" not in candidate_ids
+    assert "user-b-run" not in candidate_ids
 
 
 @pytest.mark.asyncio
@@ -843,3 +947,893 @@ async def test_response_contract_has_required_structured_fields(client):
     assert payload["summary"]["text"]
     assert isinstance(payload["evidence"]["has_baseline"], bool)
     assert payload["comparison"]["baseline_period_days"] == 14
+
+
+# ============================================================
+# PR303 — restored factual, session-specific analysis
+# ============================================================
+
+
+async def _get_analysis_lang(client, workout_id: str, language: str, user_id: str = "user-a"):
+    email = "a@test.com" if user_id == "user-a" else "b@test.com"
+    return await client.get(
+        f"/api/coach/workout-analysis/{workout_id}?language={language}",
+        headers=_bearer(user_id, email),
+    )
+
+
+# Workout Analysis V2 describes and compares; Training Today/Week V2 remain the only
+# prescription authorities. These phrasings decide what the athlete should do next and
+# are therefore forbidden in every supported language.
+PRESCRIPTIVE_PHRASES_EN = (
+    "next session",
+    "easy day",
+    "rest day",
+    "more conservatively",
+    "repeat this distance",
+    "repeating this distance",
+    "reuse this",
+    "keep this control",
+    "plan an easy",
+    "use individualized",
+    "use heart-rate recording",
+)
+PRESCRIPTIVE_PHRASES_FR = (
+    "prochaine séance",
+    "journée facile",
+    "journée de repos",
+    "plus prudemment",
+    "répéter cette distance",
+    "réutilise",
+    "prévois",
+    "garde la prochaine",
+    "utilise des zones",
+    "fais progresser",
+)
+PRESCRIPTIVE_PHRASES_ES = (
+    "próxima sesión",
+    "día suave",
+    "día de descanso",
+    "más conservador",
+    "repetir esta distancia",
+    "reutiliza",
+    "planifica",
+    "usa zonas",
+    "mantén ese control",
+)
+PRESCRIPTIVE_PHRASES = (
+    PRESCRIPTIVE_PHRASES_EN + PRESCRIPTIVE_PHRASES_FR + PRESCRIPTIVE_PHRASES_ES
+)
+
+# Advice codes are observation/limit codes only. Any prescription-shaped code is banned.
+ALLOWED_ADVICE_CODES = {
+    "advice.high_intensity_observation",
+    "advice.low_intensity_observation",
+    "advice.even_pacing",
+    "advice.negative_split_confirmed",
+    "advice.maintain_consistency",
+    "advice.monitor_hr_drift",
+    "advice.recover_after_long",
+    "advice.hr_without_intensity",
+    "advice.no_hr",
+}
+
+
+def _assert_not_prescriptive(text: str) -> None:
+    lowered = text.lower()
+    for phrase in PRESCRIPTIVE_PHRASES:
+        assert phrase not in lowered, f"prescriptive phrasing found: {phrase!r} in {text!r}"
+
+
+@pytest.mark.asyncio
+async def test_fixture_a_summary_reports_its_own_distance_duration_pace_and_hr(client):
+    payload = (await _get_analysis(client, _FakeDB.FIXTURE_A_ID)).json()
+    summary = payload["summary"]["text"]
+    assert "21.27 km" in summary
+    assert "2h02" in summary
+    assert "5:43/km" in summary
+    assert "160 bpm" in summary
+    assert "174 bpm" in summary
+
+
+@pytest.mark.asyncio
+async def test_fixture_a_meaning_uses_provided_splits_drift_elevation_and_cadence(client):
+    payload = (await _get_analysis(client, _FakeDB.FIXTURE_A_ID)).json()
+    meaning = payload["meaning"]["text"]
+    assert "5:24/km" in meaning and "6:00/km" in meaning
+    assert "10 splits recorded" in meaning
+    assert "0:36/km" in meaning
+    assert "88/100" in meaning
+    assert "9 bpm" in meaning
+    assert "210 m" in meaning
+    assert "172 spm" in meaning
+    # No automatic causal attribution for the measured drift.
+    lowered = meaning.lower()
+    assert "fatigue" not in lowered
+    assert "dehydr" not in lowered
+    # Facts come first: the intensity caveat is only a closing statement.
+    assert not lowered.startswith("heart-rate facts are available")
+
+
+@pytest.mark.asyncio
+async def test_fixture_a_advice_is_specific_useful_and_non_prescriptive(client):
+    payload = (await _get_analysis(client, _FakeDB.FIXTURE_A_ID)).json()
+    assert payload["advice"]["code"] == "advice.even_pacing"
+    assert "individualized heart-rate zones" not in payload["advice"]["text"]
+    text = payload["advice"]["text"]
+    # Specific to the observed pacing fact, not a generic fallback.
+    assert "pace drop" in text
+    _assert_not_prescriptive(text)
+
+
+@pytest.mark.asyncio
+async def test_fixture_b_analysis_is_specific_and_differs_from_fixture_a(client):
+    payload_a = (await _get_analysis(client, _FakeDB.FIXTURE_A_ID)).json()
+    payload_b = (await _get_analysis(client, _FakeDB.FIXTURE_B_ID)).json()
+    summary_b = payload_b["summary"]["text"]
+    assert "10.18 km" in summary_b
+    assert "1h11" in summary_b
+    assert "6:59/km" in summary_b
+    assert "127 bpm" in summary_b
+    assert "174 bpm" not in summary_b
+    assert summary_b != payload_a["summary"]["text"]
+    assert payload_b["meaning"]["text"] != payload_a["meaning"]["text"]
+    assert payload_b["advice"]["text"] != payload_a["advice"]["text"]
+
+
+@pytest.mark.asyncio
+async def test_fixtures_do_not_invent_splits_zones_or_session_nature(client):
+    payload = (await _get_analysis(client, _FakeDB.FIXTURE_B_ID)).json()
+    assert payload["evidence"]["has_splits"] is False
+    assert payload["evidence"]["has_hr_zones"] is False
+    assert payload["pacing"]["fastest_split_min_km"] is None
+    assert payload["pacing"]["slowest_split_min_km"] is None
+    assert payload["pacing"]["negative_split"] is None
+    assert payload["physiology"]["zone_distribution"] is None
+    meaning = payload["meaning"]["text"].lower()
+    assert "splits recorded" not in meaning
+    assert "interval" not in meaning
+    assert "tempo" not in meaning
+
+
+@pytest.mark.asyncio
+async def test_fixtures_never_infer_intensity_from_average_heart_rate(client):
+    for workout_id in (_FakeDB.FIXTURE_A_ID, _FakeDB.FIXTURE_B_ID):
+        payload = (await _get_analysis(client, workout_id)).json()
+        assert payload["signals"]["intensity"]["available"] is False
+        assert payload["signals"]["intensity"]["code"] is None
+        assert payload["evidence"]["has_hr_zones"] is False
+
+
+@pytest.mark.asyncio
+async def test_fixture_b_advice_states_analysis_limits_without_prescribing(client):
+    payload = (await _get_analysis(client, _FakeDB.FIXTURE_B_ID)).json()
+    assert payload["advice"]["code"] == "advice.hr_without_intensity"
+    text = payload["advice"]["text"]
+    # Missing zone provenance is presented as a limit of the analysis, never as a
+    # training instruction, and it is never the only statement made.
+    assert "Limit of this analysis" in text
+    assert "no kilometre splits are recorded" in text
+    _assert_not_prescriptive(text)
+
+
+@pytest.mark.asyncio
+async def test_similar_history_uses_comparable_prior_sessions_only(client):
+    payload = (await _get_analysis(client, _FakeDB.FIXTURE_A_ID)).json()
+    similar = payload["comparison"]["similar"]
+    assert similar["available"] is True
+    assert similar["sample_count"] == 2
+    # P2: an unrecorded training/race nature forbids asserting strong comparability.
+    assert similar["comparable"] is False
+    assert set(similar["workout_ids"]) == {"run-fixture-a-prev-1", "run-fixture-a-prev-2"}
+    assert similar["distance_tolerance_pct"] == 30.0
+    assert similar["period_days"] == 180
+    assert similar["pace_difference_min_km"] is not None
+    assert "session_nature_unknown" in similar["limitations"]
+
+
+@pytest.mark.asyncio
+async def test_similar_history_excludes_future_and_non_comparable_distances(client):
+    payload = (await _get_analysis(client, _FakeDB.FIXTURE_A_ID)).json()
+    similar_ids = set(payload["comparison"]["similar"]["workout_ids"])
+    assert "run-fixture-a-future" not in similar_ids
+    assert "run-fixture-a-too-short" not in similar_ids
+    assert _FakeDB.FIXTURE_A_ID not in similar_ids
+
+
+@pytest.mark.asyncio
+async def test_similar_history_is_user_scoped(client):
+    await client.fake_db.workouts.insert_one(
+        _workout(
+            "run-other-user-comparable",
+            user_id="user-b",
+            date="2025-06-02T07:00:00+00:00",
+            distance_km=21.0,
+            duration_minutes=110,
+            avg_heart_rate=150,
+            avg_pace_min_km=5.2,
+        )
+    )
+    payload = (await _get_analysis(client, _FakeDB.FIXTURE_A_ID)).json()
+    similar = payload["comparison"]["similar"]
+    assert similar["sample_count"] == 2
+    assert "run-other-user-comparable" not in set(similar["workout_ids"])
+
+
+@pytest.mark.asyncio
+async def test_insufficient_similar_sample_is_not_presented_as_progression(client):
+    payload = (await _get_analysis(client, _FakeDB.FIXTURE_B_ID)).json()
+    similar = payload["comparison"]["similar"]
+    assert similar["available"] is True
+    assert similar["comparable"] is False
+    assert similar["sample_count"] == 1
+    assert "sample_too_small" in similar["limitations"]
+    meaning = payload["meaning"]["text"]
+    assert "below the 2 this analysis requires" in meaning
+    assert "raw gap, not a performance conclusion" in meaning
+    assert "progress" not in meaning
+
+
+@pytest.mark.asyncio
+async def test_missing_similar_reference_reports_unavailability_instead_of_a_conclusion(client):
+    payload = (await _get_analysis(client, _FakeDB.NO_REFERENCE_ID)).json()
+    similar = payload["comparison"]["similar"]
+    assert similar["available"] is False
+    assert similar["sample_count"] == 0
+    assert similar["limitations"] == ["no_comparable_reference"]
+    assert "no historical comparison is available" in payload["meaning"]["text"]
+
+
+@pytest.mark.asyncio
+async def test_baseline_observations_are_quoted_in_meaning_when_available(client):
+    payload = (await _get_analysis(client, _FakeDB.FIXTURE_A_ID)).json()
+    comparison = payload["comparison"]
+    assert comparison["available"] is True
+    meaning = payload["meaning"]["text"]
+    assert f"{comparison['baseline_sample_count']}-session average" in meaning
+
+
+@pytest.mark.asyncio
+async def test_fixture_analyses_are_deterministic_across_repeated_calls(client):
+    for workout_id in (_FakeDB.FIXTURE_A_ID, _FakeDB.FIXTURE_B_ID):
+        first = (await _get_analysis(client, workout_id)).json()
+        second = (await _get_analysis(client, workout_id)).json()
+        assert first == second
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("language", ["en", "fr", "es"])
+async def test_fixture_analyses_are_localized_and_keep_the_numeric_facts(client, language):
+    response = await _get_analysis_lang(client, _FakeDB.FIXTURE_A_ID, language)
+    assert response.status_code == 200
+    payload = response.json()
+    assert "21.27 km" in payload["summary"]["text"]
+    assert "5:43/km" in payload["summary"]["text"]
+    assert payload["summary"]["code"] == "summary.long_structural"
+    assert payload["advice"]["code"] == "advice.even_pacing"
+
+
+@pytest.mark.asyncio
+async def test_fixture_translations_actually_differ_between_languages(client):
+    texts = {}
+    for language in ("en", "fr", "es"):
+        payload = (await _get_analysis_lang(client, _FakeDB.FIXTURE_A_ID, language)).json()
+        texts[language] = payload["meaning"]["text"]
+    assert len(set(texts.values())) == 3
+
+
+@pytest.mark.asyncio
+async def test_incomplete_workout_does_not_fabricate_missing_measurements(client):
+    incomplete = _workout(
+        "run-fixture-incomplete",
+        user_id="user-a",
+        date="2025-12-05T07:00:00+00:00",
+        distance_km=6.0,
+        duration_minutes=38,
+    )
+    await client.fake_db.workouts.insert_one(incomplete)
+    payload = (await _get_analysis(client, "run-fixture-incomplete")).json()
+    summary = payload["summary"]["text"]
+    assert "6 km covered in 38 min." in summary
+    assert "bpm" not in summary
+    assert payload["physiology"]["available"] is False
+    assert payload["physiology"]["avg_hr"] is None
+    assert payload["physiology"]["hr_drift"] is None
+    meaning = payload["meaning"]["text"]
+    assert "bpm" not in meaning
+    assert "Elevation gain" not in meaning
+    assert "cadence" not in meaning.lower()
+
+
+@pytest.mark.asyncio
+async def test_similar_reference_is_exposed_without_breaking_the_v2_contract(client):
+    payload = (await _get_analysis(client, _FakeDB.FIXTURE_A_ID)).json()
+    assert set(payload.keys()) == {
+        "version",
+        "workout",
+        "summary",
+        "signals",
+        "physiology",
+        "pacing",
+        "comparison",
+        "meaning",
+        "advice",
+        "evidence",
+    }
+    assert payload["comparison"]["baseline_period_days"] == 14
+    assert isinstance(payload["comparison"]["similar"], dict)
+
+
+@pytest.mark.asyncio
+async def test_fixtures_are_not_readable_by_another_user(client):
+    for workout_id in (_FakeDB.FIXTURE_A_ID, _FakeDB.FIXTURE_B_ID):
+        response = await _get_analysis(client, workout_id, user_id="user-b")
+        assert response.status_code == 404
+
+
+def test_retrieve_similar_workouts_respects_sport_order_and_distance_tolerance():
+    current = {"id": "c", "type": "run", "date": "2025-06-15T07:00:00+00:00", "distance_km": 10.0}
+    candidates = [
+        {"id": "same-sport-recent", "type": "run", "date": "2025-06-10T07:00:00+00:00", "distance_km": 11.0},
+        {"id": "same-sport-older", "type": "run", "date": "2025-05-10T07:00:00+00:00", "distance_km": 9.0},
+        {"id": "other-sport", "type": "cycle", "date": "2025-06-11T07:00:00+00:00", "distance_km": 10.5},
+        {"id": "too-far-distance", "type": "run", "date": "2025-06-12T07:00:00+00:00", "distance_km": 14.0},
+        {"id": "future", "type": "run", "date": "2025-06-16T07:00:00+00:00", "distance_km": 10.2},
+        {"id": "outside-window", "type": "run", "date": "2024-06-10T07:00:00+00:00", "distance_km": 10.1},
+    ]
+    result = workout_analysis_v2.retrieve_similar_workouts(current, candidates)
+    assert [item["id"] for item in result] == ["same-sport-recent", "same-sport-older"]
+
+
+def test_retrieve_similar_workouts_separates_race_and_training_only_on_real_metadata():
+    current = {
+        "id": "c",
+        "type": "run",
+        "date": "2025-06-15T07:00:00+00:00",
+        "distance_km": 10.0,
+        "is_race": False,
+    }
+    candidates = [
+        {"id": "race", "type": "run", "date": "2025-06-10T07:00:00+00:00", "distance_km": 10.0, "is_race": True},
+        {"id": "training", "type": "run", "date": "2025-06-09T07:00:00+00:00", "distance_km": 10.0, "is_race": False},
+        {"id": "unknown-nature", "type": "run", "date": "2025-06-08T07:00:00+00:00", "distance_km": 10.0},
+        {"id": "race-named", "type": "run", "name": "Marathon de Paris", "date": "2025-06-07T07:00:00+00:00", "distance_km": 10.0},
+    ]
+    result = workout_analysis_v2.retrieve_similar_workouts(current, candidates)
+    ids = [item["id"] for item in result]
+    assert "race" not in ids
+    # Nothing is inferred from the session name: the named session stays a candidate.
+    assert ids == ["training", "unknown-nature", "race-named"]
+
+
+def test_similar_search_constants_are_bounded():
+    assert workout_analysis_v2.SIMILAR_DISTANCE_TOLERANCE_PCT == 30.0
+    assert workout_analysis_v2.SIMILAR_HISTORY_WINDOW_DAYS == 180
+    assert workout_analysis_v2.SIMILAR_MAX_RESULTS == 5
+    assert workout_analysis_v2.SIMILAR_MIN_COMPARABLE_SAMPLE == 2
+
+
+# ============================================================
+# PR303 patch — factual-only analysis (no prescription, no generic baseline reading)
+# ============================================================
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("language", ["en", "fr", "es"])
+@pytest.mark.parametrize("workout_id", [_FakeDB.FIXTURE_A_ID, _FakeDB.FIXTURE_B_ID, _FakeDB.NO_REFERENCE_ID])
+async def test_analysis_never_prescribes_a_future_session(client, workout_id, language):
+    payload = (await _get_analysis_lang(client, workout_id, language)).json()
+    assert payload["advice"]["code"] in ALLOWED_ADVICE_CODES
+    for block in ("summary", "meaning", "advice"):
+        _assert_not_prescriptive(payload[block]["text"])
+
+
+def test_no_advice_template_key_is_prescription_shaped():
+    source = inspect.getsource(workout_analysis_v2)
+    for banned in ("advice.recover_after_hard", "advice.maintain_easy", "advice.build_progressively"):
+        assert banned not in source
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("language", ["en", "fr", "es"])
+async def test_advice_selection_is_driven_by_observed_facts_not_by_zone_absence(client, language):
+    # Fixture A has a measured pace drop: the observation code wins over the zone limit.
+    payload_a = (await _get_analysis_lang(client, _FakeDB.FIXTURE_A_ID, language)).json()
+    assert payload_a["advice"]["code"] == "advice.even_pacing"
+    # Fixture B has no split/drift/long signal: only then is the zone limit stated,
+    # and it is stated as a limit of the analysis, never as an instruction.
+    payload_b = (await _get_analysis_lang(client, _FakeDB.FIXTURE_B_ID, language)).json()
+    assert payload_b["advice"]["code"] == "advice.hr_without_intensity"
+    assert payload_a["advice"]["text"] != payload_b["advice"]["text"]
+
+
+@pytest.mark.asyncio
+async def test_generic_14_day_baseline_pace_and_hr_are_not_verbalized_in_meaning(client):
+    # Fixture A's 14-day history mixes a 21 km session with much shorter runs.
+    payload = (await _get_analysis(client, _FakeDB.FIXTURE_A_ID)).json()
+    comparison = payload["comparison"]
+    # The baseline stays in the contract for compatibility...
+    assert comparison["available"] is True
+    assert comparison["avg_pace_min_km"]["baseline"] is not None
+    meaning = payload["meaning"]["text"]
+    # ...but its pace/HR deltas are never read as a performance comparison.
+    assert "against that" not in meaning
+    baseline_hr = comparison["avg_heart_rate"]["baseline"]
+    if baseline_hr is not None:
+        assert f"{baseline_hr}" not in meaning
+    for banned in ("progression", "better session", "improved", "superior effort"):
+        assert banned not in meaning.lower()
+
+
+@pytest.mark.asyncio
+async def test_baseline_distance_wording_stays_descriptive_and_only_claims_what_is_verified(client):
+    payload = (await _get_analysis(client, _FakeDB.FIXTURE_A_ID)).json()
+    meaning = payload["meaning"]["text"]
+    assert "raw 2-session average of the last 14 days" in meaning
+    assert "may include sessions of different distances or natures and is not a performance comparison" in meaning
+    assert payload["signals"]["volume"]["code"] == "above_recent"
+    assert payload["signals"]["volume"]["text"] == "Distance above the recent average"
+
+
+@pytest.mark.asyncio
+async def test_baseline_without_any_comparable_session_yields_no_performance_claim(client):
+    # NO_REFERENCE_ID has recent activity of very different distances but nothing comparable.
+    payload = (await _get_analysis(client, _FakeDB.NO_REFERENCE_ID)).json()
+    similar = payload["comparison"]["similar"]
+    assert similar["available"] is False
+    assert similar["comparable"] is False
+    meaning = payload["meaning"]["text"]
+    assert "no historical comparison is available" in meaning
+    for banned in ("faster than", "slower than", "progression", "improved"):
+        assert banned not in meaning.lower()
+    _assert_not_prescriptive(meaning)
+
+
+@pytest.mark.asyncio
+async def test_unknown_session_nature_is_reported_and_blocks_strong_comparability(client):
+    payload = (await _get_analysis(client, _FakeDB.FIXTURE_A_ID)).json()
+    similar = payload["comparison"]["similar"]
+    assert similar["sample_count"] == 2
+    assert "session_nature_unknown" in similar["limitations"]
+    assert similar["comparable"] is False
+    meaning = payload["meaning"]["text"]
+    # The factual distance/pace gap is still exposed, with the limitation spelled out.
+    assert "earlier session(s) of comparable distance carrying a usable pace" in meaning
+    assert "raw gap, not a performance conclusion" in meaning
+
+
+def test_explicit_race_metadata_excludes_incompatible_history():
+    current = {
+        "id": "current-race",
+        "type": "run",
+        "date": "2025-06-15T07:00:00+00:00",
+        "distance_km": 10.0,
+        "is_race": True,
+    }
+    candidates = [
+        {"id": "hist-training", "type": "run", "date": "2025-06-10T07:00:00+00:00", "distance_km": 10.0, "is_race": False},
+        {"id": "hist-race", "type": "run", "date": "2025-06-09T07:00:00+00:00", "distance_km": 10.0, "is_race": True},
+    ]
+    ids = [item["id"] for item in workout_analysis_v2.retrieve_similar_workouts(current, candidates)]
+    assert ids == ["hist-race"]
+
+
+def test_similar_reference_is_comparable_only_when_no_limitation_remains():
+    current = {
+        "id": "current",
+        "type": "run",
+        "date": "2025-06-15T07:00:00+00:00",
+        "distance_km": 10.0,
+        "avg_pace_min_km": 5.5,
+        "avg_heart_rate": 151,
+        "is_race": False,
+    }
+    candidates = [
+        {"id": "h1", "type": "run", "date": "2025-06-10T07:00:00+00:00", "distance_km": 10.0, "avg_pace_min_km": 5.6, "avg_heart_rate": 150, "is_race": False},
+        {"id": "h2", "type": "run", "date": "2025-06-09T07:00:00+00:00", "distance_km": 10.2, "avg_pace_min_km": 5.4, "avg_heart_rate": 152, "is_race": False},
+    ]
+    reference = workout_analysis_v2._build_similar_reference(current, candidates, "en")
+    assert reference.available is True
+    assert reference.sample_count == 2
+    assert reference.limitations == []
+    assert reference.comparable is True
+
+    # Drop the explicit nature of one reference: comparability must fall back to False.
+    candidates[1].pop("is_race")
+    degraded = workout_analysis_v2._build_similar_reference(current, candidates, "en")
+    assert degraded.limitations == ["session_nature_unknown"]
+    assert degraded.comparable is False
+
+
+# ============================================================
+# PR303 final patch — per-metric coverage and verified baseline wording
+# ============================================================
+
+
+def _similar_candidate(workout_id: str, date: str, distance_km: float, **extra) -> dict:
+    candidate = {
+        "id": workout_id,
+        "type": "run",
+        "date": date,
+        "distance_km": distance_km,
+    }
+    candidate.update(extra)
+    return candidate
+
+
+_CURRENT_FOR_COVERAGE = {
+    "id": "coverage-current",
+    "type": "run",
+    "date": "2025-06-15T07:00:00+00:00",
+    "distance_km": 10.0,
+    "avg_pace_min_km": 5.5,
+    "avg_heart_rate": 150,
+}
+
+
+def test_partial_pace_coverage_is_reported_with_its_own_sample_count():
+    # 5 comparable sessions, only 2 of them carry a usable pace.
+    candidates = [
+        _similar_candidate("p1", "2025-06-10T07:00:00+00:00", 10.0, avg_pace_min_km=5.8),
+        _similar_candidate("p2", "2025-06-09T07:00:00+00:00", 10.1, avg_pace_min_km=5.6),
+        _similar_candidate("p3", "2025-06-08T07:00:00+00:00", 10.2),
+        _similar_candidate("p4", "2025-06-07T07:00:00+00:00", 9.9),
+        _similar_candidate("p5", "2025-06-06T07:00:00+00:00", 10.3),
+    ]
+    reference = workout_analysis_v2._build_similar_reference(_CURRENT_FOR_COVERAGE, candidates, "en")
+    assert reference.sample_count == 5
+    assert reference.pace_sample_count == 2
+    assert reference.hr_sample_count == 0
+    assert reference.avg_pace_min_km == pytest.approx((5.8 + 5.6) / 2, abs=0.01)
+    assert "pace_sample_too_small" not in reference.limitations
+    assert "hr_sample_too_small" in reference.limitations
+
+    comparison = workout_analysis_v2.WorkoutAnalysisComparison(
+        available=False,
+        baseline_period_days=14,
+        baseline_sample_count=0,
+        similar=reference,
+    )
+    text = " ".join(workout_analysis_v2._comparison_observations(comparison, "en"))
+    # The pace sentence quotes the pace coverage, never the 5 sessions found.
+    assert "Across 2 earlier session(s) of comparable distance carrying a usable pace" in text
+    assert "Across 5 earlier session" not in text
+    # No heart-rate claim can be made at all.
+    assert "heart rate" not in text.lower()
+
+
+def test_partial_hr_coverage_is_reported_and_flagged_as_insufficient():
+    # 4 comparable sessions, only 1 of them carries a usable heart rate.
+    candidates = [
+        _similar_candidate("h1", "2025-06-10T07:00:00+00:00", 10.0, avg_pace_min_km=5.8, avg_heart_rate=145),
+        _similar_candidate("h2", "2025-06-09T07:00:00+00:00", 10.1, avg_pace_min_km=5.6),
+        _similar_candidate("h3", "2025-06-08T07:00:00+00:00", 10.2, avg_pace_min_km=5.7),
+        _similar_candidate("h4", "2025-06-07T07:00:00+00:00", 9.9, avg_pace_min_km=5.5),
+    ]
+    reference = workout_analysis_v2._build_similar_reference(_CURRENT_FOR_COVERAGE, candidates, "en")
+    assert reference.sample_count == 4
+    assert reference.pace_sample_count == 4
+    assert reference.hr_sample_count == 1
+    assert reference.avg_heart_rate == pytest.approx(145.0, abs=0.01)
+    assert "hr_sample_too_small" in reference.limitations
+    assert "pace_sample_too_small" not in reference.limitations
+
+    comparison = workout_analysis_v2.WorkoutAnalysisComparison(
+        available=False,
+        baseline_period_days=14,
+        baseline_sample_count=0,
+        similar=reference,
+    )
+    text = " ".join(workout_analysis_v2._comparison_observations(comparison, "en"))
+    assert "Average heart rate across 1 earlier session(s) of comparable distance carrying a usable heart rate" in text
+    assert "Average heart rate across 4 earlier session" not in text
+    # The insufficient heart-rate coverage is stated explicitly.
+    assert "That heart-rate average rests on 1 of the 4 earlier session(s) found" in text
+
+
+def test_comparable_history_without_any_pace_or_hr_invents_nothing():
+    candidates = [
+        _similar_candidate("n1", "2025-06-10T07:00:00+00:00", 10.0),
+        _similar_candidate("n2", "2025-06-09T07:00:00+00:00", 10.1),
+    ]
+    reference = workout_analysis_v2._build_similar_reference(_CURRENT_FOR_COVERAGE, candidates, "en")
+    assert reference.available is True
+    assert reference.sample_count == 2
+    assert reference.pace_sample_count == 0
+    assert reference.hr_sample_count == 0
+    assert reference.avg_pace_min_km is None
+    assert reference.avg_heart_rate is None
+    assert reference.pace_difference_min_km is None
+    assert reference.heart_rate_difference_bpm is None
+
+    comparison = workout_analysis_v2.WorkoutAnalysisComparison(
+        available=False,
+        baseline_period_days=14,
+        baseline_sample_count=0,
+        similar=reference,
+    )
+    text = " ".join(workout_analysis_v2._comparison_observations(comparison, "en")).lower()
+    assert "average pace was" not in text
+    assert "bpm" not in text
+
+
+def test_distance_sample_count_tracks_real_distance_coverage():
+    candidates = [
+        _similar_candidate("d1", "2025-06-10T07:00:00+00:00", 10.0, avg_pace_min_km=5.6),
+        _similar_candidate("d2", "2025-06-09T07:00:00+00:00", 10.1, avg_pace_min_km=5.7),
+    ]
+    reference = workout_analysis_v2._build_similar_reference(_CURRENT_FOR_COVERAGE, candidates, "en")
+    assert reference.distance_sample_count == 2
+    assert reference.avg_distance_km == pytest.approx(10.05, abs=0.01)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("language", ["en", "fr", "es"])
+async def test_baseline_wording_never_asserts_unverified_distance_mixing(client, language):
+    payload = (await _get_analysis_lang(client, _FakeDB.FIXTURE_A_ID, language)).json()
+    meaning = payload["meaning"]["text"]
+    hedged = {
+        "en": "may include sessions of different distances or natures",
+        "fr": "peut inclure des séances de distances ou de nature différentes",
+        "es": "puede incluir sesiones de distancias o naturalezas diferentes",
+    }[language]
+    asserted = {
+        "en": "mixes sessions of different distances",
+        "fr": "mélange des séances de distances différentes",
+        "es": "mezcla sesiones de distancias diferentes",
+    }[language]
+    assert hedged in meaning
+    assert asserted not in meaning
+
+
+@pytest.mark.asyncio
+async def test_identical_distance_baseline_is_not_described_as_mixed(client):
+    # A 14-day history made only of identical distances must not be claimed as mixed.
+    for index in range(2):
+        await client.fake_db.workouts.insert_one(
+            _workout(
+                f"run-uniform-{index}",
+                user_id="user-a",
+                date=f"2025-06-1{index}T07:00:00+00:00",
+                distance_km=12.0,
+                duration_minutes=70,
+                avg_pace_min_km=5.8,
+            )
+        )
+    await client.fake_db.workouts.insert_one(
+        _workout(
+            "run-uniform-current",
+            user_id="user-a",
+            date="2025-06-14T07:00:00+00:00",
+            distance_km=12.0,
+            duration_minutes=70,
+            avg_pace_min_km=5.8,
+        )
+    )
+    payload = (await _get_analysis(client, "run-uniform-current")).json()
+    meaning = payload["meaning"]["text"]
+    assert "mixes sessions of different distances" not in meaning
+    if "average of the last" in meaning:
+        assert "may include sessions of different distances or natures" in meaning
+    # Still no performance reading from the generic baseline.
+    for banned in ("progression", "better session", "improved"):
+        assert banned not in meaning.lower()
+
+
+@pytest.mark.asyncio
+async def test_mixed_distance_baseline_stays_descriptive_without_pace_or_hr_claims(client):
+    payload = (await _get_analysis(client, _FakeDB.FIXTURE_A_ID)).json()
+    comparison = payload["comparison"]
+    assert comparison["available"] is True
+    meaning = payload["meaning"]["text"]
+    assert "may include sessions of different distances or natures" in meaning
+    # The generic baseline never returns as a pace/HR comparison.
+    assert "against that" not in meaning
+    baseline_hr = comparison["avg_heart_rate"]["baseline"]
+    if baseline_hr is not None:
+        assert f"{baseline_hr}" not in meaning
+    for banned in ("progression", "better session", "improved", "superior effort"):
+        assert banned not in meaning.lower()
+
+
+# ============================================================
+# PR #304 final patch — strict population alignment and metric validity
+# ============================================================
+
+
+def test_pace_sentence_uses_the_distance_of_the_pace_population_only():
+    """P1 regression: the pace sentence must not mix two populations.
+
+    Two sessions carry a pace (9.0 km and 10.0 km, average 9.5 km); three carry
+    none (12.0, 12.5, 13.0 km). Quoting ``avg_distance_km`` here would announce
+    the 11.3 km average of all five sessions next to a pace computed on two.
+    """
+    candidates = [
+        _similar_candidate("a1", "2025-06-10T07:00:00+00:00", 9.0, avg_pace_min_km=5.8),
+        _similar_candidate("a2", "2025-06-09T07:00:00+00:00", 10.0, avg_pace_min_km=5.6),
+        _similar_candidate("a3", "2025-06-08T07:00:00+00:00", 12.0),
+        _similar_candidate("a4", "2025-06-07T07:00:00+00:00", 12.5),
+        _similar_candidate("a5", "2025-06-06T07:00:00+00:00", 13.0),
+    ]
+    current = dict(_CURRENT_FOR_COVERAGE, distance_km=11.0)
+    reference = workout_analysis_v2._build_similar_reference(current, candidates, "en")
+
+    assert reference.sample_count == 5
+    assert reference.pace_sample_count == 2
+    # The pace subset keeps its own distance average, distinct from the global one.
+    assert reference.pace_avg_distance_km == pytest.approx(9.5, abs=0.001)
+    assert reference.avg_distance_km == pytest.approx(11.3, abs=0.001)
+    assert reference.pace_avg_distance_km != reference.avg_distance_km
+
+    comparison = workout_analysis_v2.WorkoutAnalysisComparison(
+        available=False,
+        baseline_period_days=14,
+        baseline_sample_count=0,
+        similar=reference,
+    )
+    text = " ".join(workout_analysis_v2._comparison_observations(comparison, "en"))
+    assert "Across 2 earlier session(s) of comparable distance carrying a usable pace" in text
+    assert "average 9.5 km" in text
+    # The all-sessions average must never appear in the pace sentence.
+    assert "11.3" not in text
+
+
+@pytest.mark.parametrize("language", ["en", "fr", "es"])
+def test_pace_population_alignment_holds_in_every_language(language):
+    candidates = [
+        _similar_candidate("l1", "2025-06-10T07:00:00+00:00", 9.0, avg_pace_min_km=5.8),
+        _similar_candidate("l2", "2025-06-09T07:00:00+00:00", 10.0, avg_pace_min_km=5.6),
+        _similar_candidate("l3", "2025-06-08T07:00:00+00:00", 12.0),
+        _similar_candidate("l4", "2025-06-07T07:00:00+00:00", 12.5),
+        _similar_candidate("l5", "2025-06-06T07:00:00+00:00", 13.0),
+    ]
+    current = dict(_CURRENT_FOR_COVERAGE, distance_km=11.0)
+    reference = workout_analysis_v2._build_similar_reference(current, candidates, language)
+    comparison = workout_analysis_v2.WorkoutAnalysisComparison(
+        available=False,
+        baseline_period_days=14,
+        baseline_sample_count=0,
+        similar=reference,
+    )
+    text = " ".join(workout_analysis_v2._comparison_observations(comparison, language))
+    assert "9.5" in text
+    assert "11.3" not in text
+
+
+def test_invalid_pace_values_are_excluded_from_coverage_and_average():
+    candidates = [
+        _similar_candidate("v1", "2025-06-10T07:00:00+00:00", 10.0, avg_pace_min_km=5.8),
+        _similar_candidate("v2", "2025-06-09T07:00:00+00:00", 10.0, avg_pace_min_km=5.6),
+        _similar_candidate("v3", "2025-06-08T07:00:00+00:00", 10.2, avg_pace_min_km=None),
+        _similar_candidate("v4", "2025-06-07T07:00:00+00:00", 9.9, avg_pace_min_km=0),
+        _similar_candidate("v5", "2025-06-06T07:00:00+00:00", 10.3, avg_pace_min_km=-4.2),
+    ]
+    reference = workout_analysis_v2._build_similar_reference(_CURRENT_FOR_COVERAGE, candidates, "en")
+    # Only the two well-formed paces are counted, and the average rests on them alone.
+    assert reference.pace_sample_count == 2
+    assert reference.avg_pace_min_km == pytest.approx(5.7, abs=0.001)
+    assert reference.pace_avg_distance_km == pytest.approx(10.0, abs=0.001)
+
+
+def test_non_finite_and_bool_pace_values_are_excluded_too():
+    # SIMILAR_MAX_RESULTS caps the set at 5, so the remaining invalid kinds get
+    # their own fixture rather than being silently truncated away.
+    candidates = [
+        _similar_candidate("vb1", "2025-06-10T07:00:00+00:00", 10.0, avg_pace_min_km=5.8),
+        _similar_candidate("vb2", "2025-06-09T07:00:00+00:00", 10.0, avg_pace_min_km=5.6),
+        _similar_candidate("vb3", "2025-06-08T07:00:00+00:00", 10.2, avg_pace_min_km=float("nan")),
+        _similar_candidate("vb4", "2025-06-07T07:00:00+00:00", 9.9, avg_pace_min_km=float("inf")),
+        _similar_candidate("vb5", "2025-06-06T07:00:00+00:00", 10.3, avg_pace_min_km=True),
+    ]
+    reference = workout_analysis_v2._build_similar_reference(_CURRENT_FOR_COVERAGE, candidates, "en")
+    assert reference.pace_sample_count == 2
+    assert reference.avg_pace_min_km == pytest.approx(5.7, abs=0.001)
+
+
+def test_invalid_heart_rate_values_are_excluded_from_coverage_and_average():
+    candidates = [
+        _similar_candidate("w1", "2025-06-10T07:00:00+00:00", 10.0, avg_heart_rate=140),
+        _similar_candidate("w2", "2025-06-09T07:00:00+00:00", 10.1, avg_heart_rate=150),
+        _similar_candidate("w3", "2025-06-08T07:00:00+00:00", 10.2, avg_heart_rate=None),
+        _similar_candidate("w4", "2025-06-07T07:00:00+00:00", 9.9, avg_heart_rate=0),
+        _similar_candidate("w5", "2025-06-06T07:00:00+00:00", 10.3, avg_heart_rate=-10),
+    ]
+    reference = workout_analysis_v2._build_similar_reference(_CURRENT_FOR_COVERAGE, candidates, "en")
+    assert reference.hr_sample_count == 2
+    assert reference.avg_heart_rate == pytest.approx(145.0, abs=0.001)
+
+
+def test_non_finite_and_bool_heart_rate_values_are_excluded_too():
+    candidates = [
+        _similar_candidate("wb1", "2025-06-10T07:00:00+00:00", 10.0, avg_heart_rate=140),
+        _similar_candidate("wb2", "2025-06-09T07:00:00+00:00", 10.1, avg_heart_rate=150),
+        _similar_candidate("wb3", "2025-06-08T07:00:00+00:00", 10.2, avg_heart_rate=float("nan")),
+        _similar_candidate("wb4", "2025-06-07T07:00:00+00:00", 9.9, avg_heart_rate=float("inf")),
+        _similar_candidate("wb5", "2025-06-06T07:00:00+00:00", 10.3, avg_heart_rate=False),
+    ]
+    reference = workout_analysis_v2._build_similar_reference(_CURRENT_FOR_COVERAGE, candidates, "en")
+    assert reference.hr_sample_count == 2
+    assert reference.avg_heart_rate == pytest.approx(145.0, abs=0.001)
+
+
+@pytest.mark.parametrize("invalid", [None, 0, -3.2, float("nan"), float("inf"), True])
+def test_invalid_current_pace_produces_no_pace_difference(invalid):
+    candidates = [
+        _similar_candidate("c1", "2025-06-10T07:00:00+00:00", 10.0, avg_pace_min_km=5.8),
+        _similar_candidate("c2", "2025-06-09T07:00:00+00:00", 10.1, avg_pace_min_km=5.6),
+    ]
+    current = dict(_CURRENT_FOR_COVERAGE, avg_pace_min_km=invalid)
+    reference = workout_analysis_v2._build_similar_reference(current, candidates, "en")
+    assert reference.avg_pace_min_km is not None
+    assert reference.pace_difference_min_km is None
+
+    comparison = workout_analysis_v2.WorkoutAnalysisComparison(
+        available=False,
+        baseline_period_days=14,
+        baseline_sample_count=0,
+        similar=reference,
+    )
+    text = " ".join(workout_analysis_v2._comparison_observations(comparison, "en"))
+    assert "average pace was" not in text
+
+
+@pytest.mark.parametrize("invalid", [None, 0, -10, float("nan"), float("inf"), True])
+def test_invalid_current_heart_rate_produces_no_hr_difference(invalid):
+    candidates = [
+        _similar_candidate("d1", "2025-06-10T07:00:00+00:00", 10.0, avg_heart_rate=140),
+        _similar_candidate("d2", "2025-06-09T07:00:00+00:00", 10.1, avg_heart_rate=150),
+    ]
+    current = dict(_CURRENT_FOR_COVERAGE, avg_heart_rate=invalid)
+    reference = workout_analysis_v2._build_similar_reference(current, candidates, "en")
+    assert reference.avg_heart_rate is not None
+    assert reference.heart_rate_difference_bpm is None
+
+    comparison = workout_analysis_v2.WorkoutAnalysisComparison(
+        available=False,
+        baseline_period_days=14,
+        baseline_sample_count=0,
+        similar=reference,
+    )
+    text = " ".join(workout_analysis_v2._comparison_observations(comparison, "en"))
+    assert "Average heart rate across" not in text
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        (None, False),
+        (True, False),
+        (False, False),
+        (0, False),
+        (0.0, False),
+        (-1, False),
+        (float("nan"), False),
+        (float("inf"), False),
+        (float("-inf"), False),
+        ("5.5", False),
+        (5.5, True),
+        (150, True),
+    ],
+)
+def test_valid_positive_number_rejects_only_impossible_values(value, expected):
+    # No physiological calibration is applied: 1 bpm and 300 bpm are both "valid"
+    # here. This helper only removes values that cannot be averaged honestly.
+    assert workout_analysis_v2._valid_positive_number(value) is expected
+
+
+def test_invalid_candidate_distance_never_enters_the_comparable_set():
+    candidates = [
+        _similar_candidate("x1", "2025-06-10T07:00:00+00:00", float("nan"), avg_pace_min_km=5.8),
+        _similar_candidate("x2", "2025-06-09T07:00:00+00:00", 0, avg_pace_min_km=5.6),
+        _similar_candidate("x3", "2025-06-08T07:00:00+00:00", 10.0, avg_pace_min_km=5.7),
+    ]
+    matches = workout_analysis_v2.retrieve_similar_workouts(_CURRENT_FOR_COVERAGE, candidates)
+    assert [match["id"] for match in matches] == ["x3"]
+
+
+def test_invalid_current_distance_yields_no_comparable_reference():
+    candidates = [_similar_candidate("y1", "2025-06-10T07:00:00+00:00", 10.0, avg_pace_min_km=5.8)]
+    current = dict(_CURRENT_FOR_COVERAGE, distance_km=float("nan"))
+    assert workout_analysis_v2.retrieve_similar_workouts(current, candidates) == []
+    reference = workout_analysis_v2._build_similar_reference(current, candidates, "en")
+    assert reference.available is False
