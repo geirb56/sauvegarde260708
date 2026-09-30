@@ -94,6 +94,7 @@ class WorkoutAnalysisSimilarReference(BaseModel):
     avg_heart_rate: Optional[float] = None
     distance_sample_count: int = 0
     pace_sample_count: int = 0
+    pace_avg_distance_km: Optional[float] = None
     hr_sample_count: int = 0
     pace_difference_min_km: Optional[float] = None
     heart_rate_difference_bpm: Optional[float] = None
@@ -390,6 +391,24 @@ def _safe_avg(values: List[Optional[float]]) -> Optional[float]:
     return _safe_round(sum(valid) / len(valid), 2) if valid else None
 
 
+def _valid_positive_number(value) -> bool:
+    """A metric is usable only when it is a finite, strictly positive real number.
+
+    This deliberately rejects None, bool, NaN, +/-inf, zero and negatives, and
+    deliberately applies no physiological calibration (no HR floor/ceiling, no
+    pace bounds): this analysis eliminates impossible values, it does not invent
+    thresholds.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return math.isfinite(float(value)) and float(value) > 0
+
+
+def _usable_metric(workout: dict, key: str) -> Optional[float]:
+    value = workout.get(key)
+    return float(value) if _valid_positive_number(value) else None
+
+
 def _fmt_number(value: float, digits: int = 2) -> str:
     text = f"{float(value):.{digits}f}"
     if "." in text:
@@ -537,7 +556,7 @@ def retrieve_similar_workouts(
     strictly earlier sessions and comparable distances are retained.
     """
     current_distance = current_workout.get("distance_km")
-    if current_distance is None or float(current_distance) <= 0:
+    if not _valid_positive_number(current_distance):
         return []
 
     try:
@@ -557,7 +576,7 @@ def retrieve_similar_workouts(
         if (candidate.get("type") or "").lower() != current_type:
             continue
         candidate_distance = candidate.get("distance_km")
-        if candidate_distance is None:
+        if not _valid_positive_number(candidate_distance):
             continue
         try:
             candidate_date = _parse_workout_date(candidate.get("date", ""))
@@ -600,26 +619,35 @@ def _build_similar_reference(
             ),
         )
 
-    # Each average is built only from the matches that actually carry the metric.
-    # The counters below record that real coverage so no text can quote a sample
-    # size the average does not rest on.
-    pace_values = [match.get("avg_pace_min_km") for match in matches if match.get("avg_pace_min_km") is not None]
-    hr_values = [match.get("avg_heart_rate") for match in matches if match.get("avg_heart_rate") is not None]
-    distance_values = [match.get("distance_km") for match in matches if match.get("distance_km") is not None]
+    # Each metric gets its own population of matches. Every number quoted about a
+    # metric — its average, its sample count and, for pace, the average distance of
+    # the sessions it rests on — comes from that same subset, so a sentence can never
+    # mix two different populations.
+    pace_matches = [match for match in matches if _valid_positive_number(match.get("avg_pace_min_km"))]
+    hr_matches = [match for match in matches if _valid_positive_number(match.get("avg_heart_rate"))]
+    distance_matches = [match for match in matches if _valid_positive_number(match.get("distance_km"))]
+
+    pace_values = [float(match["avg_pace_min_km"]) for match in pace_matches]
+    hr_values = [float(match["avg_heart_rate"]) for match in hr_matches]
+    distance_values = [float(match["distance_km"]) for match in distance_matches]
 
     avg_pace = _safe_avg(pace_values)
     avg_hr = _safe_avg(hr_values)
     avg_distance = _safe_avg(distance_values)
+    # Distance average of the pace population only — never reused for anything else.
+    pace_avg_distance = _safe_avg(
+        [float(match["distance_km"]) for match in pace_matches if _valid_positive_number(match.get("distance_km"))]
+    )
 
-    current_pace = workout.get("avg_pace_min_km")
-    current_hr = workout.get("avg_heart_rate")
+    current_pace = _usable_metric(workout, "avg_pace_min_km")
+    current_hr = _usable_metric(workout, "avg_heart_rate")
     pace_difference = (
-        _safe_round(float(current_pace) - avg_pace, 3)
+        _safe_round(current_pace - avg_pace, 3)
         if current_pace is not None and avg_pace is not None
         else None
     )
     hr_difference = (
-        _safe_round(float(current_hr) - avg_hr, 1)
+        _safe_round(current_hr - avg_hr, 1)
         if current_hr is not None and avg_hr is not None
         else None
     )
@@ -648,6 +676,7 @@ def _build_similar_reference(
         avg_heart_rate=avg_hr,
         distance_sample_count=len(distance_values),
         pace_sample_count=len(pace_values),
+        pace_avg_distance_km=pace_avg_distance,
         hr_sample_count=len(hr_values),
         pace_difference_min_km=pace_difference,
         heart_rate_difference_bpm=hr_difference,
@@ -956,7 +985,9 @@ def _comparison_observations(comparison: WorkoutAnalysisComparison, language: st
         return sentences
 
     if similar.avg_pace_min_km is not None and similar.pace_difference_min_km is not None:
-        # The pace average rests on pace_sample_count sessions, never on the total.
+        # Every number in this sentence — count, pace average and average distance —
+        # comes from the pace subset only. similar.avg_distance_km covers all matches
+        # and is deliberately NOT used here.
         sentences.append(
             _template(
                 language,
@@ -964,7 +995,7 @@ def _comparison_observations(comparison: WorkoutAnalysisComparison, language: st
                 count=similar.pace_sample_count,
                 tolerance=_fmt_number(similar.distance_tolerance_pct, 0),
                 days=similar.period_days,
-                avg_distance=_fmt_number(similar.avg_distance_km or 0, 2),
+                avg_distance=_fmt_number(similar.pace_avg_distance_km or 0, 2),
                 baseline=_fmt_pace(similar.avg_pace_min_km),
                 delta=_fmt_pace_delta(similar.pace_difference_min_km),
             )

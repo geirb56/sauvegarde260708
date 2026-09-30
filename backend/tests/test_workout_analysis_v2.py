@@ -1634,3 +1634,206 @@ async def test_mixed_distance_baseline_stays_descriptive_without_pace_or_hr_clai
         assert f"{baseline_hr}" not in meaning
     for banned in ("progression", "better session", "improved", "superior effort"):
         assert banned not in meaning.lower()
+
+
+# ============================================================
+# PR #304 final patch — strict population alignment and metric validity
+# ============================================================
+
+
+def test_pace_sentence_uses_the_distance_of_the_pace_population_only():
+    """P1 regression: the pace sentence must not mix two populations.
+
+    Two sessions carry a pace (9.0 km and 10.0 km, average 9.5 km); three carry
+    none (12.0, 12.5, 13.0 km). Quoting ``avg_distance_km`` here would announce
+    the 11.3 km average of all five sessions next to a pace computed on two.
+    """
+    candidates = [
+        _similar_candidate("a1", "2025-06-10T07:00:00+00:00", 9.0, avg_pace_min_km=5.8),
+        _similar_candidate("a2", "2025-06-09T07:00:00+00:00", 10.0, avg_pace_min_km=5.6),
+        _similar_candidate("a3", "2025-06-08T07:00:00+00:00", 12.0),
+        _similar_candidate("a4", "2025-06-07T07:00:00+00:00", 12.5),
+        _similar_candidate("a5", "2025-06-06T07:00:00+00:00", 13.0),
+    ]
+    current = dict(_CURRENT_FOR_COVERAGE, distance_km=11.0)
+    reference = workout_analysis_v2._build_similar_reference(current, candidates, "en")
+
+    assert reference.sample_count == 5
+    assert reference.pace_sample_count == 2
+    # The pace subset keeps its own distance average, distinct from the global one.
+    assert reference.pace_avg_distance_km == pytest.approx(9.5, abs=0.001)
+    assert reference.avg_distance_km == pytest.approx(11.3, abs=0.001)
+    assert reference.pace_avg_distance_km != reference.avg_distance_km
+
+    comparison = workout_analysis_v2.WorkoutAnalysisComparison(
+        available=False,
+        baseline_period_days=14,
+        baseline_sample_count=0,
+        similar=reference,
+    )
+    text = " ".join(workout_analysis_v2._comparison_observations(comparison, "en"))
+    assert "Across 2 earlier session(s) of comparable distance carrying a usable pace" in text
+    assert "average 9.5 km" in text
+    # The all-sessions average must never appear in the pace sentence.
+    assert "11.3" not in text
+
+
+@pytest.mark.parametrize("language", ["en", "fr", "es"])
+def test_pace_population_alignment_holds_in_every_language(language):
+    candidates = [
+        _similar_candidate("l1", "2025-06-10T07:00:00+00:00", 9.0, avg_pace_min_km=5.8),
+        _similar_candidate("l2", "2025-06-09T07:00:00+00:00", 10.0, avg_pace_min_km=5.6),
+        _similar_candidate("l3", "2025-06-08T07:00:00+00:00", 12.0),
+        _similar_candidate("l4", "2025-06-07T07:00:00+00:00", 12.5),
+        _similar_candidate("l5", "2025-06-06T07:00:00+00:00", 13.0),
+    ]
+    current = dict(_CURRENT_FOR_COVERAGE, distance_km=11.0)
+    reference = workout_analysis_v2._build_similar_reference(current, candidates, language)
+    comparison = workout_analysis_v2.WorkoutAnalysisComparison(
+        available=False,
+        baseline_period_days=14,
+        baseline_sample_count=0,
+        similar=reference,
+    )
+    text = " ".join(workout_analysis_v2._comparison_observations(comparison, language))
+    assert "9.5" in text
+    assert "11.3" not in text
+
+
+def test_invalid_pace_values_are_excluded_from_coverage_and_average():
+    candidates = [
+        _similar_candidate("v1", "2025-06-10T07:00:00+00:00", 10.0, avg_pace_min_km=5.8),
+        _similar_candidate("v2", "2025-06-09T07:00:00+00:00", 10.0, avg_pace_min_km=5.6),
+        _similar_candidate("v3", "2025-06-08T07:00:00+00:00", 10.2, avg_pace_min_km=None),
+        _similar_candidate("v4", "2025-06-07T07:00:00+00:00", 9.9, avg_pace_min_km=0),
+        _similar_candidate("v5", "2025-06-06T07:00:00+00:00", 10.3, avg_pace_min_km=-4.2),
+    ]
+    reference = workout_analysis_v2._build_similar_reference(_CURRENT_FOR_COVERAGE, candidates, "en")
+    # Only the two well-formed paces are counted, and the average rests on them alone.
+    assert reference.pace_sample_count == 2
+    assert reference.avg_pace_min_km == pytest.approx(5.7, abs=0.001)
+    assert reference.pace_avg_distance_km == pytest.approx(10.0, abs=0.001)
+
+
+def test_non_finite_and_bool_pace_values_are_excluded_too():
+    # SIMILAR_MAX_RESULTS caps the set at 5, so the remaining invalid kinds get
+    # their own fixture rather than being silently truncated away.
+    candidates = [
+        _similar_candidate("vb1", "2025-06-10T07:00:00+00:00", 10.0, avg_pace_min_km=5.8),
+        _similar_candidate("vb2", "2025-06-09T07:00:00+00:00", 10.0, avg_pace_min_km=5.6),
+        _similar_candidate("vb3", "2025-06-08T07:00:00+00:00", 10.2, avg_pace_min_km=float("nan")),
+        _similar_candidate("vb4", "2025-06-07T07:00:00+00:00", 9.9, avg_pace_min_km=float("inf")),
+        _similar_candidate("vb5", "2025-06-06T07:00:00+00:00", 10.3, avg_pace_min_km=True),
+    ]
+    reference = workout_analysis_v2._build_similar_reference(_CURRENT_FOR_COVERAGE, candidates, "en")
+    assert reference.pace_sample_count == 2
+    assert reference.avg_pace_min_km == pytest.approx(5.7, abs=0.001)
+
+
+def test_invalid_heart_rate_values_are_excluded_from_coverage_and_average():
+    candidates = [
+        _similar_candidate("w1", "2025-06-10T07:00:00+00:00", 10.0, avg_heart_rate=140),
+        _similar_candidate("w2", "2025-06-09T07:00:00+00:00", 10.1, avg_heart_rate=150),
+        _similar_candidate("w3", "2025-06-08T07:00:00+00:00", 10.2, avg_heart_rate=None),
+        _similar_candidate("w4", "2025-06-07T07:00:00+00:00", 9.9, avg_heart_rate=0),
+        _similar_candidate("w5", "2025-06-06T07:00:00+00:00", 10.3, avg_heart_rate=-10),
+    ]
+    reference = workout_analysis_v2._build_similar_reference(_CURRENT_FOR_COVERAGE, candidates, "en")
+    assert reference.hr_sample_count == 2
+    assert reference.avg_heart_rate == pytest.approx(145.0, abs=0.001)
+
+
+def test_non_finite_and_bool_heart_rate_values_are_excluded_too():
+    candidates = [
+        _similar_candidate("wb1", "2025-06-10T07:00:00+00:00", 10.0, avg_heart_rate=140),
+        _similar_candidate("wb2", "2025-06-09T07:00:00+00:00", 10.1, avg_heart_rate=150),
+        _similar_candidate("wb3", "2025-06-08T07:00:00+00:00", 10.2, avg_heart_rate=float("nan")),
+        _similar_candidate("wb4", "2025-06-07T07:00:00+00:00", 9.9, avg_heart_rate=float("inf")),
+        _similar_candidate("wb5", "2025-06-06T07:00:00+00:00", 10.3, avg_heart_rate=False),
+    ]
+    reference = workout_analysis_v2._build_similar_reference(_CURRENT_FOR_COVERAGE, candidates, "en")
+    assert reference.hr_sample_count == 2
+    assert reference.avg_heart_rate == pytest.approx(145.0, abs=0.001)
+
+
+@pytest.mark.parametrize("invalid", [None, 0, -3.2, float("nan"), float("inf"), True])
+def test_invalid_current_pace_produces_no_pace_difference(invalid):
+    candidates = [
+        _similar_candidate("c1", "2025-06-10T07:00:00+00:00", 10.0, avg_pace_min_km=5.8),
+        _similar_candidate("c2", "2025-06-09T07:00:00+00:00", 10.1, avg_pace_min_km=5.6),
+    ]
+    current = dict(_CURRENT_FOR_COVERAGE, avg_pace_min_km=invalid)
+    reference = workout_analysis_v2._build_similar_reference(current, candidates, "en")
+    assert reference.avg_pace_min_km is not None
+    assert reference.pace_difference_min_km is None
+
+    comparison = workout_analysis_v2.WorkoutAnalysisComparison(
+        available=False,
+        baseline_period_days=14,
+        baseline_sample_count=0,
+        similar=reference,
+    )
+    text = " ".join(workout_analysis_v2._comparison_observations(comparison, "en"))
+    assert "average pace was" not in text
+
+
+@pytest.mark.parametrize("invalid", [None, 0, -10, float("nan"), float("inf"), True])
+def test_invalid_current_heart_rate_produces_no_hr_difference(invalid):
+    candidates = [
+        _similar_candidate("d1", "2025-06-10T07:00:00+00:00", 10.0, avg_heart_rate=140),
+        _similar_candidate("d2", "2025-06-09T07:00:00+00:00", 10.1, avg_heart_rate=150),
+    ]
+    current = dict(_CURRENT_FOR_COVERAGE, avg_heart_rate=invalid)
+    reference = workout_analysis_v2._build_similar_reference(current, candidates, "en")
+    assert reference.avg_heart_rate is not None
+    assert reference.heart_rate_difference_bpm is None
+
+    comparison = workout_analysis_v2.WorkoutAnalysisComparison(
+        available=False,
+        baseline_period_days=14,
+        baseline_sample_count=0,
+        similar=reference,
+    )
+    text = " ".join(workout_analysis_v2._comparison_observations(comparison, "en"))
+    assert "Average heart rate across" not in text
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        (None, False),
+        (True, False),
+        (False, False),
+        (0, False),
+        (0.0, False),
+        (-1, False),
+        (float("nan"), False),
+        (float("inf"), False),
+        (float("-inf"), False),
+        ("5.5", False),
+        (5.5, True),
+        (150, True),
+    ],
+)
+def test_valid_positive_number_rejects_only_impossible_values(value, expected):
+    # No physiological calibration is applied: 1 bpm and 300 bpm are both "valid"
+    # here. This helper only removes values that cannot be averaged honestly.
+    assert workout_analysis_v2._valid_positive_number(value) is expected
+
+
+def test_invalid_candidate_distance_never_enters_the_comparable_set():
+    candidates = [
+        _similar_candidate("x1", "2025-06-10T07:00:00+00:00", float("nan"), avg_pace_min_km=5.8),
+        _similar_candidate("x2", "2025-06-09T07:00:00+00:00", 0, avg_pace_min_km=5.6),
+        _similar_candidate("x3", "2025-06-08T07:00:00+00:00", 10.0, avg_pace_min_km=5.7),
+    ]
+    matches = workout_analysis_v2.retrieve_similar_workouts(_CURRENT_FOR_COVERAGE, candidates)
+    assert [match["id"] for match in matches] == ["x3"]
+
+
+def test_invalid_current_distance_yields_no_comparable_reference():
+    candidates = [_similar_candidate("y1", "2025-06-10T07:00:00+00:00", 10.0, avg_pace_min_km=5.8)]
+    current = dict(_CURRENT_FOR_COVERAGE, distance_km=float("nan"))
+    assert workout_analysis_v2.retrieve_similar_workouts(current, candidates) == []
+    reference = workout_analysis_v2._build_similar_reference(current, candidates, "en")
+    assert reference.available is False
