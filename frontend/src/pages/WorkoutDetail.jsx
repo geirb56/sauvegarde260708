@@ -306,7 +306,7 @@ export default function WorkoutDetail() {
     return () => controller.abort();
   }, [id, lang]);
 
-  const goToAskCoach = () => navigate("/coach");
+  const goToAskCoach = () => navigate(id ? `/coach?analyze=${encodeURIComponent(id)}` : "/coach");
   const backTo = ALLOWED_BACK_ROUTES.has(location.state?.from) ? location.state.from : "/sessions";
 
   if (workoutLoading) {

@@ -37,6 +37,8 @@ The Training V2 engine decides the prescription. The Coach only explains it.
 
 📊 AVAILABLE DATA:
 - Canonical Training V2 goal, current week, today prescription, readiness, load, paces and performance context
+- Bounded factual history of recent workouts (recent_workouts: distance, duration, pace, HR, elevation)
+- Factual session detail and canonical Workout Analysis V2 (workout_detail: summary, signals, physiology, pacing, similar sessions comparison) when a workout is selected
 - Some fields can be unavailable; unavailable data must stay unavailable
 - Confidence, sufficiency and extrapolation metadata are authoritative and must be respected
 
@@ -60,7 +62,9 @@ The Training V2 engine decides the prescription. The Coach only explains it.
 - ALWAYS respond in the user's language (FR, EN or ES)
 - Don't use bullet points unless requested
 - Speak like a human coach, not like a report
-- Refer to specific sessions when relevant
+- Refer to specific sessions when relevant (dates, distances, paces, heart rate)
+- When comparing workouts, use the canonical comparison.similar facts without inventing new baselines
+- Workout Analysis V2 advice is an observational fact/boundary, not an independent prescription
 - Never create a new prescription
 - Never modify or replace the served prescription
 - Never fabricate missing metrics, readiness scores, paces, or performance certainty
@@ -117,6 +121,7 @@ async def enrich_chat_response(
 
 Respond in {language.upper()} as a caring and expert personal coach.
 Explain only the authoritative data provided above.
+When asked about recent sessions or specific workouts, use the factual recent_workouts history and workout_detail Workout Analysis V2 facts.
 If a field is unavailable or low-confidence, say so plainly.
 Do not invent a new prescription or alter the served prescription.{_lang_directive(language)}"""
 

@@ -1,7 +1,7 @@
 import React from "react";
 import "@testing-library/jest-dom";
-import { render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import axios from "axios";
 
 import WorkoutDetail from "@/pages/WorkoutDetail";
@@ -279,4 +279,29 @@ test("SessionDetail uses the canonical V2 endpoint", async () => {
   const urls = axios.get.mock.calls.map(([url]) => url);
   expect(urls).toContainEqual(expect.stringContaining("/coach/workout-analysis/w1"));
   expect(urls.some((url) => url.includes("/coach/detailed-analysis/"))).toBe(false);
+});
+
+test("WorkoutDetail Ask Coach button navigates to /coach with analyze parameter", async () => {
+  mockAxios();
+
+  function LocationTracker() {
+    const loc = useLocation();
+    return <div data-testid="location-display">{loc.pathname}{loc.search}</div>;
+  }
+
+  renderWithProviders(
+    <Routes>
+      <Route path="/workout/:id" element={<WorkoutDetail />} />
+      <Route path="/coach" element={<LocationTracker />} />
+    </Routes>,
+    "/workout/w1",
+  );
+
+  await screen.findByTestId("coach-summary");
+  const askCoachBtn = screen.getByTestId("ask-coach-btn");
+  expect(askCoachBtn).toBeInTheDocument();
+
+  fireEvent.click(askCoachBtn);
+
+  expect(await screen.findByTestId("location-display")).toHaveTextContent("/coach?analyze=w1");
 });

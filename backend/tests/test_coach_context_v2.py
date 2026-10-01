@@ -55,6 +55,10 @@ def _matches(document: dict, query: dict) -> bool:
                 return False
             if "$lte" in expected and (actual is None or actual > expected["$lte"]):
                 return False
+            if "$gt" in expected and (actual is None or actual <= expected["$gt"]):
+                return False
+            if "$lt" in expected and (actual is None or actual >= expected["$lt"]):
+                return False
             if "$ne" in expected and actual == expected["$ne"]:
                 return False
         elif actual != expected:
@@ -794,3 +798,146 @@ def test_system_prompt_coach_declares_v2_authority_rules():
     assert "You have access to ALL their real training data" not in prompt
     assert "Never create a new prescription" in prompt
     assert "Never modify or replace the served prescription" in prompt
+    assert "recent_workouts" in prompt
+    assert "Workout Analysis V2" in prompt
+
+
+@pytest.mark.asyncio
+async def test_coach_context_v2_populates_bounded_recent_workouts():
+    fake_db = _FakeDB()
+    fake_db.workouts = _Collection([
+        {
+            "id": "w-recent-1",
+            "user_id": _USER_ID,
+            "date": "2026-09-15T08:00:00Z",
+            "name": "Threshold 8k",
+            "type": "run",
+            "distance_km": 8.0,
+            "duration_minutes": 38.5,
+            "avg_pace_min_km": 4.81,
+            "avg_heart_rate": 162,
+            "max_heart_rate": 178,
+            "elevation_gain_m": 45.0,
+        },
+        {
+            "id": "w-recent-2",
+            "user_id": _USER_ID,
+            "date": "2026-09-01T07:00:00Z",
+            "name": "Easy run",
+            "type": "run",
+            "distance_km": 10.0,
+            "duration_minutes": 55.0,
+            "avg_heart_rate": 140,
+            "max_heart_rate": None,
+            "elevation_gain_m": None,
+        },
+        {
+            "id": "w-old",
+            "user_id": _USER_ID,
+            "date": "2026-08-10T07:00:00Z",
+            "name": "Old run",
+            "type": "run",
+            "distance_km": 12.0,
+            "duration_minutes": 65.0,
+        },
+        {
+            "id": "w-future",
+            "user_id": _USER_ID,
+            "date": "2026-09-25T07:00:00Z",
+            "name": "Future run",
+            "type": "run",
+            "distance_km": 15.0,
+            "duration_minutes": 80.0,
+        },
+        {
+            "id": "w-other",
+            "user_id": "other-user",
+            "date": "2026-09-14T07:00:00Z",
+            "name": "Other user run",
+            "type": "run",
+            "distance_km": 5.0,
+            "duration_minutes": 25.0,
+        },
+    ])
+
+    response, context = await _call_coach(fake_db)
+    assert response.status_code == 200
+    recent = context.get("recent_workouts", [])
+    assert len(recent) == 2
+
+    # Preserves descending date order
+    assert recent[0]["id"] == "w-recent-1"
+    assert recent[0]["name"] == "Threshold 8k"
+    assert recent[0]["distance_km"] == 8.0
+    assert recent[0]["duration_minutes"] == 38.5
+    assert recent[0]["avg_pace_min_km"] == 4.81
+    assert recent[0]["avg_heart_rate"] == 162
+    assert recent[0]["max_heart_rate"] == 178
+    assert recent[0]["elevation_gain_m"] == 45.0
+
+    # Missing metrics must be None, never 0
+    assert recent[1]["id"] == "w-recent-2"
+    assert recent[1]["max_heart_rate"] is None
+    assert recent[1]["elevation_gain_m"] is None
+
+    # Excluded workouts
+    recent_ids = {w["id"] for w in recent}
+    assert "w-old" not in recent_ids
+    assert "w-future" not in recent_ids
+    assert "w-other" not in recent_ids
+
+
+@pytest.mark.asyncio
+async def test_coach_context_v2_selected_workout_includes_workout_analysis_v2():
+    fake_db = _FakeDB()
+    fake_db.workouts = _Collection([
+        {
+            "id": "w-selected",
+            "user_id": _USER_ID,
+            "date": "2026-09-12T09:00:00Z",
+            "name": "Progression Run",
+            "type": "run",
+            "distance_km": 12.0,
+            "duration_minutes": 60.0,
+            "avg_heart_rate": 155,
+            "max_heart_rate": 172,
+            "elevation_gain_m": 80.0,
+        },
+        {
+            "id": "w-hist-1",
+            "user_id": _USER_ID,
+            "date": "2026-09-05T09:00:00Z",
+            "name": "Earlier Run",
+            "type": "run",
+            "distance_km": 11.5,
+            "duration_minutes": 58.0,
+            "avg_heart_rate": 152,
+        },
+    ])
+
+    response, context = await _call_coach(fake_db, workout_id="w-selected")
+    assert response.status_code == 200
+    workout_detail = context.get("workout_detail")
+    assert workout_detail is not None
+    assert workout_detail["id"] == "w-selected"
+    assert workout_detail["name"] == "Progression Run"
+    assert workout_detail["distance_km"] == 12.0
+    assert workout_detail["duration_minutes"] == 60.0
+    assert workout_detail["avg_heart_rate"] == 155
+    assert workout_detail["max_heart_rate"] == 172
+    assert workout_detail["elevation_gain_m"] == 80.0
+
+    analysis = workout_detail.get("analysis")
+    assert analysis is not None
+    assert analysis["version"] == "v2"
+    assert analysis["workout"]["id"] == "w-selected"
+    assert "summary" in analysis
+    assert "signals" in analysis
+    assert "physiology" in analysis
+    assert "pacing" in analysis
+    assert "comparison" in analysis
+    assert "evidence" in analysis
+    assert isinstance(analysis["comparison"]["similar"], dict)
+    assert analysis["comparison"]["similar"]["available"] is True
+    assert "w-hist-1" in analysis["comparison"]["similar"]["workout_ids"]
+
