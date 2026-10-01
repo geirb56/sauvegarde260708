@@ -55,8 +55,8 @@ class CoachWorkoutDetail(BaseModel):
     duration_minutes: Optional[float] = None
     avg_hr: Optional[float] = None
     max_hr: Optional[float] = None
-    avg_heart_rate: Optional[int] = None
-    max_heart_rate: Optional[int] = None
+    avg_heart_rate: Optional[float] = None
+    max_heart_rate: Optional[float] = None
     avg_pace_min_km: Optional[float] = None
     avg_speed_kmh: Optional[float] = None
     elevation_gain_m: Optional[float] = None
