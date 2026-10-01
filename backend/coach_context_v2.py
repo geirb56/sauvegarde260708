@@ -432,8 +432,24 @@ def _is_valid_recent_workout(
 
 
 def _normalize_recent_workout(workout: dict[str, Any]) -> CoachRecentWorkout:
-    avg_hr = _safe_hr(workout.get("avg_heart_rate", workout.get("average_heartrate")))
-    max_hr = _safe_hr(workout.get("max_heart_rate", workout.get("max_heartrate")))
+    raw_avg_hr = workout.get("avg_heart_rate")
+    if raw_avg_hr is None:
+        raw_avg_hr = workout.get("average_heartrate")
+    if raw_avg_hr is None:
+        raw_avg_hr = workout.get("avg_hr")
+    avg_hr = _safe_hr(raw_avg_hr)
+
+    raw_max_hr = workout.get("max_heart_rate")
+    if raw_max_hr is None:
+        raw_max_hr = workout.get("max_heartrate")
+    if raw_max_hr is None:
+        raw_max_hr = workout.get("max_hr")
+    max_hr = _safe_hr(raw_max_hr)
+
+    raw_elevation = workout.get("elevation_gain_m")
+    if raw_elevation is None:
+        raw_elevation = workout.get("total_elevation_gain_m")
+
     return CoachRecentWorkout(
         id=str(workout.get("id") or ""),
         date=str(workout.get("date") or ""),
@@ -445,7 +461,7 @@ def _normalize_recent_workout(workout: dict[str, Any]) -> CoachRecentWorkout:
         avg_speed_kmh=_safe_speed_kmh(workout),
         avg_heart_rate=avg_hr,
         max_heart_rate=max_hr,
-        elevation_gain_m=_safe_elevation(workout.get("elevation_gain_m")),
+        elevation_gain_m=_safe_elevation(raw_elevation),
     )
 
 
@@ -474,7 +490,10 @@ def _normalize_workout_detail(
 
     avg_pace = _safe_pace_min_km(workout)
     avg_speed = _safe_speed_kmh(workout)
-    elevation = _safe_elevation(workout.get("elevation_gain_m") or workout.get("total_elevation_gain_m"))
+    raw_elevation = workout.get("elevation_gain_m")
+    if raw_elevation is None:
+        raw_elevation = workout.get("total_elevation_gain_m")
+    elevation = _safe_elevation(raw_elevation)
 
     return CoachWorkoutDetail(
         id=str(workout.get("id")),

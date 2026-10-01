@@ -823,13 +823,13 @@ async def test_coach_context_v2_populates_bounded_recent_workouts():
             "id": "w-recent-2",
             "user_id": _USER_ID,
             "date": "2026-09-01T07:00:00Z",
-            "name": "Easy run",
+            "name": "Track workout",
             "type": "run",
             "distance_km": 10.0,
             "duration_minutes": 55.0,
             "avg_heart_rate": 140,
             "max_heart_rate": None,
-            "elevation_gain_m": None,
+            "elevation_gain_m": 0.0,
         },
         {
             "id": "w-old",
@@ -875,10 +875,10 @@ async def test_coach_context_v2_populates_bounded_recent_workouts():
     assert recent[0]["max_heart_rate"] == 178
     assert recent[0]["elevation_gain_m"] == 45.0
 
-    # Missing metrics must be None, never 0
+    # Missing metrics must be None, never 0, and valid 0.0 elevation must be preserved
     assert recent[1]["id"] == "w-recent-2"
     assert recent[1]["max_heart_rate"] is None
-    assert recent[1]["elevation_gain_m"] is None
+    assert recent[1]["elevation_gain_m"] == 0.0
 
     # Excluded workouts
     recent_ids = {w["id"] for w in recent}
