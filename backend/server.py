@@ -48,11 +48,9 @@ from coach_service import (
     reset_metrics as reset_coach_metrics
 )
 from workout_analysis_v2 import (
-    SIMILAR_HISTORY_WINDOW_DAYS as WORKOUT_ANALYSIS_HISTORY_WINDOW_DAYS,
     WorkoutAnalysisV2Response,
-    build_workout_analysis_v2,
-    workout_analysis_candidate_date_bounds,
 )
+from workout_analysis_v2_service import load_scoped_workout_analysis_v2
 
 from training_v2.training_load import build_training_load
 from training_v2.training_history import RUNNING_TYPES, build_training_history
@@ -1871,6 +1869,19 @@ async def _release_free_coach_quota_slot(reservation: dict) -> None:
 async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachResponse:
     """Canonical Coach processing contract shared by Coach runtime endpoints."""
     user_id = user["id"]
+    workout = None
+    workout_analysis = None
+    if request.workout_id is not None:
+        selected_workout = await load_scoped_workout_analysis_v2(
+            db=db,
+            user_id=user_id,
+            workout_id=request.workout_id,
+            language=request.language or "en",
+        )
+        if selected_workout is None:
+            raise HTTPException(status_code=404, detail="Workout not found")
+        workout, workout_analysis = selected_workout
+
     language = request.language or "en"
     user_message = request.message or ""
     now_utc = datetime.now(timezone.utc)
@@ -1965,10 +1976,6 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
         week_payload = await get_training_v2_week(user=user)
         today_payload = await get_today_adaptive_session(user=user)
 
-        workout = None
-        if request.workout_id:
-            workout = await db.workouts.find_one({"id": request.workout_id, "user_id": user_id})
-
         context = (await build_coach_context_v2(
             db=db,
             user_id=user_id,
@@ -1984,6 +1991,7 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
             training_paces=training_paces,
             performance=performance,
             workout=workout,
+            workout_analysis=workout_analysis,
         )).model_dump(mode="json")
 
         # 6. Stocker le message utilisateur
@@ -2071,21 +2079,18 @@ async def clear_conversation_history(user: dict = Depends(auth_user)):
 async def get_workout_analysis_v2(workout_id: str, language: str = "en", user: dict = Depends(auth_user)):
     """Return the canonical deterministic workout analysis payload."""
     user_id = user["id"]
-    workout = await db.workouts.find_one({"id": workout_id, "user_id": user_id}, {"_id": 0})
-    if not workout:
-        raise HTTPException(status_code=404, detail="Workout not found")
-    lower_bound, upper_bound = workout_analysis_candidate_date_bounds(
-        workout.get("date", ""), days=WORKOUT_ANALYSIS_HISTORY_WINDOW_DAYS
+    result = await load_scoped_workout_analysis_v2(
+        db=db,
+        user_id=user_id,
+        workout_id=workout_id,
+        language=language,
     )
-    historical_workouts = await db.workouts.find(
-        {
-            "user_id": user_id,
-            "type": workout.get("type"),
-            "date": {"$gte": lower_bound, "$lt": upper_bound},
-        },
-        {"_id": 0},
-    ).sort("date", -1).to_list(length=200)
-    return build_workout_analysis_v2(workout=workout, historical_workouts=historical_workouts, language=language)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Workout not found")
+    _, analysis = result
+    if analysis is None:
+        raise HTTPException(status_code=422, detail="Workout analysis unavailable")
+    return analysis
 
 
 # ========== CARDIO COACH RUNNING SCREEN ==========

@@ -88,6 +88,7 @@ class _Collection:
         self._docs = [dict(doc) for doc in (docs or [])]
         self.find_one_calls: list[dict] = []
         self.find_projections: list[dict | None] = []
+        self.find_calls: list[tuple[dict, dict | None]] = []
 
     @staticmethod
     def _apply_projection(doc: dict, projection):
@@ -114,6 +115,7 @@ class _Collection:
 
     def find(self, query=None, projection=None):
         self.find_projections.append(dict(projection) if isinstance(projection, dict) else projection)
+        self.find_calls.append((dict(query or {}), dict(projection) if isinstance(projection, dict) else projection))
         return _Cursor(
             self._apply_projection(dict(doc), projection)
             for doc in self._docs
@@ -208,6 +210,9 @@ class _FakeDB:
                 "distance_km": 99.0,
                 "duration_minutes": 999,
             }
+        ])
+        self.coach_quota_counters = _Collection([
+            {"user_id": _USER_ID, "month_key": "2026-09", "count": 2, "baseline": 1},
         ])
         self.training_plans = _ExplodingTrainingPlansCollection()
 
@@ -479,7 +484,32 @@ async def _call_coach(
                 json={"message": "How does this week look?", "language": "en", "workout_id": workout_id},
             )
 
-    return response, captured["context"]
+    return response, captured.get("context")
+
+
+async def _call_invalid_workout_coach(fake_db: _FakeDB, workout_id: str):
+    if hasattr(server.rate_limiter, "requests"):
+        server.rate_limiter.requests.clear()
+    reserve = AsyncMock(return_value=None)
+    llm = AsyncMock(return_value=("ok", True, {}))
+    access = AsyncMock(return_value=UserAccess(user_id=_USER_ID, tier=Tier.FREE))
+    with (
+        patch.object(server, "db", fake_db),
+        patch.object(server.app.state, "db", fake_db, create=True),
+        patch("server.get_user_access", access),
+        patch("server._reserve_free_coach_quota_slot", reserve),
+        patch("llm_coach.enrich_chat_response", llm),
+    ):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=server.app),
+            base_url="http://test",
+        ) as client:
+            response = await client.post(
+                "/api/coach/analyze",
+                headers=_bearer(),
+                json={"message": "Analyze this workout", "language": "en", "workout_id": workout_id},
+            )
+    return response, access, reserve, llm
 
 
 @pytest.mark.asyncio
@@ -612,13 +642,28 @@ async def test_coach_context_v2_leaves_missing_data_unavailable():
 
 
 @pytest.mark.asyncio
-async def test_coach_context_v2_enforces_workout_user_isolation():
+@pytest.mark.parametrize(
+    ("workout_id", "workout_docs"),
+    [
+        ("missing-workout", []),
+        ("foreign-workout", [{"id": "foreign-workout", "user_id": "other-user"}]),
+    ],
+)
+async def test_coach_analyze_rejects_missing_or_foreign_workout_before_side_effects(workout_id, workout_docs):
     fake_db = _FakeDB()
-    response, context = await _call_coach(fake_db, workout_id="foreign-workout")
+    fake_db.workouts = _Collection(workout_docs)
+    quota_before = [dict(doc) for doc in fake_db.coach_quota_counters._docs]
 
-    assert response.status_code == 200
-    assert context.get("workout_detail") is None
-    assert {"id": "foreign-workout", "user_id": _USER_ID} in fake_db.workouts.find_one_calls
+    response, access, reserve, llm = await _call_invalid_workout_coach(fake_db, workout_id)
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Workout not found"}
+    assert fake_db.workouts.find_one_calls == [{"id": workout_id, "user_id": _USER_ID}]
+    assert fake_db.conversations._docs == []
+    assert fake_db.coach_quota_counters._docs == quota_before
+    access.assert_not_awaited()
+    reserve.assert_not_awaited()
+    llm.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -773,11 +818,18 @@ async def test_coach_context_v2_stats_match_training_history_v2_running_types():
 def test_analyze_with_coach_source_uses_v2_authorities_only():
     source = inspect.getsource(server.process_coach_message)
     context_source = inspect.getsource(server.build_coach_context_v2)
+    analysis_loader_source = inspect.getsource(server.load_scoped_workout_analysis_v2)
+    recent_normalizer_source = inspect.getsource(coach_context_v2._normalize_recent_workout)
     cycle_source = inspect.getsource(coach_context_v2._build_cycle_response)
     phase_source = inspect.getsource(coach_context_v2._build_phase_value)
 
     assert "db.training_plans" not in source
-    assert 'db.workouts.find_one({"id": request.workout_id, "user_id": user_id})' in source
+    assert "load_scoped_workout_analysis_v2" in source
+    assert "build_workout_analysis_v2" in analysis_loader_source
+    assert "build_workout_analysis_v2" not in context_source
+    assert "intensity" not in recent_normalizer_source.lower()
+    assert "progress" not in recent_normalizer_source.lower()
+    assert "workout_analysis_candidate_date_bounds" in analysis_loader_source
     assert "load_canonical_training_paces" in source
     assert "compute_training_paces" not in source
     assert "build_cycle_calendar_response" in cycle_source
@@ -803,60 +855,161 @@ def test_system_prompt_coach_declares_v2_authority_rules():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("analysis_available", [False, True])
+async def test_llm_prompts_include_recent_facts_and_block_unsupported_inferences(analysis_available):
+    import llm_coach
+    from workout_analysis_v2 import build_workout_analysis_v2
+
+    analysis = None
+    if analysis_available:
+        analysis = build_workout_analysis_v2(
+            workout={
+                "id": "long-run",
+                "name": "Progression Run",
+                "date": "2026-09-15T08:00:00Z",
+                "type": "run",
+                "distance_km": 21.27,
+                "duration_minutes": 140,
+                "avg_heart_rate": 160,
+                "avg_pace_min_km": 6.58,
+            },
+            historical_workouts=[],
+            language="en",
+        ).model_dump(mode="json")
+        assert analysis["signals"]["intensity"]["available"] is False
+        assert analysis["comparison"]["available"] is False
+
+    context = {
+        "language": "en",
+        "recent_workouts": [
+            {
+                "id": "short-run",
+                "date": "2026-09-14T08:00:00Z",
+                "type": "running",
+                "name": "Easy Run",
+                "distance_km": 10.18,
+                "duration_minutes": None,
+                "avg_pace_min_km": None,
+                "avg_speed_kmh": None,
+                "avg_heart_rate": 127,
+                "max_heart_rate": None,
+                "elevation_gain_m": None,
+            }
+        ],
+        "recent_workouts_coverage": {
+            "window_days": 30,
+            "start_date_inclusive": "2026-08-19",
+            "end_date_inclusive": "2026-09-17",
+            "available_count": 1,
+            "included_count": 1,
+            "max_count": 30,
+            "truncated": False,
+        },
+        "workout_detail": {
+            "id": "long-run",
+            "name": "Progression Run",
+            "date": "2026-09-15T08:00:00Z",
+            "type": "run",
+            "distance_km": 21.27,
+            "duration_minutes": 140,
+            "avg_heart_rate": 160,
+            "max_heart_rate": None,
+            "analysis": analysis,
+        },
+    }
+    captured = {}
+
+    async def _capture_prompts(system_prompt, user_prompt, user_id, context_type):
+        captured.update(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            user_id=user_id,
+            context_type=context_type,
+        )
+        return "captured", True, {}
+
+    with patch("llm_coach._call_gpt", side_effect=_capture_prompts):
+        result = await llm_coach.enrich_chat_response(
+            user_message="Compare these runs.",
+            context=context,
+            conversation_history=[],
+            user_id=_USER_ID,
+        )
+
+    assert result[0] == "captured"
+    prompts = captured["system_prompt"] + "\n" + captured["user_prompt"]
+    assert '"distance_km":21.27' in prompts
+    assert '"avg_heart_rate":160' in prompts
+    assert '"distance_km":10.18' in prompts
+    assert '"avg_heart_rate":127' in prompts
+    assert "descriptive facts only" in prompts
+    assert "do not establish physiological intensity" in prompts
+    assert "Never infer threshold, LT1/LT2, easy/hard effort, progress, regression, or physiological efficiency" in prompts
+    assert "does not prove progress" in prompts
+    assert "available Workout Analysis V2 fields" in prompts
+    assert "If analysis is absent" in prompts
+    assert "recent_workouts is a bounded selection" in prompts
+    assert "if truncated do not claim to have reviewed all sessions" in prompts
+    assert "Training V2 remains the sole prescription authority" in prompts
+    if analysis_available:
+        assert '"available":false' in prompts
+
+
+@pytest.mark.asyncio
 async def test_coach_context_v2_populates_bounded_recent_workouts():
     fake_db = _FakeDB()
-    fake_db.workouts = _Collection([
+    fake_db.garmin_activities = _Collection([
         {
-            "id": "w-recent-1",
+            "external_id": "w-recent-1",
             "user_id": _USER_ID,
-            "date": "2026-09-15T08:00:00Z",
+            "start_time": "2026-09-15T08:00:00Z",
             "name": "Threshold 8k",
-            "type": "run",
-            "distance_km": 8.0,
-            "duration_minutes": 38.5,
-            "avg_pace_min_km": 4.81,
-            "avg_heart_rate": 162,
-            "max_heart_rate": 178,
-            "elevation_gain_m": 45.0,
+            "activity_type": "running",
+            "distance": 8000.0,
+            "duration": 2310.0,
+            "pace_seconds_per_km": 288.6,
+            "average_hr": 162,
+            "max_hr": 178,
+            "elevation_gain": 45.0,
         },
         {
-            "id": "w-recent-2",
+            "external_id": "w-recent-2",
             "user_id": _USER_ID,
-            "date": "2026-09-01T07:00:00Z",
+            "start_time": "2026-09-01T07:00:00Z",
             "name": "Track workout",
-            "type": "run",
-            "distance_km": 10.0,
-            "duration_minutes": 55.0,
-            "avg_heart_rate": 140,
-            "max_heart_rate": None,
-            "elevation_gain_m": 0.0,
+            "activity_type": "running",
+            "distance": 10000.0,
+            "duration": 3300.0,
+            "average_hr": 140,
+            "max_hr": None,
+            "elevation_gain": 0.0,
         },
         {
-            "id": "w-old",
+            "external_id": "w-old",
             "user_id": _USER_ID,
-            "date": "2026-08-10T07:00:00Z",
+            "start_time": "2026-08-10T07:00:00Z",
             "name": "Old run",
-            "type": "run",
-            "distance_km": 12.0,
-            "duration_minutes": 65.0,
+            "activity_type": "running",
+            "distance": 12000.0,
+            "duration": 3900.0,
         },
         {
-            "id": "w-future",
+            "external_id": "w-future",
             "user_id": _USER_ID,
-            "date": "2026-09-25T07:00:00Z",
+            "start_time": "2026-09-25T07:00:00Z",
             "name": "Future run",
-            "type": "run",
-            "distance_km": 15.0,
-            "duration_minutes": 80.0,
+            "activity_type": "running",
+            "distance": 15000.0,
+            "duration": 4800.0,
         },
         {
-            "id": "w-other",
+            "external_id": "w-other",
             "user_id": "other-user",
-            "date": "2026-09-14T07:00:00Z",
+            "start_time": "2026-09-14T07:00:00Z",
             "name": "Other user run",
-            "type": "run",
-            "distance_km": 5.0,
-            "duration_minutes": 25.0,
+            "activity_type": "running",
+            "distance": 5000.0,
+            "duration": 1500.0,
         },
     ])
 
@@ -866,7 +1019,7 @@ async def test_coach_context_v2_populates_bounded_recent_workouts():
     assert len(recent) == 2
 
     # Preserves descending date order
-    assert recent[0]["id"] == "w-recent-1"
+    assert recent[0]["id"] == "garmin-w-recent-1"
     assert recent[0]["name"] == "Threshold 8k"
     assert recent[0]["distance_km"] == 8.0
     assert recent[0]["duration_minutes"] == 38.5
@@ -876,15 +1029,100 @@ async def test_coach_context_v2_populates_bounded_recent_workouts():
     assert recent[0]["elevation_gain_m"] == 45.0
 
     # Missing metrics must be None, never 0, and valid 0.0 elevation must be preserved
-    assert recent[1]["id"] == "w-recent-2"
+    assert recent[1]["id"] == "garmin-w-recent-2"
     assert recent[1]["max_heart_rate"] is None
     assert recent[1]["elevation_gain_m"] == 0.0
 
     # Excluded workouts
     recent_ids = {w["id"] for w in recent}
-    assert "w-old" not in recent_ids
-    assert "w-future" not in recent_ids
-    assert "w-other" not in recent_ids
+    assert "garmin-w-old" not in recent_ids
+    assert "garmin-w-future" not in recent_ids
+    assert "garmin-w-other" not in recent_ids
+    assert context["recent_workouts_coverage"] == {
+        "window_days": 30,
+        "start_date_inclusive": "2026-08-19",
+        "end_date_inclusive": "2026-09-17",
+        "available_count": 2,
+        "included_count": 2,
+        "max_count": 30,
+        "truncated": False,
+    }
+    history_query = next(query for query, _ in fake_db.garmin_activities.find_calls if "start_time" in query)
+    assert history_query == {
+        "user_id": _USER_ID,
+        "start_time": {"$gte": "2026-08-19", "$lt": "2026-09-18"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_coach_recent_workouts_use_exact_30_inclusive_dates():
+    fake_db = _FakeDB()
+    fake_db.garmin_activities = _Collection([
+        {"external_id": "day-minus-30", "user_id": _USER_ID, "start_time": "2026-08-18T08:00:00Z", "distance": 1000},
+        {"external_id": "day-minus-29", "user_id": _USER_ID, "start_time": "2026-08-19T08:00:00Z", "distance": 2000},
+        {"external_id": "day-j", "user_id": _USER_ID, "start_time": "2026-09-17T08:00:00Z", "distance": 3000, "elevation_gain": 0},
+        {"external_id": "day-plus-1", "user_id": _USER_ID, "start_time": "2026-09-18T08:00:00Z", "distance": 4000},
+        {"external_id": "other-user", "user_id": "other-user", "start_time": "2026-09-17T09:00:00Z", "distance": 5000},
+    ])
+
+    response, context = await _call_coach(fake_db)
+
+    assert response.status_code == 200
+    recent = context["recent_workouts"]
+    assert [item["id"] for item in recent] == ["garmin-day-j", "garmin-day-minus-29"]
+    assert recent[0]["elevation_gain_m"] == 0.0
+    assert context["recent_workouts_coverage"]["available_count"] == 2
+    history_query = next(query for query, _ in fake_db.garmin_activities.find_calls if "start_time" in query)
+    assert history_query["start_time"] == {
+        "$gte": "2026-08-19",
+        "$lt": "2026-09-18",
+    }
+    assert not coach_context_v2._is_valid_recent_workout(
+        {"start_time": "2026-08-18T23:59:59Z"},
+        _REFERENCE_DATE,
+    )
+    assert coach_context_v2._is_valid_recent_workout(
+        {"start_time": "2026-08-19T00:00:00Z"},
+        _REFERENCE_DATE,
+    )
+    assert coach_context_v2._is_valid_recent_workout(
+        {"start_time": "2026-09-17T23:59:59Z"},
+        _REFERENCE_DATE,
+    )
+    assert not coach_context_v2._is_valid_recent_workout(
+        {"start_time": "2026-09-18T00:00:00Z"},
+        _REFERENCE_DATE,
+    )
+
+
+@pytest.mark.asyncio
+async def test_coach_recent_workouts_report_exact_truncated_coverage():
+    fake_db = _FakeDB()
+    fake_db.garmin_activities = _Collection([
+        {
+            "external_id": f"activity-{index:02d}",
+            "user_id": _USER_ID,
+            "start_time": f"2026-09-{17 - index % 17:02d}T{index % 24:02d}:00:00Z",
+            "distance": 5000,
+        }
+        for index in range(35)
+    ])
+
+    response, context = await _call_coach(fake_db)
+
+    assert response.status_code == 200
+    assert len(context["recent_workouts"]) == 30
+    assert context["recent_workouts_coverage"] == {
+        "window_days": 30,
+        "start_date_inclusive": "2026-08-19",
+        "end_date_inclusive": "2026-09-17",
+        "available_count": 35,
+        "included_count": 30,
+        "max_count": 30,
+        "truncated": True,
+    }
+    dates = [item["date"] for item in context["recent_workouts"]]
+    assert dates == sorted(dates, reverse=True)
 
 
 @pytest.mark.asyncio
@@ -940,4 +1178,3 @@ async def test_coach_context_v2_selected_workout_includes_workout_analysis_v2():
     assert isinstance(analysis["comparison"]["similar"], dict)
     assert analysis["comparison"]["similar"]["available"] is True
     assert "w-hist-1" in analysis["comparison"]["similar"]["workout_ids"]
-

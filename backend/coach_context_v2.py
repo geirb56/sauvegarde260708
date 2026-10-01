@@ -17,12 +17,7 @@ from training_v2.training_cycle_response import build_cycle_calendar_response
 from training_v2.training_history import build_training_history
 from training_v2.training_load import TrainingLoadSnapshot
 from training_v2.training_paces import TrainingPaces, training_paces_to_api_dict
-from workout_analysis_v2 import (
-    SIMILAR_HISTORY_WINDOW_DAYS as WORKOUT_ANALYSIS_HISTORY_WINDOW_DAYS,
-    WorkoutAnalysisV2Response,
-    build_workout_analysis_v2,
-    workout_analysis_candidate_date_bounds,
-)
+from workout_analysis_v2 import WorkoutAnalysisV2Response
 
 COACH_RECENT_WORKOUTS_WINDOW_DAYS = 30
 COACH_RECENT_WORKOUTS_MAX_COUNT = 30
@@ -42,6 +37,18 @@ class CoachRecentWorkout(BaseModel):
     avg_heart_rate: Optional[float] = None
     max_heart_rate: Optional[float] = None
     elevation_gain_m: Optional[float] = None
+
+
+class CoachRecentWorkoutsCoverage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    window_days: int
+    start_date_inclusive: str
+    end_date_inclusive: str
+    available_count: int
+    included_count: int
+    max_count: int
+    truncated: bool
 
 
 class CoachWorkoutDetail(BaseModel):
@@ -188,6 +195,7 @@ class CoachContextV2(BaseModel):
     weekly_reconciliation: CoachWeeklyReconciliationContext
     current_week_sessions: list[CoachWeekSessionContext] = Field(default_factory=list)
     recent_workouts: list[CoachRecentWorkout] = Field(default_factory=list)
+    recent_workouts_coverage: CoachRecentWorkoutsCoverage
     today: CoachTodayContext
     readiness: CoachReadinessContext
     training_load: CoachTrainingLoadContext
@@ -412,53 +420,94 @@ def _safe_elevation(val: Any) -> Optional[float]:
         return None
 
 
+def _safe_scaled_positive(value: Any, scale: float, digits: int) -> Optional[float]:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        scaled = float(value) * scale
+        return round(scaled, digits) if math.isfinite(scaled) and scaled > 0 else None
+    except (ValueError, TypeError):
+        return None
+
+
 def _is_valid_recent_workout(
     workout: dict[str, Any],
     reference_date: date,
     window_days: int = COACH_RECENT_WORKOUTS_WINDOW_DAYS,
 ) -> bool:
-    raw_date = workout.get("date")
+    raw_date = workout.get("start_time") or workout.get("date")
     if not raw_date:
         return False
     workout_date = _parse_iso_date(raw_date)
     if workout_date is None:
         return False
-    if workout_date > reference_date:
+    if workout_date >= reference_date + timedelta(days=1):
         return False
-    cutoff = reference_date - timedelta(days=window_days)
+    cutoff = reference_date - timedelta(days=window_days - 1)
     if workout_date < cutoff:
         return False
     return True
 
 
 def _normalize_recent_workout(workout: dict[str, Any]) -> CoachRecentWorkout:
-    raw_avg_hr = workout.get("avg_heart_rate")
+    garmin_activity = workout.get("garmin_activity")
+    raw_values = {**(garmin_activity if isinstance(garmin_activity, dict) else {}), **workout}
+    raw_avg_hr = raw_values.get("avg_heart_rate")
     if raw_avg_hr is None:
-        raw_avg_hr = workout.get("average_heartrate")
+        raw_avg_hr = raw_values.get("average_hr")
     if raw_avg_hr is None:
-        raw_avg_hr = workout.get("avg_hr")
+        raw_avg_hr = raw_values.get("average_heartrate")
+    if raw_avg_hr is None:
+        raw_avg_hr = raw_values.get("avg_hr")
     avg_hr = _safe_hr(raw_avg_hr)
 
-    raw_max_hr = workout.get("max_heart_rate")
+    raw_max_hr = raw_values.get("max_heart_rate")
     if raw_max_hr is None:
-        raw_max_hr = workout.get("max_heartrate")
+        raw_max_hr = raw_values.get("max_heartrate")
     if raw_max_hr is None:
-        raw_max_hr = workout.get("max_hr")
+        raw_max_hr = raw_values.get("max_hr")
     max_hr = _safe_hr(raw_max_hr)
 
-    raw_elevation = workout.get("elevation_gain_m")
+    raw_elevation = raw_values.get("elevation_gain_m")
     if raw_elevation is None:
-        raw_elevation = workout.get("total_elevation_gain_m")
+        raw_elevation = raw_values.get("elevation_gain")
+
+    distance_m = raw_values.get("distance_m")
+    if distance_m is None:
+        distance_m = raw_values.get("distance")
+    duration_seconds = raw_values.get("duration_s")
+    if duration_seconds is None:
+        duration_seconds = raw_values.get("duration")
+    raw_pace = raw_values.get("pace_seconds_per_km")
+    raw_speed = raw_values.get("average_speed_mps")
+    workout_id = raw_values.get("id")
+    if workout_id is None and raw_values.get("external_id") is not None:
+        workout_id = f"garmin-{raw_values['external_id']}"
+    if workout_id is None:
+        workout_id = raw_values.get("activity_id", "")
+    workout_date = raw_values.get("start_time") or raw_values.get("date") or ""
+    distance_km = _safe_scaled_positive(distance_m, 0.001, 2)
+    duration_minutes = _safe_scaled_positive(duration_seconds, 1 / 60, 1)
+    avg_pace_min_km = _safe_scaled_positive(raw_pace, 1 / 60, 2)
+    avg_speed_kmh = _safe_scaled_positive(raw_speed, 3.6, 2)
+    if distance_km is None:
+        distance_km = _safe_distance_km(raw_values)
+    if duration_minutes is None:
+        duration_minutes = _safe_duration_minutes(raw_values)
+    if avg_pace_min_km is None:
+        avg_pace_min_km = _safe_pace_min_km(raw_values)
+    if avg_speed_kmh is None:
+        avg_speed_kmh = _safe_speed_kmh(raw_values)
 
     return CoachRecentWorkout(
-        id=str(workout.get("id") or ""),
-        date=str(workout.get("date") or ""),
-        type=str(workout.get("type") or "workout"),
-        name=workout.get("name") if workout.get("name") is not None else None,
-        distance_km=_safe_distance_km(workout),
-        duration_minutes=_safe_duration_minutes(workout),
-        avg_pace_min_km=_safe_pace_min_km(workout),
-        avg_speed_kmh=_safe_speed_kmh(workout),
+        id=str(workout_id),
+        date=str(workout_date),
+        type=str(raw_values.get("type") or raw_values.get("activity_type") or "workout"),
+        name=raw_values.get("name") if raw_values.get("name") is not None else None,
+        distance_km=distance_km,
+        duration_minutes=duration_minutes,
+        avg_pace_min_km=avg_pace_min_km,
+        avg_speed_kmh=avg_speed_kmh,
         avg_heart_rate=avg_hr,
         max_heart_rate=max_hr,
         elevation_gain_m=_safe_elevation(raw_elevation),
@@ -584,52 +633,63 @@ async def build_coach_context_v2(
         for prediction in performance.predictions
     ]
 
-    if recent_workouts is None and db is not None and hasattr(db, "workouts"):
-        lower_bound = (reference_date - timedelta(days=COACH_RECENT_WORKOUTS_WINDOW_DAYS)).isoformat()
-        upper_bound = (reference_date + timedelta(days=1)).isoformat()
-        cursor = db.workouts.find(
+    if recent_workouts is None and db is not None and hasattr(db, "garmin_activities"):
+        start_date = reference_date - timedelta(days=COACH_RECENT_WORKOUTS_WINDOW_DAYS - 1)
+        end_date = reference_date
+        lower_bound = start_date.isoformat()
+        upper_bound = (end_date + timedelta(days=1)).isoformat()
+        cursor = db.garmin_activities.find(
             {
                 "user_id": user_id,
-                "date": {"$gte": lower_bound, "$lt": upper_bound},
+                "start_time": {"$gte": lower_bound, "$lt": upper_bound},
             },
             {"_id": 0},
         )
         if hasattr(cursor, "sort"):
-            cursor = cursor.sort("date", -1)
-        if hasattr(cursor, "limit"):
-            cursor = cursor.limit(COACH_RECENT_WORKOUTS_MAX_COUNT)
-        workout_docs = await cursor.to_list(COACH_RECENT_WORKOUTS_MAX_COUNT)
-        recent_workouts = [
-            _normalize_recent_workout(doc)
+            cursor = cursor.sort("start_time", -1)
+        workout_docs = await cursor.to_list(length=None)
+        valid_workout_docs = [
+            doc
             for doc in workout_docs
-            if _is_valid_recent_workout(doc, reference_date)
+            if doc.get("user_id") == user_id and _is_valid_recent_workout(doc, reference_date)
         ]
+        normalized_workouts = [
+            _normalize_recent_workout(doc)
+            for doc in valid_workout_docs
+        ]
+        recent_workouts = normalized_workouts[:COACH_RECENT_WORKOUTS_MAX_COUNT]
+        recent_workouts_coverage = CoachRecentWorkoutsCoverage(
+            window_days=COACH_RECENT_WORKOUTS_WINDOW_DAYS,
+            start_date_inclusive=lower_bound,
+            end_date_inclusive=end_date.isoformat(),
+            available_count=len(normalized_workouts),
+            included_count=len(recent_workouts),
+            max_count=COACH_RECENT_WORKOUTS_MAX_COUNT,
+            truncated=len(normalized_workouts) > COACH_RECENT_WORKOUTS_MAX_COUNT,
+        )
     elif recent_workouts is None:
         recent_workouts = []
-
-    if workout is not None and workout_analysis is None and db is not None and hasattr(db, "workouts"):
-        try:
-            lower_bound, upper_bound = workout_analysis_candidate_date_bounds(
-                workout.get("date", ""), days=WORKOUT_ANALYSIS_HISTORY_WINDOW_DAYS
-            )
-            historical_cursor = db.workouts.find(
-                {
-                    "user_id": user_id,
-                    "type": workout.get("type"),
-                    "date": {"$gte": lower_bound, "$lt": upper_bound},
-                },
-                {"_id": 0},
-            )
-            if hasattr(historical_cursor, "sort"):
-                historical_cursor = historical_cursor.sort("date", -1)
-            historical = await historical_cursor.to_list(length=200)
-            workout_analysis = build_workout_analysis_v2(
-                workout=workout,
-                historical_workouts=historical,
-                language=language,
-            )
-        except Exception:
-            workout_analysis = None
+        recent_workouts_coverage = CoachRecentWorkoutsCoverage(
+            window_days=COACH_RECENT_WORKOUTS_WINDOW_DAYS,
+            start_date_inclusive=(reference_date - timedelta(days=COACH_RECENT_WORKOUTS_WINDOW_DAYS - 1)).isoformat(),
+            end_date_inclusive=reference_date.isoformat(),
+            available_count=0,
+            included_count=0,
+            max_count=COACH_RECENT_WORKOUTS_MAX_COUNT,
+            truncated=False,
+        )
+    else:
+        available_count = len(recent_workouts)
+        recent_workouts = list(recent_workouts)[:COACH_RECENT_WORKOUTS_MAX_COUNT]
+        recent_workouts_coverage = CoachRecentWorkoutsCoverage(
+            window_days=COACH_RECENT_WORKOUTS_WINDOW_DAYS,
+            start_date_inclusive=(reference_date - timedelta(days=COACH_RECENT_WORKOUTS_WINDOW_DAYS - 1)).isoformat(),
+            end_date_inclusive=reference_date.isoformat(),
+            available_count=available_count,
+            included_count=len(recent_workouts),
+            max_count=COACH_RECENT_WORKOUTS_MAX_COUNT,
+            truncated=available_count > COACH_RECENT_WORKOUTS_MAX_COUNT,
+        )
 
     return CoachContextV2(
         language=language,
@@ -669,6 +729,7 @@ async def build_coach_context_v2(
         ),
         current_week_sessions=current_week_sessions,
         recent_workouts=recent_workouts,
+        recent_workouts_coverage=recent_workouts_coverage,
         today=CoachTodayContext(
             canonical=dict(today_payload),
             prescription_source=today_source,
@@ -710,6 +771,7 @@ __all__ = [
     "COACH_RECENT_WORKOUTS_WINDOW_DAYS",
     "CoachContextV2",
     "CoachRecentWorkout",
+    "CoachRecentWorkoutsCoverage",
     "CoachWorkoutDetail",
     "build_coach_context_v2",
 ]
