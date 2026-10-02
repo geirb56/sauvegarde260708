@@ -39,6 +39,16 @@ jest.mock("@/pages/ResetPassword", () => () => <div>reset-password-page</div>);
 jest.mock("@/pages/Admin", () => () => <div>admin-page</div>);
 
 describe("Legacy redirects remain active", () => {
+  it("/messages replaces the legacy URL with the visible Coach page", async () => {
+    window.history.pushState({}, "Messages", "/messages");
+    const replaceState = jest.spyOn(window.history, "replaceState");
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("coach-page")).toBeTruthy());
+    expect(window.location.pathname).toBe("/coach");
+    expect(replaceState).toHaveBeenCalledWith(expect.anything(), "", "/coach");
+    replaceState.mockRestore();
+  });
+
   it("/guidance redirects to /coach", async () => {
     window.history.pushState({}, "Guidance", "/guidance");
     render(<App />);
@@ -49,5 +59,12 @@ describe("Legacy redirects remain active", () => {
     window.history.pushState({}, "Digest", "/digest");
     render(<App />);
     await waitFor(() => expect(screen.getByText("progress-page")).toBeTruthy());
+  });
+
+  it("/training-v2 redirects to /training", async () => {
+    window.history.pushState({}, "Training V2", "/training-v2");
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("training-page")).toBeTruthy());
+    expect(window.location.pathname).toBe("/training");
   });
 });

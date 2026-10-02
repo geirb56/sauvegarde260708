@@ -5,6 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useLanguage } from "@/context/LanguageContext";
+import { formatPaceDisplay, formatPaceDelta } from "@/lib/workoutAnalysis";
 import {
   ArrowLeft,
   Heart,
@@ -18,8 +19,6 @@ import {
   HeartPulse,
   AlertCircle,
   Lightbulb,
-  ChevronDown,
-  ChevronUp,
 } from "lucide-react";
 
 import { API_BASE_URL } from "@/config";
@@ -40,15 +39,8 @@ const formatDuration = (minutes) => {
   return `${mins}m`;
 };
 
-const formatPaceDisplay = (pace) => {
-  if (pace == null) return "--";
-  const mins = Math.floor(pace);
-  const secs = Math.round((pace % 1) * 60);
-  return `${mins}:${String(secs).padStart(2, "0")}/km`;
-};
-
 const formatSignedMetric = (metric, suffix = "") => {
-  if (!metric || metric.difference == null) return "--";
+  if (!metric || metric.difference == null || !Number.isFinite(metric.difference)) return "--";
   const sign = metric.difference > 0 ? "+" : "";
   return `${sign}${metric.difference}${suffix}`;
 };
@@ -251,7 +243,7 @@ const AnalysisSkeleton = () => (
 const AnalysisError = ({ t }) => (
   <div className="flex items-center gap-2 text-muted-foreground">
     <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-    <span className="font-mono text-xs">{t("workoutDetailExtended.analysisUnavailable") || "Analyse indisponible"}</span>
+    <span className="font-mono text-xs">{t("workoutDetailExtended.analysisUnavailable")}</span>
   </div>
 );
 
@@ -266,7 +258,6 @@ export default function WorkoutDetail() {
   const [analysis, setAnalysis] = useState(null);
   const [analysisLoading, setAnalysisLoading] = useState(true);
   const [analysisError, setAnalysisError] = useState(false);
-  const [showEvidence, setShowEvidence] = useState(false);
 
   useEffect(() => {
     setWorkout(null);
@@ -345,7 +336,7 @@ export default function WorkoutDetail() {
 
   const Icon = getWorkoutIcon(workout.type);
   const typeLabel = t(`workoutTypes.${workout.type}`) || workout.type;
-  const dateStr = new Date(workout.date).toLocaleDateString(lang === "fr" ? "fr-FR" : "en-US", {
+  const dateStr = new Date(workout.date).toLocaleDateString({ fr: "fr-FR", en: "en-US", es: "es-ES" }[lang], {
     weekday: "short",
     month: "short",
     day: "numeric",
@@ -354,6 +345,11 @@ export default function WorkoutDetail() {
   const physiology = analysis?.physiology;
   const pacing = analysis?.pacing;
   const evidence = analysis?.evidence;
+  const similar = comparison?.similar;
+  const interpolate = (key, values) => Object.entries(values).reduce(
+    (text, [name, value]) => text.replace(`{${name}}`, value == null ? "--" : String(value)),
+    t(`workoutDetailExtended.${key}`),
+  );
 
   const getSessionTypeStyle = (label) => {
     if (label === "hard" || label === "very_high") return "text-chart-1 bg-chart-1/10";
@@ -472,44 +468,12 @@ export default function WorkoutDetail() {
         </Card>
       </div>
 
-      {physiology?.available && physiology?.zone_distribution && (
-        <Card className="bg-card border-border mb-3" data-testid="hr-zones-card">
-          <CardContent className="p-3">
-            <div className="flex items-center gap-2 mb-3">
-              <HeartPulse className="w-4 h-4 text-chart-1" />
-              <span className="font-mono text-[9px] uppercase tracking-widest text-muted-foreground">{t("analysis.hrZones")}</span>
-              {physiology.avg_hr != null && (
-                <span className="ml-auto font-mono text-[10px] text-muted-foreground flex items-center gap-1">
-                  <Heart className="w-3 h-3" />
-                  {t("analysis.avgHr")}: {physiology.avg_hr} bpm
-                </span>
-              )}
-            </div>
-            <HRZonesChart zones={physiology.zone_distribution} t={t} />
-            <ZoneSummary zones={physiology.zone_distribution} t={t} />
-          </CardContent>
-        </Card>
-      )}
-
-      {workout.km_splits && workout.km_splits.length > 0 && (
-        <Card className="bg-card border-border mb-3" data-testid="splits-chart-card">
-          <CardContent className="p-3">
-            <div className="flex items-center gap-2 mb-3">
-              <Activity className="w-4 h-4 text-primary" />
-              <span className="font-mono text-[9px] uppercase tracking-widest text-muted-foreground">{t("workoutDetailExtended.pacePerKm")}</span>
-              <span className="ml-auto font-mono text-[10px] text-muted-foreground">{workout.km_splits.length} km</span>
-            </div>
-            <SplitsChart splits={workout.km_splits} t={t} />
-          </CardContent>
-        </Card>
-      )}
-
       {pacing?.available && (
         <Card className="bg-card border-border mb-3" data-testid="pacing-summary-card">
           <CardContent className="p-3">
             <div className="flex items-center gap-2 mb-3">
               <Activity className="w-4 h-4 text-primary" />
-              <span className="font-mono text-[9px] uppercase tracking-widest text-muted-foreground">{t("workoutDetailExtended.comparison")}</span>
+              <span className="font-mono text-[9px] uppercase tracking-widest text-muted-foreground">{t("workoutDetailExtended.pace")}</span>
             </div>
             <div className="grid grid-cols-2 gap-2 text-xs">
               {pacing.average_pace_min_km != null && (
@@ -533,7 +497,7 @@ export default function WorkoutDetail() {
               {pacing.pace_drop_min_km != null && (
                 <div>
                   <p className="font-mono text-[10px] text-muted-foreground">{t("workoutDetailExtended.paceDrop")}</p>
-                  <p className="font-mono font-semibold">{formatPaceDisplay(pacing.pace_drop_min_km)}</p>
+                  <p className="font-mono font-semibold">{formatPaceDelta(pacing.pace_drop_min_km)}</p>
                 </div>
               )}
             </div>
@@ -546,33 +510,34 @@ export default function WorkoutDetail() {
           <CardContent className="p-3">
             <div className="flex items-center gap-2 mb-3">
               <Scale className="w-4 h-4 text-muted-foreground" />
-              <span className="font-mono text-[9px] uppercase tracking-widest text-muted-foreground">{t("workoutDetailExtended.comparison")}</span>
+              <span className="font-mono text-[9px] uppercase tracking-widest text-muted-foreground">{interpolate("recentComparison", { days: comparison.baseline_period_days })}</span>
             </div>
+            <p className="font-mono text-[10px] text-muted-foreground mb-2">{interpolate("sampleCount", { count: comparison.baseline_sample_count })}</p>
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               {comparison.distance_km && (
                 <div className="rounded-sm bg-muted/20 p-2">
-                  <p className="font-mono text-[9px] uppercase text-muted-foreground">Distance</p>
+                  <p className="font-mono text-[9px] uppercase text-muted-foreground">{t("workoutDetailExtended.distance")}</p>
                   <p className="font-mono text-xs">{formatSignedMetric(comparison.distance_km, " km")}</p>
                 </div>
               )}
               {comparison.duration_minutes && (
                 <div className="rounded-sm bg-muted/20 p-2">
-                  <p className="font-mono text-[9px] uppercase text-muted-foreground">Duration</p>
+                  <p className="font-mono text-[9px] uppercase text-muted-foreground">{t("workoutDetailExtended.duration")}</p>
                   <p className="font-mono text-xs">{formatSignedMetric(comparison.duration_minutes, " min")}</p>
                 </div>
               )}
               {comparison.avg_heart_rate && (
                 <div className="rounded-sm bg-muted/20 p-2">
-                  <p className="font-mono text-[9px] uppercase text-muted-foreground">HR</p>
+                  <p className="font-mono text-[9px] uppercase text-muted-foreground">{t("workoutDetailExtended.heartRate")}</p>
                   <p className="font-mono text-xs">{formatSignedMetric(comparison.avg_heart_rate, " bpm")}</p>
                 </div>
               )}
               {(comparison.avg_pace_min_km || comparison.avg_speed_kmh) && (
                 <div className="rounded-sm bg-muted/20 p-2">
-                  <p className="font-mono text-[9px] uppercase text-muted-foreground">Pace / Speed</p>
+                  <p className="font-mono text-[9px] uppercase text-muted-foreground">{t(comparison.avg_pace_min_km ? "workoutDetailExtended.pace" : "workoutDetailExtended.speed")}</p>
                   <p className="font-mono text-xs">
                     {comparison.avg_pace_min_km
-                      ? formatSignedMetric(comparison.avg_pace_min_km, "/km")
+                      ? formatPaceDelta(comparison.avg_pace_min_km.difference)
                       : formatSignedMetric(comparison.avg_speed_kmh, " km/h")}
                   </p>
                 </div>
@@ -582,78 +547,38 @@ export default function WorkoutDetail() {
         </Card>
       )}
 
-      <Card className="bg-card border-border mb-3">
-        <CardContent className="p-3">
-          <div className="flex items-center gap-2 mb-2">
-            <Activity className="w-4 h-4 text-muted-foreground" />
-            <span className="font-mono text-[9px] uppercase tracking-widest text-muted-foreground">{t("workoutDetailExtended.meaning")}</span>
-          </div>
-          {analysisLoading ? (
-            <AnalysisSkeleton />
-          ) : analysisError ? (
-            <AnalysisError t={t} />
-          ) : analysis?.meaning?.text ? (
-            <p className="font-mono text-xs text-muted-foreground leading-relaxed" data-testid="meaning-text">{analysis.meaning.text}</p>
-          ) : null}
-        </CardContent>
-      </Card>
-
-      <Card className="bg-primary/5 border-primary/20 mb-3">
-        <CardContent className="p-3">
-          <div className="flex items-center gap-2 mb-2">
-            <Lightbulb className="w-4 h-4 text-primary" />
-            <span className="font-mono text-[10px] uppercase tracking-widest text-primary">{t("workoutDetailExtended.coachAdvice")}</span>
-          </div>
-          {analysisLoading ? (
-            <AnalysisSkeleton />
-          ) : analysisError ? (
-            <AnalysisError t={t} />
-          ) : analysis?.advice?.text ? (
-            <p className="font-mono text-xs text-primary leading-relaxed" data-testid="advice-text">{analysis.advice.text}</p>
-          ) : null}
-        </CardContent>
-      </Card>
-
-      {(analysisLoading || analysis || analysisError) && (
-        <Card className="bg-card border-border mb-3">
-          <CardContent className="p-3">
-            {analysisLoading ? (
-              <AnalysisSkeleton />
-            ) : (
+      {similar && (
+        <Card className="bg-card border-border mb-3" data-testid="similar-comparison-card">
+          <CardContent className="p-3 space-y-2 font-mono text-xs">
+            <h2 className="text-[9px] uppercase tracking-widest text-muted-foreground">{interpolate("similarComparison", { days: similar.period_days })}</h2>
+            {similar.available ? (
               <>
-                <button
-                  onClick={() => setShowEvidence(!showEvidence)}
-                  className="w-full flex items-center justify-between text-left"
-                  data-testid="advanced-toggle"
-                >
-                  <span className="font-mono text-[9px] uppercase tracking-widest text-muted-foreground">{t("workoutDetailExtended.goFurther")}</span>
-                  {showEvidence ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
-                </button>
-                {showEvidence && analysis && (
-                  <div className="mt-3 border-t border-border pt-3 space-y-2" data-testid="evidence-card">
-                    <p className="font-mono text-[11px] text-muted-foreground">version: {analysis.version}</p>
-                    <p className="font-mono text-[11px] text-muted-foreground">HR: {evidence?.has_heart_rate ? "yes" : "no"}</p>
-                    <p className="font-mono text-[11px] text-muted-foreground">HR zones: {evidence?.has_hr_zones ? "yes" : "no"}</p>
-                    <p className="font-mono text-[11px] text-muted-foreground">Splits: {evidence?.has_splits ? "yes" : "no"}</p>
-                    <p className="font-mono text-[11px] text-muted-foreground">Baseline: {evidence?.has_baseline ? `yes (${comparison?.baseline_sample_count})` : "no"}</p>
-                    {!physiology?.available && physiology?.reason_unavailable && (
-                      <p className="font-mono text-[11px] text-muted-foreground">{physiology.reason_unavailable}</p>
-                    )}
-                    {!comparison?.available && comparison?.reason_unavailable && (
-                      <p className="font-mono text-[11px] text-muted-foreground">{comparison.reason_unavailable}</p>
-                    )}
-                    {!pacing?.available && pacing?.reason_unavailable && (
-                      <p className="font-mono text-[11px] text-muted-foreground">{pacing.reason_unavailable}</p>
-                    )}
+                <p>{interpolate("sampleCount", { count: similar.sample_count })}</p>
+                {similar.avg_distance_km != null && <p>{t("workoutDetailExtended.averageDistance")}: {similar.avg_distance_km} km</p>}
+                {(similar.avg_pace_min_km != null || similar.pace_difference_min_km != null) && (
+                  <div data-testid="similar-pace">
+                    <p>{t("workoutDetailExtended.averagePace")}: {formatPaceDisplay(similar.avg_pace_min_km)}</p>
+                    <p>{t("workoutDetailExtended.difference")}: {formatPaceDelta(similar.pace_difference_min_km)}</p>
+                    <p className="text-muted-foreground">{interpolate("paceSampleCount", { count: similar.pace_sample_count, total: similar.sample_count })}</p>
                   </div>
                 )}
+                {(similar.avg_heart_rate != null || similar.heart_rate_difference_bpm != null) && (
+                  <div data-testid="similar-heart-rate">
+                    <p>{t("workoutDetailExtended.averageHeartRate")}: {similar.avg_heart_rate == null ? "--" : `${similar.avg_heart_rate} bpm`}</p>
+                    <p>{t("workoutDetailExtended.difference")}: {formatSignedMetric({ difference: similar.heart_rate_difference_bpm }, " bpm")}</p>
+                    <p className="text-muted-foreground">{interpolate("hrSampleCount", { count: similar.hr_sample_count, total: similar.sample_count })}</p>
+                  </div>
+                )}
+                {similar.comparable === false && <p className="text-muted-foreground" data-testid="similar-comparability-caveat">{t("workoutDetailExtended.descriptiveComparison")}</p>}
               </>
+            ) : (
+              <p className="text-muted-foreground">{similar.reason_unavailable || t("workoutDetailExtended.similarUnavailable")}</p>
             )}
           </CardContent>
         </Card>
       )}
 
-      <div className="mt-4">
+      <div className="my-4">
         <Button
           onClick={goToAskCoach}
           data-testid="ask-coach-btn"
@@ -663,6 +588,71 @@ export default function WorkoutDetail() {
           {t("workoutDetailExtended.askCoach")}
         </Button>
       </div>
+
+      {analysis && !analysisLoading && !analysisError && (
+        <details className="bg-card border border-border p-3 mb-3" data-testid="analysis-details">
+          <summary className="cursor-pointer font-mono text-xs" data-testid="advanced-toggle">{t("workoutDetailExtended.analysisDetails")}</summary>
+          <div className="mt-3 space-y-3">
+            {analysis.meaning?.text && (
+              <section>
+                <h2 className="font-mono text-[10px] uppercase text-muted-foreground">{t("workoutDetailExtended.meaning")}</h2>
+                <p className="font-mono text-xs text-muted-foreground leading-relaxed" data-testid="meaning-text">{analysis.meaning.text}</p>
+              </section>
+            )}
+            {analysis.advice?.text && (
+              <section>
+                <h2 className="font-mono text-[10px] uppercase text-muted-foreground flex items-center gap-2"><Lightbulb className="w-3 h-3" />{t("workoutDetailExtended.analysisAdvice")}</h2>
+                <p className="font-mono text-xs text-muted-foreground leading-relaxed" data-testid="advice-text">{analysis.advice.text}</p>
+              </section>
+            )}
+            {physiology?.available && physiology.zone_distribution && (
+              <section data-testid="hr-zones-card">
+                <h2 className="font-mono text-[10px] uppercase text-muted-foreground flex items-center gap-2"><HeartPulse className="w-4 h-4" />{t("analysis.hrZones")}</h2>
+                {physiology.avg_hr != null && <p className="font-mono text-xs">{t("analysis.avgHr")}: {physiology.avg_hr} bpm</p>}
+                <HRZonesChart zones={physiology.zone_distribution} t={t} />
+                <ZoneSummary zones={physiology.zone_distribution} t={t} />
+              </section>
+            )}
+            {workout.km_splits?.length > 0 && (
+              <section data-testid="splits-chart-card">
+                <h2 className="font-mono text-[10px] uppercase text-muted-foreground">{t("workoutDetailExtended.pacePerKm")}</h2>
+                <SplitsChart splits={workout.km_splits} t={t} />
+              </section>
+            )}
+            {evidence && (
+              <section className="font-mono text-[11px] text-muted-foreground space-y-1" data-testid="evidence-card">
+                <h2 className="uppercase">{t("workoutDetailExtended.evidence")}</h2>
+                <p>{t("workoutDetailExtended.version")}: {analysis.version ?? "--"}</p>
+                {[
+                  ["has_heart_rate", "heartRate"],
+                  ["has_hr_zones", "hrZonesEvidence"],
+                  ["has_splits", "splitsEvidence"],
+                  ["has_baseline", "baselineEvidence"],
+                  ["has_cadence", "cadenceEvidence"],
+                  ["has_elevation", "elevationEvidence"],
+                ].map(([key, label]) => (
+                  <p key={key}>{t(`workoutDetailExtended.${label}`)}: {evidence[key] == null ? "--" : t(`workoutDetailExtended.${evidence[key] ? "yes" : "no"}`)}</p>
+                ))}
+              </section>
+            )}
+            <section className="font-mono text-[11px] text-muted-foreground space-y-1" data-testid="analysis-limitations">
+              <h2 className="uppercase">{t("workoutDetailExtended.limitations")}</h2>
+              {[analysis.signals?.intensity, physiology, pacing, comparison, similar].filter(
+                (item) => item?.available === false && item.reason_unavailable,
+              ).map((item, index) => <p key={index}>{item.reason_unavailable}</p>)}
+              {similar?.limitations?.map((limitation) => (
+                <p key={limitation}>{t(`workoutDetailExtended.${{
+                  session_nature_unknown: "unknownSessionNature",
+                  sample_too_small: "smallSample",
+                  pace_sample_too_small: "smallPaceSample",
+                  hr_sample_too_small: "smallHrSample",
+                  no_comparable_reference: "similarUnavailable",
+                }[limitation] || "descriptiveComparison"}`)}</p>
+              ))}
+            </section>
+          </div>
+        </details>
+      )}
     </div>
   );
 }

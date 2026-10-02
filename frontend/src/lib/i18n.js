@@ -518,6 +518,9 @@ export const translations = {
       plan: {
         title: "Training Plan",
         description: "Update your goal and supported plan settings without leaving this page.",
+        lockedTitle: "Training plan settings are locked",
+        lockedDescription: "Training plan settings are available during your trial or with Premium. Your other settings remain available on the FREE plan.",
+        lockedCta: "View subscription options",
         loadError: "Unable to load your training settings.",
         currentGoal: "Current goal",
         changeGoal: "Goal",
@@ -1410,6 +1413,9 @@ export const translations = {
       plan: {
         title: "Plan d'entraînement",
         description: "Modifiez votre objectif et les réglages du plan réellement supportés depuis cette page.",
+        lockedTitle: "Les réglages du plan d'entraînement sont verrouillés",
+        lockedDescription: "Les réglages du plan d'entraînement sont disponibles pendant votre essai ou avec Premium. Vos autres réglages restent accessibles avec l'offre FREE.",
+        lockedCta: "Voir les offres d'abonnement",
         loadError: "Impossible de charger vos réglages d'entraînement.",
         currentGoal: "Objectif actuel",
         changeGoal: "Objectif",
@@ -2237,6 +2243,9 @@ export const translations = {
       plan: {
         title: "Plan de entrenamiento",
         description: "Actualiza tu objetivo y los ajustes del plan realmente compatibles sin salir de esta página.",
+        lockedTitle: "Los ajustes del plan de entrenamiento están bloqueados",
+        lockedDescription: "Los ajustes del plan de entrenamiento están disponibles durante la prueba o con Premium. Los demás ajustes siguen disponibles con el plan FREE.",
+        lockedCta: "Ver opciones de suscripción",
         loadError: "No se pueden cargar tus ajustes de entrenamiento.",
         currentGoal: "Objetivo actual",
         changeGoal: "Objetivo",
