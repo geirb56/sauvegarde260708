@@ -4,6 +4,7 @@
 
 - Base (`copilot/dev`): `933ab88f7bf5d5092b13e54d2ab1bdf5103fea73`
 - Audited starting HEAD: `163e10d4cb66334e52a5c39e5bd51ea3adec2bf1` (previous audited HEADs: `e15c7f739c6ef4e5d5a740c32b0d491c4c4479da`, `be6f37b6ccf8d7916e93e1bf432e48ee03f38c0f`, `86baa8a181e5e83b256e2a4bfe0034dd47744339`)
+- Final HEAD: `cf9b25f8073e2f76f00212b15a0bc335d0c5d056`
 - Branch: `copilot/restore-factual-context-coach`
 - PR: [#305](https://github.com/geirb56/sauvegarde260708/pull/305)
 
