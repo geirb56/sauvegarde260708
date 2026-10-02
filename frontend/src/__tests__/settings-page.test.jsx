@@ -536,7 +536,8 @@ describe("Settings UX V2", () => {
     expect(raceRow).toHaveTextContent("No race details saved yet.");
   });
 
-  test("save plan start date uses canonical backend contract and reloads plan settings", async () => {
+  test.each(["trial", "premium"])("%s saves plan start date using canonical contract and reloads plan settings", async (plan) => {
+    setSubscription(plan);
     mockAxiosApi();
     renderPage();
 
@@ -553,7 +554,8 @@ describe("Settings UX V2", () => {
     expect(toast.success).toHaveBeenCalled();
   });
 
-  test("save race settings shows success feedback only after backend confirmation", async () => {
+  test.each(["trial", "premium"])("%s saves race settings with success feedback only after backend confirmation", async (plan) => {
+    setSubscription(plan);
     mockAxiosApi(createApiState(), {
       postImplementation: (url) => {
         if (url.includes("/user/goal")) {
@@ -586,7 +588,8 @@ describe("Settings UX V2", () => {
     expect(toast.success).toHaveBeenCalled();
   });
 
-  test("saving sessions preference uses max wording and keeps 5-column selector layout", async () => {
+  test.each(["trial", "premium"])("%s saves sessions preference with max wording and 5-column selector layout", async (plan) => {
+    setSubscription(plan);
     mockAxiosApi();
     renderPage({ lang: "fr" });
 
@@ -737,7 +740,8 @@ describe("Settings UX V2", () => {
     expect(axios.delete).not.toHaveBeenCalled();
   });
 
-  test("confirm remove race sends minimal PATCH payload", async () => {
+  test.each(["trial", "premium"])("%s confirm remove race sends minimal PATCH payload", async (plan) => {
+    setSubscription(plan);
     const state = createApiState();
     mockAxiosApi(state, {
       patchImplementation: (url, payload) => {
@@ -764,7 +768,8 @@ describe("Settings UX V2", () => {
     expect(axios.delete).not.toHaveBeenCalled();
   });
 
-  test("confirm remove target time sends minimal PATCH payload and reloads optional state", async () => {
+  test.each(["trial", "premium"])("%s confirm remove target time sends minimal PATCH payload and reloads optional state", async (plan) => {
+    setSubscription(plan);
     const state = createApiState();
     mockAxiosApi(state, {
       patchImplementation: (url, payload) => {

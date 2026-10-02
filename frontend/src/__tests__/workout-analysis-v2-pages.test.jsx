@@ -1,6 +1,6 @@
 import React from "react";
 import "@testing-library/jest-dom";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import axios from "axios";
 
@@ -10,6 +10,8 @@ import DetailedAnalysis from "@/pages/DetailedAnalysis";
 import SessionDetail from "@/pages/SessionDetail";
 import { LanguageProvider } from "@/context/LanguageContext";
 import { UnitProvider } from "@/context/UnitContext";
+import { translations, LANGUAGE_STORAGE_KEY } from "@/lib/i18n";
+import { formatPaceDisplay, formatPaceDelta } from "@/lib/workoutAnalysis";
 
 jest.mock("axios");
 
@@ -149,8 +151,8 @@ const analysisMissingEvidence = {
   },
 };
 
-function renderWithProviders(ui, route) {
-  window.localStorage.setItem("runindex-language", "en");
+function renderWithProviders(ui, route, language = "en") {
+  window.localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
   return render(
     <LanguageProvider>
       <UnitProvider>
@@ -206,6 +208,24 @@ test("WorkoutDetail makes only one canonical analysis request", async () => {
   expect(analysisCalls.some((url) => url.includes("/rag/workout/"))).toBe(false);
   expect(screen.getByTestId("meaning-text")).toBeInTheDocument();
   expect(screen.getByTestId("advice-text")).toBeInTheDocument();
+  expect(screen.getByTestId("meaning-text")).not.toBeVisible();
+  expect(screen.getByTestId("advice-text")).not.toBeVisible();
+  expect(screen.getByTestId("evidence-card")).not.toBeVisible();
+  expect(screen.getByTestId("analysis-details")).not.toHaveAttribute("open");
+  expect(screen.getByTestId("ask-coach-btn")).toBeVisible();
+  expect(screen.queryByText("Coach advice")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("similar-comparison-card")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByTestId("advanced-toggle"));
+  expect(screen.getByTestId("analysis-details")).toHaveAttribute("open");
+  expect(screen.getByTestId("meaning-text")).toBeVisible();
+  expect(screen.getByTestId("advice-text")).toBeVisible();
+  expect(screen.getByTestId("evidence-card")).toBeVisible();
+  expect(screen.getByTestId("hr-zones-card")).toBeVisible();
+  expect(screen.queryByText("Easy effort")).not.toBeInTheDocument();
+  expect(screen.queryByText("High intensity")).not.toBeInTheDocument();
+  expect(screen.queryByText("Balanced")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByTestId("advanced-toggle"));
+  expect(screen.getByTestId("meaning-text")).not.toBeVisible();
 });
 
 test("WorkoutDetail hides physiology and pacing cards when evidence is unavailable", async () => {
@@ -222,10 +242,18 @@ test("WorkoutDetail hides physiology and pacing cards when evidence is unavailab
   expect(screen.queryByTestId("hr-zones-card")).not.toBeInTheDocument();
   expect(screen.queryByTestId("pacing-summary-card")).not.toBeInTheDocument();
   expect(screen.queryByTestId("comparison-card")).not.toBeInTheDocument();
-  expect(screen.getByTestId("intensity-card-unavailable")).toHaveTextContent("--");
+  expect(screen.getByTestId("intensity-card-unavailable")).toHaveTextContent(translations.en.workoutDetailExtended.intensityUnavailable);
   expect(screen.getByTestId("intensity-card-unavailable")).not.toHaveTextContent("Moderate intensity");
   expect(screen.getByText("Moderate session volume")).toBeInTheDocument();
   expect(screen.getByText("Standard session")).toBeInTheDocument();
+  expect(screen.getByTestId("intensity-card-unavailable")).not.toHaveTextContent(
+    analysisMissingEvidence.signals.intensity.reason_unavailable,
+  );
+  fireEvent.click(screen.getByTestId("advanced-toggle"));
+  expect(screen.getByTestId("analysis-limitations")).toHaveTextContent(analysisMissingEvidence.signals.intensity.reason_unavailable);
+  expect(screen.getByTestId("analysis-limitations")).toHaveTextContent("Heart-rate evidence is unavailable.");
+  expect(screen.getByTestId("analysis-limitations")).toHaveTextContent("Pacing evidence is unavailable.");
+  expect(screen.getByTestId("analysis-limitations")).toHaveTextContent("No prior same-type workouts in the last 14 days.");
 });
 
 test("WorkoutDetail shows one coherent error state for analysis failure", async () => {
@@ -246,7 +274,201 @@ test("WorkoutDetail shows one coherent error state for analysis failure", async 
   expect(screen.getByText(/analyzing/i)).toBeInTheDocument();
   await waitFor(() => expect(screen.getByTestId("workout-detail")).toBeInTheDocument());
   expect(screen.queryByTestId("coach-summary")).not.toBeInTheDocument();
+  expect(screen.getByText("Analysis unavailable")).toBeVisible();
+  expect(screen.queryByTestId("analysis-details")).not.toBeInTheDocument();
+  expect(screen.getByTestId("ask-coach-btn")).toBeVisible();
   expect(axios.get).toHaveBeenCalledTimes(2);
+});
+
+test.each([
+  [-0.012, "-0:01/km"],
+  [0.2, "+0:12/km"],
+  [0, "0:00/km"],
+  [-1.2, "-1:12/km"],
+  [1.999, "+2:00/km"],
+  [null, "--"],
+  [undefined, "--"],
+  [NaN, "--"],
+])("formats minutes/km delta %s without inventing missing values", (difference, expected) => {
+  expect(formatPaceDelta(difference)).toBe(expected);
+});
+
+test("absolute pace rounding carries seconds into minutes", () => {
+  expect(formatPaceDisplay(5.999)).toBe("6:00/km");
+  expect(formatPaceDisplay(null)).toBe("--");
+});
+
+const similarReference = {
+  available: true,
+  comparable: false,
+  period_days: 180,
+  sample_count: 5,
+  avg_distance_km: 10.4,
+  avg_pace_min_km: 6.012,
+  avg_heart_rate: 148,
+  pace_sample_count: 2,
+  hr_sample_count: 3,
+  pace_difference_min_km: -0.012,
+  heart_rate_difference_bpm: 2,
+  limitations: ["session_nature_unknown", "pace_sample_too_small"],
+  reason_unavailable: null,
+};
+
+test.each([
+  ["fr", "Allure", "Durée", "Fréquence cardiaque", "Comparaison récente · 14 jours", "Séances similaires · 180 jours"],
+  ["en", "Pace", "Duration", "Heart rate", "Recent comparison · 14 days", "Similar sessions · 180 days"],
+  ["es", "Ritmo", "Duración", "Frecuencia cardíaca", "Comparación reciente · 14 días", "Sesiones similares · 180 días"],
+])("WorkoutDetail localizes facts and separates recent and similar references in %s", async (
+  language, pace, duration, hr, recentTitle, similarTitle,
+) => {
+  const payload = {
+    ...analysis,
+    meaning: { ...analysis.meaning, text: "Opaque meaning: 999 sessions, 999 days, 999 bpm. Never parse this text." },
+    comparison: { ...analysis.comparison, similar: similarReference },
+  };
+  mockAxios({ analysisPayload: payload });
+  renderWithProviders(
+    <Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>,
+    "/workout/w1", language,
+  );
+  await screen.findByTestId("coach-summary");
+  const pacing = screen.getByTestId("pacing-summary-card");
+  const recent = screen.getByTestId("comparison-card");
+  const similar = screen.getByTestId("similar-comparison-card");
+  expect(within(pacing).getByText(pace)).toBeVisible();
+  expect(within(pacing).getByText("+0:12/km")).toBeVisible();
+  expect(within(recent).getByText(recentTitle)).toBeVisible();
+  expect(within(recent).getByText(duration)).toBeVisible();
+  expect(within(recent).getByText(hr)).toBeVisible();
+  expect(within(recent).getByText("-0:06/km")).toBeVisible();
+  expect(recent).toHaveTextContent(translations[language].workoutDetailExtended.sampleCount.replace("{count}", "2"));
+  expect(within(similar).getByText(similarTitle)).toBeVisible();
+  expect(similar).toHaveTextContent("6:01/km");
+  expect(similar).toHaveTextContent("-0:01/km");
+  expect(similar).toHaveTextContent("148 bpm");
+  expect(similar).toHaveTextContent("+2 bpm");
+  expect(similar).toHaveTextContent(translations[language].workoutDetailExtended.sampleCount.replace("{count}", "5"));
+  expect(similar).toHaveTextContent(translations[language].workoutDetailExtended.paceSampleCount.replace("{count}", "2").replace("{total}", "5"));
+  expect(similar).toHaveTextContent(translations[language].workoutDetailExtended.hrSampleCount.replace("{count}", "3").replace("{total}", "5"));
+  expect(screen.getByTestId("similar-comparability-caveat")).toHaveTextContent(translations[language].workoutDetailExtended.descriptiveComparison);
+  expect(similar).not.toHaveTextContent("999");
+  expect(screen.getByTestId("ask-coach-btn")).toBeVisible();
+  expect(screen.getByTestId("meaning-text")).not.toBeVisible();
+  expect(screen.getByTestId("intensity-card-unavailable")).toHaveTextContent(translations[language].workoutDetailExtended.intensityUnavailable);
+  expect(screen.getByTestId("intensity-card-unavailable")).not.toHaveTextContent(analysis.signals.intensity.reason_unavailable);
+  expect(pacing.compareDocumentPosition(recent) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(recent.compareDocumentPosition(similar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(similar.compareDocumentPosition(screen.getByTestId("ask-coach-btn")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(screen.getByTestId("ask-coach-btn").compareDocumentPosition(screen.getByTestId("analysis-details")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  fireEvent.click(screen.getByTestId("advanced-toggle"));
+  expect(screen.getByTestId("analysis-limitations")).toHaveTextContent(translations[language].workoutDetailExtended.unknownSessionNature);
+  expect(screen.getByTestId("analysis-limitations")).not.toHaveTextContent("session_nature_unknown");
+  expect(screen.queryByText(translations[language].zones.dominant_easy)).not.toBeInTheDocument();
+  expect(screen.queryByText(translations[language].zones.dominant_hard)).not.toBeInTheDocument();
+});
+
+test("similar reference is independent of baseline availability and does not coerce missing deltas", async () => {
+  mockAxios({
+    analysisPayload: {
+      ...analysisMissingEvidence,
+      comparison: {
+        ...analysisMissingEvidence.comparison,
+        similar: { ...similarReference, pace_difference_min_km: null, heart_rate_difference_bpm: null },
+      },
+    },
+  });
+  renderWithProviders(
+    <Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>,
+    "/workout/w1",
+  );
+  await screen.findByTestId("coach-summary");
+  expect(screen.queryByTestId("comparison-card")).not.toBeInTheDocument();
+  expect(screen.getByTestId("similar-comparison-card")).toBeVisible();
+  expect(screen.getByTestId("similar-pace")).toHaveTextContent("Difference: --");
+  expect(screen.getByTestId("similar-heart-rate")).toHaveTextContent("Difference: --");
+  expect(screen.getByTestId("similar-pace")).not.toHaveTextContent("0:00/km");
+});
+
+test.each([null, 5])("missing evidence counts are omitted, with total %s", async (sampleCount) => {
+  mockAxios({
+    analysisPayload: {
+      ...analysis,
+      comparison: {
+        ...analysis.comparison,
+        baseline_sample_count: null,
+        similar: { ...similarReference, sample_count: sampleCount, pace_sample_count: null, hr_sample_count: undefined },
+      },
+    },
+  });
+  renderWithProviders(
+    <Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>,
+    "/workout/w1",
+  );
+  await screen.findByTestId("coach-summary");
+  expect(screen.getByTestId("comparison-card")).not.toHaveTextContent("reference session");
+  expect(screen.getByTestId("similar-pace")).not.toHaveTextContent("Pace evidence");
+  expect(screen.getByTestId("similar-heart-rate")).not.toHaveTextContent("Heart-rate evidence");
+  expect(screen.getByTestId("similar-comparison-card")).not.toHaveTextContent("-- of");
+  if (sampleCount == null) expect(screen.getByTestId("similar-comparison-card")).not.toHaveTextContent("reference session");
+});
+
+test("similar heart-rate average and delta are rounded to whole bpm", async () => {
+  mockAxios({
+    analysisPayload: {
+      ...analysis,
+      comparison: {
+        ...analysis.comparison,
+        similar: { ...similarReference, avg_heart_rate: 136.8, heart_rate_difference_bpm: 3.8 },
+      },
+    },
+  });
+  renderWithProviders(
+    <Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>,
+    "/workout/w1",
+  );
+  await screen.findByTestId("coach-summary");
+  expect(screen.getByTestId("similar-heart-rate")).toHaveTextContent("Average heart rate: 137 bpm");
+  expect(screen.getByTestId("similar-heart-rate")).toHaveTextContent("Difference: +4 bpm");
+  expect(screen.getByTestId("similar-heart-rate")).not.toHaveTextContent("136.8");
+  expect(screen.getByTestId("similar-heart-rate")).not.toHaveTextContent("3.8");
+});
+
+test("unavailable similar reference gives a human caveat without fabricated metrics", async () => {
+  mockAxios({
+    analysisPayload: {
+      ...analysis,
+      comparison: {
+        ...analysis.comparison,
+        similar: {
+          available: false, comparable: false, sample_count: 0, period_days: 180,
+          avg_pace_min_km: null, avg_heart_rate: null,
+          limitations: ["no_comparable_reference"],
+          reason_unavailable: "No earlier session of comparable distance was found.",
+        },
+      },
+    },
+  });
+  renderWithProviders(
+    <Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>,
+    "/workout/w1",
+  );
+  await screen.findByTestId("coach-summary");
+  expect(screen.getByTestId("similar-comparison-card")).toHaveTextContent("No earlier session of comparable distance was found.");
+  expect(screen.queryByTestId("similar-pace")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("similar-heart-rate")).not.toBeInTheDocument();
+});
+
+test.each(["fr", "en", "es"])("WorkoutDetail business keys are explicitly translated in %s", (language) => {
+  const keys = [
+    "pace", "speed", "distance", "duration", "heartRate", "recentComparison", "similarComparison",
+    "sampleCount", "paceSampleCount", "hrSampleCount", "averageDistance", "averagePace",
+    "averageHeartRate", "difference", "descriptiveComparison", "similarUnavailable",
+    "analysisDetails", "analysisAdvice", "analysisUnavailable", "evidence", "version",
+    "hrZonesEvidence", "splitsEvidence", "baselineEvidence", "cadenceEvidence", "elevationEvidence",
+    "yes", "no", "limitations", "unknownSessionNature", "smallSample", "smallPaceSample", "smallHrSample",
+    "intensityUnavailable",
+  ];
+  keys.forEach((key) => expect(translations[language].workoutDetailExtended[key]).toEqual(expect.any(String)));
 });
 
 test("DetailedAnalysis uses the canonical V2 endpoint", async () => {

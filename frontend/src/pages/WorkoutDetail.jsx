@@ -194,44 +194,6 @@ const HRZonesChart = ({ zones, t }) => {
   );
 };
 
-const ZoneSummary = ({ zones, t }) => {
-  if (!zones) return null;
-  const easyPct = (zones.z1 || 0) + (zones.z2 || 0);
-  const moderatePct = zones.z3 || 0;
-  const hardPct = (zones.z4 || 0) + (zones.z5 || 0);
-  let dominant = "balanced";
-  let dominantColor = "text-chart-3";
-  if (hardPct >= 50) {
-    dominant = "hard";
-    dominantColor = "text-chart-1";
-  } else if (easyPct >= 60) {
-    dominant = "easy";
-    dominantColor = "text-chart-2";
-  }
-
-  return (
-    <div className="flex items-center justify-between mt-3 pt-3 border-t border-border">
-      <div className="flex gap-4">
-        <div className="text-center">
-          <p className="font-mono text-xs font-semibold text-chart-2">{easyPct}%</p>
-          <p className="font-mono text-[8px] text-muted-foreground uppercase">{t("zones.easy")}</p>
-        </div>
-        <div className="text-center">
-          <p className="font-mono text-xs font-semibold text-chart-3">{moderatePct}%</p>
-          <p className="font-mono text-[8px] text-muted-foreground uppercase">{t("zones.moderate")}</p>
-        </div>
-        <div className="text-center">
-          <p className="font-mono text-xs font-semibold text-chart-1">{hardPct}%</p>
-          <p className="font-mono text-[8px] text-muted-foreground uppercase">{t("zones.hard")}</p>
-        </div>
-      </div>
-      <div className={`px-2 py-1 rounded-sm ${dominant === "hard" ? "bg-chart-1/10" : dominant === "easy" ? "bg-chart-2/10" : "bg-chart-3/10"}`}>
-        <p className={`font-mono text-[10px] font-semibold ${dominantColor}`}>{t(`zones.dominant_${dominant}`)}</p>
-      </div>
-    </div>
-  );
-};
-
 const AnalysisSkeleton = () => (
   <div className="space-y-2">
     <Skeleton className="h-3 w-3/4" />
@@ -408,12 +370,7 @@ export default function WorkoutDetail() {
               </>
             ) : analysis?.signals?.intensity ? (
               <div data-testid="intensity-card-unavailable">
-                <span className="inline-block px-2 py-0.5 rounded-sm font-mono text-xs bg-muted text-muted-foreground">--</span>
-                {analysis.signals.intensity.reason_unavailable && (
-                  <p className="font-mono text-[10px] text-muted-foreground leading-relaxed mt-1">
-                    {analysis.signals.intensity.reason_unavailable}
-                  </p>
-                )}
+                <p className="font-mono text-[10px] text-muted-foreground leading-relaxed">{t("workoutDetailExtended.intensityUnavailable")}</p>
                 {physiology?.avg_hr != null && (
                   <p className="font-mono text-[10px] text-muted-foreground flex items-center gap-1 mt-1">
                     <Heart className="w-2.5 h-2.5" />
@@ -512,7 +469,7 @@ export default function WorkoutDetail() {
               <Scale className="w-4 h-4 text-muted-foreground" />
               <span className="font-mono text-[9px] uppercase tracking-widest text-muted-foreground">{interpolate("recentComparison", { days: comparison.baseline_period_days })}</span>
             </div>
-            <p className="font-mono text-[10px] text-muted-foreground mb-2">{interpolate("sampleCount", { count: comparison.baseline_sample_count })}</p>
+            {comparison.baseline_sample_count != null && <p className="font-mono text-[10px] text-muted-foreground mb-2">{interpolate("sampleCount", { count: comparison.baseline_sample_count })}</p>}
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               {comparison.distance_km && (
                 <div className="rounded-sm bg-muted/20 p-2">
@@ -553,20 +510,20 @@ export default function WorkoutDetail() {
             <h2 className="text-[9px] uppercase tracking-widest text-muted-foreground">{interpolate("similarComparison", { days: similar.period_days })}</h2>
             {similar.available ? (
               <>
-                <p>{interpolate("sampleCount", { count: similar.sample_count })}</p>
+                {similar.sample_count != null && <p>{interpolate("sampleCount", { count: similar.sample_count })}</p>}
                 {similar.avg_distance_km != null && <p>{t("workoutDetailExtended.averageDistance")}: {similar.avg_distance_km} km</p>}
                 {(similar.avg_pace_min_km != null || similar.pace_difference_min_km != null) && (
                   <div data-testid="similar-pace">
                     <p>{t("workoutDetailExtended.averagePace")}: {formatPaceDisplay(similar.avg_pace_min_km)}</p>
                     <p>{t("workoutDetailExtended.difference")}: {formatPaceDelta(similar.pace_difference_min_km)}</p>
-                    <p className="text-muted-foreground">{interpolate("paceSampleCount", { count: similar.pace_sample_count, total: similar.sample_count })}</p>
+                    {similar.pace_sample_count != null && similar.sample_count != null && <p className="text-muted-foreground">{interpolate("paceSampleCount", { count: similar.pace_sample_count, total: similar.sample_count })}</p>}
                   </div>
                 )}
                 {(similar.avg_heart_rate != null || similar.heart_rate_difference_bpm != null) && (
                   <div data-testid="similar-heart-rate">
-                    <p>{t("workoutDetailExtended.averageHeartRate")}: {similar.avg_heart_rate == null ? "--" : `${similar.avg_heart_rate} bpm`}</p>
-                    <p>{t("workoutDetailExtended.difference")}: {formatSignedMetric({ difference: similar.heart_rate_difference_bpm }, " bpm")}</p>
-                    <p className="text-muted-foreground">{interpolate("hrSampleCount", { count: similar.hr_sample_count, total: similar.sample_count })}</p>
+                    <p>{t("workoutDetailExtended.averageHeartRate")}: {similar.avg_heart_rate == null ? "--" : `${Math.round(similar.avg_heart_rate)} bpm`}</p>
+                    <p>{t("workoutDetailExtended.difference")}: {formatSignedMetric({ difference: similar.heart_rate_difference_bpm == null ? null : Math.round(similar.heart_rate_difference_bpm) }, " bpm")}</p>
+                    {similar.hr_sample_count != null && similar.sample_count != null && <p className="text-muted-foreground">{interpolate("hrSampleCount", { count: similar.hr_sample_count, total: similar.sample_count })}</p>}
                   </div>
                 )}
                 {similar.comparable === false && <p className="text-muted-foreground" data-testid="similar-comparability-caveat">{t("workoutDetailExtended.descriptiveComparison")}</p>}
@@ -610,7 +567,6 @@ export default function WorkoutDetail() {
                 <h2 className="font-mono text-[10px] uppercase text-muted-foreground flex items-center gap-2"><HeartPulse className="w-4 h-4" />{t("analysis.hrZones")}</h2>
                 {physiology.avg_hr != null && <p className="font-mono text-xs">{t("analysis.avgHr")}: {physiology.avg_hr} bpm</p>}
                 <HRZonesChart zones={physiology.zone_distribution} t={t} />
-                <ZoneSummary zones={physiology.zone_distribution} t={t} />
               </section>
             )}
             {workout.km_splits?.length > 0 && (
