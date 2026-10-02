@@ -211,17 +211,18 @@ class _FakeDB:
         return col
 
 
-def _server_db_patches(fake_db: _FakeDB):
-    return [
-        patch.object(server, "db", fake_db),
-        patch.object(server.app.state, "db", fake_db),
-    ]
-
-
 @contextmanager
 def _patch_server_db(fake_db: _FakeDB):
-    with patch.object(server, "db", fake_db), patch.object(server.app.state, "db", fake_db):
-        yield
+    orig_state_db = getattr(server.app.state, "db", None)
+    server.app.state.db = fake_db
+    with patch.object(server, "db", fake_db):
+        try:
+            yield
+        finally:
+            if orig_state_db is not None:
+                server.app.state.db = orig_state_db
+            elif hasattr(server.app.state, "db"):
+                del server.app.state.db
 
 
 def _current_month_key() -> str:
@@ -258,9 +259,12 @@ async def _premium_access(_db, user_id: str):
     return UserAccess(user_id=user_id, tier=Tier.PREMIUM)
 
 
-async def _run_analyze(fake_db: _FakeDB, access_fn, *, user_id: str = "user-a", message: str = "hello"):
+@contextmanager
+def _analyze_environment(fake_db: _FakeDB, access_fn):
+    orig_state_db = getattr(server.app.state, "db", None)
+    server.app.state.db = fake_db
     patches = [
-        *_server_db_patches(fake_db),
+        patch.object(server, "db", fake_db),
         patch("server.get_user_access", AsyncMock(side_effect=access_fn)),
         patch("server._resolve_goal_v2", AsyncMock(return_value=SimpleNamespace())),
         patch("server._resolve_canonical_reference_date", return_value=datetime(2026, 1, 15, tzinfo=timezone.utc).date()),
@@ -275,24 +279,37 @@ async def _run_analyze(fake_db: _FakeDB, access_fn, *, user_id: str = "user-a", 
         patch("server.build_coach_context_v2", AsyncMock(return_value=_ContextPayload())),
         patch("server.llm_coach.enrich_chat_response", AsyncMock(side_effect=_coach_response_stub)),
     ]
-
-    if hasattr(server.rate_limiter, "requests"):
-        server.rate_limiter.requests.clear()
-
     with (
         patches[0], patches[1], patches[2], patches[3], patches[4],
         patches[5], patches[6], patches[7], patches[8], patches[9],
-        patches[10], patches[11], patches[12], patches[13], patches[14],
+        patches[10], patches[11], patches[12], patches[13],
     ):
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=server.app),
-            base_url="http://test",
-        ) as client:
-            return await client.post(
-                "/api/coach/analyze",
-                headers=_bearer(user_id, f"{user_id}@test.com"),
-                json={"message": message, "language": "en"},
-            )
+        try:
+            yield
+        finally:
+            if orig_state_db is not None:
+                server.app.state.db = orig_state_db
+            elif hasattr(server.app.state, "db"):
+                del server.app.state.db
+
+
+async def _send_analyze_request(user_id: str = "user-a", message: str = "hello"):
+    if hasattr(server.rate_limiter, "requests"):
+        server.rate_limiter.requests.clear()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=server.app),
+        base_url="http://test",
+    ) as client:
+        return await client.post(
+            "/api/coach/analyze",
+            headers=_bearer(user_id, f"{user_id}@test.com"),
+            json={"message": message, "language": "en"},
+        )
+
+
+async def _run_analyze(fake_db: _FakeDB, access_fn, *, user_id: str = "user-a", message: str = "hello"):
+    with _analyze_environment(fake_db, access_fn):
+        return await _send_analyze_request(user_id, message)
 
 
 def _iso_at(base: datetime, idx: int) -> str:
@@ -569,10 +586,11 @@ async def test_free_concurrency_allows_only_one_when_at_9_of_10():
     ]
     fake_db = _FakeDB(conversations=docs)
 
-    r1, r2 = await asyncio.gather(
-        _run_analyze(fake_db, _free_access, message="concurrent-1"),
-        _run_analyze(fake_db, _free_access, message="concurrent-2"),
-    )
+    with _analyze_environment(fake_db, _free_access):
+        r1, r2 = await asyncio.gather(
+            _send_analyze_request("user-a", message="concurrent-1"),
+            _send_analyze_request("user-a", message="concurrent-2"),
+        )
     statuses = sorted([r1.status_code, r2.status_code])
     assert statuses == [200, 429]
 
@@ -587,10 +605,11 @@ async def test_free_concurrency_allows_only_one_when_at_9_of_10():
 
 async def test_concurrent_first_use_initialization_creates_single_counter_document():
     fake_db = _FakeDB(conversations=[])
-    r1, r2 = await asyncio.gather(
-        _run_analyze(fake_db, _free_access, message="first-1"),
-        _run_analyze(fake_db, _free_access, message="first-2"),
-    )
+    with _analyze_environment(fake_db, _free_access):
+        r1, r2 = await asyncio.gather(
+            _send_analyze_request("user-a", message="first-1"),
+            _send_analyze_request("user-a", message="first-2"),
+        )
     assert r1.status_code == 200
     assert r2.status_code == 200
     assert len(fake_db.coach_quota_counters._docs) == 1

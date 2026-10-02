@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
@@ -16,6 +17,38 @@ from training_v2.training_cycle_response import build_cycle_calendar_response
 from training_v2.training_history import build_training_history
 from training_v2.training_load import TrainingLoadSnapshot
 from training_v2.training_paces import TrainingPaces, training_paces_to_api_dict
+from workout_analysis_v2 import WorkoutAnalysisV2Response
+
+COACH_RECENT_WORKOUTS_WINDOW_DAYS = 30
+COACH_RECENT_WORKOUTS_MAX_COUNT = 30
+
+
+class CoachRecentWorkout(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    date: str
+    type: str
+    name: Optional[str] = None
+    distance_km: Optional[float] = None
+    duration_minutes: Optional[float] = None
+    avg_pace_min_km: Optional[float] = None
+    avg_speed_kmh: Optional[float] = None
+    avg_heart_rate: Optional[float] = None
+    max_heart_rate: Optional[float] = None
+    elevation_gain_m: Optional[float] = None
+
+
+class CoachRecentWorkoutsCoverage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    window_days: int
+    start_date_inclusive: str
+    end_date_inclusive: str
+    available_count: int
+    included_count: int
+    max_count: int
+    truncated: bool
 
 
 class CoachWorkoutDetail(BaseModel):
@@ -23,12 +56,20 @@ class CoachWorkoutDetail(BaseModel):
 
     id: str
     name: Optional[str] = None
+    date: Optional[str] = None
+    type: Optional[str] = None
     distance_km: Optional[float] = None
     duration_minutes: Optional[float] = None
     avg_hr: Optional[float] = None
     max_hr: Optional[float] = None
+    avg_heart_rate: Optional[float] = None
+    max_heart_rate: Optional[float] = None
+    avg_pace_min_km: Optional[float] = None
+    avg_speed_kmh: Optional[float] = None
+    elevation_gain_m: Optional[float] = None
     zones: Optional[dict[str, Any]] = None
     km_splits: list[Any] = Field(default_factory=list)
+    analysis: Optional[WorkoutAnalysisV2Response] = None
 
 
 class CoachActivityStats(BaseModel):
@@ -153,6 +194,8 @@ class CoachContextV2(BaseModel):
     weekly_target: CoachWeeklyTargetContext
     weekly_reconciliation: CoachWeeklyReconciliationContext
     current_week_sessions: list[CoachWeekSessionContext] = Field(default_factory=list)
+    recent_workouts: list[CoachRecentWorkout] = Field(default_factory=list)
+    recent_workouts_coverage: CoachRecentWorkoutsCoverage
     today: CoachTodayContext
     readiness: CoachReadinessContext
     training_load: CoachTrainingLoadContext
@@ -293,37 +336,238 @@ async def _today_snapshot_doc(
     )
 
 
-def _normalize_workout_detail(workout: Optional[dict[str, Any]]) -> Optional[CoachWorkoutDetail]:
+def _safe_distance_km(workout: dict[str, Any]) -> Optional[float]:
+    raw_km = workout.get("distance_km")
+    if raw_km is not None and not isinstance(raw_km, bool):
+        try:
+            val = float(raw_km)
+            if math.isfinite(val) and val > 0:
+                return round(val, 2)
+        except (ValueError, TypeError):
+            pass
+    raw_m = workout.get("distance")
+    if raw_m is not None and not isinstance(raw_m, bool):
+        try:
+            val = float(raw_m)
+            if math.isfinite(val) and val > 0:
+                return round(val / 1000.0 if val >= 1000 else val, 2)
+        except (ValueError, TypeError):
+            pass
+    return None
+
+
+def _safe_duration_minutes(workout: dict[str, Any]) -> Optional[float]:
+    moving_time = workout.get("moving_time")
+    if moving_time is not None and not isinstance(moving_time, bool):
+        try:
+            val = float(moving_time)
+            if math.isfinite(val) and val > 0:
+                return round(val / 60.0, 1)
+        except (ValueError, TypeError):
+            pass
+    raw_dur = workout.get("duration_minutes")
+    if raw_dur is not None and not isinstance(raw_dur, bool):
+        try:
+            val = float(raw_dur)
+            if math.isfinite(val) and val > 0:
+                return round(val, 1)
+        except (ValueError, TypeError):
+            pass
+    return None
+
+
+def _safe_hr(val: Any) -> Optional[float]:
+    if val is None or isinstance(val, bool):
+        return None
+    try:
+        f = float(val)
+        return round(f, 1) if math.isfinite(f) and f > 0 else None
+    except (ValueError, TypeError):
+        return None
+
+
+def _safe_pace_min_km(workout: dict[str, Any]) -> Optional[float]:
+    raw_pace = workout.get("avg_pace_min_km")
+    if raw_pace is not None and not isinstance(raw_pace, bool):
+        try:
+            val = float(raw_pace)
+            if math.isfinite(val) and val > 0:
+                return round(val, 2)
+        except (ValueError, TypeError):
+            pass
+    return None
+
+
+def _safe_speed_kmh(workout: dict[str, Any]) -> Optional[float]:
+    raw_speed = workout.get("avg_speed_kmh")
+    if raw_speed is not None and not isinstance(raw_speed, bool):
+        try:
+            val = float(raw_speed)
+            if math.isfinite(val) and val > 0:
+                return round(val, 2)
+        except (ValueError, TypeError):
+            pass
+    return None
+
+
+def _safe_elevation(val: Any) -> Optional[float]:
+    if val is None or isinstance(val, bool):
+        return None
+    try:
+        f = float(val)
+        return round(f, 1) if math.isfinite(f) and f >= 0 else None
+    except (ValueError, TypeError):
+        return None
+
+
+def _safe_scaled_positive(value: Any, scale: float, digits: int) -> Optional[float]:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        scaled = float(value) * scale
+        return round(scaled, digits) if math.isfinite(scaled) and scaled > 0 else None
+    except (ValueError, TypeError):
+        return None
+
+
+def _is_valid_recent_workout(
+    workout: dict[str, Any],
+    reference_date: date,
+    window_days: int = COACH_RECENT_WORKOUTS_WINDOW_DAYS,
+) -> bool:
+    raw_date = workout.get("start_time") or workout.get("date")
+    if not raw_date:
+        return False
+    workout_date = _parse_iso_date(raw_date)
+    if workout_date is None:
+        return False
+    if workout_date >= reference_date + timedelta(days=1):
+        return False
+    cutoff = reference_date - timedelta(days=window_days - 1)
+    if workout_date < cutoff:
+        return False
+    return True
+
+
+def _normalize_recent_workout(workout: dict[str, Any]) -> CoachRecentWorkout:
+    garmin_activity = workout.get("garmin_activity")
+    raw_values = {**(garmin_activity if isinstance(garmin_activity, dict) else {}), **workout}
+    raw_avg_hr = raw_values.get("avg_heart_rate")
+    if raw_avg_hr is None:
+        raw_avg_hr = raw_values.get("average_hr")
+    if raw_avg_hr is None:
+        raw_avg_hr = raw_values.get("average_heartrate")
+    if raw_avg_hr is None:
+        raw_avg_hr = raw_values.get("avg_hr")
+    avg_hr = _safe_hr(raw_avg_hr)
+
+    raw_max_hr = raw_values.get("max_heart_rate")
+    if raw_max_hr is None:
+        raw_max_hr = raw_values.get("max_heartrate")
+    if raw_max_hr is None:
+        raw_max_hr = raw_values.get("max_hr")
+    max_hr = _safe_hr(raw_max_hr)
+
+    raw_elevation = raw_values.get("elevation_gain_m")
+    if raw_elevation is None:
+        raw_elevation = raw_values.get("elevation_gain")
+
+    distance_m = raw_values.get("distance_m")
+    if distance_m is None:
+        distance_m = raw_values.get("distance")
+    duration_seconds = raw_values.get("duration_s")
+    if duration_seconds is None:
+        duration_seconds = raw_values.get("duration")
+    raw_pace = raw_values.get("pace_seconds_per_km")
+    raw_speed = raw_values.get("average_speed_mps")
+    workout_id = raw_values.get("id")
+    if workout_id is None and raw_values.get("external_id") is not None:
+        workout_id = f"garmin-{raw_values['external_id']}"
+    if workout_id is None:
+        workout_id = raw_values.get("activity_id", "")
+    workout_date = raw_values.get("start_time") or raw_values.get("date") or ""
+    distance_km = _safe_scaled_positive(distance_m, 0.001, 2)
+    duration_minutes = _safe_scaled_positive(duration_seconds, 1 / 60, 1)
+    avg_pace_min_km = _safe_scaled_positive(raw_pace, 1 / 60, 2)
+    avg_speed_kmh = _safe_scaled_positive(raw_speed, 3.6, 2)
+    if distance_km is None:
+        distance_km = _safe_distance_km(raw_values)
+    if duration_minutes is None:
+        duration_minutes = _safe_duration_minutes(raw_values)
+    if avg_pace_min_km is None:
+        avg_pace_min_km = _safe_pace_min_km(raw_values)
+    if avg_speed_kmh is None:
+        avg_speed_kmh = _safe_speed_kmh(raw_values)
+
+    return CoachRecentWorkout(
+        id=str(workout_id),
+        date=str(workout_date),
+        type=str(raw_values.get("type") or raw_values.get("activity_type") or "workout"),
+        name=raw_values.get("name") if raw_values.get("name") is not None else None,
+        distance_km=distance_km,
+        duration_minutes=duration_minutes,
+        avg_pace_min_km=avg_pace_min_km,
+        avg_speed_kmh=avg_speed_kmh,
+        avg_heart_rate=avg_hr,
+        max_heart_rate=max_hr,
+        elevation_gain_m=_safe_elevation(raw_elevation),
+    )
+
+
+def _normalize_workout_detail(
+    workout: Optional[dict[str, Any]],
+    analysis: Optional[WorkoutAnalysisV2Response] = None,
+) -> Optional[CoachWorkoutDetail]:
     if not workout:
         return None
 
-    duration_minutes: Optional[float] = None
-    moving_time = workout.get("moving_time")
-    if isinstance(moving_time, (int, float)) and not isinstance(moving_time, bool) and moving_time > 0:
-        duration_minutes = float(moving_time) / 60.0
-    else:
-        raw_duration = workout.get("duration_minutes")
-        if isinstance(raw_duration, (int, float)) and not isinstance(raw_duration, bool):
-            duration_minutes = float(raw_duration)
+    garmin_activity = workout.get("garmin_activity")
+    raw_values = {**(garmin_activity if isinstance(garmin_activity, dict) else {}), **workout}
 
-    distance_km: Optional[float] = None
-    raw_distance_km = workout.get("distance_km")
-    if isinstance(raw_distance_km, (int, float)) and not isinstance(raw_distance_km, bool):
-        distance_km = float(raw_distance_km)
-    else:
-        raw_distance = workout.get("distance")
-        if isinstance(raw_distance, (int, float)) and not isinstance(raw_distance, bool):
-            distance_km = float(raw_distance) / 1000.0 if raw_distance >= 1000 else float(raw_distance)
+    duration_minutes = _safe_duration_minutes(raw_values)
+    distance_km = _safe_distance_km(raw_values)
+    raw_avg_hr = raw_values.get("avg_heart_rate")
+    if raw_avg_hr is None:
+        raw_avg_hr = raw_values.get("average_heartrate")
+    if raw_avg_hr is None:
+        raw_avg_hr = raw_values.get("average_hr")
+    if raw_avg_hr is None:
+        raw_avg_hr = raw_values.get("avg_hr")
+    avg_hr = _safe_hr(raw_avg_hr)
+
+    raw_max_hr = raw_values.get("max_heart_rate")
+    if raw_max_hr is None:
+        raw_max_hr = raw_values.get("max_heartrate")
+    if raw_max_hr is None:
+        raw_max_hr = raw_values.get("max_hr")
+    max_hr = _safe_hr(raw_max_hr)
+
+    avg_pace = _safe_pace_min_km(raw_values)
+    avg_speed = _safe_speed_kmh(raw_values)
+    raw_elevation = raw_values.get("elevation_gain_m")
+    if raw_elevation is None:
+        raw_elevation = raw_values.get("elevation_gain")
+    if raw_elevation is None:
+        raw_elevation = raw_values.get("total_elevation_gain_m")
+    elevation = _safe_elevation(raw_elevation)
 
     return CoachWorkoutDetail(
         id=str(workout.get("id")),
         name=workout.get("name"),
+        date=str(workout.get("date")) if workout.get("date") is not None else None,
+        type=str(workout.get("type")) if workout.get("type") is not None else None,
         distance_km=distance_km,
         duration_minutes=duration_minutes,
-        avg_hr=workout.get("average_heartrate", workout.get("avg_heart_rate")),
-        max_hr=workout.get("max_heartrate", workout.get("max_heart_rate")),
-        zones=workout.get("effort_zone_distribution"),
-        km_splits=list(workout.get("km_splits") or [])[:5],
+        avg_hr=float(avg_hr) if avg_hr is not None else None,
+        max_hr=float(max_hr) if max_hr is not None else None,
+        avg_heart_rate=avg_hr,
+        max_heart_rate=max_hr,
+        avg_pace_min_km=avg_pace,
+        avg_speed_kmh=avg_speed,
+        elevation_gain_m=elevation,
+        zones=raw_values.get("effort_zone_distribution"),
+        km_splits=list(raw_values.get("km_splits") or [])[:5],
+        analysis=analysis,
     )
 
 
@@ -343,6 +587,8 @@ async def build_coach_context_v2(
     training_paces: TrainingPaces,
     performance: PerformanceEstimate,
     workout: Optional[dict[str, Any]] = None,
+    workout_analysis: Optional[WorkoutAnalysisV2Response] = None,
+    recent_workouts: Optional[list[CoachRecentWorkout]] = None,
 ) -> CoachContextV2:
     cycle_response = _build_cycle_response(
         resolved_goal=resolved_goal,
@@ -394,6 +640,64 @@ async def build_coach_context_v2(
         for prediction in performance.predictions
     ]
 
+    if recent_workouts is None and db is not None and hasattr(db, "garmin_activities"):
+        start_date = reference_date - timedelta(days=COACH_RECENT_WORKOUTS_WINDOW_DAYS - 1)
+        end_date = reference_date
+        lower_bound = start_date.isoformat()
+        upper_bound = (end_date + timedelta(days=1)).isoformat()
+        cursor = db.garmin_activities.find(
+            {
+                "user_id": user_id,
+                "start_time": {"$gte": lower_bound, "$lt": upper_bound},
+            },
+            {"_id": 0},
+        )
+        if hasattr(cursor, "sort"):
+            cursor = cursor.sort("start_time", -1)
+        workout_docs = await cursor.to_list(length=None)
+        valid_workout_docs = [
+            doc
+            for doc in workout_docs
+            if doc.get("user_id") == user_id and _is_valid_recent_workout(doc, reference_date)
+        ]
+        normalized_workouts = [
+            _normalize_recent_workout(doc)
+            for doc in valid_workout_docs
+        ]
+        recent_workouts = normalized_workouts[:COACH_RECENT_WORKOUTS_MAX_COUNT]
+        recent_workouts_coverage = CoachRecentWorkoutsCoverage(
+            window_days=COACH_RECENT_WORKOUTS_WINDOW_DAYS,
+            start_date_inclusive=lower_bound,
+            end_date_inclusive=end_date.isoformat(),
+            available_count=len(normalized_workouts),
+            included_count=len(recent_workouts),
+            max_count=COACH_RECENT_WORKOUTS_MAX_COUNT,
+            truncated=len(normalized_workouts) > COACH_RECENT_WORKOUTS_MAX_COUNT,
+        )
+    elif recent_workouts is None:
+        recent_workouts = []
+        recent_workouts_coverage = CoachRecentWorkoutsCoverage(
+            window_days=COACH_RECENT_WORKOUTS_WINDOW_DAYS,
+            start_date_inclusive=(reference_date - timedelta(days=COACH_RECENT_WORKOUTS_WINDOW_DAYS - 1)).isoformat(),
+            end_date_inclusive=reference_date.isoformat(),
+            available_count=0,
+            included_count=0,
+            max_count=COACH_RECENT_WORKOUTS_MAX_COUNT,
+            truncated=False,
+        )
+    else:
+        available_count = len(recent_workouts)
+        recent_workouts = list(recent_workouts)[:COACH_RECENT_WORKOUTS_MAX_COUNT]
+        recent_workouts_coverage = CoachRecentWorkoutsCoverage(
+            window_days=COACH_RECENT_WORKOUTS_WINDOW_DAYS,
+            start_date_inclusive=(reference_date - timedelta(days=COACH_RECENT_WORKOUTS_WINDOW_DAYS - 1)).isoformat(),
+            end_date_inclusive=reference_date.isoformat(),
+            available_count=available_count,
+            included_count=len(recent_workouts),
+            max_count=COACH_RECENT_WORKOUTS_MAX_COUNT,
+            truncated=available_count > COACH_RECENT_WORKOUTS_MAX_COUNT,
+        )
+
     return CoachContextV2(
         language=language,
         reference_date=reference_date.isoformat(),
@@ -431,6 +735,8 @@ async def build_coach_context_v2(
             reason_codes=list(week_payload.get("reconciliation_reason_codes") or []),
         ),
         current_week_sessions=current_week_sessions,
+        recent_workouts=recent_workouts,
+        recent_workouts_coverage=recent_workouts_coverage,
         today=CoachTodayContext(
             canonical=dict(today_payload),
             prescription_source=today_source,
@@ -463,8 +769,16 @@ async def build_coach_context_v2(
             has_data=performance.has_data,
             predictions=predictions,
         ),
-        workout_detail=_normalize_workout_detail(workout),
+        workout_detail=_normalize_workout_detail(workout, workout_analysis),
     )
 
 
-__all__ = ["CoachContextV2", "build_coach_context_v2"]
+__all__ = [
+    "COACH_RECENT_WORKOUTS_MAX_COUNT",
+    "COACH_RECENT_WORKOUTS_WINDOW_DAYS",
+    "CoachContextV2",
+    "CoachRecentWorkout",
+    "CoachRecentWorkoutsCoverage",
+    "CoachWorkoutDetail",
+    "build_coach_context_v2",
+]

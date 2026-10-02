@@ -1,10 +1,11 @@
 import React from "react";
 import "@testing-library/jest-dom";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import axios from "axios";
 
 import WorkoutDetail from "@/pages/WorkoutDetail";
+import Coach from "@/pages/Coach";
 import DetailedAnalysis from "@/pages/DetailedAnalysis";
 import SessionDetail from "@/pages/SessionDetail";
 import { LanguageProvider } from "@/context/LanguageContext";
@@ -279,4 +280,35 @@ test("SessionDetail uses the canonical V2 endpoint", async () => {
   const urls = axios.get.mock.calls.map(([url]) => url);
   expect(urls).toContainEqual(expect.stringContaining("/coach/workout-analysis/w1"));
   expect(urls.some((url) => url.includes("/coach/detailed-analysis/"))).toBe(false);
+});
+
+test("WorkoutDetail Ask Coach runs analysis in the real Coach page", async () => {
+  axios.get.mockImplementation((url) => {
+    if (url.includes("/coach/history")) return Promise.resolve({ data: [] });
+    if (url.includes("/workouts/w1")) return Promise.resolve({ data: workout });
+    if (url.includes("/coach/workout-analysis/w1")) return Promise.resolve({ data: analysis });
+    return Promise.reject(new Error(`unexpected ${url}`));
+  });
+  axios.post.mockResolvedValue({ data: { response: "Coach analyzed the selected workout." } });
+
+  renderWithProviders(
+    <Routes>
+      <Route path="/workout/:id" element={<WorkoutDetail />} />
+      <Route path="/coach" element={<Coach />} />
+    </Routes>,
+    "/workout/w1",
+  );
+
+  await screen.findByTestId("coach-summary");
+  fireEvent.click(screen.getByTestId("ask-coach-btn"));
+
+  expect(await screen.findByText("Coach analyzed the selected workout.")).toBeInTheDocument();
+  expect(axios.post).toHaveBeenCalledWith(
+    expect.stringContaining("/coach/analyze"),
+    {
+      message: expect.stringContaining("Morning Run"),
+      workout_id: "w1",
+      language: "en",
+    },
+  );
 });
