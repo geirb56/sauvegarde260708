@@ -1,0 +1,66 @@
+{
+  "summary": "PR285→PR298 runtime validation (auth v2, workout analysis v2, coach context v2, legacy route cleanup, premium gating). Ran 21 pytest cases against the public API (all pass) and an E2E Playwright walkthrough on the FREE testrunner account: login+redirect, header/branding, Coach/Settings/Training navigation, and legacy route probing. Backend behavior matches spec: bearer-only auth, unified 401 payloads, FREE gating (403 subscription_required) on premium endpoints, workout-analysis v2 no 500 on unknown id. UI login works and the app never white-screens or throws uncaught errors. Two minor UX issues surfaced.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/<any-non-whitelisted-path>", "issue": "Premium middleware pre-empts routing for FREE users and returns 403 subscription_required for both existing-and-gated and non-existent routes. This is fine for security (doesn't leak route inventory) but means legacy-route removal cannot be externally distinguished from 'gated' via the FREE account. Suggest allowing routing→404 before premium gate to make removal verifiable."},
+      {"endpoint": "GET /api/training/v2/preferences", "issue": "Only PATCH is registered; GET returns 405. Consider adding GET to expose current preferences (frontend Settings page shows 'Unable to load your training settings' — likely tied to this)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "App.js router", "issue": "Legacy path /messages is NOT redirected (only /guidance, /digest, /training-v2 are). Navigating to /messages renders a blank black page and logs a React Router warning 'No routes matched location /messages'. App doesn't crash but user sees empty screen.", "selector": "Route path=\"messages\"", "priority": "MEDIUM"},
+      {"component": "Settings > Training Plan", "issue": "For FREE user, shows red error banner 'Unable to load your training settings.' instead of a paywall/CTA. Root cause is likely the 403 from /api/training/v2/preferences (or absence of GET endpoint). Prefer showing the standard premium paywall like on /training.", "selector": ".error banner under 'Training Plan'", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "backend_test_coverage": {
+    "auth_runtime": "PASS — POST /api/auth/login returns access_token; GET /api/auth/me returns 200 with correct email; wrong password → 401.",
+    "bearer_only_unified_401": "PASS — no header → 401 authentication_required; invalid token → 401; non-Bearer scheme → 401; protected /api/training/v2/cycle without auth → 401.",
+    "legacy_routes_no_data_or_crash": "PASS — /messages, /week-plan, /guidance, /guidance/digest, /rag, /rag/query, /deep_analysis, /coach/workout-analysis all return 401/403/404/405 (never 200 nor 500).",
+    "training_v2_gating_FREE": "PASS — /api/training/v2/cycle → 403; /api/training/v2/week → 403; PATCH /api/training/v2/preferences → 403 (all clean subscription_required payloads).",
+    "coach_v2": "PASS — /api/coach/history responds without 500; /api/subscription/status returns 200 with plan/messages_limit.",
+    "workout_analysis_v2_sport_safe": "PASS — /api/coach/workout-analysis/<unknown-id> does not 500 (returns gated/404 gracefully).",
+    "pytest_total": "21/21 passed"
+  },
+  "frontend_test_coverage": {
+    "login_page_loads": "PASS — /login renders, auth-brand-logo (/runindex-logo.png) visible.",
+    "login_flow": "PASS — filling email/password + Sign in redirects to '/' (dashboard) and persists JWT in localStorage.access_token.",
+    "header_symbol": "PASS — /runindex-symbol.png present in header on protected pages.",
+    "dashboard_FREE_state": "PASS — 'No data yet / Connect Garmin' state; no fake readiness score, no crash.",
+    "coach_page": "PASS — /coach renders Coach explanation + helpful prompts (Analyze Training Load / Heart Rate Patterns / Pace Consistency); no white screen.",
+    "settings_page": "PARTIAL — page loads (Training/Garmin/Preferences), but 'Unable to load your training settings' error surfaces.",
+    "training_page_paywall": "PASS — clean premium paywall UI (lock icon, Premium 4,99€/month, feature list, 'Activer Premium' CTA); expected gating for FREE.",
+    "legacy_messages_route": "PARTIAL — no crash, but no redirect either; blank black page + Router warning."
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_pr285_298_runtime.py",
+    "/app/test_reports/pytest/pr285_298.xml",
+    "/app/test_reports/dashboard_ui.png",
+    "/app/test_reports/page_coach.png",
+    "/app/test_reports/page_settings.png",
+    "/app/test_reports/page_training.png",
+    "/app/test_reports/legacy_messages.png"
+  ],
+  "action_items": [
+    "Add a Route path=\"messages\" element=<Navigate to=\"/coach\" replace /> (or an equivalent target) in frontend/src/App.js — currently missing while /guidance and /digest have redirects.",
+    "Settings > Training Plan: replace 'Unable to load your training settings' generic error for FREE users with the same premium paywall shown on /training (or handle 403 gracefully). Root cause likely /api/training/v2/preferences GET returning 405 or the PATCH-only design.",
+    "Consider adding GET /api/training/v2/preferences for read-back symmetry (currently PATCH-only)."
+  ],
+  "critical_code_review_comments": [
+    "Premium gating middleware runs BEFORE FastAPI routing, so unknown paths return 403 subscription_required for FREE users. Not a bug per se (avoids route enumeration) but obscures 404s and complicates future audits of legacy-route removal.",
+    "server.py is ~5063 lines — well past the 700-line healthy threshold. Continue extracting domain routers (already done for auth); consider splitting training v2, coach, workouts into their own routers/modules.",
+    "The /messages legacy path is only mopped up server-side but not client-side; without a client Navigate redirect the user sees a blank screen (React Router warning). Same defensive redirects that guard /guidance and /digest should be added."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_pr285_298_runtime.py (new)"
+  ],
+  "success_rate": {"backend": "100% (21/21)", "frontend": "88% (7/8 flows fully green; 1 partial: /messages)"},
+  "test_credentials": "testrunner@runindex.app / Test1234! (FREE). JWT via POST /api/auth/login → localStorage.access_token.",
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Auth: token key in localStorage is 'access_token'. Dashboard is at '/', not '/dashboard'. FREE user gets a global 403 subscription_required for anything not on the FREE whitelist — including non-existent paths — so 'legacy route removed' can't be asserted with hard 404. The premium gating middleware sits BEFORE routing. Training preferences endpoint is PATCH-only. Legacy client-side redirects live in /app/frontend/src/App.js lines 84-87 (guidance→/coach, digest→/progress, training-v2→/training); /messages is missing.",
+  "rca_of_the_issue": "Blank /messages: /app/frontend/src/App.js registers <Navigate> redirects for guidance/digest/training-v2 but no entry for the removed /messages legacy path, so React Router falls through to no-match and renders empty. Fix = add <Route path=\"messages\" element={<Navigate to=\"/coach\" replace />} />. Settings training-settings error: Settings page fetches training preferences via GET but backend only exposes PATCH /api/training/v2/preferences (405), producing a generic error toast instead of premium paywall for FREE users."
+}
