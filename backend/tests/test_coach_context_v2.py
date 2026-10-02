@@ -1178,3 +1178,187 @@ async def test_coach_context_v2_selected_workout_includes_workout_analysis_v2():
     assert isinstance(analysis["comparison"]["similar"], dict)
     assert analysis["comparison"]["similar"]["available"] is True
     assert "w-hist-1" in analysis["comparison"]["similar"]["workout_ids"]
+
+
+@pytest.mark.asyncio
+async def test_load_scoped_workout_analysis_v2_enriches_minimal_garmin_workout():
+    from workout_analysis_v2_service import load_scoped_workout_analysis_v2
+
+    fake_db = _FakeDB()
+    # Realistic minimal workout produced by activity_to_workout / event_worker
+    fake_db.workouts = _Collection([
+        {
+            "id": "garmin-987654",
+            "type": "run",
+            "name": "Garmin Activity",
+            "date": "2026-09-15T08:00:00Z",
+            "duration_minutes": 50,
+            "distance_km": 10.0,
+            "avg_heart_rate": 148,
+            "avg_pace_min_km": 5.0,
+            "data_source": "garmin",
+            "user_id": _USER_ID,
+        }
+    ])
+    # Rich ingestion source in garmin_activities
+    fake_db.garmin_activities = _Collection([
+        {
+            "external_id": "987654",
+            "user_id": _USER_ID,
+            "start_time": "2026-09-15T08:00:00Z",
+            "distance": 10000,
+            "duration": 3000,
+            "avg_hr": 148,
+            "garmin_activity": {
+                "activity_id": "987654",
+                "average_hr": 148,
+                "max_hr": 172,
+                "elevation_gain": 0.0,
+                "average_speed_mps": 3.33,
+                "average_run_cadence": 168.0,
+                "has_splits": True,
+            },
+            "raw_payload": {
+                "elevationGain": 0.0,
+                "maxHR": 172,
+                "averageSpeed": 3.33,
+            },
+        }
+    ])
+
+    result = await load_scoped_workout_analysis_v2(
+        db=fake_db,
+        user_id=_USER_ID,
+        workout_id="garmin-987654",
+        language="en",
+    )
+    assert result is not None
+    workout, analysis = result
+
+    # Factual enrichment on workout
+    assert workout["id"] == "garmin-987654"
+    assert workout["max_heart_rate"] == 172
+    assert workout["elevation_gain_m"] == 0.0  # true zero preserved
+    assert workout["avg_speed_kmh"] == 11.99
+    assert workout["avg_cadence_spm"] == 168.0
+
+    # Analysis incorporates enriched facts
+    assert analysis is not None
+    assert analysis.evidence.has_cadence is True
+    assert analysis.evidence.has_elevation is True
+    assert analysis.evidence.has_heart_rate is True
+    assert analysis.physiology.max_hr == 172
+    assert analysis.pacing.average_speed_kmh == 11.99
+
+
+@pytest.mark.asyncio
+async def test_load_scoped_workout_analysis_v2_user_scoping_no_cross_contamination():
+    from workout_analysis_v2_service import load_scoped_workout_analysis_v2
+
+    fake_db = _FakeDB()
+    fake_db.workouts = _Collection([
+        {
+            "id": "garmin-111111",
+            "type": "run",
+            "name": "Garmin Activity",
+            "date": "2026-09-15T08:00:00Z",
+            "duration_minutes": 45,
+            "distance_km": 8.0,
+            "avg_heart_rate": 140,
+            "avg_pace_min_km": 5.62,
+            "data_source": "garmin",
+            "user_id": _USER_ID,
+        }
+    ])
+    # Activity exists in garmin_activities but belongs to a different user!
+    fake_db.garmin_activities = _Collection([
+        {
+            "external_id": "111111",
+            "user_id": "other-user",
+            "start_time": "2026-09-15T08:00:00Z",
+            "garmin_activity": {
+                "max_hr": 195,
+                "elevation_gain": 300.0,
+            },
+        }
+    ])
+
+    result = await load_scoped_workout_analysis_v2(
+        db=fake_db,
+        user_id=_USER_ID,
+        workout_id="garmin-111111",
+        language="en",
+    )
+    assert result is not None
+    workout, analysis = result
+    # Must NOT leak other user's facts
+    assert workout.get("max_heart_rate") is None
+    assert workout.get("elevation_gain_m") is None
+
+    # Foreign workout requested by other-user returns None (404)
+    foreign_result = await load_scoped_workout_analysis_v2(
+        db=fake_db,
+        user_id="other-user",
+        workout_id="garmin-111111",
+        language="en",
+    )
+    assert foreign_result is None
+
+
+@pytest.mark.asyncio
+async def test_coach_analyze_with_minimal_garmin_workout_pipeline():
+    fake_db = _FakeDB()
+    # Minimal workout in workouts as saved by activity_to_workout
+    fake_db.workouts = _Collection([
+        {
+            "id": "garmin-real-pipeline-1",
+            "type": "run",
+            "name": "Morning Run",
+            "date": "2026-09-15T07:30:00Z",
+            "duration_minutes": 55,
+            "distance_km": 11.2,
+            "avg_heart_rate": 152,
+            "avg_pace_min_km": 4.91,
+            "data_source": "garmin",
+            "user_id": _USER_ID,
+        }
+    ])
+    # Full native observation in garmin_activities
+    fake_db.garmin_activities = _Collection([
+        {
+            "external_id": "real-pipeline-1",
+            "user_id": _USER_ID,
+            "start_time": "2026-09-15T07:30:00Z",
+            "distance": 11200,
+            "duration": 3300,
+            "avg_hr": 152,
+            "garmin_activity": {
+                "activity_id": "real-pipeline-1",
+                "average_hr": 152,
+                "max_hr": 178,
+                "elevation_gain": 65.0,
+                "average_speed_mps": 3.394,
+                "average_run_cadence": 170.0,
+            },
+            "raw_payload": {
+                "elevationGain": 65.0,
+                "maxHR": 178,
+                "averageSpeed": 3.394,
+            },
+        }
+    ])
+
+    response, context = await _call_coach(fake_db, workout_id="garmin-real-pipeline-1")
+    assert response.status_code == 200
+    detail = context.get("workout_detail")
+    assert detail is not None
+    assert detail["id"] == "garmin-real-pipeline-1"
+    assert detail["max_heart_rate"] == 178
+    assert detail["elevation_gain_m"] == 65.0
+    assert detail["avg_speed_kmh"] == 12.22
+
+    analysis = detail.get("analysis")
+    assert analysis is not None
+    assert analysis["evidence"]["has_elevation"] is True
+    assert analysis["evidence"]["has_cadence"] is True
+    assert analysis["physiology"]["max_hr"] == 178

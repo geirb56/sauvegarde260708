@@ -521,27 +521,34 @@ def _normalize_workout_detail(
     if not workout:
         return None
 
-    duration_minutes = _safe_duration_minutes(workout)
-    distance_km = _safe_distance_km(workout)
-    raw_avg_hr = workout.get("avg_heart_rate")
+    garmin_activity = workout.get("garmin_activity")
+    raw_values = {**(garmin_activity if isinstance(garmin_activity, dict) else {}), **workout}
+
+    duration_minutes = _safe_duration_minutes(raw_values)
+    distance_km = _safe_distance_km(raw_values)
+    raw_avg_hr = raw_values.get("avg_heart_rate")
     if raw_avg_hr is None:
-        raw_avg_hr = workout.get("average_heartrate")
+        raw_avg_hr = raw_values.get("average_heartrate")
     if raw_avg_hr is None:
-        raw_avg_hr = workout.get("avg_hr")
+        raw_avg_hr = raw_values.get("average_hr")
+    if raw_avg_hr is None:
+        raw_avg_hr = raw_values.get("avg_hr")
     avg_hr = _safe_hr(raw_avg_hr)
 
-    raw_max_hr = workout.get("max_heart_rate")
+    raw_max_hr = raw_values.get("max_heart_rate")
     if raw_max_hr is None:
-        raw_max_hr = workout.get("max_heartrate")
+        raw_max_hr = raw_values.get("max_heartrate")
     if raw_max_hr is None:
-        raw_max_hr = workout.get("max_hr")
+        raw_max_hr = raw_values.get("max_hr")
     max_hr = _safe_hr(raw_max_hr)
 
-    avg_pace = _safe_pace_min_km(workout)
-    avg_speed = _safe_speed_kmh(workout)
-    raw_elevation = workout.get("elevation_gain_m")
+    avg_pace = _safe_pace_min_km(raw_values)
+    avg_speed = _safe_speed_kmh(raw_values)
+    raw_elevation = raw_values.get("elevation_gain_m")
     if raw_elevation is None:
-        raw_elevation = workout.get("total_elevation_gain_m")
+        raw_elevation = raw_values.get("elevation_gain")
+    if raw_elevation is None:
+        raw_elevation = raw_values.get("total_elevation_gain_m")
     elevation = _safe_elevation(raw_elevation)
 
     return CoachWorkoutDetail(
@@ -558,8 +565,8 @@ def _normalize_workout_detail(
         avg_pace_min_km=avg_pace,
         avg_speed_kmh=avg_speed,
         elevation_gain_m=elevation,
-        zones=workout.get("effort_zone_distribution"),
-        km_splits=list(workout.get("km_splits") or [])[:5],
+        zones=raw_values.get("effort_zone_distribution"),
+        km_splits=list(raw_values.get("km_splits") or [])[:5],
         analysis=analysis,
     )
 
