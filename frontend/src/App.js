@@ -81,6 +81,7 @@ function App() {
                     <Route path="workout/:id/analysis" element={<DetailedAnalysis />} />
                     <Route path="progress" element={<Progress />} />
                     <Route path="coach" element={<Coach />} />
+                    <Route path="messages" element={<Navigate to="/coach" replace />} />
                     <Route path="guidance" element={<Navigate to="/coach" replace />} />
                     <Route path="digest" element={<Navigate to="/progress" replace />} />
                     <Route path="training" element={<TrainingPlanV2 />} />
