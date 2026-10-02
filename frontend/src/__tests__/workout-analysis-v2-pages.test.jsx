@@ -275,8 +275,44 @@ test("WorkoutDetail shows one coherent error state for analysis failure", async 
   await waitFor(() => expect(screen.getByTestId("workout-detail")).toBeInTheDocument());
   expect(screen.queryByTestId("coach-summary")).not.toBeInTheDocument();
   expect(screen.getByText("Analysis unavailable")).toBeVisible();
-  expect(screen.queryByTestId("analysis-details")).not.toBeInTheDocument();
+  expect(screen.getByTestId("analysis-details")).not.toHaveAttribute("open");
+  expect(screen.getByTestId("splits-chart-card")).not.toBeVisible();
+  expect(screen.queryByTestId("meaning-text")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("advice-text")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("evidence-card")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("analysis-limitations")).not.toBeInTheDocument();
   expect(screen.getByTestId("ask-coach-btn")).toBeVisible();
+  fireEvent.click(screen.getByTestId("advanced-toggle"));
+  expect(screen.getByTestId("splits-chart-card")).toBeVisible();
+  expect(screen.getByTestId("splits-chart-card")).toHaveTextContent("5:54");
+  expect(screen.getByTestId("splits-chart-card")).toHaveTextContent("6:06");
+  expect(axios.get).toHaveBeenCalledTimes(2);
+});
+
+test("WorkoutDetail keeps factual splits accessible while canonical analysis is pending", async () => {
+  let resolveAnalysis;
+  const delayedAnalysis = new Promise((resolve) => { resolveAnalysis = resolve; });
+  mockAxios({ delayedAnalysis });
+  renderWithProviders(
+    <Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>,
+    "/workout/w1",
+  );
+  await screen.findByTestId("workout-detail");
+  expect(screen.getByTestId("analysis-details")).not.toHaveAttribute("open");
+  expect(screen.getByTestId("splits-chart-card")).not.toBeVisible();
+  expect(screen.getByTestId("ask-coach-btn")).toBeVisible();
+  expect(screen.queryByTestId("coach-summary")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("meaning-text")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("advice-text")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("evidence-card")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("analysis-limitations")).not.toBeInTheDocument();
+  expect(screen.getByTestId("ask-coach-btn").compareDocumentPosition(screen.getByTestId("analysis-details")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  fireEvent.click(screen.getByTestId("advanced-toggle"));
+  expect(screen.getByTestId("splits-chart-card")).toBeVisible();
+  expect(screen.getByTestId("splits-chart-card")).toHaveTextContent("5:54");
+  expect(screen.getByTestId("splits-chart-card")).toHaveTextContent("6:06");
+  resolveAnalysis({ data: analysis });
+  await screen.findByTestId("coach-summary");
   expect(axios.get).toHaveBeenCalledTimes(2);
 });
 
@@ -315,9 +351,9 @@ const similarReference = {
 };
 
 test.each([
-  ["fr", "Allure", "Durée", "Fréquence cardiaque", "Comparaison récente · 14 jours", "Séances similaires · 180 jours"],
-  ["en", "Pace", "Duration", "Heart rate", "Recent comparison · 14 days", "Similar sessions · 180 days"],
-  ["es", "Ritmo", "Duración", "Frecuencia cardíaca", "Comparación reciente · 14 días", "Sesiones similares · 180 días"],
+  ["fr", "Allure", "Durée", "FC", "Comparaison récente · 14 jours", "Sorties similaires · 180 jours"],
+  ["en", "Pace", "Duration", "HR", "Recent comparison · 14 days", "Similar sessions · 180 days"],
+  ["es", "Ritmo", "Duración", "FC", "Comparación reciente · 14 días", "Salidas similares · 180 días"],
 ])("WorkoutDetail localizes facts and separates recent and similar references in %s", async (
   language, pace, duration, hr, recentTitle, similarTitle,
 ) => {
@@ -361,10 +397,59 @@ test.each([
   expect(similar.compareDocumentPosition(screen.getByTestId("ask-coach-btn")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(screen.getByTestId("ask-coach-btn").compareDocumentPosition(screen.getByTestId("analysis-details")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   fireEvent.click(screen.getByTestId("advanced-toggle"));
+  expect(within(screen.getByTestId("analysis-details")).getByText(translations[language].workoutDetailExtended.interpretation)).toBeVisible();
+  expect(within(screen.getByTestId("analysis-details")).getByText(translations[language].workoutDetailExtended.limitations)).toBeVisible();
   expect(screen.getByTestId("analysis-limitations")).toHaveTextContent(translations[language].workoutDetailExtended.unknownSessionNature);
   expect(screen.getByTestId("analysis-limitations")).not.toHaveTextContent("session_nature_unknown");
   expect(screen.queryByText(translations[language].zones.dominant_easy)).not.toBeInTheDocument();
   expect(screen.queryByText(translations[language].zones.dominant_hard)).not.toBeInTheDocument();
+});
+
+test("French 14-day baseline stays separate from the mandatory 180-day similar fixture", async () => {
+  mockAxios({
+    analysisPayload: {
+      ...analysis,
+      comparison: {
+        ...analysis.comparison,
+        baseline_period_days: 14,
+        avg_pace_min_km: { ...analysis.comparison.avg_pace_min_km, baseline: 6.012, difference: -0.012 },
+        similar: {
+          ...similarReference,
+          available: true,
+          period_days: 180,
+          sample_count: 5,
+          avg_pace_min_km: 6.6,
+          pace_difference_min_km: 0.2,
+          avg_heart_rate: 137.2,
+          heart_rate_difference_bpm: 3.8,
+        },
+      },
+    },
+  });
+  renderWithProviders(
+    <Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>,
+    "/workout/w1", "fr",
+  );
+  await screen.findByTestId("coach-summary");
+  const recent = screen.getByTestId("comparison-card");
+  const similar = screen.getByTestId("similar-comparison-card");
+  const pacing = screen.getByTestId("pacing-summary-card");
+  expect(within(recent).getByText("Comparaison récente · 14 jours")).toBeVisible();
+  expect(within(recent).getByText("-0:01/km")).toBeVisible();
+  expect(recent).not.toHaveTextContent("+0:12/km");
+  expect(within(similar).getByText("Sorties similaires · 180 jours")).toBeVisible();
+  expect(similar).toHaveTextContent("5 séance(s) de référence");
+  expect(similar).toHaveTextContent("Allure moyenne: 6:36/km");
+  expect(similar).toHaveTextContent("Écart: +0:12/km");
+  expect(similar).not.toHaveTextContent("-0:01/km");
+  expect(similar).toHaveTextContent("FC moyenne: 137 bpm");
+  expect(similar).toHaveTextContent("Écart: +4 bpm");
+  expect(similar).toHaveTextContent("Écart descriptif, pas une conclusion de performance.");
+  expect(within(pacing).getByText("Allure")).toBeVisible();
+  expect(within(pacing).queryByText(/Comparaison/)).not.toBeInTheDocument();
+  ["Duration", "HR", "Pace / Speed"].forEach((label) => {
+    expect(screen.queryByText(label, { exact: true })).not.toBeInTheDocument();
+  });
 });
 
 test("similar reference is independent of baseline availability and does not coerce missing deltas", async () => {
@@ -467,8 +552,19 @@ test.each(["fr", "en", "es"])("WorkoutDetail business keys are explicitly transl
     "hrZonesEvidence", "splitsEvidence", "baselineEvidence", "cadenceEvidence", "elevationEvidence",
     "yes", "no", "limitations", "unknownSessionNature", "smallSample", "smallPaceSample", "smallHrSample",
     "intensityUnavailable",
+    "interpretation",
   ];
   keys.forEach((key) => expect(translations[language].workoutDetailExtended[key]).toEqual(expect.any(String)));
+});
+
+test("French workout copy stays concise and factual", () => {
+  expect(translations.fr.workoutDetailExtended).toMatchObject({
+    similarComparison: "Sorties similaires · {days} jours",
+    heartRate: "FC",
+    descriptiveComparison: "Écart descriptif, pas une conclusion de performance.",
+    interpretation: "Interprétation factuelle",
+    limitations: "Limites / points de vigilance",
+  });
 });
 
 test("DetailedAnalysis uses the canonical V2 endpoint", async () => {

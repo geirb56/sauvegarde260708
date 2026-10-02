@@ -308,6 +308,7 @@ export default function WorkoutDetail() {
   const pacing = analysis?.pacing;
   const evidence = analysis?.evidence;
   const similar = comparison?.similar;
+  const hasAnalysis = Boolean(analysis && !analysisLoading && !analysisError);
   const interpolate = (key, values) => Object.entries(values).reduce(
     (text, [name, value]) => text.replace(`{${name}}`, value == null ? "--" : String(value)),
     t(`workoutDetailExtended.${key}`),
@@ -546,23 +547,23 @@ export default function WorkoutDetail() {
         </Button>
       </div>
 
-      {analysis && !analysisLoading && !analysisError && (
+      {(hasAnalysis || workout.km_splits?.length > 0) && (
         <details className="bg-card border border-border p-3 mb-3" data-testid="analysis-details">
           <summary className="cursor-pointer font-mono text-xs" data-testid="advanced-toggle">{t("workoutDetailExtended.analysisDetails")}</summary>
           <div className="mt-3 space-y-3">
-            {analysis.meaning?.text && (
+            {hasAnalysis && analysis.meaning?.text && (
               <section>
-                <h2 className="font-mono text-[10px] uppercase text-muted-foreground">{t("workoutDetailExtended.meaning")}</h2>
+                <h2 className="font-mono text-[10px] uppercase text-muted-foreground">{t("workoutDetailExtended.interpretation")}</h2>
                 <p className="font-mono text-xs text-muted-foreground leading-relaxed" data-testid="meaning-text">{analysis.meaning.text}</p>
               </section>
             )}
-            {analysis.advice?.text && (
+            {hasAnalysis && analysis.advice?.text && (
               <section>
                 <h2 className="font-mono text-[10px] uppercase text-muted-foreground flex items-center gap-2"><Lightbulb className="w-3 h-3" />{t("workoutDetailExtended.analysisAdvice")}</h2>
                 <p className="font-mono text-xs text-muted-foreground leading-relaxed" data-testid="advice-text">{analysis.advice.text}</p>
               </section>
             )}
-            {physiology?.available && physiology.zone_distribution && (
+            {hasAnalysis && physiology?.available && physiology.zone_distribution && (
               <section data-testid="hr-zones-card">
                 <h2 className="font-mono text-[10px] uppercase text-muted-foreground flex items-center gap-2"><HeartPulse className="w-4 h-4" />{t("analysis.hrZones")}</h2>
                 {physiology.avg_hr != null && <p className="font-mono text-xs">{t("analysis.avgHr")}: {physiology.avg_hr} bpm</p>}
@@ -575,7 +576,7 @@ export default function WorkoutDetail() {
                 <SplitsChart splits={workout.km_splits} t={t} />
               </section>
             )}
-            {evidence && (
+            {hasAnalysis && evidence && (
               <section className="font-mono text-[11px] text-muted-foreground space-y-1" data-testid="evidence-card">
                 <h2 className="uppercase">{t("workoutDetailExtended.evidence")}</h2>
                 <p>{t("workoutDetailExtended.version")}: {analysis.version ?? "--"}</p>
@@ -591,7 +592,7 @@ export default function WorkoutDetail() {
                 ))}
               </section>
             )}
-            <section className="font-mono text-[11px] text-muted-foreground space-y-1" data-testid="analysis-limitations">
+            {hasAnalysis && <section className="font-mono text-[11px] text-muted-foreground space-y-1" data-testid="analysis-limitations">
               <h2 className="uppercase">{t("workoutDetailExtended.limitations")}</h2>
               {[analysis.signals?.intensity, physiology, pacing, comparison, similar].filter(
                 (item) => item?.available === false && item.reason_unavailable,
@@ -605,7 +606,7 @@ export default function WorkoutDetail() {
                   no_comparable_reference: "similarUnavailable",
                 }[limitation] || "descriptiveComparison"}`)}</p>
               ))}
-            </section>
+            </section>}
           </div>
         </details>
       )}
