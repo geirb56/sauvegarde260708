@@ -49,9 +49,8 @@ from coach_service import (
 )
 from workout_analysis_v2 import (
     WorkoutAnalysisV2Response,
-    build_workout_analysis_v2,
-    workout_analysis_candidate_date_bounds,
 )
+from workout_analysis_v2_service import load_scoped_workout_analysis_v2
 
 from training_v2.training_load import build_training_load
 from training_v2.training_history import RUNNING_TYPES, build_training_history
@@ -184,25 +183,30 @@ SUBSCRIPTION_TIERS = {
     "free": {
         "name": "Free",
         "price_monthly": 0,
-        "price_annual": 0,
-        "messages_limit": 10,
-        "description": "Discovery"
-    },
-    "premium": {
-        "name": "Premium",
-        "price_monthly": 4.99,
-        "price_annual": 49.99,
-        "messages_limit": 999,
-        "unlimited": True,
-        "description": "Full access"
+        "messages_limit": CHAT_QUOTA_FREE,
+        "unlimited": False,
+        "description": "Free access with a limit of 10 Coach messages per month."
     },
     "trial": {
         "name": "Trial",
         "price_monthly": 0,
-        "price_annual": 0,
-        "messages_limit": 999,
+        "messages_limit": None,
         "unlimited": True,
-        "description": "Full access"
+        "description": (
+            "30 days of Premium access after connecting an eligible Garmin account; "
+            "no card required. Unlimited commercial access remains subject to "
+            "technical anti-abuse protections."
+        )
+    },
+    "premium": {
+        "name": "Premium",
+        "price_monthly": 4.99,
+        "messages_limit": None,
+        "unlimited": True,
+        "description": (
+            "Monthly Premium access. Unlimited commercial access remains subject "
+            "to technical anti-abuse protections."
+        )
     }
 }
 
@@ -318,7 +322,7 @@ class RateLimiter:
 rate_limiter = RateLimiter(requests_per_minute=120, burst_limit=30)
 
 # Endpoints exempt from rate limiting
-RATE_LIMIT_EXEMPT = {"/api/cache/stats"}
+RATE_LIMIT_EXEMPT = set()
 
 
 def get_rate_limit_key_from_request(request: Request) -> str:
@@ -1865,6 +1869,19 @@ async def _release_free_coach_quota_slot(reservation: dict) -> None:
 async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachResponse:
     """Canonical Coach processing contract shared by Coach runtime endpoints."""
     user_id = user["id"]
+    workout = None
+    workout_analysis = None
+    if request.workout_id is not None:
+        selected_workout = await load_scoped_workout_analysis_v2(
+            db=db,
+            user_id=user_id,
+            workout_id=request.workout_id,
+            language=request.language or "en",
+        )
+        if selected_workout is None:
+            raise HTTPException(status_code=404, detail="Workout not found")
+        workout, workout_analysis = selected_workout
+
     language = request.language or "en"
     user_message = request.message or ""
     now_utc = datetime.now(timezone.utc)
@@ -1959,10 +1976,6 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
         week_payload = await get_training_v2_week(user=user)
         today_payload = await get_today_adaptive_session(user=user)
 
-        workout = None
-        if request.workout_id:
-            workout = await db.workouts.find_one({"id": request.workout_id, "user_id": user_id})
-
         context = (await build_coach_context_v2(
             db=db,
             user_id=user_id,
@@ -1978,6 +1991,7 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
             training_paces=training_paces,
             performance=performance,
             workout=workout,
+            workout_analysis=workout_analysis,
         )).model_dump(mode="json")
 
         # 6. Stocker le message utilisateur
@@ -2065,19 +2079,18 @@ async def clear_conversation_history(user: dict = Depends(auth_user)):
 async def get_workout_analysis_v2(workout_id: str, language: str = "en", user: dict = Depends(auth_user)):
     """Return the canonical deterministic workout analysis payload."""
     user_id = user["id"]
-    workout = await db.workouts.find_one({"id": workout_id, "user_id": user_id}, {"_id": 0})
-    if not workout:
+    result = await load_scoped_workout_analysis_v2(
+        db=db,
+        user_id=user_id,
+        workout_id=workout_id,
+        language=language,
+    )
+    if result is None:
         raise HTTPException(status_code=404, detail="Workout not found")
-    lower_bound, upper_bound = workout_analysis_candidate_date_bounds(workout.get("date", ""), days=14)
-    historical_workouts = await db.workouts.find(
-        {
-            "user_id": user_id,
-            "type": workout.get("type"),
-            "date": {"$gte": lower_bound, "$lt": upper_bound},
-        },
-        {"_id": 0},
-    ).sort("date", -1).to_list(length=200)
-    return build_workout_analysis_v2(workout=workout, historical_workouts=historical_workouts, language=language)
+    _, analysis = result
+    if analysis is None:
+        raise HTTPException(status_code=422, detail="Workout analysis unavailable")
+    return analysis
 
 
 # ========== CARDIO COACH RUNNING SCREEN ==========
@@ -2342,8 +2355,8 @@ class SubscriptionStatusResponse(BaseModel):
     billing_period: Optional[str] = None  # "monthly" or "annual"
     expires_at: Optional[str] = None
     messages_used: int = 0
-    messages_limit: int = 10
-    messages_remaining: int = 10
+    messages_limit: Optional[int] = 10
+    messages_remaining: Optional[int] = 10
     is_unlimited: bool = False
 
 
@@ -2358,8 +2371,7 @@ class SubscriptionTierInfo(BaseModel):
     id: str
     name: str
     price_monthly: float
-    price_annual: float
-    messages_limit: int
+    messages_limit: Optional[int] = None
     unlimited: bool = False
     description: str
 
@@ -4017,7 +4029,6 @@ async def get_subscription_tiers():
             id=tier_id,
             name=config["name"],
             price_monthly=config["price_monthly"],
-            price_annual=config["price_annual"],
             messages_limit=config["messages_limit"],
             unlimited=config.get("unlimited", False),
             description=config["description"]
@@ -4052,6 +4063,7 @@ async def get_subscription_status(user: dict = Depends(auth_user)):
     # Message usage for current month
     now = datetime.now(timezone.utc)
     is_unlimited = user_access.is_unlimited_chat
+    messages_limit = user_access.chat_monthly_quota
     if is_unlimited:
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         message_count = await db.conversations.count_documents({
@@ -4059,13 +4071,11 @@ async def get_subscription_status(user: dict = Depends(auth_user)):
             "role": "user",
             "timestamp": {"$gte": month_start.isoformat()},
         })
-        messages_limit = 999
     else:
         message_count = await _get_or_bootstrap_free_coach_quota_count(
             user_id=user_id,
             now_utc=now,
         )
-        messages_limit = CHAT_QUOTA_FREE
 
     return SubscriptionStatusResponse(
         tier=user_access.tier.value,
@@ -4075,7 +4085,11 @@ async def get_subscription_status(user: dict = Depends(auth_user)):
         expires_at=expires_at,
         messages_used=message_count,
         messages_limit=messages_limit,
-        messages_remaining=max(0, messages_limit - message_count) if not is_unlimited else 999,
+        messages_remaining=(
+            max(0, messages_limit - message_count)
+            if messages_limit is not None
+            else None
+        ),
         is_unlimited=is_unlimited,
     )
 
@@ -4087,7 +4101,7 @@ async def get_premium_status(user: dict = Depends(auth_user)):
     user_id = user["id"]
     status = await get_subscription_status(user)
     return {
-        "is_premium": status.is_premium or status.tier != "free",
+        "is_premium": status.is_premium,
         "subscription_id": status.subscription_id,
         "expires_at": status.expires_at,
         "messages_used": status.messages_used,
@@ -4134,7 +4148,7 @@ async def get_user_features(user: dict = Depends(auth_user)):
 # ========== CHAT COACH (PREMIUM ONLY) ==========
 
 @api_router.get("/cache/stats")
-async def get_coach_cache_stats():
+async def get_coach_cache_stats(_admin: dict = Depends(require_admin)):
     """Get coach service cache statistics"""
     return get_cache_stats()
 
@@ -4148,7 +4162,7 @@ async def clear_coach_cache(_admin: dict = Depends(require_admin)):
 
 
 @api_router.get("/metrics")
-async def get_service_metrics():
+async def get_service_metrics(_admin: dict = Depends(require_admin)):
     """Get coach service metrics (LLM success rate, latency, etc.)"""
     return {
         "coach": get_coach_metrics(),
