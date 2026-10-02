@@ -266,6 +266,8 @@ export default function Settings() {
   const subscriptionCode = getSubscriptionCode({ subscription, isTrial, isPremium });
 
   const loadPlanSettings = useCallback(async () => {
+    if (subscriptionLoading || isFree) return false;
+
     setPlanLoading(true);
     setPlanError("");
     const [cycleV2Result, weekV2Result, userGoalResult] = await Promise.allSettled([
@@ -323,7 +325,7 @@ export default function Settings() {
     setPlanError(nextError);
     setPlanLoading(false);
     return nextError === "";
-  }, []);
+  }, [subscriptionLoading, isFree]);
 
   const loadGarminStatus = useCallback(async () => {
     setGarminLoading(true);
@@ -342,8 +344,11 @@ export default function Settings() {
 
   useEffect(() => {
     loadPlanSettings();
+  }, [loadPlanSettings]);
+
+  useEffect(() => {
     loadGarminStatus();
-  }, [loadGarminStatus, loadPlanSettings]);
+  }, [loadGarminStatus]);
 
   const handleSetTrainingGoal = async (goalValue) => {
     // PR226: ULTRA must have distance_km > 42.195 before calling set-goal.
@@ -655,7 +660,19 @@ export default function Settings() {
           description={t("settingsV2.plan.description")}
           testId="settings-plan-section"
         >
-          {planLoading ? (
+          {subscriptionLoading ? (
+            <div className="space-y-3" data-testid="settings-plan-loading">
+              <Skeleton className="h-20 w-full" />
+            </div>
+          ) : isFree ? (
+            <div className="space-y-3 rounded-xl border border-border bg-muted/30 p-4" data-testid="settings-plan-locked">
+              <h3 className="text-sm font-semibold">{t("settingsV2.plan.lockedTitle")}</h3>
+              <p className="text-sm text-muted-foreground">{t("settingsV2.plan.lockedDescription")}</p>
+              <Button type="button" onClick={() => navigate("/subscription")} data-testid="settings-plan-upgrade">
+                {t("settingsV2.plan.lockedCta")}
+              </Button>
+            </div>
+          ) : planLoading ? (
             <div className="space-y-3" data-testid="settings-plan-loading">
               <Skeleton className="h-20 w-full" />
               <Skeleton className="h-20 w-full" />

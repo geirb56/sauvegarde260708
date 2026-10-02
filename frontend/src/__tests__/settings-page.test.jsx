@@ -1,7 +1,7 @@
 import React from "react";
 import "@testing-library/jest-dom";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import axios from "axios";
 
 import Settings from "@/pages/Settings";
@@ -92,18 +92,40 @@ function getUserGoalPatchCalls() {
   return axios.patch.mock.calls.filter(([url]) => String(url).includes("/user/goal"));
 }
 
-function renderPage({ lang = "en", unitSystem = "metric" } = {}) {
-  window.localStorage.setItem(LANGUAGE_STORAGE_KEY, lang);
-  window.localStorage.setItem(UNIT_SYSTEM_KEY, unitSystem);
-  return render(
+function setSubscription(plan, loading = false) {
+  mockUseSubscription.mockReturnValue({
+    subscription: { status: plan },
+    isTrial: plan === "trial",
+    isPremium: plan === "premium",
+    isFree: plan === "free",
+    trialDaysRemaining: plan === "trial" ? 12 : null,
+    loading,
+    statusLabel: plan,
+    refreshSubscription: jest.fn(() => Promise.resolve()),
+  });
+}
+
+function RouteLocation() {
+  return <span data-testid="settings-test-location">{useLocation().pathname}</span>;
+}
+
+function SettingsTestPage() {
+  return (
     <UnitProvider>
       <LanguageProvider>
         <MemoryRouter>
           <Settings />
+          <RouteLocation />
         </MemoryRouter>
       </LanguageProvider>
     </UnitProvider>
   );
+}
+
+function renderPage({ lang = "en", unitSystem = "metric" } = {}) {
+  window.localStorage.setItem(LANGUAGE_STORAGE_KEY, lang);
+  window.localStorage.setItem(UNIT_SYSTEM_KEY, unitSystem);
+  return render(<SettingsTestPage />);
 }
 
 describe("Settings UX V2", () => {
@@ -128,6 +150,98 @@ describe("Settings UX V2", () => {
       refreshSubscription: jest.fn(() => Promise.resolve()),
     });
     mockUseGarminSyncProgress.mockReturnValue({ progress: null });
+  });
+
+  test.each(["free", "trial", "premium"])("waits for subscription loading before resolving %s plan access", async (plan) => {
+    setSubscription(plan, true);
+    mockAxiosApi();
+    const view = renderPage();
+
+    expect(screen.getByTestId("settings-plan-loading")).toBeInTheDocument();
+    expect(screen.queryByTestId("settings-plan-locked")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("settings-current-goal")).not.toBeInTheDocument();
+    await screen.findByTestId("settings-garmin-status");
+    expect(axios.get.mock.calls.map(([url]) => String(url))).toEqual([
+      expect.stringContaining("/garmin/status"),
+    ]);
+    fireEvent.click(screen.getByTestId("units-imperial"));
+    expect(window.localStorage.getItem(UNIT_SYSTEM_KEY)).toBe("imperial");
+    expect(screen.getByTestId("settings-account-section")).toBeInTheDocument();
+
+    setSubscription(plan);
+    view.rerender(<SettingsTestPage />);
+    if (plan === "free") {
+      expect(await screen.findByTestId("settings-plan-locked")).toBeInTheDocument();
+      expect(axios.get.mock.calls).toHaveLength(1);
+    } else {
+      expect(await screen.findByTestId("settings-current-goal")).toHaveTextContent("Marathon");
+      ["/training/v2/cycle", "/training/v2/week", "/user/goal"].forEach((endpoint) => {
+        expect(axios.get).toHaveBeenCalledWith(expect.stringContaining(endpoint));
+      });
+    }
+  });
+
+  test.each([
+    ["en", "Training plan settings are locked", "Training plan settings are available during your trial or with Premium.", "View subscription options"],
+    ["fr", "Les réglages du plan d'entraînement sont verrouillés", "Les réglages du plan d'entraînement sont disponibles pendant votre essai ou avec Premium.", "Voir les offres d'abonnement"],
+    ["es", "Los ajustes del plan de entrenamiento están bloqueados", "Los ajustes del plan de entrenamiento están disponibles durante la prueba o con Premium.", "Ver opciones de suscripción"],
+  ])("FREE shows a translated inline Plan lock in %s without fetching protected settings", async (lang, title, description, cta) => {
+    setSubscription("free");
+    mockAxiosApi();
+    renderPage({ lang });
+
+    const lockedCard = await screen.findByTestId("settings-plan-locked");
+    expect(lockedCard).toHaveTextContent(title);
+    expect(lockedCard).toHaveTextContent(description);
+    expect(screen.getByTestId("settings-plan-upgrade")).toHaveTextContent(cta);
+    await screen.findByTestId("settings-garmin-status");
+    expect(axios.get.mock.calls.map(([url]) => String(url))).toEqual([
+      expect.stringContaining("/garmin/status"),
+    ]);
+    expect(screen.queryByTestId("settings-plan-error")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("training-goal-btn-10K")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("settings-race-fields")).not.toBeInTheDocument();
+    ["preferences", "account", "about"].forEach((section) => {
+      expect(screen.getByTestId(`settings-${section}-section`)).toBeInTheDocument();
+    });
+    expect(document.body.textContent).not.toMatch(/settingsV2\./);
+    fireEvent.click(screen.getByTestId("settings-plan-upgrade"));
+    expect(screen.getByTestId("settings-test-location")).toHaveTextContent("/subscription");
+    expect(axios.post).not.toHaveBeenCalled();
+    expect(axios.patch).not.toHaveBeenCalled();
+  });
+
+  test("FREE access is determined by context authority, not Premium billing display", async () => {
+    setSubscription("free");
+    mockUseSubscription.mockReturnValue({
+      ...mockUseSubscription(),
+      subscription: { status: "premium" },
+    });
+    mockAxiosApi();
+    renderPage();
+
+    expect(await screen.findByTestId("settings-plan-locked")).toBeInTheDocument();
+    await screen.findByTestId("settings-garmin-status");
+    expect(axios.get.mock.calls).toHaveLength(1);
+    expect(screen.queryByTestId("settings-garmin-sync")).not.toBeInTheDocument();
+  });
+
+  test.each(["trial", "premium"])("%s preserves plan reads and manual Garmin sync", async (plan) => {
+    setSubscription(plan);
+    mockAxiosApi();
+    renderPage();
+
+    expect(await screen.findByTestId("settings-current-goal")).toHaveTextContent("Marathon");
+    expect(screen.queryByTestId("settings-plan-locked")).not.toBeInTheDocument();
+    ["/training/v2/cycle", "/training/v2/week", "/user/goal"].forEach((endpoint) => {
+      expect(axios.get).toHaveBeenCalledWith(expect.stringContaining(endpoint));
+    });
+    await screen.findByTestId("settings-garmin-sync");
+    fireEvent.click(screen.getByTestId("settings-garmin-sync"));
+    await waitFor(() => {
+      expect(axios.post).toHaveBeenCalledWith(expect.stringContaining("/garmin/sync"), {});
+      expect(screen.getByTestId("settings-garmin-sync")).not.toBeDisabled();
+    });
   });
 
   test("loads settings and shows six supported goal buttons", async () => {
@@ -179,7 +293,8 @@ describe("Settings UX V2", () => {
     expect(calledUrls.some((url) => url.includes("/training/full-cycle"))).toBe(false);
   });
 
-  test("goal update uses canonical set-goal endpoint and never legacy route", async () => {
+  test.each(["trial", "premium"])("%s goal update uses canonical set-goal endpoint and never legacy route", async (plan) => {
+    setSubscription(plan);
     mockAxiosApi();
     renderPage();
 
@@ -258,6 +373,50 @@ describe("Settings UX V2", () => {
     expect(screen.queryByTestId("settings-garmin-sync")).not.toBeInTheDocument();
     expect(screen.getByTestId("settings-garmin-reconnect-toggle")).toBeInTheDocument();
     expect(screen.getByTestId("settings-garmin-disconnect")).toBeInTheDocument();
+  });
+
+  test.each([false, true])("FREE Garmin connect/reconnect and disconnect remain usable (connected=%s)", async (connected) => {
+    setSubscription("free");
+    const state = createApiState({ garminStatus: { connected, activity_count: 0 } });
+    mockAxiosApi(state, {
+      postImplementation: (url) => {
+        if (url.includes("/garmin/connect")) {
+          state.garminStatus.connected = true;
+          return Promise.resolve({ data: { status: "connected" } });
+        }
+        if (url.includes("/garmin/disconnect")) {
+          state.garminStatus.connected = false;
+          return Promise.resolve({ data: {} });
+        }
+        return Promise.reject(new Error(`Unexpected POST ${url}`));
+      },
+    });
+    renderPage();
+
+    await screen.findByTestId("settings-garmin-status");
+    if (connected) fireEvent.click(screen.getByTestId("settings-garmin-reconnect-toggle"));
+    fireEvent.change(screen.getByTestId("garmin-email-input"), { target: { value: "runner@example.com" } });
+    fireEvent.change(screen.getByTestId("garmin-password-input"), { target: { value: "test-placeholder" } });
+    fireEvent.click(screen.getByTestId("garmin-connect"));
+
+    await waitFor(() => {
+      expect(axios.post).toHaveBeenCalledWith(expect.stringContaining("/garmin/connect"), {
+        garmin_username: "runner@example.com",
+        garmin_password: "test-placeholder",
+      });
+      expect(screen.getByTestId("settings-garmin-disconnect")).not.toBeDisabled();
+    });
+    expect(mockUseSubscription().refreshSubscription).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("settings-garmin-sync")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("settings-garmin-disconnect"));
+    await waitFor(() => {
+      expect(axios.post).toHaveBeenCalledWith(expect.stringContaining("/garmin/disconnect"), {});
+      expect(screen.getByTestId("garmin-password-input")).toHaveValue("");
+    });
+    fireEvent.click(screen.getByTestId("lang-fr"));
+    expect(screen.getByTestId("settings-language-current")).toHaveTextContent("FR");
+    expect(axios.get.mock.calls.every(([url]) => String(url).includes("/garmin/status"))).toBe(true);
+    expect(axios.patch).not.toHaveBeenCalled();
   });
 
   test("shows subscription status from existing context", async () => {
@@ -377,7 +536,8 @@ describe("Settings UX V2", () => {
     expect(raceRow).toHaveTextContent("No race details saved yet.");
   });
 
-  test("save plan start date uses canonical backend contract and reloads plan settings", async () => {
+  test.each(["trial", "premium"])("%s saves plan start date using canonical contract and reloads plan settings", async (plan) => {
+    setSubscription(plan);
     mockAxiosApi();
     renderPage();
 
@@ -394,7 +554,8 @@ describe("Settings UX V2", () => {
     expect(toast.success).toHaveBeenCalled();
   });
 
-  test("save race settings shows success feedback only after backend confirmation", async () => {
+  test.each(["trial", "premium"])("%s saves race settings with success feedback only after backend confirmation", async (plan) => {
+    setSubscription(plan);
     mockAxiosApi(createApiState(), {
       postImplementation: (url) => {
         if (url.includes("/user/goal")) {
@@ -427,7 +588,8 @@ describe("Settings UX V2", () => {
     expect(toast.success).toHaveBeenCalled();
   });
 
-  test("saving sessions preference uses max wording and keeps 5-column selector layout", async () => {
+  test.each(["trial", "premium"])("%s saves sessions preference with max wording and 5-column selector layout", async (plan) => {
+    setSubscription(plan);
     mockAxiosApi();
     renderPage({ lang: "fr" });
 
@@ -578,7 +740,8 @@ describe("Settings UX V2", () => {
     expect(axios.delete).not.toHaveBeenCalled();
   });
 
-  test("confirm remove race sends minimal PATCH payload", async () => {
+  test.each(["trial", "premium"])("%s confirm remove race sends minimal PATCH payload", async (plan) => {
+    setSubscription(plan);
     const state = createApiState();
     mockAxiosApi(state, {
       patchImplementation: (url, payload) => {
@@ -605,7 +768,8 @@ describe("Settings UX V2", () => {
     expect(axios.delete).not.toHaveBeenCalled();
   });
 
-  test("confirm remove target time sends minimal PATCH payload and reloads optional state", async () => {
+  test.each(["trial", "premium"])("%s confirm remove target time sends minimal PATCH payload and reloads optional state", async (plan) => {
+    setSubscription(plan);
     const state = createApiState();
     mockAxiosApi(state, {
       patchImplementation: (url, payload) => {

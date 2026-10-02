@@ -8,7 +8,6 @@ if (!global.TextDecoder) {
   global.TextDecoder = TextDecoder;
 }
 
-// JSDOM does not implement scrollIntoView; polyfill as no-op for tests.
-if (typeof Element !== "undefined" && !Element.prototype.scrollIntoView) {
-  Element.prototype.scrollIntoView = () => {};
+if (typeof HTMLElement.prototype.scrollIntoView !== "function") {
+  HTMLElement.prototype.scrollIntoView = function scrollIntoView() {};
 }
