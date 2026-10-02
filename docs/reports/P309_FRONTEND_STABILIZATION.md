@@ -137,3 +137,45 @@ Les tests conservent notamment une seule requête canonical Workout Analysis, l'
 - Les tests frontend utilisent des APIs simulées : aucune validation live Garmin, paiement, navigateur déployé ou modification des autorités backend n'est revendiquée.
 
 **Livraison : une seule PR vers `copilot/dev`, NON MERGÉE.**
+
+## Correctif résiduel PR #306 — zéro arrondi (2026-10-02)
+
+- HEAD de départ du correctif : `17f38864e442608c6946a3fee8889e406ff03a81`.
+- Nouveau HEAD final du code corrigé et validé : `349b2db99f0c7e9e6b6144a8e2a581a0516e42c2`.
+- Le commit suivant modifie uniquement ce rapport ; son SHA de livraison est donné dans la réponse finale. Un commit ne peut pas contenir son propre SHA sans le changer.
+- PR existante #306 vérifiée **OPEN / DRAFT / NON MERGÉE** ; aucune nouvelle PR créée.
+
+`formatPaceDelta()` retourne désormais exactement `0:00/km` dès que `Math.round(Math.abs(difference) * 60) === 0`, avant de déterminer le signe. Les valeurs `-0.001` et `+0.001` n'affichent donc plus `±0:00/km`. Les écarts non nuls arrondis, zéro exact et les valeurs absentes/non finies conservent leurs comportements précédents. Les deux nouveaux cas sont ajoutés au tableau de tests existant.
+
+Ce patch ne modifie que :
+
+- `/home/runner/work/sauvegarde260708/sauvegarde260708/frontend/src/lib/workoutAnalysis.js`
+- `/home/runner/work/sauvegarde260708/sauvegarde260708/frontend/src/__tests__/workout-analysis-v2-pages.test.jsx`
+- `/home/runner/work/sauvegarde260708/sauvegarde260708/docs/reports/P309_FRONTEND_STABILIZATION.md`
+
+Commandes réellement exécutées pour ce correctif, après `npm ci --legacy-peer-deps` avec le lockfile existant inchangé :
+
+```bash
+cd /home/runner/work/sauvegarde260708/sauvegarde260708/frontend
+npx craco test src/__tests__/workout-analysis-v2-pages.test.jsx --watchAll=false --forceExit
+npx craco test \
+  src/__tests__/app-legacy-redirects.test.jsx \
+  src/__tests__/settings-page.test.jsx \
+  src/__tests__/workout-analysis-v2-pages.test.jsx \
+  src/__tests__/chat-coach-subscription-status.test.jsx \
+  --watchAll=false --forceExit
+npm run build
+cd /home/runner/work/sauvegarde260708/sauvegarde260708
+git diff --check
+```
+
+Résultats du correctif :
+
+- WorkoutDetail : **1/1 suite, 31/31 tests réussis**, 0 snapshot, sortie 0.
+- Quatre suites P309 : **4/4 suites, 89/89 tests réussis**, 0 snapshot, sortie 0.
+- Build : **Compiled successfully**, sortie 0 ; warnings Browserslist et Node `fs.F_OK` non bloquants.
+- `git diff --check` : réussi, sortie 0.
+- Scan secrets : aucun secret détecté ; CodeQL JavaScript : **0 alerte**.
+- Revue automatique intégrée : binaire indisponible ; aucune réussite de revue automatique effective n'est revendiquée.
+
+La suite complète frontend n'a **pas été réexécutée** pour ce micro-correctif. Son échec Progress préexistant documenté ci-dessus n'est ni corrigé ni déclaré résolu. Aucun changement backend, Settings, Coach, Garmin, splits, routes, i18n, architecture ou dépendances.
