@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import inspect
+from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -23,6 +24,7 @@ import server  # noqa: E402
 import coach_context_v2  # noqa: E402
 from access_control import Tier, UserAccess  # noqa: E402
 from auth.jwt_utils import create_access_token  # noqa: E402
+from garmin.service import activity_to_workout  # noqa: E402
 from training_v2.periodization import build_periodization  # noqa: E402
 from training_v2.plan_goal import GoalType, build_plan_goal  # noqa: E402
 from training_v2.training_cycle_response import build_cycle_calendar_response  # noqa: E402
@@ -456,8 +458,6 @@ async def _call_coach(
     ]
 
     patches = [
-        patch.object(server, "db", fake_db),
-        patch.object(server.app.state, "db", fake_db, create=True),
         patch("server.get_user_access", AsyncMock(side_effect=_premium_access)),
         patch("server._resolve_canonical_reference_date", return_value=_REFERENCE_DATE),
         patch("server._resolve_goal_v2", AsyncMock(return_value=resolved_goal)),
@@ -473,16 +473,24 @@ async def _call_coach(
         patch("llm_coach.enrich_chat_response", side_effect=_fake_enrich_chat_response),
     ]
 
-    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8], patches[9], patches[10], patches[11], patches[12], patches[13], patches[14]:
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=server.app),
-            base_url="http://test",
-        ) as client:
-            response = await client.post(
-                "/api/coach/analyze",
-                headers=_bearer(),
-                json={"message": "How does this week look?", "language": "en", "workout_id": workout_id},
-            )
+    orig_server_db = getattr(server, "db", None)
+    orig_state_db = getattr(server.app.state, "db", None)
+    server.db = fake_db
+    server.app.state.db = fake_db
+    try:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8], patches[9], patches[10], patches[11], patches[12]:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=server.app),
+                base_url="http://test",
+            ) as client:
+                response = await client.post(
+                    "/api/coach/analyze",
+                    headers=_bearer(),
+                    json={"message": "How does this week look?", "language": "en", "workout_id": workout_id},
+                )
+    finally:
+        server.db = orig_server_db
+        server.app.state.db = orig_state_db
 
     return response, captured.get("context")
 
@@ -493,22 +501,28 @@ async def _call_invalid_workout_coach(fake_db: _FakeDB, workout_id: str):
     reserve = AsyncMock(return_value=None)
     llm = AsyncMock(return_value=("ok", True, {}))
     access = AsyncMock(return_value=UserAccess(user_id=_USER_ID, tier=Tier.FREE))
-    with (
-        patch.object(server, "db", fake_db),
-        patch.object(server.app.state, "db", fake_db, create=True),
-        patch("server.get_user_access", access),
-        patch("server._reserve_free_coach_quota_slot", reserve),
-        patch("llm_coach.enrich_chat_response", llm),
-    ):
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=server.app),
-            base_url="http://test",
-        ) as client:
-            response = await client.post(
-                "/api/coach/analyze",
-                headers=_bearer(),
-                json={"message": "Analyze this workout", "language": "en", "workout_id": workout_id},
-            )
+    orig_server_db = getattr(server, "db", None)
+    orig_state_db = getattr(server.app.state, "db", None)
+    server.db = fake_db
+    server.app.state.db = fake_db
+    try:
+        with (
+            patch("server.get_user_access", access),
+            patch("server._reserve_free_coach_quota_slot", reserve),
+            patch("llm_coach.enrich_chat_response", llm),
+        ):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=server.app),
+                base_url="http://test",
+            ) as client:
+                response = await client.post(
+                    "/api/coach/analyze",
+                    headers=_bearer(),
+                    json={"message": "Analyze this workout", "language": "en", "workout_id": workout_id},
+                )
+    finally:
+        server.db = orig_server_db
+        server.app.state.db = orig_state_db
     return response, access, reserve, llm
 
 
@@ -1184,36 +1198,49 @@ async def test_coach_context_v2_selected_workout_includes_workout_analysis_v2():
 async def test_load_scoped_workout_analysis_v2_enriches_minimal_garmin_workout():
     from workout_analysis_v2_service import load_scoped_workout_analysis_v2
 
+    # 1. Real activity_to_workout execution on realistic normalized Garmin activity
+    raw_garmin_activity = {
+        "external_id": "987654",
+        "activity_type": "running",
+        "name": "Morning Run",
+        "start_time": "2026-09-15T08:00:00Z",
+        "distance": 10000.0,
+        "duration": 3000.0,
+        "pace_seconds_per_km": 300.0,
+        "avg_hr": 148,
+    }
+    derived_workout = activity_to_workout(raw_garmin_activity, _USER_ID)
+    assert derived_workout is not None
+    assert derived_workout["id"] == "garmin-987654"
+    assert derived_workout["user_id"] == _USER_ID
+    assert derived_workout["data_source"] == "garmin"
+    assert derived_workout["distance_km"] == 10.0
+    assert derived_workout["duration_minutes"] == 50
+    assert derived_workout["avg_heart_rate"] == 148
+    # Derived workout intentionally lacks deep Garmin fields
+    assert "max_heart_rate" not in derived_workout
+    assert "elevation_gain_m" not in derived_workout
+    assert "avg_speed_kmh" not in derived_workout
+    assert "avg_cadence_spm" not in derived_workout
+
     fake_db = _FakeDB()
-    # Realistic minimal workout produced by activity_to_workout / event_worker
-    fake_db.workouts = _Collection([
-        {
-            "id": "garmin-987654",
-            "type": "run",
-            "name": "Garmin Activity",
-            "date": "2026-09-15T08:00:00Z",
-            "duration_minutes": 50,
-            "distance_km": 10.0,
-            "avg_heart_rate": 148,
-            "avg_pace_min_km": 5.0,
-            "data_source": "garmin",
-            "user_id": _USER_ID,
-        }
-    ])
+    # Stored in workouts collection as derived product layer
+    fake_db.workouts = _Collection([dict(derived_workout)])
+
     # Rich ingestion source in garmin_activities
     fake_db.garmin_activities = _Collection([
         {
             "external_id": "987654",
             "user_id": _USER_ID,
             "start_time": "2026-09-15T08:00:00Z",
-            "distance": 10000,
-            "duration": 3000,
+            "distance": 10000.0,
+            "duration": 3000.0,
             "avg_hr": 148,
             "garmin_activity": {
                 "activity_id": "987654",
                 "average_hr": 148,
                 "max_hr": 172,
-                "elevation_gain": 0.0,
+                "elevation_gain": 0.0,  # true zero
                 "average_speed_mps": 3.33,
                 "average_run_cadence": 168.0,
                 "has_splits": True,
@@ -1235,12 +1262,32 @@ async def test_load_scoped_workout_analysis_v2_enriches_minimal_garmin_workout()
     assert result is not None
     workout, analysis = result
 
-    # Factual enrichment on workout
+    # 2. Loader retains workout product identity
     assert workout["id"] == "garmin-987654"
+    assert workout["user_id"] == _USER_ID
+    assert workout["data_source"] == "garmin"
+
+    # 4. Enriched in-memory copy contains available Garmin facts
     assert workout["max_heart_rate"] == 172
     assert workout["elevation_gain_m"] == 0.0  # true zero preserved
     assert workout["avg_speed_kmh"] == 11.99
     assert workout["avg_cadence_spm"] == 168.0
+
+    # 5. Absent fields remain absent
+    assert workout.get("effort_zone_distribution") is None
+    assert workout.get("km_splits") is None
+    assert workout.get("split_analysis") is None
+
+    # 6. No physiological data is invented
+    assert workout.get("vo2max") is None
+    assert workout.get("lactate_threshold") is None
+
+    # 7. Original db.workouts document is NOT mutated or persisted with enrichment
+    original_stored_doc = fake_db.workouts._docs[0]
+    assert original_stored_doc.get("max_heart_rate") is None
+    assert original_stored_doc.get("elevation_gain_m") is None
+    assert original_stored_doc.get("avg_speed_kmh") is None
+    assert original_stored_doc.get("avg_cadence_spm") is None
 
     # Analysis incorporates enriched facts
     assert analysis is not None
@@ -1252,25 +1299,69 @@ async def test_load_scoped_workout_analysis_v2_enriches_minimal_garmin_workout()
 
 
 @pytest.mark.asyncio
+async def test_load_scoped_workout_analysis_v2_no_matching_garmin_source():
+    from workout_analysis_v2_service import load_scoped_workout_analysis_v2
+
+    raw_garmin_activity = {
+        "external_id": "777888",
+        "activity_type": "running",
+        "name": "Tempo Run",
+        "start_time": "2026-09-14T07:00:00Z",
+        "distance": 8000.0,
+        "duration": 2400.0,
+        "pace_seconds_per_km": 300.0,
+        "avg_hr": 155,
+    }
+    derived_workout = activity_to_workout(raw_garmin_activity, _USER_ID)
+    assert derived_workout is not None
+
+    fake_db = _FakeDB()
+    fake_db.workouts = _Collection([dict(derived_workout)])
+    fake_db.garmin_activities = _Collection([])  # No matching Garmin source document
+
+    result = await load_scoped_workout_analysis_v2(
+        db=fake_db,
+        user_id=_USER_ID,
+        workout_id="garmin-777888",
+        language="en",
+    )
+    assert result is not None
+    workout, analysis = result
+
+    # Minimal workout preserved without crash
+    assert workout["id"] == "garmin-777888"
+    assert workout["distance_km"] == 8.0
+    assert workout.get("max_heart_rate") is None
+    assert workout.get("elevation_gain_m") is None
+    assert workout.get("avg_cadence_spm") is None
+
+    # Analysis partially available based on minimal workout fields
+    assert analysis is not None
+    assert analysis.evidence.has_cadence is False
+    assert analysis.evidence.has_elevation is False
+    assert analysis.evidence.has_heart_rate is True
+
+
+@pytest.mark.asyncio
 async def test_load_scoped_workout_analysis_v2_user_scoping_no_cross_contamination():
     from workout_analysis_v2_service import load_scoped_workout_analysis_v2
 
+    raw_garmin_activity = {
+        "external_id": "111111",
+        "activity_type": "running",
+        "name": "Garmin Activity",
+        "start_time": "2026-09-15T08:00:00Z",
+        "distance": 8000.0,
+        "duration": 2700.0,
+        "pace_seconds_per_km": 337.5,
+        "avg_hr": 140,
+    }
+    derived_workout = activity_to_workout(raw_garmin_activity, _USER_ID)
+    assert derived_workout is not None
+
     fake_db = _FakeDB()
-    fake_db.workouts = _Collection([
-        {
-            "id": "garmin-111111",
-            "type": "run",
-            "name": "Garmin Activity",
-            "date": "2026-09-15T08:00:00Z",
-            "duration_minutes": 45,
-            "distance_km": 8.0,
-            "avg_heart_rate": 140,
-            "avg_pace_min_km": 5.62,
-            "data_source": "garmin",
-            "user_id": _USER_ID,
-        }
-    ])
-    # Activity exists in garmin_activities but belongs to a different user!
+    fake_db.workouts = _Collection([dict(derived_workout)])
+    # Activity exists in garmin_activities with matching external_id but belongs to other-user
     fake_db.garmin_activities = _Collection([
         {
             "external_id": "111111",
@@ -1279,6 +1370,7 @@ async def test_load_scoped_workout_analysis_v2_user_scoping_no_cross_contaminati
             "garmin_activity": {
                 "max_hr": 195,
                 "elevation_gain": 300.0,
+                "average_run_cadence": 180.0,
             },
         }
     ])
@@ -1294,6 +1386,7 @@ async def test_load_scoped_workout_analysis_v2_user_scoping_no_cross_contaminati
     # Must NOT leak other user's facts
     assert workout.get("max_heart_rate") is None
     assert workout.get("elevation_gain_m") is None
+    assert workout.get("avg_cadence_spm") is None
 
     # Foreign workout requested by other-user returns None (404)
     foreign_result = await load_scoped_workout_analysis_v2(
@@ -1307,30 +1400,29 @@ async def test_load_scoped_workout_analysis_v2_user_scoping_no_cross_contaminati
 
 @pytest.mark.asyncio
 async def test_coach_analyze_with_minimal_garmin_workout_pipeline():
+    raw_garmin_activity = {
+        "external_id": "real-pipeline-1",
+        "activity_type": "running",
+        "name": "Morning Run",
+        "start_time": "2026-09-15T07:30:00Z",
+        "distance": 11200.0,
+        "duration": 3300.0,
+        "pace_seconds_per_km": 294.6,
+        "avg_hr": 152,
+    }
+    derived_workout = activity_to_workout(raw_garmin_activity, _USER_ID)
+    assert derived_workout is not None
+
     fake_db = _FakeDB()
-    # Minimal workout in workouts as saved by activity_to_workout
-    fake_db.workouts = _Collection([
-        {
-            "id": "garmin-real-pipeline-1",
-            "type": "run",
-            "name": "Morning Run",
-            "date": "2026-09-15T07:30:00Z",
-            "duration_minutes": 55,
-            "distance_km": 11.2,
-            "avg_heart_rate": 152,
-            "avg_pace_min_km": 4.91,
-            "data_source": "garmin",
-            "user_id": _USER_ID,
-        }
-    ])
+    fake_db.workouts = _Collection([dict(derived_workout)])
     # Full native observation in garmin_activities
     fake_db.garmin_activities = _Collection([
         {
             "external_id": "real-pipeline-1",
             "user_id": _USER_ID,
             "start_time": "2026-09-15T07:30:00Z",
-            "distance": 11200,
-            "duration": 3300,
+            "distance": 11200.0,
+            "duration": 3300.0,
             "avg_hr": 152,
             "garmin_activity": {
                 "activity_id": "real-pipeline-1",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import math
 from typing import Any, Optional
 
@@ -9,6 +10,8 @@ from workout_analysis_v2 import (
     build_workout_analysis_v2,
     workout_analysis_candidate_date_bounds,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _safe_hr(val: Any) -> Optional[int]:
@@ -238,5 +241,9 @@ async def load_scoped_workout_analysis_v2(
             language=language,
         )
     except Exception:
+        logger.exception(
+            "Workout Analysis V2 unavailable for workout_id=%s",
+            workout_id,
+        )
         analysis = None
     return workout, analysis
