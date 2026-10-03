@@ -270,12 +270,28 @@ def _project_paces_for_llm(value: Any) -> Any:
 
     projected = {}
     for key, item in value.items():
-        if key in {"avg_pace_min_km", "average_pace_min_km", "fastest_split_min_km", "slowest_split_min_km"}:
+        if key in {
+            "avg_pace_min_km",
+            "average_pace_min_km",
+            "fastest_split_min_km",
+            "slowest_split_min_km",
+            "pace_min_km",
+            "split_pace_min_km",
+        }:
             if isinstance(item, dict):
                 continue
             display = _format_pace_min_km(item)
             if display is not None:
                 projected[key.removesuffix("_min_km") + "_display"] = display
+            continue
+        if key in {"pace_seconds_per_km", "avg_pace_seconds_per_km"}:
+            try:
+                pace_min_km = Decimal(str(item)) / Decimal("60")
+            except (InvalidOperation, TypeError, ValueError):
+                continue
+            display = _format_pace_min_km(pace_min_km)
+            if display is not None:
+                projected[key.removesuffix("_seconds_per_km") + "_display"] = display
             continue
         if key in {"pace_difference_min_km", "pace_drop_min_km"}:
             display = _format_pace_delta_min_km(item)

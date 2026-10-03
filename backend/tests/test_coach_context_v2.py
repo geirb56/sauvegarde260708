@@ -1042,7 +1042,8 @@ async def test_coach_context_v2_populates_bounded_recent_workouts():
     assert recent[0]["name"] == "Threshold 8k"
     assert recent[0]["distance_km"] == 8.0
     assert recent[0]["duration_minutes"] == 38.5
-    assert recent[0]["avg_pace_min_km"] == 4.81
+    assert recent[0]["avg_pace_display"] == "4:49/km"
+    assert "avg_pace_min_km" not in recent[0]
     assert recent[0]["avg_heart_rate"] == 162
     assert recent[0]["max_heart_rate"] == 178
     assert recent[0]["elevation_gain_m"] == 45.0

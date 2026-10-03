@@ -1259,7 +1259,7 @@ async def test_incomplete_workout_does_not_fabricate_missing_measurements(client
     await client.fake_db.workouts.insert_one(incomplete)
     payload = (await _get_analysis(client, "run-fixture-incomplete")).json()
     summary = payload["summary"]["text"]
-    assert "6 km covered in 38 min." in summary
+    assert "You covered 6 km in 38 min." in summary
     assert "bpm" not in summary
     assert payload["physiology"]["available"] is False
     assert payload["physiology"]["avg_hr"] is None
