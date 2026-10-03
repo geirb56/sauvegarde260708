@@ -100,7 +100,8 @@ export default function Coach() {
       toast.error(t("coach.error"));
       setMessages(prev => [...prev, { 
         role: "assistant", 
-        content: t("coach.unavailable")
+        content: t("coach.unavailable"),
+        workout_id: workoutId,
       }]);
     } finally {
       setLoading(false);
