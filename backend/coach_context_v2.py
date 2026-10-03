@@ -324,8 +324,8 @@ def build_llm_coach_context(context: CoachContextV2 | dict[str, Any]) -> dict[st
         exact_cutoff = _parse_exact_datetime(raw_selected_date)
         projected["selected_workout_permissions"] = {
             "intensity_interpretation_allowed": intensity_available,
-            "raw_hr_is_descriptive_only": not intensity_available,
-            "raw_pace_is_descriptive_only": not intensity_available,
+            "raw_hr_is_descriptive_only": True,
+            "raw_pace_is_descriptive_only": True,
             "progress_regression_allowed": False,
             "physiological_efficiency_allowed": False,
             "causal_explanation_allowed": False,
@@ -793,8 +793,9 @@ async def build_coach_context_v2(
     ]
 
     selected_workout_id = str(workout.get("id") or "") if workout else ""
+    garmin_activity = workout.get("garmin_activity") if workout else None
     workout_values = (
-        {**(workout.get("garmin_activity") or {}), **workout}
+        {**(garmin_activity if isinstance(garmin_activity, dict) else {}), **workout}
         if workout else {}
     )
     selected_workout_date = _parse_iso_date(

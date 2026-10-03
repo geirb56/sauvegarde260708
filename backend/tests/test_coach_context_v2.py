@@ -538,6 +538,8 @@ async def test_coach_context_v2_uses_canonical_authorities_and_prescription_prec
 
     assert response.status_code == 200
     assert fake_db.training_plans.find_one_called is False
+    assert context["workout_detail"] is None
+    assert "selected_workout_permissions" not in context
     assert context["goal"]["objective"] == "Autumn Marathon"
     assert fake_db.training_prescription_snapshots.find_projections[0] == {"_id": 0}
     assert fake_db.training_planned_prescription_memory.find_projections[0] == {"_id": 0}
@@ -1342,6 +1344,17 @@ def test_llm_pace_formatting_projection_and_grounding_permissions():
         "similar_comparable": False,
         "similar_differences_descriptive_only": True,
     }
+    available_intensity = coach_context_v2.build_llm_coach_context({
+        "workout_detail": {
+            "analysis": {
+                "signals": {"intensity": {"available": True}},
+                "comparison": {"similar": {"available": False, "comparable": False}},
+            }
+        }
+    })["selected_workout_permissions"]
+    assert available_intensity["intensity_interpretation_allowed"] is True
+    assert available_intensity["raw_hr_is_descriptive_only"] is True
+    assert available_intensity["raw_pace_is_descriptive_only"] is True
     serialized = json.dumps(projected)
     for raw_value in ('"avg_pace_min_km"', '"pace_difference_min_km"', "6.81", "6.012", "0.2"):
         assert raw_value not in serialized
