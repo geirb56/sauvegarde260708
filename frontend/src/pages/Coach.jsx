@@ -19,6 +19,7 @@ export default function Coach() {
   const [initialLoading, setInitialLoading] = useState(true);
   const [historyLoadError, setHistoryLoadError] = useState(false);
   const [analyzingWorkout, setAnalyzingWorkout] = useState(null);
+  const [activeWorkoutId, setActiveWorkoutId] = useState(null);
   const scrollRef = useRef(null);
   const { t, lang } = useLanguage();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -65,6 +66,7 @@ export default function Coach() {
   }, [messages]);
 
   const triggerWorkoutAnalysis = async (workoutId) => {
+    setActiveWorkoutId(workoutId);
     setAnalyzingWorkout(workoutId);
     setLoading(true);
 
@@ -111,26 +113,34 @@ export default function Coach() {
     if (!input.trim() || loading) return;
 
     const userMessage = input.trim();
+    const workoutId = activeWorkoutId || undefined;
     setInput("");
-    setMessages(prev => [...prev, { role: "user", content: userMessage }]);
+    setMessages(prev => [...prev, {
+      role: "user",
+      content: userMessage,
+      ...(workoutId ? { workout_id: workoutId } : {}),
+    }]);
     setLoading(true);
 
     try {
       const response = await axios.post(`${API}/coach/analyze`, {
         message: userMessage,
-        language: lang
+        ...(workoutId ? { workout_id: workoutId } : {}),
+        language: lang,
       });
 
       setMessages(prev => [...prev, { 
         role: "assistant", 
-        content: response.data.response 
+        content: response.data.response,
+        ...(workoutId ? { workout_id: workoutId } : {}),
       }]);
     } catch (error) {
       console.error("Coach error:", error);
       toast.error(t("coach.error"));
       setMessages(prev => [...prev, { 
         role: "assistant", 
-        content: t("coach.unavailable")
+        content: t("coach.unavailable"),
+        ...(workoutId ? { workout_id: workoutId } : {}),
       }]);
     } finally {
       setLoading(false);
@@ -141,6 +151,7 @@ export default function Coach() {
     try {
       await axios.delete(`${API}/coach/history`);
       setMessages([]);
+      setActiveWorkoutId(null);
       setHistoryLoadError(false);
       toast.success(t("coachExtended.historyCleared"));
     } catch (error) {
@@ -280,6 +291,7 @@ export default function Coach() {
                 key={idx} 
                 className={`animate-in ${msg.role === "user" ? "text-right" : ""}`}
                 data-testid={`message-${idx}`}
+                data-workout-id={msg.workout_id}
               >
                 {msg.role === "user" ? (
                   <div className="inline-block text-left max-w-[85%] md:max-w-[70%]">

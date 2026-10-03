@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import math
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -57,6 +58,7 @@ class CoachWorkoutDetail(BaseModel):
     id: str
     name: Optional[str] = None
     date: Optional[str] = None
+    start_time: Optional[str] = None
     type: Optional[str] = None
     distance_km: Optional[float] = None
     duration_minutes: Optional[float] = None
@@ -218,6 +220,115 @@ def _parse_iso_date(value: Any) -> Optional[date]:
             except ValueError:
                 return None
     return None
+
+
+def _parse_exact_datetime(value: Any) -> Optional[datetime]:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str) and ("T" in value or " " in value):
+        try:
+            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _format_pace_min_km(value: Any) -> Optional[str]:
+    try:
+        decimal_value = Decimal(str(value))
+        if not decimal_value.is_finite() or decimal_value < 0:
+            return None
+        total_seconds = int((decimal_value * 60).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    minutes, seconds = divmod(total_seconds, 60)
+    return f"{minutes}:{seconds:02d}/km"
+
+
+def _format_pace_delta_min_km(value: Any) -> Optional[str]:
+    try:
+        decimal_value = Decimal(str(value))
+        if not decimal_value.is_finite():
+            return None
+        total_seconds = int((decimal_value * 60).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    sign = "+" if total_seconds > 0 else "-" if total_seconds < 0 else ""
+    minutes, seconds = divmod(abs(total_seconds), 60)
+    return f"{sign}{minutes}:{seconds:02d}/km"
+
+
+def _project_paces_for_llm(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_project_paces_for_llm(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+
+    projected = {}
+    for key, item in value.items():
+        if key in {"avg_pace_min_km", "average_pace_min_km", "fastest_split_min_km", "slowest_split_min_km"}:
+            if isinstance(item, dict):
+                continue
+            display = _format_pace_min_km(item)
+            if display is not None:
+                projected[key.removesuffix("_min_km") + "_display"] = display
+            continue
+        if key in {"pace_difference_min_km", "pace_drop_min_km"}:
+            display = _format_pace_delta_min_km(item)
+            if display is not None:
+                projected[key.removesuffix("_min_km") + "_display"] = display
+            continue
+        projected[key] = _project_paces_for_llm(item)
+    return projected
+
+
+def build_llm_coach_context(context: CoachContextV2 | dict[str, Any]) -> dict[str, Any]:
+    """Build a compact LLM projection with display-ready paces and explicit permissions."""
+    canonical = (
+        context.model_dump(mode="json")
+        if isinstance(context, CoachContextV2)
+        else context
+    )
+    projected = _project_paces_for_llm(canonical)
+    workout_detail = canonical.get("workout_detail")
+    if workout_detail:
+        analysis = workout_detail.get("analysis") or {}
+        signals = analysis.get("signals") or {}
+        intensity_available = bool((signals.get("intensity") or {}).get("available"))
+        similar = ((analysis.get("comparison") or {}).get("similar") or {})
+        selected_date = workout_detail.get("date")
+        raw_selected_date = (
+            (workout_detail.get("start_time"))
+            or selected_date
+        )
+        exact_cutoff = _parse_exact_datetime(raw_selected_date)
+        projected["selected_workout_permissions"] = {
+            "intensity_interpretation_allowed": intensity_available,
+            "raw_hr_is_descriptive_only": not intensity_available,
+            "raw_pace_is_descriptive_only": not intensity_available,
+            "progress_regression_allowed": False,
+            "physiological_efficiency_allowed": False,
+            "causal_explanation_allowed": False,
+            "similar_comparison_available": bool(similar.get("available")),
+            "similar_comparable": bool(similar.get("comparable")),
+            "similar_differences_descriptive_only": not bool(similar.get("comparable")),
+        }
+        projected["selected_workout_history_cutoff"] = (
+            exact_cutoff.isoformat() if exact_cutoff else selected_date
+        )
+        projected["selected_workout_history_cutoff_precision"] = (
+            "strict_timestamp_exclusive" if exact_cutoff else "date_inclusive"
+        )
+        projected["current_training_temporal_scope"] = (
+            "Training V2, readiness, load, and performance values are current context as of "
+            f"{canonical.get('reference_date')}; they do not establish the athlete's state "
+            "on the selected workout date."
+        )
+    return projected
 
 
 def _build_plan_goal(resolved_goal: Any) -> PlanGoal:
@@ -449,6 +560,30 @@ def _is_valid_recent_workout(
     return True
 
 
+def _is_before_selected_workout(
+    recent_workout: dict[str, Any] | CoachRecentWorkout,
+    *,
+    selected_workout_id: str,
+    selected_date: date,
+    selected_datetime: Optional[datetime],
+) -> bool:
+    workout_id = recent_workout.id if isinstance(recent_workout, CoachRecentWorkout) else recent_workout.get("id")
+    if str(workout_id or "") == selected_workout_id:
+        return False
+    raw_date = (
+        recent_workout.date
+        if isinstance(recent_workout, CoachRecentWorkout)
+        else recent_workout.get("start_time") or recent_workout.get("date")
+    )
+    workout_date = _parse_iso_date(raw_date)
+    if workout_date is None or workout_date > selected_date:
+        return False
+    if selected_datetime is None:
+        return True
+    workout_datetime = _parse_exact_datetime(raw_date)
+    return workout_datetime is not None and workout_datetime < selected_datetime
+
+
 def _normalize_recent_workout(workout: dict[str, Any]) -> CoachRecentWorkout:
     garmin_activity = workout.get("garmin_activity")
     raw_values = {**(garmin_activity if isinstance(garmin_activity, dict) else {}), **workout}
@@ -555,6 +690,7 @@ def _normalize_workout_detail(
         id=str(workout.get("id")),
         name=workout.get("name"),
         date=str(workout.get("date")) if workout.get("date") is not None else None,
+        start_time=str(raw_values.get("start_time")) if raw_values.get("start_time") is not None else None,
         type=str(workout.get("type")) if workout.get("type") is not None else None,
         distance_km=distance_km,
         duration_minutes=duration_minutes,
@@ -640,9 +776,22 @@ async def build_coach_context_v2(
         for prediction in performance.predictions
     ]
 
+    selected_workout_id = str(workout.get("id") or "") if workout else ""
+    workout_values = (
+        {**(workout.get("garmin_activity") or {}), **workout}
+        if workout else {}
+    )
+    selected_workout_date = _parse_iso_date(
+        workout_values.get("start_time") or workout_values.get("date")
+    )
+    history_reference_date = selected_workout_date or reference_date
+    selected_workout_datetime = _parse_exact_datetime(
+        workout_values.get("start_time") or workout_values.get("date")
+    )
+
     if recent_workouts is None and db is not None and hasattr(db, "garmin_activities"):
-        start_date = reference_date - timedelta(days=COACH_RECENT_WORKOUTS_WINDOW_DAYS - 1)
-        end_date = reference_date
+        start_date = history_reference_date - timedelta(days=COACH_RECENT_WORKOUTS_WINDOW_DAYS - 1)
+        end_date = history_reference_date
         lower_bound = start_date.isoformat()
         upper_bound = (end_date + timedelta(days=1)).isoformat()
         cursor = db.garmin_activities.find(
@@ -658,7 +807,17 @@ async def build_coach_context_v2(
         valid_workout_docs = [
             doc
             for doc in workout_docs
-            if doc.get("user_id") == user_id and _is_valid_recent_workout(doc, reference_date)
+            if doc.get("user_id") == user_id
+            and _is_valid_recent_workout(doc, history_reference_date)
+            and (
+                selected_workout_date is None
+                or _is_before_selected_workout(
+                    doc,
+                    selected_workout_id=selected_workout_id,
+                    selected_date=selected_workout_date,
+                    selected_datetime=selected_workout_datetime,
+                )
+            )
         ]
         normalized_workouts = [
             _normalize_recent_workout(doc)
@@ -678,20 +837,31 @@ async def build_coach_context_v2(
         recent_workouts = []
         recent_workouts_coverage = CoachRecentWorkoutsCoverage(
             window_days=COACH_RECENT_WORKOUTS_WINDOW_DAYS,
-            start_date_inclusive=(reference_date - timedelta(days=COACH_RECENT_WORKOUTS_WINDOW_DAYS - 1)).isoformat(),
-            end_date_inclusive=reference_date.isoformat(),
+            start_date_inclusive=(history_reference_date - timedelta(days=COACH_RECENT_WORKOUTS_WINDOW_DAYS - 1)).isoformat(),
+            end_date_inclusive=history_reference_date.isoformat(),
             available_count=0,
             included_count=0,
             max_count=COACH_RECENT_WORKOUTS_MAX_COUNT,
             truncated=False,
         )
     else:
+        if selected_workout_date is not None:
+            recent_workouts = [
+                item
+                for item in recent_workouts
+                if _is_before_selected_workout(
+                    item,
+                    selected_workout_id=selected_workout_id,
+                    selected_date=selected_workout_date,
+                    selected_datetime=selected_workout_datetime,
+                )
+            ]
         available_count = len(recent_workouts)
         recent_workouts = list(recent_workouts)[:COACH_RECENT_WORKOUTS_MAX_COUNT]
         recent_workouts_coverage = CoachRecentWorkoutsCoverage(
             window_days=COACH_RECENT_WORKOUTS_WINDOW_DAYS,
-            start_date_inclusive=(reference_date - timedelta(days=COACH_RECENT_WORKOUTS_WINDOW_DAYS - 1)).isoformat(),
-            end_date_inclusive=reference_date.isoformat(),
+            start_date_inclusive=(history_reference_date - timedelta(days=COACH_RECENT_WORKOUTS_WINDOW_DAYS - 1)).isoformat(),
+            end_date_inclusive=history_reference_date.isoformat(),
             available_count=available_count,
             included_count=len(recent_workouts),
             max_count=COACH_RECENT_WORKOUTS_MAX_COUNT,
