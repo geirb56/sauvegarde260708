@@ -58,6 +58,7 @@ When only a date is available, the history cutoff is date-granular and later dat
 ## PR #307 follow-up: remaining grounding gaps
 
 - Patch starting HEAD: `4897a268f3b5e3cc916aeb241ad59e46a9ce2a14` (PR #307 was verified open, draft, unmerged, and clean against `copilot/dev` at `d5f25ad51b9289df61a4471969bbad3bc64f6945`).
+- Code and test changes are committed at `1fa2d7c142013534f5a2bd79b0ba724f8946f956`; the report update is a docs-only commit on the same PR branch.
 - `stats_7d` and `stats_30d` retain their existing current-date calculations. For selected-workout LLM context, they are moved under `current_training_context` with the `reference_date`, `temporal_scope: current_only`, `historical_selected_workout_evidence: false`, and an explicit warning that later reference dates may include post-workout activity. They are not duplicated at the projection root.
 - Training Paces LLM projection now strips `min_per_km` when a deterministic `pace_str` is available, including nested PaceRange `lower` and `upper` values. If a `min_per_km` has no string representation, projection formats it as a display string instead of exposing the raw decimal. `pace_str`, range strings, speed, and other safe metadata remain. The canonical Training Paces API serializer is unchanged.
 - Added regression assertions using selected workout 28/09, activity 01/10, reference date 03/10, and nonzero current stats. Also added PaceValue/PaceRange projection tests and assertions against the captured final LLM prompt.
