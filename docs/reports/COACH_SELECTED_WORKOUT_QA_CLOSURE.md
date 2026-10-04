@@ -54,3 +54,15 @@ These changes do not claim new real-world QA results or guarantee untested behav
 Training V2 prescription logic, WorkoutGenerator, DailyAdaptation, WeeklyTarget, WeeklyReconciliation, StructuredWorkoutPrescriptionEngine, Garmin workers/scheduling/queue, readiness calculations, subscriptions, Performance Curve, VMA, RAG legacy, and WorkoutDetail presentation were not modified. Workout Analysis V2 calculations and classifications were not modified.
 
 When only a date is available, the history cutoff is date-granular and later dates are excluded; exact same-day ordering cannot be established without timestamps. Current Training V2 data are retained as current context and are explicitly not evidence of historical readiness or training state. External LLM behavior remains outside these deterministic tests.
+
+## PR #307 follow-up: remaining grounding gaps
+
+- Patch starting HEAD: `4897a268f3b5e3cc916aeb241ad59e46a9ce2a14` (PR #307 was verified open, draft, unmerged, and clean against `copilot/dev` at `d5f25ad51b9289df61a4471969bbad3bc64f6945`).
+- `stats_7d` and `stats_30d` retain their existing current-date calculations. For selected-workout LLM context, they are moved under `current_training_context` with the `reference_date`, `temporal_scope: current_only`, `historical_selected_workout_evidence: false`, and an explicit warning that later reference dates may include post-workout activity. They are not duplicated at the projection root.
+- Training Paces LLM projection now strips `min_per_km` when a deterministic `pace_str` is available, including nested PaceRange `lower` and `upper` values. If a `min_per_km` has no string representation, projection formats it as a display string instead of exposing the raw decimal. `pace_str`, range strings, speed, and other safe metadata remain. The canonical Training Paces API serializer is unchanged.
+- Added regression assertions using selected workout 28/09, activity 01/10, reference date 03/10, and nonzero current stats. Also added PaceValue/PaceRange projection tests and assertions against the captured final LLM prompt.
+- Backend: `python -m pytest tests/test_coach_context_v2.py tests/test_coach_contract_unified.py tests/test_workout_analysis_v2.py -q` from `backend/` — **174 passed, 12 warnings**.
+- Frontend: `npx craco test src/__tests__/coach-page.test.jsx src/__tests__/workout-analysis-v2-pages.test.jsx src/__tests__/chat-coach-subscription-status.test.jsx --watchAll=false --forceExit` from `frontend/` — **3 suites passed, 42 tests passed**.
+- Frontend build: `npm run build` from `frontend/` — **compiled successfully**.
+- `git diff --check` — **passed**.
+- The LLM was not called externally; verification covers the projected context and captured prompt only.

@@ -1264,6 +1264,13 @@ async def test_selected_workout_recent_history_uses_strict_prior_timestamp_cutof
         fake_db,
         workout_id="garmin-selected-0928",
         reference_date=date(2026, 10, 3),
+        domain_activities=[
+            SimpleNamespace(
+                activity_type="running",
+                start_time=datetime(2026, 10, 1, 8, 0, tzinfo=timezone.utc),
+                distance_m=9660,
+            )
+        ],
     )
 
     assert response.status_code == 200
@@ -1274,6 +1281,18 @@ async def test_selected_workout_recent_history_uses_strict_prior_timestamp_cutof
     assert "garmin-same-day-before" in recent_ids
     assert "garmin-selected-0928" not in recent_ids
     assert "garmin-future-1001" not in recent_ids
+    assert context["current_training_context"]["reference_date"] == "2026-10-03"
+    assert context["current_training_context"]["temporal_scope"] == "current_only"
+    assert context["current_training_context"]["may_include_activity_after_selected_workout"] is True
+    assert context["current_training_context"]["historical_selected_workout_evidence"] is False
+    assert context["current_training_context"]["stats_7d"]["km"] > 0
+    assert context["current_training_context"]["stats_30d"]["km"] > 0
+    assert "stats_7d" not in context
+    assert "stats_30d" not in context
+    assert (
+        "may include activity after the selected workout"
+        in context["current_training_context"]["description"]
+    )
     assert context["recent_workouts_coverage"] == {
         "window_days": 30,
         "start_date_inclusive": "2026-08-30",
@@ -1285,9 +1304,6 @@ async def test_selected_workout_recent_history_uses_strict_prior_timestamp_cutof
     }
     assert context["selected_workout_history_cutoff"] == "2026-09-28T10:00:00+00:00"
     assert context["selected_workout_history_cutoff_precision"] == "strict_timestamp_exclusive"
-    assert context["current_training_temporal_scope"].startswith(
-        "Training V2, readiness, load, and performance values are current context"
-    )
 
 
 def test_llm_pace_formatting_projection_and_grounding_permissions():
@@ -1360,6 +1376,49 @@ def test_llm_pace_formatting_projection_and_grounding_permissions():
         assert raw_value not in serialized
 
 
+def test_llm_training_paces_projection_hides_raw_min_per_km_values():
+    projected = coach_context_v2.build_llm_coach_context({
+        "language": "en",
+        "training_paces": {
+            "paces": {
+                "easy": {
+                    "lower": {
+                        "min_per_km": 6.81,
+                        "pace_str": "6:49",
+                        "km_per_hour": 8.81,
+                    },
+                    "upper": {
+                        "min_per_km": 7.2,
+                        "pace_str": "7:12",
+                    },
+                    "lower_str": "6:49",
+                    "upper_str": "7:12",
+                },
+                "threshold": {
+                    "min_per_km": 5.25,
+                    "pace_str": "5:15",
+                },
+            }
+        },
+    })
+    serialized = json.dumps(projected)
+
+    assert '"min_per_km"' not in serialized
+    assert "6:49" in serialized
+    assert "7:12" in serialized
+    assert "5:15" in serialized
+    assert "8.81" in serialized
+    assert "6.81" not in serialized
+    assert projected["training_paces"]["paces"]["easy"]["lower"] == {
+        "pace_str": "6:49",
+        "km_per_hour": 8.81,
+    }
+    assert projected["training_paces"]["paces"]["easy"]["upper"] == {"pace_str": "7:12"}
+    assert projected["training_paces"]["paces"]["easy"]["lower_str"] == "6:49"
+    assert projected["training_paces"]["paces"]["easy"]["upper_str"] == "7:12"
+    assert projected["training_paces"]["paces"]["threshold"] == {"pace_str": "5:15"}
+
+
 @pytest.mark.asyncio
 async def test_llm_receives_only_display_paces_and_explicit_interpretation_policy():
     import llm_coach
@@ -1367,6 +1426,19 @@ async def test_llm_receives_only_display_paces_and_explicit_interpretation_polic
     context = coach_context_v2.build_llm_coach_context({
         "language": "en",
         "reference_date": "2026-10-03",
+        "stats_7d": {"km": 9.66, "sessions": 1},
+        "stats_30d": {"km": 30.0, "sessions": 4},
+        "training_paces": {
+            "paces": {
+                "easy": {
+                    "lower": {"min_per_km": 6.81, "pace_str": "6:49", "km_per_hour": 8.81},
+                    "upper": {"min_per_km": 7.2, "pace_str": "7:12"},
+                    "lower_str": "6:49",
+                    "upper_str": "7:12",
+                },
+                "threshold": {"min_per_km": 5.25, "pace_str": "5:15"},
+            }
+        },
         "recent_workouts": [{"id": "recent", "avg_pace_min_km": 6.81}],
         "workout_detail": {
             "id": "selected",
@@ -1413,6 +1485,14 @@ async def test_llm_receives_only_display_paces_and_explicit_interpretation_polic
     assert '"progress_regression_allowed":false' in prompt
     assert '"physiological_efficiency_allowed":false' in prompt
     assert '"causal_explanation_allowed":false' in prompt
+    assert '"min_per_km"' not in prompt
+    assert "6:49" in prompt
+    assert "7:12" in prompt
+    assert "5:15" in prompt
+    assert '"temporal_scope":"current_only"' in prompt
+    assert '"reference_date":"2026-10-03"' in prompt
+    assert '"historical_selected_workout_evidence":false' in prompt
+    assert '"may_include_activity_after_selected_workout":true' in prompt
 
 
 @pytest.mark.asyncio

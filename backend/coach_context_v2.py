@@ -270,6 +270,13 @@ def _project_paces_for_llm(value: Any) -> Any:
 
     projected = {}
     for key, item in value.items():
+        if key == "min_per_km":
+            if value.get("pace_str"):
+                continue
+            display = _format_pace_min_km(item)
+            if display is not None:
+                projected["pace_display"] = display
+            continue
         if key in {
             "avg_pace_min_km",
             "average_pace_min_km",
@@ -339,11 +346,26 @@ def build_llm_coach_context(context: CoachContextV2 | dict[str, Any]) -> dict[st
         projected["selected_workout_history_cutoff_precision"] = (
             "strict_timestamp_exclusive" if exact_cutoff else "date_inclusive"
         )
-        projected["current_training_temporal_scope"] = (
-            "Training V2, readiness, load, and performance values are current context as of "
-            f"{canonical.get('reference_date')}; they do not establish the athlete's state "
-            "on the selected workout date."
-        )
+        selected_workout_date = _parse_iso_date(raw_selected_date)
+        reference_date = canonical.get("reference_date")
+        projected["current_training_context"] = {
+            "reference_date": reference_date,
+            "stats_7d": projected.pop("stats_7d", None),
+            "stats_30d": projected.pop("stats_30d", None),
+            "temporal_scope": "current_only",
+            "may_include_activity_after_selected_workout": bool(
+                selected_workout_date
+                and _parse_iso_date(reference_date)
+                and _parse_iso_date(reference_date) > selected_workout_date
+            ),
+            "historical_selected_workout_evidence": False,
+            "description": (
+                "These current aggregates and the Training V2, readiness, load, and performance "
+                "context are calculated as of reference_date, not as of the selected workout date. "
+                "When reference_date is later, these aggregates may include activity after the selected workout; "
+                "never use them as historical evidence about the selected workout."
+            ),
+        }
     return projected
 
 
