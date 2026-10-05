@@ -81,19 +81,19 @@ const SplitsChart = ({ splits, t }) => {
       <div className="flex items-center justify-between text-xs">
         <div className="flex gap-4">
           <div>
-            <p className="font-mono text-[9px] text-muted-foreground uppercase">{t("workoutDetailExtended.fastest")}</p>
+            <p className="font-mono text-[11px] text-muted-foreground uppercase">{t("workoutDetailExtended.fastest")}</p>
             <p className="font-mono text-xs font-semibold text-emerald-400">
               Km {splits[fastestIdx]?.km} • {splits[fastestIdx]?.pace_str}
             </p>
           </div>
           <div>
-            <p className="font-mono text-[9px] text-muted-foreground uppercase">{t("workoutDetailExtended.slowest")}</p>
+            <p className="font-mono text-[11px] text-muted-foreground uppercase">{t("workoutDetailExtended.slowest")}</p>
             <p className="font-mono text-xs font-semibold text-orange-400">
               Km {splits[slowestIdx]?.km} • {splits[slowestIdx]?.pace_str}
             </p>
           </div>
           <div>
-            <p className="font-mono text-[9px] text-muted-foreground uppercase">{t("workoutDetailExtended.average")}</p>
+            <p className="font-mono text-[11px] text-muted-foreground uppercase">{t("workoutDetailExtended.average")}</p>
             <p className="font-mono text-xs font-semibold">{formatPace(avgPace)}/km</p>
           </div>
         </div>
@@ -110,7 +110,7 @@ const SplitsChart = ({ splits, t }) => {
           return (
             <div key={split.km} className="flex items-center gap-2 group">
               <div className="w-8 text-right shrink-0">
-                <span className={`font-mono text-[10px] ${isFastest ? "text-emerald-400 font-bold" : isSlowest ? "text-orange-400 font-bold" : "text-muted-foreground"}`}>
+                <span className={`font-mono text-[11px] ${isFastest ? "text-emerald-400 font-bold" : isSlowest ? "text-orange-400 font-bold" : "text-muted-foreground"}`}>
                   {split.km}
                 </span>
               </div>
@@ -122,7 +122,7 @@ const SplitsChart = ({ splits, t }) => {
                   style={{ width: `${Math.max(width, 5)}%`, backgroundColor: color, minWidth: "20px" }}
                 >
                   {width > 25 && (
-                    <span className="font-mono text-[9px] text-white font-semibold px-1.5 drop-shadow-sm">
+                    <span className="font-mono text-[11px] text-primary-foreground font-semibold px-1.5">
                       {split.pace_str}
                     </span>
                   )}
@@ -130,14 +130,14 @@ const SplitsChart = ({ splits, t }) => {
               </div>
 
               <div className="w-12 shrink-0">
-                <span className={`font-mono text-[10px] ${isFastest ? "text-emerald-400 font-bold" : isSlowest ? "text-orange-400 font-bold" : "text-muted-foreground"}`}>
+                <span className={`font-mono text-[11px] ${isFastest ? "text-emerald-400 font-bold" : isSlowest ? "text-orange-400 font-bold" : "text-muted-foreground"}`}>
                   {split.pace_str}
                 </span>
               </div>
 
               {split.avg_hr && (
-                <div className="w-14 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <span className="font-mono text-[9px] text-red-400">{split.avg_hr} bpm</span>
+                <div className="w-14 shrink-0">
+                  <span className="font-mono text-[11px] text-red-400">{split.avg_hr} bpm</span>
                 </div>
               )}
             </div>
@@ -145,7 +145,7 @@ const SplitsChart = ({ splits, t }) => {
         })}
 
         {!showAllKm && (
-          <p className="text-center font-mono text-[9px] text-muted-foreground pt-2">
+          <p className="text-center font-sans text-sm text-muted-foreground pt-2">
             {t("workoutDetailExtended.simplifiedView").replace("{count}", splits.length)}
           </p>
         )}
@@ -173,20 +173,20 @@ const HRZonesChart = ({ zones, t }) => {
         const barWidth = Math.max((pct / maxPct) * 100, pct > 0 ? 8 : 0);
         return (
           <div key={zone.key} className="flex items-center gap-2">
-            <span className="font-mono text-[10px] w-6 text-muted-foreground">{zone.label}</span>
+            <span className="font-mono text-[11px] w-6 text-muted-foreground">{zone.label}</span>
             <div className="flex-1 h-5 bg-muted/30 relative overflow-hidden">
               <div
                 className="h-full transition-all duration-500 ease-out flex items-center"
                 style={{ width: `${barWidth}%`, backgroundColor: zone.color, minWidth: pct > 0 ? "24px" : "0" }}
               >
                 {pct > 0 && (
-                  <span className="font-mono text-[10px] text-white font-semibold px-1.5 drop-shadow-sm">
+                  <span className="font-mono text-[11px] text-primary-foreground font-semibold px-1.5">
                     {pct}%
                   </span>
                 )}
               </div>
             </div>
-            <span className="font-mono text-[9px] w-16 text-muted-foreground hidden sm:block">{t(`zones.${zone.desc}`)}</span>
+            <span className="font-mono text-[11px] w-16 text-muted-foreground hidden sm:block">{t(`zones.${zone.desc}`)}</span>
           </div>
         );
       })}
@@ -325,13 +325,13 @@ export default function WorkoutDetail() {
       <div className="mb-4 flex items-center justify-between gap-3">
         <Link to={backTo} className="inline-flex items-center gap-2 text-muted-foreground hover:text-foreground">
           <ArrowLeft className="w-4 h-4" />
-          <span className="font-mono text-[10px] uppercase tracking-widest">{t("workout.back")}</span>
+          <span className="font-mono text-[11px] uppercase tracking-widest">{t("workout.back")}</span>
         </Link>
         <div className="flex items-center gap-2">
           <Icon className="w-4 h-4 text-muted-foreground" />
-          <span className="font-mono text-[10px] uppercase text-muted-foreground">{typeLabel}</span>
+          <span className="font-mono text-[11px] uppercase text-muted-foreground">{typeLabel}</span>
         </div>
-        <span className="font-mono text-[10px] text-muted-foreground">{dateStr}</span>
+        <span className="font-mono text-[11px] text-muted-foreground">{dateStr}</span>
       </div>
 
       <h1 className="font-heading text-base uppercase tracking-tight font-bold mb-4 leading-tight">{workout.name}</h1>
@@ -343,7 +343,7 @@ export default function WorkoutDetail() {
           ) : analysisError ? (
             <AnalysisError t={t} />
           ) : analysis?.summary?.text ? (
-            <p className="font-mono text-sm leading-relaxed" data-testid="coach-summary">{analysis.summary.text}</p>
+            <p className="font-sans text-sm leading-relaxed" data-testid="coach-summary">{analysis.summary.text}</p>
           ) : null}
         </CardContent>
       </Card>
@@ -353,7 +353,7 @@ export default function WorkoutDetail() {
           <CardContent className="p-2">
             <div className="flex items-center gap-1 mb-1">
               <Zap className="w-3 h-3 text-muted-foreground" />
-              <span className="font-mono text-[8px] uppercase tracking-widest text-muted-foreground">{t("analysis.intensity")}</span>
+              <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">{t("analysis.intensity")}</span>
             </div>
             {analysisLoading ? (
               <Skeleton className="h-5 w-full" />
@@ -363,7 +363,7 @@ export default function WorkoutDetail() {
                   {analysis.signals.intensity.text}
                 </span>
                 {physiology?.avg_hr != null && (
-                  <p className="font-mono text-[10px] text-muted-foreground flex items-center gap-1 mt-1">
+                  <p className="font-mono text-[11px] text-muted-foreground flex items-center gap-1 mt-1">
                     <Heart className="w-2.5 h-2.5" />
                     {physiology.avg_hr} bpm
                   </p>
@@ -371,9 +371,9 @@ export default function WorkoutDetail() {
               </>
             ) : analysis?.signals?.intensity ? (
               <div data-testid="intensity-card-unavailable">
-                <p className="font-mono text-[10px] text-muted-foreground leading-relaxed">{t("workoutDetailExtended.intensityUnavailable")}</p>
+                <p className="font-sans text-sm text-secondary-foreground leading-relaxed">{t("workoutDetailExtended.intensityUnavailable")}</p>
                 {physiology?.avg_hr != null && (
-                  <p className="font-mono text-[10px] text-muted-foreground flex items-center gap-1 mt-1">
+                  <p className="font-mono text-[11px] text-muted-foreground flex items-center gap-1 mt-1">
                     <Heart className="w-2.5 h-2.5" />
                     {physiology.avg_hr} bpm
                   </p>
@@ -389,16 +389,16 @@ export default function WorkoutDetail() {
           <CardContent className="p-2">
             <div className="flex items-center gap-1 mb-1">
               <Scale className="w-3 h-3 text-muted-foreground" />
-              <span className="font-mono text-[8px] uppercase tracking-widest text-muted-foreground">{t("analysis.load")}</span>
+              <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">{t("analysis.load")}</span>
             </div>
             {analysisLoading ? (
               <Skeleton className="h-5 w-full" />
             ) : analysis?.signals?.volume ? (
               <>
                 <p className="font-mono text-xs font-semibold leading-tight">{analysis.signals.volume.text}</p>
-                <p className="font-mono text-[10px] text-muted-foreground">{workout.distance_km} km • {formatDuration(workout.duration_minutes)}</p>
+                <p className="font-mono text-[11px] text-muted-foreground">{workout.distance_km} km • {formatDuration(workout.duration_minutes)}</p>
                 {comparison?.distance_km && (
-                  <p className="font-mono text-[9px] mt-1 text-muted-foreground">{formatSignedMetric(comparison.distance_km, " km")}</p>
+                  <p className="font-mono text-[11px] mt-1 text-muted-foreground">{formatSignedMetric(comparison.distance_km, " km")}</p>
                 )}
               </>
             ) : (
@@ -411,7 +411,7 @@ export default function WorkoutDetail() {
           <CardContent className="p-2">
             <div className="flex items-center gap-1 mb-1">
               <Activity className="w-3 h-3 text-muted-foreground" />
-              <span className="font-mono text-[8px] uppercase tracking-widest text-muted-foreground">{t("analysis.type")}</span>
+              <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">{t("analysis.type")}</span>
             </div>
             {analysisLoading ? (
               <Skeleton className="h-5 w-full" />
@@ -431,30 +431,30 @@ export default function WorkoutDetail() {
           <CardContent className="p-3">
             <div className="flex items-center gap-2 mb-3">
               <Activity className="w-4 h-4 text-primary" />
-              <span className="font-mono text-[9px] uppercase tracking-widest text-muted-foreground">{t("workoutDetailExtended.pace")}</span>
+              <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">{t("workoutDetailExtended.pace")}</span>
             </div>
             <div className="grid grid-cols-2 gap-2 text-xs">
               {pacing.average_pace_min_km != null && (
                 <div>
-                  <p className="font-mono text-[10px] text-muted-foreground">{t("workoutDetailExtended.average")}</p>
+                  <p className="font-mono text-[11px] text-muted-foreground">{t("workoutDetailExtended.average")}</p>
                   <p className="font-mono font-semibold">{formatPaceDisplay(pacing.average_pace_min_km)}</p>
                 </div>
               )}
               {pacing.fastest_split_min_km != null && (
                 <div>
-                  <p className="font-mono text-[10px] text-muted-foreground">{t("workoutDetailExtended.fastest")}</p>
+                  <p className="font-mono text-[11px] text-muted-foreground">{t("workoutDetailExtended.fastest")}</p>
                   <p className="font-mono font-semibold">{formatPaceDisplay(pacing.fastest_split_min_km)}</p>
                 </div>
               )}
               {pacing.slowest_split_min_km != null && (
                 <div>
-                  <p className="font-mono text-[10px] text-muted-foreground">{t("workoutDetailExtended.slowest")}</p>
+                  <p className="font-mono text-[11px] text-muted-foreground">{t("workoutDetailExtended.slowest")}</p>
                   <p className="font-mono font-semibold">{formatPaceDisplay(pacing.slowest_split_min_km)}</p>
                 </div>
               )}
               {pacing.pace_drop_min_km != null && (
                 <div>
-                  <p className="font-mono text-[10px] text-muted-foreground">{t("workoutDetailExtended.paceDrop")}</p>
+                  <p className="font-mono text-[11px] text-muted-foreground">{t("workoutDetailExtended.paceDrop")}</p>
                   <p className="font-mono font-semibold">{formatPaceDelta(pacing.pace_drop_min_km)}</p>
                 </div>
               )}
@@ -468,31 +468,31 @@ export default function WorkoutDetail() {
           <CardContent className="p-3">
             <div className="flex items-center gap-2 mb-3">
               <Scale className="w-4 h-4 text-muted-foreground" />
-              <span className="font-mono text-[9px] uppercase tracking-widest text-muted-foreground">{interpolate("recentComparison", { days: comparison.baseline_period_days })}</span>
+              <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">{interpolate("recentComparison", { days: comparison.baseline_period_days })}</span>
             </div>
-            {comparison.baseline_sample_count != null && <p className="font-mono text-[10px] text-muted-foreground mb-2">{interpolate("sampleCount", { count: comparison.baseline_sample_count })}</p>}
+            {comparison.baseline_sample_count != null && <p className="font-sans text-sm text-muted-foreground mb-2">{interpolate("sampleCount", { count: comparison.baseline_sample_count })}</p>}
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               {comparison.distance_km && (
                 <div className="rounded-sm bg-muted/20 p-2">
-                  <p className="font-mono text-[9px] uppercase text-muted-foreground">{t("workoutDetailExtended.distance")}</p>
+                  <p className="font-mono text-[11px] uppercase text-muted-foreground">{t("workoutDetailExtended.distance")}</p>
                   <p className="font-mono text-xs">{formatSignedMetric(comparison.distance_km, " km")}</p>
                 </div>
               )}
               {comparison.duration_minutes && (
                 <div className="rounded-sm bg-muted/20 p-2">
-                  <p className="font-mono text-[9px] uppercase text-muted-foreground">{t("workoutDetailExtended.duration")}</p>
+                  <p className="font-mono text-[11px] uppercase text-muted-foreground">{t("workoutDetailExtended.duration")}</p>
                   <p className="font-mono text-xs">{formatSignedMetric(comparison.duration_minutes, " min")}</p>
                 </div>
               )}
               {comparison.avg_heart_rate && (
                 <div className="rounded-sm bg-muted/20 p-2">
-                  <p className="font-mono text-[9px] uppercase text-muted-foreground">{t("workoutDetailExtended.heartRate")}</p>
+                  <p className="font-mono text-[11px] uppercase text-muted-foreground">{t("workoutDetailExtended.heartRate")}</p>
                   <p className="font-mono text-xs">{formatSignedMetric(comparison.avg_heart_rate, " bpm")}</p>
                 </div>
               )}
               {(comparison.avg_pace_min_km || comparison.avg_speed_kmh) && (
                 <div className="rounded-sm bg-muted/20 p-2">
-                  <p className="font-mono text-[9px] uppercase text-muted-foreground">{t(comparison.avg_pace_min_km ? "workoutDetailExtended.pace" : "workoutDetailExtended.speed")}</p>
+                  <p className="font-mono text-[11px] uppercase text-muted-foreground">{t(comparison.avg_pace_min_km ? "workoutDetailExtended.pace" : "workoutDetailExtended.speed")}</p>
                   <p className="font-mono text-xs">
                     {comparison.avg_pace_min_km
                       ? formatPaceDelta(comparison.avg_pace_min_km.difference)
@@ -507,8 +507,8 @@ export default function WorkoutDetail() {
 
       {similar && (
         <Card className="bg-card border-border mb-3" data-testid="similar-comparison-card">
-          <CardContent className="p-3 space-y-2 font-mono text-xs">
-            <h2 className="text-[9px] uppercase tracking-widest text-muted-foreground">{interpolate("similarComparison", { days: similar.period_days })}</h2>
+          <CardContent className="p-3 space-y-2 font-sans text-sm leading-relaxed">
+            <h2 className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">{interpolate("similarComparison", { days: similar.period_days })}</h2>
             {similar.available ? (
               <>
                 {similar.sample_count != null && <p>{interpolate("sampleCount", { count: similar.sample_count })}</p>}
@@ -540,7 +540,7 @@ export default function WorkoutDetail() {
         <Button
           onClick={goToAskCoach}
           data-testid="ask-coach-btn"
-          className="w-full bg-primary text-white hover:bg-primary/90 rounded-none h-10 font-mono text-xs uppercase tracking-wider flex items-center justify-center gap-2"
+          className="w-full bg-primary text-primary-foreground hover:bg-primary/90 rounded-none h-10 font-mono text-xs uppercase tracking-wider flex items-center justify-center gap-2"
         >
           <MessageSquare className="w-3.5 h-3.5" />
           {t("workoutDetailExtended.askCoach")}
@@ -553,32 +553,32 @@ export default function WorkoutDetail() {
           <div className="mt-3 space-y-3">
             {hasAnalysis && analysis.meaning?.text && (
               <section>
-                <h2 className="font-mono text-[10px] uppercase text-muted-foreground">{t("workoutDetailExtended.interpretation")}</h2>
-                <p className="font-mono text-xs text-muted-foreground leading-relaxed" data-testid="meaning-text">{analysis.meaning.text}</p>
+                <h2 className="font-mono text-[11px] uppercase text-muted-foreground">{t("workoutDetailExtended.interpretation")}</h2>
+                <p className="font-sans text-sm text-secondary-foreground leading-relaxed" data-testid="meaning-text">{analysis.meaning.text}</p>
               </section>
             )}
             {hasAnalysis && analysis.advice?.text && (
               <section>
-                <h2 className="font-mono text-[10px] uppercase text-muted-foreground flex items-center gap-2"><Lightbulb className="w-3 h-3" />{t("workoutDetailExtended.analysisAdvice")}</h2>
-                <p className="font-mono text-xs text-muted-foreground leading-relaxed" data-testid="advice-text">{analysis.advice.text}</p>
+                <h2 className="font-mono text-[11px] uppercase text-muted-foreground flex items-center gap-2"><Lightbulb className="w-3 h-3" />{t("workoutDetailExtended.analysisAdvice")}</h2>
+                <p className="font-sans text-sm text-secondary-foreground leading-relaxed" data-testid="advice-text">{analysis.advice.text}</p>
               </section>
             )}
             {hasAnalysis && physiology?.available && physiology.zone_distribution && (
               <section data-testid="hr-zones-card">
-                <h2 className="font-mono text-[10px] uppercase text-muted-foreground flex items-center gap-2"><HeartPulse className="w-4 h-4" />{t("analysis.hrZones")}</h2>
+                <h2 className="font-mono text-[11px] uppercase text-muted-foreground flex items-center gap-2"><HeartPulse className="w-4 h-4" />{t("analysis.hrZones")}</h2>
                 {physiology.avg_hr != null && <p className="font-mono text-xs">{t("analysis.avgHr")}: {physiology.avg_hr} bpm</p>}
                 <HRZonesChart zones={physiology.zone_distribution} t={t} />
               </section>
             )}
             {workout.km_splits?.length > 0 && (
               <section data-testid="splits-chart-card">
-                <h2 className="font-mono text-[10px] uppercase text-muted-foreground">{t("workoutDetailExtended.pacePerKm")}</h2>
+                <h2 className="font-mono text-[11px] uppercase text-muted-foreground">{t("workoutDetailExtended.pacePerKm")}</h2>
                 <SplitsChart splits={workout.km_splits} t={t} />
               </section>
             )}
             {hasAnalysis && evidence && (
-              <section className="font-mono text-[11px] text-muted-foreground space-y-1" data-testid="evidence-card">
-                <h2 className="uppercase">{t("workoutDetailExtended.evidence")}</h2>
+              <section className="font-sans text-sm leading-relaxed text-secondary-foreground space-y-1" data-testid="evidence-card">
+                <h2 className="font-mono text-[11px] uppercase text-muted-foreground">{t("workoutDetailExtended.evidence")}</h2>
                 <p>{t("workoutDetailExtended.version")}: {analysis.version ?? "--"}</p>
                 {[
                   ["has_heart_rate", "heartRate"],
@@ -592,8 +592,8 @@ export default function WorkoutDetail() {
                 ))}
               </section>
             )}
-            {hasAnalysis && <section className="font-mono text-[11px] text-muted-foreground space-y-1" data-testid="analysis-limitations">
-              <h2 className="uppercase">{t("workoutDetailExtended.limitations")}</h2>
+            {hasAnalysis && <section className="font-sans text-sm leading-relaxed text-secondary-foreground space-y-1" data-testid="analysis-limitations">
+              <h2 className="font-mono text-[11px] uppercase text-muted-foreground">{t("workoutDetailExtended.limitations")}</h2>
               {[analysis.signals?.intensity, physiology, pacing, comparison, similar].filter(
                 (item) => item?.available === false && item.reason_unavailable,
               ).map((item, index) => <p key={index}>{item.reason_unavailable}</p>)}

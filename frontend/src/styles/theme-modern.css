@@ -2,9 +2,9 @@
 
 :root {
   /* Base Colors - Dark Navy */
-  --bg-primary: #0a0e1a;
+  --bg-primary: hsl(var(--background));
   --bg-secondary: #0f1424;
-  --bg-card: #141a2e;
+  --bg-card: hsl(var(--card));
   --bg-card-hover: #1a2038;
   
   /* Primary Accent - RunIndex Green */
@@ -36,14 +36,14 @@
   --type-seuil: #f97316;
   --type-recuperation: #22d3ee;
   
-  /* Text */
-  --text-primary: #ffffff;
-  --text-secondary: #94a3b8;
-  --text-tertiary: #64748b;
+  /* Shared hierarchy: primary content, supporting text, readable metadata/help. */
+  --text-primary: hsl(var(--foreground));
+  --text-secondary: hsl(var(--secondary-foreground));
+  --text-tertiary: hsl(var(--muted-foreground));
   
   /* Borders */
-  --border-color: #1e293b;
-  --border-color-light: #334155;
+  --border-color: hsl(var(--border));
+  --border-color-light: hsl(var(--border-strong));
   
   /* Chart colors */
   --chart-line: #6EEB5A;
@@ -409,7 +409,7 @@ body {
   }
 
   .nav-item-modern .nav-label {
-    font-size: 0.625rem;
+    font-size: 0.6875rem;
   }
 }
 
