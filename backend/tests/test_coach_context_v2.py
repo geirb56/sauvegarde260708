@@ -1342,6 +1342,8 @@ async def test_selected_workout_recent_history_uses_strict_prior_timestamp_cutof
         ("after", "2026-09-28T10:00:01Z", False, True),
         ("unknown-time", "2026-09-28", False, True),
         ("next-day", "2026-09-29", False, False),
+        ("prior-local-day-after-utc", "2026-09-27T23:45:00-12:00", False, True),
+        ("prior-local-day-before-utc", "2026-09-27T23:45:00+02:00", True, True),
         ("selected", "2026-09-26", False, False),
         ("selected", "2026-09-28T09:00:00Z", False, False),
         ("invalid", "not-a-date", False, False),
