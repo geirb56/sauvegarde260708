@@ -5,7 +5,7 @@
 - Objectif unique : **CONTRASTE + LISIBILITÉ**, pas une certification complète WCAG.
 - Base : `copilot/dev`.
 - HEAD initial réellement vérifié : `4214c3e0b258a49b6d18436cce81ee39158d24f9`.
-- HEAD frontend vérifié : `4e39171a84c2ff1ccdeffd23f9d1a7d6b12ca5c8`.
+- HEAD frontend vérifié : `c20d9750f9c476030828ced5b84a37cb22853520`.
 - HEAD final de livraison : celui de la branche `copilot/runindex-pr-15a`, publié
   avec son SHA exact dans la description de PR et le message de livraison.
   Le SHA du commit contenant ce rapport ne peut pas être encodé dans ce même
@@ -94,6 +94,9 @@ Le vert RunIndex reste un accent, pas le texte secondaire générique. Le rouge
 destructive est éclairci pour les erreurs sur fond sombre, avec texte sombre
 sur boutons/badges destructive. Le status danger moderne partage ce token.
 Le bleu informatif est éclairci ; le violet Premium et l'orange restent présents.
+Le foreground warning est `#fb923c` : le badge « Faible » de Progress conserve
+son fond orange alpha mais n'utilise plus l'orange décoratif trop sombre comme
+couleur du texte sur une card objectif.
 Le paywall conserve son gradient violet/rose avec un texte sombre lisible,
 et un fond muted lorsqu'il est désactivé.
 
@@ -158,17 +161,20 @@ src/__tests__/progress-mobile-ux.test.jsx
 src/__tests__/subscription-page-copy.test.jsx
 ```
 
-Résultat : **9 suites, 230 tests passés**.
+Résultat final : **9 suites, 231 tests passés**.
 
 Contrôle supplémentaire directement lié aux couleurs readiness :
 `dashboard-run-readiness-v2.test.jsx` + `global-ui-contrast.test.js` :
 **2 suites, 76 tests passés**. Les assertions readiness vérifient toujours
 les états et les surfaces grises/rouges, plutôt que l'ancien texte sombre.
+Après la dernière correction warning : `global-ui-contrast.test.js`,
+`progress-mobile-ux.test.jsx`, `progress-potential-ui.test.jsx` et
+`dashboard-run-readiness-v2.test.jsx` : **4 suites, 91 tests passés**.
 
 Suite frontend complète exécutée :
 `CI=true npm test -- --watchAll=false --runInBand --forceExit`.
 Résultat au HEAD frontend vérifié : **33 suites passées, 1 échouée ;
-543 tests passés, 1 échoué, 544 tests au total**.
+544 tests passés, 1 échoué, 545 tests au total**.
 
 Échec préexistant conservé :
 `progress-v2-migration.test.jsx`, « predictions list rendering preserved »,
@@ -240,6 +246,36 @@ il ne constitue pas une capture atomique de tous les états sur un seul HEAD.
   avec les fallbacks. Les familles Manrope/Barlow/JetBrains restent définies
   dans le produit, mais leur rendu chargé doit être vérifié sur environnement
   réseau autorisé.
+
+Recontrôles ciblés finaux au HEAD frontend
+`c20d9750f9c476030828ced5b84a37cb22853520`, après les corrections :
+
+| Largeur | Valeur readiness grise | Valeur readiness rouge | Badge « Faible » |
+| --- | ---: | ---: | ---: |
+| 320 px | 5.39:1 | 6.15:1 | 5.43:1 |
+| 360 px | 5.38:1 | 6.15:1 | 5.43:1 |
+| 390 px | 5.44:1 | 6.21:1 | 5.43:1 |
+
+Les fonds réels composités ont été mesurés en pixels, sans inspection humaine
+des captures. Les deux défauts additionnels trouvés sur fixtures readiness et
+objectif (respectivement ~3.5:1 et 4.24:1) sont corrigés ; l'opacité utile est 1.
+Le test déterministe inclut désormais le fond composité `#4d3028` du badge
+objectif pour empêcher une régression du warning.
+
+Autres recontrôles :
+
+- Navigation française : contraste 5.89:1 inactive / 10.27:1 active, aucun
+  label coupé aux trois largeurs.
+- Graduations Progress sur fixture historique : 11 px, contraste 5.54:1.
+- Paragraphes modifiés Dashboard/Settings/Subscription : 14 px, interligne
+  22.75 px pour les explications relaxed.
+- Dernières explications Garmin/TRIAL et FAQ Subscription corrigées ;
+  trois recontrôles navigateur du contenu visible : 14 px, aucun overflow
+  document ni texte coupé.
+- Hint iOS déclenché par UA Safari/iPhone : paragraphe 14 px sans-serif,
+  contraste 5.58:1. À 390 px, son bord bas empiète de 1.80 px sur le bord
+  haut de la navigation, sans occlusion de texte ; pas de changement de layout
+  supplémentaire pour ce chevauchement décoratif.
 
 ## Fichiers modifiés
 

@@ -85,6 +85,10 @@ describe("canonical RunIndex text contrast (not a complete WCAG audit)", () => {
     expect(contrast(declarations["--status-warning"], "#4d3028")).toBeGreaterThanOrEqual(4.5);
   });
 
+  test("Trial badge uses readable dark text on its existing blue-500 surface", () => {
+    expect(contrast(declarations["--background"], "#3b82f6")).toBeGreaterThanOrEqual(4.5);
+  });
+
   test("mobile navigation never reduces labels below 11px", () => {
     const sizes = [...modern.matchAll(/\.nav-item-modern \.nav-label\s*\{[^}]*font-size:\s*([\d.]+)rem/g)];
     expect(sizes).toHaveLength(2);

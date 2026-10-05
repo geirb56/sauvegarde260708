@@ -124,7 +124,7 @@ function getSubscriptionCode({ subscription, isTrial, isPremium }) {
 
 function getSubscriptionBadgeClass(code) {
   if (code === "PREMIUM") return "bg-amber-500 text-black";
-  if (code === "TRIAL") return "bg-blue-500 text-white";
+  if (code === "TRIAL") return "bg-blue-500 text-background";
   return "bg-muted text-foreground";
 }
 
