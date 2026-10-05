@@ -83,7 +83,7 @@ export const IOSPWAHint = () => {
             <p className="text-xs font-medium text-foreground mb-1">
               {t("pwa.installTitle")}
             </p>
-            <p className="text-[10px] text-muted-foreground leading-relaxed">
+            <p className="font-sans text-sm text-muted-foreground leading-relaxed">
               {t("pwa.installMessage")}
             </p>
           </div>

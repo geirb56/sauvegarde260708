@@ -222,7 +222,7 @@ export default function Coach() {
           <div className="h-full flex flex-col items-center justify-center text-center py-12" data-testid="coach-history-load-error">
             <Card className="w-full max-w-xl border-border bg-card/80 text-left shadow-sm">
               <CardContent className="space-y-3 p-5 sm:p-6">
-                <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-primary">
+                <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-primary">
                   {t("coach.subtitle")}
                 </p>
                 <p className="text-sm leading-relaxed text-muted-foreground">
@@ -236,13 +236,13 @@ export default function Coach() {
             <Card className="w-full max-w-xl border-border bg-card/80 text-left shadow-sm">
               <CardContent className="space-y-5 p-5 sm:p-6">
                 <div className="space-y-2 text-center sm:text-left">
-                  <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-primary">
+                  <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-primary">
                     {t("coach.subtitle")}
                   </p>
                   <p className="text-sm leading-relaxed text-muted-foreground">
                     {t("coach.emptyState")}
                   </p>
-                  <p className="text-xs leading-relaxed text-muted-foreground">
+                  <p className="font-sans text-sm leading-relaxed text-secondary-foreground">
                     {t("coachExtended.authorityNote")}
                   </p>
                 </div>
@@ -261,7 +261,7 @@ export default function Coach() {
                   </Link>
                 </div>
                 <div className="space-y-2">
-                  <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+                  <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
                     {t("coachExtended.helpfulPrompts")}
                   </p>
                   <div className="space-y-2">
@@ -296,16 +296,16 @@ export default function Coach() {
               >
                 {msg.role === "user" ? (
                   <div className="inline-block text-left max-w-[85%] md:max-w-[70%]">
-                    <p className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground mb-2">
+                    <p className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground mb-2">
                       {t("coach.you")}
                     </p>
                     <Card className="bg-muted border-border">
                       <CardContent className="p-4">
-                        <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                        <p className="font-sans text-sm whitespace-pre-wrap break-words leading-relaxed">{msg.content}</p>
                         {msg.workout_id && (
                           <div className="mt-2 flex items-center gap-1 text-primary">
                             <Activity className="w-3 h-3" />
-                            <span className="font-mono text-[10px] uppercase">
+                            <span className="font-mono text-[11px] uppercase">
                               {t("coachExtended.workoutAnalyzed")}
                             </span>
                           </div>
@@ -315,11 +315,11 @@ export default function Coach() {
                   </div>
                 ) : (
                   <div className="max-w-[85%] md:max-w-[70%]">
-                    <p className="font-mono text-[10px] uppercase tracking-widest text-primary mb-2">
+                    <p className="font-mono text-[11px] uppercase tracking-widest text-primary mb-2">
                       RunIndex
                     </p>
                     <div className="coach-message">
-                      <p className="text-sm whitespace-pre-wrap leading-relaxed">
+                      <p className="font-sans text-sm whitespace-pre-wrap break-words leading-relaxed">
                         {msg.content}
                       </p>
                     </div>
@@ -329,7 +329,7 @@ export default function Coach() {
             ))}
             {loading && (
               <div className="animate-in">
-                <p className="font-mono text-[10px] uppercase tracking-widest text-primary mb-2">
+                <p className="font-mono text-[11px] uppercase tracking-widest text-primary mb-2">
                   RunIndex
                 </p>
                 <div className="coach-message flex items-center gap-2">
@@ -356,14 +356,14 @@ export default function Coach() {
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={t("coach.placeholder")}
-            className="flex-1 min-h-[44px] max-h-[120px] resize-none bg-muted border-transparent focus:border-primary rounded-none font-mono text-sm"
+            className="flex-1 min-h-[44px] max-h-[120px] resize-none bg-muted border-input focus:border-primary rounded-none font-sans text-sm"
             disabled={loading}
           />
           <Button
             type="submit"
             data-testid="coach-submit"
             disabled={!input.trim() || loading}
-            className="bg-primary text-white hover:bg-primary/90 rounded-none uppercase font-bold tracking-wider text-xs h-11 px-6"
+            className="bg-primary text-primary-foreground hover:bg-primary/90 rounded-none uppercase font-bold tracking-wider text-xs h-11 px-6"
           >
             {loading ? (
               <Loader2 className="w-4 h-4 animate-spin" />
@@ -382,7 +382,7 @@ function SuggestionButton({ onClick, text, testId }) {
     <button
       onClick={onClick}
       data-testid={testId}
-      className="block w-full p-3 text-left font-mono text-xs uppercase tracking-wider text-muted-foreground border border-border hover:border-primary/30 hover:text-foreground transition-colors"
+      className="block w-full p-3 text-left font-sans text-sm text-secondary-foreground border border-border hover:border-primary/30 hover:text-foreground transition-colors"
     >
       {text}
     </button>

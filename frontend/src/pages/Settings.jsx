@@ -124,7 +124,7 @@ function getSubscriptionCode({ subscription, isTrial, isPremium }) {
 
 function getSubscriptionBadgeClass(code) {
   if (code === "PREMIUM") return "bg-amber-500 text-black";
-  if (code === "TRIAL") return "bg-blue-500 text-white";
+  if (code === "TRIAL") return "bg-blue-500 text-background";
   return "bg-muted text-foreground";
 }
 
@@ -138,7 +138,7 @@ function StatusMessage({ status, message, testId }) {
       : "text-muted-foreground";
 
   return (
-    <p className={`text-xs ${colorClass}`} data-testid={testId}>
+    <p className={`text-sm leading-relaxed ${colorClass}`} data-testid={testId}>
       {message}
     </p>
   );
@@ -170,7 +170,7 @@ function SettingRow({ label, value, helper, action, testId }) {
         <div className="min-w-0">
           <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">{label}</p>
           <p className="mt-1 text-sm font-medium text-foreground break-words">{value}</p>
-          {helper ? <p className="mt-1 text-xs text-muted-foreground">{helper}</p> : null}
+          {helper ? <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{helper}</p> : null}
         </div>
         {action ? <div className="shrink-0">{action}</div> : null}
       </div>
@@ -726,9 +726,9 @@ export default function Settings() {
                     placeholder={t("settingsV2.plan.ultraDistancePlaceholder")}
                     data-testid="settings-ultra-distance-pending-input"
                   />
-                  <p className="text-xs text-muted-foreground">{t("settingsV2.plan.ultraDistanceHint")}</p>
+                  <p className="text-sm leading-relaxed text-muted-foreground">{t("settingsV2.plan.ultraDistanceHint")}</p>
                   {pendingUltraDistance && !(parseFloat(pendingUltraDistance) > 42.195) && (
-                    <p className="text-xs text-destructive" data-testid="settings-ultra-distance-pending-error">
+                    <p className="text-sm leading-relaxed text-destructive" data-testid="settings-ultra-distance-pending-error">
                       {t("settingsV2.plan.ultraDistanceError")}
                     </p>
                   )}
@@ -858,7 +858,7 @@ export default function Settings() {
                           data-testid="goal-ultra-distance-input"
                         />
                         {goalForm.ultraDistanceKm && !(parseFloat(goalForm.ultraDistanceKm) > 42.195) && (
-                          <p className="mt-1 text-xs text-destructive" data-testid="goal-ultra-distance-error">
+                          <p className="mt-1 text-sm leading-relaxed text-destructive" data-testid="goal-ultra-distance-error">
                             {t("settingsV2.plan.ultraDistanceError")}
                           </p>
                         )}
@@ -869,7 +869,7 @@ export default function Settings() {
                       <p className="mb-1 block text-xs uppercase tracking-[0.18em] text-muted-foreground">
                         {t("settingsV2.plan.targetTime")}
                       </p>
-                      <p className="mb-2 text-xs text-muted-foreground">{t("settingsV2.plan.targetTimeHelp")}</p>
+                      <p className="mb-2 text-sm leading-relaxed text-muted-foreground">{t("settingsV2.plan.targetTimeHelp")}</p>
                       <div className="flex flex-wrap items-center gap-2">
                         <Input
                           type="number"
@@ -905,7 +905,7 @@ export default function Settings() {
                     disabled={planAction.status === "saving"}
                     onClick={handleSaveRaceSettings}
                     data-testid="save-goal"
-                    className="w-full sm:w-auto"
+                    className="h-auto min-h-9 w-full whitespace-normal py-2 sm:w-auto"
                   >
                     {planAction.status === "saving" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                     {t("settingsV2.plan.saveRace")}

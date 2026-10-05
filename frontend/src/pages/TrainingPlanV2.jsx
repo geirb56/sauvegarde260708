@@ -388,7 +388,7 @@ function SessionStatePill({ t, state }) {
 
   return (
     <span
-      className="text-[10px] uppercase tracking-wide text-muted-foreground"
+      className="text-[11px] uppercase tracking-wide text-muted-foreground"
       data-testid={`session-status-${state}`}
     >
       {labels[state]}
@@ -398,7 +398,7 @@ function SessionStatePill({ t, state }) {
 
 function AdaptedBadge({ modified, t }) {
   if (modified !== true) return null;
-  return <Badge variant="outline" className="text-[10px]" data-testid="session-adapted-badge">{t("trainingV2.adapted")}</Badge>;
+  return <Badge variant="outline" className="text-[11px]" data-testid="session-adapted-badge">{t("trainingV2.adapted")}</Badge>;
 }
 
 function WeekSessionRow({ session, day, isToday, unitSystem, t, locale }) {
@@ -516,7 +516,7 @@ function WeekSessionRow({ session, day, isToday, unitSystem, t, locale }) {
                 style={{ background: tone.accent }}
               />
             )}
-            <p className="truncate font-medium" data-testid={`training-v2-day-type-${day}`}>{typeLabel}</p>
+            <p className="min-w-0 break-words font-medium" data-testid={`training-v2-day-type-${day}`}>{typeLabel}</p>
             <AdaptedBadge modified={session?.session_modified_from_planned} t={t} />
           </div>
           {(compactMetric || prescribedPaceOrZone) && (
@@ -531,7 +531,7 @@ function WeekSessionRow({ session, day, isToday, unitSystem, t, locale }) {
         </div>
         <div className="text-right">
           {isToday ? (
-            <Badge className="mb-1 whitespace-nowrap px-2 py-1 text-[10px]" data-testid="today-highlight-badge">{t("trainingV2.todayBadge")}</Badge>
+            <Badge className="mb-1 whitespace-nowrap px-2 py-1 text-[11px]" data-testid="today-highlight-badge">{t("trainingV2.todayBadge")}</Badge>
           ) : (
             <span className="block text-xs text-muted-foreground">{stateMarker}</span>
           )}

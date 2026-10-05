@@ -296,9 +296,9 @@ describe("Test 7: recommendation_color absent → gray", () => {
 
     const badge = container.querySelector('[data-testid="run-readiness-recommendation"]');
     expect(badge).not.toBeNull();
-    // Gray accent is #6b7280 → rgb(107, 114, 128) in jsdom
+    // Preserve the gray badge surface; useful text uses the readable tertiary token.
     const style = badge.getAttribute("style") || "";
-    expect(style).toContain("rgb(107, 114, 128)");
+    expect(badge.style.background).toContain("rgba(107, 114, 128,");
     // Must NOT be green
     expect(style).not.toContain("rgb(34, 197, 94)");
 
@@ -322,8 +322,8 @@ describe("Test 8: recommendation_color unknown → gray", () => {
     const badge = container.querySelector('[data-testid="run-readiness-recommendation"]');
     expect(badge).not.toBeNull();
     const style = badge.getAttribute("style") || "";
-    // Unknown color → gray: #6b7280 → rgb(107, 114, 128) in jsdom
-    expect(style).toContain("rgb(107, 114, 128)");
+    // Unknown color retains the gray surface rather than becoming green.
+    expect(badge.style.background).toContain("rgba(107, 114, 128,");
     expect(style).not.toContain("rgb(34, 197, 94)");
 
     unmount();
@@ -339,7 +339,7 @@ describe("Test 9: recommendation_color known → matching accent", () => {
   it.each([
     ["green", "rgb(34, 197, 94)"],
     ["yellow", "rgb(245, 158, 11)"],
-    ["red", "rgb(239, 68, 68)"],
+    ["red", "rgba(239, 68, 68,"],
   ])("color=%s → accent %s in badge style", async (color, expectedRgb) => {
     const cardio = buildCardio({ recommendation_color: color });
     cardio.recommendation_color = color;

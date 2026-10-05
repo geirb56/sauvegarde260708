@@ -38,8 +38,8 @@ const API = API_BASE_URL;
 const STATUS_COLORS = {
   green: { bg: "#22c55e20", text: "#22c55e", border: "#22c55e40" },
   yellow: { bg: "#f59e0b20", text: "#f59e0b", border: "#f59e0b40" },
-  red: { bg: "#ef444420", text: "#ef4444", border: "#ef444440" },
-  gray: { bg: "#6b728020", text: "#6b7280", border: "#6b728040" },
+  red: { bg: "#ef444420", text: "var(--status-danger)", border: "#ef444440" },
+  gray: { bg: "#6b728020", text: "var(--text-tertiary)", border: "#6b728040" },
 };
 
 const REC_STYLES = {
@@ -58,12 +58,14 @@ const REC_STYLES = {
   red: {
     bg: "linear-gradient(135deg, #1c0202 0%, #450a0a 100%)",
     accent: "#ef4444",
+    text: "var(--status-danger)",
     button: "#ef4444",
     buttonHover: "#dc2626",
   },
   gray: {
     bg: "linear-gradient(135deg, #111827 0%, #1f2937 100%)",
     accent: "#6b7280",
+    text: "var(--text-tertiary)",
     button: "#6b7280",
     buttonHover: "#4b5563",
   },
@@ -269,7 +271,7 @@ function TodayPreviewFree({ t }) {
         <span style={{ color: "#ffffff", fontWeight: 700, fontSize: 14, textAlign: "center" }}>
           {t("dashboard.todayPreviewLock")}
         </span>
-        <span style={{ color: "rgba(255,255,255,0.75)", fontSize: 12, textAlign: "center", lineHeight: 1.4 }}>
+        <span style={{ color: "var(--text-secondary)", fontSize: 14, textAlign: "center", lineHeight: 1.4 }}>
           {t("dashboard.todayPreviewDesc")}
         </span>
         <Link
@@ -298,7 +300,7 @@ function PacesPreviewFree({ t }) {
   return (
     <div
       className="rounded-2xl p-4 space-y-3 animate-in"
-      style={{ background: "var(--bg-elevated, #1a1a1f)", border: "1px solid var(--border, #2a2a30)", position: "relative", overflow: "hidden" }}
+      style={{ background: "var(--bg-card)", border: "1px solid var(--border-color)", position: "relative", overflow: "hidden" }}
       data-testid="paces-preview-free"
     >
       <div className="flex items-center justify-between gap-2">
@@ -306,7 +308,7 @@ function PacesPreviewFree({ t }) {
           <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#6EEB5A" }}>
             {t("dashboard.pacesTeaserTitle")}
           </p>
-          <p className="text-xs mt-1" style={{ color: "var(--text-tertiary)" }}>
+          <p className="text-sm leading-relaxed mt-1" style={{ color: "var(--text-tertiary)" }}>
             {t("dashboard.pacesTeaserSubtitle")}
           </p>
         </div>
@@ -365,8 +367,8 @@ function WeekPreviewFree({ t }) {
     <div
       className="rounded-2xl p-4 animate-in"
       style={{
-        background: "var(--bg-elevated, #1a1a1f)",
-        border: "1px solid var(--border, #2a2a30)",
+        background: "var(--bg-card)",
+        border: "1px solid var(--border-color)",
         position: "relative",
         overflow: "hidden",
       }}
@@ -415,7 +417,7 @@ function WeekPreviewFree({ t }) {
         <span style={{ color: "#ffffff", fontWeight: 700, fontSize: 14, textAlign: "center" }}>
           {t("dashboard.weekPreviewLock")}
         </span>
-        <span style={{ color: "rgba(255,255,255,0.75)", fontSize: 12, textAlign: "center", lineHeight: 1.4 }}>
+        <span style={{ color: "var(--text-secondary)", fontSize: 14, textAlign: "center", lineHeight: 1.4 }}>
           {t("dashboard.weekPreviewDesc")}
         </span>
         <Link
@@ -460,9 +462,9 @@ function SessionCard({ session, isGrayed = false, fatigueColor = null }) {
 
   return (
     <div
-      className={`flex items-center gap-2 p-2.5 rounded-lg ${isGrayed ? "opacity-50" : ""}`}
+      className="flex items-center gap-2 p-2.5 rounded-lg"
       style={{
-        background: style.bg,
+        background: isGrayed ? "var(--bg-card)" : style.bg,
         border: `2px solid ${borderColor}`
       }}
     >
@@ -476,13 +478,13 @@ function SessionCard({ session, isGrayed = false, fatigueColor = null }) {
             {sessionTitle}
           </span>
           {sessionDuration && (
-            <span className="text-xs leading-tight" style={{ color: style.text, opacity: 0.8 }}>
+            <span className="text-xs leading-tight" style={{ color: "var(--text-secondary)" }}>
               {sessionDuration}
             </span>
           )}
         </div>
         {sessionDetails && (
-          <span className="text-xs block leading-snug" style={{ color: style.text, opacity: 0.7 }}>
+          <span className="text-sm block leading-snug" style={{ color: "var(--text-secondary)" }}>
             {sessionDetails}
           </span>
         )}
@@ -574,7 +576,7 @@ function MetricWidget({ icon: Icon, label, value, unit, status, detail }) {
         )}
       </div>
       {detail && (
-        <p className="text-[10px] leading-tight" style={{ color: "var(--text-tertiary)" }}>
+        <p className="text-[11px] leading-tight" style={{ color: "var(--text-tertiary)" }}>
           {detail}
         </p>
       )}
@@ -627,7 +629,7 @@ function RunIndexPillar({ icon: Icon, label, value, color }) {
           {Icon && <Icon className="w-4 h-4 shrink-0" style={{ color }} />}
           <span>{label}</span>
         </div>
-        <span className="text-sm font-bold" style={{ color: isNull ? "rgba(255,255,255,0.35)" : color }}>
+        <span className="text-sm font-bold" style={{ color: isNull ? "var(--text-tertiary)" : "var(--text-primary)" }}>
           {isNull ? "—" : `${safeValue}%`}
         </span>
       </div>
@@ -660,14 +662,14 @@ function ReadinessTile({ icon: Icon, label, value, status, testId, onClick }) {
       <div className="flex items-center justify-between">
         {Icon && <Icon className="w-4 h-4 shrink-0" style={{ color }} />}
         <div className="flex items-center gap-1.5">
-          <Info className="w-3 h-3 opacity-40" style={{ color: "var(--text-tertiary)" }} />
+          <Info className="w-3 h-3" style={{ color: "var(--text-tertiary)" }} />
           <span className="w-2 h-2 rounded-full shrink-0" style={{ background: color }} />
         </div>
       </div>
-      <span className="text-[10px] font-medium leading-tight" style={{ color: "var(--text-tertiary)" }}>
+      <span className="text-[11px] font-medium leading-tight" style={{ color: "var(--text-tertiary)" }}>
         {label}
       </span>
-      <span className="text-base font-black leading-none" style={{ color }} data-testid={`readiness-value-${testId}`}>
+      <span className="text-base font-black leading-none" style={{ color: (STATUS_COLORS[status] || STATUS_COLORS.gray).text }} data-testid={`readiness-value-${testId}`}>
         {value}
       </span>
     </button>
@@ -742,8 +744,8 @@ function ReadinessChart({ data = [], height = 150 }) {
           return (
             <span
               key={z.key}
-              className="absolute text-[8px] uppercase tracking-wider font-semibold"
-              style={{ left: 4, top: `${(yMid / height) * 100}%`, transform: "translateY(-50%)", color: z.color, opacity: 0.85 }}
+              className="absolute text-[11px] uppercase tracking-wider font-semibold"
+              style={{ left: 4, top: `${(yMid / height) * 100}%`, transform: "translateY(-50%)", color: "var(--text-secondary)" }}
             >
               {t(`dashboard.readinessZones.${z.key}`)}
             </span>
@@ -754,7 +756,7 @@ function ReadinessChart({ data = [], height = 150 }) {
       {/* Tap tooltip */}
       {selected !== null && (
         <div
-          className="absolute z-10 px-2 py-1 rounded-lg text-[10px] whitespace-nowrap text-center"
+          className="absolute z-10 px-2 py-1 rounded-lg text-[11px] whitespace-nowrap text-center"
           style={{
             left: `${(xAt(selected) / width) * 100}%`,
             top: 0,
@@ -970,7 +972,7 @@ export default function Dashboard() {
         <>
           {cardioError && (
             <div
-              className="flex items-center gap-2 px-4 py-3 rounded-xl text-xs"
+              className="flex items-center gap-2 px-4 py-3 rounded-xl text-sm leading-relaxed"
               style={{ background: "#f59e0b15", border: "1px solid #f59e0b30", color: "#f59e0b" }}
             >
               <AlertTriangle size={14} />
@@ -984,14 +986,14 @@ export default function Dashboard() {
               return (
                 <div
                   className="rounded-2xl p-6 flex flex-col items-center text-center gap-3"
-                  style={{ background: "var(--bg-elevated, #1a1a1f)", border: "1px solid var(--border, #2a2a30)" }}
+                  style={{ background: "var(--bg-card)", border: "1px solid var(--border-color)" }}
                   data-testid="cardio-no-data"
                 >
                   <Activity size={28} style={{ color: "var(--text-tertiary)" }} />
                   <p className="text-sm font-semibold" style={{ color: "var(--text-secondary)" }}>
                     {t("dashboard.noData", "No data yet")}
                   </p>
-                  <p className="text-xs max-w-xs" style={{ color: "var(--text-tertiary)" }}>
+                  <p className="text-sm leading-relaxed max-w-xs" style={{ color: "var(--text-tertiary)" }}>
                     {cardioData?.message || t("dashboard.connectGarminPrompt", "Connect your Garmin to see your readiness and daily metrics.")}
                   </p>
                   <Link
@@ -1052,7 +1054,7 @@ export default function Dashboard() {
                         aria-label="Refresh"
                         data-testid="run-readiness-refresh"
                       >
-                        <RefreshCw size={14} style={{ color: recStyle.accent }} />
+                        <RefreshCw size={14} style={{ color: recStyle.text || recStyle.accent }} />
                       </button>
                     </div>
                   </div>
@@ -1060,7 +1062,7 @@ export default function Dashboard() {
                   <div className="flex flex-wrap items-center gap-2">
                     <span
                       className="px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider"
-                      style={{ background: `${recStyle.accent}1f`, color: recStyle.accent }}
+                      style={{ background: `${recStyle.accent}1f`, color: recStyle.text || recStyle.accent }}
                       data-testid="run-readiness-recommendation"
                     >
                       {readinessStateLabel}
@@ -1082,15 +1084,15 @@ export default function Dashboard() {
                       <div className="space-y-2">
                         <span
                           className="text-2xl font-bold leading-none block"
-                          style={{ color: "#6b7280" }}
+                          style={{ color: "var(--text-tertiary)" }}
                           data-testid="run-readiness-score"
                           aria-label={t("dashboard.runReadinessUnavailable")}
                         >
                           {t("dashboard.runReadinessUnavailable")}
                         </span>
                         <p
-                          className="text-xs leading-tight"
-                          style={{ color: "rgba(255,255,255,0.65)" }}
+                          className="font-sans text-sm leading-relaxed"
+                          style={{ color: "var(--text-secondary)" }}
                           data-testid="run-readiness-unavailable-cause"
                         >
                           {readinessUnavailableCause}
@@ -1149,7 +1151,7 @@ export default function Dashboard() {
                   </div>
 
                   {cardioData?.mock && (
-                    <p className="text-center text-[10px]" style={{ color: "var(--text-tertiary)" }}>
+                    <p className="text-center text-[11px]" style={{ color: "var(--text-tertiary)" }}>
                       {t("dashboard.demoDataNotice")}
                     </p>
                   )}
@@ -1273,7 +1275,7 @@ export default function Dashboard() {
               <h2 className="text-lg font-black mt-1" style={{ color: "#ffffff" }}>
                 {t("dashboard.runIndexOverall")}
               </h2>
-              <p className="text-xs mt-2 max-w-md" style={{ color: "rgba(255,255,255,0.72)" }}>
+              <p className="text-sm leading-relaxed mt-2 max-w-md" style={{ color: "var(--text-secondary)" }}>
                 {t("dashboard.runIndexDescription")}
               </p>
             </div>
@@ -1285,7 +1287,7 @@ export default function Dashboard() {
           <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
             <div>
               {runIndexNull ? (
-                <p className="text-base font-semibold" style={{ color: "rgba(255,255,255,0.55)" }}>
+                <p className="text-base font-semibold" style={{ color: "var(--text-tertiary)" }}>
                   {t("dashboard.runIndexInsufficient") || "Insufficient data"}
                 </p>
               ) : (
@@ -1319,8 +1321,8 @@ export default function Dashboard() {
         <div
           className="rounded-2xl p-4 space-y-3 animate-in"
           style={{
-            background: "var(--bg-elevated, #1a1a1f)",
-            border: "1px solid var(--border, #2a2a30)",
+            background: "var(--bg-card)",
+            border: "1px solid var(--border-color)",
           }}
           data-testid="dashboard-paces-card"
         >
@@ -1328,7 +1330,7 @@ export default function Dashboard() {
             <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#6EEB5A" }}>
               {t("dashboard.pacesTeaserTitle")}
             </p>
-            <p className="text-xs" style={{ color: "var(--text-tertiary)" }}>
+            <p className="text-sm leading-relaxed" style={{ color: "var(--text-tertiary)" }}>
               {t("dashboard.pacesTeaserSubtitle")}
             </p>
           </div>
@@ -1400,8 +1402,8 @@ export default function Dashboard() {
           <div
             className="rounded-2xl p-4 space-y-3 animate-in"
             style={{
-              background: "var(--bg-elevated, #1a1a1f)",
-              border: "1px solid var(--border, #2a2a30)",
+              background: "var(--bg-card)",
+              border: "1px solid var(--border-color)",
             }}
             data-testid="weekly-target-card"
           >
