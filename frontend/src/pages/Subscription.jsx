@@ -541,7 +541,7 @@ export default function Subscription() {
                 <form className="space-y-3" onSubmit={handleGarminTrialConnect} data-testid="trial-garmin-connect-form">
                   <div>
                     <p className="font-semibold">Connectez Garmin pour démarrer l'essai</p>
-                    <p className="mt-1 text-xs text-muted-foreground">
+                    <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
                       L&apos;essai Premium de 30 jours démarre après une connexion Garmin éligible. Un seul essai est disponible par compte Garmin.
                     </p>
                   </div>
@@ -611,7 +611,7 @@ export default function Subscription() {
 
         {/* Illustration cards */}
         <div className="relative mt-14 w-full max-w-lg mx-auto px-4">
-          <p className="mb-3 text-center text-xs text-muted-foreground">
+          <p className="mb-3 text-center text-sm leading-relaxed text-muted-foreground">
             Exemples illustratifs
           </p>
           <div className="grid grid-cols-3 gap-2 sm:gap-3">
@@ -735,7 +735,7 @@ export default function Subscription() {
             </div>
             <div>
               <p className="font-bold text-lg">Garmin Connect</p>
-              <p className="text-xs text-muted-foreground mt-1">
+              <p className="text-sm leading-relaxed text-muted-foreground mt-1">
                 La connexion Garmin reste nécessaire pour importer vos données
               </p>
             </div>
@@ -860,7 +860,7 @@ export default function Subscription() {
                 <CardContent className="p-6 flex flex-col h-full">
                   <div className="mb-auto">
                     <h3 className="font-bold text-lg mb-1">FREE</h3>
-                    <p className="text-xs text-muted-foreground mb-5">
+                    <p className="text-sm leading-relaxed text-muted-foreground mb-5">
                       Pour découvrir RunIndex
                     </p>
                     <div className="mb-6">
@@ -898,7 +898,7 @@ export default function Subscription() {
                 <CardContent className="p-6 flex flex-col h-full">
                   <div className="mb-auto">
                     <h3 className="font-bold text-lg mb-1">PREMIUM</h3>
-                    <p className="text-xs text-muted-foreground mb-5">
+                    <p className="text-sm leading-relaxed text-muted-foreground mb-5">
                       Accès complet à RunIndex
                     </p>
                     <div className="mb-1">
@@ -907,7 +907,7 @@ export default function Subscription() {
                         / mois
                       </span>
                     </div>
-                    <p className="text-xs text-primary mb-6">
+                    <p className="text-sm leading-relaxed text-primary mb-6">
                       TRIAL : 30 jours Premium après connexion Garmin éligible
                     </p>
                     <ul className="space-y-2 mb-6">
@@ -945,10 +945,10 @@ export default function Subscription() {
         )}
 
         <div className="mt-6 text-center space-y-1">
-          <p className="text-xs text-muted-foreground">
+          <p className="text-sm leading-relaxed text-muted-foreground">
             Le plan TRIAL donne 30 jours Premium après connexion Garmin éligible.
           </p>
-          <p className="text-xs text-muted-foreground">
+          <p className="text-sm leading-relaxed text-muted-foreground">
             Un seul essai est disponible par compte Garmin.
           </p>
         </div>
@@ -989,7 +989,7 @@ export default function Subscription() {
                 {openFaq === idx && (
                   <div
                     id={`faq-answer-${idx}`}
-                    className="px-5 pb-4 text-xs text-muted-foreground leading-relaxed border-t border-border pt-3"
+                    className="px-5 pb-4 font-sans text-sm text-muted-foreground leading-relaxed border-t border-border pt-3"
                   >
                     {a}
                   </div>
