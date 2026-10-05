@@ -206,13 +206,13 @@ def _template(language: str, key: str, **params) -> str:
             "unavailable.intensity": "Intensity classification is unavailable without individualized physiological evidence.",
             "unavailable.pacing": "Pacing evidence is unavailable.",
             "unavailable.baseline": "No prior same-type workouts in the last {days} days.",
-            "fact.distance_duration": "{distance} km covered in {duration}.",
-            "fact.distance_duration_pace": "{distance} km covered in {duration} at {pace}.",
-            "fact.distance_duration_speed": "{distance} km covered in {duration} at {speed} km/h.",
+            "fact.distance_duration": "You covered {distance} km in {duration}.",
+            "fact.distance_duration_pace": "You covered {distance} km in {duration} at {pace}.",
+            "fact.distance_duration_speed": "You covered {distance} km in {duration} at {speed} km/h.",
             "fact.duration_only": "{duration} of recorded activity.",
-            "fact.hr_avg": "Average heart rate {avg_hr} bpm.",
-            "fact.hr_avg_max": "Average heart rate {avg_hr} bpm, peak {max_hr} bpm.",
-            "fact.hr_max_only": "Peak heart rate {max_hr} bpm.",
+            "fact.hr_avg": "Your average heart rate was {avg_hr} bpm.",
+            "fact.hr_avg_max": "Your average heart rate was {avg_hr} bpm (peak {max_hr} bpm).",
+            "fact.hr_max_only": "Your peak heart rate was {max_hr} bpm.",
             "fact.splits_range": "Kilometre splits ran from {fastest} to {slowest} ({count} splits recorded).",
             "fact.pace_drop": "Recorded pace drop of {drop} across the session.",
             "fact.negative_split": "The recorded split data confirms a negative split.",
@@ -275,13 +275,13 @@ def _template(language: str, key: str, **params) -> str:
             "unavailable.intensity": "La classification d'intensité est indisponible sans preuve physiologique individualisée.",
             "unavailable.pacing": "Les données d'allure sont indisponibles.",
             "unavailable.baseline": "Aucune séance antérieure du même type sur les {days} derniers jours.",
-            "fact.distance_duration": "{distance} km parcourus en {duration}.",
-            "fact.distance_duration_pace": "{distance} km parcourus en {duration} à {pace}.",
-            "fact.distance_duration_speed": "{distance} km parcourus en {duration} à {speed} km/h.",
+            "fact.distance_duration": "Tu as parcouru {distance} km en {duration}.",
+            "fact.distance_duration_pace": "Tu as parcouru {distance} km en {duration} à {pace}.",
+            "fact.distance_duration_speed": "Tu as parcouru {distance} km en {duration} à {speed} km/h.",
             "fact.duration_only": "{duration} d'activité enregistrée.",
-            "fact.hr_avg": "Fréquence cardiaque moyenne {avg_hr} bpm.",
-            "fact.hr_avg_max": "Fréquence cardiaque moyenne {avg_hr} bpm, maximale {max_hr} bpm.",
-            "fact.hr_max_only": "Fréquence cardiaque maximale {max_hr} bpm.",
+            "fact.hr_avg": "Ta fréquence cardiaque moyenne était de {avg_hr} bpm.",
+            "fact.hr_avg_max": "Ta fréquence cardiaque moyenne était de {avg_hr} bpm (max {max_hr} bpm).",
+            "fact.hr_max_only": "Ta fréquence cardiaque maximale était de {max_hr} bpm.",
             "fact.splits_range": "Les fractions kilométriques vont de {fastest} à {slowest} ({count} fractions enregistrées).",
             "fact.pace_drop": "Perte d'allure enregistrée de {drop} sur la séance.",
             "fact.negative_split": "Les fractions enregistrées confirment un negative split.",
@@ -344,13 +344,13 @@ def _template(language: str, key: str, **params) -> str:
             "unavailable.intensity": "La clasificación de intensidad no está disponible sin evidencia fisiológica individualizada.",
             "unavailable.pacing": "No hay datos de ritmo disponibles.",
             "unavailable.baseline": "No hay sesiones previas del mismo tipo en los últimos {days} días.",
-            "fact.distance_duration": "{distance} km recorridos en {duration}.",
-            "fact.distance_duration_pace": "{distance} km recorridos en {duration} a {pace}.",
-            "fact.distance_duration_speed": "{distance} km recorridos en {duration} a {speed} km/h.",
+            "fact.distance_duration": "Recorriste {distance} km en {duration}.",
+            "fact.distance_duration_pace": "Recorriste {distance} km en {duration} a {pace}.",
+            "fact.distance_duration_speed": "Recorriste {distance} km en {duration} a {speed} km/h.",
             "fact.duration_only": "{duration} de actividad registrada.",
-            "fact.hr_avg": "Frecuencia cardíaca media {avg_hr} bpm.",
-            "fact.hr_avg_max": "Frecuencia cardíaca media {avg_hr} bpm, máxima {max_hr} bpm.",
-            "fact.hr_max_only": "Frecuencia cardíaca máxima {max_hr} bpm.",
+            "fact.hr_avg": "Tu frecuencia cardíaca media fue de {avg_hr} bpm.",
+            "fact.hr_avg_max": "Tu frecuencia cardíaca media fue de {avg_hr} bpm (máxima {max_hr} bpm).",
+            "fact.hr_max_only": "Tu frecuencia cardíaca máxima fue de {max_hr} bpm.",
             "fact.splits_range": "Los parciales por kilómetro van de {fastest} a {slowest} ({count} parciales registrados).",
             "fact.pace_drop": "Pérdida de ritmo registrada de {drop} en la sesión.",
             "fact.negative_split": "Los parciales registrados confirman un negative split.",
@@ -1066,9 +1066,12 @@ def _build_summary(
             "short": "summary.short_structural",
         }.get(signals.session_type.code, "summary.standard_structural")
 
-    text = _join_sentences(
-        [_template(language, key)] + _structural_observations(workout, physiology, pacing, language)
-    )
+    observations = _structural_observations(workout, physiology, pacing, language)
+    if signals.intensity.available:
+        sentences = [_template(language, key)] + observations
+    else:
+        sentences = observations or [_template(language, key)]
+    text = _join_sentences(sentences)
     return AnalysisText(code=key, text=text)
 
 
