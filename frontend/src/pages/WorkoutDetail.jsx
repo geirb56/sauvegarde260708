@@ -42,6 +42,23 @@ const formatDuration = (minutes) => {
 
 const formatHeartRate = (value) => Number.isFinite(value) ? `${Math.round(value)} bpm` : "--";
 
+const distanceNumberFormatter = new Intl.NumberFormat("en-US", {
+  maximumFractionDigits: 2,
+  useGrouping: false,
+});
+
+export const formatDistance = (value) => {
+  if (!Number.isFinite(value)) return "--";
+  const rounded = distanceNumberFormatter.format(value);
+  return `${rounded === "-0" ? "0" : rounded} km`;
+};
+
+export const formatSignedDistance = (metric) => {
+  const distance = formatDistance(metric?.difference);
+  if (distance === "--" || distance === "0 km") return distance;
+  return `${metric.difference > 0 ? "+" : ""}${distance}`;
+};
+
 const formatSignedMetric = (metric, suffix = "", round = false) => {
   if (!metric || metric.difference == null || !Number.isFinite(metric.difference)) return "--";
   const difference = round ? Math.round(metric.difference) : metric.difference;
@@ -401,9 +418,9 @@ export default function WorkoutDetail() {
             ) : analysis?.signals?.volume ? (
               <>
                 <p className="font-mono text-xs font-semibold leading-tight">{analysis.signals.volume.text}</p>
-                <p className="font-mono text-[11px] text-muted-foreground">{workout.distance_km} km • {formatDuration(workout.duration_minutes)}</p>
+                <p className="font-mono text-[11px] text-muted-foreground">{formatDistance(workout.distance_km)} • {formatDuration(workout.duration_minutes)}</p>
                 {comparison?.distance_km && (
-                  <p className="font-mono text-[11px] mt-1 text-muted-foreground">{formatSignedMetric(comparison.distance_km, " km")}</p>
+                  <p className="font-mono text-[11px] mt-1 text-muted-foreground">{formatSignedDistance(comparison.distance_km)}</p>
                 )}
               </>
             ) : (
@@ -480,7 +497,7 @@ export default function WorkoutDetail() {
               {comparison.distance_km && (
                 <div className="rounded-sm bg-muted/20 p-2">
                   <p className="font-mono text-[11px] uppercase text-muted-foreground">{t("workoutDetailExtended.distance")}</p>
-                  <p className="font-mono text-xs">{formatSignedMetric(comparison.distance_km, " km")}</p>
+                  <p className="font-mono text-xs">{formatSignedDistance(comparison.distance_km)}</p>
                 </div>
               )}
               {comparison.duration_minutes && (
@@ -517,7 +534,7 @@ export default function WorkoutDetail() {
             {similar.available ? (
               <>
                 {similar.sample_count != null && <p>{formatSampleCount(similar.sample_count)}</p>}
-                {similar.avg_distance_km != null && <p>{t("workoutDetailExtended.averageDistance")}: {similar.avg_distance_km} km</p>}
+                <p>{t("workoutDetailExtended.averageDistance")}: {formatDistance(similar.avg_distance_km)}</p>
                 {(similar.avg_pace_min_km != null || similar.pace_difference_min_km != null) && (
                   <div data-testid="similar-pace">
                     <p>{t("workoutDetailExtended.averagePace")}: {formatPaceDisplay(similar.avg_pace_min_km)}</p>

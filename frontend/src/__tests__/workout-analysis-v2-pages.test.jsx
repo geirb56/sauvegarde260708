@@ -4,7 +4,7 @@ import { render, screen, waitFor, fireEvent, within } from "@testing-library/rea
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import axios from "axios";
 
-import WorkoutDetail from "@/pages/WorkoutDetail";
+import WorkoutDetail, { formatDistance, formatSignedDistance } from "@/pages/WorkoutDetail";
 import Coach from "@/pages/Coach";
 import DetailedAnalysis from "@/pages/DetailedAnalysis";
 import SessionDetail from "@/pages/SessionDetail";
@@ -518,6 +518,88 @@ test("similar heart-rate average and delta are rounded to whole bpm", async () =
   expect(screen.getByTestId("similar-heart-rate")).toHaveTextContent("Difference: +4 bpm");
   expect(screen.getByTestId("similar-heart-rate")).not.toHaveTextContent("136.8");
   expect(screen.getByTestId("similar-heart-rate")).not.toHaveTextContent("3.8");
+});
+
+test.each([
+  [9.68, "9.68 km"],
+  [9.6800000004, "9.68 km"],
+  [10, "10 km"],
+  [1.2, "1.2 km"],
+  [1.3900000001, "1.39 km"],
+  [2.555, "2.56 km"],
+  [0, "0 km"],
+  [-0, "0 km"],
+  [-0.001, "0 km"],
+  [null, "--"],
+  [undefined, "--"],
+  [NaN, "--"],
+  [Infinity, "--"],
+  [-Infinity, "--"],
+])("formats absolute distance %s as %s", (value, expected) => {
+  expect(formatDistance(value)).toBe(expected);
+});
+
+test.each([
+  [2.55, "+2.55 km"],
+  [1, "+1 km"],
+  [1.3900000001, "+1.39 km"],
+  [2.5500000003, "+2.55 km"],
+  [2.555, "+2.56 km"],
+  [-1.39, "-1.39 km"],
+  [0, "0 km"],
+  [-0, "0 km"],
+  [-0.001, "0 km"],
+  [0.001, "0 km"],
+  [null, "--"],
+  [undefined, "--"],
+  [NaN, "--"],
+  [Infinity, "--"],
+  [-Infinity, "--"],
+])("formats distance delta %s as %s without mutating it", (difference, expected) => {
+  const metric = Object.freeze({ difference });
+  expect(formatSignedDistance(metric)).toBe(expected);
+  expect(metric.difference).toBe(difference);
+});
+
+test.each([null, undefined])("missing distance metric %s stays unavailable", (metric) => {
+  expect(formatSignedDistance(metric)).toBe("--");
+});
+
+test.each([
+  [9.6800000004, 2.5500000003, "9.68 km", "+2.55 km"],
+  [null, null, "--", "--"],
+  [NaN, Infinity, "--", "--"],
+  [0, -0.001, "0 km", "0 km"],
+])("WorkoutDetail renders formatted distances in recent, similar and volume cards (%s, %s)", async (
+  absolute, delta, absoluteText, deltaText,
+) => {
+  const workoutPayload = Object.freeze({ ...workout, distance_km: absolute });
+  const metric = Object.freeze({ ...analysis.comparison.distance_km, difference: delta });
+  const similar = Object.freeze({ ...similarReference, avg_distance_km: absolute });
+  mockAxios({
+    workoutPayload,
+    analysisPayload: {
+      ...analysis,
+      comparison: { ...analysis.comparison, distance_km: metric, similar },
+    },
+  });
+  renderWithProviders(
+    <Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>,
+    "/workout/w1",
+  );
+  await screen.findByTestId("coach-summary");
+  const recent = screen.getByTestId("comparison-card");
+  expect(within(recent).getByText("Distance").nextSibling.textContent).toBe(deltaText);
+  expect(screen.getByTestId("similar-comparison-card")).toHaveTextContent(`Average distance: ${absoluteText}`);
+  const volumeLine = screen.getByText(`${absoluteText} • 1h`);
+  expect(volumeLine).toBeVisible();
+  expect(volumeLine.nextSibling.textContent).toBe(deltaText);
+  expect(screen.getByTestId("workout-detail").textContent).not.toMatch(/[+-]?\d+\.\d{3,}\s*km/);
+  expect(screen.getByTestId("workout-detail")).not.toHaveTextContent("-0 km");
+  expect(screen.getByTestId("workout-detail")).not.toHaveTextContent("+0 km");
+  expect(workoutPayload.distance_km).toBe(absolute);
+  expect(similar.avg_distance_km).toBe(absolute);
+  expect(metric.difference).toBe(delta);
 });
 
 test.each([
