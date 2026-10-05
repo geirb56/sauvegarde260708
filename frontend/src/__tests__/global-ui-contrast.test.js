@@ -80,6 +80,11 @@ describe("canonical RunIndex text contrast (not a complete WCAG audit)", () => {
     expect(contrast(declarations[foreground], declarations[background])).toBeGreaterThanOrEqual(4.5);
   });
 
+  test("warning text remains AA on the composited goal/confidence badge surface", () => {
+    // Measured goal card + orange badge background from the mobile fixture.
+    expect(contrast(declarations["--status-warning"], "#4d3028")).toBeGreaterThanOrEqual(4.5);
+  });
+
   test("mobile navigation never reduces labels below 11px", () => {
     const sizes = [...modern.matchAll(/\.nav-item-modern \.nav-label\s*\{[^}]*font-size:\s*([\d.]+)rem/g)];
     expect(sizes).toHaveLength(2);

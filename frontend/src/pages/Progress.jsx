@@ -409,7 +409,7 @@ export default function Progress() {
                           </p>
                           <span
                             className="inline-flex px-2 py-0.5 rounded-full text-[11px] font-bold"
-                            style={{ background: `${confidenceColor}20`, color: confidence === "insufficient" ? "var(--text-tertiary)" : confidenceColor }}
+                            style={{ background: `${confidenceColor}20`, color: confidence === "insufficient" ? "var(--text-tertiary)" : confidence === "low" ? "var(--status-warning)" : confidenceColor }}
                           >
                             {confidenceText}
                           </span>
