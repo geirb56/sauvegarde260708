@@ -146,3 +146,21 @@ Depuis `/home/runner/work/sauvegarde260708/sauvegarde260708/backend`, avec le m�
 | `/tmp/pr15b-venv/bin/python -m pytest tests/test_coach_context_v2.py tests/test_coach_contract_unified.py -q` après correction | **154 passed**, 14 warnings |
 
 **Périmètre :** seuls `_is_before_selected_workout`, son nouveau test symétrique et ce rapport sont modifiés par le correctif P2. La projection des allures et tout le reste de #310 sont inchangés : `llm_coach.py`, Voice/prompts, Training V2, Workout Analysis V2, frontend, Dashboard/Readiness, Garmin, auth/subscription et autres règles métier. Aucune nouvelle PR ni merge ; 15C non commencée.
+
+### Revalidation du correctif déjà livré — 5 octobre 2026
+
+- Base exacte de #310 : `copilot/dev`, `d830a26ab005bbdd4e7c4ed9f38a9efdd086bef3`.
+- HEAD code/tests revalidé : `b3259f6f78edb49e16f47bdb1b8f8cb85eb472c6`, déjà présent sur la branche distante au début de cette vérification.
+- Le correctif et le test symétrique sont déjà présents à ce HEAD : aucune nouvelle modification du code ou des tests n'est nécessaire. Seul ce rapport est complété ; le reste de #310 est inchangé.
+- Environnement recréé : Python 3.12.3, venv `/tmp/pr15b-venv`, sans modification des manifests ni de `pytest.ini` (`-n 2 --dist loadscope`).
+
+Depuis `/home/runner/work/sauvegarde260708/sauvegarde260708/backend`, les deux commandes ont été relancées successivement avec le Python du venv :
+
+| Commande | Résultat exact de cette revalidation |
+| --- | --- |
+| `/tmp/pr15b-venv/bin/python -m pytest tests/test_coach_context_v2.py -k "is_before_selected_workout or selected_workout_recent_history" -q` | **49 passed, 12 warnings in 1.40s** |
+| `/tmp/pr15b-venv/bin/python -m pytest tests/test_coach_context_v2.py tests/test_coach_contract_unified.py -q` | **154 passed, 12 warnings in 1.83s** |
+
+Les warnings concernent les dépréciations passlib/crypt, Pydantic et FastAPI. Les résultats historiques ci-dessus restent des preuves de leurs exécutions initiales, pas les résultats de cette revalidation.
+
+PR #310 vérifiée OPEN / DRAFT / non mergée. Aucun merge, aucune nouvelle PR et aucun travail 15C. Le nouveau HEAD documentaire de livraison est communiqué dans le commentaire de suivi et la réponse finale.
