@@ -112,3 +112,37 @@ Résultat : **1 failed**, même assertion `assert 'predict_races(' in fn_src`. C
 - L'échec PR211 préexistant et les warnings de dépréciation restent hors périmètre.
 - La projection reste une reconnaissance explicite des clés canoniques ; toute nouvelle variante future devra être couverte par des tests avant son exposition au LLM.
 - PR laissée non mergée ; 15C non commencée.
+
+## Correctif résiduel P2 — priorité à la chronologie UTC
+
+- PR existante : **#310**, branche `copilot/15b-coach-context-correctness`, vérifiée **OPEN / DRAFT / non mergée** avant modification.
+- HEAD réel de départ du correctif, local et remote après re-fetch : `ce5c80faec4a95e89c753f0045c1006d4a0cd813`.
+- Base `copilot/dev` vérifiée : `d830a26ab005bbdd4e7c4ed9f38a9efdd086bef3`.
+- Le HEAD de livraison du correctif est communiqué dans le commentaire de suivi et la réponse finale ; les résultats ci-dessous remplacent les comptes précédents pour le code corrigé.
+
+**Cause du P2 :** le rejet `workout_date > selected_date` précédait encore la comparaison exacte. Un candidat portant une date locale du lendemain pouvait donc être rejeté alors que son instant UTC était antérieur à la sélection.
+
+**Avant :** selected `2026-09-28T11:00:00Z`, candidate `2026-09-29T00:00:00+14:00` → exclu à tort.
+
+**Après :** exclusion du même ID, rejet des dates invalides, puis priorité à la comparaison stricte des deux timestamps exacts. Le candidat `+14:00` correspond à `2026-09-28T10:00:00Z` et est donc inclus. Les timestamps égaux ou ultérieurs restent exclus, indépendamment de leur date locale.
+
+Les candidats date-only restent autorisés uniquement sur un jour strictement antérieur lorsque la sélection est horodatée. Pour une sélection date-only, `workout_date <= selected_date` préserve exactement `date_inclusive`, sauf même ID.
+
+**Nouveau test explicite :** `test_is_before_selected_workout_uses_utc_not_local_date` couvre les dicts et `CoachRecentWorkout`, avec selected à `11:00Z`, et vérifie la non-mutation :
+
+- `2026-09-29T00:00:00+14:00` → `10:00Z` → **inclus**.
+- `2026-09-27T23:45:00-12:00` → `11:45Z` → **exclu**.
+
+Le test existant `-12:00` avec sélection à `10:00Z` est également conservé inchangé.
+
+### Résultats réellement exécutés pour le P2
+
+Depuis `/home/runner/work/sauvegarde260708/sauvegarde260708/backend`, avec le même runner pytest configuré (`-n 2 --dist loadscope`), après restauration du venv isolé et sans modification de dépendances du dépôt :
+
+| Commande | Résultat exact |
+| --- | --- |
+| `/tmp/pr15b-venv/bin/python -m pytest tests/test_coach_context_v2.py -k 'uses_utc_not_local_date' -q` avant correction de production | **2 failed, 2 passed**, 14 warnings ; cas `+14:00` reproduit pour dict et modèle |
+| `/tmp/pr15b-venv/bin/python -m pytest tests/test_coach_context_v2.py -k 'is_before_selected_workout or selected_workout_recent_history' -q` après correction | **49 passed**, 14 warnings |
+| `/tmp/pr15b-venv/bin/python -m pytest tests/test_coach_context_v2.py tests/test_coach_contract_unified.py -q` après correction | **154 passed**, 14 warnings |
+
+**Périmètre :** seuls `_is_before_selected_workout`, son nouveau test symétrique et ce rapport sont modifiés par le correctif P2. La projection des allures et tout le reste de #310 sont inchangés : `llm_coach.py`, Voice/prompts, Training V2, Workout Analysis V2, frontend, Dashboard/Readiness, Garmin, auth/subscription et autres règles métier. Aucune nouvelle PR ni merge ; 15C non commencée.

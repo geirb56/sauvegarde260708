@@ -619,14 +619,14 @@ def _is_before_selected_workout(
         else recent_workout.get("start_time") or recent_workout.get("date")
     )
     workout_date = _parse_iso_date(raw_date)
-    if workout_date is None or workout_date > selected_date:
+    if workout_date is None:
         return False
-    if selected_datetime is None:
-        return True
-    workout_datetime = _parse_exact_datetime(raw_date)
-    if workout_datetime is None:
+    if selected_datetime is not None:
+        workout_datetime = _parse_exact_datetime(raw_date)
+        if workout_datetime is not None:
+            return workout_datetime < selected_datetime
         return workout_date < selected_date
-    return workout_datetime < selected_datetime
+    return workout_date <= selected_date
 
 
 def _normalize_recent_workout(workout: dict[str, Any]) -> CoachRecentWorkout:

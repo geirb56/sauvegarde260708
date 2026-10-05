@@ -1378,6 +1378,29 @@ def test_is_before_selected_workout_date_precision(
     )
 
 
+@pytest.mark.parametrize("as_model", [False, True], ids=["dict", "CoachRecentWorkout"])
+@pytest.mark.parametrize(
+    "candidate_date,expected",
+    [
+        ("2026-09-29T00:00:00+14:00", True),
+        ("2026-09-27T23:45:00-12:00", False),
+    ],
+)
+def test_is_before_selected_workout_uses_utc_not_local_date(as_model, candidate_date, expected):
+    selected_datetime = datetime(2026, 9, 28, 11, tzinfo=timezone.utc)
+    candidate = {"id": "candidate", "date": candidate_date, "type": "run"}
+    if as_model:
+        candidate = coach_context_v2.CoachRecentWorkout(**candidate)
+    snapshot = deepcopy(candidate)
+    assert coach_context_v2._is_before_selected_workout(
+        candidate,
+        selected_workout_id="selected",
+        selected_date=selected_datetime.date(),
+        selected_datetime=selected_datetime,
+    ) is expected
+    assert candidate == snapshot
+
+
 _CANONICAL_PACE_PROJECTIONS = [
     ("pace_min_per_km", "pace_display", 6.81, "6:49/km"),
     ("pace_min_per_km_min", "pace_min_display", 5.25, "5:15/km"),
