@@ -32,17 +32,38 @@ const getWorkoutIcon = (type) => {
 };
 
 const formatDuration = (minutes) => {
-  if (!minutes && minutes !== 0) return "--";
-  const hrs = Math.floor(minutes / 60);
-  const mins = minutes % 60;
+  if (!Number.isFinite(minutes) || minutes < 0) return "--";
+  const roundedMinutes = Math.round(minutes);
+  const hrs = Math.floor(roundedMinutes / 60);
+  const mins = roundedMinutes % 60;
   if (hrs > 0) return `${hrs}h${mins > 0 ? mins : ""}`;
   return `${mins}m`;
 };
 
-const formatSignedMetric = (metric, suffix = "") => {
+const formatHeartRate = (value) => Number.isFinite(value) ? `${Math.round(value)} bpm` : "--";
+
+const distanceNumberFormatter = new Intl.NumberFormat("en-US", {
+  maximumFractionDigits: 2,
+  useGrouping: false,
+});
+
+export const formatDistance = (value) => {
+  if (!Number.isFinite(value)) return "--";
+  const rounded = distanceNumberFormatter.format(value);
+  return `${rounded === "-0" ? "0" : rounded} km`;
+};
+
+export const formatSignedDistance = (metric) => {
+  const distance = formatDistance(metric?.difference);
+  if (distance === "--" || distance === "0 km") return distance;
+  return `${metric.difference > 0 ? "+" : ""}${distance}`;
+};
+
+const formatSignedMetric = (metric, suffix = "", round = false) => {
   if (!metric || metric.difference == null || !Number.isFinite(metric.difference)) return "--";
-  const sign = metric.difference > 0 ? "+" : "";
-  return `${sign}${metric.difference}${suffix}`;
+  const difference = round ? Math.round(metric.difference) : metric.difference;
+  const sign = difference > 0 ? "+" : "";
+  return `${sign}${difference}${suffix}`;
 };
 
 const SplitsChart = ({ splits, t }) => {
@@ -135,9 +156,9 @@ const SplitsChart = ({ splits, t }) => {
                 </span>
               </div>
 
-              {split.avg_hr && (
+              {split.avg_hr != null && (
                 <div className="w-14 shrink-0">
-                  <span className="font-mono text-[11px] text-red-400">{split.avg_hr} bpm</span>
+                  <span className="font-mono text-[11px] text-red-400">{formatHeartRate(split.avg_hr)}</span>
                 </div>
               )}
             </div>
@@ -313,6 +334,7 @@ export default function WorkoutDetail() {
     (text, [name, value]) => text.replace(`{${name}}`, value == null ? "--" : String(value)),
     t(`workoutDetailExtended.${key}`),
   );
+  const formatSampleCount = (count) => interpolate(count === 1 ? "sampleCountOne" : "sampleCount", { count });
 
   const getSessionTypeStyle = (label) => {
     if (label === "hard" || label === "very_high") return "text-chart-1 bg-chart-1/10";
@@ -365,7 +387,7 @@ export default function WorkoutDetail() {
                 {physiology?.avg_hr != null && (
                   <p className="font-mono text-[11px] text-muted-foreground flex items-center gap-1 mt-1">
                     <Heart className="w-2.5 h-2.5" />
-                    {physiology.avg_hr} bpm
+                    {formatHeartRate(physiology.avg_hr)}
                   </p>
                 )}
               </>
@@ -375,7 +397,7 @@ export default function WorkoutDetail() {
                 {physiology?.avg_hr != null && (
                   <p className="font-mono text-[11px] text-muted-foreground flex items-center gap-1 mt-1">
                     <Heart className="w-2.5 h-2.5" />
-                    {physiology.avg_hr} bpm
+                    {formatHeartRate(physiology.avg_hr)}
                   </p>
                 )}
               </div>
@@ -396,9 +418,9 @@ export default function WorkoutDetail() {
             ) : analysis?.signals?.volume ? (
               <>
                 <p className="font-mono text-xs font-semibold leading-tight">{analysis.signals.volume.text}</p>
-                <p className="font-mono text-[11px] text-muted-foreground">{workout.distance_km} km • {formatDuration(workout.duration_minutes)}</p>
+                <p className="font-mono text-[11px] text-muted-foreground">{formatDistance(workout.distance_km)} • {formatDuration(workout.duration_minutes)}</p>
                 {comparison?.distance_km && (
-                  <p className="font-mono text-[11px] mt-1 text-muted-foreground">{formatSignedMetric(comparison.distance_km, " km")}</p>
+                  <p className="font-mono text-[11px] mt-1 text-muted-foreground">{formatSignedDistance(comparison.distance_km)}</p>
                 )}
               </>
             ) : (
@@ -470,24 +492,24 @@ export default function WorkoutDetail() {
               <Scale className="w-4 h-4 text-muted-foreground" />
               <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">{interpolate("recentComparison", { days: comparison.baseline_period_days })}</span>
             </div>
-            {comparison.baseline_sample_count != null && <p className="font-sans text-sm text-muted-foreground mb-2">{interpolate("sampleCount", { count: comparison.baseline_sample_count })}</p>}
+            {comparison.baseline_sample_count != null && <p className="font-sans text-sm text-muted-foreground mb-2">{formatSampleCount(comparison.baseline_sample_count)}</p>}
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               {comparison.distance_km && (
                 <div className="rounded-sm bg-muted/20 p-2">
                   <p className="font-mono text-[11px] uppercase text-muted-foreground">{t("workoutDetailExtended.distance")}</p>
-                  <p className="font-mono text-xs">{formatSignedMetric(comparison.distance_km, " km")}</p>
+                  <p className="font-mono text-xs">{formatSignedDistance(comparison.distance_km)}</p>
                 </div>
               )}
               {comparison.duration_minutes && (
                 <div className="rounded-sm bg-muted/20 p-2">
                   <p className="font-mono text-[11px] uppercase text-muted-foreground">{t("workoutDetailExtended.duration")}</p>
-                  <p className="font-mono text-xs">{formatSignedMetric(comparison.duration_minutes, " min")}</p>
+                  <p className="font-mono text-xs">{formatSignedMetric(comparison.duration_minutes, " min", true)}</p>
                 </div>
               )}
               {comparison.avg_heart_rate && (
                 <div className="rounded-sm bg-muted/20 p-2">
                   <p className="font-mono text-[11px] uppercase text-muted-foreground">{t("workoutDetailExtended.heartRate")}</p>
-                  <p className="font-mono text-xs">{formatSignedMetric(comparison.avg_heart_rate, " bpm")}</p>
+                  <p className="font-mono text-xs">{formatSignedMetric(comparison.avg_heart_rate, " bpm", true)}</p>
                 </div>
               )}
               {(comparison.avg_pace_min_km || comparison.avg_speed_kmh) && (
@@ -511,8 +533,8 @@ export default function WorkoutDetail() {
             <h2 className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">{interpolate("similarComparison", { days: similar.period_days })}</h2>
             {similar.available ? (
               <>
-                {similar.sample_count != null && <p>{interpolate("sampleCount", { count: similar.sample_count })}</p>}
-                {similar.avg_distance_km != null && <p>{t("workoutDetailExtended.averageDistance")}: {similar.avg_distance_km} km</p>}
+                {similar.sample_count != null && <p>{formatSampleCount(similar.sample_count)}</p>}
+                <p>{t("workoutDetailExtended.averageDistance")}: {formatDistance(similar.avg_distance_km)}</p>
                 {(similar.avg_pace_min_km != null || similar.pace_difference_min_km != null) && (
                   <div data-testid="similar-pace">
                     <p>{t("workoutDetailExtended.averagePace")}: {formatPaceDisplay(similar.avg_pace_min_km)}</p>
@@ -522,8 +544,8 @@ export default function WorkoutDetail() {
                 )}
                 {(similar.avg_heart_rate != null || similar.heart_rate_difference_bpm != null) && (
                   <div data-testid="similar-heart-rate">
-                    <p>{t("workoutDetailExtended.averageHeartRate")}: {similar.avg_heart_rate == null ? "--" : `${Math.round(similar.avg_heart_rate)} bpm`}</p>
-                    <p>{t("workoutDetailExtended.difference")}: {formatSignedMetric({ difference: similar.heart_rate_difference_bpm == null ? null : Math.round(similar.heart_rate_difference_bpm) }, " bpm")}</p>
+                    <p>{t("workoutDetailExtended.averageHeartRate")}: {formatHeartRate(similar.avg_heart_rate)}</p>
+                    <p>{t("workoutDetailExtended.difference")}: {formatSignedMetric({ difference: similar.heart_rate_difference_bpm }, " bpm", true)}</p>
                     {similar.hr_sample_count != null && similar.sample_count != null && <p className="text-muted-foreground">{interpolate("hrSampleCount", { count: similar.hr_sample_count, total: similar.sample_count })}</p>}
                   </div>
                 )}
@@ -566,7 +588,7 @@ export default function WorkoutDetail() {
             {hasAnalysis && physiology?.available && physiology.zone_distribution && (
               <section data-testid="hr-zones-card">
                 <h2 className="font-mono text-[11px] uppercase text-muted-foreground flex items-center gap-2"><HeartPulse className="w-4 h-4" />{t("analysis.hrZones")}</h2>
-                {physiology.avg_hr != null && <p className="font-mono text-xs">{t("analysis.avgHr")}: {physiology.avg_hr} bpm</p>}
+                {physiology.avg_hr != null && <p className="font-mono text-xs">{t("analysis.avgHr")}: {formatHeartRate(physiology.avg_hr)}</p>}
                 <HRZonesChart zones={physiology.zone_distribution} t={t} />
               </section>
             )}
