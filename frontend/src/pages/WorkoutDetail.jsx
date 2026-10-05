@@ -267,7 +267,7 @@ export default function WorkoutDetail() {
       <div className="p-4 pb-24 flex items-center justify-center min-h-[60vh]">
         <div className="flex flex-col items-center gap-3">
           <Loader2 className="w-6 h-6 animate-spin text-primary" />
-          <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">{t("workoutDetailExtended.analyzing")}</span>
+          <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">{t("workoutDetailExtended.analyzing")}</span>
         </div>
       </div>
     );
@@ -278,7 +278,7 @@ export default function WorkoutDetail() {
       <div className="p-4 pb-24 flex items-center justify-center min-h-[60vh]">
         <div className="flex flex-col items-center gap-3">
           <Loader2 className="w-6 h-6 animate-spin text-primary" />
-          <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">{t("workoutDetailExtended.analyzing")}</span>
+          <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">{t("workoutDetailExtended.analyzing")}</span>
         </div>
       </div>
     );

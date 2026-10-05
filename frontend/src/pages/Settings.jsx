@@ -905,7 +905,7 @@ export default function Settings() {
                     disabled={planAction.status === "saving"}
                     onClick={handleSaveRaceSettings}
                     data-testid="save-goal"
-                    className="w-full sm:w-auto"
+                    className="h-auto min-h-9 w-full whitespace-normal py-2 sm:w-auto"
                   >
                     {planAction.status === "saving" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                     {t("settingsV2.plan.saveRace")}

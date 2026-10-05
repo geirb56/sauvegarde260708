@@ -68,6 +68,18 @@ describe("canonical RunIndex text contrast (not a complete WCAG audit)", () => {
     expect(luminance(declarations["--secondary-foreground"])).toBeGreaterThan(luminance(declarations["--muted-foreground"]));
   });
 
+  test.each([
+    ["--primary-foreground", "--primary"],
+    ["--destructive-foreground", "--destructive"],
+    ["--status-danger", "--card"],
+    ["--status-warning", "--card"],
+    ["--status-success", "--card"],
+    ["--status-info", "--card"],
+    ["--accent-violet-light", "--card"],
+  ])("semantic text %s on %s remains readable", (foreground, background) => {
+    expect(contrast(declarations[foreground], declarations[background])).toBeGreaterThanOrEqual(4.5);
+  });
+
   test("mobile navigation never reduces labels below 11px", () => {
     const sizes = [...modern.matchAll(/\.nav-item-modern \.nav-label\s*\{[^}]*font-size:\s*([\d.]+)rem/g)];
     expect(sizes).toHaveLength(2);

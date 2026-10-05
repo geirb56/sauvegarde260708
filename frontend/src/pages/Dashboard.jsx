@@ -38,8 +38,8 @@ const API = API_BASE_URL;
 const STATUS_COLORS = {
   green: { bg: "#22c55e20", text: "#22c55e", border: "#22c55e40" },
   yellow: { bg: "#f59e0b20", text: "#f59e0b", border: "#f59e0b40" },
-  red: { bg: "#ef444420", text: "#ef4444", border: "#ef444440" },
-  gray: { bg: "#6b728020", text: "#6b7280", border: "#6b728040" },
+  red: { bg: "#ef444420", text: "var(--status-danger)", border: "#ef444440" },
+  gray: { bg: "#6b728020", text: "var(--text-tertiary)", border: "#6b728040" },
 };
 
 const REC_STYLES = {
@@ -57,13 +57,13 @@ const REC_STYLES = {
   },
   red: {
     bg: "linear-gradient(135deg, #1c0202 0%, #450a0a 100%)",
-    accent: "#ef4444",
+    accent: "var(--status-danger)",
     button: "#ef4444",
     buttonHover: "#dc2626",
   },
   gray: {
     bg: "linear-gradient(135deg, #111827 0%, #1f2937 100%)",
-    accent: "#6b7280",
+    accent: "var(--text-tertiary)",
     button: "#6b7280",
     buttonHover: "#4b5563",
   },
@@ -460,9 +460,9 @@ function SessionCard({ session, isGrayed = false, fatigueColor = null }) {
 
   return (
     <div
-      className={`flex items-center gap-2 p-2.5 rounded-lg ${isGrayed ? "opacity-50" : ""}`}
+      className="flex items-center gap-2 p-2.5 rounded-lg"
       style={{
-        background: style.bg,
+        background: isGrayed ? "var(--bg-card)" : style.bg,
         border: `2px solid ${borderColor}`
       }}
     >
@@ -476,13 +476,13 @@ function SessionCard({ session, isGrayed = false, fatigueColor = null }) {
             {sessionTitle}
           </span>
           {sessionDuration && (
-            <span className="text-xs leading-tight" style={{ color: style.text, opacity: 0.8 }}>
+            <span className="text-xs leading-tight" style={{ color: "var(--text-secondary)" }}>
               {sessionDuration}
             </span>
           )}
         </div>
         {sessionDetails && (
-          <span className="text-xs block leading-snug" style={{ color: style.text, opacity: 0.7 }}>
+          <span className="text-sm block leading-snug" style={{ color: "var(--text-secondary)" }}>
             {sessionDetails}
           </span>
         )}
@@ -574,7 +574,7 @@ function MetricWidget({ icon: Icon, label, value, unit, status, detail }) {
         )}
       </div>
       {detail && (
-        <p className="text-[10px] leading-tight" style={{ color: "var(--text-tertiary)" }}>
+        <p className="text-[11px] leading-tight" style={{ color: "var(--text-tertiary)" }}>
           {detail}
         </p>
       )}
@@ -627,7 +627,7 @@ function RunIndexPillar({ icon: Icon, label, value, color }) {
           {Icon && <Icon className="w-4 h-4 shrink-0" style={{ color }} />}
           <span>{label}</span>
         </div>
-        <span className="text-sm font-bold" style={{ color: isNull ? "rgba(255,255,255,0.35)" : color }}>
+        <span className="text-sm font-bold" style={{ color: isNull ? "var(--text-tertiary)" : "var(--text-primary)" }}>
           {isNull ? "—" : `${safeValue}%`}
         </span>
       </div>
@@ -660,11 +660,11 @@ function ReadinessTile({ icon: Icon, label, value, status, testId, onClick }) {
       <div className="flex items-center justify-between">
         {Icon && <Icon className="w-4 h-4 shrink-0" style={{ color }} />}
         <div className="flex items-center gap-1.5">
-          <Info className="w-3 h-3 opacity-40" style={{ color: "var(--text-tertiary)" }} />
+          <Info className="w-3 h-3" style={{ color: "var(--text-tertiary)" }} />
           <span className="w-2 h-2 rounded-full shrink-0" style={{ background: color }} />
         </div>
       </div>
-      <span className="text-[10px] font-medium leading-tight" style={{ color: "var(--text-tertiary)" }}>
+      <span className="text-[11px] font-medium leading-tight" style={{ color: "var(--text-tertiary)" }}>
         {label}
       </span>
       <span className="text-base font-black leading-none" style={{ color }} data-testid={`readiness-value-${testId}`}>
@@ -742,8 +742,8 @@ function ReadinessChart({ data = [], height = 150 }) {
           return (
             <span
               key={z.key}
-              className="absolute text-[8px] uppercase tracking-wider font-semibold"
-              style={{ left: 4, top: `${(yMid / height) * 100}%`, transform: "translateY(-50%)", color: z.color, opacity: 0.85 }}
+              className="absolute text-[11px] uppercase tracking-wider font-semibold"
+              style={{ left: 4, top: `${(yMid / height) * 100}%`, transform: "translateY(-50%)", color: "var(--text-secondary)" }}
             >
               {t(`dashboard.readinessZones.${z.key}`)}
             </span>
@@ -754,7 +754,7 @@ function ReadinessChart({ data = [], height = 150 }) {
       {/* Tap tooltip */}
       {selected !== null && (
         <div
-          className="absolute z-10 px-2 py-1 rounded-lg text-[10px] whitespace-nowrap text-center"
+          className="absolute z-10 px-2 py-1 rounded-lg text-[11px] whitespace-nowrap text-center"
           style={{
             left: `${(xAt(selected) / width) * 100}%`,
             top: 0,
@@ -1082,7 +1082,7 @@ export default function Dashboard() {
                       <div className="space-y-2">
                         <span
                           className="text-2xl font-bold leading-none block"
-                          style={{ color: "#6b7280" }}
+                          style={{ color: "var(--text-tertiary)" }}
                           data-testid="run-readiness-score"
                           aria-label={t("dashboard.runReadinessUnavailable")}
                         >
@@ -1149,7 +1149,7 @@ export default function Dashboard() {
                   </div>
 
                   {cardioData?.mock && (
-                    <p className="text-center text-[10px]" style={{ color: "var(--text-tertiary)" }}>
+                    <p className="text-center text-[11px]" style={{ color: "var(--text-tertiary)" }}>
                       {t("dashboard.demoDataNotice")}
                     </p>
                   )}

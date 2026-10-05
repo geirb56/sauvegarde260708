@@ -382,7 +382,7 @@ export default function Progress() {
                             {t(`progressExtended.${DISTANCE_I18N_KEYS[distanceKey]}`)}
                           </p>
                           {isGoal && (
-                            <span className="px-1.5 py-0.5 rounded-full text-[8px] font-bold leading-none" style={{ background: "var(--accent-green)", color: "#0a0e1a" }}>
+                            <span className="px-1.5 py-0.5 rounded-full text-[11px] font-bold leading-none" style={{ background: "var(--accent-green)", color: "hsl(var(--primary-foreground))" }}>
                               {t("progressExtended.goalLabel")}
                             </span>
                           )}
@@ -404,11 +404,11 @@ export default function Progress() {
                         )}
 
                         <div className="mt-3">
-                          <p className="text-[10px] text-muted-foreground mb-1">
+                          <p className="text-[11px] text-muted-foreground mb-1">
                             {t("progressExtended.confidenceLabel")}
                           </p>
                           <span
-                            className="inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold"
+                            className="inline-flex px-2 py-0.5 rounded-full text-[11px] font-bold"
                             style={{ background: `${confidenceColor}20`, color: confidenceColor }}
                           >
                             {confidenceText}
@@ -447,7 +447,7 @@ export default function Progress() {
             {/* Current RunIndex + Trend */}
             <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div className="min-w-0">
-                <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
+                <p className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground mb-1">
                   {t("progressExtended.runIndexCurrent")}
                 </p>
                 <div className="flex items-baseline gap-2">
@@ -460,7 +460,7 @@ export default function Progress() {
 
               {runIndexHistory?.has_data && (
                 <div className="flex flex-col gap-1 self-start sm:items-end">
-                  <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <p className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
                     {t("progressExtended.runIndexTrend")}
                   </p>
                   <div
@@ -487,7 +487,7 @@ export default function Progress() {
                 <button
                   key={value}
                   onClick={() => setRunIndexPeriod(value)}
-                  className={`px-3 py-1 rounded-full font-mono text-[10px] uppercase tracking-wider transition-all ${
+                  className={`px-3 py-1 rounded-full font-mono text-[11px] uppercase tracking-wider transition-all ${
                     runIndexPeriod === value
                       ? "bg-primary text-black font-bold"
                       : "bg-muted/30 text-muted-foreground hover:bg-muted/60"
@@ -503,7 +503,7 @@ export default function Progress() {
                 className="mb-4 px-3 py-2 rounded-xl"
                 style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}
               >
-                <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                <p className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
                   {t("progressExtended.insufficientPeriodData")}
                 </p>
               </div>
@@ -579,7 +579,7 @@ export default function Progress() {
             {/* Pillar details */}
             {runIndexHistory?.has_data && runIndexHistory.pillars && (
               <div className="mb-4">
-                <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground mb-3">
+                <p className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground mb-3">
                   {t("progressExtended.pillarsTitle")}
                 </p>
                 <div className="grid grid-cols-2 gap-2">
@@ -594,7 +594,7 @@ export default function Progress() {
                       >
                         <span className="text-xl">{pillarIcons[pillar]}</span>
                         <div className="flex-1 min-w-0">
-                          <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                          <p className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
                             {pillarLabels[pillar]}
                           </p>
                           <div className="flex items-baseline gap-1.5">
@@ -607,7 +607,7 @@ export default function Progress() {
                             )}
                           </div>
                           {evo !== null && evo !== undefined && (
-                            <p className={`font-mono text-[10px] uppercase tracking-wider ${evoColor}`}>
+                            <p className={`font-mono text-[11px] uppercase tracking-wider ${evoColor}`}>
                               {`${evo > 0 ? "+" : ""}${evo}% ${t("progressExtended.sinceStartOfPeriod")}`}
                             </p>
                           )}
@@ -627,7 +627,7 @@ export default function Progress() {
               >
                 <div className="flex items-center gap-2 mb-2">
                   <Brain className="w-3.5 h-3.5" style={{ color: "#6EEB5A" }} />
-                  <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: "rgba(110, 235, 90, 0.8)" }}>
+                  <span className="font-mono text-[11px] uppercase tracking-wider" style={{ color: "var(--accent-green)" }}>
                     {t("progressExtended.aiAnalysisTitle")}
                   </span>
                 </div>
@@ -647,7 +647,7 @@ export default function Progress() {
           <CardContent className="p-4">
             <div className="flex items-center gap-2 mb-2">
               <Activity className="w-4 h-4 text-primary" />
-              <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              <span className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
                 {t("progressExtended.sessions7d")}
               </span>
             </div>
@@ -662,7 +662,7 @@ export default function Progress() {
           <CardContent className="p-4">
             <div className="flex items-center gap-2 mb-2">
               <TrendingUp className="w-4 h-4 text-emerald-500" />
-              <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              <span className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
                 {t("progressExtended.km7d")}
               </span>
             </div>
@@ -677,7 +677,7 @@ export default function Progress() {
           <CardContent className="p-4">
             <div className="flex items-center gap-2 mb-2">
               <Calendar className="w-4 h-4 text-primary" />
-              <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              <span className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
                 {t("progressExtended.km30d")}
               </span>
             </div>
@@ -699,7 +699,7 @@ export default function Progress() {
             {/* Staleness banner — show when latest measurement is not from today/yesterday */}
             {garminHealth.latest.is_current === false && garminHealth.latest.measurement_date && (
               <span
-                className="font-mono text-[10px] uppercase tracking-wider text-amber-400 ml-1"
+                className="font-mono text-[11px] uppercase tracking-wider text-amber-400 ml-1"
                 data-testid="garmin-health-stale-banner"
               >
                 · {formatMeasurementDate(garminHealth.latest.measurement_date, lang)}
@@ -722,7 +722,7 @@ export default function Progress() {
               <CardContent className="p-4">
                 <div className="flex items-center gap-2 mb-2">
                   <Activity className="w-4 h-4 text-emerald-500" />
-                  <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <span className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
                     HRV
                   </span>
                 </div>
@@ -733,7 +733,7 @@ export default function Progress() {
                   <span className="text-sm text-muted-foreground ml-1">ms</span>
                 </p>
                 {garminHealth.latest.is_current === false && garminHealth.latest.hrv != null && (
-                  <p className="font-mono text-[10px] text-amber-400 mt-1" data-testid="garmin-hrv-stale">
+                  <p className="font-mono text-[11px] text-amber-400 mt-1" data-testid="garmin-hrv-stale">
                     {garminHealth.latest.hrv} · {formatMeasurementDate(garminHealth.latest.measurement_date, lang)}
                   </p>
                 )}
@@ -755,7 +755,7 @@ export default function Progress() {
               <CardContent className="p-4">
                 <div className="flex items-center gap-2 mb-2">
                   <Heart className="w-4 h-4 text-rose-500" />
-                  <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <span className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
                     {t("progressExtended.garminRestingHr")}
                   </span>
                 </div>
@@ -766,7 +766,7 @@ export default function Progress() {
                   <span className="text-sm text-muted-foreground ml-1">bpm</span>
                 </p>
                 {garminHealth.latest.is_current === false && garminHealth.latest.resting_hr != null && (
-                  <p className="font-mono text-[10px] text-amber-400 mt-1" data-testid="garmin-rhr-stale">
+                  <p className="font-mono text-[11px] text-amber-400 mt-1" data-testid="garmin-rhr-stale">
                     {garminHealth.latest.resting_hr} · {formatMeasurementDate(garminHealth.latest.measurement_date, lang)}
                   </p>
                 )}
@@ -788,7 +788,7 @@ export default function Progress() {
               <CardContent className="p-4">
                 <div className="flex items-center gap-2 mb-2">
                   <Moon className="w-4 h-4 text-blue-400" />
-                  <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <span className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
                     {t("progressExtended.garminSleep")}
                   </span>
                 </div>
@@ -799,7 +799,7 @@ export default function Progress() {
                   <span className="text-sm text-muted-foreground ml-1">h</span>
                 </p>
                 {garminHealth.latest.is_current === false && garminHealth.latest.sleep_hours != null && (
-                  <p className="font-mono text-[10px] text-amber-400 mt-1" data-testid="garmin-sleep-stale">
+                  <p className="font-mono text-[11px] text-amber-400 mt-1" data-testid="garmin-sleep-stale">
                     {garminHealth.latest.sleep_hours} · {formatMeasurementDate(garminHealth.latest.measurement_date, lang)}
                   </p>
                 )}
@@ -828,10 +828,10 @@ export default function Progress() {
               <div className="flex items-center gap-4">
                 <div className="w-14 h-14 rounded-xl flex flex-col items-center justify-center" style={{ background: "rgba(16, 185, 129, 0.12)", border: "1px solid rgba(16, 185, 129, 0.25)" }}>
                   <Zap className="w-5 h-5" style={{ color: "rgb(16, 185, 129)" }} />
-                  <span className="text-[7px] font-mono uppercase mt-0.5" style={{ color: "rgba(16, 185, 129, 0.82)" }}>VO2MAX</span>
+                  <span className="text-[11px] font-mono uppercase mt-0.5 text-primary">VO2MAX</span>
                 </div>
                 <div>
-                  <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">{t("progressExtended.garminVo2maxLabel")}</p>
+                  <p className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">{t("progressExtended.garminVo2maxLabel")}</p>
                   <div className="flex items-baseline gap-2">
                     <span className="text-4xl font-bold text-white">
                       {garminVo2CurrentValue ?? "--"}
@@ -853,7 +853,7 @@ export default function Progress() {
 
             {garminVo2Series.length > 0 ? (
               <div className="mt-4">
-                <p className="text-[10px] font-mono uppercase text-muted-foreground mb-3">
+                <p className="text-[11px] font-mono uppercase text-muted-foreground mb-3">
                   {t("progressExtended.garminVo2maxHistoryTitle")}
                 </p>
                 <div className="h-36">
@@ -888,9 +888,9 @@ export default function Progress() {
                                   {formatMeasurementDate(data.date, lang)}
                                 </p>
                                 <p className="font-bold text-white">VO2MAX: {data.value} ml/kg/min</p>
-                                <p className="text-[10px] text-muted-foreground">{t("progressExtended.garminSourceLabel")}</p>
+                                <p className="text-[11px] text-muted-foreground">{t("progressExtended.garminSourceLabel")}</p>
                                 {data.precise != null && (
-                                  <p className="text-[10px] text-muted-foreground">{data.precise}</p>
+                                  <p className="text-[11px] text-muted-foreground">{data.precise}</p>
                                 )}
                               </div>
                             );

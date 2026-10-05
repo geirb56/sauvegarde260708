@@ -626,7 +626,7 @@ export default function Subscription() {
               >
                 <Icon className={`w-5 h-5 mx-auto mb-2 ${color}`} />
                 <div className={`text-lg sm:text-xl font-bold ${color} break-words`}>{value}</div>
-                <div className="text-[10px] text-muted-foreground mt-1 truncate">{label}</div>
+                <div className="text-[11px] text-muted-foreground mt-1">{label}</div>
               </div>
             ))}
           </div>
