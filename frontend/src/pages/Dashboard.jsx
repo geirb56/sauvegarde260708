@@ -669,7 +669,7 @@ function ReadinessTile({ icon: Icon, label, value, status, testId, onClick }) {
       <span className="text-[11px] font-medium leading-tight" style={{ color: "var(--text-tertiary)" }}>
         {label}
       </span>
-      <span className="text-base font-black leading-none" style={{ color }} data-testid={`readiness-value-${testId}`}>
+      <span className="text-base font-black leading-none" style={{ color: (STATUS_COLORS[status] || STATUS_COLORS.gray).text }} data-testid={`readiness-value-${testId}`}>
         {value}
       </span>
     </button>

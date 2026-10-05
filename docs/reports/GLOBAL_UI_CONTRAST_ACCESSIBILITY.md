@@ -5,7 +5,7 @@
 - Objectif unique : **CONTRASTE + LISIBILITÉ**, pas une certification complète WCAG.
 - Base : `copilot/dev`.
 - HEAD initial réellement vérifié : `4214c3e0b258a49b6d18436cce81ee39158d24f9`.
-- HEAD frontend vérifié : `14fed22297f29342fa9cfc513502b71d75573ffd`.
+- HEAD frontend vérifié : `4e39171a84c2ff1ccdeffd23f9d1a7d6b12ca5c8`.
 - HEAD final de livraison : celui de la branche `copilot/runindex-pr-15a`, publié
   avec son SHA exact dans la description de PR et le message de livraison.
   Le SHA du commit contenant ce rapport ne peut pas être encodé dans ce même
@@ -130,6 +130,8 @@ gradient, image ou combinaison arbitraire de transparences de l'application.
   en sans-serif ; métadonnées techniques courtes toujours Mono.
 - Coach : contenu des messages et saisie sans-serif ; suggestions et aide
   lisibles ; aucun changement de conversation, prompt ou réponse.
+- Dashboard, Settings et Subscription : explications longues et helpers encore
+  à 12 px constatés en QA portés à 14 px ; labels et métadonnées courts conservés.
 - Navigation : cinq entrées conservées, label 11 px même sous 380 px, actif
   vert. Les longs labels français peuvent se replier dans leur cellule ;
   la réserve basse du main couvre cette hauteur et la safe area.
@@ -182,6 +184,8 @@ pour satisfaire cette assertion source historique.
   triviaux ; reviewer automatique indisponible (modèle absent du registre).
   Ce statut ne doit pas être présenté comme une revue automatique réellement
   réussie.
+- Revue indépendante read-only du diff frontend : aucun problème significatif
+  trouvé ; aucun changement réalisé par cet agent.
 
 ## QA mobile
 
@@ -202,9 +206,40 @@ WorkoutDetail, Coach, Progress, Settings et Subscription :
 Le transport de l'outil Playwright était fermé. Les mesures ont été réalisées
 par le protocole standard Chrome DevTools, sans nouvelle dépendance.
 Les captures ne constituent **pas une inspection visuelle humaine**.
-Les résultats finaux stabilisés et les limites de couverture sont précisés
-dans la livraison ; ne pas assimiler un état transitoire de chargement à une
-page validée.
+
+Deuxième passage : **36 états/page/largeur stabilisés**, sur les sept pages
+demandées et Subscription, Login, Register, Onboarding ; Coach testé vide et
+avec historique. Attente des réponses API et stabilité du DOM, sans exception
+runtime non interceptée. Ce passage a traversé les commits de présentation ;
+il ne constitue pas une capture atomique de tous les états sur un seul HEAD.
+
+| Largeur | Overflow document | Texte coupé constaté | Échecs de contraste sur fonds solides mesurés | Hauteur nav |
+| --- | --- | --- | --- | --- |
+| 320 px | aucun | aucun | aucun | 78.56 px |
+| 360 px | aucun | aucun | aucun | 78.56 px |
+| 390 px | aucun | aucun | aucun | 81.80 px |
+
+- Labels navigation : 11 px, contenus dans les liens ; main réservé à 84 px,
+  compatible avec ces hauteurs (safe area native non simulée).
+- Aucun texte utile visible sous 11 px dans les états contrôlés.
+- Placeholders : opacité 1, contraste mesuré 5.48–5.54:1.
+- Coach désactivé / « Plan actuel » : opacité 1, contraste mesuré 5.48:1,
+  fond muted distinct ; Input auth 16 px, textarea Coach 14 px.
+- FREE : paywalls Training/Progress stables, previews Dashboard restreints.
+  Trial : accès Training/Progress avec `has_premium_access:true`, même si
+  `plan:"free"`. Premium : parcours ouverts. Aucun contrat d'accès modifié.
+- Login/Register publics ; Onboarding sans token redirige vers Login.
+- Quelques dépassements de conteneurs locaux, sans coupure constatée, restent :
+  stats de séance de 3 px à 320 px, label statistique Progress de 7 px,
+  labels Subscription dépassant leur petit sous-conteneur mais pas leur parent.
+  Le document ne déborde pas et aucun nouvel override de layout n'est ajouté
+  pour des dépassements qui ne cachent pas les textes.
+- 13 éléments Dashboard sur gradients sont distingués des mesures sur fonds
+  solides ; le résultat « aucun échec » ne doit pas leur être étendu.
+- Polices distantes indisponibles dans le navigateur QA : mesures réalisées
+  avec les fallbacks. Les familles Manrope/Barlow/JetBrains restent définies
+  dans le produit, mais leur rendu chargé doit être vérifié sur environnement
+  réseau autorisé.
 
 ## Fichiers modifiés
 
@@ -233,3 +268,6 @@ et contrôles partagés sans overrides page-par-page.
 - Le frontend conserve les troncatures intentionnelles existantes des noms longs
   de séances ; elles ne sont pas transformées en nouvelle architecture de layout.
 - L'absence d'inspection humaine des captures doit rester explicite.
+- Les mesures sur fonds solides ne certifient pas chaque gradient ni chaque
+  état de données ; la PR ne doit pas être annoncée comme une certification AA
+  exhaustive de l'application ou comme validée humainement pour Cxxx.
