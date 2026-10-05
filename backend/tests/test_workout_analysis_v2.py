@@ -735,12 +735,37 @@ async def test_structural_standard_session_uses_neutral_structural_wording(clien
     assert payload["signals"]["session_type"]["code"] == "standard"
     assert payload["signals"]["session_type"]["text"] == "Standard session"
     lowered_summary = payload["summary"]["text"].lower()
-    assert lowered_summary.startswith("standard-duration session completed.")
-    # The structural wording is now followed by factual, session-specific observations.
-    assert "6 km covered in 35 min at 5:51/km." in lowered_summary
-    assert "average heart rate 170 bpm, peak 180 bpm." in lowered_summary
+    assert lowered_summary.startswith("you covered 6 km in 35 min at 5:51/km.")
+    assert "your average heart rate was 170 bpm (peak 180 bpm)." in lowered_summary
     for forbidden in ("steady", "consistent", "regular"):
         assert forbidden not in lowered_summary
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("language", "distance_fact", "heart_rate_fact", "forbidden"),
+    [
+        ("fr", "Tu as parcouru 6 km en 35 min à 5:51/km.", "Ta fréquence cardiaque moyenne était de 170 bpm (max 180 bpm).", ("facile", "modérée", "intense", "endurance fondamentale")),
+        ("en", "You covered 6 km in 35 min at 5:51/km.", "Your average heart rate was 170 bpm (peak 180 bpm).", ("easy", "moderate", "intense", "fundamental endurance")),
+        ("es", "Recorriste 6 km en 35 min a 5:51/km.", "Tu frecuencia cardíaca media fue de 170 bpm (máxima 180 bpm).", ("fácil", "moderada", "intensa", "easy")),
+    ],
+)
+async def test_unavailable_intensity_summary_leads_with_natural_facts_in_all_languages(
+    client, language, distance_fact, heart_rate_fact, forbidden
+):
+    payload = (await _get_analysis_lang(client, _FakeDB.HR_NO_ZONES_ID, language)).json()
+    summary = payload["summary"]["text"]
+
+    assert payload["signals"]["intensity"]["available"] is False
+    assert distance_fact in summary
+    assert heart_rate_fact in summary
+    assert "Standard-duration session completed" not in summary
+    assert "Séance de durée standard réalisée" not in summary
+    assert "Sesión de duración estándar completada" not in summary
+    assert all(term not in summary.lower() for term in forbidden)
+    assert payload["physiology"]["avg_hr"] == 170
+    assert payload["physiology"]["max_hr"] == 180
+    assert payload["pacing"]["average_pace_min_km"] == 5.85
 
 
 @pytest.mark.asyncio
@@ -1234,7 +1259,7 @@ async def test_incomplete_workout_does_not_fabricate_missing_measurements(client
     await client.fake_db.workouts.insert_one(incomplete)
     payload = (await _get_analysis(client, "run-fixture-incomplete")).json()
     summary = payload["summary"]["text"]
-    assert "6 km covered in 38 min." in summary
+    assert "You covered 6 km in 38 min." in summary
     assert "bpm" not in summary
     assert payload["physiology"]["available"] is False
     assert payload["physiology"]["avg_hr"] is None

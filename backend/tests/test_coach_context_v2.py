@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import inspect
+import json
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
@@ -429,6 +430,8 @@ async def _call_coach(
     workout_id: str | None = None,
     resolved_goal=None,
     domain_activities=None,
+    reference_date: date = _REFERENCE_DATE,
+    captured_history_out: list[dict] | None = None,
 ) -> tuple[httpx.Response, dict]:
     captured: dict = {}
 
@@ -459,7 +462,7 @@ async def _call_coach(
 
     patches = [
         patch("server.get_user_access", AsyncMock(side_effect=_premium_access)),
-        patch("server._resolve_canonical_reference_date", return_value=_REFERENCE_DATE),
+        patch("server._resolve_canonical_reference_date", return_value=reference_date),
         patch("server._resolve_goal_v2", AsyncMock(return_value=resolved_goal)),
         patch("server.mongo_garmin_activities_to_domain", side_effect=lambda docs: domain_activities if docs else []),
         patch("server.build_training_load", return_value=training_load or _training_load()),
@@ -492,6 +495,8 @@ async def _call_coach(
         server.db = orig_server_db
         server.app.state.db = orig_state_db
 
+    if captured_history_out is not None:
+        captured_history_out.extend(captured.get("conversation_history", []))
     return response, captured.get("context")
 
 
@@ -533,6 +538,8 @@ async def test_coach_context_v2_uses_canonical_authorities_and_prescription_prec
 
     assert response.status_code == 200
     assert fake_db.training_plans.find_one_called is False
+    assert context["workout_detail"] is None
+    assert "selected_workout_permissions" not in context
     assert context["goal"]["objective"] == "Autumn Marathon"
     assert fake_db.training_prescription_snapshots.find_projections[0] == {"_id": 0}
     assert fake_db.training_planned_prescription_memory.find_projections[0] == {"_id": 0}
@@ -1037,7 +1044,8 @@ async def test_coach_context_v2_populates_bounded_recent_workouts():
     assert recent[0]["name"] == "Threshold 8k"
     assert recent[0]["distance_km"] == 8.0
     assert recent[0]["duration_minutes"] == 38.5
-    assert recent[0]["avg_pace_min_km"] == 4.81
+    assert recent[0]["avg_pace_display"] == "4:49/km"
+    assert "avg_pace_min_km" not in recent[0]
     assert recent[0]["avg_heart_rate"] == 162
     assert recent[0]["max_heart_rate"] == 178
     assert recent[0]["elevation_gain_m"] == 45.0
@@ -1192,6 +1200,356 @@ async def test_coach_context_v2_selected_workout_includes_workout_analysis_v2():
     assert isinstance(analysis["comparison"]["similar"], dict)
     assert analysis["comparison"]["similar"]["available"] is True
     assert "w-hist-1" in analysis["comparison"]["similar"]["workout_ids"]
+
+
+@pytest.mark.asyncio
+async def test_selected_workout_recent_history_uses_strict_prior_timestamp_cutoff():
+    selected_start = "2026-09-28T10:00:00Z"
+    fake_db = _FakeDB()
+    fake_db.workouts = _Collection([
+        {
+            "id": "garmin-selected-0928",
+            "user_id": _USER_ID,
+            "date": selected_start,
+            "start_time": selected_start,
+            "name": "Selected run",
+            "type": "run",
+            "distance_km": 10.18,
+            "duration_minutes": 71,
+            "avg_pace_min_km": 6.98,
+            "avg_heart_rate": 127,
+            "max_heart_rate": 144,
+        }
+    ])
+    fake_db.garmin_activities = _Collection([
+        {
+            "external_id": "prior-0926",
+            "user_id": _USER_ID,
+            "start_time": "2026-09-26T08:00:00Z",
+            "distance": 10400,
+            "duration": 4100,
+            "pace_seconds_per_km": 396,
+            "average_hr": 134,
+        },
+        {
+            "external_id": "same-day-before",
+            "user_id": _USER_ID,
+            "start_time": "2026-09-28T09:59:59Z",
+            "distance": 9000,
+            "duration": 3600,
+            "pace_seconds_per_km": 400,
+            "average_hr": 135,
+        },
+        {
+            "external_id": "selected-0928",
+            "user_id": _USER_ID,
+            "start_time": selected_start,
+            "distance": 10180,
+            "duration": 4260,
+            "pace_seconds_per_km": 419,
+            "average_hr": 127,
+        },
+        {
+            "external_id": "future-1001",
+            "user_id": _USER_ID,
+            "start_time": "2026-10-01T08:00:00Z",
+            "distance": 9660,
+            "duration": 3960,
+            "pace_seconds_per_km": 408,
+            "average_hr": 141,
+        },
+    ])
+
+    response, context = await _call_coach(
+        fake_db,
+        workout_id="garmin-selected-0928",
+        reference_date=date(2026, 10, 3),
+        domain_activities=[
+            SimpleNamespace(
+                activity_type="running",
+                start_time=datetime(2026, 10, 1, 8, 0, tzinfo=timezone.utc),
+                distance_m=9660,
+            )
+        ],
+    )
+
+    assert response.status_code == 200
+    assert context["workout_detail"]["id"] == "garmin-selected-0928"
+    recent = context["recent_workouts"]
+    recent_ids = {item["id"] for item in recent}
+    assert "garmin-prior-0926" in recent_ids
+    assert "garmin-same-day-before" in recent_ids
+    assert "garmin-selected-0928" not in recent_ids
+    assert "garmin-future-1001" not in recent_ids
+    assert context["current_training_context"]["reference_date"] == "2026-10-03"
+    assert context["current_training_context"]["temporal_scope"] == "current_only"
+    assert context["current_training_context"]["may_include_activity_after_selected_workout"] is True
+    assert context["current_training_context"]["historical_selected_workout_evidence"] is False
+    assert context["current_training_context"]["stats_7d"]["km"] > 0
+    assert context["current_training_context"]["stats_30d"]["km"] > 0
+    assert "stats_7d" not in context
+    assert "stats_30d" not in context
+    assert (
+        "may include activity after the selected workout"
+        in context["current_training_context"]["description"]
+    )
+    assert context["recent_workouts_coverage"] == {
+        "window_days": 30,
+        "start_date_inclusive": "2026-08-30",
+        "end_date_inclusive": "2026-09-28",
+        "available_count": 2,
+        "included_count": 2,
+        "max_count": 30,
+        "truncated": False,
+    }
+    assert context["selected_workout_history_cutoff"] == "2026-09-28T10:00:00+00:00"
+    assert context["selected_workout_history_cutoff_precision"] == "strict_timestamp_exclusive"
+
+
+def test_llm_pace_formatting_projection_and_grounding_permissions():
+    assert coach_context_v2._format_pace_min_km(6.81) == "6:49/km"
+    assert coach_context_v2._format_pace_min_km(6.8) == "6:48/km"
+    assert coach_context_v2._format_pace_min_km(6.012) == "6:01/km"
+    assert coach_context_v2._format_pace_delta_min_km(0.2) == "+0:12/km"
+    assert coach_context_v2._format_pace_delta_min_km(-0.012) == "-0:01/km"
+    assert coach_context_v2._format_pace_delta_min_km(0.001) == "0:00/km"
+    assert coach_context_v2._format_pace_delta_min_km(-0.001) == "0:00/km"
+
+    projected = coach_context_v2.build_llm_coach_context({
+        "reference_date": "2026-10-03",
+        "recent_workouts": [{"id": "recent", "avg_pace_min_km": 6.81}],
+        "workout_detail": {
+            "id": "selected",
+            "date": "2026-09-28T10:00:00Z",
+            "avg_pace_min_km": 6.8,
+            "analysis": {
+                "signals": {"intensity": {"available": False}},
+                "pacing": {"average_pace_min_km": 6.012},
+                "comparison": {
+                    "avg_pace_min_km": {"current": 6.8, "baseline": 6.6, "difference": 0.2},
+                    "similar": {
+                        "available": True,
+                        "comparable": False,
+                        "avg_pace_min_km": 6.6,
+                        "pace_difference_min_km": 0.2,
+                        "avg_heart_rate": 140,
+                        "heart_rate_difference_bpm": -13,
+                    },
+                },
+            },
+        },
+    })
+
+    assert projected["recent_workouts"][0]["avg_pace_display"] == "6:49/km"
+    detail = projected["workout_detail"]
+    assert detail["avg_pace_display"] == "6:48/km"
+    assert detail["analysis"]["pacing"]["average_pace_display"] == "6:01/km"
+    assert "avg_pace_min_km" not in detail["analysis"]["comparison"]
+    similar = detail["analysis"]["comparison"]["similar"]
+    assert similar["avg_pace_display"] == "6:36/km"
+    assert similar["pace_difference_display"] == "+0:12/km"
+    permissions = projected["selected_workout_permissions"]
+    assert permissions == {
+        "intensity_interpretation_allowed": False,
+        "raw_hr_is_descriptive_only": True,
+        "raw_pace_is_descriptive_only": True,
+        "progress_regression_allowed": False,
+        "physiological_efficiency_allowed": False,
+        "causal_explanation_allowed": False,
+        "similar_comparison_available": True,
+        "similar_comparable": False,
+        "similar_differences_descriptive_only": True,
+    }
+    available_intensity = coach_context_v2.build_llm_coach_context({
+        "workout_detail": {
+            "analysis": {
+                "signals": {"intensity": {"available": True}},
+                "comparison": {"similar": {"available": False, "comparable": False}},
+            }
+        }
+    })["selected_workout_permissions"]
+    assert available_intensity["intensity_interpretation_allowed"] is True
+    assert available_intensity["raw_hr_is_descriptive_only"] is True
+    assert available_intensity["raw_pace_is_descriptive_only"] is True
+    serialized = json.dumps(projected)
+    for raw_value in ('"avg_pace_min_km"', '"pace_difference_min_km"', "6.81", "6.012", "0.2"):
+        assert raw_value not in serialized
+
+
+def test_llm_training_paces_projection_hides_raw_min_per_km_values():
+    projected = coach_context_v2.build_llm_coach_context({
+        "language": "en",
+        "training_paces": {
+            "paces": {
+                "easy": {
+                    "lower": {
+                        "min_per_km": 6.81,
+                        "pace_str": "6:49",
+                        "km_per_hour": 8.81,
+                    },
+                    "upper": {
+                        "min_per_km": 7.2,
+                        "pace_str": "7:12",
+                    },
+                    "lower_str": "6:49",
+                    "upper_str": "7:12",
+                },
+                "threshold": {
+                    "min_per_km": 5.25,
+                    "pace_str": "5:15",
+                },
+            }
+        },
+    })
+    serialized = json.dumps(projected)
+
+    assert '"min_per_km"' not in serialized
+    assert "6:49" in serialized
+    assert "7:12" in serialized
+    assert "5:15" in serialized
+    assert "8.81" in serialized
+    assert "6.81" not in serialized
+    assert projected["training_paces"]["paces"]["easy"]["lower"] == {
+        "pace_str": "6:49",
+        "km_per_hour": 8.81,
+    }
+    assert projected["training_paces"]["paces"]["easy"]["upper"] == {"pace_str": "7:12"}
+    assert projected["training_paces"]["paces"]["easy"]["lower_str"] == "6:49"
+    assert projected["training_paces"]["paces"]["easy"]["upper_str"] == "7:12"
+    assert projected["training_paces"]["paces"]["threshold"] == {"pace_str": "5:15"}
+
+
+@pytest.mark.asyncio
+async def test_llm_receives_only_display_paces_and_explicit_interpretation_policy():
+    import llm_coach
+
+    context = coach_context_v2.build_llm_coach_context({
+        "language": "en",
+        "reference_date": "2026-10-03",
+        "stats_7d": {"km": 9.66, "sessions": 1},
+        "stats_30d": {"km": 30.0, "sessions": 4},
+        "training_paces": {
+            "paces": {
+                "easy": {
+                    "lower": {"min_per_km": 6.81, "pace_str": "6:49", "km_per_hour": 8.81},
+                    "upper": {"min_per_km": 7.2, "pace_str": "7:12"},
+                    "lower_str": "6:49",
+                    "upper_str": "7:12",
+                },
+                "threshold": {"min_per_km": 5.25, "pace_str": "5:15"},
+            }
+        },
+        "recent_workouts": [{"id": "recent", "avg_pace_min_km": 6.81}],
+        "workout_detail": {
+            "id": "selected",
+            "date": "2026-09-28",
+            "avg_pace_min_km": 6.8,
+            "analysis": {
+                "signals": {"intensity": {"available": False}},
+                "pacing": {"average_pace_min_km": 6.012},
+                "comparison": {
+                    "similar": {
+                        "available": True,
+                        "comparable": False,
+                        "avg_pace_min_km": 6.6,
+                        "pace_difference_min_km": 0.2,
+                        "heart_rate_difference_bpm": -13,
+                    }
+                },
+            },
+        },
+    })
+    captured = {}
+
+    async def _capture(system_prompt, user_prompt, user_id, context_type):
+        captured["system_prompt"] = system_prompt
+        captured["user_prompt"] = user_prompt
+        return "captured", True, {}
+
+    with patch("llm_coach._call_gpt", side_effect=_capture):
+        await llm_coach.enrich_chat_response(
+            user_message="Compare this session.",
+            context=context,
+            conversation_history=[],
+            user_id=_USER_ID,
+        )
+
+    prompt = captured["system_prompt"] + captured["user_prompt"]
+    assert "6:49/km" in prompt
+    assert "6:48/km" in prompt
+    assert "6:01/km" in prompt
+    assert '"avg_pace_min_km"' not in prompt
+    assert '"pace_difference_min_km"' not in prompt
+    assert "Use pace display strings verbatim" in prompt
+    assert '"intensity_interpretation_allowed":false' in prompt
+    assert '"progress_regression_allowed":false' in prompt
+    assert '"physiological_efficiency_allowed":false' in prompt
+    assert '"causal_explanation_allowed":false' in prompt
+    assert '"min_per_km"' not in prompt
+    assert "6:49" in prompt
+    assert "7:12" in prompt
+    assert "5:15" in prompt
+    assert '"temporal_scope":"current_only"' in prompt
+    assert '"reference_date":"2026-10-03"' in prompt
+    assert '"historical_selected_workout_evidence":false' in prompt
+    assert '"may_include_activity_after_selected_workout":true' in prompt
+
+
+@pytest.mark.asyncio
+async def test_coach_conversation_history_is_scoped_by_workout_and_general_chat():
+    reference = datetime(2026, 9, 20, tzinfo=timezone.utc)
+    fake_db = _FakeDB()
+    fake_db.workouts = _Collection([
+        {
+            "id": "workout-a",
+            "user_id": _USER_ID,
+            "date": "2026-09-18T08:00:00Z",
+            "name": "Workout A",
+            "type": "run",
+            "distance_km": 10,
+            "duration_minutes": 60,
+        },
+        {
+            "id": "workout-b",
+            "user_id": _USER_ID,
+            "date": "2026-09-19T08:00:00Z",
+            "name": "Workout B",
+            "type": "run",
+            "distance_km": 10,
+            "duration_minutes": 60,
+        },
+    ])
+    fake_db.conversations = _Collection([
+        {"user_id": _USER_ID, "role": "user", "content": "A discussion", "workout_id": "workout-a", "timestamp": "2026-09-19T10:00:00Z"},
+        {"user_id": _USER_ID, "role": "assistant", "content": "A response", "workout_id": "workout-a", "timestamp": "2026-09-19T10:01:00Z"},
+        {"user_id": _USER_ID, "role": "user", "content": "B discussion", "workout_id": "workout-b", "timestamp": "2026-09-19T11:00:00Z"},
+        {"user_id": _USER_ID, "role": "assistant", "content": "B response", "workout_id": "workout-b", "timestamp": "2026-09-19T11:01:00Z"},
+        {"user_id": _USER_ID, "role": "user", "content": "General discussion", "workout_id": None, "timestamp": "2026-09-19T12:00:00Z"},
+        {"user_id": _USER_ID, "role": "assistant", "content": "General response", "workout_id": None, "timestamp": "2026-09-19T12:01:00Z"},
+    ])
+
+    for workout_id, expected, forbidden in (
+        ("workout-a", {"A discussion", "A response"}, {"B discussion", "B response", "General discussion"}),
+        ("workout-b", {"B discussion", "B response"}, {"A discussion", "A response", "General discussion"}),
+        (None, {"General discussion", "General response"}, {"A discussion", "A response", "B discussion", "B response"}),
+    ):
+        captured_history: list[dict] = []
+        response, _context = await _call_coach(
+            fake_db,
+            workout_id=workout_id,
+            reference_date=date(2026, 9, 20),
+            captured_history_out=captured_history,
+        )
+        assert response.status_code == 200
+        contents = {item["content"] for item in captured_history}
+        assert expected <= contents
+        assert forbidden.isdisjoint(contents)
+
+    with patch("server.db", fake_db):
+        full_history = await server.get_conversation_history(user={"id": _USER_ID})
+    assert {"A discussion", "B discussion", "General discussion"} <= {
+        item["content"] for item in full_history
+    }
 
 
 @pytest.mark.asyncio

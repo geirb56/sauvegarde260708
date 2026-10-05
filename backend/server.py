@@ -78,7 +78,7 @@ from garmin.sync_progress import get_sync_progress
 from training_v2.performance_model import predict_races, activity_date  # PR185
 from training_v2.plan_goal import GoalType
 from training_v2.training_paces_authority import load_canonical_training_paces
-from coach_context_v2 import build_coach_context_v2
+from coach_context_v2 import build_coach_context_v2, build_llm_coach_context
 
 from config.training_goals import GOAL_CONFIG  # noqa: E402  # PR145: single source
 
@@ -1912,9 +1912,10 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
             )
 
     try:
-        # 1. Retrieve conversation history (last 5 messages)
+        # 1. Retrieve conversation history scoped to this workout or to general chat.
+        conversation_scope = {"user_id": user_id, "workout_id": request.workout_id}
         conversation_history = await db.conversations.find(
-            {"user_id": user_id}
+            conversation_scope
         ).sort("timestamp", -1).limit(5).to_list(5)
         conversation_history = list(reversed(conversation_history))  # Chronological order
 
@@ -1993,6 +1994,7 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
             workout=workout,
             workout_analysis=workout_analysis,
         )).model_dump(mode="json")
+        llm_context = build_llm_coach_context(context)
 
         # 6. Stocker le message utilisateur
         user_msg_id = str(uuid.uuid4())
@@ -2009,7 +2011,7 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
         # 7. Appeler le modèle LLM serveur configuré pour générer la réponse
         llm_response, success, meta = await llm_coach.enrich_chat_response(
             user_message=user_message,
-            context=context,
+            context=llm_context,
             conversation_history=[{"role": m.get("role"), "content": m.get("content")} for m in conversation_history],
             user_id=user_id
         )
