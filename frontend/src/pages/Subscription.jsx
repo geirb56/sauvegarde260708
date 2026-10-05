@@ -655,7 +655,7 @@ export default function Subscription() {
                   <Icon className="w-5 h-5 text-primary" />
                 </div>
                 <h3 className="font-semibold text-sm mb-2">{title}</h3>
-                <p className="text-xs text-muted-foreground leading-relaxed">{desc}</p>
+                <p className="font-sans text-sm text-muted-foreground leading-relaxed">{desc}</p>
               </CardContent>
             </Card>
           ))}
@@ -690,7 +690,7 @@ export default function Subscription() {
                 </div>
                 <div className="flex-1 pt-2.5">
                   <h3 className="font-semibold text-sm mb-1">{title}</h3>
-                  <p className="text-xs text-muted-foreground leading-relaxed">{desc}</p>
+                  <p className="font-sans text-sm text-muted-foreground leading-relaxed">{desc}</p>
                 </div>
               </div>
             ))}

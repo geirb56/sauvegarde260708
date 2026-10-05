@@ -272,7 +272,7 @@ export default function Progress() {
 
   const runIndexTrend = runIndexHistory?.trend ?? 0;
   const TrendIcon = runIndexTrend > 0 ? TrendingUp : runIndexTrend < 0 ? TrendingDown : Minus;
-  const trendColor = runIndexTrend > 0 ? "text-emerald-500" : runIndexTrend < 0 ? "text-red-500" : "text-muted-foreground";
+  const trendColor = runIndexTrend > 0 ? "text-emerald-500" : runIndexTrend < 0 ? "text-destructive" : "text-muted-foreground";
   const trendTone = runIndexTrend > 0 ? SEMANTIC_SURFACES.vo2 : runIndexTrend < 0 ? SEMANTIC_SURFACES.danger : SEMANTIC_SURFACES.neutral;
   const historyGranularity = runIndexHistory?.granularity || "week";
 
@@ -409,7 +409,7 @@ export default function Progress() {
                           </p>
                           <span
                             className="inline-flex px-2 py-0.5 rounded-full text-[11px] font-bold"
-                            style={{ background: `${confidenceColor}20`, color: confidenceColor }}
+                            style={{ background: `${confidenceColor}20`, color: confidence === "insufficient" ? "var(--text-tertiary)" : confidenceColor }}
                           >
                             {confidenceText}
                           </span>

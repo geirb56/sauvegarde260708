@@ -271,7 +271,7 @@ function TodayPreviewFree({ t }) {
         <span style={{ color: "#ffffff", fontWeight: 700, fontSize: 14, textAlign: "center" }}>
           {t("dashboard.todayPreviewLock")}
         </span>
-        <span style={{ color: "rgba(255,255,255,0.75)", fontSize: 12, textAlign: "center", lineHeight: 1.4 }}>
+        <span style={{ color: "var(--text-secondary)", fontSize: 14, textAlign: "center", lineHeight: 1.4 }}>
           {t("dashboard.todayPreviewDesc")}
         </span>
         <Link
@@ -308,7 +308,7 @@ function PacesPreviewFree({ t }) {
           <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#6EEB5A" }}>
             {t("dashboard.pacesTeaserTitle")}
           </p>
-          <p className="text-xs mt-1" style={{ color: "var(--text-tertiary)" }}>
+          <p className="text-sm leading-relaxed mt-1" style={{ color: "var(--text-tertiary)" }}>
             {t("dashboard.pacesTeaserSubtitle")}
           </p>
         </div>
@@ -417,7 +417,7 @@ function WeekPreviewFree({ t }) {
         <span style={{ color: "#ffffff", fontWeight: 700, fontSize: 14, textAlign: "center" }}>
           {t("dashboard.weekPreviewLock")}
         </span>
-        <span style={{ color: "rgba(255,255,255,0.75)", fontSize: 12, textAlign: "center", lineHeight: 1.4 }}>
+        <span style={{ color: "var(--text-secondary)", fontSize: 14, textAlign: "center", lineHeight: 1.4 }}>
           {t("dashboard.weekPreviewDesc")}
         </span>
         <Link
@@ -972,7 +972,7 @@ export default function Dashboard() {
         <>
           {cardioError && (
             <div
-              className="flex items-center gap-2 px-4 py-3 rounded-xl text-xs"
+              className="flex items-center gap-2 px-4 py-3 rounded-xl text-sm leading-relaxed"
               style={{ background: "#f59e0b15", border: "1px solid #f59e0b30", color: "#f59e0b" }}
             >
               <AlertTriangle size={14} />
@@ -993,7 +993,7 @@ export default function Dashboard() {
                   <p className="text-sm font-semibold" style={{ color: "var(--text-secondary)" }}>
                     {t("dashboard.noData", "No data yet")}
                   </p>
-                  <p className="text-xs max-w-xs" style={{ color: "var(--text-tertiary)" }}>
+                  <p className="text-sm leading-relaxed max-w-xs" style={{ color: "var(--text-tertiary)" }}>
                     {cardioData?.message || t("dashboard.connectGarminPrompt", "Connect your Garmin to see your readiness and daily metrics.")}
                   </p>
                   <Link
@@ -1091,8 +1091,8 @@ export default function Dashboard() {
                           {t("dashboard.runReadinessUnavailable")}
                         </span>
                         <p
-                          className="text-xs leading-tight"
-                          style={{ color: "rgba(255,255,255,0.65)" }}
+                          className="font-sans text-sm leading-relaxed"
+                          style={{ color: "var(--text-secondary)" }}
                           data-testid="run-readiness-unavailable-cause"
                         >
                           {readinessUnavailableCause}
@@ -1275,7 +1275,7 @@ export default function Dashboard() {
               <h2 className="text-lg font-black mt-1" style={{ color: "#ffffff" }}>
                 {t("dashboard.runIndexOverall")}
               </h2>
-              <p className="text-xs mt-2 max-w-md" style={{ color: "rgba(255,255,255,0.72)" }}>
+              <p className="text-sm leading-relaxed mt-2 max-w-md" style={{ color: "var(--text-secondary)" }}>
                 {t("dashboard.runIndexDescription")}
               </p>
             </div>
@@ -1287,7 +1287,7 @@ export default function Dashboard() {
           <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
             <div>
               {runIndexNull ? (
-                <p className="text-base font-semibold" style={{ color: "rgba(255,255,255,0.55)" }}>
+                <p className="text-base font-semibold" style={{ color: "var(--text-tertiary)" }}>
                   {t("dashboard.runIndexInsufficient") || "Insufficient data"}
                 </p>
               ) : (
@@ -1330,7 +1330,7 @@ export default function Dashboard() {
             <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#6EEB5A" }}>
               {t("dashboard.pacesTeaserTitle")}
             </p>
-            <p className="text-xs" style={{ color: "var(--text-tertiary)" }}>
+            <p className="text-sm leading-relaxed" style={{ color: "var(--text-tertiary)" }}>
               {t("dashboard.pacesTeaserSubtitle")}
             </p>
           </div>
