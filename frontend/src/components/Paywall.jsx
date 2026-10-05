@@ -151,7 +151,7 @@ export default function Paywall({ onClose, returnPath = "/training" }) {
           <h1 className="text-2xl font-bold text-white">
             {t("paywall.title") || "Activez votre coach running"}
           </h1>
-          <p className="text-base text-slate-300">
+          <p className="text-base text-secondary-foreground">
             {t("paywall.subtitle") || "Votre plan d'entraînement personnalisé est prêt"}
           </p>
         </div>
@@ -173,7 +173,7 @@ export default function Paywall({ onClose, returnPath = "/training" }) {
           {/* Price */}
           <div className="text-center py-2">
             <span className="text-4xl font-bold text-white">4,99 €</span>
-            <span className="text-lg text-slate-400">
+            <span className="text-lg text-muted-foreground">
               &nbsp;/ {t("paywall.perMonth") || "mois"}
             </span>
           </div>
@@ -190,7 +190,7 @@ export default function Paywall({ onClose, returnPath = "/training" }) {
                   >
                     <Icon className="w-3.5 h-3.5 text-emerald-400" />
                   </div>
-                  <span className="text-sm text-slate-200">{feature}</span>
+                  <span className="text-sm text-foreground">{feature}</span>
                 </div>
               );
             })}
@@ -215,9 +215,9 @@ export default function Paywall({ onClose, returnPath = "/training" }) {
         <Button
           onClick={handleActivate}
           disabled={loading}
-          className="w-full h-14 text-lg font-bold rounded-xl"
+          className="w-full h-14 text-lg font-bold text-background rounded-xl"
           style={{
-            background: "linear-gradient(135deg, #8b5cf6 0%, #ec4899 100%)",
+            background: loading ? "hsl(var(--muted))" : "linear-gradient(135deg, #8b5cf6 0%, #ec4899 100%)",
             border: "none",
           }}
           data-testid="paywall-cta"
@@ -239,7 +239,7 @@ export default function Paywall({ onClose, returnPath = "/training" }) {
         {onClose && (
           <button
             onClick={onClose}
-            className="w-full text-center text-sm text-slate-500 hover:text-slate-300 transition-colors"
+            className="w-full text-center text-sm text-muted-foreground hover:text-secondary-foreground transition-colors"
           >
             {t("paywall.maybeLater") || "Plus tard"}
           </button>

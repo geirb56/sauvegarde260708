@@ -424,6 +424,7 @@ describe("Settings UX V2", () => {
     renderPage();
 
     expect(await screen.findByTestId("settings-subscription-status")).toHaveTextContent("TRIAL");
+    expect(screen.getByTestId("settings-subscription-badge")).toHaveClass("bg-blue-500", "text-background");
     expect(screen.getByTestId("settings-subscription-trial")).toHaveTextContent("12 days remaining");
     expect(screen.getByTestId("settings-account-email")).toHaveTextContent("runner@example.com");
     expect(screen.getByTestId("settings-account-avatar")).toHaveTextContent("R");

@@ -67,7 +67,7 @@ export const Layout = () => {
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 overflow-x-hidden overflow-y-auto pb-[calc(4.75rem+env(safe-area-inset-bottom))]">
+      <main className="flex-1 overflow-x-hidden overflow-y-auto pb-[calc(5.25rem+env(safe-area-inset-bottom))]">
         <Outlet />
       </main>
 
@@ -94,7 +94,7 @@ export const Layout = () => {
                   />
                 )}
               </div>
-              <span className="nav-label text-center text-[11px] font-medium leading-4 whitespace-nowrap">{t(item.labelKey)}</span>
+              <span className="nav-label w-full text-center text-[11px] font-medium leading-3 whitespace-normal break-words">{t(item.labelKey)}</span>
             </NavLink>
           );
         })}

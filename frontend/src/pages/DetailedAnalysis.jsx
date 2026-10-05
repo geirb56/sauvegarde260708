@@ -59,7 +59,7 @@ export default function DetailedAnalysis() {
       <div className="p-4 pb-24 flex items-center justify-center min-h-[60vh]">
         <div className="flex flex-col items-center gap-3">
           <Loader2 className="w-6 h-6 animate-spin text-primary" />
-          <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+          <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">
             {t("detailedAnalysis.loading")}
           </span>
         </div>
@@ -93,9 +93,9 @@ export default function DetailedAnalysis() {
         </Link>
         <div className="flex items-center gap-2">
           <Icon className="w-4 h-4 text-muted-foreground" />
-          <span className="font-mono text-[10px] uppercase text-muted-foreground">{t("detailedAnalysis.title")}</span>
+          <span className="font-mono text-[11px] uppercase text-muted-foreground">{t("detailedAnalysis.title")}</span>
         </div>
-        <span className="font-mono text-[10px] text-muted-foreground">{dateStr}</span>
+        <span className="font-mono text-[11px] text-muted-foreground">{dateStr}</span>
       </div>
 
       <Card className="bg-card border-border mb-3">
@@ -103,7 +103,7 @@ export default function DetailedAnalysis() {
           <h1 className="font-heading text-base uppercase tracking-tight font-bold mb-2 leading-tight">
             {analysis.workout?.name}
           </h1>
-          <p className="font-mono text-sm text-muted-foreground leading-relaxed" data-testid="header-context">
+          <p className="font-sans text-sm text-secondary-foreground leading-relaxed" data-testid="header-context">
             {analysis.summary?.text}
           </p>
         </CardContent>
@@ -113,21 +113,21 @@ export default function DetailedAnalysis() {
         <CardContent className="p-3">
           <div className="flex items-center gap-2 mb-3">
             <Zap className="w-4 h-4 text-muted-foreground" />
-            <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+            <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">
               {t("detailedAnalysis.execution")}
             </span>
           </div>
           <div className="grid grid-cols-3 gap-2">
             <div>
-              <p className="font-mono text-[9px] uppercase text-muted-foreground mb-1">{t("detailedAnalysis.intensity")}</p>
+              <p className="font-mono text-[11px] uppercase text-muted-foreground mb-1">{t("detailedAnalysis.intensity")}</p>
               <p className="font-mono text-xs">{analysis.signals?.intensity?.available ? analysis.signals.intensity.text : "--"}</p>
             </div>
             <div>
-              <p className="font-mono text-[9px] uppercase text-muted-foreground mb-1">{t("detailedAnalysis.volume")}</p>
+              <p className="font-mono text-[11px] uppercase text-muted-foreground mb-1">{t("detailedAnalysis.volume")}</p>
               <p className="font-mono text-xs">{analysis.signals?.volume?.text || "--"}</p>
             </div>
             <div>
-              <p className="font-mono text-[9px] uppercase text-muted-foreground mb-1">{t("analysis.type")}</p>
+              <p className="font-mono text-[11px] uppercase text-muted-foreground mb-1">{t("analysis.type")}</p>
               <p className="font-mono text-xs">{analysis.signals?.session_type?.text || "--"}</p>
             </div>
           </div>
@@ -139,7 +139,7 @@ export default function DetailedAnalysis() {
           <CardContent className="p-3">
             <div className="flex items-center gap-2 mb-2">
               <HeartPulse className="w-4 h-4 text-muted-foreground" />
-              <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+              <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">
                 {t("sessions.physiology")}
               </span>
             </div>
@@ -154,11 +154,11 @@ export default function DetailedAnalysis() {
         <CardContent className="p-3">
           <div className="flex items-center gap-2 mb-2">
             <Activity className="w-4 h-4 text-muted-foreground" />
-            <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+            <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">
               {t("detailedAnalysis.meaning")}
             </span>
           </div>
-          <p className="font-mono text-xs text-muted-foreground leading-relaxed" data-testid="meaning-text">
+          <p className="font-sans text-sm text-secondary-foreground leading-relaxed" data-testid="meaning-text">
             {analysis.meaning?.text}
           </p>
         </CardContent>
@@ -169,11 +169,11 @@ export default function DetailedAnalysis() {
           <CardContent className="p-3">
             <div className="flex items-center gap-2 mb-2">
               <Lightbulb className="w-4 h-4 text-primary" />
-              <span className="font-mono text-[10px] uppercase tracking-widest text-primary">
+              <span className="font-mono text-[11px] uppercase tracking-widest text-primary">
                 {t("detailedAnalysis.advice")}
               </span>
             </div>
-            <p className="font-mono text-xs text-primary leading-relaxed" data-testid="advice-text">
+            <p className="font-sans text-sm text-secondary-foreground leading-relaxed" data-testid="advice-text">
               {analysis.advice.text}
             </p>
           </CardContent>
@@ -187,7 +187,7 @@ export default function DetailedAnalysis() {
             className="w-full p-3 flex items-center justify-between text-left"
             data-testid="advanced-toggle"
           >
-            <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+            <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">
               {t("detailedAnalysis.advanced")}
             </span>
             {showAdvanced ? (
@@ -213,10 +213,10 @@ export default function DetailedAnalysis() {
                 </p>
               )}
               {!analysis.physiology?.available && analysis.physiology?.reason_unavailable && (
-                <p className="font-mono text-[11px] text-muted-foreground">{analysis.physiology.reason_unavailable}</p>
+                <p className="font-sans text-sm leading-relaxed text-secondary-foreground">{analysis.physiology.reason_unavailable}</p>
               )}
               {!analysis.comparison?.available && analysis.comparison?.reason_unavailable && (
-                <p className="font-mono text-[11px] text-muted-foreground">{analysis.comparison.reason_unavailable}</p>
+                <p className="font-sans text-sm leading-relaxed text-secondary-foreground">{analysis.comparison.reason_unavailable}</p>
               )}
             </div>
           )}
