@@ -5,7 +5,7 @@
 - Objectif unique : **CONTRASTE + LISIBILITÉ**, pas une certification complète WCAG.
 - Base : `copilot/dev`.
 - HEAD initial réellement vérifié : `4214c3e0b258a49b6d18436cce81ee39158d24f9`.
-- HEAD frontend vérifié : `c20d9750f9c476030828ced5b84a37cb22853520`.
+- HEAD frontend vérifié : `ce905ebdf12066d04428ebb3b7f2f361567fb64e`.
 - HEAD final de livraison : celui de la branche `copilot/runindex-pr-15a`, publié
   avec son SHA exact dans la description de PR et le message de livraison.
   Le SHA du commit contenant ce rapport ne peut pas être encodé dans ce même
@@ -99,6 +99,9 @@ son fond orange alpha mais n'utilise plus l'orange décoratif trop sombre comme
 couleur du texte sur une card objectif.
 Le paywall conserve son gradient violet/rose avec un texte sombre lisible,
 et un fond muted lorsqu'il est désactivé.
+Le badge TRIAL Settings conserve son bleu `blue-500`, avec texte background
+sombre plutôt que blanc : cette paire est protégée par le test de contraste
+et l'assertion de classes du test Settings.
 
 ### Ratios déterministes
 
@@ -149,32 +152,34 @@ Installation des dépendances existantes : `npm ci --legacy-peer-deps --no-audit
 Depuis `frontend/`, suites directement demandées :
 
 ```text
-CI=true npm test -- --watchAll=false --runInBand --forceExit --runTestsByPath
-src/__tests__/global-ui-contrast.test.js
-src/__tests__/layout-mobile-nav.test.jsx
-src/__tests__/workout-analysis-v2-pages.test.jsx
-src/__tests__/coach-page.test.jsx
-src/__tests__/settings-page.test.jsx
-src/__tests__/training-v2-page.test.jsx
-src/__tests__/sessions-page.test.jsx
-src/__tests__/progress-mobile-ux.test.jsx
+CI=true npm test -- --watchAll=false --runInBand --forceExit --runTestsByPath \
+src/__tests__/global-ui-contrast.test.js \
+src/__tests__/layout-mobile-nav.test.jsx \
+src/__tests__/workout-analysis-v2-pages.test.jsx \
+src/__tests__/coach-page.test.jsx \
+src/__tests__/settings-page.test.jsx \
+src/__tests__/training-v2-page.test.jsx \
+src/__tests__/sessions-page.test.jsx \
+src/__tests__/progress-mobile-ux.test.jsx \
 src/__tests__/subscription-page-copy.test.jsx
 ```
 
-Résultat final : **9 suites, 231 tests passés**.
+Résultat final : **9 suites, 232 tests passés**.
 
-Contrôle supplémentaire directement lié aux couleurs readiness :
+Contrôle intermédiaire supplémentaire directement lié aux couleurs readiness :
 `dashboard-run-readiness-v2.test.jsx` + `global-ui-contrast.test.js` :
 **2 suites, 76 tests passés**. Les assertions readiness vérifient toujours
 les états et les surfaces grises/rouges, plutôt que l'ancien texte sombre.
 Après la dernière correction warning : `global-ui-contrast.test.js`,
 `progress-mobile-ux.test.jsx`, `progress-potential-ui.test.jsx` et
 `dashboard-run-readiness-v2.test.jsx` : **4 suites, 91 tests passés**.
+Après correction du badge TRIAL : `settings-page.test.jsx` +
+`global-ui-contrast.test.js` : **2 suites, 96 tests passés**.
 
 Suite frontend complète exécutée :
 `CI=true npm test -- --watchAll=false --runInBand --forceExit`.
 Résultat au HEAD frontend vérifié : **33 suites passées, 1 échouée ;
-544 tests passés, 1 échoué, 545 tests au total**.
+545 tests passés, 1 échoué, 546 tests au total**.
 
 Échec préexistant conservé :
 `progress-v2-migration.test.jsx`, « predictions list rendering preserved »,
@@ -288,6 +293,7 @@ Préfixe frontend : `frontend/src/`.
 - `pages/{Coach,Dashboard,DetailedAnalysis,Progress,Settings,Subscription,TrainingPlanV2,WorkoutDetail}.jsx`
 - `__tests__/global-ui-contrast.test.js`
 - `__tests__/dashboard-run-readiness-v2.test.jsx`
+- `__tests__/settings-page.test.jsx`
 - `docs/reports/GLOBAL_UI_CONTRAST_ACCESSIBILITY.md`
 
 Sessions, SessionDetail, Login, Register et Onboarding bénéficient des tokens
