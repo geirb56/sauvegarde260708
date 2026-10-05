@@ -521,7 +521,7 @@ export default function Progress() {
                       dataKey="date"
                       axisLine={false}
                       tickLine={false}
-                      tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 9, fontFamily: "JetBrains Mono" }}
+                      tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 11, fontFamily: "JetBrains Mono" }}
                       tickFormatter={(dateStr) => formatDateLabel(dateStr, langToLocale(lang), historyGranularity)}
                       ticks={runIndexTickDates}
                       minTickGap={viewportBand === "compact" ? 18 : 24}
@@ -530,7 +530,7 @@ export default function Progress() {
                       domain={[0, 1000]}
                       axisLine={false}
                       tickLine={false}
-                      tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 9, fontFamily: "JetBrains Mono" }}
+                      tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 11, fontFamily: "JetBrains Mono" }}
                       ticks={[0, 250, 500, 750, 1000]}
                     />
                     <Tooltip
@@ -866,7 +866,7 @@ export default function Progress() {
                         dataKey="date"
                         axisLine={false}
                         tickLine={false}
-                        tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 9, fontFamily: "JetBrains Mono" }}
+                        tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 11, fontFamily: "JetBrains Mono" }}
                         tickFormatter={(dateStr) => formatDateLabel(dateStr, langToLocale(lang), "month")}
                         ticks={vo2TickDates}
                         minTickGap={viewportBand === "compact" ? 18 : 24}
@@ -875,7 +875,7 @@ export default function Progress() {
                         domain={["dataMin - 2", "dataMax + 2"]}
                         axisLine={false}
                         tickLine={false}
-                        tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 10, fontFamily: "JetBrains Mono" }}
+                        tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 11, fontFamily: "JetBrains Mono" }}
                         tickFormatter={(value) => `${value}`}
                       />
                       <Tooltip

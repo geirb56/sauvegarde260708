@@ -57,13 +57,15 @@ const REC_STYLES = {
   },
   red: {
     bg: "linear-gradient(135deg, #1c0202 0%, #450a0a 100%)",
-    accent: "var(--status-danger)",
+    accent: "#ef4444",
+    text: "var(--status-danger)",
     button: "#ef4444",
     buttonHover: "#dc2626",
   },
   gray: {
     bg: "linear-gradient(135deg, #111827 0%, #1f2937 100%)",
-    accent: "var(--text-tertiary)",
+    accent: "#6b7280",
+    text: "var(--text-tertiary)",
     button: "#6b7280",
     buttonHover: "#4b5563",
   },
@@ -298,7 +300,7 @@ function PacesPreviewFree({ t }) {
   return (
     <div
       className="rounded-2xl p-4 space-y-3 animate-in"
-      style={{ background: "var(--bg-elevated, #1a1a1f)", border: "1px solid var(--border, #2a2a30)", position: "relative", overflow: "hidden" }}
+      style={{ background: "var(--bg-card)", border: "1px solid var(--border-color)", position: "relative", overflow: "hidden" }}
       data-testid="paces-preview-free"
     >
       <div className="flex items-center justify-between gap-2">
@@ -365,8 +367,8 @@ function WeekPreviewFree({ t }) {
     <div
       className="rounded-2xl p-4 animate-in"
       style={{
-        background: "var(--bg-elevated, #1a1a1f)",
-        border: "1px solid var(--border, #2a2a30)",
+        background: "var(--bg-card)",
+        border: "1px solid var(--border-color)",
         position: "relative",
         overflow: "hidden",
       }}
@@ -984,7 +986,7 @@ export default function Dashboard() {
               return (
                 <div
                   className="rounded-2xl p-6 flex flex-col items-center text-center gap-3"
-                  style={{ background: "var(--bg-elevated, #1a1a1f)", border: "1px solid var(--border, #2a2a30)" }}
+                  style={{ background: "var(--bg-card)", border: "1px solid var(--border-color)" }}
                   data-testid="cardio-no-data"
                 >
                   <Activity size={28} style={{ color: "var(--text-tertiary)" }} />
@@ -1052,7 +1054,7 @@ export default function Dashboard() {
                         aria-label="Refresh"
                         data-testid="run-readiness-refresh"
                       >
-                        <RefreshCw size={14} style={{ color: recStyle.accent }} />
+                        <RefreshCw size={14} style={{ color: recStyle.text || recStyle.accent }} />
                       </button>
                     </div>
                   </div>
@@ -1060,7 +1062,7 @@ export default function Dashboard() {
                   <div className="flex flex-wrap items-center gap-2">
                     <span
                       className="px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider"
-                      style={{ background: `${recStyle.accent}1f`, color: recStyle.accent }}
+                      style={{ background: `${recStyle.accent}1f`, color: recStyle.text || recStyle.accent }}
                       data-testid="run-readiness-recommendation"
                     >
                       {readinessStateLabel}
@@ -1319,8 +1321,8 @@ export default function Dashboard() {
         <div
           className="rounded-2xl p-4 space-y-3 animate-in"
           style={{
-            background: "var(--bg-elevated, #1a1a1f)",
-            border: "1px solid var(--border, #2a2a30)",
+            background: "var(--bg-card)",
+            border: "1px solid var(--border-color)",
           }}
           data-testid="dashboard-paces-card"
         >
@@ -1400,8 +1402,8 @@ export default function Dashboard() {
           <div
             className="rounded-2xl p-4 space-y-3 animate-in"
             style={{
-              background: "var(--bg-elevated, #1a1a1f)",
-              border: "1px solid var(--border, #2a2a30)",
+              background: "var(--bg-card)",
+              border: "1px solid var(--border-color)",
             }}
             data-testid="weekly-target-card"
           >
