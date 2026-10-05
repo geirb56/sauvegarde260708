@@ -164,10 +164,10 @@ function renderWithProviders(ui, route, language = "en") {
   );
 }
 
-function mockAxios({ analysisPayload = analysis, delayedAnalysis = null, rejectAnalysis = false } = {}) {
+function mockAxios({ analysisPayload = analysis, workoutPayload = workout, delayedAnalysis = null, rejectAnalysis = false } = {}) {
   axios.get.mockImplementation((url) => {
     if (url.includes("/workouts/w1")) {
-      return Promise.resolve({ data: workout });
+      return Promise.resolve({ data: workoutPayload });
     }
     if (url.includes("/coach/workout-analysis/w1")) {
       if (rejectAnalysis) {
@@ -440,7 +440,7 @@ test("French 14-day baseline stays separate from the mandatory 180-day similar f
   expect(within(recent).getByText("-0:01/km")).toBeVisible();
   expect(recent).not.toHaveTextContent("+0:12/km");
   expect(within(similar).getByText("Sorties similaires · 180 jours")).toBeVisible();
-  expect(similar).toHaveTextContent("5 séance(s) de référence");
+  expect(similar).toHaveTextContent("5 séances de référence");
   expect(similar).toHaveTextContent("Allure moyenne: 6:36/km");
   expect(similar).toHaveTextContent("Écart: +0:12/km");
   expect(similar).not.toHaveTextContent("-0:01/km");
@@ -518,6 +518,93 @@ test("similar heart-rate average and delta are rounded to whole bpm", async () =
   expect(screen.getByTestId("similar-heart-rate")).toHaveTextContent("Difference: +4 bpm");
   expect(screen.getByTestId("similar-heart-rate")).not.toHaveTextContent("136.8");
   expect(screen.getByTestId("similar-heart-rate")).not.toHaveTextContent("3.8");
+});
+
+test.each([
+  ["fr", 0, "0 séances de référence"],
+  ["fr", 1, "1 séance de référence"],
+  ["fr", 2, "2 séances de référence"],
+  ["en", 0, "0 reference sessions"],
+  ["en", 1, "1 reference session"],
+  ["en", 2, "2 reference sessions"],
+  ["es", 0, "0 sesiones de referencia"],
+  ["es", 1, "1 sesión de referencia"],
+  ["es", 2, "2 sesiones de referencia"],
+])("reference counts use human plurals in %s for %s", async (language, count, expected) => {
+  mockAxios({
+    analysisPayload: {
+      ...analysis,
+      comparison: {
+        ...analysis.comparison,
+        baseline_sample_count: count,
+        similar: { ...similarReference, sample_count: count },
+      },
+    },
+  });
+  renderWithProviders(
+    <Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>,
+    "/workout/w1", language,
+  );
+  await screen.findByTestId("coach-summary");
+  expect(screen.getByTestId("comparison-card")).toHaveTextContent(expected);
+  expect(screen.getByTestId("similar-comparison-card")).toHaveTextContent(expected);
+  expect(screen.getByTestId("workout-detail")).not.toHaveTextContent("(s)");
+  expect(screen.getByTestId("workout-detail")).not.toHaveTextContent("(es)");
+});
+
+test.each([
+  [42.678, 150.789, 2.789, -3.789, "43m", "151 bpm", "+3 min", "-4 bpm"],
+  [59.999, 0, 0, 0, "1h", "0 bpm", "0 min", "0 bpm"],
+  [119.999, 136.8, -0.1, 0.1, "2h", "137 bpm", "0 min", "0 bpm"],
+  [0, null, null, null, "0m", null, "--", "--"],
+  [null, NaN, NaN, Infinity, "--", "--", "--", "--"],
+])("WorkoutDetail formats duration %s and HR %s without raw decimals or fabricated data", async (
+  minutes, heartRate, minuteDelta, hrDelta, durationText, hrText, minuteDeltaText, hrDeltaText,
+) => {
+  const workoutPayload = {
+    ...workout,
+    duration_minutes: minutes,
+    km_splits: workout.km_splits.map((split) => ({ ...split, avg_hr: heartRate })),
+  };
+  const analysisPayload = {
+    ...analysis,
+    physiology: { ...analysis.physiology, avg_hr: heartRate },
+    comparison: {
+      ...analysis.comparison,
+      duration_minutes: { difference: minuteDelta },
+      avg_heart_rate: { difference: hrDelta },
+    },
+  };
+  mockAxios({ workoutPayload, analysisPayload });
+  renderWithProviders(
+    <Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>,
+    "/workout/w1",
+  );
+  await screen.findByTestId("coach-summary");
+  expect(screen.getByText(`10 km • ${durationText}`)).toBeVisible();
+  const recent = screen.getByTestId("comparison-card");
+  expect(within(recent).getByText("Duration").nextSibling).toHaveTextContent(minuteDeltaText);
+  expect(within(recent).getByText("HR").nextSibling).toHaveTextContent(hrDeltaText);
+  const intensity = screen.getByTestId("intensity-card-unavailable");
+  if (hrText == null) {
+    expect(intensity).not.toHaveTextContent("bpm");
+  } else {
+    expect(intensity).toHaveTextContent(hrText);
+  }
+  fireEvent.click(screen.getByTestId("advanced-toggle"));
+  if (hrText != null) {
+    expect(screen.getByTestId("hr-zones-card")).toHaveTextContent(hrText);
+    expect(screen.getByTestId("splits-chart-card")).toHaveTextContent(hrText);
+  } else {
+    expect(screen.getByTestId("hr-zones-card")).not.toHaveTextContent("bpm");
+    expect(screen.getByTestId("splits-chart-card")).not.toHaveTextContent("bpm");
+  }
+  expect(screen.getByTestId("workout-detail")).not.toHaveTextContent("NaN");
+  expect(screen.getByTestId("workout-detail")).not.toHaveTextContent("Infinity");
+  expect(workoutPayload.duration_minutes).toBe(minutes);
+  expect(analysisPayload.physiology.avg_hr).toBe(heartRate);
+  expect(analysisPayload.comparison.duration_minutes.difference).toBe(minuteDelta);
+  expect(analysisPayload.comparison.avg_heart_rate.difference).toBe(hrDelta);
 });
 
 test("unavailable similar reference gives a human caveat without fabricated metrics", async () => {
