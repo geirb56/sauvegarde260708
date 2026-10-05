@@ -5,6 +5,7 @@ import sys
 import inspect
 import json
 from contextlib import contextmanager
+from copy import deepcopy
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -1225,7 +1226,7 @@ async def test_selected_workout_recent_history_uses_strict_prior_timestamp_cutof
         {
             "external_id": "prior-0926",
             "user_id": _USER_ID,
-            "start_time": "2026-09-26T08:00:00Z",
+            "start_time": "2026-09-26",
             "distance": 10400,
             "duration": 4100,
             "pace_seconds_per_km": 396,
@@ -1248,6 +1249,27 @@ async def test_selected_workout_recent_history_uses_strict_prior_timestamp_cutof
             "duration": 4260,
             "pace_seconds_per_km": 419,
             "average_hr": 127,
+        },
+        {
+            "external_id": "same-day-date-only",
+            "user_id": _USER_ID,
+            "start_time": "2026-09-28",
+            "distance": 9000,
+            "duration": 3600,
+        },
+        {
+            "external_id": "same-day-after",
+            "user_id": _USER_ID,
+            "start_time": "2026-09-28T10:00:01Z",
+            "distance": 9000,
+            "duration": 3600,
+        },
+        {
+            "external_id": "same-day-equal",
+            "user_id": _USER_ID,
+            "start_time": selected_start,
+            "distance": 9000,
+            "duration": 3600,
         },
         {
             "external_id": "future-1001",
@@ -1279,6 +1301,9 @@ async def test_selected_workout_recent_history_uses_strict_prior_timestamp_cutof
     recent_ids = {item["id"] for item in recent}
     assert "garmin-prior-0926" in recent_ids
     assert "garmin-same-day-before" in recent_ids
+    assert "garmin-same-day-date-only" not in recent_ids
+    assert "garmin-same-day-after" not in recent_ids
+    assert "garmin-same-day-equal" not in recent_ids
     assert "garmin-selected-0928" not in recent_ids
     assert "garmin-future-1001" not in recent_ids
     assert context["current_training_context"]["reference_date"] == "2026-10-03"
@@ -1304,6 +1329,127 @@ async def test_selected_workout_recent_history_uses_strict_prior_timestamp_cutof
     }
     assert context["selected_workout_history_cutoff"] == "2026-09-28T10:00:00+00:00"
     assert context["selected_workout_history_cutoff_precision"] == "strict_timestamp_exclusive"
+
+
+@pytest.mark.parametrize("as_model", [False, True], ids=["dict", "CoachRecentWorkout"])
+@pytest.mark.parametrize("selected_timestamp", [True, False], ids=["timestamp", "date_inclusive"])
+@pytest.mark.parametrize(
+    "candidate_id,candidate_date,expected_exact,expected_date_only",
+    [
+        ("prior", "2026-09-26", True, True),
+        ("before", "2026-09-28T09:59:59Z", True, True),
+        ("equal", "2026-09-28T10:00:00Z", False, True),
+        ("after", "2026-09-28T10:00:01Z", False, True),
+        ("unknown-time", "2026-09-28", False, True),
+        ("next-day", "2026-09-29", False, False),
+        ("selected", "2026-09-26", False, False),
+        ("selected", "2026-09-28T09:00:00Z", False, False),
+        ("invalid", "not-a-date", False, False),
+    ],
+)
+def test_is_before_selected_workout_date_precision(
+    as_model, selected_timestamp, candidate_id, candidate_date,
+    expected_exact, expected_date_only,
+):
+    candidate = {"id": candidate_id, "date": candidate_date, "type": "run"}
+    if as_model:
+        candidate = coach_context_v2.CoachRecentWorkout(**candidate)
+    snapshot = deepcopy(candidate)
+    selected_datetime = (
+        datetime(2026, 9, 28, 10, tzinfo=timezone.utc) if selected_timestamp else None
+    )
+    assert coach_context_v2._is_before_selected_workout(
+        candidate,
+        selected_workout_id="selected",
+        selected_date=date(2026, 9, 28),
+        selected_datetime=selected_datetime,
+    ) is (expected_exact if selected_timestamp else expected_date_only)
+    assert candidate == snapshot
+    projected = coach_context_v2.build_llm_coach_context({
+        "workout_detail": {
+            "id": "selected",
+            "date": "2026-09-28T10:00:00Z" if selected_timestamp else "2026-09-28",
+        },
+    })
+    assert projected["selected_workout_history_cutoff_precision"] == (
+        "strict_timestamp_exclusive" if selected_timestamp else "date_inclusive"
+    )
+
+
+_CANONICAL_PACE_PROJECTIONS = [
+    ("pace_min_per_km", "pace_display", 6.81, "6:49/km"),
+    ("pace_min_per_km_min", "pace_min_display", 5.25, "5:15/km"),
+    ("pace_min_per_km_max", "pace_max_display", 6.81, "6:49/km"),
+    ("planned_pace_min_per_km", "planned_pace_display", 5.25, "5:15/km"),
+    ("actual_pace_min_per_km", "actual_pace_display", 6.81, "6:49/km"),
+    ("pace_delta_min_per_km", "pace_delta_display", 0.20, "+0:12/km"),
+]
+
+
+def test_llm_canonical_paces_final_json_is_display_only_and_non_mutating():
+    raw_paces = {key: value for key, _, value, _ in _CANONICAL_PACE_PROJECTIONS}
+    canonical = {
+        "reference_date": "2026-10-03",
+        "current_week_sessions": [{
+            "canonical": {
+                "structured_workout": {"steps": [{**raw_paces, "duration_seconds": 123}]},
+                "planned": dict(raw_paces),
+                "actual": dict(raw_paces),
+            },
+        }],
+        "today": {"canonical": dict(raw_paces)},
+        "workout_detail": {
+            "id": "selected",
+            "date": "2026-09-28T10:00:00Z",
+            "analysis": {"comparison": dict(raw_paces)},
+        },
+    }
+    snapshot = deepcopy(canonical)
+    projected = coach_context_v2.build_llm_coach_context(canonical)
+    serialized = json.dumps(projected, allow_nan=False)
+    reloaded = json.loads(serialized)
+    session = reloaded["current_week_sessions"][0]["canonical"]
+    expected = {display: text for _, display, _, text in _CANONICAL_PACE_PROJECTIONS}
+    assert session["structured_workout"]["steps"] == [{**expected, "duration_seconds": 123}]
+    assert session["planned"] == expected
+    assert session["actual"] == expected
+    assert reloaded["today"]["canonical"] == expected
+    assert reloaded["workout_detail"]["analysis"]["comparison"] == expected
+    for key, _, raw_value, display in _CANONICAL_PACE_PROJECTIONS:
+        assert f'"{key}"' not in serialized
+        assert str(raw_value) not in serialized
+        assert display in serialized
+    assert canonical == snapshot
+
+
+@pytest.mark.parametrize("raw_key,display_key,unused_value,unused_display", _CANONICAL_PACE_PROJECTIONS)
+@pytest.mark.parametrize(
+    "invalid", [None, float("nan"), float("inf"), float("-inf"), "invalid", True, {}, []],
+)
+def test_llm_canonical_invalid_paces_do_not_invent_values(
+    raw_key, display_key, unused_value, unused_display, invalid,
+):
+    canonical = {"today": {"canonical": {raw_key: invalid, "duration_seconds": 123}}}
+    projected = coach_context_v2.build_llm_coach_context(canonical)
+    serialized = json.dumps(projected, allow_nan=False)
+    assert projected["today"]["canonical"] == {"duration_seconds": 123}
+    assert f'"{raw_key}"' not in serialized
+    assert f'"{display_key}"' not in serialized
+    assert canonical["today"]["canonical"][raw_key] is invalid
+
+
+@pytest.mark.parametrize(
+    "raw_value,expected",
+    [(0.20, "+0:12/km"), (-0.012, "-0:01/km"), (0.001, "0:00/km"), (-0.001, "0:00/km"), (0, "0:00/km")],
+)
+def test_llm_canonical_delta_rounding_uses_existing_helper(raw_value, expected):
+    projected = coach_context_v2.build_llm_coach_context({
+        "today": {"canonical": {"pace_delta_min_per_km": raw_value}},
+    })
+    serialized = json.dumps(projected, allow_nan=False)
+    assert json.loads(serialized)["today"]["canonical"] == {"pace_delta_display": expected}
+    assert '"pace_delta_min_per_km"' not in serialized
+    assert expected in serialized
 
 
 def test_llm_pace_formatting_projection_and_grounding_permissions():
@@ -1428,6 +1574,11 @@ async def test_llm_receives_only_display_paces_and_explicit_interpretation_polic
         "reference_date": "2026-10-03",
         "stats_7d": {"km": 9.66, "sessions": 1},
         "stats_30d": {"km": 30.0, "sessions": 4},
+        "current_week_sessions": [{
+            "canonical": {
+                key: value for key, _, value, _ in _CANONICAL_PACE_PROJECTIONS
+            },
+        }],
         "training_paces": {
             "paces": {
                 "easy": {
@@ -1480,6 +1631,10 @@ async def test_llm_receives_only_display_paces_and_explicit_interpretation_polic
     assert "6:01/km" in prompt
     assert '"avg_pace_min_km"' not in prompt
     assert '"pace_difference_min_km"' not in prompt
+    for raw_key, display_key, raw_value, display in _CANONICAL_PACE_PROJECTIONS:
+        assert f'"{raw_key}"' not in prompt
+        assert str(raw_value) not in prompt
+        assert f'"{display_key}":"{display}"' in prompt
     assert "Use pace display strings verbatim" in prompt
     assert '"intensity_interpretation_allowed":false' in prompt
     assert '"progress_regression_allowed":false' in prompt
