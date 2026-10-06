@@ -284,12 +284,17 @@ def _project_paces_for_llm(value: Any) -> Any:
             "slowest_split_min_km",
             "pace_min_km",
             "split_pace_min_km",
+            "pace_min_per_km",
+            "pace_min_per_km_min",
+            "pace_min_per_km_max",
+            "planned_pace_min_per_km",
+            "actual_pace_min_per_km",
         }:
             if isinstance(item, dict):
                 continue
             display = _format_pace_min_km(item)
             if display is not None:
-                projected[key.removesuffix("_min_km") + "_display"] = display
+                projected[key.removesuffix("_min_km").replace("_min_per_km", "") + "_display"] = display
             continue
         if key in {"pace_seconds_per_km", "avg_pace_seconds_per_km"}:
             try:
@@ -300,10 +305,10 @@ def _project_paces_for_llm(value: Any) -> Any:
             if display is not None:
                 projected[key.removesuffix("_seconds_per_km") + "_display"] = display
             continue
-        if key in {"pace_difference_min_km", "pace_drop_min_km"}:
+        if key in {"pace_difference_min_km", "pace_drop_min_km", "pace_delta_min_per_km"}:
             display = _format_pace_delta_min_km(item)
             if display is not None:
-                projected[key.removesuffix("_min_km") + "_display"] = display
+                projected[key.removesuffix("_min_km").removesuffix("_min_per_km") + "_display"] = display
             continue
         projected[key] = _project_paces_for_llm(item)
     return projected
@@ -614,12 +619,14 @@ def _is_before_selected_workout(
         else recent_workout.get("start_time") or recent_workout.get("date")
     )
     workout_date = _parse_iso_date(raw_date)
-    if workout_date is None or workout_date > selected_date:
+    if workout_date is None:
         return False
-    if selected_datetime is None:
-        return True
-    workout_datetime = _parse_exact_datetime(raw_date)
-    return workout_datetime is not None and workout_datetime < selected_datetime
+    if selected_datetime is not None:
+        workout_datetime = _parse_exact_datetime(raw_date)
+        if workout_datetime is not None:
+            return workout_datetime < selected_datetime
+        return workout_date < selected_date
+    return workout_date <= selected_date
 
 
 def _normalize_recent_workout(workout: dict[str, Any]) -> CoachRecentWorkout:
