@@ -7,6 +7,7 @@ import axios from "axios";
 import Coach from "@/pages/Coach";
 import { LanguageProvider } from "@/context/LanguageContext";
 import { useAuth } from "@/context/AuthContext";
+import { LANGUAGE_STORAGE_KEY } from "@/lib/i18n";
 
 jest.mock("axios");
 jest.mock("sonner", () => ({
@@ -19,11 +20,17 @@ jest.mock("@/context/AuthContext", () => ({
 describe("Coach page", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, "en");
     useAuth.mockReturnValue({ user: { id: "u1" } });
     axios.get.mockResolvedValue({ data: [] });
   });
 
-  test("empty state stays advisory and does not fabricate a prescription", async () => {
+  test.each([
+    ["en", /I can help you understand today's workout/i, /I use your RunIndex plan/i],
+    ["fr", /Je peux t'aider à comprendre ta séance du jour/i, /Je m'appuie sur ton plan RunIndex/i],
+    ["es", /Puedo ayudarte a entender la sesión de hoy/i, /Me apoyo en tu plan de RunIndex/i],
+  ])("empty state is natural and advisory in %s", async (language, emptyState, note) => {
+    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
     render(
       <LanguageProvider>
         <MemoryRouter>
@@ -32,8 +39,11 @@ describe("Coach page", () => {
       </LanguageProvider>
     );
 
-    expect(await screen.findByText(/only prescription authority/i)).toBeInTheDocument();
-    expect(screen.getByText(/Open today and training/i)).toBeInTheDocument();
+    expect(await screen.findByText(emptyState)).toBeInTheDocument();
+    expect(screen.getByText(note)).toBeInTheDocument();
+    expect(screen.getByTestId("coach-page")).not.toHaveTextContent(
+      /second prescription|seconde prescription|segunda prescripción|prescription authority|autorité de prescription|autoridad de prescripción|Training V2|canonical|canonique|engine/i
+    );
     expect(screen.queryByText(/Tempo|Intervals|Long run/i)).not.toBeInTheDocument();
   });
 
@@ -49,10 +59,15 @@ describe("Coach page", () => {
     );
 
     expect(await screen.findByTestId("coach-history-load-error")).toBeInTheDocument();
-    expect(screen.queryByText(/only prescription authority/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/I use your RunIndex plan/i)).not.toBeInTheDocument();
   });
 
-  test("workout auto-analysis posts only message, workout_id, and language", async () => {
+  test.each([
+    ["en", "Analyze this workout and tell me what matters most: Tempo Run"],
+    ["fr", "Analyse cette séance et dis-moi ce qu'il faut retenir : Tempo Run"],
+    ["es", "Analiza esta sesión y dime qué es lo más importante: Tempo Run"],
+  ])("workout auto-analysis posts takeaway message, workout_id, and language in %s", async (language, message) => {
+    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
     axios.get.mockImplementation((url) => {
       if (String(url).includes("/coach/history")) {
         return Promise.resolve({ data: [] });
@@ -76,12 +91,13 @@ describe("Coach page", () => {
     expect(axios.post).toHaveBeenCalledWith(
       expect.stringContaining("/coach/analyze"),
       {
-        message: expect.any(String),
+        message,
         workout_id: "workout-42",
-        language: "en",
+        language,
       }
     );
     expect(axios.post.mock.calls[0][1]).not.toHaveProperty("deep_analysis");
+    expect(message).not.toMatch(/Deep analysis|Analyse approfondie|Análisis profundo/i);
   });
 
   test("selected workout context persists through follow-ups", async () => {
@@ -135,7 +151,7 @@ describe("Coach page", () => {
       </LanguageProvider>
     );
 
-    await screen.findByText(/only prescription authority/i);
+    await screen.findByText(/I use your RunIndex plan/i);
     fireEvent.change(screen.getByTestId("coach-input"), {
       target: { value: "What should I know about this week?" },
     });
