@@ -42,8 +42,12 @@ describe("Layout mobile nav", () => {
     expect(screen.queryByTestId("header-user-avatar")).not.toBeInTheDocument();
   });
 
-  test("renders the intended full english labels in the mobile nav", () => {
-    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, "en");
+  test.each([
+    ["fr", ["Accueil", "Plan", "Séances", "Coach", "Progrès"], "Entraînement", "Progression"],
+    ["en", ["Home", "Plan", "Sessions", "Coach", "Progress"], "Training", "Progress"],
+    ["es", ["Inicio", "Plan", "Sesiones", "Coach", "Progreso"], "Entrenamiento", "Progreso"],
+  ])("renders short single-line mobile labels with full accessible names in %s", (language, labels, training, progress) => {
+    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
     render(
       <LanguageProvider>
         <MemoryRouter>
@@ -53,29 +57,19 @@ describe("Layout mobile nav", () => {
     );
 
     const mobileNav = screen.getByTestId("mobile-nav");
-    expect(within(mobileNav).getByText("Home")).toBeInTheDocument();
-    expect(within(mobileNav).getByText("Training")).toBeInTheDocument();
-    expect(within(mobileNav).getByText("Sessions")).toBeInTheDocument();
-    expect(within(mobileNav).getByText("Coach")).toBeInTheDocument();
-    expect(within(mobileNav).getByText("Progress")).toBeInTheDocument();
-  });
-
-  test("renders the intended full french labels in the mobile nav", () => {
-    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, "fr");
-    render(
-      <LanguageProvider>
-        <MemoryRouter>
-          <Layout />
-        </MemoryRouter>
-      </LanguageProvider>
-    );
-
-    const mobileNav = screen.getByTestId("mobile-nav");
-    expect(within(mobileNav).getByText("Accueil")).toBeInTheDocument();
-    expect(within(mobileNav).getByText("Entraînement")).toBeInTheDocument();
-    expect(within(mobileNav).getByText("Séances")).toBeInTheDocument();
-    expect(within(mobileNav).getByText("Coach")).toBeInTheDocument();
-    expect(within(mobileNav).getByText("Progression")).toBeInTheDocument();
+    expect(within(mobileNav).getAllByRole("link")).toHaveLength(5);
+    expect(mobileNav.firstChild).toHaveClass("grid-cols-5");
+    labels.forEach((label) => {
+      const element = within(mobileNav).getByText(label);
+      expect(element).toHaveClass("text-[11px]", "whitespace-nowrap");
+      expect(element).not.toHaveClass("break-words");
+      expect(element).not.toHaveClass("whitespace-normal");
+      expect(element).not.toHaveClass("truncate");
+    });
+    expect(within(mobileNav).getByRole("link", { name: training })).toHaveAttribute("title", training);
+    expect(within(mobileNav).getByRole("link", { name: progress })).toHaveAttribute("title", progress);
+    expect(screen.getByTestId("mobile-nav-training")).toHaveAttribute("href", "/training");
+    expect(screen.getByTestId("mobile-nav-progress")).toHaveAttribute("href", "/progress");
   });
 
   test("removes the non-interactive header avatar even when identity is unavailable", () => {

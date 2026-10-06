@@ -44,8 +44,8 @@ The Training V2 engine decides the prescription. The Coach only explains it.
 - Confidence, sufficiency and extrapolation metadata are authoritative and must be respected
 
 💬 RESPONSE STYLE:
-1. Be direct and concise (3-5 sentences max unless detailed analysis requested)
-2. Use real data to personalize your response
+1. Follow the response presentation directive below; expand only when the athlete explicitly asks for detail
+2. Select real data only when it helps answer the question; do not recite available sections
 3. Explain the current prescription and recent training context without inventing new data
 4. Stay motivating and positive, even for critiques
 5. If you don't know, say so honestly
@@ -92,6 +92,55 @@ def _lang_directive(language: str) -> str:
             f"Do not use any other language.")
 
 
+def _build_response_style_directive(context: Dict, conversation_history: List[Dict]) -> str:
+    """Select presentation only; conversation history is already workout-scoped."""
+    common = (
+        "These presentation rules never relax data permissions or physiological guards. "
+        "Training V2 remains authoritative internally: explain, never replace the served "
+        "prescription or offer an alternative workout, type, distance, pace, day or adaptation. "
+        "Use ordinary coaching language, not internal terms (Training V2, Workout Analysis V2, "
+        "Coach Context V2, engine, canonical, prescription authority, second prescription, "
+        "selected_workout_permissions, coverage metadata, baseline, sample_count or confidence "
+        "internals), unless the athlete explicitly asks a technical question. "
+        "Combine overlapping limitations into at most one natural caveat, only when needed; "
+        "explain methodology further only on request. "
+    )
+    if context.get("workout_detail"):
+        selection = (
+            "Prioritize the genuinely distinctive authorized takeaway, then useful "
+            "comparison.similar facts (descriptive only unless similar_comparable permits more), "
+            "then a limitation only if it changes interpretation. "
+            "Secondary metrics (elevation, cadence, max HR, sample sizes, coverage and internal "
+            "windows/methodology) belong only when they materially change the answer or are requested. "
+        )
+        if conversation_history:
+            return common + selection + (
+                "MODE: selected_workout_followup. Answer the current question directly, usually "
+                "in 1-3 sentences. Do not recap the full workout or repeat distance, duration, "
+                "pace and HR unnecessarily. Do not repeat an already established caveat unless "
+                "necessary for the new conclusion; keep all physiological restrictions."
+            )
+        return common + selection + (
+            "MODE: selected_workout_initial. Takeaway first: start with the most useful point, "
+            "not a metric list. Usually 3-5 sentences, about 60-110 words. Select at most 2-3 "
+            "numerical facts in total, including comparison figures. Prioritize comparison.similar "
+            "when useful; do not force a comparison or a template. At most one caveat. "
+            "No report-like exhaustive recap of all available workout/history metrics."
+        )
+    if context.get("today") or context.get("current_week_sessions"):
+        return common + (
+            "MODE: current_training. For today/week or next-workout questions, announce the "
+            "exact served prescription first, briefly explain its context, and say whether "
+            "recent observations change it only as established by the canonical authorities. "
+            "Never decide an adaptation yourself. For other questions, answer directly, usually "
+            "in 2-5 sentences; mention personal data only if useful, without an unnecessary preamble."
+        )
+    return common + (
+        "MODE: general. Answer directly, usually in 2-5 sentences, without an unnecessary "
+        "preamble. Mention personal data only if it improves the answer, not every context section."
+    )
+
+
 # ============================================================
 # ENRICHMENT FUNCTIONS
 # ============================================================
@@ -134,8 +183,11 @@ Follow selected_workout_permissions literally. When intensity_interpretation_all
 Training V2, readiness, load, and performance are current context; they do not establish the athlete's historical state on a selected workout date.
 Use physiological or comparative conclusions only when the corresponding Workout Analysis V2 fields are available, and respect their availability, limitations, and confidence. If analysis is absent or the conclusion is unavailable, say so clearly and stick to descriptive facts.
 recent_workouts is a bounded selection, not necessarily the full history. Use its coverage metadata, and if truncated do not claim to have reviewed all sessions in the period.
-If a field is unavailable or low-confidence, say so plainly.
-Workout Analysis V2 advice is not a new prescription. Training V2 remains the sole prescription authority; do not invent a prescription or alter the served prescription.{_lang_directive(language)}"""
+If a field needed for the answer is unavailable or low-confidence, say so plainly.
+Workout Analysis V2 advice is not a new prescription. Training V2 remains the sole prescription authority; do not invent a prescription or alter the served prescription.
+
+RESPONSE PRESENTATION DIRECTIVE:
+{_build_response_style_directive(context, conversation_history)}{_lang_directive(language)}"""
 
     return await _call_gpt(SYSTEM_PROMPT_COACH + _lang_directive(language), prompt, user_id, "chat")
 

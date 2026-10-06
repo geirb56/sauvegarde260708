@@ -11,10 +11,10 @@ export const Layout = () => {
 
   const navItems = [
     { path: "/", icon: Home, labelKey: "nav.home", testId: "mobile-nav-dashboard" },
-    { path: "/training", icon: CalendarDays, labelKey: "nav.training", testId: "mobile-nav-training" },
+    { path: "/training", icon: CalendarDays, labelKey: "nav.training", mobileLabelKey: "nav.mobileTraining", testId: "mobile-nav-training" },
     { path: "/sessions", icon: Activity, labelKey: "nav.sessions", testId: "mobile-nav-sessions" },
     { path: "/coach", icon: MessageCircle, labelKey: "nav.coach", testId: "mobile-nav-coach" },
-    { path: "/progress", icon: TrendingUp, labelKey: "nav.progress", testId: "mobile-nav-progress" },
+    { path: "/progress", icon: TrendingUp, labelKey: "nav.progress", mobileLabelKey: "nav.mobileProgress", testId: "mobile-nav-progress" },
   ];
 
   return (
@@ -82,6 +82,8 @@ export const Layout = () => {
             <NavLink
               key={item.path}
               to={item.path}
+              aria-label={t(item.labelKey)}
+              title={t(item.labelKey)}
               data-testid={item.testId}
               className={`nav-item-modern flex min-h-[56px] items-center justify-center rounded-2xl px-1.5 py-2 ${isActive ? "active" : ""}`}
             >
@@ -94,7 +96,7 @@ export const Layout = () => {
                   />
                 )}
               </div>
-              <span className="nav-label w-full text-center text-[11px] font-medium leading-3 whitespace-normal break-words">{t(item.labelKey)}</span>
+              <span className="nav-label w-full text-center text-[11px] font-medium leading-3 whitespace-nowrap">{t(item.mobileLabelKey || item.labelKey)}</span>
             </NavLink>
           );
         })}
