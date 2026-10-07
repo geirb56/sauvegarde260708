@@ -422,10 +422,43 @@ describe("Coach page", () => {
 
     fireEvent.click(await screen.findByTestId("close-workout-context"));
     resolveWorkout({ data: { name: "Late name", distance_km: 8, date: "2026-10-06" } });
-    expect(await screen.findByText("analysis")).toBeInTheDocument();
+    const input = screen.getByTestId("coach-input");
+    await waitFor(() => expect(input).not.toBeDisabled());
+    expect(axios.post).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("message-0")).not.toBeInTheDocument();
     expect(screen.queryByTestId("coach-workout-context")).not.toBeInTheDocument();
     expect(screen.queryByTestId("coach-followup-chips")).not.toBeInTheDocument();
     expect(axios.delete).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: "General question" } });
+    fireEvent.submit(input.closest("form"));
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(1));
+    expect(axios.post.mock.calls[0][1]).not.toHaveProperty("workout_id");
+  });
+
+  test("closing during an in-flight analysis preserves its eventual reply without reactivating context", async () => {
+    axios.get.mockImplementation(url => Promise.resolve({
+      data: String(url).includes("/coach/history") ? [] : { name: "Easy Run" },
+    }));
+    let resolveAnalysis;
+    axios.post.mockImplementationOnce(() => new Promise(resolve => { resolveAnalysis = resolve; }));
+    render(
+      <LanguageProvider>
+        <MemoryRouter initialEntries={["/coach?analyze=w28"]}>
+          <Coach />
+        </MemoryRouter>
+      </LanguageProvider>
+    );
+
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByTestId("close-workout-context"));
+    expect(screen.getByTestId("message-0")).toHaveAttribute("data-workout-id", "w28");
+    expect(axios.delete).not.toHaveBeenCalled();
+    resolveAnalysis({ data: { response: "Late analysis" } });
+    expect(await screen.findByText("Late analysis")).toBeInTheDocument();
+    expect(screen.getByTestId("message-1")).toHaveAttribute("data-workout-id", "w28");
+    expect(screen.queryByTestId("coach-workout-context")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("coach-followup-chips")).not.toBeInTheDocument();
+    axios.post.mockResolvedValueOnce({ data: { response: "General answer" } });
     const input = screen.getByTestId("coach-input");
     fireEvent.change(input, { target: { value: "General question" } });
     fireEvent.submit(input.closest("form"));

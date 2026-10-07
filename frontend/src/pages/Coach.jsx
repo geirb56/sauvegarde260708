@@ -21,6 +21,7 @@ export default function Coach() {
   const [analyzingWorkout, setAnalyzingWorkout] = useState(null);
   const [activeWorkoutId, setActiveWorkoutId] = useState(null);
   const [activeWorkoutMetadata, setActiveWorkoutMetadata] = useState(null);
+  const activeWorkoutRef = useRef(null);
   const scrollRef = useRef(null);
   const inputRef = useRef(null);
   const { t, lang } = useLanguage();
@@ -68,6 +69,7 @@ export default function Coach() {
   }, [messages]);
 
   const triggerWorkoutAnalysis = async (workoutId) => {
+    activeWorkoutRef.current = workoutId;
     setActiveWorkoutId(workoutId);
     setActiveWorkoutMetadata({});
     setAnalyzingWorkout(workoutId);
@@ -87,6 +89,12 @@ export default function Coach() {
       setActiveWorkoutMetadata(current => current === null ? null : metadata);
     } catch (e) {
       workoutName = workoutId;
+    }
+
+    if (activeWorkoutRef.current !== workoutId) {
+      setLoading(false);
+      setAnalyzingWorkout(null);
+      return;
     }
 
     const analysisMessage = t("coachExtended.analysisPrompt").replace("{name}", workoutName);
@@ -187,6 +195,7 @@ export default function Coach() {
   };
 
   const handleCloseContext = () => {
+    activeWorkoutRef.current = null;
     setActiveWorkoutId(null);
     setActiveWorkoutMetadata(null);
   };
@@ -207,7 +216,7 @@ export default function Coach() {
 
   if (initialLoading) {
     return (
-      <div className="flex flex-col h-[calc(100vh-60px)] md:h-screen" data-testid="coach-page">
+      <div className="flex min-w-0 flex-col h-[calc(100dvh-4.5rem-5.25rem-env(safe-area-inset-bottom))]" data-testid="coach-page">
         <div className="px-4 py-3 md:px-8 md:py-4 border-b border-border">
           <div className="h-8 w-32 bg-muted rounded animate-pulse" />
         </div>
@@ -219,9 +228,9 @@ export default function Coach() {
   }
 
   return (
-    <div className="flex flex-col h-[calc(100vh-60px)] md:h-screen" data-testid="coach-page">
+    <div className="flex min-w-0 flex-col h-[calc(100dvh-4.5rem-5.25rem-env(safe-area-inset-bottom))]" data-testid="coach-page">
       {/* Header */}
-      <div className="px-4 py-3 md:px-8 md:py-4 border-b border-border">
+      <div className="shrink-0 px-4 py-3 md:px-8 md:py-4 border-b border-border">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <h1 className="font-heading text-xl sm:text-2xl uppercase tracking-tight font-bold mb-1 break-words">
@@ -247,7 +256,7 @@ export default function Coach() {
       </div>
 
       {activeWorkoutId && (
-        <div className="flex items-center gap-2 border-b border-border px-4 py-2 md:px-8" data-testid="coach-workout-context">
+        <div className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-2 md:px-8" data-testid="coach-workout-context">
           <p className="min-w-0 flex-1 break-words text-sm text-muted-foreground">
             {workoutContextParts.length ? workoutContextParts.join(" · ") : t("coach.activeWorkout")}
           </p>
@@ -266,7 +275,7 @@ export default function Coach() {
       )}
 
       {/* Messages Area */}
-      <ScrollArea ref={scrollRef} className="flex-1 p-4 md:p-8">
+      <ScrollArea ref={scrollRef} className="min-h-0 flex-1 p-4 md:p-8">
         {historyLoadError && messages.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-center py-12" data-testid="coach-history-load-error">
             <Card className="w-full max-w-xl border-border bg-card/80 text-left shadow-sm">
@@ -366,7 +375,7 @@ export default function Coach() {
       </ScrollArea>
 
       {/* Input Area */}
-      <div className="p-4 md:p-6 border-t border-border bg-background">
+      <div className="shrink-0 p-4 md:p-6 border-t border-border bg-background">
         <form onSubmit={handleSubmit} className="flex gap-3">
           <Textarea
             ref={inputRef}
