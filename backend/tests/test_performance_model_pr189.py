@@ -22,6 +22,7 @@ def _run(
     avg_hr: Optional[float] = None,
     max_hr: Optional[float] = None,
     activity_type: str = "running",
+    elevation_gain_m: Optional[float] = None,
 ) -> DomainActivity:
     return DomainActivity(
         activity_type=activity_type,
@@ -30,6 +31,7 @@ def _run(
         duration_s=duration_s,
         average_hr=avg_hr,
         max_hr=max_hr,
+        elevation_gain_m=elevation_gain_m,
     )
 
 
@@ -119,6 +121,45 @@ def test_c_crossing_sources_case_is_monotonic_from_raw_curve():
         assert preds[label].predicted_time_s == pytest.approx(round(expected, 1), abs=0.11)
 
 
+def test_recent_qualified_10k_performance_anchors_the_common_curve():
+    demonstrated_time = 3_000.0
+    acts = _benchmark_runs() + [
+        _run(days_ago=5, distance_m=10_000.0, duration_s=demonstrated_time, avg_hr=156.0, max_hr=178.0),
+        _run(days_ago=8, distance_m=10_000.0, duration_s=3_300.0, avg_hr=150.0, max_hr=178.0),
+        _run(days_ago=10, distance_m=15_000.0, duration_s=5_100.0, avg_hr=150.0, max_hr=178.0),
+    ]
+    quality = evaluate_performance_quality(acts[-3], acts, TODAY)
+    assert quality.qualified is True
+
+    result = predict_races(acts, TODAY)
+    preds = _pred_by_label(result)
+
+    assert preds["10K"].predicted_time_s <= demonstrated_time
+    _assert_monotonic(preds)
+    assert result.race_curve_diagnostics["anchor_applied"] is True
+    assert result.race_curve_diagnostics["anchor_distance_m"] == 10_000.0
+    assert result.race_curve_diagnostics["anchor_duration_s"] == demonstrated_time
+
+
+def test_recent_qualified_semi_performance_anchors_the_common_curve():
+    demonstrated_time = 7_320.0
+    acts = _benchmark_runs() + [
+        _run(days_ago=5, distance_m=21_097.5, duration_s=demonstrated_time, avg_hr=160.0, max_hr=178.0),
+        _run(days_ago=8, distance_m=10_000.0, duration_s=3_500.0, avg_hr=150.0, max_hr=178.0),
+        _run(days_ago=10, distance_m=15_000.0, duration_s=5_600.0, avg_hr=150.0, max_hr=178.0),
+    ]
+    assert evaluate_performance_quality(acts[-3], acts, TODAY).qualified is True
+
+    result = predict_races(acts, TODAY)
+    preds = _pred_by_label(result)
+
+    assert preds["Semi"].predicted_time_s <= demonstrated_time
+    _assert_monotonic(preds)
+    assert result.race_curve_diagnostics["anchor_applied"] is True
+    assert result.race_curve_diagnostics["anchor_distance_m"] == 21_097.5
+    assert result.race_curve_diagnostics["anchor_duration_s"] == demonstrated_time
+
+
 def test_d_recency_affects_common_curve_without_per_target_splitting():
     old_strong = _run(days_ago=80, distance_m=10_000.0, duration_s=2_880.0, avg_hr=164.0, max_hr=180.0)
     recent_slightly_weaker = _run(days_ago=4, distance_m=10_000.0, duration_s=3_020.0, avg_hr=160.0, max_hr=178.0)
@@ -141,7 +182,7 @@ def test_d_recency_affects_common_curve_without_per_target_splitting():
     }
 
 
-def test_e_outlier_does_not_dominate_curve():
+def test_e_qualified_fast_observation_anchors_one_coherent_curve():
     core = _benchmark_runs() + [
         _run(days_ago=14, distance_m=5_000.0, duration_s=1_500.0, avg_hr=158.0, max_hr=176.0),
         _run(days_ago=9, distance_m=10_000.0, duration_s=3_120.0, avg_hr=159.0, max_hr=177.0),
@@ -155,7 +196,13 @@ def test_e_outlier_does_not_dominate_curve():
     b10 = _pred_by_label(base)["10K"].predicted_time_s
     o10 = _pred_by_label(with_outlier)["10K"].predicted_time_s
     assert b10 is not None and o10 is not None
-    assert abs(o10 - b10) / b10 < 0.20
+    diagnostics = with_outlier.race_curve_diagnostics
+    assert diagnostics["anchor_applied"] is True
+    assert diagnostics["anchor_distance_m"] == 5_000.0
+    assert diagnostics["anchor_duration_s"] == 1_120.0
+    assert o10 == pytest.approx(
+        round(diagnostics["curve_a"] * 10_000.0 ** diagnostics["curve_k"], 1)
+    )
 
 
 def test_f_input_order_invariance_for_curve_and_predictions():
@@ -192,6 +239,10 @@ def test_g_future_lookahead_is_disabled_for_curve():
 
     assert a.race_curve_diagnostics == b.race_curve_diagnostics
     assert a.predictions == b.predictions
+    assert (
+        b.race_curve_diagnostics["anchor_days_ago"] is None
+        or b.race_curve_diagnostics["anchor_days_ago"] >= 0
+    )
 
 
 def test_h_non_qualified_activity_contribution_is_zero():
@@ -203,11 +254,41 @@ def test_h_non_qualified_activity_contribution_is_zero():
     baseline = predict_races(_benchmark_runs(), TODAY)
     with_non_qualified = predict_races(acts, TODAY)
     assert baseline.race_curve_diagnostics == with_non_qualified.race_curve_diagnostics
+    assert with_non_qualified.race_curve_diagnostics["anchor_applied"] is False
     base_preds = _pred_by_label(baseline)
     test_preds = _pred_by_label(with_non_qualified)
     for label in [*RACE_DISTANCES_M.keys()]:
         assert base_preds[label].predicted_time_s == test_preds[label].predicted_time_s
         assert base_preds[label].confidence == test_preds[label].confidence
+
+
+def test_trail_and_non_comparable_terrain_are_never_curve_anchors():
+    baseline = predict_races(_benchmark_runs(), TODAY)
+    trail = _run(
+        days_ago=5,
+        distance_m=10_000.0,
+        duration_s=2_500.0,
+        avg_hr=160.0,
+        max_hr=178.0,
+        activity_type="trail_running",
+    )
+    steep_road = _run(
+        days_ago=5,
+        distance_m=10_000.0,
+        duration_s=2_500.0,
+        avg_hr=160.0,
+        max_hr=178.0,
+        elevation_gain_m=500.0,
+    )
+
+    for candidate in (trail, steep_road):
+        quality = evaluate_performance_quality(candidate, _benchmark_runs() + [candidate], TODAY)
+        assert quality.qualified is False
+        result = predict_races(_benchmark_runs() + [candidate], TODAY)
+        assert result.race_curve_diagnostics == baseline.race_curve_diagnostics
+        assert [p.predicted_time_s for p in result.predictions] == [
+            p.predicted_time_s for p in baseline.predictions
+        ]
 
 
 def test_i_speed_only_qualification_feeds_curve():
@@ -220,6 +301,12 @@ def test_i_speed_only_qualification_feeds_curve():
     assert result.race_curve_diagnostics["qualified_performance_count"] >= 1
     assert preds["10K"].predicted_time_s is not None
     assert preds["10K"].source_relative_hr is None
+    assert preds["10K"].source_quality_confidence == "low"
+    assert {prediction.confidence for prediction in preds.values()} == {"low"}
+
+    repeated = predict_races(acts, TODAY)
+    assert repeated.predictions == result.predictions
+    assert repeated.race_curve_diagnostics == result.race_curve_diagnostics
 
 
 def test_j_marathon_only_extrapolation_is_symmetric_and_visible():
@@ -339,6 +426,63 @@ def _qualified_obs(*, days_ago: int, distance_m: float, duration_s: float, score
     return activity, quality
 
 
+def test_stale_performance_is_not_a_current_curve_anchor():
+    stale = _qualified_obs(days_ago=150, distance_m=10_000.0, duration_s=2_500.0, score=1.0)
+    recent = [
+        _qualified_obs(days_ago=5, distance_m=5_000.0, duration_s=1_900.0, score=1.0),
+        _qualified_obs(days_ago=8, distance_m=15_000.0, duration_s=6_000.0, score=1.0),
+    ]
+    curve = pm._build_performance_curve([stale, *recent], TODAY)
+
+    assert curve is not None
+    assert curve.anchor_days_ago != 150
+    assert pm._curve_time_s(curve, stale[0].distance_m) > stale[0].duration_s
+    assert curve.anchor_eligible_count == 2
+
+
+def test_recent_anchor_uses_fallback_riegel_k_without_confidence_boost():
+    anchor = _qualified_obs(
+        days_ago=5, distance_m=10_000.0, duration_s=3_000.0, score=0.95, confidence="low"
+    )
+    slower = _qualified_obs(
+        days_ago=8, distance_m=10_000.0, duration_s=3_300.0, score=0.95, confidence="low"
+    )
+    curve = pm._build_performance_curve([anchor, slower], TODAY)
+
+    assert curve is not None
+    assert curve.k == pytest.approx(1.06)
+    assert curve.k_fallback_applied is True
+    assert curve.anchor_applied is True
+    assert pm._curve_time_s(curve, anchor[0].distance_m) <= anchor[0].duration_s
+    assert curve.anchor_quality_confidence == "low"
+
+
+def test_no_recent_anchor_leaves_robust_fit_level_unchanged():
+    pool = [
+        _qualified_obs(
+            days_ago=130 + idx,
+            distance_m=distance,
+            duration_s=duration,
+            score=0.9,
+            confidence="low",
+        )
+        for idx, (distance, duration) in enumerate(
+            [(5_000.0, 1_600.0), (10_000.0, 3_400.0), (15_000.0, 5_300.0)]
+        )
+    ]
+    curve = pm._build_performance_curve(pool, TODAY)
+
+    assert curve is not None
+    expected_intercept = sum(
+        contributor.robust_weight
+        * (math.log(contributor.duration_s) - curve.k * math.log(contributor.distance_m))
+        for contributor in curve.contributors
+    ) / sum(contributor.robust_weight for contributor in curve.contributors)
+    assert curve.a == pytest.approx(math.exp(expected_intercept), rel=1e-10)
+    assert curve.anchor_applied is False
+    assert curve.anchor_eligible_count == 0
+
+
 def test_n_huber_final_refit_matches_final_weights():
     qualified_pool = [
         _qualified_obs(days_ago=6, distance_m=5_000.0, duration_s=1_500.0, score=1.0),
@@ -359,6 +503,15 @@ def test_n_huber_final_refit_matches_final_weights():
     assert fit is not None
     intercept, slope = fit
     assert curve.k == pytest.approx(slope, rel=1e-10, abs=1e-10)
+    anchor_intercepts = [
+        math.log(activity.duration_s)
+        - slope * math.log(activity.distance_m)
+        for activity, _ in qualified_pool
+        if 0 <= (TODAY - date.fromisoformat(activity.start_time[:10])).days
+        <= pm.CONFIDENCE_LOW_DAYS
+    ]
+    if anchor_intercepts:
+        intercept = min(intercept, min(anchor_intercepts))
     assert curve.a == pytest.approx(math.exp(intercept), rel=1e-10, abs=1e-10)
     assert curve.fit_quality == pm._weighted_r2(xs, ys, ws, intercept, slope)
 
@@ -432,6 +585,12 @@ def test_r_conflict_fallback_reestimates_a_with_forced_k():
     ys = [math.log(c.duration_s) for c in curve.contributors]
     ws = [c.robust_weight for c in curve.contributors]
     expected_log_a = sum(w * (y - pm.RIEGEL_K * x) for x, y, w in zip(xs, ys, ws)) / sum(ws)
+    anchor_log_a = min(
+        math.log(activity.duration_s) - pm.RIEGEL_K * math.log(activity.distance_m)
+        for activity, quality in qualified_pool
+        if (TODAY - date.fromisoformat(activity.start_time[:10])).days <= pm.CONFIDENCE_LOW_DAYS
+    )
+    expected_log_a = min(expected_log_a, anchor_log_a)
     assert curve.a == pytest.approx(math.exp(expected_log_a), rel=1e-10, abs=1e-10)
 
 
@@ -476,12 +635,23 @@ def test_v_outlier_weight_is_reduced_and_fit_beats_plain_ols_on_core_points():
     assert ols is not None
     ols_i, ols_k = ols
 
-    robust_i, robust_k = math.log(curve.a), curve.k
+    robust_k = curve.k
+    robust_i, _ = pm._weighted_linear_fit(
+        [math.log(c.distance_m) for c in curve.contributors],
+        [math.log(c.duration_s) for c in curve.contributors],
+        [c.robust_weight for c in curve.contributors],
+    )
+    assert robust_i is not None
     core_xs = [math.log((a.distance_m or 0.0)) for a, _ in core]
     core_ys = [math.log((a.duration_s or 0.0)) for a, _ in core]
     ols_err = sum(abs(y - (ols_i + ols_k * x)) for x, y in zip(core_xs, core_ys)) / len(core)
     robust_err = sum(abs(y - (robust_i + robust_k * x)) for x, y in zip(core_xs, core_ys)) / len(core)
     assert robust_err < ols_err
+    anchor_intercept = min(
+        math.log(activity.duration_s) - curve.k * math.log(activity.distance_m)
+        for activity, _ in pool
+    )
+    assert math.log(curve.a) == pytest.approx(min(robust_i, anchor_intercept))
 
 
 def test_w_confidence_uses_weighted_contributor_ensemble_not_best_only():
