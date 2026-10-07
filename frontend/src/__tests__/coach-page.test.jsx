@@ -1,6 +1,6 @@
 import React from "react";
 import "@testing-library/jest-dom";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import axios from "axios";
 
@@ -26,10 +26,10 @@ describe("Coach page", () => {
   });
 
   test.each([
-    ["en", /I can help you understand today's workout/i, /I use your RunIndex plan/i],
-    ["fr", /Je peux t'aider à comprendre ta séance du jour/i, /Je m'appuie sur ton plan RunIndex/i],
-    ["es", /Puedo ayudarte a entender la sesión de hoy/i, /Me apoyo en tu plan de RunIndex/i],
-  ])("empty state is natural and advisory in %s", async (language, emptyState, note) => {
+    ["en", "What do you want to work on?", "Your RunIndex coach"],
+    ["fr", "Sur quoi veux-tu qu’on travaille ?", "Ton entraîneur RunIndex"],
+    ["es", "¿En qué quieres que trabajemos?", "Tu entrenador RunIndex"],
+  ])("empty state is conversation-first in %s", async (language, emptyState, subtitle) => {
     window.localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
     render(
       <LanguageProvider>
@@ -40,11 +40,64 @@ describe("Coach page", () => {
     );
 
     expect(await screen.findByText(emptyState)).toBeInTheDocument();
-    expect(screen.getByText(note)).toBeInTheDocument();
+    expect(screen.getByText(subtitle)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "Coach" })).toBeInTheDocument();
+    expect(within(screen.getByTestId("coach-empty-state")).getAllByRole("button")).toHaveLength(4);
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("clear-history")).not.toBeInTheDocument();
     expect(screen.getByTestId("coach-page")).not.toHaveTextContent(
-      /second prescription|seconde prescription|segunda prescripción|prescription authority|autorité de prescription|autoridad de prescripción|Training V2|canonical|canonique|engine/i
+      /second prescription|seconde prescription|segunda prescripción|prescription authority|autorité de prescription|autoridad de prescripción|Training V2|canonical|canonique|engine|I use your RunIndex plan|Je m'appuie sur ton plan RunIndex|Me apoyo en tu plan de RunIndex|Helpful questions|Questions utiles|Preguntas útiles/i
     );
     expect(screen.queryByText(/Tempo|Intervals|Long run/i)).not.toBeInTheDocument();
+  });
+
+  test.each([
+    ["en", [
+      ["My next workout", "What is my next workout and how should I approach it?"],
+      ["My recent runs", "What stands out from my recent runs?"],
+      ["My progress", "What does my recent data show about my progress?"],
+      ["My recovery", "What does my recent data show about my recovery?"],
+    ]],
+    ["fr", [
+      ["Ma prochaine séance", "Quelle est ma prochaine séance et comment dois-je l’aborder ?"],
+      ["Mes dernières sorties", "Qu’est-ce qui ressort de mes dernières sorties ?"],
+      ["Ma progression", "Que montrent mes données récentes sur ma progression ?"],
+      ["Ma récupération", "Que montrent mes données récentes sur ma récupération ?"],
+    ]],
+    ["es", [
+      ["Mi próxima sesión", "¿Cuál es mi próxima sesión y cómo debería afrontarla?"],
+      ["Mis últimas salidas", "¿Qué destaca de mis últimas salidas?"],
+      ["Mi progreso", "¿Qué muestran mis datos recientes sobre mi progreso?"],
+      ["Mi recuperación", "¿Qué muestran mis datos recientes sobre mi recuperación?"],
+    ]],
+  ])("shortcuts fill and focus the composer without sending in %s", async (language, shortcuts) => {
+    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
+    axios.post.mockResolvedValue({ data: { response: "answer" } });
+    render(
+      <LanguageProvider>
+        <MemoryRouter>
+          <Coach />
+        </MemoryRouter>
+      </LanguageProvider>
+    );
+
+    await screen.findByTestId("coach-empty-state");
+    const input = screen.getByTestId("coach-input");
+    for (const [label, question] of shortcuts) {
+      fireEvent.click(screen.getByRole("button", { name: label }));
+      expect(input).toHaveValue(question);
+      expect(input).toHaveFocus();
+      expect(axios.post).not.toHaveBeenCalled();
+    }
+
+    fireEvent.click(screen.getByTestId("coach-submit"));
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(1));
+    expect(axios.post).toHaveBeenCalledWith(expect.stringContaining("/coach/analyze"), {
+      message: shortcuts[3][1],
+      language,
+    });
+    expect(await screen.findByText("answer")).toBeInTheDocument();
+    expect(screen.queryByTestId("coach-empty-state")).not.toBeInTheDocument();
   });
 
   test("history load failure renders explicit unavailable state instead of successful empty state", async () => {
@@ -59,7 +112,73 @@ describe("Coach page", () => {
     );
 
     expect(await screen.findByTestId("coach-history-load-error")).toBeInTheDocument();
-    expect(screen.queryByText(/I use your RunIndex plan/i)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("coach-empty-state")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("suggestion-nextWorkout")).not.toBeInTheDocument();
+  });
+
+  test("existing history remains visible with workout metadata and a discreet clear action", async () => {
+    axios.get.mockResolvedValueOnce({ data: [
+      { role: "user", content: "Tell me about my run", workout_id: "past-run" },
+      { role: "assistant", content: "You kept a steady effort.", workout_id: "past-run" },
+    ] });
+    render(
+      <LanguageProvider>
+        <MemoryRouter>
+          <Coach />
+        </MemoryRouter>
+      </LanguageProvider>
+    );
+
+    expect(await screen.findByText("You kept a steady effort.")).toBeInTheDocument();
+    expect(axios.get).toHaveBeenCalledWith(expect.stringContaining("/coach/history?limit=50"));
+    expect(screen.getByTestId("message-0")).toHaveAttribute("data-workout-id", "past-run");
+    expect(screen.getByTestId("message-1")).toHaveAttribute("data-workout-id", "past-run");
+    expect(screen.getByRole("button", { name: "Clear history" })).toBeInTheDocument();
+    expect(screen.queryByTestId("coach-empty-state")).not.toBeInTheDocument();
+    expect(screen.queryByText("Workout analyzed")).not.toBeInTheDocument();
+    expect(axios.post).not.toHaveBeenCalled();
+  });
+
+  test("composer preserves Enter submission, loading guard, and recoverable errors", async () => {
+    let rejectRequest;
+    axios.post.mockImplementationOnce(() => new Promise((resolve, reject) => {
+      rejectRequest = reject;
+    }));
+    render(
+      <LanguageProvider>
+        <MemoryRouter>
+          <Coach />
+        </MemoryRouter>
+      </LanguageProvider>
+    );
+
+    await screen.findByTestId("coach-empty-state");
+    const input = screen.getByRole("textbox", { name: "Ask about your training..." });
+    const submit = screen.getByRole("button", { name: "Send message" });
+    expect(submit).toBeDisabled();
+    fireEvent.change(input, { target: { value: "  How am I doing?  " } });
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    expect(axios.post).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(axios.post).toHaveBeenCalledTimes(1);
+    expect(axios.post.mock.calls[0][1]).toEqual({ message: "How am I doing?", language: "en" });
+    expect(input).toBeDisabled();
+    expect(submit).toBeDisabled();
+    expect(screen.getByText("Thinking...")).toBeInTheDocument();
+    fireEvent.submit(input.closest("form"));
+    expect(axios.post).toHaveBeenCalledTimes(1);
+
+    rejectRequest(new Error("network"));
+    expect(await screen.findByText("Unable to process request.")).toBeInTheDocument();
+    await waitFor(() => expect(input).not.toBeDisabled());
+    expect(input).toHaveValue("");
+    expect(screen.queryByText("Thinking...")).not.toBeInTheDocument();
+
+    axios.post.mockResolvedValueOnce({ data: { response: "Back online." } });
+    fireEvent.change(input, { target: { value: "Try again" } });
+    fireEvent.click(submit);
+    expect(await screen.findByText("Back online.")).toBeInTheDocument();
+    expect(axios.post).toHaveBeenCalledTimes(2);
   });
 
   test.each([
@@ -98,6 +217,9 @@ describe("Coach page", () => {
     );
     expect(axios.post.mock.calls[0][1]).not.toHaveProperty("deep_analysis");
     expect(message).not.toMatch(/Deep analysis|Analyse approfondie|Análisis profundo/i);
+    expect(await screen.findByText("analysis")).toBeInTheDocument();
+    expect(screen.getByTestId("message-0")).toHaveAttribute("data-workout-id", "workout-42");
+    expect(screen.queryByText(/Workout analyzed|Séance analysée|Sesión analizada/i)).not.toBeInTheDocument();
   });
 
   test("selected workout context persists through follow-ups", async () => {
@@ -151,7 +273,7 @@ describe("Coach page", () => {
       </LanguageProvider>
     );
 
-    await screen.findByText(/I use your RunIndex plan/i);
+    await screen.findByTestId("coach-empty-state");
     fireEvent.change(screen.getByTestId("coach-input"), {
       target: { value: "What should I know about this week?" },
     });
@@ -190,6 +312,8 @@ describe("Coach page", () => {
     await waitFor(() => expect(screen.getByTestId("coach-input")).not.toBeDisabled());
     fireEvent.click(await screen.findByTestId("clear-history"));
     await waitFor(() => expect(axios.delete).toHaveBeenCalledTimes(1));
+    expect(axios.delete).toHaveBeenCalledWith(expect.stringContaining("/coach/history"));
+    expect(await screen.findByTestId("coach-empty-state")).toBeInTheDocument();
     fireEvent.change(screen.getByTestId("coach-input"), {
       target: { value: "A general follow-up" },
     });
