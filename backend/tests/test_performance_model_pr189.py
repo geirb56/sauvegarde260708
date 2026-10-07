@@ -239,7 +239,10 @@ def test_g_future_lookahead_is_disabled_for_curve():
 
     assert a.race_curve_diagnostics == b.race_curve_diagnostics
     assert a.predictions == b.predictions
-    assert b.race_curve_diagnostics["anchor_days_ago"] != -2
+    assert (
+        b.race_curve_diagnostics["anchor_days_ago"] is None
+        or b.race_curve_diagnostics["anchor_days_ago"] >= 0
+    )
 
 
 def test_h_non_qualified_activity_contribution_is_zero():
@@ -299,6 +302,7 @@ def test_i_speed_only_qualification_feeds_curve():
     assert preds["10K"].predicted_time_s is not None
     assert preds["10K"].source_relative_hr is None
     assert preds["10K"].source_quality_confidence == "low"
+    assert {prediction.confidence for prediction in preds.values()} == {"low"}
 
     repeated = predict_races(acts, TODAY)
     assert repeated.predictions == result.predictions
