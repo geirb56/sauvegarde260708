@@ -149,6 +149,8 @@ describe("Coach page", () => {
     expect(screen.getByRole("button", { name: "Clear history" })).toBeInTheDocument();
     expect(screen.queryByTestId("coach-empty-state")).not.toBeInTheDocument();
     expect(screen.queryByText("Workout analyzed")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("coach-workout-context")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("coach-followup-chips")).not.toBeInTheDocument();
     expect(axios.post).not.toHaveBeenCalled();
   });
 
@@ -484,6 +486,57 @@ describe("Coach page", () => {
     fireEvent.click(screen.getByTestId("close-workout-context"));
     expect(screen.queryByTestId("coach-workout-context")).not.toBeInTheDocument();
     expect(screen.getAllByTestId(/^message-/)).toHaveLength(2);
+    expect(axios.delete).not.toHaveBeenCalled();
+  });
+
+  test("closing during an in-flight follow-up keeps every reply but removes context from the next request", async () => {
+    axios.get.mockImplementation(url => Promise.resolve({
+      data: String(url).includes("/coach/history") ? [] : { name: "Easy Run" },
+    }));
+    let resolveFollowUp;
+    axios.post
+      .mockResolvedValueOnce({ data: { response: "Initial analysis" } })
+      .mockImplementationOnce(() => new Promise(resolve => { resolveFollowUp = resolve; }))
+      .mockResolvedValueOnce({ data: { response: "General answer" } });
+    render(
+      <LanguageProvider>
+        <MemoryRouter initialEntries={["/coach?analyze=w28"]}>
+          <Coach />
+        </MemoryRouter>
+      </LanguageProvider>
+    );
+
+    expect(await screen.findByText("Initial analysis")).toBeInTheDocument();
+    const input = screen.getByTestId("coach-input");
+    fireEvent.click(screen.getByRole("button", { name: "How does this compare with my other runs?" }));
+    expect(axios.post).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(axios.post.mock.calls[1][1]).toEqual({
+      message: "How does this compare with my other runs?", workout_id: "w28", language: "en",
+    });
+    expect(input).toBeDisabled();
+    expect(screen.getByTestId("coach-submit")).toBeDisabled();
+    for (const chip of within(screen.getByTestId("coach-followup-chips")).getAllByRole("button")) {
+      expect(chip).toBeDisabled();
+    }
+
+    fireEvent.click(screen.getByTestId("close-workout-context"));
+    expect(screen.queryByTestId("coach-workout-context")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("coach-followup-chips")).not.toBeInTheDocument();
+    expect(screen.getByText("Initial analysis")).toBeInTheDocument();
+    expect(screen.getAllByTestId(/^message-/)).toHaveLength(3);
+    expect(axios.delete).not.toHaveBeenCalled();
+    resolveFollowUp({ data: { response: "Late comparison" } });
+    expect(await screen.findByText("Late comparison")).toBeInTheDocument();
+    expect(screen.getByTestId("message-3")).toHaveAttribute("data-workout-id", "w28");
+    expect(screen.queryByTestId("coach-followup-chips")).not.toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: "General question" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(await screen.findByText("General answer")).toBeInTheDocument();
+    expect(axios.post).toHaveBeenCalledTimes(3);
+    expect(axios.post.mock.calls[2][1]).toEqual({ message: "General question", language: "en" });
+    expect(screen.getAllByTestId(/^message-/)).toHaveLength(6);
     expect(axios.delete).not.toHaveBeenCalled();
   });
 
