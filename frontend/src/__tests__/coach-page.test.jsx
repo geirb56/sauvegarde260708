@@ -25,6 +25,19 @@ describe("Coach page", () => {
     axios.get.mockResolvedValue({ data: [] });
   });
 
+  afterEach(() => {
+    for (const [url] of axios.get.mock.calls) {
+      expect(url).toMatch(/\/(?:coach\/history\?limit=50|workouts\/[^/?]+)$/);
+    }
+    for (const [url, payload] of axios.post.mock.calls) {
+      expect(url).toMatch(/\/coach\/analyze$/);
+      expect(payload).not.toHaveProperty("deep_analysis");
+    }
+    for (const [url] of axios.delete.mock.calls) {
+      expect(url).toMatch(/\/coach\/history$/);
+    }
+  });
+
   test.each([
     ["en", "What do you want to work on?", "Your RunIndex coach"],
     ["fr", "Sur quoi veux-tu qu’on travaille ?", "Ton entraîneur RunIndex"],
@@ -153,7 +166,7 @@ describe("Coach page", () => {
     );
 
     await screen.findByTestId("coach-empty-state");
-    const input = screen.getByRole("textbox", { name: "Ask about your training..." });
+    const input = screen.getByRole("textbox", { name: "Ask your coach…" });
     const submit = screen.getByRole("button", { name: "Send message" });
     expect(submit).toBeDisabled();
     fireEvent.change(input, { target: { value: "  How am I doing?  " } });
@@ -261,6 +274,184 @@ describe("Coach page", () => {
       expect(followUpMessages[0]).toHaveAttribute("data-workout-id", "w28");
       expect(followUpMessages[1]).toHaveAttribute("data-workout-id", "w28");
     });
+    expect(screen.getAllByTestId("coach-followup-chips")).toHaveLength(1);
+    expect(within(screen.getByTestId("message-1")).queryByTestId("coach-followup-chips")).not.toBeInTheDocument();
+    expect(within(screen.getByTestId("message-3")).getByTestId("coach-followup-chips")).toBeInTheDocument();
+  });
+
+  test("closing visible workout context preserves history and makes subsequent messages general", async () => {
+    axios.get.mockImplementation((url) => {
+      if (String(url).includes("/coach/history")) {
+        return Promise.resolve({ data: [{ role: "assistant", content: "Earlier conversation", workout_id: "old" }] });
+      }
+      if (String(url).includes("/workouts/w28")) {
+        return Promise.resolve({ data: { name: "Easy Run", distance_km: 8.5, date: "2026-10-06" } });
+      }
+      return Promise.reject(new Error(`Unexpected GET ${url}`));
+    });
+    axios.post.mockResolvedValue({ data: { response: "analysis" } });
+    render(
+      <LanguageProvider>
+        <MemoryRouter initialEntries={["/coach?analyze=w28"]}>
+          <Coach />
+        </MemoryRouter>
+      </LanguageProvider>
+    );
+
+    expect(await screen.findByText("analysis")).toBeInTheDocument();
+    const context = screen.getByTestId("coach-workout-context");
+    expect(context).toHaveTextContent("Easy Run · 8.5 km · 10/6/2026");
+    expect(axios.get).toHaveBeenCalledTimes(2);
+    expect(axios.get).toHaveBeenCalledWith(expect.stringContaining("/workouts/w28"));
+    const input = screen.getByTestId("coach-input");
+    fireEvent.change(input, { target: { value: "A workout follow-up" } });
+    fireEvent.submit(input.closest("form"));
+    await waitFor(() => expect(screen.getAllByTestId(/^message-/)).toHaveLength(5));
+    await waitFor(() => expect(input).not.toBeDisabled());
+    expect(axios.post.mock.calls[1][1]).toEqual({
+      message: "A workout follow-up", workout_id: "w28", language: "en",
+    });
+
+    const messageContents = () => screen.getAllByTestId(/^message-/)
+      .map(message => message.querySelector(".whitespace-pre-wrap").textContent);
+    const savedMessages = messageContents();
+    fireEvent.click(within(context).getByRole("button", { name: "Close workout context" }));
+    expect(screen.queryByTestId("coach-workout-context")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("coach-followup-chips")).not.toBeInTheDocument();
+    expect(messageContents()).toEqual(savedMessages);
+    expect(screen.getByText("Earlier conversation")).toBeInTheDocument();
+    expect(axios.delete).not.toHaveBeenCalled();
+    expect(axios.post).toHaveBeenCalledTimes(2);
+
+    fireEvent.change(input, { target: { value: "A general question" } });
+    fireEvent.submit(input.closest("form"));
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(3));
+    expect(axios.post.mock.calls[2][1]).toEqual({ message: "A general question", language: "en" });
+    await waitFor(() => expect(screen.getAllByTestId(/^message-/)).toHaveLength(7));
+    expect(screen.getByTestId("message-3")).toHaveAttribute("data-workout-id", "w28");
+    expect(screen.getByTestId("message-5")).not.toHaveAttribute("data-workout-id");
+    expect(screen.getByTestId("message-6")).not.toHaveAttribute("data-workout-id");
+    expect(axios.post.mock.calls.every(([, payload]) => !("deep_analysis" in payload))).toBe(true);
+  });
+
+  test.each([
+    ["en", "RunIndex Coach", "Ask your coach…", "How does this compare with my other runs?", "What should I take away most of all?"],
+    ["fr", "Coach RunIndex", "Pose une question à ton coach…", "Et par rapport à mes autres sorties ?", "Qu’est-ce que je dois retenir surtout ?"],
+    ["es", "Coach RunIndex", "Pregunta a tu coach…", "¿Y en comparación con mis otras salidas?", "¿Qué es lo más importante que debo recordar?"],
+  ])("contextual chips, Coach reply/loader labels and composer are localized in %s", async (language, label, placeholder, compare, takeaway) => {
+    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
+    axios.get.mockImplementation(url => Promise.resolve({
+      data: String(url).includes("/coach/history") ? [] : { name: "Easy Run" },
+    }));
+    let resolveAnalysis;
+    axios.post.mockImplementationOnce(() => new Promise(resolve => {
+      resolveAnalysis = resolve;
+    }));
+    render(
+      <LanguageProvider>
+        <MemoryRouter initialEntries={["/coach?analyze=w28"]}>
+          <Coach />
+        </MemoryRouter>
+      </LanguageProvider>
+    );
+
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(1));
+    const input = screen.getByRole("textbox", { name: placeholder });
+    expect(input).toHaveAttribute("placeholder", placeholder);
+    expect(input).toBeDisabled();
+    expect(input).toHaveClass("rounded-2xl");
+    expect(input).not.toHaveClass("rounded-none");
+    expect(screen.getByTestId("coach-submit")).toHaveClass("rounded-full");
+    expect(screen.getByTestId("coach-submit")).not.toHaveClass("rounded-none");
+    expect(screen.getByText(label)).toBeInTheDocument();
+    expect(screen.queryByTestId("coach-followup-chips")).not.toBeInTheDocument();
+    resolveAnalysis({ data: { response: "analysis" } });
+    expect(await screen.findByText("analysis")).toBeInTheDocument();
+    expect(within(screen.getByTestId("message-1")).getByText(label)).toBeInTheDocument();
+    const chips = screen.getByTestId("coach-followup-chips");
+    expect(within(chips).getAllByRole("button")).toHaveLength(2);
+    for (const question of [compare, takeaway]) {
+      fireEvent.click(within(chips).getByRole("button", { name: question }));
+      expect(input).toHaveValue(question);
+      expect(input).toHaveFocus();
+      expect(axios.post).toHaveBeenCalledTimes(1);
+    }
+    fireEvent.click(screen.getByTestId("close-workout-context"));
+    expect(screen.queryByTestId("coach-followup-chips")).not.toBeInTheDocument();
+    expect(input).toHaveValue(takeaway);
+    expect(axios.delete).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    [{ name: "Only a name" }, "Only a name"],
+    [{ distance_km: 0 }, "0 km"],
+    [{ name: "", distance_km: null, date: null }, "This workout"],
+    [{ distance_km: -2, date: "not a date" }, "This workout"],
+  ])("context displays only available valid metadata: %j", async (metadata, expected) => {
+    axios.get.mockImplementation(url => Promise.resolve({
+      data: String(url).includes("/coach/history") ? [] : metadata,
+    }));
+    axios.post.mockResolvedValue({ data: { response: "analysis" } });
+    render(
+      <LanguageProvider>
+        <MemoryRouter initialEntries={["/coach?analyze=w28"]}>
+          <Coach />
+        </MemoryRouter>
+      </LanguageProvider>
+    );
+
+    expect(await screen.findByText("analysis")).toBeInTheDocument();
+    expect(screen.getByTestId("coach-workout-context").textContent).toBe(expected);
+    expect(screen.getByTestId("coach-workout-context")).not.toHaveTextContent(/undefined|null|Invalid Date|NaN/);
+  });
+
+  test("closing context during workout fetch is not undone by a late result", async () => {
+    let resolveWorkout;
+    axios.get.mockImplementation(url => {
+      if (String(url).includes("/coach/history")) return Promise.resolve({ data: [] });
+      return new Promise(resolve => { resolveWorkout = resolve; });
+    });
+    axios.post.mockResolvedValue({ data: { response: "analysis" } });
+    render(
+      <LanguageProvider>
+        <MemoryRouter initialEntries={["/coach?analyze=w28"]}>
+          <Coach />
+        </MemoryRouter>
+      </LanguageProvider>
+    );
+
+    fireEvent.click(await screen.findByTestId("close-workout-context"));
+    resolveWorkout({ data: { name: "Late name", distance_km: 8, date: "2026-10-06" } });
+    expect(await screen.findByText("analysis")).toBeInTheDocument();
+    expect(screen.queryByTestId("coach-workout-context")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("coach-followup-chips")).not.toBeInTheDocument();
+    expect(axios.delete).not.toHaveBeenCalled();
+    const input = screen.getByTestId("coach-input");
+    fireEvent.change(input, { target: { value: "General question" } });
+    fireEvent.submit(input.closest("form"));
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(2));
+    expect(axios.post.mock.calls[1][1]).not.toHaveProperty("workout_id");
+  });
+
+  test("workout metadata failure leaves an explicit closable context", async () => {
+    axios.get.mockImplementation(url => String(url).includes("/coach/history")
+      ? Promise.resolve({ data: [] })
+      : Promise.reject(new Error("Workout unavailable")));
+    axios.post.mockResolvedValue({ data: { response: "analysis" } });
+    render(
+      <LanguageProvider>
+        <MemoryRouter initialEntries={["/coach?analyze=w28"]}>
+          <Coach />
+        </MemoryRouter>
+      </LanguageProvider>
+    );
+
+    expect(await screen.findByText("analysis")).toBeInTheDocument();
+    expect(screen.getByTestId("coach-workout-context")).toHaveTextContent("This workout");
+    fireEvent.click(screen.getByTestId("close-workout-context"));
+    expect(screen.queryByTestId("coach-workout-context")).not.toBeInTheDocument();
+    expect(screen.getAllByTestId(/^message-/)).toHaveLength(2);
+    expect(axios.delete).not.toHaveBeenCalled();
   });
 
   test("general Coach messages do not invent a workout context", async () => {
@@ -281,6 +472,8 @@ describe("Coach page", () => {
 
     await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(1));
     expect(axios.post.mock.calls[0][1]).not.toHaveProperty("workout_id");
+    expect(screen.queryByTestId("coach-workout-context")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("coach-followup-chips")).not.toBeInTheDocument();
     await waitFor(() => {
       expect(screen.getByTestId("message-0")).not.toHaveAttribute("data-workout-id");
       expect(screen.getByTestId("message-1")).not.toHaveAttribute("data-workout-id");
@@ -314,6 +507,8 @@ describe("Coach page", () => {
     await waitFor(() => expect(axios.delete).toHaveBeenCalledTimes(1));
     expect(axios.delete).toHaveBeenCalledWith(expect.stringContaining("/coach/history"));
     expect(await screen.findByTestId("coach-empty-state")).toBeInTheDocument();
+    expect(screen.queryByTestId("coach-workout-context")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("coach-followup-chips")).not.toBeInTheDocument();
     fireEvent.change(screen.getByTestId("coach-input"), {
       target: { value: "A general follow-up" },
     });

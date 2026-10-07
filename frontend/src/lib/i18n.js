@@ -305,7 +305,14 @@ export const translations = {
     coach: {
       title: "Coach",
       subtitle: "Your RunIndex coach",
-      placeholder: "Ask about your training...",
+      placeholder: "Ask your coach…",
+      replyLabel: "RunIndex Coach",
+      activeWorkout: "This workout",
+      closeContext: "Close workout context",
+      followups: {
+        compare: "How does this compare with my other runs?",
+        takeaway: "What should I take away most of all?",
+      },
       emptyState: "What do you want to work on?",
       clearHistory: "Clear history",
       send: "Send message",
@@ -1226,7 +1233,14 @@ export const translations = {
     coach: {
       title: "Coach",
       subtitle: "Ton entraîneur RunIndex",
-      placeholder: "Posez une question sur votre entraînement...",
+      placeholder: "Pose une question à ton coach…",
+      replyLabel: "Coach RunIndex",
+      activeWorkout: "Cette séance",
+      closeContext: "Fermer le contexte de séance",
+      followups: {
+        compare: "Et par rapport à mes autres sorties ?",
+        takeaway: "Qu’est-ce que je dois retenir surtout ?",
+      },
       emptyState: "Sur quoi veux-tu qu’on travaille ?",
       clearHistory: "Effacer l’historique",
       send: "Envoyer le message",
@@ -2119,7 +2133,14 @@ export const translations = {
     coach: {
       title: "Coach",
       subtitle: "Tu entrenador RunIndex",
-      placeholder: "Pregunta sobre tu entrenamiento...",
+      placeholder: "Pregunta a tu coach…",
+      replyLabel: "Coach RunIndex",
+      activeWorkout: "Esta sesión",
+      closeContext: "Cerrar el contexto de la sesión",
+      followups: {
+        compare: "¿Y en comparación con mis otras salidas?",
+        takeaway: "¿Qué es lo más importante que debo recordar?",
+      },
       emptyState: "¿En qué quieres que trabajemos?",
       clearHistory: "Borrar historial",
       send: "Enviar mensaje",

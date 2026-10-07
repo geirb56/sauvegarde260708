@@ -5,7 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Send, Loader2, Trash2 } from "lucide-react";
+import { Send, Loader2, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { useLanguage } from "@/context/LanguageContext";
 
@@ -20,6 +20,7 @@ export default function Coach() {
   const [historyLoadError, setHistoryLoadError] = useState(false);
   const [analyzingWorkout, setAnalyzingWorkout] = useState(null);
   const [activeWorkoutId, setActiveWorkoutId] = useState(null);
+  const [activeWorkoutMetadata, setActiveWorkoutMetadata] = useState(null);
   const scrollRef = useRef(null);
   const inputRef = useRef(null);
   const { t, lang } = useLanguage();
@@ -68,6 +69,7 @@ export default function Coach() {
 
   const triggerWorkoutAnalysis = async (workoutId) => {
     setActiveWorkoutId(workoutId);
+    setActiveWorkoutMetadata({});
     setAnalyzingWorkout(workoutId);
     setLoading(true);
 
@@ -76,6 +78,13 @@ export default function Coach() {
     try {
       const workoutRes = await axios.get(`${API}/workouts/${workoutId}`);
       workoutName = workoutRes.data.name || workoutId;
+      const { name, distance_km, date } = workoutRes.data;
+      const metadata = {
+        ...(typeof name === "string" && name.trim() ? { name } : {}),
+        ...(Number.isFinite(distance_km) && distance_km >= 0 ? { distance_km } : {}),
+        ...(typeof date === "string" && date.trim() && Number.isFinite(new Date(date).getTime()) ? { date } : {}),
+      };
+      setActiveWorkoutMetadata(current => current === null ? null : metadata);
     } catch (e) {
       workoutName = workoutId;
     }
@@ -153,7 +162,7 @@ export default function Coach() {
     try {
       await axios.delete(`${API}/coach/history`);
       setMessages([]);
-      setActiveWorkoutId(null);
+      handleCloseContext();
       setHistoryLoadError(false);
       toast.success(t("coachExtended.historyCleared"));
     } catch (error) {
@@ -169,9 +178,32 @@ export default function Coach() {
   };
 
   const handleSuggestion = (key) => {
-    setInput(t(`coach.prompts.${key}`));
+    fillComposer(t(`coach.prompts.${key}`));
+  };
+
+  const fillComposer = (text) => {
+    setInput(text);
     inputRef.current?.focus();
   };
+
+  const handleCloseContext = () => {
+    setActiveWorkoutId(null);
+    setActiveWorkoutMetadata(null);
+  };
+
+  const lastWorkoutReplyIndex = activeWorkoutId ? messages.reduce(
+    (lastIndex, msg, idx) => msg.role === "assistant" && msg.workout_id === activeWorkoutId ? idx : lastIndex,
+    -1,
+  ) : -1;
+  const workoutContextParts = [
+    activeWorkoutMetadata?.name,
+    activeWorkoutMetadata?.distance_km != null
+      ? `${activeWorkoutMetadata.distance_km.toLocaleString(lang, { maximumFractionDigits: 2 })} km`
+      : null,
+    activeWorkoutMetadata?.date
+      ? new Date(activeWorkoutMetadata.date).toLocaleDateString(lang, { timeZone: "UTC" })
+      : null,
+  ].filter(part => part != null);
 
   if (initialLoading) {
     return (
@@ -213,6 +245,25 @@ export default function Coach() {
           )}
         </div>
       </div>
+
+      {activeWorkoutId && (
+        <div className="flex items-center gap-2 border-b border-border px-4 py-2 md:px-8" data-testid="coach-workout-context">
+          <p className="min-w-0 flex-1 break-words text-sm text-muted-foreground">
+            {workoutContextParts.length ? workoutContextParts.join(" · ") : t("coach.activeWorkout")}
+          </p>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="shrink-0 rounded-full"
+            aria-label={t("coach.closeContext")}
+            onClick={handleCloseContext}
+            data-testid="close-workout-context"
+          >
+            <X className="w-4 h-4" />
+          </Button>
+        </div>
+      )}
 
       {/* Messages Area */}
       <ScrollArea ref={scrollRef} className="flex-1 p-4 md:p-8">
@@ -268,13 +319,28 @@ export default function Coach() {
                 ) : (
                   <div className="max-w-[85%] md:max-w-[70%]">
                     <p className="font-mono text-[11px] uppercase tracking-widest text-primary mb-2">
-                      RunIndex
+                      {t("coach.replyLabel")}
                     </p>
                     <div className="coach-message">
                       <p className="font-sans text-sm whitespace-pre-wrap break-words leading-relaxed">
                         {msg.content}
                       </p>
                     </div>
+                    {idx === lastWorkoutReplyIndex && (
+                      <div className="mt-3 flex flex-wrap gap-2" data-testid="coach-followup-chips">
+                        {["compare", "takeaway"].map(key => (
+                          <button
+                            key={key}
+                            type="button"
+                            disabled={loading}
+                            onClick={() => fillComposer(t(`coach.followups.${key}`))}
+                            className="max-w-full rounded-full border border-border px-3 py-2 text-left text-sm text-secondary-foreground break-words hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+                          >
+                            {t(`coach.followups.${key}`)}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -282,7 +348,7 @@ export default function Coach() {
             {loading && (
               <div className="animate-in">
                 <p className="font-mono text-[11px] uppercase tracking-widest text-primary mb-2">
-                  RunIndex
+                  {t("coach.replyLabel")}
                 </p>
                 <div className="coach-message flex items-center gap-2">
                   <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
@@ -310,7 +376,7 @@ export default function Coach() {
             onKeyDown={handleKeyDown}
             placeholder={t("coach.placeholder")}
             aria-label={t("coach.placeholder")}
-            className="flex-1 min-h-[44px] max-h-[120px] resize-none bg-muted border-input focus:border-primary rounded-none font-sans text-sm"
+            className="flex-1 min-w-0 min-h-[44px] max-h-[120px] resize-none bg-muted border-input focus:border-primary rounded-2xl font-sans text-sm"
             disabled={loading}
           />
           <Button
@@ -318,7 +384,7 @@ export default function Coach() {
             data-testid="coach-submit"
             aria-label={t("coach.send")}
             disabled={!input.trim() || loading}
-            className="bg-primary text-primary-foreground hover:bg-primary/90 rounded-none uppercase font-bold tracking-wider text-xs h-11 px-6"
+            className="shrink-0 bg-primary text-primary-foreground hover:bg-primary/90 rounded-full uppercase font-bold tracking-wider text-xs h-11 px-4"
           >
             {loading ? (
               <Loader2 className="w-4 h-4 animate-spin" />
