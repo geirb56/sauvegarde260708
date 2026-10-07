@@ -853,6 +853,12 @@ class _CurveModel:
     k_identifiable: bool = False
     k_identifiability_score: float = 0.0
     k_identifiability_reason: str = "not_applicable"
+    anchor_applied: bool = False
+    anchor_distance_m: Optional[float] = None
+    anchor_duration_s: Optional[float] = None
+    anchor_days_ago: Optional[int] = None
+    anchor_quality_confidence: Optional[str] = None
+    anchor_eligible_count: int = 0
 
 
 def _recency_weight(days_ago: int) -> float:
@@ -1060,6 +1066,34 @@ def _compute_k_identifiability(
     return identifiable, score, reason
 
 
+def _select_recent_curve_anchor(
+    observations: List[_CurveObservation],
+    slope: float,
+) -> Tuple[Optional[_CurveObservation], Optional[float], int]:
+    eligible = [
+        observation
+        for observation in observations
+        if 0 <= observation.days_ago <= CONFIDENCE_LOW_DAYS
+    ]
+    if not eligible:
+        return None, None, 0
+
+    anchor = min(
+        eligible,
+        key=lambda observation: (
+            math.log(observation.duration_s)
+            - slope * math.log(observation.distance_m),
+            observation.days_ago,
+            observation.distance_m,
+            observation.duration_s,
+        ),
+    )
+    anchor_intercept = (
+        math.log(anchor.duration_s) - slope * math.log(anchor.distance_m)
+    )
+    return anchor, anchor_intercept, len(eligible)
+
+
 def _build_performance_curve(
     qualified_pool: List[Tuple[DomainActivity, PerformanceQuality]],
     reference_date: date,
@@ -1120,6 +1154,9 @@ def _build_performance_curve(
     if len(observations) == 1:
         obs = observations[0]
         a = obs.duration_s / (obs.distance_m ** RIEGEL_K)
+        anchor, _, anchor_eligible_count = _select_recent_curve_anchor(
+            observations, RIEGEL_K
+        )
         return _CurveModel(
             method="single_performance_riegel",
             a=a,
@@ -1139,6 +1176,11 @@ def _build_performance_curve(
             k_identifiable=False,
             k_identifiability_score=0.0,
             k_identifiability_reason="insufficient_slope_evidence_count",
+            anchor_distance_m=anchor.distance_m if anchor else None,
+            anchor_duration_s=anchor.duration_s if anchor else None,
+            anchor_days_ago=anchor.days_ago if anchor else None,
+            anchor_quality_confidence=anchor.quality.confidence if anchor else None,
+            anchor_eligible_count=anchor_eligible_count,
         )
 
     method: str = "prior_k_low_slope_evidence_fallback"
@@ -1240,6 +1282,13 @@ def _build_performance_curve(
     if intercept is None:
         return None
 
+    anchor, anchor_intercept, anchor_eligible_count = _select_recent_curve_anchor(
+        observations, slope
+    )
+    anchor_applied = anchor_intercept is not None and anchor_intercept < intercept
+    if anchor_applied:
+        intercept = anchor_intercept
+
     fit_quality = _weighted_r2(xs_all, ys_all, robust_ws, intercept, slope)
     max_w = max(robust_ws) if robust_ws else 0.0
     contributors = tuple(
@@ -1288,6 +1337,12 @@ def _build_performance_curve(
         slope_evidence_count=slope_evidence_count,
         slope_evidence_distance_min=slope_evidence_distance_min,
         slope_evidence_distance_max=slope_evidence_distance_max,
+        anchor_applied=anchor_applied,
+        anchor_distance_m=anchor.distance_m if anchor else None,
+        anchor_duration_s=anchor.duration_s if anchor else None,
+        anchor_days_ago=anchor.days_ago if anchor else None,
+        anchor_quality_confidence=anchor.quality.confidence if anchor else None,
+        anchor_eligible_count=anchor_eligible_count,
     )
 
 
@@ -1701,6 +1756,14 @@ def predict_races(
             ),
             "fit_quality": curve.fit_quality if curve else None,
             "k_conflict": curve.k_conflict if curve else None,
+            "anchor_applied": curve.anchor_applied if curve else False,
+            "anchor_distance_m": curve.anchor_distance_m if curve else None,
+            "anchor_duration_s": curve.anchor_duration_s if curve else None,
+            "anchor_days_ago": curve.anchor_days_ago if curve else None,
+            "anchor_quality_confidence": (
+                curve.anchor_quality_confidence if curve else None
+            ),
+            "anchor_eligible_count": curve.anchor_eligible_count if curve else 0,
             "weighted_recency": round(confidence_aggregates["weighted_recency"], 6) if curve else None,
             "weighted_quality_confidence": (
                 round(confidence_aggregates["weighted_quality_confidence"], 6) if curve else None
