@@ -1,11 +1,11 @@
 import { useState, useRef, useEffect } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import axios from "axios";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Send, Loader2, Trash2, Activity } from "lucide-react";
+import { Send, Loader2, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { useLanguage } from "@/context/LanguageContext";
 
@@ -20,7 +20,10 @@ export default function Coach() {
   const [historyLoadError, setHistoryLoadError] = useState(false);
   const [analyzingWorkout, setAnalyzingWorkout] = useState(null);
   const [activeWorkoutId, setActiveWorkoutId] = useState(null);
+  const [activeWorkoutMetadata, setActiveWorkoutMetadata] = useState(null);
+  const activeWorkoutRef = useRef(null);
   const scrollRef = useRef(null);
+  const inputRef = useRef(null);
   const { t, lang } = useLanguage();
   const [searchParams, setSearchParams] = useSearchParams();
   const hasTriggeredAnalysis = useRef(false);
@@ -66,7 +69,9 @@ export default function Coach() {
   }, [messages]);
 
   const triggerWorkoutAnalysis = async (workoutId) => {
+    activeWorkoutRef.current = workoutId;
     setActiveWorkoutId(workoutId);
+    setActiveWorkoutMetadata({});
     setAnalyzingWorkout(workoutId);
     setLoading(true);
 
@@ -75,8 +80,21 @@ export default function Coach() {
     try {
       const workoutRes = await axios.get(`${API}/workouts/${workoutId}`);
       workoutName = workoutRes.data.name || workoutId;
+      const { name, distance_km, date } = workoutRes.data;
+      const metadata = {
+        ...(typeof name === "string" && name.trim() ? { name } : {}),
+        ...(Number.isFinite(distance_km) && distance_km >= 0 ? { distance_km } : {}),
+        ...(typeof date === "string" && date.trim() && Number.isFinite(new Date(date).getTime()) ? { date } : {}),
+      };
+      setActiveWorkoutMetadata(current => current === null ? null : metadata);
     } catch (e) {
       workoutName = workoutId;
+    }
+
+    if (activeWorkoutRef.current !== workoutId) {
+      setLoading(false);
+      setAnalyzingWorkout(null);
+      return;
     }
 
     const analysisMessage = t("coachExtended.analysisPrompt").replace("{name}", workoutName);
@@ -152,7 +170,7 @@ export default function Coach() {
     try {
       await axios.delete(`${API}/coach/history`);
       setMessages([]);
-      setActiveWorkoutId(null);
+      handleCloseContext();
       setHistoryLoadError(false);
       toast.success(t("coachExtended.historyCleared"));
     } catch (error) {
@@ -168,18 +186,38 @@ export default function Coach() {
   };
 
   const handleSuggestion = (key) => {
-    const suggestions = {
-      trainingLoad: t("coachExtended.trainingLoadSuggestion"),
-      heartRate: t("coachExtended.heartRateSuggestion"),
-      paceConsistency: t("coachExtended.paceConsistencySuggestion")
-    };
-    setInput(suggestions[key]);
+    fillComposer(t(`coach.prompts.${key}`));
   };
+
+  const fillComposer = (text) => {
+    setInput(text);
+    inputRef.current?.focus();
+  };
+
+  const handleCloseContext = () => {
+    activeWorkoutRef.current = null;
+    setActiveWorkoutId(null);
+    setActiveWorkoutMetadata(null);
+  };
+
+  const lastWorkoutReplyIndex = activeWorkoutId ? messages.reduce(
+    (lastIndex, msg, idx) => msg.role === "assistant" && msg.workout_id === activeWorkoutId ? idx : lastIndex,
+    -1,
+  ) : -1;
+  const workoutContextParts = [
+    activeWorkoutMetadata?.name,
+    activeWorkoutMetadata?.distance_km != null
+      ? `${activeWorkoutMetadata.distance_km.toLocaleString(lang, { maximumFractionDigits: 2 })} km`
+      : null,
+    activeWorkoutMetadata?.date
+      ? new Date(activeWorkoutMetadata.date).toLocaleDateString(lang, { timeZone: "UTC" })
+      : null,
+  ].filter(part => part != null);
 
   if (initialLoading) {
     return (
-      <div className="flex flex-col h-[calc(100vh-60px)] md:h-screen" data-testid="coach-page">
-        <div className="p-4 md:p-8 border-b border-border">
+      <div className="flex min-w-0 flex-col h-[calc(100dvh-4.5rem-5.25rem-env(safe-area-inset-bottom))]" data-testid="coach-page">
+        <div className="px-4 py-3 md:px-8 md:py-4 border-b border-border">
           <div className="h-8 w-32 bg-muted rounded animate-pulse" />
         </div>
         <div className="flex-1 flex items-center justify-center">
@@ -190,15 +228,15 @@ export default function Coach() {
   }
 
   return (
-    <div className="flex flex-col h-[calc(100vh-60px)] md:h-screen" data-testid="coach-page">
+    <div className="flex min-w-0 flex-col h-[calc(100dvh-4.5rem-5.25rem-env(safe-area-inset-bottom))]" data-testid="coach-page">
       {/* Header */}
-      <div className="p-4 md:p-8 border-b border-border">
+      <div className="shrink-0 px-4 py-3 md:px-8 md:py-4 border-b border-border">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
-            <h1 className="font-heading text-xl sm:text-2xl md:text-3xl uppercase tracking-tight font-bold mb-1 break-words">
+            <h1 className="font-heading text-xl sm:text-2xl uppercase tracking-tight font-bold mb-1 break-words">
               {t("coach.title")}
             </h1>
-            <p className="font-mono text-xs uppercase tracking-widest text-muted-foreground">
+            <p className="font-sans text-sm text-muted-foreground">
               {t("coach.subtitle")}
             </p>
           </div>
@@ -207,6 +245,7 @@ export default function Coach() {
               variant="ghost"
               size="sm"
               onClick={handleClearHistory}
+              aria-label={t("coach.clearHistory")}
               data-testid="clear-history"
               className="text-muted-foreground hover:text-destructive"
             >
@@ -216,8 +255,27 @@ export default function Coach() {
         </div>
       </div>
 
+      {activeWorkoutId && (
+        <div className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-2 md:px-8" data-testid="coach-workout-context">
+          <p className="min-w-0 flex-1 break-words text-sm text-muted-foreground">
+            {workoutContextParts.length ? workoutContextParts.join(" · ") : t("coach.activeWorkout")}
+          </p>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="shrink-0 rounded-full"
+            aria-label={t("coach.closeContext")}
+            onClick={handleCloseContext}
+            data-testid="close-workout-context"
+          >
+            <X className="w-4 h-4" />
+          </Button>
+        </div>
+      )}
+
       {/* Messages Area */}
-      <ScrollArea ref={scrollRef} className="flex-1 p-4 md:p-8">
+      <ScrollArea ref={scrollRef} className="min-h-0 flex-1 p-4 md:p-8">
         {historyLoadError && messages.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-center py-12" data-testid="coach-history-load-error">
             <Card className="w-full max-w-xl border-border bg-card/80 text-left shadow-sm">
@@ -232,58 +290,20 @@ export default function Coach() {
             </Card>
           </div>
         ) : messages.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-center py-12">
-            <Card className="w-full max-w-xl border-border bg-card/80 text-left shadow-sm">
-              <CardContent className="space-y-5 p-5 sm:p-6">
-                <div className="space-y-2 text-center sm:text-left">
-                  <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-primary">
-                    {t("coach.subtitle")}
-                  </p>
-                  <p className="text-sm leading-relaxed text-muted-foreground">
-                    {t("coach.emptyState")}
-                  </p>
-                  <p className="font-sans text-sm leading-relaxed text-secondary-foreground">
-                    {t("coachExtended.authorityNote")}
-                  </p>
-                </div>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <Link
-                    to="/training"
-                    className="rounded-2xl border border-border px-4 py-3 text-sm font-medium text-foreground transition-colors hover:border-primary/40 hover:bg-primary/5"
-                  >
-                    {t("coachExtended.goToTraining")}
-                  </Link>
-                  <Link
-                    to="/sessions"
-                    className="rounded-2xl border border-border px-4 py-3 text-sm font-medium text-foreground transition-colors hover:border-primary/40 hover:bg-primary/5"
-                  >
-                    {t("coachExtended.goToSessions")}
-                  </Link>
-                </div>
-                <div className="space-y-2">
-                  <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
-                    {t("coachExtended.helpfulPrompts")}
-                  </p>
-                  <div className="space-y-2">
-                    <SuggestionButton
-                      onClick={() => handleSuggestion("trainingLoad")}
-                      text={t("coach.suggestions.trainingLoad")}
-                      testId="suggestion-training-load"
-                    />
-                    <SuggestionButton
-                      onClick={() => handleSuggestion("heartRate")}
-                      text={t("coach.suggestions.heartRate")}
-                      testId="suggestion-heart-rate"
-                    />
-                    <SuggestionButton
-                      onClick={() => handleSuggestion("paceConsistency")}
-                      text={t("coach.suggestions.paceConsistency")}
-                      testId="suggestion-pace-consistency"
-                    />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
+          <div className="flex flex-col items-center justify-center text-center py-12" data-testid="coach-empty-state">
+            <h2 className="font-sans text-xl font-medium mb-6">
+              {t("coach.emptyState")}
+            </h2>
+            <div className="grid w-full max-w-xl gap-2 sm:grid-cols-2">
+              {["nextWorkout", "recentRuns", "progress", "recovery"].map((key) => (
+                <SuggestionButton
+                  key={key}
+                  onClick={() => handleSuggestion(key)}
+                  text={t(`coach.suggestions.${key}`)}
+                  testId={`suggestion-${key}`}
+                />
+              ))}
+            </div>
           </div>
         ) : (
           <div className="space-y-6 pb-4">
@@ -302,27 +322,34 @@ export default function Coach() {
                     <Card className="bg-muted border-border">
                       <CardContent className="p-4">
                         <p className="font-sans text-sm whitespace-pre-wrap break-words leading-relaxed">{msg.content}</p>
-                        {msg.workout_id && (
-                          <div className="mt-2 flex items-center gap-1 text-primary">
-                            <Activity className="w-3 h-3" />
-                            <span className="font-mono text-[11px] uppercase">
-                              {t("coachExtended.workoutAnalyzed")}
-                            </span>
-                          </div>
-                        )}
                       </CardContent>
                     </Card>
                   </div>
                 ) : (
                   <div className="max-w-[85%] md:max-w-[70%]">
                     <p className="font-mono text-[11px] uppercase tracking-widest text-primary mb-2">
-                      RunIndex
+                      {t("coach.replyLabel")}
                     </p>
                     <div className="coach-message">
                       <p className="font-sans text-sm whitespace-pre-wrap break-words leading-relaxed">
                         {msg.content}
                       </p>
                     </div>
+                    {idx === lastWorkoutReplyIndex && (
+                      <div className="mt-3 flex flex-wrap gap-2" data-testid="coach-followup-chips">
+                        {["compare", "takeaway"].map(key => (
+                          <button
+                            key={key}
+                            type="button"
+                            disabled={loading}
+                            onClick={() => fillComposer(t(`coach.followups.${key}`))}
+                            className="max-w-full rounded-full border border-border px-3 py-2 text-left text-sm text-secondary-foreground break-words hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+                          >
+                            {t(`coach.followups.${key}`)}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -330,7 +357,7 @@ export default function Coach() {
             {loading && (
               <div className="animate-in">
                 <p className="font-mono text-[11px] uppercase tracking-widest text-primary mb-2">
-                  RunIndex
+                  {t("coach.replyLabel")}
                 </p>
                 <div className="coach-message flex items-center gap-2">
                   <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
@@ -348,22 +375,25 @@ export default function Coach() {
       </ScrollArea>
 
       {/* Input Area */}
-      <div className="p-4 md:p-6 border-t border-border bg-background">
+      <div className="shrink-0 p-4 md:p-6 border-t border-border bg-background">
         <form onSubmit={handleSubmit} className="flex gap-3">
           <Textarea
+            ref={inputRef}
             data-testid="coach-input"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={t("coach.placeholder")}
-            className="flex-1 min-h-[44px] max-h-[120px] resize-none bg-muted border-input focus:border-primary rounded-none font-sans text-sm"
+            aria-label={t("coach.placeholder")}
+            className="flex-1 min-w-0 min-h-[44px] max-h-[120px] resize-none bg-muted border-input focus:border-primary rounded-2xl font-sans text-sm"
             disabled={loading}
           />
           <Button
             type="submit"
             data-testid="coach-submit"
+            aria-label={t("coach.send")}
             disabled={!input.trim() || loading}
-            className="bg-primary text-primary-foreground hover:bg-primary/90 rounded-none uppercase font-bold tracking-wider text-xs h-11 px-6"
+            className="shrink-0 bg-primary text-primary-foreground hover:bg-primary/90 rounded-full uppercase font-bold tracking-wider text-xs h-11 px-4"
           >
             {loading ? (
               <Loader2 className="w-4 h-4 animate-spin" />
@@ -380,9 +410,10 @@ export default function Coach() {
 function SuggestionButton({ onClick, text, testId }) {
   return (
     <button
+      type="button"
       onClick={onClick}
       data-testid={testId}
-      className="block w-full p-3 text-left font-sans text-sm text-secondary-foreground border border-border hover:border-primary/30 hover:text-foreground transition-colors"
+      className="block w-full rounded-2xl p-3 text-left font-sans text-sm text-secondary-foreground border border-border hover:border-primary/30 hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       {text}
     </button>
