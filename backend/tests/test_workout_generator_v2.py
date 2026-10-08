@@ -199,6 +199,37 @@ def _quality_sessions(plan: WeeklyPlan) -> list[WorkoutPrescription]:
     return [s for s in plan.sessions if s.workout_type == "quality"]
 
 
+@pytest.mark.parametrize("sessions", range(2, 7))
+@pytest.mark.parametrize("basis", ("distance", "duration"))
+def test_reprise_exit_generator_preserves_session_count_without_reprise_cap(sessions, basis):
+    target = (
+        _wt_distance(24.0, sessions=sessions, allow_intensity=False, continuity_state="reprise_exit")
+        if basis == "distance"
+        else _wt_duration(120, sessions=sessions, continuity_state="reprise_exit")
+    )
+    plan = build_weekly_plan(
+        weekly_target=target,
+        runner_profile=_runner_profile_minimal().model_copy(update={"max_days_per_week": 6}),
+        plan_goal=_plan_goal(),
+        periodization=_periodization(),
+        reference_date=REF,
+    )
+    assert plan.session_count == target.target_sessions == sessions
+    assert "generator_route_normal" in plan.reason_codes
+    assert not _quality_sessions(plan)
+    if basis == "distance":
+        assert plan.planned_km == pytest.approx(target.target_km, abs=0.1)
+    else:
+        assert plan.planned_duration_minutes == target.target_duration_minutes
+    assert plan == build_weekly_plan(
+        weekly_target=target,
+        runner_profile=_runner_profile_minimal().model_copy(update={"max_days_per_week": 6}),
+        plan_goal=_plan_goal(),
+        periodization=_periodization(),
+        reference_date=REF,
+    )
+
+
 def _training_sessions(plan: WeeklyPlan) -> list[WorkoutPrescription]:
     return [s for s in plan.sessions if s.workout_type not in ("rest", "race")]
 

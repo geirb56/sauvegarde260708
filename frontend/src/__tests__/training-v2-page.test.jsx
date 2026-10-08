@@ -312,6 +312,91 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     });
   });
 
+  test("shows unavailable planned volume instead of the live target for an unknown past prescription", async () => {
+    const week = weekData();
+    week.weekly_target.target_km = 9.3;
+    week.week.planned_km = null;
+    week.week.session_count = null;
+    week.week.sessions[0] = {
+      day: "monday", planned_date: "2026-08-24", workout_type: null,
+      distance_km: null, duration_minutes: null, reason_codes: [],
+      execution_status: "prescription_unavailable", actual: null,
+    };
+    mockAxios({ week });
+    renderPage();
+    expect(await screen.findByTestId("week-volume-planned")).toHaveTextContent("—");
+    expect(screen.queryByTestId("week-volume-progress-fill")).not.toBeInTheDocument();
+    expect(screen.getByTestId("week-volume-sessions")).toHaveTextContent("0/—");
+  });
+
+  test("shows effective snapshot and future volume rather than the live target", async () => {
+    const week = weekData();
+    week.weekly_target.target_km = 9.3;
+    week.week.planned_km = 18.3;
+    week.week.session_count = 2;
+    week.week.sessions = [
+      { ...week.week.sessions[0], distance_km: 12.7 },
+      { ...week.week.sessions[6], distance_km: 5.6 },
+    ];
+    mockAxios({ week });
+    renderPage();
+    expect(await screen.findByTestId("week-volume-planned")).toHaveTextContent(formatDistance(18.3));
+  });
+
+  test.each([
+    ["fr", "Fréquence réduite cette semaine pour une reprise progressive."],
+    ["en", "Fewer sessions this week to support a gradual return to running."],
+    ["es", "Frecuencia reducida esta semana para volver a correr de forma progresiva."],
+  ])("explains a real reprise frequency reduction in %s without exposing reason codes", async (lang, message) => {
+    const week = weekData();
+    week.training_prefs = { sessions_per_week: 6 };
+    week.weekly_target.session_count = 3;
+    week.week.session_count = 3;
+    week.reconciliation_reason_codes = [
+      "SESSIONS_PREFERENCE_CAPPED_FOR_REPRISE_SAFETY",
+      "FREQUENCY_REDUCED_FOR_CONTINUITY_SAFETY",
+    ];
+    mockAxios({ week });
+    renderPage({ lang });
+    const explanation = await screen.findByTestId("week-frequency-reduction");
+    expect(explanation).toHaveTextContent(message);
+    expect(screen.getByTestId("training-v2-week")).not.toHaveTextContent("SESSIONS_PREFERENCE_CAPPED_FOR_REPRISE_SAFETY");
+    expect(screen.getByTestId("training-v2-week")).not.toHaveTextContent("FREQUENCY_REDUCED_FOR_CONTINUITY_SAFETY");
+  });
+
+  test.each([
+    "SESSIONS_PREFERENCE_CAPPED_FOR_REPRISE_SAFETY",
+    "FREQUENCY_REDUCED_FOR_CONTINUITY_SAFETY",
+  ])("explains a reduction authorized by %s alone even when historical totals are unknown", async (reason) => {
+    const week = weekData();
+    week.training_prefs = { sessions_per_week: 6 };
+    week.weekly_target.session_count = 4;
+    week.week.session_count = null;
+    week.week.planned_km = null;
+    week.reconciliation_reason_codes = [reason];
+    mockAxios({ week });
+    renderPage();
+    expect(await screen.findByTestId("week-frequency-reduction")).toHaveTextContent("Fewer sessions this week");
+  });
+
+  test.each([
+    [3, 3, []],
+    [3, 3, ["SESSIONS_PREFERENCE_CAPPED_FOR_REPRISE_SAFETY"]],
+    [6, 4, ["SESSIONS_PREFERENCE_CAPPED_BY_MAX_DAYS"]],
+    [6, 4, []],
+    [null, 4, ["FREQUENCY_REDUCED_FOR_CONTINUITY_SAFETY"]],
+    [6, null, ["FREQUENCY_REDUCED_FOR_CONTINUITY_SAFETY"]],
+  ])("does not invent a reprise explanation for preference %s and target %s (%s)", async (preference, count, reasons) => {
+    const week = weekData();
+    week.training_prefs = { sessions_per_week: preference };
+    week.weekly_target.session_count = count;
+    week.reconciliation_reason_codes = reasons;
+    mockAxios({ week });
+    renderPage();
+    await screen.findByTestId("training-v2-week");
+    expect(screen.queryByTestId("week-frequency-reduction")).not.toBeInTheDocument();
+  });
+
   test("shows paywall for free users and skips premium API calls", () => {
     useSubscription.mockReturnValue({ isFree: true, loading: false });
     renderPage();
@@ -1188,6 +1273,7 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     const partial = computeTrainingWeekProgress({
       weekly_target: { target_basis: "distance", target_km: 16, session_count: 2 },
       week: {
+        planned_km: 16,
         sessions: [
           { actual: { activity_id: "m1", distance_km: 5 } },
           { actual: { activity_id: "m2", distance_km: null } },
@@ -1201,7 +1287,7 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
 
     const empty = computeTrainingWeekProgress({
       weekly_target: { target_basis: "distance", target_km: 16, session_count: 2 },
-      week: { sessions: [], unmatched_actuals: [] },
+      week: { planned_km: 16, sessions: [], unmatched_actuals: [] },
     });
     expect(empty.completed_state).toBe("empty");
     expect(empty.progress_state).toBe("empty");

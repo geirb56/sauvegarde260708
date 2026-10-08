@@ -201,13 +201,16 @@ class WeekV2PlanResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     planned_km: Optional[float] = None
-    """Sum of TRAINING session distances only; race distance is excluded."""
+    """Sum of published TRAINING distances; rest/race excluded.
+    None for duration basis or any unknown included prescription/distance."""
 
     planned_duration_minutes: Optional[int] = None
-    """Sum of session durations. None when target_basis == "distance"."""
+    """Sum of published TRAINING durations; rest/race excluded.
+    None for distance basis or any unknown included prescription/duration."""
 
-    session_count: int
-    """Number of TRAINING sessions (excludes rest and race)."""
+    session_count: Optional[int] = None
+    """Number of published TRAINING sessions (excludes rest and race).
+    None when a prescription's type is unavailable."""
 
     sessions: List[WeekV2SessionResponse]
     """All sessions ordered Monday→Sunday."""

@@ -238,76 +238,152 @@ class TestSharedSessionSource:
         assert reconciled_target.target_km == canonical.reconciled_target.target_km
 
 
-class TestSessionsPreferenceCap:
-    @pytest.mark.parametrize(
-        ("preferred_sessions", "recommended_sessions", "expected_sessions"),
-        [
-            (3, 4, 3),
-            (3, 2, 2),
-            (5, 3, 3),
+def _normal_two_runs_kwargs():
+    from training_v2.domain_activity import DomainActivity
+
+    return dict(
+        workouts=[
+            DomainActivity(
+                activity_type="running",
+                start_time=(_REFERENCE_DATE - timedelta(days=7 * w + d)).isoformat() + "T07:00:00",
+                distance_m=9500.0,
+                duration_s=3420.0,
+            )
+            for w in range(12) for d in (3, 6)
         ],
+        goal_type="SEMI",
+        reference_date=_REFERENCE_DATE,
+        race_date=_REFERENCE_DATE + timedelta(weeks=16),
+        cycle_start_date=_REFERENCE_DATE - timedelta(weeks=4),
     )
-    def test_effective_sessions_min_rule(
-        self,
-        monkeypatch,
-        preferred_sessions: int,
-        recommended_sessions: int,
-        expected_sessions: int,
-    ) -> None:
-        def _forced_reconciliation(*, proposed_target, recent_response):
-            reconciled_target = proposed_target.model_copy(
-                update={"target_sessions": recommended_sessions}
-            )
-            return WeeklyReconciliationResult(
-                action=WeeklyReconciliationAction.KEEP,
-                original_target=proposed_target,
-                reconciled_target=reconciled_target,
-                reason_codes=("TEST_FORCED_RECOMMENDED_SESSIONS",),
-                observed_runs_per_week=None,
-                observed_distance_km=None,
-                observed_duration_minutes=None,
-                response_status="unavailable",
-                confidence="none",
-            )
 
+
+class TestSessionsPreferencePrescription:
+    @pytest.mark.parametrize("preference", range(2, 7))
+    def test_sessions_preference_normal_two_runs_fixture(self, preference):
+        kwargs = _normal_two_runs_kwargs()
+        baseline = build_canonical_weekly_plan(**kwargs)
+        canonical = build_canonical_weekly_plan(**kwargs, sessions_preference=preference)
+        assert canonical.original_target.continuity_state == "normal"
+        assert canonical.reconciliation_result.observed_runs_per_week == 2.0
+        assert canonical.reconciliation_result.observed_distance_km == 76.0
+        assert canonical.original_target.target_sessions == preference
+        assert canonical.reconciled_target.target_sessions == preference
+        assert canonical.reconciled_target.target_km == baseline.reconciled_target.target_km == 20.9
+        assert canonical.reconciliation_result.action == WeeklyReconciliationAction.KEEP
+        assert canonical.original_target is canonical.reconciliation_result.original_target
+        assert canonical.reconciled_target is canonical.reconciliation_result.reconciled_target
+        assert canonical.weekly_plan.session_count == preference
+        assert canonical.weekly_plan.planned_km == pytest.approx(20.9, abs=0.1)
+        long_run = next(s for s in canonical.weekly_plan.sessions if s.workout_type == "long_easy")
+        assert long_run.distance_km == pytest.approx(7.3, abs=0.2)
+        assert long_run.distance_km <= 0.45 * canonical.reconciled_target.target_km
+        assert long_run.distance_km <= 18.0
+        assert canonical == build_canonical_weekly_plan(**kwargs, sessions_preference=preference)
+        target, plan = build_weekly_plan_from_workouts(**kwargs, sessions_preference=preference)
+        assert target == canonical.reconciled_target
+        assert plan == canonical.weekly_plan
+
+    @pytest.mark.parametrize("preference", (None, 0, 1, 7, "3", 3.0, True))
+    def test_sessions_preference_absent_or_invalid_keeps_legacy_fixture(self, preference):
+        kwargs = _normal_two_runs_kwargs()
+        baseline = build_canonical_weekly_plan(**kwargs)
+        assert baseline.original_target.target_sessions == 2
+        assert baseline.original_target.target_km == 20.9
+        assert baseline.original_target.reason_codes == ("NORMAL_DISTANCE_BASED",)
+        assert baseline.reconciliation_result.reason_codes == ("PLAN_STRUCTURE_KEPT",)
+        assert build_canonical_weekly_plan(**kwargs, sessions_preference=preference) == baseline
+
+    def test_sessions_preference_max_days_is_audited_before_reconciliation(self):
+        canonical = build_canonical_weekly_plan(
+            **_normal_two_runs_kwargs(), sessions_preference=6,
+            user_profile={"max_days_per_week": 2},
+        )
+        assert canonical.original_target.target_sessions == canonical.reconciled_target.target_sessions == 2
+        assert "SESSIONS_PREFERENCE_CAPPED_BY_MAX_DAYS" in canonical.original_target.reason_codes
+        assert "SESSIONS_PREFERENCE_CAPPED_BY_MAX_DAYS" in canonical.reconciliation_result.reason_codes
+        assert canonical.reconciled_target is canonical.reconciliation_result.reconciled_target
+
+
+class TestSessionsPreferenceSafety:
+    @pytest.mark.parametrize("continuity", ("no_history", "deep_reprise", "partial_reprise"))
+    def test_sessions_preference_reprise_bridge_protections(self, continuity):
+        kwargs = _normal_two_runs_kwargs()
+        if continuity == "no_history":
+            kwargs["workouts"] = []
+        elif continuity == "deep_reprise":
+            kwargs["workouts"] = [
+                a.model_copy(update={
+                    "start_time": (_REFERENCE_DATE - timedelta(days=42 + 7 * w + d)).isoformat() + "T07:00:00",
+                })
+                for w in range(6) for d, a in zip((3, 6), kwargs["workouts"][:2])
+            ]
+        else:
+            kwargs["workouts"] = [
+                a.model_copy(update={"distance_m": 2000.0, "duration_s": 720.0}) if i < 2 else a
+                for i, a in enumerate(kwargs["workouts"])
+            ]
+        baseline = build_canonical_weekly_plan(**kwargs)
+        canonical = build_canonical_weekly_plan(**kwargs, sessions_preference=6)
+        assert canonical.original_target.continuity_state == continuity
+        assert canonical.original_target.target_km == baseline.original_target.target_km
+        assert canonical.original_target.target_duration_minutes == baseline.original_target.target_duration_minutes
+        assert canonical.original_target.allow_intensity is False
+        assert canonical.reconciled_target is canonical.reconciliation_result.reconciled_target
+        assert canonical.weekly_plan.allow_intensity is False
+        assert all(s.intensity_class in ("low", "rest") for s in canonical.weekly_plan.sessions)
+        assert canonical.weekly_plan.session_count == canonical.reconciled_target.target_sessions
+        assert "SESSIONS_PREFERENCE_CAPPED_FOR_REPRISE_SAFETY" in canonical.original_target.reason_codes
+        assert "SESSIONS_PREFERENCE_CAPPED_FOR_REPRISE_SAFETY" in canonical.reconciliation_result.reason_codes
+        if continuity in ("no_history", "deep_reprise"):
+            assert canonical.original_target.target_sessions == 3
+            assert canonical.reconciled_target.target_basis == "duration"
+            assert canonical.reconciled_target.target_km is None
+            assert "SESSIONS_PREFERENCE_CAPPED_FOR_REPRISE_SAFETY" in canonical.original_target.reason_codes
+            assert "SESSIONS_PREFERENCE_CAPPED_FOR_REPRISE_SAFETY" in canonical.reconciliation_result.reason_codes
+        else:
+            assert canonical.original_target.target_sessions == 4
+            assert canonical.reconciled_target.target_sessions == 3
+            assert "FREQUENCY_REDUCED_FOR_CONTINUITY_SAFETY" in canonical.reconciliation_result.reason_codes
+
+    @pytest.mark.parametrize("preference", range(2, 7))
+    @pytest.mark.parametrize("basis", ("distance", "duration"))
+    def test_partial_reprise_canonical_frequency_and_concentration(self, monkeypatch, preference, basis):
+        from training_v2 import week_plan_bridge
+
+        build_state = week_plan_bridge.build_training_state
         monkeypatch.setattr(
-            "training_v2.week_plan_bridge.build_weekly_reconciliation",
-            _forced_reconciliation,
+            week_plan_bridge, "build_training_state",
+            lambda **kwargs: build_state(**kwargs).model_copy(update={"continuity_state": "partial_reprise"}),
         )
-
-        canonical = _build_canonical(
-            n_activities=8,
-            sessions_preference=preferred_sessions,
-        )
-        assert canonical.reconciled_target.target_sessions == expected_sessions
-        assert canonical.weekly_plan.session_count == expected_sessions
-
-    def test_sessions_preference_two_is_accepted(self, monkeypatch) -> None:
-        def _forced_reconciliation(*, proposed_target, recent_response):
-            reconciled_target = proposed_target.model_copy(update={"target_sessions": 4})
-            return WeeklyReconciliationResult(
-                action=WeeklyReconciliationAction.KEEP,
-                original_target=proposed_target,
-                reconciled_target=reconciled_target,
-                reason_codes=("TEST_FORCE_FOUR",),
-                observed_runs_per_week=None,
-                observed_distance_km=None,
-                observed_duration_minutes=None,
-                response_status="unavailable",
-                confidence="none",
-            )
-
-        monkeypatch.setattr(
-            "training_v2.week_plan_bridge.build_weekly_reconciliation",
-            _forced_reconciliation,
-        )
-
-        canonical = _build_canonical(
-            n_activities=8,
-            sessions_preference=2,
-        )
-        assert canonical.reconciled_target.target_sessions == 2
-        assert canonical.weekly_plan.session_count == 2
+        kwargs = _normal_two_runs_kwargs()
+        if basis == "duration":
+            kwargs["workouts"] = [a.model_copy(update={"distance_m": None}) for a in kwargs["workouts"]]
+        canonical = build_canonical_weekly_plan(**kwargs, sessions_preference=preference)
+        original = canonical.original_target
+        reconciled = canonical.reconciled_target
+        result = canonical.reconciliation_result
+        assert original.continuity_state == reconciled.continuity_state == "partial_reprise"
+        assert original.target_basis == reconciled.target_basis == basis
+        assert original.target_sessions == min(preference, 4)
+        assert reconciled.target_sessions == (2 if preference == 2 else min(preference, 4) - 1)
+        assert canonical.weekly_plan.session_count == reconciled.target_sessions
+        cap_code = "SESSIONS_PREFERENCE_CAPPED_FOR_REPRISE_SAFETY"
+        assert (cap_code in original.reason_codes) == (preference > 4)
+        assert (cap_code in result.reason_codes) == (preference > 4)
+        if preference > 2:
+            assert "FREQUENCY_REDUCED_FOR_CONTINUITY_SAFETY" in result.reason_codes
+            assert "SESSION_LOAD_CONCENTRATION_GUARD" in result.reason_codes
+            ratio = reconciled.target_sessions / original.target_sessions
+            if basis == "distance":
+                assert reconciled.target_km == round(original.target_km * ratio, 1)
+                assert canonical.weekly_plan.planned_km == pytest.approx(reconciled.target_km, abs=0.1)
+            else:
+                assert reconciled.target_duration_minutes == round(original.target_duration_minutes * ratio)
+                assert canonical.weekly_plan.planned_duration_minutes == reconciled.target_duration_minutes
+        assert original.allow_intensity is reconciled.allow_intensity is False
+        assert all(s.intensity_class in ("low", "rest") for s in canonical.weekly_plan.sessions)
+        assert canonical == build_canonical_weekly_plan(**kwargs, sessions_preference=preference)
 
 
 # ---------------------------------------------------------------------------

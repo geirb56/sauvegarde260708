@@ -3509,6 +3509,7 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
     # today or in the past (see training_v2/prescription_snapshot.py) ─────
     from training_v2.week_execution import (
         EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE,
+        aggregate_published_sessions,
         build_week_execution,
         prescription_id_for,
     )
@@ -3885,6 +3886,9 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
         )
 
     sessions = [_session_response(se) for se in execution.sessions]
+    published_aggregate = aggregate_published_sessions(
+        sessions, target_basis=weekly_plan.target_basis
+    )
     unmatched_actuals = [
         actual
         for row in execution.extra_rows
@@ -3910,9 +3914,9 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
             confidence=weekly_target.confidence,
         ),
         week=WeekV2PlanResponse(
-            planned_km=weekly_plan.planned_km,
-            planned_duration_minutes=weekly_plan.planned_duration_minutes,
-            session_count=weekly_plan.session_count,
+            planned_km=published_aggregate.planned_km,
+            planned_duration_minutes=published_aggregate.planned_duration_minutes,
+            session_count=published_aggregate.session_count,
             sessions=sessions,
             unmatched_actuals=unmatched_actuals,
         ),
