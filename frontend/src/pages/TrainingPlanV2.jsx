@@ -650,11 +650,10 @@ function WeekVolumeSummary({ t, weekPlan, weeklyTarget, unitSystem }) {
         )}
       </div>
       <p className="text-xs text-muted-foreground" data-testid="week-volume-sessions">
-        {/* weekly_target.session_count is the canonical prescribed target;
-            fallback count is derived from week.sessions when missing. */}
+        {/* Count effective published prescriptions, never the live target. */}
         {formatTemplate(t("trainingV2.volumeSessions"), {
           done: weekProgress.completed_session_count,
-          total: weekProgress.planned_session_count ?? 0,
+          total: weekProgress.planned_session_count ?? t("trainingV2.notAvailable"),
         })}
       </p>
       {extraLabel && (

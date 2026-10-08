@@ -153,6 +153,7 @@ def _build(
     race_date: Optional[date] = None,
     plan_start: Optional[date] = None,
     ref: date = REF,
+    sessions_preference: Optional[int] = None,
 ) -> WeeklyTarget:
     hist, prof = _profile(activities, declared, ref)
     state = _state(hist, prof, ref)
@@ -169,7 +170,49 @@ def _build(
         plan_goal=goal,
         periodization=period,
         reference_date=ref,
+        **({"sessions_preference": sessions_preference} if sessions_preference is not None else {}),
     )
+
+
+@pytest.mark.parametrize("preference", range(2, 7))
+def test_sessions_preference_seeds_normal_target_without_volume_growth(preference):
+    activities = [_make_activity(7 * w + d, 9.5) for w in range(12) for d in (3, 6)]
+    baseline = _build(activities)
+    target = _build(activities, sessions_preference=preference)
+    assert baseline.continuity_state == target.continuity_state == "normal"
+    assert target.target_sessions == preference
+    assert target.target_km == baseline.target_km == 20.9
+    assert target.target_km <= 19.0 * NORMAL_MAX_PROGRESSION
+    assert target == _build(activities, sessions_preference=preference)
+    assert "SESSIONS_PREFERENCE_APPLIED" in target.reason_codes
+
+
+@pytest.mark.parametrize("continuity", ("no_history", "deep_reprise", "partial_reprise", "reprise_exit"))
+def test_sessions_preference_preserves_reprise_volume_and_intensity(continuity):
+    hist, prof = _profile()
+    state = _state(hist, prof).model_copy(update={"continuity_state": continuity})
+    kwargs = dict(
+        runner_profile=prof, training_history=hist, training_state=state,
+        plan_goal=_goal(), periodization=_periodization(), reference_date=REF,
+    )
+    baseline = build_weekly_target(**kwargs)
+    target = build_weekly_target(**kwargs, sessions_preference=6)
+    assert target.target_sessions == (3 if continuity in ("no_history", "deep_reprise") else 6)
+    assert target.target_basis == baseline.target_basis == "duration"
+    assert target.target_km is baseline.target_km is None
+    assert target.target_duration_minutes == baseline.target_duration_minutes
+    assert target.allow_intensity is baseline.allow_intensity is False
+    if continuity in ("no_history", "deep_reprise"):
+        assert "SESSIONS_PREFERENCE_CAPPED_FOR_REPRISE_SAFETY" in target.reason_codes
+
+
+def test_sessions_preference_respects_true_max_days_with_reason():
+    activities = [_make_activity(7 * w + d, 9.5) for w in range(12) for d in (3, 6)]
+    target = _build(
+        activities, declared={"max_days_per_week": 2}, sessions_preference=6,
+    )
+    assert target.target_sessions == 2
+    assert "SESSIONS_PREFERENCE_CAPPED_BY_MAX_DAYS" in target.reason_codes
 
 
 # ---------------------------------------------------------------------------

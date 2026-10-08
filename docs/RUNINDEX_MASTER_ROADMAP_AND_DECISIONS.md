@@ -286,6 +286,14 @@ Authority split:
 - DailyAdaptation changes Today only and does not rebuild the weekly plan
 - performed activity matching remains deterministic and Garmin-only
 
+Training week coherence contract:
+- An explicit `sessions_per_week` preference (2–6) seeds WeeklyTarget before WeeklyReconciliation. In `normal`, observed frequency alone does not lower it.
+- Availability caps and reprise/continuity safeguards remain authoritative, with diagnostic reason codes. Without a preference, the historical deterministic V2 policy is unchanged.
+- Frequency load-concentration protection applies only when reconciliation actually reduces frequency; volume progression/reconciliation and long-run safeguards are unchanged.
+- `/training/v2/week` aggregates the effective published `week.sessions`: reliable snapshot/planned-memory for past days, immutable served prescription for today, live prescription for future days.
+- Rest and race are excluded from training totals. Any unavailable prescription makes the aggregate/count unknown; a missing training metric makes its aggregate unknown. No historical prescription is reconstructed.
+- Training and Dashboard preserve unknown effective totals instead of falling back to `weekly_target`; `None != 0`.
+
 ---
 
 ## 10. Structured workout and snapshot state

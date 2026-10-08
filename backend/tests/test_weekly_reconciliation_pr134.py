@@ -6,6 +6,8 @@ import sys
 from datetime import date
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, ".")
 
 from training_v2.training_response import RecentTrainingResponse
@@ -102,6 +104,81 @@ def _response(
         intensity_exposure_trend="stable",
         reason_codes=(),
     )
+
+
+def test_sessions_preference_normal_keeps_three_14km_despite_observed_two():
+    target = _target_distance(sessions=3, km=14.0)
+    response = _response(observed_runs_per_week=2.0, observed_distance_km=76.0)
+    legacy = build_weekly_reconciliation(proposed_target=target, recent_response=response)
+    assert legacy.reconciled_target.target_sessions == 2
+    assert legacy.reconciled_target.target_km == 9.3
+    assert "SESSION_LOAD_CONCENTRATION_GUARD" in legacy.reason_codes
+    result = build_weekly_reconciliation(
+        proposed_target=target, recent_response=response, sessions_preference=3,
+    )
+    assert result.original_target is target
+    assert result.reconciled_target == target
+    assert result.action == WeeklyReconciliationAction.KEEP
+    assert "SESSIONS_PREFERENCE_PRESERVED" in result.reason_codes
+    assert "SESSION_LOAD_CONCENTRATION_GUARD" not in result.reason_codes
+
+
+@pytest.mark.parametrize("basis", ("distance", "duration"))
+def test_sessions_preference_does_not_suppress_genuine_volume_reconciliation(basis):
+    target = (
+        _target_distance(sessions=3, km=14.0) if basis == "distance"
+        else _target_duration(sessions=3, minutes=120, continuity="normal")
+    )
+    result = build_weekly_reconciliation(
+        proposed_target=target, sessions_preference=3,
+        recent_response=_response(
+            observed_runs_per_week=2.0, observed_distance_km=20.0,
+            observed_duration_minutes=200.0, long_run_trend="decreasing",
+        ),
+    )
+    assert result.action == WeeklyReconciliationAction.REDUCE_VOLUME
+    assert result.reconciled_target.target_sessions == 3
+    if basis == "distance":
+        assert result.reconciled_target.target_km == 11.9
+    else:
+        assert result.reconciled_target.target_duration_minutes == 102
+    assert "LONG_RUN_CAUTION" in result.reason_codes
+    assert "SESSION_LOAD_CONCENTRATION_GUARD" not in result.reason_codes
+
+
+@pytest.mark.parametrize("continuity", ("no_history", "deep_reprise", "partial_reprise", "reprise_exit"))
+@pytest.mark.parametrize("basis", ("distance", "duration"))
+def test_sessions_preference_continuity_reduction_is_explicit_and_concentration_safe(continuity, basis):
+    target = (
+        _target_distance(sessions=3, km=14.0, continuity=continuity, allow_intensity=False)
+        if basis == "distance"
+        else _target_duration(sessions=3, minutes=120, continuity=continuity)
+    )
+    response = _response(observed_runs_per_week=2.0, observed_distance_km=76.0)
+    legacy = build_weekly_reconciliation(proposed_target=target, recent_response=response)
+    result = build_weekly_reconciliation(
+        proposed_target=target, recent_response=response, sessions_preference=3,
+    )
+    assert result.reconciled_target == legacy.reconciled_target
+    assert result.reconciled_target.target_sessions == 2
+    assert result.reconciled_target.allow_intensity is False
+    assert result.reconciled_target.continuity_state == continuity
+    assert result.action == WeeklyReconciliationAction.REDUCE_BOTH
+    assert "FREQUENCY_REDUCED_FOR_CONTINUITY_SAFETY" in result.reason_codes
+    assert "SESSION_LOAD_CONCENTRATION_GUARD" in result.reason_codes
+    if basis == "distance":
+        assert result.reconciled_target.target_km == 9.3
+    else:
+        assert result.reconciled_target.target_duration_minutes == 80
+
+
+@pytest.mark.parametrize("preference", (None, 0, 1, 7, "3", 3.0, True))
+def test_sessions_preference_absent_or_invalid_preserves_reconciliation(preference):
+    kwargs = dict(
+        proposed_target=_target_distance(sessions=3, km=14.0),
+        recent_response=_response(observed_runs_per_week=2.0, observed_distance_km=76.0),
+    )
+    assert build_weekly_reconciliation(**kwargs, sessions_preference=preference) == build_weekly_reconciliation(**kwargs)
 
 
 def test_a_recent_response_none_keep():

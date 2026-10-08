@@ -45,8 +45,8 @@ export function computeTrainingWeekProgress(trainingWeekV2) {
   const targetBasis = weeklyTarget.target_basis;
   const metricField = targetBasis === "duration" ? "duration_minutes" : "distance_km";
   const plannedValue = targetBasis === "duration"
-    ? (week.planned_duration_minutes ?? weeklyTarget.target_duration_minutes)
-    : (week.planned_km ?? weeklyTarget.target_km);
+    ? (week.planned_duration_minutes ?? null)
+    : (week.planned_km ?? null);
 
   const matchedActuals = sessions
     .filter((session) => isTrainingSessionType(getSessionType(session)))
@@ -55,7 +55,9 @@ export function computeTrainingWeekProgress(trainingWeekV2) {
   const completed = aggregateKnownMetric(matchedActuals, metricField);
   const unmatchedCompleted = aggregateKnownMetric(unmatched, metricField);
 
-  const fallbackPlannedSessionCount = sessions.filter((session) => isTrainingSessionType(getSessionType(session))).length;
+  const fallbackPlannedSessionCount = sessions.some((session) => session?.execution_status === "prescription_unavailable")
+    ? null
+    : sessions.filter((session) => isTrainingSessionType(getSessionType(session))).length;
 
   let progressState = "unavailable";
   let progressPercent = null;
@@ -80,7 +82,9 @@ export function computeTrainingWeekProgress(trainingWeekV2) {
     unmatched_value: unmatchedCompleted.value,
     unmatched_state: unmatchedCompleted.state,
     completed_session_count: matchedActuals.length,
-    planned_session_count: week.session_count ?? weeklyTarget.session_count ?? fallbackPlannedSessionCount,
+    planned_session_count: Object.prototype.hasOwnProperty.call(week, "session_count")
+      ? week.session_count
+      : fallbackPlannedSessionCount,
     progress_state: progressState,
     progress_percent: progressPercent,
   };

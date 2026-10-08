@@ -312,6 +312,35 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     });
   });
 
+  test("shows unavailable planned volume instead of the live target for an unknown past prescription", async () => {
+    const week = weekData();
+    week.weekly_target.target_km = 9.3;
+    week.week.planned_km = null;
+    week.week.sessions[0] = {
+      day: "monday", planned_date: "2026-08-24", workout_type: null,
+      distance_km: null, duration_minutes: null, reason_codes: [],
+      execution_status: "prescription_unavailable", actual: null,
+    };
+    mockAxios({ week });
+    renderPage();
+    expect(await screen.findByTestId("week-volume-planned")).toHaveTextContent("—");
+    expect(screen.queryByTestId("week-volume-progress-fill")).not.toBeInTheDocument();
+  });
+
+  test("shows effective snapshot and future volume rather than the live target", async () => {
+    const week = weekData();
+    week.weekly_target.target_km = 9.3;
+    week.week.planned_km = 18.3;
+    week.week.session_count = 2;
+    week.week.sessions = [
+      { ...week.week.sessions[0], distance_km: 12.7 },
+      { ...week.week.sessions[6], distance_km: 5.6 },
+    ];
+    mockAxios({ week });
+    renderPage();
+    expect(await screen.findByTestId("week-volume-planned")).toHaveTextContent(formatDistance(18.3));
+  });
+
   test("shows paywall for free users and skips premium API calls", () => {
     useSubscription.mockReturnValue({ isFree: true, loading: false });
     renderPage();
@@ -1188,6 +1217,7 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     const partial = computeTrainingWeekProgress({
       weekly_target: { target_basis: "distance", target_km: 16, session_count: 2 },
       week: {
+        planned_km: 16,
         sessions: [
           { actual: { activity_id: "m1", distance_km: 5 } },
           { actual: { activity_id: "m2", distance_km: null } },
@@ -1201,7 +1231,7 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
 
     const empty = computeTrainingWeekProgress({
       weekly_target: { target_basis: "distance", target_km: 16, session_count: 2 },
-      week: { sessions: [], unmatched_actuals: [] },
+      week: { planned_km: 16, sessions: [], unmatched_actuals: [] },
     });
     expect(empty.completed_state).toBe("empty");
     expect(empty.progress_state).toBe("empty");

@@ -20,7 +20,7 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict
 
 from .training_response import RecentTrainingResponse
-from .weekly_target import WeeklyTarget
+from .weekly_target import WeeklyTarget, _valid_sessions_preference
 
 # PRODUCT CALIBRATION V1 — RECALIBRABLE — NOT PHYSIOLOGICAL LAW
 FREQUENCY_REDUCTION_MARGIN: float = 0.75
@@ -122,8 +122,13 @@ def build_weekly_reconciliation(
     *,
     proposed_target: WeeklyTarget,
     recent_response: Optional[RecentTrainingResponse],
+    sessions_preference: Optional[int] = None,
 ) -> WeeklyReconciliationResult:
-    """Reconcile next-week structural target with observed 28-day response."""
+    """Reconcile observed response, preserving explicit normal-state frequency.
+
+    A valid preference must already seed proposed_target; this layer never
+    increases it. Continuity and volume safety reconciliation remain active.
+    """
     if recent_response is None:
         return _keep_result(
             proposed_target=proposed_target,
@@ -166,13 +171,21 @@ def build_weekly_reconciliation(
             )
             candidate_sessions = max(observed_candidate, max_allowed_drop_candidate)
             candidate_sessions = min(candidate_sessions, proposed_target.target_sessions)
-            if candidate_sessions < proposed_target.target_sessions:
+            preserve_preference = (
+                _valid_sessions_preference(sessions_preference)
+                and proposed_target.continuity_state == "normal"
+            )
+            if candidate_sessions < proposed_target.target_sessions and preserve_preference:
+                reasons.append("SESSIONS_PREFERENCE_PRESERVED")
+            elif candidate_sessions < proposed_target.target_sessions:
                 frequency_reduced = True
                 reconciled_target = reconciled_target.model_copy(
                     update={"target_sessions": candidate_sessions}
                 )
                 reasons.append("FREQUENCY_REDUCED")
                 reasons.append("SESSION_FREQUENCY_REDUCTION_CAPPED")
+                if _valid_sessions_preference(sessions_preference):
+                    reasons.append("FREQUENCY_REDUCED_FOR_CONTINUITY_SAFETY")
 
     volume_candidate = False
     volume_reduced = False
