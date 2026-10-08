@@ -2,6 +2,14 @@
 
 ## PR04 — TrainingState V2
 
+> Rapport historique PR04/#94 : les règles de reprise ci-dessous sont des
+> snapshots, pas le contrat actuel. La correction P1 supprime le seuil mensuel
+> de sorties et l'équivalence « historique court = reprise ». Le contrat
+> TrainingState courant est documenté dans
+> `docs/RUNINDEX_MASTER_ROADMAP_AND_DECISIONS.md`, section
+> « Training week coherence contract », et implémenté dans
+> `backend/training_v2/training_state.py`.
+
 ### ⚠ TrainingState décrit. TrainingState ne prescrit pas.
 
 ---
@@ -36,8 +44,8 @@ Les deux axes sont **strictement indépendants**. Aucun état unique fusionné (
 |---|---|
 | `no_history` | Aucun historique running exploitable. |
 | `deep_reprise` | Historique antérieur présent, mais aucune sortie depuis ≥ 28 jours. |
-| `partial_reprise` | Reprise commencée, mais volume récent < 50 % du volume habituel observable. |
-| `reprise_exit` | Continuité revenue mais pas encore stabilisée (historique < 4 semaines ou activité 30j trop sparse). |
+| `partial_reprise` | Rupture prouvée : absence de sortie 8–27 jours, ou retour après semaine inactive avec volume récent < 50 % de la baseline observable. |
+| `reprise_exit` | Retour après une semaine réellement inactive, sans quatre semaines actives rétablies ; pas de critère de fréquence absolue. |
 | `normal` | Aucune rupture significative de continuité détectée. |
 
 ---
@@ -76,10 +84,13 @@ PARTIAL_REPRISE_VOLUME_RATIO = 0.50
 ```
 
 **Condition** :
-- Une baseline observable est disponible (`runner_profile.typical_weekly_km` issu de l'historique, non du profil déclaré seul)
+- Aucune sortie depuis 8–27 jours, indépendamment du volume disponible ; OU :
+- Une semaine inactive est observée dans les quatre buckets glissants de 7 jours
+- ET une baseline observable est disponible (`runner_profile.typical_weekly_km` issu de l'historique, non du profil déclaré seul)
 - ET `recent_weekly_km < 0.50 × baseline_km`
 
-Aucune valeur par défaut de volume n'est inventée. Si la baseline est `None`, cette règle ne s'applique pas.
+Aucune valeur par défaut de volume n'est inventée. Si la baseline est `None`,
+la comparaison de volume ne s'applique pas ; la rupture temporelle reste observable.
 
 ---
 
@@ -89,9 +100,13 @@ Aucune valeur par défaut de volume n'est inventée. Si la baseline est `None`, 
 REPRISE_EXIT_STABLE_WEEKS = 4
 ```
 
-**Condition principale** : `available_history_days < 4 × 7 = 28` ET `days_since_last_run < NO_RUN_DEEP_REPRISE_DAYS` (garanti par le garde `deep_reprise` précédent). Le champ `w7.activity_count` n'est **pas** pris en compte : un historique court ne peut pas produire `normal` quelle que soit la position de la dernière sortie dans la fenêtre 8–27 jours.
-
-**Condition secondaire** (lorsque l'historique est plus long mais le volume reste en zone de récupération) : volume >= 50 % de la baseline MAIS < baseline ET activité 30j < 12 sorties (= 4 × 3).
+**Condition** : un retour récent après une semaine entièrement observée sans
+activité running valide, hors `deep_reprise` et `partial_reprise`.
+`weekly_run_count_buckets_28d` couvre J-0..6, J-7..13, J-14..20 et J-21..27.
+Une activité valide (distance positive OU durée positive) suffit à rendre une
+semaine active. Les semaines avant la première activité ne prouvent rien.
+Quatre semaines actives rétablissent `normal`, sans quota mensuel de sorties.
+Des compteurs non fournis (`None`) ne sont pas des semaines inactives.
 
 La constante évite la réutilisation de l'ancienne `REPRISE_STABLE_WEEKS` legacy.
 
@@ -101,9 +116,12 @@ La constante évite la réutilisation de l'ancienne `REPRISE_STABLE_WEEKS` legac
 
 Aucune rupture significative de continuité détectée :
 - Il existe un historique running
-- La dernière sortie date de moins de 28 jours
-- Le volume récent n'est pas significativement inférieur à la baseline
-- L'historique est suffisamment profond et dense
+- Aucune absence de sortie de 8 jours ou plus
+- Aucune semaine entièrement observée inactive dans les quatre dernières semaines
+
+Un historique court mais régulier est `normal` avec une confiance plus faible.
+Un faible volume (récupération/taper), même inférieur à 50 % de la baseline,
+ne prouve pas une reprise si la continuité hebdomadaire est intacte.
 
 `normal` ne signifie PAS : charge parfaite, bonne readiness, absence de fatigue, autorisation d'intensité.
 
@@ -255,7 +273,7 @@ python -m py_compile training_v2/training_state.py training_v2/__init__.py
 
 ## Limites connues
 
-- **`reprise_exit` boundary**: La frontière entre `reprise_exit` et `normal` dépend de la densité d'activités sur 30 jours (`window_30d.activity_count < 12`). Ce seuil est conservateur et pourra être affiné avec des données réelles en PR suivante.
+- **`reprise_exit` boundary**: Le contrat courant repose sur les semaines réellement inactives, jamais sur la densité mensuelle d'activités. Les règles PR04/#94 décrites dans les snapshots ci-dessous sont remplacées.
 - **Baseline déclarée ignorée**: Si `runner_profile.typical_weekly_km` vient uniquement du profil déclaré (sans historique), aucune comparaison de volume n'est effectuée. La règle `partial_reprise` ne s'applique pas dans ce cas. Ceci est conforme au principe V2 : absence de données ≠ valeur normale.
 - **`available_history_days` convention**: Héritée de PR05 : `(ref_date - first_run_date).days`. Une seule sortie le jour même = 0 jour → confidence `"none"`. Si la spec souhaite "1 sortie = low", il faudra ajuster cette convention dans `training_history.py` (hors scope PR04).
 - **Load metrics (`acute_load`, `chronic_weekly_load`)**: Retournés `None` si `training_load.is_available == False`. Aucun fallback inventé.
@@ -304,26 +322,11 @@ Si ces deux fenêtres sont vides (toutes les activités sont plus vieilles que 9
 
 **Correction** : Le test est remplacé par `== "reprise_exit"` avec calcul arithmétique explicite démontrant pourquoi ce scénario produit exactement `reprise_exit`.
 
-**Règle exacte `partial_reprise → reprise_exit → normal`** (corrigée par Correction 4) :
-
-```
-if recent_weekly < 50% × baseline_observed:
-    → partial_reprise
-
-elif available_history_days < REPRISE_EXIT_STABLE_WEEKS × 7:  # < 28 jours
-    → reprise_exit  # (w7.activity_count ignoré — garanti days_since < 28)
-
-elif (recent_weekly < baseline AND w30.activity_count < 12):
-    → reprise_exit
-
-else:
-    → normal
-```
-
-Cas de frontière testés avec `==` (scénario contrôlé : 10 runs jours 8–29, 10 km chacun) :
-- `test_partial_reprise_volume_below_50pct` : récent = 12 km < 13.07 = 50% de 26.13 → `partial_reprise`.
-- `test_reprise_exit_volume_above_50pct_sparse_w30` : récent = 15 km > 13.42, `w30.count = 11 < 12` → `reprise_exit`.
-- `test_normal_volume_above_50pct_dense_w30` : récent = 15 km, `w30.count = 12 ≥ 12` → `normal`.
+**Snapshot remplacé par la correction P1** : la règle PR04/#94 utilisait le
+volume, la profondeur et la densité d'activités pour classifier la continuité.
+Elle n'est plus applicable. Les scénarios de faible volume avec quatre
+semaines actives sont désormais `normal` ; les tests de retour nécessitent
+une vraie semaine inactive.
 
 ---
 
@@ -333,37 +336,10 @@ Cas de frontière testés avec `==` (scénario contrôlé : 10 runs jours 8–29
 
 **Correction** :
 
-La branche `available_history_days < reprise_exit_min_days` déclenche désormais `reprise_exit` sans condition sur `w7.activity_count`. En effet, `days_since < NO_RUN_DEEP_REPRISE_DAYS` (= 28) est **déjà garanti** par le garde `deep_reprise` positionné plus haut. Un historique trop court pour être "normal" ne peut pas produire `normal`, quelle que soit la position de la dernière sortie dans la fenêtre 7–27 jours.
-
-**Règle finale de classification** :
-
-```
-# Priorité décroissante :
-
-1. not has_any_running_history
-   → no_history
-
-2. days_since_last_run >= NO_RUN_DEEP_REPRISE_DAYS (28)
-   → deep_reprise
-
-3. baseline_km is not None AND baseline_km > 0
-   AND recent_weekly_km is not None
-   AND recent_weekly_km < PARTIAL_REPRISE_VOLUME_RATIO (0.50) × baseline_km
-   → partial_reprise
-
-4. available_history_days < REPRISE_EXIT_STABLE_WEEKS (4) × 7
-   (days_since < 28 garanti ici)
-   → reprise_exit
-
-5. baseline_km is not None AND baseline_km > 0
-   AND recent_weekly_km is not None
-   AND recent_weekly_km < baseline_km
-   AND w30.activity_count < REPRISE_EXIT_STABLE_WEEKS × 3
-   → reprise_exit
-
-6. (aucune règle déclenchée)
-   → normal
-```
+**Snapshot PR94 remplacé par la correction P1** : PR94 empêchait un historique
+court sans sortie récente de devenir `normal`. Le contrat courant traite
+explicitement toute absence de 8–27 jours en `partial_reprise`, quelle que soit
+la profondeur d'historique. L'historique court seul ne déclenche plus de reprise.
 
 **Tests ajoutés (PR94)** :
 

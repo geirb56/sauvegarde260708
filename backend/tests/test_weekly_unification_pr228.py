@@ -259,6 +259,46 @@ def _normal_two_runs_kwargs():
 
 
 class TestSessionsPreferencePrescription:
+    @pytest.mark.parametrize("real_81km_case", (False, True))
+    def test_regular_four_active_weeks_preference_three_has_no_reprise_or_concentration(self, real_81km_case):
+        kwargs = _normal_two_runs_kwargs()
+        if real_81km_case:
+            from training_v2.domain_activity import DomainActivity
+
+            kwargs["workouts"] = [
+                DomainActivity(
+                    activity_type="running",
+                    start_time=(_REFERENCE_DATE - timedelta(days=day)).isoformat(),
+                    distance_m=km * 1000,
+                    duration_s=km * 360,
+                )
+                for day, km in ((2, 9.1), (5, 9), (9, 10), (12, 11),
+                                (16, 10), (19, 11), (23, 10), (26, 11), (100, 10))
+            ]
+        canonical = build_canonical_weekly_plan(**kwargs, sessions_preference=3)
+        original = canonical.original_target
+        reconciled = canonical.reconciled_target
+        result = canonical.reconciliation_result
+        assert original.continuity_state == reconciled.continuity_state == "normal"
+        assert original.target_sessions == reconciled.target_sessions == 3
+        assert result.action == WeeklyReconciliationAction.KEEP
+        assert canonical.weekly_plan.session_count == 3
+        assert len([s for s in canonical.weekly_plan.sessions if s.workout_type != "rest"]) == 3
+        assert canonical.weekly_plan.planned_km == pytest.approx(reconciled.target_km, abs=0.1)
+        assert reconciled.target_km == original.target_km
+        if real_81km_case:
+            assert result.observed_runs_per_week == 2.0
+            assert result.observed_distance_km == 81.1
+            assert original.target_km == reconciled.target_km == 22.3
+            assert canonical.weekly_plan.planned_km == 22.3
+        assert "SESSIONS_PREFERENCE_PRESERVED" in result.reason_codes
+        assert "FREQUENCY_REDUCED_FOR_CONTINUITY_SAFETY" not in result.reason_codes
+        assert "SESSION_LOAD_CONCENTRATION_GUARD" not in result.reason_codes
+        assert "VOLUME_REDUCED_FOR_FREQUENCY_SAFETY" not in result.reason_codes
+        assert "reprise" not in str(canonical.weekly_plan.model_dump()).lower()
+        assert "reprise" not in str(original.reason_codes).lower()
+        assert canonical == build_canonical_weekly_plan(**kwargs, sessions_preference=3)
+
     @pytest.mark.parametrize("preference", range(2, 7))
     def test_sessions_preference_normal_two_runs_fixture(self, preference):
         kwargs = _normal_two_runs_kwargs()
@@ -306,6 +346,37 @@ class TestSessionsPreferencePrescription:
 
 
 class TestSessionsPreferenceSafety:
+    def test_real_partial_reprise_retains_314_frequency_volume_reason_trace(self):
+        kwargs = _normal_two_runs_kwargs()
+        kwargs["workouts"] = [
+            a.model_copy(update={"distance_m": 2000.0, "duration_s": 720.0}) if i < 2 else a
+            for i, a in enumerate(kwargs["workouts"])
+            if i not in (2, 3)
+        ]
+        canonical = build_canonical_weekly_plan(**kwargs, sessions_preference=3)
+        original = canonical.original_target
+        reconciled = canonical.reconciled_target
+        result = canonical.reconciliation_result
+        assert original.continuity_state == reconciled.continuity_state == "partial_reprise"
+        assert original.target_sessions == 3
+        assert reconciled.target_sessions == canonical.weekly_plan.session_count == 2
+        assert result.action == WeeklyReconciliationAction.REDUCE_BOTH
+        assert reconciled.target_km == round(original.target_km * 2 / 3, 1)
+        assert reconciled.target_km / 2 <= original.target_km / 3
+        assert canonical.weekly_plan.planned_km == pytest.approx(reconciled.target_km, abs=0.1)
+        for code in (
+            "FREQUENCY_REDUCED",
+            "FREQUENCY_REDUCED_FOR_CONTINUITY_SAFETY",
+            "SESSION_LOAD_CONCENTRATION_GUARD",
+            "VOLUME_REDUCED_FOR_FREQUENCY_SAFETY",
+            "VOLUME_AND_FREQUENCY_REDUCED",
+        ):
+            assert code in result.reason_codes
+        assert "SESSIONS_PREFERENCE_PRESERVED" not in result.reason_codes
+        assert "generator_route_partial_reprise" in canonical.weekly_plan.reason_codes
+        assert original.allow_intensity is reconciled.allow_intensity is False
+        assert all(s.intensity_class in ("low", "rest") for s in canonical.weekly_plan.sessions)
+
     @pytest.mark.parametrize("continuity", ("no_history", "deep_reprise", "partial_reprise"))
     def test_sessions_preference_reprise_bridge_protections(self, continuity):
         kwargs = _normal_two_runs_kwargs()
@@ -322,6 +393,7 @@ class TestSessionsPreferenceSafety:
             kwargs["workouts"] = [
                 a.model_copy(update={"distance_m": 2000.0, "duration_s": 720.0}) if i < 2 else a
                 for i, a in enumerate(kwargs["workouts"])
+                if i not in (2, 3)  # An observed inactive week, not merely lower volume.
             ]
         baseline = build_canonical_weekly_plan(**kwargs)
         canonical = build_canonical_weekly_plan(**kwargs, sessions_preference=6)
