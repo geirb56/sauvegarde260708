@@ -105,6 +105,8 @@ const WEEK_V2_DISTANCE = {
     session_count: 5,
   },
   week: {
+    planned_km: 50,
+    session_count: 5,
     sessions: [
       { actual: { activity_id: "a1", distance_km: 10 } },
     ],
@@ -120,6 +122,8 @@ const WEEK_V2_DURATION = {
     session_count: 4,
   },
   week: {
+    planned_duration_minutes: 180,
+    session_count: 4,
     sessions: [
       { actual: { activity_id: "d1", duration_minutes: 45 } },
       { actual: { activity_id: "d2", duration_minutes: 90 } },
@@ -283,8 +287,8 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     unmount();
   });
 
-  // 4. distance basis: weekly target comes from weekly_target.target_km
-  it("4. distance basis: displays weekly_target.target_km", async () => {
+  // 4. distance basis: volume comes from the effective published week.
+  it("4. distance basis: displays the effective week planned_km", async () => {
     mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
     setupAxiosMocks(buildDefaultMocks({ weekV2: WEEK_V2_DISTANCE }));
 
@@ -295,8 +299,23 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
     expect(card).not.toBeNull();
     const value = container.querySelector('[data-testid="weekly-target-value"]');
     expect(value).not.toBeNull();
-    // target_km = 50, metric → "50.0 km"
+    // planned_km = 50, metric → "50.0 km"
     expect(value.textContent).toContain("50");
+    unmount();
+  });
+
+  it.each(["distance", "duration"])("unknown effective %s volume never renders a live target or fake zero", async (basis) => {
+    mockUseSubscription.mockReturnValue({ isFree: false, loading: false });
+    setupAxiosMocks(buildDefaultMocks({
+      weekV2: {
+        weekly_target: { target_basis: basis, target_km: 9.3, target_duration_minutes: 180 },
+        week: { planned_km: null, planned_duration_minutes: null, session_count: null, sessions: [] },
+      },
+    }));
+    const { container, unmount } = renderDashboard();
+    await waitForRender();
+    expect(container.querySelector('[data-testid="weekly-target-value"]').textContent).toBe("Incomplete data");
+    expect(container.querySelector('[data-testid="weekly-progress-bar"]')).toBeNull();
     unmount();
   });
 
@@ -706,11 +725,13 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
         weekV2: {
           weekly_target: {
             target_basis: "distance",
-            target_km: 16.3,
+            target_km: 9.3,
             target_duration_minutes: null,
             session_count: 3,
           },
           week: {
+            planned_km: 16.3,
+            session_count: 3,
             sessions: [
               { actual: null },
               { actual: null },
@@ -747,6 +768,8 @@ describe("PR #174 — Dashboard Training V2 Migration", () => {
             session_count: 2,
           },
           week: {
+            planned_km: 16,
+            session_count: 2,
             sessions: [{ actual: { activity_id: "m1", distance_km: 5 } }],
             unmatched_actuals: [{ distance_km: 8 }],
           },

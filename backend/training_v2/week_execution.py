@@ -48,7 +48,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Dict, List, Mapping, Optional, Sequence
+from typing import TYPE_CHECKING, Dict, List, Mapping, Optional, Sequence
+
+if TYPE_CHECKING:
+    from .training_week_response import WeekV2SessionResponse
 
 from garmin.domain_adapter import mongo_garmin_to_observed_activities
 
@@ -90,6 +93,36 @@ was never actually served/frozen while it was current. Deliberately NOT a
 PR230 ``MatchingStatus``/``AdherenceStatus`` value (PR230's engine never
 produces this state); it lives only in ``SessionExecution.execution_status``
 and the corresponding API response field."""
+
+
+@dataclass(frozen=True)
+class PublishedWeekAggregate:
+    planned_km: Optional[float]
+    planned_duration_minutes: Optional[int]
+    session_count: Optional[int]
+
+
+def aggregate_published_sessions(
+    sessions: Sequence[WeekV2SessionResponse], *, target_basis: str
+) -> PublishedWeekAggregate:
+    """Sum the published prescription, never a live plan or Garmin actuals."""
+    if any(
+        session.execution_status == EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE
+        or session.workout_type is None
+        for session in sessions
+    ):
+        # An unknown historical type could have been training, even if the
+        # current live plan says rest. Neither volume nor count is reliable.
+        return PublishedWeekAggregate(None, None, None)
+
+    training = [session for session in sessions if session.workout_type not in ("rest", "race")]
+    planned_km = None
+    planned_duration_minutes = None
+    if target_basis == "distance" and all(session.distance_km is not None for session in training):
+        planned_km = sum(session.distance_km for session in training)
+    if target_basis == "duration" and all(session.duration_minutes is not None for session in training):
+        planned_duration_minutes = sum(session.duration_minutes for session in training)
+    return PublishedWeekAggregate(planned_km, planned_duration_minutes, len(training))
 
 
 @dataclass(frozen=True)
@@ -286,7 +319,13 @@ def build_week_execution(
     genuinely-frozen historical rest day) is unaffected and still goes
     through normal PR230 matching.
     """
-    frozen_snapshots = frozen_snapshots or {}
+    # Future prescriptions remain live even if a stale/erroneous snapshot
+    # exists. Apply this once to both matching and published-row resolution.
+    frozen_snapshots = {
+        prescription_id: snapshot
+        for prescription_id, snapshot in (frozen_snapshots or {}).items()
+        if snapshot.planned_date <= reference_date
+    }
     week_end = week_start + timedelta(days=6)
 
     prescriptions: List[PrescribedWorkout] = []
@@ -516,6 +555,8 @@ def build_week_execution(
 
 
 __all__ = [
+    "aggregate_published_sessions",
+    "PublishedWeekAggregate",
     "build_week_execution",
     "WeekExecutionResult",
     "SessionExecution",

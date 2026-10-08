@@ -74,6 +74,60 @@ def _row_for(result, planned_date: date):
     raise AssertionError(f"No row for {planned_date}")
 
 
+def test_future_stale_snapshot_is_ignored_for_matching_and_display():
+    from training_v2.prescription_snapshot import snapshot_from_prescription
+    from training_v2.week_execution import prescription_id_for
+
+    live = _session("sunday", distance_km=5.6)
+    planned_date = date(2024, 6, 16)
+    prescription_id = prescription_id_for(USER, planned_date, "sunday")
+    snapshot = snapshot_from_prescription(
+        user_id=USER, prescription_id=prescription_id, planned_date=planned_date,
+        session=_session("sunday", distance_km=99.0), modified_from_planned=True,
+    )
+    result = build_week_execution(
+        user_id=USER, reference_date=WEEK_START, week_start=WEEK_START,
+        sessions=[live], garmin_docs=[], frozen_snapshots={prescription_id: snapshot},
+    )
+    execution = result.sessions[0]
+    assert execution.session.distance_km == 5.6
+    assert execution.row.planned_distance_km == 5.6
+    assert execution.modified_from_planned is None
+    assert result.snapshots_to_persist == []
+
+
+@pytest.mark.parametrize("basis,metric", [
+    ("distance", "distance_km"), ("duration", "duration_minutes"),
+])
+def test_published_aggregate_missing_training_metric_never_returns_partial_sum(basis, metric):
+    from training_v2.training_week_response import WeekV2SessionResponse
+    from training_v2.week_execution import aggregate_published_sessions
+
+    sessions = [
+        WeekV2SessionResponse(day="monday", workout_type="easy", reason_codes=[], **{metric: 25}),
+        WeekV2SessionResponse(day="sunday", workout_type="easy", reason_codes=[], **{metric: None}),
+    ]
+    aggregate = aggregate_published_sessions(sessions, target_basis=basis)
+    assert aggregate.planned_km is None
+    assert aggregate.planned_duration_minutes is None
+    assert aggregate.session_count == 2
+
+
+@pytest.mark.parametrize("basis", ["distance", "duration"])
+def test_published_aggregate_known_rest_and_race_only_is_real_zero(basis):
+    from training_v2.training_week_response import WeekV2SessionResponse
+    from training_v2.week_execution import aggregate_published_sessions
+
+    sessions = [
+        WeekV2SessionResponse(day="monday", workout_type="rest", reason_codes=[]),
+        WeekV2SessionResponse(day="sunday", workout_type="race", reason_codes=[]),
+    ]
+    aggregate = aggregate_published_sessions(sessions, target_basis=basis)
+    assert aggregate.planned_km == (0 if basis == "distance" else None)
+    assert aggregate.planned_duration_minutes == (0 if basis == "duration" else None)
+    assert aggregate.session_count == 0
+
+
 # ---------------------------------------------------------------------------
 # 1. Past session without Garmin evidence != done
 # ---------------------------------------------------------------------------

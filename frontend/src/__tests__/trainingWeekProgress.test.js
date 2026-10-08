@@ -1,6 +1,39 @@
 import { computeTrainingWeekProgress } from "../lib/trainingWeekProgress";
 
 describe("computeTrainingWeekProgress served-week denominators", () => {
+  test.each(["distance", "duration"])("never replaces an unknown effective %s aggregate with a live target", (targetBasis) => {
+    const progress = computeTrainingWeekProgress({
+      weekly_target: { target_basis: targetBasis, target_km: 9.3, target_duration_minutes: 90 },
+      week: {
+        planned_km: null,
+        planned_duration_minutes: null,
+        sessions: [
+          { execution_status: "prescription_unavailable" },
+          { workout_type: "easy", distance_km: 5.6, duration_minutes: 30 },
+        ],
+      },
+    });
+
+    expect(progress.planned_value).toBeNull();
+    expect(progress.progress_state).toBe("unavailable");
+    expect(progress.progress_percent).toBeNull();
+  });
+
+  test("uses the effective snapshot plus future total even when the live target is 9.3", () => {
+    const progress = computeTrainingWeekProgress({
+      weekly_target: { target_basis: "distance", target_km: 9.3, session_count: 2 },
+      week: {
+        planned_km: 18.3,
+        session_count: 2,
+        sessions: [
+          { workout_type: "easy", distance_km: 12.7 },
+          { workout_type: "easy", distance_km: 5.6 },
+        ],
+      },
+    });
+    expect(progress.planned_value).toBeCloseTo(12.7 + 5.6);
+  });
+
   test("uses served week planned_km instead of weekly target when reduced", () => {
     const progress = computeTrainingWeekProgress({
       weekly_target: { target_basis: "distance", target_km: 20, session_count: 4 },
@@ -54,7 +87,7 @@ describe("computeTrainingWeekProgress served-week denominators", () => {
     expect(progress.progress_percent).toBe(33);
   });
 
-  test("keeps existing normal-week behavior when served plan totals are absent", () => {
+  test("keeps absent effective totals unknown while counting only published training sessions", () => {
     const progress = computeTrainingWeekProgress({
       weekly_target: { target_basis: "distance", target_km: 20, session_count: 4 },
       week: {
@@ -66,10 +99,18 @@ describe("computeTrainingWeekProgress served-week denominators", () => {
       },
     });
 
-    expect(progress.planned_value).toBe(20);
-    expect(progress.planned_session_count).toBe(4);
+    expect(progress.planned_value).toBeNull();
+    expect(progress.planned_session_count).toBe(1);
     expect(progress.completed_planned_value).toBe(5);
     expect(progress.completed_session_count).toBe(1);
     expect(progress.unmatched_value).toBe(3);
+  });
+
+  test("preserves an explicitly unknown effective session count", () => {
+    const progress = computeTrainingWeekProgress({
+      weekly_target: { target_basis: "distance", target_km: 9.3, session_count: 3 },
+      week: { planned_km: null, session_count: null, sessions: [] },
+    });
+    expect(progress.planned_session_count).toBeNull();
   });
 });

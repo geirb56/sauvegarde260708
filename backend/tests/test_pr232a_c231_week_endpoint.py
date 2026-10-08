@@ -178,6 +178,7 @@ def _patches(fake_db: _FakeDB, reference_date: date = _MONDAY) -> list:
         patch.object(server.app.state, "db", fake_db),
         patch("server.get_user_access", AsyncMock(side_effect=_user_access)),
         patch("server.datetime", _make_fixed_datetime_class(fixed_dt)),
+        patch.object(server.rate_limiter, "is_limited", return_value=False),
     ]
 
 
@@ -217,6 +218,164 @@ async def _get_today(fake_db: _FakeDB, reference_date: date = _MONDAY) -> Dict:
     finally:
         for p in reversed(started):
             p.stop()
+
+
+def _aggregate_plan_builder(*, basis="distance", overrides=None):
+    from dataclasses import replace
+    from training_v2.week_plan_bridge import build_canonical_weekly_plan
+    from training_v2.workout_generator import WorkoutPrescription
+
+    def build(**kwargs):
+        canonical = build_canonical_weekly_plan(**kwargs)
+        sessions = []
+        for day in ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"):
+            values = {"workout_type": "rest", "intensity_class": "rest",
+                      "distance_km": None, "duration_minutes": 0}
+            values.update((overrides or {}).get(day, {}))
+            sessions.append(WorkoutPrescription(day=day, reason_codes=(), **values))
+        plan = canonical.weekly_plan.model_copy(update={
+            "target_basis": basis, "sessions": tuple(sessions),
+            "planned_km": 9.3 if basis == "distance" else None,
+            "planned_duration_minutes": 40 if basis == "duration" else None,
+            "session_count": 2,
+        })
+        target = canonical.reconciled_target.model_copy(update={"target_basis": basis})
+        return replace(canonical, weekly_plan=plan, reconciled_target=target)
+
+    return build
+
+
+def _aggregate_snapshot(day, offset, **values):
+    return {
+        "user_id": _USER_ID,
+        "prescription_id": f"{_USER_ID}:{(_MONDAY + timedelta(days=offset)).isoformat()}:{day}",
+        "planned_date": (_MONDAY + timedelta(days=offset)).isoformat(),
+        "day": day, "workout_type": "rest", "intensity_class": "rest",
+        "distance_km": None, "duration_minutes": 0, "reason_codes": [],
+        **values,
+    }
+
+
+@pytest.mark.parametrize("source", ["served", "memory"])
+async def test_published_aggregate_uses_frozen_past_and_live_future(source):
+    from copy import deepcopy
+
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    monday = _aggregate_snapshot("monday", 0, workout_type="easy",
+                                 intensity_class="low", distance_km=12.7, duration_minutes=None)
+    collection = (fake_db.training_prescription_snapshots if source == "served"
+                  else fake_db.training_planned_prescription_memory)
+    collection._docs.append(monday)
+    fake_db.training_prescription_snapshots._docs.extend([
+        _aggregate_snapshot("tuesday", 1), _aggregate_snapshot("wednesday", 2),
+    ])
+    before = deepcopy(fake_db.training_prescription_snapshots._docs)
+    builder = _aggregate_plan_builder(overrides={
+        "monday": {"workout_type": "easy", "intensity_class": "low", "distance_km": 3.7,
+                   "duration_minutes": None},
+        "sunday": {"workout_type": "easy", "intensity_class": "low", "distance_km": 5.6,
+                   "duration_minutes": None},
+    })
+    with patch("training_v2.week_plan_bridge.build_canonical_weekly_plan", builder):
+        result = await _get_week(fake_db, _MONDAY + timedelta(days=2))
+    assert result["status"] == 200, result["body"]
+    week = result["body"]["week"]
+    assert week["sessions"][0]["distance_km"] == 12.7
+    assert week["planned_km"] == pytest.approx(18.3)
+    assert week["planned_km"] == sum(s["distance_km"] for s in week["sessions"]
+                                    if s["workout_type"] not in ("rest", "race"))
+    assert week["planned_duration_minutes"] is None
+    assert week["session_count"] == 2
+    assert fake_db.training_prescription_snapshots._docs == before
+
+
+@pytest.mark.parametrize("live_type", ["easy", "rest", "race"])
+async def test_published_aggregate_unavailable_past_is_not_reconstructed(live_type):
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    fake_db.training_prescription_snapshots._docs.extend([
+        _aggregate_snapshot("tuesday", 1), _aggregate_snapshot("wednesday", 2),
+    ])
+    builder = _aggregate_plan_builder(overrides={
+        "monday": {"workout_type": live_type, "distance_km": 3.7},
+        "sunday": {"workout_type": "easy", "intensity_class": "low", "distance_km": 5.6},
+    })
+    with patch("training_v2.week_plan_bridge.build_canonical_weekly_plan", builder):
+        result = await _get_week(fake_db, _MONDAY + timedelta(days=2))
+    assert result["status"] == 200, result["body"]
+    week = result["body"]["week"]
+    assert week["sessions"][0]["workout_type"] is None
+    assert week["planned_km"] is None
+    assert week["planned_duration_minutes"] is None
+    assert week["session_count"] is None
+    assert not any(d["day"] == "monday" for d in fake_db.training_prescription_snapshots._docs)
+    assert not any(d["day"] == "monday" for d in fake_db.training_planned_prescription_memory._docs)
+
+
+@pytest.mark.parametrize("basis,metric,value,expected", [
+    ("distance", "distance_km", 0.0, 0.0),
+    ("distance", "distance_km", None, None),
+    ("duration", "duration_minutes", 25, 25),
+    ("duration", "duration_minutes", None, None),
+    ("duration", "duration_minutes", 0, 0),
+])
+async def test_published_aggregate_today_served_metrics_and_race_exclusion(basis, metric, value, expected):
+    from copy import deepcopy
+
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    fake_db.training_prescription_snapshots._docs.append(
+        _aggregate_snapshot("monday", 0, **{
+            "workout_type": "easy", "intensity_class": "low",
+            "distance_km": None, "duration_minutes": None, metric: value,
+        })
+    )
+    before = deepcopy(fake_db.training_prescription_snapshots._docs)
+    builder = _aggregate_plan_builder(basis=basis, overrides={
+        "monday": {"workout_type": "easy", "intensity_class": "low", metric: 30},
+        "sunday": {"workout_type": "race", "intensity_class": "event",
+                   "distance_km": 42.195, "duration_minutes": 240},
+    })
+    with patch("training_v2.week_plan_bridge.build_canonical_weekly_plan", builder):
+        result = await _get_week(fake_db)
+    assert result["status"] == 200, result["body"]
+    week = result["body"]["week"]
+    assert week["sessions"][0][metric] == value
+    assert week["planned_km"] == (expected if basis == "distance" else None)
+    assert week["planned_duration_minutes"] == (expected if basis == "duration" else None)
+    assert week["session_count"] == 1
+    if expected is not None:
+        assert expected == sum(s[metric] for s in week["sessions"]
+                               if s["workout_type"] not in ("rest", "race"))
+    assert fake_db.training_prescription_snapshots._docs == before
+
+
+async def test_published_aggregate_future_stale_snapshot_cannot_override_live():
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db)
+    fake_db.training_prescription_snapshots._docs.extend([
+        _aggregate_snapshot("monday", 0),
+        _aggregate_snapshot("sunday", 6, workout_type="easy", intensity_class="low",
+                            distance_km=99.0, duration_minutes=None,
+                            modified_from_planned=True),
+    ])
+    builder = _aggregate_plan_builder(overrides={
+        "sunday": {"workout_type": "easy", "intensity_class": "low",
+                   "distance_km": 5.6, "duration_minutes": None},
+    })
+    with patch("training_v2.week_plan_bridge.build_canonical_weekly_plan", builder):
+        result = await _get_week(fake_db)
+    assert result["status"] == 200, result["body"]
+    week = result["body"]["week"]
+    sunday = week["sessions"][-1]
+    assert sunday["distance_km"] == 5.6
+    assert sunday["session_modified_from_planned"] is None
+    assert sunday["structured_status"] == "future_live"
+    assert week["planned_km"] == 5.6
+    memory = next(d for d in fake_db.training_planned_prescription_memory._docs if d["day"] == "sunday")
+    assert memory["distance_km"] == 5.6
+    assert memory["structured"] == sunday["structured"]
 
 
 @pytest.mark.asyncio

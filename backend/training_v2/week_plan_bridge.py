@@ -48,8 +48,6 @@ _GOAL_MAP: dict[str, GoalType] = {
     "MAINTENANCE": GoalType.maintenance,
 }
 
-_SUPPORTED_SESSION_PREFERENCES: set[int] = {2, 3, 4, 5, 6}
-
 
 class UnknownGoalTypeError(ValueError):
     """Raised when a goal string cannot be mapped to a known GoalType."""
@@ -203,6 +201,7 @@ def _build_weekly_context_from_workouts(
     user_profile: Optional[dict],
     target_distance_km: Optional[float] = None,
     target_time_seconds: Optional[int] = None,
+    sessions_preference: Optional[int] = None,
 ) -> _WeeklyBuildContext:
     """Canonical internal V2 build pipeline — single construction site.
 
@@ -275,6 +274,7 @@ def _build_weekly_context_from_workouts(
         plan_goal=plan_goal,
         periodization=periodization,
         reference_date=reference_date,
+        sessions_preference=sessions_preference,
     )
 
     target_capability_time_seconds: Optional[int] = None
@@ -294,6 +294,7 @@ def _build_weekly_context_from_workouts(
     reconciliation_result: WeeklyReconciliationResult = build_weekly_reconciliation(
         proposed_target=weekly_target,
         recent_response=recent_response,
+        sessions_preference=sessions_preference,
     )
 
     return _WeeklyBuildContext(
@@ -320,18 +321,6 @@ def workouts_to_domain_activities(workouts: List[dict]) -> List[DomainActivity]:
             continue
         activities.append(to_domain_activity(_normalize_workout_to_domain_fields(workout)))
     return activities
-
-
-def _apply_sessions_preference_cap(
-    weekly_target: WeeklyTarget, sessions_preference: Optional[int]
-) -> WeeklyTarget:
-    """Apply user sessions/week preference as a hard cap, never an increase."""
-    if sessions_preference not in _SUPPORTED_SESSION_PREFERENCES:
-        return weekly_target
-    effective_sessions = min(weekly_target.target_sessions, sessions_preference)
-    if effective_sessions == weekly_target.target_sessions:
-        return weekly_target
-    return weekly_target.model_copy(update={"target_sessions": effective_sessions})
 
 
 def build_weekly_target_from_workouts(
@@ -400,6 +389,7 @@ def build_weekly_plan_from_workouts(
     PR228: WeeklyReconciliation is now applied inside the canonical pipeline.
     The returned WeeklyTarget is the RECONCILED target.  Callers that also
     need the full reconciliation audit should use build_canonical_weekly_plan.
+    sessions_preference seeds the original target before safety reconciliation.
 
     Returns
     -------
@@ -416,14 +406,12 @@ def build_weekly_plan_from_workouts(
         user_profile=user_profile,
         target_distance_km=target_distance_km,
         target_time_seconds=target_time_seconds,
+        sessions_preference=sessions_preference,
     )
 
     # PR228 — use the RECONCILED target as the plan authority.
     # reconciliation_result.reconciled_target == ctx.weekly_target when KEEP action.
-    reconciled_target = _apply_sessions_preference_cap(
-        ctx.reconciliation_result.reconciled_target,
-        sessions_preference,
-    )
+    reconciled_target = ctx.reconciliation_result.reconciled_target
 
     weekly_plan = build_weekly_plan(
         weekly_target=reconciled_target,
@@ -495,6 +483,8 @@ def build_canonical_weekly_plan(
 
     Asymmetric invariant: reconciled_target is always ≤ original_target
     (preserve/reduce only, never increase).
+    sessions_preference seeds original_target, subject to availability/reprise
+    caps; normal continuity preserves it against observed-frequency-only reduction.
     """
     ctx = _build_weekly_context_from_workouts(
         workouts=workouts,
@@ -505,12 +495,10 @@ def build_canonical_weekly_plan(
         user_profile=user_profile,
         target_distance_km=target_distance_km,
         target_time_seconds=target_time_seconds,
+        sessions_preference=sessions_preference,
     )
 
-    reconciled_target = _apply_sessions_preference_cap(
-        ctx.reconciliation_result.reconciled_target,
-        sessions_preference,
-    )
+    reconciled_target = ctx.reconciliation_result.reconciled_target
 
     weekly_plan = build_weekly_plan(
         weekly_target=reconciled_target,

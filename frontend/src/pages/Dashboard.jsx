@@ -1388,6 +1388,11 @@ export default function Dashboard() {
       ) : weekProgress && (() => {
         const basis = weekProgress.target_basis;
         const plannedValue = weekProgress.planned_value;
+        const plannedLabel = typeof plannedValue === "number" && Number.isFinite(plannedValue)
+          ? (basis === "distance"
+            ? formatDistance(plannedValue, { unitSystem })
+            : `${plannedValue} ${t("dashboard.minutes")}`)
+          : t("dashboard.incompleteData");
         const completedLabel = weekProgress.completed_state === "partial"
           ? t("dashboard.incompleteData")
           : (basis === "distance"
@@ -1418,7 +1423,7 @@ export default function Dashboard() {
               <div className="space-y-2" data-testid="weekly-target-distance">
                 <div className="flex items-baseline justify-between">
                   <span className="text-2xl font-black" style={{ color: "#ffffff" }} data-testid="weekly-target-value">
-                   {formatDistance(plannedValue, { unitSystem })}
+                   {plannedLabel}
                   </span>
                   <span className="text-sm" style={{ color: "var(--text-tertiary)" }}>
                     {t("dashboard.weeklyDone")}:{" "}
@@ -1452,7 +1457,7 @@ export default function Dashboard() {
              <div className="space-y-2" data-testid="weekly-target-duration">
                <div className="flex items-baseline justify-between">
                  <span className="text-2xl font-black" style={{ color: "#ffffff" }} data-testid="weekly-target-value">
-                  {plannedValue} {t("dashboard.minutes")}
+                  {plannedLabel}
                   </span>
                  <span className="text-sm" style={{ color: "var(--text-tertiary)" }}>
                   {t("dashboard.weeklyDone")}:{" "}
