@@ -868,6 +868,18 @@ export default function TrainingPlanV2() {
   const cycle = cycleData?.cycle;
   const cycleWeeks = Array.isArray(cycleData?.weeks) ? cycleData.weeks : [];
   const currentCycleWeek = cycleWeeks.find((week) => week?.is_current) || null;
+  const preferredSessions = weekData?.training_prefs?.sessions_per_week;
+  const prescribedSessions = weekData?.weekly_target?.session_count;
+  const frequencyReasons = Array.isArray(weekData?.reconciliation_reason_codes)
+    ? weekData.reconciliation_reason_codes
+    : [];
+  const showFrequencyReduction = isKnownNumber(preferredSessions)
+    && isKnownNumber(prescribedSessions)
+    && preferredSessions > prescribedSessions
+    && frequencyReasons.some((reason) => (
+      reason === "SESSIONS_PREFERENCE_CAPPED_FOR_REPRISE_SAFETY"
+      || reason === "FREQUENCY_REDUCED_FOR_CONTINUITY_SAFETY"
+    ));
 
   const goalTypeKey = normalizeGoalType(cycleData?.goal?.goal_type || weekData?.goal?.goal_type);
   const goalLabel = goalTypeKey
@@ -1113,6 +1125,11 @@ export default function TrainingPlanV2() {
             weeklyTarget={weekData?.weekly_target}
             unitSystem={unitSystem}
           />
+          {showFrequencyReduction && (
+            <p className="text-sm text-muted-foreground" data-testid="week-frequency-reduction">
+              {t("trainingV2.frequencyReducedForReprise")}
+            </p>
+          )}
           <div className="space-y-2" data-testid="week-sessions-list">
             {orderedSessions.map((session, index) => {
               const day = DAYS[index];

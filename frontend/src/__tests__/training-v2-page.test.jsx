@@ -343,6 +343,60 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     expect(await screen.findByTestId("week-volume-planned")).toHaveTextContent(formatDistance(18.3));
   });
 
+  test.each([
+    ["fr", "Fréquence réduite cette semaine pour une reprise progressive."],
+    ["en", "Fewer sessions this week to support a gradual return to running."],
+    ["es", "Frecuencia reducida esta semana para volver a correr de forma progresiva."],
+  ])("explains a real reprise frequency reduction in %s without exposing reason codes", async (lang, message) => {
+    const week = weekData();
+    week.training_prefs = { sessions_per_week: 6 };
+    week.weekly_target.session_count = 3;
+    week.week.session_count = 3;
+    week.reconciliation_reason_codes = [
+      "SESSIONS_PREFERENCE_CAPPED_FOR_REPRISE_SAFETY",
+      "FREQUENCY_REDUCED_FOR_CONTINUITY_SAFETY",
+    ];
+    mockAxios({ week });
+    renderPage({ lang });
+    const explanation = await screen.findByTestId("week-frequency-reduction");
+    expect(explanation).toHaveTextContent(message);
+    expect(screen.getByTestId("training-v2-week")).not.toHaveTextContent("SESSIONS_PREFERENCE_CAPPED_FOR_REPRISE_SAFETY");
+    expect(screen.getByTestId("training-v2-week")).not.toHaveTextContent("FREQUENCY_REDUCED_FOR_CONTINUITY_SAFETY");
+  });
+
+  test.each([
+    "SESSIONS_PREFERENCE_CAPPED_FOR_REPRISE_SAFETY",
+    "FREQUENCY_REDUCED_FOR_CONTINUITY_SAFETY",
+  ])("explains a reduction authorized by %s alone even when historical totals are unknown", async (reason) => {
+    const week = weekData();
+    week.training_prefs = { sessions_per_week: 6 };
+    week.weekly_target.session_count = 4;
+    week.week.session_count = null;
+    week.week.planned_km = null;
+    week.reconciliation_reason_codes = [reason];
+    mockAxios({ week });
+    renderPage();
+    expect(await screen.findByTestId("week-frequency-reduction")).toHaveTextContent("Fewer sessions this week");
+  });
+
+  test.each([
+    [3, 3, []],
+    [3, 3, ["SESSIONS_PREFERENCE_CAPPED_FOR_REPRISE_SAFETY"]],
+    [6, 4, ["SESSIONS_PREFERENCE_CAPPED_BY_MAX_DAYS"]],
+    [6, 4, []],
+    [null, 4, ["FREQUENCY_REDUCED_FOR_CONTINUITY_SAFETY"]],
+    [6, null, ["FREQUENCY_REDUCED_FOR_CONTINUITY_SAFETY"]],
+  ])("does not invent a reprise explanation for preference %s and target %s (%s)", async (preference, count, reasons) => {
+    const week = weekData();
+    week.training_prefs = { sessions_per_week: preference };
+    week.weekly_target.session_count = count;
+    week.reconciliation_reason_codes = reasons;
+    mockAxios({ week });
+    renderPage();
+    await screen.findByTestId("training-v2-week");
+    expect(screen.queryByTestId("week-frequency-reduction")).not.toBeInTheDocument();
+  });
+
   test("shows paywall for free users and skips premium API calls", () => {
     useSubscription.mockReturnValue({ isFree: true, loading: false });
     renderPage();

@@ -263,9 +263,11 @@ def _clamp_sessions(
         base = sessions_preference
     sessions = int(round(base)) if base is not None else 3
 
-    # In no_history / deep_reprise: cap to REPRISE_MAX_SESSIONS (PR77 principle).
+    # Apply reprise safety before reconciliation, not only when generating sessions.
     if continuity_state in ("no_history", "deep_reprise"):
         sessions = min(sessions, REPRISE_MAX_SESSIONS)
+    elif continuity_state == "partial_reprise":
+        sessions = min(sessions, 4)
 
     # Never zero sessions.
     sessions = max(1, sessions)
@@ -625,7 +627,9 @@ def build_weekly_target(
     target_sessions = _clamp_sessions(runner_profile, continuity, sessions_preference)
     if _valid_sessions_preference(sessions_preference):
         reason_codes.append("SESSIONS_PREFERENCE_APPLIED")
-        if continuity in ("no_history", "deep_reprise") and sessions_preference > REPRISE_MAX_SESSIONS:
+        if (
+            continuity in ("no_history", "deep_reprise") and sessions_preference > REPRISE_MAX_SESSIONS
+        ) or (continuity == "partial_reprise" and sessions_preference > 4):
             reason_codes.append("SESSIONS_PREFERENCE_CAPPED_FOR_REPRISE_SAFETY")
         if (
             runner_profile.max_days_per_week is not None

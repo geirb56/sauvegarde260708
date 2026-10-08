@@ -188,7 +188,8 @@ def test_sessions_preference_seeds_normal_target_without_volume_growth(preferenc
 
 
 @pytest.mark.parametrize("continuity", ("no_history", "deep_reprise", "partial_reprise", "reprise_exit"))
-def test_sessions_preference_preserves_reprise_volume_and_intensity(continuity):
+@pytest.mark.parametrize("preference", range(2, 7))
+def test_sessions_preference_preserves_reprise_volume_and_intensity(continuity, preference):
     hist, prof = _profile()
     state = _state(hist, prof).model_copy(update={"continuity_state": continuity})
     kwargs = dict(
@@ -196,14 +197,31 @@ def test_sessions_preference_preserves_reprise_volume_and_intensity(continuity):
         plan_goal=_goal(), periodization=_periodization(), reference_date=REF,
     )
     baseline = build_weekly_target(**kwargs)
-    target = build_weekly_target(**kwargs, sessions_preference=6)
-    assert target.target_sessions == (3 if continuity in ("no_history", "deep_reprise") else 6)
+    target = build_weekly_target(**kwargs, sessions_preference=preference)
+    cap = {"no_history": 3, "deep_reprise": 3, "partial_reprise": 4}.get(continuity, 6)
+    assert target.target_sessions == min(preference, cap)
     assert target.target_basis == baseline.target_basis == "duration"
     assert target.target_km is baseline.target_km is None
     assert target.target_duration_minutes == baseline.target_duration_minutes
     assert target.allow_intensity is baseline.allow_intensity is False
-    if continuity in ("no_history", "deep_reprise"):
-        assert "SESSIONS_PREFERENCE_CAPPED_FOR_REPRISE_SAFETY" in target.reason_codes
+    assert ("SESSIONS_PREFERENCE_CAPPED_FOR_REPRISE_SAFETY" in target.reason_codes) == (preference > cap)
+    assert target == build_weekly_target(**kwargs, sessions_preference=preference)
+
+
+@pytest.mark.parametrize("profile_source", ("preferred_days_per_week", "max_days_per_week", "typical_runs_per_week"))
+@pytest.mark.parametrize("preference", (None, 7, True))
+def test_partial_reprise_caps_profile_frequency_without_valid_preference(profile_source, preference):
+    hist, prof = _profile()
+    prof = prof.model_copy(update={profile_source: 6})
+    state = _state(hist, prof).model_copy(update={"continuity_state": "partial_reprise"})
+    target = build_weekly_target(
+        runner_profile=prof, training_history=hist, training_state=state,
+        plan_goal=_goal(), periodization=_periodization(), reference_date=REF,
+        sessions_preference=preference,
+    )
+    assert target.target_sessions == 4
+    assert "SESSIONS_PREFERENCE_APPLIED" not in target.reason_codes
+    assert "SESSIONS_PREFERENCE_CAPPED_FOR_REPRISE_SAFETY" not in target.reason_codes
 
 
 def test_sessions_preference_respects_true_max_days_with_reason():

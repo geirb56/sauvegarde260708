@@ -332,6 +332,9 @@ class TestSessionsPreferenceSafety:
         assert canonical.reconciled_target is canonical.reconciliation_result.reconciled_target
         assert canonical.weekly_plan.allow_intensity is False
         assert all(s.intensity_class in ("low", "rest") for s in canonical.weekly_plan.sessions)
+        assert canonical.weekly_plan.session_count == canonical.reconciled_target.target_sessions
+        assert "SESSIONS_PREFERENCE_CAPPED_FOR_REPRISE_SAFETY" in canonical.original_target.reason_codes
+        assert "SESSIONS_PREFERENCE_CAPPED_FOR_REPRISE_SAFETY" in canonical.reconciliation_result.reason_codes
         if continuity in ("no_history", "deep_reprise"):
             assert canonical.original_target.target_sessions == 3
             assert canonical.reconciled_target.target_basis == "duration"
@@ -339,9 +342,48 @@ class TestSessionsPreferenceSafety:
             assert "SESSIONS_PREFERENCE_CAPPED_FOR_REPRISE_SAFETY" in canonical.original_target.reason_codes
             assert "SESSIONS_PREFERENCE_CAPPED_FOR_REPRISE_SAFETY" in canonical.reconciliation_result.reason_codes
         else:
-            assert canonical.original_target.target_sessions == 6
-            assert canonical.reconciled_target.target_sessions == 5
+            assert canonical.original_target.target_sessions == 4
+            assert canonical.reconciled_target.target_sessions == 3
             assert "FREQUENCY_REDUCED_FOR_CONTINUITY_SAFETY" in canonical.reconciliation_result.reason_codes
+
+    @pytest.mark.parametrize("preference", range(2, 7))
+    @pytest.mark.parametrize("basis", ("distance", "duration"))
+    def test_partial_reprise_canonical_frequency_and_concentration(self, monkeypatch, preference, basis):
+        from training_v2 import week_plan_bridge
+
+        build_state = week_plan_bridge.build_training_state
+        monkeypatch.setattr(
+            week_plan_bridge, "build_training_state",
+            lambda **kwargs: build_state(**kwargs).model_copy(update={"continuity_state": "partial_reprise"}),
+        )
+        kwargs = _normal_two_runs_kwargs()
+        if basis == "duration":
+            kwargs["workouts"] = [a.model_copy(update={"distance_m": None}) for a in kwargs["workouts"]]
+        canonical = build_canonical_weekly_plan(**kwargs, sessions_preference=preference)
+        original = canonical.original_target
+        reconciled = canonical.reconciled_target
+        result = canonical.reconciliation_result
+        assert original.continuity_state == reconciled.continuity_state == "partial_reprise"
+        assert original.target_basis == reconciled.target_basis == basis
+        assert original.target_sessions == min(preference, 4)
+        assert reconciled.target_sessions == (2 if preference == 2 else min(preference, 4) - 1)
+        assert canonical.weekly_plan.session_count == reconciled.target_sessions
+        cap_code = "SESSIONS_PREFERENCE_CAPPED_FOR_REPRISE_SAFETY"
+        assert (cap_code in original.reason_codes) == (preference > 4)
+        assert (cap_code in result.reason_codes) == (preference > 4)
+        if preference > 2:
+            assert "FREQUENCY_REDUCED_FOR_CONTINUITY_SAFETY" in result.reason_codes
+            assert "SESSION_LOAD_CONCENTRATION_GUARD" in result.reason_codes
+            ratio = reconciled.target_sessions / original.target_sessions
+            if basis == "distance":
+                assert reconciled.target_km == round(original.target_km * ratio, 1)
+                assert canonical.weekly_plan.planned_km == pytest.approx(reconciled.target_km, abs=0.1)
+            else:
+                assert reconciled.target_duration_minutes == round(original.target_duration_minutes * ratio)
+                assert canonical.weekly_plan.planned_duration_minutes == reconciled.target_duration_minutes
+        assert original.allow_intensity is reconciled.allow_intensity is False
+        assert all(s.intensity_class in ("low", "rest") for s in canonical.weekly_plan.sessions)
+        assert canonical == build_canonical_weekly_plan(**kwargs, sessions_preference=preference)
 
 
 # ---------------------------------------------------------------------------

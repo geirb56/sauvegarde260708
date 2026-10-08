@@ -289,6 +289,8 @@ Authority split:
 Training week coherence contract:
 - An explicit `sessions_per_week` preference (2–6) seeds WeeklyTarget before WeeklyReconciliation. In `normal`, observed frequency alone does not lower it.
 - Availability caps and reprise/continuity safeguards remain authoritative, with diagnostic reason codes. Without a preference, the historical deterministic V2 policy is unchanged.
+- Reprise frequency caps belong to WeeklyTarget before reconciliation: `no_history`/`deep_reprise` ≤3, `partial_reprise` ≤4. The generator's defensive caps must be redundant, not silently lower the reconciled frequency.
+- Training explains a real preference reduction in FR/EN/ES only when reprise/continuity safety reason codes justify it; raw reason codes are never displayed.
 - Frequency load-concentration protection applies only when reconciliation actually reduces frequency; volume progression/reconciliation and long-run safeguards are unchanged.
 - `/training/v2/week` aggregates the effective published `week.sessions`: reliable snapshot/planned-memory for past days, immutable served prescription for today, live prescription for future days.
 - Rest and race are excluded from training totals. Any unavailable prescription makes the aggregate/count unknown; a missing training metric makes its aggregate unknown. No historical prescription is reconstructed.
