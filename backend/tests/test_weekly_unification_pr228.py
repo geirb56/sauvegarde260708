@@ -301,6 +301,7 @@ class TestSessionsPreferencePrescription:
         )
         assert canonical.original_target.target_sessions == canonical.reconciled_target.target_sessions == 2
         assert "SESSIONS_PREFERENCE_CAPPED_BY_MAX_DAYS" in canonical.original_target.reason_codes
+        assert "SESSIONS_PREFERENCE_CAPPED_BY_MAX_DAYS" in canonical.reconciliation_result.reason_codes
         assert canonical.reconciled_target is canonical.reconciliation_result.reconciled_target
 
 
@@ -336,6 +337,7 @@ class TestSessionsPreferenceSafety:
             assert canonical.reconciled_target.target_basis == "duration"
             assert canonical.reconciled_target.target_km is None
             assert "SESSIONS_PREFERENCE_CAPPED_FOR_REPRISE_SAFETY" in canonical.original_target.reason_codes
+            assert "SESSIONS_PREFERENCE_CAPPED_FOR_REPRISE_SAFETY" in canonical.reconciliation_result.reason_codes
         else:
             assert canonical.original_target.target_sessions == 6
             assert canonical.reconciled_target.target_sessions == 5

@@ -316,6 +316,7 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     const week = weekData();
     week.weekly_target.target_km = 9.3;
     week.week.planned_km = null;
+    week.week.session_count = null;
     week.week.sessions[0] = {
       day: "monday", planned_date: "2026-08-24", workout_type: null,
       distance_km: null, duration_minutes: null, reason_codes: [],
@@ -325,6 +326,7 @@ describe("TrainingPlanV2 — PR209 Runner Calendar", () => {
     renderPage();
     expect(await screen.findByTestId("week-volume-planned")).toHaveTextContent("—");
     expect(screen.queryByTestId("week-volume-progress-fill")).not.toBeInTheDocument();
+    expect(screen.getByTestId("week-volume-sessions")).toHaveTextContent("0/—");
   });
 
   test("shows effective snapshot and future volume rather than the live target", async () => {

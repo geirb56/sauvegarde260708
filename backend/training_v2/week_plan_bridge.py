@@ -389,6 +389,7 @@ def build_weekly_plan_from_workouts(
     PR228: WeeklyReconciliation is now applied inside the canonical pipeline.
     The returned WeeklyTarget is the RECONCILED target.  Callers that also
     need the full reconciliation audit should use build_canonical_weekly_plan.
+    sessions_preference seeds the original target before safety reconciliation.
 
     Returns
     -------
@@ -482,6 +483,8 @@ def build_canonical_weekly_plan(
 
     Asymmetric invariant: reconciled_target is always ≤ original_target
     (preserve/reduce only, never increase).
+    sessions_preference seeds original_target, subject to availability/reprise
+    caps; normal continuity preserves it against observed-frequency-only reduction.
     """
     ctx = _build_weekly_context_from_workouts(
         workouts=workouts,

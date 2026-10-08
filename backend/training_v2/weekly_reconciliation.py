@@ -64,6 +64,16 @@ def _dedupe_codes(codes: list[str]) -> tuple[str, ...]:
     return tuple(ordered)
 
 
+def _preference_cap_codes(target: WeeklyTarget) -> list[str]:
+    return [
+        code for code in target.reason_codes
+        if code in (
+            "SESSIONS_PREFERENCE_CAPPED_FOR_REPRISE_SAFETY",
+            "SESSIONS_PREFERENCE_CAPPED_BY_MAX_DAYS",
+        )
+    ]
+
+
 def _round_half_up(value: float) -> int:
     """Deterministic half-up rounding for session counts."""
     return int(math.floor(value + 0.5))
@@ -109,7 +119,9 @@ def _keep_result(
         action=WeeklyReconciliationAction.KEEP,
         original_target=proposed_target,
         reconciled_target=proposed_target,
-        reason_codes=_dedupe_codes(["PLAN_STRUCTURE_KEPT", keep_reason]),
+        reason_codes=_dedupe_codes([
+            "PLAN_STRUCTURE_KEPT", keep_reason, *_preference_cap_codes(proposed_target),
+        ]),
         observed_runs_per_week=observed_runs_per_week,
         observed_distance_km=observed_distance_km,
         observed_duration_minutes=observed_duration_minutes,
@@ -150,7 +162,7 @@ def build_weekly_reconciliation(
             keep_reason="RECENT_RESPONSE_INSUFFICIENT",
         )
 
-    reasons: list[str] = []
+    reasons: list[str] = _preference_cap_codes(proposed_target)
     reconciled_target = proposed_target
 
     observed_runs_per_week = recent_response.observed_runs_per_week

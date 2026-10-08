@@ -181,6 +181,37 @@ def test_sessions_preference_absent_or_invalid_preserves_reconciliation(preferen
     assert build_weekly_reconciliation(**kwargs, sessions_preference=preference) == build_weekly_reconciliation(**kwargs)
 
 
+@pytest.mark.parametrize("cap", (
+    "SESSIONS_PREFERENCE_CAPPED_FOR_REPRISE_SAFETY",
+    "SESSIONS_PREFERENCE_CAPPED_BY_MAX_DAYS",
+))
+@pytest.mark.parametrize("status", ("none", "unavailable", "insufficient", "sufficient_keep", "sufficient_reduce"))
+def test_sessions_preference_cap_codes_are_public_reconciliation_reasons(cap, status):
+    target = (
+        _target_duration(sessions=3, minutes=120, continuity="deep_reprise")
+        if cap == "SESSIONS_PREFERENCE_CAPPED_FOR_REPRISE_SAFETY"
+        else _target_distance(sessions=2, km=14.0)
+    ).model_copy(update={"reason_codes": ("BASE_TARGET", "SESSIONS_PREFERENCE_APPLIED", cap, cap)})
+    response = None if status == "none" else _response(
+        status="sufficient" if status.startswith("sufficient") else status,
+        observed_runs_per_week=1.0 if status == "sufficient_reduce" else 3.0,
+        observed_distance_km=20.0 if status == "sufficient_reduce" else 76.0,
+        observed_duration_minutes=200.0 if status == "sufficient_reduce" else 560.0,
+    )
+    result = build_weekly_reconciliation(
+        proposed_target=target, recent_response=response, sessions_preference=6,
+    )
+    assert result.reason_codes.count(cap) == 1
+    assert cap in result.model_dump(mode="json")["reason_codes"]
+    assert "BASE_TARGET" not in result.reason_codes
+    assert result.original_target is target
+    if status == "sufficient_reduce":
+        assert result.action != WeeklyReconciliationAction.KEEP
+    else:
+        assert result.action == WeeklyReconciliationAction.KEEP
+        assert result.reconciled_target is target
+
+
 def test_a_recent_response_none_keep():
     target = _target_distance()
     result = build_weekly_reconciliation(proposed_target=target, recent_response=None)
