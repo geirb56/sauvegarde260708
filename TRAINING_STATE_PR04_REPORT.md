@@ -14,6 +14,57 @@
 
 ---
 
+## Validation corrective #315 — frontière J+7 (2026-10-08)
+
+- PR existante : #315, branche `copilot/runindex-remove-fixed-threshold`.
+- Base exacte : `copilot/dev`, `06bb7932453eb4c90498a7b386954166e9a8bf8e`.
+- HEAD du code testé : `952f5670edf2bb83c19f843c4bb1bd64e0204cf3`.
+- HEAD initial demandé : `b645b8cedcf836ed538213e4666ad1d23be734c6`.
+  La correction était déjà commitée au démarrage de cette vérification ;
+  ce complément ne modifie que le rapport et la description de #315.
+
+Commande exécutée depuis `backend/`, avec les deux workers configurés :
+
+```text
+python -m pytest tests/test_training_state_pr04.py tests/test_weekly_target_v2.py tests/test_workout_generator_v2.py tests/test_weekly_unification_pr228.py -q
+```
+
+**Résultat : 437 passed, 2 failed.** Les deux échecs
+`test_continuity_confidence_29_days` et `test_continuity_confidence_89_days`
+ont été reproduits à l'identique au HEAD initial `b645b8c…` :
+ils concernent les frontières de confiance, pas la correction J+7.
+Ils restent inchangés, hors périmètre de cette correction.
+
+Les neuf exigences sont couvertes par les tests existants relancés :
+
+| Cas | Résultat vérifié |
+|---|---|
+| Dernière sortie J-6, semaines antérieures actives | `normal`, aucune fausse reprise |
+| Dernière sortie J-7 | `partial_reprise`, `NO_RUN_LAST_7D` |
+| J-7, WeeklyTarget original et réconcilié | `allow_intensity=False` |
+| J-7, plan canonique final | Easy/recovery uniquement, intensité basse, aucune qualité |
+| Chaque délai J-8 à J-27, historique court ou profond | `partial_reprise` |
+| J-28 | `deep_reprise` |
+| Sortie en J0–J6 après semaine inactive observée | `partial_reprise` ou `reprise_exit` selon volume |
+| 81,1 km/30j + 18,1 km/7j, préférence 3 | `normal`, 3 séances, 22,3 km |
+| Fréquences stables 2/3/5 sorties par semaine | `normal` |
+
+Sélections explicites supplémentaires : **73 passed** pour les frontières,
+retours, fréquences et préférences ; **2 passed** pour les plans à quatre
+semaines actives, dont la reproduction exacte 81,1/18,1.
+Ces résultats sont des sous-ensembles, pas des tests additionnels au total.
+
+Recherche de `NO_RUN_LAST_8D` : aucune occurrence applicative restante ;
+seule la note de renommage dans ce rapport le mentionne.
+CodeQL Python : **0 alerte**. La revue automatique était indisponible
+(erreur de registre de modèle) ; une revue complémentaire en lecture seule
+n'a trouvé aucun bug significatif.
+
+Aucun changement aux snapshots, Coach, Performance Curve, Training Paces
+ou Garmin. Aucune nouvelle PR, aucun merge ; **attente d'un nouveau C315**.
+
+---
+
 ## Rôle de TrainingState
 
 `TrainingState` est une couche métier pure et déterministe qui répond à deux questions indépendantes sur l'état courant du coureur :
