@@ -621,7 +621,7 @@ def test_pr94_cas1_short_history_last_run_10d():
     acts = [_act(days_ago=d) for d in [10, 14, 18, 20]]
     state = _build(acts)
     assert state.continuity_state == "partial_reprise"
-    assert "NO_RUN_LAST_8D" in state.reason_codes
+    assert "NO_RUN_LAST_7D" in state.reason_codes
 
 
 def test_pr94_cas2_history_27d_last_run_27d():
@@ -629,7 +629,7 @@ def test_pr94_cas2_history_27d_last_run_27d():
     acts = [_act(days_ago=27)]
     state = _build(acts)
     assert state.continuity_state == "partial_reprise"
-    assert "NO_RUN_LAST_8D" in state.reason_codes
+    assert "NO_RUN_LAST_7D" in state.reason_codes
 
 
 def test_pr94_cas3_frontier_deep_reprise():
@@ -703,16 +703,16 @@ def test_taper_volume_below_half_baseline_without_break_is_normal():
     assert "RECENT_VOLUME_RECOVERING" not in state.reason_codes
 
 
-@pytest.mark.parametrize("days_since", range(8, 28))
+@pytest.mark.parametrize("days_since", range(7, 28))
 @pytest.mark.parametrize("long_history", (False, True))
-def test_every_8_to_27_day_gap_is_partial_reprise(days_since, long_history):
+def test_every_7_to_27_day_gap_is_partial_reprise(days_since, long_history):
     acts = [_act(days_since)]
     if long_history:
         acts += [_act(day) for day in range(35, 140, 7)]
     state = _build(acts)
     assert state.days_since_last_run == days_since
     assert state.continuity_state == "partial_reprise"
-    assert "NO_RUN_LAST_8D" in state.reason_codes
+    assert "NO_RUN_LAST_7D" in state.reason_codes
     assert "CONTINUITY_STABLE" not in state.reason_codes
     assert "NO_RUN_LAST_28D" not in state.reason_codes
 
@@ -722,7 +722,7 @@ def test_single_run_exactly_28_days_ago_is_deep_reprise():
     assert state.days_since_last_run == 28
     assert state.continuity_state == "deep_reprise"
     assert "NO_RUN_LAST_28D" in state.reason_codes
-    assert "NO_RUN_LAST_8D" not in state.reason_codes
+    assert "NO_RUN_LAST_7D" not in state.reason_codes
 
 
 @pytest.mark.parametrize("days_since", (0, 6))
@@ -733,20 +733,36 @@ def test_short_history_before_first_run_is_not_an_observed_break(days_since):
     assert "INACTIVE_RUNNING_WEEK" not in state.reason_codes
 
 
-def test_seven_day_gap_uses_observed_week_not_eight_day_reason():
+def test_seven_day_gap_without_recent_run_is_not_reprise_exit():
     state = _build([_act(7)])
-    assert state.continuity_state == "reprise_exit"
-    assert "INACTIVE_RUNNING_WEEK" in state.reason_codes
-    assert "NO_RUN_LAST_8D" not in state.reason_codes
+    assert state.continuity_state == "partial_reprise"
+    assert "NO_RUN_LAST_7D" in state.reason_codes
+    assert "INACTIVE_RUNNING_WEEK" not in state.reason_codes
+    assert "RECENT_VOLUME_RECOVERING" not in state.reason_codes
+
+
+def test_six_day_gap_with_active_prior_weeks_is_normal():
+    acts = [_act(day) for day in range(6, 120, 7)]
+    history = build_training_history(acts, REF)
+    assert history.weekly_run_count_buckets_28d == (1, 1, 1, 1)
+    state = _build(acts)
+    assert state.days_since_last_run == 6
+    assert state.continuity_state == "normal"
+    assert "CONTINUITY_STABLE" in state.reason_codes
+    assert "NO_RUN_LAST_7D" not in state.reason_codes
+    assert "INACTIVE_RUNNING_WEEK" not in state.reason_codes
 
 
 @pytest.mark.parametrize("return_km, expected", ((2, "partial_reprise"), (15, "reprise_exit")))
-def test_real_return_requires_inactive_week_then_compares_volume(return_km, expected):
-    acts = [_act(day) for day in _BASELINE_DAYS] + [_act(2, distance_m=return_km * 1000)]
+@pytest.mark.parametrize("days_since", range(7))
+def test_real_return_requires_inactive_week_then_compares_volume(return_km, expected, days_since):
+    acts = [_act(day) for day in _BASELINE_DAYS] + [_act(days_since, distance_m=return_km * 1000)]
     history = build_training_history(acts, REF)
     assert history.weekly_run_count_buckets_28d[1] == 0
     state = _build(acts)
     assert state.continuity_state == expected
+    assert state.days_since_last_run == days_since
+    assert "NO_RUN_LAST_7D" not in state.reason_codes
     assert "INACTIVE_RUNNING_WEEK" in state.reason_codes
     assert "CONTINUITY_STABLE" not in state.reason_codes
     assert state.load_state == build_training_load(acts, REF).status

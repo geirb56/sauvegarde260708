@@ -28,11 +28,12 @@ Continuity states
   "no_history"     : No exploitable running history at all.
   "deep_reprise"   : Prior history exists but no run in the last
                      NO_RUN_DEEP_REPRISE_DAYS days.
-  "partial_reprise": A proven recent break, with no run for 8–27 days or
+  "partial_reprise": A proven recent break, with no run for 7–27 days or
                      returning weekly volume below PARTIAL_REPRISE_VOLUME_RATIO
                      of the observable baseline.
   "reprise_exit"   : A return after an observed inactive week, without four
-                     active rolling weeks yet. Volume alone is not evidence.
+                     active rolling weeks yet. A valid run in J0–J6 is required.
+                     Volume alone is not evidence.
   "normal"         : No observed continuity break. Absolute run frequency and
                      short history never imply reprise. Weeks before the first
                      valid run are not observed inactive weeks.
@@ -66,7 +67,7 @@ Reason codes
 Deterministic, language-neutral, UI-independent:
   NO_RUNNING_HISTORY
   NO_RUN_LAST_28D
-  NO_RUN_LAST_8D
+  NO_RUN_LAST_7D
   INACTIVE_RUNNING_WEEK
   RECENT_VOLUME_FAR_BELOW_BASELINE
   RECENT_VOLUME_RECOVERING
@@ -107,8 +108,8 @@ NO_RUN_DEEP_REPRISE_DAYS: int = 28
 PARTIAL_REPRISE_VOLUME_RATIO: float = 0.50
 """After a proven break, volume below this baseline fraction → partial_reprise."""
 
-NO_RUN_PARTIAL_REPRISE_DAYS: int = 8
-"""No run for 8–27 days with prior history → partial_reprise."""
+NO_RUN_PARTIAL_REPRISE_DAYS: int = 7
+"""No run for 7–27 days with prior history → partial_reprise."""
 
 REPRISE_EXIT_STABLE_WEEKS: int = 4
 """Minimum weeks of consistent recent coverage required to leave reprise_exit."""
@@ -254,13 +255,14 @@ def _classify_continuity(
 
     # ── require observed evidence of a recent continuity break ─────────────
     if days_since >= NO_RUN_PARTIAL_REPRISE_DAYS:
-        codes.append("NO_RUN_LAST_8D")
+        codes.append("NO_RUN_LAST_7D")
         return "partial_reprise", codes
 
     counts = training_history.weekly_run_count_buckets_28d
     has_inactive_week = counts is not None and any(
         count == 0 and available_days >= (index + 1) * 7
         for index, count in enumerate(counts[:REPRISE_EXIT_STABLE_WEEKS])
+        if index > 0
     )
     if not has_inactive_week:
         codes.append("CONTINUITY_STABLE")

@@ -679,6 +679,56 @@ class TestDailyAdaptationNeverIncreases:
 class TestProtectionsConserved:
     """Core protection invariants must survive the reconciliation pipeline."""
 
+    @pytest.mark.parametrize("days_since, continuity", (
+        (6, "normal"),
+        (7, "partial_reprise"),
+        (8, "partial_reprise"),
+        (27, "partial_reprise"),
+        (28, "deep_reprise"),
+    ))
+    def test_real_history_inactivity_boundaries_reach_canonical_plan(self, days_since, continuity):
+        from training_v2.domain_activity import DomainActivity
+        from training_v2.training_history import build_training_history
+
+        activities = [
+            DomainActivity(
+                activity_type="running",
+                start_time=(_REFERENCE_DATE - timedelta(days=days_since + 7 * week)).isoformat(),
+                distance_m=10_000,
+                duration_s=3600,
+            )
+            for week in range(16)
+        ]
+        history = build_training_history(activities, _REFERENCE_DATE)
+        assert history.days_since_last_run == days_since
+        assert history.window_7d.activity_count == (1 if days_since == 6 else 0)
+        kwargs = dict(
+            workouts=activities,
+            goal_type="SEMI",
+            race_date=_REFERENCE_DATE + timedelta(weeks=16),
+            cycle_start_date=_REFERENCE_DATE - timedelta(weeks=4),
+            reference_date=_REFERENCE_DATE,
+            sessions_preference=3,
+        )
+        canonical = build_canonical_weekly_plan(**kwargs)
+        assert canonical.original_target.continuity_state == continuity
+        assert canonical.reconciled_target.continuity_state == continuity
+        assert canonical.weekly_plan.session_count == canonical.reconciled_target.target_sessions
+        assert canonical.weekly_plan.session_count > 0
+        if days_since >= 7:
+            assert canonical.original_target.allow_intensity is False
+            assert canonical.reconciled_target.allow_intensity is False
+            assert canonical.weekly_plan.allow_intensity is False
+            assert f"generator_route_{continuity}" in canonical.weekly_plan.reason_codes
+            active = [s for s in canonical.weekly_plan.sessions if s.workout_type != "rest"]
+            assert active
+            assert all(s.workout_type in ("easy", "recovery") and s.intensity_class == "low" for s in active)
+            assert not any(s.workout_type == "quality" for s in canonical.weekly_plan.sessions)
+        else:
+            assert history.weekly_run_count_buckets_28d == (1, 1, 1, 1)
+            assert "generator_route_normal" in canonical.weekly_plan.reason_codes
+        assert canonical == build_canonical_weekly_plan(**kwargs)
+
     def test_no_history_produces_reprise_state(self):
         """No activities → deep_reprise state → duration-based prescription."""
         canonical = _build_canonical_no_garmin()

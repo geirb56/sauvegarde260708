@@ -44,8 +44,8 @@ Les deux axes sont **strictement indépendants**. Aucun état unique fusionné (
 |---|---|
 | `no_history` | Aucun historique running exploitable. |
 | `deep_reprise` | Historique antérieur présent, mais aucune sortie depuis ≥ 28 jours. |
-| `partial_reprise` | Rupture prouvée : absence de sortie 8–27 jours, ou retour après semaine inactive avec volume récent < 50 % de la baseline observable. |
-| `reprise_exit` | Retour après une semaine réellement inactive, sans quatre semaines actives rétablies ; pas de critère de fréquence absolue. |
+| `partial_reprise` | Rupture prouvée : absence de sortie 7–27 jours, ou retour après semaine inactive avec volume récent < 50 % de la baseline observable. |
+| `reprise_exit` | Sortie valide en J0–J6 après une semaine antérieure réellement inactive, sans quatre semaines actives rétablies ; pas de critère de fréquence absolue. |
 | `normal` | Aucune rupture significative de continuité détectée. |
 
 ---
@@ -84,7 +84,7 @@ PARTIAL_REPRISE_VOLUME_RATIO = 0.50
 ```
 
 **Condition** :
-- Aucune sortie depuis 8–27 jours, indépendamment du volume disponible ; OU :
+- Aucune sortie depuis 7–27 jours (`NO_RUN_LAST_7D`), indépendamment du volume disponible ; OU :
 - Une semaine inactive est observée dans les quatre buckets glissants de 7 jours
 - ET une baseline observable est disponible (`runner_profile.typical_weekly_km` issu de l'historique, non du profil déclaré seul)
 - ET `recent_weekly_km < 0.50 × baseline_km`
@@ -100,7 +100,7 @@ la comparaison de volume ne s'applique pas ; la rupture temporelle reste observa
 REPRISE_EXIT_STABLE_WEEKS = 4
 ```
 
-**Condition** : un retour récent après une semaine entièrement observée sans
+**Condition** : une sortie valide dans le bucket J0–J6 après une semaine antérieure entièrement observée sans
 activité running valide, hors `deep_reprise` et `partial_reprise`.
 `weekly_run_count_buckets_28d` couvre J-0..6, J-7..13, J-14..20 et J-21..27.
 Une activité valide (distance positive OU durée positive) suffit à rendre une
@@ -116,12 +116,18 @@ La constante évite la réutilisation de l'ancienne `REPRISE_STABLE_WEEKS` legac
 
 Aucune rupture significative de continuité détectée :
 - Il existe un historique running
-- Aucune absence de sortie de 8 jours ou plus
+- Aucune absence de sortie de 7 jours ou plus
 - Aucune semaine entièrement observée inactive dans les quatre dernières semaines
 
 Un historique court mais régulier est `normal` avec une confiance plus faible.
 Un faible volume (récupération/taper), même inférieur à 50 % de la baseline,
 ne prouve pas une reprise si la continuité hebdomadaire est intacte.
+
+La frontière J+7 est une semaine complète sans course : `partial_reprise`,
+intensité interdite et plan easy-only. J+6 avec continuité antérieure intacte
+reste `normal`. Le code `NO_RUN_LAST_7D` remplace `NO_RUN_LAST_8D` : la recherche
+des consommateurs n'a trouvé aucune dépendance applicative à l'ancien code,
+seulement le producteur, ses tests et la documentation.
 
 `normal` ne signifie PAS : charge parfaite, bonne readiness, absence de fatigue, autorisation d'intensité.
 
@@ -184,6 +190,7 @@ Codes déterministes, non traduits, indépendants de l'UI et du langage naturel 
 |---|---|
 | `NO_RUNNING_HISTORY` | `continuity_state = no_history` |
 | `NO_RUN_LAST_28D` | `continuity_state = deep_reprise` |
+| `NO_RUN_LAST_7D` | Absence de sortie 7–27 jours : `partial_reprise`, intensité interdite |
 | `RECENT_VOLUME_FAR_BELOW_BASELINE` | `continuity_state = partial_reprise` |
 | `RECENT_VOLUME_RECOVERING` | `continuity_state = reprise_exit` |
 | `CONTINUITY_STABLE` | `continuity_state = normal` |
