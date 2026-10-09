@@ -88,6 +88,7 @@ from .prescription_snapshot import (
     resolve_effective_session,
     snapshot_from_prescription,
 )
+from .snapshot_persistence import invalidate_future_snapshots, persist_served_snapshot
 from .structured_workout import StructuredWorkoutPrescription
 from .workout_generator import WorkoutPrescription
 
@@ -141,6 +142,7 @@ async def get_or_create_served_prescription(
     user_id: str,
     prescription_id: str,
     planned_date: date,
+    reference_date: date,
     served_candidate: WorkoutPrescription,
     planned_prescription: Optional[WorkoutPrescription] = None,
     structured_factory: Optional[Any] = None,
@@ -227,6 +229,16 @@ async def get_or_create_served_prescription(
         underlying Mongo document, identical for every caller regardless of
         which one actually created it.
     """
+    if planned_date != reference_date:
+        raise ValueError(
+            "get_or_create_served_prescription can only serve a snapshot "
+            "whose planned_date matches reference_date."
+        )
+
+    await invalidate_future_snapshots(
+        db, user_id=user_id, reference_date=reference_date
+    )
+
     # #235 — cheap pre-check: if a snapshot already exists, NEVER invoke
     # structured_factory (no second Structured Workout engine call) and
     # NEVER recompute modified_from_planned — just read the winning
@@ -261,10 +273,8 @@ async def get_or_create_served_prescription(
             adaptation_action=adaptation_action,
             adaptation_reason_codes=adaptation_reason_codes,
         )
-        await db.training_prescription_snapshots.update_one(
-            {"user_id": user_id, "prescription_id": prescription_id},
-            {"$setOnInsert": candidate_snapshot.model_dump(mode="json")},
-            upsert=True,
+        await persist_served_snapshot(
+            db, candidate_snapshot, reference_date=reference_date
         )
         winning_doc = await db.training_prescription_snapshots.find_one(
             {"user_id": user_id, "prescription_id": prescription_id}, {"_id": 0}

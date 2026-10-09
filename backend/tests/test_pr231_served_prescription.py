@@ -25,7 +25,7 @@ for _p in (_BACKEND_DIR, _TESTS_DIR):
         sys.path.insert(0, _p)
 
 import test_pr232a_c231_week_endpoint as _harness  # noqa: E402
-from training_v2.served_prescription import get_or_create_served_prescription  # noqa: E402
+from training_v2.served_prescription import get_or_create_served_prescription as _get_or_create_served_prescription  # noqa: E402
 from training_v2.workout_generator import WorkoutPrescription  # noqa: E402
 
 pytestmark = pytest.mark.asyncio
@@ -33,6 +33,12 @@ pytestmark = pytest.mark.asyncio
 _USER_ID = _harness._USER_ID
 _MONDAY = date(2024, 6, 10)
 _PID = f"{_USER_ID}:{_MONDAY.isoformat()}:monday"
+
+
+async def get_or_create_served_prescription(db, **kwargs):
+    return await _get_or_create_served_prescription(
+        db, reference_date=kwargs["planned_date"], **kwargs
+    )
 
 
 def _prescription(distance_km: float) -> WorkoutPrescription:
@@ -57,6 +63,20 @@ async def test_first_call_creates_snapshot_and_returns_its_own_candidate():
     docs = [d for d in fake_db.training_prescription_snapshots._docs if d.get("prescription_id") == _PID]
     assert len(docs) == 1
     assert docs[0]["distance_km"] == 18.0
+
+
+async def test_write_rejects_a_snapshot_for_a_different_reference_date():
+    fake_db = _harness._FakeDB()
+    with pytest.raises(ValueError, match="planned_date matches reference_date"):
+        await _get_or_create_served_prescription(
+            fake_db,
+            user_id=_USER_ID,
+            prescription_id=_PID,
+            planned_date=_MONDAY,
+            reference_date=_MONDAY + timedelta(days=1),
+            served_candidate=_prescription(18.0),
+        )
+    assert fake_db.training_prescription_snapshots._docs == []
 
 
 async def test_existing_snapshot_is_authoritative_never_overwritten():

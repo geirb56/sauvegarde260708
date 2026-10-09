@@ -126,6 +126,20 @@ class _Collection:
         q = {k: v for k, v in query.items() if not isinstance(v, dict)}
         return sum(1 for d in self._docs if self._match(d, q))
 
+    async def delete_many(self, query: dict) -> None:
+        user_id = query.get("user_id")
+        planned_date = query.get("planned_date", {})
+        future_date = planned_date.get("$gt")
+        self._docs = [
+            doc for doc in self._docs
+            if not (
+                doc.get("user_id") == user_id
+                and isinstance(doc.get("planned_date"), str)
+                and future_date is not None
+                and doc["planned_date"] > future_date
+            )
+        ]
+
     async def create_index(self, *_a: Any, **_kw: Any) -> None:
         pass
 

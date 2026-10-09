@@ -78,6 +78,7 @@ from garmin.sync_progress import get_sync_progress
 from training_v2.performance_model import predict_races, activity_date  # PR185
 from training_v2.plan_goal import GoalType
 from training_v2.training_paces_authority import load_canonical_training_paces
+from training_v2.snapshot_persistence import invalidate_future_snapshots
 from coach_context_v2 import build_coach_context_v2, build_llm_coach_context
 
 from config.training_goals import GOAL_CONFIG  # noqa: E402  # PR145: single source
@@ -2864,6 +2865,9 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     from training_v2.training_paces_authority import load_canonical_training_paces
 
     today_prescription_id = prescription_id_for(user["id"], today, day_name.lower())
+    await invalidate_future_snapshots(
+        db, user_id=user["id"], reference_date=today
+    )
     existing_snapshot_doc = await db.training_prescription_snapshots.find_one(
         {"user_id": user["id"], "prescription_id": today_prescription_id}, {"_id": 0}
     )
@@ -2974,6 +2978,7 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
             user_id=user["id"],
             prescription_id=today_prescription_id,
             planned_date=today,
+            reference_date=today,
             served_candidate=adaptation_result.adapted_workout,
             planned_prescription=planned_prescription,
             structured_factory=_structured_candidate_factory,
@@ -3516,6 +3521,10 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
     from training_v2.training_week_response import WeekV2ActualResponse
     from training_v2.prescription_snapshot import PrescriptionSnapshot, snapshot_from_prescription
     from training_v2.served_prescription import get_or_create_served_prescription
+    from training_v2.snapshot_persistence import (
+        invalidate_future_snapshots,
+        persist_served_snapshot,
+    )
 
     week_start = reference_date - timedelta(days=reference_date.weekday())
     week_end = week_start + timedelta(days=6)
@@ -3532,6 +3541,9 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
     def _planned_date_for_day(day_name: str) -> date:
         return week_start + timedelta(days=_week_day_offsets[day_name.lower()])
 
+    await invalidate_future_snapshots(
+        db, user_id=user_id, reference_date=reference_date
+    )
     existing_snapshot_docs = await db.training_prescription_snapshots.find(
         {"user_id": user_id}, {"_id": 0}
     ).to_list(1000)
@@ -3678,6 +3690,7 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
                 user_id=user_id,
                 prescription_id=today_prescription_id,
                 planned_date=reference_date,
+                reference_date=reference_date,
                 served_candidate=today_final.adaptation_result.adapted_workout,
                 planned_prescription=sessions_for_execution[today_index],
                 structured_factory=_structured_candidate_factory,
@@ -3760,10 +3773,8 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
 
     # Freeze rule is insert-only: never overwrite an already-frozen snapshot.
     for snapshot in execution.snapshots_to_persist:
-        await db.training_prescription_snapshots.update_one(
-            {"user_id": snapshot.user_id, "prescription_id": snapshot.prescription_id},
-            {"$setOnInsert": snapshot.model_dump(mode="json")},
-            upsert=True,
+        await persist_served_snapshot(
+            db, snapshot, reference_date=reference_date
         )
 
     # Persist/update planned-memory for strictly future days of THIS week only.

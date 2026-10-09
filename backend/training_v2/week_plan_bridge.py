@@ -333,6 +333,7 @@ def build_weekly_target_from_workouts(
     user_profile: Optional[dict] = None,
     target_distance_km: Optional[float] = None,
     target_time_seconds: Optional[int] = None,
+    sessions_preference: Optional[int] = None,
 ) -> WeeklyTarget:
     """Build a WeeklyTarget V2 from raw workout documents and goal info.
 
@@ -361,6 +362,7 @@ def build_weekly_target_from_workouts(
         user_profile=user_profile,
         target_distance_km=target_distance_km,
         target_time_seconds=target_time_seconds,
+        sessions_preference=sessions_preference,
     )
     return ctx.weekly_target
 

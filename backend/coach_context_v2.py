@@ -16,6 +16,7 @@ from training_v2.plan_goal import PlanGoal, build_plan_goal
 from training_v2.readiness_decision import ReadinessDecision
 from training_v2.training_cycle_response import build_cycle_calendar_response
 from training_v2.training_history import build_training_history
+from training_v2.snapshot_persistence import invalidate_future_snapshots
 from training_v2.training_load import TrainingLoadSnapshot
 from training_v2.training_paces import TrainingPaces, training_paces_to_api_dict
 from workout_analysis_v2 import WorkoutAnalysisV2Response
@@ -774,6 +775,9 @@ async def build_coach_context_v2(
     cycle_response = _build_cycle_response(
         resolved_goal=resolved_goal,
         reference_date=reference_date,
+    )
+    await invalidate_future_snapshots(
+        db, user_id=user_id, reference_date=reference_date
     )
     training_history = build_training_history(domain_activities_90, reference_date)
     week_sessions = list(((week_payload.get("week") or {}).get("sessions") or []))
