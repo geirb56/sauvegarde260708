@@ -300,7 +300,14 @@ Tests non exécutés :
   comme une couverture du raccordement non réalisé.
 - Build et lint : non lancés pour un ajout documentaire seul.
 
-La validation automatisée du rapport est consignée lors de la livraison.
+Vérifications documentaires effectuées :
+
+- `git diff --check` : code de sortie 0.
+- Scan de secrets de `RUNINDEX_PR317_REPORT.md` : aucun secret détecté.
+- `parallel_validation` appelée sur le rapport seul : CodeQL ignoré comme
+  changement documentaire trivial. Malgré l'en-tête « Success » de l'outil,
+  la revue de code indique que son modèle est absent du registre ; **revue
+  automatisée indisponible**, pas une validation positive revendiquée.
 
 ## 7. Exemple API avant / après
 
