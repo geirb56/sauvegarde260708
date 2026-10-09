@@ -31,6 +31,7 @@ from training_v2.week_plan_bridge import (
     CanonicalWeeklyPlan,
     build_canonical_weekly_plan,
     build_weekly_plan_from_workouts,
+    build_weekly_target_from_workouts,
 )
 from training_v2.weekly_reconciliation import (
     WeeklyReconciliationAction,
@@ -324,6 +325,24 @@ class TestSessionsPreferencePrescription:
         assert target == canonical.reconciled_target
         assert plan == canonical.weekly_plan
 
+    @pytest.mark.parametrize("preference", range(2, 7))
+    def test_target_only_builder_matches_canonical_original_target(
+        self, preference
+    ):
+        kwargs = _normal_two_runs_kwargs()
+        canonical = build_canonical_weekly_plan(
+            **kwargs, sessions_preference=preference
+        )
+        target = build_weekly_target_from_workouts(
+            **kwargs, sessions_preference=preference
+        )
+        plan_target, plan = build_weekly_plan_from_workouts(
+            **kwargs, sessions_preference=preference
+        )
+        assert target == canonical.original_target
+        assert plan_target == canonical.reconciled_target
+        assert plan == canonical.weekly_plan
+
     @pytest.mark.parametrize("preference", (None, 0, 1, 7, "3", 3.0, True))
     def test_sessions_preference_absent_or_invalid_keeps_legacy_fixture(self, preference):
         kwargs = _normal_two_runs_kwargs()
@@ -333,6 +352,9 @@ class TestSessionsPreferencePrescription:
         assert baseline.original_target.reason_codes == ("NORMAL_DISTANCE_BASED",)
         assert baseline.reconciliation_result.reason_codes == ("PLAN_STRUCTURE_KEPT",)
         assert build_canonical_weekly_plan(**kwargs, sessions_preference=preference) == baseline
+        assert build_weekly_target_from_workouts(
+            **kwargs, sessions_preference=preference
+        ) == baseline.original_target
 
     def test_sessions_preference_max_days_is_audited_before_reconciliation(self):
         canonical = build_canonical_weekly_plan(

@@ -85,8 +85,13 @@ from pydantic import BaseModel, ConfigDict
 
 from .prescription_snapshot import (
     PrescriptionSnapshot,
+    is_snapshot_authoritative,
     resolve_effective_session,
     snapshot_from_prescription,
+)
+from .snapshot_persistence import (
+    invalidate_future_snapshots,
+    persist_served_snapshot,
 )
 from .structured_workout import StructuredWorkoutPrescription
 from .workout_generator import WorkoutPrescription
@@ -141,6 +146,7 @@ async def get_or_create_served_prescription(
     user_id: str,
     prescription_id: str,
     planned_date: date,
+    reference_date: date,
     served_candidate: WorkoutPrescription,
     planned_prescription: Optional[WorkoutPrescription] = None,
     structured_factory: Optional[Any] = None,
@@ -160,6 +166,9 @@ async def get_or_create_served_prescription(
         Identify the (user, day) whose served prescription is being
         resolved. ``prescription_id`` must be produced by
         ``training_v2.week_execution.prescription_id_for``.
+    reference_date
+        The runtime date being served. Snapshot creation is rejected unless
+        ``planned_date == reference_date``.
     served_candidate
         The prescription THIS caller just computed (post-DailyAdaptation)
         for this day. Used to create the snapshot ONLY if none exists yet;
@@ -227,6 +236,16 @@ async def get_or_create_served_prescription(
         underlying Mongo document, identical for every caller regardless of
         which one actually created it.
     """
+    if planned_date != reference_date:
+        raise ValueError(
+            "get_or_create_served_prescription can only serve a snapshot "
+            "whose planned_date matches reference_date."
+        )
+
+    await invalidate_future_snapshots(
+        db, user_id=user_id, reference_date=reference_date
+    )
+
     # #235 — cheap pre-check: if a snapshot already exists, NEVER invoke
     # structured_factory (no second Structured Workout engine call) and
     # NEVER recompute modified_from_planned — just read the winning
@@ -241,6 +260,13 @@ async def get_or_create_served_prescription(
     )
     if existing_doc:
         winning_snapshot = PrescriptionSnapshot(**existing_doc)
+        if not is_snapshot_authoritative(
+            snapshot=winning_snapshot, reference_date=reference_date
+        ):
+            raise RuntimeError(
+                "get_or_create_served_prescription: invalid snapshot provenance "
+                f"for prescription_id={prescription_id!r}."
+            )
     else:
         modified_from_planned: Optional[bool] = None
         if planned_prescription is not None:
@@ -254,6 +280,7 @@ async def get_or_create_served_prescription(
             user_id=user_id,
             prescription_id=prescription_id,
             planned_date=planned_date,
+            served_reference_date=reference_date,
             session=served_candidate,
             modified_from_planned=modified_from_planned,
             structured=structured_candidate,
@@ -261,10 +288,8 @@ async def get_or_create_served_prescription(
             adaptation_action=adaptation_action,
             adaptation_reason_codes=adaptation_reason_codes,
         )
-        await db.training_prescription_snapshots.update_one(
-            {"user_id": user_id, "prescription_id": prescription_id},
-            {"$setOnInsert": candidate_snapshot.model_dump(mode="json")},
-            upsert=True,
+        await persist_served_snapshot(
+            db, candidate_snapshot, reference_date=reference_date
         )
         winning_doc = await db.training_prescription_snapshots.find_one(
             {"user_id": user_id, "prescription_id": prescription_id}, {"_id": 0}
@@ -274,9 +299,18 @@ async def get_or_create_served_prescription(
             # snapshot here — surface the anomaly instead of silently guessing.
             raise RuntimeError(
                 "get_or_create_served_prescription: no snapshot found for "
-                f"prescription_id={prescription_id!r} immediately after upsert."
+                f"prescription_id={prescription_id!r} immediately "
+                "after upsert."
             )
         winning_snapshot = PrescriptionSnapshot(**winning_doc)
+        if not is_snapshot_authoritative(
+            snapshot=winning_snapshot, reference_date=reference_date
+        ):
+            raise RuntimeError(
+                "get_or_create_served_prescription: invalid "
+                "winning snapshot "
+                f"provenance for prescription_id={prescription_id!r}."
+            )
 
     effective = resolve_effective_session(
         live_session=served_candidate, frozen_snapshot=winning_snapshot
