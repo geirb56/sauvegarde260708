@@ -392,31 +392,30 @@ def test_e_old_activity_prior_trained_check():
 
 
 def test_f_partial_reprise_distance_based():
-    # 30d history but recent drop.
-    # Need enough history for partial_reprise to trigger.
+    # Observed inactive days 7–13 plus a low-volume return.
     acts = (
         [_make_activity(d, 5.0) for d in [24, 26, 28]]
         + [_make_activity(d, 5.0) for d in [17, 19, 21]]
-        + [_make_activity(d, 5.0) for d in [10, 12, 14]]
+        + [_make_activity(14, 5.0)]
         + [_make_activity(2, 2.0)]  # recent big drop
     )
     wt = _build(activities=acts)
-    # If partial_reprise, should be distance-based; no_intensity.
-    if wt.target_basis == "distance":
-        assert wt.target_km is not None
-        assert wt.target_km > 0
+    assert wt.continuity_state == "partial_reprise"
+    assert wt.target_basis == "distance"
+    assert wt.target_km is not None
+    assert wt.target_km > 0
 
 
 def test_f_partial_reprise_no_intensity():
     acts = (
         [_make_activity(d, 8.0) for d in [24, 26]]
         + [_make_activity(d, 8.0) for d in [17, 19]]
-        + [_make_activity(d, 8.0) for d in [10, 12]]
         + [_make_activity(2, 2.0)]
     )
     wt = _build(activities=acts)
-    if wt.target_basis == "distance":
-        assert wt.allow_intensity is False
+    assert wt.continuity_state == "partial_reprise"
+    assert wt.target_basis == "distance"
+    assert wt.allow_intensity is False
 
 
 def test_f_partial_reprise_prudent_not_jump():
@@ -427,6 +426,7 @@ def test_f_partial_reprise_prudent_not_jump():
         + [_make_activity(2, 2.0)]
     )
     wt = _build(activities=acts)
+    assert wt.continuity_state == "partial_reprise"
     if wt.target_basis == "distance":
         assert wt.target_km <= 20.0, f"Partial reprise should be prudent, got {wt.target_km}"
 
@@ -437,13 +437,13 @@ def test_f_partial_reprise_prudent_not_jump():
 
 
 def test_g_partial_reprise_no_baseline_duration():
-    # Very short history with some runs: likely reprise_exit or partial_reprise.
-    acts = [_make_activity(3, 5.0), _make_activity(6, 4.0)]
+    # Duration-only history and eight days without running establish partial reprise.
+    acts = [_make_activity(8, 0.0, minutes=30), _make_activity(16, 0.0, minutes=30)]
     wt = _build(activities=acts)
-    # If duration-based: km must be None.
-    if wt.target_basis == "duration":
-        assert wt.target_km is None
-        assert wt.target_duration_minutes is not None
+    assert wt.continuity_state == "partial_reprise"
+    assert wt.target_basis == "duration"
+    assert wt.target_km is None
+    assert wt.target_duration_minutes is not None
 
 
 # ---------------------------------------------------------------------------
@@ -452,11 +452,12 @@ def test_g_partial_reprise_no_baseline_duration():
 
 
 def test_h_reprise_exit_allow_intensity():
-    # 3 consecutive active weeks → reprise_exit with exploitable baseline.
+    # Three active weeks after an observed inactive fourth week → reprise_exit.
     acts = (
         [_make_activity(d, 5.0) for d in [15, 17, 19]]
         + [_make_activity(d, 5.0) for d in [8, 10, 12]]
         + [_make_activity(d, 5.0) for d in [1, 3, 5]]
+        + [_make_activity(35, 5.0)]
     )
     hist, prof = _profile(acts)
     state = _state(hist, prof)
@@ -489,11 +490,11 @@ def test_i_reprise_exit_no_volume_and_intensity():
     acts_base = (
         [_make_activity(d, 10.0) for d in [22, 24, 26]]
         + [_make_activity(d, 10.0) for d in [15, 17, 19]]
-        + [_make_activity(d, 10.0) for d in [8, 10, 12]]
         + [_make_activity(d, 10.0) for d in [1, 3, 5]]
     )
     hist, prof = _profile(acts_base)
     state = _state(hist, prof)
+    assert state.continuity_state == "reprise_exit"
     goal = _goal()
     period = build_periodization(goal, REF, training_state=state, cycle_anchor_date=CYCLE_ANCHOR)
     wt = build_weekly_target(
@@ -964,8 +965,8 @@ def test_reprise_exit_no_baseline_intensity_withheld():
 
     UNKNOWN BASELINE → NO INTENSITY RETURN.
 
-    Scenario: duration-only running activities (distance_m=0) with short history
-    (< 28 days deep) → reprise_exit state, zero km in all 28d buckets,
+    Scenario: duration-only runs surrounding an observed inactive week
+    → reprise_exit state, zero km in all 28d buckets,
     chronic=None, recent=None → duration fallback → allow_intensity=False.
 
     Expected:
@@ -976,7 +977,7 @@ def test_reprise_exit_no_baseline_intensity_withheld():
         allow_intensity is False
     """
     # Duration-only activities: activity_type=running but distance_m=0.
-    # 3 sessions spread over ~18 days → available_days < 28 → reprise_exit.
+    # Days 7–13 are fully observed and inactive between two duration-only runs.
     # All 28d buckets stay at 0.0 km → no chronic, no recent km.
     def make_duration_only(days_ago: int, duration_min: int = 30) -> dict:
         d = REF - timedelta(days=days_ago)
@@ -987,7 +988,7 @@ def test_reprise_exit_no_baseline_intensity_withheld():
             "duration_s": duration_min * 60,
         }
 
-    acts = [make_duration_only(d) for d in [2, 9, 18]]
+    acts = [make_duration_only(d) for d in [2, 18]]
     hist, prof = _profile(acts)
     state = _state(hist, prof)
 
@@ -1038,6 +1039,7 @@ def test_reprise_exit_with_baseline_intensity_allowed():
         [_make_activity(d, 5.0) for d in [15, 17, 19]]
         + [_make_activity(d, 5.0) for d in [8, 10, 12]]
         + [_make_activity(d, 5.0) for d in [1, 3, 5]]
+        + [_make_activity(35, 5.0)]
     )
     hist, prof = _profile(acts)
     state = _state(hist, prof)

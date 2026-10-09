@@ -28,20 +28,15 @@ Continuity states
   "no_history"     : No exploitable running history at all.
   "deep_reprise"   : Prior history exists but no run in the last
                      NO_RUN_DEEP_REPRISE_DAYS days.
-  "partial_reprise": A comeback has started but recent weekly volume is
-                     below PARTIAL_REPRISE_VOLUME_RATIO of the observable
-                     baseline.
-  "reprise_exit"   : Continuity is recovering but not yet stable.
-                     Two detection paths:
-                     (a) available_history_days < REPRISE_EXIT_STABLE_WEEKS × 7
-                         AND days_since_last_run < NO_RUN_DEEP_REPRISE_DAYS
-                         (guaranteed by the deep_reprise guard above).
-                         Note: w7.activity_count may be 0 (last run 8–27 days
-                         ago) — short history cannot be "normal" regardless.
-                     (b) volume is between 50% and 100% of observable baseline
-                         AND window_30d has fewer than REPRISE_EXIT_STABLE_WEEKS × 3
-                         activities.
-  "normal"         : No significant continuity break detected.
+  "partial_reprise": A proven recent break, with no run for 7–27 days or
+                     returning weekly volume below PARTIAL_REPRISE_VOLUME_RATIO
+                     of the observable baseline.
+  "reprise_exit"   : A return after an observed inactive week, without four
+                     active rolling weeks yet. A valid run in J0–J6 is required.
+                     Volume alone is not evidence.
+  "normal"         : No observed continuity break. Absolute run frequency and
+                     short history never imply reprise. Weeks before the first
+                     valid run are not observed inactive weeks.
 
 Load states (mirror of TrainingLoadSnapshot.status)
 ----------------------------------------------------
@@ -72,6 +67,8 @@ Reason codes
 Deterministic, language-neutral, UI-independent:
   NO_RUNNING_HISTORY
   NO_RUN_LAST_28D
+  NO_RUN_LAST_7D
+  INACTIVE_RUNNING_WEEK
   RECENT_VOLUME_FAR_BELOW_BASELINE
   RECENT_VOLUME_RECOVERING
   CONTINUITY_STABLE
@@ -109,7 +106,10 @@ NO_RUN_DEEP_REPRISE_DAYS: int = 28
 """No run in the last N days (with prior history) → deep_reprise."""
 
 PARTIAL_REPRISE_VOLUME_RATIO: float = 0.50
-"""Recent weekly equivalent < this fraction of observable baseline → partial_reprise."""
+"""After a proven break, volume below this baseline fraction → partial_reprise."""
+
+NO_RUN_PARTIAL_REPRISE_DAYS: int = 7
+"""No run for 7–27 days with prior history → partial_reprise."""
 
 REPRISE_EXIT_STABLE_WEEKS: int = 4
 """Minimum weeks of consistent recent coverage required to leave reprise_exit."""
@@ -253,7 +253,24 @@ def _classify_continuity(
         codes.append("NO_RUN_LAST_28D")
         return "deep_reprise", codes
 
-    # ── compute recent weekly equivalent and observable baseline ──────────
+    # ── require observed evidence of a recent continuity break ─────────────
+    if days_since >= NO_RUN_PARTIAL_REPRISE_DAYS:
+        codes.append("NO_RUN_LAST_7D")
+        return "partial_reprise", codes
+
+    counts = training_history.weekly_run_count_buckets_28d
+    has_inactive_week = counts is not None and any(
+        count == 0 and available_days >= (index + 1) * 7
+        for index, count in enumerate(counts[:REPRISE_EXIT_STABLE_WEEKS])
+        if index > 0
+    )
+    if not has_inactive_week:
+        codes.append("CONTINUITY_STABLE")
+        return "normal", codes
+
+    codes.append("INACTIVE_RUNNING_WEEK")
+
+    # ── volume describes the return only after a proven break ──────────────
     recent_weekly_km = _recent_weekly_equivalent_km(training_history)
     baseline_km = _observable_baseline_km(runner_profile)
 
@@ -268,40 +285,8 @@ def _classify_continuity(
         return "partial_reprise", codes
 
     # ── reprise_exit ──────────────────────────────────────────────────────
-    # Volume is recovering (>= 50% of baseline if baseline is known, or any
-    # run in last 7d if no baseline), but not yet stable.
-    # Stability criterion: available history >= REPRISE_EXIT_STABLE_WEEKS weeks
-    # AND 30-day window shows consistent activity.
-    w30 = training_history.window_30d
-    w7 = training_history.window_7d
-
-    # "Not yet stable": fewer than REPRISE_EXIT_STABLE_WEEKS weeks of history
-    # OR the 30d window is suspiciously sparse (< 4 runs in 30d for context).
-    reprise_exit_min_days = REPRISE_EXIT_STABLE_WEEKS * 7
-
-    if available_days < reprise_exit_min_days:
-        # History too short to be "normal".
-        # days_since < NO_RUN_DEEP_REPRISE_DAYS is guaranteed here (checked above).
-        # Regardless of whether the last run was in the past 7 days or 8–27 days
-        # ago, a short history cannot be considered stable enough for "normal".
-        codes.append("RECENT_VOLUME_RECOVERING")
-        return "reprise_exit", codes
-
-    # Even with sufficient history depth, if volume is below baseline
-    # but above 50% threshold, still in reprise_exit.
-    if (
-        baseline_km is not None
-        and baseline_km > 0
-        and recent_weekly_km is not None
-        and recent_weekly_km < baseline_km
-        and w30.activity_count < REPRISE_EXIT_STABLE_WEEKS * 3
-    ):
-        codes.append("RECENT_VOLUME_RECOVERING")
-        return "reprise_exit", codes
-
-    # ── normal ────────────────────────────────────────────────────────────
-    codes.append("CONTINUITY_STABLE")
-    return "normal", codes
+    codes.append("RECENT_VOLUME_RECOVERING")
+    return "reprise_exit", codes
 
 
 def _load_reason_code(load_state: str) -> str:
