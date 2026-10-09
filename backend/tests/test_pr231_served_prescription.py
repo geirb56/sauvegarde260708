@@ -25,7 +25,9 @@ for _p in (_BACKEND_DIR, _TESTS_DIR):
         sys.path.insert(0, _p)
 
 import test_pr232a_c231_week_endpoint as _harness  # noqa: E402
-from training_v2.served_prescription import get_or_create_served_prescription as _get_or_create_served_prescription  # noqa: E402
+from training_v2.served_prescription import (
+    get_or_create_served_prescription as _get_or_create_served_prescription,
+)  # noqa: E402
 from training_v2.workout_generator import WorkoutPrescription  # noqa: E402
 
 pytestmark = pytest.mark.asyncio

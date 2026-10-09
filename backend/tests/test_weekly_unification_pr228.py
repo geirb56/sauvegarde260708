@@ -326,7 +326,9 @@ class TestSessionsPreferencePrescription:
         assert plan == canonical.weekly_plan
 
     @pytest.mark.parametrize("preference", range(2, 7))
-    def test_target_only_builder_matches_canonical_original_target(self, preference):
+    def test_target_only_builder_matches_canonical_original_target(
+        self, preference
+    ):
         kwargs = _normal_two_runs_kwargs()
         canonical = build_canonical_weekly_plan(
             **kwargs, sessions_preference=preference

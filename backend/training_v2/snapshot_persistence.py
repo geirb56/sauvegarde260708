@@ -29,14 +29,20 @@ async def persist_served_snapshot(
     *,
     reference_date: date,
 ) -> None:
-    """Persist only a snapshot for the date being served, without rewriting it."""
+    """Persist only a snapshot for the date being served.
+
+    Existing documents are never rewritten.
+    """
     if snapshot.planned_date != reference_date:
         raise ValueError(
             "A served prescription snapshot can only be persisted for "
             "reference_date."
         )
     await db.training_prescription_snapshots.update_one(
-        {"user_id": snapshot.user_id, "prescription_id": snapshot.prescription_id},
+        {
+            "user_id": snapshot.user_id,
+            "prescription_id": snapshot.prescription_id,
+        },
         {"$setOnInsert": snapshot.model_dump(mode="json")},
         upsert=True,
     )

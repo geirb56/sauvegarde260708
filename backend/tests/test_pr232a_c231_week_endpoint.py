@@ -393,7 +393,9 @@ async def test_published_aggregate_future_stale_snapshot_cannot_override_live():
 
 
 @pytest.mark.parametrize("invalid_workout_type", ["rest", "easy"])
-async def test_future_snapshot_cannot_resurrect_after_its_planned_day(invalid_workout_type):
+async def test_future_snapshot_cannot_resurrect_after_its_planned_day(
+    invalid_workout_type,
+):
     from copy import deepcopy
 
     thursday = _MONDAY + timedelta(days=3)
@@ -434,7 +436,9 @@ async def test_future_snapshot_cannot_resurrect_after_its_planned_day(invalid_wo
             "duration_minutes": None,
         },
     })
-    with patch("training_v2.week_plan_bridge.build_canonical_weekly_plan", builder):
+    with patch(
+        "training_v2.week_plan_bridge.build_canonical_weekly_plan", builder
+    ):
         thursday_result = await _get_week(fake_db, thursday)
 
     assert thursday_result["status"] == 200, thursday_result["body"]

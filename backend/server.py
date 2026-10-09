@@ -2787,6 +2787,9 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     today = _resolve_canonical_reference_date(now_utc, garmin_activities_90)
     today_iso = today.isoformat()
     day_name = today.strftime("%A")
+    await invalidate_future_snapshots(
+        db, user_id=user["id"], reference_date=today
+    )
 
     # ── 3. Readiness (live data) — only when Garmin connection is active ──
     readiness_data_source = "unavailable"
@@ -2865,9 +2868,6 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     from training_v2.training_paces_authority import load_canonical_training_paces
 
     today_prescription_id = prescription_id_for(user["id"], today, day_name.lower())
-    await invalidate_future_snapshots(
-        db, user_id=user["id"], reference_date=today
-    )
     existing_snapshot_doc = await db.training_prescription_snapshots.find_one(
         {"user_id": user["id"], "prescription_id": today_prescription_id}, {"_id": 0}
     )
