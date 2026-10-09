@@ -392,6 +392,81 @@ async def test_published_aggregate_future_stale_snapshot_cannot_override_live():
     assert memory["structured"] == sunday["structured"]
 
 
+@pytest.mark.parametrize("invalid_workout_type", ["rest", "easy"])
+async def test_future_snapshot_cannot_resurrect_after_its_planned_day(invalid_workout_type):
+    from copy import deepcopy
+
+    thursday = _MONDAY + timedelta(days=3)
+    sunday = _MONDAY + timedelta(days=6)
+    fake_db = _FakeDB()
+    _seed_cycle(fake_db, reference_date=thursday)
+    _seed_garmin_activities(fake_db, n=8, reference_date=thursday)
+
+    historical = {
+        "user_id": _USER_ID,
+        "prescription_id": f"{_USER_ID}:{_MONDAY.isoformat()}:monday",
+        "planned_date": _MONDAY.isoformat(),
+        "day": "monday",
+        "workout_type": "easy",
+        "intensity_class": "low",
+        "distance_km": 6.0,
+        "duration_minutes": None,
+        "reason_codes": [],
+    }
+    fake_db.training_prescription_snapshots._docs.append(deepcopy(historical))
+    fake_db.training_prescription_snapshots._docs.append({
+        "user_id": _USER_ID,
+        "prescription_id": f"{_USER_ID}:{sunday.isoformat()}:sunday",
+        "planned_date": sunday.isoformat(),
+        "day": "sunday",
+        "workout_type": invalid_workout_type,
+        "intensity_class": "rest" if invalid_workout_type == "rest" else "low",
+        "distance_km": None if invalid_workout_type == "rest" else 99.0,
+        "duration_minutes": None,
+        "reason_codes": [],
+    })
+
+    builder = _aggregate_plan_builder(overrides={
+        "sunday": {
+            "workout_type": "easy",
+            "intensity_class": "low",
+            "distance_km": 7.0,
+            "duration_minutes": None,
+        },
+    })
+    with patch("training_v2.week_plan_bridge.build_canonical_weekly_plan", builder):
+        thursday_result = await _get_week(fake_db, thursday)
+
+    assert thursday_result["status"] == 200, thursday_result["body"]
+    thursday_sunday = thursday_result["body"]["week"]["sessions"][-1]
+    assert thursday_sunday["planned_date"] == sunday.isoformat()
+    assert thursday_sunday["distance_km"] == 7.0
+    assert not any(
+        doc.get("prescription_id") == f"{_USER_ID}:{sunday.isoformat()}:sunday"
+        for doc in fake_db.training_prescription_snapshots._docs
+    )
+    assert historical in fake_db.training_prescription_snapshots._docs
+    assert "served_at" not in historical
+
+    with patch("training_v2.week_plan_bridge.build_canonical_weekly_plan", builder):
+        sunday_week = await _get_week(fake_db, sunday)
+        sunday_today = await _get_today(fake_db, sunday)
+
+    assert sunday_week["status"] == 200, sunday_week["body"]
+    assert sunday_today["status"] == 200, sunday_today["body"]
+    sunday_session = sunday_week["body"]["week"]["sessions"][-1]
+    served_today = sunday_today["body"]["served_prescription"]
+    valid_snapshots = [
+        doc for doc in fake_db.training_prescription_snapshots._docs
+        if doc.get("prescription_id") == f"{_USER_ID}:{sunday.isoformat()}:sunday"
+    ]
+    assert len(valid_snapshots) == 1
+    assert valid_snapshots[0]["distance_km"] != 99.0
+    assert sunday_session["distance_km"] == valid_snapshots[0]["distance_km"]
+    assert served_today["distance_km"] == valid_snapshots[0]["distance_km"]
+    assert historical in fake_db.training_prescription_snapshots._docs
+
+
 @pytest.mark.asyncio
 async def test_c234_paces_uses_garmin_local_reference_date_at_utc_midnight():
     """The paces endpoint must share Today/Week's local Garmin clock."""

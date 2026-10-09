@@ -347,6 +347,7 @@ def build_weekly_target_from_workouts(
     user_profile : optional user_profiles document for RunnerProfile enrichment.
     target_distance_km : explicit race distance (km). Required for ULTRA goals.
     target_time_seconds : optional chronometric objective in canonical seconds.
+    sessions_preference : optional preferred training days per week (2..6).
 
     Raises
     ------

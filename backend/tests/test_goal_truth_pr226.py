@@ -1238,6 +1238,7 @@ def _make_db_with_activities(cycle, user_goal=None):
 
     db.training_prescription_snapshots.update_one = _snapshot_update_one
     db.training_prescription_snapshots.find_one = _snapshot_find_one
+    db.training_prescription_snapshots.delete_many = AsyncMock()
 
     # C231 — item 3: /training/v2/week may fetch garmin_connections/daily_metrics
     # for today's session before freezing its snapshot (not connected here).

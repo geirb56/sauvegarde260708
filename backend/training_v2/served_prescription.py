@@ -162,6 +162,9 @@ async def get_or_create_served_prescription(
         Identify the (user, day) whose served prescription is being
         resolved. ``prescription_id`` must be produced by
         ``training_v2.week_execution.prescription_id_for``.
+    reference_date
+        The runtime date being served. Snapshot creation is rejected unless
+        ``planned_date == reference_date``.
     served_candidate
         The prescription THIS caller just computed (post-DailyAdaptation)
         for this day. Used to create the snapshot ONLY if none exists yet;
