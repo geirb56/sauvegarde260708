@@ -132,10 +132,6 @@ class _Collection:
     async def count_documents(self, query):
         return sum(1 for doc in self._docs if _matches(doc, query))
 
-    async def delete_many(self, query):
-        self._docs = [doc for doc in self._docs if not _matches(doc, query)]
-
-
 class _ExplodingTrainingPlansCollection:
     def __init__(self):
         self.find_one_called = False

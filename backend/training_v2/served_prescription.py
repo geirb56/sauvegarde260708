@@ -85,6 +85,7 @@ from pydantic import BaseModel, ConfigDict
 
 from .prescription_snapshot import (
     PrescriptionSnapshot,
+    is_snapshot_authoritative,
     resolve_effective_session,
     snapshot_from_prescription,
 )
@@ -256,6 +257,13 @@ async def get_or_create_served_prescription(
     )
     if existing_doc:
         winning_snapshot = PrescriptionSnapshot(**existing_doc)
+        if not is_snapshot_authoritative(
+            snapshot=winning_snapshot, reference_date=reference_date
+        ):
+            raise RuntimeError(
+                "get_or_create_served_prescription: invalid snapshot provenance "
+                f"for prescription_id={prescription_id!r}."
+            )
     else:
         modified_from_planned: Optional[bool] = None
         if planned_prescription is not None:
@@ -269,6 +277,7 @@ async def get_or_create_served_prescription(
             user_id=user_id,
             prescription_id=prescription_id,
             planned_date=planned_date,
+            served_reference_date=reference_date,
             session=served_candidate,
             modified_from_planned=modified_from_planned,
             structured=structured_candidate,
@@ -290,6 +299,13 @@ async def get_or_create_served_prescription(
                 f"prescription_id={prescription_id!r} immediately after upsert."
             )
         winning_snapshot = PrescriptionSnapshot(**winning_doc)
+        if not is_snapshot_authoritative(
+            snapshot=winning_snapshot, reference_date=reference_date
+        ):
+            raise RuntimeError(
+                "get_or_create_served_prescription: invalid winning snapshot "
+                f"provenance for prescription_id={prescription_id!r}."
+            )
 
     effective = resolve_effective_session(
         live_session=served_candidate, frozen_snapshot=winning_snapshot

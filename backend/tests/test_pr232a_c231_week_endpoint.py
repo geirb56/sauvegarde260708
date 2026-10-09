@@ -128,15 +128,23 @@ class _Collection:
 
     async def delete_many(self, query: dict) -> None:
         user_id = query.get("user_id")
-        planned_date = query.get("planned_date", {})
-        future_date = planned_date.get("$gt")
+        self.delete_many_calls = getattr(self, "delete_many_calls", [])
+        self.delete_many_calls.append(query)
+        future_date = query.get("planned_date", {}).get("$gt")
         self._docs = [
             doc for doc in self._docs
-            if not (
-                doc.get("user_id") == user_id
-                and isinstance(doc.get("planned_date"), str)
-                and future_date is not None
-                and doc["planned_date"] > future_date
+            if doc.get("user_id") != user_id
+            or (
+                doc.get("served_reference_date") is not None
+                and doc.get("served_reference_date") == doc.get("planned_date")
+            )
+            or (
+                doc.get("served_reference_date") is None
+                and (
+                    not isinstance(doc.get("planned_date"), str)
+                    or future_date is None
+                    or doc["planned_date"] <= future_date
+                )
             )
         ]
 

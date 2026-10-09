@@ -2860,6 +2860,7 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     # into the fields describing the served prescription.
     from training_v2.prescription_snapshot import (
         PrescriptionSnapshot as _PrescriptionSnapshot,
+        is_snapshot_authoritative as _is_snapshot_authoritative,
         resolve_effective_session as _resolve_effective_session,
     )
     from training_v2.week_execution import prescription_id_for
@@ -2871,6 +2872,13 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     existing_snapshot_doc = await db.training_prescription_snapshots.find_one(
         {"user_id": user["id"], "prescription_id": today_prescription_id}, {"_id": 0}
     )
+
+    if existing_snapshot_doc is not None:
+        existing_snapshot = _PrescriptionSnapshot(**existing_snapshot_doc)
+        if not _is_snapshot_authoritative(
+            snapshot=existing_snapshot, reference_date=today
+        ):
+            existing_snapshot_doc = None
 
     if existing_snapshot_doc is not None:
         # ── FAST PATH: snapshot already exists ──────────────────────────────
@@ -3519,7 +3527,11 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
         prescription_id_for,
     )
     from training_v2.training_week_response import WeekV2ActualResponse
-    from training_v2.prescription_snapshot import PrescriptionSnapshot, snapshot_from_prescription
+    from training_v2.prescription_snapshot import (
+        PrescriptionSnapshot,
+        is_snapshot_authoritative,
+        snapshot_from_prescription,
+    )
     from training_v2.served_prescription import get_or_create_served_prescription
     from training_v2.snapshot_persistence import (
         invalidate_future_snapshots,
@@ -3559,7 +3571,11 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
             continue
         if not (week_start <= snapshot_planned_date <= week_end):
             continue
-        frozen_snapshots[prescription_id] = PrescriptionSnapshot(**doc)
+        snapshot = PrescriptionSnapshot(**doc)
+        if is_snapshot_authoritative(
+            snapshot=snapshot, reference_date=reference_date
+        ):
+            frozen_snapshots[prescription_id] = snapshot
 
     # Training V2 planned-memory (current week): per-day last known PLANNED
     # prescription used as fallback for past days lacking a served snapshot.
@@ -3704,6 +3720,7 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
                 user_id=user_id,
                 prescription_id=today_prescription_id,
                 planned_date=reference_date,
+                served_reference_date=reference_date,
                 session=served,
                 # C231 (micro-correction): propagate the WINNING snapshot's
                 # own modified_from_planned — never recomputed here — so

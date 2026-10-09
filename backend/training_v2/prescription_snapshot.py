@@ -109,6 +109,12 @@ class PrescriptionSnapshot(BaseModel):
     user_id: str
     prescription_id: str
     planned_date: date
+    served_reference_date: Optional[date] = None
+    """Canonical RunIndex date when this prescription was served.
+
+    New snapshots record the same date as ``planned_date``. ``None`` is
+    retained only for legacy snapshots and is never reconstructed.
+    """
     day: str
     workout_type: str
     intensity_class: str
@@ -196,11 +202,31 @@ def is_freezable(*, planned_date: date, reference_date: date) -> bool:
     return planned_date <= reference_date
 
 
+def is_snapshot_authoritative(
+    *,
+    snapshot: PrescriptionSnapshot,
+    reference_date: date,
+) -> bool:
+    """Whether a stored snapshot can be trusted as-of ``reference_date``.
+
+    Legacy snapshots without provenance remain valid only for today or the
+    past. A present provenance value must match the planned date exactly.
+    Future prescriptions remain live even when their valid snapshot is kept
+    in storage for a concurrent request with an older reference date.
+    """
+    if snapshot.planned_date > reference_date:
+        return False
+    if snapshot.served_reference_date is None:
+        return True
+    return snapshot.served_reference_date == snapshot.planned_date
+
+
 def snapshot_from_prescription(
     *,
     user_id: str,
     prescription_id: str,
     planned_date: date,
+    served_reference_date: Optional[date] = None,
     session: WorkoutPrescription,
     modified_from_planned: Optional[bool] = None,
     structured: Optional[StructuredWorkoutPrescription] = None,
@@ -236,6 +262,7 @@ def snapshot_from_prescription(
         user_id=user_id,
         prescription_id=prescription_id,
         planned_date=planned_date,
+        served_reference_date=served_reference_date,
         day=session.day,
         workout_type=session.workout_type,
         intensity_class=session.intensity_class,
@@ -311,6 +338,8 @@ def resolve_structured_status(
 __all__ = [
     "PrescriptionSnapshot",
     "is_freezable",
+    "is_snapshot_authoritative",
+    "is_snapshot_authoritative",
     "snapshot_from_prescription",
     "resolve_effective_session",
     "resolve_structured_status",

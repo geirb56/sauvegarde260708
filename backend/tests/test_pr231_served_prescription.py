@@ -65,6 +65,7 @@ async def test_first_call_creates_snapshot_and_returns_its_own_candidate():
     docs = [d for d in fake_db.training_prescription_snapshots._docs if d.get("prescription_id") == _PID]
     assert len(docs) == 1
     assert docs[0]["distance_km"] == 18.0
+    assert docs[0]["served_reference_date"] == _MONDAY.isoformat()
 
 
 async def test_write_rejects_a_snapshot_for_a_different_reference_date():
@@ -146,6 +147,7 @@ async def test_concurrent_calls_result_in_single_snapshot_and_same_value():
     )
     docs = [d for d in fake_db.training_prescription_snapshots._docs if d.get("prescription_id") == _PID]
     assert len(docs) == 1
+    assert docs[0]["served_reference_date"] == _MONDAY.isoformat()
     assert results[0].prescription.distance_km == results[1].prescription.distance_km
     assert results[0].prescription.distance_km == docs[0]["distance_km"]
 

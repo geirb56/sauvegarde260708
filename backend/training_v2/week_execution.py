@@ -64,6 +64,7 @@ from .periodization import PeriodizationSnapshot
 from .plan_goal import PlanGoal
 from .prescription_snapshot import (
     PrescriptionSnapshot,
+    is_snapshot_authoritative,
     STRUCTURED_STATUS_FUTURE_LIVE,
     STRUCTURED_STATUS_HISTORICAL_FROZEN,
     STRUCTURED_STATUS_HISTORICAL_UNAVAILABLE,
@@ -324,7 +325,9 @@ def build_week_execution(
     frozen_snapshots = {
         prescription_id: snapshot
         for prescription_id, snapshot in (frozen_snapshots or {}).items()
-        if snapshot.planned_date <= reference_date
+        if is_snapshot_authoritative(
+            snapshot=snapshot, reference_date=reference_date
+        )
     }
     week_end = week_start + timedelta(days=6)
 
@@ -376,6 +379,7 @@ def build_week_execution(
                     user_id=user_id,
                     prescription_id=prescription_id,
                     planned_date=planned_date,
+                    served_reference_date=reference_date,
                     session=session,
                     # This fallback path persists the RAW plan `session`
                     # itself as-is (no adaptation candidate available here —

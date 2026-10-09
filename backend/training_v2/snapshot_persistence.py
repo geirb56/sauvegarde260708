@@ -14,11 +14,27 @@ async def invalidate_future_snapshots(
     user_id: str,
     reference_date: date,
 ) -> None:
-    """Permanently remove snapshots that could not yet have been served."""
+    """Remove future legacy snapshots and any incoherent provenance.
+
+    The predicates are evaluated by Mongo at deletion time. A snapshot with
+    ``served_reference_date == planned_date`` never matches either delete,
+    even when this caller holds a stale reference date across midnight.
+    """
+    await db.training_prescription_snapshots.delete_many(
+        {
+            "user_id": user_id,
+            "served_reference_date": {"$exists": True, "$ne": None},
+            "$expr": {"$ne": ["$served_reference_date", "$planned_date"]},
+        }
+    )
     await db.training_prescription_snapshots.delete_many(
         {
             "user_id": user_id,
             "planned_date": {"$gt": reference_date.isoformat()},
+            "$or": [
+                {"served_reference_date": {"$exists": False}},
+                {"served_reference_date": None},
+            ],
         }
     )
 
@@ -33,10 +49,13 @@ async def persist_served_snapshot(
 
     Existing documents are never rewritten.
     """
-    if snapshot.planned_date != reference_date:
+    if (
+        snapshot.planned_date != reference_date
+        or snapshot.served_reference_date != reference_date
+    ):
         raise ValueError(
-            "A served prescription snapshot can only be persisted for "
-            "reference_date."
+            "A served snapshot requires planned_date and "
+            "served_reference_date to match reference_date."
         )
     await db.training_prescription_snapshots.update_one(
         {
