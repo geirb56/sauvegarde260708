@@ -287,6 +287,13 @@ Authority split:
 - performed activity matching remains deterministic and Garmin-only
 
 Training week coherence contract:
+- TrainingState continuity answers whether a real recent interruption exists, not whether a runner reaches a monthly run-count quota. `load_state` remains an independent mirror of TrainingLoadSnapshot.
+- `weekly_run_count_buckets_28d` contains four rolling 7-day counts (most recent first), using valid provider-neutral running activities with positive distance or duration. An active week needs only one valid run, including duration-only runs.
+- Only fully observed inactive weeks can establish a break; weeks before the first valid activity are not inactivity. Missing bucket coverage (`None`) is not zero. Four active weeks imply `normal`, regardless of absolute frequency or weekly volume.
+- Short regular history is `normal` with lower `continuity_confidence`, not reprise. A low-volume recovery/taper week alone cannot create `partial_reprise` or `reprise_exit`.
+- With prior history, 7–27 days without running is `partial_reprise` (`NO_RUN_LAST_7D`), even when recent volume is unavailable; intensity is forbidden. ≥28 days remains `deep_reprise`. `no_history` is unchanged.
+- After an observed inactive prior week, a valid run in J0–J6 is required for a return: volume below 50% of the observed baseline yields `partial_reprise`; otherwise the return is `reprise_exit`, even if baseline is unavailable. `INACTIVE_RUNNING_WEEK` traces the break. Four active rolling weeks deterministically restore `normal`.
+- The former monthly activity-count threshold and the short-history-implies-reprise rule are removed. Continuity never assumes three runs per week.
 - An explicit `sessions_per_week` preference (2–6) seeds WeeklyTarget before WeeklyReconciliation. In `normal`, observed frequency alone does not lower it.
 - Availability caps and reprise/continuity safeguards remain authoritative, with diagnostic reason codes. Without a preference, the historical deterministic normal-state V2 policy is unchanged.
 - Reprise frequency caps belong to WeeklyTarget before reconciliation: `no_history`/`deep_reprise` ≤3, `partial_reprise` ≤4. The generator's defensive caps must be redundant, not silently lower the reconciled frequency.
