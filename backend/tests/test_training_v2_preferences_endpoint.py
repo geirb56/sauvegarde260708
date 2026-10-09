@@ -63,6 +63,10 @@ class _Collection:
                     return False
                 if "$lte" in value and (current is None or current > value["$lte"]):
                     return False
+                if "$gt" in value and (
+                    current is None or current <= value["$gt"]
+                ):
+                    return False
                 if "$ne" in value and current == value["$ne"]:
                     return False
                 continue
@@ -117,6 +121,9 @@ class _Collection:
                 self._docs.pop(index)
                 return type("DeleteResult", (), {"deleted_count": 1})()
         return type("DeleteResult", (), {"deleted_count": 0})()
+
+    async def delete_many(self, query: dict):
+        self._docs = [doc for doc in self._docs if not self._match(doc, query)]
 
     async def count_documents(self, query: dict) -> int:
         return sum(1 for doc in self._docs if self._match(doc, query))

@@ -16,6 +16,10 @@ from training_v2.plan_goal import PlanGoal, build_plan_goal
 from training_v2.readiness_decision import ReadinessDecision
 from training_v2.training_cycle_response import build_cycle_calendar_response
 from training_v2.training_history import build_training_history
+from training_v2.prescription_snapshot import (
+    PrescriptionSnapshot,
+    is_snapshot_authoritative,
+)
 from training_v2.training_load import TrainingLoadSnapshot
 from training_v2.training_paces import TrainingPaces, training_paces_to_api_dict
 from workout_analysis_v2 import WorkoutAnalysisV2Response
@@ -441,11 +445,18 @@ async def _week_prescription_authorities(
         {"_id": 0},
     ).to_list(1000)
 
-    snapshot_ids = {
-        doc.get("prescription_id")
-        for doc in snapshot_docs
-        if isinstance(doc.get("prescription_id"), str)
-    }
+    snapshot_ids: set[str] = set()
+    for doc in snapshot_docs:
+        if not isinstance(doc.get("prescription_id"), str):
+            continue
+        try:
+            snapshot = PrescriptionSnapshot(**doc)
+        except (TypeError, ValueError):
+            continue
+        if is_snapshot_authoritative(
+            snapshot=snapshot, reference_date=reference_date
+        ):
+            snapshot_ids.add(snapshot.prescription_id)
     memory_ids = {
         doc.get("prescription_id")
         for doc in memory_docs
@@ -480,14 +491,26 @@ async def _today_snapshot_doc(
     db: Any,
     user_id: str,
     today_payload: dict[str, Any],
+    reference_date: date,
 ) -> Optional[dict[str, Any]]:
     prescription_id = today_payload.get("prescription_id")
     if not isinstance(prescription_id, str):
         return None
-    return await db.training_prescription_snapshots.find_one(
+    doc = await db.training_prescription_snapshots.find_one(
         {"user_id": user_id, "prescription_id": prescription_id},
         {"_id": 0},
     )
+    if doc is None:
+        return None
+    try:
+        snapshot = PrescriptionSnapshot(**doc)
+    except (TypeError, ValueError):
+        return None
+    if not is_snapshot_authoritative(
+        snapshot=snapshot, reference_date=reference_date
+    ):
+        return None
+    return doc
 
 
 def _safe_distance_km(workout: dict[str, Any]) -> Optional[float]:
@@ -788,6 +811,7 @@ async def build_coach_context_v2(
         db=db,
         user_id=user_id,
         today_payload=today_payload,
+        reference_date=reference_date,
     )
     today_source = (
         "served_snapshot"

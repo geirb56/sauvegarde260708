@@ -132,7 +132,6 @@ class _Collection:
     async def count_documents(self, query):
         return sum(1 for doc in self._docs if _matches(doc, query))
 
-
 class _ExplodingTrainingPlansCollection:
     def __init__(self):
         self.find_one_called = False
@@ -171,7 +170,6 @@ class _FakeDB:
                 "distance_km": 4.0,
                 "duration_minutes": 28,
                 "reason_codes": ["SNAPSHOT_MON"],
-                "structured": {"kind": "structured-mon"},
                 "modified_from_planned": True,
                 "adaptation_action": "KEEP",
                 "adaptation_reason_codes": [],
@@ -186,7 +184,6 @@ class _FakeDB:
                 "distance_km": 11.2,
                 "duration_minutes": 64,
                 "reason_codes": ["SNAPSHOT_TODAY"],
-                "structured": {"kind": "structured-today"},
                 "modified_from_planned": False,
                 "adaptation_action": "KEEP",
                 "adaptation_reason_codes": ["SNAPSHOT_ONLY"],

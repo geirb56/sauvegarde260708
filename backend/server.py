@@ -78,6 +78,7 @@ from garmin.sync_progress import get_sync_progress
 from training_v2.performance_model import predict_races, activity_date  # PR185
 from training_v2.plan_goal import GoalType
 from training_v2.training_paces_authority import load_canonical_training_paces
+from training_v2.snapshot_persistence import invalidate_future_snapshots
 from coach_context_v2 import build_coach_context_v2, build_llm_coach_context
 
 from config.training_goals import GOAL_CONFIG  # noqa: E402  # PR145: single source
@@ -2786,6 +2787,9 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     today = _resolve_canonical_reference_date(now_utc, garmin_activities_90)
     today_iso = today.isoformat()
     day_name = today.strftime("%A")
+    await invalidate_future_snapshots(
+        db, user_id=user["id"], reference_date=today
+    )
 
     # ── 3. Readiness (live data) — only when Garmin connection is active ──
     readiness_data_source = "unavailable"
@@ -2856,6 +2860,7 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     # into the fields describing the served prescription.
     from training_v2.prescription_snapshot import (
         PrescriptionSnapshot as _PrescriptionSnapshot,
+        is_snapshot_authoritative as _is_snapshot_authoritative,
         resolve_effective_session as _resolve_effective_session,
     )
     from training_v2.week_execution import prescription_id_for
@@ -2867,6 +2872,13 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
     existing_snapshot_doc = await db.training_prescription_snapshots.find_one(
         {"user_id": user["id"], "prescription_id": today_prescription_id}, {"_id": 0}
     )
+
+    if existing_snapshot_doc is not None:
+        existing_snapshot = _PrescriptionSnapshot(**existing_snapshot_doc)
+        if not _is_snapshot_authoritative(
+            snapshot=existing_snapshot, reference_date=today
+        ):
+            existing_snapshot_doc = None
 
     if existing_snapshot_doc is not None:
         # ── FAST PATH: snapshot already exists ──────────────────────────────
@@ -2974,6 +2986,7 @@ async def get_today_adaptive_session(user: dict = Depends(auth_user)):
             user_id=user["id"],
             prescription_id=today_prescription_id,
             planned_date=today,
+            reference_date=today,
             served_candidate=adaptation_result.adapted_workout,
             planned_prescription=planned_prescription,
             structured_factory=_structured_candidate_factory,
@@ -3514,8 +3527,16 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
         prescription_id_for,
     )
     from training_v2.training_week_response import WeekV2ActualResponse
-    from training_v2.prescription_snapshot import PrescriptionSnapshot, snapshot_from_prescription
+    from training_v2.prescription_snapshot import (
+        PrescriptionSnapshot,
+        is_snapshot_authoritative,
+        snapshot_from_prescription,
+    )
     from training_v2.served_prescription import get_or_create_served_prescription
+    from training_v2.snapshot_persistence import (
+        invalidate_future_snapshots,
+        persist_served_snapshot,
+    )
 
     week_start = reference_date - timedelta(days=reference_date.weekday())
     week_end = week_start + timedelta(days=6)
@@ -3532,6 +3553,9 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
     def _planned_date_for_day(day_name: str) -> date:
         return week_start + timedelta(days=_week_day_offsets[day_name.lower()])
 
+    await invalidate_future_snapshots(
+        db, user_id=user_id, reference_date=reference_date
+    )
     existing_snapshot_docs = await db.training_prescription_snapshots.find(
         {"user_id": user_id}, {"_id": 0}
     ).to_list(1000)
@@ -3547,7 +3571,11 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
             continue
         if not (week_start <= snapshot_planned_date <= week_end):
             continue
-        frozen_snapshots[prescription_id] = PrescriptionSnapshot(**doc)
+        snapshot = PrescriptionSnapshot(**doc)
+        if is_snapshot_authoritative(
+            snapshot=snapshot, reference_date=reference_date
+        ):
+            frozen_snapshots[prescription_id] = snapshot
 
     # Training V2 planned-memory (current week): per-day last known PLANNED
     # prescription used as fallback for past days lacking a served snapshot.
@@ -3678,6 +3706,7 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
                 user_id=user_id,
                 prescription_id=today_prescription_id,
                 planned_date=reference_date,
+                reference_date=reference_date,
                 served_candidate=today_final.adaptation_result.adapted_workout,
                 planned_prescription=sessions_for_execution[today_index],
                 structured_factory=_structured_candidate_factory,
@@ -3691,6 +3720,7 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
                 user_id=user_id,
                 prescription_id=today_prescription_id,
                 planned_date=reference_date,
+                served_reference_date=reference_date,
                 session=served,
                 # C231 (micro-correction): propagate the WINNING snapshot's
                 # own modified_from_planned — never recomputed here — so
@@ -3760,10 +3790,8 @@ async def get_training_v2_week(user: dict = Depends(auth_user)):
 
     # Freeze rule is insert-only: never overwrite an already-frozen snapshot.
     for snapshot in execution.snapshots_to_persist:
-        await db.training_prescription_snapshots.update_one(
-            {"user_id": snapshot.user_id, "prescription_id": snapshot.prescription_id},
-            {"$setOnInsert": snapshot.model_dump(mode="json")},
-            upsert=True,
+        await persist_served_snapshot(
+            db, snapshot, reference_date=reference_date
         )
 
     # Persist/update planned-memory for strictly future days of THIS week only.
