@@ -28,6 +28,8 @@ import test_pr232a_c231_week_endpoint as _harness  # noqa: E402
 from training_v2.served_prescription import (
     get_or_create_served_prescription as _get_or_create_served_prescription,
 )  # noqa: E402
+from training_v2.prescription_snapshot import snapshot_from_prescription  # noqa: E402
+from training_v2.snapshot_persistence import persist_served_snapshot  # noqa: E402
 from training_v2.workout_generator import WorkoutPrescription  # noqa: E402
 
 pytestmark = pytest.mark.asyncio
@@ -78,6 +80,31 @@ async def test_write_rejects_a_snapshot_for_a_different_reference_date():
             planned_date=_MONDAY,
             reference_date=_MONDAY + timedelta(days=1),
             served_candidate=_prescription(18.0),
+        )
+    assert fake_db.training_prescription_snapshots._docs == []
+
+
+@pytest.mark.parametrize(
+    "planned_date,served_reference_date",
+    [
+        (_MONDAY + timedelta(days=1), None),
+        (_MONDAY, _MONDAY + timedelta(days=1)),
+    ],
+)
+async def test_persistence_rejects_missing_or_mismatched_provenance(
+    planned_date, served_reference_date
+):
+    fake_db = _harness._FakeDB()
+    snapshot = snapshot_from_prescription(
+        user_id=_USER_ID,
+        prescription_id=_PID,
+        planned_date=planned_date,
+        served_reference_date=served_reference_date,
+        session=_prescription(18.0),
+    )
+    with pytest.raises(ValueError, match="served_reference_date"):
+        await persist_served_snapshot(
+            fake_db, snapshot, reference_date=_MONDAY
         )
     assert fake_db.training_prescription_snapshots._docs == []
 

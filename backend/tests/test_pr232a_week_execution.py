@@ -10,7 +10,7 @@ from __future__ import annotations
 import ast
 import os
 import sys
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -83,6 +83,7 @@ def test_future_stale_snapshot_is_ignored_for_matching_and_display():
     prescription_id = prescription_id_for(USER, planned_date, "sunday")
     snapshot = snapshot_from_prescription(
         user_id=USER, prescription_id=prescription_id, planned_date=planned_date,
+        served_reference_date=planned_date,
         session=_session("sunday", distance_km=99.0), modified_from_planned=True,
     )
     result = build_week_execution(
@@ -94,6 +95,39 @@ def test_future_stale_snapshot_is_ignored_for_matching_and_display():
     assert execution.row.planned_distance_km == 5.6
     assert execution.modified_from_planned is None
     assert result.snapshots_to_persist == []
+
+
+def test_snapshot_with_mismatched_provenance_is_not_authoritative():
+    from training_v2.prescription_snapshot import PrescriptionSnapshot
+    from training_v2.week_execution import (
+        EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE,
+        prescription_id_for,
+    )
+
+    monday = WEEK_START
+    prescription_id = prescription_id_for(USER, monday, "monday")
+    corrupt = PrescriptionSnapshot(
+        user_id=USER,
+        prescription_id=prescription_id,
+        planned_date=monday,
+        served_reference_date=monday.replace(day=monday.day + 1),
+        day="monday",
+        workout_type="easy",
+        intensity_class="low",
+        distance_km=99.0,
+    )
+    result = build_week_execution(
+        user_id=USER,
+        reference_date=monday + timedelta(days=1),
+        week_start=WEEK_START,
+        sessions=[_session("monday", distance_km=7.0)],
+        garmin_docs=[],
+        frozen_snapshots={prescription_id: corrupt},
+    )
+    assert result.sessions[0].execution_status == (
+        EXECUTION_STATUS_PRESCRIPTION_UNAVAILABLE
+    )
+    assert result.sessions[0].session.distance_km == 7.0
 
 
 @pytest.mark.parametrize("basis,metric", [
