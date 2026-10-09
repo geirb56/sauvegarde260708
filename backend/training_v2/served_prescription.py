@@ -89,7 +89,10 @@ from .prescription_snapshot import (
     resolve_effective_session,
     snapshot_from_prescription,
 )
-from .snapshot_persistence import invalidate_future_snapshots, persist_served_snapshot
+from .snapshot_persistence import (
+    invalidate_future_snapshots,
+    persist_served_snapshot,
+)
 from .structured_workout import StructuredWorkoutPrescription
 from .workout_generator import WorkoutPrescription
 
@@ -296,14 +299,16 @@ async def get_or_create_served_prescription(
             # snapshot here — surface the anomaly instead of silently guessing.
             raise RuntimeError(
                 "get_or_create_served_prescription: no snapshot found for "
-                f"prescription_id={prescription_id!r} immediately after upsert."
+                f"prescription_id={prescription_id!r} immediately "
+                "after upsert."
             )
         winning_snapshot = PrescriptionSnapshot(**winning_doc)
         if not is_snapshot_authoritative(
             snapshot=winning_snapshot, reference_date=reference_date
         ):
             raise RuntimeError(
-                "get_or_create_served_prescription: invalid winning snapshot "
+                "get_or_create_served_prescription: invalid "
+                "winning snapshot "
                 f"provenance for prescription_id={prescription_id!r}."
             )
 
