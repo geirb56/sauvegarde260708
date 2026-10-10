@@ -636,6 +636,124 @@ préexistant documenté et de revue des risques opérationnels.** Ce verdict
 n'autorise ni merge automatique ni déploiement ; validation d'intégration
 dans Emergent reste une étape distincte après décision humaine.
 
+## C321 — Sécurisation finale des réservations Redis
+
+### Références et audit ciblé
+
+Base PR : `copilot/dev` à `d755a80ad9e47ec7cd28e62c03fd28293e41f27c`.
+HEAD de départ : `3df2f8157a534ad50288b6ce6f4534b325d2336e`.
+HEAD code testé : `1ef83a304acd80e263fb0111ae69597463312d12`.
+Le HEAD documentaire final est communiqué dans la même PR.
+
+Les six fonctions ont été examinées. `enqueue_activity_details` réserve par
+SET NX puis enfile le payload. `process_job` reçoit une livraison conservée
+dans PROCESSING avec une claim enregistrée. En backpressure/bail actif,
+`defer_activity_details` transfère atomiquement vers le sorted set/hash,
+prolongeant seulement le propriétaire correspondant. La promotion retrouve
+une preuve explicite (payload différé, identifiant, échéance) et compare
+atomiquement le pending. `recover_orphans` remet une livraison observée dans
+la file uniquement après comparaison de sa claim et retrait réussi.
+
+Une attente prolongée, un redémarrage ou une expiration artificielle pendant
+le traitement peuvent laisser ces livraisons sans pending. Auparavant,
+`maintain_details_pending` pouvait à lui seul créer le pending : aucune
+preuve de présence dans la file n'était requise. Les contrôles de propriété
+du worker utilisaient donc aussi cette réappropriation implicite.
+
+### Défaut corrigé et invariants
+
+- **Refresh strict** : compare uniquement le propriétaire ; EXPIRE si même
+  job_id, refus si autre ou absent. Aucun SET dans cette opération.
+  Release compare puis DEL ; aucune création ni suppression d'un autre owner.
+- **Récupération explicite distincte** `recover_details_pending` :
+  script Lua atomique vérifiant le payload brut exact par LPOS dans PROCESSING,
+  la présence de sa claim, et la correspondance id/user/type ACTIVITY_DETAILS.
+  Il refuse aussi une issue `superseded` déjà enregistrée.
+- Après cette preuve seulement : SET si absent, EXPIRE si même job_id,
+  refus si autre propriétaire. Un nouveau propriétaire n'est jamais écrasé.
+  Un refus pour nouveau propriétaire inscrit `superseded`, empêchant qu'une
+  redelivery ancienne revienne après expiration ultérieure du nouveau pending.
+- Le worker appelle le refresh strict, puis uniquement en cas de refus la
+  récupération explicite. Contrôle à l'entrée et juste avant dispatch sous
+  verrou utilisateur existant. Un job remplacé ne lance pas GCCLI et termine
+  avec l'issue/log existant ; une erreur Redis garde la livraison récupérable.
+- La promotion différée est déjà une opération explicite fondée sur l'état
+  du job et l'absence d'owner concurrent : elle reste inchangée. Le parking,
+  les watchdogs, claims d'orphelins, TTL, baux Mongo et cache restent inchangés.
+
+Ainsi une réservation expirée n'est jamais récupérée par un simple refresh ;
+un job toujours réellement en cours de livraison dispose d'une reprise
+prouvée. Une redelivery sans PROCESSING/claim ne peut recréer un pending.
+Les autres types de jobs Garmin ne passent pas par cette récupération.
+
+### Fichiers modifiés et scope
+
+1. `backend/jobs/queue.py` — refresh strict et récupération explicite.
+2. `backend/workers/sync_worker.py` — gates de récupération avant exécution.
+3. `backend/tests/test_activity_details_delayed_redis_c321.py` — tests Redis.
+4. `backend/tests/test_activity_details_pr321.py` — doubles de tests alignés
+   sur refresh strict et propriétaires réellement préexistants.
+5. Ce rapport.
+
+Le parseur, la chronologie, ActivityPhase, IDs, endpoints, persistance Mongo,
+Training, Workout Analysis, Readiness, Coach et frontend ne sont pas modifiés.
+Aucune nouvelle queue/collection ni fonctionnalité produit.
+
+### Commandes et résultats exacts
+
+Depuis `backend/`, `PYTHONPATH=.`, Python 3.12.3 du venv temporaire et
+configuration pytest inchangée `-n 2 --dist loadscope` :
+
+| Commande | Résultat |
+| --- | --- |
+| `python -m pytest tests/test_activity_details_pr321.py tests/test_activity_details_delayed_redis_c321.py -q` | **120 passed, 2 warnings**, 5.69 s |
+| `python -m pytest tests/test_garmin_queue_backfill_pr197.py tests/test_garmin_phased_sync_pr07a.py tests/test_garmin_deep_sync.py -q` | **39 passed**, 10.83 s |
+| `python -m pytest tests/test_garmin_user_connection.py -q` | **8 passed**, 0.60 s |
+
+**167 réussites, aucun échec sur ces exécutions.** Aucun échec ni régression
+nouvelle démontrée. Le passage ciblé précédent était 118 passed avant ajout
+des deux variantes d'expiration durant exécution, pas un échec.
+Les résultats de suites plus larges/échec statique historique des sections
+antérieures ne sont pas présentés comme réexécutés pour ce correctif Redis.
+
+Les tests supplémentaires exercent owner légitime, absent/autre owner,
+release strict, expiration réelle par PEXPIRE, reprise de livraison prouvée,
+refus sans payload/claim ou mauvaise identité, tombstone remplacé,
+expiration avant dispatch et pendant exécution, nouveau propriétaire protégé,
+redémarrage AOF et redelivery après récupération d'orphelin.
+Les tests existants de promotion à plusieurs watchdogs, pending expiré en
+différé, erreurs Redis, backpressure, Mongo lease et absence de double appel
+fournisseur sous concurrence/cache sont également rejoués.
+
+Les tests Redis utilisent **Redis 7.0.15 réellement local et isolé**, port
+éphémère loopback/AOF, pas Redis de production. Les fixtures Mongo et appels
+fournisseur restent simulés : aucun test Garmin réel ni MongoDB réel.
+Redis installé uniquement dans le sandbox ; aucune dépendance projet ajoutée.
+
+Flake8 quatre fichiers Python (`--select=E9,F63,F7,F82`) : exit 0.
+Imports `jobs.queue`, `workers.sync_worker` : OK ; `git diff --check` : exit 0.
+Scan secrets : aucun. CodeQL Python : **0 alerte**.
+Revue automatique appelée mais moteur indisponible ; revue indépendante :
+**aucun problème significatif identifié**.
+
+### Risques résiduels et livraison
+
+La preuve PROCESSING/claim établit la légitimité d'une livraison dans la file,
+pas une nouvelle autorité métier. Les verrous utilisateur et le fencing/bail
+Mongo existants restent nécessaires pour éviter des appels concurrents.
+Un job déjà en exécution peut finir après expiration de son pending : release
+n'en recrée pas et ne touche pas un nouvel owner ; les mécanismes Mongo restent
+inchangés. TTL des issues techniques fini, configuration AOF et disponibilité
+Redis réelle doivent être vérifiés en runtime Emergent.
+
+Une panne Redis ou un état corrompu n'est pas une autorisation d'exécution :
+la reprise passe par les opérations atomiques existantes. Sous panne illimitée
+aucune garantie de délai ; aucun nouveau cycle de réinsertion rapide introduit.
+
+**Prête pour revue finale avant merge**, avec validation d'intégration Emergent
+distincte. Livraison uniquement sur la branche actuelle de #321 ; aucun merge,
+déploiement, nouvelle PR, migration ou appel Garmin réel.
+
 ### Réaudit final de la deuxième correction — 10 octobre 2026
 
 Base exacte de #321 : `copilot/dev`,
