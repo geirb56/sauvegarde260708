@@ -160,8 +160,13 @@ backend/workout_analysis_v2.py backend/workout_analysis_v2_service.py
 backend/tests/test_workout_analysis_v2.py backend/tests/test_workout_analysis_v2_phases.py
 --select E9,F63,F7,F82`, `python -m compileall -q` sur les fichiers Python
 modifiés et `git diff --check` réussis. Aucune connexion à MongoDB/GCCLI réel ni
-aucun test runtime Emergent n'a été exécuté. Le scan de secrets et
-`parallel_validation` sont à effectuer après le commit final.
+aucun test runtime Emergent n'a été exécuté.
+
+- Scan de secrets des sept fichiers livrés : aucun secret détecté.
+- CodeQL Python : 0 alerte.
+- Revue automatisée : aucun commentaire n'a été retourné, mais son exécution
+  signale également l'indisponibilité du modèle demandé dans le registre; cette
+  sortie n'est donc pas présentée comme une revue complète.
 
 ## 7. Risques résiduels et points à vérifier dans Emergent
 
