@@ -252,20 +252,29 @@ const WorkoutPhaseAnalysis = ({ phaseAnalysis, t, lang }) => {
     .filter((phase) => phase?.phase_type === "recovery");
   const chronologicalPhases = sortPhases(phaseAnalysis.phases);
   const recoveryAfterEffort = new Map();
-  const associatedRecoveryOrders = new Set();
+  const associatedRecoveryPhases = new Set();
   chronologicalPhases.forEach((phase, index) => {
     const next = chronologicalPhases[index + 1];
     if (phase?.phase_type === "effort" && next?.phase_type === "recovery") {
       recoveryAfterEffort.set(phase.order, next);
-      if (Number.isFinite(next.order)) associatedRecoveryOrders.add(next.order);
+      associatedRecoveryPhases.add(next);
     }
   });
-  const standaloneRecoveries = recoveries.filter(
-    (phase) => !Number.isFinite(phase.order) || !associatedRecoveryOrders.has(phase.order),
-  );
-  const additionalPhases = chronologicalPhases.filter(
-    (phase) => !["effort", "recovery"].includes(phase?.phase_type),
-  );
+  const phaseRows = [];
+  if (chronologicalPhases.length > 0) {
+    chronologicalPhases.forEach((phase) => {
+      if (phase?.phase_type === "effort") {
+        phaseRows.push({ kind: "effort", phase, associatedRecovery: recoveryAfterEffort.get(phase.order) || null });
+      } else if (phase?.phase_type === "recovery") {
+        if (!associatedRecoveryPhases.has(phase)) phaseRows.push({ kind: "recovery", phase });
+      } else {
+        phaseRows.push({ kind: "additional", phase });
+      }
+    });
+  } else {
+    efforts.forEach((phase) => phaseRows.push({ kind: "effort", phase, associatedRecovery: null }));
+    recoveries.forEach((phase) => phaseRows.push({ kind: "recovery", phase }));
+  }
   const effortStatistics = phaseAnalysis.effort_statistics || {};
   const regularity = phaseAnalysis.effort_regularity || {};
   const missingData = Array.isArray(phaseAnalysis.missing_data) ? phaseAnalysis.missing_data : [];
@@ -336,15 +345,15 @@ const WorkoutPhaseAnalysis = ({ phaseAnalysis, t, lang }) => {
             )}
           </dl>
 
-          {efforts.length === 0
-            ? <p className="text-sm text-muted-foreground">{t("workoutDetailExtended.phaseNoEfforts")}</p>
-            : <div className="space-y-3">
-              <h3 className="text-sm font-semibold">{t("workoutDetailExtended.repetitions")}</h3>
-              <ol className="space-y-3">
-                {efforts.map((effort, index) => {
-                  const associatedRecovery = recoveryAfterEffort.get(effort.order);
+          {efforts.length === 0 && <p className="text-sm text-muted-foreground">{t("workoutDetailExtended.phaseNoEfforts")}</p>}
+          {phaseRows.length > 0 && <div className="space-y-3">
+            {efforts.length > 0 && <h3 className="text-sm font-semibold">{t("workoutDetailExtended.repetitions")}</h3>}
+            <ol className="space-y-3">
+              {phaseRows.map((row, index) => {
+                if (row.kind === "effort") {
+                  const effort = row.phase;
                   return (
-                    <li key={`${effort.order ?? index}-${index}`} className="rounded-md border border-border/70 p-3 min-w-0">
+                    <li key={`${effort.order ?? index}-${index}`} data-testid="phase-effort-card" className="rounded-md border border-border/70 p-3 min-w-0">
                       <h4 className="text-sm font-semibold mb-2">
                         {interpolate("effortNumber", { number: effort.effort_number ?? index + 1 })}
                       </h4>
@@ -353,19 +362,44 @@ const WorkoutPhaseAnalysis = ({ phaseAnalysis, t, lang }) => {
                           <PhaseMetric key={label} label={label} value={value || t("workoutDetailExtended.dataUnavailable")} />
                         ))}
                       </dl>
-                      {associatedRecovery && <div className="mt-3 border-t border-border/70 pt-3">
+                      {row.associatedRecovery && <div className="mt-3 border-t border-border/70 pt-3">
                         <h5 className="text-xs font-semibold text-muted-foreground mb-2">{t("workoutDetailExtended.recoveryAfterEffort")}</h5>
                         <dl className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-3">
-                          {phaseMetrics(associatedRecovery).map(([label, value]) => (
+                          {phaseMetrics(row.associatedRecovery).map(([label, value]) => (
                             <PhaseMetric key={label} label={label} value={value || t("workoutDetailExtended.dataUnavailable")} />
                           ))}
                         </dl>
                       </div>}
                     </li>
                   );
-                })}
-              </ol>
-            </div>}
+                }
+                if (row.kind === "recovery") {
+                  return (
+                    <li key={`${row.phase.order ?? index}-${index}`} data-testid="phase-recovery-card" className="rounded-md bg-muted/20 p-3 min-w-0">
+                      <h4 className="text-sm font-semibold mb-2">
+                        {interpolate("phaseRecoveryNumber", { number: row.phase.recovery_number ?? index + 1 })}
+                      </h4>
+                      <dl className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-3">
+                        {phaseMetrics(row.phase).map(([label, value]) => (
+                          <PhaseMetric key={label} label={label} value={value || t("workoutDetailExtended.dataUnavailable")} />
+                        ))}
+                      </dl>
+                    </li>
+                  );
+                }
+                return (
+                  <li key={`${row.phase?.order ?? index}-${index}`} data-testid="phase-additional-card" className="rounded-md bg-muted/20 p-3 min-w-0">
+                    <h4 className="text-sm font-semibold mb-2">{supplementaryPhaseLabel(row.phase)}</h4>
+                    <dl className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-3">
+                      {phaseMetrics(row.phase).map(([label, value]) => (
+                        <PhaseMetric key={label} label={label} value={value || t("workoutDetailExtended.dataUnavailable")} />
+                      ))}
+                    </dl>
+                  </li>
+                );
+              })}
+            </ol>
+          </div>}
 
           {regularity.available === true && <section className="space-y-2" data-testid="effort-regularity">
             <h3 className="text-sm font-semibold">{t("workoutDetailExtended.effortRegularity")}</h3>
@@ -397,37 +431,6 @@ const WorkoutPhaseAnalysis = ({ phaseAnalysis, t, lang }) => {
             {regularity.partial_comparison === true && (
               <p className="text-sm text-muted-foreground">{t("workoutDetailExtended.partialEffortComparison")}</p>
             )}
-          </section>}
-
-          {standaloneRecoveries.length > 0 && <section className="space-y-2">
-            <h3 className="text-sm font-semibold">{t("workoutDetailExtended.unlinkedRecoveries")}</h3>
-            <ul className="space-y-2">
-              {standaloneRecoveries.map((recovery, index) => (
-                <li key={`${recovery.order ?? index}-${index}`} className="rounded-md bg-muted/20 p-3 min-w-0">
-                  <dl className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-3">
-                    {phaseMetrics(recovery).map(([label, value]) => (
-                      <PhaseMetric key={label} label={label} value={value || t("workoutDetailExtended.dataUnavailable")} />
-                    ))}
-                  </dl>
-                </li>
-              ))}
-            </ul>
-          </section>}
-
-          {additionalPhases.length > 0 && <section className="space-y-2">
-            <h3 className="text-sm font-semibold">{t("workoutDetailExtended.additionalPhases")}</h3>
-            <ul className="space-y-2">
-              {additionalPhases.map((phase, index) => (
-                <li key={`${phase?.order ?? index}-${index}`} className="rounded-md bg-muted/20 p-3 min-w-0">
-                  <h4 className="text-sm font-semibold mb-2">{supplementaryPhaseLabel(phase)}</h4>
-                  <dl className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-3">
-                    {phaseMetrics(phase).map(([label, value]) => (
-                      <PhaseMetric key={label} label={label} value={value || t("workoutDetailExtended.dataUnavailable")} />
-                    ))}
-                  </dl>
-                </li>
-              ))}
-            </ul>
           </section>}
 
           {(missingData.length > 0 || limitations.length > 0) && <section className="space-y-2" data-testid="phase-data-limits">

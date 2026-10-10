@@ -359,7 +359,7 @@ test("structured phases show four efforts, four recoveries, statistics, and chro
   expect(section).toHaveTextContent("832 m");
   expect(section).toHaveTextContent("151 bpm");
   expect(section).toHaveTextContent("175 bpm");
-  expect(screen.getByText("Standard session")).toBeVisible();
+  expect(screen.getByTestId("coach-summary")).toHaveTextContent("Standard-duration session completed.");
   expect(axios.get).toHaveBeenCalledTimes(2);
 });
 
@@ -454,10 +454,10 @@ test("unknown phases remain chronological, use a neutral label, and do not inven
   });
   renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
   const section = await screen.findByTestId("structured-phase-analysis");
-  const effortRows = within(section).getAllByRole("listitem").slice(0, 4);
+  const effortRows = within(section).getAllByTestId("phase-effort-card");
   expect(within(effortRows[0]).queryByText("Following recovery")).not.toBeInTheDocument();
   expect(section).toHaveTextContent("Other phase");
-  expect(section).toHaveTextContent("Other recoveries");
+  expect(section).toHaveTextContent("Recovery 1");
   expect(section).not.toHaveTextContent("DEVICE_INTERNAL_PHASE");
 });
 
@@ -480,7 +480,7 @@ test("missing recoveries are reported as zero without inferred associations", as
   const section = await screen.findByTestId("structured-phase-analysis");
   expect(within(screen.getByTestId("phase-summary")).getByText("0")).toBeInTheDocument();
   expect(section).not.toHaveTextContent("Following recovery");
-  expect(screen.queryByText("Other recoveries")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("phase-recovery-card")).not.toBeInTheDocument();
 });
 
 test("missing heart-rate values are marked unavailable rather than fabricated", async () => {
