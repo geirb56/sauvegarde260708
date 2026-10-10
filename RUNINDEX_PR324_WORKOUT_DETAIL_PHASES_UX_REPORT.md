@@ -131,29 +131,56 @@ L’unique échec de la suite frontend complète est dans le test hors périmèt
 
 La PR demande uniquement l’intégration de l’affichage frontend. Aucun merge ni déploiement n’a été effectué.
 
-## C324 — Correction du gating FREE/TRIAL/PREMIUM
+## C324 — Finalisation du gating après PR #325
 
-### Audit technique préalable en lecture seule
+### Références exactes et audit préalable en lecture seule
 
-Cet audit a été effectué sur la tête de la PR #324 (`964becd29282eb13efce8ff2a6308e5f225e384e`) avant toute correction du code.
+- Branche de base GitHub `copilot/dev` : `626a0f9d979122b15c93efd650c0597089a794e8`.
+- PR #325 : intégrée dans ce HEAD par le merge commit `626a0f9d979122b15c93efd650c0597089a794e8`; le head #325 était `e23b820dfdc11a5f1a115d3ef9fd10499dfe01ce`.
+- PR #324 au début de cette correction : `b2a97833e9a23c845da5c13306f5b29bd624968a`. HEAD de validation du code et des tests de gating : `b3eb5140ba848f5dd132a757427e992dd9f426e6`. L’actualisation documentaire ci-dessous ne change pas le code testé.
+- Le merge de `copilot/dev` dans la branche #324 a été fait sans conflit. Les fichiers backend modifiés par #325 ne recoupent aucun des fichiers frontend de #324. Le diff de correction par rapport à `copilot/dev` ne contient que des fichiers frontend et ce rapport.
+- Audit effectué avant l’édition de cette correction. Aucune modification du backend #325, des calculs V2, du contrat des phases, de Garmin/GCCLI, du Coach FREE, de Training V2 ou de Readiness.
 
-1. **Droits frontend observés avant correction.** `SubscriptionProvider` dans `/home/runner/work/sauvegarde260708/sauvegarde260708/frontend/src/context/SubscriptionContext.jsx` récupère `/user/features`; `hasFeature(feature)` lit exclusivement `feature_access` et retombe sur `false`. `WorkoutDetail.jsx`, `DetailedAnalysis.jsx` et `SessionDetail.jsx` ne consultaient pas ce contexte avant de demander l’analyse V2. Le premier faisait donc l’appel sans attendre le chargement des droits et les trois écrans tentaient d’obtenir le même endpoint.
-2. **Entitlement canonique retenu.** `UserAccess.can("coach_workout_analysis")`, déclaré premium dans `/home/runner/work/sauvegarde260708/sauvegarde260708/backend/access_control.py`, est le droit réutilisable. `UserAccess.to_api_dict()` sérialise ce flag dans `feature_access`; `/api/user/features` le fournit au frontend. L’accès effectif est vrai pour TRIAL actif et PREMIUM, faux pour FREE, TRIAL expiré ou résolution échouée. Le champ `subscription/info` est seulement informatif et n’est pas une source de décision.
-3. **Protection de l’API V2 directe.** `ROUTE_ACCESS_MAP` classifie `/api/coach/workout-analysis` et `/api/coach/` comme PREMIUM. Le middleware `subscription_middleware` enregistré dans `/home/runner/work/sauvegarde260708/sauvegarde260708/backend/server.py` résout l’utilisateur depuis le JWT et `get_user_access`; il renvoie 403 `subscription_required` à FREE et refuse en échec de vérification. L’endpoint `/coach/workout-analysis/{workout_id}` utilise aussi `auth_user` et `load_scoped_workout_analysis_v2`, qui limite le workout à son propriétaire. Ainsi, l’appel direct à cette route est refusé à FREE; TRIAL/PREMIUM passent le contrôle de tier. L’isolation workout/utilisateur est vérifiée par `test_idor_returns_404_for_other_users_workout` dans `backend/tests/test_workout_analysis_v2.py`.
-4. **Autres écrans et chemins.** `DetailedAnalysis.jsx` et `SessionDetail.jsx` sont deux autres consommateurs frontend directs de l’endpoint premium; ils doivent également attendre/consommer le même entitlement lorsqu’un correctif UI est autorisé. La route legacy `/coach/detailed-analysis/{id}` n’est plus implémentée dans `server.py`; sa classification demeure premium et des tests attendent son retrait. En revanche, il existe un chemin indirect important : `/api/coach/analyze` est classé FREE pour préserver le Coach à quota limité, et `process_coach_message()` dans `backend/server.py` charge sans vérifier `coach_workout_analysis` le Workout Analysis V2 complet pour tout `request.workout_id`, puis le passe à `build_coach_context_v2()` comme `workout_detail.analysis` (`backend/coach_context_v2.py`, champ `CoachWorkoutDetail.analysis`). Un utilisateur FREE peut donc soumettre une séance au Coach et obtenir une réponse générée à partir de cette analyse; cela contourne fonctionnellement le blocage de l’endpoint direct.
-5. **Contenus de séance FREE et éléments détaillés.** `GET /api/workouts/{id}` est classé FREE, authentifié et filtré par `{"id": workout_id, "user_id": user_id}` dans `get_workout()`. Nom, date, type, distance, durée, allure/FC enregistrées dans le workout et ses splits sont les faits de séance à préserver. Tout contenu provenant de la réponse `WorkoutAnalysisV2Response` est détaillé et doit être conditionné à `coach_workout_analysis` : résumé/meaning, signaux, pacing calculé, physiology/zones venant de l’analyse, phases, comparaisons historiques, observation Coach, preuves et limitations. Workout Detail doit cesser d’utiliser les fallbacks analysis V2 pour remplir les faits FREE. L’appel FREE à `GET /workouts/{id}` doit rester disponible.
-6. **Tests de gating présents.** `backend/tests/test_workout_analysis_v2.py` couvre l’accès V2 avec un fixture qui résout actuellement les utilisateurs de test en PREMIUM par défaut et l’isolation 404; il ne prouve donc pas le refus FREE. `backend/tests/test_subscription_middleware_a63.py` couvre une reproduction minimale du middleware, pas la route V2 réelle. Le test frontend de niveaux d’abonnement de #324 affirmait à tort que FREE pouvait voir l’analyse. Il faut corriger ces preuves par des tests sur le vrai endpoint et des états d’entitlement fidèles.
+### Droit observé et chemins concernés
 
-### Blocage de périmètre — chemin Coach FREE
+- `SubscriptionContext` dans `/home/runner/work/sauvegarde260708/sauvegarde260708/frontend/src/context/SubscriptionContext.jsx` tire les droits de `/user/features`; `hasFeature(feature)` lit seulement `feature_access` et renvoie `false` si le droit manque. L’état `loading` est initialement vrai. Une erreur de récupération met en place des droits fail-closed; `/subscription/info` ne décide pas de l’accès.
+- Le seul contrôle employé dans ces pages est `!loading && hasFeature("coach_workout_analysis") === true`. Cet entitlement canonique est true pour TRIAL actif et PREMIUM et false pour FREE, TRIAL expiré, chargement, réponse sans entitlement ou échec.
+- Consommateurs frontend directs de `GET /coach/workout-analysis/{id}` repérés : `WorkoutDetail.jsx`, `DetailedAnalysis.jsx`, `SessionDetail.jsx`. L’ancienne route `/coach/detailed-analysis/{id}` n’est pas consommée et reste retirée.
+- La protection additionnelle backend est déjà livrée par #325 : dans `server.py`, `_coach_access()` consulte `UserAccess.can("coach_workout_analysis")`, fail-closed; le handler du Coach n’injecte l’analyse de séance que si l’accès est vrai. Les tests `backend/tests/test_coach_workout_access_pr325.py` couvrent le refus FREE/d’échec d’accès, l’accès TRIAL/PREMIUM et la suppression du détail V2 dans le contexte FREE. La route directe V2 reste protégée par le middleware d’accès PREMIUM et le chargement de workout reste user-scoped. Aucun droit du Coach FREE n’a été changé par cette correction.
+- Les faits de séance et splits viennent de `GET /workouts/{id}` et demeurent accessibles. Les résumés, interprétations, signaux, pacing/physiology dérivés, phases, régularité, comparaisons, observations, preuves et limitations venant de V2 sont protégés.
 
-La route V2 directe est bien protégée côté backend, mais la protection n’empêche pas le contournement fonctionnel via le Coach FREE décrit ci-dessus. Fermer ce chemin exige une décision de produit/architecture sur le contenu Workout Analysis V2 fourni au Coach FREE (retirer/séparer l’analyse détaillée du contexte Coach, ou réserver l’analyse Coach liée à un workout à TRIAL/PREMIUM). Le faire ici modifierait `process_coach_message()` et le contexte Coach IA, explicitement hors périmètre de cette correction et contraire à l’instruction de préserver le Coach IA. Une correction frontend seule ne satisferait donc pas le critère « FREE ne peut pas consulter l’analyse détaillée ».
+### Correctifs frontend
 
-**Décision :** arrêter la correction de code et suspendre la validation de #324 jusqu’à une décision. Ne pas considérer le seul contrôle de l’endpoint direct comme une preuve suffisante. Options proposées : (1) autoriser une PR backend distincte, décidant et testant le traitement du contexte Coach FREE, avant de reprendre le gating UI de #324; ou (2) confirmer que l’analyse Workout V2 de séance dans Coach FREE est explicitement autorisée et exclue du périmètre de la décision C324. Aucun changement de backend, d’UI ou de test n’est inclus par la présente mise à jour d’audit. Aucune validation complète de #324, merge ou déploiement n’est effectué.
+- **Workout Detail :** chargement des faits de séance séparé de celui de V2; appel V2 conditionné à la résolution positive de l’entitlement. Pendant le chargement des droits, après refus ou erreur, aucun appel V2 ni rendu de données V2. Le résultat analysé est masqué dès que `canAccessAnalysis` devient faux; le changement de dépendance annule le chargement précédent. La réactivation autorisée lance une nouvelle requête. Les fallbacks pour allure, vitesse et FC ne réutilisent pas de valeur V2 quand l’accès est refusé; les valeurs factuelles du workout et les splits restent visibles. Une invitation discrète localisée pointe vers `/subscription`.
+- **Detailed Analysis :** même gate; aucune requête ni aucun ancien contenu lorsque le droit manque; l’accès refusé présente l’invitation et un retour vers la séance.
+- **Session Detail :** chargement des faits indépendant; seule la section d’analyse et ses limitations dépendent du droit. Les requêtes d’analyse sont annulées/ignorées si l’accès change; les faits de séance restent visibles à FREE.
+- La logique partagée ne réimplémente aucun palier. Les libellés de l’invitation sont disponibles en FR/EN/ES. Aucun changement de design général ou de navigation.
 
-### État des vérifications C324
+### Tests et non-régression
 
-- Commande sur la base `2e9dfacae2d3c69f6e0273145cfdad86883f9acf` dans `/home/runner/work/sauvegarde260708-base/frontend`, puis répétée sur la tête PR `964becd29282eb13efce8ff2a6308e5f225e384e` dans `/home/runner/work/sauvegarde260708/sauvegarde260708/frontend` : `CI=true npm test -- --watchAll=false --runInBand --forceExit --runTestsByPath src/__tests__/progress-v2-migration.test.jsx`.
-- **Résultat base :** échec, 1 suite échouée, 10 tests réussis / 11; assertion `Progress.jsx` contient `predictions.predictions?.map` échoue à la ligne 73 du test.
-- **Résultat tête #324 :** même échec, 1 suite échouée, 10 tests réussis / 11, sur la même assertion.
-- **Classification :** échec préexistant, pas une régression de #324 (ni `Progress.jsx` ni ce test ne diffèrent entre la base et la tête). L’assertion est devenue obsolète par rapport à l’implémentation actuelle qui protège la liste avec `Array.isArray(predictions?.predictions)` puis utilise `predictions.predictions.map`; le rendu de la liste est toujours présent. Progress reste hors périmètre et n’est pas modifié.
-- Aucun nouveau test, build, scan de secrets ou `parallel_validation` de correction C324 n’a été exécuté : le changement est suspendu sur le blocage ci-dessus.
+Sur `/home/runner/work/sauvegarde260708/sauvegarde260708/frontend` :
+
+| Commande | Résultat |
+|---|---|
+| `CI=true npm test -- --watchAll=false --runInBand --forceExit --runTestsByPath src/__tests__/workout-analysis-v2-pages.test.jsx src/__tests__/subscription-context-authority.test.jsx src/lib/i18n.test.js` | **3 suites réussies, 256 tests réussis, 0 échec** |
+| `CI=true npm test -- --watchAll=false --runInBand --forceExit` | **34 suites : 33 réussies, 1 échouée; 806 tests réussis, 1 échoué** |
+| `npm run build` | **Réussite**, compilation production réussie |
+| `git diff --check origin/copilot/dev...HEAD` | **Réussite** |
+
+Couverture ajoutée/actualisée : assertions réseau d’absence de requête V2 FREE sur les trois pages; faits/splits FREE; TRIAL/PREMIUM; TRIAL expiré; entitlement inconnu et chargement; downgrade immédiat et réactivation; entitlement réel fourni par `SubscriptionContext`; maintien des phases disponibles/indisponibles, comparabilité partielle, données manquantes, réponse legacy, langues FR/EN/ES et layout mobile 360 px. La suite conserve également les tests existants du comportement Coach; aucun code/droit du Coach FREE n’a été changé.
+
+### Test historique Progress
+
+Commande sur la base actuelle `626a0f9d979122b15c93efd650c0597089a794e8` dans le worktree `/home/runner/work/sauvegarde260708-base-current/frontend` :
+
+`CI=true npm test -- --watchAll=false --runInBand --forceExit --runTestsByPath src/__tests__/progress-v2-migration.test.jsx`
+
+- **Base actuelle :** 1 suite échouée, 10 tests réussis / 11; l’assertion ligne 73 exige le texte historique `predictions.predictions?.map`.
+- **Tête #324 :** la même assertion échoue dans la suite complète (**806/807**). `Progress.jsx` et `progress-v2-migration.test.jsx` ne diffèrent pas entre la base et la tête #324.
+- **Classification :** échec préexistant, non causé par #324; assertion de test obsolète par rapport au code qui valide `Array.isArray(predictions?.predictions)` puis rend `predictions.predictions.map`. Le rendu des prédictions est toujours présent. Progress n’a pas été modifié.
+
+### Limites et vérifications Emergent restantes
+
+- Le build avertit que la base Browserslist/caniuse-lite a sept mois; aucune dépendance n’a été changée. Les tests affichent aussi l’avertissement existant `REACT_APP_BACKEND_URL` absent avec fallback.
+- Aucun runtime Emergent ni appareil Android n’est accessible dans cette validation locale. Dans Emergent, vérifier avec des comptes FREE, TRIAL actif, PREMIUM et TRIAL expiré : absence de requête réseau V2 en FREE/chargement/erreur; rechargement et retrait instantané du détail lors d’un changement de droit; faits/splits toujours visibles; navigation `/workout/:id/analysis` et `/sessions/:id`; appels Coach FREE refusés pour l’analyse personnalisée mais Coach général/quota inchangé. Confirmer les traductions et le rendu sans débordement à 360/390 px.
+- La revue Code Review/CodeQL de la correction doit être consignée après son exécution. Aucune fusion ni aucun déploiement n’a été effectué; attendre la nouvelle revue C324.
