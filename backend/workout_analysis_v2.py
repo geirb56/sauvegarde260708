@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from statistics import mean
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 SUPPORTED_LANGUAGES = {"en", "fr", "es"}
@@ -30,6 +30,10 @@ _TRAINING_METADATA_VALUES = {"training", "workout", "entrainement", "entraîneme
 class AnalysisText(BaseModel):
     code: str
     text: str
+
+
+class WorkoutAnalysisAdvice(AnalysisText):
+    available: bool = False
 
 
 class WorkoutAnalysisSignal(BaseModel):
@@ -133,8 +137,9 @@ class WorkoutAnalysisV2Response(BaseModel):
     pacing: WorkoutAnalysisPacing
     comparison: WorkoutAnalysisComparison
     meaning: AnalysisText
-    advice: AnalysisText
+    advice: WorkoutAnalysisAdvice
     evidence: WorkoutAnalysisEvidence
+    limitations: List[AnalysisText] = Field(default_factory=list)
 
 
 def _lang(language: str) -> str:
@@ -191,13 +196,30 @@ def _template(language: str, key: str, **params) -> str:
             "signal.session_type.hard": "Hard session",
             "signal.session_type.long": "Long session",
             "signal.session_type.short": "Short session",
-            "meaning.with_hr_easy": "Heart-rate evidence points to a controlled aerobic session rather than a high-stress effort.",
-            "meaning.with_hr_moderate": "Heart-rate evidence points to a balanced aerobic load with meaningful work but no clear overload signal.",
-            "meaning.with_hr_high": "Heart-rate evidence points to a demanding session with substantial cardiovascular stress.",
-            "meaning.hr_without_intensity_with_pacing": "Heart-rate facts are available, but intensity classification is unavailable without trustworthy zone evidence, so this session is interpreted structurally.",
-            "meaning.hr_without_intensity_no_pacing": "Heart-rate facts are available, but intensity classification is unavailable without trustworthy zone evidence, so only structural volume can be interpreted.",
-            "meaning.no_hr_with_pacing": "The workout can be described structurally from pace and volume, but not physiologically because heart-rate evidence is missing.",
-            "meaning.no_hr_no_pacing": "The workout can be described structurally from duration and distance, but not physiologically because heart-rate evidence is missing.",
+            "meaning.with_hr_easy": "The reliable zone evidence indicates low intensity.",
+            "meaning.with_hr_moderate": "The reliable zone evidence indicates moderate intensity.",
+            "meaning.with_hr_high": "The reliable zone evidence indicates high intensity.",
+            "meaning.hr_without_intensity_with_pacing": "Pacing and cardiac data are recorded. Physiological intensity cannot be reliably determined.",
+            "meaning.hr_without_intensity_no_pacing": "Cardiac data are recorded. Physiological intensity cannot be reliably determined.",
+            "meaning.no_hr_with_pacing": "Pacing data describe the session, but do not establish its physiological intensity.",
+            "meaning.no_hr_no_pacing": "The available data do not support a meaningful interpretation of this session.",
+            "meaning.pace_change": "The recorded splits show a marked pace change during this session.",
+            "meaning.negative_split": "The recorded splits show a faster second half.",
+            "meaning.consistent_pacing": "The recorded pacing is regular.",
+            "meaning.hr_drift": "Heart-rate drift is recorded, without an established cause.",
+            "meaning.intensity_unavailable": "Physiological intensity cannot be reliably determined.",
+            "advice.unavailable": "No usable coaching observation is available from these data.",
+            "limitations.intensity": "Individualized zone evidence is missing or unverified; physiological intensity is unavailable.",
+            "limitations.heart_rate": "No cardiac data are available.",
+            "limitations.splits": "No kilometre splits or split analysis are available; pace distribution cannot be described.",
+            "limitations.baseline": "No recent same-type baseline is available.",
+            "limitations.baseline_descriptive": "The recent baseline is descriptive only; session distances or natures may differ.",
+            "limitations.comparability": "Historical comparability is not established; differences are not evidence of progress.",
+            "limitations.no_comparable_reference": "No earlier session of comparable distance is available.",
+            "limitations.sample_too_small": "Too few similar sessions are available for a reliable comparison.",
+            "limitations.pace_sample_too_small": "Too few similar sessions have usable pacing data.",
+            "limitations.hr_sample_too_small": "Too few similar sessions have usable heart-rate data.",
+            "limitations.session_nature_unknown": "The training-versus-race nature is not recorded; comparability remains limited.",
             "advice.high_intensity_observation": "The zone evidence places this session in the demanding range; what follows it is determined by Training Today/Week, not by this analysis.",
             "advice.low_intensity_observation": "The zone evidence places this session in the controlled aerobic range; what follows it is determined by Training Today/Week, not by this analysis.",
             "advice.hr_without_intensity": "Limit of this analysis: without individualized heart-rate zones, the recorded heart-rate values cannot be read as intensity evidence.",
@@ -260,13 +282,30 @@ def _template(language: str, key: str, **params) -> str:
             "signal.session_type.hard": "Séance intense",
             "signal.session_type.long": "Séance longue",
             "signal.session_type.short": "Séance courte",
-            "meaning.with_hr_easy": "Les données cardiaques indiquent une séance aérobie contrôlée plutôt qu'un effort très contraignant.",
-            "meaning.with_hr_moderate": "Les données cardiaques indiquent une charge aérobie équilibrée sans signe clair de surcharge.",
-            "meaning.with_hr_high": "Les données cardiaques indiquent une séance exigeante avec un stress cardiovasculaire marqué.",
-            "meaning.hr_without_intensity_with_pacing": "Des données cardiaques existent, mais l'intensité ne peut pas être classée sans zones fiables; la séance est donc interprétée de façon structurelle.",
-            "meaning.hr_without_intensity_no_pacing": "Des données cardiaques existent, mais l'intensité ne peut pas être classée sans zones fiables; seul le volume structurel peut être interprété.",
-            "meaning.no_hr_with_pacing": "La séance peut être décrite sur le plan structurel grâce à l'allure et au volume, mais pas sur le plan physiologique faute de données cardiaques.",
-            "meaning.no_hr_no_pacing": "La séance peut être décrite sur le plan structurel grâce à la durée et à la distance, mais pas sur le plan physiologique faute de données cardiaques.",
+            "meaning.with_hr_easy": "Les zones fiables indiquent une intensité basse.",
+            "meaning.with_hr_moderate": "Les zones fiables indiquent une intensité modérée.",
+            "meaning.with_hr_high": "Les zones fiables indiquent une intensité élevée.",
+            "meaning.hr_without_intensity_with_pacing": "Des données d'allure et cardiaques sont enregistrées. L'intensité physiologique ne peut pas être déterminée de manière fiable.",
+            "meaning.hr_without_intensity_no_pacing": "Des données cardiaques sont enregistrées. L'intensité physiologique ne peut pas être déterminée de manière fiable.",
+            "meaning.no_hr_with_pacing": "Les données d'allure décrivent la séance, mais ne permettent pas d'établir son intensité physiologique.",
+            "meaning.no_hr_no_pacing": "Les données disponibles ne permettent pas une interprétation significative de cette séance.",
+            "meaning.pace_change": "Les fractions enregistrées montrent une variation marquée de l'allure pendant cette séance.",
+            "meaning.negative_split": "Les fractions enregistrées montrent une seconde moitié plus rapide.",
+            "meaning.consistent_pacing": "L'allure enregistrée est régulière.",
+            "meaning.hr_drift": "Une dérive cardiaque est enregistrée, sans cause établie.",
+            "meaning.intensity_unavailable": "L'intensité physiologique ne peut pas être déterminée de manière fiable.",
+            "advice.unavailable": "Aucune observation coach exploitable n'est disponible avec ces données.",
+            "limitations.intensity": "Les zones individualisées sont absentes ou non vérifiées ; l'intensité physiologique est indisponible.",
+            "limitations.heart_rate": "Aucune donnée cardiaque n'est disponible.",
+            "limitations.splits": "Aucune fraction kilométrique ni analyse des fractions n'est disponible ; la répartition de l'allure ne peut pas être décrite.",
+            "limitations.baseline": "Aucune référence récente de même type n'est disponible.",
+            "limitations.baseline_descriptive": "La référence récente est seulement descriptive ; les distances ou la nature des séances peuvent différer.",
+            "limitations.comparability": "La comparabilité historique n'est pas établie ; les écarts ne démontrent pas une progression.",
+            "limitations.no_comparable_reference": "Aucune séance antérieure de distance comparable n'est disponible.",
+            "limitations.sample_too_small": "Trop peu de séances similaires sont disponibles pour une comparaison fiable.",
+            "limitations.pace_sample_too_small": "Trop peu de séances similaires disposent de données d'allure exploitables.",
+            "limitations.hr_sample_too_small": "Trop peu de séances similaires disposent de données cardiaques exploitables.",
+            "limitations.session_nature_unknown": "La nature entraînement ou compétition n'est pas renseignée ; la comparabilité reste limitée.",
             "advice.high_intensity_observation": "Les zones placent cette séance dans la plage exigeante ; ce qui suit est déterminé par Training Today/Week, pas par cette analyse.",
             "advice.low_intensity_observation": "Les zones placent cette séance dans la plage aérobie contrôlée ; ce qui suit est déterminé par Training Today/Week, pas par cette analyse.",
             "advice.hr_without_intensity": "Limite de cette analyse : sans zones cardiaques individualisées, les valeurs de fréquence cardiaque enregistrées ne peuvent pas être lues comme une preuve d'intensité.",
@@ -329,13 +368,30 @@ def _template(language: str, key: str, **params) -> str:
             "signal.session_type.hard": "Sesión intensa",
             "signal.session_type.long": "Sesión larga",
             "signal.session_type.short": "Sesión corta",
-            "meaning.with_hr_easy": "La evidencia de frecuencia cardíaca apunta a una sesión aeróbica controlada, no a un esfuerzo de alto estrés.",
-            "meaning.with_hr_moderate": "La evidencia de frecuencia cardíaca apunta a una carga aeróbica equilibrada sin una señal clara de sobrecarga.",
-            "meaning.with_hr_high": "La evidencia de frecuencia cardíaca apunta a una sesión exigente con un estrés cardiovascular importante.",
-            "meaning.hr_without_intensity_with_pacing": "Hay datos de frecuencia cardíaca, pero la intensidad no puede clasificarse sin evidencia fiable de zonas, así que la sesión se interpreta de forma estructural.",
-            "meaning.hr_without_intensity_no_pacing": "Hay datos de frecuencia cardíaca, pero la intensidad no puede clasificarse sin evidencia fiable de zonas, así que solo puede interpretarse el volumen estructural.",
-            "meaning.no_hr_with_pacing": "La sesión puede describirse de forma estructural con ritmo y volumen, pero no fisiológicamente porque faltan datos de frecuencia cardíaca.",
-            "meaning.no_hr_no_pacing": "La sesión puede describirse de forma estructural con duración y distancia, pero no fisiológicamente porque faltan datos de frecuencia cardíaca.",
+            "meaning.with_hr_easy": "Las zonas fiables indican una intensidad baja.",
+            "meaning.with_hr_moderate": "Las zonas fiables indican una intensidad moderada.",
+            "meaning.with_hr_high": "Las zonas fiables indican una intensidad alta.",
+            "meaning.hr_without_intensity_with_pacing": "Hay datos de ritmo y cardíacos registrados. La intensidad fisiológica no puede determinarse de forma fiable.",
+            "meaning.hr_without_intensity_no_pacing": "Hay datos cardíacos registrados. La intensidad fisiológica no puede determinarse de forma fiable.",
+            "meaning.no_hr_with_pacing": "Los datos de ritmo describen la sesión, pero no permiten establecer su intensidad fisiológica.",
+            "meaning.no_hr_no_pacing": "Los datos disponibles no permiten una interpretación significativa de esta sesión.",
+            "meaning.pace_change": "Los parciales registrados muestran un cambio marcado de ritmo durante esta sesión.",
+            "meaning.negative_split": "Los parciales registrados muestran una segunda mitad más rápida.",
+            "meaning.consistent_pacing": "El ritmo registrado es regular.",
+            "meaning.hr_drift": "Se registra una deriva cardíaca, sin una causa establecida.",
+            "meaning.intensity_unavailable": "La intensidad fisiológica no puede determinarse de forma fiable.",
+            "advice.unavailable": "No hay una observación útil de coaching disponible con estos datos.",
+            "limitations.intensity": "Las zonas individualizadas faltan o no están verificadas; la intensidad fisiológica no está disponible.",
+            "limitations.heart_rate": "No hay datos cardíacos disponibles.",
+            "limitations.splits": "No hay parciales kilométricos ni análisis de parciales disponibles; no puede describirse la distribución del ritmo.",
+            "limitations.baseline": "No hay una referencia reciente del mismo tipo disponible.",
+            "limitations.baseline_descriptive": "La referencia reciente es solo descriptiva; las distancias o la naturaleza de las sesiones pueden diferir.",
+            "limitations.comparability": "La comparabilidad histórica no está establecida; las diferencias no demuestran progreso.",
+            "limitations.no_comparable_reference": "No hay una sesión anterior de distancia comparable disponible.",
+            "limitations.sample_too_small": "Hay muy pocas sesiones similares para una comparación fiable.",
+            "limitations.pace_sample_too_small": "Muy pocas sesiones similares tienen datos de ritmo utilizables.",
+            "limitations.hr_sample_too_small": "Muy pocas sesiones similares tienen datos cardíacos utilizables.",
+            "limitations.session_nature_unknown": "No se registra si se trata de entrenamiento o competición; la comparabilidad sigue siendo limitada.",
             "advice.high_intensity_observation": "Las zonas sitúan esta sesión en el rango exigente; lo que venga después lo determina Training Today/Week, no este análisis.",
             "advice.low_intensity_observation": "Las zonas sitúan esta sesión en el rango aeróbico controlado; lo que venga después lo determina Training Today/Week, no este análisis.",
             "advice.hr_without_intensity": "Límite de este análisis: sin zonas de frecuencia cardíaca individualizadas, los valores registrados no pueden leerse como evidencia de intensidad.",
@@ -1095,15 +1151,22 @@ def _build_meaning(
     else:
         code = "meaning.no_hr_with_pacing" if pacing.available else "meaning.no_hr_no_pacing"
 
-    # Facts first: the missing intensity classification is only a closing caveat,
-    # never the principal explanation of the session.
-    observations = (
-        _pacing_observations(workout, pacing, language)
-        + _physiology_observations(physiology, language)
-        + _terrain_observations(workout, language)
-        + _comparison_observations(comparison, language)
-    )
-    return AnalysisText(code=code, text=_join_sentences(observations + [_template(language, code)]))
+    if not signals.intensity.available:
+        observed_code = {
+            "advice.even_pacing": "meaning.pace_change",
+            "advice.negative_split_confirmed": "meaning.negative_split",
+            "advice.maintain_consistency": "meaning.consistent_pacing",
+            "advice.monitor_hr_drift": "meaning.hr_drift",
+        }.get(_advice_primary_code(physiology, pacing, signals))
+        if observed_code:
+            return AnalysisText(
+                code=observed_code,
+                text=_join_sentences([
+                    _template(language, observed_code),
+                    _template(language, "meaning.intensity_unavailable"),
+                ]),
+            )
+    return AnalysisText(code=code, text=_template(language, code))
 
 
 def _advice_primary_code(
@@ -1130,21 +1193,6 @@ def _advice_primary_code(
     return "advice.no_hr"
 
 
-def _advice_complement_code(
-    workout: dict,
-    physiology: WorkoutAnalysisPhysiology,
-    comparison: WorkoutAnalysisComparison,
-) -> Optional[str]:
-    if not (workout.get("km_splits") or workout.get("split_analysis")):
-        return "advice.complement.record_splits"
-    similar = comparison.similar
-    if similar is not None and not similar.available:
-        return "advice.complement.build_history"
-    if not physiology.available:
-        return "advice.complement.use_hr"
-    return None
-
-
 def _build_advice(
     workout: dict,
     physiology: WorkoutAnalysisPhysiology,
@@ -1152,13 +1200,42 @@ def _build_advice(
     comparison: WorkoutAnalysisComparison,
     signals: WorkoutAnalysisSignals,
     language: str,
-) -> AnalysisText:
+) -> WorkoutAnalysisAdvice:
     code = _advice_primary_code(physiology, pacing, signals)
-    complement_code = _advice_complement_code(workout, physiology, comparison)
-    texts = [_template(language, code)]
-    if complement_code and complement_code != code:
-        texts.append(_template(language, complement_code))
-    return AnalysisText(code=code, text=_join_sentences(texts))
+    available = code not in {"advice.hr_without_intensity", "advice.no_hr"}
+    return WorkoutAnalysisAdvice(
+        code=code,
+        text=_template(language, code if available else "advice.unavailable"),
+        available=available,
+    )
+
+
+def _build_limitations(
+    workout: dict,
+    signals: WorkoutAnalysisSignals,
+    comparison: WorkoutAnalysisComparison,
+    evidence: WorkoutAnalysisEvidence,
+    language: str,
+) -> List[AnalysisText]:
+    codes: List[str] = []
+    if not signals.intensity.available:
+        codes.append("intensity")
+    if not evidence.has_heart_rate:
+        codes.append("heart_rate")
+    if not evidence.has_splits:
+        codes.append("splits")
+    codes.append("baseline_descriptive" if comparison.available else "baseline")
+    similar = comparison.similar
+    if similar is not None:
+        if not similar.comparable:
+            codes.append("comparability")
+        codes.extend(similar.limitations)
+    if _competition_flag(workout) is None:
+        codes.append("session_nature_unknown")
+    return [
+        AnalysisText(code=f"limitations.{code}", text=_template(language, f"limitations.{code}"))
+        for code in dict.fromkeys(codes)
+    ]
 
 
 def build_workout_analysis_v2(workout: dict, historical_workouts: List[dict], language: str = "en") -> WorkoutAnalysisV2Response:
@@ -1192,4 +1269,5 @@ def build_workout_analysis_v2(workout: dict, historical_workouts: List[dict], la
         meaning=meaning,
         advice=advice,
         evidence=evidence,
+        limitations=_build_limitations(workout, signals, comparison, evidence, language),
     )
