@@ -97,6 +97,7 @@ Le seul contrat lu est `analysis.phase_analysis`, reçu dans la réponse existan
 
 Base : `copilot/dev` à `2e9dfacae2d3c69f6e0273145cfdad86883f9acf`.
 HEAD code/tests avant l’ajout documentaire final : `a2635fa3cf0f37eb7e8786932f81a4a012cd1145`.
+HEAD de validation parallèle CodeQL : `547d78b5304a571f6b2bdefab2a2092c8cdb910d` (rapport d’audit déjà inclus).
 
 Depuis `/home/runner/work/sauvegarde260708/sauvegarde260708/frontend` :
 
@@ -110,7 +111,7 @@ L’unique échec de la suite frontend complète est dans le test hors périmèt
 
 `git diff --check` a réussi. Le scan de secrets des trois fichiers source/test modifiés n’a détecté aucun secret. Aucun script lint n’est déclaré dans `frontend/package.json`; aucun lint ad hoc n’a été ajouté. La vérification 360 px est un test DOM statique des classes de retour à la ligne/conteneur, pas une validation de rendu visuel réel.
 
-Résultats Code Review et CodeQL : à compléter après l’exécution de `parallel_validation`.
+`parallel_validation` : CodeQL JavaScript **0 alerte**. La tâche Code Review n’a retourné aucun commentaire, mais son propre résultat indique que le modèle demandé est indisponible dans le registre; cette exécution n’est donc pas présentée comme une revue indépendante complète. Le HEAD de livraison final contiendra la présente mise à jour documentaire, sans changement du code/test validé au HEAD parallèle ci-dessus.
 
 ## Risques résiduels
 
