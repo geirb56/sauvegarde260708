@@ -44,7 +44,7 @@ describe("SubscriptionContext access authority", () => {
             trial_active: true,
             has_premium_access: true,
             trial_days_remaining: 30,
-            feature_access: { training_plan: true },
+            feature_access: { training_plan: true, coach_workout_analysis: true },
           },
         });
       }
@@ -71,6 +71,7 @@ describe("SubscriptionContext access authority", () => {
     expect(refreshResult).toEqual({ accessRefreshSucceeded: true });
     expect(result.current.isTrial).toBe(true);
     expect(result.current.hasPremiumAccess).toBe(true);
+    expect(result.current.hasFeature("coach_workout_analysis")).toBe(true);
     expect(result.current.isPremium).toBe(false);
     expect(result.current.trialDaysRemaining).toBe(30);
     expect(result.current.statusLabel).toBe("Free");
@@ -105,6 +106,7 @@ describe("SubscriptionContext access authority", () => {
     expect(result.current.isFree).toBe(true);
     expect(result.current.isTrial).toBe(false);
     expect(result.current.hasPremiumAccess).toBe(false);
+    expect(result.current.hasFeature("coach_workout_analysis")).toBe(false);
     expect(result.current.trialDaysRemaining).toBeNull();
     expect(result.current.statusLabel).toBe("Trial");
   });
@@ -118,7 +120,7 @@ describe("SubscriptionContext access authority", () => {
             trial_active: false,
             has_premium_access: true,
             trial_days_remaining: null,
-            feature_access: { training_plan: true },
+            feature_access: { training_plan: true, coach_workout_analysis: true },
           },
         });
       }
@@ -139,6 +141,7 @@ describe("SubscriptionContext access authority", () => {
     expect(refreshResult).toEqual({ accessRefreshSucceeded: true });
     expect(result.current.isPremium).toBe(true);
     expect(result.current.hasPremiumAccess).toBe(true);
+    expect(result.current.hasFeature("coach_workout_analysis")).toBe(true);
     expect(result.current.isTrial).toBe(false);
     expect(result.current.trialDaysRemaining).toBeNull();
     expect(result.current.statusLabel).toBeUndefined();
