@@ -305,6 +305,8 @@ export default function WorkoutDetail() {
   const isCycle = workout.type === "cycle";
   const averageSpeed = hasPositiveFiniteMetric(workout.avg_speed_kmh) ? workout.avg_speed_kmh
     : pacing?.available === true && hasPositiveFiniteMetric(pacing.average_speed_kmh) ? pacing.average_speed_kmh : null;
+  const hasWorkoutPace = hasPositiveFiniteMetric(workout.avg_pace_min_km);
+  const showSummarySpeed = isCycle || (!hasWorkoutPace && averageSpeed != null);
   const hasAveragePace = hasPositiveFiniteMetric(pacing?.average_pace_min_km);
   const showPacingSpeed = isCycle || !hasAveragePace;
   const evidence = analysis?.evidence;
@@ -367,9 +369,9 @@ export default function WorkoutDetail() {
             {[
               ["distance", formatDistance(workout.distance_km)],
               ["duration", formatDuration(workout.duration_minutes)],
-              isCycle
+              showSummarySpeed
                 ? ["averageSpeed", averageSpeed == null ? t("workoutDetailExtended.speedUnavailable") : formatSpeed(averageSpeed, { unitSystem: "metric" })]
-                : ["averagePace", hasPositiveFiniteMetric(workout.avg_pace_min_km) ? formatPaceDisplay(workout.avg_pace_min_km) : "--"],
+                : ["averagePace", hasWorkoutPace ? formatPaceDisplay(workout.avg_pace_min_km) : "--"],
               ...(Number.isFinite(avgHr) && avgHr > 0 ? [["averageHeartRate", formatHeartRate(avgHr)]] : []),
             ].map(([label, value]) => <div key={label} className="min-w-0">
               <dt className="text-sm text-muted-foreground">{t(`workoutDetailExtended.${label}`)}</dt>

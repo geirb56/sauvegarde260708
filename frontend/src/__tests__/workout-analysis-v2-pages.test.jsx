@@ -376,6 +376,51 @@ test("available intensity is displayed without reclassification", async () => {
   expect(screen.queryByTestId("intensity-card-unavailable")).not.toBeInTheDocument();
 });
 
+test.each(["fr", "en", "es"])("running retains valid average pace even when speed is recorded in %s", async (language) => {
+  mockAxios({ workoutPayload: { ...workout, avg_speed_kmh: 10 } });
+  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1", language);
+  await screen.findByTestId("coach-summary");
+  const metrics = screen.getByTestId("primary-metrics");
+  expect(metrics).toHaveTextContent(translations[language].workoutDetailExtended.averagePace);
+  expect(metrics).toHaveTextContent("6:00/km");
+  expect(metrics).not.toHaveTextContent("km/h");
+});
+
+test.each(["fr", "en", "es"])("cycling without recorded speed has a translated unavailable state in %s", async (language) => {
+  mockAxios({
+    workoutPayload: { ...workout, type: "cycle" },
+    analysisPayload: { ...analysis, pacing: { available: false, average_speed_kmh: 25 } },
+  });
+  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1", language);
+  await screen.findByTestId("coach-summary");
+  expect(screen.getByTestId("primary-metrics")).toHaveTextContent(translations[language].workoutDetailExtended.speedUnavailable);
+  expect(screen.getByTestId("primary-metrics")).not.toHaveTextContent("/km");
+});
+
+test.each(["fr", "en", "es"])("running with invalid pace reuses recorded speed before engine speed in %s", async (language) => {
+  mockAxios({
+    workoutPayload: { ...workout, avg_pace_min_km: 0, avg_speed_kmh: 10 },
+    analysisPayload: { ...analysis, pacing: { ...analysis.pacing, average_speed_kmh: 11 } },
+  });
+  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1", language);
+  await screen.findByTestId("coach-summary");
+  const metrics = screen.getByTestId("primary-metrics");
+  expect(metrics).toHaveTextContent(translations[language].workoutDetailExtended.averageSpeed);
+  expect(metrics).toHaveTextContent("10.0 km/h");
+  expect(metrics).not.toHaveTextContent("/km");
+});
+
+test("running does not reuse an engine speed marked unavailable when summary pace is invalid", async () => {
+  mockAxios({
+    workoutPayload: { ...workout, avg_pace_min_km: null },
+    analysisPayload: { ...analysis, pacing: { available: false, average_speed_kmh: 10 } },
+  });
+  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+  await screen.findByTestId("coach-summary");
+  expect(screen.getByTestId("primary-metrics")).toHaveTextContent(translations.en.workoutDetailExtended.dataUnavailable);
+  expect(screen.getByTestId("primary-metrics")).not.toHaveTextContent("km/h");
+});
+
 test.each(["fr", "en", "es"])("cycling uses recorded speed, never average min/km, in %s", async (language) => {
   mockAxios({
     workoutPayload: { ...workout, type: "cycle", avg_speed_kmh: 24.5 },
@@ -436,8 +481,8 @@ test.each([null, 0, -2, NaN, Infinity, -Infinity, "6"])("invalid absolute paces 
   renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
   await screen.findByTestId("coach-summary");
   const metrics = screen.getByTestId("primary-metrics");
-  expect(metrics).toHaveTextContent("Average pace");
-  expect(metrics).toHaveTextContent("Not recorded");
+  expect(metrics).toHaveTextContent(translations.en.workoutDetailExtended.averageSpeed);
+  expect(metrics).toHaveTextContent("10.0 km/h");
   expect(metrics).not.toHaveTextContent("/km");
   const card = screen.getByTestId("pacing-summary-card");
   expect(card).toHaveTextContent("10.0 km/h");
