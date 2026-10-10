@@ -5,8 +5,8 @@
 ### Références Git
 
 - Base de travail `copilot/dev` après merge de #321 : `3ad759622f92fe250db512b14d8be8c4a821d013`.
-- HEAD initial de la branche : le même merge #321, vérifié comme premier parent du commit de merge.
-- HEAD de code testé et HEAD final sont à relever après les commits de livraison.
+- HEAD initial de la branche : `3ad759622f92fe250db512b14d8be8c4a821d013`, le merge #321.
+- HEAD testé, incluant le code, les tests et ce rapport : `45bbe477dd10596d06f7d65e1feae610d193f7ad`.
 - Aucun merge supplémentaire, déploiement, appel GCCLI ou accès à MongoDB réel n'a été effectué.
 
 L'audit préalable a porté sur `backend/workout_analysis_v2.py`,
@@ -142,8 +142,9 @@ pour cette exécution uniquement, sans modification des manifestes.
 
 | Commande depuis `backend/` | Résultat |
 |---|---|
-| `python -m pytest tests/test_workout_analysis_v2_phases.py -q` | **21 passed** |
+| `python -m pytest tests/test_workout_analysis_v2_phases.py -q` | **22 passed** |
 | `python -m pytest tests/test_workout_analysis_v2.py tests/test_coach_context_v2.py tests/test_activity_details_pr321.py -q` | **377 passed, 14 warnings** |
+| `python -m pytest tests/test_workout_analysis_v2_phases.py tests/test_workout_analysis_v2.py tests/test_coach_context_v2.py tests/test_activity_details_pr321.py -q` | **399 passed, 14 warnings** |
 
 Les tests couvrent activité sans phases, alternance et ordre, échauffement,
 retour au calme, type inconnu, mesures absentes/nulles, FC absente, allure
@@ -151,7 +152,11 @@ incohérente, comparabilité, répétition unique, régularité régulière/irr�
 compatibilité du payload antérieur, cache versionné absent/invalide, scoping
 utilisateur, maintien des km splits et absence d'enrichissement/appel fournisseur.
 
-Contrôles additionnels : `python -m compileall -q` sur les fichiers Python
+Contrôles additionnels :
+`python -m flake8 backend/activity_phases.py backend/garmin/activity_details.py
+backend/workout_analysis_v2.py backend/workout_analysis_v2_service.py
+backend/tests/test_workout_analysis_v2.py backend/tests/test_workout_analysis_v2_phases.py
+--select E9,F63,F7,F82`, `python -m compileall -q` sur les fichiers Python
 modifiés et `git diff --check` réussis. Aucune connexion à MongoDB/GCCLI réel ni
 aucun test runtime Emergent n'a été exécuté. Le scan de secrets et
 `parallel_validation` sont à effectuer après le commit final.

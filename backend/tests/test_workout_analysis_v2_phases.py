@@ -315,6 +315,24 @@ def test_foreign_user_workout_is_not_loaded_and_foreign_phases_are_not_read():
     assert db.garmin_activities.find_one_queries == []
 
 
+def test_foreign_activity_cache_with_same_external_id_is_not_consumed():
+    db = _service_db(cached_details=_cached_details(_cached_rows()))
+    db.garmin_activities.docs[0]["user_id"] = "user-b"
+    result = _run(load_scoped_workout_analysis_v2(
+        db=db,
+        user_id="user-a",
+        workout_id="garmin-synthetic-activity",
+        language="en",
+    ))
+    assert result is not None
+    _, analysis = result
+    assert analysis.phase_analysis.available is False
+    assert db.garmin_activities.find_one_queries[0] == {
+        "user_id": "user-a",
+        "external_id": "synthetic-activity",
+    }
+
+
 def test_cache_only_phase_loader_does_not_enqueue_or_fetch_provider_data():
     source = open(load_scoped_workout_analysis_v2.__code__.co_filename, encoding="utf-8").read()
     assert "request_activity_details" not in source
