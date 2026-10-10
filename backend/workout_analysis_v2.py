@@ -1300,6 +1300,8 @@ def _phase_pace(phase: ActivityPhase) -> tuple[Optional[float], bool]:
     duration = phase.duration_s
     distance = phase.distance_m
     speed = phase.average_speed_mps
+    if duration == 0 or distance == 0:
+        return None, False
     if (
         duration is not None and distance is not None
         and math.isfinite(duration) and math.isfinite(distance)
