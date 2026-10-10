@@ -85,6 +85,9 @@ def test_valid_phases_preserve_order_and_produce_four_efforts_and_recoveries():
     ]
     assert phases.effort_regularity.available is True
     assert phases.effort_regularity.comparable_effort_count == 4
+    assert phases.effort_regularity.comparability_basis == "duration"
+    assert phases.effort_regularity.pace_sample_count == 4
+    assert phases.effort_regularity.partial_comparison is False
     assert phases.effort_regularity.average_duration_s == 240
     assert phases.effort_regularity.first_to_last_pace_change_sec_per_km > 0
     assert phases.effort_regularity.average_hr_change_bpm == 8
@@ -151,7 +154,134 @@ def test_noncomparable_efforts_do_not_receive_regularity_comparison():
     result = build_workout_analysis_v2(_workout(), [], phases=phases).phase_analysis
     assert result.effort_regularity.available is False
     assert result.effort_regularity.comparable_effort_count == 1
+    assert result.effort_regularity.pace_sample_count == 1
     assert "efforts_not_comparable" in result.limitations
+
+
+def test_fixed_duration_efforts_compare_on_duration_despite_distance_changes():
+    efforts = [
+        _phase(index, "effort", duration=240, distance=distance)
+        for index, distance in enumerate((800, 900, 1000, 1100))
+    ]
+    regularity = build_workout_analysis_v2(_workout(), [], phases=efforts).phase_analysis.effort_regularity
+    assert regularity.comparability_basis == "duration"
+    assert regularity.comparable_effort_count == 4
+    assert regularity.available is True
+
+
+def test_fixed_distance_efforts_compare_on_distance_despite_duration_changes():
+    efforts = [
+        _phase(index, "effort", duration=duration, distance=1000)
+        for index, duration in enumerate((240, 360, 480))
+    ]
+    regularity = build_workout_analysis_v2(_workout(), [], phases=efforts).phase_analysis.effort_regularity
+    assert regularity.comparability_basis == "distance"
+    assert regularity.comparable_effort_count == 3
+    assert regularity.available is True
+
+
+def test_incompatible_duration_and_distance_groups_do_not_mix_comparison_criteria():
+    efforts = [
+        _phase(0, "effort", duration=240, distance=800),
+        _phase(1, "effort", duration=240, distance=1400),
+        _phase(2, "effort", duration=500, distance=800),
+        _phase(3, "effort", duration=500, distance=1400),
+    ]
+    result = build_workout_analysis_v2(_workout(), [], phases=efforts).phase_analysis
+    regularity = result.effort_regularity
+    assert regularity.comparability_basis == "duration"
+    assert regularity.comparable_effort_count == 2
+    assert regularity.effort_count == 4
+    assert regularity.partial_comparison is True
+    assert regularity.available is True
+    assert "efforts_partially_comparable" in result.limitations
+
+
+def test_two_structurally_comparable_efforts_with_valid_paces_enable_regularity():
+    efforts = [
+        _phase(0, "effort", duration=240, distance=800),
+        _phase(1, "effort", duration=240, distance=840),
+    ]
+    regularity = build_workout_analysis_v2(_workout(), [], phases=efforts).phase_analysis.effort_regularity
+    assert regularity.comparable_effort_count == 2
+    assert regularity.pace_sample_count == 2
+    assert regularity.available is True
+    assert regularity.pace_dispersion_sec_per_km == pytest.approx(7.142857, abs=1e-5)
+
+
+def test_structurally_comparable_efforts_without_valid_paces_are_unavailable():
+    efforts = [
+        _phase(0, "effort", duration=240),
+        _phase(1, "effort", duration=240),
+    ]
+    result = build_workout_analysis_v2(_workout(), [], phases=efforts).phase_analysis
+    regularity = result.effort_regularity
+    assert regularity.comparable_effort_count == 2
+    assert regularity.pace_sample_count == 0
+    assert regularity.available is False
+    assert regularity.pace_dispersion_sec_per_km is None
+    assert "efforts_not_comparable" not in result.limitations
+    assert "effort_paces_incomplete" in result.limitations
+    assert "insufficient_comparable_effort_paces" in result.limitations
+
+
+def test_one_valid_pace_among_three_comparable_efforts_is_unavailable():
+    efforts = [
+        _phase(0, "effort", duration=240, distance=800),
+        _phase(1, "effort", duration=240),
+        _phase(2, "effort", duration=240),
+    ]
+    result = build_workout_analysis_v2(_workout(), [], phases=efforts).phase_analysis
+    regularity = result.effort_regularity
+    assert regularity.comparable_effort_count == 3
+    assert regularity.pace_sample_count == 1
+    assert regularity.available is False
+    assert regularity.pace_dispersion_sec_per_km is None
+    assert "effort_paces_incomplete" in result.limitations
+
+
+def test_two_valid_paces_among_three_comparable_efforts_are_available_but_partial():
+    efforts = [
+        _phase(0, "effort", duration=240, distance=800),
+        _phase(1, "effort", duration=240, distance=840),
+        _phase(2, "effort", duration=240),
+    ]
+    result = build_workout_analysis_v2(_workout(), [], phases=efforts).phase_analysis
+    regularity = result.effort_regularity
+    assert regularity.comparable_effort_count == 3
+    assert regularity.pace_sample_count == 2
+    assert regularity.available is True
+    assert regularity.partial_comparison is True
+    assert regularity.pace_dispersion_sec_per_km == pytest.approx(7.142857, abs=1e-5)
+    assert "effort_paces_incomplete" in result.limitations
+
+
+def test_missing_heart_rate_does_not_invalidate_comparable_pace_regularity():
+    efforts = [
+        _phase(0, "effort", duration=240, distance=800),
+        _phase(1, "effort", duration=240, distance=840),
+    ]
+    result = build_workout_analysis_v2(_workout(), [], phases=efforts).phase_analysis
+    assert result.effort_regularity.available is True
+    assert result.effort_regularity.pace_sample_count == 2
+    assert result.effort_regularity.average_hr_change_bpm is None
+    assert result.effort_statistics.average_hr is None
+
+
+def test_first_to_last_pace_change_uses_the_first_and_last_efforts_in_selected_cohort():
+    efforts = [
+        _phase(0, "effort", duration=240, distance=800),
+        _phase(1, "effort", duration=600, distance=2000),
+        _phase(2, "effort", duration=240, distance=810),
+    ]
+    result = build_workout_analysis_v2(_workout(), [], phases=efforts).phase_analysis
+    regularity = result.effort_regularity
+    assert regularity.comparability_basis == "duration"
+    assert regularity.comparable_effort_count == 2
+    assert regularity.pace_sample_count == 2
+    assert regularity.first_to_last_pace_change_sec_per_km == pytest.approx(-3.7037037)
+    assert regularity.average_pace_sec_per_km == pytest.approx(298.1481481)
+    assert regularity.partial_comparison is True
 
 
 def test_one_repetition_has_descriptive_values_but_no_regularity_claim():
@@ -161,6 +291,8 @@ def test_one_repetition_has_descriptive_values_but_no_regularity_claim():
     assert result.effort_statistics.count == 1
     assert result.effort_regularity.available is False
     assert result.effort_regularity.average_duration_s == 240
+    assert result.effort_regularity.comparable_effort_count == 1
+    assert result.effort_regularity.pace_sample_count == 1
     assert result.effort_regularity.pace_dispersion_sec_per_km is None
 
 
@@ -187,6 +319,7 @@ def test_legacy_response_payload_and_kilometre_split_contract_remain_compatible(
     old_payload.pop("phase_analysis")
     restored = WorkoutAnalysisV2Response.model_validate(old_payload)
     assert restored.phase_analysis.available is False
+    assert restored.phase_analysis.effort_regularity.available is False
     assert restored.evidence.has_splits is True
 
 

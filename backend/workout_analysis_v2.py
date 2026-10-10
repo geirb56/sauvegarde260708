@@ -11,6 +11,7 @@ from activity_phases import ActivityPhase
 
 
 SUPPORTED_LANGUAGES = {"en", "fr", "es"}
+PHASE_COMPARABILITY_TOLERANCE_PCT = 20.0
 
 # Baseline window kept identical to the V2 contract (comparison.baseline_period_days).
 BASELINE_PERIOD_DAYS = 14
@@ -159,7 +160,10 @@ class WorkoutAnalysisEffortRegularity(BaseModel):
     available: bool = False
     effort_count: int = 0
     comparable_effort_count: int = 0
-    comparability_tolerance_pct: float = 20.0
+    comparability_tolerance_pct: float = PHASE_COMPARABILITY_TOLERANCE_PCT
+    comparability_basis: Optional[Literal["duration", "distance"]] = None
+    pace_sample_count: int = 0
+    partial_comparison: bool = False
     average_duration_s: Optional[float] = None
     average_pace_sec_per_km: Optional[float] = None
     pace_dispersion_sec_per_km: Optional[float] = None
@@ -1335,46 +1339,83 @@ def _phase_statistics(phases: List[WorkoutAnalysisStructuredPhase]) -> WorkoutAn
 def _efforts_comparable(
     first: WorkoutAnalysisStructuredPhase,
     candidate: WorkoutAnalysisStructuredPhase,
+    basis: Literal["duration", "distance"],
 ) -> bool:
-    for key in ("duration_s", "distance_m"):
-        left = getattr(first, key)
-        right = getattr(candidate, key)
-        if (
-            left is not None and right is not None and left > 0 and right > 0
-            and abs(left - right) / max(left, right) <= 0.2
-        ):
-            return True
-    return False
+    key = "duration_s" if basis == "duration" else "distance_m"
+    left = getattr(first, key)
+    right = getattr(candidate, key)
+    if (
+        left is None or right is None or not math.isfinite(left) or not math.isfinite(right)
+        or left <= 0 or right <= 0
+    ):
+        return False
+    difference_pct = abs(left - right) / max(left, right) * 100
+    return difference_pct <= PHASE_COMPARABILITY_TOLERANCE_PCT
 
 
-def _effort_regularity(efforts: List[WorkoutAnalysisStructuredPhase]) -> WorkoutAnalysisEffortRegularity:
+def _effort_comparison_cohort(
+    efforts: List[WorkoutAnalysisStructuredPhase],
+) -> tuple[List[WorkoutAnalysisStructuredPhase], Optional[Literal["duration", "distance"]]]:
+    best_cohort: List[WorkoutAnalysisStructuredPhase] = []
+    best_basis: Optional[Literal["duration", "distance"]] = None
+    for basis in ("duration", "distance"):
+        for anchor in efforts:
+            key = "duration_s" if basis == "duration" else "distance_m"
+            value = getattr(anchor, key)
+            if value is None or not math.isfinite(value) or value <= 0:
+                continue
+            cohort = [
+                effort for effort in efforts
+                if effort is anchor or _efforts_comparable(anchor, effort, basis)
+            ]
+            if len(cohort) > len(best_cohort):
+                best_cohort = cohort
+                best_basis = basis
+    return best_cohort, best_basis
+
+
+def _effort_regularity(
+    efforts: List[WorkoutAnalysisStructuredPhase],
+) -> WorkoutAnalysisEffortRegularity:
     if not efforts:
         return WorkoutAnalysisEffortRegularity()
-    comparable = [efforts[0]] + [
-        effort for effort in efforts[1:] if _efforts_comparable(efforts[0], effort)
-    ]
+    comparable, basis = _effort_comparison_cohort(efforts)
     durations = [effort.duration_s for effort in comparable if effort.duration_s is not None]
-    paces = [effort.pace_sec_per_km for effort in comparable if effort.pace_sec_per_km is not None]
-    first, last = comparable[0], comparable[-1]
+    paces = [
+        effort for effort in comparable
+        if effort.pace_sec_per_km is not None
+        and math.isfinite(effort.pace_sec_per_km)
+        and effort.pace_sec_per_km > 0
+    ]
+    heart_rates = [
+        effort for effort in comparable
+        if effort.average_hr is not None and math.isfinite(effort.average_hr)
+    ]
     dispersion = None
-    if len(paces) > 1:
-        average_pace = mean(paces)
-        dispersion = math.sqrt(mean((pace - average_pace) ** 2 for pace in paces))
+    pace_values = [effort.pace_sec_per_km for effort in paces]
+    if len(pace_values) >= 2:
+        average_pace = mean(pace_values)
+        dispersion = math.sqrt(mean((pace - average_pace) ** 2 for pace in pace_values))
+    comparable_count = len(comparable)
+    pace_count = len(paces)
     return WorkoutAnalysisEffortRegularity(
-        available=len(comparable) >= 2,
+        available=pace_count >= 2,
         effort_count=len(efforts),
-        comparable_effort_count=len(comparable),
+        comparable_effort_count=comparable_count,
+        comparability_basis=basis,
+        pace_sample_count=pace_count,
+        partial_comparison=comparable_count < len(efforts) or pace_count < comparable_count,
         average_duration_s=mean(durations) if durations else None,
-        average_pace_sec_per_km=mean(paces) if paces else None,
+        average_pace_sec_per_km=mean(pace_values) if pace_values else None,
         pace_dispersion_sec_per_km=dispersion,
         first_to_last_pace_change_sec_per_km=(
-            last.pace_sec_per_km - first.pace_sec_per_km
-            if first.pace_sec_per_km is not None and last.pace_sec_per_km is not None
+            paces[-1].pace_sec_per_km - paces[0].pace_sec_per_km
+            if len(paces) >= 2
             else None
         ),
         average_hr_change_bpm=(
-            last.average_hr - first.average_hr
-            if first.average_hr is not None and last.average_hr is not None
+            heart_rates[-1].average_hr - heart_rates[0].average_hr
+            if len(heart_rates) >= 2
             else None
         ),
     )
@@ -1435,8 +1476,14 @@ def _build_phase_analysis(phases: Optional[List[ActivityPhase]]) -> WorkoutAnaly
     limitations = []
     if incoherent_pace:
         limitations.append("incoherent_pace")
-    if len(efforts) > 1 and not regularity.available:
+    if len(efforts) > 1 and regularity.comparable_effort_count < 2:
         limitations.append("efforts_not_comparable")
+    elif regularity.comparable_effort_count < len(efforts):
+        limitations.append("efforts_partially_comparable")
+    if regularity.pace_sample_count < regularity.comparable_effort_count:
+        limitations.append("effort_paces_incomplete")
+    if regularity.pace_sample_count < 2 and regularity.comparable_effort_count >= 2:
+        limitations.append("insufficient_comparable_effort_paces")
     return WorkoutAnalysisPhaseAnalysis(
         available=True,
         analysis_type="structured_phases",
