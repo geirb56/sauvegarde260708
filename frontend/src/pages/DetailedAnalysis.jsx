@@ -4,7 +4,9 @@ import axios from "axios";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useLanguage } from "@/context/LanguageContext";
+import { useSubscription } from "@/context/SubscriptionContext";
 import { getAnalysisLimitations, hasCoachObservation } from "@/lib/workoutAnalysis";
+import WorkoutAnalysisAccessNotice from "@/components/WorkoutAnalysisAccessNotice";
 import {
   ArrowLeft,
   Zap,
@@ -39,11 +41,18 @@ export default function DetailedAnalysis() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { t, lang } = useLanguage();
+  const { loading: subscriptionLoading, hasFeature } = useSubscription();
+  const canAccessAnalysis = !subscriptionLoading && hasFeature("coach_workout_analysis") === true;
   const [analysis, setAnalysis] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   useEffect(() => {
+    setAnalysis(null);
+    if (!canAccessAnalysis) {
+      setLoading(false);
+      return undefined;
+    }
     const controller = new AbortController();
     setLoading(true);
     axios.get(`${API}/coach/workout-analysis/${id}?language=${lang}`, { signal: controller.signal })
@@ -51,11 +60,11 @@ export default function DetailedAnalysis() {
       .catch(() => setAnalysis(null))
       .finally(() => setLoading(false));
     return () => controller.abort();
-  }, [id, lang]);
+  }, [id, lang, canAccessAnalysis]);
 
   const goToAskCoach = () => navigate("/coach");
 
-  if (loading) {
+  if (subscriptionLoading || (canAccessAnalysis && loading)) {
     return (
       <div className="p-4 pb-24 flex items-center justify-center min-h-[60vh]">
         <div className="flex flex-col items-center gap-3">
@@ -64,6 +73,18 @@ export default function DetailedAnalysis() {
             {t("detailedAnalysis.loading")}
           </span>
         </div>
+      </div>
+    );
+  }
+
+  if (!canAccessAnalysis) {
+    return (
+      <div className="p-4 pb-24" data-testid="analysis-access-denied">
+        <Link to={`/workout/${id}`} className="inline-flex items-center gap-2 text-muted-foreground mb-6">
+          <ArrowLeft className="w-4 h-4" />
+          <span className="font-mono text-xs uppercase">{t("workout.back")}</span>
+        </Link>
+        <WorkoutAnalysisAccessNotice t={t} />
       </div>
     );
   }

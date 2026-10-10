@@ -4,7 +4,9 @@ import axios from "axios";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import WorkoutAnalysisAccessNotice from "@/components/WorkoutAnalysisAccessNotice";
 import { useLanguage } from "@/context/LanguageContext";
+import { useSubscription } from "@/context/SubscriptionContext";
 import { formatPaceDisplay, formatPaceDelta, getAnalysisLimitations, hasCoachObservation } from "@/lib/workoutAnalysis";
 import { formatSpeed } from "@/utils/units";
 import {
@@ -197,6 +199,257 @@ const HRZonesChart = ({ zones, t }) => {
   );
 };
 
+const formatPhaseDuration = (seconds) => {
+  if (!Number.isFinite(seconds) || seconds < 0) return null;
+  const rounded = Math.round(seconds);
+  const hours = Math.floor(rounded / 3600);
+  const minutes = Math.floor((rounded % 3600) / 60);
+  const remainingSeconds = rounded % 60;
+  return hours > 0
+    ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remainingSeconds).padStart(2, "0")}`
+    : `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
+};
+
+const formatPhaseNumber = (value, lang, digits = 1) => new Intl.NumberFormat(
+  { fr: "fr-FR", en: "en-US", es: "es-ES" }[lang] || "en-US",
+  { maximumFractionDigits: digits },
+).format(value);
+
+const phaseMissingLabels = {
+  duration: "phaseMissingDuration",
+  distance: "phaseMissingDistance",
+  pace: "phaseMissingPace",
+  heart_rate: "phaseMissingHeartRate",
+};
+
+const phaseLimitationLabels = {
+  incoherent_pace: "phaseLimitationIncoherentPace",
+  efforts_not_comparable: "phaseLimitationNotComparable",
+  efforts_partially_comparable: "phaseLimitationPartiallyComparable",
+  effort_paces_incomplete: "phaseLimitationIncompletePaces",
+  insufficient_comparable_effort_paces: "phaseLimitationInsufficientPaces",
+};
+
+const PhaseMetric = ({ label, value }) => (
+  <div className="min-w-0">
+    <dt className="text-xs text-muted-foreground">{label}</dt>
+    <dd className="font-mono text-sm font-semibold break-words">{value}</dd>
+  </div>
+);
+
+const WorkoutPhaseAnalysis = ({ phaseAnalysis, t, lang }) => {
+  if (phaseAnalysis?.available !== true) return null;
+
+  const sortPhases = (phases) => (Array.isArray(phases) ? phases : [])
+      .map((phase, index) => ({ phase, index }))
+      .sort((left, right) => {
+        const leftOrder = Number.isFinite(left.phase?.order) ? left.phase.order : left.index;
+        const rightOrder = Number.isFinite(right.phase?.order) ? right.phase.order : right.index;
+        return leftOrder - rightOrder || left.index - right.index;
+      })
+      .map(({ phase }) => phase);
+  const efforts = sortPhases(phaseAnalysis.efforts)
+    .filter((phase) => phase?.phase_type === "effort");
+  const recoveries = sortPhases(phaseAnalysis.recoveries)
+    .filter((phase) => phase?.phase_type === "recovery");
+  const chronologicalPhases = sortPhases(phaseAnalysis.phases);
+  const recoveryAfterEffort = new Map();
+  const associatedRecoveryPhases = new Set();
+  chronologicalPhases.forEach((phase, index) => {
+    const next = chronologicalPhases[index + 1];
+    if (phase?.phase_type === "effort" && next?.phase_type === "recovery") {
+      recoveryAfterEffort.set(phase.order, next);
+      associatedRecoveryPhases.add(next);
+    }
+  });
+  const phaseRows = [];
+  if (chronologicalPhases.length > 0) {
+    chronologicalPhases.forEach((phase) => {
+      if (phase?.phase_type === "effort") {
+        phaseRows.push({ kind: "effort", phase, associatedRecovery: recoveryAfterEffort.get(phase.order) || null });
+      } else if (phase?.phase_type === "recovery") {
+        if (!associatedRecoveryPhases.has(phase)) phaseRows.push({ kind: "recovery", phase });
+      } else {
+        phaseRows.push({ kind: "additional", phase });
+      }
+    });
+  } else {
+    efforts.forEach((phase) => phaseRows.push({ kind: "effort", phase, associatedRecovery: null }));
+    recoveries.forEach((phase) => phaseRows.push({ kind: "recovery", phase }));
+  }
+  const effortStatistics = phaseAnalysis.effort_statistics || {};
+  const regularity = phaseAnalysis.effort_regularity || {};
+  const missingData = Array.isArray(phaseAnalysis.missing_data) ? phaseAnalysis.missing_data : [];
+  const limitations = Array.isArray(phaseAnalysis.limitations) ? phaseAnalysis.limitations : [];
+  const number = (value, digits = 1) => Number.isFinite(value) ? formatPhaseNumber(value, lang, digits) : null;
+  const secondsDelta = (value) => {
+    if (!Number.isFinite(value)) return null;
+    const formatted = formatPhaseNumber(Math.abs(value), lang, 1);
+    return `${value > 0 ? "+" : value < 0 ? "−" : ""}${formatted} s/km`;
+  };
+  const interpolate = (key, values) => Object.entries(values).reduce(
+    (text, [name, value]) => text.replace(`{${name}}`, String(value)),
+    t(`workoutDetailExtended.${key}`),
+  );
+  const phaseMetrics = (phase) => [
+    [t("workoutDetailExtended.duration"), formatPhaseDuration(phase?.duration_s)],
+    [t("workoutDetailExtended.distance"), Number.isFinite(phase?.distance_m) && phase.distance_m >= 0
+      ? `${formatPhaseNumber(phase.distance_m, lang, 0)} m`
+      : null],
+    [t("workoutDetailExtended.pace"), Number.isFinite(phase?.pace_sec_per_km) && phase.pace_sec_per_km > 0
+      ? formatPaceDisplay(phase.pace_sec_per_km / 60)
+      : null],
+    [t("workoutDetailExtended.averageHeartRate"), Number.isFinite(phase?.average_hr) && phase.average_hr > 0
+      ? formatHeartRate(phase.average_hr)
+      : null],
+    [t("workoutDetailExtended.maximumHeartRate"), Number.isFinite(phase?.max_hr) && phase.max_hr > 0
+      ? formatHeartRate(phase.max_hr)
+      : null],
+  ];
+  const supplementaryPhaseLabel = (phase) => {
+    if (phase?.phase_type === "warmup") return t("workoutDetailExtended.phaseWarmup");
+    if (phase?.phase_type === "cooldown") return t("workoutDetailExtended.phaseCooldown");
+    return t("workoutDetailExtended.phaseOther");
+  };
+  const uniqueMessages = (items, labels, fallback) => {
+    const messages = items.map((item) => labels[item]).filter(Boolean).map((key) => t(`workoutDetailExtended.${key}`));
+    if (items.some((item) => !labels[item])) messages.push(t(`workoutDetailExtended.${fallback}`));
+    return [...new Set(messages)];
+  };
+
+  return (
+    <section aria-labelledby="structured-phases-title" data-testid="structured-phase-analysis">
+      <h2 id="structured-phases-title" className="text-base font-semibold mb-2">
+        {t("workoutDetailExtended.structuredPhases")}
+      </h2>
+      <Card className="bg-card border-border">
+        <CardContent className="p-4 space-y-4">
+          <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3" data-testid="phase-summary">
+            <PhaseMetric label={t("workoutDetailExtended.effortCount")} value={efforts.length} />
+            <PhaseMetric label={t("workoutDetailExtended.recoveryCount")} value={recoveries.length} />
+            {Number.isFinite(effortStatistics.total_duration_s) && effortStatistics.total_duration_s >= 0 && (
+              <PhaseMetric
+                label={t("workoutDetailExtended.totalEffortDuration")}
+                value={formatPhaseDuration(effortStatistics.total_duration_s) || t("workoutDetailExtended.dataUnavailable")}
+              />
+            )}
+            {Number.isFinite(effortStatistics.total_distance_m) && effortStatistics.total_distance_m >= 0 && (
+              <PhaseMetric
+                label={t("workoutDetailExtended.totalEffortDistance")}
+                value={`${formatPhaseNumber(effortStatistics.total_distance_m / 1000, lang, 2)} km`}
+              />
+            )}
+            {Number.isFinite(effortStatistics.average_pace_sec_per_km) && effortStatistics.average_pace_sec_per_km > 0 && (
+              <PhaseMetric
+                label={t("workoutDetailExtended.averageEffortPace")}
+                value={formatPaceDisplay(effortStatistics.average_pace_sec_per_km / 60)}
+              />
+            )}
+          </dl>
+
+          {efforts.length === 0 && <p className="text-sm text-muted-foreground">{t("workoutDetailExtended.phaseNoEfforts")}</p>}
+          {phaseRows.length > 0 && <div className="space-y-3">
+            {efforts.length > 0 && <h3 className="text-sm font-semibold">{t("workoutDetailExtended.repetitions")}</h3>}
+            <ol className="space-y-3">
+              {phaseRows.map((row, index) => {
+                if (row.kind === "effort") {
+                  const effort = row.phase;
+                  return (
+                    <li key={`${effort.order ?? index}-${index}`} data-testid="phase-effort-card" className="rounded-md border border-border/70 p-3 min-w-0">
+                      <h4 className="text-sm font-semibold mb-2">
+                        {interpolate("effortNumber", { number: effort.effort_number ?? index + 1 })}
+                      </h4>
+                      <dl className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-3">
+                        {phaseMetrics(effort).map(([label, value]) => (
+                          <PhaseMetric key={label} label={label} value={value || t("workoutDetailExtended.dataUnavailable")} />
+                        ))}
+                      </dl>
+                      {row.associatedRecovery && <div className="mt-3 border-t border-border/70 pt-3">
+                        <h5 className="text-xs font-semibold text-muted-foreground mb-2">{t("workoutDetailExtended.recoveryAfterEffort")}</h5>
+                        <dl className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-3">
+                          {phaseMetrics(row.associatedRecovery).map(([label, value]) => (
+                            <PhaseMetric key={label} label={label} value={value || t("workoutDetailExtended.dataUnavailable")} />
+                          ))}
+                        </dl>
+                      </div>}
+                    </li>
+                  );
+                }
+                if (row.kind === "recovery") {
+                  return (
+                    <li key={`${row.phase.order ?? index}-${index}`} data-testid="phase-recovery-card" className="rounded-md bg-muted/20 p-3 min-w-0">
+                      <h4 className="text-sm font-semibold mb-2">
+                        {interpolate("phaseRecoveryNumber", { number: row.phase.recovery_number ?? index + 1 })}
+                      </h4>
+                      <dl className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-3">
+                        {phaseMetrics(row.phase).map(([label, value]) => (
+                          <PhaseMetric key={label} label={label} value={value || t("workoutDetailExtended.dataUnavailable")} />
+                        ))}
+                      </dl>
+                    </li>
+                  );
+                }
+                return (
+                  <li key={`${row.phase?.order ?? index}-${index}`} data-testid="phase-additional-card" className="rounded-md bg-muted/20 p-3 min-w-0">
+                    <h4 className="text-sm font-semibold mb-2">{supplementaryPhaseLabel(row.phase)}</h4>
+                    <dl className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-3">
+                      {phaseMetrics(row.phase).map(([label, value]) => (
+                        <PhaseMetric key={label} label={label} value={value || t("workoutDetailExtended.dataUnavailable")} />
+                      ))}
+                    </dl>
+                  </li>
+                );
+              })}
+            </ol>
+          </div>}
+
+          {regularity.available === true && <section className="space-y-2" data-testid="effort-regularity">
+            <h3 className="text-sm font-semibold">{t("workoutDetailExtended.effortRegularity")}</h3>
+            <p className="text-sm">
+              {interpolate("comparableEfforts", {
+                count: number(regularity.comparable_effort_count, 0) ?? t("workoutDetailExtended.dataUnavailable"),
+              })}
+            </p>
+            <dl className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {Number.isFinite(regularity.pace_dispersion_sec_per_km) && regularity.pace_dispersion_sec_per_km >= 0 && (
+                <PhaseMetric
+                  label={t("workoutDetailExtended.paceDispersion")}
+                  value={`${number(regularity.pace_dispersion_sec_per_km)} s/km`}
+                />
+              )}
+              {secondsDelta(regularity.first_to_last_pace_change_sec_per_km) != null && (
+                <PhaseMetric
+                  label={t("workoutDetailExtended.firstToLastPace")}
+                  value={secondsDelta(regularity.first_to_last_pace_change_sec_per_km)}
+                />
+              )}
+              {Number.isFinite(regularity.average_hr_change_bpm) && (
+                <PhaseMetric
+                  label={t("workoutDetailExtended.averageHeartRateEvolution")}
+                  value={`${regularity.average_hr_change_bpm > 0 ? "+" : ""}${number(regularity.average_hr_change_bpm)} bpm`}
+                />
+              )}
+            </dl>
+            {regularity.partial_comparison === true && (
+              <p className="text-sm text-muted-foreground">{t("workoutDetailExtended.partialEffortComparison")}</p>
+            )}
+          </section>}
+
+          {(missingData.length > 0 || limitations.length > 0) && <section className="space-y-2" data-testid="phase-data-limits">
+            <h3 className="text-sm font-semibold">{t("workoutDetailExtended.phaseDataLimits")}</h3>
+            {uniqueMessages(missingData, phaseMissingLabels, "phaseMissingGeneric").map((message) => (
+              <p key={message} className="text-sm text-muted-foreground">{message}</p>
+            ))}
+            {uniqueMessages(limitations, phaseLimitationLabels, "phaseLimitationGeneric").map((message) => (
+              <p key={message} className="text-sm text-muted-foreground">{message}</p>
+            ))}
+          </section>}
+        </CardContent>
+      </Card>
+    </section>
+  );
+};
+
 const AnalysisSkeleton = () => (
   <div className="space-y-2">
     <Skeleton className="h-3 w-3/4" />
@@ -217,6 +470,8 @@ export default function WorkoutDetail() {
   const navigate = useNavigate();
   const location = useLocation();
   const { t, lang } = useLanguage();
+  const { loading: subscriptionLoading, hasFeature } = useSubscription();
+  const canAccessAnalysis = !subscriptionLoading && hasFeature("coach_workout_analysis") === true;
   const [workout, setWorkout] = useState(null);
   const [workoutLoading, setWorkoutLoading] = useState(true);
   const [workoutError, setWorkoutError] = useState(null);
@@ -228,9 +483,6 @@ export default function WorkoutDetail() {
     setWorkout(null);
     setWorkoutLoading(true);
     setWorkoutError(null);
-    setAnalysis(null);
-    setAnalysisLoading(true);
-    setAnalysisError(false);
 
     const controller = new AbortController();
     const { signal } = controller;
@@ -248,6 +500,17 @@ export default function WorkoutDetail() {
         }
       });
 
+    return () => controller.abort();
+  }, [id]);
+
+  useEffect(() => {
+    setAnalysis(null);
+    setAnalysisError(false);
+    setAnalysisLoading(canAccessAnalysis);
+    if (!canAccessAnalysis) return undefined;
+
+    const controller = new AbortController();
+    const { signal } = controller;
     axios.get(`${API}/coach/workout-analysis/${id}?language=${lang}`, { signal })
       .then((res) => {
         if (signal.aborted) return;
@@ -262,7 +525,7 @@ export default function WorkoutDetail() {
       });
 
     return () => controller.abort();
-  }, [id, lang]);
+  }, [id, lang, canAccessAnalysis]);
 
   const goToAskCoach = () => navigate(id ? `/coach?analyze=${encodeURIComponent(id)}` : "/coach");
   const backTo = ALLOWED_BACK_ROUTES.has(location.state?.from) ? location.state.from : "/sessions";
@@ -299,9 +562,10 @@ export default function WorkoutDetail() {
     month: "short",
     day: "numeric",
   }) : t("workoutDetailExtended.dataUnavailable");
-  const comparison = analysis?.comparison;
-  const physiology = analysis?.physiology;
-  const pacing = analysis?.pacing;
+  const analysisForRender = canAccessAnalysis && !analysisLoading && !analysisError ? analysis : null;
+  const comparison = analysisForRender?.comparison;
+  const physiology = analysisForRender?.physiology;
+  const pacing = analysisForRender?.pacing;
   const isCycle = workout.type === "cycle";
   const averageSpeed = hasPositiveFiniteMetric(workout.avg_speed_kmh) ? workout.avg_speed_kmh
     : pacing?.available === true && hasPositiveFiniteMetric(pacing.average_speed_kmh) ? pacing.average_speed_kmh : null;
@@ -309,9 +573,9 @@ export default function WorkoutDetail() {
   const showSummarySpeed = isCycle || (!hasWorkoutPace && averageSpeed != null);
   const hasAveragePace = hasPositiveFiniteMetric(pacing?.average_pace_min_km);
   const showPacingSpeed = isCycle || !hasAveragePace;
-  const evidence = analysis?.evidence;
+  const evidence = analysisForRender?.evidence;
   const similar = comparison?.similar;
-  const hasAnalysis = Boolean(analysis && !analysisLoading && !analysisError);
+  const hasAnalysis = Boolean(analysisForRender);
   const displayMetric = (value) => value === "--" ? t("workoutDetailExtended.dataUnavailable") : value;
   const avgHr = Number.isFinite(workout.avg_heart_rate) && workout.avg_heart_rate > 0 ? workout.avg_heart_rate : physiology?.avg_hr;
   const maxHr = Number.isFinite(workout.max_heart_rate) && workout.max_heart_rate > 0 ? workout.max_heart_rate : physiology?.max_hr;
@@ -323,9 +587,9 @@ export default function WorkoutDetail() {
     || ["fastest_split_min_km", "slowest_split_min_km"].some((key) => hasPositiveFiniteMetric(pacing[key]))
     || ["pace_drop_min_km", "consistency_score", "variability"].some((key) => Number.isFinite(pacing[key]))
   );
-  const technicalLimitations = getAnalysisLimitations(analysis, t);
+  const technicalLimitations = getAnalysisLimitations(analysisForRender, t);
   const hasLimitation = (code) => technicalLimitations.some((item) => item.code === `limitations.${code}`);
-  const observationAvailable = hasCoachObservation(analysis);
+  const observationAvailable = hasCoachObservation(analysisForRender);
   const interpolate = (key, values) => Object.entries(values).reduce(
     (text, [name, value]) => text.replace(`{${name}}`, value == null ? t("workoutDetailExtended.dataUnavailable") : String(value)),
     t(`workoutDetailExtended.${key}`),
@@ -372,28 +636,36 @@ export default function WorkoutDetail() {
               <dd className="text-base font-semibold">{displayMetric(value)}</dd>
             </div>)}
           </dl>
-          {analysisLoading ? (
+          {canAccessAnalysis && analysisLoading ? (
             <AnalysisSkeleton />
-          ) : analysisError ? (
+          ) : canAccessAnalysis && analysisError ? (
             <AnalysisError t={t} />
-          ) : analysis?.summary?.text ? (
-            <p className="font-sans text-sm leading-relaxed" data-testid="coach-summary">{analysis.summary.text}</p>
-          ) : <p className="text-sm text-muted-foreground">{t("workoutDetailExtended.analysisUnavailable")}</p>}
+          ) : hasAnalysis && analysisForRender?.summary?.text ? (
+            <p className="font-sans text-sm leading-relaxed" data-testid="coach-summary">{analysisForRender.summary.text}</p>
+          ) : hasAnalysis ? (
+            <p className="text-sm text-muted-foreground">{t("workoutDetailExtended.analysisUnavailable")}</p>
+          ) : canAccessAnalysis ? (
+            <p className="text-sm text-muted-foreground">{t("workoutDetailExtended.analysisUnavailable")}</p>
+          ) : !subscriptionLoading ? (
+            <WorkoutAnalysisAccessNotice t={t} />
+          ) : null}
         </CardContent>
       </Card>
       </section>
 
+      <WorkoutPhaseAnalysis phaseAnalysis={analysisForRender?.phase_analysis} t={t} lang={lang} />
+
       {hasAnalysis && <section aria-labelledby="takeaways-title">
         <h2 id="takeaways-title" className="text-base font-semibold mb-2">{t("workoutDetailExtended.takeaways")}</h2>
         <Card className="bg-card border-border"><CardContent className="p-4 space-y-3">
-          <p className="text-sm leading-relaxed" data-testid="meaning-text">{analysis.meaning?.text || t("workoutDetailExtended.meaningUnavailable")}</p>
+          <p className="text-sm leading-relaxed" data-testid="meaning-text">{analysisForRender.meaning?.text || t("workoutDetailExtended.meaningUnavailable")}</p>
           <div className="flex flex-wrap gap-2">
-            {[["volume", "load"], ["session_type", "type"]].map(([key, label]) => analysis.signals?.[key]?.available === true && analysis.signals[key].text ? (
-              <p key={key} className="text-sm rounded bg-muted/30 p-2">{t(`analysis.${label}`)}: {analysis.signals[key].text}</p>
+            {[["volume", "load"], ["session_type", "type"]].map(([key, label]) => analysisForRender.signals?.[key]?.available === true && analysisForRender.signals[key].text ? (
+              <p key={key} className="text-sm rounded bg-muted/30 p-2">{t(`analysis.${label}`)}: {analysisForRender.signals[key].text}</p>
             ) : null)}
           </div>
-          {analysis.signals?.intensity?.available === true && analysis.signals.intensity.text ? (
-            <p className={`text-sm rounded p-2 ${getSessionTypeStyle(analysis.signals.intensity.code)}`}>{t("analysis.intensity")}: {analysis.signals.intensity.text}</p>
+          {analysisForRender.signals?.intensity?.available === true && analysisForRender.signals.intensity.text ? (
+            <p className={`text-sm rounded p-2 ${getSessionTypeStyle(analysisForRender.signals.intensity.code)}`}>{t("analysis.intensity")}: {analysisForRender.signals.intensity.text}</p>
           ) : <p className="text-sm text-muted-foreground" data-testid="intensity-card-unavailable">{t("workoutDetailExtended.intensityUnavailable")}</p>}
           {technicalLimitations.length > 0 && <a
             href="#workout-analysis-details"
@@ -453,7 +725,7 @@ export default function WorkoutDetail() {
           </CardContent>
         </Card>
       )}
-      {!hasPacing && !analysisLoading && !analysisError && <p className="text-sm text-muted-foreground">{(!hasLimitation("splits") && pacing?.reason_unavailable) || t("workoutDetailExtended.pacingUnavailable")}</p>}
+      {!hasPacing && hasAnalysis && <p className="text-sm text-muted-foreground">{(!hasLimitation("splits") && pacing?.reason_unavailable) || t("workoutDetailExtended.pacingUnavailable")}</p>}
       {hasSplits && <div className="mt-3" data-testid="splits-chart-card">
         <h3 className="text-sm font-semibold mb-2">{t("workoutDetailExtended.recordedSplits")}</h3>
         <SplitsChart splits={workout.km_splits} t={t} />
@@ -548,17 +820,17 @@ export default function WorkoutDetail() {
                 <p className="text-muted-foreground" data-testid="similar-comparability-caveat">{t(`workoutDetailExtended.${similar.comparable === true ? "comparableReference" : "limitedComparability"}`)}</p>
               </>
             ) : (
-              <p className="text-muted-foreground">{(!(Array.isArray(analysis.limitations) && analysis.limitations.some((item) => item?.code === "limitations.no_comparable_reference")) && similar.reason_unavailable) || t("workoutDetailExtended.similarUnavailable")}</p>
+              <p className="text-muted-foreground">{(!(Array.isArray(analysisForRender.limitations) && analysisForRender.limitations.some((item) => item?.code === "limitations.no_comparable_reference")) && similar.reason_unavailable) || t("workoutDetailExtended.similarUnavailable")}</p>
             )}
           </CardContent>
         </Card>
       )}
       </section>}
 
-      <section aria-labelledby="coach-advice-title">
+      {canAccessAnalysis && <section aria-labelledby="coach-advice-title">
         <h2 id="coach-advice-title" className="text-base font-semibold mb-2">{t("workoutDetailExtended.coachObservation")}</h2>
         {hasAnalysis && <p className={`text-sm leading-relaxed mb-3${observationAvailable ? "" : " text-muted-foreground"}`} data-testid={observationAvailable ? "advice-text" : "advice-unavailable"}>
-          {observationAvailable ? analysis.advice.text : t("workoutDetailExtended.adviceUnavailable")}
+          {observationAvailable ? analysisForRender.advice.text : t("workoutDetailExtended.adviceUnavailable")}
         </p>}
         <Button
           onClick={goToAskCoach}
@@ -568,13 +840,13 @@ export default function WorkoutDetail() {
           <MessageSquare className="w-3.5 h-3.5" />
           {t("workoutDetailExtended.askCoach")}
         </Button>
-      </section>
+      </section>}
 
       {hasAnalysis && (
         <details id="workout-analysis-details" className="bg-card border border-border p-3 mb-3" data-testid="analysis-details">
           <summary className="cursor-pointer text-sm min-h-11 content-center" data-testid="advanced-toggle">{t("workoutDetailExtended.advancedDetails")}</summary>
           <div className="mt-3 space-y-3">
-            {analysis.version != null && <p className="text-sm">{t("workoutDetailExtended.version")}: {analysis.version}</p>}
+            {analysisForRender.version != null && <p className="text-sm">{t("workoutDetailExtended.version")}: {analysisForRender.version}</p>}
             {hasAnalysis && evidence && (
               <section className="font-sans text-sm leading-relaxed text-secondary-foreground space-y-1" data-testid="evidence-card">
                 <h3 className="text-sm font-semibold">{t("workoutDetailExtended.evidence")}</h3>
