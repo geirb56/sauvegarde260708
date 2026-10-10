@@ -238,22 +238,19 @@ const PhaseMetric = ({ label, value }) => (
 const WorkoutPhaseAnalysis = ({ phaseAnalysis, t, lang }) => {
   if (phaseAnalysis?.available !== true) return null;
 
-  const efforts = Array.isArray(phaseAnalysis.efforts)
-    ? phaseAnalysis.efforts.filter((phase) => phase?.phase_type === "effort")
-    : [];
-  const recoveries = Array.isArray(phaseAnalysis.recoveries)
-    ? phaseAnalysis.recoveries.filter((phase) => phase?.phase_type === "recovery")
-    : [];
-  const chronologicalPhases = Array.isArray(phaseAnalysis.phases)
-    ? phaseAnalysis.phases
+  const sortPhases = (phases) => (Array.isArray(phases) ? phases : [])
       .map((phase, index) => ({ phase, index }))
       .sort((left, right) => {
         const leftOrder = Number.isFinite(left.phase?.order) ? left.phase.order : left.index;
         const rightOrder = Number.isFinite(right.phase?.order) ? right.phase.order : right.index;
         return leftOrder - rightOrder || left.index - right.index;
       })
-      .map(({ phase }) => phase)
-    : [];
+      .map(({ phase }) => phase);
+  const efforts = sortPhases(phaseAnalysis.efforts)
+    .filter((phase) => phase?.phase_type === "effort");
+  const recoveries = sortPhases(phaseAnalysis.recoveries)
+    .filter((phase) => phase?.phase_type === "recovery");
+  const chronologicalPhases = sortPhases(phaseAnalysis.phases);
   const recoveryAfterEffort = new Map();
   const associatedRecoveryOrders = new Set();
   chronologicalPhases.forEach((phase, index) => {

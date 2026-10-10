@@ -11,6 +11,8 @@ import DetailedAnalysis from "@/pages/DetailedAnalysis";
 import SessionDetail from "@/pages/SessionDetail";
 import { LanguageProvider } from "@/context/LanguageContext";
 import { UnitProvider } from "@/context/UnitContext";
+import { AuthProvider } from "@/context/AuthContext";
+import { SubscriptionProvider } from "@/context/SubscriptionContext";
 import { translations, LANGUAGE_STORAGE_KEY } from "@/lib/i18n";
 import { formatPaceDisplay, formatPaceDelta } from "@/lib/workoutAnalysis";
 
@@ -152,6 +154,63 @@ const analysisMissingEvidence = {
   },
 };
 
+const makeStructuredPhaseAnalysis = () => {
+  const effortPaces = [288.4, 282, 271, 291];
+  const effortDistances = [832, 851, 886, 825];
+  const effortHeartRates = [151, 157, 159, 159];
+  const efforts = effortPaces.map((pace, index) => ({
+    order: index * 2 + 1,
+    phase_type: "effort",
+    effort_number: index + 1,
+    duration_s: 240,
+    distance_m: effortDistances[index],
+    pace_sec_per_km: pace,
+    average_hr: effortHeartRates[index],
+    max_hr: [160, 165, 175, 166][index],
+  }));
+  const recoveries = effortPaces.map((_, index) => ({
+    order: index * 2 + 2,
+    phase_type: "recovery",
+    recovery_number: index + 1,
+    duration_s: 120,
+    distance_m: 180,
+    pace_sec_per_km: 666,
+    average_hr: 130,
+    max_hr: 145,
+  }));
+  const phases = efforts.flatMap((effort, index) => [effort, recoveries[index]]);
+
+  return {
+    available: true,
+    analysis_type: "structured_phases",
+    phases,
+    efforts,
+    recoveries,
+    effort_statistics: {
+      count: 4,
+      total_duration_s: 960,
+      total_distance_m: 3394,
+      average_pace_sec_per_km: 283,
+      average_hr: 156.5,
+      max_hr: 175,
+    },
+    recovery_statistics: { count: 4, total_duration_s: 480, total_distance_m: 720 },
+    effort_regularity: {
+      available: true,
+      effort_count: 4,
+      comparable_effort_count: 4,
+      comparability_basis: "duration",
+      pace_sample_count: 4,
+      partial_comparison: false,
+      pace_dispersion_sec_per_km: 7.7,
+      first_to_last_pace_change_sec_per_km: 2.6,
+      average_hr_change_bpm: 8,
+    },
+    missing_data: [],
+    limitations: [],
+  };
+};
+
 function renderWithProviders(ui, route, language = "en") {
   window.localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
   return render(
@@ -161,6 +220,21 @@ function renderWithProviders(ui, route, language = "en") {
           {ui}
         </MemoryRouter>
       </UnitProvider>
+    </LanguageProvider>,
+  );
+}
+
+function renderWithSubscriptionPlan(ui, route, plan) {
+  window.localStorage.setItem("access_token", "test-access-token");
+  return render(
+    <LanguageProvider>
+      <AuthProvider>
+        <SubscriptionProvider>
+          <UnitProvider>
+            <MemoryRouter initialEntries={[route]}>{ui}</MemoryRouter>
+          </UnitProvider>
+        </SubscriptionProvider>
+      </AuthProvider>
     </LanguageProvider>,
   );
 }
@@ -261,6 +335,312 @@ test("WorkoutDetail hides physiology and pacing cards when evidence is unavailab
   expect(screen.getByText("Pacing evidence is unavailable.")).toBeVisible();
   expect(screen.getByText("No prior same-type workouts in the last 14 days.")).toBeVisible();
   expect(screen.getByTestId("heart-response")).toHaveTextContent("150 bpm");
+});
+
+test("structured phases show four efforts, four recoveries, statistics, and chronological details", async () => {
+  const phaseAnalysis = makeStructuredPhaseAnalysis();
+  mockAxios({ analysisPayload: { ...analysis, phase_analysis: phaseAnalysis } });
+
+  renderWithProviders(
+    <Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>,
+    "/workout/w1",
+  );
+
+  const section = await screen.findByTestId("structured-phase-analysis");
+  expect(within(screen.getByTestId("phase-summary")).getAllByText("4")).toHaveLength(2);
+  expect(section).toHaveTextContent("16:00");
+  expect(section).toHaveTextContent("3.39 km");
+  expect(section).toHaveTextContent("4:43/km");
+  expect(section).toHaveTextContent("7.7 s/km");
+  expect(section).toHaveTextContent("+8 bpm");
+  expect(within(section).getAllByRole("listitem")).toHaveLength(4);
+  expect(section.querySelectorAll("h5")).toHaveLength(4);
+  expect(section).toHaveTextContent("4:48/km");
+  expect(section).toHaveTextContent("832 m");
+  expect(section).toHaveTextContent("151 bpm");
+  expect(section).toHaveTextContent("175 bpm");
+  expect(screen.getByText("Standard session")).toBeVisible();
+  expect(axios.get).toHaveBeenCalledTimes(2);
+});
+
+test("structured phases sort efforts and recoveries by their recorded order", async () => {
+  const phaseAnalysis = makeStructuredPhaseAnalysis();
+  mockAxios({
+    analysisPayload: {
+      ...analysis,
+      phase_analysis: {
+        ...phaseAnalysis,
+        efforts: [...phaseAnalysis.efforts].reverse(),
+        recoveries: [...phaseAnalysis.recoveries].reverse(),
+      },
+    },
+  });
+  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+  const section = await screen.findByTestId("structured-phase-analysis");
+  const effortRows = within(section).getAllByRole("listitem").slice(0, 4);
+  expect(effortRows[0]).toHaveTextContent("Effort 1");
+  expect(effortRows[0]).toHaveTextContent("4:48/km");
+  expect(effortRows[3]).toHaveTextContent("Effort 4");
+  expect(effortRows[3]).toHaveTextContent("4:51/km");
+});
+
+test("unavailable or absent phase_analysis preserves standard Workout Detail without an empty phase section", async () => {
+  for (const phaseAnalysis of [undefined, { available: false, analysis_type: "standard", efforts: [], limitations: ["structured_phases_unavailable"] }]) {
+    mockAxios({
+      analysisPayload: phaseAnalysis === undefined ? analysis : { ...analysis, phase_analysis: phaseAnalysis },
+    });
+    const { unmount } = renderWithProviders(
+      <Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>,
+      "/workout/w1",
+    );
+    await screen.findByTestId("coach-summary");
+    expect(screen.queryByTestId("structured-phase-analysis")).not.toBeInTheDocument();
+    expect(screen.getByTestId("primary-metrics")).toHaveTextContent("10 km");
+    expect(screen.getByTestId("splits-chart-card")).toBeVisible();
+    unmount();
+  }
+});
+
+test("one effort is shown without a regularity judgment", async () => {
+  const phaseAnalysis = makeStructuredPhaseAnalysis();
+  const effort = { ...phaseAnalysis.efforts[0], order: 1, effort_number: 1 };
+  mockAxios({
+    analysisPayload: {
+      ...analysis,
+      phase_analysis: {
+        ...phaseAnalysis,
+        phases: [effort],
+        efforts: [effort],
+        recoveries: [],
+        effort_statistics: { count: 1, total_duration_s: 240, total_distance_m: 832, average_pace_sec_per_km: 288.4 },
+        recovery_statistics: { count: 0 },
+        effort_regularity: { available: false, effort_count: 1, comparable_effort_count: 1 },
+      },
+    },
+  });
+  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+  const section = await screen.findByTestId("structured-phase-analysis");
+  expect(within(section).getAllByRole("listitem")).toHaveLength(1);
+  expect(section).toHaveTextContent("4:00");
+  expect(screen.queryByTestId("effort-regularity")).not.toBeInTheDocument();
+  expect(section).not.toHaveTextContent("Following recovery");
+});
+
+test("unknown phases remain chronological, use a neutral label, and do not invent recovery links", async () => {
+  const phaseAnalysis = makeStructuredPhaseAnalysis();
+  const [effort1, recovery1, effort2, recovery2, effort3, recovery3, effort4, recovery4] = phaseAnalysis.phases;
+  const unknown = { order: 2, phase_type: "unknown", native_type: "DEVICE_INTERNAL_PHASE", duration_s: 30 };
+  const phases = [
+    { ...effort1, order: 1 },
+    unknown,
+    { ...recovery1, order: 3 },
+    { ...effort2, order: 4 },
+    { ...recovery2, order: 5 },
+    { ...effort3, order: 6 },
+    { ...recovery3, order: 7 },
+    { ...effort4, order: 8 },
+    { ...recovery4, order: 9 },
+  ];
+  mockAxios({
+    analysisPayload: {
+      ...analysis,
+      phase_analysis: {
+        ...phaseAnalysis,
+        phases,
+        efforts: [phases[0], phases[3], phases[5], phases[7]],
+        recoveries: [phases[2], phases[4], phases[6], phases[8]],
+      },
+    },
+  });
+  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+  const section = await screen.findByTestId("structured-phase-analysis");
+  const effortRows = within(section).getAllByRole("listitem").slice(0, 4);
+  expect(within(effortRows[0]).queryByText("Following recovery")).not.toBeInTheDocument();
+  expect(section).toHaveTextContent("Other phase");
+  expect(section).toHaveTextContent("Other recoveries");
+  expect(section).not.toHaveTextContent("DEVICE_INTERNAL_PHASE");
+});
+
+test("missing recoveries are reported as zero without inferred associations", async () => {
+  const phaseAnalysis = makeStructuredPhaseAnalysis();
+  const efforts = phaseAnalysis.efforts.map((effort, index) => ({ ...effort, order: index + 1 }));
+  mockAxios({
+    analysisPayload: {
+      ...analysis,
+      phase_analysis: {
+        ...phaseAnalysis,
+        phases: efforts,
+        efforts,
+        recoveries: [],
+        recovery_statistics: { count: 0 },
+      },
+    },
+  });
+  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+  const section = await screen.findByTestId("structured-phase-analysis");
+  expect(within(screen.getByTestId("phase-summary")).getByText("0")).toBeInTheDocument();
+  expect(section).not.toHaveTextContent("Following recovery");
+  expect(screen.queryByText("Other recoveries")).not.toBeInTheDocument();
+});
+
+test("missing heart-rate values are marked unavailable rather than fabricated", async () => {
+  const phaseAnalysis = makeStructuredPhaseAnalysis();
+  const efforts = phaseAnalysis.efforts.map((effort) => ({ ...effort, average_hr: null, max_hr: null }));
+  mockAxios({
+    analysisPayload: {
+      ...analysis,
+      phase_analysis: {
+        ...phaseAnalysis,
+        efforts,
+        phases: phaseAnalysis.phases.map((phase) => phase.phase_type === "effort"
+          ? { ...phase, average_hr: null, max_hr: null }
+          : phase),
+        missing_data: ["heart_rate"],
+      },
+    },
+  });
+  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+  const section = await screen.findByTestId("structured-phase-analysis");
+  expect(section).toHaveTextContent("Not recorded");
+  expect(section).toHaveTextContent(translations.en.workoutDetailExtended.phaseMissingHeartRate);
+  expect(section).not.toHaveTextContent("undefined");
+});
+
+test("missing effort paces hide only unavailable pace indicators and translate limitations", async () => {
+  const phaseAnalysis = makeStructuredPhaseAnalysis();
+  const efforts = phaseAnalysis.efforts.map((effort) => ({ ...effort, pace_sec_per_km: null }));
+  mockAxios({
+    analysisPayload: {
+      ...analysis,
+      phase_analysis: {
+        ...phaseAnalysis,
+        efforts,
+        phases: phaseAnalysis.phases.map((phase) => phase.phase_type === "effort" ? { ...phase, pace_sec_per_km: null } : phase),
+        effort_statistics: { ...phaseAnalysis.effort_statistics, average_pace_sec_per_km: null },
+        effort_regularity: { ...phaseAnalysis.effort_regularity, available: false },
+        missing_data: ["pace"],
+        limitations: ["effort_paces_incomplete", "future_internal_code"],
+      },
+    },
+  });
+  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+  const section = await screen.findByTestId("structured-phase-analysis");
+  expect(section).toHaveTextContent(translations.en.workoutDetailExtended.phaseMissingPace);
+  expect(section).toHaveTextContent(translations.en.workoutDetailExtended.phaseLimitationIncompletePaces);
+  expect(section).toHaveTextContent(translations.en.workoutDetailExtended.phaseLimitationGeneric);
+  expect(section).not.toHaveTextContent("effort_paces_incomplete");
+  expect(section).not.toHaveTextContent("future_internal_code");
+  expect(section).not.toHaveTextContent("Average effort pace");
+});
+
+test("available regularity shows descriptive values and partial comparison is explicit", async () => {
+  const phaseAnalysis = makeStructuredPhaseAnalysis();
+  mockAxios({
+    analysisPayload: {
+      ...analysis,
+      phase_analysis: {
+        ...phaseAnalysis,
+        effort_regularity: { ...phaseAnalysis.effort_regularity, partial_comparison: true, comparable_effort_count: 3 },
+        limitations: ["efforts_partially_comparable"],
+      },
+    },
+  });
+  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+  const regularity = await screen.findByTestId("effort-regularity");
+  expect(regularity).toHaveTextContent("3 comparable efforts");
+  expect(regularity).toHaveTextContent(translations.en.workoutDetailExtended.partialEffortComparison);
+  expect(regularity).toHaveTextContent("+2.6 s/km");
+  expect(regularity).toHaveTextContent("Average HR change across repetitions");
+  expect(regularity).not.toHaveTextContent(/drift/i);
+});
+
+test("unavailable regularity does not display a performance judgment or regularity card", async () => {
+  const phaseAnalysis = makeStructuredPhaseAnalysis();
+  mockAxios({
+    analysisPayload: {
+      ...analysis,
+      phase_analysis: {
+        ...phaseAnalysis,
+        effort_regularity: { ...phaseAnalysis.effort_regularity, available: false },
+      },
+    },
+  });
+  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+  const section = await screen.findByTestId("structured-phase-analysis");
+  expect(screen.queryByTestId("effort-regularity")).not.toBeInTheDocument();
+  expect(section).not.toHaveTextContent("perfect");
+  expect(section).not.toHaveTextContent("goal achieved");
+});
+
+test("structured phases without kilometer splits remain distinct from split data", async () => {
+  mockAxios({
+    workoutPayload: { ...workout, km_splits: [] },
+    analysisPayload: { ...analysis, phase_analysis: makeStructuredPhaseAnalysis() },
+  });
+  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+  expect(await screen.findByTestId("structured-phase-analysis")).toBeVisible();
+  expect(screen.queryByTestId("splits-chart-card")).not.toBeInTheDocument();
+  expect(screen.getByText(translations.en.workoutDetailExtended.splitsUnavailable)).toBeVisible();
+});
+
+test("structured phases and kilometer splits remain independently visible", async () => {
+  mockAxios({ analysisPayload: { ...analysis, phase_analysis: makeStructuredPhaseAnalysis() } });
+  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+  expect(await screen.findByTestId("structured-phase-analysis")).toBeVisible();
+  expect(screen.getByTestId("splits-chart-card")).toBeVisible();
+  expect(screen.getByTestId("splits-chart-card")).toHaveTextContent("5:54");
+});
+
+test.each(["free", "trial", "premium"])(
+  "phase analysis remains at the existing Workout Detail access level for %s users",
+  async (plan) => {
+    const phaseAnalysis = makeStructuredPhaseAnalysis();
+    axios.get.mockImplementation((url) => {
+      if (url.endsWith("/auth/me")) return Promise.resolve({ data: { id: "synthetic-user" } });
+      if (url.endsWith("/user/features")) return Promise.resolve({
+        data: { has_premium_access: plan !== "free", trial_active: plan === "trial", feature_access: {} },
+      });
+      if (url.includes("/subscription/info")) return Promise.resolve({ data: { status: plan } });
+      if (url.includes("/workouts/w1")) return Promise.resolve({ data: workout });
+      if (url.includes("/coach/workout-analysis/w1")) return Promise.resolve({ data: { ...analysis, phase_analysis: phaseAnalysis } });
+      return Promise.reject(new Error(`unexpected ${url}`));
+    });
+
+    renderWithSubscriptionPlan(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1", plan);
+
+    expect(await screen.findByTestId("structured-phase-analysis")).toBeVisible();
+    await waitFor(() => expect(axios.get.mock.calls.some(([url]) => url.endsWith("/user/features"))).toBe(true));
+    expect(screen.queryByText(/subscribe|upgrade/i)).not.toBeInTheDocument();
+    window.localStorage.removeItem("access_token");
+  },
+);
+
+test.each(["fr", "en", "es"])("structured phase headings and labels are localized in %s", async (language) => {
+  mockAxios({ analysisPayload: { ...analysis, phase_analysis: makeStructuredPhaseAnalysis() } });
+  renderWithProviders(
+    <Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>,
+    "/workout/w1",
+    language,
+  );
+  const section = await screen.findByTestId("structured-phase-analysis");
+  const labels = translations[language].workoutDetailExtended;
+  expect(within(section).getByRole("heading", { level: 2 })).toHaveTextContent(labels.structuredPhases);
+  expect(section).toHaveTextContent(labels.effortCount);
+  expect(section).toHaveTextContent(labels.effortNumber.replace("{number}", "1"));
+  expect(section).toHaveTextContent(labels.averageEffortPace);
+});
+
+test("structured phase cards keep a compact, wrapping layout at a 360px mobile viewport", async () => {
+  const originalWidth = window.innerWidth;
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: 360 });
+  mockAxios({ analysisPayload: { ...analysis, phase_analysis: makeStructuredPhaseAnalysis() } });
+  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+  const section = await screen.findByTestId("structured-phase-analysis");
+  expect(screen.getByTestId("workout-detail")).toHaveClass("min-w-0");
+  expect(section.querySelectorAll(".min-w-0").length).toBeGreaterThan(0);
+  expect(section.querySelector("table")).toBeNull();
+  expect(section.innerHTML).not.toContain("min-w-max");
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: originalWidth });
 });
 
 test("WorkoutDetail shows one coherent error state for analysis failure", async () => {
