@@ -3,12 +3,15 @@ from __future__ import annotations
 import math
 from datetime import datetime, timedelta, timezone
 from statistics import mean
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from activity_phases import ActivityPhase
+
 
 SUPPORTED_LANGUAGES = {"en", "fr", "es"}
+PHASE_COMPARABILITY_TOLERANCE_PCT = 20.0
 
 # Baseline window kept identical to the V2 contract (comparison.baseline_period_days).
 BASELINE_PERIOD_DAYS = 14
@@ -128,6 +131,60 @@ class WorkoutAnalysisEvidence(BaseModel):
     has_elevation: bool
 
 
+class WorkoutAnalysisStructuredPhase(BaseModel):
+    order: int
+    native_type: Optional[str] = None
+    phase_type: Literal["effort", "recovery", "warmup", "cooldown", "unknown"]
+    duration_s: Optional[float] = None
+    distance_m: Optional[float] = None
+    average_speed_mps: Optional[float] = None
+    pace_sec_per_km: Optional[float] = None
+    average_hr: Optional[float] = None
+    max_hr: Optional[float] = None
+    min_hr: Optional[float] = None
+    source: str
+    effort_number: Optional[int] = None
+    recovery_number: Optional[int] = None
+
+
+class WorkoutAnalysisPhaseStatistics(BaseModel):
+    count: int = 0
+    total_duration_s: Optional[float] = None
+    total_distance_m: Optional[float] = None
+    average_pace_sec_per_km: Optional[float] = None
+    average_hr: Optional[float] = None
+    max_hr: Optional[float] = None
+
+
+class WorkoutAnalysisEffortRegularity(BaseModel):
+    available: bool = False
+    effort_count: int = 0
+    comparable_effort_count: int = 0
+    comparability_tolerance_pct: float = PHASE_COMPARABILITY_TOLERANCE_PCT
+    comparability_basis: Optional[Literal["duration", "distance"]] = None
+    pace_sample_count: int = 0
+    partial_comparison: bool = False
+    average_duration_s: Optional[float] = None
+    average_pace_sec_per_km: Optional[float] = None
+    pace_dispersion_sec_per_km: Optional[float] = None
+    first_to_last_pace_change_sec_per_km: Optional[float] = None
+    average_hr_change_bpm: Optional[float] = None
+
+
+class WorkoutAnalysisPhaseAnalysis(BaseModel):
+    available: bool = False
+    analysis_type: Literal["standard", "structured_phases"] = "standard"
+    source: Optional[str] = None
+    phases: List[WorkoutAnalysisStructuredPhase] = Field(default_factory=list)
+    efforts: List[WorkoutAnalysisStructuredPhase] = Field(default_factory=list)
+    recoveries: List[WorkoutAnalysisStructuredPhase] = Field(default_factory=list)
+    effort_statistics: WorkoutAnalysisPhaseStatistics = Field(default_factory=WorkoutAnalysisPhaseStatistics)
+    recovery_statistics: WorkoutAnalysisPhaseStatistics = Field(default_factory=WorkoutAnalysisPhaseStatistics)
+    effort_regularity: WorkoutAnalysisEffortRegularity = Field(default_factory=WorkoutAnalysisEffortRegularity)
+    missing_data: List[str] = Field(default_factory=list)
+    limitations: List[str] = Field(default_factory=list)
+
+
 class WorkoutAnalysisV2Response(BaseModel):
     version: str = "v2"
     workout: WorkoutAnalysisWorkout
@@ -140,6 +197,7 @@ class WorkoutAnalysisV2Response(BaseModel):
     advice: WorkoutAnalysisAdvice
     evidence: WorkoutAnalysisEvidence
     limitations: List[AnalysisText] = Field(default_factory=list)
+    phase_analysis: WorkoutAnalysisPhaseAnalysis = Field(default_factory=WorkoutAnalysisPhaseAnalysis)
 
 
 def _lang(language: str) -> str:
@@ -1238,7 +1296,215 @@ def _build_limitations(
     ]
 
 
-def build_workout_analysis_v2(workout: dict, historical_workouts: List[dict], language: str = "en") -> WorkoutAnalysisV2Response:
+def _phase_pace(phase: ActivityPhase) -> tuple[Optional[float], bool]:
+    duration = phase.duration_s
+    distance = phase.distance_m
+    speed = phase.average_speed_mps
+    if (
+        duration is not None and distance is not None
+        and math.isfinite(duration) and math.isfinite(distance)
+        and duration > 0 and distance > 0
+    ):
+        if speed is not None and math.isfinite(speed) and speed > 0:
+            speed_distance_m = speed * duration
+            relative_difference = abs(distance - speed_distance_m) / max(distance, speed_distance_m)
+            if relative_difference > 0.2:
+                return None, True
+            pace = 1000 / speed
+        else:
+            pace = duration * 1000 / distance
+        return (pace, False) if math.isfinite(pace) else (None, False)
+    if speed is not None and math.isfinite(speed) and speed > 0:
+        pace = 1000 / speed
+        return (pace, False) if math.isfinite(pace) else (None, False)
+    return None, False
+
+
+def _phase_statistics(phases: List[WorkoutAnalysisStructuredPhase]) -> WorkoutAnalysisPhaseStatistics:
+    durations = [phase.duration_s for phase in phases if phase.duration_s is not None]
+    distances = [phase.distance_m for phase in phases if phase.distance_m is not None]
+    paces = [phase.pace_sec_per_km for phase in phases if phase.pace_sec_per_km is not None]
+    average_hrs = [phase.average_hr for phase in phases if phase.average_hr is not None]
+    max_hrs = [phase.max_hr for phase in phases if phase.max_hr is not None]
+    return WorkoutAnalysisPhaseStatistics(
+        count=len(phases),
+        total_duration_s=sum(durations) if len(durations) == len(phases) and phases else None,
+        total_distance_m=sum(distances) if len(distances) == len(phases) and phases else None,
+        average_pace_sec_per_km=mean(paces) if paces else None,
+        average_hr=mean(average_hrs) if average_hrs else None,
+        max_hr=max(max_hrs) if max_hrs else None,
+    )
+
+
+def _efforts_comparable(
+    first: WorkoutAnalysisStructuredPhase,
+    candidate: WorkoutAnalysisStructuredPhase,
+    basis: Literal["duration", "distance"],
+) -> bool:
+    key = "duration_s" if basis == "duration" else "distance_m"
+    left = getattr(first, key)
+    right = getattr(candidate, key)
+    if (
+        left is None or right is None or not math.isfinite(left) or not math.isfinite(right)
+        or left <= 0 or right <= 0
+    ):
+        return False
+    difference_pct = abs(left - right) / max(left, right) * 100
+    return difference_pct <= PHASE_COMPARABILITY_TOLERANCE_PCT
+
+
+def _effort_comparison_cohort(
+    efforts: List[WorkoutAnalysisStructuredPhase],
+) -> tuple[List[WorkoutAnalysisStructuredPhase], Optional[Literal["duration", "distance"]]]:
+    best_cohort: List[WorkoutAnalysisStructuredPhase] = []
+    best_basis: Optional[Literal["duration", "distance"]] = None
+    for basis in ("duration", "distance"):
+        for anchor in efforts:
+            key = "duration_s" if basis == "duration" else "distance_m"
+            value = getattr(anchor, key)
+            if value is None or not math.isfinite(value) or value <= 0:
+                continue
+            cohort = [
+                effort for effort in efforts
+                if effort is anchor or _efforts_comparable(anchor, effort, basis)
+            ]
+            if len(cohort) > len(best_cohort):
+                best_cohort = cohort
+                best_basis = basis
+    return best_cohort, best_basis
+
+
+def _effort_regularity(
+    efforts: List[WorkoutAnalysisStructuredPhase],
+) -> WorkoutAnalysisEffortRegularity:
+    if not efforts:
+        return WorkoutAnalysisEffortRegularity()
+    comparable, basis = _effort_comparison_cohort(efforts)
+    durations = [effort.duration_s for effort in comparable if effort.duration_s is not None]
+    paces = [
+        effort for effort in comparable
+        if effort.pace_sec_per_km is not None
+        and math.isfinite(effort.pace_sec_per_km)
+        and effort.pace_sec_per_km > 0
+    ]
+    heart_rates = [
+        effort for effort in comparable
+        if effort.average_hr is not None and math.isfinite(effort.average_hr)
+    ]
+    dispersion = None
+    pace_values = [effort.pace_sec_per_km for effort in paces]
+    if len(pace_values) >= 2:
+        average_pace = mean(pace_values)
+        dispersion = math.sqrt(mean((pace - average_pace) ** 2 for pace in pace_values))
+    comparable_count = len(comparable)
+    pace_count = len(paces)
+    return WorkoutAnalysisEffortRegularity(
+        available=pace_count >= 2,
+        effort_count=len(efforts),
+        comparable_effort_count=comparable_count,
+        comparability_basis=basis,
+        pace_sample_count=pace_count,
+        partial_comparison=comparable_count < len(efforts) or pace_count < comparable_count,
+        average_duration_s=mean(durations) if durations else None,
+        average_pace_sec_per_km=mean(pace_values) if pace_values else None,
+        pace_dispersion_sec_per_km=dispersion,
+        first_to_last_pace_change_sec_per_km=(
+            paces[-1].pace_sec_per_km - paces[0].pace_sec_per_km
+            if len(paces) >= 2
+            else None
+        ),
+        average_hr_change_bpm=(
+            heart_rates[-1].average_hr - heart_rates[0].average_hr
+            if len(heart_rates) >= 2
+            else None
+        ),
+    )
+
+
+def _build_phase_analysis(phases: Optional[List[ActivityPhase]]) -> WorkoutAnalysisPhaseAnalysis:
+    if not phases:
+        return WorkoutAnalysisPhaseAnalysis(
+            limitations=["structured_phases_unavailable"],
+        )
+
+    efforts_seen = 0
+    recoveries_seen = 0
+    structured = []
+    incoherent_pace = False
+    missing_data = set()
+    for phase in phases:
+        if phase.phase_type == "effort":
+            efforts_seen += 1
+            effort_number = efforts_seen
+            recovery_number = None
+        elif phase.phase_type == "recovery":
+            recoveries_seen += 1
+            effort_number = None
+            recovery_number = recoveries_seen
+        else:
+            effort_number = recovery_number = None
+
+        pace, incoherent = _phase_pace(phase)
+        incoherent_pace = incoherent_pace or incoherent
+        if phase.duration_s is None:
+            missing_data.add("duration")
+        if phase.distance_m is None:
+            missing_data.add("distance")
+        if pace is None:
+            missing_data.add("pace")
+        if phase.average_hr is None and phase.max_hr is None:
+            missing_data.add("heart_rate")
+        structured.append(WorkoutAnalysisStructuredPhase(
+            order=phase.order,
+            native_type=phase.native_type,
+            phase_type=phase.phase_type,
+            duration_s=phase.duration_s,
+            distance_m=phase.distance_m,
+            average_speed_mps=phase.average_speed_mps,
+            pace_sec_per_km=pace,
+            average_hr=phase.average_hr,
+            max_hr=phase.max_hr,
+            min_hr=phase.min_hr,
+            source=phase.source,
+            effort_number=effort_number,
+            recovery_number=recovery_number,
+        ))
+
+    efforts = [phase for phase in structured if phase.phase_type == "effort"]
+    recoveries = [phase for phase in structured if phase.phase_type == "recovery"]
+    regularity = _effort_regularity(efforts)
+    limitations = []
+    if incoherent_pace:
+        limitations.append("incoherent_pace")
+    if len(efforts) > 1 and regularity.comparable_effort_count < 2:
+        limitations.append("efforts_not_comparable")
+    elif regularity.comparable_effort_count < len(efforts):
+        limitations.append("efforts_partially_comparable")
+    if regularity.pace_sample_count < regularity.comparable_effort_count:
+        limitations.append("effort_paces_incomplete")
+    if regularity.pace_sample_count < 2 and regularity.comparable_effort_count >= 2:
+        limitations.append("insufficient_comparable_effort_paces")
+    return WorkoutAnalysisPhaseAnalysis(
+        available=True,
+        analysis_type="structured_phases",
+        source=phases[0].source,
+        phases=structured,
+        efforts=efforts,
+        recoveries=recoveries,
+        effort_statistics=_phase_statistics(efforts),
+        recovery_statistics=_phase_statistics(recoveries),
+        effort_regularity=regularity,
+        missing_data=sorted(missing_data),
+        limitations=limitations,
+    )
+
+
+def build_workout_analysis_v2(
+    workout: dict,
+    historical_workouts: List[dict],
+    language: str = "en",
+    phases: Optional[List[ActivityPhase]] = None,
+) -> WorkoutAnalysisV2Response:
     comparison = _localized_comparison(workout, historical_workouts, language)
     physiology = _build_physiology(workout, language)
     pacing = _build_pacing(workout, language)
@@ -1270,4 +1536,5 @@ def build_workout_analysis_v2(workout: dict, historical_workouts: List[dict], la
         advice=advice,
         evidence=evidence,
         limitations=_build_limitations(workout, signals, comparison, evidence, language),
+        phase_analysis=_build_phase_analysis(phases),
     )
