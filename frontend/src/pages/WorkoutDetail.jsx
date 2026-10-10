@@ -197,6 +197,257 @@ const HRZonesChart = ({ zones, t }) => {
   );
 };
 
+const formatPhaseDuration = (seconds) => {
+  if (!Number.isFinite(seconds) || seconds < 0) return null;
+  const rounded = Math.round(seconds);
+  const hours = Math.floor(rounded / 3600);
+  const minutes = Math.floor((rounded % 3600) / 60);
+  const remainingSeconds = rounded % 60;
+  return hours > 0
+    ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remainingSeconds).padStart(2, "0")}`
+    : `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
+};
+
+const formatPhaseNumber = (value, lang, digits = 1) => new Intl.NumberFormat(
+  { fr: "fr-FR", en: "en-US", es: "es-ES" }[lang] || "en-US",
+  { maximumFractionDigits: digits },
+).format(value);
+
+const phaseMissingLabels = {
+  duration: "phaseMissingDuration",
+  distance: "phaseMissingDistance",
+  pace: "phaseMissingPace",
+  heart_rate: "phaseMissingHeartRate",
+};
+
+const phaseLimitationLabels = {
+  incoherent_pace: "phaseLimitationIncoherentPace",
+  efforts_not_comparable: "phaseLimitationNotComparable",
+  efforts_partially_comparable: "phaseLimitationPartiallyComparable",
+  effort_paces_incomplete: "phaseLimitationIncompletePaces",
+  insufficient_comparable_effort_paces: "phaseLimitationInsufficientPaces",
+};
+
+const PhaseMetric = ({ label, value }) => (
+  <div className="min-w-0">
+    <dt className="text-xs text-muted-foreground">{label}</dt>
+    <dd className="font-mono text-sm font-semibold break-words">{value}</dd>
+  </div>
+);
+
+const WorkoutPhaseAnalysis = ({ phaseAnalysis, t, lang }) => {
+  if (phaseAnalysis?.available !== true) return null;
+
+  const efforts = Array.isArray(phaseAnalysis.efforts)
+    ? phaseAnalysis.efforts.filter((phase) => phase?.phase_type === "effort")
+    : [];
+  const recoveries = Array.isArray(phaseAnalysis.recoveries)
+    ? phaseAnalysis.recoveries.filter((phase) => phase?.phase_type === "recovery")
+    : [];
+  const chronologicalPhases = Array.isArray(phaseAnalysis.phases)
+    ? phaseAnalysis.phases
+      .map((phase, index) => ({ phase, index }))
+      .sort((left, right) => {
+        const leftOrder = Number.isFinite(left.phase?.order) ? left.phase.order : left.index;
+        const rightOrder = Number.isFinite(right.phase?.order) ? right.phase.order : right.index;
+        return leftOrder - rightOrder || left.index - right.index;
+      })
+      .map(({ phase }) => phase)
+    : [];
+  const recoveryAfterEffort = new Map();
+  const associatedRecoveryOrders = new Set();
+  chronologicalPhases.forEach((phase, index) => {
+    const next = chronologicalPhases[index + 1];
+    if (phase?.phase_type === "effort" && next?.phase_type === "recovery") {
+      recoveryAfterEffort.set(phase.order, next);
+      if (Number.isFinite(next.order)) associatedRecoveryOrders.add(next.order);
+    }
+  });
+  const standaloneRecoveries = recoveries.filter(
+    (phase) => !Number.isFinite(phase.order) || !associatedRecoveryOrders.has(phase.order),
+  );
+  const additionalPhases = chronologicalPhases.filter(
+    (phase) => !["effort", "recovery"].includes(phase?.phase_type),
+  );
+  const effortStatistics = phaseAnalysis.effort_statistics || {};
+  const regularity = phaseAnalysis.effort_regularity || {};
+  const missingData = Array.isArray(phaseAnalysis.missing_data) ? phaseAnalysis.missing_data : [];
+  const limitations = Array.isArray(phaseAnalysis.limitations) ? phaseAnalysis.limitations : [];
+  const number = (value, digits = 1) => Number.isFinite(value) ? formatPhaseNumber(value, lang, digits) : null;
+  const secondsDelta = (value) => {
+    if (!Number.isFinite(value)) return null;
+    const formatted = formatPhaseNumber(Math.abs(value), lang, 1);
+    return `${value > 0 ? "+" : value < 0 ? "−" : ""}${formatted} s/km`;
+  };
+  const interpolate = (key, values) => Object.entries(values).reduce(
+    (text, [name, value]) => text.replace(`{${name}}`, String(value)),
+    t(`workoutDetailExtended.${key}`),
+  );
+  const phaseMetrics = (phase) => [
+    [t("workoutDetailExtended.duration"), formatPhaseDuration(phase?.duration_s)],
+    [t("workoutDetailExtended.distance"), Number.isFinite(phase?.distance_m) && phase.distance_m >= 0
+      ? `${formatPhaseNumber(phase.distance_m, lang, 0)} m`
+      : null],
+    [t("workoutDetailExtended.pace"), Number.isFinite(phase?.pace_sec_per_km) && phase.pace_sec_per_km > 0
+      ? formatPaceDisplay(phase.pace_sec_per_km / 60)
+      : null],
+    [t("workoutDetailExtended.averageHeartRate"), Number.isFinite(phase?.average_hr) && phase.average_hr > 0
+      ? formatHeartRate(phase.average_hr)
+      : null],
+    [t("workoutDetailExtended.maximumHeartRate"), Number.isFinite(phase?.max_hr) && phase.max_hr > 0
+      ? formatHeartRate(phase.max_hr)
+      : null],
+  ];
+  const supplementaryPhaseLabel = (phase) => {
+    if (phase?.phase_type === "warmup") return t("workoutDetailExtended.phaseWarmup");
+    if (phase?.phase_type === "cooldown") return t("workoutDetailExtended.phaseCooldown");
+    return t("workoutDetailExtended.phaseOther");
+  };
+  const uniqueMessages = (items, labels, fallback) => {
+    const messages = items.map((item) => labels[item]).filter(Boolean).map((key) => t(`workoutDetailExtended.${key}`));
+    if (items.some((item) => !labels[item])) messages.push(t(`workoutDetailExtended.${fallback}`));
+    return [...new Set(messages)];
+  };
+
+  return (
+    <section aria-labelledby="structured-phases-title" data-testid="structured-phase-analysis">
+      <h2 id="structured-phases-title" className="text-base font-semibold mb-2">
+        {t("workoutDetailExtended.structuredPhases")}
+      </h2>
+      <Card className="bg-card border-border">
+        <CardContent className="p-4 space-y-4">
+          <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3" data-testid="phase-summary">
+            <PhaseMetric label={t("workoutDetailExtended.effortCount")} value={efforts.length} />
+            <PhaseMetric label={t("workoutDetailExtended.recoveryCount")} value={recoveries.length} />
+            {Number.isFinite(effortStatistics.total_duration_s) && effortStatistics.total_duration_s >= 0 && (
+              <PhaseMetric
+                label={t("workoutDetailExtended.totalEffortDuration")}
+                value={formatPhaseDuration(effortStatistics.total_duration_s) || t("workoutDetailExtended.dataUnavailable")}
+              />
+            )}
+            {Number.isFinite(effortStatistics.total_distance_m) && effortStatistics.total_distance_m >= 0 && (
+              <PhaseMetric
+                label={t("workoutDetailExtended.totalEffortDistance")}
+                value={`${formatPhaseNumber(effortStatistics.total_distance_m / 1000, lang, 2)} km`}
+              />
+            )}
+            {Number.isFinite(effortStatistics.average_pace_sec_per_km) && effortStatistics.average_pace_sec_per_km > 0 && (
+              <PhaseMetric
+                label={t("workoutDetailExtended.averageEffortPace")}
+                value={formatPaceDisplay(effortStatistics.average_pace_sec_per_km / 60)}
+              />
+            )}
+          </dl>
+
+          {efforts.length === 0
+            ? <p className="text-sm text-muted-foreground">{t("workoutDetailExtended.phaseNoEfforts")}</p>
+            : <div className="space-y-3">
+              <h3 className="text-sm font-semibold">{t("workoutDetailExtended.repetitions")}</h3>
+              <ol className="space-y-3">
+                {efforts.map((effort, index) => {
+                  const associatedRecovery = recoveryAfterEffort.get(effort.order);
+                  return (
+                    <li key={`${effort.order ?? index}-${index}`} className="rounded-md border border-border/70 p-3 min-w-0">
+                      <h4 className="text-sm font-semibold mb-2">
+                        {interpolate("effortNumber", { number: effort.effort_number ?? index + 1 })}
+                      </h4>
+                      <dl className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-3">
+                        {phaseMetrics(effort).map(([label, value]) => (
+                          <PhaseMetric key={label} label={label} value={value || t("workoutDetailExtended.dataUnavailable")} />
+                        ))}
+                      </dl>
+                      {associatedRecovery && <div className="mt-3 border-t border-border/70 pt-3">
+                        <h5 className="text-xs font-semibold text-muted-foreground mb-2">{t("workoutDetailExtended.recoveryAfterEffort")}</h5>
+                        <dl className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-3">
+                          {phaseMetrics(associatedRecovery).map(([label, value]) => (
+                            <PhaseMetric key={label} label={label} value={value || t("workoutDetailExtended.dataUnavailable")} />
+                          ))}
+                        </dl>
+                      </div>}
+                    </li>
+                  );
+                })}
+              </ol>
+            </div>}
+
+          {regularity.available === true && <section className="space-y-2" data-testid="effort-regularity">
+            <h3 className="text-sm font-semibold">{t("workoutDetailExtended.effortRegularity")}</h3>
+            <p className="text-sm">
+              {interpolate("comparableEfforts", {
+                count: number(regularity.comparable_effort_count, 0) ?? t("workoutDetailExtended.dataUnavailable"),
+              })}
+            </p>
+            <dl className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {Number.isFinite(regularity.pace_dispersion_sec_per_km) && regularity.pace_dispersion_sec_per_km >= 0 && (
+                <PhaseMetric
+                  label={t("workoutDetailExtended.paceDispersion")}
+                  value={`${number(regularity.pace_dispersion_sec_per_km)} s/km`}
+                />
+              )}
+              {secondsDelta(regularity.first_to_last_pace_change_sec_per_km) != null && (
+                <PhaseMetric
+                  label={t("workoutDetailExtended.firstToLastPace")}
+                  value={secondsDelta(regularity.first_to_last_pace_change_sec_per_km)}
+                />
+              )}
+              {Number.isFinite(regularity.average_hr_change_bpm) && (
+                <PhaseMetric
+                  label={t("workoutDetailExtended.averageHeartRateEvolution")}
+                  value={`${regularity.average_hr_change_bpm > 0 ? "+" : ""}${number(regularity.average_hr_change_bpm)} bpm`}
+                />
+              )}
+            </dl>
+            {regularity.partial_comparison === true && (
+              <p className="text-sm text-muted-foreground">{t("workoutDetailExtended.partialEffortComparison")}</p>
+            )}
+          </section>}
+
+          {standaloneRecoveries.length > 0 && <section className="space-y-2">
+            <h3 className="text-sm font-semibold">{t("workoutDetailExtended.unlinkedRecoveries")}</h3>
+            <ul className="space-y-2">
+              {standaloneRecoveries.map((recovery, index) => (
+                <li key={`${recovery.order ?? index}-${index}`} className="rounded-md bg-muted/20 p-3 min-w-0">
+                  <dl className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-3">
+                    {phaseMetrics(recovery).map(([label, value]) => (
+                      <PhaseMetric key={label} label={label} value={value || t("workoutDetailExtended.dataUnavailable")} />
+                    ))}
+                  </dl>
+                </li>
+              ))}
+            </ul>
+          </section>}
+
+          {additionalPhases.length > 0 && <section className="space-y-2">
+            <h3 className="text-sm font-semibold">{t("workoutDetailExtended.additionalPhases")}</h3>
+            <ul className="space-y-2">
+              {additionalPhases.map((phase, index) => (
+                <li key={`${phase?.order ?? index}-${index}`} className="rounded-md bg-muted/20 p-3 min-w-0">
+                  <h4 className="text-sm font-semibold mb-2">{supplementaryPhaseLabel(phase)}</h4>
+                  <dl className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-3">
+                    {phaseMetrics(phase).map(([label, value]) => (
+                      <PhaseMetric key={label} label={label} value={value || t("workoutDetailExtended.dataUnavailable")} />
+                    ))}
+                  </dl>
+                </li>
+              ))}
+            </ul>
+          </section>}
+
+          {(missingData.length > 0 || limitations.length > 0) && <section className="space-y-2" data-testid="phase-data-limits">
+            <h3 className="text-sm font-semibold">{t("workoutDetailExtended.phaseDataLimits")}</h3>
+            {uniqueMessages(missingData, phaseMissingLabels, "phaseMissingGeneric").map((message) => (
+              <p key={message} className="text-sm text-muted-foreground">{message}</p>
+            ))}
+            {uniqueMessages(limitations, phaseLimitationLabels, "phaseLimitationGeneric").map((message) => (
+              <p key={message} className="text-sm text-muted-foreground">{message}</p>
+            ))}
+          </section>}
+        </CardContent>
+      </Card>
+    </section>
+  );
+};
+
 const AnalysisSkeleton = () => (
   <div className="space-y-2">
     <Skeleton className="h-3 w-3/4" />
@@ -382,6 +633,8 @@ export default function WorkoutDetail() {
         </CardContent>
       </Card>
       </section>
+
+      <WorkoutPhaseAnalysis phaseAnalysis={analysis?.phase_analysis} t={t} lang={lang} />
 
       {hasAnalysis && <section aria-labelledby="takeaways-title">
         <h2 id="takeaways-title" className="text-base font-semibold mb-2">{t("workoutDetailExtended.takeaways")}</h2>
