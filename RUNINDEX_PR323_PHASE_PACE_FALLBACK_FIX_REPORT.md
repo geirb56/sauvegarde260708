@@ -94,6 +94,15 @@ suites ont ensuite été installées avec leurs versions du dépôt.
 Redis serveur local a été installé pour exécuter les 34 tests auparavant ignorés.
 Aucun fichier de dépendances du dépôt n'a changé.
 
+Validation complémentaire effectuée après commit :
+
+- Scan de secrets sur les trois fichiers : aucun secret détecté.
+- CodeQL Python : **0 alerte**.
+- La revue de `parallel_validation` est indisponible : modèle de revue absent
+  du registre malgré le libellé « Success » renvoyé par l'outil.
+- Une revue read-only distincte par l'agent `code-review` a donc été exécutée :
+  aucun problème significatif trouvé.
+
 Les avertissements proviennent de dépréciations existantes
 (Starlette, passlib, Pydantic et hooks FastAPI).
 
@@ -126,8 +135,8 @@ existants. Le chargement cache conserve son enrichissement local existant.
 - Tests synthétiques et caches reconstruits : ils ne prouvent pas le contenu
   d'une activité réelle Garmin et ne remplacent pas une revue technique.
 - Aucun déploiement, aucun merge automatique.
-- La revue automatisée et le scan de sécurité sont consignés dans la PR après
-  validation ; ils ne remplacent pas les points Emergent ci-dessous.
+- L'indisponibilité de la revue intégrée est compensée par une revue distincte ;
+  celle-ci et CodeQL ne remplacent pas les points Emergent ci-dessous.
 
 ## 8. Points de validation Emergent
 
