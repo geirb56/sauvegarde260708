@@ -4,6 +4,7 @@ import logging
 import math
 from typing import Any, Optional
 
+from activity_phases import ACTIVITY_PHASE_SCHEMA_VERSION, ActivityPhase
 from workout_analysis_v2 import (
     SIMILAR_HISTORY_WINDOW_DAYS,
     WorkoutAnalysisV2Response,
@@ -197,6 +198,58 @@ def enrich_workout_from_garmin_activity(
     return enriched
 
 
+def _cached_activity_phases(activity_doc: dict[str, Any]) -> Optional[list[ActivityPhase]]:
+    details = activity_doc.get("activity_details")
+    if not isinstance(details, dict):
+        return None
+    if (
+        details.get("schema_version") != ACTIVITY_PHASE_SCHEMA_VERSION
+        or details.get("status") != "complete"
+        or details.get("source") != "garmin"
+        or details.get("endpoint") != "typed-splits"
+    ):
+        return None
+    raw_phases = details.get("phases")
+    if not isinstance(raw_phases, list) or not raw_phases or len(raw_phases) > 1000:
+        return None
+
+    phases: list[ActivityPhase] = []
+    previous_order = -1
+    try:
+        for index, raw in enumerate(raw_phases):
+            if not isinstance(raw, dict):
+                return None
+            order = raw.get("order")
+            if (
+                isinstance(order, bool) or not isinstance(order, int)
+                or order != index or order <= previous_order
+            ):
+                return None
+            previous_order = order
+            if raw.get("phase_type") not in {"effort", "recovery", "warmup", "cooldown", "unknown"}:
+                return None
+            if not isinstance(raw.get("source"), str) or raw["source"] != details["source"]:
+                return None
+            for key in (
+                "duration_s", "distance_m", "average_speed_mps",
+                "average_hr", "max_hr", "min_hr",
+            ):
+                value = raw.get(key)
+                if value is not None and (
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(float(value))
+                    or value < 0
+                ):
+                    return None
+            if raw.get("native_type") is not None and not isinstance(raw.get("native_type"), str):
+                return None
+            phases.append(ActivityPhase.model_validate(raw))
+    except (OverflowError, TypeError, ValueError):
+        return None
+    return phases
+
+
 async def load_scoped_workout_analysis_v2(
     *,
     db: Any,
@@ -211,12 +264,14 @@ async def load_scoped_workout_analysis_v2(
     if workout is None:
         return None
 
+    phases = None
     if _is_garmin_workout(workout):
         ext_id = _extract_garmin_external_id(workout)
         if ext_id:
             activity_doc = await _fetch_garmin_activity(db, user_id, ext_id)
             if activity_doc:
                 workout = enrich_workout_from_garmin_activity(workout, activity_doc)
+                phases = _cached_activity_phases(activity_doc)
 
     try:
         lower_bound, upper_bound = workout_analysis_candidate_date_bounds(
@@ -239,6 +294,7 @@ async def load_scoped_workout_analysis_v2(
             workout=workout,
             historical_workouts=historical_workouts,
             language=language,
+            phases=phases,
         )
     except Exception:
         logger.exception(
