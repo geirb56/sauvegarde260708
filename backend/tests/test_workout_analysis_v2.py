@@ -968,6 +968,7 @@ async def test_response_contract_has_required_structured_fields(client):
         "advice",
         "evidence",
         "limitations",
+        "phase_analysis",
     }
     assert payload["signals"]["intensity"]["available"] is False
     assert payload["summary"]["text"]
@@ -1292,6 +1293,7 @@ async def test_similar_reference_is_exposed_without_breaking_the_v2_contract(cli
         "advice",
         "evidence",
         "limitations",
+        "phase_analysis",
     }
     assert payload["comparison"]["baseline_period_days"] == 14
     assert isinstance(payload["comparison"]["similar"], dict)

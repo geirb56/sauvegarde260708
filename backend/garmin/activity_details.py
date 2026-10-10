@@ -8,10 +8,11 @@ Unrecognized envelopes fail closed rather than being cached as empty data.
 import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
+from activity_phases import ACTIVITY_PHASE_SCHEMA_VERSION
 from .factory import get_provider_for_user
 from .activity_ids import normalize_activity_id
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = ACTIVITY_PHASE_SCHEMA_VERSION
 LEASE_SECONDS = 900
 RETRY_SECONDS = 300
 

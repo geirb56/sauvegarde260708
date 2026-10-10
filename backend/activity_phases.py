@@ -6,6 +6,9 @@ import math
 from pydantic import BaseModel, ConfigDict
 
 
+ACTIVITY_PHASE_SCHEMA_VERSION = 2
+
+
 class ActivityPhase(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
