@@ -78,7 +78,7 @@ const analysis = {
     reason_unavailable: null,
   },
   meaning: { code: "meaning.hr_without_intensity_with_pacing", text: "Heart-rate facts are available, but intensity classification is unavailable without trustworthy zone evidence, so this session is interpreted structurally." },
-  advice: { code: "advice.hr_without_intensity", text: "Use individualized heart-rate zones on future sessions before treating raw heart-rate values as intensity evidence." },
+  advice: { available: true, code: "advice.maintain_consistency", text: "The recorded pace stayed consistent during this session." },
   evidence: {
     has_heart_rate: true,
     has_hr_zones: true,
@@ -218,7 +218,7 @@ test("WorkoutDetail makes only one canonical analysis request", async () => {
   expect(screen.getByTestId("evidence-card")).not.toBeVisible();
   expect(screen.getByTestId("analysis-details")).not.toHaveAttribute("open");
   expect(screen.getByTestId("ask-coach-btn")).toBeVisible();
-  expect(screen.getByRole("heading", { name: "Coach advice" })).toBeVisible();
+  expect(screen.getByRole("heading", { name: "Coach observation" })).toBeVisible();
   expect(screen.queryByTestId("similar-comparison-card")).not.toBeInTheDocument();
   fireEvent.click(screen.getByTestId("advanced-toggle"));
   expect(screen.getByTestId("analysis-details")).toHaveAttribute("open");
@@ -332,7 +332,7 @@ test.each(["fr", "en", "es"])("seven sections have translated headings in order 
   const headings = screen.getAllByRole("heading", { level: 2 });
   expect(headings.map((heading) => heading.textContent)).toEqual([
     labels.sessionSummary, labels.takeaways, labels.pacingSection, labels.heartResponse,
-    labels.historyComparison, labels.coachAdvice,
+    labels.historyComparison, labels.coachObservation,
   ]);
   expect(screen.getByTestId("advanced-toggle")).toHaveTextContent(labels.advancedDetails);
   expect(screen.getByTestId("hr-zones-card")).toHaveTextContent(labels.zonesProvenance);
@@ -351,7 +351,7 @@ test("missing metrics, HR, splits, history and analysis text have explicit empty
   expect(screen.getByTestId("primary-metrics")).toHaveTextContent("Not recorded");
   expect(screen.getByTestId("heart-response")).toHaveTextContent(analysisMissingEvidence.physiology.reason_unavailable);
   expect(screen.getByTestId("meaning-text")).toHaveTextContent(translations.en.workoutDetailExtended.meaningUnavailable);
-  expect(screen.getByTestId("advice-text")).toHaveTextContent(translations.en.workoutDetailExtended.adviceUnavailable);
+  expect(screen.getByTestId("advice-unavailable")).toHaveTextContent(translations.en.workoutDetailExtended.adviceUnavailable);
   expect(screen.getByText(translations.en.workoutDetailExtended.splitsUnavailable)).toBeVisible();
   expect(screen.queryByTestId("hr-zones-card")).not.toBeInTheDocument();
   expect(screen.queryByTestId("splits-chart-card")).not.toBeInTheDocument();
@@ -676,7 +676,8 @@ test.each([
   fireEvent.click(screen.getByTestId("advanced-toggle"));
   expect(within(screen.getByTestId("analysis-details")).queryByTestId("meaning-text")).not.toBeInTheDocument();
   expect(within(screen.getByTestId("analysis-details")).getByText(translations[language].workoutDetailExtended.limitations)).toBeVisible();
-  expect(similar).toHaveTextContent(translations[language].workoutDetailExtended.unknownSessionNature);
+  expect(similar).not.toHaveTextContent(translations[language].workoutDetailExtended.unknownSessionNature);
+  expect(screen.getByTestId("analysis-limitations")).toHaveTextContent(translations[language].workoutDetailExtended.unknownSessionNature);
   expect(screen.getByTestId("analysis-limitations")).not.toHaveTextContent("session_nature_unknown");
   expect(screen.queryByText(translations[language].zones.dominant_easy)).not.toBeInTheDocument();
   expect(screen.queryByText(translations[language].zones.dominant_hard)).not.toBeInTheDocument();
@@ -1064,8 +1065,8 @@ test("WorkoutDetail Ask Coach runs analysis in the real Coach page", async () =>
     if (url.endsWith("/workouts")) return Promise.resolve({ data: [workout] });
     return Promise.reject(new Error(`unexpected ${url}`));
   });
-  axios.post.mockResolvedValue({ data: { response: "Coach analyzed the selected workout." } });
 
+  axios.post.mockResolvedValue({ data: { response: "Coach analyzed the selected workout." } });
   renderWithProviders(
     <Routes>
       <Route path="/sessions" element={<Sessions />} />
@@ -1074,13 +1075,11 @@ test("WorkoutDetail Ask Coach runs analysis in the real Coach page", async () =>
     </Routes>,
     "/sessions",
   );
-
   const sessionLink = await screen.findByRole("link", { name: /150 bpm/ });
   expect(sessionLink).toHaveAttribute("href", "/workout/w1");
   fireEvent.click(sessionLink);
   await screen.findByTestId("coach-summary");
   fireEvent.click(screen.getByTestId("ask-coach-btn"));
-
   expect(await screen.findByText("Coach analyzed the selected workout.")).toBeInTheDocument();
   expect(axios.post).toHaveBeenCalledWith(
     expect.stringContaining("/coach/analyze"),
@@ -1091,3 +1090,95 @@ test("WorkoutDetail Ask Coach runs analysis in the real Coach page", async () =>
     },
   );
 });
+
+const editorialPages = [
+    ["WorkoutDetail", "/workout/w1", "/workout/:id", WorkoutDetail, "workout-detail"],
+    ["DetailedAnalysis", "/workout/w1/analysis", "/workout/:id/analysis", DetailedAnalysis, "detailed-analysis"],
+    ["SessionDetail", "/sessions/w1", "/sessions/:id", SessionDetail, "session-detail-page"],
+  ];
+
+  describe.each(editorialPages)("%s PR320 contract", (name, route, path, Page, testId) => {
+    test.each(["fr", "en", "es"])("available observation is factual and localized in %s", async (language) => {
+      mockAxios();
+      renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route, language);
+      await screen.findByTestId(testId);
+      const labels = translations[language].workoutDetailExtended;
+      expect(screen.getByText(labels.coachObservation)).toBeVisible();
+      expect(screen.getByText(analysis.advice.text)).toBeVisible();
+      expect(screen.getByText(analysis.meaning.text)).toBeVisible();
+      expect(screen.queryByText(translations[language].sessions.nextSession)).not.toBeInTheDocument();
+      expect(screen.queryByText(labels.adviceUnavailable)).not.toBeInTheDocument();
+    });
+
+    test.each(["fr", "en", "es"].flatMap((language) =>
+      [false, undefined, "true", null].map((available) => [language, available]),
+    ))("unavailable or legacy observation in %s (%s) cannot become advice", async (language, available) => {
+      mockAxios({ analysisPayload: { ...analysis, advice: { available, text: "Do not prescribe this legacy text." } } });
+      renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route, language);
+      await screen.findByTestId(testId);
+      expect(screen.getByText(translations[language].workoutDetailExtended.adviceUnavailable)).toBeVisible();
+      expect(screen.queryByText("Do not prescribe this legacy text.")).not.toBeInTheDocument();
+      expect(screen.getByTestId(testId)).not.toHaveTextContent("undefined");
+      if (name !== "SessionDetail") expect(screen.getByTestId("ask-coach-btn")).toBeVisible();
+    });
+
+    test.each(["fr", "en", "es"])("localized limitations are deduplicated and never appended to meaning in %s", async (language) => {
+      const localized = {
+        fr: ["Zones non vérifiées.", "Comparaison limitée.", "Fractions manquantes."],
+        en: ["Unverified zones.", "Limited comparison.", "Missing splits."],
+        es: ["Zonas no verificadas.", "Comparación limitada.", "Faltan parciales."],
+      }[language];
+      const limitations = [
+        { code: "limitations.intensity", text: localized[0] },
+        { code: "limitations.intensity", text: "Duplicate code must not appear." },
+        { code: "limitations.comparability", text: localized[1] },
+        { code: "limitations.splits", text: localized[2] },
+        { code: "limitations.other", text: localized[2] },
+      ];
+      mockAxios({ analysisPayload: { ...analysis, limitations } });
+      renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route, language);
+      await screen.findByTestId(testId);
+      if (name === "SessionDetail") fireEvent.click(screen.getByText(translations[language].workoutDetailExtended.advancedDetails));
+      else fireEvent.click(screen.getByTestId("advanced-toggle"));
+      const section = screen.getByTestId("analysis-limitations");
+      localized.forEach((text) => {
+        expect(within(section).getByText(text)).toBeVisible();
+        expect(screen.getAllByText(text)).toHaveLength(1);
+      });
+      expect(screen.queryByText("Duplicate code must not appear.")).not.toBeInTheDocument();
+      expect(screen.queryByText(analysis.signals.intensity.reason_unavailable)).not.toBeInTheDocument();
+      expect(screen.getAllByText(analysis.meaning.text)).toHaveLength(1);
+      expect(section).not.toHaveTextContent(analysis.meaning.text);
+    });
+
+    test.each([undefined, [], null])("absent or empty limitations (%s) do not create an empty section", async (limitations) => {
+      mockAxios({ analysisPayload: { ...analysis, limitations, signals: { ...analysis.signals, intensity: { available: true, text: "Observed intensity" } } } });
+      renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
+      await screen.findByTestId(testId);
+      if (name !== "SessionDetail") fireEvent.click(screen.getByTestId("advanced-toggle"));
+      expect(screen.queryByTestId("analysis-limitations")).not.toBeInTheDocument();
+    });
+  });
+
+  test("limitations link opens advanced details without repeating the historical caveat", async () => {
+    mockAxios({
+      analysisPayload: {
+        ...analysis,
+        meaning: { text: "Recorded steady running." },
+        comparison: { ...analysis.comparison, similar: similarReference },
+        limitations: [
+          { code: "limitations.session_nature_unknown", text: "Localized session nature caveat." },
+          { code: "limitations.intensity", text: "Localized intensity caveat." },
+        ],
+      },
+    });
+    renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+    await screen.findByTestId("coach-summary");
+    fireEvent.click(screen.getByRole("link", { name: translations.en.workoutDetailExtended.viewLimitations }));
+    expect(screen.getByTestId("analysis-details")).toHaveAttribute("open");
+    expect(screen.getAllByText("Localized session nature caveat.")).toHaveLength(1);
+    expect(screen.getByTestId("similar-comparison-card")).not.toHaveTextContent("Localized session nature caveat.");
+    expect(screen.getByTestId("meaning-text").textContent).toBe("Recorded steady running.");
+    expect(screen.getByTestId("primary-metrics")).toHaveTextContent("150 bpm");
+    expect(screen.getByTestId("splits-chart-card")).toHaveTextContent("5:54");
+  });
