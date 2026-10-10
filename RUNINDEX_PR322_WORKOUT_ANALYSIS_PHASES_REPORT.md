@@ -280,5 +280,8 @@ Emergent/Garmin/MongoDB n'a été interrogé.
   livraison.
 
 HEAD code/tests C322 validés : `c16a931143d2973d45ba5e31bbb79379507513a8`.
-Les validations finales du rapport, du scan de secrets et de CodeQL sont
-consignées à l'issue de cette livraison.
+HEAD de livraison du rapport : `aeeadcb303cecd0ae257c175414ea9c2140650df`.
+`parallel_validation`: CodeQL Python, 0 alerte. La revue automatisée n'a
+retourné aucun commentaire, mais le modèle demandé n'était pas disponible dans
+son registre; elle ne constitue donc pas une revue complète. Scan de secrets :
+aucun secret détecté. Flake8 ciblé, compilation et `git diff --check` réussis.
