@@ -6,7 +6,9 @@
 
 - Base de travail `copilot/dev` après merge de #321 : `3ad759622f92fe250db512b14d8be8c4a821d013`.
 - HEAD initial de la branche : `3ad759622f92fe250db512b14d8be8c4a821d013`, le merge #321.
-- HEAD testé, incluant le code, les tests et ce rapport : `45bbe477dd10596d06f7d65e1feae610d193f7ad`.
+- HEAD code/tests validés : `48859b6b5eab4584d08e12de0b7457dec507b01f`.
+- Les mises à jour ultérieures éventuelles du présent rapport sont documentaires;
+  cette référence désigne le code et les tests effectivement validés.
 - Aucun merge supplémentaire, déploiement, appel GCCLI ou accès à MongoDB réel n'a été effectué.
 
 L'audit préalable a porté sur `backend/workout_analysis_v2.py`,
