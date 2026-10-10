@@ -106,6 +106,7 @@ from demo_mode import (
 from access_control import (
     get_user_access,
     get_route_access,
+    UserAccess,
     Tier,
     RouteAccess,
     CHAT_QUOTA_FREE,
@@ -1867,9 +1868,48 @@ async def _release_free_coach_quota_slot(reservation: dict) -> None:
     )
 
 
+async def _coach_access(user_id: str) -> tuple[UserAccess, bool]:
+    try:
+        access = await get_user_access(db, user_id)
+        return access, access.can("coach_workout_analysis") is True
+    except Exception:
+        logger.exception("[Coach] Could not resolve workout analysis access")
+        return UserAccess(user_id=user_id, tier=Tier.FREE), False
+
+
+def _coach_history_scope(user_id: str, allowed: bool, workout_id: Optional[str] = None) -> dict:
+    scope = {"user_id": user_id, "workout_id": workout_id}
+    if not allowed:
+        # Legacy assistant replies have no entitlement provenance; retain records,
+        # but do not re-expose potentially restricted content after a downgrade.
+        scope["$or"] = [
+            {"role": "user"},
+            {"role": "assistant", "coach_workout_analysis_allowed": False},
+        ]
+    return scope
+
+
+def _coach_workout_restriction(language: str) -> CoachResponse:
+    messages = {
+        "fr": "L'analyse personnalisée d'une séance nécessite un essai actif ou Premium. "
+              "Le Coach reste disponible pour vos autres questions selon votre quota. "
+              "Abonnement : /subscription",
+        "es": "El análisis personalizado de una sesión requiere una prueba activa o Premium. "
+              "El Coach sigue disponible para otras preguntas según tu cuota. "
+              "Suscripción: /subscription",
+        "en": "Personalized workout analysis requires an active trial or Premium. "
+              "The Coach remains available for other questions within your quota. "
+              "Subscription: /subscription",
+    }
+    return CoachResponse(response=messages.get(language, messages["en"]), message_id="")
+
+
 async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachResponse:
     """Canonical Coach processing contract shared by Coach runtime endpoints."""
     user_id = user["id"]
+    user_access, workout_analysis_allowed = await _coach_access(user_id)
+    if request.workout_id is not None and not workout_analysis_allowed:
+        return _coach_workout_restriction(request.language or "en")
     workout = None
     workout_analysis = None
     if request.workout_id is not None:
@@ -1887,7 +1927,6 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
     user_message = request.message or ""
     now_utc = datetime.now(timezone.utc)
 
-    user_access = await get_user_access(db, user_id)
     is_unlimited = user_access.is_unlimited_chat
     reservation: Optional[dict] = None
     user_message_persisted = False
@@ -1914,7 +1953,7 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
 
     try:
         # 1. Retrieve conversation history scoped to this workout or to general chat.
-        conversation_scope = {"user_id": user_id, "workout_id": request.workout_id}
+        conversation_scope = _coach_history_scope(user_id, workout_analysis_allowed, request.workout_id)
         conversation_history = await db.conversations.find(
             conversation_scope
         ).sort("timestamp", -1).limit(5).to_list(5)
@@ -1995,7 +2034,9 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
             workout=workout,
             workout_analysis=workout_analysis,
         )).model_dump(mode="json")
-        llm_context = build_llm_coach_context(context)
+        llm_context = build_llm_coach_context(
+            context, workout_analysis_allowed=workout_analysis_allowed,
+        )
 
         # 6. Stocker le message utilisateur
         user_msg_id = str(uuid.uuid4())
@@ -2040,6 +2081,7 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
             "role": "assistant",
             "content": response_text,
             "workout_id": request.workout_id,
+            "coach_workout_analysis_allowed": workout_analysis_allowed,
             "timestamp": datetime.now(timezone.utc).isoformat()
         })
 
@@ -2055,9 +2097,10 @@ async def process_coach_message(*, request: CoachRequest, user: dict) -> CoachRe
 async def get_conversation_history(user: dict = Depends(auth_user), limit: int = 50):
     """Get conversation history for a user"""
     user_id = user["id"]
+    _, allowed = await _coach_access(user_id)
     safe_limit = max(1, min(limit, 50))
     recent_messages = await db.conversations.find(
-        {"user_id": user_id},
+        {"user_id": user_id} if allowed else _coach_history_scope(user_id, False),
         {"_id": 0}
     ).sort("timestamp", -1).limit(safe_limit).to_list(safe_limit)
     recent_messages.reverse()
@@ -2082,6 +2125,13 @@ async def clear_conversation_history(user: dict = Depends(auth_user)):
 async def get_workout_analysis_v2(workout_id: str, language: str = "en", user: dict = Depends(auth_user)):
     """Return the canonical deterministic workout analysis payload."""
     user_id = user["id"]
+    _, allowed = await _coach_access(user_id)
+    if not allowed:
+        raise HTTPException(status_code=403, detail={
+            "error": "subscription_required",
+            "message": "Subscription required to access this feature",
+            "upgrade_url": "/subscription",
+        })
     result = await load_scoped_workout_analysis_v2(
         db=db,
         user_id=user_id,

@@ -318,7 +318,11 @@ def _project_paces_for_llm(value: Any) -> Any:
     return projected
 
 
-def build_llm_coach_context(context: CoachContextV2 | dict[str, Any]) -> dict[str, Any]:
+def build_llm_coach_context(
+    context: CoachContextV2 | dict[str, Any],
+    *,
+    workout_analysis_allowed: bool = True,
+) -> dict[str, Any]:
     """Build a compact LLM projection with display-ready paces and explicit permissions."""
     canonical = (
         context.model_dump(mode="json")
@@ -326,6 +330,11 @@ def build_llm_coach_context(context: CoachContextV2 | dict[str, Any]) -> dict[st
         else context
     )
     projected = _project_paces_for_llm(canonical)
+    projected["coach_workout_analysis_allowed"] = workout_analysis_allowed
+    if not workout_analysis_allowed:
+        projected.pop("workout_detail", None)
+        projected.pop("selected_workout_permissions", None)
+        return projected
     workout_detail = canonical.get("workout_detail")
     if workout_detail:
         analysis = workout_detail.get("analysis") or {}

@@ -69,6 +69,10 @@ class _Collection:
     @staticmethod
     def _matches(doc: dict, query: dict) -> bool:
         for key, value in query.items():
+            if key == "$or":
+                if not any(_Collection._matches(doc, branch) for branch in value):
+                    return False
+                continue
             if isinstance(value, dict):
                 if "$gte" in value:
                     if doc.get(key) is None or doc.get(key) < value["$gte"]:

@@ -503,7 +503,7 @@ async def _call_invalid_workout_coach(fake_db: _FakeDB, workout_id: str):
         server.rate_limiter.requests.clear()
     reserve = AsyncMock(return_value=None)
     llm = AsyncMock(return_value=("ok", True, {}))
-    access = AsyncMock(return_value=UserAccess(user_id=_USER_ID, tier=Tier.FREE))
+    access = AsyncMock(return_value=UserAccess(user_id=_USER_ID, tier=Tier.PREMIUM))
     orig_server_db = getattr(server, "db", None)
     orig_state_db = getattr(server.app.state, "db", None)
     server.db = fake_db
@@ -680,7 +680,7 @@ async def test_coach_analyze_rejects_missing_or_foreign_workout_before_side_effe
     assert fake_db.workouts.find_one_calls == [{"id": workout_id, "user_id": _USER_ID}]
     assert fake_db.conversations._docs == []
     assert fake_db.coach_quota_counters._docs == quota_before
-    access.assert_not_awaited()
+    access.assert_awaited_once()
     reserve.assert_not_awaited()
     llm.assert_not_awaited()
 
@@ -1722,7 +1722,10 @@ async def test_coach_conversation_history_is_scoped_by_workout_and_general_chat(
         assert expected <= contents
         assert forbidden.isdisjoint(contents)
 
-    with patch("server.db", fake_db):
+    with (
+        patch("server.db", fake_db),
+        patch("server.get_user_access", AsyncMock(side_effect=_premium_access)),
+    ):
         full_history = await server.get_conversation_history(user={"id": _USER_ID})
     assert {"A discussion", "B discussion", "General discussion"} <= {
         item["content"] for item in full_history
