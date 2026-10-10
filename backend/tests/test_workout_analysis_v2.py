@@ -1089,7 +1089,7 @@ async def test_fixture_a_advice_is_specific_useful_and_non_prescriptive(client):
     assert "individualized heart-rate zones" not in payload["advice"]["text"]
     text = payload["advice"]["text"]
     # Specific to the observed pacing fact, not a generic fallback.
-    assert "pace drop" in text
+    assert "pace change" in text
     _assert_not_prescriptive(text)
 
 
@@ -1744,6 +1744,9 @@ def test_meaning_selects_only_the_demonstrated_signal(language, split_analysis, 
     assert analysis.advice.available is True
     assert analysis.signals.intensity.available is False
     assert len(analysis.meaning.text) <= 240
+    if meaning_code == "meaning.pace_change":
+        for unsupported_decline in ("pace drop", "perte d'allure", "pérdida de ritmo"):
+            assert unsupported_decline not in analysis.advice.text
 
 
 @pytest.mark.parametrize("language", ["en", "fr", "es"])
