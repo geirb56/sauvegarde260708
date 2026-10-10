@@ -492,3 +492,146 @@ significatif identifié** sur le diff C321.
 
 **Livraison C321 : uniquement commits sur la branche actuelle de #321,
 rapport et diff pour revue. Aucun merge, déploiement ou nouvelle PR.**
+
+## C321 — Deuxième correction : chronologie et jobs différés
+
+### Références et audit du tri initial
+
+Base PR : `copilot/dev`, `d755a80ad9e47ec7cd28e62c03fd28293e41f27c`.
+Départ de cette correction : `25d2048acf1f7ba3a7b3722a6f24a85efc993792`.
+HEAD code testé : `38938ee22f2593800f74d8b79b086d32d0962974`.
+Le commit documentaire ultérieur est identifié dans le commentaire de livraison.
+Cette section remplace les règles de chronologie/promotion du bilan précédent.
+
+Défaut démontré : une récupération `[effort daté, récupération non datée,
+effort daté]` pouvait devenir `[effort, effort, récupération]`.
+La simple présence d'un timestamp n'est pas une preuve de position pour les
+éléments qui n'en possèdent pas.
+
+### Règle chronologique définitive
+
+- Après filtrage RWD sans réordonnancement, si **toutes** les phases retenues
+  possèdent un `messageIndex` entier non négatif et **unique**, on considère
+  le tri croissant des index. Il est adopté seulement si les timestamps
+  disponibles ne décroissent pas dans cet ordre.
+- Sinon, si **toutes** les phases retenues possèdent une date-heure valide,
+  on considère leur tri UTC stable. Il est adopté seulement si les index
+  disponibles ne décroissent pas dans cet ordre.
+- Si index complets et temps se contredisent, aucune priorité arbitraire :
+  ordre de réception. Si les preuves sont partielles, invalides ou ambiguës,
+  ordre de réception également. Aucun sous-ensemble daté n'est extrait pour
+  pousser les éléments non datés à la fin.
+- Les timestamps égaux restent stables ; les index dupliqués ne permettent
+  pas un tri par index. Sans temps complet corroborant un autre ordre,
+  les duplications restent dans l'ordre reçu.
+- Le filtrage enlève uniquement les RWD et ne permute pas les autres phases.
+  Le tri éventuel intervient ensuite sur une preuve globale cohérente.
+  `order` est recalculé ; aucune durée cumulée, `lapIndexes` ou mesure inventée.
+
+L'ordre complet/cohérent est une règle prudente et déterministe, pas une
+garantie de retrouver la chronologie physique en présence de données source
+contradictoires. Le contrat `splits/type`, les types INTERVAL, la vitesse/allure,
+les IDs et FC optionnelles restent inchangés.
+
+### Audit des transitions Redis et défauts démontrés
+
+1. Avant cette correction, la promotion vérifiait l'échéance mais pas le
+   propriétaire du pending : après expiration et nouvelle demande, un ancien
+   job pouvait redevenir runnable.
+2. Le worker rafraîchissait le pending sans exploiter le résultat du compare :
+   même un pending détenu par un autre job n'empêchait pas son appel fournisseur.
+3. Un pending expiré sans remplaçant doit pouvoir être repris atomiquement,
+   et non laisser l'ancien job en attente permanente.
+4. Redis Lua n'annule pas les écritures antérieures lorsqu'une erreur
+   WRONGTYPE survient au milieu du script : il faut vérifier les types et
+   les payloads avant les transitions destructives.
+5. La récupération d'un orphan details avait une fenêtre entre retrait
+   PROCESSING et réinsertion : la réinsertion des details fait désormais
+   partie d'un script Lua conditionné au succès du retrait.
+   Deux watchdogs ne réenfilent donc pas le même orphan. Autres jobs inchangés.
+
+### Correctifs et invariants
+
+- Refresh pending atomique : reprendre s'il manque, renouveler si `job_id`
+  correspond, refuser si un autre job est propriétaire. Release ne reprend
+  jamais un pending absent et ne supprime jamais un autre propriétaire.
+- Promotion atomique et bornée : reprendre uniquement pending absent ou
+  identique ; un pending détenu par un nouveau job **interdit** la promotion.
+  L'ancien job termine explicitement `superseded`, enregistré dans un hash
+  technique d'issues à TTL 1800 s et dans les logs. Ni GCCLI ni nouvelle
+  réinsertion ni suppression de la nouvelle réservation.
+- Worker : contrôle initial et nouveau contrôle juste avant dispatch sous
+  verrou utilisateur. Un job supplanté est ACKé uniquement comme issue
+  terminale explicitement loguée, jamais comme enrichissement réussi.
+- Les contrôles de types et payloads ont lieu avant les écritures Lua.
+  Une erreur de déplacement/promotion garde la source récupérable ;
+  les erreurs Redis dans le worker ne deviennent pas un ACK terminal.
+- Les différés restent hors FIFO jusqu'à échéance, sans cycle de cinq secondes.
+  Watchdog multiple, lots de 100, FIFO ordinaire et verrous existants conservés.
+- Les redeliveries terminées retrouvent le cache Mongo ; un bail expiré peut
+  être repris, son jeton empêche une écriture ancienne. Bail 900 s, timeout
+  fournisseur ≤60 s et marge worker 65 s inchangés.
+- Crash avant parking : PROCESSING persisté et reprise watchdog ; après
+  parking : sorted set/hash persistés et reprise de promotion. Pending repris
+  seulement s'il est absent, jamais s'il est déjà réattribué.
+
+Fichiers modifiés : data_layer, jobs/queue, workers/sync_worker, les deux suites
+de tests de détails et ce rapport. Aucun moteur, frontend, ID stocké,
+collection Mongo, migration ou fonctionnalité produit ajouté.
+
+### Tests exacts
+
+Depuis `backend/`, `PYTHONPATH=.`, Python 3.12.3 du venv temporaire ;
+`backend/pytest.ini` inchangé (`-n 2 --dist loadscope`) :
+
+| Commande `python -m pytest … -q` | Résultat |
+| --- | --- |
+| `tests/test_activity_details_pr321.py tests/test_activity_details_delayed_redis_c321.py` | **92 passed, 2 warnings**, 2.40 s |
+| `tests/test_garmin_queue_backfill_pr197.py tests/test_garmin_phased_sync_pr07a.py tests/test_garmin_deep_sync.py` | **39 passed**, 11.06 s |
+| `tests/test_garmin_user_connection.py` | **8 passed**, 0.75 s |
+| `tests/test_garmin_data_layer.py tests/test_garmin_activity_normalization_pr02.py tests/test_training_v2_domain_activity.py tests/test_performed_workout_pr230.py tests/test_mongo_garmin_boundary_pr137.py` | **181 passed, 1 failed**, 1.08 s |
+| `tests/test_workout_analysis_v2.py` | **168 passed, 14 warnings**, 2.28 s |
+
+**488 réussites, 1 échec préexistant** : assertion textuelle
+`test_g_server_uses_boundary` sur un appel absent de server.py au départ
+`25d2048…` (seul l'import existe), code/test inchangés.
+Warnings : dépréciations existantes, aucune régression observée.
+Premier passage ciblé : 90 réussites, 1 échec du test de lot qui fabriquait
+101 propriétaires concurrents pour un seul utilisateur. Correction de
+la fixture liée au nouvel invariant : 101 utilisateurs distincts ; lot
+100 puis 1 vérifié. Aucun test hors périmètre modifié.
+
+Couverture supplémentaire : preuves complètes index/temps, timestamps
+incohérents, index manquants/dupliqués, phase intermédiaire sans temps, RWD
+intercalé ; pending réellement expiré, nouveau propriétaire, promotion
+interdite/issue explicite, watchdogs concurrents, crash avant/après parking,
+WRONGTYPE avec source conservée, reprise de bail et redelivery cache.
+Les tests Redis utilisent **réellement Redis 7.0.15 local isolé**, loopback,
+AOF, ports éphémères ; aucune connexion Redis/Mongo de production.
+
+`git diff --check`, Flake8 (`--select=E9,F63,F7,F82`) des cinq fichiers Python
+changés : exit 0. Imports data_layer/queue/sync_worker : OK.
+Scan secrets : aucun ; CodeQL Python : **0 alerte**.
+Revue automatisée appelée mais moteur indisponible (modèle absent).
+La revue indépendante a détecté une réinsertion orphan non conditionnée au
+résultat du retrait : corrigée par Lua et test de deux watchdogs (une insertion).
+
+### Risques résiduels et verdict
+
+- Une source contradictoire ne démontre pas un ordre meilleur : réception
+  conservée et aucun horaire fictif. Contrôle du JSON réel par Emergent requis.
+- Atomicité Redis garantit absence d'interleaving, pas rollback général sur
+  panne serveur/OOM. Précontrôles traitent les erreurs de type démontrées ;
+  durabilité dépend de l'AOF/runtime. Une corruption persistante de clé exige
+  diagnostic opérationnel, plutôt qu'effacement silencieux des jobs.
+- Les issues `superseded` sont terminales, loguées et conservées temporairement,
+  pas des activités enrichies. Aucun endpoint produit supplémentaire.
+- Backlog, panne illimitée et changement du compte pendant un job restent des
+  risques runtime ; verrous et fencing Mongo existants demeurent nécessaires.
+- Redis multi-clés, watchdog, baux et isolation sur Emergent restent à valider.
+  Aucun test Garmin réel, Mongo réel, merge ou déploiement effectué ici.
+
+**Verdict : prête pour revue de merge, sous réserve d'acceptation de l'échec
+préexistant documenté et de revue des risques opérationnels.** Ce verdict
+n'autorise ni merge automatique ni déploiement ; validation d'intégration
+dans Emergent reste une étape distincte après décision humaine.

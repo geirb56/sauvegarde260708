@@ -319,17 +319,33 @@ async def recover_orphans() -> int:
             continue
         if now - float(claimed_at) <= ORPHAN_TIMEOUT:
             continue
+        if job.get("type") == JOB_ACTIVITY_DETAILS:
+            moved = await r.eval(
+                """
+                local expected = {'list', 'hash', 'list'}
+                for i, key in ipairs(KEYS) do
+                    local kind = redis.call('TYPE', key).ok
+                    if kind ~= 'none' and kind ~= expected[i] then
+                        return redis.error_reply('Invalid orphan key type')
+                    end
+                end
+                if redis.call('LREM', KEYS[1], 1, ARGV[1]) == 0 then return 0 end
+                redis.call('HDEL', KEYS[2], ARGV[2])
+                redis.call('LPUSH', KEYS[3], ARGV[1])
+                return 1
+                """,
+                3, PROCESSING_KEY, CLAIMS_KEY, QUEUE_KEY, raw, job_id,
+            )
+            recovered += int(moved)
+            continue
         # Orphan: move it back to the queue atomically. LREM returns 0 if another
         # process already recovered/acked it, in which case we do nothing.
         async with r.pipeline(transaction=True) as pipe:
             pipe.lrem(PROCESSING_KEY, 1, raw)
             pipe.hdel(CLAIMS_KEY, job_id)
-            if job.get("type") == JOB_ACTIVITY_DETAILS:
-                pipe.lpush(QUEUE_KEY, raw)
             results = await pipe.execute()
         if results and results[0]:
-            if job.get("type") != JOB_ACTIVITY_DETAILS:
-                await r.lpush(QUEUE_KEY, raw)
+            await r.lpush(QUEUE_KEY, raw)
             recovered += 1
             logger.warning("[watchdog] recovered orphan job id=%s user=%s", job_id, job.get("user_id"))
     if recovered:

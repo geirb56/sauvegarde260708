@@ -239,3 +239,15 @@ def test_redis_wrong_type_before_transition_preserves_job(local_redis, monkeypat
             await client.delete(queue.QUEUE_KEY)
             assert await queue.promote_due_activity_details() == 1
     asyncio.run(scenario())
+
+
+def test_two_watchdogs_recover_one_details_orphan_once(local_redis, monkeypatch):
+    async def scenario():
+        async with client_for(local_redis, monkeypatch) as client:
+            raw, job = await in_flight(client)
+            await client.hset(queue.CLAIMS_KEY, job["id"], 0)
+            results = await asyncio.gather(queue.recover_orphans(), queue.recover_orphans())
+            assert sum(results) == 1
+            assert await client.llen(queue.QUEUE_KEY) == 1
+            assert await client.llen(queue.PROCESSING_KEY) == 0
+    asyncio.run(scenario())
