@@ -89,7 +89,10 @@ class GccliRunner:
             env["GCCLI_ACCOUNT"] = account
         return env
 
-    def _run_json(self, args: List[str], account: Optional[str] = None):
+    def _run_json(
+        self, args: List[str], account: Optional[str] = None,
+        single_attempt: bool = False,
+    ):
         """Run a gccli data command with per-call timeout + bounded retries.
 
         Each invocation is a fresh subprocess with its own env (isolated per
@@ -99,8 +102,9 @@ class GccliRunner:
         self._ensure_available()
         cmd = [self.gccli_path] + args + ["-j"]
         last_err: Optional[Exception] = None
+        attempts = 1 if single_attempt else self.max_retries
 
-        for attempt in range(1, self.max_retries + 1):
+        for attempt in range(1, attempts + 1):
             try:
                 cp = subprocess.run(
                     cmd,
@@ -131,11 +135,11 @@ class GccliRunner:
             except GccliError as exc:
                 last_err = exc
 
-            if attempt < self.max_retries:
+            if attempt < attempts:
                 backoff = min(2 ** attempt, 8)
                 logger.warning(
                     "[gccli] transient failure (attempt %s/%s) for '%s'; retrying in %ss",
-                    attempt, self.max_retries, " ".join(args), backoff,
+                    attempt, attempts, " ".join(args), backoff,
                 )
                 time.sleep(backoff)
 
@@ -226,6 +230,17 @@ class GccliRunner:
         raise GccliError("Garmin authentication failed")
 
     # -------------------------------------------------------------- data fetch
+    def fetch_activity_typed_splits(self, activity_id: str, account: str):
+        from .activity_ids import normalize_activity_id
+
+        activity_id = normalize_activity_id(activity_id)
+        if not account:
+            raise GccliError("Garmin account required")
+        # The reliable queue owns retries; one command fits the worker lease.
+        return self._run_json(
+            ["activity", "typed-splits", activity_id], account=account, single_attempt=True,
+        )
+
     def fetch_activities(
         self, limit: int = 20, start: int = 0, account: Optional[str] = None
     ) -> List[Dict]:
