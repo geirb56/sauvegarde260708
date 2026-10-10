@@ -193,3 +193,61 @@ Avant merge, Emergent doit valider :
 - [ ] Absence de débordement horizontal.
 
 Corrections livrées dans PR318 uniquement ; attendre la revue et ces validations avant merge.
+
+## Vérification complémentaire — 10 octobre 2026
+
+### Références exactes et cause résiduelle
+
+- PR existante : #318, branche `copilot/restructuration-ux-workout-detail`.
+- Base cible vérifiée avec `git ls-remote origin refs/heads/copilot/dev` : `65524421948976502cd51f108d8e427d9bd67f29`.
+- HEAD avant cette vérification : `91181d575aa2af1819997f789ce517709d3c39e9`.
+- HEAD après correction fonctionnelle, code effectivement testé : `7e179acafe0eeb36b84de5b666175c5cb28d5eb8`.
+- Le commit documentaire suivant ne change pas le code testé ; son HEAD exact sera publié dans le commentaire de livraison sur #318.
+
+Les corrections sportives, numériques et cardiaques décrites précédemment étaient déjà présentes au HEAD de départ. L’inspection du code a identifié un dernier écart : lorsque l’allure d’activité était invalide, le résumé affichait « non enregistré » même si une vitesse existante était exploitable. Le fallback était appliqué à la carte d’analyse mais pas au résumé hors vélo.
+
+Le résumé réutilise maintenant la vitesse existante, finie et strictement positive, lorsque son allure est invalide : priorité à `workout.avg_speed_kmh`, sinon `pacing.average_speed_kmh` uniquement avec `available === true`. Une allure de course valide reste prioritaire, même en présence d’une vitesse. Sans vitesse exploitable, l’état d’absence reste explicite. Aucun calcul distance/durée/allure, aucun nouveau champ ni modification des moteurs.
+
+L’audit confirme les types backend `run`, `cycle`, `swim` et les normalisations Garmin décrites ci-dessus ; les libellés frontend ne changent pas ce contrat. Les allures absolues, splits et références similaires restent protégés par une validation finie et positive. Les écarts signés restent inchangés.
+
+Les zones sont toujours conditionnées par la disponibilité et des pourcentages exploitables Z1–Z5 ; les données invalides ou absentes sont masquées. L’avertissement FR/EN/ES reste visible et repliable sur plusieurs lignes en `text-sm`, sans présentation des zones comme seuils LT1/LT2 ni interprétation nouvelle. Cela ne démontre pas sa lisibilité dans l’application réelle.
+
+### Fichiers modifiés dans cette vérification
+
+- `frontend/src/pages/WorkoutDetail.jsx`
+- `frontend/src/__tests__/workout-analysis-v2-pages.test.jsx`
+- `RUNINDEX_PR318_REPORT.md`
+
+Les traductions existantes sont réutilisées sans modification. Aucun backend, Workout Analysis V2, Training V2 ou route secondaire modifié.
+
+### Exécutions effectives
+
+Depuis `frontend/` :
+
+- `npm ci --legacy-peer-deps --no-audit --no-fund` : réussi, manifests et lockfile inchangés.
+- `CI=true npm test -- --watchAll=false --runInBand --forceExit --runTestsByPath src/__tests__/workout-analysis-v2-pages.test.jsx src/lib/i18n.test.js src/__tests__/sessions-page.test.jsx src/__tests__/app-legacy-redirects.test.jsx` : **4 suites réussies, 148 tests réussis, aucun échec**, code de sortie 0.
+- `npm run build` : **Compiled successfully**, code de sortie 0 ; avertissement Browserslist existant.
+- `git diff --check` : réussi.
+- Scan de secrets des fichiers frontend modifiés : aucun secret détecté.
+- `parallel_validation` après commit fonctionnel : CodeQL JavaScript exécuté, **0 alerte**. La revue automatique reste indisponible (modèle absent du registre), malgré son statut global de succès.
+- Agent complémentaire `code-review`, lecture seule du diff courant et des corrections WorkoutDetail contre la base : aucun bug fonctionnel significatif identifié.
+
+Les dix tests ajoutés vérifient FR/EN/ES pour course avec allure valide malgré une vitesse présente, vélo sans vitesse exploitable, fallback du résumé vers vitesse d’activité prioritaire et refus d’une vitesse moteur indisponible. Les cas existants null, zéro, négatif, NaN, infini et non numérique vérifient maintenant également le fallback vitesse du résumé. Absence FC, zones invalides/indisponibles, traductions et parcours des vrais composants Sessions → WorkoutDetail → Coach restent exécutés.
+
+### Limitations et validation runtime Emergent avant merge
+
+Les résultats précédents du rapport sont des snapshots historiques ; les résultats ci-dessus correspondent au code de cette vérification. Les avertissements de configuration backend des tests et de sortie forcée Jest restent présents. Aucun linter autonome n’est configuré dans les scripts frontend ; le build existant a été exécuté.
+
+Aucune URL Emergent ni session authentifiée de test n’a été fournie pour cette exécution. La validation de l’application réelle n’a donc **pas été effectuée** ; les tests DOM ne prouvent ni la lisibilité mobile ni l’absence de débordement horizontal. La provenance et les bornes des zones restent non certifiées par le contrat API.
+
+- [ ] Mobile réel 360 px et 390 px : avertissement des zones lisible.
+- [ ] Séance endurance.
+- [ ] Séance fractionnée.
+- [ ] Activité vélo si disponible : vitesse km/h ou indisponibilité explicite.
+- [ ] Activité sans FC : absence des zones lorsque les données sont indisponibles.
+- [ ] Activité avec splits et historique.
+- [ ] Navigation Sessions → Détail → Coach, contexte exact de séance.
+- [ ] Chargement et erreur API.
+- [ ] Absence de débordement horizontal.
+
+PR318 uniquement, aucune nouvelle PR et aucun merge. Attendre la revue et la validation runtime Emergent.
