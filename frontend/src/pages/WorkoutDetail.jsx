@@ -567,7 +567,8 @@ export default function WorkoutDetail() {
   const physiology = analysisForRender?.physiology;
   const pacing = analysisForRender?.pacing;
   const isCycle = workout.type === "cycle";
-  const averageSpeed = hasPositiveFiniteMetric(workout.avg_speed_kmh) ? workout.avg_speed_kmh : null;
+  const averageSpeed = hasPositiveFiniteMetric(workout.avg_speed_kmh) ? workout.avg_speed_kmh
+    : pacing?.available === true && hasPositiveFiniteMetric(pacing.average_speed_kmh) ? pacing.average_speed_kmh : null;
   const hasWorkoutPace = hasPositiveFiniteMetric(workout.avg_pace_min_km);
   const showSummarySpeed = isCycle || (!hasWorkoutPace && averageSpeed != null);
   const hasAveragePace = hasPositiveFiniteMetric(pacing?.average_pace_min_km);
@@ -576,8 +577,8 @@ export default function WorkoutDetail() {
   const similar = comparison?.similar;
   const hasAnalysis = Boolean(analysisForRender);
   const displayMetric = (value) => value === "--" ? t("workoutDetailExtended.dataUnavailable") : value;
-  const avgHr = Number.isFinite(workout.avg_heart_rate) && workout.avg_heart_rate > 0 ? workout.avg_heart_rate : null;
-  const maxHr = Number.isFinite(workout.max_heart_rate) && workout.max_heart_rate > 0 ? workout.max_heart_rate : null;
+  const avgHr = Number.isFinite(workout.avg_heart_rate) && workout.avg_heart_rate > 0 ? workout.avg_heart_rate : physiology?.avg_hr;
+  const maxHr = Number.isFinite(workout.max_heart_rate) && workout.max_heart_rate > 0 ? workout.max_heart_rate : physiology?.max_hr;
   const hasHr = (Number.isFinite(avgHr) && avgHr > 0) || (Number.isFinite(maxHr) && maxHr > 0);
   const hasSplits = Array.isArray(workout.km_splits) && workout.km_splits.some((split) => Number.isFinite(split?.pace_min_km) && split.pace_min_km > 0);
   const hasZones = physiology?.available === true && ["z1", "z2", "z3", "z4", "z5"].some((key) => Number.isFinite(physiology.zone_distribution?.[key]) && physiology.zone_distribution[key] > 0 && physiology.zone_distribution[key] <= 100);
@@ -642,6 +643,8 @@ export default function WorkoutDetail() {
           ) : hasAnalysis && analysisForRender?.summary?.text ? (
             <p className="font-sans text-sm leading-relaxed" data-testid="coach-summary">{analysisForRender.summary.text}</p>
           ) : hasAnalysis ? (
+            <p className="text-sm text-muted-foreground">{t("workoutDetailExtended.analysisUnavailable")}</p>
+          ) : canAccessAnalysis ? (
             <p className="text-sm text-muted-foreground">{t("workoutDetailExtended.analysisUnavailable")}</p>
           ) : !subscriptionLoading ? (
             <WorkoutAnalysisAccessNotice t={t} />

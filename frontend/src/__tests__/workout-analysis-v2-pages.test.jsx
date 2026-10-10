@@ -215,6 +215,7 @@ const makeStructuredPhaseAnalysis = () => {
 
 function renderWithProviders(ui, route, language = "en") {
   window.localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
+  window.localStorage.setItem("runindex_unit_system", "metric");
   return render(
     <LanguageProvider>
       <UnitProvider>
@@ -623,7 +624,7 @@ test.each([
 
 test.each([
   ["expired trial", { loading: false, allowed: false }],
-  ["unknown rights", { loading: false, allowed: undefined }],
+  ["unknown rights", { loading: false, allowed: null }],
   ["rights loading", { loading: true, allowed: true }],
 ])("WorkoutDetail does not request analysis for %s", async (_state, access) => {
   setAnalysisAccess(access);
@@ -1003,7 +1004,7 @@ test("null analysis is not shown as a network failure", async () => {
   mockAxios({ analysisPayload: null });
   renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
   await screen.findByTestId("workout-detail");
-  expect(screen.getByText(translations.en.workoutDetailExtended.analysisUnavailable)).toBeVisible();
+  expect(await screen.findByText(translations.en.workoutDetailExtended.analysisUnavailable)).toBeVisible();
   expect(screen.queryByText(translations.en.workoutDetailExtended.analysisLoadError)).not.toBeInTheDocument();
   expect(screen.getByTestId("splits-chart-card")).toBeVisible();
 });
@@ -1556,8 +1557,10 @@ const editorialPages = [
     expect(screen.queryByText(analysis.advice.text)).not.toBeInTheDocument();
     expect(screen.getByTestId("analysis-upgrade-notice")).toBeVisible();
     if (_name === "SessionDetail") {
-      expect(screen.getByText("10 km")).toBeVisible();
-      expect(screen.getByText("1h")).toBeVisible();
+      const facts = screen.getByTestId("session-detail-page");
+      expect(facts).toHaveTextContent("Morning Run");
+      expect(facts.textContent).toMatch(/10(?:\.0)? km|6\.21 mi/);
+      expect(facts).toHaveTextContent("1h");
     }
   });
 

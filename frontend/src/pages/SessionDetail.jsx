@@ -257,7 +257,7 @@ export default function SessionDetail() {
         </div>
       </div>
 
-      {canAccessAnalysis ? <section className="space-y-3 rounded-2xl border border-border bg-card/30 p-4">
+      <section className="space-y-3 rounded-2xl border border-border bg-card/30 p-4">
         <div className="flex items-center gap-2">
           <Scale className="h-4 w-4 text-muted-foreground" />
           <h2 className="text-sm font-medium uppercase tracking-[0.18em] text-muted-foreground">
@@ -298,7 +298,7 @@ export default function SessionDetail() {
         </section>
       )}
 
-      <section className="space-y-3 rounded-2xl border border-border bg-card/30 p-4">
+      {canAccessAnalysis ? <section className="space-y-3 rounded-2xl border border-border bg-card/30 p-4">
         <div className="flex items-center gap-2">
           <Sparkles className="h-4 w-4 text-primary" />
           <h2 className="text-sm font-medium uppercase tracking-[0.18em] text-muted-foreground">
