@@ -152,5 +152,8 @@ La route V2 directe est bien protégée côté backend, mais la protection n’e
 
 ### État des vérifications C324
 
-- La comparaison requise du test `src/__tests__/progress-v2-migration.test.jsx` entre la base `2e9dfacae2d3c69f6e0273145cfdad86883f9acf` et la tête #324 doit être exécutée/documentée avant toute reprise; le rapport initial de #324 indique un échec de son assertion sur `predictions.predictions?.map`, mais ne contient pas la comparaison de base.
+- Commande sur la base `2e9dfacae2d3c69f6e0273145cfdad86883f9acf` dans `/home/runner/work/sauvegarde260708-base/frontend`, puis répétée sur la tête PR `964becd29282eb13efce8ff2a6308e5f225e384e` dans `/home/runner/work/sauvegarde260708/sauvegarde260708/frontend` : `CI=true npm test -- --watchAll=false --runInBand --forceExit --runTestsByPath src/__tests__/progress-v2-migration.test.jsx`.
+- **Résultat base :** échec, 1 suite échouée, 10 tests réussis / 11; assertion `Progress.jsx` contient `predictions.predictions?.map` échoue à la ligne 73 du test.
+- **Résultat tête #324 :** même échec, 1 suite échouée, 10 tests réussis / 11, sur la même assertion.
+- **Classification :** échec préexistant, pas une régression de #324 (ni `Progress.jsx` ni ce test ne diffèrent entre la base et la tête). L’assertion est devenue obsolète par rapport à l’implémentation actuelle qui protège la liste avec `Array.isArray(predictions?.predictions)` puis utilise `predictions.predictions.map`; le rendu de la liste est toujours présent. Progress reste hors périmètre et n’est pas modifié.
 - Aucun nouveau test, build, scan de secrets ou `parallel_validation` de correction C324 n’a été exécuté : le changement est suspendu sur le blocage ci-dessus.
