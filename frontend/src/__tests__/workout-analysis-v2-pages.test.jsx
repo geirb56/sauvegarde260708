@@ -11,12 +11,14 @@ import DetailedAnalysis from "@/pages/DetailedAnalysis";
 import SessionDetail from "@/pages/SessionDetail";
 import { LanguageProvider } from "@/context/LanguageContext";
 import { UnitProvider } from "@/context/UnitContext";
-import { AuthProvider } from "@/context/AuthContext";
-import { SubscriptionProvider } from "@/context/SubscriptionContext";
+import { useSubscription } from "@/context/SubscriptionContext";
 import { translations, LANGUAGE_STORAGE_KEY } from "@/lib/i18n";
 import { formatPaceDisplay, formatPaceDelta } from "@/lib/workoutAnalysis";
 
 jest.mock("axios");
+jest.mock("@/context/SubscriptionContext", () => ({
+  useSubscription: jest.fn(),
+}));
 
 const workout = {
   id: "w1",
@@ -224,19 +226,11 @@ function renderWithProviders(ui, route, language = "en") {
   );
 }
 
-function renderWithSubscriptionPlan(ui, route, plan) {
-  window.localStorage.setItem("access_token", "test-access-token");
-  return render(
-    <LanguageProvider>
-      <AuthProvider>
-        <SubscriptionProvider>
-          <UnitProvider>
-            <MemoryRouter initialEntries={[route]}>{ui}</MemoryRouter>
-          </UnitProvider>
-        </SubscriptionProvider>
-      </AuthProvider>
-    </LanguageProvider>,
-  );
+function setAnalysisAccess({ loading = false, allowed = true } = {}) {
+  useSubscription.mockReturnValue({
+    loading,
+    hasFeature: (feature) => feature === "coach_workout_analysis" && allowed,
+  });
 }
 
 function mockAxios({ analysisPayload = analysis, workoutPayload = workout, delayedAnalysis = null, rejectAnalysis = false } = {}) {
@@ -259,6 +253,7 @@ function mockAxios({ analysisPayload = analysis, workoutPayload = workout, delay
 
 beforeEach(() => {
   jest.clearAllMocks();
+  setAnalysisAccess();
 });
 
 test("WorkoutDetail makes only one canonical analysis request", async () => {
@@ -591,29 +586,97 @@ test("structured phases and kilometer splits remain independently visible", asyn
   expect(screen.getByTestId("splits-chart-card")).toHaveTextContent("5:54");
 });
 
-test.each(["free", "trial", "premium"])(
-  "phase analysis remains at the existing Workout Detail access level for %s users",
-  async (plan) => {
-    const phaseAnalysis = makeStructuredPhaseAnalysis();
-    axios.get.mockImplementation((url) => {
-      if (url.endsWith("/auth/me")) return Promise.resolve({ data: { id: "synthetic-user" } });
-      if (url.endsWith("/user/features")) return Promise.resolve({
-        data: { has_premium_access: plan !== "free", trial_active: plan === "trial", feature_access: {} },
-      });
-      if (url.includes("/subscription/info")) return Promise.resolve({ data: { status: plan } });
-      if (url.includes("/workouts/w1")) return Promise.resolve({ data: workout });
-      if (url.includes("/coach/workout-analysis/w1")) return Promise.resolve({ data: { ...analysis, phase_analysis: phaseAnalysis } });
-      return Promise.reject(new Error(`unexpected ${url}`));
-    });
+test.each([
+  ["FREE", false],
+  ["active TRIAL", true],
+  ["PREMIUM", true],
+])("WorkoutDetail network and rendering access matches %s entitlement", async (_tier, allowed) => {
+  setAnalysisAccess({ allowed });
+  mockAxios({ analysisPayload: { ...analysis, phase_analysis: makeStructuredPhaseAnalysis() } });
 
-    renderWithSubscriptionPlan(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1", plan);
+  renderWithProviders(
+    <Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>,
+    "/workout/w1",
+  );
 
+  await screen.findByTestId("workout-detail");
+  if (allowed) {
     expect(await screen.findByTestId("structured-phase-analysis")).toBeVisible();
-    await waitFor(() => expect(axios.get.mock.calls.some(([url]) => url.endsWith("/user/features"))).toBe(true));
-    expect(screen.queryByText(/subscribe|upgrade/i)).not.toBeInTheDocument();
-    window.localStorage.removeItem("access_token");
-  },
-);
+    expect(axios.get.mock.calls.map(([url]) => url).filter((url) => url.includes("/coach/workout-analysis/"))).toHaveLength(1);
+    expect(screen.queryByTestId("analysis-upgrade-notice")).not.toBeInTheDocument();
+  } else {
+    expect(await screen.findByTestId("analysis-upgrade-notice")).toBeVisible();
+    expect(screen.queryByTestId("structured-phase-analysis")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("coach-summary")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("takeaways-title")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("history-section")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("analysis-details")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("ask-coach-btn")).not.toBeInTheDocument();
+    expect(axios.get.mock.calls.map(([url]) => url).some((url) => url.includes("/coach/workout-analysis/"))).toBe(false);
+    expect(screen.getByTestId("primary-metrics")).toHaveTextContent("10 km");
+    expect(screen.getByTestId("primary-metrics")).toHaveTextContent("1h");
+    expect(screen.getByTestId("primary-metrics")).toHaveTextContent("6:00/km");
+    expect(screen.getByTestId("splits-chart-card")).toBeVisible();
+    expect(screen.getByTestId("splits-chart-card")).toHaveTextContent("5:54");
+  }
+});
+
+test.each([
+  ["expired trial", { loading: false, allowed: false }],
+  ["unknown rights", { loading: false, allowed: undefined }],
+  ["rights loading", { loading: true, allowed: true }],
+])("WorkoutDetail does not request analysis for %s", async (_state, access) => {
+  setAnalysisAccess(access);
+  mockAxios({ analysisPayload: { ...analysis, phase_analysis: makeStructuredPhaseAnalysis() } });
+  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+  await screen.findByTestId("workout-detail");
+  expect(axios.get.mock.calls.map(([url]) => url).some((url) => url.includes("/coach/workout-analysis/"))).toBe(false);
+  expect(screen.queryByTestId("structured-phase-analysis")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("coach-summary")).not.toBeInTheDocument();
+});
+
+test("WorkoutDetail waits for entitlement resolution before requesting analysis", async () => {
+  setAnalysisAccess({ loading: true, allowed: true });
+  mockAxios({ analysisPayload: { ...analysis, phase_analysis: makeStructuredPhaseAnalysis() } });
+  const route = <Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>;
+  const view = renderWithProviders(route, "/workout/w1");
+  await screen.findByTestId("workout-detail");
+  expect(axios.get.mock.calls.map(([url]) => url).some((url) => url.includes("/coach/workout-analysis/"))).toBe(false);
+
+  setAnalysisAccess({ allowed: true });
+  view.rerender(
+    <LanguageProvider>
+      <UnitProvider>
+        <MemoryRouter initialEntries={["/workout/w1"]}>{route}</MemoryRouter>
+      </UnitProvider>
+    </LanguageProvider>,
+  );
+  expect(await screen.findByTestId("structured-phase-analysis")).toBeVisible();
+  expect(axios.get.mock.calls.map(([url]) => url).filter((url) => url.includes("/coach/workout-analysis/"))).toHaveLength(1);
+});
+
+test("WorkoutDetail hides loaded analysis immediately on downgrade and reloads after reactivation", async () => {
+  setAnalysisAccess({ allowed: true });
+  mockAxios({ analysisPayload: { ...analysis, phase_analysis: makeStructuredPhaseAnalysis() } });
+  const route = <Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>;
+  const view = renderWithProviders(route, "/workout/w1");
+  expect(await screen.findByTestId("structured-phase-analysis")).toBeVisible();
+
+  setAnalysisAccess({ loading: true, allowed: true });
+  view.rerender(<LanguageProvider><UnitProvider><MemoryRouter initialEntries={["/workout/w1"]}>{route}</MemoryRouter></UnitProvider></LanguageProvider>);
+  expect(screen.queryByTestId("structured-phase-analysis")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("coach-summary")).not.toBeInTheDocument();
+
+  setAnalysisAccess({ allowed: false });
+  view.rerender(<LanguageProvider><UnitProvider><MemoryRouter initialEntries={["/workout/w1"]}>{route}</MemoryRouter></UnitProvider></LanguageProvider>);
+  expect(screen.getByTestId("analysis-upgrade-notice")).toBeVisible();
+  expect(axios.get.mock.calls.map(([url]) => url).filter((url) => url.includes("/coach/workout-analysis/"))).toHaveLength(1);
+
+  setAnalysisAccess({ allowed: true });
+  view.rerender(<LanguageProvider><UnitProvider><MemoryRouter initialEntries={["/workout/w1"]}>{route}</MemoryRouter></UnitProvider></LanguageProvider>);
+  expect(await screen.findByTestId("structured-phase-analysis")).toBeVisible();
+  expect(axios.get.mock.calls.map(([url]) => url).filter((url) => url.includes("/coach/workout-analysis/"))).toHaveLength(2);
+});
 
 test.each(["fr", "en", "es"])("structured phase headings and labels are localized in %s", async (language) => {
   mockAxios({ analysisPayload: { ...analysis, phase_analysis: makeStructuredPhaseAnalysis() } });
@@ -1388,7 +1451,7 @@ test.each(["fr", "en", "es"])("WorkoutDetail business keys are explicitly transl
     "analysisDetails", "analysisAdvice", "analysisUnavailable", "evidence", "version",
     "hrZonesEvidence", "splitsEvidence", "baselineEvidence", "cadenceEvidence", "elevationEvidence",
     "yes", "no", "limitations", "unknownSessionNature", "smallSample", "smallPaceSample", "smallHrSample",
-    "intensityUnavailable",
+    "intensityUnavailable", "analysisPremiumRequired", "unlockAnalysis",
     "interpretation",
   ];
   keys.forEach((key) => expect(translations[language].workoutDetailExtended[key]).toEqual(expect.any(String)));
@@ -1476,6 +1539,41 @@ const editorialPages = [
     ["DetailedAnalysis", "/workout/w1/analysis", "/workout/:id/analysis", DetailedAnalysis, "detailed-analysis"],
     ["SessionDetail", "/sessions/w1", "/sessions/:id", SessionDetail, "session-detail-page"],
   ];
+
+  test.each(editorialPages)("FREE cannot load V2 through %s", async (_name, route, path, Page, testId) => {
+    setAnalysisAccess({ allowed: false });
+    mockAxios();
+    renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
+
+    if (_name === "DetailedAnalysis") {
+      expect(await screen.findByTestId("analysis-access-denied")).toBeVisible();
+    } else {
+      expect(await screen.findByTestId(testId)).toBeVisible();
+    }
+    expect(axios.get.mock.calls.map(([url]) => url).some((url) => url.includes("/coach/workout-analysis/"))).toBe(false);
+    expect(screen.queryByText(analysis.summary.text)).not.toBeInTheDocument();
+    expect(screen.queryByText(analysis.meaning.text)).not.toBeInTheDocument();
+    expect(screen.queryByText(analysis.advice.text)).not.toBeInTheDocument();
+    expect(screen.getByTestId("analysis-upgrade-notice")).toBeVisible();
+    if (_name === "SessionDetail") {
+      expect(screen.getByText("10 km")).toBeVisible();
+      expect(screen.getByText("1h")).toBeVisible();
+    }
+  });
+
+  test.each(["fr", "en", "es"])("FREE analysis upgrade link is localized in %s", async (language) => {
+    setAnalysisAccess({ allowed: false });
+    mockAxios();
+    renderWithProviders(
+      <Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>,
+      "/workout/w1",
+      language,
+    );
+    const notice = await screen.findByTestId("analysis-upgrade-notice");
+    expect(notice).toHaveTextContent(translations[language].workoutDetailExtended.analysisPremiumRequired);
+    expect(within(notice).getByRole("link", { name: translations[language].workoutDetailExtended.unlockAnalysis })).toHaveAttribute("href", "/subscription");
+    expect(axios.get.mock.calls.map(([url]) => url).some((url) => url.includes("/coach/workout-analysis/"))).toBe(false);
+  });
 
   describe.each(editorialPages)("%s PR320 contract", (name, route, path, Page, testId) => {
     test.each(["fr", "en", "es"])("available observation is factual and localized in %s", async (language) => {

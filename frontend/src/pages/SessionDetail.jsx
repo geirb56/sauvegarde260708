@@ -12,7 +12,9 @@ import {
 
 import { API_BASE_URL } from "@/config";
 import { useLanguage } from "@/context/LanguageContext";
+import { useSubscription } from "@/context/SubscriptionContext";
 import { useUnitSystem } from "@/context/UnitContext";
+import WorkoutAnalysisAccessNotice from "@/components/WorkoutAnalysisAccessNotice";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatDistance, formatElevation, formatPace, formatSpeed } from "@/utils/units";
 import { formatDuration } from "@/utils/workoutHelpers";
@@ -67,6 +69,8 @@ const DetailSkeleton = () => (
 export default function SessionDetail() {
   const { id } = useParams();
   const { t, lang } = useLanguage();
+  const { loading: subscriptionLoading, hasFeature } = useSubscription();
+  const canAccessAnalysis = !subscriptionLoading && hasFeature("coach_workout_analysis") === true;
   const { unitSystem } = useUnitSystem();
   const [session, setSession] = useState(null);
   const [analysis, setAnalysis] = useState(null);
@@ -76,22 +80,33 @@ export default function SessionDetail() {
     const loadSession = async () => {
       setLoading(true);
       try {
-        const [sessionRes, analysisRes] = await Promise.all([
-          axios.get(`${API}/workouts/${id}`),
-          axios.get(`${API}/coach/workout-analysis/${id}?language=${lang}`).catch(() => ({ data: null })),
-        ]);
+        const sessionRes = await axios.get(`${API}/workouts/${id}`);
         setSession(sessionRes.data);
-        setAnalysis(analysisRes.data);
       } catch (error) {
         setSession(null);
-        setAnalysis(null);
       } finally {
         setLoading(false);
       }
     };
 
     loadSession();
-  }, [id, lang]);
+  }, [id]);
+
+  useEffect(() => {
+    let active = true;
+    setAnalysis(null);
+    if (!canAccessAnalysis) return () => { active = false; };
+
+    axios.get(`${API}/coach/workout-analysis/${id}?language=${lang}`)
+      .then((res) => {
+        if (active) setAnalysis(res.data);
+      })
+      .catch(() => {
+        if (active) setAnalysis(null);
+      });
+
+    return () => { active = false; };
+  }, [id, lang, canAccessAnalysis]);
 
   const locale = localeByLang[lang] || "en-US";
   const cadenceValue = session?.avg_cadence_spm || session?.average_cadence;
@@ -159,14 +174,15 @@ export default function SessionDetail() {
     );
   }
 
-  const limitations = getAnalysisLimitations(analysis, t);
-  const observationAvailable = hasCoachObservation(analysis);
+  const analysisForRender = canAccessAnalysis ? analysis : null;
+  const limitations = getAnalysisLimitations(analysisForRender, t);
+  const observationAvailable = hasCoachObservation(analysisForRender);
   const analysisSections = [
     {
       key: "summary",
       title: t("sessions.summary"),
       icon: Sparkles,
-      content: analysis?.summary?.text,
+      content: analysisForRender?.summary?.text,
       tone: "border-primary/20 bg-primary/5",
     },
     {
@@ -174,9 +190,9 @@ export default function SessionDetail() {
       title: t("sessions.strengths"),
       icon: Scale,
       content: [
-        analysis?.signals?.intensity?.available ? analysis?.signals?.intensity?.text : null,
-        analysis?.signals?.volume?.text,
-        analysis?.signals?.session_type?.text,
+        analysisForRender?.signals?.intensity?.available ? analysisForRender?.signals?.intensity?.text : null,
+        analysisForRender?.signals?.volume?.text,
+        analysisForRender?.signals?.session_type?.text,
       ].filter(Boolean).join(" • "),
       tone: "border-emerald-500/20 bg-emerald-500/5",
     },
@@ -184,34 +200,34 @@ export default function SessionDetail() {
       key: "improvements",
       title: t("workoutDetailExtended.historyComparison"),
       icon: Activity,
-      content: analysis?.comparison?.available
-        ? `baseline ${analysis.comparison.baseline_sample_count}`
-        : analysis && (limitations.some((item) => item.code === "limitations.baseline")
-          ? t("workoutDetailExtended.historyUnavailable") : analysis.comparison?.reason_unavailable),
+      content: analysisForRender?.comparison?.available
+        ? `baseline ${analysisForRender.comparison.baseline_sample_count}`
+        : analysisForRender && (limitations.some((item) => item.code === "limitations.baseline")
+          ? t("workoutDetailExtended.historyUnavailable") : analysisForRender.comparison?.reason_unavailable),
       tone: "border-amber-500/20 bg-amber-500/5",
     },
     {
       key: "physiology",
       title: t("sessions.physiology"),
       icon: HeartPulse,
-      content: analysis?.physiology?.available
-        ? `HR ${analysis.physiology.avg_hr ?? "--"} / ${analysis.physiology.max_hr ?? "--"}`
-        : analysis && (limitations.some((item) => item.code === "limitations.heart_rate")
-          ? t("workoutDetailExtended.heartRateUnavailable") : analysis.physiology?.reason_unavailable),
+      content: analysisForRender?.physiology?.available
+        ? `HR ${analysisForRender.physiology.avg_hr ?? "--"} / ${analysisForRender.physiology.max_hr ?? "--"}`
+        : analysisForRender && (limitations.some((item) => item.code === "limitations.heart_rate")
+          ? t("workoutDetailExtended.heartRateUnavailable") : analysisForRender.physiology?.reason_unavailable),
       tone: "border-border bg-card/40",
     },
     {
       key: "meaning",
       title: t("workoutDetailExtended.meaning"),
       icon: Activity,
-      content: analysis?.meaning?.text,
+      content: analysisForRender?.meaning?.text,
       tone: "border-border bg-card/40",
     },
     {
       key: "observation",
       title: t("workoutDetailExtended.coachObservation"),
       icon: Lightbulb,
-      content: analysis && (observationAvailable ? analysis.advice.text : t("workoutDetailExtended.adviceUnavailable")),
+      content: analysisForRender && (observationAvailable ? analysisForRender.advice.text : t("workoutDetailExtended.adviceUnavailable")),
       tone: "border-border bg-card/40",
     },
   ].filter((section) => section.content);
@@ -241,7 +257,7 @@ export default function SessionDetail() {
         </div>
       </div>
 
-      <section className="space-y-3 rounded-2xl border border-border bg-card/30 p-4">
+      {canAccessAnalysis ? <section className="space-y-3 rounded-2xl border border-border bg-card/30 p-4">
         <div className="flex items-center gap-2">
           <Scale className="h-4 w-4 text-muted-foreground" />
           <h2 className="text-sm font-medium uppercase tracking-[0.18em] text-muted-foreground">
@@ -308,8 +324,8 @@ export default function SessionDetail() {
             })}
           </div>
         )}
-      </section>
-      {limitations.length > 0 && <details className="rounded-2xl border border-border bg-card/30 p-4" data-testid="session-analysis-details">
+      </section> : !subscriptionLoading && <WorkoutAnalysisAccessNotice t={t} />}
+      {canAccessAnalysis && limitations.length > 0 && <details className="rounded-2xl border border-border bg-card/30 p-4" data-testid="session-analysis-details">
         <summary className="cursor-pointer text-sm min-h-11 content-center">{t("workoutDetailExtended.advancedDetails")}</summary>
         <section className="mt-3 space-y-2 text-sm text-muted-foreground" data-testid="analysis-limitations">
           <h3 className="font-semibold">{t("workoutDetailExtended.limitations")}</h3>
