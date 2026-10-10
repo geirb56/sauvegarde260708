@@ -4,6 +4,7 @@ import axios from "axios";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useLanguage } from "@/context/LanguageContext";
+import { getAnalysisLimitations, hasCoachObservation } from "@/lib/workoutAnalysis";
 import {
   ArrowLeft,
   Zap,
@@ -80,6 +81,8 @@ export default function DetailedAnalysis() {
   }
 
   const Icon = getWorkoutIcon(analysis.workout?.type);
+  const limitations = getAnalysisLimitations(analysis, t);
+  const observationAvailable = hasCoachObservation(analysis);
   const dateStr = new Date(analysis.workout?.date).toLocaleDateString(
     lang === "fr" ? "fr-FR" : lang === "es" ? "es-ES" : "en-US",
     { weekday: "short", month: "short", day: "numeric" },
@@ -159,26 +162,24 @@ export default function DetailedAnalysis() {
             </span>
           </div>
           <p className="font-sans text-sm text-secondary-foreground leading-relaxed" data-testid="meaning-text">
-            {analysis.meaning?.text}
+            {analysis.meaning?.text || t("workoutDetailExtended.meaningUnavailable")}
           </p>
         </CardContent>
       </Card>
 
-      {analysis.advice?.text && (
-        <Card className="bg-primary/5 border-primary/20 mb-3">
+        <Card className="bg-card border-border mb-3">
           <CardContent className="p-3">
             <div className="flex items-center gap-2 mb-2">
               <Lightbulb className="w-4 h-4 text-primary" />
               <span className="font-mono text-[11px] uppercase tracking-widest text-primary">
-                {t("detailedAnalysis.advice")}
+                {t("workoutDetailExtended.coachObservation")}
               </span>
             </div>
-            <p className="font-sans text-sm text-secondary-foreground leading-relaxed" data-testid="advice-text">
-              {analysis.advice.text}
+            <p className={`font-sans text-sm leading-relaxed ${observationAvailable ? "text-secondary-foreground" : "text-muted-foreground"}`} data-testid={observationAvailable ? "advice-text" : "advice-unavailable"}>
+              {observationAvailable ? analysis.advice.text : t("workoutDetailExtended.adviceUnavailable")}
             </p>
           </CardContent>
         </Card>
-      )}
 
       <Card className="bg-card border-border mb-3">
         <CardContent className="p-0">
@@ -186,6 +187,8 @@ export default function DetailedAnalysis() {
             onClick={() => setShowAdvanced(!showAdvanced)}
             className="w-full p-3 flex items-center justify-between text-left"
             data-testid="advanced-toggle"
+            aria-expanded={showAdvanced}
+            aria-controls="detailed-analysis-advanced"
           >
             <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">
               {t("detailedAnalysis.advanced")}
@@ -197,10 +200,10 @@ export default function DetailedAnalysis() {
             )}
           </button>
           {showAdvanced && (
-            <div className="px-3 pb-3 border-t border-border pt-3 grid gap-2" data-testid="advanced-text">
+            <div id="detailed-analysis-advanced" className="px-3 pb-3 border-t border-border pt-3 grid gap-2" data-testid="advanced-text">
               <p className="font-mono text-[11px] text-muted-foreground">version: {analysis.version}</p>
               <p className="font-mono text-[11px] text-muted-foreground">
-                baseline: {analysis.comparison?.available ? analysis.comparison.baseline_sample_count : 0}
+                baseline: {analysis.comparison?.baseline_sample_count ?? "--"}
               </p>
               {analysis.comparison?.distance_km && (
                 <p className="font-mono text-[11px] text-muted-foreground">
@@ -212,12 +215,16 @@ export default function DetailedAnalysis() {
                   duration: {formatSignedMetric(analysis.comparison.duration_minutes, " min")}
                 </p>
               )}
-              {!analysis.physiology?.available && analysis.physiology?.reason_unavailable && (
+              {!limitations.some((item) => item.code === "limitations.heart_rate") && !analysis.physiology?.available && analysis.physiology?.reason_unavailable && (
                 <p className="font-sans text-sm leading-relaxed text-secondary-foreground">{analysis.physiology.reason_unavailable}</p>
               )}
-              {!analysis.comparison?.available && analysis.comparison?.reason_unavailable && (
+              {!limitations.some((item) => item.code === "limitations.baseline") && !analysis.comparison?.available && analysis.comparison?.reason_unavailable && (
                 <p className="font-sans text-sm leading-relaxed text-secondary-foreground">{analysis.comparison.reason_unavailable}</p>
               )}
+              {limitations.length > 0 && <section data-testid="analysis-limitations">
+                <h3 className="text-sm font-semibold">{t("workoutDetailExtended.limitations")}</h3>
+                {limitations.map((item) => <p key={item.code} className="text-sm text-muted-foreground">{item.text}</p>)}
+              </section>}
             </div>
           )}
         </CardContent>

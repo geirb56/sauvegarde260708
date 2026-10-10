@@ -967,6 +967,7 @@ async def test_response_contract_has_required_structured_fields(client):
         "meaning",
         "advice",
         "evidence",
+        "limitations",
     }
     assert payload["signals"]["intensity"]["available"] is False
     assert payload["summary"]["text"]
@@ -1062,16 +1063,17 @@ async def test_fixture_a_summary_reports_its_own_distance_duration_pace_and_hr(c
 
 
 @pytest.mark.asyncio
-async def test_fixture_a_meaning_uses_provided_splits_drift_elevation_and_cadence(client):
+async def test_fixture_a_meaning_selects_one_observation_without_repeating_metrics(client):
     payload = (await _get_analysis(client, _FakeDB.FIXTURE_A_ID)).json()
     meaning = payload["meaning"]["text"]
-    assert "5:24/km" in meaning and "6:00/km" in meaning
-    assert "10 splits recorded" in meaning
-    assert "0:36/km" in meaning
-    assert "88/100" in meaning
-    assert "9 bpm" in meaning
-    assert "210 m" in meaning
-    assert "172 spm" in meaning
+    assert payload["meaning"]["code"] == "meaning.pace_change"
+    assert len(meaning) <= 240
+    for metric in ("5:24/km", "6:00/km", "10 splits", "0:36/km", "88/100", "9 bpm", "210 m", "172 spm"):
+        assert metric not in meaning
+    assert payload["pacing"]["consistency_score"] == 88
+    assert payload["physiology"]["hr_drift"] == 9
+    assert payload["evidence"]["has_elevation"] is True
+    assert payload["evidence"]["has_cadence"] is True
     # No automatic causal attribution for the measured drift.
     lowered = meaning.lower()
     assert "fatigue" not in lowered
@@ -1087,7 +1089,7 @@ async def test_fixture_a_advice_is_specific_useful_and_non_prescriptive(client):
     assert "individualized heart-rate zones" not in payload["advice"]["text"]
     text = payload["advice"]["text"]
     # Specific to the observed pacing fact, not a generic fallback.
-    assert "pace drop" in text
+    assert "pace change" in text
     _assert_not_prescriptive(text)
 
 
@@ -1131,14 +1133,16 @@ async def test_fixtures_never_infer_intensity_from_average_heart_rate(client):
 
 
 @pytest.mark.asyncio
-async def test_fixture_b_advice_states_analysis_limits_without_prescribing(client):
+async def test_fixture_b_advice_is_unavailable_and_limits_are_separate(client):
     payload = (await _get_analysis(client, _FakeDB.FIXTURE_B_ID)).json()
     assert payload["advice"]["code"] == "advice.hr_without_intensity"
     text = payload["advice"]["text"]
-    # Missing zone provenance is presented as a limit of the analysis, never as a
-    # training instruction, and it is never the only statement made.
-    assert "Limit of this analysis" in text
-    assert "no kilometre splits are recorded" in text
+    assert payload["advice"]["available"] is False
+    assert text == "No usable coaching observation is available from these data."
+    assert "Limit of this analysis" not in text
+    assert {"limitations.intensity", "limitations.splits"} <= {
+        item["code"] for item in payload["limitations"]
+    }
     _assert_not_prescriptive(text)
 
 
@@ -1194,8 +1198,9 @@ async def test_insufficient_similar_sample_is_not_presented_as_progression(clien
     assert similar["sample_count"] == 1
     assert "sample_too_small" in similar["limitations"]
     meaning = payload["meaning"]["text"]
-    assert "below the 2 this analysis requires" in meaning
-    assert "raw gap, not a performance conclusion" in meaning
+    assert "below the 2 this analysis requires" not in meaning
+    assert "limitations.sample_too_small" in {item["code"] for item in payload["limitations"]}
+    assert "limitations.comparability" in {item["code"] for item in payload["limitations"]}
     assert "progress" not in meaning
 
 
@@ -1206,16 +1211,18 @@ async def test_missing_similar_reference_reports_unavailability_instead_of_a_con
     assert similar["available"] is False
     assert similar["sample_count"] == 0
     assert similar["limitations"] == ["no_comparable_reference"]
-    assert "no historical comparison is available" in payload["meaning"]["text"]
+    assert "limitations.no_comparable_reference" in {item["code"] for item in payload["limitations"]}
+    assert "historical comparison" not in payload["meaning"]["text"]
 
 
 @pytest.mark.asyncio
-async def test_baseline_observations_are_quoted_in_meaning_when_available(client):
+async def test_baseline_observations_are_not_repeated_in_meaning_when_available(client):
     payload = (await _get_analysis(client, _FakeDB.FIXTURE_A_ID)).json()
     comparison = payload["comparison"]
     assert comparison["available"] is True
     meaning = payload["meaning"]["text"]
-    assert f"{comparison['baseline_sample_count']}-session average" in meaning
+    assert f"{comparison['baseline_sample_count']}-session average" not in meaning
+    assert "limitations.baseline_descriptive" in {item["code"] for item in payload["limitations"]}
 
 
 @pytest.mark.asyncio
@@ -1284,6 +1291,7 @@ async def test_similar_reference_is_exposed_without_breaking_the_v2_contract(cli
         "meaning",
         "advice",
         "evidence",
+        "limitations",
     }
     assert payload["comparison"]["baseline_period_days"] == 14
     assert isinstance(payload["comparison"]["similar"], dict)
@@ -1394,8 +1402,8 @@ async def test_generic_14_day_baseline_pace_and_hr_are_not_verbalized_in_meaning
 async def test_baseline_distance_wording_stays_descriptive_and_only_claims_what_is_verified(client):
     payload = (await _get_analysis(client, _FakeDB.FIXTURE_A_ID)).json()
     meaning = payload["meaning"]["text"]
-    assert "raw 2-session average of the last 14 days" in meaning
-    assert "may include sessions of different distances or natures and is not a performance comparison" in meaning
+    assert "raw 2-session average of the last 14 days" not in meaning
+    assert "limitations.baseline_descriptive" in {item["code"] for item in payload["limitations"]}
     assert payload["signals"]["volume"]["code"] == "above_recent"
     assert payload["signals"]["volume"]["text"] == "Distance above the recent average"
 
@@ -1408,7 +1416,8 @@ async def test_baseline_without_any_comparable_session_yields_no_performance_cla
     assert similar["available"] is False
     assert similar["comparable"] is False
     meaning = payload["meaning"]["text"]
-    assert "no historical comparison is available" in meaning
+    assert "historical comparison" not in meaning
+    assert "limitations.no_comparable_reference" in {item["code"] for item in payload["limitations"]}
     for banned in ("faster than", "slower than", "progression", "improved"):
         assert banned not in meaning.lower()
     _assert_not_prescriptive(meaning)
@@ -1422,9 +1431,9 @@ async def test_unknown_session_nature_is_reported_and_blocks_strong_comparabilit
     assert "session_nature_unknown" in similar["limitations"]
     assert similar["comparable"] is False
     meaning = payload["meaning"]["text"]
-    # The factual distance/pace gap is still exposed, with the limitation spelled out.
-    assert "earlier session(s) of comparable distance carrying a usable pace" in meaning
-    assert "raw gap, not a performance conclusion" in meaning
+    assert "earlier session(s) of comparable distance" not in meaning
+    assert similar["pace_difference_min_km"] is not None
+    assert "limitations.session_nature_unknown" in {item["code"] for item in payload["limitations"]}
 
 
 def test_explicit_race_metadata_excludes_incompatible_history():
@@ -1607,7 +1616,8 @@ async def test_baseline_wording_never_asserts_unverified_distance_mixing(client,
         "fr": "mélange des séances de distances différentes",
         "es": "mezcla sesiones de distancias diferentes",
     }[language]
-    assert hedged in meaning
+    assert hedged not in meaning
+    assert "limitations.baseline_descriptive" in {item["code"] for item in payload["limitations"]}
     assert asserted not in meaning
 
 
@@ -1638,8 +1648,8 @@ async def test_identical_distance_baseline_is_not_described_as_mixed(client):
     payload = (await _get_analysis(client, "run-uniform-current")).json()
     meaning = payload["meaning"]["text"]
     assert "mixes sessions of different distances" not in meaning
-    if "average of the last" in meaning:
-        assert "may include sessions of different distances or natures" in meaning
+    assert "average of the last" not in meaning
+    assert "limitations.baseline_descriptive" in {item["code"] for item in payload["limitations"]}
     # Still no performance reading from the generic baseline.
     for banned in ("progression", "better session", "improved"):
         assert banned not in meaning.lower()
@@ -1651,7 +1661,8 @@ async def test_mixed_distance_baseline_stays_descriptive_without_pace_or_hr_clai
     comparison = payload["comparison"]
     assert comparison["available"] is True
     meaning = payload["meaning"]["text"]
-    assert "may include sessions of different distances or natures" in meaning
+    assert "may include sessions of different distances or natures" not in meaning
+    assert "limitations.baseline_descriptive" in {item["code"] for item in payload["limitations"]}
     # The generic baseline never returns as a pace/HR comparison.
     assert "against that" not in meaning
     baseline_hr = comparison["avg_heart_rate"]["baseline"]
@@ -1660,6 +1671,140 @@ async def test_mixed_distance_baseline_stays_descriptive_without_pace_or_hr_clai
     for banned in ("progression", "better session", "improved", "superior effort"):
         assert banned not in meaning.lower()
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("language", ["en", "fr", "es"])
+@pytest.mark.parametrize("workout_id", [
+    _FakeDB.CURRENT_ID,
+    _FakeDB.HR_NO_ZONES_ID,
+    _FakeDB.NO_HR_ID,
+    _FakeDB.HIGH_ZONES_ID,
+    _FakeDB.FIXTURE_A_ID,
+    _FakeDB.FIXTURE_B_ID,
+    _FakeDB.NO_REFERENCE_ID,
+    _FakeDB.CADENCE_ID,
+])
+async def test_editorial_contract_is_short_localized_and_keeps_limits_accessible(client, language, workout_id):
+    payload = (await _get_analysis_lang(client, workout_id, language)).json()
+    meaning = payload["meaning"]["text"]
+    assert len(meaning) <= 240
+    assert meaning.count(".") <= 2
+    assert not any(char.isdigit() for char in meaning)
+    assert not any(observation in meaning for observation in workout_analysis_v2._comparison_observations(
+        workout_analysis_v2.WorkoutAnalysisComparison.model_validate(payload["comparison"]), language
+    ))
+    codes = [item["code"] for item in payload["limitations"]]
+    assert len(codes) == len(set(codes))
+    assert "limitations.intensity" in codes
+    if not payload["evidence"]["has_splits"]:
+        assert "limitations.splits" in codes
+    for item in payload["limitations"]:
+        assert item["text"] != item["code"]
+        assert item["text"] not in payload["advice"]["text"]
+        assert item["text"] not in meaning
+    advice = payload["advice"]
+    if advice["available"] is False:
+        assert advice["text"] == workout_analysis_v2._template(language, "advice.unavailable")
+    else:
+        assert advice["code"] not in {"advice.hr_without_intensity", "advice.no_hr"}
+    for block in ("summary", "meaning", "advice"):
+        _assert_not_prescriptive(payload[block]["text"])
+
+
+@pytest.mark.parametrize("language", ["en", "fr", "es"])
+def test_no_interpretable_signal_has_honest_meaning_and_unavailable_advice(language):
+    workout = _workout("minimal", user_id="u", date="2025-06-15", distance_km=8, duration_minutes=40)
+    analysis = workout_analysis_v2.build_workout_analysis_v2(workout, [], language)
+    assert analysis.meaning.code == "meaning.no_hr_no_pacing"
+    assert analysis.advice.available is False
+    assert analysis.advice.code == "advice.no_hr"
+    assert analysis.advice.text == workout_analysis_v2._template(language, "advice.unavailable")
+    assert {"limitations.heart_rate", "limitations.splits", "limitations.baseline",
+            "limitations.no_comparable_reference", "limitations.session_nature_unknown"} <= {
+        item.code for item in analysis.limitations
+    }
+
+
+@pytest.mark.parametrize("language", ["en", "fr", "es"])
+@pytest.mark.parametrize("split_analysis,hr_analysis,meaning_code,advice_code", [
+    ({"pace_drop": 0.6}, {}, "meaning.pace_change", "advice.even_pacing"),
+    ({"pace_drop": -0.6}, {}, "meaning.pace_change", "advice.even_pacing"),
+    ({"negative_split": True}, {}, "meaning.negative_split", "advice.negative_split_confirmed"),
+    ({"consistency_score": 95}, {}, "meaning.consistent_pacing", "advice.maintain_consistency"),
+    ({}, {"hr_drift": 9}, "meaning.hr_drift", "advice.monitor_hr_drift"),
+])
+def test_meaning_selects_only_the_demonstrated_signal(language, split_analysis, hr_analysis, meaning_code, advice_code):
+    workout = _workout(
+        "observed", user_id="u", date="2025-06-15", distance_km=8, duration_minutes=40,
+        split_analysis=split_analysis, hr_analysis=hr_analysis,
+    )
+    analysis = workout_analysis_v2.build_workout_analysis_v2(workout, [], language)
+    assert analysis.meaning.code == meaning_code
+    assert analysis.advice.code == advice_code
+    assert analysis.advice.available is True
+    assert analysis.signals.intensity.available is False
+    assert len(analysis.meaning.text) <= 240
+    if meaning_code == "meaning.pace_change":
+        for unsupported_decline in ("pace drop", "perte d'allure", "pérdida de ritmo"):
+            assert unsupported_decline not in analysis.advice.text
+
+
+@pytest.mark.parametrize("language", ["en", "fr", "es"])
+def test_comparable_history_stays_separate_and_metrics_are_unchanged(language):
+    workout = _workout(
+        "complete", user_id="u", date="2025-06-15T07:00:00+00:00",
+        distance_km=10, duration_minutes=60, avg_pace_min_km=6,
+        avg_heart_rate=150, max_heart_rate=170,
+        effort_zone_distribution={"z1": 20, "z2": 50, "z3": 20, "z4": 10, "z5": 0},
+        km_splits=[{"pace_min_km": 5.9}, {"pace_min_km": 6.1}],
+        split_analysis={"fastest_split_pace": 5.9, "slowest_split_pace": 6.1,
+                        "pace_drop": 0.2, "negative_split": False, "consistency_score": 92},
+        hr_analysis={"hr_drift": 6}, elevation_gain_m=210, avg_cadence_spm=172,
+    )
+    workout["is_race"] = False
+    history = [
+        dict(workout, id=f"previous-{index}", date=f"2025-06-0{index}T07:00:00+00:00")
+        for index in (1, 2)
+    ]
+    analysis = workout_analysis_v2.build_workout_analysis_v2(workout, history, language)
+    assert analysis.physiology.model_dump() == {
+        "available": True, "avg_hr": 150, "max_hr": 170,
+        "zone_distribution": {"z1": 20.0, "z2": 50.0, "z3": 20.0, "z4": 10.0, "z5": 0.0},
+        "hr_drift": 6.0, "reason_unavailable": None,
+    }
+    assert analysis.pacing.model_dump() == {
+        "available": True, "average_pace_min_km": 6.0, "average_speed_kmh": None,
+        "fastest_split_min_km": 5.9, "slowest_split_min_km": 6.1, "pace_drop_min_km": 0.2,
+        "negative_split": False, "consistency_score": 92.0, "variability": None,
+        "reason_unavailable": None,
+    }
+    assert analysis.signals.intensity.available is False
+    assert analysis.signals.intensity.code is None
+    assert analysis.comparison.baseline_sample_count == 2
+    assert analysis.comparison.similar.comparable is True
+    assert analysis.comparison.similar.limitations == []
+    assert analysis.comparison.similar.pace_difference_min_km == 0
+    assert analysis.comparison.similar.heart_rate_difference_bpm == 0
+    assert analysis.evidence.has_cadence and analysis.evidence.has_elevation
+    assert "limitations.comparability" not in {item.code for item in analysis.limitations}
+    assert analysis.meaning.code == "meaning.consistent_pacing"
+
+
+@pytest.mark.asyncio
+async def test_api_extension_accepts_legacy_payloads_and_preserves_code_text_consumers(client):
+    payload = (await _get_analysis(client, _FakeDB.FIXTURE_A_ID)).json()
+    assert isinstance(payload["advice"]["available"], bool)
+    assert all(set(item) == {"code", "text"} for item in payload["limitations"])
+    legacy_advice = workout_analysis_v2.AnalysisText.model_validate(payload["advice"])
+    assert legacy_advice.text == payload["advice"]["text"]
+    payload.pop("limitations")
+    payload["advice"].pop("available")
+    restored = workout_analysis_v2.WorkoutAnalysisV2Response.model_validate(payload)
+    assert restored.advice.available is False
+    assert restored.limitations == []
+    assert restored.advice.text == legacy_advice.text
+    restored.limitations.append(workout_analysis_v2.AnalysisText(code="test", text="test"))
+    assert workout_analysis_v2.WorkoutAnalysisV2Response.model_validate(payload).limitations == []
 
 # ============================================================
 # PR #304 final patch — strict population alignment and metric validity
