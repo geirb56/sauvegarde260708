@@ -31,6 +31,7 @@ from dotenv import load_dotenv
 load_dotenv()  # load backend/.env when run standalone
 
 import redis.asyncio as aioredis
+from redis.exceptions import RedisError
 from motor.motor_asyncio import AsyncIOMotorClient
 
 from jobs.queue import (
@@ -100,7 +101,11 @@ async def process_job(db, redis, raw: str, job: dict) -> None:
     lock_key = f"{LOCK_PREFIX}{user_id}"
 
     if job_type == JOB_ACTIVITY_DETAILS:
-        await maintain_details_pending(redis, user_id, job_id)
+        if not await maintain_details_pending(redis, user_id, job_id):
+            logger.warning("[worker] activity_details terminal=superseded job_id=%s user=%s",
+                           job_id, user_id)
+            await ack_job(raw, job_id)
+            return
 
     if job_type == JOB_ACTIVITY_DETAILS and job.get("not_before", 0) > time.time():
         await defer_activity_details(raw, job)
@@ -124,6 +129,11 @@ async def process_job(db, redis, raw: str, job: dict) -> None:
     start = time.time()
     logger.info("[worker] sync_start type=%s user=%s attempt=%s", job_type, user_id, attempts + 1)
     try:
+        if job_type == JOB_ACTIVITY_DETAILS and not await maintain_details_pending(redis, user_id, job_id):
+            logger.warning("[worker] activity_details terminal=superseded job_id=%s user=%s",
+                           job_id, user_id)
+            await ack_job(raw, job_id)
+            return
         work = (
             _run_job(db, job_type, user_id, job.get("activity_id"))
             if job_type == JOB_ACTIVITY_DETAILS else _run_job(db, job_type, user_id)
@@ -154,6 +164,9 @@ async def process_job(db, redis, raw: str, job: dict) -> None:
             await rate_limiter.set_cooldown(user_id)
         # ACK only on success: this is the single point that removes the job.
         await ack_job(raw, job_id)
+    except RedisError:
+        # Keep the reliable in-flight record for watchdog recovery, not ACK.
+        raise
     except Exception as exc:  # timeout or provider/runner failure
         duration = round(time.time() - start, 2)
         attempts += 1

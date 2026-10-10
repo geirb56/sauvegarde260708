@@ -310,6 +310,8 @@ class Redis:
         self.values.pop(key, None)
 
     async def eval(self, script, numkeys, key, job_id, action, ttl):
+        if key not in self.values and action == "refresh":
+            self.values[key] = job_id
         if self.values.get(key) != job_id:
             return 0
         if action == "release":
@@ -528,7 +530,7 @@ def test_chronology_timestamp_before_index_and_stable_missing_fields():
         {"type": "INTERVAL_COOLDOWN", "duration": 7, "messageIndex": True},
     ]}
     phases = normalize_typed_splits(payload)
-    assert [p["duration_s"] for p in phases] == [2, 1, 3, 5, 4, 6, 7]
+    assert [p["duration_s"] for p in phases] == [1, 2, 3, 4, 5, 6, 7]
     assert [p["order"] for p in phases] == list(range(7))
 
 
@@ -636,3 +638,50 @@ def test_future_job_parks_immediately_without_locks_sleep_requeue_or_ack(db, mon
     requeue.assert_not_awaited()
     sleep.assert_not_awaited()
     ack.assert_not_awaited()
+
+
+@pytest.mark.parametrize("rows,expected", [
+    ([{"messageIndex": 2}, {"messageIndex": 0}, {"messageIndex": 1}], [1, 2, 0]),
+    ([{"startTimeGMT": "2026-10-01T10:02:00"},
+      {"startTimeGMT": "2026-10-01T10:00:00"},
+      {"startTimeGMT": "2026-10-01T10:01:00"}], [1, 2, 0]),
+    ([{"messageIndex": 0, "startTimeGMT": "2026-10-01T10:00:00"},
+      {"messageIndex": 1},
+      {"messageIndex": 2, "startTimeGMT": "2026-10-01T10:02:00"}], [0, 1, 2]),
+    ([{"startTimeGMT": "2026-10-01T10:00:00"}, {},
+      {"startTimeGMT": "2026-10-01T10:02:00"}], [0, 1, 2]),
+    ([{"messageIndex": 2}, {}, {"messageIndex": 0}], [0, 1, 2]),
+    ([{"messageIndex": 1}, {"messageIndex": 1}, {"messageIndex": 0}], [0, 1, 2]),
+    ([{"messageIndex": 0, "startTimeGMT": "2026-10-01T10:02:00"},
+      {"messageIndex": 1, "startTimeGMT": "2026-10-01T10:00:00"}], [0, 1]),
+])
+def test_final_chronology_requires_coherent_complete_evidence(rows, expected):
+    splits = [{"type": "INTERVAL_ACTIVE", "duration": i, **row} for i, row in enumerate(rows)]
+    splits.insert(1, {"type": "RWD_WALK"})
+    assert [p["duration_s"] for p in normalize_typed_splits({"splits": splits})] == expected
+
+
+def test_worker_never_runs_superseded_job(db, monkeypatch):
+    from workers import sync_worker
+
+    redis = Redis()
+    redis.values[queue._pending_key(queue.JOB_ACTIVITY_DETAILS, "a")] = "new-job"
+    work = AsyncMock()
+    ack = AsyncMock()
+    monkeypatch.setattr(sync_worker, "_run_job", work)
+    monkeypatch.setattr(sync_worker, "ack_job", ack)
+    job = {"id": "old-job", "type": queue.JOB_ACTIVITY_DETAILS, "user_id": "a",
+           "activity_id": "123"}
+    run(sync_worker.process_job(db, redis, "raw", job))
+    work.assert_not_awaited()
+    ack.assert_awaited_once_with("raw", "old-job")
+    assert redis.values[queue._pending_key(queue.JOB_ACTIVITY_DETAILS, "a")] == "new-job"
+
+
+def test_expired_mongo_lease_can_be_reclaimed_and_completed_redelivery_is_cached(db, provider):
+    db.garmin_activities.docs[0]["activity_details_fetch"] = {
+        "token": "old", "next_attempt_at": "2000-01-01T00:00:00+00:00",
+    }
+    assert run(details.fetch_activity_details(db, "a", "123"))["status"] == "complete"
+    assert run(details.fetch_activity_details(db, "a", "123"))["status"] == "cached"
+    provider[0].get_activity_phases.assert_called_once()

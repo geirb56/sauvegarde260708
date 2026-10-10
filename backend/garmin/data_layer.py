@@ -186,9 +186,9 @@ class GarminActivity(BaseModel):
 def normalize_typed_splits(raw: Any) -> List[Dict]:
     """Normalize C321's verified envelope; reject incompatible responses.
 
-    Dated rows precede undated rows, by UTC start time. messageIndex breaks
-    timestamp ties and orders undated rows; input position is the final stable
-    fallback. Missing timestamps are never inferred from duration or lap data.
+    Complete unique message indexes are used only if available timestamps
+    agree with that order. Otherwise complete timestamps can order the entire
+    sequence if available indexes agree. Ambiguity preserves reception order.
     """
     if not isinstance(raw, dict) or not isinstance(raw.get("splits"), list):
         raise ValueError("Unsupported typed-splits payload")
@@ -207,8 +207,8 @@ def normalize_typed_splits(raw: Any) -> List[Dict]:
         except OverflowError:
             return None
 
-    def chronological_key(item):
-        position, split = item
+    def ordering_evidence(item):
+        _, split = item
         start = split.get("startTimeGMT")
         timestamp = None
         if isinstance(start, str) and ("T" in start or " " in start):
@@ -222,10 +222,7 @@ def normalize_typed_splits(raw: Any) -> List[Dict]:
         index = split.get("messageIndex")
         if isinstance(index, bool) or not isinstance(index, int) or index < 0:
             index = None
-        return (
-            timestamp is None, timestamp if timestamp is not None else 0,
-            index is None, index if index is not None else 0, position,
-        )
+        return index, timestamp
 
     retained = []
     for position, split in enumerate(splits):
@@ -238,7 +235,23 @@ def normalize_typed_splits(raw: Any) -> List[Dict]:
         if split["type"] not in {"RWD_RUN", "RWD_WALK"}:
             retained.append((position, split))
     phases = []
-    for order, (_, split) in enumerate(sorted(retained, key=chronological_key)):
+    evidence = {position: ordering_evidence(item) for item in retained for position in [item[0]]}
+
+    def agrees(sequence, column):
+        values = [evidence[position][column] for position, _ in sequence
+                  if evidence[position][column] is not None]
+        return all(a <= b for a, b in zip(values, values[1:]))
+
+    indexes = [evidence[position][0] for position, _ in retained]
+    if all(index is not None for index in indexes) and len(set(indexes)) == len(indexes):
+        candidate = sorted(retained, key=lambda item: evidence[item[0]][0])
+        if agrees(candidate, 1):
+            retained = candidate
+    elif all(evidence[position][1] is not None for position, _ in retained):
+        candidate = sorted(retained, key=lambda item: evidence[item[0]][1])
+        if agrees(candidate, 0):
+            retained = candidate
+    for order, (_, split) in enumerate(retained):
         native_type = split["type"]
         phases.append(ActivityPhase(
             order=order,
