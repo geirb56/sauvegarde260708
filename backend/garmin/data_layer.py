@@ -13,12 +13,14 @@ Design rules (do not violate):
   readiness, endpoints or frontend. Future PRs will consume these models.
 
 Historical raw shapes come from audited gccli 1.9.0 output. The typed-splits
-contract below is provisional and covered by explicitly synthetic tests.
+contract follows the Emergent C321 audit; tests reconstruct its documented
+structure and are not raw captures.
 """
 
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
+from datetime import datetime, timezone
 
 from pydantic import BaseModel, ConfigDict
 import math
@@ -181,29 +183,62 @@ class GarminActivity(BaseModel):
         )
 
 def normalize_typed_splits(raw: Any) -> List[Dict]:
-    """Provisional typed-splits contract; tests are synthetic, not audited JSON."""
-    if isinstance(raw, dict) and isinstance(raw.get("splitDTOs"), list):
-        raw = raw["splitDTOs"]
-    if not isinstance(raw, list) or len(raw) > 1000:
+    """Normalize C321's verified envelope; reject incompatible responses.
+
+    Dated rows precede undated rows, by UTC start time. messageIndex breaks
+    timestamp ties and orders undated rows; input position is the final stable
+    fallback. Missing timestamps are never inferred from duration or lap data.
+    """
+    if not isinstance(raw, dict) or not isinstance(raw.get("splits"), list):
+        raise ValueError("Unsupported typed-splits payload")
+    splits = raw["splits"]
+    if len(splits) > 1000:
         raise ValueError("Unsupported typed-splits payload")
     phase_types = {
         "INTERVAL_ACTIVE": "effort", "INTERVAL_RECOVERY": "recovery",
-        "WARMUP": "warmup", "COOLDOWN": "cooldown",
+        "INTERVAL_WARMUP": "warmup", "INTERVAL_COOLDOWN": "cooldown",
     }
 
     def measurement(value):
         number = _num(value)
-        return number if number is not None and math.isfinite(number) and number >= 0 else None
+        try:
+            return number if number is not None and math.isfinite(number) and number >= 0 else None
+        except OverflowError:
+            return None
 
-    phases = []
-    for order, split in enumerate(raw):
+    def chronological_key(item):
+        position, split = item
+        start = split.get("startTimeGMT")
+        timestamp = None
+        if isinstance(start, str) and ("T" in start or " " in start):
+            try:
+                parsed = datetime.fromisoformat(start.replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                timestamp = parsed.timestamp()
+            except (ValueError, OverflowError, OSError):
+                pass
+        index = split.get("messageIndex")
+        if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+            index = None
+        return (
+            timestamp is None, timestamp if timestamp is not None else 0,
+            index is None, index if index is not None else 0, position,
+        )
+
+    retained = []
+    for position, split in enumerate(splits):
         if (
             not isinstance(split, dict)
-            or not _str(split.get("splitType"))
-            or len(split["splitType"]) > 128
+            or not _str(split.get("type"))
+            or len(split["type"]) > 128
         ):
             raise ValueError("Unsupported typed-split row")
-        native_type = split["splitType"]
+        if split["type"] not in {"RWD_RUN", "RWD_WALK"}:
+            retained.append((position, split))
+    phases = []
+    for order, (_, split) in enumerate(sorted(retained, key=chronological_key)):
+        native_type = split["type"]
         phases.append(ActivityPhase(
             order=order,
             native_type=native_type,

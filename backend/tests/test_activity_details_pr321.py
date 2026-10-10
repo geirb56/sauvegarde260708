@@ -1,6 +1,6 @@
-"""PR321 contract tests. ALL typed-splits data below is SYNTHETIC.
+"""PR321/C321 contract tests. ALL typed-splits data below is RECONSTRUCTED.
 
-No fixture represents the real activity 24671804067 or a Garmin connection.
+Structure/units follow the supplied Emergent audit, not a raw GCCLI capture.
 Mongo and Redis are in-memory test doubles; subprocess calls are mocked.
 """
 
@@ -22,13 +22,14 @@ from garmin.runner import GccliError, GccliRunner
 from jobs import queue
 
 SYNTHETIC_SPLITS = [
-    {"splitType": "WARMUP", "duration": 600},
-    {"splitType": "INTERVAL_ACTIVE", "duration": 240, "distance": 1000,
+    {"type": "INTERVAL_WARMUP", "duration": 600},
+    {"type": "INTERVAL_ACTIVE", "duration": 240, "distance": 1000,
      "averageSpeed": 4.1, "averageHR": 165, "maxHR": 175},
-    {"splitType": "INTERVAL_RECOVERY", "duration": 180, "distance": 0},
-    {"splitType": "COOLDOWN"},
-    {"splitType": "UNRECOGNIZED"},
+    {"type": "INTERVAL_RECOVERY", "duration": 180, "distance": 0},
+    {"type": "INTERVAL_COOLDOWN"},
+    {"type": "UNRECOGNIZED"},
 ]
+SYNTHETIC_PAYLOAD = {"activityId": 123, "activityUUID": "reconstructed", "splits": SYNTHETIC_SPLITS}
 
 
 def run(coro):
@@ -36,7 +37,7 @@ def run(coro):
 
 
 def test_synthetic_parsing_preserves_order_native_types_and_available_metrics():
-    phases = normalize_typed_splits({"splitDTOs": SYNTHETIC_SPLITS})
+    phases = normalize_typed_splits(SYNTHETIC_PAYLOAD)
     assert [p["phase_type"] for p in phases] == [
         "warmup", "effort", "recovery", "cooldown", "unknown",
     ]
@@ -52,30 +53,33 @@ def test_synthetic_parsing_preserves_order_native_types_and_available_metrics():
     assert all(p["source"] == "garmin" for p in phases)
 
 
-@pytest.mark.parametrize("value", [None, True, "240", -1, float("inf"), float("nan")])
+@pytest.mark.parametrize("value", [None, True, "240", -1, float("inf"), float("nan"), 10 ** 1000])
 def test_missing_or_invalid_measurements_are_not_fabricated(value):
-    phase = normalize_typed_splits([{"splitType": "INTERVAL_ACTIVE", "duration": value}])[0]
+    phase = normalize_typed_splits({"splits": [{"type": "INTERVAL_ACTIVE", "duration": value}]})[0]
     assert phase["duration_s"] is None
     assert phase["average_speed_mps"] is None
     assert phase["average_hr"] is None
 
 
-@pytest.mark.parametrize("raw", [None, {}, {"splits": []}, [None], [{}],
-                                     [{"splitType": ""}], [SYNTHETIC_SPLITS[0]] * 1001])
+@pytest.mark.parametrize("raw", [None, {}, {"splitDTOs": []}, [None], [{}],
+                               {"splits": [{"splitType": "INTERVAL_ACTIVE"}]},
+                               {"splits": [{"type": ""}]},
+                               {"splits": [SYNTHETIC_SPLITS[0]] * 1001}])
 def test_unverified_shapes_fail_closed(raw):
     with pytest.raises(ValueError):
         normalize_typed_splits(raw)
 
 
-@pytest.mark.parametrize("raw", [[], {"splitDTOs": []}])
+@pytest.mark.parametrize("raw", [{"splits": []},
+                               {"activityId": 123, "activityUUID": "reconstructed", "splits": []}])
 def test_recognized_empty_data(raw):
     assert normalize_typed_splits(raw) == []
 
 
 def test_runner_uses_existing_command_auth_and_json_boundary(tmp_path):
     runner = GccliRunner(home=str(tmp_path))
-    runner._run_json = Mock(return_value=SYNTHETIC_SPLITS)
-    assert runner.fetch_activity_typed_splits("123", "synthetic-account") == SYNTHETIC_SPLITS
+    runner._run_json = Mock(return_value=SYNTHETIC_PAYLOAD)
+    assert runner.fetch_activity_typed_splits("123", "synthetic-account") == SYNTHETIC_PAYLOAD
     runner._run_json.assert_called_once_with(
         ["activity", "typed-splits", "123"], account="synthetic-account", single_attempt=True,
     )
@@ -183,7 +187,7 @@ def db():
 @pytest.fixture
 def provider(monkeypatch):
     provider = Mock()
-    provider.get_activity_phases.return_value = normalize_typed_splits(SYNTHETIC_SPLITS)
+    provider.get_activity_phases.return_value = normalize_typed_splits(SYNTHETIC_PAYLOAD)
     factory = Mock(return_value=provider)
     monkeypatch.setattr(details, "get_provider_for_user", factory)
     return provider, factory
@@ -235,7 +239,7 @@ def test_concurrent_fetches_share_atomic_activity_lease(db, provider):
     def blocked(*args):
         entered.set()
         assert release.wait(timeout=5)
-        return normalize_typed_splits(SYNTHETIC_SPLITS)
+        return normalize_typed_splits(SYNTHETIC_PAYLOAD)
 
     provider[0].get_activity_phases.side_effect = blocked
 
@@ -255,7 +259,7 @@ def test_concurrent_fetches_share_atomic_activity_lease(db, provider):
 def test_stale_completion_cannot_overwrite_new_claim(db, provider):
     def superseded(*args):
         db.garmin_activities.docs[0]["activity_details_fetch"]["token"] = "new-claim"
-        return normalize_typed_splits(SYNTHETIC_SPLITS)
+        return normalize_typed_splits(SYNTHETIC_PAYLOAD)
 
     provider[0].get_activity_phases.side_effect = superseded
     assert run(details.fetch_activity_details(db, "a", "123"))["status"] == "superseded"
@@ -370,7 +374,7 @@ def test_cached_state_is_rechecked_in_atomic_claim(db, provider, monkeypatch):
 
     async def race(query, update, upsert=False):
         db.garmin_activities.docs[0]["activity_details"] = {
-            "schema_version": 1, "status": "complete", "phases": [],
+            "schema_version": details.SCHEMA_VERSION, "status": "complete", "phases": [],
         }
         return await original_update(query, update, upsert=upsert)
 
@@ -449,15 +453,15 @@ def test_worker_defers_lease_contention_without_ack_or_consuming_retry(db, monke
         "success": False, "status": "deferred", "retry_at": retry_at,
     }))
     ack = AsyncMock()
-    requeue = AsyncMock()
+    defer = AsyncMock()
     monkeypatch.setattr(sync_worker, "ack_job", ack)
-    monkeypatch.setattr(sync_worker, "requeue_job", requeue)
+    monkeypatch.setattr(sync_worker, "defer_activity_details", defer)
     job = {"id": "synthetic-job", "type": queue.JOB_ACTIVITY_DETAILS,
            "user_id": "a", "activity_id": "123", "attempts": 1}
     run(sync_worker.process_job(db, redis, "synthetic-raw", job))
     ack.assert_not_awaited()
-    requeue.assert_awaited_once()
-    payload = json.loads(requeue.call_args.args[2])
+    defer.assert_awaited_once()
+    payload = defer.call_args.args[1]
     assert payload["attempts"] == 1
     assert payload["not_before"] == datetime.fromisoformat(retry_at).timestamp()
 
@@ -471,3 +475,164 @@ def test_pending_ownership_does_not_delete_a_newer_job():
     assert run(queue.maintain_details_pending(redis, "a", "new-job")) == 1
     assert run(queue.maintain_details_pending(redis, "a", "new-job", release=True)) == 1
     assert key not in redis.values
+
+
+def reconstructed_reference_payload():
+    """29 rows matching audited counts; timings/metrics reconstructed, not captured."""
+    from datetime import datetime, timedelta
+
+    start = datetime(2026, 10, 1, 10)
+    rows = []
+    types_and_durations = [("INTERVAL_WARMUP", 600)]
+    types_and_durations += [
+        (kind, duration) for _ in range(4)
+        for kind, duration in [("INTERVAL_ACTIVE", 240), ("INTERVAL_RECOVERY", 180)]
+    ]
+    types_and_durations.append(("INTERVAL_COOLDOWN", 600))
+    for index, (kind, duration) in enumerate(types_and_durations):
+        rows.append({"type": kind, "duration": duration, "messageIndex": index,
+                     "startTimeGMT": start.isoformat(), "averageSpeed": 4 if kind == "INTERVAL_ACTIVE" else 2})
+        start += timedelta(seconds=duration)
+    rows.extend({"type": "RWD_RUN" if i % 2 else "RWD_WALK", "messageIndex": i}
+                for i in range(19))
+    return {"activityId": 24671804067, "activityUUID": "reconstructed", "splits": rows}
+
+
+def test_reconstructed_reference_excludes_19_rwd_rows_and_keeps_four_repetitions():
+    payload = reconstructed_reference_payload()
+    assert len(payload["splits"]) == 29
+    payload["splits"].reverse()
+    phases = normalize_typed_splits(payload)
+    assert len(phases) == 10
+    assert [p["duration_s"] for p in phases if p["phase_type"] == "effort"] == [240] * 4
+    assert [p["duration_s"] for p in phases if p["phase_type"] == "recovery"] == [180] * 4
+    assert [p["phase_type"] for p in phases] == [
+        "warmup", "effort", "recovery", "effort", "recovery",
+        "effort", "recovery", "effort", "recovery", "cooldown",
+    ]
+    assert all(p["min_hr"] is None for p in phases)
+    assert not any(p["native_type"].startswith("RWD_") for p in phases)
+
+
+def test_chronology_timestamp_before_index_and_stable_missing_fields():
+    payload = {"splits": [
+        {"type": "INTERVAL_ACTIVE", "duration": 1, "messageIndex": 0,
+         "startTimeGMT": "2026-10-01T10:01:00Z"},
+        {"type": "INTERVAL_ACTIVE", "duration": 2, "messageIndex": 99,
+         "startTimeGMT": "2026-10-01T10:00:00"},
+        {"type": "INTERVAL_ACTIVE", "duration": 3, "messageIndex": 2,
+         "startTimeGMT": "2026-10-01T12:01:00+02:00"},
+        {"type": "INTERVAL_RECOVERY", "duration": 4, "messageIndex": 5},
+        {"type": "INTERVAL_RECOVERY", "duration": 5, "messageIndex": 1, "startTimeGMT": "invalid"},
+        {"type": "INTERVAL_COOLDOWN", "duration": 6},
+        {"type": "INTERVAL_COOLDOWN", "duration": 7, "messageIndex": True},
+    ]}
+    phases = normalize_typed_splits(payload)
+    assert [p["duration_s"] for p in phases] == [2, 1, 3, 5, 4, 6, 7]
+    assert [p["order"] for p in phases] == list(range(7))
+
+
+def test_equal_and_absent_ordering_keys_keep_input_order():
+    rows = [{"type": "INTERVAL_ACTIVE", "duration": n, "messageIndex": 3,
+             "startTimeGMT": "2026-10-01T10:00:00"} for n in [3, 1, 2]]
+    assert [p["duration_s"] for p in normalize_typed_splits({"splits": rows})] == [3, 1, 2]
+    for row in rows:
+        row.pop("messageIndex")
+        row.pop("startTimeGMT")
+    assert [p["duration_s"] for p in normalize_typed_splits({"splits": rows})] == [3, 1, 2]
+
+
+@pytest.mark.parametrize("speed,expected", [
+    (4, 250), (2.5, 400), (0, None), (-1, None), (None, None),
+    (True, None), ("4", None), (float("inf"), None), (float("nan"), None),
+    (5e-324, None),
+])
+def test_pace_is_derived_only_for_finite_positive_speed_and_not_persisted(speed, expected):
+    from activity_phases import ActivityPhase
+
+    phase = ActivityPhase(**normalize_typed_splits({"splits": [
+        {"type": "INTERVAL_ACTIVE", "averageSpeed": speed},
+    ]})[0])
+    assert phase.pace_sec_per_km == expected
+    assert "pace_sec_per_km" not in phase.model_dump()
+
+
+@pytest.mark.parametrize("activity_id", [24671804067, "24671804067"])
+def test_provider_normalizes_integer_response_id_and_string_request_id(activity_id):
+    runner = Mock()
+    runner.fetch_activity_typed_splits.return_value = reconstructed_reference_payload()
+    phases = GccliProvider(runner, account="synthetic-a").get_activity_phases("a", activity_id)
+    assert len(phases) == 10
+    runner.fetch_activity_typed_splits.assert_called_once_with("24671804067", account="synthetic-a")
+
+
+@pytest.mark.parametrize("response_id", [None, True, 456, "garmin-123"])
+def test_provider_rejects_response_identity_mismatch(response_id):
+    runner = Mock()
+    runner.fetch_activity_typed_splits.return_value = {**SYNTHETIC_PAYLOAD, "activityId": response_id}
+    with pytest.raises((ValueError, GccliError)):
+        GccliProvider(runner, account="synthetic-a").get_activity_phases("a", "123")
+
+
+def test_explicit_workout_id_conversion_does_not_change_provider_id_validation():
+    from garmin.activity_ids import normalize_activity_id
+    from workout_analysis_v2_service import _extract_garmin_external_id
+
+    assert _extract_garmin_external_id({"id": "garmin-24671804067", "external_id": None}) == "24671804067"
+    assert _extract_garmin_external_id({"id": "other-123"}) is None
+    assert _extract_garmin_external_id({"external_id": 24671804067}) == "24671804067"
+    assert normalize_activity_id(24671804067) == "24671804067"
+    assert normalize_activity_id("00123") == "00123"
+    for invalid in ["garmin-123", "other-123", True, -1, 12.3]:
+        with pytest.raises(ValueError):
+            normalize_activity_id(invalid)
+
+
+def test_integer_target_is_normalized_without_rewriting_mongo_ids(db, provider):
+    assert run(details.fetch_activity_details(db, "a", 123))["success"]
+    assert db.garmin_activities.docs[0]["external_id"] == "123"
+    provider[0].get_activity_phases.assert_called_once_with("a", "123")
+    assert "activity_details" not in db.garmin_activities.docs[1]
+
+
+def test_incompatible_response_is_failed_not_negative_cache(db, monkeypatch):
+    runner = Mock()
+    runner.fetch_activity_typed_splits.return_value = {"activityId": 123, "splitDTOs": []}
+    monkeypatch.setattr(details, "get_provider_for_user",
+                        lambda *a, **k: GccliProvider(runner, account="synthetic-a"))
+    assert not run(details.fetch_activity_details(db, "a", "123"))["success"]
+    assert "activity_details" not in db.garmin_activities.docs[0]
+    assert db.garmin_activities.docs[0]["activity_details_fetch"]["status"] == "failed"
+
+
+def test_version_one_negative_cache_is_not_reused_after_contract_correction(db, provider):
+    db.garmin_activities.docs[0]["activity_details"] = {
+        "schema_version": 1, "status": "no_data", "phases": [],
+    }
+    assert run(details.fetch_activity_details(db, "a", "123"))["status"] == "complete"
+    assert db.garmin_activities.docs[0]["activity_details"]["schema_version"] == 2
+    provider[0].get_activity_phases.assert_called_once()
+
+
+def test_future_job_parks_immediately_without_locks_sleep_requeue_or_ack(db, monkeypatch):
+    from workers import sync_worker
+    import time
+
+    redis = Redis()
+    redis.set = AsyncMock()
+    defer = AsyncMock()
+    requeue = AsyncMock()
+    ack = AsyncMock()
+    sleep = AsyncMock()
+    monkeypatch.setattr(sync_worker, "defer_activity_details", defer)
+    monkeypatch.setattr(sync_worker, "requeue_job", requeue)
+    monkeypatch.setattr(sync_worker, "ack_job", ack)
+    monkeypatch.setattr(sync_worker.asyncio, "sleep", sleep)
+    job = {"id": "synthetic-job", "type": queue.JOB_ACTIVITY_DETAILS, "user_id": "a",
+           "activity_id": "123", "attempts": 1, "not_before": time.time() + 900}
+    run(sync_worker.process_job(db, redis, "synthetic-raw", job))
+    defer.assert_awaited_once_with("synthetic-raw", job)
+    redis.set.assert_not_awaited()
+    requeue.assert_not_awaited()
+    sleep.assert_not_awaited()
+    ack.assert_not_awaited()

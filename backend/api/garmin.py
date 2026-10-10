@@ -173,7 +173,7 @@ async def get_activity_phases(
     from garmin.activity_details import validate_activity_id
 
     try:
-        validate_activity_id(activity_id)
+        activity_id = validate_activity_id(activity_id)
     except ValueError:
         raise HTTPException(status_code=422, detail="Invalid activity identifier")
     doc = await request.app.state.db.garmin_activities.find_one(

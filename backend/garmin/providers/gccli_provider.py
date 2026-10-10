@@ -108,13 +108,16 @@ class GccliProvider(Provider):
 
     def get_activity_phases(self, user_id: str, activity_id: str) -> List[Dict]:
         from ..data_layer import normalize_typed_splits
+        from ..activity_ids import normalize_activity_id
 
+        activity_id = normalize_activity_id(activity_id)
         account = self._garmin_account
         if not account:
             raise GccliError("Per-user Garmin account required")
-        return normalize_typed_splits(
-            self._runner.fetch_activity_typed_splits(activity_id, account=account)
-        )
+        raw = self._runner.fetch_activity_typed_splits(activity_id, account=account)
+        if not isinstance(raw, dict) or normalize_activity_id(raw.get("activityId")) != activity_id:
+            raise GccliError("Activity response identifier mismatch")
+        return normalize_typed_splits(raw)
 
 
     def fetch_all_activities(self, page_size: int = 50) -> List[Dict]:

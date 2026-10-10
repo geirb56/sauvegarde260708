@@ -49,6 +49,8 @@ from jobs.queue import (
     _pending_key,
     _should_update_sync_progress,
     maintain_details_pending,
+    defer_activity_details,
+    promote_due_activity_details,
     claim_job,
     ack_job,
     requeue_job,
@@ -101,9 +103,7 @@ async def process_job(db, redis, raw: str, job: dict) -> None:
         await maintain_details_pending(redis, user_id, job_id)
 
     if job_type == JOB_ACTIVITY_DETAILS and job.get("not_before", 0) > time.time():
-        # Keep deferred work reliable without holding the user's sync lock.
-        await asyncio.sleep(min(5, job["not_before"] - time.time()))
-        await requeue_job(raw, job_id)
+        await defer_activity_details(raw, job)
         return
 
     # One active sync per user. If busy, move the in-flight job back to the queue.
@@ -134,7 +134,7 @@ async def process_job(db, redis, raw: str, job: dict) -> None:
         result = await asyncio.wait_for(work, timeout=timeout)
         if job_type == JOB_ACTIVITY_DETAILS and result.get("status") == "deferred":
             job["not_before"] = datetime.fromisoformat(result["retry_at"]).timestamp()
-            await requeue_job(raw, job_id, json.dumps(job))
+            await defer_activity_details(raw, job)
             return
         if not result.get("success"):
             raise RuntimeError(result.get("error") or result.get("message") or "sync failed")
@@ -195,6 +195,7 @@ async def watchdog_loop() -> None:
     logger.info("[watchdog] enabled interval=%ss", WATCHDOG_INTERVAL)
     while True:
         try:
+            await promote_due_activity_details()
             n = await recover_orphans()
             if n:
                 logger.warning("[watchdog] requeued %s orphan job(s)", n)

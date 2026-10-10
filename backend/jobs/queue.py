@@ -22,6 +22,9 @@ QUEUE_KEY = "runindex:garmin:queue"
 PROCESSING_KEY = "runindex:garmin:processing"
 # Hash job_id -> claimed_at (epoch); used by the watchdog to detect orphans.
 CLAIMS_KEY = "runindex:garmin:claims"
+# Only explicit activity-details jobs wait here, outside the runnable FIFO.
+DELAYED_KEY = "runindex:garmin:details:delayed"
+DELAYED_PAYLOADS_KEY = "runindex:garmin:details:delayed_payloads"
 # A job stuck in processing longer than this (s) is considered orphaned.
 ORPHAN_TIMEOUT = int(os.environ.get("SYNC_ORPHAN_TIMEOUT", "120"))
 
@@ -128,7 +131,7 @@ async def enqueue_activity_details(user_id: str, activity_id: str) -> dict:
     """One explicit target, at most one queued enrichment per user."""
     from garmin.activity_details import validate_activity_id
 
-    validate_activity_id(activity_id)
+    activity_id = validate_activity_id(activity_id)
     r = get_redis()
     key = _pending_key(JOB_ACTIVITY_DETAILS, user_id)
     job_id = uuid.uuid4().hex
@@ -196,6 +199,49 @@ async def requeue_job(raw: str, job_id: str, new_payload: str = None) -> None:
         pipe.hdel(CLAIMS_KEY, job_id)
         pipe.lpush(QUEUE_KEY, new_payload if new_payload is not None else raw)
         await pipe.execute()
+
+
+async def defer_activity_details(raw: str, job: dict) -> None:
+    """Atomically park an in-flight job, without ACK or a runnable-queue loop."""
+    due = float(job["not_before"])
+    ttl = max(DETAILS_PENDING_TTL, int(due - time.time()) + DETAILS_PENDING_TTL)
+    await get_redis().eval(
+        """
+        if redis.call('LREM', KEYS[1], 1, ARGV[1]) == 0 then return 0 end
+        redis.call('HDEL', KEYS[2], ARGV[2])
+        redis.call('HSET', KEYS[4], ARGV[2], ARGV[3])
+        redis.call('ZADD', KEYS[3], ARGV[4], ARGV[2])
+        if redis.call('GET', KEYS[5]) == ARGV[2] then
+            redis.call('EXPIRE', KEYS[5], ARGV[5])
+        end
+        return 1
+        """,
+        5, PROCESSING_KEY, CLAIMS_KEY, DELAYED_KEY, DELAYED_PAYLOADS_KEY,
+        _pending_key(JOB_ACTIVITY_DETAILS, job["user_id"]),
+        raw, job["id"], json.dumps(job), due, ttl,
+    )
+
+
+async def promote_due_activity_details() -> int:
+    """Watchdog promotion, bounded and atomic across multiple workers."""
+    return await get_redis().eval(
+        """
+        local ids = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[1],
+                               'LIMIT', 0, 100)
+        local promoted = 0
+        for _, id in ipairs(ids) do
+            local payload = redis.call('HGET', KEYS[2], id)
+            if payload then
+                redis.call('LPUSH', KEYS[3], payload)
+                promoted = promoted + 1
+            end
+            redis.call('ZREM', KEYS[1], id)
+            redis.call('HDEL', KEYS[2], id)
+        end
+        return promoted
+        """,
+        3, DELAYED_KEY, DELAYED_PAYLOADS_KEY, QUEUE_KEY, time.time(),
+    )
 
 
 async def recover_orphans() -> int:

@@ -231,9 +231,9 @@ class GccliRunner:
 
     # -------------------------------------------------------------- data fetch
     def fetch_activity_typed_splits(self, activity_id: str, account: str):
-        from .activity_details import validate_activity_id
+        from .activity_ids import normalize_activity_id
 
-        validate_activity_id(activity_id)
+        activity_id = normalize_activity_id(activity_id)
         if not account:
             raise GccliError("Garmin account required")
         # The reliable queue owns retries; one command fits the worker lease.

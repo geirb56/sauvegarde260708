@@ -1,25 +1,23 @@
 """Targeted typed-splits normalization and persistence (summary-independent).
 
-No verified typed-splits fixture exists in GitHub. Supported envelope/field
-names are a provisional contract, not a claim about the real GCCLI response.
+The envelope and fields follow the Emergent C321 runtime audit supplied by
+the user; reconstructed GitHub fixtures are not raw GCCLI captures.
 Unrecognized envelopes fail closed rather than being cached as empty data.
 """
 
 import asyncio
-import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from .factory import get_provider_for_user
+from .activity_ids import normalize_activity_id
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 LEASE_SECONDS = 900
 RETRY_SECONDS = 300
 
 
 def validate_activity_id(activity_id: str) -> str:
-    if not isinstance(activity_id, str) or not re.fullmatch(r"[0-9]{1,30}", activity_id):
-        raise ValueError("Invalid activity identifier")
-    return activity_id
+    return normalize_activity_id(activity_id)
 
 
 def _identity(user_id: str, activity_id: str) -> dict:
@@ -40,6 +38,7 @@ def _cached(doc: dict) -> bool:
 async def request_activity_details(db, user_id: str, activity_id: str) -> dict:
     from jobs.queue import enqueue_activity_details
 
+    activity_id = validate_activity_id(activity_id)
     doc = await db.garmin_activities.find_one(_identity(user_id, activity_id), {"_id": 0})
     if doc is None:
         return {"status": "not_found"}
@@ -52,6 +51,7 @@ async def request_activity_details(db, user_id: str, activity_id: str) -> dict:
 
 
 async def fetch_activity_details(db, user_id: str, activity_id: str) -> dict:
+    activity_id = validate_activity_id(activity_id)
     identity = _identity(user_id, activity_id)
     doc = await db.garmin_activities.find_one(identity, {"_id": 0})
     if doc is None or _cached(doc):
