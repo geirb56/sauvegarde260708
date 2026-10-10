@@ -6,25 +6,23 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useLanguage } from "@/context/LanguageContext";
 import { formatPaceDisplay, formatPaceDelta } from "@/lib/workoutAnalysis";
+import { formatSpeed } from "@/utils/units";
 import {
   ArrowLeft,
-  Heart,
-  Zap,
   Scale,
   Activity,
   MessageSquare,
   Loader2,
   Bike,
   Footprints,
-  HeartPulse,
   AlertCircle,
-  Lightbulb,
 } from "lucide-react";
 
 import { API_BASE_URL } from "@/config";
 
 const API = API_BASE_URL;
 const ALLOWED_BACK_ROUTES = new Set(["/sessions", "/training", "/progress"]);
+const hasPositiveFiniteMetric = (value) => Number.isFinite(value) && value > 0;
 
 const getWorkoutIcon = (type) => {
   if (type === "cycle") return Bike;
@@ -67,7 +65,9 @@ const formatSignedMetric = (metric, suffix = "", round = false) => {
 };
 
 const SplitsChart = ({ splits, t }) => {
-  if (!splits || splits.length === 0) return null;
+  const validSplits = Array.isArray(splits) ? splits.filter((split) => Number.isFinite(split?.pace_min_km) && split.pace_min_km > 0) : [];
+  if (validSplits.length === 0) return null;
+  splits = validSplits;
 
   const paces = splits.map((s) => s.pace_min_km);
   const minPace = Math.min(...paces);
@@ -88,55 +88,41 @@ const SplitsChart = ({ splits, t }) => {
     return "#6EEB5A";
   };
 
-  const formatPace = (pace) => {
-    const mins = Math.floor(pace);
-    const secs = Math.round((pace % 1) * 60);
-    return `${mins}:${String(secs).padStart(2, "0")}`;
-  };
-
-  const displaySplits = splits.length > 25 ? splits.filter((_, i) => i % 2 === 0 || i === splits.length - 1) : splits;
-  const showAllKm = splits.length <= 25;
-
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between text-xs">
-        <div className="flex gap-4">
+      <div className="text-xs">
+        <div className="grid grid-cols-2 gap-3">
           <div>
             <p className="font-mono text-[11px] text-muted-foreground uppercase">{t("workoutDetailExtended.fastest")}</p>
             <p className="font-mono text-xs font-semibold text-emerald-400">
-              Km {splits[fastestIdx]?.km} • {splits[fastestIdx]?.pace_str}
+              Km {splits[fastestIdx]?.km} • {formatPaceDisplay(minPace)}
             </p>
           </div>
           <div>
             <p className="font-mono text-[11px] text-muted-foreground uppercase">{t("workoutDetailExtended.slowest")}</p>
             <p className="font-mono text-xs font-semibold text-orange-400">
-              Km {splits[slowestIdx]?.km} • {splits[slowestIdx]?.pace_str}
+              Km {splits[slowestIdx]?.km} • {formatPaceDisplay(maxPace)}
             </p>
-          </div>
-          <div>
-            <p className="font-mono text-[11px] text-muted-foreground uppercase">{t("workoutDetailExtended.average")}</p>
-            <p className="font-mono text-xs font-semibold">{formatPace(avgPace)}/km</p>
           </div>
         </div>
       </div>
 
-      <div className="bg-muted/20 rounded-lg p-3 space-y-1">
-        {(showAllKm ? splits : displaySplits).map((split, idx) => {
-          const actualIdx = showAllKm ? idx : splits.findIndex((s) => s.km === split.km);
+      <div className="bg-muted/20 rounded-lg p-2 max-h-96 overflow-y-auto" tabIndex={0} role="region" aria-label={t("workoutDetailExtended.pacePerKm")}>
+        {splits.map((split, actualIdx) => {
           const width = getBarWidth(split.pace_min_km);
           const color = getBarColor(split.pace_min_km, actualIdx);
           const isFastest = actualIdx === fastestIdx;
           const isSlowest = actualIdx === slowestIdx;
 
           return (
-            <div key={split.km} className="flex items-center gap-2 group">
+            <div key={`${split.km}-${actualIdx}`} className="flex min-h-11 items-center gap-2">
               <div className="w-8 text-right shrink-0">
                 <span className={`font-mono text-[11px] ${isFastest ? "text-emerald-400 font-bold" : isSlowest ? "text-orange-400 font-bold" : "text-muted-foreground"}`}>
                   {split.km}
                 </span>
               </div>
 
-              <div className="flex-1 h-5 bg-muted/30 rounded-sm relative overflow-hidden">
+              <div className="flex-1 min-w-0 h-5 bg-muted/30 rounded-sm relative overflow-hidden">
                 <div className="absolute top-0 bottom-0 w-px bg-white/40 z-10" style={{ left: `${getBarWidth(avgPace)}%` }} />
                 <div
                   className={`h-full rounded-sm transition-all duration-300 flex items-center ${isFastest || isSlowest ? "ring-1 ring-white/20" : ""}`}
@@ -144,7 +130,7 @@ const SplitsChart = ({ splits, t }) => {
                 >
                   {width > 25 && (
                     <span className="font-mono text-[11px] text-primary-foreground font-semibold px-1.5">
-                      {split.pace_str}
+                      {formatPaceDisplay(split.pace_min_km).replace("/km", "")}
                     </span>
                   )}
                 </div>
@@ -152,11 +138,11 @@ const SplitsChart = ({ splits, t }) => {
 
               <div className="w-12 shrink-0">
                 <span className={`font-mono text-[11px] ${isFastest ? "text-emerald-400 font-bold" : isSlowest ? "text-orange-400 font-bold" : "text-muted-foreground"}`}>
-                  {split.pace_str}
+                  {formatPaceDisplay(split.pace_min_km).replace("/km", "")}
                 </span>
               </div>
 
-              {split.avg_hr != null && (
+              {Number.isFinite(split.avg_hr) && split.avg_hr > 0 && (
                 <div className="w-14 shrink-0">
                   <span className="font-mono text-[11px] text-red-400">{formatHeartRate(split.avg_hr)}</span>
                 </div>
@@ -165,11 +151,6 @@ const SplitsChart = ({ splits, t }) => {
           );
         })}
 
-        {!showAllKm && (
-          <p className="text-center font-sans text-sm text-muted-foreground pt-2">
-            {t("workoutDetailExtended.simplifiedView").replace("{count}", splits.length)}
-          </p>
-        )}
       </div>
     </div>
   );
@@ -185,12 +166,13 @@ const HRZonesChart = ({ zones, t }) => {
     { key: "z4", color: "#F97316", label: "Z4", desc: "threshold" },
     { key: "z5", color: "#EF4444", label: "Z5", desc: "max" },
   ];
-  const maxPct = Math.max(...zoneConfig.map((z) => zones[z.key] || 0), 1);
+  const validZones = zoneConfig.filter((zone) => Number.isFinite(zones[zone.key]) && zones[zone.key] >= 0 && zones[zone.key] <= 100);
+  const maxPct = Math.max(...validZones.map((z) => zones[z.key]), 1);
 
   return (
     <div className="space-y-2">
-      {zoneConfig.map((zone) => {
-        const pct = zones[zone.key] || 0;
+      {validZones.map((zone) => {
+        const pct = zones[zone.key];
         const barWidth = Math.max((pct / maxPct) * 100, pct > 0 ? 8 : 0);
         return (
           <div key={zone.key} className="flex items-center gap-2">
@@ -207,7 +189,7 @@ const HRZonesChart = ({ zones, t }) => {
                 )}
               </div>
             </div>
-            <span className="font-mono text-[11px] w-16 text-muted-foreground hidden sm:block">{t(`zones.${zone.desc}`)}</span>
+            <span className="font-mono text-xs w-12 shrink-0 text-right">{pct}%</span>
           </div>
         );
       })}
@@ -226,7 +208,7 @@ const AnalysisSkeleton = () => (
 const AnalysisError = ({ t }) => (
   <div className="flex items-center gap-2 text-muted-foreground">
     <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-    <span className="font-mono text-xs">{t("workoutDetailExtended.analysisUnavailable")}</span>
+    <span className="font-sans text-sm">{t("workoutDetailExtended.analysisLoadError")}</span>
   </div>
 );
 
@@ -237,7 +219,7 @@ export default function WorkoutDetail() {
   const { t, lang } = useLanguage();
   const [workout, setWorkout] = useState(null);
   const [workoutLoading, setWorkoutLoading] = useState(true);
-  const [workoutError, setWorkoutError] = useState(false);
+  const [workoutError, setWorkoutError] = useState(null);
   const [analysis, setAnalysis] = useState(null);
   const [analysisLoading, setAnalysisLoading] = useState(true);
   const [analysisError, setAnalysisError] = useState(false);
@@ -245,7 +227,7 @@ export default function WorkoutDetail() {
   useEffect(() => {
     setWorkout(null);
     setWorkoutLoading(true);
-    setWorkoutError(false);
+    setWorkoutError(null);
     setAnalysis(null);
     setAnalysisLoading(true);
     setAnalysisError(false);
@@ -255,23 +237,25 @@ export default function WorkoutDetail() {
 
     axios.get(`${API}/workouts/${id}`, { signal })
       .then((res) => {
+        if (signal.aborted) return;
         setWorkout(res.data);
         setWorkoutLoading(false);
       })
       .catch((err) => {
-        if (!axios.isCancel(err)) {
-          setWorkoutError(true);
+        if (!signal.aborted && !axios.isCancel(err)) {
+          setWorkoutError(err.response?.status === 404 ? "missing" : "network");
           setWorkoutLoading(false);
         }
       });
 
     axios.get(`${API}/coach/workout-analysis/${id}?language=${lang}`, { signal })
       .then((res) => {
+        if (signal.aborted) return;
         setAnalysis(res.data);
         setAnalysisLoading(false);
       })
       .catch((err) => {
-        if (!axios.isCancel(err)) {
+        if (!signal.aborted && !axios.isCancel(err)) {
           setAnalysisError(true);
           setAnalysisLoading(false);
         }
@@ -294,44 +278,62 @@ export default function WorkoutDetail() {
     );
   }
 
-  if (!workout && analysisLoading) {
-    return (
-      <div className="p-4 pb-24 flex items-center justify-center min-h-[60vh]">
-        <div className="flex flex-col items-center gap-3">
-          <Loader2 className="w-6 h-6 animate-spin text-primary" />
-          <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">{t("workoutDetailExtended.analyzing")}</span>
-        </div>
-      </div>
-    );
-  }
-
   if (workoutError || !workout) {
     return (
       <div className="p-4 pb-24" data-testid="workout-not-found">
-        <Link to="/" className="inline-flex items-center gap-2 text-muted-foreground mb-6">
+        <Link to={backTo} className="inline-flex items-center gap-2 text-muted-foreground mb-6">
           <ArrowLeft className="w-4 h-4" />
           <span className="font-mono text-xs uppercase">{t("workout.back")}</span>
         </Link>
-        <p className="text-muted-foreground">{t("workout.notFound")}</p>
+        <p className="text-muted-foreground">{t(workoutError === "network" ? "workoutDetailExtended.workoutLoadError" : "workout.notFound")}</p>
       </div>
     );
   }
 
   const Icon = getWorkoutIcon(workout.type);
-  const typeLabel = t(`workoutTypes.${workout.type}`) || workout.type;
-  const dateStr = new Date(workout.date).toLocaleDateString({ fr: "fr-FR", en: "en-US", es: "es-ES" }[lang], {
+  const translatedType = t(`workoutTypes.${workout.type}`);
+  const typeLabel = translatedType === `workoutTypes.${workout.type}` ? (workout.type || t("workoutDetailExtended.dataUnavailable")) : translatedType;
+  const date = workout.date ? new Date(workout.date) : null;
+  const dateStr = date && Number.isFinite(date.getTime()) ? date.toLocaleDateString({ fr: "fr-FR", en: "en-US", es: "es-ES" }[lang], {
     weekday: "short",
     month: "short",
     day: "numeric",
-  });
+  }) : t("workoutDetailExtended.dataUnavailable");
   const comparison = analysis?.comparison;
   const physiology = analysis?.physiology;
   const pacing = analysis?.pacing;
+  const isCycle = workout.type === "cycle";
+  const averageSpeed = hasPositiveFiniteMetric(workout.avg_speed_kmh) ? workout.avg_speed_kmh
+    : pacing?.available === true && hasPositiveFiniteMetric(pacing.average_speed_kmh) ? pacing.average_speed_kmh : null;
+  const hasWorkoutPace = hasPositiveFiniteMetric(workout.avg_pace_min_km);
+  const showSummarySpeed = isCycle || (!hasWorkoutPace && averageSpeed != null);
+  const hasAveragePace = hasPositiveFiniteMetric(pacing?.average_pace_min_km);
+  const showPacingSpeed = isCycle || !hasAveragePace;
   const evidence = analysis?.evidence;
   const similar = comparison?.similar;
   const hasAnalysis = Boolean(analysis && !analysisLoading && !analysisError);
+  const displayMetric = (value) => value === "--" ? t("workoutDetailExtended.dataUnavailable") : value;
+  const avgHr = Number.isFinite(workout.avg_heart_rate) && workout.avg_heart_rate > 0 ? workout.avg_heart_rate : physiology?.avg_hr;
+  const maxHr = Number.isFinite(workout.max_heart_rate) && workout.max_heart_rate > 0 ? workout.max_heart_rate : physiology?.max_hr;
+  const hasHr = (Number.isFinite(avgHr) && avgHr > 0) || (Number.isFinite(maxHr) && maxHr > 0);
+  const hasSplits = Array.isArray(workout.km_splits) && workout.km_splits.some((split) => Number.isFinite(split?.pace_min_km) && split.pace_min_km > 0);
+  const hasZones = physiology?.available === true && ["z1", "z2", "z3", "z4", "z5"].some((key) => Number.isFinite(physiology.zone_distribution?.[key]) && physiology.zone_distribution[key] > 0 && physiology.zone_distribution[key] <= 100);
+  const hasPacing = pacing?.available === true && (
+    (!isCycle && hasAveragePace) || (showPacingSpeed && hasPositiveFiniteMetric(pacing.average_speed_kmh))
+    || ["fastest_split_min_km", "slowest_split_min_km"].some((key) => hasPositiveFiniteMetric(pacing[key]))
+    || ["pace_drop_min_km", "consistency_score", "variability"].some((key) => Number.isFinite(pacing[key]))
+  );
+  const similarLimitations = Array.isArray(similar?.limitations) ? similar.limitations : [];
+  const limitationLabel = (limitation) => t(`workoutDetailExtended.${{
+    session_nature_unknown: "unknownSessionNature",
+    sample_too_small: "smallSample",
+    pace_sample_too_small: "smallPaceSample",
+    hr_sample_too_small: "smallHrSample",
+    no_comparable_reference: "similarUnavailable",
+  }[limitation] || "descriptiveComparison"}`);
+  const technicalLimitations = [analysis?.signals?.intensity].filter((item) => item?.available === false && item.reason_unavailable);
   const interpolate = (key, values) => Object.entries(values).reduce(
-    (text, [name, value]) => text.replace(`{${name}}`, value == null ? "--" : String(value)),
+    (text, [name, value]) => text.replace(`{${name}}`, value == null ? t("workoutDetailExtended.dataUnavailable") : String(value)),
     t(`workoutDetailExtended.${key}`),
   );
   const formatSampleCount = (count) => interpolate(count === 1 ? "sampleCountOne" : "sampleCount", { count });
@@ -343,8 +345,8 @@ export default function WorkoutDetail() {
   };
 
   return (
-    <div className="p-4 pb-24" data-testid="workout-detail">
-      <div className="mb-4 flex items-center justify-between gap-3">
+    <div className="p-4 pb-24 max-w-3xl mx-auto min-w-0 break-words space-y-5" data-testid="workout-detail">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <Link to={backTo} className="inline-flex items-center gap-2 text-muted-foreground hover:text-foreground">
           <ArrowLeft className="w-4 h-4" />
           <span className="font-mono text-[11px] uppercase tracking-widest">{t("workout.back")}</span>
@@ -353,170 +355,164 @@ export default function WorkoutDetail() {
           <Icon className="w-4 h-4 text-muted-foreground" />
           <span className="font-mono text-[11px] uppercase text-muted-foreground">{typeLabel}</span>
         </div>
-        <span className="font-mono text-[11px] text-muted-foreground">{dateStr}</span>
       </div>
 
-      <h1 className="font-heading text-base uppercase tracking-tight font-bold mb-4 leading-tight">{workout.name}</h1>
-
-      <Card className="bg-card border-border mb-3">
-        <CardContent className="p-3">
+      <section aria-labelledby="session-summary-title" data-testid="session-summary">
+        <h2 id="session-summary-title" className="text-base font-semibold mb-2">{t("workoutDetailExtended.sessionSummary")}</h2>
+        <Card className="bg-card border-border">
+        <CardContent className="p-4 space-y-3">
+          <div>
+            <h1 className="font-heading text-xl font-bold leading-tight">{workout.name || typeLabel}</h1>
+            <p className="text-sm text-muted-foreground mt-1">{dateStr} · {typeLabel}</p>
+          </div>
+          <dl className="grid grid-cols-2 gap-3" data-testid="primary-metrics">
+            {[
+              ["distance", formatDistance(workout.distance_km)],
+              ["duration", formatDuration(workout.duration_minutes)],
+              showSummarySpeed
+                ? ["averageSpeed", averageSpeed == null ? t("workoutDetailExtended.speedUnavailable") : formatSpeed(averageSpeed, { unitSystem: "metric" })]
+                : ["averagePace", hasWorkoutPace ? formatPaceDisplay(workout.avg_pace_min_km) : "--"],
+              ...(Number.isFinite(avgHr) && avgHr > 0 ? [["averageHeartRate", formatHeartRate(avgHr)]] : []),
+            ].map(([label, value]) => <div key={label} className="min-w-0">
+              <dt className="text-sm text-muted-foreground">{t(`workoutDetailExtended.${label}`)}</dt>
+              <dd className="text-base font-semibold">{displayMetric(value)}</dd>
+            </div>)}
+          </dl>
           {analysisLoading ? (
             <AnalysisSkeleton />
           ) : analysisError ? (
             <AnalysisError t={t} />
           ) : analysis?.summary?.text ? (
             <p className="font-sans text-sm leading-relaxed" data-testid="coach-summary">{analysis.summary.text}</p>
-          ) : null}
+          ) : <p className="text-sm text-muted-foreground">{t("workoutDetailExtended.analysisUnavailable")}</p>}
         </CardContent>
       </Card>
+      </section>
 
-      <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
-        <Card className="bg-card border-border overflow-hidden">
-          <CardContent className="p-2">
-            <div className="flex items-center gap-1 mb-1">
-              <Zap className="w-3 h-3 text-muted-foreground" />
-              <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">{t("analysis.intensity")}</span>
-            </div>
-            {analysisLoading ? (
-              <Skeleton className="h-5 w-full" />
-            ) : analysis?.signals?.intensity?.available ? (
-              <>
-                <span className={`inline-block px-2 py-0.5 rounded-sm font-mono text-xs ${getSessionTypeStyle(analysis.signals.intensity.code)}`}>
-                  {analysis.signals.intensity.text}
-                </span>
-                {physiology?.avg_hr != null && (
-                  <p className="font-mono text-[11px] text-muted-foreground flex items-center gap-1 mt-1">
-                    <Heart className="w-2.5 h-2.5" />
-                    {formatHeartRate(physiology.avg_hr)}
-                  </p>
-                )}
-              </>
-            ) : analysis?.signals?.intensity ? (
-              <div data-testid="intensity-card-unavailable">
-                <p className="font-sans text-sm text-secondary-foreground leading-relaxed">{t("workoutDetailExtended.intensityUnavailable")}</p>
-                {physiology?.avg_hr != null && (
-                  <p className="font-mono text-[11px] text-muted-foreground flex items-center gap-1 mt-1">
-                    <Heart className="w-2.5 h-2.5" />
-                    {formatHeartRate(physiology.avg_hr)}
-                  </p>
-                )}
-              </div>
-            ) : (
-              <span className="font-mono text-xs text-muted-foreground">--</span>
-            )}
-          </CardContent>
-        </Card>
+      {hasAnalysis && <section aria-labelledby="takeaways-title">
+        <h2 id="takeaways-title" className="text-base font-semibold mb-2">{t("workoutDetailExtended.takeaways")}</h2>
+        <Card className="bg-card border-border"><CardContent className="p-4 space-y-3">
+          <p className="text-sm leading-relaxed" data-testid="meaning-text">{analysis.meaning?.text || t("workoutDetailExtended.meaningUnavailable")}</p>
+          <div className="flex flex-wrap gap-2">
+            {[["volume", "load"], ["session_type", "type"]].map(([key, label]) => analysis.signals?.[key]?.available === true && analysis.signals[key].text ? (
+              <p key={key} className="text-sm rounded bg-muted/30 p-2">{t(`analysis.${label}`)}: {analysis.signals[key].text}</p>
+            ) : null)}
+          </div>
+          {analysis.signals?.intensity?.available === true && analysis.signals.intensity.text ? (
+            <p className={`text-sm rounded p-2 ${getSessionTypeStyle(analysis.signals.intensity.code)}`}>{t("analysis.intensity")}: {analysis.signals.intensity.text}</p>
+          ) : <p className="text-sm text-muted-foreground" data-testid="intensity-card-unavailable">{t("workoutDetailExtended.intensityUnavailable")}</p>}
+        </CardContent></Card>
+      </section>}
 
-        <Card className="bg-card border-border">
-          <CardContent className="p-2">
-            <div className="flex items-center gap-1 mb-1">
-              <Scale className="w-3 h-3 text-muted-foreground" />
-              <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">{t("analysis.load")}</span>
-            </div>
-            {analysisLoading ? (
-              <Skeleton className="h-5 w-full" />
-            ) : analysis?.signals?.volume ? (
-              <>
-                <p className="font-mono text-xs font-semibold leading-tight">{analysis.signals.volume.text}</p>
-                <p className="font-mono text-[11px] text-muted-foreground">{formatDistance(workout.distance_km)} • {formatDuration(workout.duration_minutes)}</p>
-                {comparison?.distance_km && (
-                  <p className="font-mono text-[11px] mt-1 text-muted-foreground">{formatSignedDistance(comparison.distance_km)}</p>
-                )}
-              </>
-            ) : (
-              <span className="font-mono text-xs text-muted-foreground">--</span>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card className="bg-card border-border">
-          <CardContent className="p-2">
-            <div className="flex items-center gap-1 mb-1">
-              <Activity className="w-3 h-3 text-muted-foreground" />
-              <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">{t("analysis.type")}</span>
-            </div>
-            {analysisLoading ? (
-              <Skeleton className="h-5 w-full" />
-            ) : analysis?.signals?.session_type ? (
-              <div className={`inline-block px-2 py-1 rounded-sm ${getSessionTypeStyle(analysis.signals.session_type.code)}`}>
-                <p className="font-mono text-xs font-semibold">{analysis.signals.session_type.text}</p>
-              </div>
-            ) : (
-              <span className="font-mono text-xs text-muted-foreground">--</span>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
-      {pacing?.available && (
+      <section aria-labelledby="pacing-title">
+      <h2 id="pacing-title" className="text-base font-semibold mb-2">{t(`workoutDetailExtended.${isCycle ? "speedSection" : "pacingSection"}`)}</h2>
+      {hasPacing && (
         <Card className="bg-card border-border mb-3" data-testid="pacing-summary-card">
           <CardContent className="p-3">
             <div className="flex items-center gap-2 mb-3">
               <Activity className="w-4 h-4 text-primary" />
-              <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">{t("workoutDetailExtended.pace")}</span>
+              <span className="text-sm font-semibold text-muted-foreground">{t(`workoutDetailExtended.${showPacingSpeed ? "speed" : "pace"}`)}</span>
             </div>
-            <div className="grid grid-cols-2 gap-2 text-xs">
-              {pacing.average_pace_min_km != null && (
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              {!isCycle && hasAveragePace && (
                 <div>
-                  <p className="font-mono text-[11px] text-muted-foreground">{t("workoutDetailExtended.average")}</p>
+                  <p className="text-sm text-muted-foreground">{t("workoutDetailExtended.average")}</p>
                   <p className="font-mono font-semibold">{formatPaceDisplay(pacing.average_pace_min_km)}</p>
                 </div>
               )}
-              {pacing.fastest_split_min_km != null && (
+              {showPacingSpeed && hasPositiveFiniteMetric(pacing.average_speed_kmh) && <div>
+                <p className="text-sm text-muted-foreground">{t("workoutDetailExtended.speed")}</p>
+                <p className="font-mono font-semibold">{formatSpeed(pacing.average_speed_kmh, { unitSystem: "metric" })}</p>
+              </div>}
+              {hasPositiveFiniteMetric(pacing.fastest_split_min_km) && (
                 <div>
-                  <p className="font-mono text-[11px] text-muted-foreground">{t("workoutDetailExtended.fastest")}</p>
+                  <p className="text-sm text-muted-foreground">{t("workoutDetailExtended.fastest")}</p>
                   <p className="font-mono font-semibold">{formatPaceDisplay(pacing.fastest_split_min_km)}</p>
                 </div>
               )}
-              {pacing.slowest_split_min_km != null && (
+              {hasPositiveFiniteMetric(pacing.slowest_split_min_km) && (
                 <div>
-                  <p className="font-mono text-[11px] text-muted-foreground">{t("workoutDetailExtended.slowest")}</p>
+                  <p className="text-sm text-muted-foreground">{t("workoutDetailExtended.slowest")}</p>
                   <p className="font-mono font-semibold">{formatPaceDisplay(pacing.slowest_split_min_km)}</p>
                 </div>
               )}
-              {pacing.pace_drop_min_km != null && (
+              {Number.isFinite(pacing.pace_drop_min_km) && (
                 <div>
-                  <p className="font-mono text-[11px] text-muted-foreground">{t("workoutDetailExtended.paceDrop")}</p>
+                  <p className="text-sm text-muted-foreground">{t("workoutDetailExtended.paceDrop")}</p>
                   <p className="font-mono font-semibold">{formatPaceDelta(pacing.pace_drop_min_km)}</p>
                 </div>
               )}
+              {Number.isFinite(pacing.consistency_score) && <div>
+                <p className="text-sm text-muted-foreground">{t("workoutDetailExtended.consistency")}</p>
+                <p className="font-mono font-semibold">{pacing.consistency_score}/100</p>
+              </div>}
+              {Number.isFinite(pacing.variability) && <div>
+                <p className="text-sm text-muted-foreground">{t("workoutDetailExtended.recordedVariability")}</p>
+                <p className="font-mono font-semibold">{pacing.variability}</p>
+              </div>}
             </div>
           </CardContent>
         </Card>
       )}
+      {!hasPacing && !analysisLoading && !analysisError && <p className="text-sm text-muted-foreground">{pacing?.reason_unavailable || t("workoutDetailExtended.pacingUnavailable")}</p>}
+      {hasSplits && <div className="mt-3" data-testid="splits-chart-card">
+        <h3 className="text-sm font-semibold mb-2">{t("workoutDetailExtended.recordedSplits")}</h3>
+        <SplitsChart splits={workout.km_splits} t={t} />
+      </div>}
+      {Array.isArray(workout.km_splits) && workout.km_splits.some((split) => !Number.isFinite(split?.pace_min_km) || split.pace_min_km <= 0) && <p className="text-sm text-muted-foreground mt-2">{t("workoutDetailExtended.invalidSplits")}</p>}
+      {!hasSplits && <p className="text-sm text-muted-foreground mt-2">{t("workoutDetailExtended.splitsUnavailable")}</p>}
+      </section>
 
+      <section aria-labelledby="heart-response-title" data-testid="heart-response">
+        <h2 id="heart-response-title" className="text-base font-semibold mb-2">{t("workoutDetailExtended.heartResponse")}</h2>
+        {hasHr || hasZones ? <Card className="bg-card border-border"><CardContent className="p-4 space-y-3">
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            {Number.isFinite(avgHr) && avgHr > 0 && <p>{t("workoutDetailExtended.averageHeartRate")}<br /><strong>{formatHeartRate(avgHr)}</strong></p>}
+            {Number.isFinite(maxHr) && maxHr > 0 && <p>{t("workoutDetailExtended.maximumHeartRate")}<br /><strong>{formatHeartRate(maxHr)}</strong></p>}
+          </div>
+          {hasZones && <div data-testid="hr-zones-card">
+            <h3 className="text-sm font-semibold">{t("analysis.hrZones")}</h3>
+            <p className="text-sm text-muted-foreground my-2">{t("workoutDetailExtended.zonesProvenance")}</p>
+            <HRZonesChart zones={physiology.zone_distribution} t={t} />
+          </div>}
+        </CardContent></Card> : <p className="text-sm text-muted-foreground">{physiology?.reason_unavailable || t("workoutDetailExtended.heartRateUnavailable")}</p>}
+      </section>
+
+      {hasAnalysis && <section aria-labelledby="history-title" data-testid="history-section">
+      <h2 id="history-title" className="text-base font-semibold mb-2">{t("workoutDetailExtended.historyComparison")}</h2>
+      <p className="text-sm text-muted-foreground mb-3">{t("workoutDetailExtended.descriptiveComparison")}</p>
       {comparison?.available && (
         <Card className="bg-card border-border mb-3" data-testid="comparison-card">
           <CardContent className="p-3">
             <div className="flex items-center gap-2 mb-3">
               <Scale className="w-4 h-4 text-muted-foreground" />
-              <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">{interpolate("recentComparison", { days: comparison.baseline_period_days })}</span>
+              <h3 className="text-sm font-semibold">{interpolate("recentComparison", { days: comparison.baseline_period_days })}</h3>
             </div>
             {comparison.baseline_sample_count != null && <p className="font-sans text-sm text-muted-foreground mb-2">{formatSampleCount(comparison.baseline_sample_count)}</p>}
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-              {comparison.distance_km && (
+              {Number.isFinite(comparison.distance_km?.difference) && (
                 <div className="rounded-sm bg-muted/20 p-2">
                   <p className="font-mono text-[11px] uppercase text-muted-foreground">{t("workoutDetailExtended.distance")}</p>
                   <p className="font-mono text-xs">{formatSignedDistance(comparison.distance_km)}</p>
                 </div>
               )}
-              {comparison.duration_minutes && (
+              {Number.isFinite(comparison.duration_minutes?.difference) && (
                 <div className="rounded-sm bg-muted/20 p-2">
                   <p className="font-mono text-[11px] uppercase text-muted-foreground">{t("workoutDetailExtended.duration")}</p>
                   <p className="font-mono text-xs">{formatSignedMetric(comparison.duration_minutes, " min", true)}</p>
                 </div>
               )}
-              {comparison.avg_heart_rate && (
+              {Number.isFinite(comparison.avg_heart_rate?.difference) && (
                 <div className="rounded-sm bg-muted/20 p-2">
                   <p className="font-mono text-[11px] uppercase text-muted-foreground">{t("workoutDetailExtended.heartRate")}</p>
                   <p className="font-mono text-xs">{formatSignedMetric(comparison.avg_heart_rate, " bpm", true)}</p>
                 </div>
               )}
-              {(comparison.avg_pace_min_km || comparison.avg_speed_kmh) && (
+              {(Number.isFinite(comparison.avg_pace_min_km?.difference) || Number.isFinite(comparison.avg_speed_kmh?.difference)) && (
                 <div className="rounded-sm bg-muted/20 p-2">
-                  <p className="font-mono text-[11px] uppercase text-muted-foreground">{t(comparison.avg_pace_min_km ? "workoutDetailExtended.pace" : "workoutDetailExtended.speed")}</p>
+                  <p className="font-mono text-[11px] uppercase text-muted-foreground">{t(Number.isFinite(comparison.avg_pace_min_km?.difference) ? "workoutDetailExtended.pace" : "workoutDetailExtended.speed")}</p>
                   <p className="font-mono text-xs">
-                    {comparison.avg_pace_min_km
+                    {Number.isFinite(comparison.avg_pace_min_km?.difference)
                       ? formatPaceDelta(comparison.avg_pace_min_km.difference)
                       : formatSignedMetric(comparison.avg_speed_kmh, " km/h")}
                   </p>
@@ -527,29 +523,31 @@ export default function WorkoutDetail() {
         </Card>
       )}
 
+      {!comparison?.available && <p className="text-sm text-muted-foreground mb-3">{comparison?.reason_unavailable || t("workoutDetailExtended.historyUnavailable")}</p>}
       {similar && (
         <Card className="bg-card border-border mb-3" data-testid="similar-comparison-card">
           <CardContent className="p-3 space-y-2 font-sans text-sm leading-relaxed">
-            <h2 className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">{interpolate("similarComparison", { days: similar.period_days })}</h2>
+            <h3 className="text-sm font-semibold">{interpolate("similarComparison", { days: similar.period_days })}</h3>
             {similar.available ? (
               <>
                 {similar.sample_count != null && <p>{formatSampleCount(similar.sample_count)}</p>}
-                <p>{t("workoutDetailExtended.averageDistance")}: {formatDistance(similar.avg_distance_km)}</p>
-                {(similar.avg_pace_min_km != null || similar.pace_difference_min_km != null) && (
+                {Number.isFinite(similar.avg_distance_km) && <p>{t("workoutDetailExtended.averageDistance")}: {formatDistance(similar.avg_distance_km)}</p>}
+                {(hasPositiveFiniteMetric(similar.avg_pace_min_km) || Number.isFinite(similar.pace_difference_min_km)) && (
                   <div data-testid="similar-pace">
-                    <p>{t("workoutDetailExtended.averagePace")}: {formatPaceDisplay(similar.avg_pace_min_km)}</p>
-                    <p>{t("workoutDetailExtended.difference")}: {formatPaceDelta(similar.pace_difference_min_km)}</p>
+                    {hasPositiveFiniteMetric(similar.avg_pace_min_km) && <p>{t("workoutDetailExtended.averagePace")}: {formatPaceDisplay(similar.avg_pace_min_km)}</p>}
+                    {Number.isFinite(similar.pace_difference_min_km) && <p>{t("workoutDetailExtended.difference")}: {formatPaceDelta(similar.pace_difference_min_km)}</p>}
                     {similar.pace_sample_count != null && similar.sample_count != null && <p className="text-muted-foreground">{interpolate("paceSampleCount", { count: similar.pace_sample_count, total: similar.sample_count })}</p>}
                   </div>
                 )}
                 {(similar.avg_heart_rate != null || similar.heart_rate_difference_bpm != null) && (
                   <div data-testid="similar-heart-rate">
-                    <p>{t("workoutDetailExtended.averageHeartRate")}: {formatHeartRate(similar.avg_heart_rate)}</p>
-                    <p>{t("workoutDetailExtended.difference")}: {formatSignedMetric({ difference: similar.heart_rate_difference_bpm }, " bpm", true)}</p>
+                    {Number.isFinite(similar.avg_heart_rate) && <p>{t("workoutDetailExtended.averageHeartRate")}: {formatHeartRate(similar.avg_heart_rate)}</p>}
+                    {Number.isFinite(similar.heart_rate_difference_bpm) && <p>{t("workoutDetailExtended.difference")}: {formatSignedMetric({ difference: similar.heart_rate_difference_bpm }, " bpm", true)}</p>}
                     {similar.hr_sample_count != null && similar.sample_count != null && <p className="text-muted-foreground">{interpolate("hrSampleCount", { count: similar.hr_sample_count, total: similar.sample_count })}</p>}
                   </div>
                 )}
-                {similar.comparable === false && <p className="text-muted-foreground" data-testid="similar-comparability-caveat">{t("workoutDetailExtended.descriptiveComparison")}</p>}
+                <p className="text-muted-foreground" data-testid="similar-comparability-caveat">{t(`workoutDetailExtended.${similar.comparable === true ? "comparableReference" : "limitedComparability"}`)}</p>
+                {similarLimitations.map((limitation) => <p key={limitation} className="text-muted-foreground">{limitationLabel(limitation)}</p>)}
               </>
             ) : (
               <p className="text-muted-foreground">{similar.reason_unavailable || t("workoutDetailExtended.similarUnavailable")}</p>
@@ -557,51 +555,29 @@ export default function WorkoutDetail() {
           </CardContent>
         </Card>
       )}
+      </section>}
 
-      <div className="my-4">
+      <section aria-labelledby="coach-advice-title">
+        <h2 id="coach-advice-title" className="text-base font-semibold mb-2">{t("workoutDetailExtended.coachAdvice")}</h2>
+        {hasAnalysis && <p className="text-sm leading-relaxed mb-3" data-testid="advice-text">{analysis.advice?.text || t("workoutDetailExtended.adviceUnavailable")}</p>}
         <Button
           onClick={goToAskCoach}
           data-testid="ask-coach-btn"
-          className="w-full bg-primary text-primary-foreground hover:bg-primary/90 rounded-none h-10 font-mono text-xs uppercase tracking-wider flex items-center justify-center gap-2"
+          className="w-full bg-primary text-primary-foreground hover:bg-primary/90 min-h-11 h-auto py-3 whitespace-normal text-sm flex items-center justify-center gap-2"
         >
           <MessageSquare className="w-3.5 h-3.5" />
           {t("workoutDetailExtended.askCoach")}
         </Button>
-      </div>
+      </section>
 
-      {(hasAnalysis || workout.km_splits?.length > 0) && (
+      {hasAnalysis && (
         <details className="bg-card border border-border p-3 mb-3" data-testid="analysis-details">
-          <summary className="cursor-pointer font-mono text-xs" data-testid="advanced-toggle">{t("workoutDetailExtended.analysisDetails")}</summary>
+          <summary className="cursor-pointer text-sm min-h-11 content-center" data-testid="advanced-toggle">{t("workoutDetailExtended.advancedDetails")}</summary>
           <div className="mt-3 space-y-3">
-            {hasAnalysis && analysis.meaning?.text && (
-              <section>
-                <h2 className="font-mono text-[11px] uppercase text-muted-foreground">{t("workoutDetailExtended.interpretation")}</h2>
-                <p className="font-sans text-sm text-secondary-foreground leading-relaxed" data-testid="meaning-text">{analysis.meaning.text}</p>
-              </section>
-            )}
-            {hasAnalysis && analysis.advice?.text && (
-              <section>
-                <h2 className="font-mono text-[11px] uppercase text-muted-foreground flex items-center gap-2"><Lightbulb className="w-3 h-3" />{t("workoutDetailExtended.analysisAdvice")}</h2>
-                <p className="font-sans text-sm text-secondary-foreground leading-relaxed" data-testid="advice-text">{analysis.advice.text}</p>
-              </section>
-            )}
-            {hasAnalysis && physiology?.available && physiology.zone_distribution && (
-              <section data-testid="hr-zones-card">
-                <h2 className="font-mono text-[11px] uppercase text-muted-foreground flex items-center gap-2"><HeartPulse className="w-4 h-4" />{t("analysis.hrZones")}</h2>
-                {physiology.avg_hr != null && <p className="font-mono text-xs">{t("analysis.avgHr")}: {formatHeartRate(physiology.avg_hr)}</p>}
-                <HRZonesChart zones={physiology.zone_distribution} t={t} />
-              </section>
-            )}
-            {workout.km_splits?.length > 0 && (
-              <section data-testid="splits-chart-card">
-                <h2 className="font-mono text-[11px] uppercase text-muted-foreground">{t("workoutDetailExtended.pacePerKm")}</h2>
-                <SplitsChart splits={workout.km_splits} t={t} />
-              </section>
-            )}
+            {analysis.version != null && <p className="text-sm">{t("workoutDetailExtended.version")}: {analysis.version}</p>}
             {hasAnalysis && evidence && (
               <section className="font-sans text-sm leading-relaxed text-secondary-foreground space-y-1" data-testid="evidence-card">
-                <h2 className="font-mono text-[11px] uppercase text-muted-foreground">{t("workoutDetailExtended.evidence")}</h2>
-                <p>{t("workoutDetailExtended.version")}: {analysis.version ?? "--"}</p>
+                <h3 className="text-sm font-semibold">{t("workoutDetailExtended.evidence")}</h3>
                 {[
                   ["has_heart_rate", "heartRate"],
                   ["has_hr_zones", "hrZonesEvidence"],
@@ -610,24 +586,13 @@ export default function WorkoutDetail() {
                   ["has_cadence", "cadenceEvidence"],
                   ["has_elevation", "elevationEvidence"],
                 ].map(([key, label]) => (
-                  <p key={key}>{t(`workoutDetailExtended.${label}`)}: {evidence[key] == null ? "--" : t(`workoutDetailExtended.${evidence[key] ? "yes" : "no"}`)}</p>
+                  evidence[key] == null ? null : <p key={key}>{t(`workoutDetailExtended.${label}`)}: {t(`workoutDetailExtended.${evidence[key] ? "yes" : "no"}`)}</p>
                 ))}
               </section>
             )}
-            {hasAnalysis && <section className="font-sans text-sm leading-relaxed text-secondary-foreground space-y-1" data-testid="analysis-limitations">
-              <h2 className="font-mono text-[11px] uppercase text-muted-foreground">{t("workoutDetailExtended.limitations")}</h2>
-              {[analysis.signals?.intensity, physiology, pacing, comparison, similar].filter(
-                (item) => item?.available === false && item.reason_unavailable,
-              ).map((item, index) => <p key={index}>{item.reason_unavailable}</p>)}
-              {similar?.limitations?.map((limitation) => (
-                <p key={limitation}>{t(`workoutDetailExtended.${{
-                  session_nature_unknown: "unknownSessionNature",
-                  sample_too_small: "smallSample",
-                  pace_sample_too_small: "smallPaceSample",
-                  hr_sample_too_small: "smallHrSample",
-                  no_comparable_reference: "similarUnavailable",
-                }[limitation] || "descriptiveComparison"}`)}</p>
-              ))}
+            {technicalLimitations.length > 0 && <section className="font-sans text-sm leading-relaxed text-secondary-foreground space-y-1" data-testid="analysis-limitations">
+              <h3 className="text-sm font-semibold">{t("workoutDetailExtended.limitations")}</h3>
+              {technicalLimitations.map((item, index) => <p key={index}>{item.reason_unavailable}</p>)}
             </section>}
           </div>
         </details>

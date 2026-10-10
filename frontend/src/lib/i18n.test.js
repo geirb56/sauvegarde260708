@@ -5,6 +5,20 @@ describe("i18n auth coverage", () => {
     window.localStorage.clear();
   });
 
+  test("WorkoutDetail keys and interpolation placeholders match in FR/EN/ES", () => {
+    const reference = translations.en.workoutDetailExtended;
+    ["fr", "en", "es"].forEach((language) => {
+      const labels = translations[language].workoutDetailExtended;
+      expect(Object.keys(labels).sort()).toEqual(Object.keys(reference).sort());
+      Object.entries(reference).forEach(([key, value]) => {
+        expect(labels[key]).toEqual(expect.any(String));
+        expect(labels[key].trim()).not.toBe("");
+        expect((labels[key].match(/\{[^}]+\}/g) || []).sort()).toEqual((value.match(/\{[^}]+\}/g) || []).sort());
+        expect(getTranslation(language, `workoutDetailExtended.${key}`)).toBe(labels[key]);
+      });
+    });
+  });
+
   test("auth keys exist in all supported languages", () => {
     const requiredKeys = [
       "auth.signIn",
