@@ -305,6 +305,13 @@ class Redis:
     async def delete(self, key):
         self.values.pop(key, None)
 
+    async def eval(self, script, numkeys, key, job_id, action, ttl):
+        if self.values.get(key) != job_id:
+            return 0
+        if action == "release":
+            self.values.pop(key)
+        return 1
+
 
 def test_queue_bounds_one_target_per_user_and_isolates_users(monkeypatch):
     redis = Redis()
@@ -453,3 +460,14 @@ def test_worker_defers_lease_contention_without_ack_or_consuming_retry(db, monke
     payload = json.loads(requeue.call_args.args[2])
     assert payload["attempts"] == 1
     assert payload["not_before"] == datetime.fromisoformat(retry_at).timestamp()
+
+
+def test_pending_ownership_does_not_delete_a_newer_job():
+    redis = Redis()
+    key = queue._pending_key(queue.JOB_ACTIVITY_DETAILS, "a")
+    redis.values[key] = "new-job"
+    assert run(queue.maintain_details_pending(redis, "a", "old-job", release=True)) == 0
+    assert redis.values[key] == "new-job"
+    assert run(queue.maintain_details_pending(redis, "a", "new-job")) == 1
+    assert run(queue.maintain_details_pending(redis, "a", "new-job", release=True)) == 1
+    assert key not in redis.values

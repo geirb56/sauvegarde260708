@@ -58,6 +58,22 @@ LOCK_PREFIX = "sync_lock:"       # per-user concurrency lock (worker side)
 LOCK_TTL = 120                   # seconds
 PENDING_PREFIX = "sync_pending:"  # dedupe flag: a job is queued/running for user
 PENDING_TTL = 300                # seconds
+DETAILS_PENDING_TTL = 1800
+
+
+async def maintain_details_pending(redis, user_id: str, job_id: str, release=False):
+    """Refresh/release only this job's reservation, never a newer job's flag."""
+    return await redis.eval(
+        """
+        if redis.call('GET', KEYS[1]) == ARGV[1] then
+            if ARGV[2] == 'release' then return redis.call('DEL', KEYS[1]) end
+            return redis.call('EXPIRE', KEYS[1], ARGV[3])
+        end
+        return 0
+        """,
+        1, _pending_key(JOB_ACTIVITY_DETAILS, user_id), job_id,
+        "release" if release else "refresh", DETAILS_PENDING_TTL,
+    )
 
 
 async def _push(job_type: str, user_id: str, attempts: int = 0, job_id: str = None) -> None:
@@ -115,16 +131,17 @@ async def enqueue_activity_details(user_id: str, activity_id: str) -> dict:
     validate_activity_id(activity_id)
     r = get_redis()
     key = _pending_key(JOB_ACTIVITY_DETAILS, user_id)
-    if not await r.set(key, JOB_ACTIVITY_DETAILS, nx=True, ex=PENDING_TTL):
+    job_id = uuid.uuid4().hex
+    if not await r.set(key, job_id, nx=True, ex=DETAILS_PENDING_TTL):
         return {"status": "already_queued"}
     try:
         await r.lpush(QUEUE_KEY, json.dumps({
-            "id": uuid.uuid4().hex, "type": JOB_ACTIVITY_DETAILS,
+            "id": job_id, "type": JOB_ACTIVITY_DETAILS,
             "user_id": user_id, "activity_id": activity_id,
             "attempts": 0, "enqueued_at": time.time(),
         }))
     except Exception:
-        await r.delete(key)
+        await maintain_details_pending(r, user_id, job_id, release=True)
         raise
     return {"status": "queued"}
 

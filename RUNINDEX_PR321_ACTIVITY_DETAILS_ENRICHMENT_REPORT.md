@@ -156,7 +156,11 @@ les credentials, les sorties GCCLI ni l'état interne complet.
   Le même mécanisme conserve un job récupéré après crash jusqu'à expiration
   du bail. La file existante n'a pas de primitive delayed-job : le worker
   réenfile le job avec une pause bornée de 5 s, sans verrou utilisateur.
-- Redis pending TTL existant 300 s, fiable at-least-once ; la réservation Mongo
+- Redis pending des autres jobs inchangé (300 s). Le job ciblé possède son
+  propre pending de 1800 s, supérieur au bail de 900 s, rafraîchi lorsqu'il
+  est traité/différé. Refresh/libération Lua compare atomiquement le job_id :
+  un ancien job ne supprime jamais le pending d'un nouveau.
+  Livraison fiable at-least-once ; la réservation Mongo
   protège aussi contre expiration du pending, redelivery et requêtes concurrentes.
 - Aucun nouveau schéma/index/collection ni migration ou suppression historique.
 
@@ -168,13 +172,13 @@ Depuis `backend/`, `PYTHONPATH=.` et `python` du venv :
 
 | Commande `python -m pytest … -q` | Résultat |
 | --- | --- |
-| `tests/test_activity_details_pr321.py` | **46 passed, 1 warning**, 0.82 s |
+| `tests/test_activity_details_pr321.py` | **47 passed, 1 warning**, 0.80 s |
 | `tests/test_garmin_user_connection.py` (processus isolé) | **8 passed**, 0.60 s |
-| `tests/test_garmin_queue_backfill_pr197.py tests/test_garmin_phased_sync_pr07a.py tests/test_garmin_deep_sync.py` | **39 passed**, 10.79 s |
+| `tests/test_garmin_queue_backfill_pr197.py tests/test_garmin_phased_sync_pr07a.py tests/test_garmin_deep_sync.py` | **39 passed**, 10.75 s |
 | `tests/test_garmin_data_layer.py tests/test_garmin_activity_normalization_pr02.py tests/test_training_v2_domain_activity.py tests/test_performed_workout_pr230.py tests/test_mongo_garmin_boundary_pr137.py` | **181 passed, 1 failed**, 0.64 s |
 
 Les deux workers `-n 2 --dist loadscope` viennent de `backend/pytest.ini`,
-inchangé. **274 tests passés, un échec préexistant** sur ces exécutions finales.
+inchangé. **275 tests passés, un échec préexistant** sur ces exécutions finales.
 
 L'échec `test_g_server_uses_boundary` cherche dans `server.py` un appel exact
 `build_recent_training_response(domain_activities...)` absent au HEAD de base.
@@ -208,6 +212,9 @@ Autres vérifications :
   validée. Une revue indépendante supplémentaire a identifié l'ACK incorrect
   d'un job encore sous bail/cooldown. Corrigé par différé fiable et testé
   (pas d'ACK, pas de consommation des retries, conservation de `not_before`).
+  Sa seconde passe a identifié l'expiration et la libération non possédée du
+  pending partagé ; corrigées par TTL ciblé et comparaison Lua du job_id,
+  avec test de protection contre suppression du pending d'un nouveau job.
 
 ## 8. Validations impossibles ici et risques résiduels
 

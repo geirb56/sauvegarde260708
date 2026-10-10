@@ -48,6 +48,7 @@ from jobs.queue import (
     STATS_FAILED_KEY,
     _pending_key,
     _should_update_sync_progress,
+    maintain_details_pending,
     claim_job,
     ack_job,
     requeue_job,
@@ -96,6 +97,9 @@ async def process_job(db, redis, raw: str, job: dict) -> None:
     attempts = int(job.get("attempts", 0))
     lock_key = f"{LOCK_PREFIX}{user_id}"
 
+    if job_type == JOB_ACTIVITY_DETAILS:
+        await maintain_details_pending(redis, user_id, job_id)
+
     if job_type == JOB_ACTIVITY_DETAILS and job.get("not_before", 0) > time.time():
         # Keep deferred work reliable without holding the user's sync lock.
         await asyncio.sleep(min(5, job["not_before"] - time.time()))
@@ -141,7 +145,10 @@ async def process_job(db, redis, raw: str, job: dict) -> None:
             result.get("synced_count"), result.get("new_count"), result.get("metrics_count"),
             result.get("status", "complete"),
         )
-        await redis.delete(_pending_key(job_type, user_id))
+        if job_type == JOB_ACTIVITY_DETAILS:
+            await maintain_details_pending(redis, user_id, job_id, release=True)
+        else:
+            await redis.delete(_pending_key(job_type, user_id))
         # Cooldown: throttle auto-syncs for this user after a successful run.
         if _should_update_sync_progress(job_type):
             await rate_limiter.set_cooldown(user_id)
@@ -170,7 +177,10 @@ async def process_job(db, redis, raw: str, job: dict) -> None:
                     phase="failed",
                     error_code="worker_sync_failed",
                 )
-            await redis.delete(_pending_key(job_type, user_id))
+            if job_type == JOB_ACTIVITY_DETAILS:
+                await maintain_details_pending(redis, user_id, job_id, release=True)
+            else:
+                await redis.delete(_pending_key(job_type, user_id))
             # Monitoring counter only (additive; failure handling unchanged).
             await redis.incr(STATS_FAILED_KEY)
             # Terminal failure after max retries: drop from processing.
