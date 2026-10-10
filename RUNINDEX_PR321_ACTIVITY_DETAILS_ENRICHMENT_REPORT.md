@@ -668,3 +668,147 @@ manquants/dupliqués, contradictions, dates invalides ou sans heure,
 absence de preuve, stabilité/déterminisme et quatre variantes RWD intercalées.
 Les `lapIndexes` et les durées volontairement contradictoires ne servent
 jamais de référence d'ordre. Ces données ne sont pas des captures Garmin.
+
+**Audit Redis actualisé et défauts supplémentaires démontrés.** La promotion
+atomique vérifiant le propriétaire `job_id`, la reprise d'un pending absent et
+la suppression compare-and-delete sont déjà présentes au HEAD de départ ;
+elles ne sont pas réécrites. Le cache et le bail Mongo restent inchangés.
+
+- Un watchdog pouvait lire une ancienne date de claim, puis retirer une
+  livraison fraîche du même payload après reprise par un autre worker. Le
+  script de récupération des details compare désormais le claim courant à la
+  valeur observée avant tout retrait.
+- L'adoption d'un claim absent pouvait écraser un claim frais ou recréer une
+  entrée de claim après ACK. Elle devient atomique : payload encore dans
+  PROCESSING et `HSETNX`. Les autres types de jobs restent inchangés.
+- Les details en contention de verrou utilisateur ou de plafond global
+  retournaient encore immédiatement dans le FIFO après 1 ou 2 secondes.
+  Ils sont maintenant parqués jusqu'à au moins la cadence watchdog
+  (30 s par défaut), sans sommeil artificiel, consommation d'essai ou ACK.
+  Le pending est renouvelé par le mécanisme différé existant. Une sync Garmin
+  conserve son verrou, les mêmes limites et son comportement historique.
+
+**Tests de cette intervention.** Toutes les commandes pytest ci-dessous sont
+exécutées depuis
+`/home/runner/work/sauvegarde260708/sauvegarde260708/backend`,
+avec `PYTHONPATH=.`, `/usr/bin/python` 3.12.3 et la configuration xdist
+inchangée `-n 2 --dist loadscope`.
+
+| Commande exacte (hors préfixe `PYTHONPATH=.`) | Résultat |
+| --- | --- |
+| `python -m pytest tests/test_typed_splits_chronology_c321.py tests/test_garmin_data_layer.py tests/test_garmin_activity_normalization_pr02.py tests/test_training_v2_domain_activity.py tests/test_performed_workout_pr230.py tests/test_mongo_garmin_boundary_pr137.py -q` | **198 passed, 1 failed**, 0,83 s |
+| `python -m pytest tests/test_workout_analysis_v2.py -q` — premier essai | **0 test exécuté, 1 erreur de collecte** : `pytest_asyncio` absent |
+| `python -m pytest tests/test_workout_analysis_v2.py -q` — après restauration des dépendances de test existantes | **168 passed, 14 warnings**, 1,76 s |
+| `python -m pytest tests/test_activity_details_pr321.py tests/test_activity_details_delayed_redis_c321.py -q` | **104 passed** |
+| `python -m pytest tests/test_garmin_queue_backfill_pr197.py tests/test_garmin_phased_sync_pr07a.py tests/test_garmin_deep_sync.py -q` | **39 passed** |
+| `python -m pytest tests/test_garmin_user_connection.py -q` | **8 passed** |
+| `python -m pytest tests/test_garmin_queue_health_admin.py -q` | **14 passed** |
+
+Pour les quatre dernières lignes, les commandes déléguées comportaient
+également `TMPDIR="$PWD/../.queue-c321-runtime"` et, respectivement,
+`--basetemp="$PWD/../.queue-c321-runtime/details-full"`,
+`--basetemp="$PWD/../.queue-c321-runtime/garmin-isolated"`,
+`--basetemp="$PWD/../.queue-c321-runtime/user-isolated"`,
+`--basetemp="$PWD/../.queue-c321-runtime/admin-only"`.
+Ce répertoire temporaire a été supprimé après arrêt des Redis de test.
+
+**Essais intermédiaires et limites de traçabilité.** La démonstration avant
+correctif, depuis la racine du dépôt, était :
+`PYTHONPATH=backend TMPDIR="$PWD/.queue-c321-runtime" python -m pytest
+-c backend/pytest.ini --basetemp="$PWD/.queue-c321-runtime/regression-before"
+backend/tests/test_activity_details_delayed_redis_c321.py
+-k 'stale_watchdog or missing_claim or backpressure' -q`.
+Elle produisait **4 échecs** : watchdog sur claim redélivré, adoption écrasant
+un claim frais et les deux contentions user-lock/global-cap. Ces quatre
+régressions démontrées sont corrigées et passent dans la suite finale.
+
+L'essai combiné depuis `backend` :
+`TMPDIR="$PWD/../.queue-c321-runtime" python -m pytest
+--basetemp="$PWD/../.queue-c321-runtime/full"
+tests/test_activity_details_pr321.py
+tests/test_activity_details_delayed_redis_c321.py
+tests/test_garmin_queue_backfill_pr197.py
+tests/test_garmin_phased_sync_pr07a.py tests/test_garmin_deep_sync.py
+tests/test_garmin_user_connection.py tests/test_queue_health.py
+tests/test_garmin_queue_health_admin.py -q`
+a échoué ; **le résumé exact n'a pas été conservé par le spécialiste :
+aucun nombre n'est inventé pour cette tentative**.
+Le diagnostic avec les six fichiers Garmin/health de cette commande a donné
+**46 passed, 2 failed, 6 errors** : pollution des stubs `config.secrets`
+entre modules (bootstrap/admin), cinq fonctions de queue-health demandant un
+argument `r` non défini comme fixture, et une fonction async non marquée.
+Avec seulement les quatre fichiers Garmin, **46 passed, 1 failed**
+(même assertion bootstrap liée à l'ordre des stubs).
+Ces défauts de lancement/collection existent dans les tests inchangés ;
+les suites unitaires isolées pertinentes passent comme indiqué ci-dessus.
+`test_queue_health.py` est un script nécessitant son client explicite,
+pas une suite pytest autonome ; ses six fonctions ont été appelées
+séparément avec un Redis local isolé (**6 réussites supplémentaires,
+hors total pytest**). La commande ad hoc complète est conservée dans la
+trace de l'agent, pas présentée comme une commande pytest reproductible.
+
+Le spécialiste a également signalé un premier lancement racine
+(**13 passed, 4 failed, 1 erreur de collecte**, mauvais chemin de résolution
+`config.secrets`), puis des sélections partielles réussies (**89**, **45** et
+**30** passed). Les commandes des deux premières sélections n'ont pas été
+conservées intégralement ; elles ne servent pas au verdict ni au total final.
+La sélection finale de 30 était :
+`TMPDIR="$PWD/../.queue-c321-runtime" python -m pytest
+--basetemp="$PWD/../.queue-c321-runtime/queue-final"
+tests/test_activity_details_delayed_redis_c321.py
+tests/test_activity_details_pr321.py
+-k 'delayed_redis_c321 or enqueue or worker or pending_ownership or expired_mongo_lease' -q`.
+
+L'échec `test_g_server_uses_boundary` est l'assertion textuelle préexistante
+sur `build_recent_training_response(domain_activities...)`. Le `git show`
+de la base exacte confirme que seul l'import est présent ; aucun changement
+de `server.py` ou du test. Il ne s'agit pas d'une régression de C321.
+L'erreur de collecte était une dépendance absente du sandbox, corrigée par
+installation des outils déjà utilisés par les tests existants ; aucun fichier
+de dépendances projet modifié. Les warnings sont les dépréciations
+Starlette/passlib/Pydantic/FastAPI existantes.
+
+`python -m py_compile` des deux fichiers de chronologie ; depuis `backend`,
+`python -m flake8 garmin/data_layer.py tests/test_typed_splits_chronology_c321.py
+--select=E9,F63,F7,F82` et
+`PYTHONPATH=. python -c 'import garmin.data_layer; print("data_layer import OK")'`
+: exit 0.
+Le spécialiste queue a également exécuté
+`python -m flake8 jobs/queue.py workers/sync_worker.py
+tests/test_activity_details_delayed_redis_c321.py --select=E9,F63,F7,F82` et
+`python -c 'import jobs.queue, workers.sync_worker'` : exit 0.
+
+**Bilan final : 531 tests pytest réussis, 1 échec préexistant** dans les
+exécutions complètes finales ci-dessus (les essais partiels ne sont pas
+additionnés). Les 104 tests details incluent **18 tests avec Redis 7.0.15
+réel, local isolé sur loopback, ports éphémères et AOF**, pas un Redis de
+production. Les autres contrôles de worker/provider/Mongo utilisent des
+simulations ; les appels Redis de transition sont exécutés par de vrais
+scripts Lua dans ces 18 tests, pas imités par un faux `eval`.
+
+**Vérifications et livraison.** HEAD de code testé :
+`6480a494a5c9a831894e0e3f5089e9a9c6523ead`. Les commits documentaires et
+de nettoyage ultérieurs ne changent pas le code testé ; leurs SHA exacts sont
+fournis dans le commentaire de livraison. Des artefacts Redis temporaires
+ont été capturés pendant une validation concurrente ; ils ont été retirés
+intégralement de l'arbre final et ne font pas partie du diff livré.
+Le diff final depuis `2c52b529...` ne comporte que les trois fichiers
+backend ciblés, les deux suites de tests details/chronologie et ce rapport.
+`git diff --check` : exit 0 ; scan des six fichiers : aucun secret.
+CodeQL Python au HEAD de code : **0 alerte**. La revue automatisée a été
+appelée mais son moteur est indisponible (modèle absent du registre), malgré
+son libellé « Success » ; une revue indépendante de la chronologie et une
+revue indépendante du delta queue n'ont trouvé aucun défaut significatif.
+
+**Risques opérationnels inchangés.** L'enqueue details reste `SET NX` puis
+`LPUSH` : un crash entre ces opérations peut laisser une réservation sans
+payload jusqu'à son TTL fini (1800 s). L'API ne confirme pas un job enfilé
+avant le retour de `LPUSH`. Redis ne garantit pas de rollback Lua général sur
+OOM, et la persistance effective dépend de la configuration runtime.
+Le bail Mongo de 900 s et le timeout GCCLI borné à 60 s restent la protection
+pour une activité ; aucun test MongoDB/Garmin réel n'est revendiqué.
+
+**Verdict actualisé : prête pour revue humaine de merge**, avec l'échec
+statique préexistant et les limites runtime ci-dessus explicitement soumis
+au reviewer. Aucun merge, déploiement, nouveau produit, nouvelle PR ou test
+Garmin réel depuis GitHub. L'intégration Emergent reste à valider séparément.
