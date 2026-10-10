@@ -6,9 +6,9 @@
 
 - Base de travail `copilot/dev` après merge de #321 : `3ad759622f92fe250db512b14d8be8c4a821d013`.
 - HEAD initial de la branche : `3ad759622f92fe250db512b14d8be8c4a821d013`, le merge #321.
-- HEAD code/tests validés : `48859b6b5eab4584d08e12de0b7457dec507b01f`.
-- Les mises à jour ultérieures éventuelles du présent rapport sont documentaires;
-  cette référence désigne le code et les tests effectivement validés.
+- HEAD code/tests validés pour la livraison initiale : `48859b6b5eab4584d08e12de0b7457dec507b01f`.
+- La section **C322** ci-dessous documente la correction ultérieure de comparabilité
+  et la validation correspondante sur la branche de PR.
 - Aucun merge supplémentaire, déploiement, appel GCCLI ou accès à MongoDB réel n'a été effectué.
 
 L'audit préalable a porté sur `backend/workout_analysis_v2.py`,
@@ -111,10 +111,9 @@ valeurs `None`.
   données comme `incoherent_pace` au-delà de ce seuil.
 - FC : moyenne et maximum de chaque phase sont retransmis tels quels. Aucune
   baisse ou vitesse de récupération cardiaque n'est calculée.
-- Régularité : une répétition est comparable à la première si sa durée **ou**
-  sa distance est à moins de 20 % de celle-ci. Dispersion des allures calculée
-  comme écart-type descriptif; évolution premier–dernier et changement des FC
-  moyennes sont descriptifs, sans attribuer de cause à une variation.
+- Régularité : le mécanisme initial fondé sur la durée **ou** la distance a été
+  corrigé par C322. Les règles appliquées actuellement sont décrites dans cette
+  section dédiée ci-dessous.
 - Les métriques absentes restent `None`; une métrique partielle n'est pas
   complétée par zéro. Les phases inconnues restent dans l'ordre chronologique,
   sans être reclassées en effort/récupération.
@@ -144,9 +143,9 @@ pour cette exécution uniquement, sans modification des manifestes.
 
 | Commande depuis `backend/` | Résultat |
 |---|---|
-| `python -m pytest tests/test_workout_analysis_v2_phases.py -q` | **22 passed** |
-| `python -m pytest tests/test_workout_analysis_v2.py tests/test_coach_context_v2.py tests/test_activity_details_pr321.py -q` | **377 passed, 14 warnings** |
-| `python -m pytest tests/test_workout_analysis_v2_phases.py tests/test_workout_analysis_v2.py tests/test_coach_context_v2.py tests/test_activity_details_pr321.py -q` | **399 passed, 14 warnings** |
+| `python -m pytest tests/test_workout_analysis_v2_phases.py -q` | **22 passed** avant C322 |
+| `python -m pytest tests/test_workout_analysis_v2.py tests/test_coach_context_v2.py tests/test_activity_details_pr321.py -q` | **377 passed, 14 warnings** avant C322 |
+| `python -m pytest tests/test_workout_analysis_v2_phases.py tests/test_workout_analysis_v2.py tests/test_coach_context_v2.py tests/test_activity_details_pr321.py -q` | **399 passed, 14 warnings** avant C322 |
 
 Les tests couvrent activité sans phases, alternance et ordre, échauffement,
 retour au calme, type inconnu, mesures absentes/nulles, FC absente, allure
@@ -184,3 +183,102 @@ aucun test runtime Emergent n'a été exécuté.
 - Toute vérification runtime future doit confirmer l'absence de requête
   d'enrichissement à l'analyse et l'isolation inter-utilisateurs, sans lancer
   GCCLI ni déclencher un POST depuis ce moteur.
+
+## C322 — Correction de la comparabilité et de la régularité
+
+### Défauts corrigés
+
+- `_efforts_comparable()` acceptait un effort selon sa durée ou sa distance au
+  cas de référence. Une même cohorte pouvait ainsi mélanger des bases de
+  comparaison différentes.
+- `_effort_regularity()` déclarait `available=True` dès deux efforts
+  structurellement comparables, même si zéro ou une seule allure était valide.
+- Les limitations de `_build_phase_analysis()` confondaient les efforts
+  structurellement non comparables avec les allures manquantes.
+
+### Critère cohérent de comparaison
+
+- Chaque cohorte candidate repose sur un unique axe : `duration` ou `distance`;
+  le même axe et le même effort d'ancrage s'appliquent à tous les membres.
+- Une mesure n'est utilisable que si elle est présente, finie et strictement
+  positive. Deux valeurs sont comparables si leur différence absolue divisée par
+  la plus grande des deux ne dépasse pas 20 %. La tolérance demeure exposée dans
+  `comparability_tolerance_pct`.
+- Le choix est déterministe : retenir la cohorte la plus nombreuse parmi les
+  ancres et les axes. En cas d'égalité, l'ordre de priorité est durée puis
+  distance; les ancres sont examinées dans l'ordre chronologique des efforts,
+  et le premier candidat de même taille est conservé. Le titre de séance n'est
+  jamais consulté.
+- Ce choix permet notamment de retenir les quatre efforts de référence de
+  240 secondes malgré leurs distances distinctes, ainsi que des répétitions de
+  distance fixe dont les durées varient.
+
+### Séries partielles et disponibilité
+
+Le contrat `WorkoutAnalysisEffortRegularity` reste additif et expose en plus :
+
+- `comparability_basis` : axe unique retenu, ou `None` si aucun axe n'est
+  disponible;
+- `comparable_effort_count` : effectif structurel de la cohorte, distinct du
+  nombre d'allures;
+- `pace_sample_count` : efforts de cette cohorte ayant une allure finie,
+  strictement positive et cohérente;
+- `partial_comparison` : vrai si des efforts sont hors cohorte ou si une ou
+  plusieurs allures de la cohorte manquent.
+
+`available=True` exactement lorsque la cohorte structurelle contient au moins
+deux efforts avec une allure valide chacun. L'écart-type et le changement
+premier–dernier restent `None` sous deux allures. Le changement
+premier–dernier utilise les première et dernière allures valides, dans l'ordre
+de la séance, au sein de la cohorte retenue.
+
+Les statistiques par groupe (`effort_statistics`) continuent de résumer tous
+les efforts indépendamment de la régularité. La durée et les FC de régularité
+restent calculées sur la cohorte même si une allure manque; l'évolution de FC
+utilise les FC moyennes disponibles au sein de cette cohorte. L'absence de FC
+n'empêche donc pas une régularité d'allures.
+
+Les limitations distinguent maintenant :
+
+- `efforts_not_comparable` : moins de deux efforts dans la cohorte;
+- `efforts_partially_comparable` : la cohorte n'inclut pas tous les efforts;
+- `effort_paces_incomplete` : des efforts de la cohorte n'ont pas d'allure;
+- `insufficient_comparable_effort_paces` : moins de deux allures valides dans
+  une cohorte d'au moins deux efforts.
+
+Les efforts exclus ne disparaissent pas de `phase_analysis.efforts` ni des
+statistiques descriptives globales.
+
+### Tests et résultats C322
+
+Depuis `backend/` :
+
+| Commande | Résultat |
+|---|---|
+| `python -m pytest tests/test_workout_analysis_v2_phases.py -q` | **31 passed** |
+| `python -m pytest tests/test_workout_analysis_v2.py tests/test_coach_context_v2.py tests/test_activity_details_pr321.py -q` | **377 passed, 14 warnings** |
+| `python -m pytest tests/test_workout_analysis_v2_phases.py tests/test_workout_analysis_v2.py tests/test_coach_context_v2.py tests/test_activity_details_pr321.py -q` | **408 passed, 14 warnings** |
+
+Les tests C322 vérifient les valeurs numériques, les axes retenus, les effectifs,
+la disponibilité et les limitations pour les cas 4×240 s, distance fixe,
+groupes temporels/distances incompatibles, allures absentes ou partielles, FC
+absente, effort unique, cohorte partielle et évolution de la première à la
+dernière allure effectivement retenue. Le contrat JSON historique avec défauts
+additifs reste couvert. Les références restent synthétiques; aucun runtime
+Emergent/Garmin/MongoDB n'a été interrogé.
+
+### Risques résiduels
+
+- La règle de meilleure couverture (puis durée en cas d'égalité) choisit une
+  cohorte descriptive, pas une interprétation du format sportif. Une cohorte
+  partielle est signalée par effectif, axe, indicateur partiel et limitations.
+- Le seuil de 20 % est descriptif et déterministe; il ne constitue ni un score
+  ni une conclusion physiologique.
+- À vérifier en revue C322 : acceptabilité produit de la cohorte partielle
+  lorsqu'au moins deux allures comparables sont valides, et cohérence sur les
+  données d'observation synthétiques. Aucun merge n'est autorisé par cette
+  livraison.
+
+HEAD code/tests C322 validés : `c16a931143d2973d45ba5e31bbb79379507513a8`.
+Les validations finales du rapport, du scan de secrets et de CodeQL sont
+consignées à l'issue de cette livraison.
