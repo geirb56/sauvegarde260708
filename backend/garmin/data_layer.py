@@ -8,18 +8,24 @@ Design rules (do not violate):
 - No business logic (no RunnerProfile / TrainingHistory / TrainingState / plans).
 - No fallback / no fabrication: when Garmin does not provide a value the field
   is ``None``. Empty ``{}`` / ``[]`` / ``null`` payloads must yield valid models
-  with ``None`` fields (never raise).
+  with ``None`` fields for historical summary/health models (never raise).
+  Typed-splits rejects incompatible envelopes to avoid caching false emptiness.
 - Additive only: nothing here is wired into the existing engine, score,
   readiness, endpoints or frontend. Future PRs will consume these models.
 
-All raw shapes below come from the real audited gccli 1.9.0 output.
+Historical raw shapes come from audited gccli 1.9.0 output. The typed-splits
+contract follows the Emergent C321 audit; tests reconstruct its documented
+structure and are not raw captures.
 """
 
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
+from datetime import datetime, timezone
 
 from pydantic import BaseModel, ConfigDict
+import math
+from activity_phases import ActivityPhase
 
 
 # --------------------------------------------------------------------------- #
@@ -176,6 +182,92 @@ class GarminActivity(BaseModel):
             has_splits=(meta.get("hasSplits") if isinstance(meta.get("hasSplits"), bool) else None),
             details_available=details_available,
         )
+
+def normalize_typed_splits(raw: Any) -> List[Dict]:
+    """Normalize C321's verified envelope; reject incompatible responses.
+
+    Complete unique message indexes are used only if available timestamps
+    agree with that order. Otherwise complete timestamps can order the entire
+    sequence if available indexes agree. Ambiguity preserves reception order.
+    RWD_* rows are filtered without changing retained rows' relative order.
+    """
+    if not isinstance(raw, dict) or not isinstance(raw.get("splits"), list):
+        raise ValueError("Unsupported typed-splits payload")
+    splits = raw["splits"]
+    if len(splits) > 1000:
+        raise ValueError("Unsupported typed-splits payload")
+    phase_types = {
+        "INTERVAL_ACTIVE": "effort", "INTERVAL_RECOVERY": "recovery",
+        "INTERVAL_WARMUP": "warmup", "INTERVAL_COOLDOWN": "cooldown",
+    }
+
+    def measurement(value):
+        number = _num(value)
+        try:
+            return number if number is not None and math.isfinite(number) and number >= 0 else None
+        except OverflowError:
+            return None
+
+    def ordering_evidence(item):
+        _, split = item
+        start = split.get("startTimeGMT")
+        timestamp = None
+        if isinstance(start, str) and ("T" in start or " " in start):
+            try:
+                parsed = datetime.fromisoformat(start.replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                timestamp = parsed.timestamp()
+            except (ValueError, OverflowError, OSError):
+                pass
+        index = split.get("messageIndex")
+        if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+            index = None
+        return index, timestamp
+
+    retained = []
+    for position, split in enumerate(splits):
+        if (
+            not isinstance(split, dict)
+            or not _str(split.get("type"))
+            or len(split["type"]) > 128
+        ):
+            raise ValueError("Unsupported typed-split row")
+        if not split["type"].startswith("RWD_"):
+            retained.append((position, split))
+    phases = []
+    evidence = {position: ordering_evidence(item) for item in retained for position in [item[0]]}
+
+    def agrees(sequence, column):
+        values = [evidence[position][column] for position, _ in sequence
+                  if evidence[position][column] is not None]
+        return all(a <= b for a, b in zip(values, values[1:]))
+
+    indexes = [evidence[position][0] for position, _ in retained]
+    if all(index is not None for index in indexes) and len(set(indexes)) == len(indexes):
+        candidate = sorted(retained, key=lambda item: evidence[item[0]][0])
+        if agrees(candidate, 1):
+            retained = candidate
+    elif all(evidence[position][1] is not None for position, _ in retained):
+        candidate = sorted(retained, key=lambda item: evidence[item[0]][1])
+        if agrees(candidate, 0):
+            retained = candidate
+    for order, (_, split) in enumerate(retained):
+        native_type = split["type"]
+        phases.append(ActivityPhase(
+            order=order,
+            native_type=native_type,
+            phase_type=phase_types.get(native_type, "unknown"),
+            duration_s=measurement(split.get("duration")),
+            distance_m=measurement(split.get("distance")),
+            average_speed_mps=measurement(split.get("averageSpeed")),
+            average_hr=measurement(split.get("averageHR")),
+            max_hr=measurement(split.get("maxHR")),
+            min_hr=measurement(split.get("minHR")),
+            source="garmin",
+        ).model_dump())
+    return phases
+
 
 # --------------------------------------------------------------------------- #
 # GarminDailyMetrics

@@ -22,6 +22,10 @@ QUEUE_KEY = "runindex:garmin:queue"
 PROCESSING_KEY = "runindex:garmin:processing"
 # Hash job_id -> claimed_at (epoch); used by the watchdog to detect orphans.
 CLAIMS_KEY = "runindex:garmin:claims"
+# Only explicit activity-details jobs wait here, outside the runnable FIFO.
+DELAYED_KEY = "runindex:garmin:details:delayed"
+DELAYED_PAYLOADS_KEY = "runindex:garmin:details:delayed_payloads"
+DETAILS_OUTCOMES_KEY = "runindex:garmin:details:outcomes"
 # A job stuck in processing longer than this (s) is considered orphaned.
 ORPHAN_TIMEOUT = int(os.environ.get("SYNC_ORPHAN_TIMEOUT", "120"))
 
@@ -39,9 +43,12 @@ JOB_SYNC_USER = "SYNC_USER"          # full sync: activities + daily health metr
 JOB_SYNC_ACTIVITY = "SYNC_ACTIVITY"  # activities-focused sync
 JOB_INCREMENTAL_SYNC = "INCREMENTAL_SYNC"  # incremental: only new activities (since last)
 JOB_VO2MAX_BACKFILL = "VO2MAX_BACKFILL"  # one-shot historical VO2max fetch
+JOB_ACTIVITY_DETAILS = "ACTIVITY_DETAILS"
 
 
 def _pending_key(job_type: str, user_id: str) -> str:
+    if job_type == JOB_ACTIVITY_DETAILS:
+        return f"{PENDING_PREFIX}{user_id}:activity_details"
     if job_type == JOB_VO2MAX_BACKFILL:
         return f"{PENDING_PREFIX}{user_id}:vo2max_backfill"
     return f"{PENDING_PREFIX}{user_id}"
@@ -55,6 +62,57 @@ LOCK_PREFIX = "sync_lock:"       # per-user concurrency lock (worker side)
 LOCK_TTL = 120                   # seconds
 PENDING_PREFIX = "sync_pending:"  # dedupe flag: a job is queued/running for user
 PENDING_TTL = 300                # seconds
+DETAILS_PENDING_TTL = 1800
+
+
+async def maintain_details_pending(redis, user_id: str, job_id: str, release=False):
+    """Refresh/release only this job's reservation, never a newer job's flag."""
+    return await redis.eval(
+        """
+        if redis.call('GET', KEYS[1]) == ARGV[1] then
+            if ARGV[2] == 'release' then return redis.call('DEL', KEYS[1]) end
+            return redis.call('EXPIRE', KEYS[1], ARGV[3])
+        end
+        return 0
+        """,
+        1, _pending_key(JOB_ACTIVITY_DETAILS, user_id), job_id,
+        "release" if release else "refresh", DETAILS_PENDING_TTL,
+    )
+
+
+async def recover_details_pending(redis, raw: str, job: dict) -> int:
+    """Explicit recovery: only a claimed delivery still in PROCESSING is eligible."""
+    return await redis.eval(
+        """
+        local expected = {'string', 'list', 'hash', 'hash'}
+        for i, key in ipairs(KEYS) do
+            local kind = redis.call('TYPE', key).ok
+            if kind ~= 'none' and kind ~= expected[i] then
+                return redis.error_reply('Invalid reservation recovery key type')
+            end
+        end
+        local delivery = cjson.decode(ARGV[1])
+        if delivery.id ~= ARGV[2] or delivery.user_id ~= ARGV[3]
+           or delivery.type ~= 'ACTIVITY_DETAILS' then return 0 end
+        if redis.call('LPOS', KEYS[2], ARGV[1]) == false then return 0 end
+        if redis.call('HEXISTS', KEYS[3], ARGV[2]) == 0 then return 0 end
+        if redis.call('HGET', KEYS[4], ARGV[2]) == 'superseded' then return 0 end
+        local owner = redis.call('GET', KEYS[1])
+        if owner == false then
+            redis.call('SET', KEYS[1], ARGV[2], 'EX', ARGV[4])
+            return 1
+        end
+        if owner == ARGV[2] then
+            return redis.call('EXPIRE', KEYS[1], ARGV[4])
+        end
+        redis.call('HSET', KEYS[4], ARGV[2], 'superseded')
+        redis.call('EXPIRE', KEYS[4], ARGV[4])
+        return 0
+        """,
+        4, _pending_key(JOB_ACTIVITY_DETAILS, job["user_id"]),
+        PROCESSING_KEY, CLAIMS_KEY, DETAILS_OUTCOMES_KEY,
+        raw, job["id"], job["user_id"], DETAILS_PENDING_TTL,
+    )
 
 
 async def _push(job_type: str, user_id: str, attempts: int = 0, job_id: str = None) -> None:
@@ -103,6 +161,28 @@ async def enqueue_incremental_sync(user_id: str) -> dict:
 async def enqueue_vo2max_backfill(user_id: str) -> dict:
     """Queue the one-shot historical VO2max backfill."""
     return await _enqueue_deduped(JOB_VO2MAX_BACKFILL, user_id)
+
+
+async def enqueue_activity_details(user_id: str, activity_id: str) -> dict:
+    """One explicit target, at most one queued enrichment per user."""
+    from garmin.activity_details import validate_activity_id
+
+    activity_id = validate_activity_id(activity_id)
+    r = get_redis()
+    key = _pending_key(JOB_ACTIVITY_DETAILS, user_id)
+    job_id = uuid.uuid4().hex
+    if not await r.set(key, job_id, nx=True, ex=DETAILS_PENDING_TTL):
+        return {"status": "already_queued"}
+    try:
+        await r.lpush(QUEUE_KEY, json.dumps({
+            "id": job_id, "type": JOB_ACTIVITY_DETAILS,
+            "user_id": user_id, "activity_id": activity_id,
+            "attempts": 0, "enqueued_at": time.time(),
+        }))
+    except Exception:
+        await maintain_details_pending(r, user_id, job_id, release=True)
+        raise
+    return {"status": "queued"}
 
 
 # --------------------------------------------------------------------------- #
@@ -157,6 +237,95 @@ async def requeue_job(raw: str, job_id: str, new_payload: str = None) -> None:
         await pipe.execute()
 
 
+async def defer_activity_details(raw: str, job: dict) -> None:
+    """Atomically park an in-flight job, without ACK or a runnable-queue loop."""
+    due = float(job["not_before"])
+    ttl = max(DETAILS_PENDING_TTL, int(due - time.time()) + DETAILS_PENDING_TTL)
+    await get_redis().eval(
+        """
+        local expected = {'list', 'hash', 'zset', 'hash', 'string'}
+        for i, key in ipairs(KEYS) do
+            local kind = redis.call('TYPE', key).ok
+            if kind ~= 'none' and kind ~= expected[i] then
+                return redis.error_reply('Invalid deferred key type')
+            end
+        end
+        if redis.call('LREM', KEYS[1], 1, ARGV[1]) == 0 then return 0 end
+        redis.call('HDEL', KEYS[2], ARGV[2])
+        redis.call('HSET', KEYS[4], ARGV[2], ARGV[3])
+        redis.call('ZADD', KEYS[3], ARGV[4], ARGV[2])
+        if redis.call('GET', KEYS[5]) == ARGV[2] then
+            redis.call('EXPIRE', KEYS[5], ARGV[5])
+        end
+        return 1
+        """,
+        5, PROCESSING_KEY, CLAIMS_KEY, DELAYED_KEY, DELAYED_PAYLOADS_KEY,
+        _pending_key(JOB_ACTIVITY_DETAILS, job["user_id"]),
+        raw, job["id"], json.dumps(job), due, ttl,
+    )
+
+
+async def promote_due_activity_details() -> int:
+    """Watchdog promotion, bounded and atomic across multiple workers."""
+    result = await get_redis().eval(
+        """
+        local expected = {'zset', 'hash', 'list', 'hash'}
+        for i, key in ipairs(KEYS) do
+            local kind = redis.call('TYPE', key).ok
+            if kind ~= 'none' and kind ~= expected[i] then
+                return redis.error_reply('Invalid promotion key type')
+            end
+        end
+        local ids = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[1],
+                               'LIMIT', 0, 100)
+        local jobs = {}
+        for _, id in ipairs(ids) do
+            local payload = redis.call('HGET', KEYS[2], id)
+            if not payload then return redis.error_reply('Missing delayed payload: ' .. id) end
+            local job = cjson.decode(payload)
+            if job.id ~= id or type(job.user_id) ~= 'string' then
+                return redis.error_reply('Invalid delayed identity')
+            end
+            local pending = ARGV[2] .. job.user_id .. ':activity_details'
+            local kind = redis.call('TYPE', pending).ok
+            if kind ~= 'none' and kind ~= 'string' then
+                return redis.error_reply('Invalid pending key type')
+            end
+            jobs[id] = job
+        end
+        local promoted = 0
+        local superseded = {}
+        for _, id in ipairs(ids) do
+            local payload = redis.call('HGET', KEYS[2], id)
+            if payload then
+                local job = jobs[id]
+                local pending = ARGV[2] .. job.user_id .. ':activity_details'
+                local owner = redis.call('GET', pending)
+                if owner == false or owner == id then
+                    redis.call('SET', pending, id, 'EX', ARGV[3])
+                    redis.call('LPUSH', KEYS[3], payload)
+                    promoted = promoted + 1
+                else
+                    redis.call('HSET', KEYS[4], id, 'superseded')
+                    redis.call('EXPIRE', KEYS[4], ARGV[3])
+                    table.insert(superseded, id)
+                end
+            else
+                return redis.error_reply('Missing delayed payload: ' .. id)
+            end
+            redis.call('ZREM', KEYS[1], id)
+            redis.call('HDEL', KEYS[2], id)
+        end
+        return {promoted, superseded}
+        """,
+        4, DELAYED_KEY, DELAYED_PAYLOADS_KEY, QUEUE_KEY, DETAILS_OUTCOMES_KEY, time.time(),
+        PENDING_PREFIX, DETAILS_PENDING_TTL,
+    )
+    for job_id in result[1]:
+        logger.warning("[queue] activity_details terminal=superseded job_id=%s", job_id)
+    return result[0]
+
+
 async def recover_orphans() -> int:
     """Requeue jobs stuck in the processing list past ORPHAN_TIMEOUT.
 
@@ -177,9 +346,40 @@ async def recover_orphans() -> int:
             continue
         claimed_at = await r.hget(CLAIMS_KEY, job_id)
         if claimed_at is None:
-            await r.hset(CLAIMS_KEY, job_id, now)
+            if job.get("type") == JOB_ACTIVITY_DETAILS:
+                await r.eval(
+                    """
+                    if redis.call('LPOS', KEYS[1], ARGV[1]) == false then return 0 end
+                    return redis.call('HSETNX', KEYS[2], ARGV[2], ARGV[3])
+                    """,
+                    2, PROCESSING_KEY, CLAIMS_KEY, raw, job_id, now,
+                )
+            else:
+                await r.hset(CLAIMS_KEY, job_id, now)
             continue
         if now - float(claimed_at) <= ORPHAN_TIMEOUT:
+            continue
+        if job.get("type") == JOB_ACTIVITY_DETAILS:
+            # The same payload may have been recovered and freshly claimed
+            # since HGET; only move the delivery we actually observed.
+            moved = await r.eval(
+                """
+                local expected = {'list', 'hash', 'list'}
+                for i, key in ipairs(KEYS) do
+                    local kind = redis.call('TYPE', key).ok
+                    if kind ~= 'none' and kind ~= expected[i] then
+                        return redis.error_reply('Invalid orphan key type')
+                    end
+                end
+                if redis.call('HGET', KEYS[2], ARGV[2]) ~= ARGV[3] then return 0 end
+                if redis.call('LREM', KEYS[1], 1, ARGV[1]) == 0 then return 0 end
+                redis.call('HDEL', KEYS[2], ARGV[2])
+                redis.call('LPUSH', KEYS[3], ARGV[1])
+                return 1
+                """,
+                3, PROCESSING_KEY, CLAIMS_KEY, QUEUE_KEY, raw, job_id, claimed_at,
+            )
+            recovered += int(moved)
             continue
         # Orphan: move it back to the queue atomically. LREM returns 0 if another
         # process already recovered/acked it, in which case we do nothing.
