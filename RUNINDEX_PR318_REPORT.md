@@ -120,3 +120,76 @@ Contrôles :
 - [ ] Chargement, absence de données et erreur réseau en environnement déployé.
 
 Ne pas merger avant ces validations runtime.
+
+## Corrections finales avant validation bêta — 10 octobre 2026
+
+### HEAD et périmètre exacts
+
+- Base cible inchangée : `copilot/dev`, `65524421948976502cd51f108d8e427d9bd67f29`.
+- HEAD avant correction : `d75c0f689b72848dc7c7bbc5c8e314ea7879560a`.
+- HEAD après correction fonctionnelle, correspondant au code testé : `0ca993a922b017051ddb5a13779e84d8f4ee3ad5`.
+- Le commit suivant ajoute uniquement cette mise à jour documentaire ; son HEAD de livraison sera publié dans un commentaire sur la PR318 existante.
+- Fichiers de cette correction : `frontend/src/pages/WorkoutDetail.jsx`, `frontend/src/lib/i18n.js`, `frontend/src/__tests__/workout-analysis-v2-pages.test.jsx`, `RUNINDEX_PR318_REPORT.md`.
+- Aucun nouveau PR, aucun merge, aucun changement backend, Workout Analysis V2, Training V2 ou routes secondaires.
+
+### P1 — Affichage selon le sport
+
+**Cause :** la métrique du résumé utilisait toujours `avg_pace_min_km`, indépendamment de `workout.type`.
+
+**Audit des types :** `WorkoutCreate.validate_type` dans `backend/server.py` autorise `run`, `cycle`, `swim`. `backend/garmin/service.py` normalise running/trail_running/treadmill_running vers `run`, cycling/biking vers `cycle`, swimming vers `swim`. Les traductions frontend comprennent aussi trail, marche, randonnée, renforcement et cardio ; ces libellés ne constituent pas une extension du contrat de création backend. Sessions distingue notamment `cycle`.
+
+**Correctif :** pour `cycle`, le résumé affiche la vitesse moyenne en km/h : priorité à `workout.avg_speed_kmh` fini et strictement positif, sinon `pacing.average_speed_kmh` fini et strictement positif uniquement si le moteur le marque disponible. Sans vitesse exploitable, une explication FR/EN/ES remplace la valeur. Aucune vitesse dérivée de l’allure, distance ou durée. Le formateur existant `frontend/src/utils/units.js::formatSpeed` est réutilisé explicitement en unités métriques.
+
+La section d’analyse moyenne du vélo privilégie également la vitesse et porte le titre « Vitesse et régularité ». La course conserve l’allure en min/km ; aucun changement de calcul ou nouvelle convention de natation.
+
+### P2 — Allures absolues invalides
+
+**Cause :** `Number.isFinite` acceptait zéro et les valeurs négatives ; le fallback vitesse limité à `== null` ignorait NaN, l’infini, zéro et les valeurs négatives.
+
+**Correctif :** validation locale explicite `Number.isFinite(value) && value > 0` pour l’allure moyenne du résumé, l’allure moyenne du moteur, les fractions les plus rapides/lentes et l’allure moyenne des références similaires. Les splits avaient déjà cette protection. Une allure moteur invalide autorise le fallback vers une vitesse moteur disponible, finie et positive. Une carte sans métrique exploitable est remplacée par l’explication existante.
+
+Les écarts d’allure ne sont pas des allures absolues : zéro et les différences négatives finies restent valides et conservent leur sens descriptif. Aucun recalcul de métriques du moteur ; le formateur partagé d’allure n’est pas modifié, afin de limiter le périmètre à WorkoutDetail.
+
+### P2 — Vérification des zones cardiaques
+
+Les zones ne sont affichées que lorsque `physiology.available === true` et qu’au moins une des clés Z1–Z5 possède un pourcentage fini, strictement positif et inférieur ou égal à 100. Les lignes invalides sont omises ; les distributions absentes, entièrement invalides, entièrement nulles ou ne contenant que des clés inconnues sont masquées.
+
+L’avertissement de provenance/bornes non fournies reste visible, en `text-sm`, dans un conteneur autorisant le retour à la ligne. Aucune attribution aux seuils LT1/LT2 ni nouvelle interprétation physiologique. Tests DOM ajoutés pour le texte et les données invalides ; sa lisibilité réelle sur mobile reste à valider par Emergent.
+
+### Vérifications effectivement exécutées après correction
+
+Depuis `frontend/` :
+
+- `npm ci --legacy-peer-deps --no-audit --no-fund` : restauration réussie des dépendances verrouillées, sans modification des manifests/lockfiles.
+- `CI=true npm test -- --watchAll=false --runInBand --forceExit --runTestsByPath src/__tests__/workout-analysis-v2-pages.test.jsx src/lib/i18n.test.js src/__tests__/sessions-page.test.jsx src/__tests__/app-legacy-redirects.test.jsx` : **4 suites réussies, 138 tests réussis, 0 échec**.
+- `npm run build` : **compilation réussie** ; avertissement Browserslist existant.
+- `git diff --check` : aucun problème d’espacement.
+- Scan de secrets des trois fichiers frontend modifiés : aucun secret.
+- `parallel_validation` : CodeQL JavaScript exécuté, **0 alerte**. Revue automatique indisponible à cause du modèle configuré absent du registre ; ne pas considérer le statut global « succès » comme une revue exécutée.
+- Revue complémentaire `code-review`, en lecture seule, du diff de correction : aucun problème significatif identifié.
+
+Les tests couvrent course avec allure valide, vélo avec vitesse observée et fallback moteur disponible, vélo sans vitesse exploitable, allures nulles/zéro/négatives/NaN/infinies et non numériques, fallback vitesse, absence de FC, zones invalides/indisponibles, FR/EN/ES et le parcours des vrais composants Sessions → WorkoutDetail → Coach avec `workout_id: "w1"`. Les tests existants d’écarts négatifs/zéro et des routes secondaires restent exécutés.
+
+Une exécution intermédiaire a échoué sur le sélecteur du nouveau test de navigation, car Sessions utilise le type et les métriques comme nom accessible plutôt que le nom d’activité. Le sélecteur a été adapté ; le résultat final de 138 tests ci-dessus a réellement été obtenu.
+
+### Limitations restantes et checklist runtime Emergent
+
+- Pas de test visuel ou runtime sur l’application réelle dans cette session.
+- La disponibilité frontend n’établit pas une qualité physiologique nouvelle : seules les données et disponibilités existantes sont exploitées.
+- L’API ne certifie toujours pas la provenance/bornes des zones.
+- Le résumé vélo peut afficher une indisponibilité pendant que l’analyse est encore en cours si la vitesse d’activité est absente, puis afficher la vitesse moteur disponible.
+- Les valeurs moteur, textes et fractions historiques ne sont pas recalculés ; les autres types sportifs et le formateur partagé restent inchangés.
+
+Avant merge, Emergent doit valider :
+
+- [ ] Mobile réel 360 px et 390 px, avertissement des zones lisible.
+- [ ] Séance endurance.
+- [ ] Séance fractionnée.
+- [ ] Activité vélo si disponible : km/h ou explication d’indisponibilité.
+- [ ] Activité sans FC.
+- [ ] Activité avec splits et historique.
+- [ ] Navigation Sessions → Détail → Coach et contexte de séance.
+- [ ] Chargement et erreur API.
+- [ ] Absence de débordement horizontal.
+
+Corrections livrées dans PR318 uniquement ; attendre la revue et ces validations avant merge.
