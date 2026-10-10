@@ -1122,6 +1122,14 @@ const editorialPages = [
       if (name !== "SessionDetail") expect(screen.getByTestId("ask-coach-btn")).toBeVisible();
     });
 
+    test.each(["", "   ", null, undefined])("empty available observation (%s) uses a conservative fallback", async (text) => {
+      mockAxios({ analysisPayload: { ...analysis, advice: { available: true, text } } });
+      renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
+      await screen.findByTestId(testId);
+      expect(screen.getByText(translations.en.workoutDetailExtended.adviceUnavailable)).toBeVisible();
+      expect(screen.getByTestId(testId)).not.toHaveTextContent("undefined");
+    });
+
     test.each(["fr", "en", "es"])("localized limitations are deduplicated and never appended to meaning in %s", async (language) => {
       const localized = {
         fr: ["Zones non vérifiées.", "Comparaison limitée.", "Fractions manquantes."],
@@ -1157,6 +1165,28 @@ const editorialPages = [
       await screen.findByTestId(testId);
       if (name !== "SessionDetail") fireEvent.click(screen.getByTestId("advanced-toggle"));
       expect(screen.queryByTestId("analysis-limitations")).not.toBeInTheDocument();
+    });
+
+    test.each([null, "api-error"])("empty or failed analysis (%s) preserves the secondary route", async (payload) => {
+      mockAxios({ analysisPayload: payload === "api-error" ? null : payload, rejectAnalysis: payload === "api-error" });
+      renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
+      if (name === "DetailedAnalysis") {
+        expect(await screen.findByTestId("analysis-not-found")).toHaveTextContent(translations.en.workout.notFound);
+      } else {
+        await screen.findByTestId(testId);
+        expect(screen.queryByTestId("advice-text")).not.toBeInTheDocument();
+        expect(screen.queryByTestId("analysis-limitations")).not.toBeInTheDocument();
+        expect(screen.getByTestId(testId)).not.toHaveTextContent("undefined");
+      }
+    });
+
+    test("loading analysis does not prematurely expose an observation", async () => {
+      let resolveAnalysis;
+      mockAxios({ delayedAnalysis: new Promise((resolve) => { resolveAnalysis = resolve; }) });
+      renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
+      expect(screen.queryByText(analysis.advice.text)).not.toBeInTheDocument();
+      resolveAnalysis({ data: analysis });
+      expect(await screen.findByText(analysis.advice.text)).toBeVisible();
     });
   });
 
