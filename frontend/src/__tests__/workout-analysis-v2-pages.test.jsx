@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes, Link } from "react-router-dom";
 import axios from "axios";
 
 import WorkoutDetail, { formatDistance, formatSignedDistance } from "@/pages/WorkoutDetail";
+import Sessions from "@/pages/Sessions";
 import Coach from "@/pages/Coach";
 import DetailedAnalysis from "@/pages/DetailedAnalysis";
 import SessionDetail from "@/pages/SessionDetail";
@@ -373,6 +374,116 @@ test("available intensity is displayed without reclassification", async () => {
   await screen.findByTestId("coach-summary");
   expect(screen.getByText(/Engine supplied intensity/)).toBeVisible();
   expect(screen.queryByTestId("intensity-card-unavailable")).not.toBeInTheDocument();
+});
+
+test.each(["fr", "en", "es"])("cycling uses recorded speed, never average min/km, in %s", async (language) => {
+  mockAxios({
+    workoutPayload: { ...workout, type: "cycle", avg_speed_kmh: 24.5 },
+    analysisPayload: { ...analysis, pacing: { ...analysis.pacing, average_speed_kmh: 23 } },
+  });
+  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1", language);
+  await screen.findByTestId("coach-summary");
+  const metrics = screen.getByTestId("primary-metrics");
+  expect(metrics).toHaveTextContent(translations[language].workoutDetailExtended.averageSpeed);
+  expect(metrics).toHaveTextContent("24.5 km/h");
+  expect(metrics).not.toHaveTextContent("/km");
+  expect(screen.getByTestId("pacing-summary-card")).toHaveTextContent("23.0 km/h");
+  expect(within(screen.getByTestId("pacing-summary-card")).queryByText("6:00/km")).not.toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: translations[language].workoutDetailExtended.speedSection })).toBeVisible();
+});
+
+test.each([null, 0, -3, NaN, Infinity, -Infinity, "25"])("cycling rejects unusable speeds %s without deriving speed", async (speed) => {
+  mockAxios({
+    workoutPayload: { ...workout, type: "cycle", avg_speed_kmh: speed },
+    analysisPayload: { ...analysis, pacing: { available: true, average_pace_min_km: 6, average_speed_kmh: speed } },
+  });
+  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+  await screen.findByTestId("coach-summary");
+  expect(screen.getByTestId("primary-metrics")).toHaveTextContent(translations.en.workoutDetailExtended.speedUnavailable);
+  expect(screen.getByTestId("primary-metrics")).not.toHaveTextContent("/km");
+  expect(screen.queryByTestId("pacing-summary-card")).not.toBeInTheDocument();
+});
+
+test("cycling can reuse an available engine speed when the workout speed is missing", async () => {
+  mockAxios({
+    workoutPayload: { ...workout, type: "cycle", avg_speed_kmh: null },
+    analysisPayload: { ...analysis, pacing: { ...analysis.pacing, average_speed_kmh: 25 } },
+  });
+  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+  await screen.findByTestId("coach-summary");
+  expect(screen.getByTestId("primary-metrics")).toHaveTextContent("25.0 km/h");
+});
+
+test("cycling does not reuse a speed marked unavailable by the engine", async () => {
+  mockAxios({
+    workoutPayload: { ...workout, type: "cycle" },
+    analysisPayload: { ...analysis, pacing: { available: false, average_speed_kmh: 25 } },
+  });
+  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+  await screen.findByTestId("coach-summary");
+  expect(screen.getByTestId("primary-metrics")).toHaveTextContent(translations.en.workoutDetailExtended.speedUnavailable);
+});
+
+test.each([null, 0, -2, NaN, Infinity, -Infinity, "6"])("invalid absolute paces %s are omitted and a valid engine speed is used", async (pace) => {
+  mockAxios({
+    workoutPayload: { ...workout, avg_pace_min_km: pace, km_splits: [{ km: 1, pace_min_km: pace }] },
+    analysisPayload: {
+      ...analysis,
+      pacing: { available: true, average_pace_min_km: pace, average_speed_kmh: 10, fastest_split_min_km: pace, slowest_split_min_km: pace },
+      comparison: { ...analysis.comparison, similar: { available: true, avg_pace_min_km: pace, pace_difference_min_km: null } },
+    },
+  });
+  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+  await screen.findByTestId("coach-summary");
+  const metrics = screen.getByTestId("primary-metrics");
+  expect(metrics).toHaveTextContent("Average pace");
+  expect(metrics).toHaveTextContent("Not recorded");
+  expect(metrics).not.toHaveTextContent("/km");
+  const card = screen.getByTestId("pacing-summary-card");
+  expect(card).toHaveTextContent("10.0 km/h");
+  expect(card).not.toHaveTextContent("/km");
+  expect(screen.queryByTestId("similar-pace")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("splits-chart-card")).not.toBeInTheDocument();
+  expect(screen.getByTestId("workout-detail")).not.toHaveTextContent("NaN");
+  expect(screen.getByTestId("workout-detail")).not.toHaveTextContent("Infinity");
+});
+
+test.each([null, 0, -2, NaN, Infinity])("an invalid pace %s without a usable speed produces an explicit pacing empty state", async (pace) => {
+  mockAxios({ analysisPayload: { ...analysis, pacing: { available: true, average_pace_min_km: pace, average_speed_kmh: 0 } } });
+  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+  await screen.findByTestId("coach-summary");
+  expect(screen.queryByTestId("pacing-summary-card")).not.toBeInTheDocument();
+  expect(screen.getByText(translations.en.workoutDetailExtended.pacingUnavailable)).toBeVisible();
+});
+
+test.each([null, {}, { z1: null, z2: NaN, z3: Infinity, z4: -1, z5: 101 }, { z1: 0, z2: 0 }, { unknown: 50 }])(
+  "zones with no usable recorded distribution %s are hidden", async (zones) => {
+    mockAxios({
+      workoutPayload: { ...workout, avg_heart_rate: null, max_heart_rate: null },
+      analysisPayload: { ...analysis, physiology: { available: true, zone_distribution: zones } },
+    });
+    renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+    await screen.findByTestId("coach-summary");
+    expect(screen.queryByTestId("hr-zones-card")).not.toBeInTheDocument();
+    expect(screen.getByTestId("heart-response")).toHaveTextContent(translations.en.workoutDetailExtended.heartRateUnavailable);
+  },
+);
+
+test("unavailable zones are hidden even if percentages are present", async () => {
+  mockAxios({ analysisPayload: { ...analysis, physiology: { ...analysis.physiology, available: false } } });
+  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+  await screen.findByTestId("coach-summary");
+  expect(screen.queryByTestId("hr-zones-card")).not.toBeInTheDocument();
+});
+
+test("valid zone rows retain a mobile-readable provenance warning and omit invalid percentages", async () => {
+  mockAxios({ analysisPayload: { ...analysis, physiology: { ...analysis.physiology, zone_distribution: { z1: 30, z2: NaN, z3: -2, z4: 101, z5: null } } } });
+  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+  await screen.findByTestId("coach-summary");
+  const zones = screen.getByTestId("hr-zones-card");
+  expect(within(zones).getByText(translations.en.workoutDetailExtended.zonesProvenance)).toHaveClass("text-sm");
+  expect(zones).toHaveTextContent("Z1");
+  ["Z2", "Z3", "Z4", "Z5", "NaN", "Infinity"].forEach((label) => expect(within(zones).queryByText(label, { exact: true })).not.toBeInTheDocument());
 });
 
 test("invalid splits are omitted and all valid long-activity splits remain accessible", async () => {
@@ -905,18 +1016,23 @@ test("WorkoutDetail Ask Coach runs analysis in the real Coach page", async () =>
     if (url.includes("/coach/history")) return Promise.resolve({ data: [] });
     if (url.includes("/workouts/w1")) return Promise.resolve({ data: workout });
     if (url.includes("/coach/workout-analysis/w1")) return Promise.resolve({ data: analysis });
+    if (url.endsWith("/workouts")) return Promise.resolve({ data: [workout] });
     return Promise.reject(new Error(`unexpected ${url}`));
   });
   axios.post.mockResolvedValue({ data: { response: "Coach analyzed the selected workout." } });
 
   renderWithProviders(
     <Routes>
+      <Route path="/sessions" element={<Sessions />} />
       <Route path="/workout/:id" element={<WorkoutDetail />} />
       <Route path="/coach" element={<Coach />} />
     </Routes>,
-    "/workout/w1",
+    "/sessions",
   );
 
+  const sessionLink = await screen.findByRole("link", { name: /150 bpm/ });
+  expect(sessionLink).toHaveAttribute("href", "/workout/w1");
+  fireEvent.click(sessionLink);
   await screen.findByTestId("coach-summary");
   fireEvent.click(screen.getByTestId("ask-coach-btn"));
 

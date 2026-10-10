@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useLanguage } from "@/context/LanguageContext";
 import { formatPaceDisplay, formatPaceDelta } from "@/lib/workoutAnalysis";
+import { formatSpeed } from "@/utils/units";
 import {
   ArrowLeft,
   Scale,
@@ -21,6 +22,7 @@ import { API_BASE_URL } from "@/config";
 
 const API = API_BASE_URL;
 const ALLOWED_BACK_ROUTES = new Set(["/sessions", "/training", "/progress"]);
+const hasPositiveFiniteMetric = (value) => Number.isFinite(value) && value > 0;
 
 const getWorkoutIcon = (type) => {
   if (type === "cycle") return Bike;
@@ -300,6 +302,11 @@ export default function WorkoutDetail() {
   const comparison = analysis?.comparison;
   const physiology = analysis?.physiology;
   const pacing = analysis?.pacing;
+  const isCycle = workout.type === "cycle";
+  const averageSpeed = hasPositiveFiniteMetric(workout.avg_speed_kmh) ? workout.avg_speed_kmh
+    : pacing?.available === true && hasPositiveFiniteMetric(pacing.average_speed_kmh) ? pacing.average_speed_kmh : null;
+  const hasAveragePace = hasPositiveFiniteMetric(pacing?.average_pace_min_km);
+  const showPacingSpeed = isCycle || !hasAveragePace;
   const evidence = analysis?.evidence;
   const similar = comparison?.similar;
   const hasAnalysis = Boolean(analysis && !analysisLoading && !analysisError);
@@ -309,7 +316,11 @@ export default function WorkoutDetail() {
   const hasHr = (Number.isFinite(avgHr) && avgHr > 0) || (Number.isFinite(maxHr) && maxHr > 0);
   const hasSplits = Array.isArray(workout.km_splits) && workout.km_splits.some((split) => Number.isFinite(split?.pace_min_km) && split.pace_min_km > 0);
   const hasZones = physiology?.available === true && ["z1", "z2", "z3", "z4", "z5"].some((key) => Number.isFinite(physiology.zone_distribution?.[key]) && physiology.zone_distribution[key] > 0 && physiology.zone_distribution[key] <= 100);
-  const hasPacing = pacing?.available === true && ["average_pace_min_km", "average_speed_kmh", "fastest_split_min_km", "slowest_split_min_km", "pace_drop_min_km", "consistency_score", "variability"].some((key) => Number.isFinite(pacing[key]));
+  const hasPacing = pacing?.available === true && (
+    (!isCycle && hasAveragePace) || (showPacingSpeed && hasPositiveFiniteMetric(pacing.average_speed_kmh))
+    || ["fastest_split_min_km", "slowest_split_min_km"].some((key) => hasPositiveFiniteMetric(pacing[key]))
+    || ["pace_drop_min_km", "consistency_score", "variability"].some((key) => Number.isFinite(pacing[key]))
+  );
   const similarLimitations = Array.isArray(similar?.limitations) ? similar.limitations : [];
   const limitationLabel = (limitation) => t(`workoutDetailExtended.${{
     session_nature_unknown: "unknownSessionNature",
@@ -356,7 +367,9 @@ export default function WorkoutDetail() {
             {[
               ["distance", formatDistance(workout.distance_km)],
               ["duration", formatDuration(workout.duration_minutes)],
-              ["averagePace", formatPaceDisplay(workout.avg_pace_min_km)],
+              isCycle
+                ? ["averageSpeed", averageSpeed == null ? t("workoutDetailExtended.speedUnavailable") : formatSpeed(averageSpeed, { unitSystem: "metric" })]
+                : ["averagePace", hasPositiveFiniteMetric(workout.avg_pace_min_km) ? formatPaceDisplay(workout.avg_pace_min_km) : "--"],
               ...(Number.isFinite(avgHr) && avgHr > 0 ? [["averageHeartRate", formatHeartRate(avgHr)]] : []),
             ].map(([label, value]) => <div key={label} className="min-w-0">
               <dt className="text-sm text-muted-foreground">{t(`workoutDetailExtended.${label}`)}</dt>
@@ -390,32 +403,32 @@ export default function WorkoutDetail() {
       </section>}
 
       <section aria-labelledby="pacing-title">
-      <h2 id="pacing-title" className="text-base font-semibold mb-2">{t("workoutDetailExtended.pacingSection")}</h2>
+      <h2 id="pacing-title" className="text-base font-semibold mb-2">{t(`workoutDetailExtended.${isCycle ? "speedSection" : "pacingSection"}`)}</h2>
       {hasPacing && (
         <Card className="bg-card border-border mb-3" data-testid="pacing-summary-card">
           <CardContent className="p-3">
             <div className="flex items-center gap-2 mb-3">
               <Activity className="w-4 h-4 text-primary" />
-              <span className="text-sm font-semibold text-muted-foreground">{t("workoutDetailExtended.pace")}</span>
+              <span className="text-sm font-semibold text-muted-foreground">{t(`workoutDetailExtended.${showPacingSpeed ? "speed" : "pace"}`)}</span>
             </div>
             <div className="grid grid-cols-2 gap-3 text-sm">
-              {Number.isFinite(pacing.average_pace_min_km) && (
+              {!isCycle && hasAveragePace && (
                 <div>
                   <p className="text-sm text-muted-foreground">{t("workoutDetailExtended.average")}</p>
                   <p className="font-mono font-semibold">{formatPaceDisplay(pacing.average_pace_min_km)}</p>
                 </div>
               )}
-              {pacing.average_pace_min_km == null && Number.isFinite(pacing.average_speed_kmh) && <div>
+              {showPacingSpeed && hasPositiveFiniteMetric(pacing.average_speed_kmh) && <div>
                 <p className="text-sm text-muted-foreground">{t("workoutDetailExtended.speed")}</p>
-                <p className="font-mono font-semibold">{pacing.average_speed_kmh} km/h</p>
+                <p className="font-mono font-semibold">{formatSpeed(pacing.average_speed_kmh, { unitSystem: "metric" })}</p>
               </div>}
-              {Number.isFinite(pacing.fastest_split_min_km) && (
+              {hasPositiveFiniteMetric(pacing.fastest_split_min_km) && (
                 <div>
                   <p className="text-sm text-muted-foreground">{t("workoutDetailExtended.fastest")}</p>
                   <p className="font-mono font-semibold">{formatPaceDisplay(pacing.fastest_split_min_km)}</p>
                 </div>
               )}
-              {Number.isFinite(pacing.slowest_split_min_km) && (
+              {hasPositiveFiniteMetric(pacing.slowest_split_min_km) && (
                 <div>
                   <p className="text-sm text-muted-foreground">{t("workoutDetailExtended.slowest")}</p>
                   <p className="font-mono font-semibold">{formatPaceDisplay(pacing.slowest_split_min_km)}</p>
@@ -517,9 +530,9 @@ export default function WorkoutDetail() {
               <>
                 {similar.sample_count != null && <p>{formatSampleCount(similar.sample_count)}</p>}
                 {Number.isFinite(similar.avg_distance_km) && <p>{t("workoutDetailExtended.averageDistance")}: {formatDistance(similar.avg_distance_km)}</p>}
-                {(similar.avg_pace_min_km != null || similar.pace_difference_min_km != null) && (
+                {(hasPositiveFiniteMetric(similar.avg_pace_min_km) || Number.isFinite(similar.pace_difference_min_km)) && (
                   <div data-testid="similar-pace">
-                    {Number.isFinite(similar.avg_pace_min_km) && <p>{t("workoutDetailExtended.averagePace")}: {formatPaceDisplay(similar.avg_pace_min_km)}</p>}
+                    {hasPositiveFiniteMetric(similar.avg_pace_min_km) && <p>{t("workoutDetailExtended.averagePace")}: {formatPaceDisplay(similar.avg_pace_min_km)}</p>}
                     {Number.isFinite(similar.pace_difference_min_km) && <p>{t("workoutDetailExtended.difference")}: {formatPaceDelta(similar.pace_difference_min_km)}</p>}
                     {similar.pace_sample_count != null && similar.sample_count != null && <p className="text-muted-foreground">{interpolate("paceSampleCount", { count: similar.pace_sample_count, total: similar.sample_count })}</p>}
                   </div>
