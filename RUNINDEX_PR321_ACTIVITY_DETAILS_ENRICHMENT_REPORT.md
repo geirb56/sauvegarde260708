@@ -1,5 +1,10 @@
 # RUNINDEX — PR321 — Enrichissement ciblé des activités
 
+> Les sections 1–9 ci-dessous sont le bilan historique de la première livraison.
+> Leur contrat provisoire et la stratégie de différé sont remplacés par la section
+> **C321 — Corrections après audit runtime Emergent**, en fin de rapport.
+> Aucun de ces bilans n'est une validation runtime Garmin effectuée dans GitHub.
+
 ## 1. Références Git et périmètre
 
 - Base canonique : `copilot/dev`.
@@ -251,3 +256,239 @@ consommés par les moteurs ou le frontend : c'est volontaire.
 8. Vérifier latences, limites, index existants et tailles documentaires réelles ;
    aucun appel systématique aux détails ni collecte massive.
 9. Faire constater explicitement la réussite/échec du gate runtime par Emergent.
+
+## C321 — Corrections après audit runtime Emergent
+
+### 1. Références et constats du contrat réel
+
+- PR existante corrigée : **#321**, sans nouvelle PR, merge ou changement de branche.
+- Base de PR : `copilot/dev` à `d755a80ad9e47ec7cd28e62c03fd28293e41f27c`.
+- HEAD de départ de C321 : `c545f43d013e065e1ab8682cd21a23e0c4a0aecd`.
+- HEAD du code C321 testé : `3cbbe9ed21e232874d001787c1d823b41fdf65cc`.
+  Le commit documentaire suivant complète ce bilan ; son HEAD final sera
+  communiqué dans un commentaire sur la même PR, sans référence circulaire.
+
+Source : constats vérifiés reproduits dans la demande C321, issus de l'audit
+Emergent de GCCLI v1.9.0 pour `activity typed-splits 24671804067 -j`.
+`/app/RUNINDEX_PR321_GCCLI_RUNTIME_CONTRACT_AUDIT.md` n'a pas été lu depuis
+GitHub, et aucun appel Garmin n'a été exécuté ici.
+
+Contrat confirmé par cette source :
+- racine `{activityId, activityUUID, splits}` ;
+- `type` est le type natif, `duration` en secondes, `distance` en mètres,
+  `averageSpeed` en m/s, `averageHR` et `maxHR` en bpm ;
+- `messageIndex` et `startTimeGMT` apportent des informations d'ordre ;
+- `minHR` est absent de la réponse observée ;
+- 29 éléments : quatre efforts 240 s, quatre récupérations 180 s,
+  échauffement/retour au calme, et 19 éléments RWD à exclure.
+
+### 2. Hypothèses initiales invalidées
+
+Le parseur initial acceptait `splitDTOs`/liste brute, lisait `splitType` et
+mappait `WARMUP`/`COOLDOWN`. Aucun de ces noms n'était une preuve du JSON réel.
+Il conservait l'ordre brut sans exploiter les temps et ne séparait pas RWD.
+Les anciennes fixtures étaient bien synthétiques, mais ne vérifiaient donc
+pas le contrat réel. Elles sont remplacées par des fixtures **reconstruites
+d'après le contrat documenté**, pas présentées comme captures de l'activité.
+
+### 3. Modifications exactes et cache
+
+- `backend/garmin/data_layer.py` : exige une racine objet avec liste `splits`,
+  lit `type`, conserve les unités confirmées, mappe les quatre `INTERVAL_*`,
+  exclut uniquement `RWD_RUN`/`RWD_WALK`, conserve le type natif des éléments
+  retenus et utilise la règle d'ordre ci-dessous.
+- Enveloppe ou ligne incompatible : `ValueError`, jamais un faux succès vide.
+  Une liste `splits` reconnue vide, ou ne contenant que RWD, n'a légitimement
+  aucune phase structurée. Les types inconnus restent `unknown` sans prétendre
+  qu'ils ont été observés dans l'audit.
+- Mesures absentes/incompatibles, booléennes, négatives, non finies ou
+  non représentables : `None`; zéro reste zéro. Pas de FC minimale calculée.
+  `min_hr` déjà présent dans le modèle reste `None` quand la source est absente.
+- `backend/activity_phases.py` : propriété de lecture `pace_sec_per_km`,
+  `1000 / average_speed_mps` uniquement si vitesse positive/finie et résultat
+  fini. **Pas de nouveau champ sérialisé/persisté**, pas de seconde autorité.
+- `backend/garmin/activity_details.py` : version de cache **2**. Les caches
+  `complete`/`no_data` v1 ne bloquent plus une récupération explicite correcte.
+  Aucun backfill automatique, migration ni réécriture globale.
+- `backend/garmin/activity_ids.py`, runner/provider et frontières API/file :
+  normalisation décrite ci-dessous, vérification de l'identité dans la réponse.
+- `backend/jobs/queue.py`, `backend/workers/sync_worker.py` : différé fiable
+  sans recirculation dans la FIFO.
+- `backend/tests/test_activity_details_pr321.py` : contrat reconstruit,
+  identifiants, ordre, invalides, cache et différé.
+- `backend/tests/test_activity_details_delayed_redis_c321.py` : vraies commandes
+  Lua sur Redis **local isolé**, concurrence de promotion et redémarrage AOF.
+
+Diff de code C321 au HEAD testé : 11 fichiers, 507 insertions, 53 suppressions.
+La documentation constitue le douzième fichier du correctif.
+Aucun moteur métier, consommateur Training/Workout Analysis, frontend,
+modèle de prescription, collection Mongo ou identifiant stocké modifié.
+Les phases ne sont pas converties en `km_splits`.
+
+### 4. Règle d'ordonnancement déterministe
+
+1. Pour les phases retenues, `startTimeGMT` ISO date-heure valide constitue
+   la preuve temporelle principale. Les valeurs sans offset sont interprétées
+   UTC conformément au nom GMT ; les offsets explicites sont normalisés UTC.
+   Une date sans heure ou une valeur invalide est traitée comme temps absent.
+2. Les phases datées sont triées par instant croissant. À instant égal,
+   `messageIndex` entier non négatif valide départage, puis position originale.
+3. Les phases sans temps exploitable sont placées après les phases datées,
+   triées par `messageIndex` quand disponible ; les index absents/invalides
+   suivent, dans leur ordre d'entrée. En l'absence de toute preuve, l'ordre
+   d'entrée reste stable.
+4. `order` est ensuite recalculé en positions consécutives à partir de zéro,
+   **après** exclusion des RWD. Ni `lapIndexes`, ni durée cumulée, ni un nom
+   de séance ne servent à inventer un instant ou une classification.
+
+Les champs n'étant pas toujours présents, une chronologie complète ne peut
+être prouvée pour une phase non datée. Le placement de repli est explicitement
+documenté, stable, mais ne prétend pas retrouver un horaire absent.
+Tests : liste de référence reconstruite inversée, timestamps/index contradictoires,
+offsets équivalents, égalités, temps manquants/invalides et aucune clé d'ordre.
+
+### 5. Stratégie d'identifiants et jointures historiques
+
+Audit du code : `GccliProvider._normalize`/`GarminActivity.from_summary` stockent
+déjà les IDs résumés comme chaînes. Les requêtes de détails restent strictement
+`user_id + external_id + source=garmin`. C321 ne modifie aucun ID stocké.
+
+`normalize_activity_id` convertit les **entiers** GCCLI en chaînes, accepte
+les chaînes numériques existantes sans les réécrire, refuse booléens,
+flottants, valeurs négatives, arguments CLI et préfixes.
+Le runner transmet une chaîne à GCCLI. Le provider compare aussi
+`activityId` de la réponse, après cette normalisation, à la cible demandée :
+absence/mismatch/incompatibilité échouent avant toute persistance des phases.
+
+`workout_analysis_v2_service._extract_garmin_external_id` constitue déjà
+la conversion spécifique du workout `garmin-24671804067` vers la clé
+`24671804067` quand `external_id` est absent/None.
+Ses requêtes restent scoped par `user_id` ; son repli historique d'ID entier
+reste inchangé. Ce pont est vérifié par tests, **pas modifié**.
+Les endpoints de phases prennent un ID d'activité, pas un ID de workout :
+`garmin-123` y reste invalide. Aucune conversion globale ou autre fournisseur
+affecté ; aucune migration MongoDB.
+
+### 6. Vérification et correction minimale Redis
+
+**Défaut confirmé** : la réinsertion toutes les cinq secondes pouvait produire
+environ 180 passages en FIFO pour un bail de 900 s et occuper des slots locaux
+alors qu'aucun travail n'était prêt. La préservation du job ne suffisait pas.
+
+Correction additive au worker/file existants :
+- deux clés Redis techniques : sorted set `runindex:garmin:details:delayed`
+  (score d'échéance, membre `job_id`) et hash associé des payloads ;
+  aucune nouvelle collection, aucun nouveau worker/moteur ou fournisseur ;
+- une transition Lua atomique retire le payload exact de PROCESSING et sa
+  claim **uniquement s'il était encore présent**, puis conserve le payload
+  et l'échéance dans le différé. Un double transfert n'altère pas le job ;
+- aucun ACK, aucune consommation de tentative, aucun `sleep` ni
+  réenfilage régulier dans la FIFO pendant le bail ;
+- watchdog existant (30 s par défaut) : promotion Lua des jobs échus,
+  **100 maximum par cycle**, atomiquement vers la FIFO puis suppression
+  des enregistrements différés. Deux watchdogs ne promeuvent pas deux fois ;
+- LPUSH conserve le sens FIFO existant : les jobs ordinaires déjà prêts
+  passent avant les nouveaux jobs promus. Les jobs futurs ne prennent
+  ni sémaphore worker durant leur attente, ni verrou utilisateur/slot global ;
+- pending toujours protégé par comparaison du `job_id` ; lors du transfert
+  sa durée est portée à au moins `échéance - maintenant + 1800 s`.
+  Ainsi le pending couvre un bail 900 s **et** une marge de traitement.
+  Ni refresh ni release d'un ancien job ne modifient celui d'un nouveau ;
+- crash avant la transition : PROCESSING/watchdog existants récupèrent.
+  Après transition : données différées persistées dans Redis ; la reprise
+  locale AOF est testée. Pas de TTL sur les payloads différés qui perdrait
+  silencieusement des jobs.
+
+Les verrous existants, retries des autres types de job, limites globales et
+primitives de synchronisation n'ont pas été reconstruits.
+
+### 7. Tests C321 et résultats exacts
+
+Python 3.12.3, pytest 9.1.1, configuration inchangée `-n 2 --dist loadscope`.
+Les commandes suivantes sont exécutées depuis `backend/` avec `PYTHONPATH=.`
+et `python` du venv de validation. Aucun compte Garmin ni MongoDB réel.
+
+| Commande `python -m pytest … -q` | Résultat final |
+| --- | --- |
+| `tests/test_activity_details_pr321.py tests/test_activity_details_delayed_redis_c321.py` | **78 passed, 2 warnings**, 1.81 s |
+| `tests/test_garmin_queue_backfill_pr197.py tests/test_garmin_phased_sync_pr07a.py tests/test_garmin_deep_sync.py` | **39 passed**, 11.09 s |
+| `tests/test_garmin_user_connection.py` (isolé) | **8 passed**, 0.79 s |
+| `tests/test_garmin_data_layer.py tests/test_garmin_activity_normalization_pr02.py tests/test_training_v2_domain_activity.py tests/test_performed_workout_pr230.py tests/test_mongo_garmin_boundary_pr137.py` | **181 passed, 1 failed**, 0.96 s |
+| `tests/test_workout_analysis_v2.py` (isolé) | **168 passed, 14 warnings**, 2.34 s |
+
+**474 tests réussis, un échec préexistant inchangé.** L'assertion
+`test_g_server_uses_boundary` recherche toujours un appel textuel absent de
+`server.py`. Vérifié à nouveau par `git show c545f43…:backend/server.py` :
+seul l'import `build_recent_training_response` est présent.
+Ni fichier ni test concernés ne sont modifiés ; aucune régression nouvelle
+démontrée par les suites exécutées.
+
+Un premier essai combiné donnait 181 passed, 1 failed, 1 erreur de collecte
+(`pytest_asyncio` absent). Après restauration du plugin utilisé par les tests
+existants, `email_validator` manquait encore au chargement du serveur.
+Les dépendances existantes ASGI restaurées, la suite Workout Analysis V2
+passe intégralement (168/168). Aucun requirements/outil de test projet ajouté.
+Les warnings sont des dépréciations existantes de Starlette/Pydantic/FastAPI/passlib.
+
+La suite ciblée couvre les quatre efforts/récupérations, warmup/cooldown et
+19 RWD exclus sur 29 lignes reconstruites ; aucune fixture ne prétend être
+une capture brute. Elle couvre aussi ID entier/chaîne/mismatch/prefix,
+vitesse nulle/non finie/bool/texte/absente, allure non persistée,
+temps/index manquants, rejet sans cache négatif, invalidation v1, isolation,
+non-écrasement de résumés, events et non-ACK des différés.
+
+Les **5 tests Redis intégration** utilisent un serveur local éphémère sur
+loopback/port isolé, AOF `appendfsync always`, jamais `REDIS_URL` de production :
+transfert atomique/idempotent et FIFO libre ; promotion concurrente exactement
+une fois ; lot borné 100/101 ; ownership/TTL ; kill/restart avec survie du job.
+`redis-server` 7.0.15 a été installé uniquement dans le sandbox pour exercer
+le runtime Redis déjà utilisé par le projet. Sans binaire, ces tests se
+signalent explicitement comme skipped, pas comme validés.
+
+Autres vérifications : Flake8 des 11 fichiers Python changés
+`--select=E9,F63,F7,F82`, `compileall`, `git diff --check` : exit 0.
+Scan de secrets : aucun. CodeQL Python au HEAD de code C321 : **0 alerte**.
+La revue automatisée a été appelée mais son moteur reste indisponible
+(modèle absent du registre) malgré son libellé « Success » ; une revue
+indépendante de code a été effectuée en complément : **aucun problème
+significatif identifié** sur le diff C321.
+
+### 8. Risques résiduels
+
+- Le contrat et les unités sont maintenant ceux du constat Emergent fourni,
+  mais GitHub ne possède toujours pas la capture JSON brute vérifiée.
+- Sans timestamp, la chronologie est seulement un repli stable fondé sur
+  l'index/ordre d'entrée ; ce n'est pas une reconstruction temporelle prouvée.
+- Aucun MongoDB réel testé. Verrous/index/latences et clés Redis du runtime
+  Emergent restent à contrôler, particulièrement support des scripts Lua
+  multi-clés (comme dans les mécanismes Redis existants).
+- La promotion peut intervenir jusqu'à un cycle watchdog après l'échéance ;
+  un backlog réel prolonge naturellement l'attente. Pending TTL fini et cache
+  versionné/fencing ne constituent pas une garantie de délai sous panne illimitée.
+- Les métriques de queue historiques ne comptent pas encore les jobs parked
+  dans le différé ; elles restent inchangées plutôt qu'élargies hors périmètre.
+- La durabilité après redémarrage Redis dépend de sa configuration persistante.
+  Elle est vérifiée en local avec AOF, pas présumée en production.
+- Les phases ne sont pas injectées dans les algorithmes ou le frontend ;
+  le GET dédié reste leur accès courant.
+
+### 9. Éléments restant à valider par Emergent
+
+1. Après revue et merge **explicitement autorisé**, rejouer le GET/POST ciblé
+   de l'activité `24671804067` avec son compte isolé ; confirmer 10 phases
+   structurées après exclusion des 19 RWD, les 4×240 s et 4×180 s et l'ordre.
+2. Comparer directement au JSON brut `splits/type`, `messageIndex`,
+   `startTimeGMT`, unités et mesures ; vérifier `min_hr=None` et l'allure
+   dérivée à la lecture, sans champ d'allure supplémentaire dans Mongo.
+3. Vérifier que `external_id` reste chaîne, `workouts.id` conserve `garmin-`,
+   aucun changement des clés, events, résultats moteur ou prescriptions.
+4. Rejouer sync résumés/full/incrémentale et isolation A/B, erreurs réelles
+   simulées en runtime, cache version2 et GET sans nouvel appel GCCLI.
+5. Sur Redis runtime, valider transfert/promotions/Lua/ownership, pending
+   couvrant le bail, crash/restart et progression des jobs de sync ordinaires
+   sans recirculation de 5 s ; contrôler persistance Redis réelle.
+6. Consigner résultats et limites runtime dans Emergent. GitHub ne prétend
+   avoir validé ni Garmin réel, ni production Mongo/Redis, ni rendu déployé.
+
+**Livraison C321 : uniquement commits sur la branche actuelle de #321,
+rapport et diff pour revue. Aucun merge, déploiement ou nouvelle PR.**

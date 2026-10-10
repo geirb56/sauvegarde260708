@@ -8,7 +8,8 @@ Design rules (do not violate):
 - No business logic (no RunnerProfile / TrainingHistory / TrainingState / plans).
 - No fallback / no fabrication: when Garmin does not provide a value the field
   is ``None``. Empty ``{}`` / ``[]`` / ``null`` payloads must yield valid models
-  with ``None`` fields (never raise).
+  with ``None`` fields for historical summary/health models (never raise).
+  Typed-splits rejects incompatible envelopes to avoid caching false emptiness.
 - Additive only: nothing here is wired into the existing engine, score,
   readiness, endpoints or frontend. Future PRs will consume these models.
 
