@@ -139,6 +139,133 @@ def test_reported_speed_is_used_only_when_duration_distance_are_not_both_availab
     assert result.efforts[0].pace_sec_per_km == 250
 
 
+@pytest.mark.parametrize(
+    "duration,distance,expected_pace",
+    [
+        (0, 800, None),
+        (240, 0, None),
+        (0, 0, None),
+        (0, None, None),
+        (None, 0, None),
+        (None, 800, 250),
+        (240, None, 250),
+        (None, None, 250),
+    ],
+)
+def test_speed_fallback_distinguishes_explicit_zero_from_missing_measurements(
+    duration, distance, expected_pace,
+):
+    result = build_workout_analysis_v2(
+        _workout(), [],
+        phases=[_phase(0, "effort", duration=duration, distance=distance, speed=4)],
+    ).phase_analysis
+    assert result.available is True
+    assert result.efforts[0].pace_sec_per_km == expected_pace
+    assert result.effort_statistics.average_pace_sec_per_km == expected_pace
+    assert ("duration" in result.missing_data) is (duration is None)
+    assert ("distance" in result.missing_data) is (distance is None)
+    assert ("pace" in result.missing_data) is (expected_pace is None)
+    assert "incoherent_pace" not in result.limitations
+    assert result.effort_regularity.available is False
+    assert result.effort_regularity.pace_dispersion_sec_per_km is None
+
+
+@pytest.mark.parametrize("speed", [0, -1, float("nan"), float("inf"), float("-inf")])
+@pytest.mark.parametrize("duration,distance", [(None, None), (240, None), (None, 800)])
+def test_invalid_speed_never_supplies_fallback_pace(speed, duration, distance):
+    result = build_workout_analysis_v2(
+        _workout(), [],
+        phases=[_phase(0, "effort", duration=duration, distance=distance, speed=speed)],
+    ).phase_analysis
+    assert result.efforts[0].pace_sec_per_km is None
+    assert result.effort_statistics.average_pace_sec_per_km is None
+    assert result.effort_regularity.pace_sample_count == 0
+    assert result.effort_regularity.available is False
+    assert "pace" in result.missing_data
+    assert "incoherent_pace" not in result.limitations
+
+
+@pytest.mark.parametrize("speed", [None, 0, -1, float("nan"), float("inf"), float("-inf")])
+def test_positive_measurements_still_supply_pace_without_valid_speed(speed):
+    result = build_workout_analysis_v2(
+        _workout(), [],
+        phases=[_phase(0, "effort", duration=240, distance=800, speed=speed)],
+    ).phase_analysis
+    assert result.efforts[0].pace_sec_per_km == 300
+    assert "incoherent_pace" not in result.limitations
+
+
+@pytest.mark.parametrize(
+    "distance,expected_pace,incoherent",
+    [(960, 250, False), (800, 250, False), (768, 250, False), (767, None, True)],
+)
+def test_speed_coherence_threshold_and_speed_authority_are_unchanged(
+    distance, expected_pace, incoherent,
+):
+    result = build_workout_analysis_v2(
+        _workout(), [],
+        phases=[_phase(0, "effort", duration=240, distance=distance, speed=4)],
+    ).phase_analysis
+    assert result.efforts[0].pace_sec_per_km == expected_pace
+    assert ("incoherent_pace" in result.limitations) is incoherent
+    assert result.effort_regularity.pace_sample_count == (0 if incoherent else 1)
+
+
+@pytest.mark.parametrize("valid_count", [1, 2])
+@pytest.mark.parametrize("zero_measurement,basis", [("distance", "duration"), ("duration", "distance")])
+def test_zero_invalidated_pace_is_excluded_without_changing_other_statistics(
+    valid_count, zero_measurement, basis,
+):
+    efforts = [
+        _phase(index, "effort", duration=duration, distance=distance, avg_hr=150, max_hr=160)
+        for index, (duration, distance) in enumerate(
+            [(240, 800), (240, 840)] if basis == "duration" else [(240, 800), (252, 800)]
+        )
+    ][:valid_count]
+    efforts.append(_phase(
+        valid_count, "effort",
+        duration=0 if zero_measurement == "duration" else 240,
+        distance=0 if zero_measurement == "distance" else 800,
+        speed=4, avg_hr=160, max_hr=170,
+    ))
+    analysis = build_workout_analysis_v2(_workout(), [], phases=efforts)
+    result = analysis.phase_analysis
+    regularity = result.effort_regularity
+    valid_paces = [phase.duration_s * 1000 / phase.distance_m for phase in efforts[:-1]]
+    assert result.available is True
+    assert result.efforts[-1].pace_sec_per_km is None
+    assert regularity.comparable_effort_count == valid_count + 1
+    assert regularity.comparability_basis == basis
+    assert regularity.pace_sample_count == valid_count
+    assert regularity.available is (valid_count == 2)
+    assert regularity.partial_comparison is True
+    assert regularity.average_pace_sec_per_km == pytest.approx(sum(valid_paces) / valid_count)
+    if valid_count == 1:
+        assert regularity.pace_dispersion_sec_per_km is None
+        assert regularity.first_to_last_pace_change_sec_per_km is None
+        assert result.limitations == [
+            "effort_paces_incomplete", "insufficient_comparable_effort_paces",
+        ]
+    else:
+        assert regularity.pace_dispersion_sec_per_km == pytest.approx(
+            abs(valid_paces[1] - valid_paces[0]) / 2,
+        )
+        assert regularity.first_to_last_pace_change_sec_per_km == pytest.approx(
+            valid_paces[1] - valid_paces[0],
+        )
+        assert result.limitations == ["effort_paces_incomplete"]
+    assert result.effort_statistics.total_duration_s == sum(phase.duration_s for phase in efforts)
+    assert result.effort_statistics.total_distance_m == sum(phase.distance_m for phase in efforts)
+    assert result.effort_statistics.average_hr == pytest.approx((150 * valid_count + 160) / (valid_count + 1))
+    assert result.effort_statistics.max_hr == 170
+    assert regularity.average_duration_s == pytest.approx(
+        sum(phase.duration_s for phase in efforts) / len(efforts),
+    )
+    assert regularity.average_hr_change_bpm == 10
+    baseline = build_workout_analysis_v2(_workout(), []).model_dump(exclude={"phase_analysis"})
+    assert analysis.model_dump(exclude={"phase_analysis"}) == baseline
+
+
 def test_incoherent_reported_speed_suppresses_pace_and_adds_limitation():
     phase = _phase(0, "effort", duration=240, distance=800, speed=1.0)
     result = build_workout_analysis_v2(_workout(), [], phases=[phase]).phase_analysis
@@ -415,6 +542,46 @@ def test_scoped_loader_reads_valid_cache_and_keeps_prescription_unmatched():
     assert analysis.phase_analysis.effort_regularity.available is True
     assert "prescription" not in analysis.phase_analysis.model_dump()
     assert db.garmin_activities.find_one_queries[0]["user_id"] == "user-a"
+
+
+@pytest.mark.parametrize("zero_measurement", ["duration_s", "distance_m"])
+def test_scoped_loader_preserves_zero_and_missing_measurements_for_speed_fallback(zero_measurement):
+    rows = _cached_rows()
+    rows[0].update({zero_measurement: 0, "average_speed_mps": 4})
+    rows[1].update({zero_measurement: None, "average_speed_mps": 4})
+    db = _service_db(cached_details=_cached_details(rows))
+    _, analysis = _run(load_scoped_workout_analysis_v2(
+        db=db, user_id="user-a", workout_id="garmin-synthetic-activity", language="en",
+    ))
+    result = analysis.phase_analysis
+    assert result.available is True
+    assert [phase.order for phase in result.phases] == [0, 1]
+    assert [phase.phase_type for phase in result.phases] == ["effort", "effort"]
+    assert getattr(result.phases[0], zero_measurement) == 0
+    assert getattr(result.phases[1], zero_measurement) is None
+    assert [phase.pace_sec_per_km for phase in result.efforts] == [None, 250]
+    assert result.effort_regularity.pace_sample_count == 1
+    assert result.effort_regularity.available is False
+    assert result.effort_regularity.partial_comparison is True
+    assert result.limitations == [
+        "effort_paces_incomplete", "insufficient_comparable_effort_paces",
+    ]
+    assert db.garmin_activities.find_one_queries == [
+        {"user_id": "user-a", "external_id": "synthetic-activity"},
+    ]
+
+
+@pytest.mark.parametrize("speed", [-1, float("nan"), float("inf"), float("-inf")])
+def test_scoped_loader_rejects_invalid_cached_speed(speed):
+    rows = _cached_rows()
+    rows[0]["average_speed_mps"] = speed
+    _, analysis = _run(load_scoped_workout_analysis_v2(
+        db=_service_db(cached_details=_cached_details(rows)),
+        user_id="user-a", workout_id="garmin-synthetic-activity", language="en",
+    ))
+    assert analysis.phase_analysis.available is False
+    assert analysis.phase_analysis.efforts == []
+    assert analysis.phase_analysis.limitations == ["structured_phases_unavailable"]
 
 
 @pytest.mark.parametrize(
