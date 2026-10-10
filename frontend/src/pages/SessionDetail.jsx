@@ -16,6 +16,7 @@ import { useUnitSystem } from "@/context/UnitContext";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatDistance, formatElevation, formatPace, formatSpeed } from "@/utils/units";
 import { formatDuration } from "@/utils/workoutHelpers";
+import { getAnalysisLimitations, hasCoachObservation } from "@/lib/workoutAnalysis";
 
 const API = API_BASE_URL;
 
@@ -158,6 +159,8 @@ export default function SessionDetail() {
     );
   }
 
+  const limitations = getAnalysisLimitations(analysis, t);
+  const observationAvailable = hasCoachObservation(analysis);
   const analysisSections = [
     {
       key: "summary",
@@ -179,11 +182,12 @@ export default function SessionDetail() {
     },
     {
       key: "improvements",
-      title: t("sessions.improvements"),
+      title: t("workoutDetailExtended.historyComparison"),
       icon: Activity,
       content: analysis?.comparison?.available
         ? `baseline ${analysis.comparison.baseline_sample_count}`
-        : analysis?.comparison?.reason_unavailable,
+        : analysis && (limitations.some((item) => item.code === "limitations.baseline")
+          ? t("workoutDetailExtended.historyUnavailable") : analysis.comparison?.reason_unavailable),
       tone: "border-amber-500/20 bg-amber-500/5",
     },
     {
@@ -192,7 +196,8 @@ export default function SessionDetail() {
       icon: HeartPulse,
       content: analysis?.physiology?.available
         ? `HR ${analysis.physiology.avg_hr ?? "--"} / ${analysis.physiology.max_hr ?? "--"}`
-        : analysis?.physiology?.reason_unavailable,
+        : analysis && (limitations.some((item) => item.code === "limitations.heart_rate")
+          ? t("workoutDetailExtended.heartRateUnavailable") : analysis.physiology?.reason_unavailable),
       tone: "border-border bg-card/40",
     },
     {
@@ -203,11 +208,11 @@ export default function SessionDetail() {
       tone: "border-border bg-card/40",
     },
     {
-      key: "nextSession",
-      title: t("sessions.nextSession"),
+      key: "observation",
+      title: t("workoutDetailExtended.coachObservation"),
       icon: Lightbulb,
-      content: analysis?.advice?.text,
-      tone: "border-primary/20 bg-primary/5",
+      content: analysis && (observationAvailable ? analysis.advice.text : t("workoutDetailExtended.adviceUnavailable")),
+      tone: "border-border bg-card/40",
     },
   ].filter((section) => section.content);
 
@@ -304,6 +309,13 @@ export default function SessionDetail() {
           </div>
         )}
       </section>
+      {limitations.length > 0 && <details className="rounded-2xl border border-border bg-card/30 p-4" data-testid="session-analysis-details">
+        <summary className="cursor-pointer text-sm min-h-11 content-center">{t("workoutDetailExtended.advancedDetails")}</summary>
+        <section className="mt-3 space-y-2 text-sm text-muted-foreground" data-testid="analysis-limitations">
+          <h3 className="font-semibold">{t("workoutDetailExtended.limitations")}</h3>
+          {limitations.map((item) => <p key={item.code}>{item.text}</p>)}
+        </section>
+      </details>}
     </div>
   );
 }

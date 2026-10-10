@@ -5,7 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useLanguage } from "@/context/LanguageContext";
-import { formatPaceDisplay, formatPaceDelta } from "@/lib/workoutAnalysis";
+import { formatPaceDisplay, formatPaceDelta, getAnalysisLimitations, hasCoachObservation } from "@/lib/workoutAnalysis";
 import { formatSpeed } from "@/utils/units";
 import {
   ArrowLeft,
@@ -323,15 +323,9 @@ export default function WorkoutDetail() {
     || ["fastest_split_min_km", "slowest_split_min_km"].some((key) => hasPositiveFiniteMetric(pacing[key]))
     || ["pace_drop_min_km", "consistency_score", "variability"].some((key) => Number.isFinite(pacing[key]))
   );
-  const similarLimitations = Array.isArray(similar?.limitations) ? similar.limitations : [];
-  const limitationLabel = (limitation) => t(`workoutDetailExtended.${{
-    session_nature_unknown: "unknownSessionNature",
-    sample_too_small: "smallSample",
-    pace_sample_too_small: "smallPaceSample",
-    hr_sample_too_small: "smallHrSample",
-    no_comparable_reference: "similarUnavailable",
-  }[limitation] || "descriptiveComparison"}`);
-  const technicalLimitations = [analysis?.signals?.intensity].filter((item) => item?.available === false && item.reason_unavailable);
+  const technicalLimitations = getAnalysisLimitations(analysis, t);
+  const hasLimitation = (code) => technicalLimitations.some((item) => item.code === `limitations.${code}`);
+  const observationAvailable = hasCoachObservation(analysis);
   const interpolate = (key, values) => Object.entries(values).reduce(
     (text, [name, value]) => text.replace(`{${name}}`, value == null ? t("workoutDetailExtended.dataUnavailable") : String(value)),
     t(`workoutDetailExtended.${key}`),
@@ -401,6 +395,11 @@ export default function WorkoutDetail() {
           {analysis.signals?.intensity?.available === true && analysis.signals.intensity.text ? (
             <p className={`text-sm rounded p-2 ${getSessionTypeStyle(analysis.signals.intensity.code)}`}>{t("analysis.intensity")}: {analysis.signals.intensity.text}</p>
           ) : <p className="text-sm text-muted-foreground" data-testid="intensity-card-unavailable">{t("workoutDetailExtended.intensityUnavailable")}</p>}
+          {technicalLimitations.length > 0 && <a
+            href="#workout-analysis-details"
+            className="text-sm text-muted-foreground underline inline-flex items-center min-h-11"
+            onClick={() => { document.getElementById("workout-analysis-details").open = true; }}
+          >{t("workoutDetailExtended.viewLimitations")}</a>}
         </CardContent></Card>
       </section>}
 
@@ -454,7 +453,7 @@ export default function WorkoutDetail() {
           </CardContent>
         </Card>
       )}
-      {!hasPacing && !analysisLoading && !analysisError && <p className="text-sm text-muted-foreground">{pacing?.reason_unavailable || t("workoutDetailExtended.pacingUnavailable")}</p>}
+      {!hasPacing && !analysisLoading && !analysisError && <p className="text-sm text-muted-foreground">{(!hasLimitation("splits") && pacing?.reason_unavailable) || t("workoutDetailExtended.pacingUnavailable")}</p>}
       {hasSplits && <div className="mt-3" data-testid="splits-chart-card">
         <h3 className="text-sm font-semibold mb-2">{t("workoutDetailExtended.recordedSplits")}</h3>
         <SplitsChart splits={workout.km_splits} t={t} />
@@ -475,7 +474,7 @@ export default function WorkoutDetail() {
             <p className="text-sm text-muted-foreground my-2">{t("workoutDetailExtended.zonesProvenance")}</p>
             <HRZonesChart zones={physiology.zone_distribution} t={t} />
           </div>}
-        </CardContent></Card> : <p className="text-sm text-muted-foreground">{physiology?.reason_unavailable || t("workoutDetailExtended.heartRateUnavailable")}</p>}
+        </CardContent></Card> : <p className="text-sm text-muted-foreground">{(!hasLimitation("heart_rate") && physiology?.reason_unavailable) || t("workoutDetailExtended.heartRateUnavailable")}</p>}
       </section>
 
       {hasAnalysis && <section aria-labelledby="history-title" data-testid="history-section">
@@ -523,7 +522,7 @@ export default function WorkoutDetail() {
         </Card>
       )}
 
-      {!comparison?.available && <p className="text-sm text-muted-foreground mb-3">{comparison?.reason_unavailable || t("workoutDetailExtended.historyUnavailable")}</p>}
+      {!comparison?.available && <p className="text-sm text-muted-foreground mb-3">{(!hasLimitation("baseline") && comparison?.reason_unavailable) || t("workoutDetailExtended.historyUnavailable")}</p>}
       {similar && (
         <Card className="bg-card border-border mb-3" data-testid="similar-comparison-card">
           <CardContent className="p-3 space-y-2 font-sans text-sm leading-relaxed">
@@ -547,10 +546,9 @@ export default function WorkoutDetail() {
                   </div>
                 )}
                 <p className="text-muted-foreground" data-testid="similar-comparability-caveat">{t(`workoutDetailExtended.${similar.comparable === true ? "comparableReference" : "limitedComparability"}`)}</p>
-                {similarLimitations.map((limitation) => <p key={limitation} className="text-muted-foreground">{limitationLabel(limitation)}</p>)}
               </>
             ) : (
-              <p className="text-muted-foreground">{similar.reason_unavailable || t("workoutDetailExtended.similarUnavailable")}</p>
+              <p className="text-muted-foreground">{(!(Array.isArray(analysis.limitations) && analysis.limitations.some((item) => item?.code === "limitations.no_comparable_reference")) && similar.reason_unavailable) || t("workoutDetailExtended.similarUnavailable")}</p>
             )}
           </CardContent>
         </Card>
@@ -558,8 +556,10 @@ export default function WorkoutDetail() {
       </section>}
 
       <section aria-labelledby="coach-advice-title">
-        <h2 id="coach-advice-title" className="text-base font-semibold mb-2">{t("workoutDetailExtended.coachAdvice")}</h2>
-        {hasAnalysis && <p className="text-sm leading-relaxed mb-3" data-testid="advice-text">{analysis.advice?.text || t("workoutDetailExtended.adviceUnavailable")}</p>}
+        <h2 id="coach-advice-title" className="text-base font-semibold mb-2">{t("workoutDetailExtended.coachObservation")}</h2>
+        {hasAnalysis && <p className={`text-sm leading-relaxed mb-3${observationAvailable ? "" : " text-muted-foreground"}`} data-testid={observationAvailable ? "advice-text" : "advice-unavailable"}>
+          {observationAvailable ? analysis.advice.text : t("workoutDetailExtended.adviceUnavailable")}
+        </p>}
         <Button
           onClick={goToAskCoach}
           data-testid="ask-coach-btn"
@@ -571,7 +571,7 @@ export default function WorkoutDetail() {
       </section>
 
       {hasAnalysis && (
-        <details className="bg-card border border-border p-3 mb-3" data-testid="analysis-details">
+        <details id="workout-analysis-details" className="bg-card border border-border p-3 mb-3" data-testid="analysis-details">
           <summary className="cursor-pointer text-sm min-h-11 content-center" data-testid="advanced-toggle">{t("workoutDetailExtended.advancedDetails")}</summary>
           <div className="mt-3 space-y-3">
             {analysis.version != null && <p className="text-sm">{t("workoutDetailExtended.version")}: {analysis.version}</p>}
@@ -592,7 +592,7 @@ export default function WorkoutDetail() {
             )}
             {technicalLimitations.length > 0 && <section className="font-sans text-sm leading-relaxed text-secondary-foreground space-y-1" data-testid="analysis-limitations">
               <h3 className="text-sm font-semibold">{t("workoutDetailExtended.limitations")}</h3>
-              {technicalLimitations.map((item, index) => <p key={index}>{item.reason_unavailable}</p>)}
+              {technicalLimitations.map((item) => <p key={item.code}>{item.text}</p>)}
             </section>}
           </div>
         </details>
