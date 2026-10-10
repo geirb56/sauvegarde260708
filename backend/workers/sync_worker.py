@@ -22,6 +22,7 @@ import logging
 import os
 import sys
 import time
+from datetime import datetime
 
 # Make /app/backend importable when launched as a module or script.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -95,6 +96,12 @@ async def process_job(db, redis, raw: str, job: dict) -> None:
     attempts = int(job.get("attempts", 0))
     lock_key = f"{LOCK_PREFIX}{user_id}"
 
+    if job_type == JOB_ACTIVITY_DETAILS and job.get("not_before", 0) > time.time():
+        # Keep deferred work reliable without holding the user's sync lock.
+        await asyncio.sleep(min(5, job["not_before"] - time.time()))
+        await requeue_job(raw, job_id)
+        return
+
     # One active sync per user. If busy, move the in-flight job back to the queue.
     if not await redis.set(lock_key, "1", nx=True, ex=LOCK_TTL):
         logger.info("[worker] user=%s already syncing -> requeue", user_id)
@@ -121,6 +128,10 @@ async def process_job(db, redis, raw: str, job: dict) -> None:
         # retries; leave a small persistence margin before cancelling its thread.
         timeout = max(JOB_TIMEOUT, 65) if job_type == JOB_ACTIVITY_DETAILS else JOB_TIMEOUT
         result = await asyncio.wait_for(work, timeout=timeout)
+        if job_type == JOB_ACTIVITY_DETAILS and result.get("status") == "deferred":
+            job["not_before"] = datetime.fromisoformat(result["retry_at"]).timestamp()
+            await requeue_job(raw, job_id, json.dumps(job))
+            return
         if not result.get("success"):
             raise RuntimeError(result.get("error") or result.get("message") or "sync failed")
         duration = round(time.time() - start, 2)

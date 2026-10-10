@@ -75,7 +75,14 @@ async def fetch_activity_details(db, user_id: str, activity_id: str) -> dict:
         }}},
     )
     if not claim.modified_count:
-        return {"success": True, "status": "cooldown"}
+        current = await db.garmin_activities.find_one(identity, {"_id": 0})
+        if current is None or _cached(current):
+            return {"success": True, "status": "not_found" if current is None else "cached"}
+        state = current.get("activity_details_fetch") or {}
+        return {
+            "success": False, "status": "deferred",
+            "retry_at": state.get("next_attempt_at"),
+        }
     fenced = {**identity, "activity_details_fetch.token": token}
     try:
         provider = get_provider_for_user(user_id, garmin_account=conn["garmin_username"])

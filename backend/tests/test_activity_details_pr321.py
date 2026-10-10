@@ -211,7 +211,7 @@ def test_errors_do_not_cache_empty_or_erase_details_and_have_cooldown(db, provid
     provider[0].get_activity_phases.side_effect = GccliError("synthetic failure")
     assert not run(details.fetch_activity_details(db, "a", "123"))["success"]
     assert db.garmin_activities.docs[0]["activity_details"] == old_details
-    assert run(details.fetch_activity_details(db, "a", "123"))["status"] == "cooldown"
+    assert run(details.fetch_activity_details(db, "a", "123"))["status"] == "deferred"
     assert provider[0].get_activity_phases.call_count == 1
 
 
@@ -243,7 +243,7 @@ def test_concurrent_fetches_share_atomic_activity_lease(db, provider):
         first = asyncio.create_task(details.fetch_activity_details(db, "a", "123"))
         try:
             assert await asyncio.to_thread(entered.wait, 5)
-            assert (await details.fetch_activity_details(db, "a", "123"))["status"] == "cooldown"
+            assert (await details.fetch_activity_details(db, "a", "123"))["status"] == "deferred"
         finally:
             release.set()
         assert (await first)["success"]
@@ -368,7 +368,7 @@ def test_cached_state_is_rechecked_in_atomic_claim(db, provider, monkeypatch):
         return await original_update(query, update, upsert=upsert)
 
     monkeypatch.setattr(db.garmin_activities, "update_one", race)
-    assert run(details.fetch_activity_details(db, "a", "123"))["status"] == "cooldown"
+    assert run(details.fetch_activity_details(db, "a", "123"))["status"] == "cached"
     provider[0].get_activity_phases.assert_not_called()
 
 
@@ -427,3 +427,29 @@ def test_http_phases_are_authenticated_scoped_and_cache_only(db, provider, monke
             assert (await client.get(path)).status_code == 401
 
     run(scenario())
+
+
+def test_worker_defers_lease_contention_without_ack_or_consuming_retry(db, monkeypatch):
+    from workers import sync_worker
+    from datetime import datetime, timedelta, timezone
+
+    redis = Redis()
+    monkeypatch.setattr(sync_worker.rate_limiter, "acquire_global_slot",
+                        AsyncMock(return_value=True))
+    monkeypatch.setattr(sync_worker.rate_limiter, "release_global_slot", AsyncMock())
+    retry_at = (datetime.now(timezone.utc) + timedelta(seconds=900)).isoformat()
+    monkeypatch.setattr(details, "fetch_activity_details", AsyncMock(return_value={
+        "success": False, "status": "deferred", "retry_at": retry_at,
+    }))
+    ack = AsyncMock()
+    requeue = AsyncMock()
+    monkeypatch.setattr(sync_worker, "ack_job", ack)
+    monkeypatch.setattr(sync_worker, "requeue_job", requeue)
+    job = {"id": "synthetic-job", "type": queue.JOB_ACTIVITY_DETAILS,
+           "user_id": "a", "activity_id": "123", "attempts": 1}
+    run(sync_worker.process_job(db, redis, "synthetic-raw", job))
+    ack.assert_not_awaited()
+    requeue.assert_awaited_once()
+    payload = json.loads(requeue.call_args.args[2])
+    assert payload["attempts"] == 1
+    assert payload["not_before"] == datetime.fromisoformat(retry_at).timestamp()
