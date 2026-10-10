@@ -39,9 +39,12 @@ JOB_SYNC_USER = "SYNC_USER"          # full sync: activities + daily health metr
 JOB_SYNC_ACTIVITY = "SYNC_ACTIVITY"  # activities-focused sync
 JOB_INCREMENTAL_SYNC = "INCREMENTAL_SYNC"  # incremental: only new activities (since last)
 JOB_VO2MAX_BACKFILL = "VO2MAX_BACKFILL"  # one-shot historical VO2max fetch
+JOB_ACTIVITY_DETAILS = "ACTIVITY_DETAILS"
 
 
 def _pending_key(job_type: str, user_id: str) -> str:
+    if job_type == JOB_ACTIVITY_DETAILS:
+        return f"{PENDING_PREFIX}{user_id}:activity_details"
     if job_type == JOB_VO2MAX_BACKFILL:
         return f"{PENDING_PREFIX}{user_id}:vo2max_backfill"
     return f"{PENDING_PREFIX}{user_id}"
@@ -103,6 +106,27 @@ async def enqueue_incremental_sync(user_id: str) -> dict:
 async def enqueue_vo2max_backfill(user_id: str) -> dict:
     """Queue the one-shot historical VO2max backfill."""
     return await _enqueue_deduped(JOB_VO2MAX_BACKFILL, user_id)
+
+
+async def enqueue_activity_details(user_id: str, activity_id: str) -> dict:
+    """One explicit target, at most one queued enrichment per user."""
+    from garmin.activity_details import validate_activity_id
+
+    validate_activity_id(activity_id)
+    r = get_redis()
+    key = _pending_key(JOB_ACTIVITY_DETAILS, user_id)
+    if not await r.set(key, JOB_ACTIVITY_DETAILS, nx=True, ex=PENDING_TTL):
+        return {"status": "already_queued"}
+    try:
+        await r.lpush(QUEUE_KEY, json.dumps({
+            "id": uuid.uuid4().hex, "type": JOB_ACTIVITY_DETAILS,
+            "user_id": user_id, "activity_id": activity_id,
+            "attempts": 0, "enqueued_at": time.time(),
+        }))
+    except Exception:
+        await r.delete(key)
+        raise
+    return {"status": "queued"}
 
 
 # --------------------------------------------------------------------------- #

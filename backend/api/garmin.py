@@ -149,6 +149,47 @@ async def garmin_activities(
     return {"activities": items, "count": len(items), "source": "db"}
 
 
+@garmin_router.post("/activities/{activity_id}/phases", status_code=202)
+async def request_activity_phases(
+    activity_id: str, request: Request, user: dict = Depends(get_current_user),
+):
+    from garmin.activity_details import request_activity_details
+
+    try:
+        result = await request_activity_details(request.app.state.db, user["id"], activity_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid activity identifier")
+    except Exception:
+        raise HTTPException(status_code=503, detail="Activity enrichment temporarily unavailable")
+    if result["status"] == "not_found":
+        raise HTTPException(status_code=404, detail="Activity not found")
+    return result
+
+
+@garmin_router.get("/activities/{activity_id}/phases")
+async def get_activity_phases(
+    activity_id: str, request: Request, user: dict = Depends(get_current_user),
+):
+    from garmin.activity_details import validate_activity_id
+
+    try:
+        validate_activity_id(activity_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid activity identifier")
+    doc = await request.app.state.db.garmin_activities.find_one(
+        {"user_id": user["id"], "external_id": activity_id, "source": "garmin"},
+        {"_id": 0, "activity_details": 1, "activity_details_fetch": 1},
+    )
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Activity not found")
+    fetch = doc.get("activity_details_fetch") or {}
+    return {
+        "activity_details": doc.get("activity_details"),
+        "fetch_status": fetch.get("status", "not_requested"),
+        "error_code": fetch.get("error_code"),
+    }
+
+
 @garmin_router.post("/backfill")
 async def garmin_backfill_endpoint(
     request: Request,

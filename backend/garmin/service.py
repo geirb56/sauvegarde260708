@@ -570,6 +570,9 @@ async def _ingest_activities(db, user_id: str, activities: list) -> dict:
         if not ext_id:
             continue
         doc = {**act, "user_id": user_id, "synced_at": datetime.now(timezone.utc).isoformat()}
+        # Enrichment is owned exclusively by the targeted details writer.
+        doc.pop("activity_details", None)
+        doc.pop("activity_details_fetch", None)
         res = await db.garmin_activities.update_one(
             {"user_id": user_id, "external_id": ext_id},
             {"$set": doc},

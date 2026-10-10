@@ -38,6 +38,7 @@ from jobs.queue import (
     JOB_SYNC_ACTIVITY,
     JOB_INCREMENTAL_SYNC,
     JOB_VO2MAX_BACKFILL,
+    JOB_ACTIVITY_DETAILS,
     LOCK_PREFIX,
     LOCK_TTL,
     HEARTBEAT_PREFIX,
@@ -73,7 +74,10 @@ SCHEDULE_INTERVAL = int(os.environ.get("SYNC_SCHEDULE_INTERVAL", "0"))
 SCHEDULE_STAGGER_MS = int(os.environ.get("SYNC_SCHEDULE_STAGGER_MS", "200"))
 
 
-async def _run_job(db, job_type: str, user_id: str) -> dict:
+async def _run_job(db, job_type: str, user_id: str, activity_id: str = None) -> dict:
+    if job_type == JOB_ACTIVITY_DETAILS:
+        from garmin.activity_details import fetch_activity_details
+        return await fetch_activity_details(db, user_id, activity_id)
     if job_type == JOB_VO2MAX_BACKFILL:
         return await garmin_service.run_vo2max_backfill_job(db, user_id)
     if job_type == JOB_INCREMENTAL_SYNC:
@@ -109,7 +113,14 @@ async def process_job(db, redis, raw: str, job: dict) -> None:
     start = time.time()
     logger.info("[worker] sync_start type=%s user=%s attempt=%s", job_type, user_id, attempts + 1)
     try:
-        result = await asyncio.wait_for(_run_job(db, job_type, user_id), timeout=JOB_TIMEOUT)
+        work = (
+            _run_job(db, job_type, user_id, job.get("activity_id"))
+            if job_type == JOB_ACTIVITY_DETAILS else _run_job(db, job_type, user_id)
+        )
+        # A targeted command is bounded to 60s by GccliRunner, without inline
+        # retries; leave a small persistence margin before cancelling its thread.
+        timeout = max(JOB_TIMEOUT, 65) if job_type == JOB_ACTIVITY_DETAILS else JOB_TIMEOUT
+        result = await asyncio.wait_for(work, timeout=timeout)
         if not result.get("success"):
             raise RuntimeError(result.get("error") or result.get("message") or "sync failed")
         duration = round(time.time() - start, 2)

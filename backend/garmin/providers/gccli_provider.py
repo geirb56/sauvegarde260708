@@ -106,6 +106,17 @@ class GccliProvider(Provider):
             acts = [a for a in acts if (a.get("start_time") or "") > since]
         return acts
 
+    def get_activity_phases(self, user_id: str, activity_id: str) -> List[Dict]:
+        from ..data_layer import normalize_typed_splits
+
+        account = self._garmin_account
+        if not account:
+            raise GccliError("Per-user Garmin account required")
+        return normalize_typed_splits(
+            self._runner.fetch_activity_typed_splits(activity_id, account=account)
+        )
+
+
     def fetch_all_activities(self, page_size: int = 50) -> List[Dict]:
         """Fetch ALL available activities using paginated gccli calls.
 

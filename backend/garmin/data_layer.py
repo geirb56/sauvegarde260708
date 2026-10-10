@@ -12,7 +12,8 @@ Design rules (do not violate):
 - Additive only: nothing here is wired into the existing engine, score,
   readiness, endpoints or frontend. Future PRs will consume these models.
 
-All raw shapes below come from the real audited gccli 1.9.0 output.
+Historical raw shapes come from audited gccli 1.9.0 output. The typed-splits
+contract below is provisional and covered by explicitly synthetic tests.
 """
 
 from __future__ import annotations
@@ -20,6 +21,8 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict
+import math
+from activity_phases import ActivityPhase
 
 
 # --------------------------------------------------------------------------- #
@@ -176,6 +179,45 @@ class GarminActivity(BaseModel):
             has_splits=(meta.get("hasSplits") if isinstance(meta.get("hasSplits"), bool) else None),
             details_available=details_available,
         )
+
+def normalize_typed_splits(raw: Any) -> List[Dict]:
+    """Provisional typed-splits contract; tests are synthetic, not audited JSON."""
+    if isinstance(raw, dict) and isinstance(raw.get("splitDTOs"), list):
+        raw = raw["splitDTOs"]
+    if not isinstance(raw, list) or len(raw) > 1000:
+        raise ValueError("Unsupported typed-splits payload")
+    phase_types = {
+        "INTERVAL_ACTIVE": "effort", "INTERVAL_RECOVERY": "recovery",
+        "WARMUP": "warmup", "COOLDOWN": "cooldown",
+    }
+
+    def measurement(value):
+        number = _num(value)
+        return number if number is not None and math.isfinite(number) and number >= 0 else None
+
+    phases = []
+    for order, split in enumerate(raw):
+        if (
+            not isinstance(split, dict)
+            or not _str(split.get("splitType"))
+            or len(split["splitType"]) > 128
+        ):
+            raise ValueError("Unsupported typed-split row")
+        native_type = split["splitType"]
+        phases.append(ActivityPhase(
+            order=order,
+            native_type=native_type,
+            phase_type=phase_types.get(native_type, "unknown"),
+            duration_s=measurement(split.get("duration")),
+            distance_m=measurement(split.get("distance")),
+            average_speed_mps=measurement(split.get("averageSpeed")),
+            average_hr=measurement(split.get("averageHR")),
+            max_hr=measurement(split.get("maxHR")),
+            min_hr=measurement(split.get("minHR")),
+            source="garmin",
+        ).model_dump())
+    return phases
+
 
 # --------------------------------------------------------------------------- #
 # GarminDailyMetrics
