@@ -53,6 +53,79 @@ Les métadonnées et fichiers des PR #318, #319, #320 et #322 ont aussi été re
 - Workout Detail ne consomme pas `SubscriptionContext` et ne masque pas conditionnellement Workout Analysis V2 selon `FREE`, `TRIAL` ou `PREMIUM`. La requête d’analyse existante est faite sans contrôle de plan dans cette page.
 - Le nouveau rendu doit donc rester dans le même périmètre d’accès que les données déjà renvoyées à cette page, sans introduire de nouveau contrôle, endpoint ou règle d’abonnement. Les droits effectifs de la route restent déterminés par les contrôles backend existants ; cette PR frontend ne les redéfinit pas.
 
-## Modifications et validations
+## Composants réutilisés
 
-À compléter après l’implémentation et les contrôles de cette PR. Les résultats synthétiques de référence ne valent pas validation sur l’activité réelle `24671804067` ni sur le runtime Emergent.
+- La section s’intègre dans `/home/runner/work/sauvegarde260708/sauvegarde260708/frontend/src/pages/WorkoutDetail.jsx`, sous le résumé de séance et avant les points clés existants.
+- Elle reprend les composants `Card`/`CardContent`, les classes Tailwind et le formateur d’allure `formatPaceDisplay` déjà utilisés dans Workout Detail.
+- `SplitsChart` est laissé inchangé : les splits kilométriques restent affichés dans la section de pacing et ne sont ni recalculés ni confondus avec des phases.
+- Aucune bibliothèque, aucun composant graphique ou endpoint supplémentaire n’a été ajouté.
+
+## Modifications effectuées
+
+- Ajout d’une section autonome d’efforts/récupérations, rendue uniquement lorsque `phase_analysis.available === true`.
+- Résumé : nombre d’efforts et de récupérations, temps total et distance des efforts, allure moyenne des efforts quand calculable.
+- Détail : les phases sont triées selon `order`; chaque effort comprend durée, distance, allure et FC moyenne/maximale disponibles. Les récupérations consécutives immédiates sont rattachées au détail de cet effort. Une récupération sans lien direct reste une ligne distincte; les échauffements, retours au calme et types inconnus demeurent visibles dans leur position chronologique avec un libellé neutre. Aucun `native_type` fournisseur n’est rendu.
+- Régularité : visible uniquement lorsque `effort_regularity.available === true`; le nombre comparable, la dispersion, l’évolution premier–dernier et l’évolution de FC moyenne sont affichés uniquement s’ils sont disponibles. `partial_comparison` reçoit une réserve explicite. Le texte décrit les mesures et ne porte aucun jugement de performance.
+- Valeurs facultatives/non finies : omissions pour les indicateurs non calculables ou libellé traduit « Non enregistré » dans une répétition. `missing_data` et `limitations` sont rendus sous forme d’explications localisées, jamais sous forme de codes internes.
+- Aucune modification de la classification historique `signals.session_type`, des calculs Workout Analysis V2, de la collecte ou d’un domaine backend.
+
+Fichiers modifiés :
+
+- `/home/runner/work/sauvegarde260708/sauvegarde260708/frontend/src/pages/WorkoutDetail.jsx`
+- `/home/runner/work/sauvegarde260708/sauvegarde260708/frontend/src/lib/i18n.js`
+- `/home/runner/work/sauvegarde260708/sauvegarde260708/frontend/src/__tests__/workout-analysis-v2-pages.test.jsx`
+- `/home/runner/work/sauvegarde260708/sauvegarde260708/RUNINDEX_PR324_WORKOUT_DETAIL_PHASES_UX_REPORT.md`
+
+## Contrat API consommé
+
+Le seul contrat lu est `analysis.phase_analysis`, reçu dans la réponse existante de `GET /coach/workout-analysis/{workout_id}?language={lang}`. Le frontend consomme `available`, `phases`, `efforts`, `recoveries`, les statistiques, la régularité, les valeurs manquantes et les limitations. L’unité d’allure est `pace_sec_per_km` (convertie vers le formateur existant en min/km); durées en secondes, distances en mètres et FC observées sont utilisées telles que fournies. `source`, `analysis_type` et `native_type` ne servent pas à reclasser les phases ou à afficher des données fournisseur.
+
+## Comportement avec et sans phases
+
+- `available=true` : section structurée, incluant aussi les cas partiels et les phases non-effort/récupération.
+- `available=false`, champ absent (ancienne réponse), analyse en chargement ou erreur : aucune section de phases, aucun message d’erreur additionnel. Les sections standard gardent leur comportement.
+- Les splits kilométriques fonctionnent indépendamment : ils restent visibles avec des phases et leur état vide reste inchangé sans splits.
+- Les fixtures de cette PR sont synthétiques et sans donnée personnelle. Les valeurs de référence fournies dans le besoin servent uniquement à ces fixtures; l’activité `24671804067` n’a pas été interrogée et n’est pas déclarée validée.
+
+## Gating et traductions
+
+- La page n’utilise pas `SubscriptionContext` et n’avait pas de gate Workout Analysis V2. Le rendu ajouté ne crée ni entitlement, ni règle, ni endpoint et ne masque pas l’accès préexistant.
+- Des tests utilisent le `SubscriptionProvider` actuel avec états `FREE`, `TRIAL` et `PREMIUM`; la section demeure au niveau d’accès existant dans les trois états.
+- Libellés de phase, mesures manquantes, limites, comparabilité et régularité ajoutés dans le dictionnaire i18n existant FR/EN/ES. Le test de parité i18n vérifie les clés et les placeholders d’interpolation des trois langues.
+
+## Tests et contrôles exécutés
+
+Base : `copilot/dev` à `2e9dfacae2d3c69f6e0273145cfdad86883f9acf`.
+HEAD code/tests avant l’ajout documentaire final : `a2635fa3cf0f37eb7e8786932f81a4a012cd1145`.
+
+Depuis `/home/runner/work/sauvegarde260708/sauvegarde260708/frontend` :
+
+| Commande | Résultat |
+|---|---|
+| `CI=true npm test -- --watchAll=false --runInBand --forceExit --runTestsByPath src/__tests__/workout-analysis-v2-pages.test.jsx src/lib/i18n.test.js` | **2 suites réussies, 242 tests réussis, 0 échec** |
+| `CI=true npm test -- --watchAll=false --runInBand --forceExit` | **34 suites : 33 réussies, 1 échouée; 795 tests réussis, 1 échoué** |
+| `npm run build` | **Réussite** — compilation de production réussie |
+
+L’unique échec de la suite frontend complète est dans le test hors périmètre `src/__tests__/progress-v2-migration.test.jsx`, assertion historique `predictions.predictions?.map` sur le texte source de `Progress.jsx`. Aucun fichier Progress ni code de cette page n’est modifié par cette PR. Le build signale aussi la base Browserslist/caniuse-lite datée; aucune dépendance n’a été modifiée. Un avertissement existant concernant l’absence de `REACT_APP_BACKEND_URL` apparaît dans les tests.
+
+`git diff --check` a réussi. Le scan de secrets des trois fichiers source/test modifiés n’a détecté aucun secret. Aucun script lint n’est déclaré dans `frontend/package.json`; aucun lint ad hoc n’a été ajouté. La vérification 360 px est un test DOM statique des classes de retour à la ligne/conteneur, pas une validation de rendu visuel réel.
+
+Résultats Code Review et CodeQL : à compléter après l’exécution de `parallel_validation`.
+
+## Risques résiduels
+
+- Sans données runtime Emergent, la présence et les valeurs du contrat dans l’environnement déployé ne sont pas vérifiées.
+- Les classes responsive sont testées dans le DOM, mais l’absence de débordement réel et la lisibilité tactile doivent être confirmées visuellement sur Android aux largeurs 360/390 px.
+- Les phases inconnues ou mesures manquantes restent descriptives; les fixtures synthétiques ne remplacent pas l’examen par les réviseurs des données autorisées.
+- Le test de suite complète existant hors périmètre demeure en échec décrit ci-dessus.
+
+## Vérifications runtime à effectuer dans Emergent
+
+1. Sur une activité structurée autorisée, confirmer l’ordre des phases, les nombres d’efforts/récupérations, les unités, les valeurs nulles et la correspondance de récupération uniquement pour les phases directement successives.
+2. Vérifier une phase inconnue, une récupération absente, des FC/allures manquantes, une régularité indisponible/partielle, ainsi que l’affichage combiné ou absent des splits.
+3. Vérifier qu’une activité sans phases et une ancienne réponse API conservent exactement le rendu standard et que `session_type=standard` n’est pas modifié.
+4. Confirmer les droits effectifs `FREE`/`TRIAL`/`PREMIUM` de l’API existante; cette PR ne les redéfinit pas.
+5. Parcourir FR/EN/ES et contrôler l’interface réelle sur Android à 360 px et 390 px, sans débordement horizontal.
+6. Ne lancer aucun enrichissement fournisseur lors de cette vérification; attendre la revue C324 avant toute décision de merge ou déploiement.
+
+La PR demande uniquement l’intégration de l’affichage frontend. Aucun merge ni déploiement n’a été effectué.
