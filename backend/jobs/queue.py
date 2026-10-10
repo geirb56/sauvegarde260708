@@ -69,10 +69,6 @@ async def maintain_details_pending(redis, user_id: str, job_id: str, release=Fal
     """Refresh/release only this job's reservation, never a newer job's flag."""
     return await redis.eval(
         """
-        if ARGV[2] == 'refresh' and redis.call('GET', KEYS[1]) == false then
-            redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[3])
-            return 1
-        end
         if redis.call('GET', KEYS[1]) == ARGV[1] then
             if ARGV[2] == 'release' then return redis.call('DEL', KEYS[1]) end
             return redis.call('EXPIRE', KEYS[1], ARGV[3])
@@ -81,6 +77,41 @@ async def maintain_details_pending(redis, user_id: str, job_id: str, release=Fal
         """,
         1, _pending_key(JOB_ACTIVITY_DETAILS, user_id), job_id,
         "release" if release else "refresh", DETAILS_PENDING_TTL,
+    )
+
+
+async def recover_details_pending(redis, raw: str, job: dict) -> int:
+    """Explicit recovery: only a claimed delivery still in PROCESSING is eligible."""
+    return await redis.eval(
+        """
+        local expected = {'string', 'list', 'hash', 'hash'}
+        for i, key in ipairs(KEYS) do
+            local kind = redis.call('TYPE', key).ok
+            if kind ~= 'none' and kind ~= expected[i] then
+                return redis.error_reply('Invalid reservation recovery key type')
+            end
+        end
+        local delivery = cjson.decode(ARGV[1])
+        if delivery.id ~= ARGV[2] or delivery.user_id ~= ARGV[3]
+           or delivery.type ~= 'ACTIVITY_DETAILS' then return 0 end
+        if redis.call('LPOS', KEYS[2], ARGV[1]) == false then return 0 end
+        if redis.call('HEXISTS', KEYS[3], ARGV[2]) == 0 then return 0 end
+        if redis.call('HGET', KEYS[4], ARGV[2]) == 'superseded' then return 0 end
+        local owner = redis.call('GET', KEYS[1])
+        if owner == false then
+            redis.call('SET', KEYS[1], ARGV[2], 'EX', ARGV[4])
+            return 1
+        end
+        if owner == ARGV[2] then
+            return redis.call('EXPIRE', KEYS[1], ARGV[4])
+        end
+        redis.call('HSET', KEYS[4], ARGV[2], 'superseded')
+        redis.call('EXPIRE', KEYS[4], ARGV[4])
+        return 0
+        """,
+        4, _pending_key(JOB_ACTIVITY_DETAILS, job["user_id"]),
+        PROCESSING_KEY, CLAIMS_KEY, DETAILS_OUTCOMES_KEY,
+        raw, job["id"], job["user_id"], DETAILS_PENDING_TTL,
     )
 
 

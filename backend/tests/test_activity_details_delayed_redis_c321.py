@@ -452,3 +452,135 @@ def test_other_garmin_jobs_keep_existing_backpressure(monkeypatch, blocked):
     requeue.assert_awaited_once_with("raw", "normal")
     sleep.assert_awaited_once_with(1 if blocked == "user_lock" else 2)
     defer.assert_not_awaited()
+
+
+@pytest.mark.parametrize("owner,release,expected", [
+    ("c321", False, 1), (None, False, 0), ("new-job", False, 0),
+    ("c321", True, 1), (None, True, 0), ("new-job", True, 0),
+])
+def test_strict_pending_refresh_and_release(local_redis, monkeypatch, owner, release, expected):
+    async def scenario():
+        async with client_for(local_redis, monkeypatch) as client:
+            key = queue._pending_key(queue.JOB_ACTIVITY_DETAILS, "a")
+            if owner:
+                await client.set(key, owner, ex=10)
+            assert await queue.maintain_details_pending(client, "a", "c321", release=release) == expected
+            assert await client.get(key) == (None if release and owner == "c321" else owner)
+            if owner == "c321" and not release:
+                assert await client.ttl(key) > 10
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("invalid_state", ["missing_delivery", "missing_claim", "wrong_identity", "superseded"])
+def test_explicit_recovery_requires_claimed_live_delivery(local_redis, monkeypatch, invalid_state):
+    async def scenario():
+        async with client_for(local_redis, monkeypatch) as client:
+            raw, job = await in_flight(client)
+            key = queue._pending_key(queue.JOB_ACTIVITY_DETAILS, "a")
+            await client.delete(key)
+            if invalid_state == "missing_delivery":
+                await client.lrem(queue.PROCESSING_KEY, 1, raw)
+            elif invalid_state == "missing_claim":
+                await client.hdel(queue.CLAIMS_KEY, job["id"])
+            elif invalid_state == "wrong_identity":
+                job = {**job, "user_id": "b"}
+            else:
+                await client.hset(queue.DETAILS_OUTCOMES_KEY, job["id"], "superseded")
+            assert await queue.recover_details_pending(client, raw, job) == 0
+            assert await client.get(key) is None
+    asyncio.run(scenario())
+
+
+def test_explicit_recovery_after_ttl_expiry_is_atomic(local_redis, monkeypatch):
+    async def scenario():
+        async with client_for(local_redis, monkeypatch) as client:
+            raw, job = await in_flight(client)
+            key = queue._pending_key(queue.JOB_ACTIVITY_DETAILS, "a")
+            await client.pexpire(key, 1)
+            await asyncio.sleep(0.01)
+            assert await queue.maintain_details_pending(client, "a", job["id"]) == 0
+            assert await client.get(key) is None
+            assert await queue.recover_details_pending(client, raw, job) == 1
+            assert await client.get(key) == job["id"]
+            await client.set(key, "new-job", ex=10)
+            assert await queue.recover_details_pending(client, raw, job) == 0
+            assert await client.get(key) == "new-job"
+            await client.delete(key)
+            assert await queue.recover_details_pending(client, raw, job) == 0
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("new_owner", [False, True])
+def test_worker_expiration_before_dispatch_uses_explicit_recovery(local_redis, monkeypatch, new_owner):
+    from workers import sync_worker
+
+    async def scenario():
+        async with client_for(local_redis, monkeypatch) as client:
+            raw, job = await in_flight(client, delay=-1)
+            key = queue._pending_key(queue.JOB_ACTIVITY_DETAILS, "a")
+
+            async def slot():
+                await client.delete(key)
+                if new_owner:
+                    await client.set(key, "new-job", ex=30)
+                return True
+
+            work = AsyncMock(return_value={"success": True, "status": "cached"})
+            monkeypatch.setattr(sync_worker.rate_limiter, "acquire_global_slot", slot)
+            monkeypatch.setattr(sync_worker.rate_limiter, "release_global_slot", AsyncMock())
+            monkeypatch.setattr(sync_worker, "_run_job", work)
+            await sync_worker.process_job(None, client, raw, job)
+            assert work.await_count == (0 if new_owner else 1)
+            assert await client.llen(queue.PROCESSING_KEY) == 0
+            assert await client.get(key) == ("new-job" if new_owner else None)
+    asyncio.run(scenario())
+
+
+def test_restart_redelivery_with_expired_pending_reclaims_live_delivery(local_redis, monkeypatch):
+    async def prepare():
+        async with client_for(local_redis, monkeypatch) as client:
+            raw, job = await in_flight(client, delay=-1)
+            await client.delete(queue._pending_key(queue.JOB_ACTIVITY_DETAILS, "a"))
+            await client.hset(queue.CLAIMS_KEY, job["id"], 0)
+    asyncio.run(prepare())
+    local_redis[1]()
+
+    async def recover():
+        async with client_for(local_redis, monkeypatch) as client:
+            assert await queue.recover_orphans() == 1
+            raw, job = await queue.claim_job(timeout=1)
+            assert await queue.maintain_details_pending(client, "a", job["id"]) == 0
+            assert await queue.recover_details_pending(client, raw, job) == 1
+            await queue.ack_job(raw, job["id"])
+            await queue.maintain_details_pending(client, "a", job["id"], release=True)
+            assert await queue.recover_details_pending(client, raw, job) == 0
+    asyncio.run(recover())
+
+
+@pytest.mark.parametrize("new_owner", [False, True])
+def test_expiration_during_execution_does_not_recreate_on_release(local_redis, monkeypatch, new_owner):
+    from workers import sync_worker
+
+    async def scenario():
+        async with client_for(local_redis, monkeypatch) as client:
+            raw, job = await in_flight(client, delay=-1)
+            key = queue._pending_key(queue.JOB_ACTIVITY_DETAILS, "a")
+
+            async def work(*args):
+                await client.pexpire(key, 1)
+                await asyncio.sleep(0.01)
+                assert await client.get(key) is None
+                if new_owner:
+                    await client.set(key, "new-job", ex=30)
+                return {"success": True}
+
+            monkeypatch.setattr(sync_worker.rate_limiter, "acquire_global_slot",
+                                AsyncMock(return_value=True))
+            monkeypatch.setattr(sync_worker.rate_limiter, "release_global_slot", AsyncMock())
+            invocation = AsyncMock(side_effect=work)
+            monkeypatch.setattr(sync_worker, "_run_job", invocation)
+            await sync_worker.process_job(None, client, raw, job)
+            invocation.assert_awaited_once()
+            assert await client.get(key) == ("new-job" if new_owner else None)
+            assert await client.llen(queue.PROCESSING_KEY) == 0
+    asyncio.run(scenario())

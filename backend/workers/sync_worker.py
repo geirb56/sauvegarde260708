@@ -50,6 +50,7 @@ from jobs.queue import (
     _pending_key,
     _should_update_sync_progress,
     maintain_details_pending,
+    recover_details_pending,
     defer_activity_details,
     promote_due_activity_details,
     claim_job,
@@ -101,7 +102,10 @@ async def process_job(db, redis, raw: str, job: dict) -> None:
     lock_key = f"{LOCK_PREFIX}{user_id}"
 
     if job_type == JOB_ACTIVITY_DETAILS:
-        if not await maintain_details_pending(redis, user_id, job_id):
+        if (
+            not await maintain_details_pending(redis, user_id, job_id)
+            and not await recover_details_pending(redis, raw, job)
+        ):
             logger.warning("[worker] activity_details terminal=superseded job_id=%s user=%s",
                            job_id, user_id)
             await ack_job(raw, job_id)
@@ -137,7 +141,10 @@ async def process_job(db, redis, raw: str, job: dict) -> None:
     start = time.time()
     logger.info("[worker] sync_start type=%s user=%s attempt=%s", job_type, user_id, attempts + 1)
     try:
-        if job_type == JOB_ACTIVITY_DETAILS and not await maintain_details_pending(redis, user_id, job_id):
+        if job_type == JOB_ACTIVITY_DETAILS and (
+            not await maintain_details_pending(redis, user_id, job_id)
+            and not await recover_details_pending(redis, raw, job)
+        ):
             logger.warning("[worker] activity_details terminal=superseded job_id=%s user=%s",
                            job_id, user_id)
             await ack_job(raw, job_id)

@@ -310,8 +310,6 @@ class Redis:
         self.values.pop(key, None)
 
     async def eval(self, script, numkeys, key, job_id, action, ttl):
-        if key not in self.values and action == "refresh":
-            self.values[key] = job_id
         if self.values.get(key) != job_id:
             return 0
         if action == "release":
@@ -401,6 +399,7 @@ def test_worker_reuses_user_lock_and_ack_without_sync_progress(db, monkeypatch):
     monkeypatch.setattr(details, "fetch_activity_details", fetch)
     job = {"id": "synthetic-job", "type": queue.JOB_ACTIVITY_DETAILS,
            "user_id": "a", "activity_id": "123", "attempts": 0}
+    redis.values[queue._pending_key(queue.JOB_ACTIVITY_DETAILS, "a")] = job["id"]
     run(sync_worker.process_job(db, redis, "synthetic-raw", job))
     fetch.assert_awaited_once_with(db, "a", "123")
     ack.assert_awaited_once_with("synthetic-raw", "synthetic-job")
@@ -460,6 +459,7 @@ def test_worker_defers_lease_contention_without_ack_or_consuming_retry(db, monke
     monkeypatch.setattr(sync_worker, "defer_activity_details", defer)
     job = {"id": "synthetic-job", "type": queue.JOB_ACTIVITY_DETAILS,
            "user_id": "a", "activity_id": "123", "attempts": 1}
+    redis.values[queue._pending_key(queue.JOB_ACTIVITY_DETAILS, "a")] = job["id"]
     run(sync_worker.process_job(db, redis, "synthetic-raw", job))
     ack.assert_not_awaited()
     defer.assert_awaited_once()
@@ -632,6 +632,7 @@ def test_future_job_parks_immediately_without_locks_sleep_requeue_or_ack(db, mon
     monkeypatch.setattr(sync_worker.asyncio, "sleep", sleep)
     job = {"id": "synthetic-job", "type": queue.JOB_ACTIVITY_DETAILS, "user_id": "a",
            "activity_id": "123", "attempts": 1, "not_before": time.time() + 900}
+    redis.values[queue._pending_key(queue.JOB_ACTIVITY_DETAILS, "a")] = job["id"]
     run(sync_worker.process_job(db, redis, "synthetic-raw", job))
     defer.assert_awaited_once_with("synthetic-raw", job)
     redis.set.assert_not_awaited()
@@ -670,6 +671,7 @@ def test_worker_never_runs_superseded_job(db, monkeypatch):
     ack = AsyncMock()
     monkeypatch.setattr(sync_worker, "_run_job", work)
     monkeypatch.setattr(sync_worker, "ack_job", ack)
+    monkeypatch.setattr(sync_worker, "recover_details_pending", AsyncMock(return_value=0))
     job = {"id": "old-job", "type": queue.JOB_ACTIVITY_DETAILS, "user_id": "a",
            "activity_id": "123"}
     run(sync_worker.process_job(db, redis, "raw", job))
