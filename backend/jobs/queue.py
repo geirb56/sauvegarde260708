@@ -315,11 +315,22 @@ async def recover_orphans() -> int:
             continue
         claimed_at = await r.hget(CLAIMS_KEY, job_id)
         if claimed_at is None:
-            await r.hset(CLAIMS_KEY, job_id, now)
+            if job.get("type") == JOB_ACTIVITY_DETAILS:
+                await r.eval(
+                    """
+                    if redis.call('LPOS', KEYS[1], ARGV[1]) == false then return 0 end
+                    return redis.call('HSETNX', KEYS[2], ARGV[2], ARGV[3])
+                    """,
+                    2, PROCESSING_KEY, CLAIMS_KEY, raw, job_id, now,
+                )
+            else:
+                await r.hset(CLAIMS_KEY, job_id, now)
             continue
         if now - float(claimed_at) <= ORPHAN_TIMEOUT:
             continue
         if job.get("type") == JOB_ACTIVITY_DETAILS:
+            # The same payload may have been recovered and freshly claimed
+            # since HGET; only move the delivery we actually observed.
             moved = await r.eval(
                 """
                 local expected = {'list', 'hash', 'list'}
@@ -329,12 +340,13 @@ async def recover_orphans() -> int:
                         return redis.error_reply('Invalid orphan key type')
                     end
                 end
+                if redis.call('HGET', KEYS[2], ARGV[2]) ~= ARGV[3] then return 0 end
                 if redis.call('LREM', KEYS[1], 1, ARGV[1]) == 0 then return 0 end
                 redis.call('HDEL', KEYS[2], ARGV[2])
                 redis.call('LPUSH', KEYS[3], ARGV[1])
                 return 1
                 """,
-                3, PROCESSING_KEY, CLAIMS_KEY, QUEUE_KEY, raw, job_id,
+                3, PROCESSING_KEY, CLAIMS_KEY, QUEUE_KEY, raw, job_id, claimed_at,
             )
             recovered += int(moved)
             continue

@@ -113,6 +113,10 @@ async def process_job(db, redis, raw: str, job: dict) -> None:
 
     # One active sync per user. If busy, move the in-flight job back to the queue.
     if not await redis.set(lock_key, "1", nx=True, ex=LOCK_TTL):
+        if job_type == JOB_ACTIVITY_DETAILS:
+            job["not_before"] = time.time() + max(WATCHDOG_INTERVAL, 1)
+            await defer_activity_details(raw, job)
+            return
         logger.info("[worker] user=%s already syncing -> requeue", user_id)
         await asyncio.sleep(1)
         await requeue_job(raw, job_id)
@@ -120,8 +124,12 @@ async def process_job(db, redis, raw: str, job: dict) -> None:
 
     # Global anti-explosion cap (cluster-wide). If saturated, requeue and back off.
     if not await rate_limiter.acquire_global_slot():
-        logger.info("[worker] global sync cap reached -> requeue user=%s", user_id)
         await redis.delete(lock_key)
+        if job_type == JOB_ACTIVITY_DETAILS:
+            job["not_before"] = time.time() + max(WATCHDOG_INTERVAL, 1)
+            await defer_activity_details(raw, job)
+            return
+        logger.info("[worker] global sync cap reached -> requeue user=%s", user_id)
         await asyncio.sleep(2)
         await requeue_job(raw, job_id)
         return

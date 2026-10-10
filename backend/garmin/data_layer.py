@@ -189,6 +189,7 @@ def normalize_typed_splits(raw: Any) -> List[Dict]:
     Complete unique message indexes are used only if available timestamps
     agree with that order. Otherwise complete timestamps can order the entire
     sequence if available indexes agree. Ambiguity preserves reception order.
+    RWD_* rows are filtered without changing retained rows' relative order.
     """
     if not isinstance(raw, dict) or not isinstance(raw.get("splits"), list):
         raise ValueError("Unsupported typed-splits payload")
@@ -232,7 +233,7 @@ def normalize_typed_splits(raw: Any) -> List[Dict]:
             or len(split["type"]) > 128
         ):
             raise ValueError("Unsupported typed-split row")
-        if split["type"] not in {"RWD_RUN", "RWD_WALK"}:
+        if not split["type"].startswith("RWD_"):
             retained.append((position, split))
     phases = []
     evidence = {position: ordering_evidence(item) for item in retained for position in [item[0]]}

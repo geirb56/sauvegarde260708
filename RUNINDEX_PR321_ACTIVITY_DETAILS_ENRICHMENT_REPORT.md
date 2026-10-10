@@ -635,3 +635,36 @@ résultat du retrait : corrigée par Lua et test de deux watchdogs (une insertio
 préexistant documenté et de revue des risques opérationnels.** Ce verdict
 n'autorise ni merge automatique ni déploiement ; validation d'intégration
 dans Emergent reste une étape distincte après décision humaine.
+
+### Réaudit final de la deuxième correction — 10 octobre 2026
+
+Base exacte de #321 : `copilot/dev`,
+`d755a80ad9e47ec7cd28e62c03fd28293e41f27c`.
+HEAD au début de cette nouvelle intervention :
+`2c52b5290a7156065ff600105ca3cae8fa592665`, branche actuelle
+`copilot/enrichir-activites-avec-tructures`. Les résultats précédents ci-dessus
+sont des preuves historiques, pas des tests exécutés dans cette intervention.
+
+**Audit chronologique actualisé.** Le tri « présence de timestamp d'abord »
+n'existe plus au HEAD de départ : les critères globaux complets/cohérents
+décrits dans cette section sont déjà implémentés. Ils sont conservés, sans
+refonte ni reconstruction temporelle. Les index entiers non négatifs complets
+et uniques peuvent être non contigus ; les dates GMT sans timezone sont
+interprétées en UTC, les dates avec offset sont comparées en UTC. Une date seule
+ou invalide n'est pas une date-heure exploitable. Les timestamps égaux ne
+permutent pas les lignes ex æquo. Une contradiction entre index et temps
+conserve l'ordre reçu.
+
+**Défaut de filtrage démontré.** L'exclusion ne couvrait que `RWD_RUN` et
+`RWD_WALK`, contrairement à l'invariant `RWD_*`. Une ligne synthétique
+`RWD_STAND` ou `RWD_UNKNOWN` entre deux intervalles restait une phase `unknown`.
+Le filtre porte maintenant sur le préfixe `RWD_`. Aucune autre famille inconnue
+n'est exclue. Le filtrage précède la recherche de preuve chronologique et
+préserve exactement l'ordre relatif des lignes conservées.
+
+Les 17 cas synthétiques supplémentaires couvrent temps complets/offsets,
+index complets non contigus, temps partiels avec index complets, index
+manquants/dupliqués, contradictions, dates invalides ou sans heure,
+absence de preuve, stabilité/déterminisme et quatre variantes RWD intercalées.
+Les `lapIndexes` et les durées volontairement contradictoires ne servent
+jamais de référence d'ordre. Ces données ne sont pas des captures Garmin.

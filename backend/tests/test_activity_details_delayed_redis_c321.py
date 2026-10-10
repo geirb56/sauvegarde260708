@@ -11,6 +11,7 @@ import socket
 import subprocess
 import time
 from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock
 
 import pytest
 import redis
@@ -251,3 +252,203 @@ def test_two_watchdogs_recover_one_details_orphan_once(local_redis, monkeypatch)
             assert await client.llen(queue.QUEUE_KEY) == 1
             assert await client.llen(queue.PROCESSING_KEY) == 0
     asyncio.run(scenario())
+
+
+def test_stale_watchdog_does_not_recover_a_fresh_redelivery(local_redis, monkeypatch):
+    async def scenario():
+        async with client_for(local_redis, monkeypatch) as client:
+            raw, job = await in_flight(client)
+            await client.hset(queue.CLAIMS_KEY, job["id"], 0)
+            original_hget = client.hget
+
+            async def redeliver(key, job_id):
+                observed = await original_hget(key, job_id)
+                await queue.requeue_job(raw, job_id)
+                assert (await queue.claim_job(timeout=1))[1]["id"] == job_id
+                return observed
+
+            monkeypatch.setattr(client, "hget", redeliver)
+            assert await queue.recover_orphans() == 0
+            assert await client.llen(queue.PROCESSING_KEY) == 1
+            assert await client.llen(queue.QUEUE_KEY) == 0
+            assert float(await original_hget(queue.CLAIMS_KEY, job["id"])) > 0
+    asyncio.run(scenario())
+
+
+def test_missing_claim_adoption_does_not_overwrite_a_fresh_claim(local_redis, monkeypatch):
+    async def scenario():
+        async with client_for(local_redis, monkeypatch) as client:
+            _, job = await in_flight(client)
+            await client.hdel(queue.CLAIMS_KEY, job["id"])
+            original_hget = client.hget
+            fresh_claim = time.time() + 10
+
+            async def claim_during_read(key, job_id):
+                observed = await original_hget(key, job_id)
+                await client.hset(key, job_id, fresh_claim)
+                return observed
+
+            monkeypatch.setattr(client, "hget", claim_during_read)
+            assert await queue.recover_orphans() == 0
+            assert float(await original_hget(queue.CLAIMS_KEY, job["id"])) == fresh_claim
+    asyncio.run(scenario())
+
+
+def test_missing_claim_adoption_does_not_resurrect_an_acked_job(local_redis, monkeypatch):
+    async def scenario():
+        async with client_for(local_redis, monkeypatch) as client:
+            raw, job = await in_flight(client)
+            await client.hdel(queue.CLAIMS_KEY, job["id"])
+            original_hget = client.hget
+
+            async def ack_during_read(key, job_id):
+                observed = await original_hget(key, job_id)
+                await queue.ack_job(raw, job_id)
+                return observed
+
+            monkeypatch.setattr(client, "hget", ack_during_read)
+            assert await queue.recover_orphans() == 0
+            assert await client.hlen(queue.CLAIMS_KEY) == 0
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("blocked", ["user_lock", "global_cap"])
+def test_details_backpressure_parks_without_sleep_or_retry(monkeypatch, blocked):
+    from workers import sync_worker
+
+    client = AsyncMock()
+    client.set.return_value = blocked != "user_lock"
+    monkeypatch.setattr(sync_worker, "maintain_details_pending", AsyncMock(return_value=1))
+    acquire = AsyncMock(return_value=False)
+    monkeypatch.setattr(sync_worker.rate_limiter, "acquire_global_slot", acquire)
+    defer = AsyncMock()
+    requeue = AsyncMock()
+    work = AsyncMock()
+    sleep = AsyncMock()
+    ack = AsyncMock()
+    monkeypatch.setattr(sync_worker, "defer_activity_details", defer)
+    monkeypatch.setattr(sync_worker, "requeue_job", requeue)
+    monkeypatch.setattr(sync_worker, "_run_job", work)
+    monkeypatch.setattr(sync_worker, "ack_job", ack)
+    monkeypatch.setattr(sync_worker.asyncio, "sleep", sleep)
+    job = {"id": "blocked", "type": queue.JOB_ACTIVITY_DETAILS, "user_id": "a",
+           "activity_id": "123", "attempts": 1}
+    before = time.time()
+    asyncio.run(sync_worker.process_job(None, client, "raw", job))
+    defer.assert_awaited_once_with("raw", job)
+    assert job["not_before"] >= before + sync_worker.WATCHDOG_INTERVAL
+    assert job["attempts"] == 1
+    requeue.assert_not_awaited()
+    sleep.assert_not_awaited()
+    work.assert_not_awaited()
+    ack.assert_not_awaited()
+    if blocked == "user_lock":
+        acquire.assert_not_awaited()
+        client.delete.assert_not_awaited()
+    else:
+        client.delete.assert_awaited_once_with(f"{queue.LOCK_PREFIX}a")
+
+
+@pytest.mark.parametrize("transition", ["defer", "ack"])
+def test_worker_redis_error_keeps_inflight_for_recovery(local_redis, monkeypatch, transition):
+    from workers import sync_worker
+
+    async def scenario():
+        async with client_for(local_redis, monkeypatch) as client:
+            raw, job = await in_flight(client, delay=-1)
+            monkeypatch.setattr(sync_worker.rate_limiter, "acquire_global_slot",
+                                AsyncMock(return_value=True))
+            monkeypatch.setattr(sync_worker.rate_limiter, "release_global_slot", AsyncMock())
+            result = {"success": True, "status": "cached"}
+            if transition == "defer":
+                result = {"status": "deferred",
+                          "retry_at": "2099-01-01T00:00:00+00:00"}
+            work = AsyncMock(return_value=result)
+            monkeypatch.setattr(sync_worker, "_run_job", work)
+            failing = "defer_activity_details" if transition == "defer" else "ack_job"
+            monkeypatch.setattr(sync_worker, failing,
+                                AsyncMock(side_effect=redis.ConnectionError("synthetic outage")))
+            with pytest.raises(redis.ConnectionError):
+                await sync_worker.process_job(None, client, raw, job)
+            assert await client.llen(queue.PROCESSING_KEY) == 1
+            assert await client.zcard(queue.DELAYED_KEY) == 0
+            assert await client.llen(queue.QUEUE_KEY) == 0
+            assert job["attempts"] == 1
+            assert await client.get(f"{queue.LOCK_PREFIX}a") is None
+            await client.hset(queue.CLAIMS_KEY, job["id"], 0)
+            assert await queue.recover_orphans() == 1
+            recovered_raw, recovered_job = await queue.claim_job(timeout=1)
+            assert recovered_job["id"] == job["id"]
+            # Redelivery consults the Mongo cache through the unchanged service.
+            monkeypatch.setattr(sync_worker, "ack_job", queue.ack_job)
+            work.return_value = {"success": True, "status": "cached"}
+            await sync_worker.process_job(None, client, recovered_raw, recovered_job)
+            assert await client.llen(queue.PROCESSING_KEY) == 0
+            assert await client.get(queue._pending_key(queue.JOB_ACTIVITY_DETAILS, "a")) is None
+    asyncio.run(scenario())
+
+
+def test_claim_stamp_outage_keeps_job_until_watchdog_adoption(local_redis, monkeypatch):
+    async def scenario():
+        async with client_for(local_redis, monkeypatch) as client:
+            job = {"id": "unstamped", "type": queue.JOB_ACTIVITY_DETAILS,
+                   "user_id": "a", "activity_id": "123"}
+            await client.lpush(queue.QUEUE_KEY, json.dumps(job))
+            monkeypatch.setattr(client, "hset",
+                                AsyncMock(side_effect=redis.ConnectionError("synthetic outage")))
+            with pytest.raises(redis.ConnectionError):
+                await queue.claim_job(timeout=1)
+            assert await client.llen(queue.PROCESSING_KEY) == 1
+            assert await client.hlen(queue.CLAIMS_KEY) == 0
+            assert await queue.recover_orphans() == 0
+            assert await client.hlen(queue.CLAIMS_KEY) == 1
+            now = time.time()
+            monkeypatch.setattr(queue.time, "time", lambda: now + queue.ORPHAN_TIMEOUT + 1)
+            assert await queue.recover_orphans() == 1
+            assert await client.llen(queue.QUEUE_KEY) == 1
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("blocked", ["user_lock", "global_cap"])
+def test_details_backpressure_stays_outside_fifo(local_redis, monkeypatch, blocked):
+    from workers import sync_worker
+
+    async def scenario():
+        async with client_for(local_redis, monkeypatch) as client:
+            raw, job = await in_flight(client, delay=-1)
+            if blocked == "user_lock":
+                await client.set(f"{queue.LOCK_PREFIX}a", "existing-sync", ex=queue.LOCK_TTL)
+            monkeypatch.setattr(sync_worker.rate_limiter, "acquire_global_slot",
+                                AsyncMock(return_value=False))
+            await sync_worker.process_job(None, client, raw, job)
+            assert await client.llen(queue.PROCESSING_KEY) == 0
+            assert await client.zcard(queue.DELAYED_KEY) == 1
+            assert await client.hlen(queue.CLAIMS_KEY) == 0
+            for _ in range(3):
+                assert await queue.promote_due_activity_details() == 0
+            assert await client.llen(queue.QUEUE_KEY) == 0
+            assert await client.get(queue._pending_key(queue.JOB_ACTIVITY_DETAILS, "a")) == job["id"]
+            if blocked == "user_lock":
+                assert await client.get(f"{queue.LOCK_PREFIX}a") == "existing-sync"
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("blocked", ["user_lock", "global_cap"])
+def test_other_garmin_jobs_keep_existing_backpressure(monkeypatch, blocked):
+    from workers import sync_worker
+
+    client = AsyncMock()
+    client.set.return_value = blocked != "user_lock"
+    monkeypatch.setattr(sync_worker.rate_limiter, "acquire_global_slot",
+                        AsyncMock(return_value=False))
+    defer = AsyncMock()
+    requeue = AsyncMock()
+    sleep = AsyncMock()
+    monkeypatch.setattr(sync_worker, "defer_activity_details", defer)
+    monkeypatch.setattr(sync_worker, "requeue_job", requeue)
+    monkeypatch.setattr(sync_worker.asyncio, "sleep", sleep)
+    job = {"id": "normal", "type": queue.JOB_SYNC_USER, "user_id": "a"}
+    asyncio.run(sync_worker.process_job(None, client, "raw", job))
+    requeue.assert_awaited_once_with("raw", "normal")
+    sleep.assert_awaited_once_with(1 if blocked == "user_lock" else 2)
+    defer.assert_not_awaited()
