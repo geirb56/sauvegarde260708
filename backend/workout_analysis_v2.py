@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from statistics import mean
 from typing import Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from activity_phases import ActivityPhase
 
@@ -33,6 +33,11 @@ _TRAINING_METADATA_VALUES = {"training", "workout", "entrainement", "entraîneme
 class AnalysisText(BaseModel):
     code: str
     text: str
+
+
+class WorkoutAnalysisMeaning(AnalysisText):
+    observations: List[str] = Field(default_factory=list)
+    caveats: List[str] = Field(default_factory=list)
 
 
 class WorkoutAnalysisAdvice(AnalysisText):
@@ -178,6 +183,7 @@ class WorkoutAnalysisEffortRegularity(BaseModel):
 
 
 class WorkoutAnalysisPhaseAnalysis(BaseModel):
+    # Availability preserves observed phase data, including unclassified phases.
     available: bool = False
     analysis_type: Literal["standard", "structured_phases"] = "standard"
     source: Optional[str] = None
@@ -199,11 +205,18 @@ class WorkoutAnalysisV2Response(BaseModel):
     physiology: WorkoutAnalysisPhysiology
     pacing: WorkoutAnalysisPacing
     comparison: WorkoutAnalysisComparison
-    meaning: AnalysisText
+    meaning: WorkoutAnalysisMeaning
     advice: WorkoutAnalysisAdvice
     evidence: WorkoutAnalysisEvidence
     limitations: List[AnalysisText] = Field(default_factory=list)
     phase_analysis: WorkoutAnalysisPhaseAnalysis = Field(default_factory=WorkoutAnalysisPhaseAnalysis)
+
+    @field_validator("meaning", mode="before")
+    @classmethod
+    def _accept_legacy_meaning(cls, value):
+        if isinstance(value, AnalysisText) and not isinstance(value, WorkoutAnalysisMeaning):
+            return value.model_dump()
+        return value
 
 
 def _lang(language: str) -> str:
@@ -530,6 +543,8 @@ def _template(language: str, key: str, **params) -> str:
             "fact.phase_max_hr": "Peak heart rate observed in the phases: {maximum} bpm.",
             "advice.phases": "These descriptive observations can inform the Coach; the next session remains the responsibility of Training Today/Week.",
             "limitations.phase_splits": "No kilometre splits or kilometre split analysis are available; structured phases are available separately.",
+            "limitations.phase_classification": "Recorded phases are unclassified; no usable structured phase evidence is available.",
+            "limitations.phase_classification_partial": "Some recorded phases are unclassified; effort and recovery observations cover only classified phases.",
             "limitations.phase_missing": "Missing phase data: {fields}.",
             "limitations.phase_quality": "Phase reliability limitation: {reason}.",
             "limitations.phase_regularity": "Effort pace regularity is unavailable.",
@@ -567,6 +582,8 @@ def _template(language: str, key: str, **params) -> str:
             "fact.phase_max_hr": "FC maximale observée dans les phases : {maximum} bpm.",
             "advice.phases": "Ces observations descriptives peuvent éclairer le Coach ; la prochaine séance reste sous la responsabilité de Training Today/Week.",
             "limitations.phase_splits": "Aucune fraction kilométrique ni analyse kilométrique n'est disponible ; les phases structurées sont disponibles séparément.",
+            "limitations.phase_classification": "Les phases enregistrées ne sont pas classifiées ; aucune preuve de phases structurées exploitables n'est disponible.",
+            "limitations.phase_classification_partial": "Certaines phases enregistrées ne sont pas classifiées ; les observations d'effort et de récupération portent uniquement sur les phases classifiées.",
             "limitations.phase_missing": "Données de phases manquantes : {fields}.",
             "limitations.phase_quality": "Limite de fiabilité des phases : {reason}.",
             "limitations.phase_regularity": "La régularité des allures des efforts est indisponible.",
@@ -604,6 +621,8 @@ def _template(language: str, key: str, **params) -> str:
             "fact.phase_max_hr": "Frecuencia cardíaca máxima observada en las fases: {maximum} bpm.",
             "advice.phases": "Estas observaciones descriptivas pueden informar al Coach; la próxima sesión sigue bajo la responsabilidad de Training Today/Week.",
             "limitations.phase_splits": "No hay parciales kilométricos ni análisis kilométrico disponibles; las fases estructuradas están disponibles por separado.",
+            "limitations.phase_classification": "Las fases registradas no están clasificadas; no hay evidencia de fases estructuradas utilizables.",
+            "limitations.phase_classification_partial": "Algunas fases registradas no están clasificadas; las observaciones de esfuerzo y recuperación cubren solo las fases clasificadas.",
             "limitations.phase_missing": "Datos de fases ausentes: {fields}.",
             "limitations.phase_quality": "Limitación de fiabilidad de las fases: {reason}.",
             "limitations.phase_regularity": "La regularidad del ritmo de los esfuerzos no está disponible.",
@@ -1327,9 +1346,23 @@ def _build_meaning(
     signals: WorkoutAnalysisSignals,
     language: str,
     phase_observations: Optional[Dict[str, List[str]]] = None,
-) -> AnalysisText:
+) -> WorkoutAnalysisMeaning:
     if phase_observations and phase_observations["execution"]:
-        return AnalysisText(
+        caveats = phase_observations["uncertainty"] + (
+            [] if signals.intensity.available else [_template(language, "meaning.intensity_unavailable")]
+        )
+        observations = phase_observations["takeaways"]
+        if not observations:
+            fallback_code = "meaning.intensity_unavailable"
+            if signals.intensity.available and signals.intensity.code:
+                if signals.intensity.code in {"high", "very_high"}:
+                    fallback_code = "meaning.with_hr_high"
+                elif signals.intensity.code == "low":
+                    fallback_code = "meaning.with_hr_easy"
+                else:
+                    fallback_code = "meaning.with_hr_moderate"
+            observations = [_template(language, fallback_code)]
+        return WorkoutAnalysisMeaning(
             code="meaning.structured_phases",
             text=_join_sentences(
                 phase_observations["execution"] + phase_observations["uncertainty"]
@@ -1338,6 +1371,8 @@ def _build_meaning(
                     comparison.available or (comparison.similar and comparison.similar.available)
                 ) else [])
             ),
+            observations=observations,
+            caveats=caveats,
         )
     if signals.intensity.available and signals.intensity.code:
         if signals.intensity.code in {"high", "very_high"}:
@@ -1359,14 +1394,13 @@ def _build_meaning(
             "advice.monitor_hr_drift": "meaning.hr_drift",
         }.get(_advice_primary_code(physiology, pacing, signals))
         if observed_code:
-            return AnalysisText(
-                code=observed_code,
-                text=_join_sentences([
-                    _template(language, observed_code),
-                    _template(language, "meaning.intensity_unavailable"),
-                ]),
-            )
-    return AnalysisText(code=code, text=_template(language, code))
+            text = _join_sentences([
+                _template(language, observed_code),
+                _template(language, "meaning.intensity_unavailable"),
+            ])
+            return WorkoutAnalysisMeaning(code=observed_code, text=text, observations=[text])
+    text = _template(language, code)
+    return WorkoutAnalysisMeaning(code=code, text=text, observations=[text])
 
 
 def _advice_primary_code(
@@ -1435,6 +1469,12 @@ def _build_limitations(
         codes.append("heart_rate")
     if not evidence.has_splits:
         codes.append("phase_splits" if evidence.has_structured_phases else "splits")
+    if phase_analysis is not None and any(
+        phase.phase_type == "unknown" for phase in phase_analysis.phases
+    ):
+        codes.append(
+            "phase_classification_partial" if evidence.has_structured_phases else "phase_classification"
+        )
     codes.append("baseline_descriptive" if comparison.available else "baseline")
     similar = comparison.similar
     if similar is not None:
@@ -1715,11 +1755,12 @@ def _phase_number(value: float, digits: int, language: str) -> str:
 def _phase_observations(
     phases: WorkoutAnalysisPhaseAnalysis, structure: WorkoutAnalysisSignal, language: str,
 ) -> Dict[str, List[str]]:
-    observations = {"essential": [], "execution": [], "coach": [], "uncertainty": []}
+    observations = {"essential": [], "execution": [], "takeaways": [], "coach": [], "uncertainty": []}
     if not phases.available:
         return observations
     essential = observations["essential"]
     execution = observations["execution"]
+    takeaways = observations["takeaways"]
     if structure.available:
         essential.append(f"{structure.text}.")
     duration_facts = []
@@ -1747,20 +1788,24 @@ def _phase_observations(
             pace=_fmt_pace(regularity.average_pace_sec_per_km / 60),
             count=regularity.pace_sample_count, total=regularity.effort_count,
         ))
-        execution.append(_template(
+        dispersion = _template(
             language, "fact.effort_dispersion",
             dispersion=_phase_number(regularity.pace_dispersion_sec_per_km, 1, language),
             count=regularity.pace_sample_count,
-        ))
+        )
+        execution.append(dispersion)
+        takeaways.append(dispersion)
         fastest = min(paced, key=lambda phase: phase.pace_sec_per_km)
         slowest = max(paced, key=lambda phase: phase.pace_sec_per_km)
         if fastest.pace_sec_per_km != slowest.pace_sec_per_km:
-            execution.append(_template(
+            extremes = _template(
                 language, "fact.effort_extremes", fastest=fastest.effort_number,
                 slowest=slowest.effort_number,
                 fast_pace=_fmt_pace(fastest.pace_sec_per_km / 60),
                 slow_pace=_fmt_pace(slowest.pace_sec_per_km / 60),
-            ))
+            )
+            execution.append(extremes)
+            takeaways.append(extremes)
         if not regularity.partial_comparison:
             change = paced[-1].pace_sec_per_km - paced[-2].pace_sec_per_km
             observations["coach"].append(
@@ -1782,11 +1827,13 @@ def _phase_observations(
             observations["uncertainty"].append(coverage)
             observations["coach"].append(coverage)
     if len(cohort) >= 2 and all(_valid_positive_number(phase.average_hr) for phase in cohort):
-        execution.append(_template(
+        hr_evolution = _template(
             language, "fact.effort_hr",
             first=_fmt_number(cohort[0].average_hr, 0), last=_fmt_number(cohort[-1].average_hr, 0),
             first_number=cohort[0].effort_number, last_number=cohort[-1].effort_number,
-        ))
+        )
+        execution.append(hr_evolution)
+        takeaways.append(hr_evolution)
     hr_count = sum(_valid_positive_number(phase.average_hr) for phase in cohort)
     if hr_count < len(cohort):
         observations["uncertainty"].append(_template(
@@ -1821,7 +1868,10 @@ def build_workout_analysis_v2(
         has_baseline=comparison.available,
         has_cadence=workout.get("avg_cadence_spm") is not None or bool(workout.get("cadence_analysis")),
         has_elevation=workout.get("elevation_gain_m") is not None or bool(workout.get("elevation_analysis")),
-        has_structured_phases=phase_analysis.available,
+        has_structured_phases=any(
+            phase.phase_type in {"effort", "recovery", "warmup", "cooldown"}
+            for phase in phase_analysis.phases
+        ),
         has_effort_regularity=phase_analysis.effort_regularity.available,
         has_phase_heart_rate=any(
             _valid_positive_number(phase.average_hr) or _valid_positive_number(phase.max_hr)

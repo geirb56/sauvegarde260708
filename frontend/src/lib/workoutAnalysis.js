@@ -17,6 +17,30 @@ export const hasCoachObservation = (analysis) =>
   && typeof analysis.advice.text === "string"
   && analysis.advice.text.trim().length > 0;
 
+export const getSessionClassification = (analysis, t) => {
+  const structure = analysis?.signals?.session_structure;
+  if (structure?.available === true && ["intervals", "continuous"].includes(structure.code)) {
+    return {
+      label: t("workoutDetailExtended.structure"),
+      text: t(`workoutDetailExtended.structure${structure.code === "intervals" ? "Intervals" : "Continuous"}`),
+    };
+  }
+  const type = analysis?.signals?.session_type;
+  return type?.available === true && type.text
+    ? { label: t("analysis.type"), text: type.text }
+    : null;
+};
+
+export const getAnalysisTakeaway = (analysis) => {
+  const observations = analysis?.meaning?.observations;
+  const caveats = analysis?.meaning?.caveats;
+  if (Array.isArray(observations) && (observations.length > 0 || (Array.isArray(caveats) && caveats.length > 0))) {
+    return [...new Set([...observations, ...(Array.isArray(caveats) ? caveats : [])]
+      .filter((text) => typeof text === "string" && text.trim()))].join(" ");
+  }
+  return analysis?.meaning?.text;
+};
+
 export const getAnalysisLimitations = (analysis, t) => {
   const items = Array.isArray(analysis?.limitations) ? [...analysis.limitations] : [];
   const intensity = analysis?.signals?.intensity;

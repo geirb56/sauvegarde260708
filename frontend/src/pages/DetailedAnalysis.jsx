@@ -5,7 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useLanguage } from "@/context/LanguageContext";
 import { useSubscription } from "@/context/SubscriptionContext";
-import { getAnalysisLimitations, hasCoachObservation } from "@/lib/workoutAnalysis";
+import { getAnalysisLimitations, hasCoachObservation, getSessionClassification, getAnalysisTakeaway } from "@/lib/workoutAnalysis";
 import WorkoutAnalysisAccessNotice from "@/components/WorkoutAnalysisAccessNotice";
 import {
   ArrowLeft,
@@ -104,6 +104,7 @@ export default function DetailedAnalysis() {
   const Icon = getWorkoutIcon(analysis.workout?.type);
   const limitations = getAnalysisLimitations(analysis, t);
   const observationAvailable = hasCoachObservation(analysis);
+  const classification = getSessionClassification(analysis, t);
   const dateStr = new Date(analysis.workout?.date).toLocaleDateString(
     lang === "fr" ? "fr-FR" : lang === "es" ? "es-ES" : "en-US",
     { weekday: "short", month: "short", day: "numeric" },
@@ -151,8 +152,8 @@ export default function DetailedAnalysis() {
               <p className="font-mono text-xs">{analysis.signals?.volume?.text || "--"}</p>
             </div>
             <div>
-              <p className="font-mono text-[11px] uppercase text-muted-foreground mb-1">{t("analysis.type")}</p>
-              <p className="font-mono text-xs">{analysis.signals?.session_type?.text || "--"}</p>
+              <p className="font-mono text-[11px] uppercase text-muted-foreground mb-1">{classification?.label || t("analysis.type")}</p>
+              <p className="font-mono text-xs">{classification?.text || "--"}</p>
             </div>
           </div>
         </CardContent>
@@ -183,7 +184,7 @@ export default function DetailedAnalysis() {
             </span>
           </div>
           <p className="font-sans text-sm text-secondary-foreground leading-relaxed" data-testid="meaning-text">
-            {analysis.meaning?.text || t("workoutDetailExtended.meaningUnavailable")}
+            {getAnalysisTakeaway(analysis) || t("workoutDetailExtended.meaningUnavailable")}
           </p>
         </CardContent>
       </Card>
@@ -226,6 +227,7 @@ export default function DetailedAnalysis() {
               <p className="font-mono text-[11px] text-muted-foreground">
                 baseline: {analysis.comparison?.baseline_sample_count ?? "--"}
               </p>
+              {analysis.comparison?.available && <p className="text-sm text-muted-foreground">{t("workoutDetailExtended.descriptiveReference")}</p>}
               {analysis.comparison?.distance_km && (
                 <p className="font-mono text-[11px] text-muted-foreground">
                   distance: {formatSignedMetric(analysis.comparison.distance_km, " km")}
