@@ -1,0 +1,325 @@
+"""PR332 queue/worker contracts, isolated local Redis and mocked Garmin/Mongo."""
+
+import asyncio
+import json
+import time
+from datetime import datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+import redis
+
+from jobs import queue
+from workers import sync_worker
+from test_activity_details_delayed_redis_c321 import client_for, local_redis
+
+
+async def claimed_laps(client, user_id="a"):
+    assert await queue.enqueue_activity_laps(user_id, "123") == {"status": "queued"}
+    return await queue.claim_job(timeout=1)
+
+
+def mock_slots(monkeypatch):
+    acquire = AsyncMock(return_value=True)
+    release = AsyncMock()
+    monkeypatch.setattr(sync_worker.rate_limiter, "acquire_global_slot", acquire)
+    monkeypatch.setattr(sync_worker.rate_limiter, "release_global_slot", release)
+    monkeypatch.setattr(sync_worker.rate_limiter, "set_cooldown", AsyncMock())
+    monkeypatch.setattr(sync_worker, "update_sync_progress", AsyncMock())
+    return acquire, release
+
+
+def test_repeated_enqueue_is_per_user_and_type(local_redis, monkeypatch):
+    async def scenario():
+        async with client_for(local_redis, monkeypatch) as client:
+            results = await asyncio.gather(*[
+                queue.enqueue_activity_laps("a", "123") for _ in range(10)
+            ])
+            assert results.count({"status": "queued"}) == 1
+            assert results.count({"status": "already_queued"}) == 9
+            # Reservation intentionally stores only job id; another target also
+            # reports the occupied per-user/type slot, not its own queued state.
+            assert await queue.enqueue_activity_laps("a", "456") == {"status": "already_queued"}
+            assert await queue.enqueue_activity_details("a", "123") == {"status": "queued"}
+            assert await queue.enqueue_activity_laps("b", "123") == {"status": "queued"}
+            assert await client.llen(queue.QUEUE_KEY) == 3
+            laps_owner = await client.get(queue._pending_key(queue.JOB_ACTIVITY_LAPS, "a"))
+            details_owner = await client.get(queue._pending_key(queue.JOB_ACTIVITY_DETAILS, "a"))
+            assert laps_owner and details_owner and laps_owner != details_owner
+            assert not queue._should_update_sync_progress(queue.JOB_ACTIVITY_LAPS)
+    asyncio.run(scenario())
+
+
+def test_enqueue_failure_releases_only_its_reservation(local_redis, monkeypatch):
+    async def scenario():
+        async with client_for(local_redis, monkeypatch) as client:
+            key = queue._pending_key(queue.JOB_ACTIVITY_LAPS, "a")
+
+            async def fail(*args):
+                await client.set(key, "new-owner")
+                raise redis.ConnectionError("synthetic outage")
+
+            monkeypatch.setattr(client, "lpush", fail)
+            with pytest.raises(redis.ConnectionError):
+                await queue.enqueue_activity_laps("a", "123")
+            assert await client.get(key) == "new-owner"
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("invalid", [None, "", "--help", "../123", True])
+def test_invalid_target_never_enqueues(monkeypatch, invalid):
+    client = AsyncMock()
+    monkeypatch.setattr(queue, "get_redis", lambda: client)
+    with pytest.raises(ValueError):
+        asyncio.run(queue.enqueue_activity_laps("a", invalid))
+    client.set.assert_not_awaited()
+
+
+def test_laps_dispatch_is_targeted(monkeypatch):
+    from garmin import activity_laps
+
+    fetch = AsyncMock(return_value={"success": True, "status": "cached"})
+    monkeypatch.setattr(activity_laps, "fetch_activity_laps", fetch)
+    db = object()
+    assert asyncio.run(sync_worker._run_job(db, queue.JOB_ACTIVITY_LAPS, "a", "123"))["success"]
+    fetch.assert_awaited_once_with(db, "a", "123")
+
+
+def test_worker_deferred_retry_promotes_and_acks(local_redis, monkeypatch):
+    async def scenario():
+        async with client_for(local_redis, monkeypatch) as client:
+            raw, job = await claimed_laps(client)
+            acquire, release = mock_slots(monkeypatch)
+            due = time.time() + 900
+            work = AsyncMock(return_value={
+                "status": "deferred", "success": False,
+                "retry_at": datetime.fromtimestamp(due, timezone.utc).isoformat(),
+            })
+            monkeypatch.setattr(sync_worker, "_run_job", work)
+            await sync_worker.process_job(None, client, raw, job)
+            assert job["attempts"] == 0
+            assert await client.llen(queue.PROCESSING_KEY) == 0
+            assert await client.hlen(queue.CLAIMS_KEY) == 0
+            assert await client.llen(queue.QUEUE_KEY) == 0
+            assert await client.zscore(queue.DELAYED_KEY, job["id"]) == pytest.approx(due, rel=0, abs=1e-6)
+            key = queue._pending_key(queue.JOB_ACTIVITY_LAPS, "a")
+            assert await client.ttl(key) >= 2698
+            assert await queue.promote_due_activity_details() == 0
+            monkeypatch.setattr(queue.time, "time", lambda: due + 1)
+            counts = await asyncio.gather(
+                queue.promote_due_activity_details(), queue.promote_due_activity_details(),
+            )
+            assert sum(counts) == 1
+            raw, job = await queue.claim_job(timeout=1)
+            work.return_value = {"success": True, "status": "cached"}
+            await sync_worker.process_job(None, client, raw, job)
+            assert await client.get(key) is None
+            assert await client.llen(queue.PROCESSING_KEY) == 0
+            assert await client.hlen(queue.DELAYED_PAYLOADS_KEY) == 0
+            assert acquire.await_count == release.await_count == 2
+            sync_worker.rate_limiter.set_cooldown.assert_not_awaited()
+            sync_worker.update_sync_progress.assert_not_awaited()
+            work.assert_awaited_with(None, queue.JOB_ACTIVITY_LAPS, "a", "123")
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("blocked", ["user", "global"])
+def test_laps_backpressure_shares_existing_locks(local_redis, monkeypatch, blocked):
+    async def scenario():
+        async with client_for(local_redis, monkeypatch) as client:
+            raw, job = await claimed_laps(client)
+            acquire, release = mock_slots(monkeypatch)
+            acquire.return_value = False
+            lock = f"{queue.LOCK_PREFIX}a"
+            if blocked == "user":
+                await client.set(lock, "existing-sync", ex=queue.LOCK_TTL)
+            work = AsyncMock()
+            monkeypatch.setattr(sync_worker, "_run_job", work)
+            await sync_worker.process_job(None, client, raw, job)
+            assert await client.zcard(queue.DELAYED_KEY) == 1
+            assert await client.llen(queue.QUEUE_KEY) == 0
+            assert job["attempts"] == 0
+            work.assert_not_awaited()
+            release.assert_not_awaited()
+            assert acquire.await_count == (0 if blocked == "user" else 1)
+            assert await client.get(lock) == ("existing-sync" if blocked == "user" else None)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("transition", ["defer", "ack", "cancel"])
+def test_interrupted_worker_redelivery(local_redis, monkeypatch, transition):
+    async def scenario():
+        async with client_for(local_redis, monkeypatch) as client:
+            raw, job = await claimed_laps(client)
+            mock_slots(monkeypatch)
+            work = AsyncMock(return_value={"success": True})
+            monkeypatch.setattr(sync_worker, "_run_job", work)
+            if transition == "cancel":
+                work.side_effect = asyncio.CancelledError()
+                error = asyncio.CancelledError
+            else:
+                error = redis.ConnectionError
+                name = "ack_job" if transition == "ack" else "defer_activity_details"
+                monkeypatch.setattr(sync_worker, name, AsyncMock(side_effect=error("outage")))
+                if transition == "defer":
+                    work.return_value = {"status": "deferred", "retry_at": "2099-01-01T00:00:00+00:00"}
+            with pytest.raises(error):
+                await sync_worker.process_job(None, client, raw, job)
+            assert await client.llen(queue.PROCESSING_KEY) == 1
+            assert await client.get(f"{queue.LOCK_PREFIX}a") is None
+            await client.hset(queue.CLAIMS_KEY, job["id"], 0)
+            assert sum(await asyncio.gather(queue.recover_orphans(), queue.recover_orphans())) == 1
+            raw, job = await queue.claim_job(timeout=1)
+            monkeypatch.setattr(sync_worker, "ack_job", queue.ack_job)
+            monkeypatch.setattr(sync_worker, "defer_activity_details", queue.defer_activity_details)
+            work.side_effect = None
+            work.return_value = {"success": True, "status": "cached"}
+            await sync_worker.process_job(None, client, raw, job)
+            assert await client.llen(queue.PROCESSING_KEY) == 0
+            assert await client.hlen(queue.CLAIMS_KEY) == 0
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("new_owner", [False, True])
+def test_stale_pending_cannot_refresh_release_or_execute(local_redis, monkeypatch, new_owner):
+    async def scenario():
+        async with client_for(local_redis, monkeypatch) as client:
+            raw, job = await claimed_laps(client)
+            key = queue._pending_key(queue.JOB_ACTIVITY_LAPS, "a")
+            await client.delete(key)
+            if new_owner:
+                await client.set(key, "new-owner", ex=30)
+            assert await queue.maintain_details_pending(
+                client, "a", job["id"], job_type=queue.JOB_ACTIVITY_LAPS,
+            ) == 0
+            mock_slots(monkeypatch)
+            work = AsyncMock(return_value={"success": True})
+            monkeypatch.setattr(sync_worker, "_run_job", work)
+            await sync_worker.process_job(None, client, raw, job)
+            assert work.await_count == (0 if new_owner else 1)
+            assert await client.get(key) == ("new-owner" if new_owner else None)
+            if new_owner:
+                assert await queue.recover_details_pending(client, raw, job) == 0
+                await queue.maintain_details_pending(
+                    client, "a", job["id"], release=True, job_type=queue.JOB_ACTIVITY_LAPS,
+                )
+                assert await client.get(key) == "new-owner"
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("invalid", ["type", "identity", "pending_type"])
+def test_lua_validation_preserves_inflight_and_delayed(local_redis, monkeypatch, invalid):
+    async def scenario():
+        async with client_for(local_redis, monkeypatch) as client:
+            raw, job = await claimed_laps(client)
+            job["not_before"] = time.time() - 1
+            if invalid == "pending_type":
+                key = queue._pending_key(queue.JOB_ACTIVITY_LAPS, "a")
+                await client.delete(key)
+                await client.lpush(key, "wrong-type")
+            else:
+                job["type" if invalid == "type" else "activity_id"] = "invalid"
+            with pytest.raises(redis.ResponseError):
+                await queue.defer_activity_details(raw, job)
+            assert await client.llen(queue.PROCESSING_KEY) == 1
+            assert await client.hlen(queue.CLAIMS_KEY) == 1
+            assert await client.zcard(queue.DELAYED_KEY) == 0
+    asyncio.run(scenario())
+
+
+def test_promotion_checks_type_and_correct_pending_suffix(local_redis, monkeypatch):
+    async def scenario():
+        async with client_for(local_redis, monkeypatch) as client:
+            raw, job = await claimed_laps(client)
+            job["not_before"] = time.time() - 1
+            await queue.defer_activity_details(raw, job)
+            await client.hset(queue.DELAYED_PAYLOADS_KEY, job["id"],
+                              json.dumps({**job, "type": queue.JOB_SYNC_USER}))
+            with pytest.raises(redis.ResponseError):
+                await queue.promote_due_activity_details()
+            assert await client.zcard(queue.DELAYED_KEY) == 1
+            await client.hset(queue.DELAYED_PAYLOADS_KEY, job["id"], json.dumps(job))
+            await client.set(queue._pending_key(queue.JOB_ACTIVITY_DETAILS, "a"), "details-owner")
+            await client.set(queue._pending_key(queue.JOB_ACTIVITY_LAPS, "a"), "new-laps-owner")
+            assert await queue.promote_due_activity_details() == 0
+            assert await client.get(queue._pending_key(queue.JOB_ACTIVITY_DETAILS, "a")) == "details-owner"
+            assert await client.get(queue._pending_key(queue.JOB_ACTIVITY_LAPS, "a")) == "new-laps-owner"
+            assert await client.hget(queue.DETAILS_OUTCOMES_KEY, job["id"]) == "superseded"
+    asyncio.run(scenario())
+
+
+def test_laps_delayed_storage_survives_local_redis_restart(local_redis, monkeypatch):
+    async def park():
+        async with client_for(local_redis, monkeypatch) as client:
+            raw, job = await claimed_laps(client)
+            job["not_before"] = time.time() - 1
+            await queue.defer_activity_details(raw, job)
+            await queue.defer_activity_details(raw, {**job, "attempts": 99})
+            assert await client.zcard(queue.DELAYED_KEY) == 1
+    asyncio.run(park())
+    local_redis[1]()
+
+    async def promote():
+        async with client_for(local_redis, monkeypatch) as client:
+            assert await queue.promote_due_activity_details() == 1
+            raw, job = await queue.claim_job(timeout=1)
+            assert job["type"] == queue.JOB_ACTIVITY_LAPS
+            assert job["attempts"] == 0
+            key = queue._pending_key(queue.JOB_ACTIVITY_LAPS, "a")
+            await client.delete(key)
+            assert await queue.recover_details_pending(client, raw, {**job, "type": queue.JOB_ACTIVITY_DETAILS}) == 0
+            assert await queue.recover_details_pending(client, raw, job) == 1
+            await queue.ack_job(raw, job["id"])
+            await client.delete(key)
+            assert await queue.recover_details_pending(client, raw, job) == 0
+    asyncio.run(promote())
+
+
+def test_laps_stale_watchdog_cannot_recover_fresh_redelivery(local_redis, monkeypatch):
+    async def scenario():
+        async with client_for(local_redis, monkeypatch) as client:
+            raw, job = await claimed_laps(client)
+            await client.hset(queue.CLAIMS_KEY, job["id"], 0)
+            original_hget = client.hget
+
+            async def redeliver(key, job_id):
+                old = await original_hget(key, job_id)
+                await queue.requeue_job(raw, job_id)
+                await queue.claim_job(timeout=1)
+                return old
+
+            monkeypatch.setattr(client, "hget", redeliver)
+            assert await queue.recover_orphans() == 0
+            assert await client.llen(queue.PROCESSING_KEY) == 1
+            assert await client.llen(queue.QUEUE_KEY) == 0
+    asyncio.run(scenario())
+
+
+def test_laps_failures_use_existing_retries_and_targeted_timeout(local_redis, monkeypatch):
+    async def scenario():
+        async with client_for(local_redis, monkeypatch) as client:
+            raw, job = await claimed_laps(client)
+            mock_slots(monkeypatch)
+            monkeypatch.setattr(sync_worker, "_run_job", AsyncMock(side_effect=RuntimeError("failure")))
+            sleep = AsyncMock()
+            wait_for = sync_worker.asyncio.wait_for
+            timeouts = []
+
+            async def timed(work, timeout):
+                timeouts.append(timeout)
+                return await wait_for(work, timeout)
+
+            monkeypatch.setattr(sync_worker, "asyncio", SimpleNamespace(sleep=sleep, wait_for=timed))
+            for attempt in range(sync_worker.MAX_RETRIES):
+                await sync_worker.process_job(None, client, raw, job)
+                if attempt + 1 < sync_worker.MAX_RETRIES:
+                    assert await client.llen(queue.QUEUE_KEY) == 1
+                    raw, job = await queue.claim_job(timeout=1)
+                    assert job["attempts"] == attempt + 1
+            assert timeouts == [max(sync_worker.JOB_TIMEOUT, 65)] * sync_worker.MAX_RETRIES
+            assert sleep.await_count == sync_worker.MAX_RETRIES - 1
+            assert await client.llen(queue.PROCESSING_KEY) == 0
+            assert await client.get(queue._pending_key(queue.JOB_ACTIVITY_LAPS, "a")) is None
+            assert await client.get(queue.STATS_FAILED_KEY) == "1"
+    asyncio.run(scenario())

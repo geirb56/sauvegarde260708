@@ -106,6 +106,15 @@ class GccliProvider(Provider):
             acts = [a for a in acts if (a.get("start_time") or "") > since]
         return acts
 
+    def get_activity_laps(self, user_id: str, activity_id: str) -> List[Dict]:
+        from ..activity_laps import normalize_activity_laps, validate_activity_id
+
+        activity_id = validate_activity_id(activity_id)
+        if not self._garmin_account:
+            raise GccliError("Per-user Garmin account required")
+        raw = self._runner.fetch_activity_splits(activity_id, account=self._garmin_account)
+        return normalize_activity_laps(raw, activity_id)
+
     def get_activity_phases(self, user_id: str, activity_id: str) -> List[Dict]:
         from ..data_layer import normalize_typed_splits
         from ..activity_ids import normalize_activity_id
