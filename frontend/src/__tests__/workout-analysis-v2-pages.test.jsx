@@ -553,6 +553,11 @@ test.each([
         text: "Execution details and unavailable intensity caveat.",
         observations: ["Measured comparable efforts show 7.7 s/km pace dispersion."],
       },
+      advice: {
+        available: true,
+        code: "advice.structured_phases",
+        text: "The final effort was faster. Physiological intensity cannot be reliably determined.",
+      },
       phase_analysis: makeStructuredPhaseAnalysis(),
     },
   });
@@ -562,6 +567,18 @@ test.each([
   expect(screen.getByTestId("structured-phase-analysis")).toHaveAttribute("data-testid", "structured-phase-analysis");
   expect(screen.queryByText("Execution details and unavailable intensity caveat.")).not.toBeInTheDocument();
   expect(screen.queryByText(/intensity.*unavailable/i)).not.toBeInTheDocument();
+  expect(screen.queryByText("The final effort was faster. Physiological intensity cannot be reliably determined.")).not.toBeInTheDocument();
+});
+
+test.each([
+  null,
+  [],
+  [null, { km: 1, pace_min_km: null }, { km: 2, pace_min_km: 0 }],
+])("WorkoutDetail omits absent or unusable kilometer splits: %s", async (km_splits) => {
+  mockAxios({ workoutPayload: { ...workout, km_splits } });
+  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+  await screen.findByTestId("workout-detail");
+  expect(screen.queryByTestId("kilometer-splits")).not.toBeInTheDocument();
 });
 
 test.each([

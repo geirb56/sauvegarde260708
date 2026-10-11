@@ -50,6 +50,8 @@ export const getAnalysisTakeaway = (analysis) => {
 export const getDistinctCoachObservation = (analysis) => {
   if (!hasCoachObservation(analysis)) return null;
   const observation = analysis.advice.text.trim();
+  if (analysis?.advice?.code === "advice.structured_phases"
+    && analysis?.signals?.intensity?.available !== true) return null;
   if (analysis?.advice?.code === "advice.effort_dispersion"
     && analysis?.phase_analysis?.effort_regularity?.available === true) return null;
   return observation === getAnalysisTakeaway(analysis)?.trim() ? null : observation;
