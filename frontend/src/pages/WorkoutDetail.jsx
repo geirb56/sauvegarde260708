@@ -7,7 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import WorkoutAnalysisAccessNotice from "@/components/WorkoutAnalysisAccessNotice";
 import { useLanguage } from "@/context/LanguageContext";
 import { useSubscription } from "@/context/SubscriptionContext";
-import { getDistinctCoachObservation, getSessionClassification, getAnalysisTakeaway } from "@/lib/workoutAnalysis";
+import { formatPaceDisplay, getDistinctCoachObservation, getSessionClassification, getAnalysisTakeaway } from "@/lib/workoutAnalysis";
 import { formatSpeed } from "@/utils/units";
 import WorkoutPhaseAnalysis from "@/components/workout/WorkoutPhaseAnalysis";
 import {
@@ -182,6 +182,7 @@ export default function WorkoutDetail() {
   const coachObservation = getDistinctCoachObservation(analysisForRender);
   const takeaway = getAnalysisTakeaway(analysisForRender);
   const classification = getSessionClassification(analysisForRender, t);
+  const intensity = analysisForRender?.signals?.intensity;
 
   return (
     <div className="p-4 pb-24 max-w-3xl mx-auto min-w-0 break-words space-y-5" data-testid="workout-detail">
@@ -196,7 +197,7 @@ export default function WorkoutDetail() {
         </div>
       </div>
 
-      <section aria-labelledby="session-summary-title" data-testid="session-summary">
+      <section aria-labelledby="session-summary-title" data-testid={hasAnalysis ? "coach-summary" : "session-summary"}>
         <h2 id="session-summary-title" className="text-base font-semibold mb-2">{t("workoutDetailExtended.sessionSummary")}</h2>
         <Card className="bg-card border-border">
         <CardContent className="p-4 space-y-3">
@@ -232,13 +233,13 @@ export default function WorkoutDetail() {
 
       <WorkoutPhaseAnalysis phaseAnalysis={analysisForRender?.phase_analysis} t={t} lang={lang} />
 
-      {takeaway && <section aria-labelledby="takeaways-title">
+      {(takeaway || classification || (intensity?.available === true && intensity.text)) && <section aria-labelledby="takeaways-title">
         <h2 id="takeaways-title" className="text-base font-semibold mb-2">{t("workoutDetailExtended.takeaways")}</h2>
         <Card className="bg-card border-border"><CardContent className="p-4 space-y-2">
-          <p className="text-sm leading-relaxed" data-testid="meaning-text">{takeaway}</p>
+          {takeaway && <p className="text-sm leading-relaxed" data-testid="meaning-text">{takeaway}</p>}
           {classification && <p className="text-sm text-muted-foreground" data-testid="session-classification">{classification.label}: {classification.text}</p>}
-          {analysisForRender.signals?.intensity?.available === true && analysisForRender.signals.intensity.text && (
-            <p className="text-sm" data-testid="available-intensity">{t("analysis.intensity")}: {analysisForRender.signals.intensity.text}</p>
+          {intensity?.available === true && intensity.text && (
+            <p className="text-sm" data-testid="available-intensity">{t("analysis.intensity")}: {intensity.text}</p>
           )}
         </CardContent></Card>
       </section>}

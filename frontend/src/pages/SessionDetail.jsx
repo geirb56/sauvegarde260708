@@ -26,16 +26,6 @@ const localeByLang = {
   es: "es-ES",
 };
 
-const KNOWN_METRIC_KEYS = new Set([
-  "id",
-  "name",
-  "date",
-  "type",
-  "notes",
-  "user_id",
-  "_id",
-]);
-
 const formatLabel = (key) => key
   .replace(/_/g, " ")
   .replace(/\b\w/g, (char) => char.toUpperCase());
@@ -114,7 +104,7 @@ export default function SessionDetail() {
         ? { label: t("workout.avgHeartRate"), value: `${Math.round(session.avg_heart_rate)} bpm` } : null,
     ].filter(Boolean);
     return metrics;
-  }, [locale, session, t, unitSystem]);
+  }, [session, t, unitSystem]);
 
   if (loading) return <DetailSkeleton />;
 
