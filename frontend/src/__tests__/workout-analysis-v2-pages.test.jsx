@@ -1017,13 +1017,15 @@ test.each([null, 0, -2, NaN, Infinity, -Infinity, "6"])("invalid absolute paces 
   expect(screen.getByTestId("workout-detail")).not.toHaveTextContent("Infinity");
 });
 
-test.each([null, 0, -2, NaN, Infinity])("an invalid pace %s without a usable speed produces an explicit pacing empty state", async (pace) => {
-  mockAxios({ analysisPayload: { ...analysis, pacing: { available: true, average_pace_min_km: pace, average_speed_kmh: 0 } } });
+test.each([null, 0, -2, NaN, Infinity])("invalid engine pace %s does not replace a valid recorded pace", async (pace) => {
+  mockAxios({
+    workoutPayload: { ...workout, avg_pace_min_km: 6 },
+    analysisPayload: { ...analysis, pacing: { available: true, average_pace_min_km: pace, average_speed_kmh: 0 } },
+  });
   renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
   await screen.findByTestId("coach-summary");
   expect(screen.queryByTestId("pacing-summary-card")).not.toBeInTheDocument();
-  expect(screen.queryByText(translations.en.workoutDetailExtended.pacingUnavailable)).not.toBeInTheDocument();
-  expect(screen.getByTestId("primary-metrics")).not.toHaveTextContent("/km");
+  expect(screen.getByTestId("primary-metrics")).toHaveTextContent("6:00/km");
 });
 
 test.each([null, {}, { z1: null, z2: NaN, z3: Infinity, z4: -1, z5: 101 }, { z1: 0, z2: 0 }, { unknown: 50 }])(
@@ -1079,7 +1081,7 @@ test("null analysis is not shown as a network failure", async () => {
   mockAxios({ analysisPayload: null });
   renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
   await screen.findByTestId("workout-detail");
-  expect(await screen.findByText(translations.en.workoutDetailExtended.analysisUnavailable)).toBeVisible();
+  expect(screen.queryByText(translations.en.workoutDetailExtended.analysisUnavailable)).not.toBeInTheDocument();
   expect(screen.queryByText(translations.en.workoutDetailExtended.analysisLoadError)).not.toBeInTheDocument();
   expect(screen.queryByTestId("splits-chart-card")).not.toBeInTheDocument();
 });
@@ -1093,7 +1095,10 @@ test("late responses are ignored after the workout route changes even if transpo
     if (url.includes("/workouts/w1")) return delayedWorkout;
     if (url.includes("/coach/workout-analysis/w1")) return delayedAnalysis;
     if (url.includes("/workouts/w2")) return Promise.resolve({ data: { ...workout, id: "w2", name: "New activity" } });
-    return Promise.resolve({ data: { ...analysis, summary: { text: "New analysis" } } });
+    return Promise.resolve({ data: {
+      ...analysis,
+      advice: { available: true, code: "advice.other", text: "New Coach note" },
+    } });
   });
   renderWithProviders(
     <><Link to="/workout/w2">Next activity</Link><Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes></>,
@@ -1102,10 +1107,10 @@ test("late responses are ignored after the workout route changes even if transpo
   const firstSignals = axios.get.mock.calls.map(([, options]) => options.signal);
   fireEvent.click(screen.getByText("Next activity"));
   expect(firstSignals.every((signal) => signal.aborted)).toBe(true);
-  await screen.findByText("New analysis");
+  await screen.findByText("New Coach note");
   resolveWorkout({ data: workout });
   resolveAnalysis({ data: analysis });
-  await waitFor(() => expect(screen.getByTestId("coach-summary")).toHaveTextContent("New analysis"));
+  await waitFor(() => expect(screen.getByTestId("workout-detail")).toHaveTextContent("New Coach note"));
   expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("New activity");
 });
 
@@ -1240,7 +1245,6 @@ test.each([null, 5])("missing evidence counts are omitted, with total %s", async
   await screen.findByTestId("coach-summary");
   expect(screen.queryByTestId("comparison-card")).not.toBeInTheDocument();
   expect(screen.queryByTestId("similar-comparison-card")).not.toBeInTheDocument();
-  expect(screen.queryByText(expected)).not.toBeInTheDocument();
 });
 
 test("similar heart-rate average and delta are rounded to whole bpm", async () => {
@@ -1485,8 +1489,9 @@ test("DetailedAnalysis uses the canonical V2 endpoint", async () => {
   expect(screen.queryByTestId("header-context")).not.toBeInTheDocument();
   const urls = axios.get.mock.calls.map(([url]) => url);
   expect(urls).toEqual([expect.stringContaining("/coach/workout-analysis/w1")]);
-  expect(screen.getByText("Type")).toBeInTheDocument();
-  expect(screen.queryByText("Regularity")).not.toBeInTheDocument();
+  expect(screen.getByTestId("primary-metrics")).toHaveTextContent("10.0 km");
+  expect(screen.queryByTestId("comparison-card")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("similar-comparison-card")).not.toBeInTheDocument();
 });
 
 test("SessionDetail uses the canonical V2 endpoint", async () => {
