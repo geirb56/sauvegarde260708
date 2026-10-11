@@ -178,6 +178,7 @@ class WorkoutAnalysisEffortRegularity(BaseModel):
 
 
 class WorkoutAnalysisPhaseAnalysis(BaseModel):
+    # Availability preserves observed phase data, including unclassified phases.
     available: bool = False
     analysis_type: Literal["standard", "structured_phases"] = "standard"
     source: Optional[str] = None
@@ -530,6 +531,8 @@ def _template(language: str, key: str, **params) -> str:
             "fact.phase_max_hr": "Peak heart rate observed in the phases: {maximum} bpm.",
             "advice.phases": "These descriptive observations can inform the Coach; the next session remains the responsibility of Training Today/Week.",
             "limitations.phase_splits": "No kilometre splits or kilometre split analysis are available; structured phases are available separately.",
+            "limitations.phase_classification": "Recorded phases are unclassified; no usable structured phase evidence is available.",
+            "limitations.phase_classification_partial": "Some recorded phases are unclassified; effort and recovery observations cover only classified phases.",
             "limitations.phase_missing": "Missing phase data: {fields}.",
             "limitations.phase_quality": "Phase reliability limitation: {reason}.",
             "limitations.phase_regularity": "Effort pace regularity is unavailable.",
@@ -567,6 +570,8 @@ def _template(language: str, key: str, **params) -> str:
             "fact.phase_max_hr": "FC maximale observée dans les phases : {maximum} bpm.",
             "advice.phases": "Ces observations descriptives peuvent éclairer le Coach ; la prochaine séance reste sous la responsabilité de Training Today/Week.",
             "limitations.phase_splits": "Aucune fraction kilométrique ni analyse kilométrique n'est disponible ; les phases structurées sont disponibles séparément.",
+            "limitations.phase_classification": "Les phases enregistrées ne sont pas classifiées ; aucune preuve de phases structurées exploitables n'est disponible.",
+            "limitations.phase_classification_partial": "Certaines phases enregistrées ne sont pas classifiées ; les observations d'effort et de récupération portent uniquement sur les phases classifiées.",
             "limitations.phase_missing": "Données de phases manquantes : {fields}.",
             "limitations.phase_quality": "Limite de fiabilité des phases : {reason}.",
             "limitations.phase_regularity": "La régularité des allures des efforts est indisponible.",
@@ -604,6 +609,8 @@ def _template(language: str, key: str, **params) -> str:
             "fact.phase_max_hr": "Frecuencia cardíaca máxima observada en las fases: {maximum} bpm.",
             "advice.phases": "Estas observaciones descriptivas pueden informar al Coach; la próxima sesión sigue bajo la responsabilidad de Training Today/Week.",
             "limitations.phase_splits": "No hay parciales kilométricos ni análisis kilométrico disponibles; las fases estructuradas están disponibles por separado.",
+            "limitations.phase_classification": "Las fases registradas no están clasificadas; no hay evidencia de fases estructuradas utilizables.",
+            "limitations.phase_classification_partial": "Algunas fases registradas no están clasificadas; las observaciones de esfuerzo y recuperación cubren solo las fases clasificadas.",
             "limitations.phase_missing": "Datos de fases ausentes: {fields}.",
             "limitations.phase_quality": "Limitación de fiabilidad de las fases: {reason}.",
             "limitations.phase_regularity": "La regularidad del ritmo de los esfuerzos no está disponible.",
@@ -1435,6 +1442,12 @@ def _build_limitations(
         codes.append("heart_rate")
     if not evidence.has_splits:
         codes.append("phase_splits" if evidence.has_structured_phases else "splits")
+    if phase_analysis is not None and any(
+        phase.phase_type == "unknown" for phase in phase_analysis.phases
+    ):
+        codes.append(
+            "phase_classification_partial" if evidence.has_structured_phases else "phase_classification"
+        )
     codes.append("baseline_descriptive" if comparison.available else "baseline")
     similar = comparison.similar
     if similar is not None:
@@ -1821,7 +1834,10 @@ def build_workout_analysis_v2(
         has_baseline=comparison.available,
         has_cadence=workout.get("avg_cadence_spm") is not None or bool(workout.get("cadence_analysis")),
         has_elevation=workout.get("elevation_gain_m") is not None or bool(workout.get("elevation_analysis")),
-        has_structured_phases=phase_analysis.available,
+        has_structured_phases=any(
+            phase.phase_type in {"effort", "recovery", "warmup", "cooldown"}
+            for phase in phase_analysis.phases
+        ),
         has_effort_regularity=phase_analysis.effort_regularity.available,
         has_phase_heart_rate=any(
             _valid_positive_number(phase.average_hr) or _valid_positive_number(phase.max_hr)
