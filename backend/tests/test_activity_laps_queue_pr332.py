@@ -37,10 +37,9 @@ def test_repeated_enqueue_is_per_user_and_type(local_redis, monkeypatch):
                 queue.enqueue_activity_laps("a", "123") for _ in range(10)
             ])
             assert results.count({"status": "queued"}) == 1
-            assert results.count({"status": "already_queued"}) == 9
-            # Reservation intentionally stores only job id; another target also
-            # reports the occupied per-user/type slot, not its own queued state.
-            assert await queue.enqueue_activity_laps("a", "456") == {"status": "already_queued"}
+            assert results.count({"status": "already_queued"}) + results.count({"status": "busy"}) == 9
+            assert await queue.enqueue_activity_laps("a", "123") == {"status": "already_queued"}
+            assert await queue.enqueue_activity_laps("a", "456") == {"status": "busy"}
             assert await queue.enqueue_activity_details("a", "123") == {"status": "queued"}
             assert await queue.enqueue_activity_laps("b", "123") == {"status": "queued"}
             assert await client.llen(queue.QUEUE_KEY) == 3
@@ -48,6 +47,48 @@ def test_repeated_enqueue_is_per_user_and_type(local_redis, monkeypatch):
             details_owner = await client.get(queue._pending_key(queue.JOB_ACTIVITY_DETAILS, "a"))
             assert laps_owner and details_owner and laps_owner != details_owner
             assert not queue._should_update_sync_progress(queue.JOB_ACTIVITY_LAPS)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("location", ["queue", "processing", "delayed", "unknown"])
+def test_post_dedup_confirms_pending_target_in_all_delivery_states(local_redis, monkeypatch, location):
+    async def scenario():
+        async with client_for(local_redis, monkeypatch) as client:
+            if location == "unknown":
+                await client.set(queue._pending_key(queue.JOB_ACTIVITY_LAPS, "a"), "unknown-job")
+            else:
+                assert await queue.enqueue_activity_laps("a", "123") == {"status": "queued"}
+                if location != "queue":
+                    raw, job = await queue.claim_job(timeout=1)
+                    if location == "delayed":
+                        job["not_before"] = time.time() + 900
+                        await queue.defer_activity_details(raw, job)
+            assert await queue.enqueue_activity_laps("a", "123") == {
+                "status": "busy" if location == "unknown" else "already_queued",
+            }
+            assert await queue.enqueue_activity_laps("a", "456") == {"status": "busy"}
+            assert await client.llen(queue.QUEUE_KEY) == (1 if location == "queue" else 0)
+            assert await client.llen(queue.PROCESSING_KEY) == (1 if location == "processing" else 0)
+            assert await client.zcard(queue.DELAYED_KEY) == (1 if location == "delayed" else 0)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("payload", [
+    "invalid JSON",
+    json.dumps({"id": "owner", "type": queue.JOB_ACTIVITY_DETAILS,
+                "user_id": "a", "activity_id": "123"}),
+    json.dumps({"id": "owner", "type": queue.JOB_ACTIVITY_LAPS,
+                "user_id": "other", "activity_id": "123"}),
+])
+def test_pending_lookup_fails_closed_for_unknown_delivery(local_redis, monkeypatch, payload):
+    async def scenario():
+        async with client_for(local_redis, monkeypatch) as client:
+            key = queue._pending_key(queue.JOB_ACTIVITY_LAPS, "a")
+            await client.set(key, "owner")
+            await client.lpush(queue.QUEUE_KEY, payload)
+            assert await queue.enqueue_activity_laps("a", "123") == {"status": "busy"}
+            assert await client.get(key) == "owner"
+            assert await client.llen(queue.QUEUE_KEY) == 1
     asyncio.run(scenario())
 
 
@@ -67,13 +108,23 @@ def test_enqueue_failure_releases_only_its_reservation(local_redis, monkeypatch)
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("invalid", [None, "", "--help", "../123", True])
+@pytest.mark.parametrize("invalid", [None, "", "--help", "../123", True, "0", "garmin-0"])
 def test_invalid_target_never_enqueues(monkeypatch, invalid):
     client = AsyncMock()
     monkeypatch.setattr(queue, "get_redis", lambda: client)
     with pytest.raises(ValueError):
         asyncio.run(queue.enqueue_activity_laps("a", invalid))
     client.set.assert_not_awaited()
+
+
+def test_laps_enqueue_normalizes_prefixed_target_and_dedup(local_redis, monkeypatch):
+    async def scenario():
+        async with client_for(local_redis, monkeypatch) as client:
+            assert await queue.enqueue_activity_laps("a", "garmin-00123") == {"status": "queued"}
+            assert json.loads(await client.lindex(queue.QUEUE_KEY, 0))["activity_id"] == "123"
+            assert await queue.enqueue_activity_laps("a", "000123") == {"status": "already_queued"}
+            assert await queue.enqueue_activity_laps("a", "garmin-456") == {"status": "busy"}
+    asyncio.run(scenario())
 
 
 def test_laps_dispatch_is_targeted(monkeypatch):

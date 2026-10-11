@@ -148,7 +148,13 @@ async def request_activity_laps(db, user_id, activity_id):
         }}},
     )
     if not claim.modified_count:
-        return {"status": "already_requested"}
+        current = await db.garmin_activities.find_one(identity, {"_id": 0})
+        if current is None or _cached(current):
+            return {"status": "not_found" if current is None else "cached"}
+        state = current.get("activity_laps_fetch") or {}
+        return {"status": state.get("status") if state.get("status") in {
+            "queued", "running",
+        } else "cooldown"}
     fenced = {**identity, "activity_laps_fetch.token": token}
     try:
         result = await enqueue_activity_laps(user_id, identity["external_id"])
@@ -156,13 +162,17 @@ async def request_activity_laps(db, user_id, activity_id):
             # The per-user queue slot may belong to a different target.
             await db.garmin_activities.update_one(fenced, {"$set": {
                 "activity_laps_fetch": {"status": "failed", "error_code": "queue_busy",
-                                       "next_attempt_at": now.isoformat()},
+                                       "next_attempt_at": (
+                                           now + timedelta(seconds=RETRY_SECONDS)
+                                       ).isoformat()},
             }})
         return result
     except Exception:
         await db.garmin_activities.update_one(fenced, {"$set": {
             "activity_laps_fetch": {"status": "failed", "error_code": "queue_unavailable",
-                                   "next_attempt_at": now.isoformat()},
+                                   "next_attempt_at": (
+                                       now + timedelta(seconds=RETRY_SECONDS)
+                                   ).isoformat()},
         }})
         raise
 

@@ -119,7 +119,7 @@ sur le propriétaire JWT/job et `source="garmin"`.
 
 - `POST /api/garmin/activities/{activity_id}/laps` : HTTP 202, acquisition
   ciblée. Statuts `queued`, `already_queued`, `running`, `cached`, `cooldown`,
-  `busy` ou `already_requested` en cas de course concurrente.
+  ou `busy`. Une course de réservation relit Mongo pour rendre l'état courant.
 - `GET /api/garmin/activities/{activity_id}/laps` : HTTP 200,
   `activity_laps`, `cache_current`, `fetch_status`, `error_code`,
   `next_attempt_at`. États `not_requested`, `queued`, `running`, `complete`,
@@ -163,9 +163,42 @@ récupérable `lease_expired`, sans que GET déclenche une récupération.
 
 ## Tests exécutés
 
-Résultats et commandes exacts ajoutés après exécution avant livraison.
 Premier essai avec le Python système : échec avant collecte
 `No module named pytest` ; ce n'est pas un test réussi.
+
+Depuis `backend/`, avec `python -m pytest` et les deux workers configurés :
+
+- `tests/test_activity_laps_pr332.py -q` : **60 passed**, 2 avertissements
+  de dépréciation Starlette/Pydantic ; réexécuté après corrections de cooldown
+  et ajout de la concurrence POST.
+- `tests/test_garmin_activity_normalization_pr02.py tests/test_garmin_data_layer.py
+  tests/test_garmin_daily_metrics_pr03.py tests/test_garmin_phased_sync_pr07a.py
+  tests/test_garmin_deep_sync.py -q` : **96 passed**.
+- `tests/test_garmin_user_connection.py -q` : **8 passed**.
+- Essai groupé initial des neuf modules Garmin (les cinq précédents plus
+  user_connection, queue_backfill_pr197, queue_health_admin et
+  vo2max_history_endpoint) : **103 passed, 1 failed, 3 erreurs de collecte**.
+  Import Redis pollué par les stubs de tests, dépendance `email_validator`
+  absente pour les modules important `server`, et bootstrap global échouant
+  dans le groupe (8/8 réussis en isolation). Aucune modification des tests
+  existants ni prétention que ce groupe est vert.
+- `git diff --check` : réussi.
+- Lint tenté : `python -m flake8 --select=E9,F63,F7,F82` sur les fichiers
+  Python du contrat/provider/API/persistance/tests laps : non exécuté,
+  environnement sans module `flake8`. Aucun nouveau linter ajouté.
+
+Validation de l'agent queue depuis la racine :
+
+`TMPDIR="$PWD/.test-runtime" PYTHONPATH=backend python -m pytest -q
+--basetemp="$PWD/.test-runtime/pytest"
+backend/tests/test_activity_laps_queue_pr332.py
+backend/tests/test_activity_details_pr321.py
+backend/tests/test_activity_details_delayed_redis_c321.py
+backend/tests/test_garmin_queue_backfill_pr197.py
+backend/tests/test_typed_splits_chronology_c321.py` :
+**164 passed**, un avertissement existant. Redis local isolé, pas de Mongo
+réel ni Garmin. Résultats complémentaires après réconciliation de cible
+et revue finale consignés avant livraison.
 
 ## Risques résiduels et limites
 
@@ -183,6 +216,9 @@ Premier essai avec le Python système : échec avant collecte
 - Mongo simulée dans les tests : comportement atomique réel et déploiement
   distribué doivent être audités dans Emergent après merge autorisé.
 - Limites Redis/per-user/global et watchdog hérités de #321, pas remplacés.
+- La réconciliation POST d'un slot occupé inspecte les livraisons de la queue,
+  processing et stockage différé ; coût linéaire des listes en cas de contention.
+  GET n'effectue jamais cette inspection.
 - Aucun appel Garmin réel ni écriture Mongo de production depuis Copilot.
 
 ## Protocole runtime Emergent après merge autorisé

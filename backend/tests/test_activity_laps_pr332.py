@@ -207,6 +207,20 @@ def test_post_writes_status_before_queue_and_repeated_request(db, monkeypatch):
     assert run(laps.request_activity_laps(db, "c", "24346252881"))["status"] == "not_found"
 
 
+def test_concurrent_posts_enqueue_one_target(db, monkeypatch):
+    call = AsyncMock(return_value={"status": "queued"})
+    monkeypatch.setattr(queue, "enqueue_activity_laps", call)
+
+    async def scenario():
+        results = await asyncio.gather(*[
+            laps.request_activity_laps(db, "a", "24346252881") for _ in range(10)
+        ])
+        assert all(result["status"] == "queued" for result in results)
+
+    run(scenario())
+    assert call.call_count == 1
+
+
 @pytest.mark.parametrize("failure", [False, True])
 def test_queue_busy_or_unavailable_is_not_false_queued(db, monkeypatch, failure):
     call = AsyncMock(side_effect=RuntimeError() if failure else None,
@@ -218,9 +232,14 @@ def test_queue_busy_or_unavailable_is_not_false_queued(db, monkeypatch, failure)
     else:
         run(laps.request_activity_laps(db, "a", "24346252881"))
     assert run(laps.get_activity_laps(db, "a", "24346252881"))["fetch_status"] == "retryable_error"
+    assert run(laps.request_activity_laps(db, "a", "24346252881"))["status"] == "cooldown"
 
 
 def test_already_pending_job_keeps_mongo_queued(db, monkeypatch):
+    db.garmin_activities.docs[0]["activity_laps_fetch"] = {
+        "status": "queued", "token": "old-queued",
+        "next_attempt_at": "2000-01-01T00:00:00+00:00",
+    }
     monkeypatch.setattr(queue, "enqueue_activity_laps", AsyncMock(
         return_value={"status": "already_queued"},
     ))

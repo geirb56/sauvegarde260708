@@ -181,9 +181,9 @@ async def enqueue_activity_details(user_id: str, activity_id: str) -> dict:
 async def enqueue_activity_laps(user_id: str, activity_id: str) -> dict:
     """One lap target per user, independent of the details reservation.
 
-    Pending stores the job id, not the target: ``already_queued`` means this
-    user's laps slot is occupied, possibly by a different activity. The caller
-    persists Mongo queued state before enqueueing; Redis is not GET authority.
+    POST-only lookup confirms the reserved delivery's target; an unknown or
+    different target is busy. The caller persists Mongo queued state before
+    enqueueing; Redis is never the GET authority.
     """
     return await _enqueue_targeted(user_id, activity_id, JOB_ACTIVITY_LAPS)
 
@@ -191,7 +191,10 @@ async def enqueue_activity_laps(user_id: str, activity_id: str) -> dict:
 async def _enqueue_targeted(
     user_id: str, activity_id: str, job_type=JOB_ACTIVITY_DETAILS,
 ) -> dict:
-    from garmin.activity_details import validate_activity_id
+    if job_type == JOB_ACTIVITY_LAPS:
+        from garmin.activity_laps import validate_activity_id
+    else:
+        from garmin.activity_details import validate_activity_id
 
     if job_type not in TARGETED_JOB_TYPES:
         raise ValueError("Unsupported targeted job type")
@@ -200,6 +203,34 @@ async def _enqueue_targeted(
     key = _pending_key(job_type, user_id)
     job_id = uuid.uuid4().hex
     if not await r.set(key, job_id, nx=True, ex=DETAILS_PENDING_TTL):
+        if job_type == JOB_ACTIVITY_LAPS:
+            same_target = await r.eval(
+                """
+                local owner = redis.call('GET', KEYS[1])
+                if owner == false then return 0 end
+                local function matches(payload)
+                    local ok, job = pcall(cjson.decode, payload)
+                    if not ok or type(job) ~= 'table' or job.id ~= owner then return nil end
+                    return job.type == 'ACTIVITY_LAPS' and job.user_id == ARGV[1]
+                           and job.activity_id == ARGV[2]
+                end
+                local payload = redis.call('HGET', KEYS[4], owner)
+                if payload then
+                    local same = matches(payload)
+                    if same ~= nil then return same and 1 or 0 end
+                end
+                for i = 2, 3 do
+                    for _, raw in ipairs(redis.call('LRANGE', KEYS[i], 0, -1)) do
+                        local same = matches(raw)
+                        if same ~= nil then return same and 1 or 0 end
+                    end
+                end
+                return 0
+                """,
+                4, key, QUEUE_KEY, PROCESSING_KEY, DELAYED_PAYLOADS_KEY,
+                user_id, activity_id,
+            )
+            return {"status": "already_queued" if same_target else "busy"}
         return {"status": "already_queued"}
     try:
         await r.lpush(QUEUE_KEY, json.dumps({
