@@ -51,17 +51,26 @@ def test_reference_has_one_coherent_interpretation_without_zones_or_km_splits(la
     assert regularity.pace_dispersion_sec_per_km == pytest.approx(7.6870, abs=0.001)
     assert regularity.average_hr_change_bpm == 8
     assert analysis.physiology.hr_drift is None
-    for field in (analysis.summary, analysis.meaning, analysis.advice):
-        assert "4 × 4 min" in field.text
-        assert "4 × 3 min" in field.text
-        assert "4:43/km" in field.text
-        assert "7.7 s/km" in field.text
-        assert "151 → 157 → 159 → 159" in field.text
-        assert "175 bpm" in field.text
-        assert "4:31/km" in field.text and "4:51/km" in field.text
+    assert "4 × 4 min" in analysis.summary.text
+    assert "4 × 3 min" in analysis.summary.text
+    assert "4:43/km" in analysis.summary.text
+    decimal = "." if language == "en" else ","
+    assert f"14{decimal}26 km" in analysis.summary.text
+    assert f"7{decimal}7 s/km" in analysis.meaning.text
+    assert "151" in analysis.meaning.text and "159" in analysis.meaning.text
+    assert "175 bpm" in analysis.meaning.text
+    assert "4:31/km" in analysis.meaning.text and "4:51/km" in analysis.meaning.text
+    assert f"19{decimal}8 s/km" in analysis.advice.text
+    for detail in ("4 × 4 min", "4:43/km", "14.26 km", "14,26 km"):
+        assert detail not in analysis.meaning.text
+        assert detail not in analysis.advice.text
+    for detail in ("s/km", "151", "175 bpm", "4:31/km", "4:51/km"):
+        assert detail not in analysis.summary.text
+    assert all(detail not in analysis.advice.text for detail in ("151", "175 bpm", "4:31/km", "4:51/km"))
+    assert len(analysis.advice.text) < 250
+    assert len(analysis.summary.text) < 250
     assert analysis.advice.available is True
-    assert "Training Today/Week" in analysis.advice.text
-    assert "14.26 km" in analysis.summary.text
+    assert "Training Today/Week" not in analysis.advice.text
     codes = {item.code for item in analysis.limitations}
     assert "limitations.phase_splits" in codes
     assert "limitations.splits" not in codes
@@ -104,6 +113,7 @@ def test_partial_incoherent_phases_keep_limits_and_never_claim_full_regularity()
     analysis = build_workout_analysis_v2(reference_workout(), [], "fr", phases)
     assert analysis.signals.session_structure.code == "intervals"
     assert analysis.phase_analysis.effort_regularity.partial_comparison is True
+    assert "(2/4)" in analysis.summary.text
     assert "relativement régulières" not in analysis.meaning.text
     assert "151 →" not in analysis.meaning.text
     codes = {item.code for item in analysis.limitations}
@@ -132,7 +142,7 @@ def test_missing_global_hr_does_not_erase_observed_phase_hr():
     assert analysis.evidence.has_heart_rate is False
     assert analysis.evidence.has_phase_heart_rate is True
     assert "limitations.heart_rate" not in {item.code for item in analysis.limitations}
-    assert "151 → 157 → 159 → 159" in analysis.meaning.text
+    assert "151 à 159 bpm" in analysis.meaning.text
     assert analysis.signals.intensity.available is False
 
 
@@ -201,3 +211,70 @@ def test_unclassified_unusable_phases_preserve_existing_pacing_conclusions():
     assert analysis.meaning == baseline.meaning
     assert analysis.advice == baseline.advice
     assert analysis.advice.code == "advice.even_pacing"
+
+
+@pytest.mark.parametrize("language", ["fr", "en", "es"])
+@pytest.mark.parametrize("reason", [
+    "incoherent_pace", "efforts_not_comparable", "efforts_partially_comparable",
+    "effort_paces_incomplete", "insufficient_comparable_effort_paces",
+])
+def test_phase_limitation_texts_are_localized_without_changing_diagnostic_codes(language, reason):
+    from workout_analysis_v2 import _build_limitations
+
+    analysis = build_workout_analysis_v2(reference_workout(), [], language, reference_phases())
+    phases = analysis.phase_analysis.model_copy(update={
+        "limitations": [reason], "missing_data": ["duration", "distance", "pace", "heart_rate"],
+    })
+    limitations = _build_limitations(
+        reference_workout(), analysis.signals, analysis.comparison, analysis.evidence, language, phases,
+    )
+    texts = {item.code: item.text for item in limitations}
+    text = texts[f"limitations.phases.{reason}"]
+    assert reason not in text and "_" not in text
+    assert "heart_rate" not in texts["limitations.phase_missing"]
+    assert {"fr": "durée", "en": "duration", "es": "duración"}[language] in texts["limitations.phase_missing"]
+    if reason == "effort_paces_incomplete":
+        assert {"fr": "Certaines allures", "en": "Some effort paces", "es": "Faltan algunos ritmos"}[language] in text
+
+
+@pytest.mark.parametrize("language", ["fr", "en", "es"])
+def test_partial_observations_remain_scoped_and_coach_is_non_prescriptive(language):
+    phases = reference_phases()
+    phases[0] = phases[0].model_copy(update={"distance_m": None, "average_hr": None})
+    analysis = build_workout_analysis_v2(reference_workout(), [], language, phases)
+    assert analysis.phase_analysis.effort_regularity.partial_comparison is True
+    assert "(3/4)" in analysis.summary.text
+    assert "3" in analysis.meaning.text
+    assert "4" in analysis.meaning.text
+    assert {"fr": "ne décrivent pas toutes", "en": "do not describe every", "es": "no describen todas"}[language] in analysis.meaning.text
+    assert {"fr": "Couverture cardiaque", "en": "Heart-rate coverage", "es": "Cobertura cardíaca"}[language] in analysis.meaning.text
+    assert analysis.signals.intensity.available is False
+    assert analysis.physiology.hr_drift is None
+    assert "relatively regular" not in analysis.meaning.text
+    assert "relativement régulières" not in analysis.meaning.text
+    assert "relativamente regulares" not in analysis.meaning.text
+    for text in (analysis.advice.text, analysis.meaning.text):
+        assert "effort_paces_incomplete" not in text
+    assert all(word not in analysis.advice.text.lower() for word in ("tomorrow", "demain", "mañana"))
+
+
+def test_equal_paces_describe_equality_without_success_or_intensity_judgment():
+    phases = [
+        phase.model_copy(update={"distance_m": 800}) if phase.phase_type == "effort" else phase
+        for phase in reference_phases()
+    ]
+    analysis = build_workout_analysis_v2(reference_workout(), [], "fr", phases)
+    assert "même allure" in analysis.advice.text
+    assert "0 s/km" in analysis.meaning.text
+    assert "réuss" not in analysis.advice.text
+    assert analysis.signals.intensity.available is False
+
+
+def test_older_similar_reference_is_not_hidden_by_missing_recent_baseline():
+    workout = reference_workout()
+    workout.update(avg_pace_min_km=5.0, workout_type="training")
+    earlier = {**workout, "id": "older-synthetic", "date": "2026-08-01", "avg_pace_min_km": 5.5}
+    analysis = build_workout_analysis_v2(workout, [earlier], "en", reference_phases())
+    assert analysis.comparison.available is False
+    assert analysis.comparison.similar.available is True
+    assert "5:30/km" in analysis.meaning.text

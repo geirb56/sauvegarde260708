@@ -506,10 +506,27 @@ def _template(language: str, key: str, **params) -> str:
             "fact.phases": "{efforts} effort(s), {recoveries} recovery phase(s) observed.",
             "fact.repetitions": "{count} × {duration} min efforts observed.",
             "fact.recoveries": "{count} × {duration} min recoveries observed.",
-            "fact.effort_pace": "Comparable efforts: mean pace {pace}, dispersion {dispersion} s/km ({count} measured efforts).",
-            "fact.effort_regular": "The comparable repetitions were relatively regular.",
+            "fact.effort_pace": "Mean pace of comparable efforts: {pace}.",
+            "fact.effort_pace_partial": "Mean pace of measured comparable efforts ({count}/{total}): {pace}.",
+            "fact.effort_dispersion": "The {count} measured comparable efforts have a pace dispersion of {dispersion} s/km.",
+            "fact.phase_distance": "Total distance: {distance} km.",
             "fact.effort_extremes": "Effort {fastest} was fastest ({fast_pace}); effort {slowest} was slowest ({slow_pace}).",
-            "fact.effort_hr": "Mean heart rate across comparable efforts: {values} bpm; this is a description between repetitions, not a cardiac drift measurement.",
+            "fact.effort_hr": "Mean heart rate changes from {first} to {last} bpm between measured efforts {first_number} and {last_number}. This is not a cardiac drift measurement.",
+            "advice.effort_change": "The last measured comparable effort is {change} s/km {direction} than the preceding one.",
+            "advice.effort_equal": "The last two measured comparable efforts have the same pace.",
+            "advice.effort_dispersion": "The measured comparable efforts show a pace dispersion of {dispersion} s/km.",
+            "pace.slower": "slower",
+            "pace.faster": "faster",
+            "limitations.phase_partial": "These pace observations cover only {count} of {total} efforts; they do not describe every repetition.",
+            "phase.field.duration": "duration",
+            "phase.field.distance": "distance",
+            "phase.field.pace": "pace",
+            "phase.field.heart_rate": "heart rate",
+            "phase.limit.incoherent_pace": "Some phase speed, distance and duration measurements disagree; the affected paces are excluded.",
+            "phase.limit.efforts_not_comparable": "Effort durations or distances differ too much to describe their pace regularity together.",
+            "phase.limit.efforts_partially_comparable": "Only some efforts have comparable durations or distances.",
+            "phase.limit.effort_paces_incomplete": "Some effort paces are missing; the regularity analysis is partial.",
+            "phase.limit.insufficient_comparable_effort_paces": "Too few comparable efforts have usable paces to describe regularity.",
             "fact.phase_max_hr": "Peak heart rate observed in the phases: {maximum} bpm.",
             "advice.phases": "These descriptive observations can inform the Coach; the next session remains the responsibility of Training Today/Week.",
             "limitations.phase_splits": "No kilometre splits or kilometre split analysis are available; structured phases are available separately.",
@@ -526,10 +543,27 @@ def _template(language: str, key: str, **params) -> str:
             "fact.phases": "{efforts} effort(s), {recoveries} phase(s) de récupération observés.",
             "fact.repetitions": "{count} × {duration} min d'effort observées.",
             "fact.recoveries": "{count} × {duration} min de récupération observées.",
-            "fact.effort_pace": "Efforts comparables : allure moyenne {pace}, dispersion {dispersion} s/km ({count} efforts mesurés).",
-            "fact.effort_regular": "Les répétitions comparables sont relativement régulières.",
+            "fact.effort_pace": "Allure moyenne des efforts comparables : {pace}.",
+            "fact.effort_pace_partial": "Allure moyenne des efforts comparables mesurés ({count}/{total}) : {pace}.",
+            "fact.effort_dispersion": "Les {count} efforts comparables mesurés présentent une dispersion de {dispersion} s/km.",
+            "fact.phase_distance": "Distance totale : {distance} km.",
             "fact.effort_extremes": "L'effort {fastest} est le plus rapide ({fast_pace}) ; l'effort {slowest} est le plus lent ({slow_pace}).",
-            "fact.effort_hr": "FC moyenne des efforts comparables : {values} bpm ; il s'agit d'une description entre répétitions, pas d'une mesure de dérive cardiaque.",
+            "fact.effort_hr": "La FC moyenne évolue de {first} à {last} bpm entre les efforts mesurés {first_number} et {last_number}. Cette évolution ne constitue pas une mesure de dérive cardiaque.",
+            "advice.effort_change": "Le dernier effort comparable mesuré est {direction} de {change} s/km que le précédent.",
+            "advice.effort_equal": "Les deux derniers efforts comparables mesurés ont la même allure.",
+            "advice.effort_dispersion": "Les efforts comparables mesurés présentent une dispersion d'allure de {dispersion} s/km.",
+            "pace.slower": "plus lent",
+            "pace.faster": "plus rapide",
+            "limitations.phase_partial": "Ces observations d'allure portent sur {count} des {total} efforts ; elles ne décrivent pas toutes les répétitions.",
+            "phase.field.duration": "durée",
+            "phase.field.distance": "distance",
+            "phase.field.pace": "allure",
+            "phase.field.heart_rate": "fréquence cardiaque",
+            "phase.limit.incoherent_pace": "Certaines vitesses, distances et durées de phases sont incohérentes ; les allures concernées sont exclues.",
+            "phase.limit.efforts_not_comparable": "Les durées ou distances des efforts diffèrent trop pour décrire ensemble leur régularité d'allure.",
+            "phase.limit.efforts_partially_comparable": "Seuls certains efforts ont des durées ou distances comparables.",
+            "phase.limit.effort_paces_incomplete": "Certaines allures d'effort sont manquantes ; l'analyse de régularité est partielle.",
+            "phase.limit.insufficient_comparable_effort_paces": "Trop peu d'efforts comparables ont une allure exploitable pour décrire la régularité.",
             "fact.phase_max_hr": "FC maximale observée dans les phases : {maximum} bpm.",
             "advice.phases": "Ces observations descriptives peuvent éclairer le Coach ; la prochaine séance reste sous la responsabilité de Training Today/Week.",
             "limitations.phase_splits": "Aucune fraction kilométrique ni analyse kilométrique n'est disponible ; les phases structurées sont disponibles séparément.",
@@ -546,10 +580,27 @@ def _template(language: str, key: str, **params) -> str:
             "fact.phases": "{efforts} esfuerzo(s), {recoveries} fase(s) de recuperación observados.",
             "fact.repetitions": "{count} × {duration} min de esfuerzo observados.",
             "fact.recoveries": "{count} × {duration} min de recuperación observados.",
-            "fact.effort_pace": "Esfuerzos comparables: ritmo medio {pace}, dispersión {dispersion} s/km ({count} esfuerzos medidos).",
-            "fact.effort_regular": "Las repeticiones comparables fueron relativamente regulares.",
+            "fact.effort_pace": "Ritmo medio de los esfuerzos comparables: {pace}.",
+            "fact.effort_pace_partial": "Ritmo medio de los esfuerzos comparables medidos ({count}/{total}): {pace}.",
+            "fact.effort_dispersion": "Los {count} esfuerzos comparables medidos presentan una dispersión de {dispersion} s/km.",
+            "fact.phase_distance": "Distancia total: {distance} km.",
             "fact.effort_extremes": "El esfuerzo {fastest} fue el más rápido ({fast_pace}); el esfuerzo {slowest} fue el más lento ({slow_pace}).",
-            "fact.effort_hr": "Frecuencia cardíaca media de los esfuerzos comparables: {values} bpm; es una descripción entre repeticiones, no una medición de deriva cardíaca.",
+            "fact.effort_hr": "La frecuencia cardíaca media cambia de {first} a {last} bpm entre los esfuerzos medidos {first_number} y {last_number}. No es una medición de deriva cardíaca.",
+            "advice.effort_change": "El último esfuerzo comparable medido es {change} s/km {direction} que el anterior.",
+            "advice.effort_equal": "Los dos últimos esfuerzos comparables medidos tienen el mismo ritmo.",
+            "advice.effort_dispersion": "Los esfuerzos comparables medidos muestran una dispersión de ritmo de {dispersion} s/km.",
+            "pace.slower": "más lento",
+            "pace.faster": "más rápido",
+            "limitations.phase_partial": "Estas observaciones de ritmo cubren {count} de los {total} esfuerzos; no describen todas las repeticiones.",
+            "phase.field.duration": "duración",
+            "phase.field.distance": "distancia",
+            "phase.field.pace": "ritmo",
+            "phase.field.heart_rate": "frecuencia cardíaca",
+            "phase.limit.incoherent_pace": "Algunas velocidades, distancias y duraciones de fases son incoherentes; se excluyen los ritmos afectados.",
+            "phase.limit.efforts_not_comparable": "Las duraciones o distancias de los esfuerzos difieren demasiado para describir juntos su regularidad de ritmo.",
+            "phase.limit.efforts_partially_comparable": "Solo algunos esfuerzos tienen duraciones o distancias comparables.",
+            "phase.limit.effort_paces_incomplete": "Faltan algunos ritmos de esfuerzo; el análisis de regularidad es parcial.",
+            "phase.limit.insufficient_comparable_effort_paces": "Muy pocos esfuerzos comparables tienen ritmos utilizables para describir la regularidad.",
             "fact.phase_max_hr": "Frecuencia cardíaca máxima observada en las fases: {maximum} bpm.",
             "advice.phases": "Estas observaciones descriptivas pueden informar al Coach; la próxima sesión sigue bajo la responsabilidad de Training Today/Week.",
             "limitations.phase_splits": "No hay parciales kilométricos ni análisis kilométrico disponibles; las fases estructuradas están disponibles por separado.",
@@ -1234,15 +1285,17 @@ def _build_summary(
     pacing: WorkoutAnalysisPacing,
     signals: WorkoutAnalysisSignals,
     language: str,
-    phase_observations: Optional[List[str]] = None,
+    phase_observations: Optional[Dict[str, List[str]]] = None,
 ) -> AnalysisText:
-    if phase_observations:
+    if phase_observations and phase_observations["essential"]:
+        distance = _usable_metric(workout, "distance_km")
+        distance_fact = (
+            [_template(language, "fact.phase_distance", distance=_phase_number(distance, 2, language))]
+            if distance is not None else []
+        )
         return AnalysisText(
             code="summary.structured_phases",
-            text=_join_sentences(
-                phase_observations + _structural_observations(workout, physiology, pacing, language)
-                + ([] if signals.intensity.available else [_template(language, "meaning.intensity_unavailable")])
-            ),
+            text=_join_sentences(phase_observations["essential"] + distance_fact),
         )
     if signals.intensity.available and signals.intensity.code:
         key = {
@@ -1273,15 +1326,17 @@ def _build_meaning(
     comparison: WorkoutAnalysisComparison,
     signals: WorkoutAnalysisSignals,
     language: str,
-    phase_observations: Optional[List[str]] = None,
+    phase_observations: Optional[Dict[str, List[str]]] = None,
 ) -> AnalysisText:
-    if phase_observations:
+    if phase_observations and phase_observations["execution"]:
         return AnalysisText(
             code="meaning.structured_phases",
             text=_join_sentences(
-                phase_observations
+                phase_observations["execution"] + phase_observations["uncertainty"]
                 + ([] if signals.intensity.available else [_template(language, "meaning.intensity_unavailable")])
-                + _comparison_observations(comparison, language)
+                + (_comparison_observations(comparison, language) if (
+                    comparison.available or (comparison.similar and comparison.similar.available)
+                ) else [])
             ),
         )
     if signals.intensity.available and signals.intensity.code:
@@ -1345,15 +1400,14 @@ def _build_advice(
     comparison: WorkoutAnalysisComparison,
     signals: WorkoutAnalysisSignals,
     language: str,
-    phase_observations: Optional[List[str]] = None,
+    phase_observations: Optional[Dict[str, List[str]]] = None,
 ) -> WorkoutAnalysisAdvice:
-    if phase_observations:
+    if phase_observations and phase_observations["coach"]:
         return WorkoutAnalysisAdvice(
             code="advice.structured_phases",
             text=_join_sentences(
-                phase_observations
+                phase_observations["coach"]
                 + ([] if signals.intensity.available else [_template(language, "meaning.intensity_unavailable")])
-                + [_template(language, "advice.phases")]
             ),
             available=True,
         )
@@ -1397,12 +1451,14 @@ def _build_limitations(
         if phase_analysis.missing_data:
             limitations.append(AnalysisText(
                 code="limitations.phase_missing",
-                text=_template(language, "limitations.phase_missing", fields=", ".join(phase_analysis.missing_data)),
+                text=_template(language, "limitations.phase_missing", fields=", ".join(
+                    _template(language, f"phase.field.{field}") for field in phase_analysis.missing_data
+                )),
             ))
         for reason in phase_analysis.limitations:
             limitations.append(AnalysisText(
                 code=f"limitations.phases.{reason}",
-                text=_template(language, "limitations.phase_quality", reason=reason),
+                text=_template(language, f"phase.limit.{reason}"),
             ))
         if phase_analysis.efforts and not phase_analysis.effort_regularity.available:
             limitations.append(AnalysisText(
@@ -1651,60 +1707,94 @@ def _session_structure(
     return _unavailable_signal(_template(language, "structure.unknown"))
 
 
+def _phase_number(value: float, digits: int, language: str) -> str:
+    formatted = _fmt_number(value, digits)
+    return formatted.replace(".", ",") if _lang(language) in {"fr", "es"} else formatted
+
+
 def _phase_observations(
     phases: WorkoutAnalysisPhaseAnalysis, structure: WorkoutAnalysisSignal, language: str,
-) -> List[str]:
+) -> Dict[str, List[str]]:
+    observations = {"essential": [], "execution": [], "coach": [], "uncertainty": []}
     if not phases.available:
-        return []
-    observations = []
+        return observations
+    essential = observations["essential"]
+    execution = observations["execution"]
     if structure.available:
-        observations.append(structure.text)
-    if phases.efforts or phases.recoveries:
-        observations.append(_template(
-            language, "fact.phases", efforts=len(phases.efforts), recoveries=len(phases.recoveries),
-        ))
+        essential.append(f"{structure.text}.")
+    duration_facts = []
     for rows, key in (
         (phases.efforts, "fact.repetitions"), (phases.recoveries, "fact.recoveries"),
     ):
         durations = [phase.duration_s for phase in rows]
         if durations and all(_valid_positive_number(value) for value in durations):
             if all(math.isclose(value, durations[0], abs_tol=1) for value in durations):
-                observations.append(_template(
-                    language, key, count=len(rows), duration=_fmt_number(durations[0] / 60, 2),
+                duration_facts.append(_template(
+                    language, key, count=len(rows), duration=_phase_number(durations[0] / 60, 2, language),
                 ))
+    if phases.efforts or phases.recoveries:
+        if len(duration_facts) < bool(phases.efforts) + bool(phases.recoveries):
+            essential.append(_template(
+                language, "fact.phases", efforts=len(phases.efforts), recoveries=len(phases.recoveries),
+            ))
+        essential.extend(duration_facts)
     regularity = phases.effort_regularity
     cohort, _ = _effort_comparison_cohort(phases.efforts)
     paced = [phase for phase in cohort if _valid_positive_number(phase.pace_sec_per_km)]
     if regularity.available:
-        observations.append(_template(
-            language, "fact.effort_pace",
+        essential.append(_template(
+            language, "fact.effort_pace_partial" if regularity.partial_comparison else "fact.effort_pace",
             pace=_fmt_pace(regularity.average_pace_sec_per_km / 60),
-            dispersion=_fmt_number(regularity.pace_dispersion_sec_per_km, 1),
+            count=regularity.pace_sample_count, total=regularity.effort_count,
+        ))
+        execution.append(_template(
+            language, "fact.effort_dispersion",
+            dispersion=_phase_number(regularity.pace_dispersion_sec_per_km, 1, language),
             count=regularity.pace_sample_count,
         ))
-        # Use the existing kilometre consistency criterion on the comparable
-        # effort cohort, without inventing a physiological threshold.
-        avg = regularity.average_pace_sec_per_km
-        consistency = 100 - max(abs(phase.pace_sec_per_km - avg) for phase in paced) / avg * 100
-        if consistency >= 90 and not regularity.partial_comparison:
-            observations.append(_template(language, "fact.effort_regular"))
         fastest = min(paced, key=lambda phase: phase.pace_sec_per_km)
         slowest = max(paced, key=lambda phase: phase.pace_sec_per_km)
         if fastest.pace_sec_per_km != slowest.pace_sec_per_km:
-            observations.append(_template(
+            execution.append(_template(
                 language, "fact.effort_extremes", fastest=fastest.effort_number,
                 slowest=slowest.effort_number,
                 fast_pace=_fmt_pace(fastest.pace_sec_per_km / 60),
                 slow_pace=_fmt_pace(slowest.pace_sec_per_km / 60),
             ))
+        if not regularity.partial_comparison:
+            change = paced[-1].pace_sec_per_km - paced[-2].pace_sec_per_km
+            observations["coach"].append(
+                _template(language, "advice.effort_equal") if change == 0 else _template(
+                    language, "advice.effort_change",
+                    change=_phase_number(abs(change), 1, language),
+                    direction=_template(language, "pace.slower" if change > 0 else "pace.faster"),
+                )
+            )
+        else:
+            observations["coach"].append(_template(
+                language, "advice.effort_dispersion",
+                dispersion=_phase_number(regularity.pace_dispersion_sec_per_km, 1, language),
+            ))
+            coverage = _template(
+                language, "limitations.phase_partial",
+                count=regularity.pace_sample_count, total=regularity.effort_count,
+            )
+            observations["uncertainty"].append(coverage)
+            observations["coach"].append(coverage)
     if len(cohort) >= 2 and all(_valid_positive_number(phase.average_hr) for phase in cohort):
-        observations.append(_template(
+        execution.append(_template(
             language, "fact.effort_hr",
-            values=" → ".join(_fmt_number(phase.average_hr, 0) for phase in cohort),
+            first=_fmt_number(cohort[0].average_hr, 0), last=_fmt_number(cohort[-1].average_hr, 0),
+            first_number=cohort[0].effort_number, last_number=cohort[-1].effort_number,
+        ))
+    hr_count = sum(_valid_positive_number(phase.average_hr) for phase in cohort)
+    if hr_count < len(cohort):
+        observations["uncertainty"].append(_template(
+            language, "limitations.phase_hr", count=hr_count, total=len(cohort),
         ))
     maxima = [phase.max_hr for phase in phases.phases if _valid_positive_number(phase.max_hr)]
     if maxima:
-        observations.append(_template(language, "fact.phase_max_hr", maximum=_fmt_number(max(maxima), 0)))
+        execution.append(_template(language, "fact.phase_max_hr", maximum=_fmt_number(max(maxima), 0)))
     return observations
 
 

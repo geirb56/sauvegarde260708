@@ -189,3 +189,114 @@ Le correctif de revue et les résultats finaux sont inclus dans le commit suivan
 Le HEAD final du rapport
 sera indiqué dans la description de PR (un fichier ne peut contenir le SHA
 du commit qui le contient sans référence circulaire).
+
+## C326 — Correctif de revue
+
+### Audit et périmètre
+
+HEAD relu avant correction : `db9f0fd55f9afe804571e225dbac96a8ac4ecd58`.
+L'audit confirme que `_phase_observations` renvoyait une liste unique injectée
+intégralement dans summary, meaning et advice. Les tests exigeaient cette triple
+répétition. `_build_limitations` affichait directement les identifiants de qualité
+et les noms anglais des données manquantes.
+
+Fichiers modifiés par C326 uniquement :
+
+- `backend/workout_analysis_v2.py` : observations réparties légèrement par rôle
+  (faits essentiels, exécution, Coach, incertitudes), textes et localisation.
+- `backend/tests/test_workout_analysis_v2_unified.py` : assertions de
+  complémentarité, concision, couverture partielle et limitations FR/EN/ES.
+- `RUNINDEX_PR326_UNIFIED_WORKOUT_ANALYSIS_REPORT.md` : cette section.
+
+Le fichier test_workout_analysis_v2_phases.py a été relu et reste inchangé
+dans ce correctif. Aucun nouveau moteur/service, aucune modification des
+calculs #322/#323, modèles API, signaux, evidence, droits ou frontend.
+
+### Régularité et complémentarité
+
+Le score ≥90 provenait de la logique historique des splits kilométriques,
+réappliquée aux efforts par la première implémentation #326. C326 retire
+cette qualification : la dispersion mesurée suffit, sans seuil de réussite,
+sans jugement physiologique et sans recalcul du score de cohérence.
+
+Le résumé donne structure, durées/counts observés, allure moyenne des efforts
+comparables et distance totale, sans série cardiaque ou limitations.
+Meaning présente dispersion, extrêmes et évolution descriptive de FC,
+avec couverture partielle si nécessaire. Advice retient un seul fait court :
+écart d'allure entre les deux derniers efforts comparables mesurés si la
+couverture est complète, sinon dispersion sur le sous-ensemble avec réserve.
+L'absence de référence physiologique reste explicite dans meaning/advice
+et les limitations, sans prescrire la suite de l'entraînement.
+
+### Exemple avant/après : fixture 4 × 4 min (FR)
+
+**Avant**, chaque champ reprenait notamment :
+« Séance d'intervalles. 4 × 4 min d'effort observées. 4 × 3 min de récupération
+observées. Allure moyenne 4:43/km, dispersion 7.7 s/km. Répétitions relativement
+régulières. Effort 3 plus rapide (4:31/km), effort 4 plus lent (4:51/km).
+FC 151 → 157 → 159 → 159 bpm, pas une mesure de dérive cardiaque.
+Maximum 175 bpm. Intensité indéterminée. »
+Summary ajoutait les totaux, meaning l'historique, advice l'autorité Training.
+
+**Après**, exemple produit par le moteur :
+
+- **summary** : « Séance d'intervalles. 4 × 4 min d'effort observées.
+  4 × 3 min de récupération observées. Allure moyenne des efforts comparables :
+  4:43/km. Distance totale : 14,26 km. »
+- **meaning** : « Les 4 efforts comparables mesurés présentent une dispersion
+  de 7,7 s/km. L'effort 3 est le plus rapide (4:31/km) ; l'effort 4 est le plus
+  lent (4:51/km). La FC moyenne évolue de 151 à 159 bpm entre les efforts
+  mesurés 1 et 4. Cette évolution ne constitue pas une mesure de dérive
+  cardiaque. FC maximale observée dans les phases : 175 bpm. L'intensité
+  physiologique ne peut pas être déterminée de manière fiable. »
+- **advice** : « Le dernier effort comparable mesuré est plus lent de 19,8 s/km
+  que le précédent. L'intensité physiologique ne peut pas être déterminée
+  de manière fiable. »
+
+Les codes `limitations.phases.*` restent identiques ; par exemple,
+`effort_paces_incomplete` devient :
+
+- FR : « Certaines allures d'effort sont manquantes ; l'analyse de régularité
+  est partielle. »
+- EN : « Some effort paces are missing; the regularity analysis is partial. »
+- ES : « Faltan algunos ritmos de esfuerzo; el análisis de regularidad es parcial. »
+
+Les données manquantes sont également nommées dans la langue demandée.
+Splits absents, phases présentes, couverture cardiaque et intensité indéterminée
+restent distingués.
+
+### Tests et risques résiduels
+
+Environnement de cette session : `/tmp/c326-venv/bin/python`, Python 3.12.3.
+Commande identique aux 12 suites listées ci-dessus, avec cet interpréteur et
+la configuration existante `-n 2 --dist loadscope`.
+Les dépendances nécessaires aux tests ont été restaurées, pas de modification
+des requirements ; les intégrations privées inutilisées par ces doubles
+n'ont pas été nécessaires. Aucune prétention de baseline C326 : l'environnement
+était prêt après le début des modifications.
+
+Passage ciblé unified/phases : **109 exécutés, 109 réussis, 0 échoué,
+0 ignoré**. Passage des 12 suites : **570 exécutés, 570 réussis,
+0 échoué, 0 ignoré**, 12 avertissements de dépréciation existante.
+Dernier passage après ajustement de ponctuation/historique : **570 exécutés,
+570 réussis, 0 échoué, 0 ignoré**, 12 avertissements, 3,37 s.
+`git diff --check` réussi. Aucun échec de suite constaté dans ce correctif.
+
+Revue read-only indépendante : deux observations corrigées et testées :
+la moyenne partielle du résumé affiche désormais sa couverture compacte
+(ex. 3/4), et les références similaires sur 180 jours restent visibles même
+en l'absence de baseline sur 14 jours. La limitation d'historique absent
+reste dans limitations, pas dans l'interprétation d'exécution.
+Passage final après ces corrections : **571 exécutés, 571 réussis,
+0 échoué, 0 ignoré**, 12 avertissements, 3,35 s.
+
+Risques résiduels : textes légèrement différents, aucune suite frontend
+exécutée car aucun changement frontend ; qualité des mesures inchangée,
+incertitudes conservées. Les champs sans observations suffisantes conservent
+leur fallback historique. Les codes de diagnostic bruts restent disponibles
+dans phase_analysis pour les outils techniques, pas dans les limitations
+utilisateur. Aucun merge, déploiement ou accès en écriture aux données réelles.
+Nouvelle revue C326 requise avant merge.
+
+Nouveau HEAD du correctif : à renseigner après commit. Le SHA final contenant
+ce rapport sera publié sur la PR #326 et dans le compte rendu final.
