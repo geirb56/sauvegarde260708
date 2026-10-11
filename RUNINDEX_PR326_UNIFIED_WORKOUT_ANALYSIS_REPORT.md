@@ -298,5 +298,10 @@ dans phase_analysis pour les outils techniques, pas dans les limitations
 utilisateur. Aucun merge, déploiement ou accès en écriture aux données réelles.
 Nouvelle revue C326 requise avant merge.
 
-Nouveau HEAD du correctif : à renseigner après commit. Le SHA final contenant
+Validation du correctif : scan de secrets sans résultat ; CodeQL Python :
+**0 alerte**. La revue automatisée standard reste indisponible (modèle absent),
+la revue indépendante et ses deux corrections sont documentées ci-dessus.
+
+Nouveau HEAD du correctif : `171ae0f1db8e819f0777cf9ada90c34976358168`.
+Le commit suivant ne modifie que la traçabilité de ce rapport. Le SHA final contenant
 ce rapport sera publié sur la PR #326 et dans le compte rendu final.
