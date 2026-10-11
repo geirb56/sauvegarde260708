@@ -33,12 +33,18 @@ export const getSessionClassification = (analysis, t) => {
 
 export const getAnalysisTakeaway = (analysis) => {
   const observations = analysis?.meaning?.observations;
-  const caveats = analysis?.meaning?.caveats;
-  if (Array.isArray(observations) && (observations.length > 0 || (Array.isArray(caveats) && caveats.length > 0))) {
-    return [...new Set([...observations, ...(Array.isArray(caveats) ? caveats : [])]
-      .filter((text) => typeof text === "string" && text.trim()))].join(" ");
-  }
-  return analysis?.meaning?.text;
+  if (analysis?.meaning?.code === "meaning.structured_phases"
+    || analysis?.signals?.intensity?.available !== true
+    || !Array.isArray(observations)) return null;
+  return observations.find((text) => typeof text === "string" && text.trim()) || null;
+};
+
+export const getDistinctCoachObservation = (analysis) => {
+  if (!hasCoachObservation(analysis)) return null;
+  const observation = analysis.advice.text.trim();
+  if (analysis?.advice?.code === "advice.effort_dispersion"
+    && analysis?.phase_analysis?.effort_regularity?.available === true) return null;
+  return observation === getAnalysisTakeaway(analysis)?.trim() ? null : observation;
 };
 
 export const getAnalysisLimitations = (analysis, t) => {
