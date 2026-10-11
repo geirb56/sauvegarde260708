@@ -13,6 +13,7 @@ import { useSubscription } from "@/context/SubscriptionContext";
 import { useUnitSystem } from "@/context/UnitContext";
 import WorkoutAnalysisAccessNotice from "@/components/WorkoutAnalysisAccessNotice";
 import WorkoutPhaseAnalysis from "@/components/workout/WorkoutPhaseAnalysis";
+import WorkoutKilometerSplits from "@/components/workout/WorkoutKilometerSplits";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatDistance, formatPace, formatSpeed } from "@/utils/units";
 import { formatDuration } from "@/utils/workoutHelpers";
@@ -169,6 +170,12 @@ export default function SessionDetail() {
       </section>
 
       <WorkoutPhaseAnalysis phaseAnalysis={analysisForRender?.phase_analysis} t={t} lang={lang} />
+      <WorkoutKilometerSplits
+        splits={session.km_splits}
+        workoutType={session.type}
+        unitSystem={unitSystem}
+        t={t}
+      />
 
       {canAccessAnalysis ? <>
         {analysisForRender && <section className="space-y-3 rounded-2xl border border-border bg-card/30 p-4" data-testid="session-analysis">

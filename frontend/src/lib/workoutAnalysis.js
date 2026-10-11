@@ -33,9 +33,17 @@ export const getSessionClassification = (analysis, t) => {
 
 export const getAnalysisTakeaway = (analysis) => {
   const observations = analysis?.meaning?.observations;
-  if (analysis?.meaning?.code === "meaning.structured_phases"
-    || analysis?.signals?.intensity?.available !== true
-    || !Array.isArray(observations)) return null;
+  if (!Array.isArray(observations)) return null;
+  if (analysis?.meaning?.code === "meaning.structured_phases") {
+    if (analysis?.phase_analysis?.effort_regularity?.available !== true) return null;
+    return observations.find((text) => typeof text === "string" && text.trim()) || null;
+  }
+  const intensityCode = analysis?.signals?.intensity?.code;
+  if (analysis?.signals?.intensity?.available !== true
+    || !["low", "moderate", "high", "very_high"].includes(intensityCode)
+    || !["meaning.with_hr_easy", "meaning.with_hr_moderate", "meaning.with_hr_high"].includes(analysis?.meaning?.code)) {
+    return null;
+  }
   return observations.find((text) => typeof text === "string" && text.trim()) || null;
 };
 

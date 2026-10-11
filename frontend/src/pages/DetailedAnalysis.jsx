@@ -9,6 +9,8 @@ import { useSubscription } from "@/context/SubscriptionContext";
 import { Button } from "@/components/ui/button";
 import WorkoutAnalysisAccessNotice from "@/components/WorkoutAnalysisAccessNotice";
 import WorkoutPhaseAnalysis from "@/components/workout/WorkoutPhaseAnalysis";
+import WorkoutKilometerSplits from "@/components/workout/WorkoutKilometerSplits";
+import { useUnitSystem } from "@/context/UnitContext";
 import { formatDistance, formatSpeed } from "@/utils/units";
 import { formatDuration } from "@/utils/workoutHelpers";
 import { formatPaceDisplay, getDistinctCoachObservation, getSessionClassification, getAnalysisTakeaway } from "@/lib/workoutAnalysis";
@@ -20,19 +22,25 @@ export default function DetailedAnalysis() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { t, lang } = useLanguage();
+  const { unitSystem } = useUnitSystem();
   const { loading: subscriptionLoading, hasFeature } = useSubscription();
   const canAccessAnalysis = !subscriptionLoading && hasFeature("coach_workout_analysis") === true;
   const [analysis, setAnalysis] = useState(null);
+  const [workout, setWorkout] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     setAnalysis(null);
+    setWorkout(null);
     if (!canAccessAnalysis) {
       setLoading(false);
       return undefined;
     }
     const controller = new AbortController();
     setLoading(true);
+    axios.get(`${API}/workouts/${id}`, { signal: controller.signal })
+      .then((res) => setWorkout(res.data))
+      .catch(() => setWorkout(null));
     axios.get(`${API}/coach/workout-analysis/${id}?language=${lang}`, { signal: controller.signal })
       .then((res) => setAnalysis(res.data))
       .catch(() => setAnalysis(null))
@@ -121,6 +129,12 @@ export default function DetailedAnalysis() {
       </section>
 
       <WorkoutPhaseAnalysis phaseAnalysis={analysis.phase_analysis} t={t} lang={lang} />
+      <WorkoutKilometerSplits
+        splits={workout?.km_splits}
+        workoutType={analysis.workout?.type || workout?.type}
+        unitSystem={unitSystem}
+        t={t}
+      />
 
       {(getAnalysisTakeaway(analysis) || classification || analysis.signals?.intensity?.available === true) && <section className="my-3 rounded-xl border border-border bg-card p-3">
         <h2 className="mb-2 font-mono text-[11px] uppercase tracking-widest text-muted-foreground">{t("detailedAnalysis.meaning")}</h2>

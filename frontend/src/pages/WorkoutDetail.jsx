@@ -7,9 +7,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import WorkoutAnalysisAccessNotice from "@/components/WorkoutAnalysisAccessNotice";
 import { useLanguage } from "@/context/LanguageContext";
 import { useSubscription } from "@/context/SubscriptionContext";
+import { useUnitSystem } from "@/context/UnitContext";
 import { formatPaceDisplay, getDistinctCoachObservation, getSessionClassification, getAnalysisTakeaway } from "@/lib/workoutAnalysis";
 import { formatSpeed } from "@/utils/units";
 import WorkoutPhaseAnalysis from "@/components/workout/WorkoutPhaseAnalysis";
+import WorkoutKilometerSplits from "@/components/workout/WorkoutKilometerSplits";
 import {
   ArrowLeft,
   MessageSquare,
@@ -78,6 +80,7 @@ export default function WorkoutDetail() {
   const navigate = useNavigate();
   const location = useLocation();
   const { t, lang } = useLanguage();
+  const { unitSystem } = useUnitSystem();
   const { loading: subscriptionLoading, hasFeature } = useSubscription();
   const canAccessAnalysis = !subscriptionLoading && hasFeature("coach_workout_analysis") === true;
   const [workout, setWorkout] = useState(null);
@@ -234,6 +237,12 @@ export default function WorkoutDetail() {
       </section>
 
       <WorkoutPhaseAnalysis phaseAnalysis={analysisForRender?.phase_analysis} t={t} lang={lang} />
+      <WorkoutKilometerSplits
+        splits={workout.km_splits}
+        workoutType={workout.type}
+        unitSystem={unitSystem}
+        t={t}
+      />
 
       {(takeaway || classification || (intensity?.available === true && intensity.text)) && <section aria-labelledby="takeaways-title">
         <h2 id="takeaways-title" className="text-base font-semibold mb-2">{t("workoutDetailExtended.takeaways")}</h2>
