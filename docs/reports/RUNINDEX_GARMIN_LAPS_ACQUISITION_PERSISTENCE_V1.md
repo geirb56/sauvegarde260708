@@ -130,6 +130,13 @@ xdist 3.8.0, Redis client 8.1.0/server 7.0.15, Motor 3.7.1,
 PyMongo 4.18.3, FastAPI 0.143.0, HTTPX 0.28.1. Pas de dépendance du dépôt
 changée ; versions déployées exactes à revalider.
 
+Validation P332 : **CodeQL Python terminé, 0 alerte**. Revue automatique
+indisponible (modèle configuré absent), pas un succès revendiqué.
+Agent de code review indépendant : aucun problème significatif trouvé dans
+le diff ciblé. Scan secrets : aucune détection. `git diff --check` réussi.
+Ces résultats récents remplacent, pour la correction, l'ancien timeout
+documenté plus bas ; ils ne remplacent pas la validation runtime Emergent.
+
 ### Procédure reproductible Emergent — cible 24346252881
 
 À exécuter avec les accès existants et autorisation explicite ; **non exécutée
