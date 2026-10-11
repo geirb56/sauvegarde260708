@@ -18,7 +18,7 @@ import WorkoutAnalysisAccessNotice from "@/components/WorkoutAnalysisAccessNotic
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatDistance, formatElevation, formatPace, formatSpeed } from "@/utils/units";
 import { formatDuration } from "@/utils/workoutHelpers";
-import { getAnalysisLimitations, hasCoachObservation } from "@/lib/workoutAnalysis";
+import { getAnalysisLimitations, hasCoachObservation, getSessionClassification, getAnalysisTakeaway } from "@/lib/workoutAnalysis";
 
 const API = API_BASE_URL;
 
@@ -192,7 +192,7 @@ export default function SessionDetail() {
       content: [
         analysisForRender?.signals?.intensity?.available ? analysisForRender?.signals?.intensity?.text : null,
         analysisForRender?.signals?.volume?.text,
-        analysisForRender?.signals?.session_type?.text,
+        getSessionClassification(analysisForRender, t)?.text,
       ].filter(Boolean).join(" • "),
       tone: "border-emerald-500/20 bg-emerald-500/5",
     },
@@ -220,7 +220,7 @@ export default function SessionDetail() {
       key: "meaning",
       title: t("workoutDetailExtended.meaning"),
       icon: Activity,
-      content: analysisForRender?.meaning?.text,
+      content: getAnalysisTakeaway(analysisForRender),
       tone: "border-border bg-card/40",
     },
     {

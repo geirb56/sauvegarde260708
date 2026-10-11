@@ -14,6 +14,7 @@ import { UnitProvider } from "@/context/UnitContext";
 import { useSubscription } from "@/context/SubscriptionContext";
 import { translations, LANGUAGE_STORAGE_KEY } from "@/lib/i18n";
 import { formatPaceDisplay, formatPaceDelta } from "@/lib/workoutAnalysis";
+import { getAnalysisTakeaway } from "@/lib/workoutAnalysis";
 
 jest.mock("axios");
 jest.mock("@/context/SubscriptionContext", () => ({
@@ -255,6 +256,104 @@ function mockAxios({ analysisPayload = analysis, workoutPayload = workout, delay
 beforeEach(() => {
   jest.clearAllMocks();
   setAnalysisAccess();
+});
+
+test("PR328 an empty execution list with caveats does not restore historical text", () => {
+  expect(getAnalysisTakeaway({ meaning: { text: "Legacy historical figures.", observations: [], caveats: ["Scientific uncertainty."] } }))
+    .toBe("Scientific uncertainty.");
+  expect(getAnalysisTakeaway({ meaning: { observations: ["Scientific uncertainty."], caveats: ["Scientific uncertainty."] } }))
+    .toBe("Scientific uncertainty.");
+});
+
+test.each(["fr", "en", "es"])("PR328 interval takeaways and evidence are coherent in %s", async (language) => {
+  const labels = translations[language].workoutDetailExtended;
+  const payload = {
+    ...analysis,
+    signals: { ...analysis.signals, session_structure: { available: true, code: "intervals" } },
+    meaning: {
+      ...analysis.meaning,
+      text: "Legacy facts and historical comparison 14 days 180 days.",
+      observations: ["Synthetic effort dispersion 7.7 s/km.", "Synthetic HR 151 to 159 bpm."],
+      caveats: ["Synthetic physiological uncertainty."],
+    },
+    phase_analysis: makeStructuredPhaseAnalysis(),
+    evidence: { ...analysis.evidence, has_splits: false, has_structured_phases: true },
+    comparison: {
+      ...analysis.comparison,
+      similar: { available: true, comparable: false, period_days: 180, sample_count: 2, avg_pace_min_km: 6 },
+    },
+  };
+  mockAxios({ analysisPayload: payload, workoutPayload: { ...workout, km_splits: [] } });
+  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1", language);
+  await screen.findByTestId("meaning-text");
+  expect(screen.getByTestId("session-classification")).toHaveTextContent(`${labels.structure}: ${labels.structureIntervals}`);
+  expect(screen.queryByText(/Standard session/)).not.toBeInTheDocument();
+  expect(screen.getByTestId("meaning-text")).toHaveTextContent("7.7 s/km.");
+  expect(screen.getByTestId("meaning-text")).toHaveTextContent("Synthetic physiological uncertainty.");
+  expect(screen.getByTestId("meaning-text")).not.toHaveTextContent("historical");
+  expect(screen.getByTestId("advice-text")).not.toHaveTextContent("Synthetic effort");
+  expect(screen.getByTestId("baseline-values")).not.toHaveAttribute("open");
+  expect(screen.getByTestId("similar-values")).not.toHaveAttribute("open");
+  expect(screen.getByTestId("similar-reference-label")).toHaveTextContent(labels.descriptiveReference);
+  expect(screen.getByTestId("similar-comparability-caveat")).toBeVisible();
+  fireEvent.click(within(screen.getByTestId("similar-values")).getByText(labels.referenceDetails));
+  expect(screen.getByTestId("similar-pace")).toBeVisible();
+  fireEvent.click(screen.getByTestId("advanced-toggle"));
+  const evidenceCard = screen.getByTestId("evidence-card");
+  expect(evidenceCard).toHaveTextContent(`${labels.splitsEvidence}: ${labels.no}`);
+  expect(evidenceCard).toHaveTextContent(`${labels.recordedPhasesEvidence}: ${labels.yes}`);
+  expect(evidenceCard).toHaveTextContent(`${labels.structuredPhasesEvidence}: ${labels.yes}`);
+});
+
+test.each([
+  ["continuous", true, true, "continuous"],
+  ["absent", false, false, null],
+  ["unknown", true, false, null],
+  ["mixed", true, true, null],
+])("PR328 keeps the three evidence levels separate for %s", async (_, available, classified, structure) => {
+  mockAxios({
+    analysisPayload: {
+      ...analysis,
+      signals: { ...analysis.signals, session_structure: { available: Boolean(structure), code: structure } },
+      phase_analysis: { available, phases: [], efforts: [], recoveries: [] },
+      evidence: { ...analysis.evidence, has_splits: false, has_structured_phases: classified },
+    },
+  });
+  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+  await screen.findByTestId("meaning-text");
+  const labels = translations.en.workoutDetailExtended;
+  expect(screen.getByTestId("session-classification")).toHaveTextContent(structure ? "Structure: Continuous" : "Type: Standard session");
+  fireEvent.click(screen.getByTestId("advanced-toggle"));
+  expect(screen.getByTestId("evidence-card")).toHaveTextContent(`${labels.recordedPhasesEvidence}: ${available ? labels.yes : labels.no}`);
+  expect(screen.getByTestId("evidence-card")).toHaveTextContent(`${labels.structuredPhasesEvidence}: ${classified ? labels.yes : labels.no}`);
+});
+
+test("PR328 reliable historical reference remains expanded", async () => {
+  mockAxios({ analysisPayload: {
+    ...analysis,
+    comparison: { ...analysis.comparison, similar: { available: true, comparable: true, period_days: 180, avg_pace_min_km: 6 } },
+  } });
+  renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
+  await screen.findByTestId("similar-values");
+  expect(screen.getByTestId("similar-values")).toHaveAttribute("open");
+  expect(screen.getByTestId("similar-pace")).toBeVisible();
+  expect(screen.queryByTestId("similar-reference-label")).not.toBeInTheDocument();
+});
+
+test.each([
+  ["DetailedAnalysis", "/analysis/w1", "/analysis/:id", DetailedAnalysis],
+  ["SessionDetail", "/session/w1", "/session/:id", SessionDetail],
+])("PR328 %s consumes additive takeaways and structure", async (_, route, path, Page) => {
+  mockAxios({ analysisPayload: {
+    ...analysis,
+    signals: { ...analysis.signals, session_structure: { available: true, code: "intervals" } },
+    meaning: { ...analysis.meaning, observations: ["Compact synthetic execution."], caveats: ["Scientific reserve."] },
+  } });
+  renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
+  expect(await screen.findByText("Compact synthetic execution. Scientific reserve.")).toBeVisible();
+  expect(screen.getByText(/Intervals/)).toBeVisible();
+  expect(screen.queryByText("Standard session")).not.toBeInTheDocument();
+  expect(screen.queryByText(analysis.meaning.text)).not.toBeInTheDocument();
 });
 
 test("WorkoutDetail makes only one canonical analysis request", async () => {
@@ -1094,6 +1193,7 @@ test.each([
   expect(within(pacing).getByText(pace)).toBeVisible();
   expect(within(pacing).getByText("+0:12/km")).toBeVisible();
   expect(within(recent).getByText(recentTitle)).toBeVisible();
+  fireEvent.click(within(screen.getByTestId("baseline-values")).getByText(translations[language].workoutDetailExtended.referenceDetails));
   expect(within(recent).getByText(duration)).toBeVisible();
   expect(within(recent).getByText(hr)).toBeVisible();
   expect(within(recent).getByText("-0:06/km")).toBeVisible();
@@ -1157,6 +1257,7 @@ test("French 14-day baseline stays separate from the mandatory 180-day similar f
   const similar = screen.getByTestId("similar-comparison-card");
   const pacing = screen.getByTestId("pacing-summary-card");
   expect(within(recent).getByText("Comparaison récente · 14 jours")).toBeVisible();
+  fireEvent.click(within(screen.getByTestId("baseline-values")).getByText(translations.fr.workoutDetailExtended.referenceDetails));
   expect(within(recent).getByText("-0:01/km")).toBeVisible();
   expect(recent).not.toHaveTextContent("+0:12/km");
   expect(within(similar).getByText("Sorties similaires · 180 jours")).toBeVisible();
