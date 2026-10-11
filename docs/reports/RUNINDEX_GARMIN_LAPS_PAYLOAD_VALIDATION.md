@@ -1,6 +1,6 @@
 # RUNINDEX — P331 : Validation du payload Garmin `activity splits` (lapDTOs)
 
-&gt; Audit **lecture seule**. Un seul appel GCCLI `activity splits`. Aucune écriture Mongo, aucun POST API, aucun worker, aucun réimport/backfill, aucun changement de code, aucune PR/commit. Caches `activity_details` non modifiés. Training V2 / Coach / WA V2 inchangés. Drift local `activity_day` préservé. Aucun secret ni GPS exposé. Fichiers temporaires supprimés après analyse.
+> Audit **lecture seule**. Un seul appel GCCLI `activity splits`. Aucune écriture Mongo, aucun POST API, aucun worker, aucun réimport/backfill, aucun changement de code, aucune PR/commit. Caches `activity_details` non modifiés. Training V2 / Coach / WA V2 inchangés. Drift local `activity_day` préservé. Aucun secret ni GPS exposé. Fichiers temporaires supprimés après analyse.
 
 ---
 
@@ -78,13 +78,13 @@ Extrait JSON anonymisé (lap complet + lap partiel) : voir `backend/tests/fixtur
 | Ordre `messageIndex` | 0→21 strictement séquentiel |
 | Doublons | **aucun** |
 | `startTimeGMT` | monotone croissant ✅ |
-| Valeurs manquantes/nulles/incohérentes | **aucune** sur l'échantillon |
+| Valeurs manquantes/nulles/incohérentes | Aucune valeur manquante ou nulle. Légère incohérence observée sur le dernier lap : maxSpeed 3,191 m/s inférieur à averageSpeed 3,196 m/s (écart 0,005 m/s). Origine non déterminée ; valeurs sources conservées. |
 | Cohérence allure↔distance/durée | ex. lap1 : 1000 m / 341,128 s → 2,931 m/s = `averageSpeed` ✅ (confirme unités m, s, m/s) |
 | **Mode de déclenchement** | **non fourni** (pas de champ natif). La régularité ~1000 m est **compatible** avec un découpage auto par distance, **mais non prouvée** → ne pas qualifier « auto » ni « manuel ». |
 
 ## 5. Mapping source → contrat normalisé proposé (#331)
 
-&gt; Valeurs absentes conservées à `null`. **Ne pas** convertir automatiquement en `km_splits`. **Ne pas** toucher `typed-splits`/`activity_details`.
+> Valeurs absentes conservées à `null`. **Ne pas** convertir automatiquement en `km_splits`. **Ne pas** toucher `typed-splits`/`activity_details`.
 
 | Champ normalisé (cible) | Source `lapDTOs` | Unité cible | Base |
 |---|---|---|---|
