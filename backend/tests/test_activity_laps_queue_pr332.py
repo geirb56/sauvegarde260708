@@ -3,9 +3,10 @@
 import asyncio
 import json
 import time
+import threading
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 import redis
@@ -149,6 +150,155 @@ def test_core_post_first_repeated_busy_and_expired_same_target(local_redis, monk
     asyncio.run(scenario())
 
 
+def test_mongo_reservation_crash_before_enqueue_recovers_after_expiry(local_redis, monkeypatch):
+    from garmin import activity_laps
+    from test_activity_details_pr321 import Collection
+
+    async def scenario():
+        async with client_for(local_redis, monkeypatch) as client:
+            db = SimpleNamespace(garmin_activities=Collection([
+                {"user_id": "a", "external_id": "123", "source": "garmin"},
+            ]))
+            enqueue = queue.enqueue_activity_laps
+            monkeypatch.setattr(queue, "enqueue_activity_laps", AsyncMock(
+                side_effect=asyncio.CancelledError,
+            ))
+            with pytest.raises(asyncio.CancelledError):
+                await activity_laps.request_activity_laps(db, "a", "123")
+            state = db.garmin_activities.docs[0]["activity_laps_fetch"]
+            old_token = state["token"]
+            assert state["status"] == "queued"
+            assert await client.llen(queue.QUEUE_KEY) == 0
+            assert await activity_laps.request_activity_laps(db, "a", "123") == {"status": "queued"}
+            state["next_attempt_at"] = "2000-01-01T00:00:00+00:00"
+            assert (await activity_laps.get_activity_laps(db, "a", "123"))["error_code"] == "lease_expired"
+            monkeypatch.setattr(queue, "enqueue_activity_laps", enqueue)
+            assert await activity_laps.request_activity_laps(db, "a", "123") == {"status": "queued"}
+            assert db.garmin_activities.docs[0]["activity_laps_fetch"]["token"] != old_token
+            assert await client.llen(queue.QUEUE_KEY) == 1
+    asyncio.run(scenario())
+
+
+def test_interruption_cannot_leave_redis_pending_without_delivery(local_redis, monkeypatch):
+    async def scenario():
+        async with client_for(local_redis, monkeypatch) as client:
+            monkeypatch.setattr(client, "lpush", AsyncMock(side_effect=asyncio.CancelledError))
+            try:
+                await queue.enqueue_activity_laps("a", "123")
+            except asyncio.CancelledError:
+                pass
+            owner = await client.get(queue._pending_key(queue.JOB_ACTIVITY_LAPS, "a"))
+            if owner is not None:
+                deliveries = await client.lrange(queue.QUEUE_KEY, 0, -1)
+                assert any(json.loads(raw)["id"] == owner for raw in deliveries)
+    asyncio.run(scenario())
+
+
+def test_laps_enqueue_wrong_type_does_not_create_reservation(local_redis, monkeypatch):
+    async def scenario():
+        async with client_for(local_redis, monkeypatch) as client:
+            await client.set(queue.QUEUE_KEY, "wrong-type")
+            with pytest.raises(redis.ResponseError):
+                await queue.enqueue_activity_laps("a", "123")
+            assert await client.get(queue._pending_key(queue.JOB_ACTIVITY_LAPS, "a")) is None
+            assert await client.get(queue.QUEUE_KEY) == "wrong-type"
+    asyncio.run(scenario())
+
+
+def test_worker_restart_and_duplicate_delivery_use_persisted_cache(local_redis, monkeypatch):
+    from garmin import activity_laps
+    from test_activity_details_pr321 import Collection
+
+    async def scenario():
+        async with client_for(local_redis, monkeypatch) as client:
+            db = SimpleNamespace(
+                garmin_activities=Collection([
+                    {"user_id": "a", "external_id": "123", "source": "garmin",
+                     "activity_day": "local-day", "activity_details": {"phases": []}},
+                ]),
+                garmin_connections=Collection([
+                    {"user_id": "a", "connected": True, "garmin_username": "synthetic-a"},
+                ]),
+            )
+            provider = Mock()
+            provider.get_activity_laps.return_value = [{"distance_m": 400}]
+            monkeypatch.setattr(activity_laps, "get_provider_for_user", Mock(return_value=provider))
+            mock_slots(monkeypatch)
+            raw, job = await claimed_laps(client)
+            # A claimed worker disappears; the reliable record outlives that worker.
+            await client.hset(queue.CLAIMS_KEY, job["id"], 0)
+            assert await queue.recover_orphans() == 1
+            raw, recovered = await queue.claim_job(timeout=1)
+            await sync_worker.process_job(db, client, raw, recovered)
+            await client.lpush(queue.QUEUE_KEY, raw)
+            raw, duplicate = await queue.claim_job(timeout=1)
+            await sync_worker.process_job(db, client, raw, duplicate)
+            provider.get_activity_laps.assert_called_once_with("a", "123")
+            doc = db.garmin_activities.docs[0]
+            assert doc["activity_day"] == "local-day"
+            assert doc["activity_details"] == {"phases": []}
+            assert await activity_laps.request_activity_laps(db, "a", "123") == {"status": "cached"}
+            assert (await activity_laps.get_activity_laps(db, "a", "123"))["cache_current"]
+            assert await client.llen(queue.QUEUE_KEY) == 0
+            assert await client.llen(queue.PROCESSING_KEY) == 0
+    asyncio.run(scenario())
+
+
+def test_expired_running_post_does_not_lose_the_reserved_delivery(local_redis, monkeypatch):
+    from garmin import activity_laps
+    from test_activity_details_pr321 import Collection
+
+    entered, release = threading.Event(), threading.Event()
+
+    def blocked(*args):
+        entered.set()
+        if not release.wait(5):
+            raise RuntimeError("test release timeout")
+        return [{"distance_m": 400}]
+
+    async def scenario():
+        async with client_for(local_redis, monkeypatch) as client:
+            db = SimpleNamespace(
+                garmin_activities=Collection([
+                    {"user_id": "a", "external_id": "123", "source": "garmin"},
+                ]),
+                garmin_connections=Collection([
+                    {"user_id": "a", "connected": True, "garmin_username": "synthetic-a"},
+                ]),
+            )
+            provider = Mock()
+            provider.get_activity_laps.side_effect = blocked
+            monkeypatch.setattr(activity_laps, "get_provider_for_user", Mock(return_value=provider))
+            mock_slots(monkeypatch)
+            assert await activity_laps.request_activity_laps(db, "a", "123") == {"status": "queued"}
+            raw, job = await queue.claim_job(timeout=1)
+            worker = asyncio.create_task(sync_worker.process_job(db, client, raw, job))
+            try:
+                assert await asyncio.to_thread(entered.wait, 5)
+                state = db.garmin_activities.docs[0]["activity_laps_fetch"]
+                state["next_attempt_at"] = "2000-01-01T00:00:00+00:00"
+                assert await activity_laps.request_activity_laps(db, "a", "123") == {
+                    "status": "already_queued",
+                }
+            finally:
+                release.set()
+                await worker
+            # The old thread must not write, but its delivery must survive for recovery.
+            assert "activity_laps" not in db.garmin_activities.docs[0]
+            assert await client.zcard(queue.DELAYED_KEY) == 1
+            assert await queue.promote_due_activity_details() == 1
+            raw, recovered = await queue.claim_job(timeout=1)
+            assert recovered["id"] == job["id"]
+            assert recovered["attempts"] == 0
+            provider.get_activity_laps.side_effect = None
+            provider.get_activity_laps.return_value = [{"distance_m": 800}]
+            await sync_worker.process_job(db, client, raw, recovered)
+            assert db.garmin_activities.docs[0]["activity_laps"]["laps"] == [{"distance_m": 800}]
+            assert await client.llen(queue.PROCESSING_KEY) == 0
+            assert await client.get(queue._pending_key(queue.JOB_ACTIVITY_LAPS, "a")) is None
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("payload", [
     "invalid JSON",
     json.dumps({"id": "owner", "type": queue.JOB_ACTIVITY_DETAILS,
@@ -177,7 +327,7 @@ def test_enqueue_failure_releases_only_its_reservation(local_redis, monkeypatch)
                 await client.set(key, "new-owner")
                 raise redis.ConnectionError("synthetic outage")
 
-            monkeypatch.setattr(client, "lpush", fail)
+            monkeypatch.setattr(client, "eval", fail)
             with pytest.raises(redis.ConnectionError):
                 await queue.enqueue_activity_laps("a", "123")
             assert await client.get(key) == "new-owner"

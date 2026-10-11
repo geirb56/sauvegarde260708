@@ -1,5 +1,189 @@
 # RUNINDEX — PR332 : Garmin Lap Acquisition & Persistence V1
 
+## P332 — Correction ciblée avant merge (2026-10-11)
+
+### Références et verdict
+
+- PR existante : #332, toujours draft, aucun merge/nouvelle PR.
+- Base PR : `copilot/dev` / `6c2f986074a9f84def0b9ad73e097d0e16406d06`.
+- Head audité avant correction : `ee5a9cc9f1476a73582ddbbb463f475bb2668d38`.
+- Head corrigé exact : publié dans le commentaire de livraison de #332.
+- Git initial propre. Aucun drift local préexistant ; `activity_day` inchangé.
+- **Verdict : HOLD** jusqu'à validation runtime Emergent et audit C332.
+  Les tests locaux ne valident pas Mongo production, les workers Railway ou
+  le payload réel complet ; la fixture ne contient toujours que deux exemples.
+
+### Diagnostic factuel A — Cohérence Mongo / Redis
+
+1. Interruption après réservation Mongo, avant tout enqueue Redis :
+   `queued` reste jusqu'au bail de 900 s. Une demande avant expiration retourne
+   `queued` même si aucune livraison n'existe ; après expiration GET expose
+   `retryable_error/lease_expired` et POST reprend la réservation.
+   Test déterministe par cancellation et expiration contrôlée : réussi avant
+   correction. Pas de changement de cette politique bornée, ni réparation GET.
+2. Anomalie distincte reproduite : Redis réservait le pending dans Lua puis
+   faisait LPUSH hors Lua. Une cancellation entre les deux laissait un pending
+   sans livraison, bloquant jusqu'au TTL 1800 s. Le test d'invariant a échoué
+   avant correction. **Correctif** limité aux laps : SET NX et LPUSH dans le
+   même script Lua ; prévalidation des types de clés avant tout write, car Lua
+   est atomique mais n'annule pas les écritures en cas d'erreur de script.
+   Aucun stockage/queue supplémentaire, legacy typed-splits inchangé.
+
+### Diagnostic factuel B — Lease, fencing, redelivery, redémarrage
+
+Le fencing Mongo empêchait déjà l'écriture d'un ancien token après nouvelle
+acquisition. Les tests existants couvrent worker interrompu, bail expiré,
+nouveau résultat puis ancienne terminaison, reprise watchdog et Redis AOF.
+
+**Anomalie reproduite au niveau worker réel + Redis local** :
+un POST après expiration du `running` remplace le token Mongo par `queued`,
+mais Redis retourne `already_queued` pour la livraison encore exécutée.
+L'ancienne écriture est refusée ; le fetch retournait pourtant un succès
+`superseded`. Le worker ACKait alors l'unique livraison et libérait pending,
+laissant Mongo queued sans travail. Échec observé : aucun job différé (0 au
+lieu de 1).
+
+**Correctif minimal** : après écriture refusée, relire le document utilisateur.
+Si le nouveau cache est valide ou l'activité supprimée, succès terminal
+`superseded` conservé. Sinon retourner le contrat interne existant `deferred` :
+immédiat si queued, sinon au prochain bail/cooldown. Le worker existant parque
+alors la même livraison sans consommer un retry, puis reprend. Aucune nouvelle
+logique de worker ni transmission des tokens Mongo à Redis nécessaire :
+les pending Redis sont déjà protégés par leur propre job-id.
+
+Ajouts : cycle cancellation Mongo→expiration→POST, interruption Redis,
+wrong-type Redis sans réservation partielle, POST sur running expiré→ancienne
+terminaison refusée→déférence→nouveau cache, worker disparu→watchdog→nouveau
+traitement→livraison dupliquée utilisant le cache (un seul appel provider).
+Le redémarrage worker est simulé par abandon/reprise de la livraison ; pas
+un test de déploiement Railway ni de SIGKILL production.
+
+### Diagnostic factuel C — Contrat API sans rupture
+
+Aucune route, HTTP status ou forme de réponse publique modifiée.
+
+| Notion | Contrat |
+|---|---|
+| Résultat POST | `queued` nouvelle réservation ou demande déjà réservée ; `already_queued` même cible confirmée dans Redis ; `running` en cours ; `busy` autre cible/slot inconnu ; `cooldown` délai temporaire ; `cached` cache versionné valide |
+| État GET | `fetch_status` : `not_requested`, `queued`, `running`, `complete`, `empty`, `retryable_error` |
+| Disponibilité | `cache_current` indique la validité versionnée ; `activity_laps` peut contenir un ancien cache pendant un retry, ne pas le confondre avec un résultat courant |
+| Retry | `error_code` + `next_attempt_at` ; failed ou bail expiré → `retryable_error` ; retry déclenché uniquement par POST/queue déjà autorisée |
+
+`already_queued`, `busy`, `cooldown` sont des résultats de demande, pas des
+statuts finaux de cache. `complete` et `empty` décrivent un cache reconnu ;
+`empty` n'est jamais déduit d'une erreur. `deferred` reste interne worker.
+POST conserve HTTP 202 pour ces réponses ; 404 inaccessible, 422 ID invalide,
+503 indisponibilité queue. GET reste exclusivement Mongo, sans writes/Redis.
+
+### Diagnostic factuel D — Intégrité et périmètre
+
+Laps sur `garmin_activities` uniquement. Writer laps ne touche ni phases,
+ni `activity_details`, ni `activity_day`. Ingestion suivante utilise `$set`
+en excluant les deux sous-documents laps ; tests de préservation conservés.
+Cache valide évite provider/GCCLI en POST, GET et redelivery. Aucun backfill,
+automatisation d'acquisition, priorité de jobs ou calcul physiologique ajouté.
+`intensity_type` reste une valeur source opaque, sans conversion en zone.
+
+La stratégie future (queue GCCLI/worker Railway existants, enrichissement
+différé et priorité des syncs principales, moteurs canoniques) n'est pas
+implémentée dans ce correctif.
+
+### Fichiers corrigés et tests réellement exécutés
+
+- `backend/jobs/queue.py` : enqueue laps atomique et validation des types.
+- `backend/garmin/activity_laps.py` : différer une livraison fenced lorsque
+  le cache courant n'est pas encore disponible.
+- `backend/tests/test_activity_laps_queue_pr332.py` : cinq tests ciblés,
+  adaptation du point d'injection de panne de l'enqueue passé dans Lua.
+- Ce rapport : diagnostic et protocole runtime.
+
+Depuis `backend/` (`/home/runner/work/sauvegarde260708/sauvegarde260708/backend`) :
+
+1. `python -m pytest tests/test_activity_laps_queue_pr332.py -k
+   'mongo_reservation_crash or expired_running_post' -q` avant correctif :
+   **1 passed, 1 failed** (perte de livraison démontrée).
+2. `python -m pytest tests/test_activity_laps_queue_pr332.py -k
+   'interruption_cannot' -q` avant correctif : **1 failed**
+   (pending sans livraison démontré).
+3. `python -m pytest tests/test_activity_laps_pr332.py
+   tests/test_activity_laps_queue_pr332.py tests/test_activity_details_pr321.py
+   tests/test_activity_details_delayed_redis_c321.py
+   tests/test_typed_splits_chronology_c321.py
+   tests/test_garmin_queue_backfill_pr197.py -q` :
+   **244 passed**, 3 avertissements de dépréciation, 18,33 s.
+4. `python -m pytest tests/test_garmin_activity_normalization_pr02.py
+   tests/test_garmin_data_layer.py tests/test_garmin_daily_metrics_pr03.py
+   tests/test_garmin_phased_sync_pr07a.py tests/test_garmin_deep_sync.py -q` :
+   **96 passed**, 0,88 s.
+5. `python -m pytest tests/test_garmin_user_connection.py -q` :
+   **8 passed**, 0,74 s.
+6. Tentative supplémentaire du groupe (3) avec `test_reliable_queue.py`
+   avant l'atomicité Redis finale : **241 passed, 3 erreurs** (fixture `r`
+   inexistante dans ce module prévu pour un runner manuel).
+   Ce module n'a pas été modifié ni exécuté contre des services externes.
+
+Premiers essais : pytest absent, incompatibilité PyOpenSSL système puis deux
+tests skipped faute de redis-server. Runtime restauré hors dépôt et Redis
+local installé avant les reproductions effectives ci-dessus. Aucun skip
+dans les 244 tests finaux. Versions test : Python 3.12.3, pytest 9.1.1,
+xdist 3.8.0, Redis client 8.1.0/server 7.0.15, Motor 3.7.1,
+PyMongo 4.18.3, FastAPI 0.143.0, HTTPX 0.28.1. Pas de dépendance du dépôt
+changée ; versions déployées exactes à revalider.
+
+### Procédure reproductible Emergent — cible 24346252881
+
+À exécuter avec les accès existants et autorisation explicite ; **non exécutée
+par Copilot**. Ne pas afficher JWT, compte Garmin, user-id, HOME personnel,
+GPS ou payload brut dans le rapport public.
+
+1. Relever SHA backend **et** worker Railway ; vérifier version identique et
+   queue existante. Authentifier le propriétaire dans la session existante ;
+   vérifier le document par user/source/external_id `24346252881`.
+2. En lecture seule conserver une comparaison privée des sous-documents
+   `activity_details`, `activity_day` et résumé ; ne publier que
+   « identiques/non identiques ». Relever cache laps version/statut/fetched_at.
+3. GET `/api/garmin/activities/24346252881/laps` avec cette authentification.
+   Observer les logs existants : **aucune commande GCCLI** et aucune write.
+   Sans authentification → 401/403 ; autre utilisateur → 404.
+4. Si cache déjà valide, vérifier directement 22 laps, dernier lap
+   `lap_index=22`, `order=21`, `distance_m≈274.53`, sans purger/refetch.
+   Sinon POST cette route une fois et répéter immédiatement : un seul job
+   autorisé, GET queued/running. Attendre l'exécution du worker existant,
+   sans lancer une commande GCCLI manuelle en parallèle.
+5. Après complete, attendre **22 laps** et dernier environ **274,53 m**
+   pour cette activité précise (référence #331, pas généralisation).
+   Vérifier index/ordre et valeurs : maxSpeed 3.191 et averageSpeed 3.196
+   du dernier lap conservés. Ne pas attendre 22 depuis la fixture locale
+   de deux exemples ni inventer des laps manquants.
+6. Vérifier absence des champs GPS/strideLength/connectIQ/lengthDTOs,
+   source Garmin/endpoint splits/version 1 ; comparer données existantes
+   privées avant/après : aucun effacement phases/local day/résumé.
+7. Refaire POST (attendu `cached`) et plusieurs GET : fetched_at et laps
+   inchangés, **zéro acquisition supplémentaire** dans les logs.
+8. Sur la prochaine sync ordinaire déjà autorisée, comparer encore les
+   données existantes/laps. Ne pas déclencher un réimport ou backfill.
+9. Pannes/concurrence dans un environnement isolé seulement : reproduire
+   arrêt avant enqueue, interruption worker, expiration de bail, POST
+   concurrent et redelivery ; contrôler reprise et anciennes écritures
+   refusées. Ne pas modifier leases/tokens/queue de production pour tester.
+10. Publier SHA exacts, statuts, compte d'appels (sans identité), nombre de
+    laps, distance finale et booléens de préservation. Si 22/274,53 diffèrent,
+    conserver la source, diagnostiquer et garder **HOLD**, pas corriger les
+    valeurs pour satisfaire l'attendu.
+
+### Risques résiduels
+
+Mongo/Redis restent deux systèmes sans transaction commune : interruption
+avant enqueue laisse queued jusqu'à 900 s (pas un blocage illimité).
+Crash serveur Redis/durabilité dépend de l'AOF/config déployée ; l'atomicité
+Lua ne constitue pas une garantie de persistance production.
+Lookup de contention linéaire inchangé. Les limites/verrous/watchdog hérités
+ne sont pas refactorisés. Mongo et provider simulés, Redis local réel :
+tests locaux ≠ validation de production. Aucun appel Garmin réel ni Mongo
+production, aucun enrichissement automatique/backfill. Audit C332 requis.
+
+---
+
 ## Références exactes et préconditions
 
 - Base : `copilot/dev`, `6c2f986074a9f84def0b9ad73e097d0e16406d06`.

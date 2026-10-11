@@ -246,7 +246,20 @@ async def fetch_activity_laps(db, user_id, activity_id):
             },
             "activity_laps_fetch": {"status": "complete" if laps else "empty"},
         }})
-        return {"success": True, "status": "complete" if result.modified_count else "superseded"}
+        if result.modified_count:
+            return {"success": True, "status": "complete"}
+        current = await db.garmin_activities.find_one(identity, {"_id": 0})
+        if current is not None and not _cached(current):
+            state = current.get("activity_laps_fetch") or {}
+            return {
+                "success": False, "status": "deferred",
+                "retry_at": (
+                    datetime.now(timezone.utc).isoformat()
+                    if state.get("status") == "queued"
+                    else state.get("next_attempt_at", datetime.now(timezone.utc).isoformat())
+                ),
+            }
+        return {"success": True, "status": "superseded"}
     except Exception:
         await db.garmin_activities.update_one(fenced, {"$set": {
             "activity_laps_fetch": {

@@ -203,9 +203,23 @@ async def _enqueue_targeted(
     key = _pending_key(job_type, user_id)
     job_id = uuid.uuid4().hex
     if job_type == JOB_ACTIVITY_LAPS:
+        payload = json.dumps({
+            "id": job_id, "type": job_type, "user_id": user_id,
+            "activity_id": activity_id, "attempts": 0, "enqueued_at": time.time(),
+        })
         reservation = await r.eval(
             """
-                if redis.call('SET', KEYS[1], ARGV[3], 'NX', 'EX', ARGV[4]) then return 2 end
+                local expected = {'string', 'list', 'list', 'hash'}
+                for i, key in ipairs(KEYS) do
+                    local kind = redis.call('TYPE', key).ok
+                    if kind ~= 'none' and kind ~= expected[i] then
+                        return redis.error_reply('Invalid laps enqueue key type')
+                    end
+                end
+                if redis.call('SET', KEYS[1], ARGV[3], 'NX', 'EX', ARGV[4]) then
+                    redis.call('LPUSH', KEYS[2], ARGV[5])
+                    return 2
+                end
                 local owner = redis.call('GET', KEYS[1])
                 if owner == false then return 0 end
                 local function matches(payload)
@@ -228,10 +242,11 @@ async def _enqueue_targeted(
                 return 0
             """,
             4, key, QUEUE_KEY, PROCESSING_KEY, DELAYED_PAYLOADS_KEY,
-            user_id, activity_id, job_id, DETAILS_PENDING_TTL,
+            user_id, activity_id, job_id, DETAILS_PENDING_TTL, payload,
         )
         if reservation != 2:
             return {"status": "already_queued" if reservation == 1 else "busy"}
+        return {"status": "queued"}
     elif not await r.set(key, job_id, nx=True, ex=DETAILS_PENDING_TTL):
         return {"status": "already_queued"}
     try:
