@@ -186,3 +186,18 @@ def test_structure_requires_observed_sequence_or_full_continuous_coverage(kinds,
     analysis = build_workout_analysis_v2(reference_workout(), [], phases=phases)
     assert analysis.signals.session_structure.code == expected
     assert analysis.signals.intensity.available is False
+
+
+def test_unclassified_unusable_phases_preserve_existing_pacing_conclusions():
+    workout = reference_workout()
+    workout["split_analysis"] = {"pace_drop": 0.5}
+    baseline = build_workout_analysis_v2(workout, [])
+    analysis = build_workout_analysis_v2(
+        workout, [], phases=[ActivityPhase(order=0, source="synthetic-provider")],
+    )
+    assert analysis.phase_analysis.available is True
+    assert analysis.signals.session_structure.available is False
+    assert analysis.summary == baseline.summary
+    assert analysis.meaning == baseline.meaning
+    assert analysis.advice == baseline.advice
+    assert analysis.advice.code == "advice.even_pacing"

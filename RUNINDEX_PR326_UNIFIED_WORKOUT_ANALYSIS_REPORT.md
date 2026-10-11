@@ -118,7 +118,15 @@ tests/test_rag_endpoints.py tests/test_idor_integration.py -q --tb=short
 Cette suite couvre les droits, refus avant loader/LLM, isolation utilisateur,
 contrats HTTP, Coach, absence de zones fiables, phases sans splits, phases
 partielles/incohérentes et absence de progression ou dérive inventées.
-Résultat final et revue automatisée : à confirmer après dernier passage.
+Résultat final après correction de revue : **551 passed**, 14 warnings,
+`git diff --check` réussi. Les phases inconnues sans observations exploitables
+conservent désormais les conclusions générales existantes (test ajouté).
+
+Validation sécurité : scan de secrets sans résultat ; CodeQL Python **0 alerte**.
+La revue automatisée de parallel_validation était indisponible (modèle absent),
+malgré son statut de sortie « Success ». Une revue read-only indépendante
+code-review a identifié le cas des phases inconnues ; il a été corrigé et
+couvert par test. Revue technique C326 toujours requise.
 
 ## Exemple synthétique du 10 octobre 2026
 
@@ -176,6 +184,8 @@ et phases présentes, sans nier l'analyse des fractions.
   ou déploiement. Revue technique C326 requise avant intégration.
 
 Base exacte : `0bc806fc9a566c16918e044a852036413d6fe072`.
-HEAD d'implémentation : à renseigner après commit ; le HEAD final du rapport
+HEAD d'implémentation initiale : `31dfcb933455b43fd02bb74f7ef49ef66f7c9f39`.
+Le correctif de revue et les résultats finaux sont inclus dans le commit suivant.
+Le HEAD final du rapport
 sera indiqué dans la description de PR (un fichier ne peut contenir le SHA
 du commit qui le contient sans référence circulaire).

@@ -1659,9 +1659,10 @@ def _phase_observations(
     observations = []
     if structure.available:
         observations.append(structure.text)
-    observations.append(_template(
-        language, "fact.phases", efforts=len(phases.efforts), recoveries=len(phases.recoveries),
-    ))
+    if phases.efforts or phases.recoveries:
+        observations.append(_template(
+            language, "fact.phases", efforts=len(phases.efforts), recoveries=len(phases.recoveries),
+        ))
     for rows, key in (
         (phases.efforts, "fact.repetitions"), (phases.recoveries, "fact.recoveries"),
     ):
