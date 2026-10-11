@@ -213,7 +213,9 @@ export default function WorkoutDetail() {
                 ? ["duration", formatDuration(workout.duration_minutes)] : null,
               isCycle
                 ? (averageSpeed == null ? null : ["averageSpeed", formatSpeed(averageSpeed, { unitSystem: "metric" })])
-                : (hasWorkoutPace ? ["averagePace", formatPaceDisplay(workout.avg_pace_min_km)] : null),
+                : (hasWorkoutPace
+                  ? ["averagePace", formatPaceDisplay(workout.avg_pace_min_km)]
+                  : averageSpeed == null ? null : ["averageSpeed", formatSpeed(averageSpeed, { unitSystem: "metric" })]),
               Number.isFinite(avgHr) && avgHr > 0 ? ["averageHeartRate", formatHeartRate(avgHr)] : null,
             ].filter(Boolean).map(([label, value]) => <div key={label} className="min-w-0">
               <dt className="text-sm text-muted-foreground">{t(`workoutDetailExtended.${label}`)}</dt>
@@ -224,7 +226,7 @@ export default function WorkoutDetail() {
             <AnalysisSkeleton />
           ) : canAccessAnalysis && analysisError ? (
             <AnalysisError t={t} />
-          ) : !subscriptionLoading ? (
+          ) : !canAccessAnalysis && !subscriptionLoading ? (
             <WorkoutAnalysisAccessNotice t={t} />
           ) : null}
         </CardContent>

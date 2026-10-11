@@ -85,7 +85,9 @@ export default function DetailedAnalysis() {
       ? [t("workoutDetailExtended.duration"), formatDuration(analysis.comparison.duration_minutes.current)] : null,
     cycling
       ? (Number.isFinite(speed) && speed > 0 ? [t("workoutDetailExtended.averageSpeed"), formatSpeed(speed, { unitSystem: "metric" })] : null)
-      : (Number.isFinite(pace) && pace > 0 ? [t("workoutDetailExtended.averagePace"), formatPaceDisplay(pace)] : null),
+      : (Number.isFinite(pace) && pace > 0
+        ? [t("workoutDetailExtended.averagePace"), formatPaceDisplay(pace)]
+        : Number.isFinite(speed) && speed > 0 ? [t("workoutDetailExtended.averageSpeed"), formatSpeed(speed, { unitSystem: "metric" })] : null),
     Number.isFinite(analysis.physiology?.avg_hr) && analysis.physiology.avg_hr > 0
       ? [t("workoutDetailExtended.averageHeartRate"), `${analysis.physiology.avg_hr} bpm`] : null,
   ].filter(Boolean);

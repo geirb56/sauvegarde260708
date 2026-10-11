@@ -111,7 +111,7 @@ const WorkoutPhaseAnalysis = ({ phaseAnalysis, t, lang }) => {
         {t("workoutDetailExtended.structuredPhases")}
       </h2>
       <Card className="border-border bg-card">
-        <CardContent className="space-y-3 p-3">
+        <CardContent className="min-w-0 space-y-3 p-3">
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm" data-testid="phase-summary">
             <span>{t("workoutDetailExtended.effortCount")}: {efforts.length}</span>
             <span>{t("workoutDetailExtended.recoveryCount")}: {recoveries.length}</span>
@@ -125,7 +125,7 @@ const WorkoutPhaseAnalysis = ({ phaseAnalysis, t, lang }) => {
               </span>
             )}
           </div>
-          <ol className="space-y-1" data-testid="phase-rows">
+          <ol className="min-w-0 space-y-1" data-testid="phase-rows">
             {rows.map((row, index) => {
               if (row.kind === "effort") {
                 const metrics = getPhaseMetrics(row.phase, t);

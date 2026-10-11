@@ -817,15 +817,13 @@ test("WorkoutDetail shows one coherent error state for analysis failure", async 
   expect(screen.queryByTestId("coach-summary")).not.toBeInTheDocument();
   expect(screen.getByText(translations.en.workoutDetailExtended.analysisLoadError)).toBeVisible();
   expect(screen.queryByTestId("analysis-details")).not.toBeInTheDocument();
-  expect(screen.getByTestId("splits-chart-card")).toBeVisible();
+  expect(screen.queryByTestId("splits-chart-card")).not.toBeInTheDocument();
   expect(screen.queryByTestId("meaning-text")).not.toBeInTheDocument();
   expect(screen.queryByTestId("advice-text")).not.toBeInTheDocument();
   expect(screen.queryByTestId("evidence-card")).not.toBeInTheDocument();
   expect(screen.queryByTestId("analysis-limitations")).not.toBeInTheDocument();
   expect(screen.getByTestId("ask-coach-btn")).toBeVisible();
-  expect(screen.getByTestId("splits-chart-card")).toBeVisible();
-  expect(screen.getByTestId("splits-chart-card")).toHaveTextContent("5:54");
-  expect(screen.getByTestId("splits-chart-card")).toHaveTextContent("6:06");
+  expect(screen.queryByTestId("splits-chart-card")).not.toBeInTheDocument();
   expect(axios.get).toHaveBeenCalledTimes(2);
 });
 
@@ -962,7 +960,7 @@ test.each(["fr", "en", "es"])("cycling uses recorded speed, never average min/km
   expect(metrics).toHaveTextContent(translations[language].workoutDetailExtended.averageSpeed);
   expect(metrics).toHaveTextContent("24.5 km/h");
   expect(metrics).not.toHaveTextContent("/km");
-  expect(screen.queryByTestId("pacing-summary-card")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("primary-metrics")).not.toHaveTextContent("/km");
 });
 
 test.each([null, 0, -3, NaN, Infinity, -Infinity, "25"])("cycling rejects unusable speeds %s without deriving speed", async (speed) => {
@@ -1012,9 +1010,7 @@ test.each([null, 0, -2, NaN, Infinity, -Infinity, "6"])("invalid absolute paces 
   expect(metrics).toHaveTextContent(translations.en.workoutDetailExtended.averageSpeed);
   expect(metrics).toHaveTextContent("10.0 km/h");
   expect(metrics).not.toHaveTextContent("/km");
-  const card = screen.getByTestId("pacing-summary-card");
-  expect(card).toHaveTextContent("10.0 km/h");
-  expect(card).not.toHaveTextContent("/km");
+  expect(screen.queryByTestId("pacing-summary-card")).not.toBeInTheDocument();
   expect(screen.queryByTestId("similar-pace")).not.toBeInTheDocument();
   expect(screen.queryByTestId("splits-chart-card")).not.toBeInTheDocument();
   expect(screen.getByTestId("workout-detail")).not.toHaveTextContent("NaN");
@@ -1026,7 +1022,8 @@ test.each([null, 0, -2, NaN, Infinity])("an invalid pace %s without a usable spe
   renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
   await screen.findByTestId("coach-summary");
   expect(screen.queryByTestId("pacing-summary-card")).not.toBeInTheDocument();
-  expect(screen.getByText(translations.en.workoutDetailExtended.pacingUnavailable)).toBeVisible();
+  expect(screen.queryByText(translations.en.workoutDetailExtended.pacingUnavailable)).not.toBeInTheDocument();
+  expect(screen.getByTestId("primary-metrics")).not.toHaveTextContent("/km");
 });
 
 test.each([null, {}, { z1: null, z2: NaN, z3: Infinity, z4: -1, z5: 101 }, { z1: 0, z2: 0 }, { unknown: 50 }])(
@@ -1038,7 +1035,7 @@ test.each([null, {}, { z1: null, z2: NaN, z3: Infinity, z4: -1, z5: 101 }, { z1:
     renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
     await screen.findByTestId("coach-summary");
     expect(screen.queryByTestId("hr-zones-card")).not.toBeInTheDocument();
-    expect(screen.getByTestId("heart-response")).toHaveTextContent(translations.en.workoutDetailExtended.heartRateUnavailable);
+    expect(screen.queryByTestId("heart-response")).not.toBeInTheDocument();
   },
 );
 
@@ -1049,27 +1046,21 @@ test("unavailable zones are hidden even if percentages are present", async () =>
   expect(screen.queryByTestId("hr-zones-card")).not.toBeInTheDocument();
 });
 
-test("valid zone rows retain a mobile-readable provenance warning and omit invalid percentages", async () => {
+test("heart-rate zones and provenance diagnostics stay off the workout screen", async () => {
   mockAxios({ analysisPayload: { ...analysis, physiology: { ...analysis.physiology, zone_distribution: { z1: 30, z2: NaN, z3: -2, z4: 101, z5: null } } } });
   renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
   await screen.findByTestId("coach-summary");
-  const zones = screen.getByTestId("hr-zones-card");
-  expect(within(zones).getByText(translations.en.workoutDetailExtended.zonesProvenance)).toHaveClass("text-sm");
-  expect(zones).toHaveTextContent("Z1");
-  ["Z2", "Z3", "Z4", "Z5", "NaN", "Infinity"].forEach((label) => expect(within(zones).queryByText(label, { exact: true })).not.toBeInTheDocument());
+  expect(screen.queryByTestId("hr-zones-card")).not.toBeInTheDocument();
+  expect(screen.queryByText(translations.en.workoutDetailExtended.zonesProvenance)).not.toBeInTheDocument();
 });
 
-test("invalid splits are omitted and all valid long-activity splits remain accessible", async () => {
+test("kilometer split tables stay off the workout screen", async () => {
   const splits = Array.from({ length: 30 }, (_, i) => ({ km: i + 1, pace_min_km: 6, pace_str: "6:00" }));
   mockAxios({ workoutPayload: { ...workout, km_splits: [...splits, null, { km: 31, pace_min_km: null }] } });
   renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
   await screen.findByTestId("coach-summary");
-  const region = within(screen.getByTestId("splits-chart-card")).getByRole("region");
-  expect(region).toHaveAttribute("tabindex", "0");
-  expect(within(region).getByText("30", { exact: true })).toBeVisible();
-  expect(within(region).getByText("2", { exact: true })).toBeVisible();
-  expect(screen.getByText(translations.en.workoutDetailExtended.invalidSplits)).toBeVisible();
-  expect(screen.getByTestId("splits-chart-card")).not.toHaveTextContent("NaN");
+  expect(screen.queryByTestId("splits-chart-card")).not.toBeInTheDocument();
+  expect(screen.queryByText(translations.en.workoutDetailExtended.invalidSplits)).not.toBeInTheDocument();
 });
 
 test.each([
@@ -1090,7 +1081,7 @@ test("null analysis is not shown as a network failure", async () => {
   await screen.findByTestId("workout-detail");
   expect(await screen.findByText(translations.en.workoutDetailExtended.analysisUnavailable)).toBeVisible();
   expect(screen.queryByText(translations.en.workoutDetailExtended.analysisLoadError)).not.toBeInTheDocument();
-  expect(screen.getByTestId("splits-chart-card")).toBeVisible();
+  expect(screen.queryByTestId("splits-chart-card")).not.toBeInTheDocument();
 });
 
 test("late responses are ignored after the workout route changes even if transport ignores abort", async () => {
@@ -1599,7 +1590,7 @@ const editorialPages = [
       const labels = translations[language].workoutDetailExtended;
       expect(screen.getByText(labels.coachObservation)).toBeVisible();
       expect(screen.getByText(analysis.advice.text)).toBeVisible();
-      expect(screen.getByText(analysis.meaning.text)).toBeVisible();
+      expect(screen.queryByText(analysis.meaning.text)).not.toBeInTheDocument();
       expect(screen.queryByText(translations[language].sessions.nextSession)).not.toBeInTheDocument();
       expect(screen.queryByText(labels.adviceUnavailable)).not.toBeInTheDocument();
     });
@@ -1610,21 +1601,21 @@ const editorialPages = [
       mockAxios({ analysisPayload: { ...analysis, advice: { available, text: "Do not prescribe this legacy text." } } });
       renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route, language);
       await screen.findByTestId(testId);
-      expect(screen.getByText(translations[language].workoutDetailExtended.adviceUnavailable)).toBeVisible();
+      expect(screen.queryByText(translations[language].workoutDetailExtended.adviceUnavailable)).not.toBeInTheDocument();
       expect(screen.queryByText("Do not prescribe this legacy text.")).not.toBeInTheDocument();
       expect(screen.getByTestId(testId)).not.toHaveTextContent("undefined");
-      if (name !== "SessionDetail") expect(screen.getByTestId("ask-coach-btn")).toBeVisible();
+      expect(screen.getByTestId("ask-coach-btn")).toBeVisible();
     });
 
     test.each(["", "   ", null, undefined])("empty available observation (%s) uses a conservative fallback", async (text) => {
       mockAxios({ analysisPayload: { ...analysis, advice: { available: true, text } } });
       renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
       await screen.findByTestId(testId);
-      expect(screen.getByText(translations.en.workoutDetailExtended.adviceUnavailable)).toBeVisible();
+      expect(screen.queryByText(translations.en.workoutDetailExtended.adviceUnavailable)).not.toBeInTheDocument();
       expect(screen.getByTestId(testId)).not.toHaveTextContent("undefined");
     });
 
-    test.each(["fr", "en", "es"])("localized limitations are deduplicated and never appended to meaning in %s", async (language) => {
+    test.each(["fr", "en", "es"])("technical limitations stay hidden from the workout screen in %s", async (language) => {
       const localized = {
         fr: ["Zones non vérifiées.", "Comparaison limitée.", "Fractions manquantes."],
         en: ["Unverified zones.", "Limited comparison.", "Missing splits."],
@@ -1640,24 +1631,18 @@ const editorialPages = [
       mockAxios({ analysisPayload: { ...analysis, limitations } });
       renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route, language);
       await screen.findByTestId(testId);
-      if (name === "SessionDetail") fireEvent.click(screen.getByText(translations[language].workoutDetailExtended.advancedDetails));
-      else fireEvent.click(screen.getByTestId("advanced-toggle"));
-      const section = screen.getByTestId("analysis-limitations");
-      localized.forEach((text) => {
-        expect(within(section).getByText(text)).toBeVisible();
-        expect(screen.getAllByText(text)).toHaveLength(1);
-      });
+      localized.forEach((text) => expect(screen.queryByText(text)).not.toBeInTheDocument());
       expect(screen.queryByText("Duplicate code must not appear.")).not.toBeInTheDocument();
       expect(screen.queryByText(analysis.signals.intensity.reason_unavailable)).not.toBeInTheDocument();
-      expect(screen.getAllByText(analysis.meaning.text)).toHaveLength(1);
-      expect(section).not.toHaveTextContent(analysis.meaning.text);
+      expect(screen.queryByTestId("analysis-limitations")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("analysis-details")).not.toBeInTheDocument();
+      expect(screen.getByText(analysis.advice.text)).toBeVisible();
     });
 
     test.each([undefined, [], null])("absent or empty limitations (%s) do not create an empty section", async (limitations) => {
       mockAxios({ analysisPayload: { ...analysis, limitations, signals: { ...analysis.signals, intensity: { available: true, text: "Observed intensity" } } } });
       renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
       await screen.findByTestId(testId);
-      if (name !== "SessionDetail") fireEvent.click(screen.getByTestId("advanced-toggle"));
       expect(screen.queryByTestId("analysis-limitations")).not.toBeInTheDocument();
     });
 
@@ -1684,7 +1669,7 @@ const editorialPages = [
     });
   });
 
-  test("limitations link opens advanced details without repeating the historical caveat", async () => {
+  test("technical limitations and historical data stay hidden while workout facts remain visible", async () => {
     mockAxios({
       analysisPayload: {
         ...analysis,
@@ -1698,11 +1683,10 @@ const editorialPages = [
     });
     renderWithProviders(<Routes><Route path="/workout/:id" element={<WorkoutDetail />} /></Routes>, "/workout/w1");
     await screen.findByTestId("coach-summary");
-    fireEvent.click(screen.getByRole("link", { name: translations.en.workoutDetailExtended.viewLimitations }));
-    expect(screen.getByTestId("analysis-details")).toHaveAttribute("open");
-    expect(screen.getAllByText("Localized session nature caveat.")).toHaveLength(1);
-    expect(screen.getByTestId("similar-comparison-card")).not.toHaveTextContent("Localized session nature caveat.");
-    expect(screen.getByTestId("meaning-text").textContent).toBe("Recorded steady running.");
+    expect(screen.queryByTestId("analysis-details")).not.toBeInTheDocument();
+    expect(screen.queryByText("Localized session nature caveat.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Localized intensity caveat.")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("similar-comparison-card")).not.toBeInTheDocument();
     expect(screen.getByTestId("primary-metrics")).toHaveTextContent("150 bpm");
-    expect(screen.getByTestId("splits-chart-card")).toHaveTextContent("5:54");
+    expect(screen.queryByTestId("splits-chart-card")).not.toBeInTheDocument();
   });
