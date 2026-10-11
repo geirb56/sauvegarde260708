@@ -224,6 +224,11 @@ réussie malgré le libellé de succès retourné par l'outil. Revue indépendan
 rubber-duck effectuée ; corrections du cooldown, relecture CAS et
 réconciliation même cible/autre cible intégrées. Audit C332 toujours requis.
 Scans de secrets : aucun secret détecté dans les fichiers modifiés.
+Dernière validation du head `77125166cb6f98919006e9042159f8df62392b68` :
+revue automatique toujours indisponible et **CodeQL interrompu par timeout**.
+Les 0 alertes précédentes concernent les commits antérieurs, pas une analyse
+finale terminée de ce head. Revalidation sécurité complète requise lors de
+l'audit C332 ; aucun succès final CodeQL revendiqué.
 
 ## Risques résiduels et limites
 
