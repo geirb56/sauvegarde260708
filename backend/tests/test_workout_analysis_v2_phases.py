@@ -262,8 +262,16 @@ def test_zero_invalidated_pace_is_excluded_without_changing_other_statistics(
         sum(phase.duration_s for phase in efforts) / len(efforts),
     )
     assert regularity.average_hr_change_bpm == 10
-    baseline = build_workout_analysis_v2(_workout(), []).model_dump(exclude={"phase_analysis"})
-    assert analysis.model_dump(exclude={"phase_analysis"}) == baseline
+    baseline = build_workout_analysis_v2(_workout(), [])
+    for field in ("workout", "physiology", "pacing", "comparison"):
+        assert getattr(analysis, field) == getattr(baseline, field)
+    assert analysis.signals.intensity == baseline.signals.intensity
+    assert analysis.signals.volume == baseline.signals.volume
+    assert analysis.signals.session_type == baseline.signals.session_type
+    assert analysis.evidence.has_effort_regularity is (valid_count == 2)
+    assert "limitations.phases.effort_paces_incomplete" in {
+        item.code for item in analysis.limitations
+    }
 
 
 def test_incoherent_reported_speed_suppresses_pace_and_adds_limitation():
