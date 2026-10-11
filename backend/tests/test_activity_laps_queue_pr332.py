@@ -73,6 +73,82 @@ def test_post_dedup_confirms_pending_target_in_all_delivery_states(local_redis, 
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("location", ["queue", "processing", "delayed", "unknown"])
+def test_core_post_mongo_state_matches_real_redis_reservation(local_redis, monkeypatch, location):
+    from garmin import activity_laps
+    from test_activity_details_pr321 import Collection
+
+    async def scenario():
+        async with client_for(local_redis, monkeypatch) as client:
+            db = SimpleNamespace(garmin_activities=Collection([
+                {"user_id": "a", "external_id": "123", "source": "garmin",
+                 "activity_laps_fetch": {"status": "queued", "next_attempt_at": "2000-01-01T00:00:00+00:00"}},
+                {"user_id": "a", "external_id": "456", "source": "garmin"},
+            ]))
+            if location == "unknown":
+                await client.set(queue._pending_key(queue.JOB_ACTIVITY_LAPS, "a"), "unknown-owner")
+            else:
+                assert await queue.enqueue_activity_laps("a", "123") == {"status": "queued"}
+                if location != "queue":
+                    raw, job = await queue.claim_job(timeout=1)
+                    if location == "delayed":
+                        job["not_before"] = time.time() + 900
+                        await queue.defer_activity_details(raw, job)
+            same = await activity_laps.request_activity_laps(db, "a", "garmin-00123")
+            same_state = db.garmin_activities.docs[0]["activity_laps_fetch"]
+            if location == "unknown":
+                assert same == {"status": "busy"}
+                assert same_state["status"] == "failed"
+                assert same_state["error_code"] == "queue_busy"
+            else:
+                assert same == {"status": "already_queued"}
+                assert same_state["status"] == "queued"
+                assert same_state["token"]
+            other = await activity_laps.request_activity_laps(db, "a", "garmin-456")
+            assert other == {"status": "busy"}
+            other_state = db.garmin_activities.docs[1]["activity_laps_fetch"]
+            assert other_state["status"] == "failed"
+            assert other_state["error_code"] == "queue_busy"
+            assert await client.llen(queue.QUEUE_KEY) == (1 if location == "queue" else 0)
+            assert await client.llen(queue.PROCESSING_KEY) == (1 if location == "processing" else 0)
+            assert await client.zcard(queue.DELAYED_KEY) == (1 if location == "delayed" else 0)
+    asyncio.run(scenario())
+
+
+def test_core_post_first_repeated_busy_and_expired_same_target(local_redis, monkeypatch):
+    from garmin import activity_laps
+    from test_activity_details_pr321 import Collection
+
+    async def scenario():
+        async with client_for(local_redis, monkeypatch) as client:
+            db = SimpleNamespace(garmin_activities=Collection([
+                {"user_id": "a", "external_id": "123", "source": "garmin"},
+                {"user_id": "a", "external_id": "456", "source": "garmin"},
+            ]))
+            assert await activity_laps.request_activity_laps(db, "a", "garmin-123") == {"status": "queued"}
+            state = db.garmin_activities.docs[0]["activity_laps_fetch"]
+            token = state["token"]
+            assert state["status"] == "queued"
+            assert await activity_laps.request_activity_laps(db, "a", "123") == {"status": "queued"}
+            assert db.garmin_activities.docs[0]["activity_laps_fetch"]["token"] == token
+            assert await activity_laps.request_activity_laps(db, "a", "456") == {"status": "busy"}
+            other = db.garmin_activities.docs[1]["activity_laps_fetch"]
+            assert other["status"] == "failed"
+            assert other["error_code"] == "queue_busy"
+            state["next_attempt_at"] = "2000-01-01T00:00:00+00:00"
+            assert await activity_laps.request_activity_laps(db, "a", "garmin-00123") == {
+                "status": "already_queued",
+            }
+            refreshed = db.garmin_activities.docs[0]["activity_laps_fetch"]
+            assert refreshed["status"] == "queued"
+            assert refreshed["token"] != token
+            assert await client.llen(queue.QUEUE_KEY) == 1
+            payload = json.loads(await client.lindex(queue.QUEUE_KEY, 0))
+            assert payload["activity_id"] == "123"
+            assert await client.get(queue._pending_key(queue.JOB_ACTIVITY_LAPS, "a")) == payload["id"]
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("payload", [
     "invalid JSON",
     json.dumps({"id": "owner", "type": queue.JOB_ACTIVITY_DETAILS,

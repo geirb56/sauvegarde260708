@@ -202,10 +202,10 @@ async def _enqueue_targeted(
     r = get_redis()
     key = _pending_key(job_type, user_id)
     job_id = uuid.uuid4().hex
-    if not await r.set(key, job_id, nx=True, ex=DETAILS_PENDING_TTL):
-        if job_type == JOB_ACTIVITY_LAPS:
-            same_target = await r.eval(
-                """
+    if job_type == JOB_ACTIVITY_LAPS:
+        reservation = await r.eval(
+            """
+                if redis.call('SET', KEYS[1], ARGV[3], 'NX', 'EX', ARGV[4]) then return 2 end
                 local owner = redis.call('GET', KEYS[1])
                 if owner == false then return 0 end
                 local function matches(payload)
@@ -226,11 +226,13 @@ async def _enqueue_targeted(
                     end
                 end
                 return 0
-                """,
-                4, key, QUEUE_KEY, PROCESSING_KEY, DELAYED_PAYLOADS_KEY,
-                user_id, activity_id,
-            )
-            return {"status": "already_queued" if same_target else "busy"}
+            """,
+            4, key, QUEUE_KEY, PROCESSING_KEY, DELAYED_PAYLOADS_KEY,
+            user_id, activity_id, job_id, DETAILS_PENDING_TTL,
+        )
+        if reservation != 2:
+            return {"status": "already_queued" if reservation == 1 else "busy"}
+    elif not await r.set(key, job_id, nx=True, ex=DETAILS_PENDING_TTL):
         return {"status": "already_queued"}
     try:
         await r.lpush(QUEUE_KEY, json.dumps({

@@ -197,8 +197,33 @@ backend/tests/test_activity_details_delayed_redis_c321.py
 backend/tests/test_garmin_queue_backfill_pr197.py
 backend/tests/test_typed_splits_chronology_c321.py` :
 **164 passed**, un avertissement existant. Redis local isolé, pas de Mongo
-réel ni Garmin. Résultats complémentaires après réconciliation de cible
-et revue finale consignés avant livraison.
+réel ni Garmin.
+
+Après réconciliation de cible et normalisation d'ID, même commande cinq
+modules : **174 passed**, un avertissement existant.
+Après finalisation de la réservation/lookup laps dans un seul appel Lua et
+ajout des tests d'intégration POST + vrai Redis local + Mongo simulée :
+
+`TMPDIR="$PWD/.test-runtime" PYTHONPATH=backend /usr/bin/python -m pytest -q
+--basetemp="$PWD/.test-runtime/queue-only-pytest"
+backend/tests/test_activity_laps_queue_pr332.py` : **38 passed** (4,92 s).
+Ces derniers tests couvrent aussi queued/processing/delayed/slot inconnu,
+POST répété, autre cible busy et réconciliation de bail expiré.
+
+Le runtime Python de test a été restauré hors fichiers suivis ; aucune
+dépendance du dépôt changée. Principales versions réellement utilisées :
+Python 3.12.3, pytest 9.1.1, xdist 3.8.0, Redis client 8.1.0, Motor 3.7.1,
+PyMongo 4.18.2, FastAPI 0.110.1, HTTPX 0.28.1. Cela diffère de certaines
+versions épinglées du déploiement : non-régression runtime exacte à confirmer
+dans Emergent. Les artefacts de test ne sont pas suivis/commités.
+
+Validation automatique exécutée sur les commits d'implémentation :
+**CodeQL Python : 0 alerte**. Revue automatique demandée mais **indisponible**
+(modèle configuré non présent dans le registre) : ne constitue pas une revue
+réussie malgré le libellé de succès retourné par l'outil. Revue indépendante
+rubber-duck effectuée ; corrections du cooldown, relecture CAS et
+réconciliation même cible/autre cible intégrées. Audit C332 toujours requis.
+Scans de secrets : aucun secret détecté dans les fichiers modifiés.
 
 ## Risques résiduels et limites
 
