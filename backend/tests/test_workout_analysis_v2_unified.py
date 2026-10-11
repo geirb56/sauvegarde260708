@@ -3,7 +3,7 @@ from copy import deepcopy
 import pytest
 
 from activity_phases import ActivityPhase
-from coach_context_v2 import CoachWorkoutDetail
+from coach_context_v2 import CoachWorkoutDetail, build_llm_coach_context
 from workout_analysis_v2 import WorkoutAnalysisV2Response, build_workout_analysis_v2
 
 
@@ -211,6 +211,122 @@ def test_unclassified_unusable_phases_preserve_existing_pacing_conclusions():
     assert analysis.meaning == baseline.meaning
     assert analysis.advice == baseline.advice
     assert analysis.advice.code == "advice.even_pacing"
+
+
+@pytest.mark.parametrize("language", ["fr", "en", "es"])
+@pytest.mark.parametrize(
+    "kinds,expected_structure",
+    [
+        ([], None),
+        (["unknown"], None),
+        (["unknown", "unknown", "unknown"], None),
+        (["effort"], "other"),
+        (["recovery"], "other"),
+        (["warmup"], "other"),
+        (["cooldown"], "other"),
+        (["unknown", "effort"], "other"),
+        (["unknown", "recovery"], "other"),
+        (["effort", "recovery"], "other"),
+        (["effort", "effort"], "other"),
+        (["effort", "recovery", "effort"], "intervals"),
+        (["effort", "unknown", "effort"], "other"),
+        (["effort", "unknown", "recovery", "effort"], "intervals"),
+    ],
+)
+def test_structured_evidence_requires_classification_not_presence(language, kinds, expected_structure):
+    workout = reference_workout()
+    phases = [
+        ActivityPhase(
+            order=index, phase_type=kind, native_type=f"SYNTHETIC_{kind.upper()}",
+            duration_s=240, distance_m=800, average_hr=150, max_hr=160,
+            source="synthetic-provider",
+        )
+        for index, kind in enumerate(kinds)
+    ]
+    analysis = build_workout_analysis_v2(workout, [], language, phases)
+    classified = any(kind != "unknown" for kind in kinds)
+    result = analysis.phase_analysis
+    assert result.available is bool(kinds)
+    assert result.analysis_type == ("structured_phases" if kinds else "standard")
+    assert analysis.evidence.has_structured_phases is classified
+    assert analysis.signals.session_structure.code == expected_structure
+    assert analysis.signals.session_structure.available is (expected_structure is not None)
+    assert [row.phase_type for row in result.phases] == kinds
+    assert [row.native_type for row in result.phases] == [row.native_type for row in phases]
+    assert all(row.duration_s == 240 and row.distance_m == 800 for row in result.phases)
+    assert all(row.pace_sec_per_km == 300 and row.average_hr == 150 for row in result.phases)
+    assert len(result.efforts) == kinds.count("effort")
+    assert len(result.recoveries) == kinds.count("recovery")
+    assert result.effort_statistics.count == kinds.count("effort")
+    assert result.recovery_statistics.count == kinds.count("recovery")
+    assert all(
+        row.effort_number is None and row.recovery_number is None
+        for row in result.phases if row.phase_type == "unknown"
+    )
+    codes = {item.code for item in analysis.limitations}
+    assert ("limitations.phase_splits" in codes) is classified
+    assert ("limitations.splits" in codes) is not classified
+    assert ("limitations.phase_classification" in codes) is (bool(kinds) and not classified)
+    assert ("limitations.phase_classification_partial" in codes) is (classified and "unknown" in kinds)
+    if kinds.count("effort") < 2:
+        assert analysis.evidence.has_effort_regularity is False
+        assert result.effort_regularity.available is False
+        assert result.effort_regularity.pace_dispersion_sec_per_km is None
+        assert result.effort_regularity.first_to_last_pace_change_sec_per_km is None
+    if not classified:
+        baseline = build_workout_analysis_v2(workout, [], language)
+        assert result.effort_statistics.total_duration_s is None
+        assert result.recovery_statistics.total_duration_s is None
+        assert analysis.summary == baseline.summary
+        assert analysis.advice == baseline.advice
+        assert "limitations.phase_regularity" not in codes
+        assert "limitations.phase_hr" not in codes
+    # Coach receives the canonical proof; its pace projection must not infer classification.
+    detail = CoachWorkoutDetail(
+        id=workout["id"], name=workout["name"], date=workout["date"], type="run", analysis=analysis,
+    )
+    payload = detail.model_dump(mode="json")
+    assert payload["analysis"] == analysis.model_dump(mode="json")
+    projected = build_llm_coach_context({"workout_detail": payload})["workout_detail"]["analysis"]
+    assert projected["evidence"] == payload["analysis"]["evidence"]
+    assert projected["phase_analysis"]["available"] is bool(kinds)
+    assert [row["phase_type"] for row in projected["phase_analysis"]["phases"]] == kinds
+    assert projected["signals"]["session_structure"] == payload["analysis"]["signals"]["session_structure"]
+    assert projected["limitations"] == payload["analysis"]["limitations"]
+    assert WorkoutAnalysisV2Response.model_validate(payload["analysis"]) == analysis
+
+
+def test_unknown_phases_preserve_missing_data_without_hiding_classified_observations():
+    phases = [ActivityPhase(order=0, source="synthetic-provider")] + [
+        phase.model_copy(update={"order": phase.order + 1}) for phase in reference_phases()
+    ]
+    analysis = build_workout_analysis_v2(reference_workout(), [], "fr", phases)
+    baseline = build_workout_analysis_v2(reference_workout(), [], "fr", reference_phases())
+    assert analysis.evidence.has_structured_phases is True
+    assert analysis.signals.session_structure.code == "intervals"
+    assert analysis.phase_analysis.effort_regularity == baseline.phase_analysis.effort_regularity
+    assert analysis.phase_analysis.effort_statistics == baseline.phase_analysis.effort_statistics
+    assert analysis.phase_analysis.recovery_statistics == baseline.phase_analysis.recovery_statistics
+    assert analysis.summary == baseline.summary
+    assert analysis.meaning == baseline.meaning
+    assert analysis.advice == baseline.advice
+    assert analysis.phase_analysis.missing_data == ["distance", "duration", "heart_rate", "pace"]
+    codes = {item.code for item in analysis.limitations}
+    assert {"limitations.phase_missing", "limitations.phase_classification_partial"} <= codes
+
+
+@pytest.mark.parametrize("language", ["fr", "en", "es"])
+@pytest.mark.parametrize("classified", [False, True])
+def test_classification_limitations_are_localized(language, classified):
+    phases = [ActivityPhase(order=0, source="synthetic-provider")]
+    if classified:
+        phases.append(ActivityPhase(order=1, phase_type="effort", source="synthetic-provider"))
+    analysis = build_workout_analysis_v2(reference_workout(), [], language, phases)
+    code = "limitations.phase_classification_partial" if classified else "limitations.phase_classification"
+    text = next(item.text for item in analysis.limitations if item.code == code)
+    assert {"fr": "classifiées", "en": "unclassified", "es": "clasificadas"}[language] in text
+    assert code not in text
+    assert "limitations.phase_missing" in {item.code for item in analysis.limitations}
 
 
 @pytest.mark.parametrize("language", ["fr", "en", "es"])
