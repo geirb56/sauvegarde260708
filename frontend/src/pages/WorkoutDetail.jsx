@@ -7,7 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import WorkoutAnalysisAccessNotice from "@/components/WorkoutAnalysisAccessNotice";
 import { useLanguage } from "@/context/LanguageContext";
 import { useSubscription } from "@/context/SubscriptionContext";
-import { formatPaceDisplay, formatPaceDelta, getAnalysisLimitations, hasCoachObservation } from "@/lib/workoutAnalysis";
+import { formatPaceDisplay, formatPaceDelta, getAnalysisLimitations, hasCoachObservation, getSessionClassification, getAnalysisTakeaway } from "@/lib/workoutAnalysis";
 import { formatSpeed } from "@/utils/units";
 import {
   ArrowLeft,
@@ -590,6 +590,7 @@ export default function WorkoutDetail() {
   const technicalLimitations = getAnalysisLimitations(analysisForRender, t);
   const hasLimitation = (code) => technicalLimitations.some((item) => item.code === `limitations.${code}`);
   const observationAvailable = hasCoachObservation(analysisForRender);
+  const classification = getSessionClassification(analysisForRender, t);
   const interpolate = (key, values) => Object.entries(values).reduce(
     (text, [name, value]) => text.replace(`{${name}}`, value == null ? t("workoutDetailExtended.dataUnavailable") : String(value)),
     t(`workoutDetailExtended.${key}`),
@@ -658,11 +659,12 @@ export default function WorkoutDetail() {
       {hasAnalysis && <section aria-labelledby="takeaways-title">
         <h2 id="takeaways-title" className="text-base font-semibold mb-2">{t("workoutDetailExtended.takeaways")}</h2>
         <Card className="bg-card border-border"><CardContent className="p-4 space-y-3">
-          <p className="text-sm leading-relaxed" data-testid="meaning-text">{analysisForRender.meaning?.text || t("workoutDetailExtended.meaningUnavailable")}</p>
+          <p className="text-sm leading-relaxed" data-testid="meaning-text">{getAnalysisTakeaway(analysisForRender) || t("workoutDetailExtended.meaningUnavailable")}</p>
           <div className="flex flex-wrap gap-2">
-            {[["volume", "load"], ["session_type", "type"]].map(([key, label]) => analysisForRender.signals?.[key]?.available === true && analysisForRender.signals[key].text ? (
+            {[["volume", "load"]].map(([key, label]) => analysisForRender.signals?.[key]?.available === true && analysisForRender.signals[key].text ? (
               <p key={key} className="text-sm rounded bg-muted/30 p-2">{t(`analysis.${label}`)}: {analysisForRender.signals[key].text}</p>
             ) : null)}
+            {classification && <p className="text-sm rounded bg-muted/30 p-2" data-testid="session-classification">{classification.label}: {classification.text}</p>}
           </div>
           {analysisForRender.signals?.intensity?.available === true && analysisForRender.signals.intensity.text ? (
             <p className={`text-sm rounded p-2 ${getSessionTypeStyle(analysisForRender.signals.intensity.code)}`}>{t("analysis.intensity")}: {analysisForRender.signals.intensity.text}</p>
@@ -760,6 +762,9 @@ export default function WorkoutDetail() {
               <h3 className="text-sm font-semibold">{interpolate("recentComparison", { days: comparison.baseline_period_days })}</h3>
             </div>
             {comparison.baseline_sample_count != null && <p className="font-sans text-sm text-muted-foreground mb-2">{formatSampleCount(comparison.baseline_sample_count)}</p>}
+            <p className="text-sm text-muted-foreground mb-2">{t("workoutDetailExtended.descriptiveReference")}</p>
+            <details data-testid="baseline-values">
+            <summary className="cursor-pointer text-sm min-h-11 content-center">{t("workoutDetailExtended.referenceDetails")}</summary>
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               {Number.isFinite(comparison.distance_km?.difference) && (
                 <div className="rounded-sm bg-muted/20 p-2">
@@ -790,6 +795,7 @@ export default function WorkoutDetail() {
                 </div>
               )}
             </div>
+            </details>
           </CardContent>
         </Card>
       )}
@@ -801,6 +807,10 @@ export default function WorkoutDetail() {
             <h3 className="text-sm font-semibold">{interpolate("similarComparison", { days: similar.period_days })}</h3>
             {similar.available ? (
               <>
+                {similar.comparable !== true && <p className="text-muted-foreground" data-testid="similar-reference-label">{t("workoutDetailExtended.descriptiveReference")}</p>}
+                <p className="text-muted-foreground" data-testid="similar-comparability-caveat">{t(`workoutDetailExtended.${similar.comparable === true ? "comparableReference" : "limitedComparability"}`)}</p>
+                <details open={similar.comparable === true} data-testid="similar-values">
+                <summary className="cursor-pointer min-h-11 content-center">{t("workoutDetailExtended.referenceDetails")}</summary>
                 {similar.sample_count != null && <p>{formatSampleCount(similar.sample_count)}</p>}
                 {Number.isFinite(similar.avg_distance_km) && <p>{t("workoutDetailExtended.averageDistance")}: {formatDistance(similar.avg_distance_km)}</p>}
                 {(hasPositiveFiniteMetric(similar.avg_pace_min_km) || Number.isFinite(similar.pace_difference_min_km)) && (
@@ -817,7 +827,7 @@ export default function WorkoutDetail() {
                     {similar.hr_sample_count != null && similar.sample_count != null && <p className="text-muted-foreground">{interpolate("hrSampleCount", { count: similar.hr_sample_count, total: similar.sample_count })}</p>}
                   </div>
                 )}
-                <p className="text-muted-foreground" data-testid="similar-comparability-caveat">{t(`workoutDetailExtended.${similar.comparable === true ? "comparableReference" : "limitedComparability"}`)}</p>
+                </details>
               </>
             ) : (
               <p className="text-muted-foreground">{(!(Array.isArray(analysisForRender.limitations) && analysisForRender.limitations.some((item) => item?.code === "limitations.no_comparable_reference")) && similar.reason_unavailable) || t("workoutDetailExtended.similarUnavailable")}</p>
@@ -854,12 +864,14 @@ export default function WorkoutDetail() {
                   ["has_heart_rate", "heartRate"],
                   ["has_hr_zones", "hrZonesEvidence"],
                   ["has_splits", "splitsEvidence"],
+                  ["has_structured_phases", "structuredPhasesEvidence"],
                   ["has_baseline", "baselineEvidence"],
                   ["has_cadence", "cadenceEvidence"],
                   ["has_elevation", "elevationEvidence"],
                 ].map(([key, label]) => (
                   evidence[key] == null ? null : <p key={key}>{t(`workoutDetailExtended.${label}`)}: {t(`workoutDetailExtended.${evidence[key] ? "yes" : "no"}`)}</p>
                 ))}
+                <p>{t("workoutDetailExtended.recordedPhasesEvidence")}: {t(`workoutDetailExtended.${analysisForRender.phase_analysis?.available === true ? "yes" : "no"}`)}</p>
               </section>
             )}
             {technicalLimitations.length > 0 && <section className="font-sans text-sm leading-relaxed text-secondary-foreground space-y-1" data-testid="analysis-limitations">
