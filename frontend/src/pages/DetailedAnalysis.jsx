@@ -1,60 +1,46 @@
-import { useState, useEffect } from "react";
-import { useParams, Link, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import axios from "axios";
-import { Card, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { useLanguage } from "@/context/LanguageContext";
-import { useSubscription } from "@/context/SubscriptionContext";
-import { getAnalysisLimitations, hasCoachObservation, getSessionClassification, getAnalysisTakeaway } from "@/lib/workoutAnalysis";
-import WorkoutAnalysisAccessNotice from "@/components/WorkoutAnalysisAccessNotice";
-import {
-  ArrowLeft,
-  Zap,
-  Scale,
-  Activity,
-  Lightbulb,
-  ChevronDown,
-  ChevronUp,
-  MessageSquare,
-  Loader2,
-  Bike,
-  Footprints,
-  HeartPulse,
-} from "lucide-react";
+import { ArrowLeft, Loader2, MessageSquare } from "lucide-react";
 
 import { API_BASE_URL } from "@/config";
+import { useLanguage } from "@/context/LanguageContext";
+import { useSubscription } from "@/context/SubscriptionContext";
+import { Button } from "@/components/ui/button";
+import WorkoutAnalysisAccessNotice from "@/components/WorkoutAnalysisAccessNotice";
+import WorkoutPhaseAnalysis from "@/components/workout/WorkoutPhaseAnalysis";
+import WorkoutKilometerSplits from "@/components/workout/WorkoutKilometerSplits";
+import { useUnitSystem } from "@/context/UnitContext";
+import { formatDistance, formatSpeed } from "@/utils/units";
+import { formatDuration } from "@/utils/workoutHelpers";
+import { formatPaceDisplay, getDistinctCoachObservation, getSessionClassification, getAnalysisTakeaway } from "@/lib/workoutAnalysis";
 
 const API = API_BASE_URL;
-
-const getWorkoutIcon = (type) => {
-  if (type === "cycle") return Bike;
-  return Footprints;
-};
-
-const formatSignedMetric = (metric, suffix = "") => {
-  if (!metric || metric.difference == null) return "--";
-  const sign = metric.difference > 0 ? "+" : "";
-  return `${sign}${metric.difference}${suffix}`;
-};
+const isCycling = (type) => ["cycle", "cycling", "ride"].includes(type);
 
 export default function DetailedAnalysis() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { t, lang } = useLanguage();
+  const { unitSystem } = useUnitSystem();
   const { loading: subscriptionLoading, hasFeature } = useSubscription();
   const canAccessAnalysis = !subscriptionLoading && hasFeature("coach_workout_analysis") === true;
   const [analysis, setAnalysis] = useState(null);
+  const [workout, setWorkout] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [showAdvanced, setShowAdvanced] = useState(false);
 
   useEffect(() => {
     setAnalysis(null);
+    setWorkout(null);
     if (!canAccessAnalysis) {
       setLoading(false);
       return undefined;
     }
     const controller = new AbortController();
     setLoading(true);
+    axios.get(`${API}/workouts/${id}`, { signal: controller.signal })
+      .then((res) => setWorkout(res.data))
+      .catch(() => setWorkout(null));
     axios.get(`${API}/coach/workout-analysis/${id}?language=${lang}`, { signal: controller.signal })
       .then((res) => setAnalysis(res.data))
       .catch(() => setAnalysis(null))
@@ -62,16 +48,12 @@ export default function DetailedAnalysis() {
     return () => controller.abort();
   }, [id, lang, canAccessAnalysis]);
 
-  const goToAskCoach = () => navigate("/coach");
-
   if (subscriptionLoading || (canAccessAnalysis && loading)) {
     return (
       <div className="p-4 pb-24 flex items-center justify-center min-h-[60vh]">
         <div className="flex flex-col items-center gap-3">
           <Loader2 className="w-6 h-6 animate-spin text-primary" />
-          <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">
-            {t("detailedAnalysis.loading")}
-          </span>
+          <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">{t("detailedAnalysis.loading")}</span>
         </div>
       </div>
     );
@@ -101,168 +83,81 @@ export default function DetailedAnalysis() {
     );
   }
 
-  const Icon = getWorkoutIcon(analysis.workout?.type);
-  const limitations = getAnalysisLimitations(analysis, t);
-  const observationAvailable = hasCoachObservation(analysis);
+  const cycling = isCycling(analysis.workout?.type);
+  const pace = analysis.pacing?.average_pace_min_km;
+  const speed = analysis.pacing?.average_speed_kmh;
+  const metrics = [
+    Number.isFinite(analysis.comparison?.distance_km?.current) && analysis.comparison.distance_km.current > 0
+      ? [t("workoutDetailExtended.distance"), formatDistance(analysis.comparison.distance_km.current, { unitSystem: "metric" })] : null,
+    Number.isFinite(analysis.comparison?.duration_minutes?.current) && analysis.comparison.duration_minutes.current > 0
+      ? [t("workoutDetailExtended.duration"), formatDuration(analysis.comparison.duration_minutes.current)] : null,
+    cycling
+      ? (Number.isFinite(speed) && speed > 0 ? [t("workoutDetailExtended.averageSpeed"), formatSpeed(speed, { unitSystem: "metric" })] : null)
+      : (Number.isFinite(pace) && pace > 0
+        ? [t("workoutDetailExtended.averagePace"), formatPaceDisplay(pace)]
+        : Number.isFinite(speed) && speed > 0 ? [t("workoutDetailExtended.averageSpeed"), formatSpeed(speed, { unitSystem: "metric" })] : null),
+    Number.isFinite(analysis.physiology?.avg_hr) && analysis.physiology.avg_hr > 0
+      ? [t("workoutDetailExtended.averageHeartRate"), `${analysis.physiology.avg_hr} bpm`] : null,
+  ].filter(Boolean);
   const classification = getSessionClassification(analysis, t);
-  const dateStr = new Date(analysis.workout?.date).toLocaleDateString(
-    lang === "fr" ? "fr-FR" : lang === "es" ? "es-ES" : "en-US",
+  const observation = getDistinctCoachObservation(analysis);
+  const date = new Date(analysis.workout?.date);
+  const dateStr = Number.isFinite(date.getTime()) ? date.toLocaleDateString(
+    { fr: "fr-FR", es: "es-ES", en: "en-US" }[lang] || "en-US",
     { weekday: "short", month: "short", day: "numeric" },
-  );
+  ) : "";
 
   return (
     <div className="p-4 pb-24" data-testid="detailed-analysis">
       <div className="flex items-center justify-between mb-3">
-        <Link to={`/workout/${id}`} className="text-muted-foreground hover:text-foreground">
+        <Link to={`/workout/${id}`} className="text-muted-foreground hover:text-foreground" aria-label={t("workout.back")}>
           <ArrowLeft className="w-5 h-5" />
         </Link>
-        <div className="flex items-center gap-2">
-          <Icon className="w-4 h-4 text-muted-foreground" />
-          <span className="font-mono text-[11px] uppercase text-muted-foreground">{t("detailedAnalysis.title")}</span>
-        </div>
+        <span className="font-mono text-[11px] uppercase text-muted-foreground">{t("detailedAnalysis.title")}</span>
         <span className="font-mono text-[11px] text-muted-foreground">{dateStr}</span>
       </div>
 
-      <Card className="bg-card border-border mb-3">
-        <CardContent className="p-3">
-          <h1 className="font-heading text-base uppercase tracking-tight font-bold mb-2 leading-tight">
-            {analysis.workout?.name}
-          </h1>
-          <p className="font-sans text-sm text-secondary-foreground leading-relaxed" data-testid="header-context">
-            {analysis.summary?.text}
-          </p>
-        </CardContent>
-      </Card>
+      <section className="mb-3 rounded-xl border border-border bg-card p-3" aria-labelledby="workout-summary-title">
+        <h1 id="workout-summary-title" className="mb-2 font-heading text-base font-bold leading-tight">{analysis.workout?.name}</h1>
+        {metrics.length > 0 && <dl className="grid grid-cols-2 gap-3" data-testid="primary-metrics">
+          {metrics.map(([label, value]) => <div key={label}>
+            <dt className="text-xs text-muted-foreground">{label}</dt>
+            <dd className="text-sm font-semibold">{value}</dd>
+          </div>)}
+        </dl>}
+        {metrics.length === 0 && analysis.summary?.text && <p className="mt-3 font-sans text-sm leading-relaxed" data-testid="header-context">{analysis.summary.text}</p>}
+      </section>
 
-      <Card className="bg-card border-border mb-3">
-        <CardContent className="p-3">
-          <div className="flex items-center gap-2 mb-3">
-            <Zap className="w-4 h-4 text-muted-foreground" />
-            <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">
-              {t("detailedAnalysis.execution")}
-            </span>
-          </div>
-          <div className="grid grid-cols-3 gap-2">
-            <div>
-              <p className="font-mono text-[11px] uppercase text-muted-foreground mb-1">{t("detailedAnalysis.intensity")}</p>
-              <p className="font-mono text-xs">{analysis.signals?.intensity?.available ? analysis.signals.intensity.text : "--"}</p>
-            </div>
-            <div>
-              <p className="font-mono text-[11px] uppercase text-muted-foreground mb-1">{t("detailedAnalysis.volume")}</p>
-              <p className="font-mono text-xs">{analysis.signals?.volume?.text || "--"}</p>
-            </div>
-            <div>
-              <p className="font-mono text-[11px] uppercase text-muted-foreground mb-1">{classification?.label || t("analysis.type")}</p>
-              <p className="font-mono text-xs">{classification?.text || "--"}</p>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+      <WorkoutPhaseAnalysis phaseAnalysis={analysis.phase_analysis} t={t} lang={lang} />
+      <WorkoutKilometerSplits
+        splits={workout?.km_splits}
+        workoutType={analysis.workout?.type || workout?.type}
+        unitSystem={unitSystem}
+        t={t}
+      />
 
-      {analysis.physiology?.available && (
-        <Card className="bg-card border-border mb-3" data-testid="physiology-card">
-          <CardContent className="p-3">
-            <div className="flex items-center gap-2 mb-2">
-              <HeartPulse className="w-4 h-4 text-muted-foreground" />
-              <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">
-                {t("sessions.physiology")}
-              </span>
-            </div>
-            <p className="font-mono text-xs text-muted-foreground leading-relaxed">
-              HR {analysis.physiology.avg_hr ?? "--"} / max {analysis.physiology.max_hr ?? "--"}
-            </p>
-          </CardContent>
-        </Card>
-      )}
+      {(getAnalysisTakeaway(analysis) || classification || analysis.signals?.intensity?.available === true) && <section className="my-3 rounded-xl border border-border bg-card p-3">
+        <h2 className="mb-2 font-mono text-[11px] uppercase tracking-widest text-muted-foreground">{t("detailedAnalysis.meaning")}</h2>
+        {getAnalysisTakeaway(analysis) && <p className="font-sans text-sm leading-relaxed" data-testid="meaning-text">{getAnalysisTakeaway(analysis)}</p>}
+        {classification && <p className="mt-2 text-sm text-muted-foreground" data-testid="session-classification">{classification.label}: {classification.text}</p>}
+        {analysis.signals?.intensity?.available === true && analysis.signals.intensity.text && (
+          <p className="mt-2 text-sm">{t("analysis.intensity")}: {analysis.signals.intensity.text}</p>
+        )}
+      </section>}
 
-      <Card className="bg-card border-border mb-3">
-        <CardContent className="p-3">
-          <div className="flex items-center gap-2 mb-2">
-            <Activity className="w-4 h-4 text-muted-foreground" />
-            <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">
-              {t("detailedAnalysis.meaning")}
-            </span>
-          </div>
-          <p className="font-sans text-sm text-secondary-foreground leading-relaxed" data-testid="meaning-text">
-            {getAnalysisTakeaway(analysis) || t("workoutDetailExtended.meaningUnavailable")}
-          </p>
-        </CardContent>
-      </Card>
+      {observation && <section className="my-3 rounded-xl border border-border bg-card p-3">
+        <h2 className="mb-2 font-mono text-[11px] uppercase tracking-widest text-primary">{t("workoutDetailExtended.coachObservation")}</h2>
+        <p className="font-sans text-sm leading-relaxed" data-testid="advice-text">{observation}</p>
+      </section>}
 
-        <Card className="bg-card border-border mb-3">
-          <CardContent className="p-3">
-            <div className="flex items-center gap-2 mb-2">
-              <Lightbulb className="w-4 h-4 text-primary" />
-              <span className="font-mono text-[11px] uppercase tracking-widest text-primary">
-                {t("workoutDetailExtended.coachObservation")}
-              </span>
-            </div>
-            <p className={`font-sans text-sm leading-relaxed ${observationAvailable ? "text-secondary-foreground" : "text-muted-foreground"}`} data-testid={observationAvailable ? "advice-text" : "advice-unavailable"}>
-              {observationAvailable ? analysis.advice.text : t("workoutDetailExtended.adviceUnavailable")}
-            </p>
-          </CardContent>
-        </Card>
-
-      <Card className="bg-card border-border mb-3">
-        <CardContent className="p-0">
-          <button
-            onClick={() => setShowAdvanced(!showAdvanced)}
-            className="w-full p-3 flex items-center justify-between text-left"
-            data-testid="advanced-toggle"
-            aria-expanded={showAdvanced}
-            aria-controls="detailed-analysis-advanced"
-          >
-            <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">
-              {t("detailedAnalysis.advanced")}
-            </span>
-            {showAdvanced ? (
-              <ChevronUp className="w-4 h-4 text-muted-foreground" />
-            ) : (
-              <ChevronDown className="w-4 h-4 text-muted-foreground" />
-            )}
-          </button>
-          {showAdvanced && (
-            <div id="detailed-analysis-advanced" className="px-3 pb-3 border-t border-border pt-3 grid gap-2" data-testid="advanced-text">
-              <p className="font-mono text-[11px] text-muted-foreground">version: {analysis.version}</p>
-              <p className="font-mono text-[11px] text-muted-foreground">
-                baseline: {analysis.comparison?.baseline_sample_count ?? "--"}
-              </p>
-              {analysis.comparison?.available && <p className="text-sm text-muted-foreground">{t("workoutDetailExtended.descriptiveReference")}</p>}
-              {analysis.comparison?.distance_km && (
-                <p className="font-mono text-[11px] text-muted-foreground">
-                  distance: {formatSignedMetric(analysis.comparison.distance_km, " km")}
-                </p>
-              )}
-              {analysis.comparison?.duration_minutes && (
-                <p className="font-mono text-[11px] text-muted-foreground">
-                  duration: {formatSignedMetric(analysis.comparison.duration_minutes, " min")}
-                </p>
-              )}
-              {!limitations.some((item) => item.code === "limitations.heart_rate") && !analysis.physiology?.available && analysis.physiology?.reason_unavailable && (
-                <p className="font-sans text-sm leading-relaxed text-secondary-foreground">{analysis.physiology.reason_unavailable}</p>
-              )}
-              {!limitations.some((item) => item.code === "limitations.baseline") && !analysis.comparison?.available && analysis.comparison?.reason_unavailable && (
-                <p className="font-sans text-sm leading-relaxed text-secondary-foreground">{analysis.comparison.reason_unavailable}</p>
-              )}
-              {limitations.length > 0 && <section data-testid="analysis-limitations">
-                <h3 className="text-sm font-semibold">{t("workoutDetailExtended.limitations")}</h3>
-                {limitations.map((item) => <p key={item.code} className="text-sm text-muted-foreground">{item.text}</p>)}
-              </section>}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      <div className="mt-4">
-        <Button
-          onClick={goToAskCoach}
-          data-testid="ask-coach-btn"
-          className="w-full bg-muted hover:bg-muted/80 text-foreground border border-border rounded-none h-11 sm:h-10 font-mono text-xs uppercase tracking-wider flex items-center justify-center gap-2"
-        >
-          <MessageSquare className="w-3.5 h-3.5" />
-          {t("detailedAnalysis.askCoach")}
-        </Button>
-      </div>
+      <Button
+        onClick={() => navigate(id ? `/coach?analyze=${encodeURIComponent(id)}` : "/coach")}
+        data-testid="ask-coach-btn"
+        className="mt-4 w-full bg-muted text-foreground border border-border rounded-none h-11 font-mono text-xs uppercase tracking-wider flex items-center justify-center gap-2"
+      >
+        <MessageSquare className="w-3.5 h-3.5" />
+        {t("detailedAnalysis.askCoach")}
+      </Button>
     </div>
   );
 }
