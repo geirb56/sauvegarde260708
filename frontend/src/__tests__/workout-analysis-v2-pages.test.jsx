@@ -1,7 +1,7 @@
 import React from "react";
 import "@testing-library/jest-dom";
 import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
-import { MemoryRouter, Route, Routes, Link } from "react-router-dom";
+import { MemoryRouter, Route, Routes, Link, useLocation } from "react-router-dom";
 import axios from "axios";
 
 import WorkoutDetail, { formatDistance, formatSignedDistance } from "@/pages/WorkoutDetail";
@@ -227,6 +227,11 @@ function renderWithProviders(ui, route, language = "en") {
     </LanguageProvider>,
   );
 }
+
+const LocationDisplay = () => {
+  const { pathname, search } = useLocation();
+  return <span data-testid="current-location">{pathname}{search}</span>;
+};
 
 function setAnalysisAccess({ loading = false, allowed = true } = {}) {
   useSubscription.mockReturnValue({
@@ -1585,6 +1590,40 @@ const editorialPages = [
     expect(notice).toHaveTextContent(translations[language].workoutDetailExtended.analysisPremiumRequired);
     expect(within(notice).getByRole("link", { name: translations[language].workoutDetailExtended.unlockAnalysis })).toHaveAttribute("href", "/subscription");
     expect(axios.get.mock.calls.map(([url]) => url).some((url) => url.includes("/coach/workout-analysis/"))).toBe(false);
+  });
+
+  test.each(editorialPages)("unavailable intensity and history stay hidden through %s", async (_name, route, path, Page, testId) => {
+    mockAxios({
+      analysisPayload: {
+        ...analysis,
+        comparison: { ...analysis.comparison, similar: { ...similarReference, comparable: true } },
+        signals: { ...analysis.signals, intensity: { ...analysis.signals.intensity, available: false } },
+      },
+    });
+    renderWithProviders(<Routes><Route path={path} element={<Page />} /></Routes>, route);
+    const page = await screen.findByTestId(testId);
+    expect(page).not.toHaveTextContent(analysis.signals.intensity.reason_unavailable);
+    expect(page).not.toHaveTextContent("14 days");
+    expect(page).not.toHaveTextContent("180 days");
+    expect(screen.queryByTestId("analysis-limitations")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("comparison-card")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("similar-comparison-card")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("available-intensity")).not.toBeInTheDocument();
+    expect(page).not.toHaveTextContent(/High intensity|Low intensity/);
+  });
+
+  test.each(editorialPages)("Coach navigation preserves the exact workout ID through %s", async (_name, route, path, Page, testId) => {
+    mockAxios();
+    renderWithProviders(
+      <Routes>
+        <Route path={path} element={<Page />} />
+        <Route path="/coach" element={<LocationDisplay />} />
+      </Routes>,
+      route,
+    );
+    await screen.findByTestId(testId);
+    fireEvent.click(screen.getByTestId("ask-coach-btn"));
+    expect(await screen.findByTestId("current-location")).toHaveTextContent("/coach?analyze=w1");
   });
 
   describe.each(editorialPages)("%s PR320 contract", (name, route, path, Page, testId) => {
