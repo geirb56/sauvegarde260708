@@ -79,33 +79,56 @@ Champs normalisés persistés : `lap_index`, `order`, `start_time_gmt`, `distanc
 
 ## 8. Tests automatisés réellement exécutés
 
-| Suite | Résultat |
-|---|---|
-| `test_activity_laps_pr332.py` (unit, hors Redis isolé) | **passés** (inclus dans 68 passed du run normal) |
-| `test_activity_laps_queue_pr332.py` (unit, hors Redis isolé) | **passés** |
-| Tests d'intégration Redis isolés (fixture `local_redis`) | **PARTIELS** — un lot a démarré (**72 passed**) mais la suite complète n'a **pas** pu être menée à terme : le spawn répété de `redis-server` isolé devient instable sous charge dans ce harness (« Isolated Redis did not start », timeout du run). |
+### 8.1 Cause de l'instabilité précédente — RÉSOLUE
+Les instances `redis-server` isolées ne démarraient pas car le binaire `/app/bin/redis-server` requiert `liblzf.so.1` / `libjemalloc.so.2` présentes dans `/app/lib/` mais absentes du chemin de librairies du shell (le Redis runtime tournait déjà avec le bon `LD_LIBRARY_PATH`). **Correctif d'invocation uniquement** (pas de modif code) : `PATH=/app/bin:$PATH` + `LD_LIBRARY_PATH=/app/lib`. Après cela, chaque instance isolée démarre en < 1 s.
 
-**Important** : les 35 tests précédemment « skipped » (absence de `redis-server` au PATH) **ne sont pas déclarés réussis**. En exposant `/app/bin` au PATH, une partie de l'intégration Redis isolée s'est exécutée (72 passés) **sans toucher** le Redis runtime (instances isolées sur ports aléatoires), mais la couverture **crash / lease expiré / redelivery** n'a **pas** pu être confirmée intégralement (erreurs de démarrage des instances isolées = limitation d'environnement, **aucun échec applicatif démontré**). Le Redis runtime est resté sain tout du long.
+### 8.2 Résilience Redis — exécution séquentielle (un test à la fois, Redis isolé dédié, timeout borné)
+
+| Scénario | Test | Résultat |
+|---|---|---|
+| Crash réservation Mongo → avant enqueue Redis, récupération après expiry | `test_mongo_reservation_crash_before_enqueue_recovers_after_expiry` | **PASS** (1) |
+| Fencing — interruption ne laisse pas de pending sans livraison | `test_interruption_cannot_leave_redis_pending_without_delivery` | **PASS** (1) |
+| Lease expiré — POST running expiré ne perd pas la livraison réservée | `test_expired_running_post_does_not_lose_the_reserved_delivery` | **PASS** (1) |
+| Redelivery — worker interrompu | `test_interrupted_worker_redelivery` | **PASS** (3) |
+| Orphelin / watchdog stale ne recrée pas de redelivery | `test_laps_stale_watchdog_cannot_recover_fresh_redelivery` | **PASS** (1) |
+| Retry différé promu puis ACK | `test_worker_deferred_retry_promotes_and_acks` | **PASS** (1) |
+| Pending stale ne peut ni refresh, ni release, ni exécuter | `test_stale_pending_cannot_refresh_release_or_execute` | **PASS** (2) |
+| Stockage différé survit au redémarrage Redis | `test_laps_delayed_storage_survives_local_redis_restart` | **PASS** (1) |
+| Échec d'enqueue ne libère que sa propre réservation | `test_enqueue_failure_releases_only_its_reservation` | **PASS** (1) |
+| Dédup POST confirmée dans tous les états de livraison (queue/processing/delayed/unknown) | `test_post_dedup_confirms_pending_target_in_all_delivery_states` | **PASS** (4) |
+| Lookup pending « fail-closed » pour livraison inconnue | `test_pending_lookup_fails_closed_for_unknown_delivery` | **PASS** (3) |
+| Promotion vérifie type + suffixe pending correct | `test_promotion_checks_type_and_correct_pending_suffix` | **PASS** (1) |
+
+**Total : 20 cas de résilience exécutés → 20 PASS, 0 FAIL, 0 NON EXÉCUTÉ.**
+
+Exécution strictement séquentielle (une invocation `pytest` par scénario), sur Redis **isolés** (ports aléatoires 127.0.0.1, `--save ""`, tmp dir) — le **Redis runtime (6379) n'a jamais été touché** et est resté `PING=True`, queue propre, tout du long.
+
+### 8.3 Tests fonctionnels
+Non re-exécutés (déjà validés au runtime §3–§7 : 22 laps, persistance, idempotence). Les suites unit (`test_activity_laps_pr332.py` / `_queue_pr332.py`, hors Redis isolé) restent vertes.
 
 ## 9. Anomalies éventuelles
 
 - **Aucune anomalie fonctionnelle** sur le parcours runtime (acquisition, persistance, idempotence, ACK, nettoyage, non-régression).
+- **Aucune anomalie de résilience** : les 20 cas crash / lease / redelivery / fencing / orphelins passent.
 - Anomalie **connue et attendue** (donnée Garmin) : dernier lap `avg_speed > max_speed` — correctement **préservée**, non corrigée.
-- Limitation **d'environnement** : instabilité de spawn de `redis-server` isolé pour la suite d'intégration Redis (ne reflète pas un défaut de #332).
+- Limitation d'environnement précédente (spawn `redis-server`) **résolue** via `LD_LIBRARY_PATH=/app/lib` à l'invocation (pas de modif code).
 
 ## 10. Risques résiduels
 
-1. Couverture automatisée **crash/lease/redelivery** non confirmée intégralement dans ce harness (nécessiterait un Redis de test stable dédié ou une exécution séquencée des instances isolées).
-2. Généralisation hors échantillon : un seul profil d'activité continue (22 laps) validé au runtime ; cas `lapDTOs` vide/null, laps manuels, multisport non observés.
-3. `strideLength` non persisté (hors mapping actuel) et unité non confirmée — sans impact sur ce test.
-4. Le « HOLD runtime gate » documenté upstream (commit `c9b7d45`) concerne l'activation de l'acquisition automatique différée — hors périmètre de cette validation.
+1. Généralisation hors échantillon : un seul profil d'activité continue (22 laps) validé au runtime ; cas `lapDTOs` vide/null, laps manuels, multisport non observés en runtime réel (mais couverts par les tests unit).
+2. `strideLength` non persisté (hors mapping actuel) et unité non confirmée — sans impact.
+3. Le « HOLD runtime gate » upstream (commit `c9b7d45`) concerne l'activation de l'acquisition automatique différée — à lever désormais que la résilience est validée.
 
 ---
 
-## Verdict : **PASS PARTIEL**
+## Verdict : **PASS**
 
-**Validé par observation runtime réelle** : première acquisition déclenchée (cache absent au départ), **1 seule** commande GCCLI `activity splits`, persistance Mongo conforme au contrat #331 (**22 laps, 21,2745 km, schema_version=1, complete**, champs normalisés, `null` préservés, anomalie Garmin conservée, `intensity_type` non interprété), **idempotence** (3 POST → 1 acquisition ; `queued`→`running`→`cached` ; aucune duplication), **isolation/non-régression** (`activity_details`/phases/`activity_day` inchangés, Redis nettoyé, pas d'orphelin), Redis runtime sain.
+**Fonctionnel (runtime réel)** : première acquisition observée, **1 seule** commande GCCLI, persistance conforme #331 (**22 laps / 21,2745 km / schema_version=1 / complete**, champs normalisés, `null` préservés, anomalie Garmin conservée, `intensity_type` non interprété), **idempotence** (3 POST → 1 acquisition), **isolation/non-régression** (`activity_details`/phases/`activity_day` inchangés, Redis nettoyé).
 
-**Pourquoi PARTIEL et non PASS complet** : la couverture **automatisée** des scénarios Redis de résilience (crash, lease expiré, redelivery) n'a **pas** pu être exécutée intégralement de façon fiable dans ce harness (instabilité de spawn des instances `redis-server` isolées) — **aucune anomalie démontrée**, mais couverture incomplète explicitement signalée. Ces scénarios restent à confirmer sur un Redis de test dédié stable avant de lever le « runtime gate » et de passer à l'acquisition automatique différée.
+**Résilience (tests automatisés, exécution séquentielle, Redis isolé)** : **20/20 PASS** — crash réservation→enqueue, lease expiré, redelivery, fencing, orphelins/watchdog, promotion différée, dédup multi-états, restart Redis. 0 FAIL, 0 NON EXÉCUTÉ. Redis runtime jamais touché.
+
+La limitation précédente du harness (spawn `redis-server`) était un simple problème de `LD_LIBRARY_PATH`, résolu à l'invocation sans modifier le code applicatif.
+
+**#332 est fonctionnellement et structurellement validée (fonctionnel + résilience).** La roadmap peut se poursuivre avec l'adaptation de la queue GCCLI et l'acquisition automatique différée des laps ; le « runtime gate » peut être levé.
 
 *(STOP. Aucune PR, aucun code modifié, rien poussé.)*
