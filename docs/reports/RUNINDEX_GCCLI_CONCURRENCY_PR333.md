@@ -253,9 +253,11 @@ traitement réussi ou échec terminal existant.
 - HEAD audité avant correction :
   `6de36fc84c0e76311aaf9bd14e3d12a8f6feb44c`.
 - HEAD du code de production correctif :
-  `df8f889720f279034c6b87038720de52d15b9fc2`. Les ajouts de preuves finaux
-  concernent uniquement le module de tests C333 et ce rapport ; le HEAD de
-  livraison est fourni sur la PR et dans la réponse finale.
+  `df8f889720f279034c6b87038720de52d15b9fc2`.
+- HEAD du snapshot code/tests définitif (405 tests) et de la validation CodeQL :
+  `1479832417a880b2ee37f1448cea9826829d1de5`. Les commits ultérieurs ne
+  changent que le rapport ; le HEAD de livraison est fourni sur la PR et dans
+  la réponse finale.
 - Les corrections restent sur `copilot/fiabilisation-limiteur-global-gcccli`,
   pas sur la branche d'intégration.
 
