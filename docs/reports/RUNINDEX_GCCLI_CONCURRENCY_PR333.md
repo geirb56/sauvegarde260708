@@ -6,6 +6,9 @@
 - Base exacte : `copilot/dev`, `70fd6344b10edf61ba9877731837689943d9c30e`
   (merge de #332, vérifié contre la référence distante avant modification).
 - HEAD initial audité : `70fd6344b10edf61ba9877731837689943d9c30e`.
+- HEAD code/tests validé : `32de7817ff0c8829364ebeec34d64fc14de8f931`.
+  Les commits ultérieurs de rapport ne changent pas ce snapshot de code/tests ;
+  le SHA HEAD de livraison est fourni dans la description de PR et la réponse finale.
 - Branche de livraison : `copilot/fiabilisation-limiteur-global-gcccli`.
 - Objectif unique : sécuriser les deux réservations de concurrence existantes.
   Aucune nouvelle queue, aucun worker/service supplémentaire, aucun merge.
@@ -170,6 +173,17 @@ absence de comptes/services runtime dédiés à ces essais et périmètre exclus
 concurrence backend. Aucune réussite runtime distante n'est revendiquée.
 Les dépendances de test existantes ont été installées dans le sandbox ; les
 manifests de dépendances et images du projet ne sont pas modifiés.
+
+Validation automatisée après commit du code/tests : **CodeQL Python, 0 alerte**.
+Le scanner de secrets ne détecte aucun secret dans les 12 fichiers modifiés.
+L'outil de review automatisée est indisponible (modèle
+`capi-prod-claude-sonnet-4.6` absent de son registre) : son statut « succès /
+aucun commentaire » n'est donc pas revendiqué comme une review effective.
+Une revue de conception indépendante a été réalisée ; ses observations sur
+le blocage historique de l'event loop, le drain de migration et le refus fermé
+des pannes Redis sont consignées ci-dessous.
+Une seconde review read-only du diff final par l'agent spécialisé `code-review`
+ne trouve aucun problème significatif ; elle ne remplace pas l'audit utilisateur.
 
 ## Risques résiduels et gates de déploiement
 
