@@ -22,7 +22,7 @@ QUEUE_KEY = "runindex:garmin:queue"
 PROCESSING_KEY = "runindex:garmin:processing"
 # Hash job_id -> claimed_at (epoch); used by the watchdog to detect orphans.
 CLAIMS_KEY = "runindex:garmin:claims"
-# Only explicit activity-details jobs wait here, outside the runnable FIFO.
+# Explicit details/laps jobs share these existing delayed structures.
 DELAYED_KEY = "runindex:garmin:details:delayed"
 DELAYED_PAYLOADS_KEY = "runindex:garmin:details:delayed_payloads"
 DETAILS_OUTCOMES_KEY = "runindex:garmin:details:outcomes"
@@ -44,11 +44,15 @@ JOB_SYNC_ACTIVITY = "SYNC_ACTIVITY"  # activities-focused sync
 JOB_INCREMENTAL_SYNC = "INCREMENTAL_SYNC"  # incremental: only new activities (since last)
 JOB_VO2MAX_BACKFILL = "VO2MAX_BACKFILL"  # one-shot historical VO2max fetch
 JOB_ACTIVITY_DETAILS = "ACTIVITY_DETAILS"
+JOB_ACTIVITY_LAPS = "ACTIVITY_LAPS"
+TARGETED_JOB_TYPES = {JOB_ACTIVITY_DETAILS, JOB_ACTIVITY_LAPS}
 
 
 def _pending_key(job_type: str, user_id: str) -> str:
     if job_type == JOB_ACTIVITY_DETAILS:
         return f"{PENDING_PREFIX}{user_id}:activity_details"
+    if job_type == JOB_ACTIVITY_LAPS:
+        return f"{PENDING_PREFIX}{user_id}:activity_laps"
     if job_type == JOB_VO2MAX_BACKFILL:
         return f"{PENDING_PREFIX}{user_id}:vo2max_backfill"
     return f"{PENDING_PREFIX}{user_id}"
@@ -65,8 +69,12 @@ PENDING_TTL = 300                # seconds
 DETAILS_PENDING_TTL = 1800
 
 
-async def maintain_details_pending(redis, user_id: str, job_id: str, release=False):
+async def maintain_details_pending(
+    redis, user_id: str, job_id: str, release=False, job_type=JOB_ACTIVITY_DETAILS,
+):
     """Refresh/release only this job's reservation, never a newer job's flag."""
+    if job_type not in TARGETED_JOB_TYPES:
+        raise ValueError("Unsupported targeted job type")
     return await redis.eval(
         """
         if redis.call('GET', KEYS[1]) == ARGV[1] then
@@ -75,7 +83,7 @@ async def maintain_details_pending(redis, user_id: str, job_id: str, release=Fal
         end
         return 0
         """,
-        1, _pending_key(JOB_ACTIVITY_DETAILS, user_id), job_id,
+        1, _pending_key(job_type, user_id), job_id,
         "release" if release else "refresh", DETAILS_PENDING_TTL,
     )
 
@@ -92,8 +100,10 @@ async def recover_details_pending(redis, raw: str, job: dict) -> int:
             end
         end
         local delivery = cjson.decode(ARGV[1])
+        local suffixes = {ACTIVITY_DETAILS = ':activity_details', ACTIVITY_LAPS = ':activity_laps'}
+        local suffix = suffixes[delivery.type]
         if delivery.id ~= ARGV[2] or delivery.user_id ~= ARGV[3]
-           or delivery.type ~= 'ACTIVITY_DETAILS' then return 0 end
+           or suffix == nil or KEYS[1] ~= ARGV[5] .. delivery.user_id .. suffix then return 0 end
         if redis.call('LPOS', KEYS[2], ARGV[1]) == false then return 0 end
         if redis.call('HEXISTS', KEYS[3], ARGV[2]) == 0 then return 0 end
         if redis.call('HGET', KEYS[4], ARGV[2]) == 'superseded' then return 0 end
@@ -109,9 +119,9 @@ async def recover_details_pending(redis, raw: str, job: dict) -> int:
         redis.call('EXPIRE', KEYS[4], ARGV[4])
         return 0
         """,
-        4, _pending_key(JOB_ACTIVITY_DETAILS, job["user_id"]),
+        4, _pending_key(job.get("type", JOB_ACTIVITY_DETAILS), job["user_id"]),
         PROCESSING_KEY, CLAIMS_KEY, DETAILS_OUTCOMES_KEY,
-        raw, job["id"], job["user_id"], DETAILS_PENDING_TTL,
+        raw, job["id"], job["user_id"], DETAILS_PENDING_TTL, PENDING_PREFIX,
     )
 
 
@@ -165,22 +175,88 @@ async def enqueue_vo2max_backfill(user_id: str) -> dict:
 
 async def enqueue_activity_details(user_id: str, activity_id: str) -> dict:
     """One explicit target, at most one queued enrichment per user."""
-    from garmin.activity_details import validate_activity_id
+    return await _enqueue_targeted(user_id, activity_id)
 
+
+async def enqueue_activity_laps(user_id: str, activity_id: str) -> dict:
+    """One lap target per user, independent of the details reservation.
+
+    POST-only lookup confirms the reserved delivery's target; an unknown or
+    different target is busy. The caller persists Mongo queued state before
+    enqueueing; Redis is never the GET authority.
+    """
+    return await _enqueue_targeted(user_id, activity_id, JOB_ACTIVITY_LAPS)
+
+
+async def _enqueue_targeted(
+    user_id: str, activity_id: str, job_type=JOB_ACTIVITY_DETAILS,
+) -> dict:
+    if job_type == JOB_ACTIVITY_LAPS:
+        from garmin.activity_laps import validate_activity_id
+    else:
+        from garmin.activity_details import validate_activity_id
+
+    if job_type not in TARGETED_JOB_TYPES:
+        raise ValueError("Unsupported targeted job type")
     activity_id = validate_activity_id(activity_id)
     r = get_redis()
-    key = _pending_key(JOB_ACTIVITY_DETAILS, user_id)
+    key = _pending_key(job_type, user_id)
     job_id = uuid.uuid4().hex
-    if not await r.set(key, job_id, nx=True, ex=DETAILS_PENDING_TTL):
+    if job_type == JOB_ACTIVITY_LAPS:
+        payload = json.dumps({
+            "id": job_id, "type": job_type, "user_id": user_id,
+            "activity_id": activity_id, "attempts": 0, "enqueued_at": time.time(),
+        })
+        reservation = await r.eval(
+            """
+                local expected = {'string', 'list', 'list', 'hash'}
+                for i, key in ipairs(KEYS) do
+                    local kind = redis.call('TYPE', key).ok
+                    if kind ~= 'none' and kind ~= expected[i] then
+                        return redis.error_reply('Invalid laps enqueue key type')
+                    end
+                end
+                if redis.call('SET', KEYS[1], ARGV[3], 'NX', 'EX', ARGV[4]) then
+                    redis.call('LPUSH', KEYS[2], ARGV[5])
+                    return 2
+                end
+                local owner = redis.call('GET', KEYS[1])
+                if owner == false then return 0 end
+                local function matches(payload)
+                    local ok, job = pcall(cjson.decode, payload)
+                    if not ok or type(job) ~= 'table' or job.id ~= owner then return nil end
+                    return job.type == 'ACTIVITY_LAPS' and job.user_id == ARGV[1]
+                           and job.activity_id == ARGV[2]
+                end
+                local payload = redis.call('HGET', KEYS[4], owner)
+                if payload then
+                    local same = matches(payload)
+                    if same ~= nil then return same and 1 or 0 end
+                end
+                for i = 2, 3 do
+                    for _, raw in ipairs(redis.call('LRANGE', KEYS[i], 0, -1)) do
+                        local same = matches(raw)
+                        if same ~= nil then return same and 1 or 0 end
+                    end
+                end
+                return 0
+            """,
+            4, key, QUEUE_KEY, PROCESSING_KEY, DELAYED_PAYLOADS_KEY,
+            user_id, activity_id, job_id, DETAILS_PENDING_TTL, payload,
+        )
+        if reservation != 2:
+            return {"status": "already_queued" if reservation == 1 else "busy"}
+        return {"status": "queued"}
+    elif not await r.set(key, job_id, nx=True, ex=DETAILS_PENDING_TTL):
         return {"status": "already_queued"}
     try:
         await r.lpush(QUEUE_KEY, json.dumps({
-            "id": job_id, "type": JOB_ACTIVITY_DETAILS,
+            "id": job_id, "type": job_type,
             "user_id": user_id, "activity_id": activity_id,
             "attempts": 0, "enqueued_at": time.time(),
         }))
     except Exception:
-        await maintain_details_pending(r, user_id, job_id, release=True)
+        await maintain_details_pending(r, user_id, job_id, release=True, job_type=job_type)
         raise
     return {"status": "queued"}
 
@@ -250,6 +326,17 @@ async def defer_activity_details(raw: str, job: dict) -> None:
                 return redis.error_reply('Invalid deferred key type')
             end
         end
+        local delivery = cjson.decode(ARGV[1])
+        local job = cjson.decode(ARGV[3])
+        local suffixes = {ACTIVITY_DETAILS = ':activity_details', ACTIVITY_LAPS = ':activity_laps'}
+        local suffix = suffixes[job.type]
+        if suffix == nil or job.id ~= ARGV[2] or delivery.id ~= job.id
+           or delivery.type ~= job.type or delivery.user_id ~= job.user_id
+           or delivery.activity_id ~= job.activity_id
+           or type(job.user_id) ~= 'string'
+           or KEYS[5] ~= ARGV[6] .. job.user_id .. suffix then
+            return redis.error_reply('Invalid deferred identity')
+        end
         if redis.call('LREM', KEYS[1], 1, ARGV[1]) == 0 then return 0 end
         redis.call('HDEL', KEYS[2], ARGV[2])
         redis.call('HSET', KEYS[4], ARGV[2], ARGV[3])
@@ -260,8 +347,8 @@ async def defer_activity_details(raw: str, job: dict) -> None:
         return 1
         """,
         5, PROCESSING_KEY, CLAIMS_KEY, DELAYED_KEY, DELAYED_PAYLOADS_KEY,
-        _pending_key(JOB_ACTIVITY_DETAILS, job["user_id"]),
-        raw, job["id"], json.dumps(job), due, ttl,
+        _pending_key(job.get("type", JOB_ACTIVITY_DETAILS), job["user_id"]),
+        raw, job["id"], json.dumps(job), due, ttl, PENDING_PREFIX,
     )
 
 
@@ -283,23 +370,24 @@ async def promote_due_activity_details() -> int:
             local payload = redis.call('HGET', KEYS[2], id)
             if not payload then return redis.error_reply('Missing delayed payload: ' .. id) end
             local job = cjson.decode(payload)
-            if job.id ~= id or type(job.user_id) ~= 'string' then
+            local suffixes = {ACTIVITY_DETAILS = ':activity_details', ACTIVITY_LAPS = ':activity_laps'}
+            local suffix = suffixes[job.type]
+            if job.id ~= id or type(job.user_id) ~= 'string' or suffix == nil then
                 return redis.error_reply('Invalid delayed identity')
             end
-            local pending = ARGV[2] .. job.user_id .. ':activity_details'
+            local pending = ARGV[2] .. job.user_id .. suffix
             local kind = redis.call('TYPE', pending).ok
             if kind ~= 'none' and kind ~= 'string' then
                 return redis.error_reply('Invalid pending key type')
             end
-            jobs[id] = job
+            jobs[id] = pending
         end
         local promoted = 0
         local superseded = {}
         for _, id in ipairs(ids) do
             local payload = redis.call('HGET', KEYS[2], id)
             if payload then
-                local job = jobs[id]
-                local pending = ARGV[2] .. job.user_id .. ':activity_details'
+                local pending = jobs[id]
                 local owner = redis.call('GET', pending)
                 if owner == false or owner == id then
                     redis.call('SET', pending, id, 'EX', ARGV[3])
@@ -322,7 +410,7 @@ async def promote_due_activity_details() -> int:
         PENDING_PREFIX, DETAILS_PENDING_TTL,
     )
     for job_id in result[1]:
-        logger.warning("[queue] activity_details terminal=superseded job_id=%s", job_id)
+        logger.warning("[queue] targeted enrichment terminal=superseded job_id=%s", job_id)
     return result[0]
 
 
@@ -346,7 +434,7 @@ async def recover_orphans() -> int:
             continue
         claimed_at = await r.hget(CLAIMS_KEY, job_id)
         if claimed_at is None:
-            if job.get("type") == JOB_ACTIVITY_DETAILS:
+            if job.get("type") in TARGETED_JOB_TYPES:
                 await r.eval(
                     """
                     if redis.call('LPOS', KEYS[1], ARGV[1]) == false then return 0 end
@@ -359,7 +447,7 @@ async def recover_orphans() -> int:
             continue
         if now - float(claimed_at) <= ORPHAN_TIMEOUT:
             continue
-        if job.get("type") == JOB_ACTIVITY_DETAILS:
+        if job.get("type") in TARGETED_JOB_TYPES:
             # The same payload may have been recovered and freshly claimed
             # since HGET; only move the delivery we actually observed.
             moved = await r.eval(

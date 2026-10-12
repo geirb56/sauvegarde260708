@@ -230,6 +230,16 @@ class GccliRunner:
         raise GccliError("Garmin authentication failed")
 
     # -------------------------------------------------------------- data fetch
+    def fetch_activity_splits(self, activity_id: str, account: str):
+        from .activity_laps import validate_activity_id
+
+        activity_id = validate_activity_id(activity_id)
+        if not account:
+            raise GccliError("Garmin account required")
+        return self._run_json(
+            ["activity", "splits", activity_id], account=account, single_attempt=True,
+        )
+
     def fetch_activity_typed_splits(self, activity_id: str, account: str):
         from .activity_ids import normalize_activity_id
 
