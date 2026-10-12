@@ -69,6 +69,23 @@ PENDING_TTL = 300                # seconds
 DETAILS_PENDING_TTL = 1800
 
 
+async def acquire_user_lock(redis, user_id: str, token: str) -> bool:
+    return bool(await redis.set(f"{LOCK_PREFIX}{user_id}", token, nx=True, ex=LOCK_TTL))
+
+
+async def maintain_user_lock(redis, user_id: str, token: str, release=False) -> bool:
+    """Only the current delivery may refresh or release the user lock."""
+    return bool(await redis.eval(
+        """
+        if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
+        if ARGV[2] == 'release' then return redis.call('DEL', KEYS[1]) end
+        return redis.call('EXPIRE', KEYS[1], ARGV[3])
+        """,
+        1, f"{LOCK_PREFIX}{user_id}", token,
+        "release" if release else "refresh", LOCK_TTL,
+    ))
+
+
 async def maintain_details_pending(
     redis, user_id: str, job_id: str, release=False, job_type=JOB_ACTIVITY_DETAILS,
 ):

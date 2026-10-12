@@ -321,6 +321,8 @@ def test_details_backpressure_parks_without_sleep_or_retry(monkeypatch, blocked)
     monkeypatch.setattr(sync_worker, "maintain_details_pending", AsyncMock(return_value=1))
     acquire = AsyncMock(return_value=False)
     monkeypatch.setattr(sync_worker.rate_limiter, "acquire_global_slot", acquire)
+    release = AsyncMock()
+    monkeypatch.setattr(sync_worker.rate_limiter, "release_global_slot", release)
     defer = AsyncMock()
     requeue = AsyncMock()
     work = AsyncMock()
@@ -344,9 +346,12 @@ def test_details_backpressure_parks_without_sleep_or_retry(monkeypatch, blocked)
     ack.assert_not_awaited()
     if blocked == "user_lock":
         acquire.assert_not_awaited()
-        client.delete.assert_not_awaited()
-    else:
-        client.delete.assert_awaited_once_with(f"{queue.LOCK_PREFIX}a")
+    client.delete.assert_not_awaited()
+    release.assert_awaited_once()
+    token = release.await_args.args[0]
+    assert client.eval.await_count == (1 if blocked == "user_lock" else 2)
+    for call in client.eval.await_args_list:
+        assert call.args[1:] == (1, f"{queue.LOCK_PREFIX}a", token, "release", queue.LOCK_TTL)
 
 
 @pytest.mark.parametrize("transition", ["defer", "ack"])
@@ -420,6 +425,7 @@ def test_details_backpressure_stays_outside_fifo(local_redis, monkeypatch, block
                 await client.set(f"{queue.LOCK_PREFIX}a", "existing-sync", ex=queue.LOCK_TTL)
             monkeypatch.setattr(sync_worker.rate_limiter, "acquire_global_slot",
                                 AsyncMock(return_value=False))
+            monkeypatch.setattr(sync_worker.rate_limiter, "release_global_slot", AsyncMock())
             await sync_worker.process_job(None, client, raw, job)
             assert await client.llen(queue.PROCESSING_KEY) == 0
             assert await client.zcard(queue.DELAYED_KEY) == 1
@@ -441,6 +447,7 @@ def test_other_garmin_jobs_keep_existing_backpressure(monkeypatch, blocked):
     client.set.return_value = blocked != "user_lock"
     monkeypatch.setattr(sync_worker.rate_limiter, "acquire_global_slot",
                         AsyncMock(return_value=False))
+    monkeypatch.setattr(sync_worker.rate_limiter, "release_global_slot", AsyncMock())
     defer = AsyncMock()
     requeue = AsyncMock()
     sleep = AsyncMock()
@@ -519,11 +526,11 @@ def test_worker_expiration_before_dispatch_uses_explicit_recovery(local_redis, m
             raw, job = await in_flight(client, delay=-1)
             key = queue._pending_key(queue.JOB_ACTIVITY_DETAILS, "a")
 
-            async def slot():
+            async def slot(token):
                 await client.delete(key)
                 if new_owner:
                     await client.set(key, "new-job", ex=30)
-                return True
+                return token
 
             work = AsyncMock(return_value={"success": True, "status": "cached"})
             monkeypatch.setattr(sync_worker.rate_limiter, "acquire_global_slot", slot)

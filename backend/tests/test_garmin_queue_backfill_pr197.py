@@ -27,6 +27,14 @@ class _FakeRedis:
         self.deleted.append(key)
         self.values.pop(key, None)
 
+    async def eval(self, script, numkeys, key, token, action, ttl):
+        if self.values.get(key) != token:
+            return 0
+        if action == "release":
+            self.deleted.append(key)
+            self.values.pop(key)
+        return 1
+
     async def incr(self, key):
         self.counters[key] = self.counters.get(key, 0) + 1
 
