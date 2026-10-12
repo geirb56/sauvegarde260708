@@ -4,6 +4,7 @@ import asyncio
 import json
 import multiprocessing
 import os
+import pty
 import signal
 import subprocess
 import sys
@@ -29,6 +30,17 @@ def rapid_renewal(monkeypatch):
     monkeypatch.setattr(execution_lease, "RENEWAL_MAX_INTERVAL_SECONDS", 0.04)
 
 
+async def expire_user(client, user):
+    deadline = time.monotonic() + 0.3
+    key = f"{queue.LOCK_PREFIX}{user}"
+    while time.monotonic() < deadline:
+        await client.pexpire(key, 1)
+        await asyncio.sleep(0.005)
+        if not await client.exists(key):
+            return
+    pytest.fail("user lock did not expire between renewal checks")
+
+
 def alive(pid):
     try:
         os.kill(pid, 0)
@@ -46,6 +58,29 @@ def test_worker_renews_tiny_original_leases_while_event_loop_is_blocked(
     leases = []
     original_renew = execution_lease.ExecutionLease._renew_owned
     marker = tmp_path / "blocked-loop-command"
+    started_marker = tmp_path / "blocked-loop-started"
+    shortened_at = []
+    shortener_errors = []
+
+    def shorten_after_physical_start():
+        connection = redis.Redis.from_url(local_redis[0], socket_timeout=0.5)
+        try:
+            deadline = time.monotonic() + 3
+            while not started_marker.exists() and time.monotonic() < deadline:
+                time.sleep(0.002)
+            assert started_marker.exists()
+            seconds, micros = connection.time()
+            transaction = connection.pipeline()
+            transaction.zadd(rate_limiter.GLOBAL_LEASE_KEY, {
+                leases[0].token: seconds + micros / 1e6 + 0.3,
+            })
+            transaction.pexpire(f"{queue.LOCK_PREFIX}a", 300)
+            transaction.execute()
+            shortened_at.append(time.monotonic())
+        except BaseException as exc:
+            shortener_errors.append(exc)
+        finally:
+            connection.close()
 
     def observed(lease):
         original_renew(lease)
@@ -82,15 +117,20 @@ def test_worker_renews_tiny_original_leases_while_event_loop_is_blocked(
                 # Blocking provider work, not to_thread: the old renewal task
                 # could never run before the original 300ms reservations died.
                 runner._run_json(["-c", (
-                    "import json,pathlib,time; time.sleep(0.9); "
+                    "import json,pathlib,time; "
+                    f"pathlib.Path({str(started_marker)!r}).write_text('started'); "
+                    "time.sleep(0.9); "
                     f"pathlib.Path({str(marker)!r}).write_text('real'); "
                     "print(json.dumps({'success': True}))"
                 )])
                 finished = time.monotonic()
                 assert not heartbeat
                 assert finished - started > 0.3
+                assert not shortener_errors
+                assert len(shortened_at) == 1
+                assert finished - shortened_at[0] > 0.3
                 assert sum(
-                    ident != event_loop_thread and started < stamp < finished
+                    ident != event_loop_thread and shortened_at[0] < stamp < finished
                     for ident, stamp in observations
                 ) >= 3
                 assert await client.get(f"{queue.LOCK_PREFIX}a") == lease.token
@@ -102,7 +142,13 @@ def test_worker_renews_tiny_original_leases_while_event_loop_is_blocked(
             monkeypatch.setattr(sync_worker, "_run_job", work)
             monkeypatch.setattr(sync_worker, "ack_job", AsyncMock())
             job = {"id": "blocked", "type": queue.JOB_VO2MAX_BACKFILL, "user_id": "a"}
-            await sync_worker.process_job(None, client, "raw", job)
+            shortener = threading.Thread(target=shorten_after_physical_start)
+            shortener.start()
+            try:
+                await sync_worker.process_job(None, client, "raw", job)
+            finally:
+                shortener.join(3)
+            assert not shortener.is_alive()
             assert marker.read_text() == "real"
             assert not leases[0]._renewal.is_alive()
             assert await rate_limiter.global_active_count() == 0
@@ -136,10 +182,7 @@ def test_renewal_loss_during_real_command_never_revives_or_kills_it_immediately(
                 if loss == "global-expiry":
                     await expire_global(client, lease.token)
                 elif loss == "user-expiry":
-                    seconds, micros = await client.time()
-                    await client.pexpireat(
-                        f"{queue.LOCK_PREFIX}a", seconds * 1000 + micros // 1000 - 1,
-                    )
+                    await expire_user(client, "a")
                 else:
                     await client.set(f"{queue.LOCK_PREFIX}a", "replacement", ex=30)
                 score = await client.zscore(rate_limiter.GLOBAL_LEASE_KEY, lease.token)
@@ -236,10 +279,7 @@ def test_expiry_during_existing_physical_command_can_overlap_successor_without_r
                 if expiry == "global":
                     await expire_global(client, "old")
                 else:
-                    seconds, micros = await client.time()
-                    await client.pexpireat(
-                        f"{queue.LOCK_PREFIX}a", seconds * 1000 + micros // 1000 - 1,
-                    )
+                    await expire_user(client, "a")
                 assert await asyncio.to_thread(old.stopped.wait, 0.5)
                 assert not old_task.done(), "ownership loss does not stop the physical command"
                 successor_user = "b" if expiry == "global" else "a"
@@ -305,34 +345,68 @@ def test_start_renewal_is_idempotent_and_cannot_restart_after_join(local_redis, 
 
 
 def test_real_redis_socket_timeout_then_recovery_keeps_execution_stopped(
-    local_redis, monkeypatch,
+    local_redis, monkeypatch, tmp_path,
 ):
     rapid_renewal(monkeypatch)
+    command = stand_in(tmp_path)
 
     async def scenario():
         async with isolated(local_redis, monkeypatch) as client:
             lease = await reserve(client)
             connection = lease._client()
             assert connection.ping()
-            # Pause the isolated server, not runtime Redis. The renewal's real
-            # socket deadline must fire even though the asyncio loop is healthy.
-            await client.execute_command("CLIENT", "PAUSE", 800, "ALL")
-            started = time.monotonic()
+            runner = GccliRunner(gccli_path=command[0], home=str(tmp_path), max_retries=1)
+            runner.timeout = 1.8
             lease.start_renewal()
+            context = execution_lease.current_execution.set(lease)
+            task = asyncio.create_task(asyncio.to_thread(runner._run_json, command[1:]))
+            execution_lease.current_execution.reset(context)
+            successor = None
             try:
+                deadline = time.monotonic() + 3
+                while not (tmp_path / "started").exists() and time.monotonic() < deadline:
+                    await asyncio.sleep(0.005)
+                assert (tmp_path / "started").exists()
+                pid = int((tmp_path / "started").read_text())
+                # Pause isolated Redis while a real guarded child is running.
+                # A timed-out CAS may still execute after server recovery.
+                await client.execute_command("CLIENT", "PAUSE", 1000, "ALL")
+                started = time.monotonic()
                 assert await asyncio.to_thread(lease.stopped.wait, 2)
                 assert time.monotonic() - started < 1.5
+                assert alive(pid) and not task.done()
                 await lease.join_renewal()
                 assert not lease._renewal.is_alive()
+                await asyncio.sleep(max(0, 1.05 - (time.monotonic() - started)))
                 assert await asyncio.to_thread(connection.ping)
                 assert await client.get(f"{queue.LOCK_PREFIX}a") == lease.token
-                # A queued CAS may complete after its reply timed out. It may
-                # renew a still-live owner, but cannot reopen this stopped lease.
+                await expire_user(client, "a")
+                successor = await reserve(client, token="successor")
+                successor.start_renewal()
+                score = await client.zscore(rate_limiter.GLOBAL_LEASE_KEY, lease.token)
                 with pytest.raises(execution_lease.LeaseLostError):
                     lease.command([sys.executable, "-c", "print('forbidden')"], 0.2)
+                await asyncio.sleep(0.08)
+                assert lease.stopped.is_set()
+                assert await client.get(f"{queue.LOCK_PREFIX}a") == "successor"
+                assert await client.zscore(rate_limiter.GLOBAL_LEASE_KEY, lease.token) == score
+                with pytest.raises(GccliError):
+                    await task
+                assert not alive(pid)
+                assert not (tmp_path / "escaped").exists()
+                assert not await queue.maintain_user_lock(client, "a", lease.token, release=True)
+                await rate_limiter.release_global_slot(lease.token)
+                assert await client.get(f"{queue.LOCK_PREFIX}a") == "successor"
+                assert await client.zscore(rate_limiter.GLOBAL_LEASE_KEY, "successor") is not None
             finally:
                 await lease.join_renewal()
+                if not task.done():
+                    await asyncio.gather(task, return_exceptions=True)
                 lease.close()
+                if successor is not None:
+                    successor.stop()
+                    await successor.join_renewal()
+                    successor.close()
 
     asyncio.run(scenario())
 
@@ -400,8 +474,9 @@ def test_direct_runner_keeps_unguarded_launch_behavior(monkeypatch, tmp_path, pa
         assert calls == [True]
 
 
+@pytest.mark.parametrize("path", ["subprocess", "pty"])
 def test_post_final_cas_pause_can_still_overlap_replacement_even_with_renewal(
-    local_redis, monkeypatch, tmp_path,
+    local_redis, monkeypatch, tmp_path, path,
 ):
     """Expected evidence, NOT xfail: Redis admission != physical exclusion."""
     rapid_renewal(monkeypatch)
@@ -410,10 +485,12 @@ def test_post_final_cas_pause_can_still_overlap_replacement_even_with_renewal(
     allow_old_spawn = threading.Event()
     old_paused = threading.Event()
     original_run = subprocess.run
+    original_fork = pty.fork
 
     def code(path, delay):
         return (
-            "import json,pathlib,time; start=time.monotonic(); "
+            "import json,os,pathlib,time; start=time.monotonic(); "
+            f"pathlib.Path({str(path.with_suffix('.pid'))!r}).write_text(str(os.getpid())); "
             f"pathlib.Path({str(path)!r}).write_text(json.dumps([start,None])); "
             f"time.sleep({delay}); "
             f"pathlib.Path({str(path)!r}).write_text(json.dumps([start,time.monotonic()])); "
@@ -425,8 +502,18 @@ def test_post_final_cas_pause_can_still_overlap_replacement_even_with_renewal(
             monkeypatch.setattr(rate_limiter, "GLOBAL_MAX", 1)
             old = await reserve(client, token="old")
             old.start_renewal()
-            runner = GccliRunner(gccli_path=sys.executable, home=str(tmp_path), max_retries=1)
+            executable_paths = [sys.executable, sys.executable]
+            if path == "pty":
+                executable_paths = []
+                for index, duration in enumerate([0.3, 0.8]):
+                    executable = tmp_path / f"synthetic-auth-{index}.py"
+                    executable.write_text(f"#!{sys.executable}\n{code(intervals[index], duration)}\n")
+                    executable.chmod(0o700)
+                    executable_paths.append(str(executable))
+            runner = GccliRunner(gccli_path=executable_paths[0], home=str(tmp_path), max_retries=1)
+            new_runner = GccliRunner(gccli_path=executable_paths[1], home=str(tmp_path), max_retries=1)
             runner.timeout = 2
+            new_runner.timeout = 2
 
             def delayed_os_spawn(cmd, **kwargs):
                 if any(str(intervals[0]) in arg for arg in cmd):
@@ -437,9 +524,23 @@ def test_post_final_cas_pause_can_still_overlap_replacement_even_with_renewal(
                     assert allow_old_spawn.wait(4)
                 return original_run(cmd, **kwargs)
 
-            monkeypatch.setattr("garmin.runner.subprocess.run", delayed_os_spawn)
+            def delayed_fork():
+                if execution_lease.current_execution.get() is old:
+                    last_cas_passed.set()
+                    old_paused.set()
+                    assert allow_old_spawn.wait(4)
+                return original_fork()
+
+            if path == "subprocess":
+                monkeypatch.setattr("garmin.runner.subprocess.run", delayed_os_spawn)
+            else:
+                monkeypatch.setattr("garmin.runner.pty.fork", delayed_fork)
             context = execution_lease.current_execution.set(old)
-            old_task = asyncio.create_task(asyncio.to_thread(runner._run_json, ["-c", code(intervals[0], 0.3)]))
+            old_task = asyncio.create_task(asyncio.to_thread(*(
+                [runner._run_json, ["-c", code(intervals[0], 0.3)]]
+                if path == "subprocess" else
+                [runner.login, "synthetic-old@example.test", "synthetic"]
+            )))
             execution_lease.current_execution.reset(context)
             replacement = None
             new_task = None
@@ -452,9 +553,11 @@ def test_post_final_cas_pause_can_still_overlap_replacement_even_with_renewal(
                 replacement.start_renewal()
                 assert await asyncio.to_thread(old.stopped.wait, 1)
                 context = execution_lease.current_execution.set(replacement)
-                new_task = asyncio.create_task(asyncio.to_thread(
-                    runner._run_json, ["-c", code(intervals[1], 0.8)],
-                ))
+                new_task = asyncio.create_task(asyncio.to_thread(*(
+                    [new_runner._run_json, ["-c", code(intervals[1], 0.8)]]
+                    if path == "subprocess" else
+                    [new_runner.login, "synthetic-new@example.test", "synthetic"]
+                )))
                 execution_lease.current_execution.reset(context)
                 deadline = time.monotonic() + 2
                 while not intervals[1].exists() and time.monotonic() < deadline:
@@ -462,8 +565,20 @@ def test_post_final_cas_pause_can_still_overlap_replacement_even_with_renewal(
                 assert intervals[1].exists()
                 assert await rate_limiter.global_active_count() == 1
                 allow_old_spawn.set()
-                assert await old_task == {}
-                assert await new_task == {}
+                deadline = time.monotonic() + 2
+                while not intervals[0].exists() and time.monotonic() < deadline:
+                    await asyncio.sleep(0.005)
+                assert intervals[0].exists()
+                for interval in intervals:
+                    assert json.loads(interval.read_text())[1] is None
+                    assert alive(int(interval.with_suffix(".pid").read_text()))
+                # Sample Redis WHILE both same-user physical commands live,
+                # not merely before the old launch or after both have exited.
+                assert await rate_limiter.global_active_count() == 1
+                assert await client.get(f"{queue.LOCK_PREFIX}a") == "replacement"
+                assert all(alive(int(interval.with_suffix(".pid").read_text())) for interval in intervals)
+                assert await old_task == ({} if path == "subprocess" else None)
+                assert await new_task == ({} if path == "subprocess" else None)
                 old_start, old_end = json.loads(intervals[0].read_text())
                 new_start, new_end = json.loads(intervals[1].read_text())
                 assert new_start < old_start < old_end < new_end

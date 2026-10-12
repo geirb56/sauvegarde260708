@@ -252,6 +252,10 @@ traitement réussi ou échec terminal existant.
   `70fd6344b10edf61ba9877731837689943d9c30e`.
 - HEAD audité avant correction :
   `6de36fc84c0e76311aaf9bd14e3d12a8f6feb44c`.
+- HEAD du code de production correctif :
+  `df8f889720f279034c6b87038720de52d15b9fc2`. Les ajouts de preuves finaux
+  concernent uniquement le module de tests C333 et ce rapport ; le HEAD de
+  livraison est fourni sur la PR et dans la réponse finale.
 - Les corrections restent sur `copilot/fiabilisation-limiteur-global-gcccli`,
   pas sur la branche d'intégration.
 
@@ -402,6 +406,85 @@ du compteur Redis. Les TTL sont raccourcis uniquement dans ce test (12 s) en
 conservant la marge de sécurité du code pour une commande inférieure à 1 s ;
 les TTL de production ne sont pas modifiés. Ce cas n'exige pas une suppression
 manuelle de clés pour mettre en évidence la fenêtre post-CAS.
+
+La variante PTY du premier test démontre la même fenêtre dans le chemin
+d'authentification. Redis est échantillonné pendant que les deux PIDs sont
+effectivement vivants, avant et après la lecture du compteur : le résultat
+**2 processus / 1 détenteur** n'est pas seulement déduit d'intervalles terminés.
+Des cas distincts d'expiration durant une commande déjà lancée démontrent aussi
+que l'ancien processus n'est pas tué immédiatement par la perte de renouvellement ;
+le refus de son prochain appel et la sécurité de son release restent intacts.
+
+### Résultats de validation C333
+
+- **405 tests passent** dans les groupes isolés existants : **289** tests
+  concurrence/livraison/C333 et **116** tests runner/provider.
+- **20 cas C333** supplémentaires ; les **42 cas PR333** restent couverts.
+  Aucun skip ni xfail. Les tests de reproduction du chevauchement passent parce
+  qu'ils établissent le contre-exemple, non parce qu'ils prouvent une exclusion.
+- Capacité par défaut : **10 processus workers concurrents**, 8 admissions,
+  maximum physique mesuré séparément à **8** en conditions saines. Configuration
+  réduite : 5 workers, 2 admissions et maximum physique **2**. Ces résultats
+  conditionnels ne réfutent pas les contre-exemples après perte de réservation.
+- Blocage de l'event loop : un enfant réel bloque la boucle au-delà de plusieurs
+  périodes de renouvellement ; les leases sont raccourcies **après** son départ,
+  puis sauvées par des CAS provenant du thread, sans intervention de la boucle.
+- Perte de réservations : expiry globale et véritable expiration utilisateur
+  par PEXPIRE, remplacement de propriétaire, refus de résurrection et release
+  tardif ; jamais de renouvellement d'un détenteur déjà expiré/remplacé.
+- Perte Redis réelle : `CLIENT PAUSE ALL` sur le serveur isolé pendant une
+  commande réelle, timeout socket puis récupération. Le détenteur arrêté ne
+  redémarre pas, même si son Lua en attente a pu finir après perte de la réponse.
+  Le successeur et le cleanup ancien sont testés séparément.
+- Crash SIGKILL, annulations répétées, annulation directe de la tâche interne,
+  shutdown/drainage et join d'un renouvellement en cours : suites PR333/C333.
+- Flake8 fatal-error et vérification whitespace : propres.
+
+Commandes finales exécutées depuis `backend/`, configuration
+`-n 2 --dist loadscope` inchangée :
+
+```text
+python -m pytest tests/test_gccli_concurrency_pr333.py tests/test_activity_laps_pr332.py tests/test_activity_laps_queue_pr332.py tests/test_activity_details_pr321.py tests/test_activity_details_delayed_redis_c321.py tests/test_garmin_queue_backfill_pr197.py tests/test_gccli_concurrency_c333.py --basetemp=.pytest_cache/c333-regression -q --tb=short
+# 289 passed, 7 warnings in 44.87s
+python -m pytest tests/test_garmin_daily_metrics_pr03.py tests/test_garmin_vo2max_pr195.py tests/test_garmin_deep_sync.py --basetemp=.pytest_cache/c333-runner -q --tb=short
+# 116 passed in 1.07s
+python -m flake8 sync/execution_lease.py workers/sync_worker.py garmin/runner.py tests/test_gccli_concurrency_pr333.py tests/test_gccli_concurrency_c333.py tests/test_activity_laps_queue_pr332.py --select=E9,F63,F7,F82
+git diff --check
+# exit 0, sans sortie
+```
+
+Les 7 avertissements comprennent les dépréciations existantes et deux
+avertissements Python liés au fork PTY dans un processus multithreadé. Le chemin
+PTY existant est conservé et couvert ; cela reste un point de compatibilité
+runtime Python à examiner, pas une validation de l'image Railway.
+
+Les assertions de queue/ACK/watchdog, déduplication, réservations details/laps,
+backoffs et persistance C332 sont conservées dans les groupes de régression.
+Les modules Garmin métier, Mongo/historique, frontend, abonnement et tous les
+moteurs physiologiques sont inchangés. Aucun drift local n'est réécrit.
+
+Un essai groupant les dix suites dans **un seul processus de collection pytest**
+a rencontré une pollution préexistante des stubs du module `feed` entre tests.
+Les groupes d'exécution séparés utilisés par le rapport PR333 initial passent.
+Cette tentative échouée est conservée dans les résultats ; aucun test étranger
+au périmètre n'est réécrit pour la masquer.
+L'essai commun arrêté avec `-x -o faulthandler_timeout=30` rapporte
+**2 failed, 104 passed, 3 warnings** : deux tests de routes authentifiées échouent
+à importer `api/garmin.py:30` avec
+`ModuleNotFoundError: No module named 'feed.sse'; 'feed' is not a package`.
+`test_garmin_deep_sync.py` crée à la collection des stubs globaux `feed` et
+`config` sans restauration ; l'audit indépendant confirme ce comportement
+préexistant. Le périmètre C333 ne le corrige pas.
+
+Comme précédemment, aucun test destructif runtime, suite backend entière, image
+Docker/Railway, benchmark ou essai Garmin distant n'est exécuté. Les preuves
+concernent le sandbox, un Redis loopback par fixture et des commandes simulées.
+
+La review spécialisée read-only de la correction ne trouve aucun problème
+significatif supplémentaire ; elle ne conclut pas à un PASS physique.
+La validation CodeQL Python sur le code correctif commité indique **0 alerte**.
+L'outil de review automatisée reste indisponible pour cause de modèle absent ;
+son affichage « succès / aucun commentaire » n'est pas une validation effective.
 
 ### Verdict courant
 
