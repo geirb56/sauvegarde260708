@@ -107,6 +107,9 @@ class GccliRunner:
     def _run_command(self, cmd, env):
         with self._execution_context():
             guarded_cmd, deadline, guarded = self._execution_command(cmd)
+            if guarded:
+                from sync.execution_lease import current_execution
+                current_execution.get().check_launch(self.timeout)
             return subprocess.run(
                 guarded_cmd,
                 stdout=subprocess.PIPE,
@@ -204,6 +207,9 @@ class GccliRunner:
         env = self._env(email)
         cmd, _, guarded = self._execution_command(cmd)
         output_parts: List[str] = []
+        if guarded:
+            from sync.execution_lease import current_execution
+            current_execution.get().check_launch(self.timeout)
         pid, fd = pty.fork()
         if pid == 0:
             # Child

@@ -186,34 +186,34 @@ def test_periodic_worker_renews_then_stops_on_lost_ownership(local_redis, monkey
     async def scenario():
         async with isolated(local_redis, monkeypatch) as client:
             lease = await reserve(client)
-            monkeypatch.setattr(sync_worker, "LOCK_TTL", 1)
+            monkeypatch.setattr(execution_lease, "LOCK_TTL", 1)
             await client.pexpire(f"{queue.LOCK_PREFIX}a", 1000)
-            renewed = asyncio.Event()
-            original_renew = rate_limiter.renew_execution_leases
+            renewed = threading.Event()
+            original_renew = lease._renew_owned
 
-            async def observed_renew(*args):
-                result = await original_renew(*args)
+            def observed_renew():
+                result = original_renew()
                 renewed.set()
                 return result
 
-            monkeypatch.setattr(rate_limiter, "renew_execution_leases", observed_renew)
-            renewal = asyncio.create_task(sync_worker._renew_execution(client, lease))
+            monkeypatch.setattr(lease, "_renew_owned", observed_renew)
+            sync_worker._renew_execution(lease)
             try:
-                await asyncio.wait_for(renewed.wait(), 2)
-                assert await client.ttl(f"{queue.LOCK_PREFIX}a") >= queue.LOCK_TTL - 1
+                assert await asyncio.to_thread(renewed.wait, 2)
+                assert await client.pttl(f"{queue.LOCK_PREFIX}a") > 500
                 assert not lease.stopped.is_set()
                 if loss == "user":
                     await client.set(f"{queue.LOCK_PREFIX}a", "replacement", ex=10)
                 else:
-                    monkeypatch.setattr(rate_limiter, "renew_execution_leases",
-                                        AsyncMock(side_effect=redis.ConnectionError("outage")))
-                await asyncio.wait_for(renewal, 2)
+                    monkeypatch.setattr(lease._client(), "eval", lambda *a: (_ for _ in ()).throw(
+                        redis.ConnectionError("outage"),
+                    ))
+                assert await asyncio.to_thread(lease.stopped.wait, 2)
                 assert lease.stopped.is_set()
                 if loss == "user":
                     assert await client.get(f"{queue.LOCK_PREFIX}a") == "replacement"
             finally:
-                renewal.cancel()
-                await asyncio.gather(renewal, return_exceptions=True)
+                await lease.join_renewal()
                 lease.close()
     asyncio.run(scenario())
 
@@ -729,6 +729,7 @@ def test_worker_drains_real_guarded_thread_before_releasing_locks(local_redis, m
 def _crashing_worker(url, command, pipe):
     os.environ["REDIS_URL"] = url
     lease = execution_lease.ExecutionLease("a", "crashed")
+    lease.start_renewal()
     child = subprocess.Popen(lease.command(command, 0.5), start_new_session=True)
     pipe.send(child.pid)
     pipe.close()

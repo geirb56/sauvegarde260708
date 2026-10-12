@@ -580,7 +580,7 @@ def test_laps_failures_use_existing_retries_and_targeted_timeout(local_redis, mo
             mock_slots(monkeypatch)
             monkeypatch.setattr(sync_worker, "_run_job", AsyncMock(side_effect=RuntimeError("failure")))
             sleep = AsyncMock()
-            monkeypatch.setattr(sync_worker, "_renew_execution", AsyncMock())
+            monkeypatch.setattr(sync_worker, "_renew_execution", lambda lease: None)
             run_with_lease = sync_worker.run_with_lease
             timeouts = []
 

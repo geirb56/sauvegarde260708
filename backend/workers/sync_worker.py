@@ -44,7 +44,6 @@ from jobs.queue import (
     JOB_ACTIVITY_DETAILS,
     JOB_ACTIVITY_LAPS,
     TARGETED_JOB_TYPES,
-    LOCK_TTL,
     acquire_user_lock,
     maintain_user_lock,
     HEARTBEAT_PREFIX,
@@ -102,18 +101,8 @@ async def _run_job(db, job_type: str, user_id: str, activity_id: str = None) -> 
     raise ValueError(f"unknown job type: {job_type}")
 
 
-async def _renew_execution(redis, lease):
-    while True:
-        await asyncio.sleep(min(LOCK_TTL, rate_limiter.GLOBAL_LEASE_SECONDS) / 4)
-        try:
-            if not await rate_limiter.renew_execution_leases(
-                redis, lease.user_id, lease.token,
-            ):
-                lease.stop()
-                return
-        except RedisError:
-            lease.stop()
-            return
+def _renew_execution(lease):
+    lease.start_renewal()
 
 
 async def process_job(db, redis, raw: str, job: dict) -> None:
@@ -123,16 +112,18 @@ async def process_job(db, redis, raw: str, job: dict) -> None:
         await _process_job(db, redis, raw, job, token, lease)
     finally:
         lease.stop()
-        await lease.wait_idle()
+        cancelled = await lease.wait_idle()
+        cancelled = await lease.join_renewal() or cancelled
         cleanup = asyncio.create_task(_release_execution(redis, lease))
-        cancelled = False
         while not cleanup.done():
             try:
                 await asyncio.shield(cleanup)
             except asyncio.CancelledError:
                 cancelled = True
-        cleanup.result()
-        lease.close()
+        try:
+            cleanup.result()
+        finally:
+            lease.close()
         if cancelled:
             raise asyncio.CancelledError
 
@@ -196,7 +187,7 @@ async def _process_job(db, redis, raw: str, job: dict, token: str, lease) -> Non
         return
 
     start = time.time()
-    renewal = asyncio.create_task(_renew_execution(redis, lease))
+    _renew_execution(lease)
     logger.info("[worker] sync_start type=%s user=%s attempt=%s", job_type, user_id, attempts + 1)
     try:
         if targeted and (
@@ -271,12 +262,6 @@ async def _process_job(db, redis, raw: str, job: dict, token: str, lease) -> Non
             await redis.incr(STATS_FAILED_KEY)
             # Terminal failure after max retries: drop from processing.
             await ack_job(raw, job_id)
-    finally:
-        renewal.cancel()
-        try:
-            await renewal
-        except asyncio.CancelledError:
-            pass
 
 
 async def watchdog_loop() -> None:

@@ -1,5 +1,11 @@
 # RUNINDEX — Fiabilisation de la concurrence GCCLI (#333)
 
+> Les sections initiales ci-dessous décrivent le snapshot PR333 livré à
+> `6de36fc84c0e76311aaf9bd14e3d12a8f6feb44c`. La section **Correction C333 avant
+> merge** en fin de rapport prévaut pour l'audit courant, les preuves et le verdict.
+> Les 385 tests initiaux n'établissaient pas une garantie stricte d'absence de
+> chevauchement physique dans la fenêtre entre Redis et le lancement OS.
+
 ## Références et périmètre
 
 - Repository : `geirb56/sauvegarde260708`.
@@ -236,3 +242,175 @@ reservations expirées, parking/promotions atomiques et ACK seulement après
 traitement réussi ou échec terminal existant.
 
 **Livraison sans merge automatique. Audit utilisateur requis avant merge.**
+
+## Correction C333 avant merge — audit courant
+
+### Références et causes racines vérifiées
+
+- PR existante : #333, toujours draft ; aucun merge et aucun déploiement.
+- Base d'intégration : `copilot/dev`,
+  `70fd6344b10edf61ba9877731837689943d9c30e`.
+- HEAD audité avant correction :
+  `6de36fc84c0e76311aaf9bd14e3d12a8f6feb44c`.
+- Les corrections restent sur `copilot/fiabilisation-limiteur-global-gcccli`,
+  pas sur la branche d'intégration.
+
+**Renouvellement dépendant de la boucle.** Dans le snapshot audité,
+`sync_worker._renew_execution` attendait `asyncio.sleep(30)` puis une commande
+Redis async. Il ne pouvait pas s'exécuter pendant un blocage de l'event loop.
+Les appels synchrones aux providers dans `garmin/service.py` (VO2max, métriques
+quotidiennes, pagination et synchronisation) sont bien présents dans le code ;
+ils ne sont pas uniformément déplacés dans `asyncio.to_thread`. La vérification
+synchrone par commande protège son propre prochain départ, mais ne renouvelle
+pas les réservations d'autres jobs de la même boucle. Un tel renouvellement
+périodique n'était donc pas une protection indépendante de l'exécution physique.
+
+**Fenêtre Redis / OS.** `ExecutionLease.command` faisait un CAS de propriété
+et construisait les arguments du gardien. Le runner appelait ensuite
+`subprocess.run`, ou `pty.fork` suivi d'un `exec` pour le login. Redis ne participe
+pas à cette création OS. Un propriétaire pouvait changer après la réponse Lua
+et avant l'exécution effective. Le contrôle de durée monotone de la réponse
+Redis ne couvre pas une suspension ultérieure. Ni le token, ni le TTL, ni GNU
+`timeout` ne constituent un fencing accepté par Garmin avant sa première requête.
+
+**Deux propriétés différentes.** L'admission Lua et le release à token peuvent
+rester corrects alors qu'un processus ancien tourne encore. Un ZSET de cardinal
+8 ne prouve pas qu'il existe au plus 8 exécutions physiques ; une expiration
+forcée, une perte de clés ou une suspension après le dernier contrôle peut
+séparer ces deux observations. Les nouveaux tests doivent mesurer ces propriétés
+séparément, avec des enfants réels et pas seulement des mocks d'admission.
+
+### Modifications ciblées et justification
+
+1. Le worker démarre un **thread de renouvellement par exécution admise**, après
+   acquisition des deux réservations. Ce thread appartient au worker existant :
+   ce n'est ni un nouveau service ni un consommateur de queue. Il utilise le
+   client Redis synchrone et le même Lua de comparaison des deux propriétaires,
+   à une cadence calculée à partir des TTL (30 s avec les valeurs actuelles).
+   Le renouvellement n'attend plus le scheduling de la boucle asyncio.
+2. Le Lua n'est pas changé : si le membre global est déjà expiré/absent, ou si
+   le verrou utilisateur est absent/différent, rien n'est renouvelé. L'exécution
+   est arrêtée pour ses commandes futures. Une erreur Redis n'est pas traitée
+   comme une autorisation implicite.
+3. La création paresseuse du client synchrone est protégée contre les appels
+   simultanés du runner et du thread. Les timeouts socket/connexion sont courts
+   et les retries Redis implicites désactivés ; on ne reprend pas une commande
+   après perte de son contrôle de propriété.
+4. Le `finally` arrête les futurs départs, attend les commandes enregistrées,
+   signale l'arrêt du thread et attend sa fin **avant** release et fermeture du
+   client. Les libérations restent conditionnées au token, indépendantes et
+   protégées contre les annulations répétées. Une réponse de renouvellement en
+   retard ne peut donc pas rétablir une réservation après son cleanup normal.
+5. Un dernier CAS est ajouté dans le runner après la construction des arguments,
+   immédiatement avant `subprocess.run` ou `pty.fork`. Il refuse le départ si un
+   remplacement/une expiration est observable à cet instant ; il réduit la
+   fenêtre précédente sans prétendre rendre Redis et le lancement OS atomiques.
+6. Les commandes physiques gardent le timeout indépendant introduit par PR333,
+   et le drainage garde son enregistrement de threads/processus réels.
+
+Les TTL, le défaut de capacité globale 8, les commandes Garmin, le nombre de
+tentatives et les backoffs ne sont pas changés. Queue/claims/watchdog/delayed,
+réservations pending et persistance C332 ne sont pas reconstruits. Le nouveau
+thread ajoute une faible consommation mémoire et des commandes Redis
+périodiques ; aucun chiffre de performance non mesuré n'est revendiqué.
+
+### Limite stricte et mécanisme de fencing nécessaire
+
+Une deuxième vérification ne prouve pas la propriété « jamais de chevauchement » :
+un processus peut encore être suspendu juste **après son dernier CAS**, ou juste
+avant que le gardien ne démarre. Redis peut alors recycler la réservation,
+accepter son successeur, puis l'ancien processus reprendre son spawn.
+Un thread indépendant corrige le blocage asyncio tant que le processus et ses
+threads sont schedulés ; il ne corrige pas le gel complet du worker, un changement
+d'autorité Redis ou une expiration imposée pendant une commande déjà en cours.
+Le gardien borne l'exécution après son lancement mais ne l'empêche pas de partir.
+
+Pour une garantie stricte, une autorité d'exécution non contournable doit accepter
+un **epoch monotone de fencing** pour chaque propriétaire et slot, et rejeter
+les epochs obsolètes au moment où elle exécute la commande. Le transfert d'un slot
+doit attendre la terminaison et le reap du processus précédent, pas seulement la
+disparition de son TTL. Cette autorité doit arbitrer l'ensemble des workers :
+un mutex local à une machine Railway ou un nouveau compteur Redis n'est pas
+suffisant entre instances. Si elle est externe à Garmin, elle doit contrôler
+tous les lancements/enfants et refuser de transférer une capacité dont l'arrêt
+ancien n'est pas établi, même pendant une partition. Un simple jeton transmis
+à GCCLI que Garmin ne vérifie pas ne fournit pas ce fencing.
+
+Ce mécanisme implique une décision d'architecture hors de la correction ciblée ;
+il est **proposé, pas implémenté**. Aucune nouvelle queue/service n'est ajoutée
+pour contourner le périmètre demandé. Le verdict de merge devra refléter la
+fenêtre résiduelle démontrée, indépendamment du succès des tests Redis.
+
+### Contraintes Railway / Redis
+
+- Conserver les TTL actuels et les timeouts GCCLI existants ; ne pas accepter
+  une commande dont la deadline dépasse la fenêtre de réservation. Une marge
+  fixe ne constitue pas une mesure des pires suspensions d'ordonnancement Railway.
+- Vérifier la présence de GNU coreutils `timeout`, la création de groupes de
+  processus et l'absence d'échappement/daemonisation de GCCLI. Le fichier
+  `deploy/railway/Dockerfile.worker` utilise `python:3.11-slim` et
+  `workers.run_all`, mais l'image déployée n'a pas été construite ni testée ici.
+- Les threads de renouvellement sont indépendants de l'event loop, pas du
+  processus OS, du GIL, de la résolution DNS, du gel du conteneur ou d'un arrêt
+  d'instance Railway. Les timeouts socket sans retry bornent l'I/O réseau
+  habituelle ; ils ne prouvent pas une borne globale sous gel OS ou DNS bloqué.
+- Drain complet des anciennes versions avant activation ; ne jamais intervenir
+  sur le compteur legacy ou les réservations d'un worker encore vivant pour
+  « débloquer » artificiellement l'admission.
+- Redis doit être une autorité unique cohérente, sans éviction/FLUSH/perte de clés
+  actives ou failover perdant leurs écritures ; un refus de communication reste
+  un refus d'autorisation, pas un mode dégradé sans limite.
+- Les scripts Lua existants utilisent plusieurs clés sans hash tag commun :
+  ils requièrent un Redis compatible avec ces EVAL atomiques. Un véritable Redis
+  Cluster multi-shard pourrait répondre `CROSSSLOT`. Aucun support Cluster ni
+  changement de nommage n'est introduit dans C333 ; valider cette compatibilité
+  dans la configuration Railway/Redis effective plutôt que l'inférer d'une URL.
+- Aucun test, restart, merge ou déploiement ne vise le Redis/Garmin/Mongo runtime.
+
+### Scénario critique reproduit : compteur correct, exécutions en chevauchement
+
+Le nouveau test
+`test_post_final_cas_pause_can_still_overlap_replacement_even_with_renewal`
+dans `backend/tests/test_gccli_concurrency_c333.py` n'est ni un `xfail` ni une
+assertion retirée. Il **attend et mesure** le contre-exemple suivant :
+
+1. L'ancien détenteur passe le dernier CAS puis attend à l'entrée de l'implémentation
+   réelle de `subprocess.run`, avant création du PID.
+2. Sur le Redis isolé, sa réservation globale est rendue expirée et son verrou
+   utilisateur retiré ; le successeur acquiert les deux réservations.
+3. Le thread de renouvellement ancien détecte la perte de propriété et interdit
+   les futurs appels de commande. Le successeur lance un enfant réel.
+4. L'ancien appel, déjà au-delà du dernier contrôle, reprend son spawn. Les
+   timestamps monotones écrits par les deux enfants montrent un chevauchement.
+5. L'admission Redis compte **1** détenteur et les deux enfants tournent pour le
+   même utilisateur. Le cleanup ancien n'efface toujours pas le successeur.
+
+La mutation de réservation est imposée **dans le test isolé**, pas effectuée en
+production. Elle modélise le handover devenu possible après expiration pendant
+une suspension post-CAS. Avec le processus et ses threads schedulés normalement,
+le nouveau renouvellement réduit fortement ce cas ; il ne supprime pas la
+fenêtre logique démontrée. Le résultat positif de ce test signifie que la
+reproduction du risque réussit, **pas** que l'exclusion physique est garantie.
+
+Un second cas,
+`test_sigstop_after_final_cas_pauses_renewal_and_allows_physical_overlap_after_real_expiry`,
+utilise plusieurs processus et un véritable `SIGSTOP`/`SIGCONT` : le gel arrête
+**aussi** le thread indépendant, les deux réservations expirent naturellement
+dans Redis, un successeur est admis, puis l'ancien processus reprend après le
+dernier CAS. Les enfants réels écrivent leurs intervalles d'activité séparément
+du compteur Redis. Les TTL sont raccourcis uniquement dans ce test (12 s) en
+conservant la marge de sécurité du code pour une commande inférieure à 1 s ;
+les TTL de production ne sont pas modifiés. Ce cas n'exige pas une suppression
+manuelle de clés pour mettre en évidence la fenêtre post-CAS.
+
+### Verdict courant
+
+**BLOCKED pour une garantie stricte d'absence de chevauchement physique.**
+
+La correction indépendante de l'event loop et le refus des changements observés
+avant le dernier CAS ne suffisent pas à clôturer le risque après ce CAS.
+La sûreté du bookkeeping Redis et l'absence de corruption par cleanup tardif
+sont des propriétés distinctes, conservées ; elles ne justifient pas un PASS
+global. La décision de merge nécessite soit le mécanisme de fencing décrit
+ci-dessus, soit une acceptation explicite d'une garantie moins forte par l'audit
+utilisateur. Aucun merge ni déploiement n'est proposé automatiquement.
