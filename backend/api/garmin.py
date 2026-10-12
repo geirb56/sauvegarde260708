@@ -149,6 +149,38 @@ async def garmin_activities(
     return {"activities": items, "count": len(items), "source": "db"}
 
 
+@garmin_router.post("/activities/{activity_id}/laps", status_code=202)
+async def request_laps(
+    activity_id: str, request: Request, user: dict = Depends(get_current_user),
+):
+    from garmin.activity_laps import request_activity_laps
+
+    try:
+        result = await request_activity_laps(request.app.state.db, user["id"], activity_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid activity identifier")
+    except Exception:
+        raise HTTPException(status_code=503, detail="Activity enrichment temporarily unavailable")
+    if result["status"] == "not_found":
+        raise HTTPException(status_code=404, detail="Activity not found")
+    return result
+
+
+@garmin_router.get("/activities/{activity_id}/laps")
+async def read_laps(
+    activity_id: str, request: Request, user: dict = Depends(get_current_user),
+):
+    from garmin.activity_laps import get_activity_laps
+
+    try:
+        result = await get_activity_laps(request.app.state.db, user["id"], activity_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid activity identifier")
+    if result.get("status") == "not_found":
+        raise HTTPException(status_code=404, detail="Activity not found")
+    return result
+
+
 @garmin_router.post("/activities/{activity_id}/phases", status_code=202)
 async def request_activity_phases(
     activity_id: str, request: Request, user: dict = Depends(get_current_user),

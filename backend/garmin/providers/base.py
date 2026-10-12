@@ -32,6 +32,10 @@ class Provider(ABC):
 
     name: str = "base"
 
+    def get_activity_laps(self, user_id: str, activity_id: str) -> Optional[List[Dict]]:
+        """Optional targeted observed laps; None means unsupported."""
+        return None
+
     def get_activity_phases(self, user_id: str, activity_id: str) -> Optional[List[Dict]]:
         """Optional targeted observed phases; None means unsupported."""
         return None
