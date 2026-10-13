@@ -31,6 +31,7 @@ steady      — comfortably steady, upper-easy
 quality     — structurally hard / workout session (tempo, threshold, intervals)
               The exact nature is NOT decided here.  One quality max per week (V1).
 long_easy   — long run at easy/steady effort
+race        — canonical race-day event slot (not training load, never renamed from another type)
 
 Intensity rules (V1)
 ---------------------
@@ -71,10 +72,11 @@ All coefficients are centralised here, clearly labelled "calibration V1, recalib
 
 No-rounding-drift contract
 ---------------------------
-  distance target  → sum(session.distance_km) == weekly_target.target_km  (± 0.1 km tolerance)
-  duration target  → sum(session.duration_minutes) == weekly_target.target_duration_minutes
+  distance target  → sum(training session.distance_km) == weekly_target.target_km  (± 0.1 km tolerance)
+  duration target  → sum(training session.duration_minutes) == weekly_target.target_duration_minutes
 
-  Residual arrondi is applied to the largest running session.
+  `race` is an event, not training load, and is therefore EXCLUDED from these
+  aggregates. Residual arrondi is applied to the largest training session.
 
 Migration matrix (legacy → V2)
 --------------------------------
@@ -94,13 +96,21 @@ Migration matrix (legacy → V2)
 
 from __future__ import annotations
 
-from datetime import date
+from dataclasses import dataclass
+from datetime import date, timedelta
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict
 
 from .periodization import PeriodizationPhase, PeriodizationSnapshot
-from .plan_goal import GoalType, PlanGoal
+from .plan_goal import (
+    DISTANCE_10K_KM,
+    DISTANCE_5K_KM,
+    DISTANCE_HALF_MARATHON_KM,
+    DISTANCE_MARATHON_KM,
+    GoalType,
+    PlanGoal,
+)
 from .runner_profile import RunnerProfile
 from .weekly_target import WeeklyTarget
 
@@ -207,6 +217,7 @@ _SESSION_DISTANCE_WEIGHTS: dict[str, float] = {
     "steady": 1.10,
     "quality": 1.00,
     "long_easy": 0.0,  # handled separately
+    "race": 0.0,
     "rest": 0.0,
 }
 
@@ -217,6 +228,7 @@ _SESSION_DURATION_WEIGHTS: dict[str, float] = {
     "steady": 1.10,
     "quality": 1.10,
     "long_easy": 0.0,  # handled separately
+    "race": 0.0,
     "rest": 0.0,
 }
 
@@ -260,10 +272,10 @@ class WorkoutPrescription(BaseModel):
     """Day of week name, e.g. 'monday'."""
 
     workout_type: str
-    """Session category: rest | recovery | easy | steady | quality | long_easy."""
+    """Session category: rest | recovery | easy | steady | quality | long_easy | race."""
 
     intensity_class: str
-    """Broad intensity bucket: rest | low | moderate | high."""
+    """Broad intensity bucket: rest | low | moderate | high | event."""
 
     distance_km: Optional[float]
     """Distance in km, or None when target_basis is duration and no pace available."""
@@ -278,11 +290,15 @@ class WorkoutPrescription(BaseModel):
 class WeeklyPlan(BaseModel):
     """Immutable weekly training plan produced by WorkoutGenerator.
 
-    The sum of session distances (when target_basis == "distance") equals
-    weekly_target.target_km exactly (± 0.1 km).
+    The sum of TRAINING session distances (when target_basis == "distance")
+    equals
+    weekly_target.target_km exactly (± 0.1 km), unless an explicit reduction
+    reason code removes sessions and their volume from the served week.
 
-    The sum of session durations (when target_basis == "duration") equals
-    weekly_target.target_duration_minutes exactly.
+    The sum of TRAINING session durations (when target_basis == "duration")
+    equals
+    weekly_target.target_duration_minutes exactly, unless an explicit reduction
+    reason code removes sessions and their duration from the served week.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -293,13 +309,13 @@ class WeeklyPlan(BaseModel):
     """Mirrors WeeklyTarget.target_basis: "distance" | "duration"."""
 
     planned_km: Optional[float]
-    """Sum of session distances. None when target_basis == "duration"."""
+    """Sum of TRAINING session distances only. None when target_basis == "duration"."""
 
     planned_duration_minutes: Optional[int]
     """Sum of session durations. None when target_basis == "distance"."""
 
     session_count: int
-    """Number of running sessions (excludes rest days)."""
+    """Number of TRAINING sessions (excludes rest and race)."""
 
     sessions: tuple[WorkoutPrescription, ...]
     """All seven sessions (running + rest), ordered Monday→Sunday."""
@@ -322,11 +338,65 @@ _INTENSITY_CLASS: dict[str, str] = {
     "steady": "moderate",
     "quality": "high",
     "long_easy": "low",
+    "race": "event",
 }
 
 
 def _intensity_class(workout_type: str) -> str:
     return _INTENSITY_CLASS.get(workout_type, "low")
+
+
+def _is_training_workout_type(workout_type: str) -> bool:
+    return workout_type not in {"rest", "race"}
+
+
+def _is_training_session(session: WorkoutPrescription) -> bool:
+    return _is_training_workout_type(session.workout_type)
+
+
+def _resolve_target_time_profile(
+    plan_goal: PlanGoal,
+    *,
+    target_capability_time_seconds: Optional[int],
+) -> Optional[str]:
+    """Classify target-time ambition using equivalent capability time on target distance."""
+    if (
+        plan_goal.target_time_seconds is None
+        or plan_goal.target_time_seconds <= 0
+        or target_capability_time_seconds is None
+        or target_capability_time_seconds <= 0
+    ):
+        return None
+    if plan_goal.target_time_seconds <= int(target_capability_time_seconds * 0.97):
+        return "aggressive"
+    if plan_goal.target_time_seconds >= int(target_capability_time_seconds * 1.03):
+        return "conservative"
+    return None
+
+
+def _apply_target_time_modulation(
+    skeleton: list[tuple[str, str]],
+    *,
+    target_time_profile: Optional[str],
+    allow_intensity: bool,
+) -> tuple[list[tuple[str, str]], Optional[str]]:
+    # Intentionally conservative: adjust at most one slot per week so target_time
+    # influences composition without overriding continuity/phase protection logic.
+    if target_time_profile is None or not allow_intensity:
+        return skeleton, None
+
+    adjusted = list(skeleton)
+    if target_time_profile == "aggressive":
+        for idx, (day, slot_type) in enumerate(adjusted):
+            if slot_type in ("easy", "recovery"):
+                adjusted[idx] = (day, "steady")
+                return adjusted, "target_time_profile_aggressive"
+    elif target_time_profile == "conservative":
+        for idx, (day, slot_type) in enumerate(adjusted):
+            if slot_type == "quality":
+                adjusted[idx] = (day, "steady")
+                return adjusted, "target_time_profile_conservative"
+    return skeleton, None
 
 
 # ---------------------------------------------------------------------------
@@ -411,21 +481,21 @@ def _correct_rounding_drift_distance(
     sessions: list[WorkoutPrescription],
     target_km: float,
 ) -> list[WorkoutPrescription]:
-    """Adjust the largest running session so sum(distance_km) == target_km.
+    """Adjust the largest training session so sum(distance_km) == target_km.
 
     Operates on a mutable list; returns a list of rebuilt immutable objects.
     Contract: input sessions already have distance_km rounded to 0.1 km.
     """
-    running = [s for s in sessions if s.workout_type != "rest" and s.distance_km is not None]
-    if not running:
+    training_sessions = [s for s in sessions if _is_training_session(s) and s.distance_km is not None]
+    if not training_sessions:
         return sessions
 
-    current_total = round(sum(s.distance_km for s in running), 1)
+    current_total = round(sum(s.distance_km for s in training_sessions), 1)
     residual = round(target_km - current_total, 1)
     if abs(residual) < 0.05:  # within acceptable precision
         return sessions
 
-    biggest = max(running, key=lambda s: s.distance_km)
+    biggest = max(training_sessions, key=lambda s: s.distance_km)
     new_km = round(biggest.distance_km + residual, 1)
 
     result = []
@@ -441,17 +511,17 @@ def _correct_rounding_drift_duration(
     sessions: list[WorkoutPrescription],
     target_minutes: int,
 ) -> list[WorkoutPrescription]:
-    """Adjust the largest running session so sum(duration_minutes) == target_minutes."""
-    running = [s for s in sessions if s.workout_type != "rest" and s.duration_minutes is not None]
-    if not running:
+    """Adjust the largest training session so sum(duration_minutes) == target_minutes."""
+    training_sessions = [s for s in sessions if _is_training_session(s) and s.duration_minutes is not None]
+    if not training_sessions:
         return sessions
 
-    current_total = sum(s.duration_minutes for s in running)
+    current_total = sum(s.duration_minutes for s in training_sessions)
     residual = target_minutes - current_total
     if residual == 0:
         return sessions
 
-    biggest = max(running, key=lambda s: s.duration_minutes)
+    biggest = max(training_sessions, key=lambda s: s.duration_minutes)
     new_min = biggest.duration_minutes + residual
 
     result = []
@@ -463,11 +533,218 @@ def _correct_rounding_drift_duration(
     return result
 
 
+def _build_placeholder_skeleton(session_types: list[str]) -> list[tuple[str, str]]:
+    return [(f"slot_{index}", workout_type) for index, workout_type in enumerate(session_types)]
+
+
+def _build_intended_normal_training_sessions(
+    *,
+    weekly_target: WeeklyTarget,
+    session_types: list[str],
+    goal_type: str,
+    allow_intensity: bool,
+) -> list[WorkoutPrescription]:
+    skeleton = _build_placeholder_skeleton(session_types)
+    if weekly_target.target_basis == "distance" and weekly_target.target_km is not None:
+        return _correct_rounding_drift_distance(
+            _build_distance_sessions(
+                skeleton=skeleton,
+                target_km=weekly_target.target_km,
+                goal_type=goal_type,
+                allow_intensity=allow_intensity,
+                base_reason_codes=(),
+            ),
+            weekly_target.target_km,
+        )
+    if weekly_target.target_basis == "duration" and weekly_target.target_duration_minutes is not None:
+        return _correct_rounding_drift_duration(
+            _build_duration_sessions(
+                skeleton=skeleton,
+                total_minutes=weekly_target.target_duration_minutes,
+                goal_type=goal_type,
+                allow_intensity=allow_intensity,
+                base_reason_codes=(),
+            ),
+            weekly_target.target_duration_minutes,
+        )
+    return []
+
+
+def _build_intended_reprise_training_sessions(
+    *,
+    weekly_target: WeeklyTarget,
+    n_sessions: int,
+    allow_run_walk: bool,
+    base_reason_codes: tuple[str, ...],
+) -> list[WorkoutPrescription]:
+    if n_sessions <= 0:
+        return []
+    if weekly_target.target_basis == "duration" and weekly_target.target_duration_minutes is not None:
+        durations = _split_durations(weekly_target.target_duration_minutes, n_sessions)
+        min_dur = min(durations) if durations else 0
+        run_walk_code = ("run_walk_allowed",) if allow_run_walk else ()
+        return [
+            _make_running_session(
+                day=f"slot_{index}",
+                workout_type="recovery" if duration == min_dur else "easy",
+                duration_minutes=duration,
+                reason_codes=base_reason_codes + run_walk_code,
+            )
+            for index, duration in enumerate(durations)
+        ]
+
+    target_km = weekly_target.target_km or 0.0
+    splits_map: dict[int, list[float]] = {
+        1: [1.0],
+        2: [0.40, 0.60],
+        3: [0.28, 0.32, 0.40],
+        4: [0.20, 0.25, 0.25, 0.30],
+    }
+    splits = splits_map.get(n_sessions, splits_map.get(min(n_sessions, 4), [1.0]))
+    distances = sorted(round(target_km * split, 1) for split in splits)
+    sessions = [
+        _make_running_session(
+            day=f"slot_{index}",
+            workout_type="recovery" if distance == distances[0] else "easy",
+            distance_km=distance,
+            reason_codes=base_reason_codes,
+        )
+        for index, distance in enumerate(distances)
+    ]
+    return _correct_rounding_drift_distance(sessions, target_km)
+
+
+def _reduce_to_race_week_calendar(
+    *,
+    intended_training_sessions: list[WorkoutPrescription],
+    runner_profile: RunnerProfile,
+    race_week: _RaceWeekConfig,
+) -> tuple[list[WorkoutPrescription], tuple[str, ...]]:
+    constrained_training_sessions, guard_codes = _build_race_week_training_sessions(
+        intended_training_sessions=intended_training_sessions,
+        race_week=race_week,
+    )
+    skeleton, extra_codes = _assign_days(
+        [session.workout_type for session in constrained_training_sessions],
+        runner_profile,
+        allowed_training_days=list(race_week.allowed_training_days_before_race),
+        reserved_day_to_type={race_week.race_day: "race"},
+        capacity_reason_code="RACE_WEEK_CALENDAR_LIMITED",
+    )
+    active_slots = [(day, workout_type) for day, workout_type in skeleton if _is_training_workout_type(workout_type)]
+    remaining_sessions = list(constrained_training_sessions[:len(active_slots)])
+    day_to_session: dict[str, WorkoutPrescription] = {}
+    for day, workout_type in active_slots:
+        match_index = next(
+            index for index, session in enumerate(remaining_sessions) if session.workout_type == workout_type
+        )
+        matched = remaining_sessions.pop(match_index)
+        day_to_session[day] = matched.model_copy(update={"day": day})
+
+    result: list[WorkoutPrescription] = []
+    for day in _ALL_DAYS:
+        if day == race_week.race_day:
+            result.append(_make_race(day, distance_km=race_week.race_distance_km))
+        elif day == race_week.race_eve_day:
+            result.append(_make_rest(day, reason_codes=("RACE_EVE_REST_RESERVED",)))
+        elif day in day_to_session:
+            result.append(day_to_session[day])
+        else:
+            result.append(_make_rest(day))
+    return result, _merge_reason_codes(guard_codes, extra_codes)
+
+
 # ---------------------------------------------------------------------------
 # Day slot assignment
 # ---------------------------------------------------------------------------
 
 _ALL_DAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+_DAY_ORDER: dict[str, int] = {d: i for i, d in enumerate(_ALL_DAYS)}
+
+
+@dataclass(frozen=True)
+class _RaceWeekConfig:
+    race_date: date
+    race_day: str
+    race_distance_km: Optional[float]
+    training_days_before_race: tuple[str, ...]
+    allowed_training_days_before_race: tuple[str, ...]
+    race_eve_day: Optional[str]
+    max_pre_race_training_sessions: int
+
+
+@dataclass(frozen=True)
+class _CrossWeekRaceEveConfig:
+    race_date: date
+    race_eve_day: str
+
+
+def _resolve_race_distance_km(plan_goal: PlanGoal) -> Optional[float]:
+    goal_type = plan_goal.goal_type.value if hasattr(plan_goal.goal_type, "value") else str(plan_goal.goal_type)
+    if plan_goal.target_distance_km is not None:
+        return plan_goal.target_distance_km
+    return {
+        GoalType.five_k.value: DISTANCE_5K_KM,
+        GoalType.ten_k.value: DISTANCE_10K_KM,
+        GoalType.half_marathon.value: DISTANCE_HALF_MARATHON_KM,
+        GoalType.marathon.value: DISTANCE_MARATHON_KM,
+    }.get(goal_type)
+
+
+def _resolve_race_week_config(
+    *,
+    plan_goal: PlanGoal,
+    reference_date: date,
+) -> Optional[_RaceWeekConfig]:
+    race_date = plan_goal.race_date
+    if race_date is None:
+        return None
+
+    week_start = reference_date - timedelta(days=reference_date.weekday())
+    week_end = week_start + timedelta(days=6)
+    if not (week_start <= race_date <= week_end):
+        return None
+
+    race_day = _ALL_DAYS[race_date.weekday()]
+    race_eve_day = _ALL_DAYS[race_date.weekday() - 1] if race_date.weekday() > 0 else None
+    training_days_before_race = tuple(
+        day for day in _ALL_DAYS if _DAY_ORDER[day] < _DAY_ORDER[race_day]
+    )
+    allowed_training_days_before_race = tuple(
+        day for day in training_days_before_race if day != race_eve_day
+    )
+    return _RaceWeekConfig(
+        race_date=race_date,
+        race_day=race_day,
+        race_distance_km=_resolve_race_distance_km(plan_goal),
+        training_days_before_race=training_days_before_race,
+        allowed_training_days_before_race=allowed_training_days_before_race,
+        race_eve_day=race_eve_day,
+        max_pre_race_training_sessions=min(
+            _RACE_WEEK_SESSIONS,
+            len(allowed_training_days_before_race),
+        ),
+    )
+
+
+def _resolve_cross_week_race_eve_config(
+    *,
+    plan_goal: PlanGoal,
+    reference_date: date,
+) -> Optional[_CrossWeekRaceEveConfig]:
+    race_date = plan_goal.race_date
+    if race_date is None:
+        return None
+
+    week_start = reference_date - timedelta(days=reference_date.weekday())
+    week_end = week_start + timedelta(days=6)
+    if race_date != week_end + timedelta(days=1):
+        return None
+
+    return _CrossWeekRaceEveConfig(
+        race_date=race_date,
+        race_eve_day="sunday",
+    )
 
 
 def _get_skeleton(n: int) -> list[tuple[str, str]]:
@@ -510,9 +787,78 @@ def _select_evenly(candidates: list[str], n: int) -> list[str]:
     return [candidates[i] for i in sorted(dedup[:n])]
 
 
+def _merge_reason_codes(*groups: list[str] | tuple[str, ...]) -> tuple[str, ...]:
+    merged: list[str] = []
+    for group in groups:
+        for code in group:
+            if code not in merged:
+                merged.append(code)
+    return tuple(merged)
+
+
+def _constrain_race_week_training_session(session: WorkoutPrescription) -> WorkoutPrescription:
+    constrained_type = session.workout_type if session.workout_type in {"easy", "recovery"} else "easy"
+    if constrained_type == session.workout_type:
+        return session
+    return session.model_copy(
+        update={
+            "workout_type": constrained_type,
+            "intensity_class": _intensity_class(constrained_type),
+            "reason_codes": _merge_reason_codes(
+                session.reason_codes,
+                ("RACE_WEEK_PRE_EVENT_GUARD",),
+            ),
+        }
+    )
+
+
+def _build_race_week_training_sessions(
+    *,
+    intended_training_sessions: list[WorkoutPrescription],
+    race_week: _RaceWeekConfig,
+) -> tuple[list[WorkoutPrescription], list[str]]:
+    constrained = [
+        _constrain_race_week_training_session(session)
+        for session in intended_training_sessions
+    ]
+    kept = constrained[:race_week.max_pre_race_training_sessions]
+    codes = ["RACE_WEEK_PRE_EVENT_GUARD"]
+    if race_week.race_eve_day is not None:
+        codes.append("RACE_EVE_REST_RESERVED")
+    if len(constrained) > len(kept):
+        codes.extend(["RACE_WEEK_SESSION_CAP", "RACE_WEEK_CALENDAR_LIMITED"])
+    return kept, codes
+
+
+def _apply_cross_week_race_eve_guard(
+    *,
+    sessions: list[WorkoutPrescription],
+    cross_week_race_eve: Optional[_CrossWeekRaceEveConfig],
+) -> tuple[list[WorkoutPrescription], list[str]]:
+    if cross_week_race_eve is None:
+        return sessions, []
+
+    guarded_sessions: list[WorkoutPrescription] = []
+    changed = False
+    for session in sessions:
+        if session.day == cross_week_race_eve.race_eve_day:
+            guarded_sessions.append(
+                _make_rest(cross_week_race_eve.race_eve_day, reason_codes=("RACE_EVE_REST_RESERVED",))
+            )
+            changed = True
+        else:
+            guarded_sessions.append(session)
+
+    return guarded_sessions, (["RACE_EVE_REST_RESERVED"] if changed else [])
+
+
 def _assign_days(
     session_slots: list[str],  # ordered session types to fill (no rest)
     runner_profile: RunnerProfile,
+    *,
+    allowed_training_days: Optional[list[str]] = None,
+    reserved_day_to_type: Optional[dict[str, str]] = None,
+    capacity_reason_code: str = "SCHEDULE_CONSTRAINT_LIMITED",
 ) -> tuple[list[tuple[str, str]], list[str]]:
     """Assign session types to days, respecting RunnerProfile constraints.
 
@@ -535,6 +881,12 @@ def _assign_days(
     """
     n = len(session_slots)
     extra_reason_codes: list[str] = []
+    reserved_day_to_type = {
+        str(day).strip().lower(): str(workout_type).strip().lower()
+        for day, workout_type in (reserved_day_to_type or {}).items()
+        if str(day).strip().lower() in set(_ALL_DAYS)
+    }
+    reserved_days = set(reserved_day_to_type)
 
     # --- parse unavailable days (V1 contract: exact day-name match only) ----
     unavailable: set[str] = {
@@ -544,7 +896,21 @@ def _assign_days(
 
     # --- full candidate pool (7 days minus unavailable) ---------------------
     # max_days_per_week does NOT reduce this pool; it caps n instead.
-    candidates: list[str] = [d for d in _ALL_DAYS if d not in unavailable]
+    allowed_training_day_set = (
+        {
+            d.strip().lower()
+            for d in allowed_training_days
+            if isinstance(d, str) and d.strip().lower() in set(_ALL_DAYS)
+        }
+        if allowed_training_days is not None
+        else None
+    )
+    candidates: list[str] = [
+        d for d in _ALL_DAYS
+        if d not in unavailable
+        and d not in reserved_days
+        and (allowed_training_day_set is None or d in allowed_training_day_set)
+    ]
 
     # --- max_days_per_week: cap on SESSION COUNT, not on candidate days -----
     max_days = runner_profile.max_days_per_week
@@ -554,12 +920,12 @@ def _assign_days(
 
     # --- check feasibility --------------------------------------------------
     if n > len(candidates):
-        extra_reason_codes.append("SCHEDULE_CONSTRAINT_LIMITED")
+        extra_reason_codes.append(capacity_reason_code)
         n = len(candidates)
         session_slots = list(session_slots[:n])
 
     if n == 0:
-        return [(d, "rest") for d in _ALL_DAYS], extra_reason_codes
+        return [(d, reserved_day_to_type.get(d, "rest")) for d in _ALL_DAYS], extra_reason_codes
 
     # --- preferred_long_run_day ---------------------------------------------
     # If the week contains long_easy and the runner has a valid preferred day
@@ -568,19 +934,17 @@ def _assign_days(
     pref_long_day: Optional[str] = None
     if has_long_easy and runner_profile.preferred_long_run_day:
         pref = runner_profile.preferred_long_run_day.strip().lower()
-        if pref in set(_ALL_DAYS) and pref not in unavailable:
+        if pref in candidates:
             pref_long_day = pref
 
     # --- select n days ------------------------------------------------------
-    _day_order: dict[str, int] = {d: i for i, d in enumerate(_ALL_DAYS)}
-
     if n >= len(candidates):
         selected: list[str] = list(candidates)
     elif pref_long_day is not None:
         # Pin pref_long_day; select n-1 others evenly from remaining candidates.
         remaining = [d for d in candidates if d != pref_long_day]
         others = _select_evenly(remaining, n - 1)
-        selected = sorted(others + [pref_long_day], key=lambda d: _day_order[d])
+        selected = sorted(others + [pref_long_day], key=lambda d: _DAY_ORDER[d])
     else:
         selected = _select_evenly(candidates, n)
 
@@ -596,10 +960,10 @@ def _assign_days(
     # Quality adjacency rule: avoid quality on the calendar day immediately
     # before long_easy_day when another arrangement is possible.
     if long_easy_day is not None and len(non_long_days) >= 2 and "quality" in non_long_slots:
-        long_pos = _day_order[long_easy_day]
-        days_before_long = [d for d in non_long_days if _day_order[d] < long_pos]
+        long_pos = _DAY_ORDER[long_easy_day]
+        days_before_long = [d for d in non_long_days if _DAY_ORDER[d] < long_pos]
         if days_before_long:
-            adjacent_day = max(days_before_long, key=lambda d: _day_order[d])
+            adjacent_day = max(days_before_long, key=lambda d: _DAY_ORDER[d])
             adj_idx = non_long_days.index(adjacent_day)
             if non_long_slots[adj_idx] == "quality":
                 for i in range(len(non_long_slots)):
@@ -617,7 +981,9 @@ def _assign_days(
     for day, slot in zip(non_long_days, non_long_slots):
         day_to_type[day] = slot
 
-    result: list[tuple[str, str]] = [(d, day_to_type.get(d, "rest")) for d in _ALL_DAYS]
+    result: list[tuple[str, str]] = [
+        (d, reserved_day_to_type.get(d, day_to_type.get(d, "rest"))) for d in _ALL_DAYS
+    ]
     return result, extra_reason_codes
 
 
@@ -655,14 +1021,30 @@ def _order_session_slots(slots: list[str]) -> list[str]:
 # Session factory
 # ---------------------------------------------------------------------------
 
-def _make_rest(day: str) -> WorkoutPrescription:
+def _make_rest(day: str, reason_codes: tuple[str, ...] = ()) -> WorkoutPrescription:
     return WorkoutPrescription(
         day=day,
         workout_type="rest",
         intensity_class="rest",
         distance_km=None,
         duration_minutes=None,
-        reason_codes=(),
+        reason_codes=reason_codes,
+    )
+
+
+def _make_race(
+    day: str,
+    *,
+    distance_km: Optional[float],
+    reason_codes: tuple[str, ...] = ("RACE_DAY_RESERVED",),
+) -> WorkoutPrescription:
+    return WorkoutPrescription(
+        day=day,
+        workout_type="race",
+        intensity_class="event",
+        distance_km=distance_km,
+        duration_minutes=None,
+        reason_codes=reason_codes,
     )
 
 
@@ -705,10 +1087,11 @@ def _build_distance_sessions(
     goal_type: str,
     allow_intensity: bool,
     base_reason_codes: tuple[str, ...],
+    race_distance_km: Optional[float] = None,
 ) -> list[WorkoutPrescription]:
     """Build sessions for a distance-based week from a skeleton."""
     long_run_km = _compute_long_run_km(target_km, goal_type)
-    running_slots = [(d, t) for d, t in skeleton if t != "rest"]
+    running_slots = [(d, t) for d, t in skeleton if _is_training_workout_type(t)]
     has_long = any(t == "long_easy" for _, t in running_slots)
     long_km = long_run_km if has_long else 0.0
     remaining_km = max(0.0, target_km - long_km)
@@ -722,6 +1105,9 @@ def _build_distance_sessions(
     for day, slot_type in skeleton:
         if slot_type == "rest":
             sessions.append(_make_rest(day))
+            continue
+        if slot_type == "race":
+            sessions.append(_make_race(day, distance_km=race_distance_km))
             continue
 
         resolved, quality_used = _apply_intensity_rule(slot_type, allow_intensity, quality_used)
@@ -751,10 +1137,11 @@ def _build_duration_sessions(
     goal_type: str,
     allow_intensity: bool,
     base_reason_codes: tuple[str, ...],
+    race_distance_km: Optional[float] = None,
 ) -> list[WorkoutPrescription]:
     """Build sessions for a duration-based week from a skeleton."""
     long_run_minutes = _compute_long_run_duration(total_minutes, goal_type)
-    running_slots = [(d, t) for d, t in skeleton if t != "rest"]
+    running_slots = [(d, t) for d, t in skeleton if _is_training_workout_type(t)]
     has_long = any(t == "long_easy" for _, t in running_slots)
     long_min = long_run_minutes if has_long else 0
     remaining_min = max(0, total_minutes - long_min)
@@ -768,6 +1155,9 @@ def _build_duration_sessions(
     for day, slot_type in skeleton:
         if slot_type == "rest":
             sessions.append(_make_rest(day))
+            continue
+        if slot_type == "race":
+            sessions.append(_make_race(day, distance_km=race_distance_km))
             continue
 
         resolved, quality_used = _apply_intensity_rule(slot_type, allow_intensity, quality_used)
@@ -796,6 +1186,7 @@ def _build_reprise_sessions_duration(
     allow_run_walk: bool,
     base_reason_codes: tuple[str, ...],
     runner_profile: RunnerProfile,
+    race_week: Optional[_RaceWeekConfig] = None,
 ) -> tuple[list[WorkoutPrescription], list[str]]:
     """Build a reprise (deep_reprise / partial_reprise) duration-based week.
 
@@ -813,8 +1204,17 @@ def _build_reprise_sessions_duration(
     # Delegate day selection to the common scheduler.
     # Reprise sessions are all "easy" from a scheduling perspective.
     slots = ["easy"] * n
-    skeleton, extra_codes = _assign_days(slots, runner_profile)
-    active_days = [d for d, t in skeleton if t != "rest"]
+    if race_week is not None:
+        skeleton, extra_codes = _assign_days(
+            slots,
+            runner_profile,
+            allowed_training_days=list(race_week.training_days_before_race),
+            reserved_day_to_type={race_week.race_day: "race"},
+            capacity_reason_code="RACE_WEEK_CALENDAR_LIMITED",
+        )
+    else:
+        skeleton, extra_codes = _assign_days(slots, runner_profile)
+    active_days = [d for d, t in skeleton if _is_training_workout_type(t)]
     actual_n = len(active_days)  # may be < n if constraints further reduced it
 
     # Split durations using the actual session count after constraint application.
@@ -828,8 +1228,11 @@ def _build_reprise_sessions_duration(
     min_dur = min(durations_sorted) if durations_sorted else 0
 
     sessions: list[WorkoutPrescription] = []
+    skeleton_map = dict(skeleton)
     for day in _ALL_DAYS:
-        if day not in day_to_dur:
+        if skeleton_map.get(day) == "race":
+            sessions.append(_make_race(day, distance_km=race_week.race_distance_km if race_week else None))
+        elif day not in day_to_dur:
             sessions.append(_make_rest(day))
         else:
             dur = day_to_dur[day]
@@ -847,6 +1250,7 @@ def _build_reprise_sessions_distance(
     n_sessions: int,
     base_reason_codes: tuple[str, ...],
     runner_profile: RunnerProfile,
+    race_week: Optional[_RaceWeekConfig] = None,
 ) -> tuple[list[WorkoutPrescription], list[str]]:
     """Build a partial_reprise distance-based week: easy-only, no quality.
 
@@ -866,8 +1270,17 @@ def _build_reprise_sessions_distance(
 
     # Delegate day selection to the common scheduler.
     slots = ["easy"] * n
-    skeleton, extra_codes = _assign_days(slots, runner_profile)
-    active_days = [d for d, t in skeleton if t != "rest"]
+    if race_week is not None:
+        skeleton, extra_codes = _assign_days(
+            slots,
+            runner_profile,
+            allowed_training_days=list(race_week.training_days_before_race),
+            reserved_day_to_type={race_week.race_day: "race"},
+            capacity_reason_code="RACE_WEEK_CALENDAR_LIMITED",
+        )
+    else:
+        skeleton, extra_codes = _assign_days(slots, runner_profile)
+    active_days = [d for d, t in skeleton if _is_training_workout_type(t)]
     actual_n = len(active_days)  # may be < n if constraints further reduced it
 
     splits = splits_map.get(actual_n, splits_map.get(min(actual_n, 4), [1.0]))
@@ -878,8 +1291,11 @@ def _build_reprise_sessions_distance(
     min_km = min(distances_sorted) if distances_sorted else 0.0
 
     sessions: list[WorkoutPrescription] = []
+    skeleton_map = dict(skeleton)
     for day in _ALL_DAYS:
-        if day not in day_to_km:
+        if skeleton_map.get(day) == "race":
+            sessions.append(_make_race(day, distance_km=race_week.race_distance_km if race_week else None))
+        elif day not in day_to_km:
             sessions.append(_make_rest(day))
         else:
             km = day_to_km[day]
@@ -929,6 +1345,7 @@ def build_weekly_plan(
     plan_goal: PlanGoal,
     periodization: PeriodizationSnapshot,
     reference_date: date,
+    target_capability_time_seconds: Optional[int] = None,
 ) -> WeeklyPlan:
     """Build an immutable WeeklyPlan from explicit V2 inputs.
 
@@ -958,48 +1375,91 @@ def build_weekly_plan(
     continuity = weekly_target.continuity_state
     goal_type = plan_goal.goal_type.value if hasattr(plan_goal.goal_type, "value") else str(plan_goal.goal_type)
     phase = periodization.phase
+    race_week = _resolve_race_week_config(plan_goal=plan_goal, reference_date=reference_date)
+    cross_week_race_eve = _resolve_cross_week_race_eve_config(
+        plan_goal=plan_goal,
+        reference_date=reference_date,
+    )
 
     reason_codes: list[str] = list(weekly_target.reason_codes)
+    if race_week is not None:
+        reason_codes.append("RACE_DAY_RESERVED")
+    target_time_profile = _resolve_target_time_profile(
+        plan_goal,
+        target_capability_time_seconds=target_capability_time_seconds,
+    )
 
     # --- route by continuity state -----------------------------------------
     if continuity in ("no_history", "deep_reprise"):
         sessions, reason_codes = _route_reprise_deep(
-            weekly_target, n_sessions, allow_intensity, goal_type, reason_codes, runner_profile
+            weekly_target, n_sessions, allow_intensity, goal_type, reason_codes, runner_profile, race_week
         )
 
     elif continuity == "partial_reprise":
         sessions, reason_codes = _route_partial_reprise(
-            weekly_target, n_sessions, goal_type, reason_codes, runner_profile
+            weekly_target, n_sessions, goal_type, reason_codes, runner_profile, race_week
         )
 
     else:
         # reprise_exit or normal
         skeleton = _get_skeleton(n_sessions)
         skeleton = _apply_phase_modulation(skeleton, phase, allow_intensity)
-        # Re-assign days respecting RunnerProfile constraints
+        if (
+            target_basis == "distance"
+            and continuity == "normal"
+            and phase in (PeriodizationPhase.base, PeriodizationPhase.build, PeriodizationPhase.specific)
+        ):
+            skeleton, target_time_reason = _apply_target_time_modulation(
+                skeleton,
+                target_time_profile=target_time_profile,
+                allow_intensity=allow_intensity,
+            )
+            if target_time_reason:
+                reason_codes.append(target_time_reason)
         session_types = [t for _, t in skeleton if t != "rest"]
-        skeleton, constraint_codes = _assign_days(session_types, runner_profile)
-        reason_codes = list(reason_codes) + constraint_codes
-        sessions, reason_codes = _route_normal(
-            weekly_target, skeleton, goal_type, allow_intensity, reason_codes, phase
-        )
+        if race_week is not None:
+            intended_training_sessions = _build_intended_normal_training_sessions(
+                weekly_target=weekly_target,
+                session_types=session_types,
+                goal_type=goal_type,
+                allow_intensity=allow_intensity,
+            )
+            sessions, constraint_codes = _reduce_to_race_week_calendar(
+                intended_training_sessions=intended_training_sessions,
+                runner_profile=runner_profile,
+                race_week=race_week,
+            )
+            reason_codes = list(reason_codes) + list(constraint_codes)
+        else:
+            skeleton, constraint_codes = _assign_days(session_types, runner_profile)
+            reason_codes = list(reason_codes) + constraint_codes
+            sessions, reason_codes = _route_normal(
+                weekly_target, skeleton, goal_type, allow_intensity, reason_codes, phase,
+                race_distance_km=None,
+            )
+
+    sessions, cross_week_codes = _apply_cross_week_race_eve_guard(
+        sessions=sessions,
+        cross_week_race_eve=cross_week_race_eve,
+    )
+    reason_codes = _merge_reason_codes(reason_codes, cross_week_codes)
 
     # --- ensure immutability of session list --------------------------------
     immutable_sessions = tuple(sessions)
 
     # --- compute plan totals ------------------------------------------------
-    running_sessions = [s for s in immutable_sessions if s.workout_type != "rest"]
-    session_count = len(running_sessions)
+    training_sessions = [s for s in immutable_sessions if _is_training_session(s)]
+    session_count = len(training_sessions)
 
     if target_basis == "distance":
         planned_km = round(
-            sum(s.distance_km for s in running_sessions if s.distance_km is not None), 1
+            sum(s.distance_km for s in training_sessions if s.distance_km is not None), 1
         )
         planned_duration_minutes = None
     else:
         planned_km = None
         planned_duration_minutes = sum(
-            s.duration_minutes for s in running_sessions if s.duration_minutes is not None
+            s.duration_minutes for s in training_sessions if s.duration_minutes is not None
         )
 
     return WeeklyPlan(
@@ -1025,6 +1485,7 @@ def _route_reprise_deep(
     goal_type: str,
     reason_codes: list[str],
     runner_profile: RunnerProfile,
+    race_week: Optional[_RaceWeekConfig] = None,
 ) -> tuple[list[WorkoutPrescription], list[str]]:
     """Route for deep_reprise / no_history: duration-based, easy-only, run/walk allowed."""
     reason_codes = list(reason_codes)
@@ -1032,26 +1493,56 @@ def _route_reprise_deep(
 
     if weekly_target.target_basis == "duration" and weekly_target.target_duration_minutes:
         total_minutes = weekly_target.target_duration_minutes
-        sessions, constraint_codes = _build_reprise_sessions_duration(
-            total_minutes=total_minutes,
-            n_sessions=min(n_sessions, 3),
-            allow_run_walk=True,
-            base_reason_codes=("reprise_easy_only",),
-            runner_profile=runner_profile,
-        )
-        reason_codes = reason_codes + constraint_codes
-        sessions = _correct_rounding_drift_duration(sessions, total_minutes)
+        capped_sessions = min(n_sessions, 3)
+        if race_week is not None:
+            intended_training_sessions = _build_intended_reprise_training_sessions(
+                weekly_target=weekly_target,
+                n_sessions=capped_sessions,
+                allow_run_walk=True,
+                base_reason_codes=("reprise_easy_only",),
+            )
+            sessions, constraint_codes = _reduce_to_race_week_calendar(
+                intended_training_sessions=intended_training_sessions,
+                runner_profile=runner_profile,
+                race_week=race_week,
+            )
+        else:
+            sessions, constraint_codes = _build_reprise_sessions_duration(
+                total_minutes=total_minutes,
+                n_sessions=capped_sessions,
+                allow_run_walk=True,
+                base_reason_codes=("reprise_easy_only",),
+                runner_profile=runner_profile,
+                race_week=None,
+            )
+            sessions = _correct_rounding_drift_duration(sessions, total_minutes)
+        reason_codes = reason_codes + list(constraint_codes)
     else:
         # Fallback: distance-based easy-only (no_history with distance target)
         target_km = weekly_target.target_km or 0.0
-        sessions, constraint_codes = _build_reprise_sessions_distance(
-            target_km=target_km,
-            n_sessions=min(n_sessions, 3),
-            base_reason_codes=("reprise_easy_only",),
-            runner_profile=runner_profile,
-        )
-        reason_codes = reason_codes + constraint_codes
-        sessions = _correct_rounding_drift_distance(sessions, target_km)
+        capped_sessions = min(n_sessions, 3)
+        if race_week is not None:
+            intended_training_sessions = _build_intended_reprise_training_sessions(
+                weekly_target=weekly_target,
+                n_sessions=capped_sessions,
+                allow_run_walk=False,
+                base_reason_codes=("reprise_easy_only",),
+            )
+            sessions, constraint_codes = _reduce_to_race_week_calendar(
+                intended_training_sessions=intended_training_sessions,
+                runner_profile=runner_profile,
+                race_week=race_week,
+            )
+        else:
+            sessions, constraint_codes = _build_reprise_sessions_distance(
+                target_km=target_km,
+                n_sessions=capped_sessions,
+                base_reason_codes=("reprise_easy_only",),
+                runner_profile=runner_profile,
+                race_week=None,
+            )
+            sessions = _correct_rounding_drift_distance(sessions, target_km)
+        reason_codes = reason_codes + list(constraint_codes)
 
     return sessions, reason_codes
 
@@ -1062,6 +1553,7 @@ def _route_partial_reprise(
     goal_type: str,
     reason_codes: list[str],
     runner_profile: RunnerProfile,
+    race_week: Optional[_RaceWeekConfig] = None,
 ) -> tuple[list[WorkoutPrescription], list[str]]:
     """Route for partial_reprise: easy-only, distance or duration."""
     reason_codes = list(reason_codes)
@@ -1069,25 +1561,55 @@ def _route_partial_reprise(
 
     if weekly_target.target_basis == "duration" and weekly_target.target_duration_minutes:
         total_minutes = weekly_target.target_duration_minutes
-        sessions, constraint_codes = _build_reprise_sessions_duration(
-            total_minutes=total_minutes,
-            n_sessions=min(n_sessions, 4),
-            allow_run_walk=False,
-            base_reason_codes=("reprise_easy_only",),
-            runner_profile=runner_profile,
-        )
-        reason_codes = reason_codes + constraint_codes
-        sessions = _correct_rounding_drift_duration(sessions, total_minutes)
+        capped_sessions = min(n_sessions, 4)
+        if race_week is not None:
+            intended_training_sessions = _build_intended_reprise_training_sessions(
+                weekly_target=weekly_target,
+                n_sessions=capped_sessions,
+                allow_run_walk=False,
+                base_reason_codes=("reprise_easy_only",),
+            )
+            sessions, constraint_codes = _reduce_to_race_week_calendar(
+                intended_training_sessions=intended_training_sessions,
+                runner_profile=runner_profile,
+                race_week=race_week,
+            )
+        else:
+            sessions, constraint_codes = _build_reprise_sessions_duration(
+                total_minutes=total_minutes,
+                n_sessions=capped_sessions,
+                allow_run_walk=False,
+                base_reason_codes=("reprise_easy_only",),
+                runner_profile=runner_profile,
+                race_week=None,
+            )
+            sessions = _correct_rounding_drift_duration(sessions, total_minutes)
+        reason_codes = reason_codes + list(constraint_codes)
     else:
         target_km = weekly_target.target_km or 0.0
-        sessions, constraint_codes = _build_reprise_sessions_distance(
-            target_km=target_km,
-            n_sessions=min(n_sessions, 4),
-            base_reason_codes=("reprise_easy_only",),
-            runner_profile=runner_profile,
-        )
-        reason_codes = reason_codes + constraint_codes
-        sessions = _correct_rounding_drift_distance(sessions, target_km)
+        capped_sessions = min(n_sessions, 4)
+        if race_week is not None:
+            intended_training_sessions = _build_intended_reprise_training_sessions(
+                weekly_target=weekly_target,
+                n_sessions=capped_sessions,
+                allow_run_walk=False,
+                base_reason_codes=("reprise_easy_only",),
+            )
+            sessions, constraint_codes = _reduce_to_race_week_calendar(
+                intended_training_sessions=intended_training_sessions,
+                runner_profile=runner_profile,
+                race_week=race_week,
+            )
+        else:
+            sessions, constraint_codes = _build_reprise_sessions_distance(
+                target_km=target_km,
+                n_sessions=capped_sessions,
+                base_reason_codes=("reprise_easy_only",),
+                runner_profile=runner_profile,
+                race_week=None,
+            )
+            sessions = _correct_rounding_drift_distance(sessions, target_km)
+        reason_codes = reason_codes + list(constraint_codes)
 
     return sessions, reason_codes
 
@@ -1099,6 +1621,7 @@ def _route_normal(
     allow_intensity: bool,
     reason_codes: list[str],
     phase: PeriodizationPhase,
+    race_distance_km: Optional[float] = None,
 ) -> tuple[list[WorkoutPrescription], list[str]]:
     """Route for reprise_exit / normal weeks."""
     reason_codes = list(reason_codes)
@@ -1115,6 +1638,7 @@ def _route_normal(
             goal_type=goal_type,
             allow_intensity=allow_intensity,
             base_reason_codes=(),
+            race_distance_km=race_distance_km,
         )
         sessions = _correct_rounding_drift_distance(sessions, target_km)
 
@@ -1126,6 +1650,7 @@ def _route_normal(
             goal_type=goal_type,
             allow_intensity=allow_intensity,
             base_reason_codes=(),
+            race_distance_km=race_distance_km,
         )
         sessions = _correct_rounding_drift_duration(sessions, total_minutes)
     else:

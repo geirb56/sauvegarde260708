@@ -1,8 +1,8 @@
 /**
- * OAuthButtons — Google and Apple sign-in buttons.
+ * OAuthButtons — Google sign-in button.
  *
  * Handles the entire OAuth flow:
- *   1. Loads the provider SDK (Google GSI / Apple JS SDK) on mount.
+ *   1. Loads the Google GSI SDK on mount.
  *   2. Triggers the provider's auth dialog when the button is clicked.
  *   3. Receives the provider's ID token client-side.
  *   4. Sends only the ID token to the RunIndex backend for server-side
@@ -11,11 +11,10 @@
  *   6. Calls loginWithToken() to update AuthContext.
  *
  * Security notes:
- *   - REACT_APP_GOOGLE_CLIENT_ID and REACT_APP_APPLE_CLIENT_ID are public
- *     OAuth identifiers, not secrets.  They are safe to include in the
- *     frontend bundle.
+ *   - REACT_APP_GOOGLE_CLIENT_ID is a public OAuth identifier, not a secret.
+ *     It is safe to include in the frontend bundle.
  *   - The frontend never reads claims from the provider ID token.
- *   - No Google / Apple session is created on the client side.
+ *   - No Google session is created on the client side.
  */
 
 import { useEffect, useState, useCallback } from "react";
@@ -30,10 +29,6 @@ import { getAuthErrorMessage } from "@/lib/authErrors";
 // ── Configuration (public IDs, not secrets) ───────────────────────────────────
 
 const GOOGLE_CLIENT_ID = process.env.REACT_APP_GOOGLE_CLIENT_ID || "";
-const APPLE_CLIENT_ID = process.env.REACT_APP_APPLE_CLIENT_ID || "";
-const APPLE_REDIRECT_URI =
-  typeof window !== "undefined" ? window.location.origin : "";
-
 async function fetchOAuthChallenge(provider) {
   const res = await axios.post(`${API_BASE_URL}/auth/oauth/challenge/${provider}`);
   return res.data;
@@ -135,96 +130,6 @@ function useGoogleSignIn({ onSuccess, onError, t }) {
   return { signIn, ready: ready && !!GOOGLE_CLIENT_ID, loading };
 }
 
-// ── Apple Sign-In ─────────────────────────────────────────────────────────────
-
-function useAppleSignIn({ onSuccess, onError, t }) {
-  const [ready, setReady] = useState(false);
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    if (!APPLE_CLIENT_ID) return;
-
-    if (document.getElementById("apple-signin-script")) {
-      if (window.AppleID) setReady(true);
-      return;
-    }
-
-    const script = document.createElement("script");
-    script.id = "apple-signin-script";
-    script.src =
-      "https://appleid.cdn-apple.com/appleauth/static/jsapi/appleid/1/en_US/appleid.auth.js";
-    script.async = true;
-    script.defer = true;
-    script.onload = () => {
-      setReady(true);
-    };
-    script.onerror = () => {
-      onError(t("auth.appleLoadFailed"));
-    };
-    document.head.appendChild(script);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const signIn = useCallback(async () => {
-    if (!APPLE_CLIENT_ID) {
-      onError(t("auth.appleNotConfigured"));
-      return;
-    }
-    if (!window.AppleID?.auth) {
-      onError(t("auth.appleUnavailable"));
-      return;
-    }
-
-    setLoading(true);
-    try {
-    const challenge = await fetchOAuthChallenge("apple");
-    window.AppleID.auth.init({
-      clientId: APPLE_CLIENT_ID,
-      scope: "name email",
-      redirectURI: APPLE_REDIRECT_URI,
-      usePopup: true,
-      state: challenge.state,
-      nonce: challenge.nonce,
-    });
-      const result = await window.AppleID.auth.signIn();
-      const idToken = result?.authorization?.id_token;
-      const returnedState = result?.authorization?.state || challenge.state;
-      const email = result?.user?.email || null;
-
-      if (!idToken) {
-        onError(t("auth.appleNoToken"));
-        return;
-      }
-      if (returnedState !== challenge.state) {
-        onError(t("auth.appleFailed"));
-        return;
-      }
-
-      const res = await axios.post(`${API_BASE_URL}/auth/apple`, {
-        id_token: idToken,
-        email: email,
-        state: challenge.state,
-      });
-      onSuccess(res.data);
-    } catch (err) {
-      if (err?.error === "popup_closed_by_user" || err?.error === "user_cancelled_authorize") {
-        onError(t("auth.appleCancelled"));
-      } else if (err?.response) {
-        onError(getAuthErrorMessage(t, err, "auth.appleFailed"));
-      } else if (err?.error) {
-        // Apple JS SDK error codes
-        onError(t("auth.appleFailed"));
-      } else {
-        onError(t("auth.appleFailed"));
-      }
-    } finally {
-      setLoading(false);
-    }
-  }, [onError, onSuccess, t]);
-
-  return { signIn, ready: ready && !!APPLE_CLIENT_ID, loading };
-}
-
 // ── OAuthButtons component ────────────────────────────────────────────────────
 
 /**
@@ -244,7 +149,6 @@ export default function OAuthButtons({ onError, onSuccess }) {
   );
 
   const google = useGoogleSignIn({ onSuccess: handleSuccess, onError, t });
-  const apple = useAppleSignIn({ onSuccess: handleSuccess, onError, t });
 
   return (
     <div className="space-y-2">
@@ -262,22 +166,6 @@ export default function OAuthButtons({ onError, onSuccess }) {
           <GoogleIcon />
         )}
         {t("auth.continueWithGoogle")}
-      </Button>
-
-      <Button
-        type="button"
-        variant="outline"
-        className="w-full flex items-center justify-center gap-2"
-        onClick={apple.signIn}
-        disabled={apple.loading}
-        aria-label={t("auth.continueWithApple")}
-      >
-        {apple.loading ? (
-          <Loader2 className="w-4 h-4 animate-spin" />
-        ) : (
-          <AppleIcon />
-        )}
-        {t("auth.continueWithApple")}
       </Button>
     </div>
   );
@@ -303,17 +191,6 @@ function GoogleIcon() {
       <path
         fill="#34A853"
         d="M24 48c6.2 0 11.4-2 15.2-5.5l-7.5-5.8c-2 1.4-4.6 2.2-7.7 2.2-6.3 0-11.7-3.7-13.5-9l-7.8 6C6.6 42.6 14.6 48 24 48z"
-      />
-    </svg>
-  );
-}
-
-function AppleIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 814 1000" aria-hidden="true">
-      <path
-        fill="currentColor"
-        d="M788.1 340.9c-5.8 4.5-108.2 62.2-108.2 190.5 0 148.4 130.3 200.9 134.2 202.2-.6 3.2-20.7 71.9-68.7 141.9-42.8 61.6-87.5 123.1-155.5 123.1s-85.5-39.5-164-39.5c-76 0-103.7 40.8-165.9 40.8s-105-57.8-155.5-127.4C46 376.7 0 209.4 0 166.7C0 69.4 64.8 15.9 148.4 15.9 195.7 15.9 239.8 31 271.8 56.8c.1 0 71.7 46.8 133.8 46.8 57.8 0 119.5-37.7 157-37.7zm-8.7-93.9c-36.2 15.9-68.1 41.2-95.5 73-24.4 27.5-55.7 76-55.7 140.1 0 4 .3 8 .3 8h4c2.9 0 6.2-.3 9.2-.3 71.2 0 121.4-38.8 140.2-65.2 23.1-33.1 31.5-71.2 31.5-108.5 0-10.8-.8-21.8-2.3-31.4-12 3.4-21.4 7.9-31.7 13.3z"
       />
     </svg>
   );

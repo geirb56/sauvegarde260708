@@ -9,45 +9,61 @@ const API = API_BASE_URL;
 
 const SubscriptionContext = createContext(null);
 
+// Fail-closed defaults when /user/features is unavailable
+const FEATURES_FAIL_CLOSED = {
+  plan: "free",
+  trial_active: false,
+  has_premium_access: false,
+  trial_days_remaining: null,
+  feature_access: {},
+};
+
 export function SubscriptionProvider({ children }) {
   const { lang } = useLanguage();
   const { user } = useAuth();
   const userId = user?.id;
   const [subscription, setSubscription] = useState(null);
+  const [features, setFeatures] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
   const fetchSubscription = useCallback(async () => {
     if (!userId) {
       setLoading(false);
-      return;
+      return { accessRefreshSucceeded: false };
     }
     try {
-      const res = await axios.get(`${API}/subscription/info?language=${lang}`);
-      setSubscription(res.data);
-      setError(null);
+      // /user/features is the canonical authority for access rights (fail closed)
+      const [featuresRes, infoRes] = await Promise.allSettled([
+        axios.get(`${API}/user/features`),
+        axios.get(`${API}/subscription/info?language=${lang}`),
+      ]);
+      const accessRefreshSucceeded = featuresRes.status === "fulfilled";
+
+      if (accessRefreshSucceeded) {
+        setFeatures(featuresRes.value.data);
+        setError(null);
+      } else {
+        console.error("Error fetching /user/features:", featuresRes.reason);
+        // Fail closed: treat as free until backend confirms access
+        setFeatures(FEATURES_FAIL_CLOSED);
+        setError(featuresRes.reason);
+      }
+
+      if (infoRes.status === "fulfilled") {
+        setSubscription(infoRes.value.data);
+      } else {
+        // Display/billing info unavailable — not an access decision
+        setSubscription(null);
+      }
+
+      return { accessRefreshSucceeded };
     } catch (err) {
       console.error("Error fetching subscription:", err);
       setError(err);
-      // Fail-closed on error: no premium access granted until backend confirms status.
-      // Never default to trial/premium — the frontend MUST NOT decide access.
-      setSubscription({
-        status: "free",
-        features: {
-          training_plan: false,
-          plan_adaptation: false,
-          session_analysis: false,
-          sync_enabled: false,
-          api_access: false,
-          llm_access: false,
-          full_access: false
-        },
-        display: {
-          label: lang === "fr" ? "Accès limité" : lang === "es" ? "Acceso limitado" : "Limited access",
-          badge: lang === "fr" ? "LIMITÉ" : lang === "es" ? "LIMITADO" : "LIMITED",
-          badge_color: "gray"
-        }
-      });
+      setFeatures(FEATURES_FAIL_CLOSED);
+      setSubscription(null);
+      return { accessRefreshSucceeded: false };
     } finally {
       setLoading(false);
     }
@@ -57,33 +73,36 @@ export function SubscriptionProvider({ children }) {
     fetchSubscription();
   }, [fetchSubscription]);
 
-  const refreshSubscription = useCallback(() => {
+  const refreshSubscription = useCallback(async () => {
     setLoading(true);
-    fetchSubscription();
+    return fetchSubscription();
   }, [fetchSubscription]);
 
-  // Helper functions
-  const isActive = subscription?.status !== "free";
-  const isTrial = subscription?.status === "trial";
-  const isPremium = subscription?.status === "premium";
-  const isFree = subscription?.status === "free";
+  // Access authority: derived exclusively from /user/features (fail closed)
+  const hasPremiumAccess = features?.has_premium_access ?? false;
+  const isTrial = features?.trial_active ?? false;
+  const isPremium = hasPremiumAccess && !isTrial;
+  const isFree = !hasPremiumAccess;
+  const isActive = hasPremiumAccess;
 
   const hasFeature = (feature) => {
-    return subscription?.features?.[feature] ?? false;
+    // Authority: /user/features exclusively. Fail closed — no fallback to subscription.features.
+    return features?.feature_access?.[feature] ?? false;
   };
 
-  const trialDaysRemaining = subscription?.trial_days_remaining;
+  const trialDaysRemaining = features?.trial_days_remaining ?? null;
 
   const value = {
     subscription,
     loading,
     error,
     refreshSubscription,
-    // Status helpers
+    // Status helpers (authority: /user/features)
     isActive,
     isTrial,
     isPremium,
     isFree,
+    hasPremiumAccess,
     // Feature helpers
     hasFeature,
     canAccessPlan: hasFeature("training_plan"),
@@ -91,7 +110,7 @@ export function SubscriptionProvider({ children }) {
     canSync: hasFeature("sync_enabled"),
     // Trial info
     trialDaysRemaining,
-    // Display info
+    // Display info (from /subscription/info, for billing UI only)
     statusLabel: subscription?.display?.label,
     statusBadge: subscription?.display?.badge,
     statusBadgeColor: subscription?.display?.badge_color

@@ -26,6 +26,10 @@ PR133 exposes:           DailyAdaptationAction, DailyAdaptationResult,
                          build_daily_adaptation.
 PR134 exposes:           WeeklyReconciliationAction, WeeklyReconciliationResult,
                          build_weekly_reconciliation.
+PR230 exposes:           MatchingStatus, AdherenceStatus, PrescribedWorkout,
+                         ObservedActivity, PerformedWorkout,
+                         PerformedWorkoutLedger, build_performed_workouts,
+                         to_observed_activity.
 """
 
 from .domain_activity import DomainActivity
@@ -95,6 +99,16 @@ from .weekly_reconciliation import (
     WeeklyReconciliationResult,
     build_weekly_reconciliation,
 )
+from .performed_workout import (
+    AdherenceStatus,
+    MatchingStatus,
+    ObservedActivity,
+    PerformedWorkout,
+    PerformedWorkoutLedger,
+    PrescribedWorkout,
+    build_performed_workouts,
+    to_observed_activity,
+)
 
 __all__ = [
     "DomainActivity",
@@ -155,4 +169,12 @@ __all__ = [
     "WeeklyReconciliationAction",
     "WeeklyReconciliationResult",
     "build_weekly_reconciliation",
+    "AdherenceStatus",
+    "MatchingStatus",
+    "ObservedActivity",
+    "PerformedWorkout",
+    "PerformedWorkoutLedger",
+    "PrescribedWorkout",
+    "build_performed_workouts",
+    "to_observed_activity",
 ]

@@ -25,6 +25,7 @@ import select
 import shutil
 import subprocess
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
@@ -43,6 +44,16 @@ class GccliUnavailable(GccliError):
 
 class GccliMfaRequired(GccliError):
     """Raised when login requires an MFA code we don't have."""
+
+
+@dataclass(frozen=True)
+class DailyMetricsFetchResult:
+    metrics: List[Dict]
+    status: str
+    endpoint_success_count: int
+    endpoint_failure_count: int
+    endpoint_total_count: int
+    endpoint_failures: List[Dict[str, str]]
 
 
 class GccliRunner:
@@ -78,7 +89,10 @@ class GccliRunner:
             env["GCCLI_ACCOUNT"] = account
         return env
 
-    def _run_json(self, args: List[str], account: Optional[str] = None):
+    def _run_json(
+        self, args: List[str], account: Optional[str] = None,
+        single_attempt: bool = False,
+    ):
         """Run a gccli data command with per-call timeout + bounded retries.
 
         Each invocation is a fresh subprocess with its own env (isolated per
@@ -88,8 +102,9 @@ class GccliRunner:
         self._ensure_available()
         cmd = [self.gccli_path] + args + ["-j"]
         last_err: Optional[Exception] = None
+        attempts = 1 if single_attempt else self.max_retries
 
-        for attempt in range(1, self.max_retries + 1):
+        for attempt in range(1, attempts + 1):
             try:
                 cp = subprocess.run(
                     cmd,
@@ -120,11 +135,11 @@ class GccliRunner:
             except GccliError as exc:
                 last_err = exc
 
-            if attempt < self.max_retries:
+            if attempt < attempts:
                 backoff = min(2 ** attempt, 8)
                 logger.warning(
                     "[gccli] transient failure (attempt %s/%s) for '%s'; retrying in %ss",
-                    attempt, self.max_retries, " ".join(args), backoff,
+                    attempt, attempts, " ".join(args), backoff,
                 )
                 time.sleep(backoff)
 
@@ -215,6 +230,27 @@ class GccliRunner:
         raise GccliError("Garmin authentication failed")
 
     # -------------------------------------------------------------- data fetch
+    def fetch_activity_splits(self, activity_id: str, account: str):
+        from .activity_laps import validate_activity_id
+
+        activity_id = validate_activity_id(activity_id)
+        if not account:
+            raise GccliError("Garmin account required")
+        return self._run_json(
+            ["activity", "splits", activity_id], account=account, single_attempt=True,
+        )
+
+    def fetch_activity_typed_splits(self, activity_id: str, account: str):
+        from .activity_ids import normalize_activity_id
+
+        activity_id = normalize_activity_id(activity_id)
+        if not account:
+            raise GccliError("Garmin account required")
+        # The reliable queue owns retries; one command fits the worker lease.
+        return self._run_json(
+            ["activity", "typed-splits", activity_id], account=account, single_attempt=True,
+        )
+
     def fetch_activities(
         self, limit: int = 20, start: int = 0, account: Optional[str] = None
     ) -> List[Dict]:
@@ -233,9 +269,42 @@ class GccliRunner:
         account: Optional[str] = None,
     ) -> List[Dict]:
         """Fetch daily gccli payloads and normalize via GarminDailyMetrics."""
+        return self.fetch_daily_metrics_result(
+            days=days,
+            start_days_ago=start_days_ago,
+            account=account,
+        ).metrics
+
+    def fetch_daily_metrics_result(
+        self,
+        days: int = 7,
+        start_days_ago: int = 1,
+        account: Optional[str] = None,
+    ) -> DailyMetricsFetchResult:
+        """Fetch daily metrics with explicit technical status classification."""
         metrics: List[Dict] = []
+        endpoint_failures: List[Dict[str, str]] = []
+        endpoint_success_count = 0
+        endpoint_failure_count = 0
+        endpoint_total_count = max(days, 0) * 3
         now = datetime.now(timezone.utc)
         end_days_ago = start_days_ago + max(days, 0)
+        if not self.is_authenticated(account):
+            return DailyMetricsFetchResult(
+                metrics=[],
+                status="session_unavailable",
+                endpoint_success_count=0,
+                endpoint_failure_count=0,
+                endpoint_total_count=endpoint_total_count,
+                endpoint_failures=[],
+            )
+
+        def _is_session_error(exc: Exception) -> bool:
+            low = str(exc).lower()
+            markers = ("not logged", "auth", "unauthor", "forbidden", "token")
+            return any(marker in low for marker in markers)
+
+        saw_session_error = False
         for i in range(start_days_ago, end_days_ago):  # start from the requested day offset
             day = (now - timedelta(days=i)).date().isoformat()
             hr: Dict = {}
@@ -246,22 +315,34 @@ class GccliRunner:
             try:
                 hr_payload = self._run_json(["health", "hr", day], account=account)
                 hr = hr_payload if isinstance(hr_payload, dict) else {}
-            except GccliError:
+                endpoint_success_count += 1
+            except GccliError as exc:
                 hr = {}
+                endpoint_failure_count += 1
+                endpoint_failures.append({"endpoint": "health hr", "date": day, "error": str(exc)[:200]})
+                saw_session_error = saw_session_error or _is_session_error(exc)
 
             # Sleep
             try:
                 sleep_payload = self._run_json(["health", "sleep", day], account=account)
                 sleep = sleep_payload if isinstance(sleep_payload, dict) else {}
-            except GccliError:
+                endpoint_success_count += 1
+            except GccliError as exc:
                 sleep = {}
+                endpoint_failure_count += 1
+                endpoint_failures.append({"endpoint": "health sleep", "date": day, "error": str(exc)[:200]})
+                saw_session_error = saw_session_error or _is_session_error(exc)
 
             # HRV (may be empty for accounts/devices without HRV)
             try:
                 hrv_payload = self._run_json(["health", "hrv", day], account=account)
                 hrv = hrv_payload if isinstance(hrv_payload, dict) else {}
-            except GccliError:
+                endpoint_success_count += 1
+            except GccliError as exc:
                 hrv = {}
+                endpoint_failure_count += 1
+                endpoint_failures.append({"endpoint": "health hrv", "date": day, "error": str(exc)[:200]})
+                saw_session_error = saw_session_error or _is_session_error(exc)
 
             normalized = GarminDailyMetrics.from_gccli(
                 date=day,
@@ -276,7 +357,69 @@ class GccliRunner:
             # Only keep days that have at least one real metric
             if any(entry.get(k) is not None for k in ("resting_hr", "sleep_hours", "hrv")):
                 metrics.append(entry)
-        return metrics
+        if endpoint_total_count == 0:
+            status = "success_no_data"
+        elif endpoint_failure_count == endpoint_total_count:
+            status = "session_unavailable" if saw_session_error else "technical_failure"
+        elif endpoint_failure_count > 0:
+            # Partial success is usable only when at least one normalized daily
+            # metric is available; endpoint-level technical successes with zero
+            # usable metrics are treated as retryable technical failures.
+            status = "partial_success" if metrics else "technical_failure"
+        elif not metrics:
+            status = "success_no_data"
+        else:
+            status = "success"
+        return DailyMetricsFetchResult(
+            metrics=metrics,
+            status=status,
+            endpoint_success_count=endpoint_success_count,
+            endpoint_failure_count=endpoint_failure_count,
+            endpoint_total_count=endpoint_total_count,
+            endpoint_failures=endpoint_failures,
+        )
+
+    def fetch_max_metrics(
+        self,
+        account: Optional[str] = None,
+        date: Optional[str] = None,
+        raise_on_error: bool = False,
+    ) -> List[Dict]:
+        """Fetch native Garmin VO₂max (and other max metrics) via ``gccli health max-metrics``.
+
+        Parameters
+        ----------
+        account:
+            Optional Garmin account identifier passed via ``GCCLI_ACCOUNT`` env.
+        date:
+            Optional ISO date string (``YYYY-MM-DD``).  When provided and gccli
+            supports a date argument, it is appended to the command so gccli can
+            return metrics for that specific date.  The date is appended positionally
+            (``gccli health max-metrics <date>``) — pass ``None`` to omit it and
+            let gccli return the latest value as before.
+
+        Returns the raw payload list as-is; callers are responsible for
+        normalizing via :meth:`GarminVO2Max.from_max_metrics`.
+        Returns ``[]`` on any error (unavailable / non-JSON / timeout).
+        """
+        args: List[str] = ["health", "max-metrics"]
+        if date:
+            args.append(date)
+        try:
+            data = self._run_json(args, account=account)
+        except GccliError as exc:
+            if raise_on_error:
+                raise
+            logger.warning("[gccli] fetch_max_metrics failed: %s", exc)
+            return []
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            # Some gccli versions wrap the list in a dict; try common keys.
+            for key in ("maxMetrics", "metrics", "items", "data"):
+                if isinstance(data.get(key), list):
+                    return data[key]
+        return []
 
     def get_profile(self, account: Optional[str] = None) -> Dict:
         try:

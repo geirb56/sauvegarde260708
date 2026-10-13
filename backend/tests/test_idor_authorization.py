@@ -2,7 +2,7 @@
 IDOR / Authorization tests — PR60.
 
 Verifies that:
-1. GET /messages requires authentication (401 anonymous) and returns only
+1. GET /coach/history requires authentication (401 anonymous) and returns only
    the authenticated user's conversations (not another user's).
 2. GET /rag/workout/{workout_id} returns 404 when the authenticated user
    requests a workout that belongs to a different user.
@@ -109,11 +109,11 @@ class _Collection:
 
 
 # ---------------------------------------------------------------------------
-# 1. GET /messages — authentication + user isolation
+# 1. GET /coach/history — authentication + user isolation
 # ---------------------------------------------------------------------------
 
-def _messages_app():
-    """Minimal app that mirrors the fixed /messages endpoint."""
+def _history_app():
+    """Minimal app that mirrors the canonical /coach/history endpoint."""
     from auth.dependencies import get_current_user
 
     app = FastAPI()
@@ -131,44 +131,45 @@ def _messages_app():
     app.state.db = _DB()
     db = app.state.db
 
-    @app.get("/messages")
-    async def get_messages(user: dict = Depends(get_current_user), limit: int = 20):
+    @app.get("/coach/history")
+    async def get_conversation_history(user: dict = Depends(get_current_user), limit: int = 50):
         user_id = user["id"]
-        msgs = await db.conversations.find({"user_id": user_id}, {"_id": 0}).sort("timestamp", -1).to_list(limit)
+        safe_limit = max(1, min(limit, 50))
+        msgs = await db.conversations.find({"user_id": user_id}, {"_id": 0}).sort("timestamp", -1).to_list(safe_limit)
         return msgs
 
     return app, user_a_conv, user_b_conv
 
 
 @pytest_asyncio.fixture
-async def messages_client():
-    app, user_a_conv, user_b_conv = _messages_app()
+async def history_client():
+    app, user_a_conv, user_b_conv = _history_app()
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as c:
         yield c, user_a_conv, user_b_conv
 
 
-class TestMessagesEndpoint:
+class TestCoachHistoryEndpoint:
     @pytest.mark.asyncio
-    async def test_anonymous_401(self, messages_client):
-        client, *_ = messages_client
-        r = await client.get("/messages")
+    async def test_anonymous_401(self, history_client):
+        client, *_ = history_client
+        r = await client.get("/coach/history")
         assert r.status_code == 401
 
     @pytest.mark.asyncio
-    async def test_user_sees_own_messages_only(self, messages_client):
-        client, user_a_conv, user_b_conv = messages_client
-        r = await client.get("/messages", headers=_bearer("user-a", "a@test.com"))
+    async def test_user_sees_own_messages_only(self, history_client):
+        client, user_a_conv, user_b_conv = history_client
+        r = await client.get("/coach/history", headers=_bearer("user-a", "a@test.com"))
         assert r.status_code == 200
         ids = [m["id"] for m in r.json()]
         assert user_a_conv["id"] in ids
         assert user_b_conv["id"] not in ids
 
     @pytest.mark.asyncio
-    async def test_user_b_cannot_see_user_a_messages(self, messages_client):
-        client, user_a_conv, user_b_conv = messages_client
-        r = await client.get("/messages", headers=_bearer("user-b", "b@test.com"))
+    async def test_user_b_cannot_see_user_a_messages(self, history_client):
+        client, user_a_conv, user_b_conv = history_client
+        r = await client.get("/coach/history", headers=_bearer("user-b", "b@test.com"))
         assert r.status_code == 200
         ids = [m["id"] for m in r.json()]
         assert user_a_conv["id"] not in ids

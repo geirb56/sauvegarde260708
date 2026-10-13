@@ -55,9 +55,15 @@ def _stub_module(name: str, **attrs) -> ModuleType:
 # redis & redis.exceptions
 _redis_exc = _stub_module("redis.exceptions", ResponseError=Exception)
 _stub_module("redis", exceptions=_redis_exc)
-# jobs.redis_client
-_stub_module("jobs", redis_client=_stub_module("jobs.redis_client", get_redis=lambda: None))
+# jobs.redis_client / jobs.queue
+_stub_module(
+    "jobs",
+    __path__=[],
+    redis_client=_stub_module("jobs.redis_client", get_redis=lambda: None),
+    queue=_stub_module("jobs.queue", enqueue_vo2max_backfill=AsyncMock()),
+)
 _stub_module("jobs.redis_client", get_redis=lambda: None)
+_stub_module("jobs.queue", enqueue_vo2max_backfill=AsyncMock())
 # events.stream
 _stub_module("events", stream=_stub_module("events.stream",
     emit_activity_created=AsyncMock()))
@@ -397,8 +403,8 @@ def test_future_activity_ignored_by_engine():
     result = calculate_run_index_from_domain(activities, reference_date=reference)
     # Only yesterday (days_ago=1 from original ref) is visible; the 0-ago run
     # has start_time = REF_DATE which is > reference=REF_DATE-1 → excluded.
-    # A single run is not enough for a non-zero index, but the engine should not crash.
-    assert isinstance(result["run_index"], int)
+    # A single visible run is insufficient for a computed index, but the engine should not crash.
+    assert result["run_index"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -546,7 +552,7 @@ def test_post_sync_no_fanout_required():
 
     score = calculate_run_index_from_domain(activities, reference_date=REF_DATE)
     # Single activity — not enough for a full index but engine must not crash
-    assert isinstance(score["run_index"], int)
+    assert score["run_index"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -804,6 +810,7 @@ def test_real_pipeline_self_heal_wiring():
             patch("garmin.service.session_store.save_session", new=AsyncMock()),
             patch("garmin.service.update_sync_progress", new=AsyncMock()),
             patch("garmin.service.get_sync_progress", new=AsyncMock(return_value={})),
+            patch("garmin.service._build_and_persist_capabilities", new=AsyncMock()),
             patch("garmin.service.emit_activity_created", new=AsyncMock()),
             patch(
                 "garmin.service.refresh_today_run_index_after_garmin_activities",
@@ -888,6 +895,7 @@ def test_real_pipeline_self_heal_failure_isolation():
             patch("garmin.service.session_store.save_session", new=AsyncMock()),
             patch("garmin.service.update_sync_progress", new=AsyncMock()),
             patch("garmin.service.get_sync_progress", new=AsyncMock(return_value={})),
+            patch("garmin.service._build_and_persist_capabilities", new=AsyncMock()),
             patch("garmin.service.emit_activity_created", new=AsyncMock()),
             patch(
                 "garmin.service.refresh_today_run_index_after_garmin_activities",
@@ -914,3 +922,10 @@ def test_real_pipeline_self_heal_failure_isolation():
     # No fallback to db.workouts in result
     assert "workouts_upserted" not in result
     assert "SENTINEL_WORKOUT_SELF_HEAL" not in result
+
+
+def test_run_index_history_service_has_no_legacy_workout_loader():
+    source = (Path(__file__).resolve().parents[1] / "services" / "run_index_history.py").read_text(
+        encoding="utf-8"
+    )
+    assert "load_user_workouts" not in source

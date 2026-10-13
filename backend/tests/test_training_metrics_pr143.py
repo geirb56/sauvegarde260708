@@ -116,16 +116,19 @@ class TestContinuityStatesExact:
         assert acwr_reliable is False
 
     def test_reprise_exit(self):
-        """Short history (< 28 days) with recent run -> reprise_exit.
-
-        Fixture: only activities in last 14 days (available_history < 28).
-        """
-        # Activities from day 0 to day 13 — available_days = 14
-        docs = [_garmin_doc(d, 3600.0, 8000.0) for d in range(14)]
+        """Returning volume after an observed inactive week -> reprise_exit."""
+        docs = [_garmin_doc(d, 3600.0, 8000.0) for d in (*range(7), *range(14, 21))]
         state, _ = _build_chain(docs)
         assert state.continuity_state == "reprise_exit"
         acwr_reliable = state.continuity_state not in ("deep_reprise", "partial_reprise")
         assert acwr_reliable is True
+
+    def test_short_regular_history_is_normal_with_low_confidence(self):
+        docs = [_garmin_doc(d, 3600.0, 8000.0) for d in range(14)]
+        state, _ = _build_chain(docs)
+        assert state.continuity_state == "normal"
+        assert state.continuity_confidence == "low"
+        assert "CONTINUITY_STABLE" in state.reason_codes
 
     def test_normal(self):
         """Regular consistent training >= 28 days -> normal.

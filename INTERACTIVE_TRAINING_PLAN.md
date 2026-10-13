@@ -1,14 +1,22 @@
 # Interactive Training Plan - Implementation Documentation
 
+> **PR232A note:** the manual feedback system described below (§1,
+> `POST /api/training/feedback`, "Réalisé / Manqué" buttons) has been
+> **removed**. Session execution is now derived exclusively from Garmin via
+> the PR230 boundary and exposed on `GET /training/v2/week`
+> (`matching_status` / `adherence_status` / `actual`). See
+> `RUNINDEX_PR232A_REPORT.md`. The rest of this document (adaptive session
+> logic) is still accurate.
+
 ## Overview
 
 This implementation adds interactive and adaptive features to the RunIndex training plan, allowing users to provide feedback on sessions and receive dynamically adjusted workouts based on their current fatigue levels.
 
 ## Features Implemented
 
-### 1. User Feedback System
+### 1. User Feedback System — REMOVED (PR232A)
 
-**Backend: POST /api/training/feedback**
+**Backend: POST /api/training/feedback** *(removed by PR232A)*
 - Endpoint to store user feedback on training sessions
 - Parameters:
   - `date`: ISO date string (YYYY-MM-DD)
@@ -17,7 +25,7 @@ This implementation adds interactive and adaptive features to the RunIndex train
 - Uses MongoDB `training_feedback` collection
 - Prevents duplicates with upsert operation
 
-**Frontend: Feedback Buttons**
+**Frontend: Feedback Buttons** *(removed by PR232A)*
 - "Réalisé" (Done) and "Manqué" (Missed) buttons
 - Visual feedback with color changes (green for done, red for missed)
 - Disabled state after submission

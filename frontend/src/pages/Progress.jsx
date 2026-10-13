@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import axios from "axios";
 import { Card, CardContent } from "@/components/ui/card";
 import { useLanguage } from "@/context/LanguageContext";
@@ -17,13 +17,9 @@ import {
 import { 
   TrendingUp, 
   Activity,
-  ChevronDown,
-  ChevronUp,
   Calendar,
   Timer,
   Zap,
-  ArrowUpRight,
-  ArrowDownRight,
   Heart,
   Moon,
   TrendingDown,
@@ -34,6 +30,14 @@ import Paywall from "@/components/Paywall";
 
 import { API_BASE_URL } from "@/config";
 const API = API_BASE_URL;
+
+export const buildVisibleChartTicks = (points = [], maxTicks = 6) => {
+  if (!Array.isArray(points) || points.length === 0) return [];
+  if (points.length <= maxTicks) return points.map((point) => point.date);
+  const step = Math.max(1, Math.ceil((points.length - 1) / (maxTicks - 1)));
+  const ticks = points.filter((_, index) => index === 0 || index === points.length - 1 || index % step === 0).map((point) => point.date);
+  return Array.from(new Set(ticks));
+};
 
 const formatDuration = (minutes) => {
   const hrs = Math.floor(minutes / 60);
@@ -60,6 +64,18 @@ const langToLocale = (lang) => {
   return map[lang] || "fr-FR";
 };
 
+const formatMeasurementDate = (dateStr, lang) => {
+  if (!dateStr) return null;
+  try {
+    return new Date(`${dateStr}T00:00:00Z`).toLocaleDateString(langToLocale(lang), {
+      day: "numeric",
+      month: "short",
+    });
+  } catch {
+    return dateStr;
+  }
+};
+
 // PR184 — map V2 goal_type (TrainingCycleV2Response) to race prediction distance label
 const V2_GOAL_TO_PRED_DISTANCE = {
   five_k: "5K",
@@ -69,31 +85,105 @@ const V2_GOAL_TO_PRED_DISTANCE = {
   ultra: "Ultra",
 };
 
+const POTENTIAL_DISTANCES = ["5K", "10K", "Semi", "Marathon"];
+const DISTANCE_I18N_KEYS = {
+  "5K": "distance5K",
+  "10K": "distance10K",
+  Semi: "distanceHalfMarathon",
+  Marathon: "distanceMarathon",
+};
+
+const CONFIDENCE_MAP = {
+  high: { i18nKey: "confidenceHigh", color: "#22c55e" },
+  medium: { i18nKey: "confidenceMedium", color: "#f59e0b" },
+  low: { i18nKey: "confidenceLow", color: "#f97316" },
+  insufficient: { i18nKey: "confidenceInsufficient", color: "#6b7280" },
+};
+
+const SEMANTIC_SURFACES = {
+  predictions: { background: "rgba(249, 115, 22, 0.06)", border: "rgba(249, 115, 22, 0.30)", accent: "var(--accent-orange)" },
+  hrv: { background: "rgba(34, 211, 238, 0.06)", border: "rgba(34, 211, 238, 0.30)", accent: "var(--accent-cyan)" },
+  restingHr: { background: "rgba(244, 63, 94, 0.08)", border: "rgba(244, 63, 94, 0.32)", accent: "rgb(244, 63, 94)" },
+  sleep: { background: "rgba(96, 165, 250, 0.08)", border: "rgba(96, 165, 250, 0.30)", accent: "rgb(96, 165, 250)" },
+  vo2: { background: "rgba(16, 185, 129, 0.08)", border: "rgba(16, 185, 129, 0.34)", accent: "rgb(16, 185, 129)" },
+  danger: { background: "rgba(239, 68, 68, 0.14)", border: "rgba(239, 68, 68, 0.34)", accent: "var(--status-danger)" },
+  neutral: { background: "rgba(148, 163, 184, 0.08)", border: "rgba(148, 163, 184, 0.24)", accent: "rgb(148, 163, 184)" },
+};
+
+const normalizeConfidence = (value) => {
+  if (typeof value !== "string") return "insufficient";
+  const normalized = value.trim().toLowerCase();
+  return CONFIDENCE_MAP[normalized] ? normalized : "insufficient";
+};
+
+const formatPredictedRaceTime = (predictedTimeSeconds, fallbackTimeString) => {
+  if (typeof predictedTimeSeconds === "number" && Number.isFinite(predictedTimeSeconds) && predictedTimeSeconds > 0) {
+    const totalSeconds = Math.round(predictedTimeSeconds);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    if (hours >= 1) {
+      return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+    }
+    return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  }
+  if (typeof fallbackTimeString === "string" && fallbackTimeString.trim()) {
+    return fallbackTimeString.trim();
+  }
+  return null;
+};
+
 export default function Progress() {
   const [stats, setStats] = useState(null);
   const [predictions, setPredictions] = useState(null);
   // PR184: migrated training cycle from legacy full-cycle endpoint to /training/v2/cycle
-  // VMA_FRONTEND_PRESERVED = YES / PREDICTIONS_FRONTEND_PRESERVED = YES
+  // PREDICTIONS_FRONTEND_PRESERVED = YES
   const [cycleV2, setCycleV2] = useState(null);
-  const [vmaHistory, setVmaHistory] = useState(null);
   const [garminHealth, setGarminHealth] = useState(null);
+  const [runIndexCurrent, setRunIndexCurrent] = useState(null);
+  const [garminVo2maxHistory, setGarminVo2maxHistory] = useState(null);
   const [runIndexHistory, setRunIndexHistory] = useState(null);
   const [runIndexPeriod, setRunIndexPeriod] = useState("6m");
+  const [viewportBand, setViewportBand] = useState(() => (window.innerWidth <= 380 ? "compact" : window.innerWidth <= 430 ? "mobile" : "desktop"));
+  const [predictionsLoading, setPredictionsLoading] = useState(true);
+  const [predictionsError, setPredictionsError] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [showPredictions, setShowPredictions] = useState(true);
   const { t, lang } = useLanguage();
   const { isFree, loading: subLoading } = useSubscription();
   const { unitSystem } = useUnitSystem();
 
+  const fetchRacePredictions = useCallback(async () => {
+    setPredictionsLoading(true);
+    setPredictionsError(false);
+    try {
+      const predictionsRes = await axios.get(`${API}/training/race-predictions`);
+      setPredictions(predictionsRes.data);
+    } catch {
+      setPredictionsError(true);
+      setPredictions(null);
+    } finally {
+      setPredictionsLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
+    if (subLoading) return; // wait for subscription resolution
+    if (isFree) {
+      // FREE: paywall — no data fetches at all
+      setLoading(false);
+      setPredictionsLoading(false);
+      setPredictionsError(false);
+      setPredictions(null);
+      return;
+    }
     const fetchData = async () => {
       try {
-        const [statsRes, predictionsRes, cycleRes, vmaHistoryRes] = await Promise.all([
+        const [statsRes, cycleRes, runIndexRes, vo2HistoryRes] = await Promise.all([
           axios.get(`${API}/stats`),
-          axios.get(`${API}/training/race-predictions`).catch(() => ({ data: null })),
           // PR184: V2/cycle is the authority for cycle calendar (no session prescription)
           axios.get(`${API}/training/v2/cycle`).catch(() => ({ data: null })),
-          axios.get(`${API}/training/vma-history`).catch(() => ({ data: null }))
+          axios.get(`${API}/run-index`).catch(() => ({ data: null })),
+          axios.get(`${API}/garmin/vo2max-history?period=12m`).catch(() => ({ data: null })),
         ]);
         setStats(statsRes.data);
 
@@ -105,13 +195,9 @@ export default function Progress() {
           /* Garmin not connected — section stays hidden */
         }
 
-        let vmaData = vmaHistoryRes.data;
-        if (vmaData) setVmaHistory(vmaData);
-
-        let predData = predictionsRes.data;
-        if (predData) setPredictions(predData);
-
         if (cycleRes.data) setCycleV2(cycleRes.data);
+        if (runIndexRes.data?.metrics) setRunIndexCurrent(runIndexRes.data.metrics);
+        if (vo2HistoryRes.data) setGarminVo2maxHistory(vo2HistoryRes.data);
       } catch (error) {
         console.error("Failed to fetch data:", error);
       } finally {
@@ -119,10 +205,17 @@ export default function Progress() {
       }
     };
     fetchData();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [subLoading, isFree]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Fetch RunIndex history when period changes
   useEffect(() => {
+    if (subLoading) return;
+    if (isFree) return;
+    fetchRacePredictions();
+  }, [subLoading, isFree, fetchRacePredictions]);
+
+  // Fetch RunIndex history when period changes — TRIAL/PREMIUM only
+  useEffect(() => {
+    if (subLoading || isFree) return;
     const fetchRunIndexHistory = async () => {
       try {
         const res = await axios.get(`${API}/run-index/history?period=${runIndexPeriod}&language=${lang}`);
@@ -132,7 +225,18 @@ export default function Progress() {
       }
     };
     fetchRunIndexHistory();
-  }, [runIndexPeriod, lang]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [runIndexPeriod, lang, subLoading, isFree]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const updateViewportBand = () => {
+      if (window.innerWidth <= 380) setViewportBand("compact");
+      else if (window.innerWidth <= 430) setViewportBand("mobile");
+      else setViewportBand("desktop");
+    };
+    updateViewportBand();
+    window.addEventListener("resize", updateViewportBand);
+    return () => window.removeEventListener("resize", updateViewportBand);
+  }, []);
 
   if (loading || subLoading) {
     return (
@@ -168,9 +272,8 @@ export default function Progress() {
 
   const runIndexTrend = runIndexHistory?.trend ?? 0;
   const TrendIcon = runIndexTrend > 0 ? TrendingUp : runIndexTrend < 0 ? TrendingDown : Minus;
-  const trendColor = runIndexTrend > 0 ? "text-emerald-500" : runIndexTrend < 0 ? "text-red-500" : "text-muted-foreground";
-  const trendBg = runIndexTrend > 0 ? "bg-emerald-500/20" : runIndexTrend < 0 ? "bg-red-500/20" : "bg-muted/30";
-  const trendEmoji = runIndexTrend > 0 ? "⬆️" : runIndexTrend < 0 ? "⬇️" : "➡️";
+  const trendColor = runIndexTrend > 0 ? "text-emerald-500" : runIndexTrend < 0 ? "text-destructive" : "text-muted-foreground";
+  const trendTone = runIndexTrend > 0 ? SEMANTIC_SURFACES.vo2 : runIndexTrend < 0 ? SEMANTIC_SURFACES.danger : SEMANTIC_SURFACES.neutral;
   const historyGranularity = runIndexHistory?.granularity || "week";
 
   const periodOptions = [
@@ -179,6 +282,19 @@ export default function Progress() {
     { value: "12m", label: t("progressExtended.period12m") },
   ];
 
+  const garminVo2CurrentValue = runIndexCurrent?.vo2max_running ?? garminVo2maxHistory?.current?.value ?? null;
+  const garminVo2CurrentDate = runIndexCurrent?.vo2max_date ?? garminVo2maxHistory?.current?.date ?? null;
+  const garminVo2Series = Array.isArray(garminVo2maxHistory?.history) ? garminVo2maxHistory.history : [];
+  const runIndexTickDates = buildVisibleChartTicks(runIndexHistory?.history, viewportBand === "compact" ? 3 : viewportBand === "mobile" ? 4 : 6);
+  const vo2TickDates = buildVisibleChartTicks(garminVo2Series, viewportBand === "compact" ? 3 : viewportBand === "mobile" ? 4 : 6);
+  const cycleGoalDist = cycleV2?.goal?.goal_type
+    ? V2_GOAL_TO_PRED_DISTANCE[cycleV2.goal.goal_type] ?? null
+    : null;
+  const predictionByDistance = new Map(
+    Array.isArray(predictions?.predictions)
+      ? predictions.predictions.map((pred) => [pred.distance, pred])
+      : [],
+  );
   return (
     <div className="p-6 md:p-8 pb-24 md:pb-8" data-testid="progress-page">
       {/* Header */}
@@ -191,8 +307,133 @@ export default function Progress() {
         </p>
       </div>
 
+      {/* Potential */}
+      <div className="mb-8" data-testid="potential-section">
+        <Card className="bg-card border-border overflow-hidden">
+          <CardContent className="p-4 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: "rgba(245,158,11,0.2)" }}>
+                <Timer className="w-5 h-5" style={{ color: "#f59e0b" }} />
+              </div>
+              <div>
+                <h2 className="font-heading text-lg uppercase tracking-tight font-semibold">
+                  {t("progressExtended.potentialTitle")}
+                </h2>
+                <p className="font-mono text-xs text-muted-foreground">
+                  {t("progressExtended.potentialSubtitle")}
+                </p>
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {t("progressExtended.potentialGarminSource")}
+            </p>
+
+            {predictionsLoading && !predictions ? (
+              <div className="grid grid-cols-2 gap-2 sm:gap-3" data-testid="potential-loading">
+                {POTENTIAL_DISTANCES.map((distanceKey) => (
+                  <div key={distanceKey} className="rounded-xl border border-white/10 bg-white/5 p-3 animate-pulse">
+                    <div className="h-3 w-16 bg-white/10 rounded mb-3" />
+                    <div className="h-7 w-24 bg-white/10 rounded mb-2" />
+                    <div className="h-3 w-20 bg-white/10 rounded" />
+                  </div>
+                ))}
+              </div>
+            ) : predictionsError && !predictions ? (
+              <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3" data-testid="potential-error">
+                <p className="text-sm text-red-200 mb-2">{t("progressExtended.potentialError")}</p>
+                <button
+                  type="button"
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-white/10 hover:bg-white/20 transition-colors"
+                  onClick={fetchRacePredictions}
+                >
+                  {t("progressExtended.retry")}
+                </button>
+              </div>
+            ) : predictions?.has_data ? (
+              <>
+                <div className="grid grid-cols-2 gap-2 sm:gap-3" data-testid="potential-cards-grid">
+                  {POTENTIAL_DISTANCES.map((distanceKey) => {
+                    const pred = predictionByDistance.get(distanceKey) ?? null;
+                    const confidence = normalizeConfidence(pred?.confidence);
+                    const { i18nKey: confidenceI18nKey, color: confidenceColor } = CONFIDENCE_MAP[confidence];
+                    const confidenceText = t(`progressExtended.${confidenceI18nKey}`);
+                    const isGoal = cycleGoalDist !== null && pred?.distance === cycleGoalDist;
+                    const predictedTime = formatPredictedRaceTime(pred?.predicted_time_s, pred?.predicted_time);
+                    const hasPredictedTime = predictedTime !== null;
+
+                    return (
+                      <div
+                        key={distanceKey}
+                        className="rounded-xl p-3"
+                        data-testid={`potential-card-${distanceKey.toLowerCase()}`}
+                        style={{
+                          background: isGoal ? "rgba(249, 115, 22, 0.14)" : SEMANTIC_SURFACES.predictions.background,
+                          borderStyle: "solid",
+                          borderTopWidth: `${isGoal ? 2 : 1}px`,
+                          borderRightWidth: `${isGoal ? 2 : 1}px`,
+                          borderBottomWidth: `${isGoal ? 2 : 1}px`,
+                          borderColor: isGoal ? "rgba(249, 115, 22, 0.55)" : SEMANTIC_SURFACES.predictions.border,
+                          borderLeftColor: SEMANTIC_SURFACES.predictions.accent,
+                          borderLeftWidth: "3px",
+                        }}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-xs font-mono uppercase tracking-wider text-muted-foreground">
+                            {t(`progressExtended.${DISTANCE_I18N_KEYS[distanceKey]}`)}
+                          </p>
+                          {isGoal && (
+                            <span className="px-1.5 py-0.5 rounded-full text-[11px] font-bold leading-none" style={{ background: "var(--accent-green)", color: "hsl(var(--primary-foreground))" }}>
+                              {t("progressExtended.goalLabel")}
+                            </span>
+                          )}
+                        </div>
+
+                        {hasPredictedTime ? (
+                          <>
+                            <p className="text-2xl sm:text-3xl leading-none font-black text-white mt-2" data-testid={`potential-time-${distanceKey.toLowerCase()}`}>
+                              {predictedTime}
+                            </p>
+                            {pred?.predicted_pace ? (
+                              <p className="text-xs text-muted-foreground mt-1">{pred.predicted_pace}</p>
+                            ) : null}
+                          </>
+                        ) : (
+                          <p className="text-sm text-muted-foreground italic mt-2">
+                            {t("progressExtended.notEnoughPredictionData")}
+                          </p>
+                        )}
+
+                        <div className="mt-3">
+                          <p className="text-[11px] text-muted-foreground mb-1">
+                            {t("progressExtended.confidenceLabel")}
+                          </p>
+                          <span
+                            className="inline-flex px-2 py-0.5 rounded-full text-[11px] font-bold"
+                            style={{ background: `${confidenceColor}20`, color: confidence === "insufficient" ? "var(--text-tertiary)" : confidence === "low" ? "var(--status-warning)" : confidenceColor }}
+                          >
+                            {confidenceText}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {t("progressExtended.potentialTrainingLink")}
+                </p>
+              </>
+            ) : (
+              <div className="rounded-xl border border-white/10 bg-white/5 p-3" data-testid="potential-insufficient-data">
+                <p className="text-sm font-semibold text-white">{t("progressExtended.potentialNotEnoughDataTitle")}</p>
+                <p className="text-xs text-muted-foreground mt-1">{t("progressExtended.potentialNotEnoughDataHint")}</p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
       {/* ===== RUNINDEX EVOLUTION (top of tab) ===== */}
-      <div className="mb-8">
+      <div className="mb-8" data-testid="runindex-evolution-section">
         <Card className="bg-card border-border overflow-hidden">
           <CardContent className="p-4">
             {/* Section title */}
@@ -204,9 +445,9 @@ export default function Progress() {
             </div>
 
             {/* Current RunIndex + Trend */}
-            <div className="flex items-center justify-between mb-5">
-              <div>
-                <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
+            <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0">
+                <p className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground mb-1">
                   {t("progressExtended.runIndexCurrent")}
                 </p>
                 <div className="flex items-baseline gap-2">
@@ -218,13 +459,16 @@ export default function Progress() {
               </div>
 
               {runIndexHistory?.has_data && (
-                <div className={`flex flex-col items-end gap-1`}>
-                  <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                <div className="flex flex-col gap-1 self-start sm:items-end">
+                  <p className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
                     {t("progressExtended.runIndexTrend")}
                   </p>
-                  <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full ${trendBg}`}>
-                    <span className="text-base">{trendEmoji}</span>
-                    <span className={`text-sm font-bold ${trendColor}`}>
+                  <div
+                    className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs"
+                    style={{ background: trendTone.background, border: `1px solid ${trendTone.border}` }}
+                  >
+                    <TrendIcon className={`h-3.5 w-3.5 ${trendColor}`} />
+                    <span className={`font-semibold ${trendColor}`}>
                       {(() => {
                         if (runIndexTrend === 0) {
                           return t("progressExtended.runIndexTrendStablePeriod");
@@ -243,7 +487,7 @@ export default function Progress() {
                 <button
                   key={value}
                   onClick={() => setRunIndexPeriod(value)}
-                  className={`px-3 py-1 rounded-full font-mono text-[10px] uppercase tracking-wider transition-all ${
+                  className={`px-3 py-1 rounded-full font-mono text-[11px] uppercase tracking-wider transition-all ${
                     runIndexPeriod === value
                       ? "bg-primary text-black font-bold"
                       : "bg-muted/30 text-muted-foreground hover:bg-muted/60"
@@ -259,7 +503,7 @@ export default function Progress() {
                 className="mb-4 px-3 py-2 rounded-xl"
                 style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}
               >
-                <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                <p className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
                   {t("progressExtended.insufficientPeriodData")}
                 </p>
               </div>
@@ -277,15 +521,16 @@ export default function Progress() {
                       dataKey="date"
                       axisLine={false}
                       tickLine={false}
-                      tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 9, fontFamily: "JetBrains Mono" }}
+                      tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 11, fontFamily: "JetBrains Mono" }}
                       tickFormatter={(dateStr) => formatDateLabel(dateStr, langToLocale(lang), historyGranularity)}
-                      interval="preserveStartEnd"
+                      ticks={runIndexTickDates}
+                      minTickGap={viewportBand === "compact" ? 18 : 24}
                     />
                     <YAxis
                       domain={[0, 1000]}
                       axisLine={false}
                       tickLine={false}
-                      tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 9, fontFamily: "JetBrains Mono" }}
+                      tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 11, fontFamily: "JetBrains Mono" }}
                       ticks={[0, 250, 500, 750, 1000]}
                     />
                     <Tooltip
@@ -334,7 +579,7 @@ export default function Progress() {
             {/* Pillar details */}
             {runIndexHistory?.has_data && runIndexHistory.pillars && (
               <div className="mb-4">
-                <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground mb-3">
+                <p className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground mb-3">
                   {t("progressExtended.pillarsTitle")}
                 </p>
                 <div className="grid grid-cols-2 gap-2">
@@ -349,7 +594,7 @@ export default function Progress() {
                       >
                         <span className="text-xl">{pillarIcons[pillar]}</span>
                         <div className="flex-1 min-w-0">
-                          <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                          <p className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
                             {pillarLabels[pillar]}
                           </p>
                           <div className="flex items-baseline gap-1.5">
@@ -362,7 +607,7 @@ export default function Progress() {
                             )}
                           </div>
                           {evo !== null && evo !== undefined && (
-                            <p className={`font-mono text-[10px] uppercase tracking-wider ${evoColor}`}>
+                            <p className={`font-mono text-[11px] uppercase tracking-wider ${evoColor}`}>
                               {`${evo > 0 ? "+" : ""}${evo}% ${t("progressExtended.sinceStartOfPeriod")}`}
                             </p>
                           )}
@@ -382,7 +627,7 @@ export default function Progress() {
               >
                 <div className="flex items-center gap-2 mb-2">
                   <Brain className="w-3.5 h-3.5" style={{ color: "#6EEB5A" }} />
-                  <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: "rgba(110, 235, 90, 0.8)" }}>
+                  <span className="font-mono text-[11px] uppercase tracking-wider" style={{ color: "var(--accent-green)" }}>
                     {t("progressExtended.aiAnalysisTitle")}
                   </span>
                 </div>
@@ -402,7 +647,7 @@ export default function Progress() {
           <CardContent className="p-4">
             <div className="flex items-center gap-2 mb-2">
               <Activity className="w-4 h-4 text-primary" />
-              <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              <span className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
                 {t("progressExtended.sessions7d")}
               </span>
             </div>
@@ -417,7 +662,7 @@ export default function Progress() {
           <CardContent className="p-4">
             <div className="flex items-center gap-2 mb-2">
               <TrendingUp className="w-4 h-4 text-emerald-500" />
-              <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              <span className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
                 {t("progressExtended.km7d")}
               </span>
             </div>
@@ -432,7 +677,7 @@ export default function Progress() {
           <CardContent className="p-4">
             <div className="flex items-center gap-2 mb-2">
               <Calendar className="w-4 h-4 text-primary" />
-              <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              <span className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
                 {t("progressExtended.km30d")}
               </span>
             </div>
@@ -451,261 +696,234 @@ export default function Progress() {
             <h2 className="font-mono text-xs uppercase tracking-widest text-muted-foreground">
               {t("progressExtended.garminHealthTitle")}
             </h2>
+            {/* Staleness banner — show when latest measurement is not from today/yesterday */}
+            {garminHealth.latest.is_current === false && garminHealth.latest.measurement_date && (
+              <span
+                className="font-mono text-[11px] uppercase tracking-wider text-amber-400 ml-1"
+                data-testid="garmin-health-stale-banner"
+              >
+                · {formatMeasurementDate(garminHealth.latest.measurement_date, lang)}
+              </span>
+            )}
           </div>
           <div className="grid grid-cols-3 gap-2 sm:gap-3">
-            <Card className="bg-card border-border" data-testid="garmin-hrv">
+            <Card
+              className="bg-card border-border"
+              data-testid="garmin-hrv"
+              style={{
+                background: SEMANTIC_SURFACES.hrv.background,
+                borderStyle: "solid",
+                borderWidth: "1px",
+                borderColor: SEMANTIC_SURFACES.hrv.border,
+                borderLeftColor: SEMANTIC_SURFACES.hrv.accent,
+                borderLeftWidth: "3px",
+              }}
+            >
               <CardContent className="p-4">
                 <div className="flex items-center gap-2 mb-2">
                   <Activity className="w-4 h-4 text-emerald-500" />
-                  <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <span className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
                     HRV
                   </span>
                 </div>
                 <p className="font-heading text-xl sm:text-3xl font-bold text-white break-words">
-                  {garminHealth.latest.hrv ?? "--"}
+                  {garminHealth.latest.is_current !== false
+                    ? (garminHealth.latest.hrv ?? "--")
+                    : "--"}
                   <span className="text-sm text-muted-foreground ml-1">ms</span>
                 </p>
+                {garminHealth.latest.is_current === false && garminHealth.latest.hrv != null && (
+                  <p className="font-mono text-[11px] text-amber-400 mt-1" data-testid="garmin-hrv-stale">
+                    {garminHealth.latest.hrv} · {formatMeasurementDate(garminHealth.latest.measurement_date, lang)}
+                  </p>
+                )}
               </CardContent>
             </Card>
 
-            <Card className="bg-card border-border" data-testid="garmin-resting-hr">
+            <Card
+              className="bg-card border-border"
+              data-testid="garmin-resting-hr"
+              style={{
+                background: SEMANTIC_SURFACES.restingHr.background,
+                borderStyle: "solid",
+                borderWidth: "1px",
+                borderColor: SEMANTIC_SURFACES.restingHr.border,
+                borderLeftColor: SEMANTIC_SURFACES.restingHr.accent,
+                borderLeftWidth: "3px",
+              }}
+            >
               <CardContent className="p-4">
                 <div className="flex items-center gap-2 mb-2">
                   <Heart className="w-4 h-4 text-rose-500" />
-                  <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <span className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
                     {t("progressExtended.garminRestingHr")}
                   </span>
                 </div>
                 <p className="font-heading text-xl sm:text-3xl font-bold text-white break-words">
-                  {garminHealth.latest.resting_hr ?? "--"}
+                  {garminHealth.latest.is_current !== false
+                    ? (garminHealth.latest.resting_hr ?? "--")
+                    : "--"}
                   <span className="text-sm text-muted-foreground ml-1">bpm</span>
                 </p>
+                {garminHealth.latest.is_current === false && garminHealth.latest.resting_hr != null && (
+                  <p className="font-mono text-[11px] text-amber-400 mt-1" data-testid="garmin-rhr-stale">
+                    {garminHealth.latest.resting_hr} · {formatMeasurementDate(garminHealth.latest.measurement_date, lang)}
+                  </p>
+                )}
               </CardContent>
             </Card>
 
-            <Card className="bg-card border-border" data-testid="garmin-sleep">
+            <Card
+              className="bg-card border-border"
+              data-testid="garmin-sleep"
+              style={{
+                background: SEMANTIC_SURFACES.sleep.background,
+                borderStyle: "solid",
+                borderWidth: "1px",
+                borderColor: SEMANTIC_SURFACES.sleep.border,
+                borderLeftColor: SEMANTIC_SURFACES.sleep.accent,
+                borderLeftWidth: "3px",
+              }}
+            >
               <CardContent className="p-4">
                 <div className="flex items-center gap-2 mb-2">
                   <Moon className="w-4 h-4 text-blue-400" />
-                  <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <span className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
                     {t("progressExtended.garminSleep")}
                   </span>
                 </div>
                 <p className="font-heading text-xl sm:text-3xl font-bold text-white break-words">
-                  {garminHealth.latest.sleep_hours ?? "--"}
+                  {garminHealth.latest.is_current !== false
+                    ? (garminHealth.latest.sleep_hours ?? "--")
+                    : "--"}
                   <span className="text-sm text-muted-foreground ml-1">h</span>
                 </p>
+                {garminHealth.latest.is_current === false && garminHealth.latest.sleep_hours != null && (
+                  <p className="font-mono text-[11px] text-amber-400 mt-1" data-testid="garmin-sleep-stale">
+                    {garminHealth.latest.sleep_hours} · {formatMeasurementDate(garminHealth.latest.measurement_date, lang)}
+                  </p>
+                )}
               </CardContent>
             </Card>
           </div>
         </div>
       )}
 
-      {/* VO2MAX Section with Chart */}
-      {(predictions?.has_data || vmaHistory?.has_data) && (
-        <div className="mb-6">
-          <Card className="bg-card border-border overflow-hidden">
-            <CardContent className="p-4">
-              {/* Header with current VO2MAX */}
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-4">
-                  <div className="w-14 h-14 rounded-xl flex flex-col items-center justify-center" style={{ background: "rgba(110, 235, 90, 0.12)", border: "1px solid rgba(110, 235, 90, 0.25)" }}>
-                    <Zap className="w-5 h-5" style={{ color: "#6EEB5A" }} />
-                    <span className="text-[7px] font-mono uppercase mt-0.5" style={{ color: "rgba(110, 235, 90, 0.8)" }}>VO2MAX</span>
+      {/* Garmin native VO2MAX Section with sparse history */}
+      <div className="mb-6">
+        <Card
+          className="bg-card border-border overflow-hidden"
+          data-testid="garmin-vo2-card"
+          style={{
+            background: SEMANTIC_SURFACES.vo2.background,
+            borderStyle: "solid",
+            borderWidth: "1px",
+            borderColor: SEMANTIC_SURFACES.vo2.border,
+            borderLeftColor: SEMANTIC_SURFACES.vo2.accent,
+            borderLeftWidth: "3px",
+          }}
+        >
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-4">
+                <div className="w-14 h-14 rounded-xl flex flex-col items-center justify-center" style={{ background: "rgba(16, 185, 129, 0.12)", border: "1px solid rgba(16, 185, 129, 0.25)" }}>
+                  <Zap className="w-5 h-5" style={{ color: "rgb(16, 185, 129)" }} />
+                  <span className="text-[11px] font-mono uppercase mt-0.5 text-primary">VO2MAX</span>
+                </div>
+                <div>
+                  <p className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">{t("progressExtended.garminVo2maxLabel")}</p>
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-4xl font-bold text-white">
+                      {garminVo2CurrentValue ?? "--"}
+                    </span>
+                    <span className="text-sm text-muted-foreground">ml/kg/min</span>
                   </div>
-                  <div>
-                    <div className="flex items-baseline gap-2">
-                      <span className="text-4xl font-bold text-white">
-                        {vmaHistory?.current_vo2max || predictions?.athlete_profile?.estimated_vo2max || "--"}
-                      </span>
-                      <span className="text-sm text-muted-foreground">ml/kg/min</span>
-                    </div>
+                  {garminVo2CurrentDate && (
                     <p className="text-xs text-muted-foreground">
-                      {t("progressExtended.basedOn6Weeks")}
+                      {t("progressExtended.garminSourceLabel")} · {t("progressExtended.measurementDateLabel")} {formatMeasurementDate(garminVo2CurrentDate, lang)}
                     </p>
-                  </div>
+                  )}
                 </div>
-                
-                {/* Trend indicator */}
-                {vmaHistory?.trend !== 0 && vmaHistory?.trend !== undefined && (
-                  <div className={`flex items-center gap-1 px-3 py-1.5 rounded-full ${vmaHistory.trend > 0 ? 'bg-emerald-500/20' : 'bg-red-500/20'}`}>
-                    {vmaHistory.trend > 0 ? (
-                      <ArrowUpRight className="w-4 h-4 text-emerald-500" />
-                    ) : (
-                      <ArrowDownRight className="w-4 h-4 text-red-500" />
-                    )}
-                    <span className={`text-sm font-bold ${vmaHistory.trend > 0 ? 'text-emerald-500' : 'text-red-500'}`}>
-                      {vmaHistory.trend > 0 ? '+' : ''}{vmaHistory.trend}
-                    </span>
-                    <span className="text-xs text-muted-foreground ml-1">
-                      ({t("progressExtended.months12")})
-                    </span>
-                  </div>
-                )}
               </div>
-              
-              {/* VO2MAX Evolution Chart - 12 months */}
-              {vmaHistory?.history && vmaHistory.history.length > 0 && (
-                <div className="mt-4">
-                  <p className="text-[10px] font-mono uppercase text-muted-foreground mb-3">
-                    {t("progressExtended.evolution12Months")}
-                  </p>
-                  <div className="h-36">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart 
-                        data={vmaHistory.history.filter(h => h.vo2max !== null)}
-                        margin={{ top: 5, right: 10, left: -20, bottom: 5 }}
-                      >
-                        <XAxis 
-                          dataKey="period_label" 
-                          axisLine={false}
-                          tickLine={false}
-                          tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 9, fontFamily: "JetBrains Mono" }}
-                          interval={1}
-                        />
-                        <YAxis 
-                          domain={['dataMin - 2', 'dataMax + 2']}
-                          axisLine={false}
-                          tickLine={false}
-                          tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 10, fontFamily: "JetBrains Mono" }}
-                          tickFormatter={(value) => `${value}`}
-                        />
-                        <Tooltip 
-                          content={({ active, payload }) => {
-                            if (active && payload && payload.length) {
-                              const data = payload[0].payload;
-                              return (
-                                <div className="bg-popover border border-border p-2 rounded-lg shadow-lg">
-                                  <p className="font-mono text-xs text-muted-foreground">
-                                    {data.month_label} {data.half === 1 ? "(1-15)" : "(16-fin)"}
-                                  </p>
-                                  <p className="font-bold text-white">{data.vo2max} ml/kg/min</p>
-                                  <p className="text-[10px] text-muted-foreground">{data.sessions} {t("progressExtended.sessionsCount")}</p>
-                                </div>
-                              );
-                            }
-                            return null;
-                          }}
-                        />
-                        <ReferenceLine 
-                          y={vmaHistory.current_vo2max} 
-                          stroke="rgba(110, 235, 90, 0.3)" 
-                          strokeDasharray="3 3" 
-                        />
-                        <Line 
-                          type="monotone" 
-                          dataKey="vo2max" 
-                          stroke="#6EEB5A" 
-                          strokeWidth={2}
-                          dot={{ fill: "#6EEB5A", strokeWidth: 0, r: 3 }}
-                          activeDot={{ fill: "#6EEB5A", strokeWidth: 2, stroke: "white", r: 5 }}
-                          connectNulls={true}
-                        />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-      )}
+            </div>
 
-      {/* Race Predictions */}
-      {predictions?.has_data && (
-        <div className="mb-8">
-          <Card className="bg-card border-border overflow-hidden">
-            <CardContent className="p-0">
-              {/* Header */}
-              <div 
-                className="flex items-center justify-between p-4 cursor-pointer"
-                onClick={() => setShowPredictions(!showPredictions)}
-                style={{ background: "linear-gradient(135deg, rgba(245,158,11,0.1) 0%, rgba(251,191,36,0.05) 100%)" }}
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: "rgba(245,158,11,0.2)" }}>
-                    <Timer className="w-5 h-5" style={{ color: "#f59e0b" }} />
-                  </div>
-                  <div>
-                    <h2 className="font-heading text-lg uppercase tracking-tight font-semibold">
-                      {t("progressExtended.racePredictions")}
-                    </h2>
-                    <p className="font-mono text-xs text-muted-foreground">
-                      {t("progressExtended.basedOnVma")}
-                    </p>
-                  </div>
-                </div>
-                <button className="p-2 rounded-lg" style={{ background: "rgba(255,255,255,0.05)" }}>
-                  {showPredictions ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                </button>
-              </div>
+            {garminVo2CurrentValue == null ? (
+              <p className="text-sm text-muted-foreground">{t("progressExtended.noGarminVo2maxAvailable")}</p>
+            ) : null}
 
-              {showPredictions && (
-                <div className="p-4 space-y-4">
-                  {/* Predictions by distance */}
-                  <div className="space-y-2">
-                   {predictions.predictions?.map((pred) => {
-                      // PR184: derive goal label from V2 cycle goal_type
-                      const cycleGoalDist = cycleV2?.goal?.goal_type
-                        ? V2_GOAL_TO_PRED_DISTANCE[cycleV2.goal.goal_type] ?? null
-                        : null;
-                      const isGoal = cycleGoalDist !== null && pred.distance === cycleGoalDist;
-                      return (
-                      <div 
-                        key={pred.distance}
-                        className="flex items-center gap-3 p-3 rounded-xl transition-all"
-                        style={{ 
-                          background: isGoal ? `${pred.readiness_color}15` : "rgba(255,255,255,0.03)",
-                          border: isGoal ? `2px solid ${pred.readiness_color}` : "1px solid rgba(255,255,255,0.05)"
+            {garminVo2Series.length > 0 ? (
+              <div className="mt-4">
+                <p className="text-[11px] font-mono uppercase text-muted-foreground mb-3">
+                  {t("progressExtended.garminVo2maxHistoryTitle")}
+                </p>
+                <div className="h-36">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart
+                      data={garminVo2Series}
+                      margin={{ top: 5, right: 10, left: -20, bottom: 5 }}
+                    >
+                      <XAxis
+                        dataKey="date"
+                        axisLine={false}
+                        tickLine={false}
+                        tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 11, fontFamily: "JetBrains Mono" }}
+                        tickFormatter={(dateStr) => formatDateLabel(dateStr, langToLocale(lang), "month")}
+                        ticks={vo2TickDates}
+                        minTickGap={viewportBand === "compact" ? 18 : 24}
+                      />
+                      <YAxis
+                        domain={["dataMin - 2", "dataMax + 2"]}
+                        axisLine={false}
+                        tickLine={false}
+                        tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 11, fontFamily: "JetBrains Mono" }}
+                        tickFormatter={(value) => `${value}`}
+                      />
+                      <Tooltip
+                        content={({ active, payload }) => {
+                          if (active && payload && payload.length) {
+                            const data = payload[0].payload;
+                            return (
+                              <div className="bg-popover border border-border p-2 rounded-lg shadow-lg">
+                                <p className="font-mono text-xs text-muted-foreground">
+                                  {formatMeasurementDate(data.date, lang)}
+                                </p>
+                                <p className="font-bold text-white">VO2MAX: {data.value} ml/kg/min</p>
+                                <p className="text-[11px] text-muted-foreground">{t("progressExtended.garminSourceLabel")}</p>
+                                {data.precise != null && (
+                                  <p className="text-[11px] text-muted-foreground">{data.precise}</p>
+                                )}
+                              </div>
+                            );
+                          }
+                          return null;
                         }}
-                      >
-                        {/* Distance badge */}
-                        <div 
-                          className="shrink-0 w-14 h-14 rounded-xl flex flex-col items-center justify-center"
-                          style={{ background: `${pred.readiness_color}20` }}
-                        >
-                          <span className="text-sm font-bold" style={{ color: pred.readiness_color }}>
-                            {pred.distance}
-                          </span>
-                        </div>
-
-                        {/* Predicted time */}
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="text-xl font-bold text-white">{pred.predicted_time}</span>
-                            {isGoal && (
-                              <span className="px-2 py-0.5 rounded-full text-[9px] font-bold" style={{ background: "var(--accent-green)", color: "#0a0e1a" }}>
-                                {t("progressExtended.goalLabel")}
-                              </span>
-                            )}
-                          </div>
-                          <p className="text-xs text-muted-foreground">
-                            {pred.predicted_pace} • {pred.predicted_range}
-                          </p>
-                        </div>
-
-                        {/* Readiness */}
-                        <div className="shrink-0 text-right">
-                          <div 
-                            className="px-3 py-1 rounded-full text-xs font-bold mb-1"
-                            style={{ background: `${pred.readiness_color}20`, color: pred.readiness_color }}
-                          >
-                            {pred.readiness_label}
-                          </div>
-                          <p className="text-[10px] text-muted-foreground">
-                            {pred.readiness_score}% {t("progressExtended.readinessPct")}
-                          </p>
-                        </div>
-                      </div>
-                      );
-                    })}
-                  </div>
+                      />
+                      {garminVo2CurrentValue != null && (
+                        <ReferenceLine
+                          y={garminVo2CurrentValue}
+                          stroke="rgba(110, 235, 90, 0.3)"
+                          strokeDasharray="3 3"
+                        />
+                      )}
+                      <Line
+                        type="monotone"
+                        dataKey="value"
+                        stroke="#6EEB5A"
+                        strokeWidth={2}
+                        dot={{ fill: "#6EEB5A", strokeWidth: 0, r: 3 }}
+                        activeDot={{ fill: "#6EEB5A", strokeWidth: 2, stroke: "white", r: 5 }}
+                        connectNulls={false}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
                 </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-      )}
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground mt-3">{t("progressExtended.noGarminVo2maxAvailable")}</p>
+            )}
+          </CardContent>
+        </Card>
+      </div>
 
     </div>
   );

@@ -106,6 +106,29 @@ class GccliProvider(Provider):
             acts = [a for a in acts if (a.get("start_time") or "") > since]
         return acts
 
+    def get_activity_laps(self, user_id: str, activity_id: str) -> List[Dict]:
+        from ..activity_laps import normalize_activity_laps, validate_activity_id
+
+        activity_id = validate_activity_id(activity_id)
+        if not self._garmin_account:
+            raise GccliError("Per-user Garmin account required")
+        raw = self._runner.fetch_activity_splits(activity_id, account=self._garmin_account)
+        return normalize_activity_laps(raw, activity_id)
+
+    def get_activity_phases(self, user_id: str, activity_id: str) -> List[Dict]:
+        from ..data_layer import normalize_typed_splits
+        from ..activity_ids import normalize_activity_id
+
+        activity_id = normalize_activity_id(activity_id)
+        account = self._garmin_account
+        if not account:
+            raise GccliError("Per-user Garmin account required")
+        raw = self._runner.fetch_activity_typed_splits(activity_id, account=account)
+        if not isinstance(raw, dict) or normalize_activity_id(raw.get("activityId")) != activity_id:
+            raise GccliError("Activity response identifier mismatch")
+        return normalize_typed_splits(raw)
+
+
     def fetch_all_activities(self, page_size: int = 50) -> List[Dict]:
         """Fetch ALL available activities using paginated gccli calls.
 
@@ -178,6 +201,38 @@ class GccliProvider(Provider):
             days=days,
             start_days_ago=start_days_ago,
             account=account,
+        )
+
+    def get_daily_metrics_fetch_result(
+        self,
+        user_id: str,
+        days: int = 7,
+        start_days_ago: int = 1,
+    ) -> Dict:
+        result = self._runner.fetch_daily_metrics_result(
+            days=days,
+            start_days_ago=start_days_ago,
+            account=self._account(),
+        )
+        return {
+            "metrics": result.metrics,
+            "status": result.status,
+            "endpoint_success_count": result.endpoint_success_count,
+            "endpoint_failure_count": result.endpoint_failure_count,
+            "endpoint_total_count": result.endpoint_total_count,
+            "endpoint_failures": result.endpoint_failures,
+        }
+
+    def get_max_metrics(
+        self,
+        user_id: str,
+        date: Optional[str] = None,
+        raise_on_error: bool = False,
+    ) -> List[Dict]:
+        return self._runner.fetch_max_metrics(
+            account=self._account(),
+            date=date,
+            raise_on_error=raise_on_error,
         )
 
     def get_profile(self, user_id: str) -> Dict:

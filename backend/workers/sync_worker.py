@@ -22,6 +22,7 @@ import logging
 import os
 import sys
 import time
+from datetime import datetime
 
 # Make /app/backend importable when launched as a module or script.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -30,6 +31,7 @@ from dotenv import load_dotenv
 load_dotenv()  # load backend/.env when run standalone
 
 import redis.asyncio as aioredis
+from redis.exceptions import RedisError
 from motor.motor_asyncio import AsyncIOMotorClient
 
 from jobs.queue import (
@@ -37,13 +39,22 @@ from jobs.queue import (
     JOB_SYNC_USER,
     JOB_SYNC_ACTIVITY,
     JOB_INCREMENTAL_SYNC,
+    JOB_VO2MAX_BACKFILL,
+    JOB_ACTIVITY_DETAILS,
+    JOB_ACTIVITY_LAPS,
+    TARGETED_JOB_TYPES,
     LOCK_PREFIX,
     LOCK_TTL,
-    PENDING_PREFIX,
     HEARTBEAT_PREFIX,
     HEARTBEAT_TTL,
     HEARTBEAT_INTERVAL,
     STATS_FAILED_KEY,
+    _pending_key,
+    _should_update_sync_progress,
+    maintain_details_pending,
+    recover_details_pending,
+    defer_activity_details,
+    promote_due_activity_details,
     claim_job,
     ack_job,
     requeue_job,
@@ -71,7 +82,15 @@ SCHEDULE_INTERVAL = int(os.environ.get("SYNC_SCHEDULE_INTERVAL", "0"))
 SCHEDULE_STAGGER_MS = int(os.environ.get("SYNC_SCHEDULE_STAGGER_MS", "200"))
 
 
-async def _run_job(db, job_type: str, user_id: str) -> dict:
+async def _run_job(db, job_type: str, user_id: str, activity_id: str = None) -> dict:
+    if job_type == JOB_ACTIVITY_DETAILS:
+        from garmin.activity_details import fetch_activity_details
+        return await fetch_activity_details(db, user_id, activity_id)
+    if job_type == JOB_ACTIVITY_LAPS:
+        from garmin.activity_laps import fetch_activity_laps
+        return await fetch_activity_laps(db, user_id, activity_id)
+    if job_type == JOB_VO2MAX_BACKFILL:
+        return await garmin_service.run_vo2max_backfill_job(db, user_id)
     if job_type == JOB_INCREMENTAL_SYNC:
         return await garmin_service.incremental_sync(db, user_id)
     if job_type in (JOB_SYNC_USER, JOB_SYNC_ACTIVITY):
@@ -86,9 +105,29 @@ async def process_job(db, redis, raw: str, job: dict) -> None:
     job_id = job.get("id")
     attempts = int(job.get("attempts", 0))
     lock_key = f"{LOCK_PREFIX}{user_id}"
+    targeted = job_type in TARGETED_JOB_TYPES
+    pending_options = {"job_type": job_type} if job_type == JOB_ACTIVITY_LAPS else {}
+
+    if targeted:
+        if (
+            not await maintain_details_pending(redis, user_id, job_id, **pending_options)
+            and not await recover_details_pending(redis, raw, job)
+        ):
+            logger.warning("[worker] type=%s terminal=superseded job_id=%s user=%s",
+                           job_type, job_id, user_id)
+            await ack_job(raw, job_id)
+            return
+
+    if targeted and job.get("not_before", 0) > time.time():
+        await defer_activity_details(raw, job)
+        return
 
     # One active sync per user. If busy, move the in-flight job back to the queue.
     if not await redis.set(lock_key, "1", nx=True, ex=LOCK_TTL):
+        if targeted:
+            job["not_before"] = time.time() + max(WATCHDOG_INTERVAL, 1)
+            await defer_activity_details(raw, job)
+            return
         logger.info("[worker] user=%s already syncing -> requeue", user_id)
         await asyncio.sleep(1)
         await requeue_job(raw, job_id)
@@ -96,8 +135,12 @@ async def process_job(db, redis, raw: str, job: dict) -> None:
 
     # Global anti-explosion cap (cluster-wide). If saturated, requeue and back off.
     if not await rate_limiter.acquire_global_slot():
-        logger.info("[worker] global sync cap reached -> requeue user=%s", user_id)
         await redis.delete(lock_key)
+        if targeted:
+            job["not_before"] = time.time() + max(WATCHDOG_INTERVAL, 1)
+            await defer_activity_details(raw, job)
+            return
+        logger.info("[worker] global sync cap reached -> requeue user=%s", user_id)
         await asyncio.sleep(2)
         await requeue_job(raw, job_id)
         return
@@ -105,7 +148,26 @@ async def process_job(db, redis, raw: str, job: dict) -> None:
     start = time.time()
     logger.info("[worker] sync_start type=%s user=%s attempt=%s", job_type, user_id, attempts + 1)
     try:
-        result = await asyncio.wait_for(_run_job(db, job_type, user_id), timeout=JOB_TIMEOUT)
+        if targeted and (
+            not await maintain_details_pending(redis, user_id, job_id, **pending_options)
+            and not await recover_details_pending(redis, raw, job)
+        ):
+            logger.warning("[worker] type=%s terminal=superseded job_id=%s user=%s",
+                           job_type, job_id, user_id)
+            await ack_job(raw, job_id)
+            return
+        work = (
+            _run_job(db, job_type, user_id, job.get("activity_id"))
+            if targeted else _run_job(db, job_type, user_id)
+        )
+        # A targeted command is bounded to 60s by GccliRunner, without inline
+        # retries; leave a small persistence margin before cancelling its thread.
+        timeout = max(JOB_TIMEOUT, 65) if targeted else JOB_TIMEOUT
+        result = await asyncio.wait_for(work, timeout=timeout)
+        if targeted and result.get("status") == "deferred":
+            job["not_before"] = datetime.fromisoformat(result["retry_at"]).timestamp()
+            await defer_activity_details(raw, job)
+            return
         if not result.get("success"):
             raise RuntimeError(result.get("error") or result.get("message") or "sync failed")
         duration = round(time.time() - start, 2)
@@ -115,11 +177,18 @@ async def process_job(db, redis, raw: str, job: dict) -> None:
             result.get("synced_count"), result.get("new_count"), result.get("metrics_count"),
             result.get("status", "complete"),
         )
-        await redis.delete(f"{PENDING_PREFIX}{user_id}")
+        if targeted:
+            await maintain_details_pending(redis, user_id, job_id, release=True, **pending_options)
+        else:
+            await redis.delete(_pending_key(job_type, user_id))
         # Cooldown: throttle auto-syncs for this user after a successful run.
-        await rate_limiter.set_cooldown(user_id)
+        if _should_update_sync_progress(job_type):
+            await rate_limiter.set_cooldown(user_id)
         # ACK only on success: this is the single point that removes the job.
         await ack_job(raw, job_id)
+    except RedisError:
+        # Keep the reliable in-flight record for watchdog recovery, not ACK.
+        raise
     except Exception as exc:  # timeout or provider/runner failure
         duration = round(time.time() - start, 2)
         attempts += 1
@@ -137,12 +206,16 @@ async def process_job(db, redis, raw: str, job: dict) -> None:
                 "[worker] sync_failed type=%s user=%s attempts=%s duration=%ss err=%s",
                 job_type, user_id, attempts, duration, exc,
             )
-            await update_sync_progress(
-                user_id,
-                phase="failed",
-                error_code="worker_sync_failed",
-            )
-            await redis.delete(f"{PENDING_PREFIX}{user_id}")
+            if _should_update_sync_progress(job_type):
+                await update_sync_progress(
+                    user_id,
+                    phase="failed",
+                    error_code="worker_sync_failed",
+                )
+            if targeted:
+                await maintain_details_pending(redis, user_id, job_id, release=True, **pending_options)
+            else:
+                await redis.delete(_pending_key(job_type, user_id))
             # Monitoring counter only (additive; failure handling unchanged).
             await redis.incr(STATS_FAILED_KEY)
             # Terminal failure after max retries: drop from processing.
@@ -157,6 +230,7 @@ async def watchdog_loop() -> None:
     logger.info("[watchdog] enabled interval=%ss", WATCHDOG_INTERVAL)
     while True:
         try:
+            await promote_due_activity_details()
             n = await recover_orphans()
             if n:
                 logger.warning("[watchdog] requeued %s orphan job(s)", n)

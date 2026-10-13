@@ -7,26 +7,35 @@ const EXACT_AUTH_ERROR_KEYS = new Map([
   ["Token has expired", "auth.tokenExpired"],
   ["Invalid authentication token", "auth.invalidAuthenticationToken"],
   ["Google ID token has expired.", "auth.googleTokenExpired"],
-  ["Apple ID token has expired.", "auth.appleTokenExpired"],
   ["GOOGLE_CLIENT_ID is not configured on the server.", "auth.googleNotConfiguredServer"],
-  ["APPLE_CLIENT_ID is not configured on the server.", "auth.appleNotConfiguredServer"],
 ]);
 
 function _mapByPattern(detail) {
   if (!detail) return null;
   const lower = detail.toLowerCase();
   if (lower.includes("google id token audience")) return "auth.googleAudienceMismatch";
-  if (lower.includes("apple id token audience")) return "auth.appleAudienceMismatch";
   if (lower.includes("google id token issuer")) return "auth.googleIssuerInvalid";
-  if (lower.includes("apple id token issuer")) return "auth.appleIssuerInvalid";
   if (lower.includes("could not verify google identity")) return "auth.googleProviderUnavailable";
-  if (lower.includes("could not verify apple identity")) return "auth.appleProviderUnavailable";
+  if (lower.includes("password must be at least 8 characters")) return "auth.passwordTooShort";
+  if (lower.includes("password must contain at least one digit or special character")) return "auth.passwordPolicyNotMet";
   return null;
 }
 
+function _extractDetail(detail) {
+  if (typeof detail === "string") return detail.trim();
+  if (Array.isArray(detail)) {
+    const msg = detail.find((item) => item && typeof item.msg === "string")?.msg;
+    return typeof msg === "string" ? msg.trim() : "";
+  }
+  if (detail && typeof detail === "object" && typeof detail.msg === "string") {
+    return detail.msg.trim();
+  }
+  return "";
+}
+
 export function mapAuthErrorDetail(t, detail, fallbackKey = "auth.somethingWentWrong") {
-  if (typeof detail === "string") {
-    const normalized = detail.trim();
+  const normalized = _extractDetail(detail);
+  if (normalized) {
     const exact = EXACT_AUTH_ERROR_KEYS.get(normalized);
     if (exact) return t(exact);
     const byPattern = _mapByPattern(normalized);

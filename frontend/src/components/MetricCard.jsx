@@ -20,7 +20,7 @@ export const MetricCard = ({
       <p className="font-heading text-2xl md:text-3xl font-bold mb-1 text-center">
         {value}
       </p>
-      <p className="font-mono text-[9px] uppercase text-muted-foreground text-center">
+      <p className="font-mono text-[11px] uppercase text-muted-foreground text-center">
         {unit}
       </p>
       {label && <p className="font-mono text-xs text-muted-foreground mt-2 text-center">{label}</p>}

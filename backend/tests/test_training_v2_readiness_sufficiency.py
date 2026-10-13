@@ -85,28 +85,28 @@ def _load_snapshot(confidence: str) -> TrainingLoadSnapshot:
 def _solid_rhr(value: float = 58.0, measures: int = 7) -> PhysioSignal:
     return PhysioSignal(
         recent_value=value,
-        baseline=PhysioBaseline(valid_measures=measures),
+        baseline=PhysioBaseline(value=57.5, valid_measures=measures),
     )
 
 
 def _solid_hrv(value: float = 45.0, measures: int = 6) -> PhysioSignal:
     return PhysioSignal(
         recent_value=value,
-        baseline=PhysioBaseline(valid_measures=measures),
+        baseline=PhysioBaseline(value=44.0, valid_measures=measures),
     )
 
 
 def _thin_rhr(value: float = 58.0, measures: int = 3) -> PhysioSignal:
     return PhysioSignal(
         recent_value=value,
-        baseline=PhysioBaseline(valid_measures=measures),
+        baseline=PhysioBaseline(value=57.5, valid_measures=measures),
     )
 
 
 def _thin_hrv(value: float = 45.0, measures: int = 2) -> PhysioSignal:
     return PhysioSignal(
         recent_value=value,
-        baseline=PhysioBaseline(valid_measures=measures),
+        baseline=PhysioBaseline(value=44.0, valid_measures=measures),
     )
 
 
@@ -114,8 +114,8 @@ def _absent_signal() -> None:
     return None
 
 
-def _sleep() -> SleepRecord:
-    return SleepRecord()
+def _sleep(duration_hours: float = 7.2) -> SleepRecord:
+    return SleepRecord(duration_hours=duration_hours)
 
 
 def _build(
@@ -123,10 +123,12 @@ def _build(
     hrv: PhysioSignal | None,
     sleep: SleepRecord | None,
     load_confidence: str,
+    hrv_supported: bool | None = None,
 ) -> ReadinessSufficiency:
     inp = ReadinessSufficiencyInput(
         rhr=rhr,
         hrv=hrv,
+        hrv_supported=hrv_supported,
         sleep=sleep,
         load=_load_snapshot(load_confidence),
     )
@@ -185,11 +187,11 @@ class TestRHRAbsentHRVSolid:
 
 
 class TestBothPhysioAbsent:
-    """Both HRV and RHR absent → INSUFFICIENT + missing_physio."""
+    """Both HRV and RHR absent."""
 
-    def test_insufficient_missing_physio(self):
+    def test_sleep_and_load_available_is_degraded(self):
         result = _build(_absent_signal(), _absent_signal(), _sleep(), "high")
-        assert result.level == SufficiencyLevel.INSUFFICIENT
+        assert result.level == SufficiencyLevel.DEGRADED
         assert ReasonCode.missing_physio in result.reasons
         assert ReasonCode.missing_hrv in result.reasons
         assert ReasonCode.missing_rhr in result.reasons
@@ -199,6 +201,66 @@ class TestBothPhysioAbsent:
         assert result.level == SufficiencyLevel.INSUFFICIENT
         assert ReasonCode.missing_physio in result.reasons
         assert ReasonCode.missing_load in result.reasons
+
+
+class TestHRVUnsupportedFallbackPolicy:
+    """has_hrv-derived flags must not change sufficiency decisions."""
+
+    def test_hrv_unsupported_with_rhr_present_is_sufficient(self):
+        result = _build(_solid_rhr(), _absent_signal(), _sleep(), "high", hrv_supported=False)
+        assert result.level == SufficiencyLevel.SUFFICIENT
+        assert ReasonCode.missing_hrv in result.reasons
+
+    def test_hrv_supported_flag_true_false_none_same_decision(self):
+        base_args = (_absent_signal(), _absent_signal(), _sleep(), "high")
+        r_true = _build(*base_args, hrv_supported=True)
+        r_false = _build(*base_args, hrv_supported=False)
+        r_none = _build(*base_args, hrv_supported=None)
+        assert r_true.level == r_false.level == r_none.level == SufficiencyLevel.DEGRADED
+
+
+class TestBranchMatrixCanonical:
+    def test_A_rhr_scorable_and_load_scorable_is_degraded(self):
+        result = _build(_solid_rhr(), _absent_signal(), None, "high")
+        assert result.level == SufficiencyLevel.DEGRADED
+
+    def test_B_recent_rhr_without_baseline_does_not_count(self):
+        rhr_recent_without_baseline = PhysioSignal(recent_value=58.0, baseline=None)
+        result = _build(rhr_recent_without_baseline, _absent_signal(), None, "high")
+        assert result.level == SufficiencyLevel.INSUFFICIENT
+        assert ReasonCode.missing_physio in result.reasons
+
+    def test_C_recent_hrv_without_baseline_does_not_count(self):
+        hrv_recent_without_baseline = PhysioSignal(recent_value=45.0, baseline=None)
+        result = _build(_absent_signal(), hrv_recent_without_baseline, None, "high")
+        assert result.level == SufficiencyLevel.INSUFFICIENT
+        assert ReasonCode.missing_physio in result.reasons
+
+    def test_D_sleep_duration_and_load_scorable_is_degraded(self):
+        result = _build(_absent_signal(), _absent_signal(), _sleep(7.1), "high")
+        assert result.level == SufficiencyLevel.DEGRADED
+
+    def test_E_sleep_score_only_does_not_count(self):
+        result = _build(_absent_signal(), _absent_signal(), SleepRecord(score=82.0), "high")
+        assert result.level == SufficiencyLevel.INSUFFICIENT
+        assert ReasonCode.missing_sleep in result.reasons
+
+    def test_F_physio_and_sleep_scorable_load_missing_remains_blocking(self):
+        result = _build(_solid_rhr(), _solid_hrv(), _sleep(), "none")
+        assert result.level == SufficiencyLevel.INSUFFICIENT
+        assert ReasonCode.missing_load in result.reasons
+
+    def test_G_physio_only_scorable_is_insufficient(self):
+        result = _build(_solid_rhr(), _absent_signal(), None, "none")
+        assert result.level == SufficiencyLevel.INSUFFICIENT
+
+    def test_H_sleep_only_scorable_is_insufficient(self):
+        result = _build(_absent_signal(), _absent_signal(), _sleep(), "none")
+        assert result.level == SufficiencyLevel.INSUFFICIENT
+
+    def test_I_load_only_scorable_is_insufficient(self):
+        result = _build(_absent_signal(), _absent_signal(), None, "high")
+        assert result.level == SufficiencyLevel.INSUFFICIENT
 
 
 class TestSleepAbsent:
@@ -307,11 +369,12 @@ class TestThinBaselineLockCases:
 
 
 
-    """Load history < 14 days → DEGRADED + thin_load_history."""
+    """Load history can be thin; when load is unscorable, missing_load blocks."""
 
     def test_degraded_thin_load_history(self):
         result = _build(_solid_rhr(), _solid_hrv(), _sleep(), "low")
-        assert result.level == SufficiencyLevel.DEGRADED
+        assert result.level == SufficiencyLevel.INSUFFICIENT
+        assert ReasonCode.missing_load in result.reasons
         assert ReasonCode.thin_load_history in result.reasons
 
 
@@ -320,14 +383,16 @@ class TestMultipleAnomalies:
 
     def test_missing_sleep_and_thin_load(self):
         result = _build(_solid_rhr(), _solid_hrv(), None, "low")
-        assert result.level == SufficiencyLevel.DEGRADED
+        assert result.level == SufficiencyLevel.INSUFFICIENT
+        assert ReasonCode.missing_load in result.reasons
         assert ReasonCode.missing_sleep in result.reasons
         assert ReasonCode.thin_load_history in result.reasons
 
     def test_missing_sleep_thin_rhr_baseline_thin_load(self):
-        """Thin RHR + solid HRV + no sleep + thin load → DEGRADED (sleep+load drive it)."""
+        """Thin RHR + solid HRV + no sleep + thin load keeps missing_load blocking."""
         result = _build(_thin_rhr(), _solid_hrv(), None, "low")
-        assert result.level == SufficiencyLevel.DEGRADED
+        assert result.level == SufficiencyLevel.INSUFFICIENT
+        assert ReasonCode.missing_load in result.reasons
         reasons = result.reasons
         assert ReasonCode.missing_sleep in reasons
         assert ReasonCode.thin_baseline_rhr in reasons
@@ -447,8 +512,8 @@ class TestPhysioBaselineValue:
         baseline = PhysioBaseline(valid_measures=5)
         assert baseline.value is None
 
-    def test_baseline_value_does_not_affect_r1_classification(self):
-        """PhysioBaseline.value has no effect on sufficiency classification."""
+    def test_baseline_value_required_for_physio_scorability(self):
+        """Without baseline value, physio cannot count as exploitable."""
         rhr_with = PhysioSignal(
             recent_value=58.0,
             baseline=PhysioBaseline(value=58.5, valid_measures=7),
@@ -457,10 +522,11 @@ class TestPhysioBaselineValue:
             recent_value=58.0,
             baseline=PhysioBaseline(valid_measures=7),
         )
-        result_with = _build(rhr_with, _solid_hrv(), _sleep(), "high")
-        result_without = _build(rhr_without, _solid_hrv(), _sleep(), "high")
-        assert result_with.level == result_without.level
-        assert result_with.reasons == result_without.reasons
+        result_with = _build(rhr_with, _absent_signal(), None, "high")
+        result_without = _build(rhr_without, _absent_signal(), None, "high")
+        assert result_with.level == SufficiencyLevel.DEGRADED
+        assert result_without.level == SufficiencyLevel.INSUFFICIENT
+        assert ReasonCode.missing_physio in result_without.reasons
 
 
 class TestSleepRecordFields:
@@ -486,16 +552,23 @@ class TestSleepRecordFields:
         assert sr.duration_hours is None
         assert sr.score is None
 
-    def test_sleep_presence_determined_by_none_not_by_fields(self):
-        """R1: sleep presence is inputs.sleep is not None, regardless of field values."""
+    def test_sleep_scorability_depends_on_duration(self):
+        """R1: sleep is exploitable only when duration_hours is present."""
         sleep_no_fields = SleepRecord()
         sleep_with_duration = SleepRecord(duration_hours=7.0)
         sleep_with_score = SleepRecord(score=80.0)
 
-        for sleep in (sleep_no_fields, sleep_with_duration, sleep_with_score):
-            result = _build(_solid_rhr(), _solid_hrv(), sleep, "high")
-            assert result.level == SufficiencyLevel.SUFFICIENT
-            assert ReasonCode.missing_sleep not in result.reasons
+        result_no_fields = _build(_solid_rhr(), _solid_hrv(), sleep_no_fields, "high")
+        assert result_no_fields.level == SufficiencyLevel.DEGRADED
+        assert ReasonCode.missing_sleep in result_no_fields.reasons
+
+        result_with_duration = _build(_solid_rhr(), _solid_hrv(), sleep_with_duration, "high")
+        assert result_with_duration.level == SufficiencyLevel.SUFFICIENT
+        assert ReasonCode.missing_sleep not in result_with_duration.reasons
+
+        result_score_only = _build(_solid_rhr(), _solid_hrv(), sleep_with_score, "high")
+        assert result_score_only.level == SufficiencyLevel.DEGRADED
+        assert ReasonCode.missing_sleep in result_score_only.reasons
 
     def test_absent_sleep_is_still_none(self):
         result = _build(_solid_rhr(), _solid_hrv(), None, "high")

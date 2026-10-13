@@ -10,6 +10,7 @@ _TYPE_MAP = {
     "steady": "tempo",
     "quality": "threshold",
     "long_easy": "long_run",
+    "race": "race",
 }
 
 _INTENSITY_MAP = {
@@ -17,6 +18,7 @@ _INTENSITY_MAP = {
     "low": "easy",
     "moderate": "moderate",
     "high": "hard",
+    "event": "event",
 }
 
 _PHASE_INFO = {

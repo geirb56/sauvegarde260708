@@ -29,6 +29,12 @@ def test_pr189_server_route_contains_curve_level_diagnostics_contract_fields():
         '"observed_distance_max_km": curve_diag.get("observed_distance_max_km")',
         '"fit_quality": curve_diag.get("fit_quality")',
         '"k_conflict": curve_diag.get("k_conflict")',
+        '"anchor_applied": curve_diag.get("anchor_applied")',
+        '"anchor_distance_m": curve_diag.get("anchor_distance_m")',
+        '"anchor_duration_s": curve_diag.get("anchor_duration_s")',
+        '"anchor_days_ago": curve_diag.get("anchor_days_ago")',
+        '"anchor_quality_confidence": curve_diag.get("anchor_quality_confidence")',
+        '"anchor_eligible_count": curve_diag.get("anchor_eligible_count")',
         '"k_fallback_applied": curve_diag.get("k_fallback_applied")',
         '"weighted_recency": curve_diag.get("weighted_recency")',
         '"weighted_quality_confidence": curve_diag.get("weighted_quality_confidence")',
@@ -36,3 +42,16 @@ def test_pr189_server_route_contains_curve_level_diagnostics_contract_fields():
         '"effective_contributors": curve_diag.get("effective_contributors")',
     ]:
         assert key in code
+
+
+def test_pr192_server_route_contains_slope_evidence_diagnostics_fields():
+    """PR #192 — slope_evidence fields must be propagated in race_curve_diagnostics."""
+    code = SERVER_PATH.read_text(encoding="utf-8")
+    for key in [
+        '"slope_evidence_count": curve_diag.get("slope_evidence_count")',
+        '"slope_evidence_distance_min": curve_diag.get("slope_evidence_distance_min")',
+        '"slope_evidence_distance_max": curve_diag.get("slope_evidence_distance_max")',
+        '"slope_evidence_distance_min_km": curve_diag.get("slope_evidence_distance_min_km")',
+        '"slope_evidence_distance_max_km": curve_diag.get("slope_evidence_distance_max_km")',
+    ]:
+        assert key in code, f"Missing slope_evidence propagation in server.py: {key}"

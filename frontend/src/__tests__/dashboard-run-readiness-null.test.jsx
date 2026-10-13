@@ -16,6 +16,7 @@ import axios from "axios";
 
 import Dashboard from "@/pages/Dashboard";
 import { LanguageProvider } from "@/context/LanguageContext";
+import { LANGUAGE_STORAGE_KEY } from "@/lib/i18n";
 
 jest.mock("axios");
 jest.mock("sonner", () => ({
@@ -41,7 +42,7 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 // Helpers
 // ---------------------------------------------------------------------------
 
-function buildCardioPayload({ run_readiness }) {
+function buildCardioPayload({ run_readiness, readiness_unavailable_cause = null }) {
   return {
     mock: false,
     source: "garmin",
@@ -73,6 +74,7 @@ function buildCardioPayload({ run_readiness }) {
       training_load_status: "green",
     },
     history: [],
+    readiness_unavailable_cause,
   };
 }
 
@@ -112,6 +114,7 @@ async function waitForCardioLoaded(container) {
 describe("Dashboard run_readiness null handling", () => {
   afterEach(() => {
     jest.clearAllMocks();
+    window.localStorage.clear();
   });
 
   it("shows unavailable label when run_readiness is null — no score digits displayed", async () => {
@@ -168,6 +171,54 @@ describe("Dashboard run_readiness null handling", () => {
     // Should contain the numeric value
     expect(scoreEl.textContent).toContain("78.5");
 
+    unmount();
+  });
+
+  it("shows explicit unavailable cause when backend provides one", async () => {
+    axios.get.mockImplementation((url) => {
+      if (url.includes("run-index")) {
+        return Promise.resolve({
+          data: buildCardioPayload({
+            run_readiness: null,
+            readiness_unavailable_cause: "garmin_fetch_error",
+          }),
+        });
+      }
+      return Promise.resolve({ data: null });
+    });
+
+    const { container, unmount } = renderDashboard();
+    await waitForCardioLoaded(container);
+    const cause = container.querySelector('[data-testid="run-readiness-unavailable-cause"]');
+    expect(cause).not.toBeNull();
+    expect(cause.textContent.toLowerCase()).toContain("garmin");
+    unmount();
+  });
+
+  it.each([
+    ["en", "Sync in progress"],
+    ["fr", "Synchronisation en cours"],
+  ])("renders sync_in_progress with the active %s translation and no raw i18n key", async (lang, expectedText) => {
+    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, lang);
+    axios.get.mockImplementation((url) => {
+      if (url.includes("run-index")) {
+        return Promise.resolve({
+          data: buildCardioPayload({
+            run_readiness: null,
+            readiness_unavailable_cause: "sync_in_progress",
+          }),
+        });
+      }
+      return Promise.resolve({ data: null });
+    });
+
+    const { container, unmount } = renderDashboard();
+    await waitForCardioLoaded(container);
+
+    const cause = container.querySelector('[data-testid="run-readiness-unavailable-cause"]');
+    expect(cause).not.toBeNull();
+    expect(cause.textContent).toContain(expectedText);
+    expect(container.textContent).not.toContain("dashboard.readinessUnavailableCause.syncInProgress");
     unmount();
   });
 });

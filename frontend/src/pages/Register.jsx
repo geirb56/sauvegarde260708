@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Loader2, Eye, EyeOff } from "lucide-react";
 import { toast } from "sonner";
 import OAuthButtons from "@/components/OAuthButtons";
+import AuthBrand from "@/components/AuthBrand";
 import { mapAuthErrorDetail } from "@/lib/authErrors";
 
 export default function Register() {
@@ -42,7 +43,7 @@ export default function Register() {
 
     if (result.ok) {
       toast.success(t("auth.accountCreated"));
-      navigate("/", { replace: true });
+      navigate("/onboarding", { replace: true });
     } else {
       setError(mapAuthErrorDetail(t, result.errorDetail, "auth.somethingWentWrong"));
     }
@@ -50,14 +51,19 @@ export default function Register() {
 
   const handleOAuthSuccess = () => {
     toast.success(t("auth.accountCreated"));
-    navigate("/", { replace: true });
+    navigate("/onboarding", { replace: true });
   };
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
-          <CardTitle className="text-2xl font-bold">{t("auth.title")}</CardTitle>
+          <h1 className="sr-only">
+            {`${t("auth.title")} — ${t("auth.createAccount")}`}
+          </h1>
+          <CardTitle>
+            <AuthBrand testId="register-brand-logo" />
+          </CardTitle>
           <p className="text-muted-foreground text-sm mt-1">{t("auth.createAccount")}</p>
         </CardHeader>
         <CardContent>

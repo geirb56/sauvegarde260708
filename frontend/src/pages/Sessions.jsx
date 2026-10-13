@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import axios from "axios";
 import { Activity, Bike, ChevronRight, Flame, Heart, Zap } from "lucide-react";
@@ -37,6 +37,8 @@ const LoadingRows = () => (
     ))}
   </div>
 );
+
+const hasPositiveFiniteMetric = (value) => typeof value === "number" && Number.isFinite(value) && value > 0;
 
 export default function Sessions() {
   const { t, lang } = useLanguage();
@@ -95,12 +97,26 @@ export default function Sessions() {
 
             const typeConfig = WORKOUT_TYPES[workoutType] || WORKOUT_TYPES.endurance;
             const TypeIcon = typeConfig.icon;
+            const metrics = [];
+
+            if (hasPositiveFiniteMetric(workout.distance_km)) {
+              metrics.push(formatDistance(workout.distance_km, { unitSystem }));
+            }
+
+            if (hasPositiveFiniteMetric(workout.avg_pace_min_km)) {
+              metrics.push(formatPaceUnits(workout.avg_pace_min_km * 60, { unitSystem }));
+            }
+
+            if (hasPositiveFiniteMetric(workout.avg_heart_rate)) {
+              metrics.push(`${workout.avg_heart_rate} bpm`);
+            }
 
             return (
               <Link
                 key={workout.id}
                 to={`/workout/${workout.id}`}
-                className="workout-list-item animate-in"
+                state={{ from: "/sessions" }}
+                className="workout-list-item animate-in rounded-2xl"
                 style={{ animationDelay: `${index * 50}ms` }}
               >
                 <div
@@ -116,15 +132,12 @@ export default function Sessions() {
                 <div className="workout-info">
                   <p className="workout-type-name">{t(`workoutTypes.${workoutType}`)}</p>
                   <div className="workout-stats">
-                    <span>{formatDistance(workout.distance_km || 0, { unitSystem })}</span>
-                    <span className="dot" />
-                    <span>{formatPaceUnits((workout.avg_pace_min_km || 0) * 60, { unitSystem })}</span>
-                    {workout.avg_heart_rate && (
-                      <>
-                        <span className="dot" />
-                        <span>{t("dashboard.hrLabel")} {workout.avg_heart_rate}</span>
-                      </>
-                    )}
+                    {metrics.map((metric, metricIndex) => (
+                      <Fragment key={`${workout.id}-metric-${metricIndex}`}>
+                        {metricIndex > 0 ? <span className="dot" aria-hidden="true" /> : null}
+                        <span>{metric}</span>
+                      </Fragment>
+                    ))}
                   </div>
                 </div>
 

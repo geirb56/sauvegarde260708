@@ -719,3 +719,94 @@ class TestWeeklyDistanceBuckets28d:
         h = build_training_history(acts, REF)
         assert h.weekly_distance_buckets_28d[0] == 0.0
         assert h.weekly_distance_buckets_28d[1] == 5.0
+
+
+class TestWeeklyRunCountBuckets:
+    def test_empty_builder_counts_are_observed_zero_not_unknown(self):
+        assert build_training_history([], REF).weekly_run_count_buckets_28d == (0, 0, 0, 0)
+
+    def test_direct_legacy_construction_defaults_to_unknown(self):
+        fields = build_training_history([], REF).model_dump()
+        fields.pop("weekly_run_count_buckets_28d")
+        assert TrainingHistory(**fields).weekly_run_count_buckets_28d is None
+
+    @pytest.mark.parametrize("days_ago", (-1, *range(29), 100))
+    def test_each_day_in_exact_rolling_windows(self, days_ago):
+        history = build_training_history([_act("running", days_ago)], REF)
+        expected = [0, 0, 0, 0]
+        if 0 <= days_ago < 28:
+            expected[days_ago // 7] = 1
+        assert history.weekly_run_count_buckets_28d == tuple(expected)
+
+    @pytest.mark.parametrize("activity_type", ("running", "trail_running", "treadmill_running"))
+    @pytest.mark.parametrize("distance, duration", (
+        (5000, None), (None, 1800), (0, 1800), (-1, 1800),
+        (5000, 0), (5000, -1), (5000, 1800),
+    ))
+    def test_distance_or_duration_is_sufficient_and_both_count_only_once(self, activity_type, distance, duration):
+        acts = [_act(activity_type, day, distance, duration) for day in (2, 9, 16, 23)]
+        history = build_training_history(acts, REF)
+        assert history.weekly_run_count_buckets_28d == (1, 1, 1, 1)
+
+    @pytest.mark.parametrize("invalid", (None, 0, -1, "bad", "5000", True, False))
+    def test_invalid_both_metrics_do_not_count(self, invalid):
+        history = build_training_history([_act("running", 2, invalid, invalid)], REF)
+        assert history.weekly_run_count_buckets_28d == (0, 0, 0, 0)
+        assert history.has_any_running_history is False
+
+    def test_invalid_dates_future_and_nonrunning_records_are_excluded(self):
+        acts = [
+            _act("cycling", 2), _act("walking", 9), _act("swimming", 16),
+            _act("running", -1),
+            {**_act("running", 23), "start_time": "not-a-date"},
+            {**_act("running", 23), "start_time": None},
+            {**_act("running", 23), "activity_type": None},
+            None,
+        ]
+        history = build_training_history(acts, REF)
+        assert history.weekly_run_count_buckets_28d == (0, 0, 0, 0)
+        assert history.has_any_running_history is False
+
+    @pytest.mark.parametrize("source", ("garmin", "strava", "manual", None))
+    @pytest.mark.parametrize("representation", ("domain", "dict", "object", "flat_aliases"))
+    def test_provider_neutral_counts_match_all_supported_inputs(self, source, representation):
+        from types import SimpleNamespace
+
+        acts = []
+        for day in (0, 6, 7, 13, 14, 20, 21, 27):
+            fields = dict(
+                activity_type="running",
+                start_time=(REF - timedelta(days=day)).isoformat(),
+                distance_m=None if day % 2 else 5000,
+                duration_s=1800 if day % 2 else None,
+                source=source,
+                source_activity_id=str(day),
+            )
+            if representation == "domain":
+                acts.append(DomainActivity(**fields))
+            elif representation == "object":
+                acts.append(SimpleNamespace(**fields))
+            elif representation == "flat_aliases":
+                fields["distance"] = fields.pop("distance_m")
+                fields["duration"] = fields.pop("duration_s")
+                acts.append(fields)
+            else:
+                acts.append(fields)
+        history = build_training_history(acts, REF)
+        assert history.weekly_run_count_buckets_28d == (2, 2, 2, 2)
+        assert history.weekly_distance_buckets_28d == (10, 0, 10, 0)
+        assert history == build_training_history(list(reversed(acts)), REF)
+
+    def test_snapshot_and_input_are_immutable(self):
+        from copy import deepcopy
+        from pydantic import ValidationError
+
+        acts = [_act("running", day, None, 1800) for day in (2, 9, 16, 23)]
+        original = deepcopy(acts)
+        history = build_training_history(acts, REF)
+        assert acts == original
+        assert isinstance(history.weekly_run_count_buckets_28d, tuple)
+        with pytest.raises(ValidationError):
+            history.weekly_run_count_buckets_28d = (0, 0, 0, 0)
+        with pytest.raises(TypeError):
+            history.weekly_run_count_buckets_28d[0] = 99
